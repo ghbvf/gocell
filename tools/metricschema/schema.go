@@ -669,6 +669,12 @@ func (sp *scanPackage) providerCollectorEntries(call *ast.CallExpr, rel string) 
 	labels := []string{"method", "route", "status", "cell"}
 	return []Entry{
 		sp.entryFromOpts("counter", opts{
+			name:      "http_request_body_limit_rejections_total",
+			namespace: sp.namespace,
+			help:      "Total number of HTTP requests rejected for exceeding the body size limit (Content-Length fast-path).",
+			labels:    []string{"cell", "route"},
+		}, rel, call.Pos()),
+		sp.entryFromOpts("counter", opts{
 			name:      "http_requests_total",
 			namespace: sp.namespace,
 			help:      "Total number of HTTP requests.",

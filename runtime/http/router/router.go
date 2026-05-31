@@ -687,7 +687,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	if r.authVerifier != nil {
 		r.use(auth.AuthMiddleware(r.clock, r.authVerifier, r.buildAuthOpts()...))
 	}
-	r.use(middleware.BodyLimit(r.bodyLimit))
+	r.use(middleware.BodyLimit(r.bodyLimit, r.metricsCollector))
 	r.composeHandler()
 	return nil
 }
