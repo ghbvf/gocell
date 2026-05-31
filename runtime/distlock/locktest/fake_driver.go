@@ -43,6 +43,8 @@ type fakeEntry struct {
 //   - persistRenewError:  if non-nil, every Renew call returns (false, err) until ClearRenewError
 //   - NextRenewHeld:      if set to false, the next Renew returns (false, nil) — simulates ownership lost
 //   - NextReleaseError:   if non-nil, the next Release call returns err — single-shot
+//   - blockRenewCh:       if non-nil, the next Renew blocks until the channel is closed — use
+//     BlockNextRenew() + UnblockRenew() for controlled blocking/unblocking
 //
 // Use NewFakeDriverWithClock when pairing with FakeClock to ensure the driver's
 // TTL expiry logic uses the same logical time as the manager.
@@ -57,6 +59,15 @@ type FakeDriver struct {
 	persistRenewError error // persistent: stays set until ClearRenewError
 	nextRenewHeld     *bool // single-shot: consumed once
 	nextReleaseError  error // single-shot: consumed once
+
+	// blockRenewCh, when non-nil, causes the next Renew call to block until
+	// the channel is closed. Closed by UnblockRenew(). Single-shot per
+	// BlockNextRenew() call.
+	blockRenewCh chan struct{}
+	// renewEnteredCh, when non-nil, is closed by the Renew call once it has
+	// entered its body (just before blocking). Allows tests to synchronize on
+	// "Renew is now in-flight" without polling.
+	renewEnteredCh chan struct{}
 
 	// clock for TTL expiry checks (defaults to real time.Now).
 	clock func() time.Time
@@ -158,6 +169,37 @@ func (fd *FakeDriver) SetNextRenewHeld(held bool) {
 	fd.nextRenewHeld = &held
 }
 
+// BlockNextRenew arms a one-shot block: the next Renew call will block until
+// UnblockRenew() is called (or the Renew context is canceled). The returned
+// entered channel is closed by the Renew call once it has entered its body but
+// before it blocks — tests can wait on it to confirm the goroutine is in-flight.
+//
+// Usage:
+//
+//	entered := fd.BlockNextRenew()
+//	<-entered            // Renew is now blocked inside FakeDriver
+//	lock.Orphan()        // should not block even though Renew is in-flight
+//	fd.UnblockRenew()    // let Renew complete
+func (fd *FakeDriver) BlockNextRenew() <-chan struct{} {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fd.blockRenewCh = make(chan struct{})
+	fd.renewEnteredCh = make(chan struct{})
+	return fd.renewEnteredCh
+}
+
+// UnblockRenew unblocks a previously blocked Renew call. Safe to call even if
+// no Renew is currently blocked.
+func (fd *FakeDriver) UnblockRenew() {
+	fd.mu.Lock()
+	ch := fd.blockRenewCh
+	fd.blockRenewCh = nil
+	fd.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
 // Calls returns the total number of times the named method was called.
 // method is one of "SetNX", "Renew", "Release".
 func (fd *FakeDriver) Calls(method string) int {
@@ -227,12 +269,35 @@ func (fd *FakeDriver) Renew(ctx context.Context, key, token string, ttl time.Dur
 	fd.calls["Renew"].Add(1)
 
 	fd.mu.Lock()
-	defer fd.mu.Unlock()
 
 	// Record the ctx deadline for TC-12 drift-factor validation.
 	if dl, ok := ctx.Deadline(); ok {
 		fd.lastRenewDeadline = dl
 	}
+
+	// Consume the block-hook if set. Signal entered before blocking so the
+	// test can observe "Renew is now in-flight" without polling.
+	blockCh := fd.blockRenewCh
+	enteredCh := fd.renewEnteredCh
+	if blockCh != nil {
+		fd.blockRenewCh = nil
+		fd.renewEnteredCh = nil
+	}
+	fd.mu.Unlock()
+
+	if blockCh != nil {
+		if enteredCh != nil {
+			close(enteredCh)
+		}
+		// Block until the test explicitly calls UnblockRenew(). We deliberately
+		// do NOT select on ctx.Done() here so that the caller can verify that
+		// Orphan() / detachLock() return promptly even while the Renew goroutine
+		// is blocked inside the driver — that is the F1 regression being tested.
+		<-blockCh
+	}
+
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
 
 	// Consume single-shot injected error (takes priority over persistent).
 	if fd.nextRenewError != nil {

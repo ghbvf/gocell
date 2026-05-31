@@ -2,8 +2,10 @@ package distlock_test
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -455,6 +457,159 @@ func TestLock_Orphan_ManagerSelfDrainsNoGoroutineLeak(t *testing.T) {
 				current, baseline, baseline+2)
 			break
 		}
+		runtime.Gosched()
+	}
+}
+
+// TestLock_OrphanRelease_ConcurrentRace verifies that concurrent Orphan() and
+// Release() calls under -race produce no panics, set Cause() to exactly one of
+// the expected sentinels, keep Driver.Release count in {0,1}, and allow the
+// manager to drain.
+//
+// F2 safety net: 50 goroutines race on a single lock simultaneously calling
+// Orphan or Release. The shared sync.Once ensures exactly one wins; all later
+// calls are no-ops.
+func TestLock_OrphanRelease_ConcurrentRace(t *testing.T) {
+	fc := clockmock.New(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	lock, err := l.Acquire(context.Background(), "concurrent-orphan-release", testtime.D10s)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	m := mgr(l)
+	<-m.Started()
+
+	const n = 50
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				lock.Orphan()
+			} else {
+				_ = lock.Release()
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	// Exactly one terminal cause.
+	cause := lock.Cause()
+	if !errors.Is(cause, distlock.ErrLockReleased) && !errors.Is(cause, distlock.ErrLockOrphaned) {
+		t.Errorf("ConcurrentRace: unexpected Cause=%v; want ErrLockReleased or ErrLockOrphaned", cause)
+	}
+
+	// At most one Driver.Release call.
+	if got := fd.Calls("Release"); got > 1 {
+		t.Errorf("ConcurrentRace: Driver.Release count=%d; want 0 or 1", got)
+	}
+
+	// Done must be closed.
+	select {
+	case <-lock.Done():
+	case <-time.After(testTimeout):
+		t.Fatal("ConcurrentRace: lock.Done() not closed")
+	}
+
+	// Manager drains.
+	select {
+	case <-m.Drained():
+	case <-time.After(testTimeout):
+		t.Fatal("ConcurrentRace: manager did not drain")
+	}
+}
+
+// TestLock_Orphan_NotBlockedByInFlightRenew is the direct F1 regression test.
+// It proves that Lock.Orphan() returns promptly even when a Driver.Renew call
+// is concurrently blocked inside the manager's in-flight Renew goroutine.
+//
+// Before F1, handleRenew called Driver.Renew synchronously on the manager
+// goroutine. An Orphan() event would therefore block until the Renew returned,
+// which for a slow/unreachable backend could take up to TTL*(1-driftFactor).
+// After F1, the Renew runs in a background goroutine; the manager loop remains
+// live and dispatches the Orphan event immediately.
+//
+// Sequence:
+//  1. Acquire a lock (TTL=10s, renewFraction=0.5).
+//  2. Arm BlockNextRenew on FakeDriver — the next Renew call will block.
+//  3. Advance FakeClock past the renew point → manager fires Renew goroutine.
+//  4. Wait for the "renew entered" signal (goroutine is now blocked in Renew).
+//  5. Call lock.Orphan() — must return within 2s (real wall clock).
+//  6. lock.Done() must close with Cause==ErrLockOrphaned.
+//  7. Unblock the Renew; verify no goroutine leak + manager drains.
+func TestLock_Orphan_NotBlockedByInFlightRenew(t *testing.T) {
+	fc := clockmock.New(time.Time{})
+	fd := locktest.NewFakeDriverWithClock(fc.Now)
+	l := newTestLocker(fc, fd)
+
+	const ttl = testtime.D10s
+
+	lock, err := l.Acquire(context.Background(), "inflight-renew-orphan", ttl)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	m := mgr(l)
+	<-m.Started()
+	waitPendingTimers(t, fc)
+
+	// Arm the block: the next Renew call will block until UnblockRenew().
+	renewEntered := fd.BlockNextRenew()
+
+	// Advance to trigger the renew timer.
+	fc.Advance(time.Duration(float64(ttl) * 0.5))
+
+	// Wait until the Renew goroutine has entered FakeDriver.Renew.
+	select {
+	case <-renewEntered:
+		// Renew is now blocked inside FakeDriver.
+	case <-time.After(testTimeout):
+		fd.UnblockRenew()
+		t.Fatal("NotBlockedByInFlightRenew: timed out waiting for Renew to enter FakeDriver")
+	}
+
+	// NOW: Orphan must return promptly — the manager loop is live (Renew is
+	// in a background goroutine). Use a done-channel + real 2s timeout.
+	orphanDone := make(chan struct{})
+	go func() {
+		lock.Orphan()
+		close(orphanDone)
+	}()
+
+	select {
+	case <-orphanDone:
+		// Good — Orphan returned before the blocked Renew completed.
+	case <-time.After(2 * time.Second):
+		fd.UnblockRenew()
+		t.Fatal("NotBlockedByInFlightRenew: lock.Orphan() blocked for >2s while Renew was in-flight — F1 regression")
+	}
+
+	// Done must close with ErrLockOrphaned.
+	select {
+	case <-lock.Done():
+	case <-time.After(testTimeout):
+		t.Fatal("NotBlockedByInFlightRenew: lock.Done() not closed after Orphan")
+	}
+	assertSameErrorIdentity(t, lock.Cause(), distlock.ErrLockOrphaned, "cause")
+
+	// Unblock the stalled Renew goroutine so it can post its result and exit.
+	fd.UnblockRenew()
+
+	// Manager must drain cleanly (no double-decrement, no goroutine leak).
+	select {
+	case <-m.Drained():
+	case <-time.After(testTimeout):
+		t.Fatal("NotBlockedByInFlightRenew: manager did not drain after Orphan + unblock")
+	}
+
+	// Allow goroutines to settle before the test exits.
+	deadline := time.Now().Add(testtime.EventuallyLong)
+	for time.Now().Before(deadline) {
 		runtime.Gosched()
 	}
 }

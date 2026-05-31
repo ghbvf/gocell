@@ -66,24 +66,36 @@ func (h *renewHeap) Pop() any {
 // Caller must ensure h.Len() > 0.
 func (h renewHeap) Peek() *heapItem { return h[0] }
 
-// eventKind distinguishes add, remove, and orphan events sent to the manager.
+// eventKind distinguishes add, remove, orphan, and renew-result events sent to
+// the manager.
 type eventKind int
 
 const (
-	eventAdd    eventKind = iota
-	eventRemove           // initiated by release(): stops renewal AND calls Driver.Release
-	eventOrphan           // initiated by orphan(): stops renewal WITHOUT any Driver I/O
+	eventAdd         eventKind = iota
+	eventRemove                // initiated by release(): stops renewal AND calls Driver.Release
+	eventOrphan                // initiated by orphan(): stops renewal WITHOUT any Driver I/O
+	eventRenewResult           // posted back by the async Renew goroutine when the RPC returns
 )
 
 // managerEvent carries a single instruction to the manager goroutine.
+//
+// Field ownership by event kind:
+//   - eventAdd:         state is set; id/item/held/renewErr/resultCh are zero.
+//   - eventRemove:      id and resultCh are set; state/item/held/renewErr are zero.
+//   - eventOrphan:      id and resultCh are set; state/item/held/renewErr are zero.
+//   - eventRenewResult: id, item, held, renewErr are set; state and resultCh are nil.
 type managerEvent struct {
 	kind  eventKind
 	state *lockState // eventAdd: the new lock to register
-	id    lockID     // eventRemove / eventOrphan: lock to unregister
+	id    lockID     // eventRemove / eventOrphan / eventRenewResult: lock identifier
 	// resultCh receives the result on eventRemove/eventOrphan. Buffered
 	// cap=1; the manager writes exactly once and the caller reads exactly once;
 	// the channel is never closed.
 	resultCh chan error
+	// Fields used by eventRenewResult only.
+	item     *heapItem // heap item popped at the start of the renew cycle
+	held     bool      // true if the Renew RPC confirmed we still hold the key
+	renewErr error     // non-nil if the Renew RPC (all attempts) returned an error
 }
 
 // ManagerSnapshot is a read-only view of the manager's current state.
@@ -111,13 +123,14 @@ type Manager struct {
 	driver Driver
 	cfg    config
 
-	// mu protects running, started, drained, and snapshotLocks.
+	// mu protects running, started, drained, managerDone, and snapshotLocks.
 	// The heap/locks/items are owned exclusively by the run() goroutine.
 	mu            sync.Mutex
 	running       bool
 	started       chan struct{}
 	drained       chan struct{}
-	snapshotLocks int // protected by mu; written by manager-goroutine handlers, read by Snapshot()
+	managerDone   chan struct{} // closed by run() on exit; per-lifecycle instance
+	snapshotLocks int           // protected by mu; written by manager-goroutine handlers, read by Snapshot()
 
 	nextID atomic.Uint64
 	// pendingReleases counts how many locks have been added but whose
@@ -141,6 +154,7 @@ func newManager(driver Driver, cfg config) *Manager {
 		events:      make(chan managerEvent, 64),
 		started:     make(chan struct{}),
 		drained:     make(chan struct{}),
+		managerDone: make(chan struct{}),
 		renewNotify: make(chan struct{}, 16),
 	}
 	return m
@@ -189,6 +203,7 @@ func (m *Manager) add(state *lockState) {
 		// Fresh channels for this manager lifecycle.
 		m.started = make(chan struct{})
 		m.drained = make(chan struct{})
+		m.managerDone = make(chan struct{})
 		go m.run()
 	}
 	m.mu.Unlock()
@@ -232,15 +247,25 @@ func (m *Manager) run() {
 
 	locks := make(map[lockID]*lockState)
 	items := make(map[lockID]*heapItem)
+	inflightRenew := make(map[lockID]context.CancelFunc)
 	var h renewHeap
 	heap.Init(&h)
+
+	// Capture the per-lifecycle managerDone channel once so in-flight Renew
+	// goroutines can reference it without racing the next lifecycle's allocation
+	// in add().
+	m.mu.Lock()
+	managerDone := m.managerDone
+	m.mu.Unlock()
+
+	defer close(managerDone)
 
 	slog.Debug("distlock: manager started")
 	close(m.started)
 
 	for {
 		timer, timerC := m.nextTimer(&h)
-		done := m.runOnce(timer, timerC, locks, items, &h)
+		done := m.runOnce(timer, timerC, locks, items, &h, inflightRenew, managerDone)
 		if done {
 			return
 		}
@@ -272,10 +297,12 @@ func (m *Manager) runOnce(
 	locks map[lockID]*lockState,
 	items map[lockID]*heapItem,
 	h *renewHeap,
+	inflightRenew map[lockID]context.CancelFunc,
+	managerDone chan struct{},
 ) bool {
 	select {
 	case <-timerC:
-		m.handleRenew(locks, items, h)
+		m.handleRenew(locks, items, h, inflightRenew, managerDone)
 	case ev := <-m.events:
 		if timer != nil {
 			// Stop returns; no drain needed because we never reuse the timer object —
@@ -283,7 +310,7 @@ func (m *Manager) runOnce(
 			// add a drain-on-false guard here.
 			timer.Stop()
 		}
-		if m.dispatchEvent(ev, locks, items, h) {
+		if m.dispatchEvent(ev, locks, items, h, inflightRenew) {
 			return true
 		}
 	}
@@ -297,18 +324,23 @@ func (m *Manager) dispatchEvent(
 	locks map[lockID]*lockState,
 	items map[lockID]*heapItem,
 	h *renewHeap,
+	inflightRenew map[lockID]context.CancelFunc,
 ) bool {
 	switch ev.kind {
 	case eventAdd:
 		m.handleAdd(ev.state, locks, items, h)
 	case eventRemove:
-		m.handleRemove(ev, locks, items, h)
+		m.handleRemove(ev, locks, items, h, inflightRenew)
 		// Both eventRemove and eventOrphan account for one pending-release slot
 		// (each add() increments pendingReleases once).
 		return m.decPendingAndMaybeDrain()
 	case eventOrphan:
-		m.handleOrphan(ev, locks, items, h)
+		m.handleOrphan(ev, locks, items, h, inflightRenew)
 		return m.decPendingAndMaybeDrain()
+	case eventRenewResult:
+		m.handleRenewResult(ev, locks, items, h, inflightRenew)
+		// eventRenewResult is NOT a terminal disposition — it does not account
+		// for a pendingReleases slot.
 	}
 	return false
 }
@@ -351,14 +383,29 @@ func (m *Manager) handleAdd(state *lockState, locks map[lockID]*lockState, items
 	m.mu.Unlock()
 }
 
-// handleRenew pops the earliest item, calls Driver.Renew (with retry budget for
-// transient I/O errors), and re-queues on success or cancels the lock on failure.
+// handleRenew pops the earliest item from the heap and spawns a goroutine to
+// call Driver.Renew (with retry budget for transient I/O errors). The goroutine
+// posts an eventRenewResult back to the manager event channel when complete.
 //
-// Retry semantics:
-//   - held=false (ownership lost): permanent — skip retries, immediate ErrLockLost.
+// The manager loop never blocks on Driver.Renew I/O — identical to the
+// handleRemove/Driver.Release pattern. This ensures that Lock.Orphan() /
+// Coordinator.Stop() are never delayed by a slow or unreachable backend.
+//
+// Retry semantics (executed inside the goroutine):
+//   - held=false (ownership lost): permanent — skip retries, post result immediately.
 //   - err != nil (I/O error): transient by default — retry up to maxRenewAttempts.
 //   - All attempts share the same renewTimeout budget derived from TTL and driftFactor.
-func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
+//
+// inflightRenew[id] is set to the cancel func of the Renew RPC context so
+// detachLock (called by orphan/remove) can cancel an in-flight Renew and
+// prevent it from extending a key that should have expired.
+func (m *Manager) handleRenew(
+	locks map[lockID]*lockState,
+	items map[lockID]*heapItem,
+	h *renewHeap,
+	inflightRenew map[lockID]context.CancelFunc,
+	managerDone chan struct{},
+) {
 	if h.Len() == 0 {
 		return
 	}
@@ -376,83 +423,174 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 	drift := time.Duration(float64(ttl) * m.cfg.driftFactor)
 	// Compute deadline for the Renew I/O call: clock.Now() + ttl*(1-driftFactor).
 	// Using clock.Now() (not time.Now()) ensures the deadline is computed in the
-	// same time domain as the FakeClock in tests, and aligns with the WithDriftFactor
-	// documentation that defines the margin relative to the backend TTL.
-	// ref: plan "Driver renew 调用本身的超时" — deadline = clock.Now() + ttl - drift
+	// same time domain as the FakeClock in tests, so FakeDriver.LastRenewDeadline
+	// reports the correct value for TC-12 drift-factor validation.
+	//
+	// When using FakeClock (zero start time), the computed deadline is in the
+	// real past, so context.WithDeadline creates an already-expired context.
+	// This is acceptable: FakeDriver.Renew does not block on the context (it
+	// runs synchronously), and the Renew goroutine posts its result regardless
+	// of context state (no ctx.Err() guard). On the real backend the context
+	// properly bounds the RPC duration.
 	renewTimeout := ttl - drift
 	var renewCtx context.Context
 	var cancel context.CancelFunc
 	if renewTimeout > 0 {
 		deadline := m.cfg.clock.Now().Add(renewTimeout)
 		renewCtx, cancel = context.WithDeadline(context.Background(), deadline)
-		defer cancel()
 	} else {
-		renewCtx = context.Background()
+		renewCtx, cancel = context.WithCancel(context.Background())
 	}
 
+	// Record the cancel so detachLock can abort the in-flight Renew.
+	inflightRenew[item.id] = cancel
+
+	// Spawn the Renew I/O in a background goroutine so the manager loop stays
+	// live for other events (orphan, remove, add). Mirror of handleRemove's
+	// Driver.Release goroutine.
+	//
+	// The goroutine always attempts to post back an eventRenewResult.
+	// handleRenewResult handles the "late result" case (lock already detached
+	// by orphan/remove) safely: if inflightRenew[id] was deleted and the lock
+	// is absent from locks[], the result is discarded with a Debug log.
+	go m.renewWorker(renewCtx, cancel, item, state, managerDone)
+}
+
+// renewWorker executes Driver.Renew with retry logic in a background goroutine
+// and posts the result back to the manager event channel. It is launched by
+// handleRenew and runs fully outside the manager goroutine.
+//
+// Ownership-lost (held=false, err=nil) is treated as permanent and posted
+// immediately without retrying. I/O errors are retried up to maxRenewAttempts.
+func (m *Manager) renewWorker(
+	renewCtx context.Context,
+	cancel context.CancelFunc,
+	item *heapItem,
+	state *lockState,
+	managerDone chan struct{},
+) {
+	defer cancel()
+	held, lastErr := m.runRenewAttempts(renewCtx, item, state, managerDone)
+	if held || lastErr != nil { // normal or error result to report
+		select {
+		case m.events <- managerEvent{kind: eventRenewResult, id: item.id, item: item, held: held, renewErr: lastErr}:
+		case <-managerDone:
+		}
+	}
+}
+
+// runRenewAttempts calls Driver.Renew up to maxRenewAttempts times.
+// Returns (held=true, nil) on success, (false, nil) on permanent ownership
+// loss (posts the ownership-lost eventRenewResult itself), or (false, err) when
+// all attempts return I/O errors.
+//
+// When ownership-lost is detected (held=false, err=nil), the event is posted
+// directly from this function and (false, nil) is returned to renewWorker as a
+// sentinel meaning "already posted, do not post again".
+func (m *Manager) runRenewAttempts(
+	renewCtx context.Context,
+	item *heapItem,
+	state *lockState,
+	managerDone chan struct{},
+) (held bool, lastErr error) {
 	maxAttempts := m.cfg.maxRenewAttempts
-	var lastErr error
+	key := state.key
+	ttl := state.ttl
 	for attempt := range maxAttempts {
-		held, err := m.driver.Renew(renewCtx, state.key, state.token, ttl)
-		if err == nil && !held {
-			// Permanent: backend reports ownership lost (token mismatch or key gone).
-			// Skip retries — no amount of retrying will recover ownership.
-			slog.Error("distlock: renewal ownership lost",
-				"key", state.key,
-				"op", "Renew",
-				"ttl", state.ttl,
-				"attempts", 1)
-			state.lock.markCause(ErrLockLost)
-			delete(locks, item.id)
-			m.mu.Lock()
-			m.snapshotLocks = len(locks)
-			m.mu.Unlock()
-			return
+		wasHeld, err := m.driver.Renew(renewCtx, key, state.token, ttl)
+		if err == nil && !wasHeld {
+			// Permanent: ownership lost. Post immediately and return sentinel.
+			slog.Error("distlock: renewal ownership lost", "key", key, "op", "Renew", "ttl", ttl, "attempts", 1)
+			select {
+			case m.events <- managerEvent{kind: eventRenewResult, id: item.id, item: item, held: false, renewErr: nil}:
+			case <-managerDone:
+			}
+			return false, nil // sentinel: event already posted
 		}
 		if err == nil {
-			// Success — re-queue and notify.
-			// Re-queue: schedule the next renew at now + ttl * renewFraction.
-			// ref: plan main loop — "requeue 用 driver 实际成功时间 + ttl × renewFraction"
-			item.nextRenew = m.cfg.clock.Now().Add(time.Duration(float64(ttl) * m.cfg.renewFraction))
-			item.index = -1
-			items[item.id] = item
-			heap.Push(h, item)
-
-			// Signal renewNotify so tests can synchronize on renew completion.
-			select {
-			case m.renewNotify <- struct{}{}:
-			default:
-			}
-			return
+			return true, nil // success
 		}
-		// Transient I/O error — log at Debug level for intermediate attempts.
 		lastErr = err
 		slog.Debug("distlock: renewal I/O error (will retry)",
-			"key", state.key,
-			"op", "Renew",
-			"attempt", attempt+1,
-			"max_attempts", maxAttempts,
-			"error", err)
+			"key", key, "op", "Renew",
+			"attempt", attempt+1, "max_attempts", maxAttempts, "error", err)
+	}
+	return false, lastErr // all attempts exhausted
+}
+
+// handleRenewResult processes the result of an async Driver.Renew call.
+// Called by dispatchEvent when eventRenewResult arrives.
+//
+// Three outcomes:
+//  1. renewErr != nil: all Renew attempts failed → mark lock lost.
+//  2. renewErr == nil && !held: ownership lost permanently → mark lock lost.
+//  3. renewErr == nil && held: success → re-queue item and signal renewNotify.
+func (m *Manager) handleRenewResult(
+	ev managerEvent,
+	locks map[lockID]*lockState,
+	items map[lockID]*heapItem,
+	h *renewHeap,
+	inflightRenew map[lockID]context.CancelFunc,
+) {
+	// The call returned; remove the cancel func from the inflight map.
+	delete(inflightRenew, ev.id)
+
+	state, ok := locks[ev.id]
+	if !ok {
+		// Late result: lock was already detached (orphaned / removed / lost) while
+		// the Renew goroutine was in flight. Safe to ignore.
+		slog.Debug("distlock: renew result for detached lock", "lock_id", ev.id)
+		return
 	}
 
-	// All attempts exhausted — declare lock lost.
-	slog.Error("distlock: renewal I/O error; budget exhausted; lock lost",
-		"key", state.key,
-		"op", "Renew",
-		"ttl", state.ttl,
-		"attempts", maxAttempts,
-		"error", lastErr)
-	state.lock.markCause(ErrLockLost)
-	delete(locks, item.id)
-	m.mu.Lock()
-	m.snapshotLocks = len(locks)
-	m.mu.Unlock()
+	if ev.renewErr != nil {
+		// All attempts exhausted — declare lock lost.
+		slog.Error("distlock: renewal I/O error; budget exhausted; lock lost",
+			"key", state.key,
+			"op", "Renew",
+			"ttl", state.ttl,
+			"attempts", m.cfg.maxRenewAttempts,
+			"error", ev.renewErr)
+		state.lock.markCause(ErrLockLost)
+		delete(locks, ev.id)
+		m.mu.Lock()
+		m.snapshotLocks = len(locks)
+		m.mu.Unlock()
+		return
+	}
+
+	if !ev.held {
+		// Ownership lost permanently (token mismatch or key gone).
+		state.lock.markCause(ErrLockLost)
+		delete(locks, ev.id)
+		m.mu.Lock()
+		m.snapshotLocks = len(locks)
+		m.mu.Unlock()
+		return
+	}
+
+	// Success — re-queue the item with the next renew time.
+	ttl := state.ttl
+	ev.item.nextRenew = m.cfg.clock.Now().Add(time.Duration(float64(ttl) * m.cfg.renewFraction))
+	ev.item.index = -1
+	items[ev.id] = ev.item
+	heap.Push(h, ev.item)
+
+	// Signal renewNotify so tests can synchronize on renew completion.
+	select {
+	case m.renewNotify <- struct{}{}:
+	default:
+	}
 }
 
 // detachLock removes the lock with the given id from the manager's heap and
 // locks map, sets its cause, and updates snapshotLocks under mu. Returns the
 // detached lockState (and ok=true) if the lock was found, or (nil, false) if it
 // was already absent (lost via renewal failure before the terminal event arrived).
+//
+// If a Renew is in-flight for this lock, its context is canceled so the backend
+// key's expiry is bounded at ≤1×TTL (a Renew that succeeded after orphan would
+// extend the key one more cycle → ≤2×TTL, violating the ADR contract).
 //
 // Called by handleRemove and handleOrphan to share the heap-detach path.
 //
@@ -467,6 +605,7 @@ func (m *Manager) detachLock(
 	locks map[lockID]*lockState,
 	items map[lockID]*heapItem,
 	h *renewHeap,
+	inflightRenew map[lockID]context.CancelFunc,
 ) (*lockState, bool) {
 	state, ok := locks[id]
 	if !ok {
@@ -476,6 +615,13 @@ func (m *Manager) detachLock(
 	if item, has := items[id]; has {
 		heap.Remove(h, item.index)
 		delete(items, id)
+	}
+	// Cancel any in-flight Renew so an orphaned/removed key's expiry stays
+	// bounded at ≤1×TTL (a Renew that succeeded after orphan would extend the
+	// key one more cycle → ≤2×TTL, violating the ADR contract).
+	if cancel, ok := inflightRenew[id]; ok {
+		cancel()
+		delete(inflightRenew, id)
 	}
 	m.mu.Lock()
 	m.snapshotLocks = len(locks)
@@ -488,8 +634,14 @@ func (m *Manager) detachLock(
 // goroutine so the manager loop is not blocked. The result is sent to ev.resultCh
 // so the remove() caller can observe the outcome. ev.resultCh is always signaled
 // (even when the lock was already removed) so the caller never blocks indefinitely.
-func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
-	state, ok := m.detachLock(ev.id, ErrLockReleased, locks, items, h)
+func (m *Manager) handleRemove(
+	ev managerEvent,
+	locks map[lockID]*lockState,
+	items map[lockID]*heapItem,
+	h *renewHeap,
+	inflightRenew map[lockID]context.CancelFunc,
+) {
+	state, ok := m.detachLock(ev.id, ErrLockReleased, locks, items, h, inflightRenew)
 	if ok {
 		// Driver.Release runs in a background goroutine so the manager loop is
 		// not blocked on I/O. A timeout is applied so a hung backend cannot leak
@@ -518,10 +670,16 @@ func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, ite
 // naturally after ≤1×TTL. This hands the lock to a competitor within one TTL
 // window without any backend I/O, so handleOrphan never blocks on reachability.
 // ev.resultCh is always signaled (nil) so the orphan() caller unblocks immediately.
-func (m *Manager) handleOrphan(ev managerEvent, locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
+func (m *Manager) handleOrphan(
+	ev managerEvent,
+	locks map[lockID]*lockState,
+	items map[lockID]*heapItem,
+	h *renewHeap,
+	inflightRenew map[lockID]context.CancelFunc,
+) {
 	// detachLock removes the lock from the heap so renewal stops immediately.
 	// No Driver call is made — backend key expires on its own.
-	state, ok := m.detachLock(ev.id, ErrLockOrphaned, locks, items, h)
+	state, ok := m.detachLock(ev.id, ErrLockOrphaned, locks, items, h, inflightRenew)
 	if ok {
 		slog.Debug("distlock: lock orphaned", "key", state.key)
 	}
