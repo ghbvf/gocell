@@ -92,7 +92,16 @@ type Journal interface {
 // [Journal] and archtest SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01.
 //
 // Only runtime/saga.Coordinator may hold a JournalCore field, enforced by the
-// SAGA-JOURNAL-HOLDER-SEAL-01 archtest.
+// SAGA-JOURNAL-HOLDER-SEAL-01 archtest. Business producers and query-side
+// slices should hold narrower interfaces instead:
+//   - [Enqueuer] — saga enrollment only (e.g. an HTTP slice that places orders).
+//   - [Reader] — event-log read only (e.g. a status-query slice).
+//   - [ProducerReader] — enrollment + read, for cells that need both without
+//     the coordinator-only claim/append/commit surface.
+//
+// Note: SAGA-JOURNAL-HOLDER-SEAL-01 currently scans only runtime/saga for
+// JournalCore field holders. Business cells (examples/, cells/) holding
+// JournalCore are not yet machine-rejected (tracked in gh #1415).
 type JournalCore interface {
 	// Enqueue enrolls a new saga instance for orchestration. The instance MUST
 	// pass saga.Instance.ValidateNew (Pending, CurrentStep 0, no timestamps

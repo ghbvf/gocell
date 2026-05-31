@@ -6,7 +6,7 @@
     "item": { "type": "string", "minLength": 1, "maxLength": 256 },
     "amountCents": { "type": "integer", "minimum": 1, "maximum": 100000000 },
     "paymentShouldFail": { "type": "boolean", "description": "demo-only failure-injection toggle to exercise saga compensation; production services MUST NOT expose debug hooks on the business wire — drive failures from real downstream responses" },
-    "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 128, "description": "client-supplied idempotency key; the same key returns the same order without re-running the saga (Temporal workflow-id / DTM GID model)" }
+    "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:/-]+$", "description": "client-supplied idempotency key; the same key returns the same order without re-running the saga (Temporal workflow-id / DTM GID model). Must contain only ASCII letters, digits, and the separators ._:/- (matching idutil.IsSafeID) so that the derived orderID ('ord-'+key) is a valid idutil.SafeID" }
   },
   "required": ["item", "amountCents", "idempotencyKey"],
   "additionalProperties": false

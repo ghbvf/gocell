@@ -89,9 +89,16 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 // fulfillment. Returns the order ID on success.
 //
 // Idempotency (Temporal workflow-id / DTM GID model): the idempotencyKey is
-// mapped directly to the order ID ("ord-"+idempotencyKey). A repeated call
-// with the same key returns the same orderID without re-running any saga step.
-// The saga runs asynchronously — the caller gets an immediate 202 Accepted.
+// mapped directly to the order ID ("ord-"+idempotencyKey). The semantics
+// follow Stripe idempotency keys and Temporal workflow-id:
+//   - Same key, same parameters (item/amountCents/paymentShouldFail):
+//     idempotent hit — returns the same orderID without re-running any saga step.
+//   - Same key, different parameters: key reuse conflict — returns
+//     errcode.KindConflict / errcode.ErrConflict (HTTP 409). The caller must
+//     use a distinct idempotency key for a new order with different parameters.
+//
+// The saga runs asynchronously — the caller gets an immediate 202 Accepted on
+// the happy path.
 func (s *Service) PlaceOrder(
 	ctx context.Context, idempotencyKey, item string, amountCents int64, paymentShouldFail bool,
 ) (orderID string, err error) {
@@ -106,11 +113,23 @@ func (s *Service) PlaceOrder(
 	}
 
 	if createErr := s.orders.Create(ctx, order); createErr != nil {
-		// Idempotent hit: an order with this ID already exists in the repository
-		// (the primary dedup authority). Return the existing orderID without
-		// re-enrolling the saga.
+		// Conflict from repository: an order with this ID already exists.
+		// Distinguish true idempotent hit (same parameters) from key reuse with
+		// different parameters (Stripe / Temporal idempotency key semantics).
 		var ec *errcode.Error
 		if errors.As(createErr, &ec) && ec.Kind == errcode.KindConflict {
+			existing, gErr := s.orders.GetByID(ctx, orderID)
+			if gErr != nil {
+				return "", fmt.Errorf("placeorder: fetch existing order for idempotency check: %w", gErr)
+			}
+			if existing.Item != item || existing.AmountCents != amountCents || existing.PaymentShouldFail != paymentShouldFail {
+				// Key reuse with different parameters — 409 KindConflict.
+				return "", errcode.New(errcode.KindConflict, errcode.ErrConflict,
+					"placeorder: idempotency key reused with different parameters",
+					errcode.WithDetails(errcode.PublicString("idempotencyKey", idempotencyKey)),
+				)
+			}
+			// True idempotent hit — same key, same parameters.
 			s.logger.Info(
 				"placeorder: idempotent hit, returning existing order",
 				slog.String("order_id", orderID),
