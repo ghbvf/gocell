@@ -81,6 +81,7 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 		stepMaxAttempts int           // 0 = no step-level retry override (inherits saga default)
 	}
 
+	// stepMaxAttempts: 0 表示该步骤无步骤级 retries override（Step.RetryPolicy.MaxAttempts 零值，不继承 saga 级 maxAttempts:3）
 	wantSteps := []stepSpec{
 		{name: "reserveInventory", compensable: true, timeout: testtime.D5s, stepMaxAttempts: 0},
 		{name: "chargePayment", compensable: true, timeout: 0, stepMaxAttempts: 2},
