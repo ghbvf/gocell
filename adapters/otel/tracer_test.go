@@ -108,7 +108,7 @@ func TestTracer_SetAttribute(t *testing.T) {
 	// Build attribute map for precise assertions.
 	got := make(map[string]string, len(spans[0].Attributes))
 	for _, kv := range spans[0].Attributes {
-		got[string(kv.Key)] = kv.Value.Emit()
+		got[string(kv.Key)] = kv.Value.String()
 	}
 
 	assert.Equal(t, "[redacted bytes len=5 sha256=277089d91c0bdf4f]", got["bytes_key"],
