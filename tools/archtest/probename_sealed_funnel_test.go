@@ -186,21 +186,21 @@ var probeNameSanctionedPkgs = map[string]bool{
 	"github.com/ghbvf/gocell/cells/auditcore":  true,
 	"github.com/ghbvf/gocell/cells/accesscore": true,
 	// Example cells (cellgen healthz_gen.go — marker required)
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell":               true,
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell":                  true,
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell": true,
-	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":                 true,
+	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":                   true,
 }
 
 // cellgenSanctionedPkgs is the subset of probeNameSanctionedPkgs that requires
 // the cellgen marker — any ProbeName const in these packages must live in a
 // file with the cellgenMarkerLine header.
 var cellgenSanctionedPkgs = map[string]bool{
-	"github.com/ghbvf/gocell/cells/configcore":                                    true,
-	"github.com/ghbvf/gocell/cells/auditcore":                                     true,
-	"github.com/ghbvf/gocell/cells/accesscore":                                    true,
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell":                 true,
+	"github.com/ghbvf/gocell/cells/configcore":                                     true,
+	"github.com/ghbvf/gocell/cells/auditcore":                                      true,
+	"github.com/ghbvf/gocell/cells/accesscore":                                     true,
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell":                  true,
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell": true,
-	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":                  true,
+	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":                   true,
 }
 
 // adapterSanctionedPkgs requires that all ProbeName values in these packages
