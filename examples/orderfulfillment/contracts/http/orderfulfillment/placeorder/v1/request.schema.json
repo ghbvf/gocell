@@ -4,8 +4,8 @@
   "type": "object",
   "properties": {
     "item": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "amountCents": { "type": "integer", "minimum": 0, "maximum": 100000000 },
-    "paymentShouldFail": { "type": "boolean", "description": "demo-only test hook: forces payment failure to exercise compensation" }
+    "amountCents": { "type": "integer", "minimum": 1, "maximum": 100000000 },
+    "paymentShouldFail": { "type": "boolean", "description": "demo-only failure-injection toggle to exercise saga compensation; production services MUST NOT expose debug hooks on the business wire — drive failures from real downstream responses" }
   },
   "required": ["item", "amountCents"],
   "additionalProperties": false

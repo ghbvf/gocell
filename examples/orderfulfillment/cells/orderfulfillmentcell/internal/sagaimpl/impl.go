@@ -26,6 +26,14 @@ type Impl struct {
 
 // NewImpl constructs an Impl with all four required ports.
 // Returns an error if any dependency is nil.
+//
+// Nil-guard pattern: saga-side business step constructors (named NewImpl rather
+// than NewService, with no variadic opts) are not recognized by the
+// `gocell generate required-deps` codegen funnel, which only processes
+// "type Service struct" in service.go files. The four hand-written
+// validation.IsNilInterface guards below follow the same pattern used by the
+// runtime/saga engine constructors (SAGA-CONSTRUCTOR-NIL-GUARD-01). Promotion
+// to the gocell:"required" tag funnel is tracked in gh #1317.
 func NewImpl(
 	orders ports.OrderRepository,
 	inventory ports.InventoryStore,

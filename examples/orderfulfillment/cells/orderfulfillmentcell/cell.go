@@ -75,6 +75,7 @@ func WithCoordinator(p healthz.RepoProber) Option {
 type OrderCell struct {
 	*cell.BaseCell
 
+	clock   clock.Clock
 	journal journal.JournalCore
 	repo    ports.OrderRepository
 	logger  *slog.Logger
@@ -99,10 +100,14 @@ type OrderCell struct {
 	orderstatusSvc *orderstatusslice.Service
 }
 
-// NewOrderCell creates a new OrderCell with the given options.
-func NewOrderCell(opts ...Option) *OrderCell {
+// NewOrderCell creates a new OrderCell with the given clock and options.
+// clk is a mandatory positional parameter; clock.MustHaveClock panics on nil
+// (programmer error — misuse at composition root, not a runtime condition).
+func NewOrderCell(clk clock.Clock, opts ...Option) *OrderCell {
+	clock.MustHaveClock(clk, "orderfulfillmentcell.NewOrderCell")
 	c := &OrderCell{
 		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		clock:    clk,
 		logger:   slog.Default(),
 	}
 	for _, o := range opts {
@@ -138,7 +143,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	// Build the placeorder service.
 	// The journal must be injected via WithJournal by the composition root.
 	svc, err := placeorderslice.NewService(
-		clock.Real(),
+		c.clock,
 		placeorderslice.WithOrderRepository(c.repo),
 		placeorderslice.WithJournal(c.journal),
 		placeorderslice.WithLogger(c.logger),
@@ -152,7 +157,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 
 	// Build the orderstatus service using the shared repo and journal.
 	statusSvc, err := orderstatusslice.NewService(
-		clock.Real(),
+		c.clock,
 		orderstatusslice.WithOrderRepository(c.repo),
 		orderstatusslice.WithJournal(c.journal),
 		orderstatusslice.WithLogger(c.logger),

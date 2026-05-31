@@ -58,9 +58,9 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		return fmt.Errorf("register orderfulfillmentcell: %w", err)
 	}
 
-	// F8: capture lifecycle.Append errors so they bubble to runOrderfulfillment.
+	// Capture lifecycle.Append errors so they bubble to runOrderfulfillment.
 	// WithLifecycle callback has no error return (thorough fix = error-first API;
-	// tracked in backlog). Closure variable is read before app.Run.
+	// tracked in gh #1392). Closure variable is read before app.Run.
 	var lifecycleAppendErr error
 	app := bootstrap.New(
 		clk,
@@ -79,7 +79,7 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		return fmt.Errorf("orderfulfillment: register saga-coordinator lifecycle hook: %w", lifecycleAppendErr)
 	}
 
-	logger.Warn("orderfulfillment: demo mode — unauthenticated primary listener + in-memory journal + discarded outbox events")
+	logger.Warn("orderfulfillment: demo mode — unauthenticated + in-memory journal + discarded outbox events + discarded saga metrics")
 	logger.Info("orderfulfillment: starting on 127.0.0.1:8083 (demo mode, loopback only)")
 	return app.Run(ctx)
 }
@@ -121,6 +121,7 @@ func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger
 	}
 
 	// Build the saga Coordinator.
+	// Production: replace DemoTxRunner with a real persistence.TxRunner and NewNoopEmitter with a real outbox.Emitter (wired via bootstrap).
 	// outbox.DemoTxRunner{} is a pass-through TxRunner (no real DB).
 	// outbox.NewNoopEmitter() discards outbox events (demo mode).
 	coord, err := rtsaga.NewCoordinator(
@@ -139,6 +140,7 @@ func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger
 	// Build the cell, injecting the shared journal, order repository, and coordinator
 	// for /readyz health reporting.
 	oc := ordercell.NewOrderCell(
+		clk,
 		ordercell.WithJournal(jrnl),
 		ordercell.WithOrderRepo(stores.OrderRepository()),
 		ordercell.WithLogger(logger),
@@ -174,7 +176,8 @@ func buildSagaLifecycle(
 					if err := coord.Start(ownerCtx); err != nil {
 						logger.Error("saga coordinator stopped with error",
 							slog.Any("error", err),
-							slog.String("assembly_id", assemblyID))
+							slog.String("assembly_id", assemblyID),
+							slog.String("cell_id", "orderfulfillmentcell"))
 					}
 				}()
 				// Block until the coordinator's first tick completes (ready to

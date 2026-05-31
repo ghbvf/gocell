@@ -14,7 +14,7 @@ contracts:
   - http.orderfulfillment.placeorder.v1
   - saga.orderfulfillment.v1
 passCriteria:
-  - text: "POST /api/v1/orders/ with valid item + amountCents returns 202 Accepted with orderId in the response body; saga reaches KindSagaSucceeded"
+  - text: "POST /api/v1/orders/ with valid item + amountCents returns 202 Accepted with orderId in the response body"
     mode: auto
     checkRef: journey.J-orderfulfillment-happy.happy-path
   - text: "Saga coordinator drives reserveInventory → chargePayment → ship → notifyUser steps to terminal KindSagaSucceeded; verified by integration test TestPlaceOrder_HappyPath"

@@ -118,8 +118,8 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (string, e
 		return "", fmt.Errorf("orderstatus: load journal: %w", err)
 	}
 
-	status := deriveStatus(events)
-	s.logger.Debug(
+	status := s.deriveStatus(events)
+	s.logger.Info(
 		"orderstatus: status derived",
 		slog.String("order_id", orderID),
 		slog.String("status", status),
@@ -130,7 +130,10 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (string, e
 // deriveStatus folds the journal event log into a status string.
 // The last terminal event wins; if no terminal event, a forward step indicator
 // determines accepted vs running.
-func deriveStatus(events []journal.Event) string {
+// Unrecognized EventKind values are logged at Warn level for observability;
+// SAGA-STATUS-FANOUT-COVERAGE-01 does not guard this consumer-side switch,
+// so a runtime Warn is the required fallback.
+func (s *Service) deriveStatus(events []journal.Event) string {
 	var sawStep bool
 	for _, ev := range events {
 		switch ev.Kind {
@@ -142,6 +145,11 @@ func deriveStatus(events []journal.Event) string {
 			return StatusFailed
 		case journal.KindStepCompleted, journal.KindStepStarted:
 			sawStep = true
+		default:
+			s.logger.Warn(
+				"orderstatus: unrecognized journal event kind",
+				slog.String("kind", ev.Kind.String()),
+			)
 		}
 	}
 	if sawStep {

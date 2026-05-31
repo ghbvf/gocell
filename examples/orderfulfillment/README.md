@@ -73,6 +73,8 @@ The saga runs asynchronously. Check the server logs for `saga enrolled` → `ste
 
 ### Trigger compensation (payment failure)
 
+`paymentShouldFail` is a **demo-only** failure-injection field. Production services MUST NOT expose debug hooks on the HTTP API wire — drive failures from real downstream responses.
+
 Set `paymentShouldFail: true` to force the `chargePayment` step to return a conflict error, causing the coordinator to compensate in reverse over **completed steps only**:
 
 ```bash
@@ -91,11 +93,13 @@ After placing an order, you can query the saga terminal state via GET:
 curl http://127.0.0.1:8083/api/v1/orders/<orderId>
 ```
 
-Response (200 OK):
+Response (200 OK, initial query immediately after placement):
 
 ```json
 {"data":{"orderId":"ord-...","status":"accepted"}}
 ```
+
+Query again after a moment to observe the terminal state (`succeeded` or `compensated`).
 
 The `status` field reflects the saga state:
 
@@ -118,6 +122,16 @@ curl http://127.0.0.1:9093/readyz
 ```
 
 The `/readyz` probe includes `orderfulfillmentcell_repo_ready` (coordinator journal liveness) registered via the `WithCoordinator` option.
+
+## Durable Wiring Checklist
+
+To move from demo mode to a durable L3 saga path, wire all of the following in the composition root (`run.go`):
+
+1. Replace `journal.NewMemJournal` with a persistent PG-backed journal (durable saga state survives restarts).
+2. Replace `outbox.DemoTxRunner{}` with a real `persistence.TxRunner` (e.g. `postgres.TxManager`) — compose via `persistence.WrapForCell`.
+3. Replace `outbox.NewNoopEmitter()` with a real `outbox.Emitter` (e.g. relay-backed broker publisher) — compose via `outbox.WrapEmitterForCell`.
+4. Replace `kernelmetrics.NopProvider{}` with a real Prometheus metrics provider (e.g. `obmetrics.NewSagaStepCollector` wired to a real provider from `bootstrap.MetricsProvider()`).
+5. Replace `auth.AuthNone{}` + `auth.public: true` with a JWT plan (`auth.NewAuthJWTFromAssembly`) and set `auth.public: false` in both contract YAMLs — see `auth.public` comments in `contracts/http/orderfulfillment/*/v1/contract.yaml`.
 
 ## Security
 

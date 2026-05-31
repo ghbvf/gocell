@@ -3,17 +3,40 @@ package sagaimpl_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
 	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/sagaimpl"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
+
+// failingShipmentStore is a ports.ShipmentStore stub whose CreateShipment
+// always returns the configured error.
+type failingShipmentStore struct {
+	createErr error
+}
+
+func (f *failingShipmentStore) CreateShipment(_ context.Context, _ string) (string, error) {
+	return "", f.createErr
+}
+
+func (f *failingShipmentStore) CancelShipment(_ context.Context, _ string) error {
+	return nil
+}
+
+func (f *failingShipmentStore) Get(_ string) (string, bool) {
+	return "", false
+}
+
+// Verify that failingShipmentStore satisfies the interface at compile time.
+var _ ports.ShipmentStore = (*failingShipmentStore)(nil)
 
 // newTestImpl builds a saga Impl with pre-seeded inventory.
 func newTestImpl(t *testing.T, stock map[string]int) (
@@ -224,5 +247,31 @@ func TestRunNotifyUser(t *testing.T) {
 	}
 	if !out.Notified {
 		t.Error("Notified should be true")
+	}
+}
+
+func TestRunShip_ShipmentFail(t *testing.T) {
+	t.Parallel()
+
+	orders := mem.NewOrderRepository()
+	inventory := mem.NewInventoryStore(map[string]int{})
+	payments := mem.NewPaymentStore()
+	shipStore := &failingShipmentStore{createErr: fmt.Errorf("backend unavailable")}
+
+	impl, err := sagaimpl.NewImpl(orders, inventory, payments, shipStore)
+	if err != nil {
+		t.Fatalf("NewImpl: %v", err)
+	}
+
+	inst := newInst("ord-shipfail")
+	prevOut := of.ChargePaymentOutput{PaymentID: "pay-ord-shipfail", AmountCents: 100}
+
+	_, gotErr := impl.RunShip(context.Background(), inst, prevOut)
+	if gotErr == nil {
+		t.Fatal("expected error from RunShip when CreateShipment fails, got nil")
+	}
+	// RunShip wraps with "ship: create shipment: <err>"
+	if !errors.Is(gotErr, shipStore.createErr) {
+		t.Errorf("error chain does not contain original error; got: %v", gotErr)
 	}
 }

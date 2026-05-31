@@ -27,6 +27,8 @@ import (
 func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 	t.Parallel()
 
+	// 数值来源 contracts/saga/orderfulfillment/v1/contract.yaml（saga.timeout/retries + steps.{timeout,retries}）；改 contract.yaml 须同步此处。
+
 	orders := mem.NewOrderRepository()
 	inv := mem.NewInventoryStore(map[string]int{"widget": 100})
 	pay := mem.NewPaymentStore()
@@ -73,16 +75,17 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 	// --- step assertions ---
 
 	type stepSpec struct {
-		name        string
-		compensable bool          // true → Compensate func must be non-nil
-		timeout     time.Duration // 0 = no step-level timeout (inherits saga default)
+		name            string
+		compensable     bool          // true → Compensate func must be non-nil
+		timeout         time.Duration // 0 = no step-level timeout (inherits saga default)
+		stepMaxAttempts int           // 0 = no step-level retry override (inherits saga default)
 	}
 
 	wantSteps := []stepSpec{
-		{name: "reserveInventory", compensable: true, timeout: testtime.D5s},
-		{name: "chargePayment", compensable: true, timeout: 0},
-		{name: "ship", compensable: true, timeout: 0},
-		{name: "notifyUser", compensable: false, timeout: 0},
+		{name: "reserveInventory", compensable: true, timeout: testtime.D5s, stepMaxAttempts: 0},
+		{name: "chargePayment", compensable: true, timeout: 0, stepMaxAttempts: 2},
+		{name: "ship", compensable: true, timeout: 0, stepMaxAttempts: 0},
+		{name: "notifyUser", compensable: false, timeout: 0, stepMaxAttempts: 0},
 	}
 
 	if len(defn.Steps) != len(wantSteps) {
@@ -102,6 +105,10 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 		}
 		if step.Timeout != want.timeout {
 			t.Errorf("Steps[%d] (%s) Timeout = %v, want %v", i, want.name, step.Timeout, want.timeout)
+		}
+		if step.RetryPolicy.MaxAttempts != want.stepMaxAttempts {
+			t.Errorf("Steps[%d] (%s) RetryPolicy.MaxAttempts = %d, want %d",
+				i, want.name, step.RetryPolicy.MaxAttempts, want.stepMaxAttempts)
 		}
 	}
 }

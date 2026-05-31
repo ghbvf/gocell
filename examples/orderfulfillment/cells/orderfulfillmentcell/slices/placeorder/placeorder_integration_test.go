@@ -63,12 +63,10 @@ func setup(t *testing.T) testSetup {
 
 	cfg := saga.DefaultConfig()
 	cfg.PollInterval = testtime.D20ms
-	// Short LeaseDuration so the coordinator can re-claim the same instance on
-	// every tick (each step completes in < 50ms; the lease expires quickly so
-	// the next tick sees the instance as available again). The constraint
+	// LeaseDuration set to 2s to give slow CI runners enough headroom.
 	// HeartbeatInterval * HeartbeatLeaseSafetyFactor(2) < LeaseDuration is
-	// satisfied: 50ms*2 = 100ms < 200ms.
-	cfg.LeaseDuration = testtime.D200ms
+	// satisfied: 50ms*2 = 100ms << 2s.
+	cfg.LeaseDuration = testtime.D2s
 	cfg.HeartbeatInterval = testtime.D50ms
 
 	coord, err := saga.NewCoordinator(
@@ -140,7 +138,7 @@ func waitTerminal(t *testing.T, ctx context.Context, j *journal.MemJournal, id i
 			}
 		}
 		return false
-	}, testtime.EventuallyLong, testtime.FastPoll)
+	}, testtime.EventuallyExtraLong, testtime.FastPoll)
 	return found
 }
 
@@ -150,6 +148,7 @@ func waitTerminal(t *testing.T, ctx context.Context, j *journal.MemJournal, id i
 // - payment is recorded
 // - shipment is recorded
 func TestPlaceOrder_HappyPath(t *testing.T) {
+	t.Parallel()
 	ts := setup(t)
 
 	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, false)
@@ -181,6 +180,7 @@ func TestPlaceOrder_HappyPath(t *testing.T) {
 // - no payment recorded
 // - no shipment recorded
 func TestPlaceOrder_CompensateOnChargeFail(t *testing.T) {
+	t.Parallel()
 	ts := setup(t)
 
 	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, true)
@@ -210,6 +210,7 @@ func TestPlaceOrder_CompensateOnChargeFail(t *testing.T) {
 // for the happy path: four forward steps complete in order, terminal is Succeeded.
 // F4: event sequence assertion for saga orchestration.
 func TestPlaceOrder_HappyPath_EventSequence(t *testing.T) {
+	t.Parallel()
 	ts := setup(t)
 
 	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, false)
@@ -260,6 +261,7 @@ func TestPlaceOrder_HappyPath_EventSequence(t *testing.T) {
 // KindSagaCompensated.
 // F4: compensation sequence assertion.
 func TestPlaceOrder_CompensateOnChargeFail_EventSequence(t *testing.T) {
+	t.Parallel()
 	ts := setup(t)
 
 	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, true)

@@ -35,15 +35,9 @@ func newTestServiceBundle(t *testing.T) testServiceBundle {
 	return testServiceBundle{svc: svc, jrnl: jrnl}
 }
 
-// newTestService is kept for backwards-compatible single-service tests.
-func newTestService(t *testing.T) *placeorder.Service {
-	t.Helper()
-	return newTestServiceBundle(t).svc
-}
-
 func TestService_PlaceOrder_HappyPath(t *testing.T) {
 	t.Parallel()
-	svc := newTestService(t)
+	svc := newTestServiceBundle(t).svc
 	ctx := context.Background()
 
 	id, err := svc.PlaceOrder(ctx, "widget", 1000, false)
@@ -54,7 +48,7 @@ func TestService_PlaceOrder_HappyPath(t *testing.T) {
 
 func TestService_PlaceOrder_MultipleOrders(t *testing.T) {
 	t.Parallel()
-	svc := newTestService(t)
+	svc := newTestServiceBundle(t).svc
 	ctx := context.Background()
 
 	id1, err := svc.PlaceOrder(ctx, "widget", 1000, false)
@@ -68,7 +62,7 @@ func TestService_PlaceOrder_MultipleOrders(t *testing.T) {
 
 func TestService_PlaceOrder_PaymentFailFlag(t *testing.T) {
 	t.Parallel()
-	svc := newTestService(t)
+	svc := newTestServiceBundle(t).svc
 	ctx := context.Background()
 
 	id, err := svc.PlaceOrder(ctx, "widget", 500, true)
@@ -94,9 +88,7 @@ func TestService_PlaceOrder_SagaEnrolled(t *testing.T) {
 	// No coordinator is running so events may be empty but the instance exists.
 	events, err := bundle.jrnl.Load(ctx, idutil.SafeID(id))
 	require.NoError(t, err, "saga instance must be enrolled (Load must not return NotFound)")
-	// events may be nil or empty at this point (coordinator not running);
-	// what matters is that the instance is queryable without error.
-	_ = events
+	require.Empty(t, events, "freshly enrolled saga should have no events before coordinator runs")
 }
 
 func TestNewService_MissingOrders(t *testing.T) {

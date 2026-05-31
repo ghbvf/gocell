@@ -3,6 +3,7 @@ package mem_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -232,4 +233,83 @@ func TestShipmentStore(t *testing.T) {
 			t.Fatalf("double CancelShipment: %v", err)
 		}
 	})
+}
+
+// TestInventoryStore_ConcurrentReserveRelease verifies that concurrent
+// Reserve/Release operations on InventoryStore are data-race-free.
+// Run with -race to detect any missing mutex guards.
+func TestInventoryStore_ConcurrentReserveRelease(t *testing.T) {
+	t.Parallel()
+	const goroutines = 20
+	s := mem.NewInventoryStore(map[string]int{"widget": goroutines})
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	for i := range goroutines {
+		orderID := "ord-" + string(rune('A'+i))
+		go func(id string) {
+			defer wg.Done()
+			_, _ = s.Reserve(context.Background(), id, "widget")
+		}(orderID)
+		go func(id string) {
+			defer wg.Done()
+			_ = s.Release(context.Background(), id)
+		}(orderID)
+	}
+	wg.Wait()
+	// Available() must also be race-free.
+	_ = s.Available("widget")
+}
+
+// TestPaymentStore_ConcurrentChargeRefund verifies that concurrent
+// Charge/Refund operations on PaymentStore are data-race-free.
+func TestPaymentStore_ConcurrentChargeRefund(t *testing.T) {
+	t.Parallel()
+	const goroutines = 20
+	s := mem.NewPaymentStore()
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	for i := range goroutines {
+		orderID := "ord-" + string(rune('A'+i))
+		go func(id string) {
+			defer wg.Done()
+			_, _ = s.Charge(context.Background(), id, 100)
+		}(orderID)
+		go func(id string) {
+			defer wg.Done()
+			_ = s.Refund(context.Background(), id)
+		}(orderID)
+	}
+	wg.Wait()
+	// Get must also be race-free.
+	_, _ = s.Get("ord-A")
+}
+
+// TestShipmentStore_ConcurrentCreateCancel verifies that concurrent
+// CreateShipment/CancelShipment operations on ShipmentStore are data-race-free.
+func TestShipmentStore_ConcurrentCreateCancel(t *testing.T) {
+	t.Parallel()
+	const goroutines = 20
+	s := mem.NewShipmentStore()
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	for i := range goroutines {
+		orderID := "ord-" + string(rune('A'+i))
+		go func(id string) {
+			defer wg.Done()
+			_, _ = s.CreateShipment(context.Background(), id)
+		}(orderID)
+		go func(id string) {
+			defer wg.Done()
+			_ = s.CancelShipment(context.Background(), id)
+		}(orderID)
+	}
+	wg.Wait()
+	// Get must also be race-free.
+	_, _ = s.Get("ord-A")
 }
