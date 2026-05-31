@@ -89,7 +89,7 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 // is applied at the sink (adapters/otel/span.go otelSpan.RecordError); spy
 // spans in tests receive the raw error and that is expected. The redaction
 // guarantee is exercised by SPAN-RECORD-ERROR-SEAL-01 archtest
-// (tools/archtest/span_record_error_redact_test.go).
+// (tools/archtest/span_record_error_seal_test.go).
 // ref: hashicorp/vault audit log_raw=false (redact at output boundary).
 func TestWrapConsumer_RecordsErrorOnSpan(t *testing.T) {
 	tr := &spyTracer{}

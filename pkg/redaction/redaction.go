@@ -415,15 +415,9 @@ func redactValue(v any) any {
 // RedactString applies, so the field-set and over-mask trade-offs documented
 // at package level apply uniformly.
 //
-// Funnel discipline: RedactAny is the only sanctioned conversion for panic
-// recovery values reaching slog.Any("panic", ...). Production callsites MUST be
-// `slog.Any("panic", redaction.RedactAny(r))` where r is the recover() return
-// value (any). Enforced by archtest PANIC-REDACT-01 (tools/archtest/panic_invariants_test.go).
-//
-// Do not stringify in caller: `slog.String("panic", redaction.RedactString(fmt.Sprint(r)))`
-// is a discouraged variant that bypasses the typed funnel. The RedactAny default
-// branch already does `RedactString(fmt.Sprint(x))` under the hood; callers
-// should preserve the any-typed funnel form for archtest scan-ability.
+// Call-site defense-in-depth (no longer archtest-enforced; PANIC-REDACT-01
+// retired). Sink-side redaction is covered unconditionally by
+// SLOG-HANDLER-SEALED-FUNNEL-01 via RedactSlogAttr's KindAny branch.
 func RedactAny(v any) any {
 	if v == nil {
 		return nil

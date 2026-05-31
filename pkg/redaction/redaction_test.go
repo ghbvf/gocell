@@ -830,6 +830,16 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 			wantMask: false,
 		},
 		{
+			// KindAny: struct whose fmt.Sprint form contains a sensitive key=value
+			// pattern is stringified and then redacted (fail-closed). Documents the
+			// known struct-field leak surface: {token=xyz} → fmt.Sprint → "{token=xyz}"
+			// → RedactString matches `token=xyz` → mask.
+			name:     "any struct with embedded token=value — redacted after stringify",
+			attr:     slog.Any("note", struct{ T string }{T: "token=xyz"}),
+			wantKind: slog.KindString,
+			wantMask: true,
+		},
+		{
 			// Control: string with sensitive key IS redacted (unchanged behavior).
 			name:     "string redacted (control)",
 			attr:     slog.String("msg", "password=secret"),
@@ -861,7 +871,7 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 				t.Errorf("RedactSlogAttr(%v): expected mask %q in output %q",
 					tc.attr, redaction.Mask, gotStr)
 			}
-			if !tc.wantMask && tc.wantKind == slog.KindString && strings.Contains(gotStr, redaction.Mask) {
+			if !tc.wantMask && strings.Contains(gotStr, redaction.Mask) {
 				t.Errorf("RedactSlogAttr(%v): unexpected mask in output %q", tc.attr, gotStr)
 			}
 		})

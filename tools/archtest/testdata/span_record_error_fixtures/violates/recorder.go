@@ -1,4 +1,4 @@
-// Package violates is a fixture for SPAN-RECORD-ERROR-REDACT-01 negative
+// Package violates is a fixture for SPAN-RECORD-ERROR-SEAL-01 negative
 // case: span.RecordError is called with a raw error (no redaction wrap),
 // which the scanner must report as a violation. Parsed by archtest; not
 // intended to compile.

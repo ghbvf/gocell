@@ -273,6 +273,28 @@ func TestRedactingHandler_ContextFieldsStillInjected(t *testing.T) {
 	assert.Equal(t, "trace-xyz", entry["trace_id"])
 }
 
+// TestRedactingHandler_WithGroupAttrRedacted verifies that sensitive attrs nested
+// inside a WithGroup-created group are still redacted. This tests the WithGroup
+// godoc guarantee: "the group prefix does not bypass attr-level redaction".
+func TestRedactingHandler_WithGroupAttrRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(NewHandler(Options{
+		Level:  slog.LevelDebug,
+		Format: FormatJSON,
+		Writer: &buf,
+	})).WithGroup("auth")
+
+	logger.Info("req", slog.String("password", "x"))
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+
+	authGroup, ok := entry["auth"].(map[string]any)
+	require.True(t, ok, "auth group must be present in JSON output")
+	assert.Equal(t, mask, authGroup["password"],
+		"password attr inside WithGroup must be redacted")
+}
+
 // TestRedactingHandler_BenignAttrUnchanged verifies that non-sensitive attrs
 // pass through without modification.
 func TestRedactingHandler_BenignAttrUnchanged(t *testing.T) {

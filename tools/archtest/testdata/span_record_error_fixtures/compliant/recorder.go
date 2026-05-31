@@ -1,4 +1,4 @@
-// Package compliant is a fixture for SPAN-RECORD-ERROR-REDACT-01 positive
+// Package compliant is a fixture for SPAN-RECORD-ERROR-SEAL-01 positive
 // case: every span.RecordError call wraps its argument with
 // redaction.RedactError. Parsed by archtest; not intended to compile.
 package compliant

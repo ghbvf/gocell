@@ -60,13 +60,17 @@
 //     redaction.RedactString in the Handle body; it verifies the key call shapes
 //     but not every possible execution branch (e.g., a conditional path that
 //     bypasses redaction). Reverse self-check
-//     TestSlogHandlerSealedFunnel_HandleRedact_DetectsViolation exercises the
-//     detection logic on synthetic source.
+//     TestSlogHandlerSealedFunnel_A2_DetectsViolation exercises the detection
+//     logic on synthetic source (injects a fake Handle body missing the
+//     RedactSlogAttr call and confirms a violation is reported).
 //
-//   - A3 checks function bodies at the top level. A SetDefault call inside a
-//     nested helper or deferred closure would not satisfy A3. Reverse self-check
-//     TestSlogHandlerSealedFunnel_SetDefault_DetectsViolation exercises the
-//     detection.
+//   - A3 checks function bodies using EachInSubtree full recursive traversal,
+//     so SetDefault inside a nested if/defer/closure within the entry-point
+//     function body WILL be detected. The true blind spot is a SetDefault call
+//     inside a separate helper function called from the entry point — cross-
+//     FuncDecl call chains are not tracked. Reverse self-check
+//     TestSlogHandlerSealedFunnel_A3_DetectsViolation verifies that the
+//     production runCorebundle contains the required SetDefault call.
 //
 //   - A3 does not cover the timing gap between process startup and the SetDefault
 //     call (early package-level slog calls before the seal). This is the primary
@@ -89,11 +93,15 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
@@ -515,28 +523,117 @@ func TestSlogHandlerSealedFunnel_A1_DetectsViolation(t *testing.T) {
 }
 
 // TestSlogHandlerSealedFunnel_A2_DetectsViolation is the reverse self-check for
-// A2: verifies that if contextHandler.Handle lacked a RedactSlogAttr call, the
-// check would fire. We construct synthetic *ast.FuncDecl values with and without
-// the redaction call.
+// A2. It injects two synthetic Handle bodies into contextHandlerHandleRedactCheck:
+//
+//  1. RED: a Handle body that calls r.Attrs + AddAttrs but does NOT call
+//     redaction.RedactSlogAttr — the check must report ≥1 violation.
+//
+//  2. GREEN: a Handle body that does call both redaction.RedactString (for the
+//     message) and redaction.RedactSlogAttr in an AddAttrs callback — must
+//     report 0 violations.
+//
+// This provides non-vacuity proof for A2: the check can actually catch regressions.
+// Method: go/parser.ParseFile to build a minimal AST and a fake *Pass with the
+// redaction import present (same technique as TestSpanRecordErrorSeal_B_DetectsViolation).
 func TestSlogHandlerSealedFunnel_A2_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	// Synthetic test: a Handle body that does NOT call RedactSlogAttr — should
-	// be detected.
-	//
-	// We cannot easily manufacture a *Pass without RunTyped, so we test the
-	// detection helpers directly by asserting on the structure they look for:
-	// the absence of redaction.RedactSlogAttr in a function with AddAttrs calls
-	// should be flagged.
-	//
-	// The actual production detection is a production red→green proof:
-	// if the Handle body is modified to remove RedactSlogAttr, A2 will flag it.
-	//
-	// Here we verify the structural predicate: contextHandlerHandleRedactCheck
-	// fires on a nil-body case (which always has zero redaction calls).
+	// redactionImport is the import path as it would appear in logging.go.
+	const redactionImport = `"github.com/ghbvf/gocell/pkg/redaction"`
+
+	cases := []struct {
+		name    string
+		src     string
+		wantVio bool
+		desc    string
+	}{
+		{
+			name: "missing_redact_slog_attr",
+			src: `package logging
+import (
+	"context"
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
+	nr := slog.NewRecord(r.Time, r.Level, redaction.RedactString(r.Message), r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(a)  // VIOLATION: missing redaction.RedactSlogAttr(a)
+		return true
+	})
+	return h.inner.Handle(ctx, nr)
+}
+`,
+			wantVio: true,
+			desc:    "Handle calls AddAttrs without RedactSlogAttr — must be flagged",
+		},
+		{
+			name: "compliant_handle",
+			src: `package logging
+import (
+	"context"
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
+	nr := slog.NewRecord(r.Time, r.Level, redaction.RedactString(r.Message), r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(redaction.RedactSlogAttr(a))
+		return true
+	})
+	return h.inner.Handle(ctx, nr)
+}
+`,
+			wantVio: false,
+			desc:    "Handle calls RedactString + RedactSlogAttr — compliant",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "logging.go", tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err, "synthetic fixture must parse: %s", tc.desc)
+
+			// Build a minimal *Pass that is sufficient for contextHandlerHandleRedactCheck
+			// (which uses redactionLocalName + AST walk, no types.Info needed).
+			// Rel must be set because contextHandlerHandleRedactCheck calls p.Rel(f)
+			// for diagnostic positions.
+			p := &Pass{
+				Fset:  fset,
+				Files: []*ast.File{file},
+				Rel:   func(*ast.File) string { return "logging.go" },
+			}
+
+			var viols []Diagnostic
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Name == nil || fn.Body == nil {
+					return
+				}
+				if !HasReceiver(fn, slogFunnelContextHandlerTypeName) || fn.Name.Name != slogFunnelContextHandlerHandleMethod {
+					return
+				}
+				viols = append(viols, contextHandlerHandleRedactCheck(p, file, fn)...)
+			})
+
+			if tc.wantVio {
+				assert.NotEmpty(t, viols,
+					"A2 must detect violation for %q: %s", tc.name, tc.desc)
+			} else {
+				assert.Empty(t, viols,
+					"A2 must not flag %q: %s; got %v", tc.name, tc.desc, viols)
+			}
+		})
+	}
+
+	// Additionally confirm the production contextHandler.Handle yields 0 violations
+	// (non-vacuity proof of the GREEN path against real code).
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{slogFunnelLoggingPkgRelDir})
-
 	var handleChecked bool
 	_ = Run(t, scope, func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -548,21 +645,17 @@ func TestSlogHandlerSealedFunnel_A2_DetectsViolation(t *testing.T) {
 					return
 				}
 				handleChecked = true
-				// Positive: the real implementation must yield 0 violations.
 				violations := contextHandlerHandleRedactCheck(p, f, fn)
-				if len(violations) != 0 {
-					for _, v := range violations {
-						t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A2 production violation: %s:%d: %s",
-							v.Rel, v.Line, v.Message)
-					}
+				for _, v := range violations {
+					t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A2 production violation: %s:%d: %s",
+						v.Rel, v.Line, v.Message)
 				}
 			})
 		}
 		return nil
 	})
 	if !handleChecked {
-		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A2 non-vacuity: %s.%s not found"+
-			" in %s — archtest would pass vacuously without this method",
+		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A2 non-vacuity: %s.%s not found in %s",
 			slogFunnelContextHandlerTypeName, slogFunnelContextHandlerHandleMethod, slogFunnelLoggingPkgRelDir)
 	}
 }
@@ -734,6 +827,244 @@ func findFileAtPos(p *Pass, pos token.Pos) *ast.File {
 		if f.Pos() <= pos && pos <= f.End() {
 			return f
 		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// C3: Entry-point reverse coverage — allowlist must not have gaps
+// ---------------------------------------------------------------------------
+
+// TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage complements A3 by
+// asserting in the other direction: every production package under cmd/ or
+// examples/ that imports runtime/bootstrap must have at least one function in
+// slogHandlerEntryPoints. This prevents an entirely new assembly from being
+// wired up without updating the A3 allowlist.
+//
+// Granularity: package-level (not function-level). Within an existing package,
+// the actual SetDefault-bearing function is already verified by A3. This check
+// only detects NEW packages that bootstrap without a corresponding A3 entry.
+//
+// Exclusion: cmd/gocell does not import runtime/bootstrap (CLI tool, not a
+// long-running service) — it is naturally excluded by the bootstrap-import filter.
+//
+// AI-robust rating: Medium (same as A3 — caller-allowlist; Hard path tracked
+// at gh #1401).
+func TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	if err != nil {
+		t.Fatalf("A3 entry-point coverage: read module path: %v", err)
+	}
+	bootstrapPkgPath := modPath + "/runtime/bootstrap"
+
+	// Build a lookup set of packages already covered by the allowlist.
+	coveredPkgs := make(map[string]bool) // pkgPattern → true
+	for _, ep := range slogHandlerEntryPoints {
+		coveredPkgs[ep.pkgPattern] = true
+	}
+
+	// Scan all cmd/ and examples/ packages for bootstrap imports.
+	var ds []Diagnostic
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./cmd/...", "./examples/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			pkgPath := p.Pkg.Path()
+
+			// Only consider packages that import runtime/bootstrap.
+			importsBootstrap := false
+			for _, imp := range p.Pkg.Imports() {
+				if imp.Path() == bootstrapPkgPath {
+					importsBootstrap = true
+					break
+				}
+			}
+			if !importsBootstrap {
+				return nil
+			}
+
+			// Derive the ./relative/pkg pattern form (strip module path prefix).
+			relPkg := strings.TrimPrefix(pkgPath, modPath+"/")
+			pkgPattern := "./" + relPkg
+
+			if coveredPkgs[pkgPattern] {
+				return nil // already in allowlist — OK
+			}
+
+			// New package importing bootstrap but not in allowlist: flag it.
+			// Use the package-level position for the diagnostic.
+			for _, f := range p.Files {
+				if strings.HasSuffix(filepath.ToSlash(p.Rel(f)), "_test.go") {
+					continue
+				}
+				pos := p.Fset.Position(f.Pos())
+				ds = append(ds, Diagnostic{
+					Rel:  filepath.ToSlash(p.Rel(f)),
+					Line: pos.Line,
+					Message: "package " + pkgPattern + " imports runtime/bootstrap" +
+						" but has NO entry in slogHandlerEntryPoints" +
+						" — add the assembly entry-point function name to the allowlist;" +
+						" SLOG-HANDLER-SEALED-FUNNEL-01 A3 reverse coverage",
+				})
+				break // one diagnostic per package is sufficient
+			}
+			return nil
+		})
+	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01-A3-COVERAGE", ds)
+}
+
+// ---------------------------------------------------------------------------
+// C4: LogValuer self-redact enrollment
+// ---------------------------------------------------------------------------
+
+// slogLogValuerAllowlist is the authoritative list of production named types
+// that implement slog.LogValuer. Each entry carries a brief justification for
+// why the type is safe to pass through as KindLogValuer (i.e., its LogValue()
+// return value is self-redacted).
+//
+// When a new LogValuer is added to production code, it MUST appear here with a
+// justification. If its LogValue() does NOT self-redact, report the gap before
+// adding it — it is a potential PII leak.
+var slogLogValuerAllowlist = []struct {
+	// pkg is the full import path of the package containing the type.
+	pkg string
+	// typeName is the exported or unexported type name.
+	typeName string
+	// selfRedacts explains how the type protects sensitive fields.
+	selfRedacts string
+}{
+	{
+		pkg:         "runtime/http/health",
+		typeName:    "SlogDependencyEntry",
+		selfRedacts: "error_msg via newRedactedErrorMsg→RedactString (HEALTH-REDACTED-ERROR-MSG-FUNNEL-01); status/durationMs non-sensitive",
+	},
+	{
+		pkg:         "adapters/redis",
+		typeName:    "Config",
+		selfRedacts: "password field absent from LogValue output; cluster addrs redacted via url.URL.Redacted()",
+	},
+	{
+		pkg:         "adapters/mqtt",
+		typeName:    "AuthConfig",
+		selfRedacts: "password replaced with redaction.Mask when non-empty; username is non-sensitive",
+	},
+	{
+		pkg:         "kernel/webhook",
+		typeName:    "Source",
+		selfRedacts: "secret field always replaced with redaction.Mask literal",
+	},
+	{
+		pkg:         "kernel/webhook",
+		typeName:    "hmacSigner",
+		selfRedacts: "delegates to Source.LogValue() which self-redacts the secret",
+	},
+	{
+		pkg:         "kernel/command",
+		typeName:    "Entry",
+		selfRedacts: "payload replaced with '<REDACTED bytes=N>' sentinel; no credential fields in other attrs",
+	},
+}
+
+// TestSlogHandlerSealedFunnel_LogValuerSelfRedactEnrollment asserts that every
+// production named type implementing slog.LogValuer is present in
+// slogLogValuerAllowlist. New LogValuers not in the list cause a CI failure,
+// forcing the author to review the self-redaction claim before the type can
+// pass through contextHandler's KindLogValuer passthrough path unredacted.
+//
+// AI-robust rating: Medium (types.Implements scan; Hard path = codegen golden
+// enumeration of LogValuer implementations, tracked at gh #1401 alongside A3).
+func TestSlogHandlerSealedFunnel_LogValuerSelfRedactEnrollment(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	if err != nil {
+		t.Fatalf("LogValuer enrollment: read module path: %v", err)
+	}
+
+	// Build lookup: "relPkg/typeName" → true.
+	enrolled := make(map[string]bool)
+	for _, e := range slogLogValuerAllowlist {
+		enrolled[e.pkg+"/"+e.typeName] = true
+	}
+
+	var ds []Diagnostic
+	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		pkgPath := p.Pkg.Path()
+		relPkg := strings.TrimPrefix(pkgPath, modPath+"/")
+
+		// Find slog.LogValuer interface.
+		logValuerIface := findSlogLogValuerInterface(p.TypesInfo, p.Pkg)
+		if logValuerIface == nil {
+			return nil
+		}
+
+		scope := p.Pkg.Scope()
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			if obj == nil {
+				continue
+			}
+			typObj, ok := obj.(*types.TypeName)
+			if !ok {
+				continue
+			}
+			named, ok := typObj.Type().(*types.Named)
+			if !ok {
+				continue
+			}
+			if !typesutil.ImplementsInterface(named, logValuerIface) {
+				continue
+			}
+			key := relPkg + "/" + name
+			if !enrolled[key] {
+				pos := p.Fset.Position(obj.Pos())
+				ds = append(ds, Diagnostic{
+					Rel:  filepath.ToSlash(p.Rel(findFileAtPos(p, obj.Pos()))),
+					Line: pos.Line,
+					Message: "type " + name + " in " + relPkg + " implements slog.LogValuer" +
+						" but is NOT in slogLogValuerAllowlist — add it with a self-redacts" +
+						" justification, or fix its LogValue() to redact sensitive fields;" +
+						" KindLogValuer passes through contextHandler unredacted" +
+						" (SLOG-HANDLER-SEALED-FUNNEL-01 C4)",
+				})
+			}
+		}
+		return nil
+	})
+	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01-LOGVALUER-ENROLLMENT", ds)
+}
+
+// findSlogLogValuerInterface returns the *types.Interface for log/slog.LogValuer
+// by iterating the imports of the package. Returns nil if not found.
+func findSlogLogValuerInterface(info *types.Info, pkg *types.Package) *types.Interface {
+	if info == nil || pkg == nil {
+		return nil
+	}
+	for _, imp := range pkg.Imports() {
+		if imp.Path() != slogFunnelStdlibPkgPath {
+			continue
+		}
+		obj := imp.Scope().Lookup("LogValuer")
+		if obj == nil {
+			return nil
+		}
+		typeName, ok := obj.(*types.TypeName)
+		if !ok {
+			return nil
+		}
+		iface, ok := typeName.Type().Underlying().(*types.Interface)
+		if !ok {
+			return nil
+		}
+		return iface
 	}
 	return nil
 }

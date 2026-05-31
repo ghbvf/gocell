@@ -43,18 +43,37 @@ type Options struct {
 	Writer io.Writer
 }
 
-// contextHandler wraps an inner slog.Handler and enriches records with
-// context values.
+// contextHandler wraps an inner slog.Handler, enriches records with context
+// values, and provides fail-closed sink-side redaction. Beyond context
+// injection, every Handle call redacts the message with redaction.RedactString
+// and every attr with redaction.RedactSlogAttr. WithAttrs pre-redacts attrs at
+// bind time so that logger.With("password", v) is safe before any Handle call.
+// This makes the handler the process-global redaction barrier: even call sites
+// that omit explicit redaction helpers are protected.
 type contextHandler struct {
 	inner slog.Handler
 }
 
 // NewHandler creates a slog.Handler that redacts every record (fail-closed)
 // and enriches it with GoCell context values. It builds a fresh JSON/Text sink
-// writing to opts.Writer (default os.Stdout). Production entrypoints install
-// the result as slog.Default; building a fresh sink (rather than wrapping the
-// stdlib default) avoids the slog↔log recursion that wrapping the default
-// handler would trigger.
+// writing to opts.Writer (default os.Stdout).
+//
+// Security contract: every Handle call scrubs the log message with
+// redaction.RedactString and every attr with redaction.RedactSlogAttr (two-layer:
+// key-aware mask + free-form regex). WithAttrs pre-redacts at bind time. This
+// makes contextHandler the process-global redaction barrier — call-site
+// redaction helpers are defense-in-depth only.
+//
+// Production entry points must seal the process-global slog default before any
+// log emission:
+//
+//	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{...})))
+//
+// This is enforced by archtest SLOG-HANDLER-SEALED-FUNNEL-01 A3 (upstream
+// Medium; Hard-upgrade path tracked at gh #1401).
+//
+// Building a fresh sink (rather than wrapping the stdlib default) avoids the
+// slog↔log recursion that wrapping the default handler would trigger.
 func NewHandler(opts Options) slog.Handler {
 	if opts.Level == nil {
 		opts.Level = slog.LevelInfo
@@ -109,11 +128,21 @@ func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &contextHandler{inner: h.inner.WithAttrs(redacted)}
 }
 
-// WithGroup returns a new handler with the given group name.
+// WithGroup returns a new handler with the given group name. Subsequent Handle
+// calls process attrs inside this group through the same RedactSlogAttr pipeline
+// as top-level attrs — the group prefix does not bypass attr-level redaction.
 func (h *contextHandler) WithGroup(name string) slog.Handler {
 	return &contextHandler{inner: h.inner.WithGroup(name)}
 }
 
+// extractContextAttrs extracts framework-injected observability fields from ctx.
+// Trust boundary: only framework-internal, enumerated fields are extracted
+// (trace_id, span_id, request_id, correlation_id, cell_id, contract_id). These
+// are all non-user-input, non-sensitive enumeration values — they are not
+// passed through RedactSlogAttr. Before adding any new field here, confirm it
+// belongs to this trusted-enumeration set; any field carrying user-supplied or
+// credential-adjacent data must instead be added via a regular slog attr and
+// will be redacted by the Handle/WithAttrs pipeline.
 func extractContextAttrs(ctx context.Context) []slog.Attr {
 	var attrs []slog.Attr
 

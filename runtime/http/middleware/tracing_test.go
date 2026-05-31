@@ -463,7 +463,7 @@ func TestTracing_4xxNoErrorSpanStatus_NoCancelAttr(t *testing.T) {
 // Redaction is applied at the sink (adapters/otel/span.go otelSpan.RecordError)
 // rather than at the call site; spy spans in tests receive the raw error value
 // and that is expected. The redaction guarantee is exercised by
-// SPAN-RECORD-ERROR-SEAL-01 archtest (tools/archtest/span_record_error_redact_test.go).
+// SPAN-RECORD-ERROR-SEAL-01 archtest (tools/archtest/span_record_error_seal_test.go).
 func TestTracing_RecoveryRecordsPanicErrorOnSpan(t *testing.T) {
 	spy := &spyTracer{}
 	panicMsg := `upstream failed: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`

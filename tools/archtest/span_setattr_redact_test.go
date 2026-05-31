@@ -3,7 +3,7 @@
 // SPAN-SETATTR-REDACT-01 — every string-valued span attribute in
 // adapters/otel/ is funneled through pkg/redaction.RedactString +
 // TruncateString(attrValueMaxLen). Hardcoded fail-closed redaction has no
-// caller-side opt-out, mirroring the sibling SPAN-RECORD-ERROR-REDACT-01
+// caller-side opt-out, mirroring the sibling SPAN-RECORD-ERROR-SEAL-01
 // rule on span.RecordError.
 //
 // Five-assertion AI-Hard double-locked funnel (per .claude/rules/gocell/ai-robust.md
