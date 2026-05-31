@@ -380,6 +380,48 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	}
 }
 
+// TestHandler_RegisterRoutes_TenantBearing_FailClosed proves the audit query
+// endpoint fails closed for any tenant-bearing caller (#1339 F2). Until
+// tenant-scoped audit filtering lands (epic #1337 PR-2: AuditFilters.TenantID +
+// tenant-scoped WHERE), a request whose principal carries a non-empty TenantID
+// must be REJECTED (403) rather than silently served un-isolated, cross-tenant
+// results. Denial is independent of admin role / actorId — fail-closed for
+// everyone tenant-bearing.
+func TestHandler_RegisterRoutes_TenantBearing_FailClosed(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	h := NewHandler(svc)
+
+	mux := http.NewServeMux()
+	require.NoError(t, h.RegisterRoutes(mux))
+
+	const tenantUUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	for _, tc := range []struct {
+		name  string
+		roles []string
+	}{
+		{"non_admin_tenant_bearing", []string{"viewer"}},
+		{"admin_tenant_bearing", []string{"admin"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &auth.Principal{
+				Kind:       auth.PrincipalUser,
+				Subject:    "usr-1",
+				Roles:      tc.roles,
+				TenantID:   tenantUUID,
+				AuthMethod: "test",
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).
+				WithContext(auth.WithPrincipal(context.Background(), p))
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusForbidden, w.Code,
+				"tenant-bearing audit query must fail closed until PR-2 tenant filtering lands")
+		})
+	}
+}
+
 // Trust boundary tests (#27q).
 func TestHandleQuery_ActorBinding(t *testing.T) {
 	store := newHandlerStore(t)

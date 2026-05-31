@@ -113,8 +113,9 @@ func RealIPFrom(ctx context.Context) (string, bool) {
 // to at most two callers — the auth request-boundary bridge
 // (runtime/auth/middleware.go::injectPrincipalCtxKeys, shared by JWT +
 // service-token) and the consumer-side restore (kernel/outbox.RestoreToContext).
-// WithTenantID has only the consumer-side restore caller today: auth.Principal
-// carries no tenant field on develop, so the auth bridge never writes it.
+// All four setters — including WithTenantID — now have both writers: the auth
+// bridge populates TenantID from the JWT "tenant_id" claim (multi-tenancy epic
+// #1337), and the consumer restore re-hydrates it after the async hop.
 // Business producers (cells/, examples/) must never call them: principal injection
 // is the framework's responsibility (#1229; ADR 202605281200-1042 §Amendment
 // 2026-05-29 round-2). Read side (the XxxIDFrom getters) is unrestricted.

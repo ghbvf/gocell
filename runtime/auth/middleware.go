@@ -161,11 +161,15 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 //   - subject_id = p.Subject  — the subject-of-record (JWT "sub"); empty for
 //     service principals.
 //   - session_id = p.Claims["sid"] — server-side session binding, when present.
-//   - tenant_id  is intentionally NOT written: auth.Principal carries no tenant
-//     field on develop (no source yet), so the key stays unset/empty.
+//   - tenant_id  = p.TenantID — the tenant isolation boundary, sourced from the
+//     JWT "tenant_id" claim (already validated + canonicalized by the JWT
+//     verifier, JWTVerifier.VerifyIntent). Empty for service principals (a service token's callerCell
+//     is NOT a tenant — spec §service-token: tenant must come from a subject/
+//     tenant claim, never the caller cell id), anonymous principals, and
+//     single-tenant deployments.
 //
-// Only non-empty values are written so anonymous / sessionless / subjectless
-// tokens do not stamp empty principal fields onto produced entries.
+// Only non-empty values are written so anonymous / sessionless / subjectless /
+// tenantless tokens do not stamp empty principal fields onto produced entries.
 func injectPrincipalCtxKeys(ctx context.Context, p *Principal) context.Context {
 	if actor := actorOf(p); actor != "" {
 		ctx = ctxkeys.WithActorID(ctx, actor)
@@ -176,7 +180,9 @@ func injectPrincipalCtxKeys(ctx context.Context, p *Principal) context.Context {
 	if sid := p.Claims["sid"]; sid != "" {
 		ctx = ctxkeys.WithSessionID(ctx, sid)
 	}
-	// TenantID has no source on develop — see godoc above.
+	if p.TenantID != "" {
+		ctx = ctxkeys.WithTenantID(ctx, p.TenantID)
+	}
 	return ctx
 }
 
