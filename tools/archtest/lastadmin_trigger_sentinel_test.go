@@ -56,12 +56,19 @@ var raiseExceptionRe = regexp.MustCompile(`(?is)RAISE\s+EXCEPTION\s+'((?:[^']|''
 // `RAISE EXCEPTION '...'` message in sqlContent whose value begins with prefix.
 // It binds the match to the actual exception literal — exactly what reaches
 // pgErr.Message at runtime — mirroring isLastAdminProtected's
-// strings.HasPrefix(pgErr.Message, sentinel+":"). A stray comment or unrelated
-// string that merely contains the prefix is NOT a RAISE literal and does not
-// count, which is the false-negative a whole-file substring scan would miss.
+// strings.HasPrefix(pgErr.Message, sentinel+":"). Comments are blanked first
+// (stripSQLComments) so a RAISE EXCEPTION shape written *inside a comment* cannot
+// false-match, and a stray non-RAISE string carrying the prefix never counts.
+//
+// Residual ceiling (acknowledged, not a full SQL parser): a custom dollar-quote
+// body (`$tag$ … $tag$`) containing a fake RAISE is out of scope — only
+// executing the migration and asserting the raised message (Ory-style) would
+// close that, and that needs an integration DB, which this static archtest by
+// design does not. Migration 024 uses plain `$$` with normal `'…'` literals, so
+// the string/comment-aware scan is exact for it.
 func raiseExceptionMessagesWithPrefix(sqlContent, prefix string) []string {
 	var out []string
-	for _, m := range raiseExceptionRe.FindAllStringSubmatch(sqlContent, -1) {
+	for _, m := range raiseExceptionRe.FindAllStringSubmatch(stripSQLComments(sqlContent), -1) {
 		// Un-double '' to recover the message Postgres actually raises.
 		msg := strings.ReplaceAll(m[1], "''", "'")
 		if strings.HasPrefix(msg, prefix) {
@@ -69,6 +76,73 @@ func raiseExceptionMessagesWithPrefix(sqlContent, prefix string) []string {
 		}
 	}
 	return out
+}
+
+// stripSQLComments blanks `-- line` and `/* block */` comments (replacing their
+// bytes with spaces, preserving newlines) so a RAISE EXCEPTION shape inside a
+// comment cannot be extracted. It is single-quote-string-aware — PostgreSQL
+// escapes an embedded quote by doubling it (”) — so a `--` or `/*` that lives
+// inside a string literal is preserved, never mistaken for a comment opener.
+func stripSQLComments(sql string) string {
+	const (
+		normal = iota
+		inString
+		inLine
+		inBlock
+	)
+	var b strings.Builder
+	b.Grow(len(sql))
+	state := normal
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		switch state {
+		case normal:
+			switch {
+			case c == '\'':
+				state = inString
+				b.WriteByte(c)
+			case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
+				state = inLine
+				b.WriteString("  ")
+				i++
+			case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
+				state = inBlock
+				b.WriteString("  ")
+				i++
+			default:
+				b.WriteByte(c)
+			}
+		case inString:
+			b.WriteByte(c)
+			if c == '\'' {
+				if i+1 < len(sql) && sql[i+1] == '\'' { // '' escaped quote → stay in string
+					b.WriteByte('\'')
+					i++
+				} else {
+					state = normal
+				}
+			}
+		case inLine:
+			if c == '\n' {
+				state = normal
+				b.WriteByte(c)
+			} else {
+				b.WriteByte(' ')
+			}
+		case inBlock:
+			switch {
+			case c == '*' && i+1 < len(sql) && sql[i+1] == '/':
+				state = normal
+				b.WriteString("  ")
+				i++
+			case c == '\n':
+				b.WriteByte(c)
+			default:
+				b.WriteByte(' ')
+			}
+		}
+	}
+	return b.String()
 }
 
 const (
@@ -107,6 +181,12 @@ const (
 //   - SQL ⇒ Go: the RAISE literal is matched by const VALUE (typed const-eval),
 //     so editing the SQL message without updating the const is the same failure
 //     as the inverse.
+//
+// Comments are blanked (stripSQLComments, string-literal-aware) before extraction
+// so a RAISE shape written inside a comment cannot false-match. The acknowledged
+// residual — custom dollar-quote bodies, full SQL parsing — is documented on
+// raiseExceptionMessagesWithPrefix; the only fuller guard is executing the
+// migration (Ory-style), which needs an integration DB this static rule omits.
 //
 // Blind-spot self-check (AI-robust §盲区自检): the chosen helpers are
 // RunTypedProduction + EvaluateConstString (Go side) and EachContentFile (SQL
@@ -199,6 +279,25 @@ func TestLastadminTriggerSentinelConstSQLMatch01_SelfCheck(t *testing.T) {
 	if got := raiseExceptionMessagesWithPrefix(neg, prefix); len(got) != 0 {
 		t.Fatalf("self-check negative: a comment-only residue with a drifted RAISE message must NOT "+
 			"match (this is the false-negative the rule exists to catch), got %d (%v)", len(got), got)
+	}
+
+	// Stricter negative: a COMPLETE RAISE EXCEPTION statement shape written inside
+	// a comment must not match. Plain regex (no comment stripping) would have.
+	lineCommented := `-- example for docs: RAISE EXCEPTION 'effective_admin_invariant: ...' USING ERRCODE = 'P0001';
+		RAISE EXCEPTION 'effective_admin_guard_v2: real drifted message' USING ERRCODE = 'P0001';`
+	if got := raiseExceptionMessagesWithPrefix(lineCommented, prefix); len(got) != 0 {
+		t.Fatalf("self-check line-comment RAISE: a RAISE shape inside a -- comment must NOT match, got %v", got)
+	}
+	blockCommented := `/* legacy: RAISE EXCEPTION 'effective_admin_invariant: in a block comment'; */
+		RAISE EXCEPTION 'something_else: real' USING ERRCODE = 'P0001';`
+	if got := raiseExceptionMessagesWithPrefix(blockCommented, prefix); len(got) != 0 {
+		t.Fatalf("self-check block-comment RAISE: a RAISE shape inside a /* */ comment must NOT match, got %v", got)
+	}
+	// String-awareness: a '--' INSIDE the message literal must not be treated as
+	// a comment opener that truncates the message before its prefix is tested.
+	dashInString := `RAISE EXCEPTION 'effective_admin_invariant: a -- b' USING ERRCODE = 'P0001';`
+	if got := raiseExceptionMessagesWithPrefix(dashInString, prefix); len(got) != 1 {
+		t.Fatalf("self-check dash-in-string: '--' inside the literal must be preserved, got %v", got)
 	}
 
 	// Doubled-quote handling: '' inside the literal is un-escaped before prefix test.
