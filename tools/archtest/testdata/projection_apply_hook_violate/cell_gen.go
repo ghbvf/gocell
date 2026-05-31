@@ -10,11 +10,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/projection"
 )
 
-// generatedCellSubscribe models the SANCTIONED cellgen projection wiring: a
-// Coordinator.Subscribe call inside cell_gen.go bearing the cellgen DO-NOT-EDIT
-// banner. PROJECTION-APPLY-HOOK-FUNNEL-01 must ALLOW this (no diagnostic) — it is
-// the single legitimate production callsite (PR-04). Paired with healthz_gen.go
-// to prove the allowlist distinguishes cell_gen.go from sibling generated files.
+// generatedCellSubscribe models a VIOLATION under Option A (PR-04a): a
+// Coordinator.Subscribe call inside cell_gen.go. Under Option A cellgen emits the
+// record-only reg.RegisterProjection (not Coordinator.Subscribe); the only
+// sanctioned Subscribe callsite is the bootstrap drain
+// (runtime/bootstrap/phases_projection.go). PROJECTION-APPLY-HOOK-FUNNEL-01 must
+// therefore FIRE on this call — no generated file is a sanctioned callsite.
 func generatedCellSubscribe(coord *projection.Coordinator) {
 	var apply projection.Apply = func(_ context.Context, _ outbox.Entry) error { return nil }
 	_ = coord.Subscribe(context.Background(), contractspec.ContractSpec{
