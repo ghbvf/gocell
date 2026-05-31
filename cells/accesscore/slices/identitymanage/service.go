@@ -725,6 +725,14 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, user
 	// counted by the invariant and may be freely removed.
 	userIsActiveAdmin := hasAdminRole && userStatus == domain.StatusActive
 	if err := s.lastAdminGuard.CheckRemove(ctx, userID, userIsActiveAdmin); err != nil {
+		// Application-layer guard blocked the removal — the expected S4.0 path.
+		// This log lets ops distinguish an app-layer 403 from a DB-trigger 403:
+		// the migration-024 trigger only fires when this guard did NOT (the
+		// tx1-check / tx2-mutate TOCTOU window of Lock/Update), so a 403 WITHOUT
+		// this log line indicates the trigger safety net caught a concurrent race.
+		s.logger.Info("last-admin guard blocked removal",
+			slog.String("user_id", userID),
+			slog.String("user_status", string(userStatus)))
 		return fmt.Errorf("identity-manage: last-admin: %w", err)
 	}
 	return nil
