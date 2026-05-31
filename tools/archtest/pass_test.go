@@ -1,4 +1,6 @@
 // INVARIANT: ARCHTEST-PASS-DRIVER-UNIT-01
+//   - INVARIANT: FACADE-NO-LOADER-LEAK-01
+//   - INVARIANT: FACADE-CONTRACTED-EXPORTS-01
 //
 // ARCHTEST-PASS-DRIVER-UNIT-01 — unit-test coverage for the archtest.Pass
 // driver surface: archtest.Run / archtest.RunTyped / archtest.RunTypedDir
@@ -733,39 +735,20 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 		"EachFileInPackage":      true,
 	}
 
-	root := findModuleRoot(t)
-	// Only scan the direct-child (non-test) .go files in tools/archtest/ itself
-	// (not subdirectories). Use archtest.Run + DirsScope + MatchRels to stay
-	// within the facade boundary. MatchRels filters to files whose directory
-	// component is exactly "tools/archtest" (no slashes after that prefix).
-	scope := DirsScope(root, []string{"tools/archtest"}, MatchRels(func(rel string) bool {
-		slash := strings.LastIndex(rel, "/")
-		if slash < 0 {
-			return false
-		}
-		dir := rel[:slash]
-		base := rel[slash+1:]
-		return dir == "tools/archtest" &&
-			strings.HasSuffix(base, ".go") &&
-			!strings.HasSuffix(base, "_test.go")
-	}))
-
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
-		var d []Diagnostic
+	// Scan only the direct-child (non-test) .go files in tools/archtest/ itself
+	// (façade boundary; see facadeScopeForArchtest).
+	diags := Run(t, facadeScopeForArchtest(t), func(p *Pass) []Diagnostic {
+		// Shared name-match scan (func/type/var/const) against the banned set.
+		d := facadeBannedExportDiags(p, bannedLoaders,
+			"is a banned loader symbol; must NOT appear in facade")
+		// Loader-specific signature check: no exported func/method may mention
+		// *packages.Package in its params/results/receiver (catches a re-export
+		// under a non-banned alias name).
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// Exported FuncDecl checks (direct children of file).
 			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || !fn.Name.IsExported() {
 					return
-				}
-				if bannedLoaders[fn.Name.Name] {
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(fn.Name.Pos()).Line,
-						Message: "exported func " + fn.Name.Name +
-							" is a banned loader symbol; must NOT appear in facade",
-					})
 				}
 				if (fn.Type != nil && funcTypeContainsPackagesSel(fn.Type)) ||
 					funcFieldListContainsPackagesSel(fn.Recv) {
@@ -775,30 +758,6 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 						Message: "exported func " + fn.Name.Name +
 							" signature mentions *packages.Package; loaders must not leak",
 					})
-				}
-			})
-			// Exported TypeSpec (type declarations anywhere in file).
-			EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-				if ts.Name != nil && ts.Name.IsExported() && bannedLoaders[ts.Name.Name] {
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(ts.Name.Pos()).Line,
-						Message: "exported type " + ts.Name.Name +
-							" is a banned loader symbol; must NOT appear in facade",
-					})
-				}
-			})
-			// Exported ValueSpec (var/const declarations anywhere in file).
-			EachInSubtree[ast.ValueSpec](f, func(vs *ast.ValueSpec) {
-				for _, ident := range vs.Names {
-					if ident.IsExported() && bannedLoaders[ident.Name] {
-						d = append(d, Diagnostic{
-							Rel:  rel,
-							Line: p.Fset.Position(ident.Pos()).Line,
-							Message: "exported var/const " + ident.Name +
-								" is a banned loader symbol; must NOT appear in facade",
-						})
-					}
 				}
 			})
 		}
@@ -857,6 +816,180 @@ func funcFieldListContainsPackagesSel(fields *ast.FieldList) bool {
 		}
 	}
 	return false
+}
+
+// facadeScopeForArchtest returns the Scope covering only the direct-child
+// (non-test) .go files of tools/archtest/ itself — the façade boundary. Shared
+// by [TestFacadeDoesNotLeakLoaders] (FACADE-NO-LOADER-LEAK-01) and
+// [TestFacadeContractedExports] (FACADE-CONTRACTED-EXPORTS-01). MatchRels filters
+// to files whose directory component is exactly "tools/archtest" (no slashes
+// after that prefix), so sub-packages (internal/*) are excluded.
+func facadeScopeForArchtest(t *testing.T) Scope {
+	t.Helper()
+	root := findModuleRoot(t)
+	return DirsScope(root, []string{"tools/archtest"}, MatchRels(func(rel string) bool {
+		slash := strings.LastIndex(rel, "/")
+		if slash < 0 {
+			return false
+		}
+		dir := rel[:slash]
+		base := rel[slash+1:]
+		return dir == "tools/archtest" &&
+			strings.HasSuffix(base, ".go") &&
+			!strings.HasSuffix(base, "_test.go")
+	}))
+}
+
+// facadeBannedExportDiags reports any TOP-LEVEL exported declaration in p whose
+// name is in banned. reasonSuffix is appended verbatim to each diagnostic
+// message (the kind noun — "func" / "type" / "var/const" — is prepended
+// automatically). This is the shared name-match scan behind both façade-surface
+// guards; signature-shape checks (e.g. the loader's *packages.Package detection)
+// stay in the caller.
+//
+// Only top-level declarations count — they alone form the package's exported
+// surface. Func declarations are direct children of the file; type/var/const
+// declarations are scanned via the file's top-level GenDecls. A function-body-
+// LOCAL uppercase name (e.g. `func f() { type FileContext int }`) is invisible
+// outside its function and is intentionally NOT flagged, so EachInSubtree (which
+// would descend into bodies and false-positive on locals) is deliberately avoided.
+func facadeBannedExportDiags(p *Pass, banned map[string]bool, reasonSuffix string) []Diagnostic {
+	var d []Diagnostic
+	for _, f := range p.Files {
+		rel := p.Rel(f)
+		report := func(kind string, id *ast.Ident) {
+			if id != nil && id.IsExported() && banned[id.Name] {
+				d = append(d, Diagnostic{
+					Rel:     rel,
+					Line:    p.Fset.Position(id.Pos()).Line,
+					Message: "exported " + kind + " " + id.Name + " " + reasonSuffix,
+				})
+			}
+		}
+		// Top-level func declarations (direct children of *ast.File).
+		EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			report("func", fn.Name)
+		})
+		// Top-level type / var / const declarations only: the file's top-level
+		// GenDecls (direct children of *ast.File). Function-body-local GenDecls
+		// are nested and thus excluded.
+		EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+			for _, spec := range gd.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					report("type", s.Name)
+				case *ast.ValueSpec:
+					for _, ident := range s.Names {
+						report("var/const", ident)
+					}
+				}
+			}
+		})
+	}
+	return d
+}
+
+// TestFacadeBannedExportDiags_TopLevelOnly locks the "exported surface = top-level
+// declarations only" semantics of facadeBannedExportDiags: a top-level banned
+// name is flagged, while a function-body-local declaration sharing a banned name
+// (invisible outside its function, not part of the package's exported surface)
+// is NOT flagged. Regression guard for the EachInSubtree → EachInChildren[GenDecl]
+// fix; with the old subtree walk the two local decls below would false-positive.
+func TestFacadeBannedExportDiags_TopLevelOnly(t *testing.T) {
+	const src = `package archtest
+
+type FileContext = int // top-level export → MUST flag
+
+func helper() {
+	type FileContext int     // func-local → MUST NOT flag
+	var LoadContentFiles int // func-local → MUST NOT flag
+	_ = LoadContentFiles
+	_ = FileContext(0)
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p := &Pass{
+		Fset:  fset,
+		Files: []*ast.File{f},
+		Rel:   func(*ast.File) string { return "tools/archtest/x.go" },
+	}
+	banned := map[string]bool{"FileContext": true, "LoadContentFiles": true}
+
+	diags := facadeBannedExportDiags(p, banned, "BANNED")
+	if len(diags) != 1 {
+		t.Fatalf("want exactly 1 diagnostic (top-level FileContext only), got %d: %+v", len(diags), diags)
+	}
+	if !strings.Contains(diags[0].Message, "exported type FileContext") {
+		t.Errorf("unexpected diagnostic: %q", diags[0].Message)
+	}
+}
+
+// TestFacadeContractedExports enforces FACADE-CONTRACTED-EXPORTS-01 (anchored
+// in the file-header CommentGroup).
+//
+// Locks the deliberate façade contraction performed in #1037 Phase 0/1: the
+// three symbols below were removed from the archtest package's exported surface
+// and MUST NOT reappear. Without this guard the deletions are a Soft (point-in-
+// time) cleanup an AI co-author could silently revert; with it, re-declaring any
+// of them as an exported func/type/var/const in a tools/archtest/ façade file
+// fails CI immediately.
+//
+//	FileContext        → use Pass.Files / Pass.Fset / Pass.Rel (the alias was a
+//	                     dead re-export of scanner.FileContext)
+//	LoadContentFiles   → use the in-package loadContentFiles (pure reader) or the
+//	                     fail-loud EachContentFile; the public reader is removed
+//	IsGeneratedRelPath → use Pass.IsGenerated(f); the free function is removed
+//	                     (ParseBuildConstraint + BuildContextPredicate stay
+//	                     exported for the non-Pass multi-predicate use case)
+//
+// # AI-robust
+//
+// Mirrors the sibling FACADE-NO-LOADER-LEAK-01 grading. The guard is Hard for
+// the most common bypass (direct re-declaration of an exported func / type /
+// var / const carrying a banned name — a literal name match with no
+// "like-but-not" gray zone) and Medium for an alias-of-alias re-export under a
+// DIFFERENT name (would need go/types). "Not in the façade = not expressible at
+// the call site": once these names are absent from the package's exported set, a
+// rule cannot write archtest.IsGeneratedRelPath(...) — the compiler rejects it.
+//
+// This guard governs only the façade's own exported surface; it does not by
+// itself seal every route to the internal equivalents (that is not its job):
+//   - Code outside tools/archtest cannot import tools/archtest/internal/* at all
+//     — Go's internal-package visibility, compiler-enforced (Hard).
+//   - Within tools/archtest (same internal root, so the import IS allowed), a
+//     direct call to typeseval.IsGeneratedRelPath is separately gated by
+//     PASS-FUNNEL-RESOLVE-01 (Medium); scanner.FileContext / scanner.LoadContentFiles
+//     have no such ban, but re-exposing them is the very thing this test forbids.
+//
+// # Blind spots (honest disclosure, per ai-robust.md)
+//
+//   - A symbol re-exported under a DIFFERENT name (e.g. `var X = scanner.FileContext`
+//     inside a façade .go file — a legal in-package import) is not caught by the
+//     name match. This is the same Medium alias residue FACADE-NO-LOADER-LEAK-01
+//     carries; no go/types alias resolution is attempted here. There is no
+//     business value in re-exposing these under an alias.
+//   - Re-export from an archtest sub-package is out of scope: business rules import
+//     only tools/archtest (not its sub-packages), and this scan covers only the
+//     façade's own direct-child .go files (facadeScopeForArchtest).
+func TestFacadeContractedExports(t *testing.T) {
+	contractedExports := map[string]bool{
+		"FileContext":        true,
+		"LoadContentFiles":   true,
+		"IsGeneratedRelPath": true,
+	}
+
+	diags := Run(t, facadeScopeForArchtest(t), func(p *Pass) []Diagnostic {
+		return facadeBannedExportDiags(p, contractedExports,
+			"was contracted out of the archtest façade in #1037 Phase 0/1 and must NOT "+
+				"be re-exported (FileContext→Pass.Files/Fset/Rel; "+
+				"LoadContentFiles→loadContentFiles or EachContentFile; "+
+				"IsGeneratedRelPath→Pass.IsGenerated)")
+	})
+	Report(t, "FACADE-CONTRACTED-EXPORTS-01", diags)
 }
 
 // TestPass_IsFileInScopeConstraintExpr verifies that IsFileInScope returns
@@ -975,41 +1108,6 @@ func TestParseBuildConstraintReExported(t *testing.T) {
 	oraclePredDefault := typeseval.BuildContextPredicate()
 	if got, want := facadePredDefault(integrationTag), oraclePredDefault(integrationTag); got != want {
 		t.Errorf("BuildContextPredicate() tag=%q: façade=%v oracle=%v", integrationTag, got, want)
-	}
-}
-
-// TestIsGeneratedRelPathReExported verifies that archtest.IsGeneratedRelPath
-// is a thin delegate to typeseval.IsGeneratedRelPath: the returned bool must
-// agree with the oracle for generated/ and non-generated paths.
-//
-// RED proof: if IsGeneratedRelPath were removed from resolve.go (or not yet
-// added), this test would fail to compile.
-//
-// pass_test.go is permanently exempt from PASS-FUNNEL-RESOLVE-01 so the
-// direct typeseval oracle call here is legal.
-func TestIsGeneratedRelPathReExported(t *testing.T) {
-	cases := []struct {
-		rel  string
-		want bool
-	}{
-		{"generated/contracts/foo/v1/handler.go", true},
-		{"generated/foo.go", true},
-		// NOT generated: paths that don't start with "generated/"
-		{"cells/accesscore/slices/sessionlogin/handler.go", false},
-		{"kernel/outbox/result.go", false},
-		// Sub-directory named "generated" inside a hand-written package is not matched.
-		{"cells/foo/generated/bar.go", false},
-	}
-
-	for _, tc := range cases {
-		facade := IsGeneratedRelPath(tc.rel)
-		oracle := typeseval.IsGeneratedRelPath(tc.rel)
-		if facade != oracle {
-			t.Errorf("IsGeneratedRelPath(%q): façade=%v oracle=%v", tc.rel, facade, oracle)
-		}
-		if facade != tc.want {
-			t.Errorf("IsGeneratedRelPath(%q) = %v, want %v", tc.rel, facade, tc.want)
-		}
 	}
 }
 

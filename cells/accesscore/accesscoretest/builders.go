@@ -129,7 +129,8 @@ func WithIdentityInvalidator(inv *CredentialInvalidator) BuildIdentityManageOpti
 //   - Logger: slog.New(slog.DiscardHandler)
 //   - TokenIssuer: failingTokenIssuer (t.Fatal on IssueForUser; replace via
 //     WithIdentityTokenIssuer for ChangePassword paths)
-//   - WithLastAdminProtection(fixture.RoleRepository) — via bundle-internal access
+//   - roleRepo: fixture.RoleRepository (required positional param) — wires the
+//     at-least-one-effective-admin guard
 //
 // The returned fixture is the same one used internally — seed via
 // fixture.SeedUser / SeedRole / SeedAssignment, then assert via
@@ -174,10 +175,10 @@ func BuildIdentityManageService(
 		cfg.fixture.bundle.UserRepository(),
 		rawInv,
 		cfg.logger,
+		cfg.fixture.bundle.RoleRepository(),
 		identitymanage.WithEmitter(rec.CellEmitter()),
 		identitymanage.WithTxManager(cfg.fixture.TxRunner()),
 		identitymanage.WithTokenIssuer(cfg.issuer),
-		identitymanage.WithLastAdminProtection(cfg.fixture.bundle.RoleRepository()),
 	)
 	if err != nil {
 		t.Fatalf("BuildIdentityManageService: %v", err)

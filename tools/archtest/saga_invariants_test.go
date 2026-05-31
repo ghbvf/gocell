@@ -3150,7 +3150,7 @@ func sfcMarkerLine(content []byte, marker string) int {
 func sfcReadFile(t *testing.T, root, dir, rel, ext string) []byte {
 	t.Helper()
 	sc := DirsScope(root, []string{dir}, MatchRels(func(r string) bool { return r == rel }))
-	files, err := LoadContentFiles(sc, []string{ext})
+	files, err := loadContentFiles(sc, []string{ext})
 	require.NoError(t, err, "load %s", rel)
 	require.Len(t, files, 1, "expected exactly one file at %s", rel)
 	return files[0].Bytes
@@ -3161,7 +3161,7 @@ func sfcLoadDocs(t *testing.T, root string) map[string][]byte {
 	sc := DirsScope(root, []string{"docs/ops"}, MatchRels(func(rel string) bool {
 		return strings.HasSuffix(rel, "/readyz.md") || strings.HasSuffix(rel, "/alerting-rules.md")
 	}))
-	files, err := LoadContentFiles(sc, []string{".md"})
+	files, err := loadContentFiles(sc, []string{".md"})
 	require.NoError(t, err, "load saga fanout docs under docs/ops")
 	out := make(map[string][]byte, len(files))
 	for _, f := range files {
@@ -4428,7 +4428,7 @@ func loadArchtestTestFiles(t *testing.T, root string) []ContentContext {
 	sc := DirsScope(root, []string{"tools/archtest"}, IncludeTests(), MatchRels(func(rel string) bool {
 		return filepath.ToSlash(filepath.Dir(rel)) == "tools/archtest" && strings.HasSuffix(rel, "_test.go")
 	}))
-	files, err := LoadContentFiles(sc, []string{".go"})
+	files, err := loadContentFiles(sc, []string{".go"})
 	require.NoError(t, err, "load tools/archtest *_test.go for saga consolidation scan")
 	return files
 }
@@ -4479,7 +4479,7 @@ func TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent(t *testing.T) {
 	sc := DirsScope(root, []string{"tools/archtest"}, IncludeTests(), MatchRels(func(rel string) bool {
 		return path.Base(rel) == sagaConsolidatedFile
 	}))
-	files, err := LoadContentFiles(sc, []string{".go"})
+	files, err := loadContentFiles(sc, []string{".go"})
 	require.NoError(t, err)
 	require.Len(t, files, 1, "expected exactly one %s", sagaConsolidatedFile)
 

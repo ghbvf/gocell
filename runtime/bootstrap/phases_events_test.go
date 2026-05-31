@@ -478,3 +478,125 @@ func TestWithManagedResource_Relay_CompileTimeMismatch(t *testing.T) {
 	// comment from being deleted without replacement.
 	assert.True(t, true)
 }
+
+// ---------------------------------------------------------------------------
+// checkConsumerBaseConfiguredForSubscriptions — projection coverage (F1)
+// ---------------------------------------------------------------------------
+
+// stubProjectionCell is a minimal cell that registers a single projection via
+// reg.RegisterProjection. Used to exercise checkConsumerBaseConfiguredForSubscriptions
+// for the projection path.
+type stubProjectionCell struct {
+	*cell.BaseCell
+	spec         contractspec.ContractSpec
+	projectionID string
+}
+
+func newStubProjectionCell(topic string) *stubProjectionCell {
+	return &stubProjectionCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "stub-proj", Type: "core"}),
+		spec: contractspec.ContractSpec{
+			ID:        topic,
+			Kind:      cellvocab.ContractEvent,
+			Transport: "inmem",
+			Topic:     topic,
+		},
+		projectionID: "stub_projection",
+	}
+}
+
+func (c *stubProjectionCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	return reg.RegisterProjection(cell.ProjectionRequest{
+		Spec:         c.spec,
+		ProjectionID: c.projectionID,
+		CellID:       c.ID(),
+		Apply:        func(_ context.Context, _ outbox.Entry) error { return nil },
+	})
+}
+
+// TestPhase6_ProjectionsWithSubscriberButNoConsumerBase_FailsFast locks the
+// finding F1 (P1·安全/运维): a projection-only deployment must not bypass
+// checkConsumerBaseConfiguredForSubscriptions. Before the fix, only
+// snap.Subscriptions was iterated — snap.Projections was silently skipped,
+// allowing a zero-value ConsumerBase to reach the consumption path.
+//
+// This test uses a nil ConsumerBase (WithConsumerBase not called). It must
+// return an error naming "ConsumerBase" and identifying the projection topic,
+// mirroring the existing subscription guard tests above.
+func TestPhase6_ProjectionsWithSubscriberButNoConsumerBase_FailsFast(t *testing.T) {
+	t.Parallel()
+
+	bus := eventbus.New(clock.Real())
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-proj-missing-cb-test", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubProjectionCell("event.phase6.proj.no-cb.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	// No WithConsumerBase: b.consumerBase is nil.
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+	)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = bus
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err,
+		"phase6 must fail when a projection is registered but ConsumerBase is nil")
+	assert.Contains(t, err.Error(), "ConsumerBase",
+		"error must name ConsumerBase so the operator knows what to add")
+	assert.Contains(t, err.Error(), "event.phase6.proj.no-cb.v1",
+		"error must identify the offending projection topic")
+	assert.Contains(t, err.Error(), "stub-proj",
+		"error must identify the cell that registered the projection")
+}
+
+// TestPhase6_ProjectionsWithZeroValueConsumerBase_FailsFast locks the
+// zero-value ConsumerBase path for projections. A `&outbox.ConsumerBase{}`
+// literal passes the bare nil check but IsConstructed returns false — the same
+// silent-DLX failure mode as for subscriptions (PR#374 finding (a) / N8 (b)).
+// Before the fix this would not have been caught by phase6.
+func TestPhase6_ProjectionsWithZeroValueConsumerBase_FailsFast(t *testing.T) {
+	t.Parallel()
+
+	bus := eventbus.New(clock.Real())
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-proj-zero-cb-test", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubProjectionCell("event.phase6.proj.zero-cb.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+		WithConsumerBase(&outbox.ConsumerBase{}), // zero-value literal — must be rejected.
+	)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = bus
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err,
+		"phase6 must fail when a projection has a zero-value ConsumerBase")
+	assert.Contains(t, err.Error(), "not constructed via outbox.NewConsumerBase",
+		"error must call out the zero-value literal failure mode")
+	assert.Contains(t, err.Error(), "event.phase6.proj.zero-cb.v1",
+		"error must identify the offending projection topic")
+	assert.Contains(t, err.Error(), "stub-proj",
+		"error must identify the cell that registered the projection")
+}

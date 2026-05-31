@@ -208,23 +208,26 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 // (#1289, epic #1296).
 //
 // This is an OPERATIONAL tripwire, NOT a tenant-isolation security boundary.
-// develop is single-tenant: no producer writes principal.TenantID (the auth
-// middleware never calls ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01
-// locks the only writer to consumer-side RestoreToContext), so this branch is
-// dead today. A non-empty TenantID reaching audit persistence means
-// multi-tenancy (#1296) landed without wiring tenant-scoped audit filtering —
-// a security-relevant gap. Trip loudly (Error, alertable) but DO NOT drop the
+// As of the multi-tenancy epic PR-1 (#1339), the auth bridge DOES write
+// principal.TenantID from the JWT "tenant_id" claim (CTXKEYS-PRINCIPAL-WRITE-CALLER-01
+// now allowlists runtime/auth/middleware.go as a WithTenantID producer), so this
+// branch is no longer structurally dead: any audit-producing request carrying a
+// valid tenant claim reaches here with a non-empty TenantID. That is the intended
+// alarm for the PR-1→PR-2 window — multi-tenant identity now flows, but
+// tenant-scoped audit query filtering has NOT yet landed (PR-2), which is a
+// security-relevant gap. Trip loudly (Error, alertable) but DO NOT drop the
 // audit record: compliance evidence is never discarded (the caller continues to
-// Append). When #1296 lands, this tripwire is removed and replaced by
-// tenant-scoped query filtering. It guards the persistence-reach path;
-// CTXKEYS-PRINCIPAL-WRITE-CALLER-01 orthogonally guards the ctx-write path.
+// Append). PR-2 removes this tripwire and replaces it with tenant-scoped query
+// filtering. It guards the persistence-reach path; CTXKEYS-PRINCIPAL-WRITE-CALLER-01
+// orthogonally guards the ctx-write path.
 //
 // Firing cadence: logs once PER event with a non-empty tenant. That is
-// intentional — until #1296 lands the branch is dead (no producer), so any
-// firing is a real regression worth a per-event alert; the temporary nature of
-// the stopgap does not warrant sampling/rate-limiting machinery. tenant_id is an
-// opaque, non-credential identifier (observability.md), so logging its value
-// server-side is safe and aids #1296 debugging.
+// intentional for the PR-1→PR-2 window — on a default deployment the gocell
+// issuer emits no tenant_id claim, so the branch stays cold; any firing means a
+// tenant-bearing token is in use before tenant-scoped audit filtering exists, a
+// real gap worth a per-event alert. tenant_id is an opaque, non-credential
+// identifier (observability.md), so logging its value server-side is safe and
+// aids #1296 debugging.
 func (s *Service) tripSingleTenantInvariant(logPrefix string, entry outbox.Entry, principal outbox.PrincipalMetadata) {
 	if principal.TenantID == "" {
 		return

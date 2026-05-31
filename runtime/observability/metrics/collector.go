@@ -31,6 +31,24 @@ type Collector interface {
 	// framework-owned paths (healthz/readyz/metrics, unmatched 404s, listeners
 	// with no business RouteGroup attached).
 	RecordRequest(ctx context.Context, cellID, method, route string, status int, durationSeconds float64)
+
+	// RecordBodyLimitRejection increments the body-limit rejection counter for
+	// the given cell and route. It is called only on the Content-Length
+	// fast-path reject (r.ContentLength > maxBytes before the request body is
+	// read).
+	//
+	// Streaming overruns (MaxBytesReader kick-in, after the body has started
+	// being read) are handler-dependent: the handler receives
+	// *http.MaxBytesError when it reads the body, and if it propagates the
+	// error through pkg/httputil.WriteError, the framework maps it to a 413
+	// response captured in http_requests_total{status="413"} via RecordRequest.
+	// Framework-generated handlers follow this path; custom handlers that do not
+	// call httputil.WriteError will not produce a 413 in http_requests_total.
+	//
+	// cellID follows the same semantics as RecordRequest: use the owning cell
+	// ID or RuntimeCellIDSentinel ("_runtime") for framework paths.
+	// route is the low-cardinality route pattern from RouteFor.
+	RecordBodyLimitRejection(ctx context.Context, cellID, route string)
 }
 
 // RequestKey identifies one low-cardinality HTTP request metric series.
@@ -41,25 +59,38 @@ type RequestKey struct {
 	Status int
 }
 
+// BodyLimitRejectionKey identifies one body-limit rejection metric series.
+type BodyLimitRejectionKey struct {
+	Cell  string
+	Route string
+}
+
 // Snapshot is a point-in-time view of recorded metrics.
 type Snapshot struct {
-	RequestCounts  map[RequestKey]int64
-	DurationSumsMs map[RequestKey]int64
+	RequestCounts       map[RequestKey]int64
+	DurationSumsMs      map[RequestKey]int64
+	BodyLimitRejections map[BodyLimitRejectionKey]int64
 }
 
 // InMemoryCollector is a simple in-memory metrics collector for development
-// and testing. It records request counts and cumulative duration.
+// and testing. It records request counts, cumulative duration, and body-limit
+// rejection counts.
 type InMemoryCollector struct {
-	mu        sync.RWMutex
-	counts    map[RequestKey]*atomic.Int64
-	durations map[RequestKey]*atomic.Int64 // cumulative duration in microseconds
+	mu                  sync.RWMutex
+	counts              map[RequestKey]*atomic.Int64
+	durations           map[RequestKey]*atomic.Int64 // cumulative duration in microseconds
+	bodyLimitRejections map[BodyLimitRejectionKey]*atomic.Int64
 }
+
+// Compile-time interface compliance check.
+var _ Collector = (*InMemoryCollector)(nil)
 
 // NewInMemoryCollector creates an InMemoryCollector.
 func NewInMemoryCollector() *InMemoryCollector {
 	return &InMemoryCollector{
-		counts:    make(map[RequestKey]*atomic.Int64),
-		durations: make(map[RequestKey]*atomic.Int64),
+		counts:              make(map[RequestKey]*atomic.Int64),
+		durations:           make(map[RequestKey]*atomic.Int64),
+		bodyLimitRejections: make(map[BodyLimitRejectionKey]*atomic.Int64),
 	}
 }
 
@@ -93,14 +124,37 @@ func (c *InMemoryCollector) RecordRequest(_ context.Context, cellID, method, rou
 	dur.Add(int64(durationSeconds * 1e6)) // microseconds
 }
 
+// RecordBodyLimitRejection increments the body-limit rejection counter for the
+// given cell and route. Mirrors the RLock fast-path + Lock lazy-init pattern
+// of RecordRequest.
+func (c *InMemoryCollector) RecordBodyLimitRejection(_ context.Context, cellID, route string) {
+	key := BodyLimitRejectionKey{Cell: cellID, Route: route}
+
+	c.mu.RLock()
+	ctr, ok := c.bodyLimitRejections[key]
+	c.mu.RUnlock()
+
+	if !ok {
+		c.mu.Lock()
+		if _, exists := c.bodyLimitRejections[key]; !exists {
+			c.bodyLimitRejections[key] = &atomic.Int64{}
+		}
+		ctr = c.bodyLimitRejections[key]
+		c.mu.Unlock()
+	}
+
+	ctr.Add(1)
+}
+
 // Snapshot returns a point-in-time copy of all metrics.
 func (c *InMemoryCollector) Snapshot() Snapshot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	snap := Snapshot{
-		RequestCounts:  make(map[RequestKey]int64, len(c.counts)),
-		DurationSumsMs: make(map[RequestKey]int64, len(c.durations)),
+		RequestCounts:       make(map[RequestKey]int64, len(c.counts)),
+		DurationSumsMs:      make(map[RequestKey]int64, len(c.durations)),
+		BodyLimitRejections: make(map[BodyLimitRejectionKey]int64, len(c.bodyLimitRejections)),
 	}
 	for k, v := range c.counts {
 		snap.RequestCounts[k] = v.Load()
@@ -108,57 +162,96 @@ func (c *InMemoryCollector) Snapshot() Snapshot {
 	for k, v := range c.durations {
 		snap.DurationSumsMs[k] = v.Load() / 1000 // microseconds → milliseconds
 	}
+	for k, v := range c.bodyLimitRejections {
+		snap.BodyLimitRejections[k] = v.Load()
+	}
 	return snap
 }
 
+// handlerRequestEntry is the JSON shape for a single request metric entry.
+type handlerRequestEntry struct {
+	Cell       string `json:"cell"`
+	Method     string `json:"method"`
+	Route      string `json:"route"`
+	Status     int    `json:"status"`
+	Count      int64  `json:"count"`
+	DurationMs int64  `json:"duration_sum_ms"`
+}
+
+// handlerBodyLimitEntry is the JSON shape for a single body-limit rejection entry.
+type handlerBodyLimitEntry struct {
+	Cell  string `json:"cell"`
+	Route string `json:"route"`
+	Count int64  `json:"count"`
+}
+
+// buildHandlerPayload converts a Snapshot into sorted JSON-serialisable slices.
+func buildHandlerPayload(snap Snapshot) ([]handlerRequestEntry, []handlerBodyLimitEntry) {
+	requests := make([]handlerRequestEntry, 0, len(snap.RequestCounts))
+	for key, count := range snap.RequestCounts {
+		requests = append(requests, handlerRequestEntry{
+			Cell:       key.Cell,
+			Method:     key.Method,
+			Route:      key.Route,
+			Status:     key.Status,
+			Count:      count,
+			DurationMs: snap.DurationSumsMs[key],
+		})
+	}
+	sort.Slice(requests, func(i, j int) bool {
+		if requests[i].Cell != requests[j].Cell {
+			return requests[i].Cell < requests[j].Cell
+		}
+		if requests[i].Route != requests[j].Route {
+			return requests[i].Route < requests[j].Route
+		}
+		if requests[i].Method != requests[j].Method {
+			return requests[i].Method < requests[j].Method
+		}
+		return requests[i].Status < requests[j].Status
+	})
+
+	rejections := make([]handlerBodyLimitEntry, 0, len(snap.BodyLimitRejections))
+	for key, count := range snap.BodyLimitRejections {
+		rejections = append(rejections, handlerBodyLimitEntry{
+			Cell:  key.Cell,
+			Route: key.Route,
+			Count: count,
+		})
+	}
+	sort.Slice(rejections, func(i, j int) bool {
+		if rejections[i].Cell != rejections[j].Cell {
+			return rejections[i].Cell < rejections[j].Cell
+		}
+		return rejections[i].Route < rejections[j].Route
+	})
+
+	return requests, rejections
+}
+
 // Handler returns an http.Handler that serves metrics as JSON.
+// The response shape is:
+//
+//	{"data": {"requests": [...], "bodyLimitRejections": [...]}}
+//
+// requests entries are sorted by cell→route→method→status.
+// bodyLimitRejections entries are sorted by cell→route.
+//
+// collector=nil fields are omitted (nil collector disables body-limit rejection
+// recording; streaming 413s are still captured by the Metrics middleware via
+// RecordRequest and appear in the requests array).
+//
 // For Prometheus-compatible output, wire adapters/prometheus.NewMetricProvider
 // into NewProviderCollector and serve the registry via promhttp.
 func (c *InMemoryCollector) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		snap := c.Snapshot()
-
+		requests, rejections := buildHandlerPayload(c.Snapshot())
 		w.Header().Set("Content-Type", "application/json")
-
-		type entry struct {
-			Cell       string `json:"cell"`
-			Method     string `json:"method"`
-			Route      string `json:"route"`
-			Status     int    `json:"status"`
-			Count      int64  `json:"count"`
-			DurationMs int64  `json:"duration_sum_ms"`
-		}
-
-		var entries []entry
-		for key, count := range snap.RequestCounts {
-			entries = append(entries, entry{
-				Cell:       key.Cell,
-				Method:     key.Method,
-				Route:      key.Route,
-				Status:     key.Status,
-				Count:      count,
-				DurationMs: snap.DurationSumsMs[key],
-			})
-		}
-		sort.Slice(entries, func(i, j int) bool {
-			if entries[i].Cell != entries[j].Cell {
-				return entries[i].Cell < entries[j].Cell
-			}
-			if entries[i].Route != entries[j].Route {
-				return entries[i].Route < entries[j].Route
-			}
-			if entries[i].Method != entries[j].Method {
-				return entries[i].Method < entries[j].Method
-			}
-			return entries[i].Status < entries[j].Status
-		})
-
-		// Use the unified list response envelope ({"data": [...]}) consistent
-		// with .claude/rules/gocell/api-versioning.md and the other HTTP list
-		// endpoints. Inherited "metrics" wrapper would have left this dev/test
-		// handler the only inconsistent shape on the metrics surface.
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": entries,
+			"data": map[string]any{
+				"requests":            requests,
+				"bodyLimitRejections": rejections,
+			},
 		})
 	})
 }

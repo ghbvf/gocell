@@ -103,10 +103,11 @@ func (h *denyAuthHook) OnACLCheck(_ *mqttserver.Client, _ string, _ bool) bool {
 func newValidConfig(addr string) mqtt.Config {
 	id, _ := mqtt.ParseEphemeralClientID("testcell", "client")
 	return mqtt.Config{
-		ClientID:       id,
-		Brokers:        []string{fmt.Sprintf("tcp://%s", addr)},
-		ConnectTimeout: testtime.D5s,
-		KeepAlive:      testtime.D30s,
+		ClientID:        id,
+		Brokers:         []string{fmt.Sprintf("tcp://%s", addr)},
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D30s,
 		Backoff: mqtt.BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
@@ -165,27 +166,105 @@ func TestConnection_Close_IdempotentAndTerminal(t *testing.T) {
 	require.Error(t, hErr)
 }
 
-// TestConnection_NeverConnected_TransientError verifies that Open against
-// an unreachable address returns a transient error.
-func TestConnection_NeverConnected_TransientError(t *testing.T) {
+// TestConnection_ConnectDeadline_FailFast verifies that Open against an
+// unreachable address fails-fast on the cfg.ConnectDeadline budget — NOT on the
+// lifecycle ctx. The lifecycle ctx passed here is context.Background() (never
+// canceled), so the only thing that can terminate the bootstrap wait is the
+// connectCtx derived from ConnectDeadline. This is the #1388 regression guard:
+// previously a never-canceled ctx meant Open hung forever.
+func TestConnection_ConnectDeadline_FailFast(t *testing.T) {
 	clk := clock.Real()
 	id, _ := mqtt.ParseEphemeralClientID("test", "never")
 	cfg := mqtt.Config{
-		ClientID:       id,
-		Brokers:        []string{"tcp://127.0.0.1:19999"}, // dead port
-		ConnectTimeout: testtime.D500ms,
-		KeepAlive:      testtime.D30s,
+		ClientID: id,
+		Brokers:  []string{"tcp://127.0.0.1:19999"}, // dead port → connection refused (instant, not a dial timeout)
+		// ConnectDeadline (300ms) is deliberately shorter than ConnectTimeout (5s):
+		// connection-refused returns instantly so autopaho keeps retrying with
+		// backoff, and the ONLY thing that ends the wait is the ConnectDeadline
+		// budget — never the per-attempt ConnectTimeout. Equal values would blur
+		// which bound fires; distinct values lock the deadline as the binding one.
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D300ms,
+		KeepAlive:       testtime.D30s,
 		Backoff: mqtt.BackoffConfig{
 			BaseDelay: testtime.D50ms,
 			MaxDelay:  testtime.D200ms,
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
-	defer cancel()
+	// Lifecycle ctx never cancels — only ConnectDeadline can end the wait.
+	start := time.Now()
+	_, err := mqtt.Open(context.Background(), clk, cfg)
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	assertErrCode(t, err, mqtt.ErrAdapterMQTTConnectTimeout)
+	// Upper bound proves Open actually fails-fast on ConnectDeadline (300ms) and
+	// does NOT hang on the never-canceled lifecycle ctx — generous slack absorbs
+	// the bounded fail-branch cm.Disconnect(ConnectTimeout) teardown + CI jitter.
+	require.Less(t, elapsed, testtime.D5s,
+		"Open must fail-fast near ConnectDeadline, not hang on lifecycle ctx")
+}
+
+// TestConnection_ConnectDeadline_Decoupled_CMSurvives verifies the other half of
+// the #1388 split: once the first connection succeeds, the ConnectionManager is
+// bound to the lifecycle ctx, NOT the connect-deadline ctx. Open derives a
+// WithTimeout(ctx, ConnectDeadline) child and cancels it on return; if the CM
+// were (wrongly) bound to that child, the deferred cancel would tear the
+// connection down. A short ConnectDeadline plus a healthy post-Open connection
+// proves the two lifetimes are decoupled.
+func TestConnection_ConnectDeadline_Decoupled_CMSurvives(t *testing.T) {
+	addr, stop := newEmbeddedBroker(t)
+	defer stop()
+
+	clk := clock.Real()
+	cfg := newValidConfig(addr)
+	cfg.ConnectDeadline = testtime.D2s // short; connectCtx is canceled on Open return
+
+	conn, err := mqtt.Open(context.Background(), clk, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
+
+	// connectCtx (WithTimeout child) is already canceled by Open's defer; if the
+	// CM were bound to it the connection would be down. Health == nil proves the
+	// CM survives on the lifecycle ctx.
+	assert.NoError(t, conn.Health(context.Background()))
+}
+
+// TestConnection_LifecycleCtxCanceled_ReturnsCanceled verifies that canceling
+// Open's parent lifecycle ctx during the bootstrap wait surfaces
+// ErrAdapterMQTTConnectCanceled — NOT ErrAdapterMQTTConnectTimeout. The split
+// (deadline → timeout, cancel → canceled) lets ops tell a deliberate abort from
+// a slow/unreachable broker.
+//
+// Determinism: the dead port only ever yields transient connection-refused
+// errors (never permErr, never a successful connect), and ConnectDeadline is
+// large (30s) so the deadline cannot fire within the test. Therefore the ONLY
+// way Open can return is the parent-ctx cancel propagating into connectCtx,
+// whose Err() is context.Canceled.
+func TestConnection_LifecycleCtxCanceled_ReturnsCanceled(t *testing.T) {
+	clk := clock.Real()
+	id, _ := mqtt.ParseEphemeralClientID("test", "cancel")
+	cfg := mqtt.Config{
+		ClientID:        id,
+		Brokers:         []string{"tcp://127.0.0.1:19999"}, // dead port → transient only
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D30s, // large → only the cancel (not deadline) ends the wait
+		KeepAlive:       testtime.D30s,
+		Backoff: mqtt.BackoffConfig{
+			BaseDelay: testtime.D50ms,
+			MaxDelay:  testtime.D200ms,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel the parent lifecycle ctx concurrently. Open blocks on connectCtx
+	// until this propagates; with the deadline at 30s, cancel is the only exit.
+	go cancel()
 
 	_, err := mqtt.Open(ctx, clk, cfg)
 	require.Error(t, err)
+	assertErrCode(t, err, mqtt.ErrAdapterMQTTConnectCanceled)
 }
 
 // TestConnection_DenyBroker_PermanentErrViaHealth tests that a deny-all broker

@@ -714,3 +714,49 @@ func TestRegistry_Snapshot_DefensiveCopy_Webhook(t *testing.T) {
 	assert.Len(t, rec.webhookReceivers, 1, "snap mutation must not affect recorder.webhookReceivers")
 	assert.Len(t, rec.webhookDispatchers, 1, "snap mutation must not affect recorder.webhookDispatchers")
 }
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Subscribe_SpecValidate_RejectsInvalidSpec (F3)
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Subscribe_SpecValidate_RejectsInvalidSpec verifies that Subscribe
+// calls ContractSpec.Validate() and rejects malformed specs that pass the
+// individual Kind/Topic guards but fail the full validation (e.g. empty
+// Transport or an event spec that mistakenly also carries Method/Path).
+func TestRegistry_Subscribe_SpecValidate_RejectsInvalidSpec(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		mutate      func(*contractspec.ContractSpec)
+		wantMsgPart string
+	}{
+		{
+			name:        "empty_transport",
+			mutate:      func(s *contractspec.ContractSpec) { s.Transport = "" },
+			wantMsgPart: "Transport",
+		},
+		{
+			name:        "event_with_method",
+			mutate:      func(s *contractspec.ContractSpec) { s.Method = "GET" },
+			wantMsgPart: "Method",
+		},
+		{
+			name:        "empty_id",
+			mutate:      func(s *contractspec.ContractSpec) { s.ID = "" },
+			wantMsgPart: "ID",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+			spec := testRegistrySpec("order.placed")
+			tc.mutate(&spec)
+			err := rec.Subscribe(spec, noopHandler, "cg-order", "ordercell")
+			require.Error(t, err, "spec failing Validate must be rejected")
+			assert.Contains(t, err.Error(), tc.wantMsgPart,
+				"error must mention the invalid field")
+			assert.Empty(t, rec.Snapshot().Subscriptions, "rejected subscription must not accumulate")
+		})
+	}
+}

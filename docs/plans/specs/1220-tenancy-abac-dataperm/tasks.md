@@ -120,6 +120,7 @@ graph TD
 - [ ] T2.4 [P] 三 cell `internal/mem/`：mem 实现加 tenant 过滤
 - [ ] T2.5 archtest `TENANT-REPO-PARAM-FUNNEL-01`（**`[R1 F-A8]` 评级澄清**：repo 方法签名收 `tenant.TenantID` → 「漏传」是**编译器 Hard**，无需 fixture；archtest 守的不变式 = 「无 repo 方法在 production 接受 plain string 充当 tenant」typed scan，**Medium**；反向自检用 `testdata/tenant_repo_param/violates/` 放一个收 string 的假 repo，断言 archtest 红）
 - [ ] T2.6 conformance + unit：三 cell 跨租户查询返回空
+- [ ] T2.7 **`[#1339 F2 carryover]` auditquery tenant-scoped 读路径**：PR-1（#1384）落了最小 fail-closed 闸门（`auditQueryPolicy` 在 `p.TenantID != ""` 时 403）作为临时止血。本任务用真隔离替换它——`ledger.AuditFilters` 加 `TenantID` + MemStore/PG `WHERE tenant_id` + auditquery 从认证 `principal.TenantID`（**非 query param**，否则成跨租户入口）注入 filter；**删除该 403 闸门**（`cells/auditcore/slices/auditquery/handler.go::auditQueryPolicy`）+ appender `INV-SINGLE-TENANT-ONLY` tripwire（`cells/auditcore/internal/appender/service.go`）；Store 接口变更走 contract-fanout implementation matrix（MemStore+PG+conformance）。验收：tenant-bearing 请求只见本租户行（不再 403），跨租户查询返回空。
 
 ### PR-3 — PG RLS FORCE + TxRunner SET LOCAL（W2, ~1200, dep: PR-2）
 - [ ] T3.1 migration：各租户表 `ENABLE` + `FORCE ROW LEVEL SECURITY`（防 table owner bypass）+ tenant_isolation policy（`NULLIF(current_setting('app.tenant_id',true),'')::uuid`）。**`[R1 F-B11]`** ADR/migration 注释明确：应用连接 PG role **不得是 table owner 且无 `BYPASSRLS`**；integration 断言 `SELECT rolbypassrls FROM pg_roles WHERE rolname=current_user` 为 false

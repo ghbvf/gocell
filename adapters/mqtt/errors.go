@@ -61,6 +61,13 @@ const (
 	// authorization rejection triggers a 503 readyz + continued retrying.
 	ErrAdapterMQTTConnectPermanent errcode.Code = "ERR_ADAPTER_MQTT_CONNECT_PERMANENT"
 
+	// ErrAdapterMQTTConnectCanceled signals that a wait for connection was aborted
+	// by context cancellation (caller abort or a propagated lifecycle-ctx cancel)
+	// rather than the connect-deadline budget elapsing. Distinct from
+	// ErrAdapterMQTTConnectTimeout so ops can tell a deliberate shutdown/abort from
+	// a slow or unreachable broker when triaging startup failures.
+	ErrAdapterMQTTConnectCanceled errcode.Code = "ERR_ADAPTER_MQTT_CONNECT_CANCELED"
+
 	// ErrAdapterMQTTNeverConnected signals that an operation was attempted before
 	// the adapter has completed its first successful connection.
 	ErrAdapterMQTTNeverConnected errcode.Code = "ERR_ADAPTER_MQTT_NEVER_CONNECTED"

@@ -99,6 +99,10 @@ func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
 		if claims.Subject == "" {
 			return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token subject missing")
 		}
+		// claims.TenantID is already validated + canonicalized by the verifier
+		// (JWTVerifier.VerifyIntent, the single unbypassable chokepoint); no
+		// per-authenticator tenant check is needed or wanted here (a second
+		// validation site would be a redundant truth source).
 		return jwtClaimsToPrincipal(claims), true, nil
 	})
 }
@@ -106,7 +110,9 @@ func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
 // jwtClaimsToPrincipal converts verified JWT Claims to a Principal.
 // Roles is a defensive copy so callers cannot mutate the underlying slice.
 // The Claims map contains exactly three entries (sid, iss, token_use);
-// other JWT fields (aud, exp, iat, …) are intentionally excluded.
+// other JWT fields (aud, exp, iat, …) are intentionally excluded. TenantID is
+// carried in the dedicated Principal.TenantID field (already canonicalized by
+// the verifier), not in the Claims map.
 func jwtClaimsToPrincipal(c Claims) *Principal {
 	roles := append([]string(nil), c.Roles...)
 	return &Principal{
@@ -114,6 +120,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 		Subject:               c.Subject,
 		Roles:                 roles,
 		AuthMethod:            "jwt",
+		TenantID:              c.TenantID,
 		PasswordResetRequired: c.PasswordResetRequired,
 		Claims: map[string]string{
 			"sid":       c.SessionID,

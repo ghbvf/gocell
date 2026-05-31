@@ -170,6 +170,7 @@ func newE2EFixture() *e2eFixture {
 	}
 	idmSvc, err := NewService(clock.Real(),
 		userRepo, inv, slog.Default(),
+		roleRepo,
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 		WithTxManager(persistence.WrapForCell(tx)),
 	)

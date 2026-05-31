@@ -51,6 +51,7 @@ const (
 	msgConfigTLSMinVersion            = "mqtt: TLS MinVersion below TLS 1.2 is forbidden (downgrade protection)"
 	msgConfigPlaintextRemote          = "mqtt: plaintext broker scheme requires loopback host"
 	msgConfigConnectTimeout           = "mqtt: ConnectTimeout must be > 0"
+	msgConfigConnectDeadline          = "mqtt: ConnectDeadline must be > 0 (bootstrap first-connection wait budget)"
 	msgConfigKeepAlive                = "mqtt: KeepAlive must be > 0"
 	msgConfigKeepAliveBelowSecond     = "mqtt: KeepAlive must be >= 1s (uint16 seconds wire field truncates sub-second values to 0)"
 	msgConfigKeepAliveOverflow        = "mqtt: KeepAlive exceeds uint16 seconds (65535s)"
@@ -121,7 +122,17 @@ type Config struct {
 	// guard in Publisher.
 	MaximumPacketSize uint32
 	ConnectTimeout    time.Duration // per-attempt; must be > 0
-	KeepAlive         time.Duration // > 0, <= 65535s (uint16 wire field)
+	// ConnectDeadline bounds the bootstrap first-connection wait (Open blocks
+	// until the first connection comes up OR this deadline elapses). It is
+	// orthogonal to the per-attempt ConnectTimeout: ConnectTimeout caps a single
+	// dial, ConnectDeadline caps the whole "wait for first success" window across
+	// retries. Open derives a context.WithTimeout(ctx, ConnectDeadline) child for
+	// the wait while binding the ConnectionManager to the lifecycle ctx, so a
+	// broker that never comes up fails Open fast instead of hanging on an
+	// unbounded root/app ctx (#1388). Must be > 0 — a zero/negative value would
+	// re-collapse the wait onto the lifecycle ctx.
+	ConnectDeadline time.Duration
+	KeepAlive       time.Duration // > 0, <= 65535s (uint16 wire field)
 	// PublishTimeout caps the wall-clock time for a single Publish call (per-
 	// publish; the publisher's WithTimeout child ctx fires after this duration).
 	// 0 = no adapter-imposed timeout — Publisher uses the caller-provided ctx's
@@ -214,6 +225,10 @@ func (c Config) validateTimings() error {
 	if c.ConnectTimeout <= 0 {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigConnectTimeout,
 			errcode.WithDetails(errcode.PublicDuration("connectTimeout", c.ConnectTimeout)))
+	}
+	if c.ConnectDeadline <= 0 {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigConnectDeadline,
+			errcode.WithDetails(errcode.PublicDuration("connectDeadline", c.ConnectDeadline)))
 	}
 	if c.KeepAlive <= 0 {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigKeepAlive,

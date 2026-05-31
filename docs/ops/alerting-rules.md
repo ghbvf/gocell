@@ -58,8 +58,56 @@ remote-write 或业务专用 Prometheus 若不需要 runtime series，可在 scr
 ```yaml
 metric_relabel_configs:
 - source_labels: [__name__, cell]
-  regex: 'gocell_http_(requests_total|request_duration_seconds(_bucket|_sum|_count)?);_runtime'
+  regex: 'gocell_http_(requests_total|request_duration_seconds(_bucket|_sum|_count)?|request_body_limit_rejections_total);_runtime'
+  # Note: request_body_limit_rejections_total is a counter — it has no _bucket/_sum/_count
+  # suffixes (those belong to histograms/summaries only). The regex matches the bare metric name.
   action: drop
+```
+
+## HTTP Body-Limit 拒绝计数器
+
+`gocell_http_request_body_limit_rejections_total{cell, route}` 记录 BodyLimit 中间件
+因 Content-Length 超限（fast-path）返回 413 的次数。流式超限（MaxBytesReader 在读
+body 时触发）依赖 handler 将 `*http.MaxBytesError` 通过 `pkg/httputil.WriteError`
+映射为 413：框架生成的 handler 走此路径，其产生的 413 会计入
+`gocell_http_requests_total{status="413"}`；自定义 handler 若不调用 `httputil.WriteError`
+则不会产生 413 计数。两路 413 计数来源不同，不重复。
+
+Label 语义：
+
+| label | 含义 |
+|---|---|
+| `cell` | 同 `http_requests_total.cell`：路由归属 cell ID，或 `_runtime`（框架路径） |
+| `route` | 低基数路由模板（同 RouteFor 返回值）。当请求路径与已注册路由匹配时，RouteResolver 返回路由模板（如 `/api/v1/upload/blob`）；仅当路径无法匹配任何已注册路由时才回退到 `"unmatched"`。fast-path 期间 ServeMux 尚未写入 pattern recorder，故由 RouteResolver（ctx 中由 CellAttribution 注入）负责模板解析。 |
+
+推荐告警（短时突增，提示 client 配置错误或资源滥用）：
+
+```yaml
+- alert: GoCellHTTPBodyLimitRejectionSpike
+  expr: |
+    sum(rate(gocell_http_request_body_limit_rejections_total{cell!="_runtime"}[5m])) by (cell, route) > 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "HTTP body-limit rejections spiking ({{ $labels.cell }}/{{ $labels.route }})"
+    description: |
+      Cell {{ $labels.cell }} route {{ $labels.route }} is rejecting requests
+      with Content-Length > body limit at >1/sec for 5m.
+      Possible causes: client sending oversized payloads, misconfigured body limit,
+      or DDoS amplification attempt.
+      排查：通过结构化日志字段定位拒绝请求（注意 4xx 日志默认每 100 条采样一条）：
+        code=ERR_BODY_TOO_LARGE status=413 cell_id=<cell> route=<route>
+      其中 cell_id 字段对应 kernel/ctxkeys.CellIDFrom（access log 记为 cell_id，
+      非 cell），request_id 字段可关联同一请求的跨日志记录。
+      同步检查 BodyLimit 配置（WithBodyLimit 参数）与客户端 Content-Length 分布。
+```
+
+调试 PromQL：
+
+```promql
+# 按 cell / route 分组的 body-limit 拒绝速率
+sum(rate(gocell_http_request_body_limit_rejections_total[5m])) by (cell, route)
 ```
 
 ---
