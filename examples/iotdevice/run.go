@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
 // runIotdevice is the hand-written runtime helper for the iotdevice assembly.
@@ -44,10 +45,12 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	_ = mods // cell construction is done directly below; mods only validates drift
 
+	// logger is used for pre-bootstrap and cell-level logging.
+	// The process-global slog default is sealed by bootstrap.Run with the
+	// sink-side redacting handler; no manual slog.SetDefault needed here.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
-	slog.SetDefault(logger)
 
 	internalAuthChain, err := newInternalAuthChainFromEnv()
 	if err != nil {
@@ -152,6 +155,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
+		bootstrap.WithLogging(logging.Options{Format: logging.FormatJSON}),
 	}
 	// MQTT channel options (health probe + managed closer) when enabled.
 	opts = append(opts, mqttBootstrapOpts...)

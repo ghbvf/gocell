@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -144,4 +145,144 @@ func TestContextHandler_ContractID_EmptyValueSkipped(t *testing.T) {
 	err := json.Unmarshal(buf.Bytes(), &entry)
 	require.NoError(t, err)
 	assert.NotContains(t, entry, "contract_id")
+}
+
+// ---------------------------------------------------------------------------
+// B1 — sink-side redaction tests
+// All tests use an internal white-box handler via NewHandler + bytes.Buffer.
+// ---------------------------------------------------------------------------
+
+const mask = "<REDACTED>"
+
+func newTestHandler(buf *bytes.Buffer) slog.Handler {
+	return NewHandler(Options{
+		Level:  slog.LevelDebug,
+		Format: FormatJSON,
+		Writer: buf,
+	})
+}
+
+func parseEntry(t *testing.T, buf *bytes.Buffer) map[string]any {
+	t.Helper()
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	return entry
+}
+
+// TestRedactingHandler_FreeFormAttrStringMask verifies that a slog.String attr
+// containing a sensitive key=value pattern is masked in the JSON output.
+func TestRedactingHandler_FreeFormAttrStringMask(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newTestHandler(&buf))
+
+	logger.Info("login error", slog.String("note", "password=hunter2"))
+
+	entry := parseEntry(t, &buf)
+	note, ok := entry["note"].(string)
+	require.True(t, ok, "note field must be a string")
+	assert.Contains(t, note, mask)
+	assert.NotContains(t, note, "hunter2")
+}
+
+// TestRedactingHandler_KeyAwareMask verifies that a slog attr whose key is a
+// sensitive field name gets its value replaced with Mask regardless of content.
+func TestRedactingHandler_KeyAwareMask(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newTestHandler(&buf))
+
+	logger.Info("auth", slog.String("password", "x"))
+
+	entry := parseEntry(t, &buf)
+	assert.Equal(t, mask, entry["password"])
+}
+
+// TestRedactingHandler_SlogAnyRedacted verifies that slog.Any with a struct or
+// error carrying sensitive text is redacted after stringify.
+func TestRedactingHandler_SlogAnyRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newTestHandler(&buf))
+
+	type event struct{ Token string }
+	logger.Info("event", slog.Any("payload", event{Token: "password=hunter2"}))
+
+	out := buf.String()
+	assert.Contains(t, out, mask)
+}
+
+// TestRedactingHandler_GroupAttrRedacted verifies that sensitive attrs nested
+// inside a slog.Group are recursively redacted.
+func TestRedactingHandler_GroupAttrRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newTestHandler(&buf))
+
+	logger.Info("req",
+		slog.Group("headers",
+			slog.String("authorization", "Bearer abc"),
+			slog.String("x-trace-id", "trace-1"),
+		),
+	)
+
+	out := buf.String()
+	assert.Contains(t, out, mask)
+	assert.NotContains(t, out, "Bearer abc")
+	// benign field should survive
+	assert.Contains(t, out, "trace-1")
+}
+
+// TestRedactingHandler_MessageRedacted verifies that a sensitive pattern
+// embedded in the log message is masked.
+func TestRedactingHandler_MessageRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newTestHandler(&buf))
+
+	logger.Error("dsn=postgres://u:p@host/db connect failed")
+
+	entry := parseEntry(t, &buf)
+	msg, ok := entry["msg"].(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, mask)
+	assert.NotContains(t, msg, "postgres://u:p@host/db")
+}
+
+// TestRedactingHandler_WithAttrsPreBound verifies that attrs pre-bound via
+// logger.With are redacted at bind time — this is the key WithAttrs path.
+func TestRedactingHandler_WithAttrsPreBound(t *testing.T) {
+	var buf bytes.Buffer
+	base := newTestHandler(&buf)
+	logger := slog.New(base).With("authorization", "Bearer abc")
+
+	logger.Info("x")
+
+	entry := parseEntry(t, &buf)
+	authVal, ok := entry["authorization"].(string)
+	require.True(t, ok, "authorization field must be present")
+	assert.Equal(t, mask, authVal, "pre-bound sensitive attr must be masked")
+	assert.NotContains(t, authVal, "Bearer abc")
+}
+
+// TestRedactingHandler_ContextFieldsStillInjected verifies that context-
+// injected fields (trace_id etc.) still appear in the output after redaction.
+func TestRedactingHandler_ContextFieldsStillInjected(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newTestHandler(&buf))
+
+	ctx := ctxkeys.WithTraceID(context.Background(), "trace-xyz")
+	logger.InfoContext(ctx, "ok")
+
+	entry := parseEntry(t, &buf)
+	assert.Equal(t, "trace-xyz", entry["trace_id"])
+}
+
+// TestRedactingHandler_BenignAttrUnchanged verifies that non-sensitive attrs
+// pass through without modification.
+func TestRedactingHandler_BenignAttrUnchanged(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newTestHandler(&buf))
+
+	logger.Info("ping", slog.String("host", "example.com"), slog.Int("port", 8080))
+
+	entry := parseEntry(t, &buf)
+	assert.Equal(t, "example.com", entry["host"])
+	assert.EqualValues(t, 8080, entry["port"])
+	assert.False(t, strings.Contains(buf.String(), mask))
 }

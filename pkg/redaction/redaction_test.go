@@ -755,104 +755,110 @@ func (secretLeakingLogValuer) LogValue() slog.Value {
 	return slog.StringValue("password=hunter2")
 }
 
-// TestRedactSlogAttr_PassthroughKinds locks the baseline behavior of
-// redactSlogValue for non-string slog.Value kinds: bool, int64, float64,
-// time.Time, slog.Any (struct), and slog.LogValuer all pass through unchanged.
+// TestRedactSlogAttr_PassthroughKinds locks the behavior of redactSlogValue for
+// all slog.Value kinds.
 //
-// This is intentional fail-open design: the regex pipeline only matches
-// `key=value` text shapes, so numeric/temporal/structured values cannot
-// carry the patterns. Runtime data entering errcode.Error must go through
-// the sealed PublicDetail / InternalDetail newtypes (errcode.PublicAttr /
-// InternalAttr), which return slog.String (KindString) for string values
-// via AsSlogAttr — the first line of defense covering the common
-// "embedded key=value inside a string" leak shape.
+// Scalar kinds (bool, int64, float64, time.Time) pass through as the same kind —
+// the regex pipeline only matches `key=value` text shapes which scalars cannot carry.
 //
-// If a new direct-write path for slog.Any(callerSuppliedStruct) is added,
-// extend redactSlogValue with ValueResolve and add cases here.
+// KindAny (struct, error, interface{}) is now stringified via fmt.Sprint and passed
+// through RedactString — fail-closed: structure is lost but PII is masked.
+//
+// KindLogValuer is Resolved once and recursed; sensitive LogValuer results (those
+// whose resolved string matches a sensitive key=value pattern) are now redacted.
+// Benign LogValuers produce their resolved string value, unmasked.
 func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 	t.Parallel()
 
 	fixedTime := time.Unix(1700000000, 0)
 
 	cases := []struct {
-		name           string
-		attr           slog.Attr
-		wantValueEqual bool // true = value unchanged (passthrough); false = value changed (redacted)
+		name      string
+		attr      slog.Attr
+		wantKind  slog.Kind
+		wantMask  bool   // true = result must contain Mask
+		wantValue string // non-empty = exact expected string value
 	}{
 		{
-			name:           "bool passthrough",
-			attr:           slog.Bool("flag", true),
-			wantValueEqual: true,
+			name:     "bool passthrough",
+			attr:     slog.Bool("flag", true),
+			wantKind: slog.KindBool,
 		},
 		{
-			name:           "int64 passthrough",
-			attr:           slog.Int64("count", 42),
-			wantValueEqual: true,
+			name:     "int64 passthrough",
+			attr:     slog.Int64("count", 42),
+			wantKind: slog.KindInt64,
 		},
 		{
-			name:           "float64 passthrough",
-			attr:           slog.Float64("ratio", 3.14),
-			wantValueEqual: true,
+			name:     "float64 passthrough",
+			attr:     slog.Float64("ratio", 3.14),
+			wantKind: slog.KindFloat64,
 		},
 		{
-			name:           "time passthrough",
-			attr:           slog.Time("ts", fixedTime),
-			wantValueEqual: true,
+			name:     "time passthrough",
+			attr:     slog.Time("ts", fixedTime),
+			wantKind: slog.KindTime,
 		},
 		{
-			name:           "any struct passthrough",
-			attr:           slog.Any("obj", struct{ X int }{X: 1}),
-			wantValueEqual: true,
+			// KindAny is now stringify+redact (fail-closed). A benign struct
+			// ({X:1}) produces "{1}" — no sensitive key=value, RedactString is a
+			// no-op. Result kind is KindString.
+			name:      "any benign struct stringify — result is string, no mask",
+			attr:      slog.Any("obj", struct{ X int }{X: 1}),
+			wantKind:  slog.KindString,
+			wantValue: "{1}",
 		},
 		{
-			name:           "logvaluer passthrough",
-			attr:           slog.Any("v", customLogValuer{}),
-			wantValueEqual: true,
+			// KindLogValuer is Resolved and recursed. Benign LogValuer resolves
+			// to a non-sensitive string; output is that string, kind KindString.
+			name:      "logvaluer benign resolved — output is resolved string",
+			attr:      slog.Any("v", customLogValuer{}),
+			wantKind:  slog.KindString,
+			wantValue: "logvaluer-resolved-value",
 		},
 		{
-			// Documents fail-open boundary cost: LogValuer resolving to a
-			// sensitive string IS NOT redacted (passthrough). Acceptable
-			// because sealed PublicDetail / InternalDetail upstream route
-			// string values through AsSlogAttr as KindString; LogValuer /
-			// custom Stringer carriers are out of scope for redaction.
-			name:           "logvaluer with secret leaks by design (fail-open boundary)",
-			attr:           slog.Any("config", secretLeakingLogValuer{}),
-			wantValueEqual: true,
+			// KindLogValuer resolving to a sensitive key=value string IS now
+			// redacted. The fail-open boundary in earlier versions has been
+			// closed by the KindLogValuer → Resolve → recurse path.
+			name:     "logvaluer with secret resolved — now redacted (fail-closed)",
+			attr:     slog.Any("config", secretLeakingLogValuer{}),
+			wantKind: slog.KindString,
+			wantMask: true,
 		},
 		{
-			// Control case: string with sensitive key=value IS redacted.
-			name:           "string redacted (control)",
-			attr:           slog.String("msg", "password=secret"),
-			wantValueEqual: false,
+			// Control: string with sensitive key IS redacted (unchanged behavior).
+			name:     "string redacted (control)",
+			attr:     slog.String("msg", "password=secret"),
+			wantKind: slog.KindString,
+			wantMask: true,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			original := tc.attr.Value.String()
 			got := redaction.RedactSlogAttr(tc.attr)
 
 			if got.Key != tc.attr.Key {
 				t.Errorf("RedactSlogAttr key changed: got %q, want %q", got.Key, tc.attr.Key)
 			}
-
-			resultEqual := got.Value.String() == original
-			if resultEqual != tc.wantValueEqual {
-				if tc.wantValueEqual {
-					t.Errorf(
-						"RedactSlogAttr(%v): expected passthrough (value unchanged), "+
-							"but got %q (original %q). KindLogValuer/KindAny should not be "+
-							"recursively scanned — fail-open design per Known limitations.",
-						tc.attr, got.Value.String(), original,
-					)
-				} else {
-					t.Errorf(
-						"RedactSlogAttr(%v): expected redaction (value changed), "+
-							"but value unchanged %q. String control case must trigger regex.",
-						tc.attr, got.Value.String(),
-					)
+			if got.Value.Kind() != tc.wantKind {
+				t.Errorf("RedactSlogAttr(%v): got kind %v, want %v",
+					tc.attr, got.Value.Kind(), tc.wantKind)
+			}
+			if tc.wantValue != "" {
+				gotStr := got.Value.String()
+				if gotStr != tc.wantValue {
+					t.Errorf("RedactSlogAttr(%v): got %q, want %q", tc.attr, gotStr, tc.wantValue)
 				}
+			}
+			gotStr := got.Value.String()
+			if tc.wantMask && !strings.Contains(gotStr, redaction.Mask) {
+				t.Errorf("RedactSlogAttr(%v): expected mask %q in output %q",
+					tc.attr, redaction.Mask, gotStr)
+			}
+			if !tc.wantMask && tc.wantKind == slog.KindString && strings.Contains(gotStr, redaction.Mask) {
+				t.Errorf("RedactSlogAttr(%v): unexpected mask in output %q", tc.attr, gotStr)
 			}
 		})
 	}

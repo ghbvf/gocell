@@ -20,6 +20,7 @@ import (
 	// intentional resolution — do not collapse into a single package.
 	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // Format specifies the log output format.
@@ -77,17 +78,31 @@ func (h *contextHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 // Handle enriches the record with context values before delegating.
+// Every attr in the record — including the message — is redacted before
+// forwarding to the inner handler. Context-injected fields are framework-
+// trusted (trace/request IDs, cell_id) and are appended after redaction.
 func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
-	attrs := extractContextAttrs(ctx)
-	if len(attrs) > 0 {
-		r.AddAttrs(attrs...)
+	nr := slog.NewRecord(r.Time, r.Level, redaction.RedactString(r.Message), r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(redaction.RedactSlogAttr(a))
+		return true
+	})
+	ctxAttrs := extractContextAttrs(ctx)
+	if len(ctxAttrs) > 0 {
+		nr.AddAttrs(ctxAttrs...)
 	}
-	return h.inner.Handle(ctx, r)
+	return h.inner.Handle(ctx, nr)
 }
 
 // WithAttrs returns a new handler with the given attributes pre-applied.
+// Attributes are redacted at bind time to cover the logger.With(...) path,
+// which pre-binds attrs before any Handle call.
 func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &contextHandler{inner: h.inner.WithAttrs(attrs)}
+	redacted := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		redacted[i] = redaction.RedactSlogAttr(a)
+	}
+	return &contextHandler{inner: h.inner.WithAttrs(redacted)}
 }
 
 // WithGroup returns a new handler with the given group name.

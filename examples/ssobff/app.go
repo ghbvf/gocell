@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
@@ -303,6 +304,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
+		bootstrap.WithLogging(logging.Options{Format: logging.FormatJSON}),
 	)
 
 	return &SSOBFFApp{

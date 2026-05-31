@@ -279,15 +279,14 @@ func RedactPanic(v any) string {
 //
 // # Known limitations
 //
-// KindLogValuer 与 KindAny 走 passthrough 不做递归扫描，是 fail-open 设计：
-// runtime 数据进入 errcode.Error 必须经 WithDetails / WithInternal sealed
-// newtype (errcode.PublicString / InternalAttr)，PublicDetail.AsSlogAttr() 与
-// InternalDetail.AsSlogAttr() 对 string value 返回 slog.String（KindString
-// 走 RedactString 扫描），非 string value 才进入 KindAny passthrough。这是
-// 第一道防线（sealed type + AsSlogAttr KindString preference）。如未来直接
-// 注入 slog.Any(callerSuppliedStruct) 走 KindAny / KindLogValuer，需在此函
-// 数补 ValueResolve 并扩展锁定测试（pkg/redaction/redaction_test.go
-// TestRedactSlogAttr_PassthroughKinds）。
+// KindAny 经 fmt.Sprint 字符串化后走 RedactString 扫描（结构化类型降级为字符串
+// 是 fail-closed 的接受代价：任何含 key=value 形态的 struct 字符串化结果都会被
+// mask，结构信息不可恢复，但比 passthrough 泄漏 PII 更安全）。
+//
+// KindLogValuer 调用 Resolve() 后递归脱敏，保留结构化展开（如 readyz
+// SlogDependencyEntry 仍为 KindGroup，会被 Group 分支递归处理）；若 Resolve
+// 后类型仍为 KindLogValuer（自引用），fmt.Sprint 兜底（防无限递归不等价于无限深度
+// 展开，slog 标准库本身也对 LogValuer.LogValue 有调用深度限制）。
 func RedactSlogAttr(attr slog.Attr) slog.Attr {
 	if IsSensitiveKey(attr.Key) {
 		return slog.Attr{Key: attr.Key, Value: slog.StringValue(Mask)}
@@ -306,6 +305,20 @@ func redactSlogValue(v slog.Value) slog.Value {
 			out[i] = RedactSlogAttr(a)
 		}
 		return slog.GroupValue(out...)
+	case slog.KindAny:
+		// Stringify and redact: any struct/error/interface in a slog.Any call
+		// is converted to its string representation and scrubbed. This is a
+		// fail-closed design — structure is lost but PII is masked.
+		return slog.StringValue(RedactString(fmt.Sprint(v.Any())))
+	case slog.KindLogValuer:
+		// Resolve LogValuer once and recurse. If the resolved value is still a
+		// LogValuer (self-referential), fall back to stringify to break the
+		// cycle.
+		resolved := v.Resolve()
+		if resolved.Kind() == slog.KindLogValuer {
+			return slog.StringValue(RedactString(fmt.Sprint(v.Any())))
+		}
+		return redactSlogValue(resolved)
 	default:
 		return v
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
 // demoTxRunner is a pass-through TxRunner for demo mode: executes fn directly
@@ -57,10 +58,12 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	_ = mods // cell construction is done directly below; mods only validates drift
 
+	// logger is used for pre-bootstrap and cell-level logging.
+	// The process-global slog default is sealed by bootstrap.Run with the
+	// sink-side redacting handler; no manual slog.SetDefault needed here.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
-	slog.SetDefault(logger)
 
 	internalAuthChain, err := newInternalAuthChainFromEnv()
 	if err != nil {
@@ -124,6 +127,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9092", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
+		bootstrap.WithLogging(logging.Options{Format: logging.FormatJSON}),
 	)
 
 	logger.Info("todoorder: starting on :8082; protected routes require an RS256 bearer token")

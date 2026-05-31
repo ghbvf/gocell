@@ -18,10 +18,12 @@ import (
 )
 
 func main() {
+	// Pre-bootstrap logger for startup error reporting.
+	// The process-global slog default is sealed by bootstrap.Run via the
+	// sink-side redacting handler; slog.SetDefault is not called here.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
-	slog.SetDefault(logger)
 
 	app, err := NewSSOBFFApp(WithSSOBFFLogger(logger))
 	if err != nil {
