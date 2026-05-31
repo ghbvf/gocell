@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -196,17 +197,30 @@ func TestRedactingHandler_KeyAwareMask(t *testing.T) {
 	assert.Equal(t, mask, entry["password"])
 }
 
-// TestRedactingHandler_SlogAnyRedacted verifies that slog.Any with a struct or
-// error carrying sensitive text is redacted after stringify.
+// TestRedactingHandler_SlogAnyRedacted verifies the Option A KindAny boundary
+// (#1036 review F2): an error / fmt.Stringer value carried by slog.Any (the
+// panic / error path) is stringified and redacted, while a genuinely structured
+// value (plain struct) passes through so the inner handler serializes it
+// structurally.
 func TestRedactingHandler_SlogAnyRedacted(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(newTestHandler(&buf))
+	t.Run("error_value_redacted", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(newTestHandler(&buf))
+		logger.Info("event", slog.Any("error", errors.New("connect failed: password=hunter2")))
+		assert.Contains(t, buf.String(), mask)
+	})
 
-	type event struct{ Token string }
-	logger.Info("event", slog.Any("payload", event{Token: "password=hunter2"}))
-
-	out := buf.String()
-	assert.Contains(t, out, mask)
+	t.Run("plain_struct_passthrough_structured", func(t *testing.T) {
+		// Option A: a plain struct (no error/Stringer) passes through so its
+		// fields are serialized structurally — NOT flattened to a string.
+		var buf bytes.Buffer
+		logger := slog.New(newTestHandler(&buf))
+		type event struct{ Count int }
+		logger.Info("event", slog.Any("payload", event{Count: 3}))
+		out := buf.String()
+		// Structured: payload is a JSON object with the field, not a "{3}" string.
+		assert.Contains(t, out, `"payload":{"Count":3}`)
+	})
 }
 
 // TestRedactingHandler_GroupAttrRedacted verifies that sensitive attrs nested

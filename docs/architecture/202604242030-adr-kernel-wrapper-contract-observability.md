@@ -370,8 +370,12 @@ inner JSON/Text sink.
 **Retired Soft archtests** (superseded by sink-side enforcement):
 
 - `PANIC-REDACT-01` — `slog.Any("panic", X)` must wrap X with
-  `redaction.RedactAny(...)`. Retired because the sink now redacts all `Any`
-  values at the `slog.Handler` level via `RedactSlogAttr`'s `KindAny` branch.
+  `redaction.RedactAny(...)`. Retired because the sink redacts error /
+  `fmt.Stringer` `Any` values at the `slog.Handler` level via `RedactSlogAttr`'s
+  KindAny branch (GoCell panics are `panicregister.Approved(errcode.Assertion)`,
+  i.e. errors). Genuinely structured `Any` values pass through to preserve
+  structured logs (Option A; #1036 review F2 — earlier blanket fmt.Sprint
+  degraded array/map output).
 - `HTTPUTIL-5XX-LOG-REDACT-01` — `log5xx` must call `redaction.RedactSlogAttr`
   on `ecErr.Details`. Retired because the sink redacts every attr unconditionally.
 

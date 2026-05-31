@@ -127,7 +127,10 @@ each entry point. Tracked at **gh #1401**.
 
 **Retired Soft archtests** (superseded by sink-side redaction):
 - `PANIC-REDACT-01` — `slog.Any("panic", X)` must wrap X with `redaction.RedactAny`.
-  Sink's `KindAny` branch in `RedactSlogAttr` now covers this unconditionally.
+  Sink's `RedactSlogAttr` KindAny branch redacts error / `fmt.Stringer` values
+  (GoCell panics are `panicregister.Approved(errcode.Assertion)`, i.e. errors);
+  genuinely structured values pass through to preserve structured logs (Option A,
+  #1036 review F2).
 - `HTTPUTIL-5XX-LOG-REDACT-01` — `log5xx` must call `RedactSlogAttr` on attrs.
   Sink now redacts all attrs unconditionally.
 

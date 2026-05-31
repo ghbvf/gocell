@@ -755,15 +755,22 @@ func (secretLeakingLogValuer) LogValue() slog.Value {
 	return slog.StringValue("password=hunter2")
 }
 
+// stringerWithSecret implements fmt.Stringer with a secret-bearing String() to
+// exercise the Option A KindAny error/Stringer redaction branch.
+type stringerWithSecret struct{}
+
+func (stringerWithSecret) String() string { return "api_key=sekret" }
+
 // TestRedactSlogAttr_PassthroughKinds locks the behavior of redactSlogValue for
 // all slog.Value kinds.
 //
 // Scalar kinds (bool, int64, float64, time.Time) pass through as the same kind —
 // the regex pipeline only matches `key=value` text shapes which scalars cannot carry.
 //
-// KindAny (struct, error, interface{}) is stringified via fmt.Sprint and passed
-// through RedactString — fail-closed: structure is lost but PII is masked. This
-// covers the panic path slog.Any("panic", recover()).
+// KindAny (Option A, #1036 review F2): only error / fmt.Stringer values are
+// stringified via fmt.Sprint and passed through RedactString (the panic / error
+// path). Genuinely structured values (slices, maps, primitives, plain structs)
+// pass through unchanged so the inner handler serializes them structurally.
 //
 // KindLogValuer passes through unchanged (NOT resolved). See the RedactSlogAttr
 // godoc: the sole production LogValuer (readyz SlogDependencyEntry) self-redacts
@@ -804,13 +811,18 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 			wantKind: slog.KindTime,
 		},
 		{
-			// KindAny is now stringify+redact (fail-closed). A benign struct
-			// ({X:1}) produces "{1}" — no sensitive key=value, RedactString is a
-			// no-op. Result kind is KindString.
-			name:      "any benign struct stringify — result is string, no mask",
-			attr:      slog.Any("obj", struct{ X int }{X: 1}),
-			wantKind:  slog.KindString,
-			wantValue: "{1}",
+			// Option A: a plain struct (no error / Stringer) passes through as
+			// KindAny so the inner handler serializes its fields structurally.
+			name:     "any plain struct passthrough — structure preserved",
+			attr:     slog.Any("obj", struct{ X int }{X: 1}),
+			wantKind: slog.KindAny,
+		},
+		{
+			// Option A: a slice passes through as KindAny (F2: no array→string
+			// degradation).
+			name:     "any slice passthrough — structure preserved",
+			attr:     slog.Any("ids", []string{"a", "b"}),
+			wantKind: slog.KindAny,
 		},
 		{
 			// KindLogValuer passes through unchanged (kind stays KindLogValuer);
@@ -830,12 +842,18 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 			wantMask: false,
 		},
 		{
-			// KindAny: struct whose fmt.Sprint form contains a sensitive key=value
-			// pattern is stringified and then redacted (fail-closed). Documents the
-			// known struct-field leak surface: {token=xyz} → fmt.Sprint → "{token=xyz}"
-			// → RedactString matches `token=xyz` → mask.
-			name:     "any struct with embedded token=value — redacted after stringify",
-			attr:     slog.Any("note", struct{ T string }{T: "token=xyz"}),
+			// Option A: an error value (the panic/error path) is stringified via
+			// Error() and redacted. KindAny error → KindString masked.
+			name:     "any error value — stringified and redacted",
+			attr:     slog.Any("err", errors.New("connect failed: token=xyz")),
+			wantKind: slog.KindString,
+			wantMask: true,
+		},
+		{
+			// Option A: a fmt.Stringer value (string-semantic) is stringified via
+			// String() and redacted.
+			name:     "any stringer value — stringified and redacted",
+			attr:     slog.Any("s", stringerWithSecret{}),
 			wantKind: slog.KindString,
 			wantMask: true,
 		},

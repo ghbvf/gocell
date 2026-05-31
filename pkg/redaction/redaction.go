@@ -279,9 +279,14 @@ func RedactPanic(v any) string {
 //
 // # Known limitations
 //
-// KindAny 经 fmt.Sprint 字符串化后走 RedactString 扫描（结构化类型降级为字符串
-// 是 fail-closed 的接受代价：任何含 key=value 形态的 struct 字符串化结果都会被
-// mask，结构信息不可恢复，但比 passthrough 泄漏 PII 更安全）。
+// KindAny 边界（Option A，#1036 review F2）：error 与 fmt.Stringer 值是"字符串
+// 语义"（后端渲染成一行字符串），故字符串化后走 RedactString——覆盖
+// slog.Any("error", err) 与 panic 值（GoCell panic = errcode.Assertion，是
+// error）。其余 KindAny（slice / map / 基础类型 / 无 Stringer 的普通 struct）
+// passthrough，交给 inner handler 结构化序列化，避免把数组/map 退化成字符串。
+// 残余：无 Stringer 且含敏感字段的裸 struct 经 JSON 序列化仍可能泄漏（与
+// KindLogValuer 同类已知边界），由 key-aware（敏感 attr key 整体 mask）兜底；
+// 彻底的 reflect-walk 深度递归脱敏见 backlog（对标 Vault hashstructure）。
 //
 // KindLogValuer 刻意走 passthrough（不 Resolve）。唯一的生产 LogValuer 是 readyz
 // SlogDependencyEntry，其 error_msg 在构造期已经过 newRedactedErrorMsg→RedactString
@@ -310,12 +315,16 @@ func redactSlogValue(v slog.Value) slog.Value {
 		}
 		return slog.GroupValue(out...)
 	case slog.KindAny:
-		// Stringify and redact: any struct/error/interface in a slog.Any call
-		// is converted to its string representation and scrubbed. This is a
-		// fail-closed design — structure is lost but PII is masked. Covers the
-		// panic path slog.Any("panic", recover()) where the value is an
-		// uncontrolled any.
-		return slog.StringValue(RedactString(fmt.Sprint(v.Any())))
+		// Option A (#1036 review F2): only string-semantic values (error /
+		// fmt.Stringer — this is the panic / error path) are stringified and
+		// scrubbed; genuinely structured values pass through so the inner
+		// handler serializes them structurally (no array/map → string
+		// degradation). See RedactSlogAttr "Known limitations".
+		switch v.Any().(type) {
+		case error, fmt.Stringer:
+			return slog.StringValue(RedactString(fmt.Sprint(v.Any())))
+		}
+		return v
 	default:
 		// KindLogValuer and any future kinds pass through unchanged. See the
 		// RedactSlogAttr godoc "Known limitations" for the KindLogValuer rationale.

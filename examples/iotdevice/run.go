@@ -39,18 +39,19 @@ import (
 // It is called by the generated main.go and owns environment loading +
 // bootstrap wiring.
 func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []string) error {
+	// Fail-closed sink-side redaction: seal the process-global slog default with
+	// the redacting handler FIRST — before any work that may log (e.g. module
+	// drift validation below) — so every slog.Default() call is scrubbed
+	// (SLOG-HANDLER-SEALED-FUNNEL-01; #1036 review F5). logger reuses the sealed
+	// default for pre-bootstrap / cell-level logging.
+	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
+	logger := slog.Default()
+
 	mods, err := runIotdeviceModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
 	}
 	_ = mods // cell construction is done directly below; mods only validates drift
-
-	// Fail-closed sink-side redaction: seal the process-global slog default with
-	// the redacting handler before any work, so every slog.Default() call is
-	// scrubbed (SLOG-HANDLER-SEALED-FUNNEL-01). logger reuses the sealed default
-	// for pre-bootstrap / cell-level logging.
-	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
-	logger := slog.Default()
 
 	internalAuthChain, err := newInternalAuthChainFromEnv()
 	if err != nil {

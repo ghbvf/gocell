@@ -199,14 +199,15 @@ func TestSlogHandlerSealedFunnel_A1_NoBareConstruction(t *testing.T) {
 // A2: form-lock on contextHandler.Handle and WithAttrs
 // ---------------------------------------------------------------------------
 
-// contextHandlerHandleRedactCheck verifies that inside contextHandler.Handle,
-// the r.Attrs callback contains an AddAttrs call whose argument is
-// redaction.RedactSlogAttr(...), AND that the message passes through
-// redaction.RedactString.
+// contextHandlerHandleRedactCheck verifies that inside contextHandler.Handle:
+//   - the message passes through redaction.RedactString; and
+//   - the record attrs are iterated via r.Attrs(func(...) bool {...}) and EVERY
+//     AddAttrs argument inside that callback is redaction.RedactSlogAttr(...).
 //
-// This is a presence check (not a strict form-lock that verifies every
-// execution path), but it is sufficient to catch regressions where the
-// redaction call is removed from the main execution path. AST-level detection.
+// Check 2 is a per-AddAttrs form-lock (#1036 review F4), not a "RedactSlogAttr
+// appears somewhere" presence check: a bare AddAttrs(rawAttr) inside the
+// callback is flagged. The ctxAttrs AddAttrs that lives OUTSIDE the callback
+// (framework-trusted enumerated fields) is intentionally out of scope.
 func contextHandlerHandleRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []Diagnostic {
 	redactionLocal := redactionLocalName(f)
 	var ds []Diagnostic
@@ -231,32 +232,64 @@ func contextHandlerHandleRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []D
 		})
 	}
 
-	// Check 2: r.Attrs callback must contain an AddAttrs call that passes
-	// redaction.RedactSlogAttr(...) as an argument.
-	foundRedactSlogAttr := false
+	// Check 2 (form-lock, #1036 review F4): the record's attrs must be iterated
+	// via r.Attrs(func(...) bool {...}), and inside that callback EVERY AddAttrs
+	// argument must be redaction.RedactSlogAttr(...). A bare AddAttrs(rawAttr)
+	// inside the callback would bypass redaction and is rejected — this is a
+	// per-AddAttrs form-lock, not a "RedactSlogAttr appears somewhere" presence
+	// check. The ctxAttrs AddAttrs OUTSIDE the callback (framework-trusted
+	// enumerated fields) is intentionally not constrained here.
+	var attrsCallback *ast.FuncLit
 	EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		if redactionLocal == "" {
-			return
-		}
-		// Look for AddAttrs calls.
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "AddAttrs" {
+		if !ok || sel.Sel == nil || sel.Sel.Name != "Attrs" {
 			return
 		}
-		// Each argument to AddAttrs must be redaction.RedactSlogAttr(...).
-		EachInChildren[ast.CallExpr](call, func(argCall *ast.CallExpr) {
-			if callMatches(argCall, redactionLocal, slogFunnelRedactSlogAttrFunc) {
-				foundRedactSlogAttr = true
+		if len(call.Args) == 1 {
+			if fl, ok := call.Args[0].(*ast.FuncLit); ok {
+				attrsCallback = fl
 			}
-		})
+		}
 	})
-	if !foundRedactSlogAttr {
+	if attrsCallback == nil {
 		pos := p.Fset.Position(fn.Pos())
 		ds = append(ds, Diagnostic{
 			Rel:  filepath.ToSlash(p.Rel(f)),
 			Line: pos.Line,
-			Message: "contextHandler.Handle must pass each attr through" +
-				" redaction.RedactSlogAttr in the r.Attrs callback" +
+			Message: "contextHandler.Handle must iterate record attrs via" +
+				" r.Attrs(func(...) bool {...}) — SLOG-HANDLER-SEALED-FUNNEL-01 A2",
+		})
+		return ds
+	}
+
+	addAttrsCount := 0
+	bareAddAttrs := false
+	EachInSubtree[ast.CallExpr](attrsCallback.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "AddAttrs" {
+			return
+		}
+		addAttrsCount++
+		// Every argument must be a redaction.RedactSlogAttr(...) call: count the
+		// direct CallExpr children that match; if fewer than the total arg count
+		// (or any arg is a bare non-call expr), a raw attr slipped in.
+		matchArgs := 0
+		EachInChildren[ast.CallExpr](call, func(argCall *ast.CallExpr) {
+			if callMatches(argCall, redactionLocal, slogFunnelRedactSlogAttrFunc) {
+				matchArgs++
+			}
+		})
+		if redactionLocal == "" || len(call.Args) == 0 || matchArgs != len(call.Args) {
+			bareAddAttrs = true
+		}
+	})
+	if addAttrsCount == 0 || bareAddAttrs {
+		pos := p.Fset.Position(fn.Pos())
+		ds = append(ds, Diagnostic{
+			Rel:  filepath.ToSlash(p.Rel(f)),
+			Line: pos.Line,
+			Message: "contextHandler.Handle must pass EVERY attr in the r.Attrs" +
+				" callback through redaction.RedactSlogAttr (no bare AddAttrs)" +
 				" — SLOG-HANDLER-SEALED-FUNNEL-01 A2",
 		})
 	}
@@ -416,54 +449,52 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 	}
 	loggingPkgPath := modPath + "/" + slogFunnelLoggingPkgImportSuffix
 
+	// Run each entry point inline (NOT as parallel subtests): parallel subtests
+	// defer execution until this function returns, so a Report(all) after the
+	// loop would see an empty slice — a vacuous pass — plus a data race on the
+	// shared `all` slice. #1036 review F3.
 	var all []Diagnostic
 	for _, ep := range slogHandlerEntryPoints {
-		ep := ep
-		t.Run(ep.funcName, func(t *testing.T) {
-			t.Parallel()
-			found := false
-
-			diags := RunTyped(t, TypedOpts{Tests: false}, []string{ep.pkgPattern},
-				func(p *Pass) []Diagnostic {
-					if p.TypesInfo == nil {
-						return nil
-					}
-					for _, f := range p.Files {
-						// Skip test files.
-						if strings.HasSuffix(filepath.ToSlash(p.Rel(f)), "_test.go") {
-							continue
-						}
-						EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-							if fn.Name == nil || fn.Body == nil {
-								return
-							}
-							if fn.Name.Name != ep.funcName {
-								return
-							}
-							// Look for a slog.SetDefault(slog.New(logging.NewHandler(...))) call
-							// in the function body.
-							EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-								if slogSetDefaultShape(p.TypesInfo, call, loggingPkgPath) {
-									found = true
-								}
-							})
-						})
-					}
+		found := false
+		RunTyped(t, TypedOpts{Tests: false}, []string{ep.pkgPattern},
+			func(p *Pass) []Diagnostic {
+				if p.TypesInfo == nil {
 					return nil
-				})
+				}
+				for _, f := range p.Files {
+					// Skip test files.
+					if strings.HasSuffix(filepath.ToSlash(p.Rel(f)), "_test.go") {
+						continue
+					}
+					EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+						if fn.Name == nil || fn.Body == nil {
+							return
+						}
+						if fn.Name.Name != ep.funcName {
+							return
+						}
+						// Look for a slog.SetDefault(slog.New(logging.NewHandler(...))) call
+						// in the function body.
+						EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+							if slogSetDefaultShape(p.TypesInfo, call, loggingPkgPath) {
+								found = true
+							}
+						})
+					})
+				}
+				return nil
+			})
 
-			_ = diags // type-checking diags are not relevant here; we check found
-			if !found {
-				all = append(all, Diagnostic{
-					Rel:  ep.relPath,
-					Line: 0,
-					Message: "entry point function " + ep.funcName +
-						" must call slog.SetDefault(slog.New(logging.NewHandler(...)))" +
-						" before any log emission — SLOG-HANDLER-SEALED-FUNNEL-01 A3;" +
-						" Hard-upgrade path tracked at gh #1401",
-				})
-			}
-		})
+		if !found {
+			all = append(all, Diagnostic{
+				Rel:  ep.relPath,
+				Line: 0,
+				Message: "entry point function " + ep.funcName +
+					" must call slog.SetDefault(slog.New(logging.NewHandler(...)))" +
+					" before any log emission — SLOG-HANDLER-SEALED-FUNNEL-01 A3;" +
+					" Hard-upgrade path tracked at gh #1401",
+			})
+		}
 	}
 
 	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01", all)
@@ -945,7 +976,7 @@ var slogLogValuerAllowlist = []struct {
 	{
 		pkg:         "adapters/redis",
 		typeName:    "Config",
-		selfRedacts: "password field absent from LogValue output; cluster addrs redacted via url.URL.Redacted()",
+		selfRedacts: "password absent from LogValue; standalone+cluster addrs via redactAddr/url.Redacted (#1036 F1)",
 	},
 	{
 		pkg:         "adapters/mqtt",
