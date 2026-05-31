@@ -79,10 +79,11 @@ func smokeConfig(t *testing.T, addr, role string) mqtt.Config {
 		t.Fatalf("ParseEphemeralClientID(%q): %v", role, err)
 	}
 	return mqtt.Config{
-		ClientID:       id,
-		Brokers:        []string{fmt.Sprintf("tcp://%s", addr)},
-		ConnectTimeout: testtime.D5s,
-		KeepAlive:      testtime.D30s,
+		ClientID:        id,
+		Brokers:         []string{fmt.Sprintf("tcp://%s", addr)},
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D30s,
 		Backoff: mqtt.BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
