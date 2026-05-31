@@ -127,7 +127,71 @@ References:
   shutdown markCause path under that entry point. Tests covering the
   shutdown semantics must accompany that change. Tracked as backlog
   `DISTLOCK-LOCKER-SHUTDOWN-01` (open when first ManagedResource integrator
-  arrives).
+  arrives). **Still deferred after the 2026-05-31 amendment** — that
+  amendment added a *per-lock* `Orphan()`, not the *locker-level* shutdown
+  this bullet describes; `DISTLOCK-LOCKER-SHUTDOWN-01` stays open.
+
+### Amendment 2026-05-31 — per-lock `Orphan()` (issue #1116)
+
+A real production caller arrived: `runtime/saga.Coordinator.Stop()` needs to
+let go of in-flight per-instance distlocks during graceful shutdown **without**
+a release round-trip that could hang or fail when the backend is unreachable at
+shutdown time (PR #1108 mitigated this at the consumer layer with
+release-on-cancel; this amendment moves the capability into the primitive).
+
+This is a *per-lock* disposition, distinct from the still-deferred
+*locker-level* `Shutdown()/Close()` above. It is the bounded-handoff member of
+the same family etcd `client/v3/concurrency` exposes:
+
+| GoCell | etcd equivalent | Semantics | Backend key |
+|--------|-----------------|-----------|-------------|
+| `Lock.Release()` | `Session.Close()` | end critical section now | deleted immediately (Driver.Release I/O) |
+| `Lock.Orphan()` (new) | `Session.Orphan()` | stop renewal, hand off | left to expire after ≤1×TTL (no I/O) |
+
+Decision:
+
+- Add `func (l *Lock) Orphan()` — stops lease renewal, sets
+  `Cause() == ErrLockOrphaned`, closes `Done()`, performs **no** `Driver`
+  call. The backend key expires naturally within one TTL window, handing the
+  lock to a competitor.
+- `Orphan()` and `Release()` are **mutually exclusive and idempotent**: both
+  closures in `Acquire` share one `sync.Once`, so the first call of either
+  wins and any later call of either is a no-op. "Double disposition" /
+  "orphan-then-release deletes the key" is therefore not representable
+  (structural Hard, no archtest needed). This also makes saga's "Stop orphans,
+  the owning tick later calls release() which degrades to a no-op" correct by
+  construction.
+- `ErrLockOrphaned` uses `KindInternal` (mirroring `ErrLockReleased`): a
+  deliberate local disposition that, if it ever surfaced to an HTTP handler,
+  would be a server-side bug — fail-closed 500, never a misleading 409.
+- The `Locker` interface is unchanged (the method lives on `*Lock`); the
+  locker-level `Shutdown/Close` remains out of scope.
+
+Enforcement: the "Orphan performs zero backend I/O" invariant — its defining
+property — is guarded by archtest `DISTLOCK-ORPHAN-NO-DRIVER-IO-01` (Medium;
+Go ceiling — `Manager.driver` is reachable from any method, so a type-system
+seal is not available; type-aware callee resolution scoped to `handleOrphan`
+is the maximum). The mutual-exclusion/idempotence invariant above is
+structural Hard (shared `sync.Once`).
+
+#### Threat-model / consequences re-evaluation (per ai-robust.md "ADR amendment 落地必查")
+
+The two §Consequences risk rows below are re-evaluated against `Orphan()`; both stay ✅ (no cell flips to ⚠️/❌):
+
+- **fail-stays-held DoS surface** — ✅ unchanged. `Orphan()` does not widen the
+  ceiling: an orphaned key is bounded by the *same* TTL window as a
+  crash-fallback or a forgotten `Release()`. It strictly cannot hold longer
+  than the existing worst case (it stops renewal, so the key can only expire
+  *sooner* than a still-renewed lock). Same-key blast radius, not
+  framework-wide — identical posture to the original row.
+- **callerCtx values lifetime extension** — ✅ unchanged. `Orphan()` ends the
+  lock (closes `Done()`, the manager drops `lockState`), so captured callerCtx
+  values become GC-eligible exactly as they do after `Release()`. No new
+  pinning window.
+
+`*Lock` still does not implement `context.Context` (Orphan adds no
+`Deadline()/Err()`), so `DISTLOCK-LOCK-NOT-CONTEXT-01` and the Enforcement
+table above are unaffected.
 - **`Lock.AsContext(parent context.Context)` escape hatch.** See
   §"Alternatives considered".
 - **`WithMaxLockAge` safety net** for forgotten `Release()`. See
