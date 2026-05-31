@@ -21,13 +21,15 @@ import (
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus"
 	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
+	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository) {
+func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository, *journal.MemJournal) {
 	t.Helper()
 	clk := clock.Real()
 	repo := mem.NewOrderRepository()
@@ -44,21 +46,31 @@ func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository) {
 		t.Fatalf("NewService: %v", err)
 	}
 	h := orderstatusgen.NewHandler(orderstatus.NewHandler(svc))
-	return h, repo
+	return h, repo, jrnl
 }
 
 // TestHttpOrderfulfillmentOrderstatusV1Serve verifies the orderstatus contract:
-// - known order returns 200 + schema-valid response
+// - known order with enrolled saga returns 200 + schema-valid response
 // - unknown order returns 404 + error envelope
 func TestHttpOrderfulfillmentOrderstatusV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "orderfulfillment")
 	c := contracttest.LoadByID(t, root, "http.orderfulfillment.orderstatus.v1")
-	h, repo := newContractSetup(t)
+	h, repo, jrnl := newContractSetup(t)
 
 	orderID := "ord-test-contract-01"
 	order := &domain.Order{ID: orderID, Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
 	if err := repo.Create(t.Context(), order); err != nil {
 		t.Fatalf("Create: %v", err)
+	}
+	// Enqueue the saga instance so Load returns an empty slice (accepted state)
+	// rather than KindNotFound (orphan order error introduced by F1).
+	defIDStr, err := idutil.NewUUID()
+	if err != nil {
+		t.Fatalf("NewUUID: %v", err)
+	}
+	inst := ksaga.NewInstance(idutil.SafeID(orderID), idutil.SafeID(defIDStr), time.Now())
+	if err := jrnl.Enqueue(t.Context(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
 	}
 
 	path := fmt.Sprintf("/api/v1/orders/%s", orderID)
@@ -78,7 +90,7 @@ func TestHttpOrderfulfillmentOrderstatusV1Serve(t *testing.T) {
 func TestHttpOrderfulfillmentOrderstatusV1Serve_NotFound(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "orderfulfillment")
 	c := contracttest.LoadByID(t, root, "http.orderfulfillment.orderstatus.v1")
-	h, _ := newContractSetup(t)
+	h, _, _ := newContractSetup(t)
 
 	missingID := "ord-does-not-exist"
 	path := fmt.Sprintf("/api/v1/orders/%s", missingID)

@@ -50,7 +50,7 @@ func TestJOrderfulfillmentHappyHappyPath(t *testing.T) {
 	h := newJourneyHandler(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/",
-		strings.NewReader(`{"item":"widget","amountCents":1299}`))
+		strings.NewReader(`{"item":"widget","amountCents":1299,"idempotencyKey":"jrny-happy-1"}`))
 	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rec, req)
 	if rec.Code != 202 {
@@ -66,7 +66,7 @@ func TestJOrderfulfillmentCompensateCompensateOnChargeFail(t *testing.T) {
 	h := newJourneyHandler(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/",
-		strings.NewReader(`{"item":"widget","amountCents":1299,"paymentShouldFail":true}`))
+		strings.NewReader(`{"item":"widget","amountCents":1299,"paymentShouldFail":true,"idempotencyKey":"jrny-comp-1"}`))
 	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rec, req)
 	if rec.Code != 202 {

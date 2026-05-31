@@ -40,7 +40,7 @@ func TestService_PlaceOrder_HappyPath(t *testing.T) {
 	svc := newTestServiceBundle(t).svc
 	ctx := context.Background()
 
-	id, err := svc.PlaceOrder(ctx, "widget", 1000, false)
+	id, err := svc.PlaceOrder(ctx, "key-happy-1", "widget", 1000, false)
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 	require.Contains(t, id, "ord-")
@@ -51,13 +51,13 @@ func TestService_PlaceOrder_MultipleOrders(t *testing.T) {
 	svc := newTestServiceBundle(t).svc
 	ctx := context.Background()
 
-	id1, err := svc.PlaceOrder(ctx, "widget", 1000, false)
+	id1, err := svc.PlaceOrder(ctx, "key-multi-1", "widget", 1000, false)
 	require.NoError(t, err)
 
-	id2, err := svc.PlaceOrder(ctx, "gadget", 2000, false)
+	id2, err := svc.PlaceOrder(ctx, "key-multi-2", "gadget", 2000, false)
 	require.NoError(t, err)
 
-	require.NotEqual(t, id1, id2, "each order must have a unique ID")
+	require.NotEqual(t, id1, id2, "different idempotency keys must produce different order IDs")
 }
 
 func TestService_PlaceOrder_PaymentFailFlag(t *testing.T) {
@@ -65,7 +65,7 @@ func TestService_PlaceOrder_PaymentFailFlag(t *testing.T) {
 	svc := newTestServiceBundle(t).svc
 	ctx := context.Background()
 
-	id, err := svc.PlaceOrder(ctx, "widget", 500, true)
+	id, err := svc.PlaceOrder(ctx, "key-payfail-1", "widget", 500, true)
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 }
@@ -80,7 +80,7 @@ func TestService_PlaceOrder_SagaEnrolled(t *testing.T) {
 	bundle := newTestServiceBundle(t)
 	ctx := context.Background()
 
-	id, err := bundle.svc.PlaceOrder(ctx, "widget", 1299, false)
+	id, err := bundle.svc.PlaceOrder(ctx, "key-enrolled-1", "widget", 1299, false)
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 
@@ -89,6 +89,37 @@ func TestService_PlaceOrder_SagaEnrolled(t *testing.T) {
 	events, err := bundle.jrnl.Load(ctx, idutil.SafeID(id))
 	require.NoError(t, err, "saga instance must be enrolled (Load must not return NotFound)")
 	require.Empty(t, events, "freshly enrolled saga should have no events before coordinator runs")
+}
+
+// TestService_PlaceOrder_Idempotent verifies that calling PlaceOrder twice with
+// the same idempotency key returns the same orderID without duplicate saga
+// enrollment. The MemJournal should contain exactly one enrolled instance.
+func TestService_PlaceOrder_Idempotent(t *testing.T) {
+	t.Parallel()
+	bundle := newTestServiceBundle(t)
+	ctx := context.Background()
+
+	const key = "key-idempotent-1"
+
+	// First call: creates order + enrolls saga.
+	id1, err := bundle.svc.PlaceOrder(ctx, key, "widget", 1299, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, id1)
+
+	// Second call with same key: idempotent hit, same orderID, no duplicate enrollment.
+	id2, err := bundle.svc.PlaceOrder(ctx, key, "widget", 1299, false)
+	require.NoError(t, err)
+	require.Equal(t, id1, id2, "same idempotency key must return same orderID")
+
+	// Journal must contain exactly one instance (not two).
+	events, err := bundle.jrnl.Load(ctx, idutil.SafeID(id1))
+	require.NoError(t, err)
+	require.Empty(t, events, "freshly enrolled saga should have no events before coordinator runs")
+
+	// A different key must produce a different orderID.
+	id3, err := bundle.svc.PlaceOrder(ctx, "key-idempotent-2", "widget", 1299, false)
+	require.NoError(t, err)
+	require.NotEqual(t, id1, id3, "different keys must produce different order IDs")
 }
 
 func TestNewService_MissingOrders(t *testing.T) {

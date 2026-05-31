@@ -37,11 +37,12 @@ func TestHttpOrderfulfillmentPlaceorderV1Serve(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "http.orderfulfillment.placeorder.v1")
 	h := newContractHandler(t)
 
-	c.ValidateRequest(t, []byte(`{"item":"widget","amountCents":1000}`))
-	c.MustRejectRequest(t, []byte(`{"item":"widget","amountCents":1000,"unknown":"bad"}`))
+	c.ValidateRequest(t, []byte(`{"item":"widget","amountCents":1000,"idempotencyKey":"ct-happy-1"}`))
+	c.MustRejectRequest(t, []byte(`{"item":"widget","amountCents":1000,"idempotencyKey":"ct-happy-1","unknown":"bad"}`))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"item":"widget","amountCents":1000}`))
+	body := `{"item":"widget","amountCents":1000,"idempotencyKey":"ct-happy-1"}`
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -55,7 +56,8 @@ func TestHttpOrderfulfillmentPlaceorderV1Serve_WithPaymentShouldFail(t *testing.
 	h := newContractHandler(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"item":"gadget","amountCents":500,"paymentShouldFail":true}`))
+	body := `{"item":"gadget","amountCents":500,"paymentShouldFail":true,"idempotencyKey":"ct-payfail-1"}`
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)

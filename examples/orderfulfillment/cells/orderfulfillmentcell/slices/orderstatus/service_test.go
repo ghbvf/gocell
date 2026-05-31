@@ -94,16 +94,34 @@ func TestGetOrderStatus_NotFound(t *testing.T) {
 func TestGetOrderStatus_Accepted(t *testing.T) {
 	t.Parallel()
 	b := newBundle(t)
-	order := &domain.Order{ID: "ord-1", Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
-	if err := b.repo.Create(context.Background(), order); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	status, err := b.svc.GetOrderStatus(context.Background(), "ord-1")
+	// createOrder both persists the order and enrolls a saga instance via
+	// Enqueue. Load then returns an empty (non-nil) slice, so deriveStatus
+	// returns StatusAccepted — the expected post-enrollment, pre-step state.
+	orderID := createOrder(t, b)
+	status, err := b.svc.GetOrderStatus(context.Background(), orderID)
 	if err != nil {
 		t.Fatalf("GetOrderStatus: %v", err)
 	}
 	if status != orderstatus.StatusAccepted {
 		t.Errorf("status = %q, want %q", status, orderstatus.StatusAccepted)
+	}
+}
+
+func TestGetOrderStatus_OrphanOrder(t *testing.T) {
+	t.Parallel()
+	b := newBundle(t)
+	// Persist the order without enrolling a saga instance. This simulates an
+	// orphan order where Enqueue failed after the order write. After F1, the
+	// service must return an error (journal.Load → KindNotFound) instead of
+	// silently returning StatusAccepted, which would mask the enrollment bug.
+	ctx := context.Background()
+	order := &domain.Order{ID: "ord-orphan", Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
+	if err := b.repo.Create(ctx, order); err != nil {
+		t.Fatalf("repo.Create: %v", err)
+	}
+	_, err := b.svc.GetOrderStatus(ctx, "ord-orphan")
+	if err == nil {
+		t.Fatal("GetOrderStatus: expected error for orphan order (never enrolled), got nil")
 	}
 }
 

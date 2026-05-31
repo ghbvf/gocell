@@ -19,6 +19,7 @@ type Request struct {
 	Item              string `json:"item"`
 	AmountCents       int64  `json:"amountCents"`
 	PaymentShouldFail *bool  `json:"paymentShouldFail,omitempty"`
+	IdempotencyKey    string `json:"idempotencyKey"`
 }
 
 // Response — http.orderfulfillment.placeorder.v1.response

@@ -60,16 +60,16 @@ The example pre-seeds inventory with `"widget": 100` and `"gadget": 100` units.
 ```bash
 curl -X POST http://127.0.0.1:8083/api/v1/orders/ \
   -H 'Content-Type: application/json' \
-  -d '{"item":"widget","amountCents":1299}'
+  -d '{"item":"widget","amountCents":1299,"idempotencyKey":"order-1001"}'
 ```
 
 Response (202 Accepted):
 
 ```json
-{"data":{"orderId":"ord-...","status":"accepted"}}
+{"data":{"orderId":"ord-order-1001","status":"accepted"}}
 ```
 
-The saga runs asynchronously. Check the server logs for `saga enrolled` → `step completed` entries.
+The saga runs asynchronously. You can observe enrollment in the server logs via the `placeorder: order placed, saga enrolled` entry (contains `order_id` and `definition_id` fields). Per-step progress events are published to the outbox topic; in demo mode the `NoopEmitter` discards them — connect a real outbox emitter (see Durable Wiring Checklist) to observe individual step events.
 
 ### Trigger compensation (payment failure)
 
@@ -80,10 +80,39 @@ Set `paymentShouldFail: true` to force the `chargePayment` step to return a conf
 ```bash
 curl -X POST http://127.0.0.1:8083/api/v1/orders/ \
   -H 'Content-Type: application/json' \
-  -d '{"item":"widget","amountCents":1299,"paymentShouldFail":true}'
+  -d '{"item":"widget","amountCents":1299,"paymentShouldFail":true,"idempotencyKey":"order-1002"}'
 ```
 
 The saga reaches `KindSagaCompensated`: `CompensateReserveInventory` releases the inventory reservation (restoring stock to 100); no payment or shipment is ever recorded because those steps were never reached.
+
+### Request fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `item` | string | yes | Product name (1–256 chars) |
+| `amountCents` | integer | yes | Price in cents (1–100,000,000) |
+| `idempotencyKey` | string | yes | Client-supplied key for exactly-once placement (1–128 chars); same key = same order, no duplicate saga |
+| `paymentShouldFail` | boolean | no | Demo-only failure injection; omit in production |
+
+### Idempotency
+
+The `idempotencyKey` maps directly to the order ID: `orderId = "ord-" + idempotencyKey`. A repeated `POST` with the same key returns the same `orderId` without re-running any saga step — safe to retry on timeout.
+
+This mirrors the [Temporal workflow-id](https://docs.temporal.io/concepts/what-is-a-workflow-id) and [DTM GID](https://en.dtm.pub/guide/gid.html) models: the caller owns the deduplication key.
+
+```bash
+# First call — creates order and enrolls saga
+curl -X POST http://127.0.0.1:8083/api/v1/orders/ \
+  -H 'Content-Type: application/json' \
+  -d '{"item":"widget","amountCents":1299,"idempotencyKey":"order-1001"}'
+
+# Retry with same key — returns same orderId, no duplicate saga
+curl -X POST http://127.0.0.1:8083/api/v1/orders/ \
+  -H 'Content-Type: application/json' \
+  -d '{"item":"widget","amountCents":1299,"idempotencyKey":"order-1001"}'
+```
+
+Both calls return `{"data":{"orderId":"ord-order-1001","status":"accepted"}}`. The server logs the second call as `placeorder: idempotent hit, returning existing order`.
 
 ### Query order status (F10 closed)
 

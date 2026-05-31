@@ -22,8 +22,9 @@ func NewOrderRepository() *OrderRepository {
 	return &OrderRepository{orders: make(map[string]*domain.Order)}
 }
 
-// Create stores the order. Returns ErrValidationFailed if the ID is empty,
-// matching the godoc contract that requires a non-empty order.ID.
+// Create stores the order. Returns ErrValidationFailed if the ID is empty.
+// Returns KindConflict / ErrConflict if an order with the same ID already
+// exists — callers treat this as an idempotent hit and return the existing ID.
 func (r *OrderRepository) Create(_ context.Context, order *domain.Order) error {
 	if order.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -31,6 +32,10 @@ func (r *OrderRepository) Create(_ context.Context, order *domain.Order) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, exists := r.orders[order.ID]; exists {
+		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			"mem.OrderRepository.Create: order already exists")
+	}
 	cp := *order
 	r.orders[order.ID] = &cp
 	return nil

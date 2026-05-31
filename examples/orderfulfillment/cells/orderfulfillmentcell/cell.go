@@ -22,16 +22,23 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Option configures an OrderCell.
 type Option func(*OrderCell)
 
-// WithJournal injects the saga journal used for instance enrollment.
-// Typed-nil inputs are not stored; the cell initInternal will fail-fast if
-// journal remains unset.
-func WithJournal(j journal.JournalCore) Option {
+// WithJournal injects the saga journal used for instance enrollment and status
+// queries. Typed-nil inputs are not stored; the cell initInternal will
+// fail-fast if journal remains unset.
+//
+// The cell holds the narrow ProducerReader interface rather than JournalCore,
+// so business code cannot access coordinator-only methods (ClaimPending,
+// Append, MarkTerminal). The placeorder slice receives the Enqueuer subset and
+// the orderstatus slice receives the Reader subset — both satisfied by any
+// ProducerReader value.
+func WithJournal(j journal.ProducerReader) Option {
 	return func(c *OrderCell) {
 		if !validation.IsNilInterface(j) {
 			c.journal = j
@@ -76,7 +83,7 @@ type OrderCell struct {
 	*cell.BaseCell
 
 	clock   clock.Clock
-	journal journal.JournalCore
+	journal journal.ProducerReader
 	repo    ports.OrderRepository
 	logger  *slog.Logger
 
@@ -128,7 +135,8 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	// tag funnel (currently covers Service structs, not cell/coordinator wiring),
 	// tracked in gh #1317.
 	if validation.IsNilInterface(c.coord) {
-		return fmt.Errorf("orderfulfillmentcell: saga coordinator required; inject via WithCoordinator")
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"orderfulfillmentcell: saga coordinator required; inject via WithCoordinator")
 	}
 	if err := RegisterReadiness(reg, c.coord); err != nil {
 		return fmt.Errorf("orderfulfillmentcell: register coordinator readiness: %w", err)

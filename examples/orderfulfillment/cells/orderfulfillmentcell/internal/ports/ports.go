@@ -10,7 +10,10 @@ import (
 
 // OrderRepository persists and retrieves Order aggregates.
 type OrderRepository interface {
-	// Create stores a new order. Returns an error if the store fails.
+	// Create stores a new order.
+	// Returns errcode.KindConflict / errcode.ErrConflict when an order with the
+	// same ID already exists; callers treat this as an idempotent hit and
+	// return the existing order ID without re-running saga steps.
 	Create(ctx context.Context, order *domain.Order) error
 	// GetByID retrieves an order by its ID.
 	// Returns errcode.KindNotFound / errcode.ErrOrderNotFound when absent.
@@ -21,7 +24,7 @@ type OrderRepository interface {
 type InventoryStore interface {
 	// Reserve decrements available count for item and records the reservation.
 	// Returns a deterministic reservationID and an error if the item is
-	// unknown or out of stock (errcode.KindFailedPrecondition).
+	// unknown or out of stock (errcode.KindConflict / errcode.ErrConflict).
 	Reserve(ctx context.Context, orderID, item string) (reservationID string, err error)
 	// Release re-increments the available count for the item reserved by orderID.
 	// Idempotent: releasing an unknown or already-released orderID is a no-op

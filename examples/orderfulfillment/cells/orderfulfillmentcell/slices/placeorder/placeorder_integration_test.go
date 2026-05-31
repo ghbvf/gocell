@@ -151,7 +151,7 @@ func TestPlaceOrder_HappyPath(t *testing.T) {
 	t.Parallel()
 	ts := setup(t)
 
-	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, false)
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "int-happy-1", "widget", 1299, false)
 	if err != nil {
 		t.Fatalf("PlaceOrder: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestPlaceOrder_CompensateOnChargeFail(t *testing.T) {
 	t.Parallel()
 	ts := setup(t)
 
-	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, true)
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "int-comp-1", "widget", 1299, true)
 	if err != nil {
 		t.Fatalf("PlaceOrder: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestPlaceOrder_HappyPath_EventSequence(t *testing.T) {
 	t.Parallel()
 	ts := setup(t)
 
-	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, false)
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "int-evtseq-1", "widget", 1299, false)
 	if err != nil {
 		t.Fatalf("PlaceOrder: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestPlaceOrder_CompensateOnChargeFail_EventSequence(t *testing.T) {
 	t.Parallel()
 	ts := setup(t)
 
-	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, true)
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "int-compseq-1", "widget", 1299, true)
 	if err != nil {
 		t.Fatalf("PlaceOrder: %v", err)
 	}
