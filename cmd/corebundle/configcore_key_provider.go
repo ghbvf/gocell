@@ -120,6 +120,18 @@ func buildCmdVaultTransitKeyProvider(
 	return kp, nil
 }
 
+// configStaleCipherOpts is the Prometheus counter descriptor for M3 stale-key
+// observability. Declared at package scope (not inline in buildStaleCipherInc)
+// so the metricschema reachable-typed-metrics tool can statically resolve the
+// CounterOpts literal — a function-local var is not a resolvable metric helper
+// argument (TestBuild_CorebundleCapturesReachableTypedMetrics).
+var configStaleCipherOpts = prom.CounterOpts{
+	Namespace: "gocell",
+	Subsystem: "config",
+	Name:      "stale_cipher_total",
+	Help:      "Number of config values read that are encrypted with a non-current key version.",
+}
+
 // buildStaleCipherInc registers (or reuses) the stale-cipher prometheus counter
 // against registry and returns an Inc callback. When registry is nil, returns a
 // silent no-op (acceptable in test environments).
@@ -127,13 +139,7 @@ func buildStaleCipherInc(registry *prom.Registry) (func(), error) {
 	if registry == nil {
 		return func() {}, nil
 	}
-	staleCipherOpts := prom.CounterOpts{
-		Namespace: "gocell",
-		Subsystem: "config",
-		Name:      "stale_cipher_total",
-		Help:      "Number of config values read that are encrypted with a non-current key version.",
-	}
-	counter, err := promadapter.RegisterOrReuseCounter(registry, staleCipherOpts)
+	counter, err := promadapter.RegisterOrReuseCounter(registry, configStaleCipherOpts)
 	if err != nil {
 		return nil, err
 	}

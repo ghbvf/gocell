@@ -46,7 +46,7 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	outboxRelayed := requireMetric(t, schema, "outbox_relayed_total")
 	assert.Equal(t, []string{"cell", "outcome"}, outboxRelayed.Labels)
 	assert.Equal(t, "gocell_outbox_relayed_total", outboxRelayed.FQName)
-	assert.Equal(t, "cmd/corebundle/bundle_configcore_storage.go", outboxRelayed.File)
+	assert.Equal(t, "platform/configcore/storage.go", outboxRelayed.File)
 
 	configEventProcess := requireMetric(t, schema, "config_event_process_total")
 	assert.Equal(t, []string{"cell", "slice", "reason"}, configEventProcess.Labels)
