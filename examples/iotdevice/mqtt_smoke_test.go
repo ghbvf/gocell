@@ -185,11 +185,18 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 	subscription := outbox.Subscription{
 		// The trailing "+" single-level wildcard matches any version suffix,
 		// e.g. the "v1" produced by mqttEventTopic for event.device-registered.v1.
-		Topic:             smokeNamespace + "/event/device-registered/+",
-		ConsumerGroup:     "smoke-verifier",
-		CellID:            smokeNamespace,
-		ContractID:        "event.device-registered.v1",
-		ContractKind:      "event",
+		Topic:         smokeNamespace + "/event/device-registered/+",
+		ConsumerGroup: "smoke-verifier",
+		CellID:        smokeNamespace,
+		ContractID:    "event.device-registered.v1",
+		ContractKind:  "event",
+		// ContractTransport here is the verifier subscriber's own MQTT delivery
+		// channel for this demo smoke — it is NOT a claim about the contract's
+		// transport truth source. event.device-registered.v1's contract does not
+		// declare an MQTT transport (it defaults to amqp); MQTT is a demo-only
+		// observation channel wired by the single-channel DI swap. Folding MQTT
+		// into the contract/codegen transports truth source is deferred V11 work
+		// (plan §7), tracked separately.
 		ContractTransport: "mqtt",
 	}
 	received := make(chan outbox.Entry, 1)

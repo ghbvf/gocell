@@ -80,12 +80,14 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	if mqttOK {
 		directPub = mqttPub
-		// Connection implements lifecycle.ManagedResource: WithManagedResource
-		// registers its mqtt_ready readiness probe (with the default probe
-		// timeout) + LIFO Close in one call — the standard adapter wiring path,
-		// matching postgres/rabbitmq/redis.
+		// Register BOTH the connection (managed resource: mqtt_ready probe +
+		// disconnect) AND the publisher (managed closer: drains in-flight
+		// publishes). Connection.Close only disconnects — it does NOT drain, so
+		// the publisher closer is mandatory, not redundant (PR #1364 review F1).
+		// mqttChannelWiringFor derives both; its godoc documents the LIFO
+		// drain-before-disconnect ordering.
 		mqttBootstrapOpts = append(mqttBootstrapOpts,
-			bootstrap.WithManagedResource(mqttConn),
+			mqttChannelWiringFor(mqttPub, mqttConn).bootstrapOptions()...,
 		)
 	}
 

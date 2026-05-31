@@ -43,7 +43,8 @@ envelope）原样透传。
 
 ```bash
 # 1. 启动 MQTT broker（先于 demo）
-docker run --rm -p 1883:1883 eclipse-mosquitto:2.0 \
+# 仅绑 127.0.0.1：无认证 broker 不可暴露到宿主机外部网卡，本命令仅供本机 demo。
+docker run --rm -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.0 \
   mosquitto -c /mosquitto-no-auth.conf
 
 # 2. 另开终端：订阅 device-registered 主题（外部观测者）

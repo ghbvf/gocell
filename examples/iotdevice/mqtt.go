@@ -16,7 +16,9 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 // Environment variables controlling the MQTT publish demo channel.
@@ -150,6 +152,45 @@ func buildMQTTDirectPublisher(
 		return nil, nil, false, fmt.Errorf("mqtt publisher: %w", err)
 	}
 	return &mqttTopicPublisher{inner: pub, ns: ns}, conn, true, nil
+}
+
+// mqttChannelWiring is the bootstrap lifecycle wiring derived from an enabled
+// MQTT publish channel. It carries the two resources that MUST BOTH participate
+// in graceful shutdown:
+//
+//   - Resource: the *mqtt.Connection (lifecycle.ManagedResource). Registered via
+//     WithManagedResource — it wires the mqtt_ready readiness probe + LIFO
+//     disconnect, the standard adapter path (postgres/rabbitmq/redis).
+//   - Closer: the publisher (lifecycle.ContextCloser). Publisher.Close drains
+//     in-flight publishes; Connection.Close only disconnects (no drain), so the
+//     publisher closer is mandatory, not redundant — omitting it silently drops
+//     in-flight publishes on shutdown (PR #1364 review F1).
+//
+// Ordering is correctness, not cosmetic: bootstrap appends WithManagedResource
+// teardowns first (they run LAST under LIFO) and WithManagedCloser teardowns
+// later (they run earlier), so the publisher drains BEFORE the connection
+// disconnects. See runtime/bootstrap LIFO teardown.
+type mqttChannelWiring struct {
+	Resource kernellifecycle.ManagedResource
+	Closer   kernellifecycle.ContextCloser
+}
+
+// mqttChannelWiringFor pairs the enabled channel's publisher and connection into
+// the lifecycle wiring. outbox.Publisher already requires Close(ctx) error, so
+// the publisher always satisfies lifecycle.ContextCloser by interface.
+func mqttChannelWiringFor(pub outbox.Publisher, conn *mqtt.Connection) mqttChannelWiring {
+	return mqttChannelWiring{Resource: conn, Closer: pub}
+}
+
+// bootstrapOptions renders the wiring into bootstrap options. It always yields
+// exactly two — the managed resource (connection) and the managed closer
+// (publisher drain). Dropping either regresses shutdown drain/teardown; the
+// count is locked by TestMQTTChannelWiring_RegistersPublisherDrainAndConnection.
+func (w mqttChannelWiring) bootstrapOptions() []bootstrap.Option {
+	return []bootstrap.Option{
+		bootstrap.WithManagedResource(w.Resource),
+		bootstrap.WithManagedCloser(w.Closer),
+	}
 }
 
 // redactedBrokers returns broker URLs with any userinfo password masked, safe
