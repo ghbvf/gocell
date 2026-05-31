@@ -30,11 +30,12 @@ jobs:
     # (CPU/RSS budget — ~3min wall + 43 GB RSS + 18-core 100% violates the
     # hook's sub-10s deterministic contract; see ADR §"pre-push archtest 撤回").
     #
-    # 15 min covers cold module cache plus all verify-*.sh gates running
+    # 25 min covers cold module cache plus all verify-*.sh gates running
     # continue-on-failure (hack/make-rules/verify.sh accumulates failures
-    # across gates). 4 PR-time archtest gate 合并后 ~33s（PR #898 实测），仍在
-    # 15min 预算内。
-    timeout-minutes: 15 # 4 PR-time archtest gate 合并后 ~33s（PR #898 实测），仍在 15min 预算内
+    # across gates). Governance Strict also runs strict journey checkRef
+    # validation and journey smoke gates; cold hosted runners can exceed the
+    # old 15min budget while still making progress.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
