@@ -269,10 +269,10 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
   - `runtime/grpc/interceptor/chain.go` ~60
   - `runtime/grpc/interceptor/*_test.go` ~400
 - **TDD**: each interceptor unit-tested with mocked `UnaryServerInfo` + `UnaryHandler`; chain composition test
-- **archtest**:
-  - `SPAN-SETATTR-REDACT-01` — extend A2 callsite coverage to include `runtime/grpc/interceptor/tracing.go`
-  - `PANIC-REGISTERED-01` — extend caller-set to include `runtime/grpc/interceptor/recovery.go::repanicInGRPC`
-  - `GRPC-INTERCEPTOR-CHAIN-ORDER-01` — recovery MUST be outermost, auth MUST follow tracing+metrics+recovery (Medium: AST scan of `ChainUnaryInterceptor(...)` arg order)
+- **archtest** (as-built in PR #1379):
+  - ~~`SPAN-SETATTR-REDACT-01` — extend A2 to tracing.go~~ — **not needed**: tracing uses `wrapper.Attr` (not raw `attribute.String`), so it stays outside the A2 callsite set. Span-error redaction is instead enrolled via `SPAN-RECORD-ERROR-REDACT-01` (`runtime/grpc/interceptor` added to `spanRecordErrorScanDirs`).
+  - ~~`PANIC-REGISTERED-01` — extend to recovery.go::repanicInGRPC~~ — **not needed**: Recovery collapses panic→`codes.Internal` and never re-panics, so it is outside the funnel. (The new `panicregister.Approved` sites are the *required-dependency* fail-fast guards in `UnaryMetrics`/`UnaryAuth`, which the funnel already covers.)
+  - `GRPC-INTERCEPTOR-CHAIN-ORDER-01` — order is **RequestID → Tracing → Metrics → Auth → Recovery** (RequestID outermost, **Recovery innermost**). Recovery is innermost (NOT outermost): gRPC status is a return value, so the outer Metrics/Tracing observe the panic-converted `codes.Internal` cleanly — the HTTP "recovery outermost" rule is a ResponseWriter artifact that does not apply. Medium: AST scan of `ChainUnaryInterceptor(...)` arg order. Matches go-grpc-middleware consensus.
 - **Est.**: 860 lines
 - **Risk**: `auth` interceptor must not leak HTTP-listener-auth assumptions; the JWT verifier is transport-agnostic, but the token extraction (HTTP header vs grpc metadata) MUST be isolated. Addressed by typed `tokenSource` interface.
 

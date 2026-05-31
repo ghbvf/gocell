@@ -574,6 +574,7 @@ func skipMetricImplementationFile(rel string) bool {
 	case "adapters/prometheus/metric_provider.go",
 		"adapters/prometheus/hook_observer.go",
 		"runtime/observability/metrics/provider_collector.go",
+		"runtime/observability/metrics/grpc_collector.go",
 		"runtime/observability/metrics/config_event_collector.go",
 		"kernel/outbox/relay_collector.go":
 		return true
@@ -595,6 +596,10 @@ func (sp *scanPackage) knownMetricWrapperEntries(call *ast.CallExpr, rel string)
 	case runtimeMetricsPkg:
 		if fn.Name() == "NewProviderCollector" {
 			entries, err := sp.providerCollectorEntries(call, rel)
+			return entries, true, err
+		}
+		if fn.Name() == "NewGRPCProviderCollector" {
+			entries, err := sp.grpcProviderCollectorEntries(call, rel)
 			return entries, true, err
 		}
 		if fn.Name() == "NewProviderConfigEventCollector" {
@@ -673,6 +678,40 @@ func (sp *scanPackage) providerCollectorEntries(call *ast.CallExpr, rel string) 
 			name:      "http_request_duration_seconds",
 			namespace: sp.namespace,
 			help:      "HTTP request duration in seconds.",
+			labels:    labels,
+			buckets:   buckets,
+		}, rel, call.Pos()),
+	}, nil
+}
+
+// grpcProviderCollectorEntries derives the gRPC server metric schema from a
+// NewGRPCProviderCollector call site, mirroring providerCollectorEntries for the
+// HTTP surface. DurationBuckets defaults to DefaultDurationBuckets (shared
+// bucket layout across transports).
+func (sp *scanPackage) grpcProviderCollectorEntries(call *ast.CallExpr, rel string) ([]Entry, error) {
+	if len(call.Args) < 2 {
+		return nil, sp.unresolved(call, rel, "grpc provider collector config argument is missing")
+	}
+	lit := sp.resolveCompositeLit(call.Args[1])
+	if lit == nil {
+		return nil, sp.unresolved(call.Args[1], rel, "grpc provider collector config must be a resolvable literal")
+	}
+	buckets, err := sp.configBuckets(lit, "DurationBuckets", runtimeMetricsPkg, "DefaultDurationBuckets", rel)
+	if err != nil {
+		return nil, err
+	}
+	labels := []string{"method", "code", "cell"}
+	return []Entry{
+		sp.entryFromOpts("counter", opts{
+			name:      "grpc_server_requests_total",
+			namespace: sp.namespace,
+			help:      "Total number of gRPC unary server requests.",
+			labels:    labels,
+		}, rel, call.Pos()),
+		sp.entryFromOpts("histogram", opts{
+			name:      "grpc_server_request_duration_seconds",
+			namespace: sp.namespace,
+			help:      "gRPC unary server request duration in seconds.",
 			labels:    labels,
 			buckets:   buckets,
 		}, rel, call.Pos()),
