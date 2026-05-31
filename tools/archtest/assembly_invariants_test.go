@@ -726,6 +726,9 @@ const compositionPkgPath = PlatformModulePath + "/runtime/composition"
 // (kernel/assembly), which byte-locks the emitted []composition.CellModule
 // return type and its import; this archtest is the type-aware backstop for the
 // non-generated / legacy entrypoint dirs where no golden applies.
+//
+// 上游 Medium 天花板（与 SharedDeps/Topology seal 同形态，Go 包可见性限制）登记于
+// gh #1412（won't-do 跟踪）。
 func hasCompositionCellModuleReturnType(af *ast.File) bool {
 	_, ok := FindFirstInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) bool {
 		if fn.Recv != nil || fn.Name.Name != "generatedCellModules" {

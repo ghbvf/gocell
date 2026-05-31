@@ -15,6 +15,9 @@ import (
 // validated NewTopology / TopologyFromEnv constructors. If any field is exported,
 // package-external code could build an unvalidated Topology (e.g. the illegal
 // postgres+non-real combination) via a struct literal, defeating the seal.
+//
+// Package-internal 盲区（包内新增构造点绕过 validate()）是 Go 包可见性天花板，
+// 本 reflect 冻结为其 Medium 兜底；上游 Hard 化（若可行）登记于 gh #1412。
 func TestTopologyZeroExportedFields(t *testing.T) {
 	rt := reflect.TypeOf(Topology{})
 	for i := 0; i < rt.NumField(); i++ {

@@ -40,6 +40,9 @@ const (
 // zero-value struct elsewhere" inexpressible; this archtest is the backstop).
 // Same shape as the reconstruction / ctx-write caller-allowlist funnels.
 //
+// Hard-上游升级路径（接 gocell:"required" tag-funnel，泛化 requireddepsgen）追踪于
+// gh #1411；届时本 archtest 可退役。
+//
 // Blind spots (AST-only Run; documented per ai-robust §载体决策原则):
 //   - Aliased construction via a function value (e.g. `f := crypto.NoopTransformer{};`
 //     returned indirectly) is still a composite literal and IS caught — the scan

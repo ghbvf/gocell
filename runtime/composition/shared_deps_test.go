@@ -81,7 +81,10 @@ func TestSharedDeps_Validate_ValidDeps(t *testing.T) {
 
 // TestSharedDeps_SealedMarker_Unexported asserts the validity marker is an
 // unexported field so a package-external literal cannot stamp it — the
-// sealed-construction invariant Build relies on.
+// sealed-construction invariant Build relies on. The package-internal blind spot
+// (an in-package second constructor forgetting to stamp) is a Go package-
+// visibility ceiling; this reflect freeze + TestBuilder_UnsealedSharedDeps_Rejected
+// are its Medium backstop. Upstream Hard-ization (if feasible) tracked in gh #1412.
 func TestSharedDeps_SealedMarker_Unexported(t *testing.T) {
 	rt := reflect.TypeOf(SharedDeps{})
 	f, ok := rt.FieldByName("valid")
