@@ -696,7 +696,7 @@ const (
 	// bounded-TTL handoff deliberately); fail-closed 500 is preferable to a
 	// misleading 409 (which implies external conflict).
 	// ref: etcd-io/etcd client/v3/concurrency/session.go Session.Orphan
-	ErrDistlockLockOrphaned Code = "ERR_LOCK_ORPHANED"
+	ErrDistlockLockOrphaned Code = "ERR_DISTLOCK_LOCK_ORPHANED"
 
 	// MetricsSchema error codes (tools/metricschema).
 	//

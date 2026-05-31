@@ -79,6 +79,13 @@ func RunDriverConformance(t *testing.T, factory DriverFactory) {
 // (e.g., adapters/redis/integration_test.go). Do NOT call it for FakeDriver
 // conformance — FakeDriver's TTL expiry is clock-injected and tested via
 // the manager's FakeClock-driven renew cycles instead.
+//
+// C-5 also covers the Lock.Orphan() backend expectation: after renewal stops
+// (no Renew calls, no Release call), the key persists and expires only via
+// TTL, at which point SetNX succeeds for a competitor. The Driver has no
+// Orphan method — the orphan semantic lives entirely in the manager layer
+// (handleOrphan stops renewal without any Driver I/O); C-5 validates the
+// underlying physics that makes that contract possible.
 func RunDriverTTLConformance(t *testing.T, factory DriverFactory) {
 	t.Helper()
 	t.Run("C5_TTLExpiry_SetNX_Succeeds", func(t *testing.T) { conformC5(t, factory) })

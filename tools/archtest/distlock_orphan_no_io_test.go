@@ -32,9 +32,11 @@
 //   - Indirect dispatch: if handleOrphan called a helper (e.g. callDriver())
 //     that in turn calls Driver methods, this archtest would NOT detect it
 //     (we only scan the handleOrphan function body, not its callees).
-//   - Method-value assignment: `f := m.driver.Release; f(...)` — TypesInfo
-//     resolves the SelectorExpr `m.driver.Release` as a method value, so
-//     this form IS detected by the current check.
+//   - Local-variable method-value invocation: `rel := m.driver.Release;
+//     rel(ctx, key, tok)` — the SelectorExpr `m.driver.Release` on the
+//     right-hand side is resolved by TypesInfo.Selections (detected), but
+//     the invocation `rel(...)` uses an *ast.Ident as the Fun, not a
+//     *ast.SelectorExpr, so the call itself is NOT flagged as a Driver call.
 //   - Function-pointer field: if a helper struct stored a Driver method as a
 //     func field and handleOrphan called that field, it would not be detected.
 //

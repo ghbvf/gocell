@@ -122,7 +122,7 @@ type Manager struct {
 	nextID atomic.Uint64
 	// pendingReleases counts how many locks have been added but whose
 	// corresponding remove() call has not yet been processed.  The manager
-	// drains only when this reaches zero via an eventRemove event.
+	// drains only when this reaches zero via an eventRemove or eventOrphan event.
 	// Protected by mu (written by add/run; read by run).
 	pendingReleases int
 	events          chan managerEvent
@@ -455,6 +455,12 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 // was already absent (lost via renewal failure before the terminal event arrived).
 //
 // Called by handleRemove and handleOrphan to share the heap-detach path.
+//
+// detachLock intentionally does not log. Callers (handleRemove and handleOrphan)
+// own their observability signals because the two paths have different log levels
+// and contexts: handleRemove logs a warning on I/O error; handleOrphan logs at
+// Debug. Centralising the log call here would require a caller-supplied level and
+// message, adding indirection for minimal benefit.
 func (m *Manager) detachLock(
 	id lockID,
 	cause error,

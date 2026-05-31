@@ -45,7 +45,7 @@ func TestErrors_Sentinels(t *testing.T) {
 		}
 	})
 	// ErrLockOrphaned must unwrap to *errcode.Error with KindInternal and
-	// code ERR_LOCK_ORPHANED. KindInternal is chosen to match
+	// code ERR_DISTLOCK_LOCK_ORPHANED. KindInternal is chosen to match
 	// ErrLockReleased's fail-closed semantics: an orphaned lock surfacing to
 	// an HTTP handler is a server-side programming bug, not an external
 	// conflict — 500 is preferable to a misleading 409.

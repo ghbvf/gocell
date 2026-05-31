@@ -116,6 +116,12 @@ References:
 
 ## Out of scope (deferred)
 
+- **`Lock.AsContext(parent context.Context)` escape hatch.** Rejected for v1
+  to keep the surface minimal and the Hard contract tight; can be added if a
+  real use case appears. See §"Alternatives considered".
+- **`WithMaxLockAge` safety net** for forgotten `Release()`. May add later if a
+  real caller demonstrates the need; deferred to keep the minimal surface. See
+  §"Consequences / Negative".
 - **Explicit `Locker.Shutdown()` / `Close()` entry point.** The manager's
   `runOnce` loop and `markCause` plumbing already support a third lock-end
   signal beyond `ErrLockReleased` / `ErrLockLost` (e.g. `context.Canceled`
@@ -201,10 +207,6 @@ The two §Consequences risk rows below are re-evaluated against `Orphan()`; both
 `*Lock` still does not implement `context.Context` (Orphan adds no
 `Deadline()/Err()`), so `DISTLOCK-LOCK-NOT-CONTEXT-01` and the Enforcement
 table above are unaffected.
-- **`Lock.AsContext(parent context.Context)` escape hatch.** See
-  §"Alternatives considered".
-- **`WithMaxLockAge` safety net** for forgotten `Release()`. See
-  §"Consequences / Negative".
 
 ## Implementation notes
 

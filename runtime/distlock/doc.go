@@ -13,7 +13,7 @@
 // Locker.Acquire returns a *Lock, NOT a context.Context. Caller-ctx is
 // consumed for the acquire RPC only; once held, the lock lifecycle is
 // independent of caller ctx and ends only via Release(), Orphan(), renewal
-// failure, or manager shutdown. This matches the prevailing industry convention
+// failure, or TTL expiry after Orphan(). This matches the prevailing industry convention
 // (bsm/redislock, go-redsync, etcd, consul, Curator) and prevents the
 // misuse class identified in GH #20.
 //

@@ -56,7 +56,7 @@ type Locker interface {
 	// Lock-end signals (lock.Done() closed; lock.Cause() reports):
 	//   - ErrLockReleased — Release() was called (normal end-of-critical-section)
 	//   - ErrLockLost     — renewal failed or backend reports ownership taken
-	//   - ErrLockOrphaned — Orphan() was called (renewal stopped; key expires TTL)
+	//   - ErrLockOrphaned — Orphan() was called (renewal stopped; key expires after ≤1×TTL)
 	//
 	// Notably absent: caller-ctx cancellation does NOT end the lock. If the
 	// caller wants the lock to end when its ctx is canceled, the caller must
