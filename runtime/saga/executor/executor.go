@@ -356,10 +356,9 @@ func (e *Executor) Execute(
 	)
 	if result.Outcome != OutcomeSucceeded {
 		if result.Err != nil {
-			// Redact before recording — span sinks are operator-visible and
-			// must not leak secrets that could appear in step.Run errors
-			// (per .claude/rules/gocell/observability.md §Span Error Redaction).
-			span.RecordError(redaction.RedactError(result.Err))
+			// Redaction applied at sink (otelSpan.RecordError in
+			// adapters/otel/span.go); pass raw error here.
+			span.RecordError(result.Err)
 		}
 		span.SetStatus(wrapper.StatusError, result.Outcome.String())
 	}
@@ -732,8 +731,9 @@ func (e *Executor) Compensate(
 			slog.String("lease_id", string(leaseID)),
 			slog.Any("error", err),
 		)
-		// Redact before recording — see ObserveOutcome rationale above.
-		span.RecordError(redaction.RedactError(err))
+		// Redaction applied at sink (otelSpan.RecordError in
+		// adapters/otel/span.go); pass raw error here.
+		span.RecordError(err)
 		span.SetStatus(wrapper.StatusError, "compensate failed")
 		return err
 	}

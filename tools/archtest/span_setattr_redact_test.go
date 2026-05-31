@@ -189,8 +189,7 @@ func selectorMatches(sel *ast.SelectorExpr, xName, selName string) bool {
 
 // collectFuncBodyRanges returns the body Pos/End pairs of every FuncDecl in
 // file whose Name matches one of allowedNames. Pairs are flat: even indices
-// are start positions, odd indices are end positions. Mirrors
-// collectRecordErrorImplRanges in span_record_error_redact_test.go.
+// are start positions, odd indices are end positions.
 func collectFuncBodyRanges(file *ast.File, allowedNames ...string) []token.Pos {
 	allowed := make(map[string]struct{}, len(allowedNames))
 	for _, n := range allowedNames {
