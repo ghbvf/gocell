@@ -43,14 +43,6 @@ func newBundle(t *testing.T) testBundle {
 	return testBundle{svc: svc, repo: repo, jrnl: jrnl}
 }
 
-// newService is the original helper kept for backwards-compatibility with the
-// existing tests below.
-func newService(t *testing.T) (*orderstatus.Service, *mem.OrderRepository) {
-	t.Helper()
-	b := newBundle(t)
-	return b.svc, b.repo
-}
-
 // createOrder inserts an order into the repository and enrolls a saga instance
 // in the journal for it. Returns the order ID (= saga instance ID).
 func createOrder(t *testing.T, b testBundle) string {
@@ -94,19 +86,19 @@ func claimLease(t *testing.T, jrnl *journal.MemJournal) idutil.SafeID {
 
 func TestGetOrderStatus_NotFound(t *testing.T) {
 	t.Parallel()
-	svc, _ := newService(t)
-	_, err := svc.GetOrderStatus(context.Background(), "ord-nonexistent")
+	b := newBundle(t)
+	_, err := b.svc.GetOrderStatus(context.Background(), "ord-nonexistent")
 	errcodetest.AssertCode(t, err, errcode.ErrOrderNotFound)
 }
 
 func TestGetOrderStatus_Accepted(t *testing.T) {
 	t.Parallel()
-	svc, repo := newService(t)
+	b := newBundle(t)
 	order := &domain.Order{ID: "ord-1", Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
-	if err := repo.Create(context.Background(), order); err != nil {
+	if err := b.repo.Create(context.Background(), order); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	status, err := svc.GetOrderStatus(context.Background(), "ord-1")
+	status, err := b.svc.GetOrderStatus(context.Background(), "ord-1")
 	if err != nil {
 		t.Fatalf("GetOrderStatus: %v", err)
 	}

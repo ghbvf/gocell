@@ -130,9 +130,20 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (string, e
 // deriveStatus folds the journal event log into a status string.
 // The last terminal event wins; if no terminal event, a forward step indicator
 // determines accepted vs running.
-// Unrecognized EventKind values are logged at Warn level for observability;
-// SAGA-STATUS-FANOUT-COVERAGE-01 does not guard this consumer-side switch,
-// so a runtime Warn is the required fallback.
+//
+// All eleven EventKind values are explicitly listed:
+//   - Terminal kinds (KindSagaSucceeded / KindSagaCompensated / KindSagaFailed /
+//     KindSagaExpired / KindSagaCompensationFailed) return the corresponding
+//     status immediately.
+//   - Non-terminal kinds (KindStepStarted / KindStepCompleted / KindStepFailed /
+//     KindStepCompensated / KindCompensationStarted / KindStepCompensationFailed)
+//     all set sawStep=true — they confirm the saga is active (running or
+//     compensating), so the derived status is "running" rather than "accepted".
+//
+// The default branch is an out-of-range defensive guard: it should be
+// unreachable with the current EventKind set. SAGA-STATUS-FANOUT-COVERAGE-01
+// does not guard this consumer-side switch, so a runtime Warn is the required
+// fallback for any future EventKind added without updating this switch.
 func (s *Service) deriveStatus(events []journal.Event) string {
 	var sawStep bool
 	for _, ev := range events {
@@ -143,7 +154,9 @@ func (s *Service) deriveStatus(events []journal.Event) string {
 			return StatusCompensated
 		case journal.KindSagaFailed, journal.KindSagaExpired, journal.KindSagaCompensationFailed:
 			return StatusFailed
-		case journal.KindStepCompleted, journal.KindStepStarted:
+		case journal.KindStepStarted, journal.KindStepCompleted,
+			journal.KindStepFailed, journal.KindStepCompensated,
+			journal.KindCompensationStarted, journal.KindStepCompensationFailed:
 			sawStep = true
 		default:
 			s.logger.Warn(

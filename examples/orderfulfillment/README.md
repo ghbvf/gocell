@@ -51,7 +51,7 @@ go run ./examples/orderfulfillment
 
 The server starts on `127.0.0.1:8083` (primary listener, loopback only). **Demo mode**: the primary listener is unauthenticated (`auth.public: true`) for local exploration only — do not expose to untrusted networks.
 
-Internal and health listeners are bound to `127.0.0.1` (loopback only).
+The health listener (`:9093`) is also bound to `127.0.0.1` (loopback only). Demo mode does not declare an internal listener.
 
 ### Place an order (happy path)
 
@@ -130,7 +130,7 @@ To move from demo mode to a durable L3 saga path, wire all of the following in t
 1. Replace `journal.NewMemJournal` with a persistent PG-backed journal (durable saga state survives restarts).
 2. Replace `outbox.DemoTxRunner{}` with a real `persistence.TxRunner` (e.g. `postgres.TxManager`) — compose via `persistence.WrapForCell`.
 3. Replace `outbox.NewNoopEmitter()` with a real `outbox.Emitter` (e.g. relay-backed broker publisher) — compose via `outbox.WrapEmitterForCell`.
-4. Replace `kernelmetrics.NopProvider{}` with a real Prometheus metrics provider (e.g. `obmetrics.NewSagaStepCollector` wired to a real provider from `bootstrap.MetricsProvider()`); in demo mode, saga step metrics and HTTP metrics are both discarded.
+4. Replace the `kernelmetrics.NopProvider{}` passed to `obmetrics.NewSagaStepCollector` with a real Prometheus provider (e.g. from `bootstrap.MetricsProvider()`); in demo mode, saga step metrics are discarded.
 5. Replace `auth.AuthNone{}` + `auth.public: true` with a JWT plan (`auth.NewAuthJWTFromAssembly`) and set `auth.public: false` in both contract YAMLs — see `auth.public` comments in `contracts/http/orderfulfillment/*/v1/contract.yaml`.
 6. Remove the `paymentShouldFail` field from the request schema: it is a demo-only failure-injection hook and must not be exposed on the business API wire in production — drive payment failures from real downstream payment service responses instead.
 
@@ -141,7 +141,7 @@ The primary listener at `127.0.0.1:8083` uses `auth.public: true` — **all requ
 - Restrict access to `:8083` to trusted network segments or an API gateway.
 - Replace the in-memory journal and no-op outbox with durable implementations.
 
-Internal (`:9083`) and health (`:9093`) listeners are already bound to `127.0.0.1` (loopback only).
+The health listener (`:9093`) is already bound to `127.0.0.1` (loopback only). Demo mode does not declare an internal listener.
 
 ## Running the Integration Tests
 
