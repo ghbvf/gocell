@@ -840,47 +840,92 @@ func facadeScopeForArchtest(t *testing.T) Scope {
 	}))
 }
 
-// facadeBannedExportDiags walks the exported FuncDecl / TypeSpec / ValueSpec
-// declarations in p and reports any whose name is in banned. reasonSuffix is
-// appended verbatim to each diagnostic message (the kind noun — "func" /
-// "type" / "var/const" — is prepended automatically). This is the shared
-// name-match scan behind both façade-surface guards; signature-shape checks
-// (e.g. the loader's *packages.Package detection) stay in the caller.
+// facadeBannedExportDiags reports any TOP-LEVEL exported declaration in p whose
+// name is in banned. reasonSuffix is appended verbatim to each diagnostic
+// message (the kind noun — "func" / "type" / "var/const" — is prepended
+// automatically). This is the shared name-match scan behind both façade-surface
+// guards; signature-shape checks (e.g. the loader's *packages.Package detection)
+// stay in the caller.
+//
+// Only top-level declarations count — they alone form the package's exported
+// surface. Func declarations are direct children of the file; type/var/const
+// declarations are scanned via the file's top-level GenDecls. A function-body-
+// LOCAL uppercase name (e.g. `func f() { type FileContext int }`) is invisible
+// outside its function and is intentionally NOT flagged, so EachInSubtree (which
+// would descend into bodies and false-positive on locals) is deliberately avoided.
 func facadeBannedExportDiags(p *Pass, banned map[string]bool, reasonSuffix string) []Diagnostic {
 	var d []Diagnostic
 	for _, f := range p.Files {
 		rel := p.Rel(f)
+		report := func(kind string, id *ast.Ident) {
+			if id != nil && id.IsExported() && banned[id.Name] {
+				d = append(d, Diagnostic{
+					Rel:     rel,
+					Line:    p.Fset.Position(id.Pos()).Line,
+					Message: "exported " + kind + " " + id.Name + " " + reasonSuffix,
+				})
+			}
+		}
+		// Top-level func declarations (direct children of *ast.File).
 		EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-			if fn.Name != nil && fn.Name.IsExported() && banned[fn.Name.Name] {
-				d = append(d, Diagnostic{
-					Rel:     rel,
-					Line:    p.Fset.Position(fn.Name.Pos()).Line,
-					Message: "exported func " + fn.Name.Name + " " + reasonSuffix,
-				})
-			}
+			report("func", fn.Name)
 		})
-		EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-			if ts.Name != nil && ts.Name.IsExported() && banned[ts.Name.Name] {
-				d = append(d, Diagnostic{
-					Rel:     rel,
-					Line:    p.Fset.Position(ts.Name.Pos()).Line,
-					Message: "exported type " + ts.Name.Name + " " + reasonSuffix,
-				})
-			}
-		})
-		EachInSubtree[ast.ValueSpec](f, func(vs *ast.ValueSpec) {
-			for _, ident := range vs.Names {
-				if ident.IsExported() && banned[ident.Name] {
-					d = append(d, Diagnostic{
-						Rel:     rel,
-						Line:    p.Fset.Position(ident.Pos()).Line,
-						Message: "exported var/const " + ident.Name + " " + reasonSuffix,
-					})
+		// Top-level type / var / const declarations only: the file's top-level
+		// GenDecls (direct children of *ast.File). Function-body-local GenDecls
+		// are nested and thus excluded.
+		EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+			for _, spec := range gd.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					report("type", s.Name)
+				case *ast.ValueSpec:
+					for _, ident := range s.Names {
+						report("var/const", ident)
+					}
 				}
 			}
 		})
 	}
 	return d
+}
+
+// TestFacadeBannedExportDiags_TopLevelOnly locks the "exported surface = top-level
+// declarations only" semantics of facadeBannedExportDiags: a top-level banned
+// name is flagged, while a function-body-local declaration sharing a banned name
+// (invisible outside its function, not part of the package's exported surface)
+// is NOT flagged. Regression guard for the EachInSubtree → EachInChildren[GenDecl]
+// fix; with the old subtree walk the two local decls below would false-positive.
+func TestFacadeBannedExportDiags_TopLevelOnly(t *testing.T) {
+	const src = `package archtest
+
+type FileContext = int // top-level export → MUST flag
+
+func helper() {
+	type FileContext int     // func-local → MUST NOT flag
+	var LoadContentFiles int // func-local → MUST NOT flag
+	_ = LoadContentFiles
+	_ = FileContext(0)
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p := &Pass{
+		Fset:  fset,
+		Files: []*ast.File{f},
+		Rel:   func(*ast.File) string { return "tools/archtest/x.go" },
+	}
+	banned := map[string]bool{"FileContext": true, "LoadContentFiles": true}
+
+	diags := facadeBannedExportDiags(p, banned, "BANNED")
+	if len(diags) != 1 {
+		t.Fatalf("want exactly 1 diagnostic (top-level FileContext only), got %d: %+v", len(diags), diags)
+	}
+	if !strings.Contains(diags[0].Message, "exported type FileContext") {
+		t.Errorf("unexpected diagnostic: %q", diags[0].Message)
+	}
 }
 
 // TestFacadeContractedExports enforces FACADE-CONTRACTED-EXPORTS-01 (anchored

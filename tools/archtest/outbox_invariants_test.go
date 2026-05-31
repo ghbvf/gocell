@@ -1737,7 +1737,7 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 		t.Fatalf("anchor invalidated: RunTyped(./...) loaded 0 generated/ files; " +
 			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
 			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
-			"before removing the IsGeneratedRelPath skip")
+			"before removing the Pass.IsGenerated (generated/) skip")
 	}
 	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
 }
