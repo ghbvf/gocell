@@ -584,9 +584,9 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	)
 	defer func() {
 		if driveErr != nil {
-			// Redact before recording — span sinks must not leak secrets
-			// (per .claude/rules/gocell/observability.md §Span Error Redaction).
-			span.RecordError(redaction.RedactError(driveErr))
+			// Redaction applied at sink (otelSpan.RecordError in
+			// adapters/otel/span.go); pass raw error here.
+			span.RecordError(driveErr)
 			span.SetStatus(wrapper.StatusError, "driveOne returned err")
 		}
 		span.End()

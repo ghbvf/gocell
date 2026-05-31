@@ -354,10 +354,14 @@ func New(clk clock.Clock, opts ...Option) *Bootstrap {
 		o(b)
 	}
 	clock.MustHaveClock(clk, "bootstrap.New")
+
 	// Create the Lifecycle after all options are applied so that
 	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
 	// DefaultStartTimeout / DefaultStopTimeout constants internally.
+	// slog.Default is already the sink-side redacting handler: production
+	// entrypoints (runCorebundle / example runXxx) seal it before bootstrap.New
+	// runs (see logging.NewHandler + SLOG-HANDLER-SEALED-FUNNEL-01).
 	logger := slog.Default()
 	b.lifecycle = NewLifecycle(b.clock, LifecycleConfig{
 		DefaultStartTimeout: b.defaultStartTimeout,

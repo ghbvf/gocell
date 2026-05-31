@@ -82,7 +82,69 @@ ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redac
 
 Note: `wrapper.Span` does not currently expose `AddEvent` / `Link`; if added in the future they must route string attributes through `safeStringAttr` and extend `SPAN-SETATTR-REDACT-01` A2 callsite-coverage accordingly.
 
-ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sibling pattern）；ADR `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8.
+ref: `pkg/redaction/redaction.go`；archtest `SPAN-SETATTR-REDACT-01` / `SPAN-RECORD-ERROR-SEAL-01`；ADR `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8 + Amendment 2026-05-31.
+
+## slog Sink Redaction（fail-closed, sink-side）
+
+All slog output is redacted fail-closed at the **sink level** by
+`runtime/observability/logging.contextHandler` (a `slog.Handler` implementation).
+Every production assembly entry point seals the process-global slog default
+**before any log emission**:
+
+```go
+slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
+```
+
+The `contextHandler` provides three layers of protection on every `Handle` call:
+
+1. **Message redaction**: `redaction.RedactString(r.Message)` — masks
+   `key=value` / `Authorization: Bearer …` substrings in free-form messages.
+2. **Attribute value redaction** (per attr in the `r.Attrs` callback):
+   `redaction.RedactSlogAttr(a)` — two-layer scrubber:
+   - **Key-aware**: if `IsSensitiveKey(a.Key)` → replace value with `<REDACTED>`.
+   - **Free-form** (non-sensitive keys only): `RedactString` on string/any values.
+3. **Bind-time redaction** in `WithAttrs`: each pre-bound attr is redacted at
+   bind time to cover the `logger.With(...)` path before any `Handle` call.
+
+Entry points (production assembly `run.go` / `main.go`):
+- `cmd/corebundle/run.go::runCorebundle`
+- `examples/iotdevice/run.go::runIotdevice`
+- `examples/todoorder/run.go::runTodoorder`
+- `examples/ssobff/main.go::main`
+
+**Archtest**: `SLOG-HANDLER-SEALED-FUNNEL-01`
+(`tools/archtest/slog_handler_sealed_funnel_test.go`):
+
+| Assertion | Rating |
+|-----------|--------|
+| A1 — `slog.NewJSONHandler`/`NewTextHandler` banned outside logging pkg (go/types typed resolution; alias bypass ineffective) | **Hard downstream** |
+| A2 — `contextHandler.Handle` and `WithAttrs` body form-lock (RedactSlogAttr + RedactString presence; dropping fails immediately) | **Hard downstream** |
+| A3 — production entry points must each contain `slog.SetDefault(slog.New(logging.NewHandler(...)))` (caller-allowlist) | **Medium upstream** |
+
+A3 is Medium (Go cannot enforce SetDefault timing relative to early init).
+Hard-upgrade path: codegen injection of the seal as the first generated line in
+each entry point. Tracked at **gh #1401**.
+
+**Retired Soft archtests** (superseded by sink-side redaction):
+- `PANIC-REDACT-01` — `slog.Any("panic", X)` must wrap X with `redaction.RedactAny`.
+  Sink's `RedactSlogAttr` KindAny branch redacts error / `fmt.Stringer` values
+  (GoCell panics are `panicregister.Approved(errcode.Assertion)`, i.e. errors);
+  genuinely structured values pass through to preserve structured logs (Option A,
+  #1036 review F2).
+- `HTTPUTIL-5XX-LOG-REDACT-01` — `log5xx` must call `RedactSlogAttr` on attrs.
+  Sink now redacts all attrs unconditionally.
+
+Call-site redaction calls (`redaction.RedactAny`, `redaction.RedactSlogAttr`) are
+**preserved** as defense-in-depth for contexts where the process-global seal may
+not be active (unit-test / library code).
+
+**Orthogonal rule not retired**: `REPO-LOG-KEY-ID-REDACT-01`
+(`tools/archtest/repoerr_test.go`) — this is a **key-name prohibition** (forbids
+`key_id`/`keyID` in attr key slots in `cells/`), not a value-redaction rule.
+`IsSensitiveKey` does not contain `key_id`, so the sink does not mask `key_id`
+values. The two rules are orthogonal.
+
+ref: `runtime/observability/logging/logging.go`；archtest `SLOG-HANDLER-SEALED-FUNNEL-01`；ADR `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8 Amendment 2026-05-31.
 
 ## Readyz Probe 命名
 

@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
 // demoTxRunner is a pass-through TxRunner for demo mode: executes fn directly
@@ -51,16 +52,19 @@ func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 // It is called by the generated main.go and owns environment loading +
 // bootstrap wiring.
 func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []string) error {
+	// Fail-closed sink-side redaction: seal the process-global slog default with
+	// the redacting handler FIRST — before any work that may log (e.g. module
+	// drift validation below) — so every slog.Default() call is scrubbed
+	// (SLOG-HANDLER-SEALED-FUNNEL-01; #1036 review F6). logger reuses the sealed
+	// default for pre-bootstrap / cell-level logging.
+	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
+	logger := slog.Default()
+
 	mods, err := runTodoorderModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
 	}
 	_ = mods // cell construction is done directly below; mods only validates drift
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
 
 	internalAuthChain, err := newInternalAuthChainFromEnv()
 	if err != nil {

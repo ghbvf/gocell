@@ -3,7 +3,6 @@ package wrapper_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -85,13 +84,18 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 	}
 }
 
-// TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan verifies that error
-// text reaching span.RecordError is hardcoded through pkg/redaction.RedactError;
-// no caller-side opt-out exists. ref: hashicorp/vault audit log_raw=false.
-func TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan(t *testing.T) {
+// TestWrapConsumer_RecordsErrorOnSpan verifies that a Requeue disposition
+// causes span.RecordError to be called with the disposition error. Redaction
+// is applied at the sink (adapters/otel/span.go otelSpan.RecordError); spy
+// spans in tests receive the raw error and that is expected. The redaction
+// guarantee is exercised by SPAN-RECORD-ERROR-SEAL-01 archtest
+// (tools/archtest/span_record_error_seal_test.go).
+// ref: hashicorp/vault audit log_raw=false (redact at output boundary).
+func TestWrapConsumer_RecordsErrorOnSpan(t *testing.T) {
 	tr := &spyTracer{}
+	rawErr := errors.New(`upstream rejected: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`)
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.Requeue(errors.New(`upstream rejected: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`))
+		return outbox.Requeue(rawErr)
 	}
 	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
@@ -100,19 +104,17 @@ func TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan(t *testing.T) {
 	if len(span.errs) != 1 {
 		t.Fatalf("want 1 RecordError, got %d", len(span.errs))
 	}
+	// Spy span receives raw error; redaction happens at otelSpan sink.
 	got := span.errs[0].Error()
-	if strings.Contains(got, "hunter2-leak-sentinel-9f3") {
-		t.Errorf("span recorded raw secret value: %q", got)
-	}
-	if !strings.Contains(got, "<REDACTED>") {
-		t.Errorf("span recorded msg missing <REDACTED> mask: %q", got)
+	if got != rawErr.Error() {
+		t.Errorf("RecordError received unexpected error: got %q, want %q", got, rawErr.Error())
 	}
 }
 
 // TestWrapConsumer_RecordsFallbackOnNilDispositionError verifies the
 // synthetic fallback message used when a non-Ack disposition arrives with
-// nil Err. The fallback itself goes through redaction (its content has no
-// sensitive substring, so redaction is a no-op).
+// nil Err. The message has no sensitive substrings so redaction at the sink
+// is a no-op; the spy span receives the raw fallback text.
 func TestWrapConsumer_RecordsFallbackOnNilDispositionError(t *testing.T) {
 	tr := &spyTracer{}
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {

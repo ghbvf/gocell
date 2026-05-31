@@ -13,7 +13,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // w3cGRPCPropagator and b3GRPCPropagator mirror the HTTP middleware's
@@ -27,10 +26,11 @@ var (
 
 // UnaryTracing returns an interceptor that starts a wrapper.Span per RPC named
 // by the full method (leading slash stripped), records rpc.* attributes, and on
-// error records the redacted error and sets the span status. Span attributes go
-// through wrapper.Attr (not raw attribute.String), so the adapters/otel
-// safeStringAttr redaction funnel applies automatically — this interceptor does
-// not touch the SPAN-SETATTR-REDACT-01 callsite set. It mirrors
+// error records the error and sets the span status. Error redaction is owned by
+// the otelSpan sink (SPAN-RECORD-ERROR-SEAL-01) — call sites pass the raw error.
+// Span attributes go through wrapper.Attr (not raw attribute.String), so the
+// adapters/otel safeStringAttr redaction funnel applies automatically — this
+// interceptor does not touch the SPAN-SETATTR-REDACT-01 callsite set. It mirrors
 // runtime/http/middleware.Tracing. A nil tracer degrades to NoopTracer.
 func UnaryTracing(tracer wrapper.Tracer) grpc.UnaryServerInterceptor {
 	if tracer == nil {
@@ -55,9 +55,9 @@ func UnaryTracing(tracer wrapper.Tracer) grpc.UnaryServerInterceptor {
 		span.SetAttributes(wrapper.Attr{Key: "rpc.grpc.status_code", Value: int64(code)})
 		if err != nil {
 			// status.Code never returns codes.OK for a non-nil error, so a
-			// failing RPC always marks the span as error. The error text is
-			// redacted before it reaches the span.
-			span.RecordError(redaction.RedactError(err))
+			// failing RPC always marks the span as error. The raw error is
+			// redacted at the otelSpan sink (SPAN-RECORD-ERROR-SEAL-01).
+			span.RecordError(err)
 			span.SetStatus(wrapper.StatusError, code.String())
 		}
 		return resp, err

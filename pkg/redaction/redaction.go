@@ -279,15 +279,23 @@ func RedactPanic(v any) string {
 //
 // # Known limitations
 //
-// KindLogValuer 与 KindAny 走 passthrough 不做递归扫描，是 fail-open 设计：
-// runtime 数据进入 errcode.Error 必须经 WithDetails / WithInternal sealed
-// newtype (errcode.PublicString / InternalAttr)，PublicDetail.AsSlogAttr() 与
-// InternalDetail.AsSlogAttr() 对 string value 返回 slog.String（KindString
-// 走 RedactString 扫描），非 string value 才进入 KindAny passthrough。这是
-// 第一道防线（sealed type + AsSlogAttr KindString preference）。如未来直接
-// 注入 slog.Any(callerSuppliedStruct) 走 KindAny / KindLogValuer，需在此函
-// 数补 ValueResolve 并扩展锁定测试（pkg/redaction/redaction_test.go
-// TestRedactSlogAttr_PassthroughKinds）。
+// KindAny 边界（Option A，#1036 review F2）：error 与 fmt.Stringer 值是"字符串
+// 语义"（后端渲染成一行字符串），故字符串化后走 RedactString——覆盖
+// slog.Any("error", err) 与 panic 值（GoCell panic = errcode.Assertion，是
+// error）。其余 KindAny（slice / map / 基础类型 / 无 Stringer 的普通 struct）
+// passthrough，交给 inner handler 结构化序列化，避免把数组/map 退化成字符串。
+// 残余：无 Stringer 且含敏感字段的裸 struct 经 JSON 序列化仍可能泄漏（与
+// KindLogValuer 同类已知边界），由 key-aware（敏感 attr key 整体 mask）兜底；
+// 彻底的 reflect-walk 深度递归脱敏见 backlog（对标 Vault hashstructure）。
+//
+// KindLogValuer 刻意走 passthrough（不 Resolve）。唯一的生产 LogValuer 是 readyz
+// SlogDependencyEntry，其 error_msg 在构造期已经过 newRedactedErrorMsg→RedactString
+// 自脱敏（HEALTH-REDACTED-ERROR-MSG-FUNNEL-01），再 Resolve 重脱敏零安全收益；而
+// Resolve 会把 typed value 拍平成 KindGroup，破坏 ops-diagnostics 侧
+// `slog.Any(name, SlogDependencyEntry)` → type-assert 回 SlogDependencyEntry 的读取
+// 链路（runtime/http/health/healthtest）。业务若未来注入携密的自定义 LogValuer，由
+// contract-fanout 纪律 + 此处 known-gap 兜底（与 KindAny 的 fail-closed 取舍不同：
+// LogValuer 是显式实现的类型，作者可控，非 recover() 的不可控 any）。
 func RedactSlogAttr(attr slog.Attr) slog.Attr {
 	if IsSensitiveKey(attr.Key) {
 		return slog.Attr{Key: attr.Key, Value: slog.StringValue(Mask)}
@@ -306,7 +314,20 @@ func redactSlogValue(v slog.Value) slog.Value {
 			out[i] = RedactSlogAttr(a)
 		}
 		return slog.GroupValue(out...)
+	case slog.KindAny:
+		// Option A (#1036 review F2): only string-semantic values (error /
+		// fmt.Stringer — this is the panic / error path) are stringified and
+		// scrubbed; genuinely structured values pass through so the inner
+		// handler serializes them structurally (no array/map → string
+		// degradation). See RedactSlogAttr "Known limitations".
+		switch v.Any().(type) {
+		case error, fmt.Stringer:
+			return slog.StringValue(RedactString(fmt.Sprint(v.Any())))
+		}
+		return v
 	default:
+		// KindLogValuer and any future kinds pass through unchanged. See the
+		// RedactSlogAttr godoc "Known limitations" for the KindLogValuer rationale.
 		return v
 	}
 }
@@ -403,15 +424,9 @@ func redactValue(v any) any {
 // RedactString applies, so the field-set and over-mask trade-offs documented
 // at package level apply uniformly.
 //
-// Funnel discipline: RedactAny is the only sanctioned conversion for panic
-// recovery values reaching slog.Any("panic", ...). Production callsites MUST be
-// `slog.Any("panic", redaction.RedactAny(r))` where r is the recover() return
-// value (any). Enforced by archtest PANIC-REDACT-01 (tools/archtest/panic_invariants_test.go).
-//
-// Do not stringify in caller: `slog.String("panic", redaction.RedactString(fmt.Sprint(r)))`
-// is a discouraged variant that bypasses the typed funnel. The RedactAny default
-// branch already does `RedactString(fmt.Sprint(x))` under the hood; callers
-// should preserve the any-typed funnel form for archtest scan-ability.
+// Call-site defense-in-depth (no longer archtest-enforced; PANIC-REDACT-01
+// retired). Sink-side redaction is covered unconditionally by
+// SLOG-HANDLER-SEALED-FUNNEL-01 via RedactSlogAttr's KindAny branch.
 func RedactAny(v any) any {
 	if v == nil {
 		return nil
