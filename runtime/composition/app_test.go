@@ -10,6 +10,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 )
 
+// appRunCancelTimeout bounds how long App.Run may take to return after the
+// context is canceled before the test fails (TEST-TIME-LITERAL-01: no bare
+// duration literals in test bodies).
+const appRunCancelTimeout = 5 * time.Second
+
 // TestApp_Run_CancelledCtx verifies that App.Run returns promptly when the
 // context is canceled. With an empty option set, bootstrap.New(...).Run
 // completes as soon as the context is canceled.
@@ -30,7 +35,7 @@ func TestApp_Run_CancelledCtx(t *testing.T) {
 		// A canceled context causes bootstrap.Run to return context.Canceled;
 		// that is the expected path when the application shuts down.
 		_ = err // context.Canceled is acceptable
-	case <-time.After(5 * time.Second):
+	case <-time.After(appRunCancelTimeout):
 		t.Fatal("App.Run did not return within 5s after context cancel")
 	}
 }

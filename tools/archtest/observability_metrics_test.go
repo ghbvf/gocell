@@ -389,7 +389,10 @@ const adapterPromPkg = "github.com/ghbvf/gocell/adapters/prometheus"
 // surface entirely. Once #885 lands, these four entries and the public
 // NewCounter/NewCounterVec/NewGauge/NewGaugeFunc exports are deleted.
 var adapterPromCallerAllowlist = map[string]map[string]struct{}{
-	"RegisterOrReuseCounter": {"cmd/corebundle/config_module.go": {}},
+	// configcore stale-cipher counter wiring moved from cmd/corebundle to the
+	// platform/ composition-root layer (#1085); platform/configcore is where the
+	// configcore Module() binds the cell to adapters.
+	"RegisterOrReuseCounter": {"platform/configcore/module.go": {}},
 	"NewCounter":             {"adapters/vault/transit_metrics.go": {}},
 	// NewCounterVec is a labeled-metric carve-out pending removal (issue #885):
 	// vault's loginOutcome migrates to metrics.Provider.CounterVec, after which
