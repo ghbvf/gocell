@@ -1,6 +1,6 @@
-// Package saga implements the orderfulfillment saga business logic.
+// Package sagaimpl implements the orderfulfillment saga business logic.
 // It bridges the generated of.Impl interface to the domain ports.
-package saga
+package sagaimpl
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Verify that Impl satisfies the generated contract interface at compile time.
@@ -24,18 +25,35 @@ type Impl struct {
 }
 
 // NewImpl constructs an Impl with all four required ports.
+// Returns an error if any dependency is nil.
 func NewImpl(
 	orders ports.OrderRepository,
 	inventory ports.InventoryStore,
 	payments ports.PaymentStore,
 	shipments ports.ShipmentStore,
-) *Impl {
+) (*Impl, error) {
+	if validation.IsNilInterface(orders) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"orderfulfillment saga impl: orders repository required")
+	}
+	if validation.IsNilInterface(inventory) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"orderfulfillment saga impl: inventory store required")
+	}
+	if validation.IsNilInterface(payments) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"orderfulfillment saga impl: payment store required")
+	}
+	if validation.IsNilInterface(shipments) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"orderfulfillment saga impl: shipment store required")
+	}
 	return &Impl{
 		orders:    orders,
 		inventory: inventory,
 		payments:  payments,
 		shipments: shipments,
-	}
+	}, nil
 }
 
 // RunReserveInventory loads the order and reserves inventory.

@@ -6,7 +6,7 @@ A multi-step order fulfillment application demonstrating GoCell's **L3 WorkflowE
 
 - **L3 saga orchestration**: the `placeorder` slice enrolls a saga instance in the journal; the `Coordinator` drives it asynchronously through four forward steps.
 - **Compensable steps**: three of the four steps (`reserveInventory`, `chargePayment`, `ship`) declare a `CompensateFunc`; the fourth (`notifyUser`) is terminal and intentionally not compensable (notifications are best-effort).
-- **Automatic compensation**: when `chargePayment` fails (controlled by `paymentShouldFail=true`), the coordinator reverses committed steps in order: `CompensateReserveInventory` releases the inventory reservation, restoring the original stock level.
+- **Automatic compensation**: when `chargePayment` fails (controlled by `paymentShouldFail=true`), the coordinator compensates **only the steps that have already completed**. On a `chargePayment` failure, only `CompensateReserveInventory` fires (releasing the inventory reservation that was acquired in step 1); `CompensateChargePayment` and `CompensateShip` do NOT run because those steps were never executed.
 - **In-memory stores**: all domain stores (`OrderRepository`, `InventoryStore`, `PaymentStore`, `ShipmentStore`) are in-memory — no external dependencies required.
 
 ## Architecture
@@ -39,6 +39,8 @@ The `Coordinator` and `placeorder.Service` share the **same `MemJournal` instanc
 | `ship` | records shipment in `ShipmentStore` | `ShipmentStore.CancelShipment(orderID)` removes shipment | Yes |
 | `notifyUser` | logs notification (Notified: true) | — (best-effort; not compensable) | No |
 
+**Compensation is selective**: the coordinator only compensates steps that have already completed. If `chargePayment` (step 2) fails, compensation runs in reverse over completed steps only: `CompensateReserveInventory` fires (step 1 completed), but `CompensateChargePayment` and `CompensateShip` do NOT fire (steps 2 and 3 were never successfully executed).
+
 ## Quick Start
 
 No external dependencies required.
@@ -47,11 +49,13 @@ No external dependencies required.
 go run ./examples/orderfulfillment
 ```
 
-The server starts on `:8083` (primary listener — no JWT required in demo mode; the primary listener is open for local exploration).
+The server starts on `:8083` (primary listener). **Demo mode**: the primary listener is unauthenticated (`auth.public: true`) for local exploration only — do not expose to untrusted networks.
+
+Internal and health listeners are bound to `127.0.0.1` (loopback only).
 
 ### Place an order (happy path)
 
-The example pre-seeds inventory with `"widget": 100` units.
+The example pre-seeds inventory with `"widget": 100` and `"gadget": 100` units.
 
 ```bash
 curl -X POST http://localhost:8083/api/v1/orders/ \
@@ -69,7 +73,7 @@ The saga runs asynchronously. Check the server logs for `saga enrolled` → `ste
 
 ### Trigger compensation (payment failure)
 
-Set `paymentShouldFail: true` to force the `chargePayment` step to return a conflict error, causing the coordinator to compensate in reverse:
+Set `paymentShouldFail: true` to force the `chargePayment` step to return a conflict error, causing the coordinator to compensate in reverse over **completed steps only**:
 
 ```bash
 curl -X POST http://localhost:8083/api/v1/orders/ \
@@ -77,7 +81,28 @@ curl -X POST http://localhost:8083/api/v1/orders/ \
   -d '{"item":"widget","amountCents":1299,"paymentShouldFail":true}'
 ```
 
-The saga reaches `KindSagaCompensated`: inventory is released, no payment or shipment is recorded.
+The saga reaches `KindSagaCompensated`: `CompensateReserveInventory` releases the inventory reservation (restoring stock to 100); no payment or shipment is ever recorded because those steps were never reached.
+
+## Health
+
+```bash
+# Liveness — always 200 when the process is running
+curl http://localhost:9093/healthz
+
+# Readiness — 200 when the saga coordinator journal is healthy
+curl http://localhost:9093/readyz
+```
+
+The `/readyz` probe includes `orderfulfillmentcell_repo_ready` (coordinator journal liveness) registered via the `WithCoordinator` option.
+
+## Security
+
+The primary listener at `:8083` uses `auth.public: true` — **all requests are unauthenticated**. This is intentional for local demo exploration only. Production deployments must:
+- Set `auth.public: false` and configure a JWT plan.
+- Restrict access to `:8083` to trusted network segments or an API gateway.
+- Replace the in-memory journal and no-op outbox with durable implementations.
+
+Internal (`:9083`) and health (`:9093`) listeners are already bound to `127.0.0.1` (loopback only).
 
 ## Running the Integration Tests
 
@@ -121,7 +146,7 @@ These specs document acceptance criteria. The `run-journey` CLI execution path i
   - `internal/domain/` — `Order` struct
   - `internal/ports/` — `OrderRepository`, `InventoryStore`, `PaymentStore`, `ShipmentStore` interfaces
   - `internal/mem/` — in-memory implementations of all ports
-  - `internal/saga/` — `Impl` bridging the generated `of.Impl` interface to domain ports
+  - `internal/sagaimpl/` — `Impl` bridging the generated `of.Impl` interface to domain ports
   - `slices/placeorder/` — `Service.PlaceOrder()` + HTTP handler + integration tests
 - `contracts/saga/orderfulfillment/v1/` — saga contract YAML + step output schemas
 - `journeys/` — declarative journey specs

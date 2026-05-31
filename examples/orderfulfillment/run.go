@@ -61,7 +61,11 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 	}
 
 	// Build and register the saga definition.
-	reg, err := of.Register(ordercell.NewSagaImpl(stores))
+	sagaImpl, err := ordercell.NewSagaImpl(stores)
+	if err != nil {
+		return fmt.Errorf("build saga impl: %w", err)
+	}
+	reg, err := of.Register(sagaImpl)
 	if err != nil {
 		return fmt.Errorf("register saga: %w", err)
 	}
@@ -81,11 +85,13 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		return fmt.Errorf("create saga coordinator: %w", err)
 	}
 
-	// Build the cell, injecting the shared journal and order repository.
+	// Build the cell, injecting the shared journal, order repository, and coordinator
+	// for /readyz health reporting.
 	oc := ordercell.NewOrderCell(
 		ordercell.WithJournal(jrnl),
 		ordercell.WithOrderRepo(stores.OrderRepository()),
 		ordercell.WithLogger(logger),
+		ordercell.WithCoordinator(coord),
 	)
 
 	// Build the assembly and register the cell.
@@ -127,9 +133,17 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 					go func() {
 						if err := coord.Start(ownerCtx); err != nil {
 							logger.Error("saga coordinator stopped with error",
-								slog.Any("error", err))
+								slog.Any("error", err),
+								slog.String("assembly_id", assemblyID))
 						}
 					}()
+					// Block until the coordinator's first tick completes (ready to
+					// claim and drive saga instances), so HTTP can accept orders
+					// only after the coordinator is ticking.
+					select {
+					case <-coord.Ready():
+					case <-ownerCtx.Done():
+					}
 					return nil
 				},
 				OnStop: func(stopCtx context.Context) error {
@@ -139,6 +153,7 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		}),
 	)
 
+	logger.Warn("orderfulfillment: demo mode — unauthenticated primary listener + in-memory journal + discarded outbox events")
 	logger.Info("orderfulfillment: starting on :8083 (demo mode, no auth required)")
 	return app.Run(ctx)
 }

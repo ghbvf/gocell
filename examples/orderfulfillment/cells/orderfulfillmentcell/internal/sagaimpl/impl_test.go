@@ -1,4 +1,4 @@
-package saga_test
+package sagaimpl_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
-	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/saga"
+	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/sagaimpl"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -28,7 +28,10 @@ func newTestImpl(t *testing.T, stock map[string]int) (
 	inventory := mem.NewInventoryStore(stock)
 	payments := mem.NewPaymentStore()
 	shipments := mem.NewShipmentStore()
-	impl := sagaimpl.NewImpl(orders, inventory, payments, shipments)
+	impl, err := sagaimpl.NewImpl(orders, inventory, payments, shipments)
+	if err != nil {
+		t.Fatalf("NewImpl: %v", err)
+	}
 	return impl, orders, inventory, payments, shipments
 }
 

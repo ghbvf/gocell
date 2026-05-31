@@ -34,6 +34,10 @@ func consumerFieldName(kind string) string {
 		return "receivers"
 	case cellvocab.ContractGRPC:
 		return "clients"
+	case cellvocab.ContractSaga:
+		// Saga contracts have no consumer-side field: participation is
+		// one orchestrating cell per saga (RoleOrchestrate is provider-only).
+		return ""
 	default:
 		return "consumers"
 	}
@@ -68,6 +72,10 @@ func contractConsumers(c *metadata.ContractMeta) []string {
 		return c.Endpoints.Receivers
 	case cellvocab.ContractGRPC:
 		return c.Endpoints.Clients
+	case cellvocab.ContractSaga:
+		// Saga contracts have no consumer-side field: participation is
+		// one orchestrating cell per saga (RoleOrchestrate is provider-only).
+		return nil
 	default:
 		return nil
 	}

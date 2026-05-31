@@ -11,7 +11,7 @@ endpoints:
     successStatus: 202
     noContent: false
     auth:
-      public: true
+      public: true  # demo-only: production must set public: false and configure a JWT plan
     responses:
       400:
         description: "Bad request — malformed JSON body or oversized payload"

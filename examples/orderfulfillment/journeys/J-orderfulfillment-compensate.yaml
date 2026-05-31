@@ -1,3 +1,7 @@
+# Declarative acceptance spec for the compensation path.
+# Automated verification is the integration tests in
+#   examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder/
+# (run with -tags=integration). The run-journey CLI runner is backlogged (#967).
 id: J-orderfulfillment-compensate
 goal: "Place an order with paymentShouldFail=true and observe the saga coordinator compensate in reverse, releasing all acquired resources"
 lifecycle: active
@@ -13,14 +17,10 @@ passCriteria:
   - text: "POST /api/v1/orders/ with paymentShouldFail=true returns 202 Accepted with orderId (enrollment is immediate; compensation is async)"
     mode: manual
   - text: "chargePayment step returns a conflict error; coordinator enters Compensating phase; saga reaches terminal KindSagaCompensated; verified by integration test TestPlaceOrder_CompensateOnChargeFail"
-    mode: auto
-    checkRef: journey.J-orderfulfillment-compensate.saga-compensated
+    mode: manual
   - text: "CompensateReserveInventory releases the inventory reservation: Available(widget) returns to its original value"
-    mode: auto
-    checkRef: journey.J-orderfulfillment-compensate.saga-compensated
+    mode: manual
   - text: "No payment side-effect persists: PaymentStore has no record for the order after compensation"
-    mode: auto
-    checkRef: journey.J-orderfulfillment-compensate.saga-compensated
+    mode: manual
   - text: "No shipment side-effect persists: ShipmentStore has no record for the order (ship step was never reached)"
-    mode: auto
-    checkRef: journey.J-orderfulfillment-compensate.saga-compensated
+    mode: manual

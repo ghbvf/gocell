@@ -9,28 +9,32 @@ import (
 	"context"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
-	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/saga"
+	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/sagaimpl"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	saga "github.com/ghbvf/gocell/runtime/saga"
 )
 
 // setup builds the full coordinator + placeorder wiring with a shared MemJournal.
 // It returns the placeorder service, the shared journal (for Load), the memory
-// stores (for side-effect assertions), and a cancel func that stops the coordinator.
+// stores (for side-effect assertions), the coordinator (for liveness inspection),
+// and a test context that is canceled on t.Cleanup.
 type testSetup struct {
 	svc       *placeorder.Service
 	jrnl      *journal.MemJournal
 	inventory *mem.InventoryStore
 	payments  *mem.PaymentStore
 	shipments *mem.ShipmentStore
+	coord     *saga.Coordinator
+	ctx       context.Context
 }
 
 func setup(t *testing.T) testSetup {
@@ -48,21 +52,24 @@ func setup(t *testing.T) testSetup {
 	pay := mem.NewPaymentStore()
 	ship := mem.NewShipmentStore()
 
-	impl := sagaimpl.NewImpl(orders, inv, pay, ship)
+	impl, err := sagaimpl.NewImpl(orders, inv, pay, ship)
+	if err != nil {
+		t.Fatalf("NewImpl: %v", err)
+	}
 	reg, err := of.Register(impl)
 	if err != nil {
 		t.Fatalf("of.Register: %v", err)
 	}
 
 	cfg := saga.DefaultConfig()
-	cfg.PollInterval = 20 * time.Millisecond
+	cfg.PollInterval = testtime.D20ms
 	// Short LeaseDuration so the coordinator can re-claim the same instance on
 	// every tick (each step completes in < 50ms; the lease expires quickly so
 	// the next tick sees the instance as available again). The constraint
 	// HeartbeatInterval * HeartbeatLeaseSafetyFactor(2) < LeaseDuration is
 	// satisfied: 50ms*2 = 100ms < 200ms.
-	cfg.LeaseDuration = 200 * time.Millisecond
-	cfg.HeartbeatInterval = 50 * time.Millisecond
+	cfg.LeaseDuration = testtime.D200ms
+	cfg.HeartbeatInterval = testtime.D50ms
 
 	coord, err := saga.NewCoordinator(
 		jrnl,
@@ -76,16 +83,16 @@ func setup(t *testing.T) testSetup {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ownerCtx, cancel := context.WithCancel(context.Background())
 	go func() {
-		if startErr := coord.Start(ctx); startErr != nil && ctx.Err() == nil {
+		if startErr := coord.Start(ownerCtx); startErr != nil && ownerCtx.Err() == nil {
 			t.Logf("coord.Start returned: %v", startErr)
 		}
 	}()
 	<-coord.Ready()
 
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
 		defer stopCancel()
 		_ = coord.Stop(stopCtx)
 		cancel()
@@ -107,28 +114,34 @@ func setup(t *testing.T) testSetup {
 		inventory: inv,
 		payments:  pay,
 		shipments: ship,
+		coord:     coord,
+		ctx:       ownerCtx,
 	}
 }
 
 // waitTerminal polls the journal until a terminal event is observed for id or
-// the deadline passes. Returns the first terminal EventKind found.
-func waitTerminal(t *testing.T, j *journal.MemJournal, id idutil.SafeID, deadline time.Time) journal.EventKind {
+// the parent context is canceled. Returns the first terminal EventKind found.
+// Uses testwait.External to satisfy TEST-SLEEP-DISCIPLINE-01 and TEST-TIME-LITERAL-01.
+func waitTerminal(t *testing.T, ctx context.Context, j *journal.MemJournal, id idutil.SafeID) journal.EventKind {
 	t.Helper()
-	ctx := context.Background()
-	for time.Now().Before(deadline) {
+	var found journal.EventKind
+	testwait.External(t, "saga-terminal-state", func() bool {
+		if ctx.Err() != nil {
+			return true // abort on context cancellation
+		}
 		events, err := j.Load(ctx, id)
 		if err != nil {
-			t.Fatalf("waitTerminal: Load: %v", err)
+			return false
 		}
 		for i := len(events) - 1; i >= 0; i-- {
 			if events[i].Kind.IsTerminal() {
-				return events[i].Kind
+				found = events[i].Kind
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("waitTerminal: no terminal event within deadline for id=%s", id)
-	return 0
+		return false
+	}, testtime.EventuallyLong, testtime.FastPoll)
+	return found
 }
 
 // TestPlaceOrder_HappyPath verifies a successful saga run:
@@ -138,14 +151,13 @@ func waitTerminal(t *testing.T, j *journal.MemJournal, id idutil.SafeID, deadlin
 // - shipment is recorded
 func TestPlaceOrder_HappyPath(t *testing.T) {
 	ts := setup(t)
-	ctx := context.Background()
 
-	orderID, err := ts.svc.PlaceOrder(ctx, "widget", 1299, false)
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, false)
 	if err != nil {
 		t.Fatalf("PlaceOrder: %v", err)
 	}
 
-	kind := waitTerminal(t, ts.jrnl, idutil.SafeID(orderID), time.Now().Add(5*time.Second))
+	kind := waitTerminal(t, ts.ctx, ts.jrnl, idutil.SafeID(orderID))
 	if kind != journal.KindSagaSucceeded {
 		t.Errorf("terminal kind = %s, want %s", kind, journal.KindSagaSucceeded)
 	}
@@ -170,14 +182,13 @@ func TestPlaceOrder_HappyPath(t *testing.T) {
 // - no shipment recorded
 func TestPlaceOrder_CompensateOnChargeFail(t *testing.T) {
 	ts := setup(t)
-	ctx := context.Background()
 
-	orderID, err := ts.svc.PlaceOrder(ctx, "widget", 1299, true)
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, true)
 	if err != nil {
 		t.Fatalf("PlaceOrder: %v", err)
 	}
 
-	kind := waitTerminal(t, ts.jrnl, idutil.SafeID(orderID), time.Now().Add(5*time.Second))
+	kind := waitTerminal(t, ts.ctx, ts.jrnl, idutil.SafeID(orderID))
 	if kind != journal.KindSagaCompensated {
 		t.Errorf("terminal kind = %s, want %s", kind, journal.KindSagaCompensated)
 	}

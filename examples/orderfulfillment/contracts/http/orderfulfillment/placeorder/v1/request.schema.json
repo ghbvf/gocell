@@ -5,7 +5,7 @@
   "properties": {
     "item": { "type": "string", "minLength": 1, "maxLength": 256 },
     "amountCents": { "type": "integer", "minimum": 0, "maximum": 100000000 },
-    "paymentShouldFail": { "type": "boolean" }
+    "paymentShouldFail": { "type": "boolean", "description": "demo-only test hook: forces payment failure to exercise compensation" }
   },
   "required": ["item", "amountCents"],
   "additionalProperties": false

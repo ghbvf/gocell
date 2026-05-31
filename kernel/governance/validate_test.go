@@ -1937,6 +1937,13 @@ func TestContractProviderAndConsumers(t *testing.T) {
 			wantConsumers: []string{metadatatest.CellIDSvcB},
 		},
 		{
+			// Saga has a server (orchestrating cell) but no consumer-side field.
+			kind:          "saga",
+			endpoints:     metadata.EndpointsMeta{Server: metadatatest.CellIDSvcA},
+			wantProvider:  metadatatest.CellIDSvcA,
+			wantConsumers: nil,
+		},
+		{
 			kind:          "unknown",
 			endpoints:     metadata.EndpointsMeta{},
 			wantProvider:  "",

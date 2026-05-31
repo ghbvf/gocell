@@ -18,6 +18,7 @@ import (
 	placeordergen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/placeorder/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 )
 
@@ -53,6 +54,18 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// WithCoordinator injects the saga Coordinator as a healthz.RepoProber so
+// the cell can register it with /readyz. The coordinator's RepoReady probe
+// checks that the journal is reachable and the tick loop is healthy.
+// A nil value is a silent noop.
+func WithCoordinator(p healthz.RepoProber) Option {
+	return func(c *OrderCell) {
+		if p != nil {
+			c.coord = p
+		}
+	}
+}
+
 // OrderCell is the orderfulfillmentcell Cell implementation.
 type OrderCell struct {
 	*cell.BaseCell
@@ -60,6 +73,11 @@ type OrderCell struct {
 	journal journal.JournalCore
 	repo    ports.OrderRepository
 	logger  *slog.Logger
+
+	// coord is the optional saga Coordinator injected via WithCoordinator.
+	// When non-nil it is registered with /readyz via RegisterReadiness so
+	// operators can observe coordinator liveness.
+	coord healthz.RepoProber
 
 	// placeorderHandler is built in initInternal and mounted by the RouteGroup
 	// declared in initInternal.
@@ -87,6 +105,14 @@ func NewOrderCell(opts ...Option) *OrderCell {
 //
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error {
+	// Register saga coordinator readiness probe when a coordinator was injected.
+	// This makes /readyz reflect coordinator health (journal reachable + tick loop alive).
+	if c.coord != nil {
+		if err := RegisterReadiness(reg, c.coord); err != nil {
+			return fmt.Errorf("orderfulfillmentcell: register coordinator readiness: %w", err)
+		}
+	}
+
 	// Default to in-memory repository if none injected.
 	if c.repo == nil {
 		c.repo = mem.NewOrderRepository()

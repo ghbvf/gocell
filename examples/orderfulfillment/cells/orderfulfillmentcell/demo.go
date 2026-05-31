@@ -3,7 +3,7 @@ package orderfulfillmentcell
 import (
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
-	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/saga"
+	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/sagaimpl"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 )
 
@@ -43,7 +43,7 @@ func (d DemoStores) ShipmentStore() ports.ShipmentStore { return d.Shipments }
 
 // NewSagaImpl constructs the saga business logic implementation wired to the
 // given demo stores. The returned value implements of.Impl and is ready to
-// pass to of.Register.
-func NewSagaImpl(d DemoStores) of.Impl {
+// pass to of.Register. Returns an error if any store is nil.
+func NewSagaImpl(d DemoStores) (of.Impl, error) {
 	return sagaimpl.NewImpl(d.Orders, d.Inventory, d.Payments, d.Shipments)
 }
