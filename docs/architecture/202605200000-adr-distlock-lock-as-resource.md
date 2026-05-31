@@ -176,7 +176,7 @@ structural Hard (shared `sync.Once`).
 
 #### Threat-model / consequences re-evaluation (per ai-robust.md "ADR amendment 落地必查")
 
-The two §Consequences risk rows below are re-evaluated against `Orphan()`; both stay ✅ (no cell flips to ⚠️/❌):
+The two §Consequences risk rows below are re-evaluated against `Orphan()`; both stay ✅ (no cell flips to ⚠️/❌). One new **availability trade-off** is added for completeness — it is not a security row and does not flip any existing ✅.
 
 - **fail-stays-held DoS surface** — ✅ unchanged. `Orphan()` does not widen the
   ceiling: an orphaned key is bounded by the *same* TTL window as a
@@ -188,6 +188,15 @@ The two §Consequences risk rows below are re-evaluated against `Orphan()`; both
   lock (closes `Done()`, the manager drops `lockState`), so captured callerCtx
   values become GC-eligible exactly as they do after `Release()`. No new
   pinning window.
+- **saga Stop liveness trade-off (new, availability only)** — after
+  `runtime/saga.Coordinator.Stop()`, orphaned per-instance distlock keys linger
+  in the backend for up to `Config.LeaseDuration` before expiring (vs the
+  previous immediate-release behavior). A coordinator restarting within that
+  window will skip those instances until the lease lapses. This is a **liveness
+  cost, not a safety degradation**: no existing ✅ row flips; the journal
+  `lease_id` CAS continues to fence any late commits from the orphaned step. The
+  trade-off is deliberate — I/O-free shutdown cannot hang even when the backend
+  is unreachable at shutdown time.
 
 `*Lock` still does not implement `context.Context` (Orphan adds no
 `Deadline()/Err()`), so `DISTLOCK-LOCK-NOT-CONTEXT-01` and the Enforcement

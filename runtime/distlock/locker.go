@@ -232,6 +232,10 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	// mutually exclusive: whichever is called first wins; all later calls of
 	// either are no-ops. This eliminates the Release-after-Orphan and
 	// Orphan-after-Release races without additional locking.
+	//
+	// The Once MUST remain shared across both closures — splitting it into two
+	// Onces would let orphan-then-release (or the renewal-lost-then-orphan path)
+	// double-send manager events and corrupt pendingReleases drain accounting.
 	var once sync.Once
 	var releaseErr error
 	release := func() error {

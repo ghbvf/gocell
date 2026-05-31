@@ -379,10 +379,15 @@ func (c *Coordinator) Start(ctx context.Context) error {
 //     (orphanInflightLocks): renewal is stopped without a shutdown-time release
 //     round-trip, so the distlock key expires within ≤1×TTL and a competitor
 //     coordinator can take over — bounded-TTL handoff, I/O-free so it cannot hang
-//     on an unreachable backend during shutdown. A still-running wedged step keeps
-//     its lock until TTL while the journal lease_id CAS continues to fence its late
-//     commits (the PR-05 efficiency-lock model, leader_elect.go). Cooperative steps
-//     already released via tickOnce; orphanInflightLocks idempotently covers the
+//     on an unreachable backend during shutdown. After Stop, per-instance distlock
+//     keys linger in the backend for up to Config.LeaseDuration before expiring
+//     (vs the previous immediate-release behavior); a coordinator restarting within
+//     that window will skip those instances until the lease lapses — a liveness
+//     cost, not a safety degradation (the journal lease_id CAS continues to fence
+//     late commits). A still-running wedged step keeps its lock until TTL while
+//     the journal lease_id CAS continues to fence its late commits (the PR-05
+//     efficiency-lock model, leader_elect.go). Cooperative steps already released
+//     via tickOnce; orphanInflightLocks idempotently covers the
 //     drain-budget-exhausted case.
 //   - This is the inherent limit of cooperative cancellation in Go: the step
 //     goroutine itself cannot be killed. Step authors are responsible for
@@ -469,13 +474,24 @@ drain:
 // sync.Once — the tickOnce release() after a Stop orphan() is a harmless no-op
 // (a no-op in single-process mode as well). Entries are left for the owning
 // goroutine to delete from the map.
+//
+// After Stop, per-instance distlock keys linger in the backend for up to
+// Config.LeaseDuration before expiring (vs the previous immediate-release
+// behavior); a coordinator restarting within that window will skip those
+// instances until the lease lapses. This is the deliberate cost of I/O-free
+// shutdown (resilient even when the backend is unreachable at shutdown).
 func (c *Coordinator) orphanInflightLocks() {
+	var n int
 	c.inflightLocks.Range(func(_, val any) bool {
 		if d, ok := val.(inflightDrive); ok {
 			d.orphan()
+			n++
 		}
 		return true
 	})
+	if n > 0 {
+		c.logger.Info("saga: orphaned in-flight distlocks at shutdown", slog.Int("count", n))
+	}
 }
 
 // Ready returns a channel that is closed once Start transitions to running.

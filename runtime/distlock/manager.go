@@ -515,7 +515,10 @@ func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, ite
 func (m *Manager) handleOrphan(ev managerEvent, locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
 	// detachLock removes the lock from the heap so renewal stops immediately.
 	// No Driver call is made — backend key expires on its own.
-	m.detachLock(ev.id, ErrLockOrphaned, locks, items, h)
+	state, ok := m.detachLock(ev.id, ErrLockOrphaned, locks, items, h)
+	if ok {
+		slog.Debug("distlock: lock orphaned", "key", state.key)
+	}
 	// Always signal nil; orphan is fire-and-forget from the caller's perspective
 	// (no I/O result to return).
 	ev.resultCh <- nil

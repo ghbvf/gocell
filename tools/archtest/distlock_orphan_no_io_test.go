@@ -160,6 +160,10 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 // interface, and asserts that the SelectorExpr is correctly identified as a
 // Driver method call.
 //
+// This test uses an in-memory types.Config/importer.Default() (not the
+// RunTypedFixture façade) because it is a synthetic no-op-detector probe, not
+// an on-disk fixture package.
+//
 // ai-robust.md §"AI-robust 三档分级" mandates a blind-spot self-check for
 // Hard/Medium-rated archtest rules.
 func TestDistlockOrphanNoDriverIO01_BlindSpotSelfCheck(t *testing.T) {
