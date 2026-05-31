@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -38,9 +39,31 @@ func TestUnaryMetrics(t *testing.T) {
 			_, _ = UnaryMetrics(coll, clock.Real())(context.Background(), nil, info, tt.handler)
 			// cell defaults to the runtime sentinel until gRPC cell attribution
 			// is wired.
-			if got := coll.Count("_runtime", method, tt.wantCode); got != 1 {
+			if got := coll.Count(metrics.RuntimeCellSentinel, method, tt.wantCode); got != 1 {
 				t.Fatalf("count[%s] = %d, want 1", tt.wantCode, got)
 			}
 		})
 	}
+
+	t.Run("cell label uses ctxkeys CellID when present", func(t *testing.T) {
+		coll := metrics.NewInMemoryGRPCCollector()
+		ctx := kernelctxkeys.WithCellID(context.Background(), "mycell")
+		_, _ = UnaryMetrics(coll, clock.Real())(ctx, nil, info,
+			func(context.Context, any) (any, error) { return "ok", nil })
+		if got := coll.Count("mycell", method, codes.OK.String()); got != 1 {
+			t.Fatalf("count[mycell] = %d, want 1", got)
+		}
+		if got := coll.Count(metrics.RuntimeCellSentinel, method, codes.OK.String()); got != 0 {
+			t.Fatalf("count[_runtime] = %d, want 0 (cell attribution should override)", got)
+		}
+	})
+}
+
+func TestUnaryMetricsNilCollectorPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("UnaryMetrics with nil collector must panic at construction")
+		}
+	}()
+	_ = UnaryMetrics(nil, clock.Real())
 }

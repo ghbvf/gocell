@@ -7,9 +7,11 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 func TestUnaryTracing(t *testing.T) {
@@ -71,6 +73,57 @@ func TestUnaryTracing(t *testing.T) {
 			t.Fatalf("expected handler error to propagate")
 		}
 	})
+}
+
+func TestUnaryTracingPropagation(t *testing.T) {
+	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Do"}
+
+	t.Run("W3C traceparent continues upstream trace", func(t *testing.T) {
+		const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+		md := metadata.Pairs("traceparent", "00-"+traceID+"-00f067aa0ba902b7-01")
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+
+		tr := &recordingTracer{span: &recordingSpan{}}
+		var seen string
+		_, _ = UnaryTracing(tr)(ctx, nil, info, func(c context.Context, _ any) (any, error) {
+			seen, _ = ctxkeys.TraceIDFrom(c)
+			return "ok", nil
+		})
+		if seen != traceID {
+			t.Fatalf("trace id = %q, want %q (W3C parent not continued)", seen, traceID)
+		}
+	})
+
+	t.Run("no metadata starts a fresh root", func(t *testing.T) {
+		tr := &recordingTracer{span: &recordingSpan{}}
+		var present bool
+		_, _ = UnaryTracing(tr)(context.Background(), nil, info, func(c context.Context, _ any) (any, error) {
+			_, present = ctxkeys.TraceIDFrom(c)
+			return "ok", nil
+		})
+		if present {
+			t.Fatalf("no upstream trace id should be mirrored when metadata is absent")
+		}
+	})
+}
+
+func TestMetadataCarrier(t *testing.T) {
+	md := metadata.Pairs("traceparent", "abc", "x-b3-traceid", "def")
+	c := metadataCarrier(md)
+	if got := c.Get("traceparent"); got != "abc" {
+		t.Fatalf("Get(traceparent) = %q, want abc", got)
+	}
+	if got := c.Get("absent"); got != "" {
+		t.Fatalf("Get(absent) = %q, want empty", got)
+	}
+	keys := c.Keys()
+	if len(keys) != 2 {
+		t.Fatalf("Keys() = %v, want 2 keys", keys)
+	}
+	c.Set("newkey", "val")
+	if got := c.Get("newkey"); got != "val" {
+		t.Fatalf("Set/Get roundtrip failed: %q", got)
+	}
 }
 
 func TestSplitFullMethod(t *testing.T) {

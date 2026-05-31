@@ -104,6 +104,7 @@ const spanCoverageViolMsg = "production file calls span.RecordError(...) but its
 var spanRecordErrorScanDirs = []string{
 	"kernel/wrapper",
 	"runtime/http/middleware",
+	"runtime/grpc/interceptor",
 	"runtime/saga",
 	"runtime/saga/executor",
 }

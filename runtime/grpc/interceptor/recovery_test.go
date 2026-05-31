@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 func TestUnaryRecovery(t *testing.T) {
@@ -53,6 +55,21 @@ func TestUnaryRecovery(t *testing.T) {
 		}
 		if !strings.Contains(out, "<REDACTED>") {
 			t.Fatalf("slog missing redaction marker: %s", out)
+		}
+	})
+
+	t.Run("panic log carries request_id from ctx", func(t *testing.T) {
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+		defer slog.SetDefault(prev)
+
+		ctx := ctxkeys.WithRequestID(context.Background(), "req-xyz")
+		_, _ = UnaryRecovery()(ctx, nil, info,
+			func(context.Context, any) (any, error) { panic("boom") })
+
+		if !strings.Contains(buf.String(), `"request_id":"req-xyz"`) {
+			t.Fatalf("panic log missing request_id: %s", buf.String())
 		}
 	})
 }

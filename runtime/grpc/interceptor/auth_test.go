@@ -70,11 +70,27 @@ func TestUnaryAuth(t *testing.T) {
 	})
 
 	t.Run("verify infra outage -> Unavailable", func(t *testing.T) {
-		v := stubVerifier{err: errcode.New(errcode.KindUnavailable, errcode.ErrInternal, "jwks down")}
+		v := stubVerifier{err: errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "jwks down")}
 		_, err := UnaryAuth(v)(bearerCtx(), nil, info,
 			func(context.Context, any) (any, error) { return "ok", nil })
 		if status.Code(err) != codes.Unavailable {
 			t.Fatalf("code = %v, want Unavailable", status.Code(err))
+		}
+	})
+
+	t.Run("intent mismatch maps to same Unauthenticated as invalid token (enumeration-safe)", func(t *testing.T) {
+		intentErr := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "wrong intent")}
+		plainErr := stubVerifier{err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "bad signature")}
+		pass := func(context.Context, any) (any, error) { return "ok", nil }
+
+		_, e1 := UnaryAuth(intentErr)(bearerCtx(), nil, info, pass)
+		_, e2 := UnaryAuth(plainErr)(bearerCtx(), nil, info, pass)
+		s1, s2 := status.Convert(e1), status.Convert(e2)
+		if s1.Code() != codes.Unauthenticated || s2.Code() != codes.Unauthenticated {
+			t.Fatalf("codes = %v / %v, want both Unauthenticated", s1.Code(), s2.Code())
+		}
+		if s1.Message() != s2.Message() {
+			t.Fatalf("messages differ (%q vs %q): token-type leak via gRPC status", s1.Message(), s2.Message())
 		}
 	})
 
@@ -126,15 +142,13 @@ func TestUnaryAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("nil verifier fails closed with Internal", func(t *testing.T) {
-		called := false
-		_, err := UnaryAuth(nil)(bearerCtx(), nil, info, okHandler(&called))
-		if status.Code(err) != codes.Internal {
-			t.Fatalf("code = %v, want Internal", status.Code(err))
-		}
-		if called {
-			t.Fatalf("handler must not run when misconfigured")
-		}
+	t.Run("nil verifier panics at construction (fail-fast wiring)", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatalf("UnaryAuth(nil) must panic at construction (security dep is required)")
+			}
+		}()
+		_ = UnaryAuth(nil)
 	})
 }
 

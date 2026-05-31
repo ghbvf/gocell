@@ -2,10 +2,25 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 )
+
+// counterErrProvider succeeds on everything except CounterVec.
+type counterErrProvider struct{ kernelmetrics.NopProvider }
+
+func (counterErrProvider) CounterVec(kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return nil, errors.New("counter register boom")
+}
+
+// histErrProvider succeeds on CounterVec but fails on HistogramVec.
+type histErrProvider struct{ kernelmetrics.NopProvider }
+
+func (histErrProvider) HistogramVec(kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	return nil, errors.New("histogram register boom")
+}
 
 func TestInMemoryGRPCCollector(t *testing.T) {
 	c := NewInMemoryGRPCCollector()
@@ -37,6 +52,18 @@ func TestNewGRPCProviderCollector(t *testing.T) {
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		c.RecordRPC(context.Background(), "_runtime", "/pkg.Svc/Do", "OK", 0.01)
+		c.RecordRPC(context.Background(), RuntimeCellSentinel, "/pkg.Svc/Do", "OK", 0.01)
+	})
+
+	t.Run("counter registration error surfaces", func(t *testing.T) {
+		if _, err := NewGRPCProviderCollector(counterErrProvider{}, ProviderCollectorConfig{}); err == nil {
+			t.Fatalf("expected counter registration error")
+		}
+	})
+
+	t.Run("histogram registration error surfaces", func(t *testing.T) {
+		if _, err := NewGRPCProviderCollector(histErrProvider{}, ProviderCollectorConfig{}); err == nil {
+			t.Fatalf("expected histogram registration error")
+		}
 	})
 }

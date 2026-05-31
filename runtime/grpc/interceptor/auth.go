@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -30,8 +31,9 @@ type authConfig struct {
 
 // WithPublicMethod installs a predicate marking RPC methods that bypass
 // authentication (e.g. health checks). The wiring of concrete public-method
-// sets is a later-PR concern; the default (nil predicate) is fail-closed — every
-// method requires authentication.
+// sets is a later-PR concern (tracked in backlog); the default (nil predicate)
+// is fail-closed — every method requires authentication. Passing a nil
+// predicate is a no-op; any previously installed predicate is retained.
 func WithPublicMethod(pred func(fullMethod string) bool) AuthOption {
 	return func(c *authConfig) {
 		if pred != nil {
@@ -43,7 +45,8 @@ func WithPublicMethod(pred func(fullMethod string) bool) AuthOption {
 // WithPasswordResetExempt installs a predicate marking RPC methods exempt from
 // the password-reset gate (the gRPC analog of the HTTP route-based exempt
 // matcher). The default (nil predicate) is fail-closed — a reset-required token
-// is rejected on every method.
+// is rejected on every method. Passing a nil predicate is a no-op; any
+// previously installed predicate is retained.
 func WithPasswordResetExempt(pred func(fullMethod string) bool) AuthOption {
 	return func(c *authConfig) {
 		if pred != nil {
@@ -59,19 +62,20 @@ func WithPasswordResetExempt(pred func(fullMethod string) bool) AuthOption {
 // to gRPC status codes (Unauthenticated / Unavailable / PermissionDenied),
 // mirroring the HTTP handleAuthRequest classification.
 //
-// The verifier is required; a nil verifier makes every request fail closed with
-// codes.Internal (a wiring bug surfaces loudly rather than authenticating
-// nobody silently).
+// The verifier is required: a nil verifier is a wiring bug that fails fast at
+// construction (programmer-error panic). For a security interceptor this is
+// correct — the server must refuse to start rather than boot and reject every
+// request, which would be indistinguishable from an outage.
 func UnaryAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.UnaryServerInterceptor {
-	misconfigured := validation.IsNilInterface(verifier)
+	if validation.IsNilInterface(verifier) {
+		panic(panicregister.Approved("interceptor-auth-verifier-required",
+			errcode.Assertion("interceptor.UnaryAuth: verifier is required")))
+	}
 	cfg := authConfig{}
 	for _, o := range opts {
 		o(&cfg)
 	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if misconfigured {
-			return nil, status.Error(codes.Internal, "auth interceptor misconfigured")
-		}
 		if cfg.publicMethod != nil && cfg.publicMethod(info.FullMethod) {
 			return handler(ctx, req)
 		}

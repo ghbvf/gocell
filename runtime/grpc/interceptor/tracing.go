@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -55,10 +54,11 @@ func UnaryTracing(tracer wrapper.Tracer) grpc.UnaryServerInterceptor {
 		code := status.Code(err)
 		span.SetAttributes(wrapper.Attr{Key: "rpc.grpc.status_code", Value: int64(code)})
 		if err != nil {
+			// status.Code never returns codes.OK for a non-nil error, so a
+			// failing RPC always marks the span as error. The error text is
+			// redacted before it reaches the span.
 			span.RecordError(redaction.RedactError(err))
-			if code != codes.OK {
-				span.SetStatus(wrapper.StatusError, code.String())
-			}
+			span.SetStatus(wrapper.StatusError, code.String())
 		}
 		return resp, err
 	}
@@ -91,6 +91,11 @@ func extractGRPCTraceContext(ctx context.Context) context.Context {
 	return withExtractedRemoteSpanContext(b3GRPCPropagator.Extract(ctx, carrier))
 }
 
+// withExtractedRemoteSpanContext mirrors a *remote* upstream trace id into
+// ctxkeys so the wrapper.Tracer reuses it as the parent instead of starting a
+// new root. Only remote span contexts qualify — a locally-started span context
+// must not be treated as cross-service propagation. Mirrors the same-named
+// helper in runtime/http/middleware/trace_propagation.go; keep them in sync.
 func withExtractedRemoteSpanContext(ctx context.Context) context.Context {
 	spanCtx := oteltrace.SpanContextFromContext(ctx)
 	if !spanCtx.IsValid() || !spanCtx.IsRemote() {
@@ -99,6 +104,8 @@ func withExtractedRemoteSpanContext(ctx context.Context) context.Context {
 	return ctxkeys.WithTraceID(ctx, spanCtx.TraceID().String())
 }
 
+// hasRemoteSpanContext reports whether ctx already carries a valid remote span
+// context — used to short-circuit the W3C-then-b3 fallback once W3C succeeds.
 func hasRemoteSpanContext(ctx context.Context) bool {
 	spanCtx := oteltrace.SpanContextFromContext(ctx)
 	return spanCtx.IsValid() && spanCtx.IsRemote()

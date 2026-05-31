@@ -9,15 +9,28 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// RuntimeCellSentinel is the framework "owner" used as the cell label for
+// requests that do not belong to any cell-owned namespace. It is the
+// transport-neutral home for the "_runtime" sentinel (the HTTP middleware
+// exposes the same value as RuntimeCellIDSentinel); the gRPC metrics
+// interceptor reads it from here so it does not depend on the HTTP middleware
+// package. See observability.md "HTTP Metrics cell Label".
+const RuntimeCellSentinel = "_runtime"
+
 // GRPCCollector records gRPC unary server request metrics. It mirrors the HTTP
 // Collector but emits a distinct metric family (grpc_server_*) with a
 // gRPC-shaped label set: method (the full RPC method, e.g.
 // "/pkg.Service/Method"), code (the gRPC status code name, e.g. "OK" /
-// "Internal"), and cell (the coarse owner dimension, "_runtime" until cell
-// attribution is wired for gRPC).
+// "Internal"), and cell (the coarse owner dimension, RuntimeCellSentinel until
+// cell attribution is wired for gRPC).
+//
+// The method is named RecordRPC (not RecordRequest like the HTTP Collector)
+// because the gRPC signature is intentionally distinct — code (a gRPC status
+// code name) replaces the HTTP status int + route; the two interfaces are not
+// unified.
 //
 // cellID is supplied by the caller; the collector never infers it. Use the
-// owning cell ID once gRPC cell attribution lands, or RuntimeCellIDSentinel
+// owning cell ID once gRPC cell attribution lands, or RuntimeCellSentinel
 // ("_runtime") for framework / unattributed traffic.
 type GRPCCollector interface {
 	RecordRPC(ctx context.Context, cellID, method, code string, durationSeconds float64)
@@ -35,7 +48,9 @@ var _ GRPCCollector = (*grpcProviderCollector)(nil)
 // NewGRPCProviderCollector builds a GRPCCollector that records through a
 // kernel-level metrics.Provider (Prometheus-backed, OTel-backed, Nop, …).
 // DurationBuckets default to DefaultDurationBuckets, shared with the HTTP
-// collector so dashboards use a uniform bucket layout across transports.
+// collector so dashboards use a uniform bucket layout across transports. The
+// default's finest bucket is 5ms; intra-mesh RPCs that cluster below that can
+// inject finer buckets via ProviderCollectorConfig.DurationBuckets.
 func NewGRPCProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig) (GRPCCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
@@ -80,7 +95,11 @@ func (c *grpcProviderCollector) RecordRPC(ctx context.Context, cellID, method, c
 	c.duration.With(labels).Observe(ctx, durationSeconds)
 }
 
-// GRPCRequestKey identifies one low-cardinality gRPC request metric series.
+// GRPCRequestKey identifies one gRPC request metric series. Method holds the
+// full RPC method ("/pkg.Service/Method"); its cardinality is bounded because
+// gRPC methods are a registration-time enumerated set (unlike an HTTP path,
+// which is collapsed to a route template to bound cardinality — gRPC needs no
+// such templating).
 type GRPCRequestKey struct {
 	Cell   string
 	Method string
