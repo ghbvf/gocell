@@ -686,6 +686,17 @@ const (
 	// KindInternal so an accidental leak produces a fail-closed 500 rather
 	// than a misleading 409.
 	ErrDistlockLockReleased Code = "ERR_DISTLOCK_LOCK_RELEASED"
+	// ErrDistlockLockOrphaned signals that Lock.Orphan() was called by the
+	// application: renewal has stopped and the backend key is NOT deleted —
+	// it expires naturally after ≤1×TTL, handing the lock to a competitor
+	// within one TTL window without a Release round-trip. Returned by
+	// Lock.Cause() after the manager calls Lock.markCause(ErrLockOrphaned).
+	// KindInternal matches ErrDistlockLockReleased: an orphaned lock surfacing
+	// to an HTTP handler is a server-side programming bug (caller chose
+	// bounded-TTL handoff deliberately); fail-closed 500 is preferable to a
+	// misleading 409 (which implies external conflict).
+	// ref: etcd-io/etcd client/v3/concurrency/session.go Session.Orphan
+	ErrDistlockLockOrphaned Code = "ERR_LOCK_ORPHANED"
 
 	// MetricsSchema error codes (tools/metricschema).
 	//

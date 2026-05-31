@@ -12,10 +12,17 @@
 //
 // Locker.Acquire returns a *Lock, NOT a context.Context. Caller-ctx is
 // consumed for the acquire RPC only; once held, the lock lifecycle is
-// independent of caller ctx and ends only via Release(), renewal failure,
-// or manager shutdown. This matches the prevailing industry convention
+// independent of caller ctx and ends only via Release(), Orphan(), renewal
+// failure, or manager shutdown. This matches the prevailing industry convention
 // (bsm/redislock, go-redsync, etcd, consul, Curator) and prevents the
 // misuse class identified in GH #20.
+//
+// Three per-lock terminal signals (Lock.Cause()):
+//   - ErrLockReleased — Release() was called: renewal stopped, backend key deleted.
+//   - ErrLockOrphaned — Orphan() was called: renewal stopped, backend key NOT
+//     deleted (expires naturally after ≤1×TTL). Use for graceful shutdown/handoff.
+//     ref: etcd-io/etcd client/v3/concurrency/session.go Session.Orphan
+//   - ErrLockLost     — renewal failed or ownership taken by another holder.
 //
 // # Resource model
 //

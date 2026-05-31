@@ -66,21 +66,22 @@ func (h *renewHeap) Pop() any {
 // Caller must ensure h.Len() > 0.
 func (h renewHeap) Peek() *heapItem { return h[0] }
 
-// eventKind distinguishes add and remove events sent to the manager.
+// eventKind distinguishes add, remove, and orphan events sent to the manager.
 type eventKind int
 
 const (
 	eventAdd    eventKind = iota
-	eventRemove           // initiated by release()
+	eventRemove           // initiated by release(): stops renewal AND calls Driver.Release
+	eventOrphan           // initiated by orphan(): stops renewal WITHOUT any Driver I/O
 )
 
 // managerEvent carries a single instruction to the manager goroutine.
 type managerEvent struct {
 	kind  eventKind
 	state *lockState // eventAdd: the new lock to register
-	id    lockID     // eventRemove: lock to unregister
-	// resultCh receives the Driver.Release result on eventRemove. Buffered
-	// cap=1; the manager writes exactly once and remove() reads exactly once;
+	id    lockID     // eventRemove / eventOrphan: lock to unregister
+	// resultCh receives the result on eventRemove/eventOrphan. Buffered
+	// cap=1; the manager writes exactly once and the caller reads exactly once;
 	// the channel is never closed.
 	resultCh chan error
 }
@@ -210,6 +211,17 @@ func (m *Manager) remove(id lockID) error {
 	return <-resultCh
 }
 
+// orphan asks the manager to stop renewing a lock WITHOUT calling Driver.Release.
+// The backend key expires naturally after ≤1×TTL. Blocks until the manager has
+// detached the lock from its heap (fast — no I/O). Always returns nil.
+// Idempotent: the sync.Once in the Acquire closure ensures orphan is called at
+// most once per lock.
+func (m *Manager) orphan(id lockID) {
+	resultCh := make(chan error, 1)
+	m.events <- managerEvent{kind: eventOrphan, id: id, resultCh: resultCh}
+	<-resultCh // wait for the manager to detach the lock
+}
+
 // run is the manager's main goroutine. It must not be called directly.
 // It is the sole writer of locks, h, and items.
 func (m *Manager) run() {
@@ -279,7 +291,7 @@ func (m *Manager) runOnce(
 }
 
 // dispatchEvent handles a single manager event. Returns true when the manager
-// should drain and exit (last lock released).
+// should drain and exit (last lock accounted for).
 func (m *Manager) dispatchEvent(
 	ev managerEvent,
 	locks map[lockID]*lockState,
@@ -291,32 +303,35 @@ func (m *Manager) dispatchEvent(
 		m.handleAdd(ev.state, locks, items, h)
 	case eventRemove:
 		m.handleRemove(ev, locks, items, h)
-		// Decrement the pending-releases counter. Each add() increments
-		// it; only the explicit remove() path decrements it. This ensures
-		// the manager stays alive until release() is called for every lock,
-		// even if some locks are already lost via renewal failure.
-		//
-		// Note: handleRemove spawns a background goroutine for Driver.Release
-		// I/O and signals ev.resultCh when done. The remove() caller blocks on
-		// resultCh, so by the time we decrement pendingReleases here the
-		// release goroutine has NOT necessarily finished yet — it may still be
-		// in-flight. We do NOT wait here; Drained() closes once all
-		// pendingReleases reach zero, which is sufficient since remove() itself
-		// returns the I/O result to the caller.
+		// Both eventRemove and eventOrphan account for one pending-release slot
+		// (each add() increments pendingReleases once).
+		return m.decPendingAndMaybeDrain()
+	case eventOrphan:
+		m.handleOrphan(ev, locks, items, h)
+		return m.decPendingAndMaybeDrain()
+	}
+	return false
+}
+
+// decPendingAndMaybeDrain decrements pendingReleases. If it reaches zero it
+// closes the drained channel, marks the manager stopped, and returns true
+// (signals runOnce to exit). The manager exits when all pending-release slots
+// have been accounted for (via either eventRemove or eventOrphan), regardless
+// of whether Driver.Release I/O goroutines from eventRemove are still in-flight.
+func (m *Manager) decPendingAndMaybeDrain() bool {
+	m.mu.Lock()
+	m.pendingReleases--
+	pending := m.pendingReleases
+	m.mu.Unlock()
+	if pending == 0 {
 		m.mu.Lock()
-		m.pendingReleases--
-		pending := m.pendingReleases
+		m.running = false
+		m.snapshotLocks = 0
+		drained := m.drained
 		m.mu.Unlock()
-		if pending == 0 {
-			m.mu.Lock()
-			m.running = false
-			m.snapshotLocks = 0
-			drained := m.drained
-			m.mu.Unlock()
-			slog.Debug("distlock: manager drained")
-			close(drained)
-			return true
-		}
+		slog.Debug("distlock: manager drained")
+		close(drained)
+		return true
 	}
 	return false
 }
@@ -434,24 +449,41 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 	m.mu.Unlock()
 }
 
+// detachLock removes the lock with the given id from the manager's heap and
+// locks map, sets its cause, and updates snapshotLocks under mu. Returns the
+// detached lockState (and ok=true) if the lock was found, or (nil, false) if it
+// was already absent (lost via renewal failure before the terminal event arrived).
+//
+// Called by handleRemove and handleOrphan to share the heap-detach path.
+func (m *Manager) detachLock(
+	id lockID,
+	cause error,
+	locks map[lockID]*lockState,
+	items map[lockID]*heapItem,
+	h *renewHeap,
+) (*lockState, bool) {
+	state, ok := locks[id]
+	if !ok {
+		return nil, false
+	}
+	delete(locks, id)
+	if item, has := items[id]; has {
+		heap.Remove(h, item.index)
+		delete(items, id)
+	}
+	m.mu.Lock()
+	m.snapshotLocks = len(locks)
+	m.mu.Unlock()
+	state.lock.markCause(cause)
+	return state, true
+}
+
 // handleRemove processes a remove event. Driver.Release I/O runs in a background
 // goroutine so the manager loop is not blocked. The result is sent to ev.resultCh
 // so the remove() caller can observe the outcome. ev.resultCh is always signaled
 // (even when the lock was already removed) so the caller never blocks indefinitely.
 func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
-	state, ok := locks[ev.id]
-	if ok {
-		delete(locks, ev.id)
-		if item, has := items[ev.id]; has {
-			heap.Remove(h, item.index)
-			delete(items, ev.id)
-		}
-		m.mu.Lock()
-		m.snapshotLocks = len(locks)
-		m.mu.Unlock()
-		state.lock.markCause(ErrLockReleased)
-	}
-
+	state, ok := m.detachLock(ev.id, ErrLockReleased, locks, items, h)
 	if ok {
 		// Driver.Release runs in a background goroutine so the manager loop is
 		// not blocked on I/O. A timeout is applied so a hung backend cannot leak
@@ -473,4 +505,18 @@ func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, ite
 		// Signal nil so the caller unblocks immediately.
 		ev.resultCh <- nil
 	}
+}
+
+// handleOrphan processes an orphan event. Unlike handleRemove it does NOT call
+// Driver.Release: the backend key is intentionally left in place and will expire
+// naturally after ≤1×TTL. This hands the lock to a competitor within one TTL
+// window without any backend I/O, so handleOrphan never blocks on reachability.
+// ev.resultCh is always signaled (nil) so the orphan() caller unblocks immediately.
+func (m *Manager) handleOrphan(ev managerEvent, locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
+	// detachLock removes the lock from the heap so renewal stops immediately.
+	// No Driver call is made — backend key expires on its own.
+	m.detachLock(ev.id, ErrLockOrphaned, locks, items, h)
+	// Always signal nil; orphan is fire-and-forget from the caller's perspective
+	// (no I/O result to return).
+	ev.resultCh <- nil
 }

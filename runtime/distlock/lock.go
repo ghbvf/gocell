@@ -14,11 +14,13 @@ import (
 // lock is held, its lifecycle is independent of the caller ctx. This matches
 // the prevailing industry convention (bsm/redislock, go-redsync, etcd
 // client/v3/concurrency, HashiCorp consul, Apache Curator): caller-ctx
-// cancellation does NOT release a held lock; only explicit Release() or
-// renewal failure (ErrLockLost) will end it. (Explicit Locker.Shutdown is
-// deferred to a future iteration — see ADR
+// cancellation does NOT release a held lock; only explicit Release(),
+// Orphan(), or renewal failure (ErrLockLost) will end it. (Explicit
+// Locker.Shutdown is deferred to a future iteration — see ADR
 // docs/architecture/202605200000-adr-distlock-lock-as-resource.md
-// §"Out of scope".)
+// §"Out of scope".) Per-lock Orphan() now exists for graceful shutdown/handoff
+// (bounded-TTL takeover, no release RPC). DISTLOCK-LOCKER-SHUTDOWN-01 tracks
+// the deferred locker-level Shutdown/Close path.
 //
 // Rationale: caller-ctx cancellation expresses "I no longer care about the
 // outcome of THIS request" — it does NOT express "release the resource I
@@ -84,17 +86,24 @@ type Lock struct {
 	valueLookup func(key any) any
 
 	// release is the closure provided by Acquire. Idempotent via sync.Once
-	// embedded in the closure; second call returns the cached error.
+	// embedded in the closure (shared with orphan); second call returns the
+	// cached error.
 	release func() error
+
+	// orphan is the closure provided by Acquire. Shares the same sync.Once
+	// as release so Orphan() and Release() are mutually exclusive: the first
+	// call wins; later calls of either are no-ops.
+	orphan func()
 }
 
 // newLock constructs a *Lock. Package-internal: only lockerImpl.Acquire and
 // tests construct Locks.
-func newLock(valueLookup func(key any) any, release func() error) *Lock {
+func newLock(valueLookup func(key any) any, release func() error, orphan func()) *Lock {
 	return &Lock{
 		done:        make(chan struct{}),
 		valueLookup: valueLookup,
 		release:     release,
+		orphan:      orphan,
 	}
 }
 
@@ -115,6 +124,8 @@ func (l *Lock) Done() <-chan struct{} { return l.done }
 //   - ErrLockReleased: Release() was called by the application.
 //   - ErrLockLost:     renewal failed or backend reports ownership taken by
 //     another holder.
+//   - ErrLockOrphaned: Orphan() was called by the application (renewal stopped;
+//     backend key expires naturally after ≤1×TTL).
 //
 // Cause never returns context.Cause(callerCtx) — caller-ctx cancellation
 // does not end the lock under the Lock-as-Resource contract.
@@ -139,6 +150,21 @@ func (l *Lock) Value(key any) any { return l.valueLookup(key) }
 // Release blocks until Driver.Release completes (bounded by
 // WithReleaseTimeout, default 5s).
 func (l *Lock) Release() error { return l.release() }
+
+// Orphan stops this lock's lease renewal WITHOUT deleting the backend key.
+// The key expires naturally after at most one TTL window, handing the lock to
+// a competitor within ≤1×TTL — no Release I/O is performed, so Orphan never
+// blocks on or fails due to backend reachability. After Orphan, Done() is
+// closed and Cause() reports ErrLockOrphaned.
+//
+// Orphan and Release are mutually exclusive and idempotent: the first call of
+// either wins; later calls of either are no-ops. Use Orphan for graceful
+// shutdown/handoff (bounded-TTL takeover, no release RPC); use Release for
+// immediate end-of-critical-section.
+//
+// ref: etcd-io/etcd client/v3/concurrency/session.go Session.Orphan — stop
+// keepalive, lease expires after TTL (vs Close which revokes immediately).
+func (l *Lock) Orphan() { l.orphan() }
 
 // markCause sets the cause and closes done exactly once.
 // Package-internal: invoked by manager handlers (handleRenew on lost,

@@ -56,10 +56,15 @@ type Locker interface {
 	// Lock-end signals (lock.Done() closed; lock.Cause() reports):
 	//   - ErrLockReleased — Release() was called (normal end-of-critical-section)
 	//   - ErrLockLost     — renewal failed or backend reports ownership taken
+	//   - ErrLockOrphaned — Orphan() was called (renewal stopped; key expires TTL)
 	//
 	// Notably absent: caller-ctx cancellation does NOT end the lock. If the
 	// caller wants the lock to end when its ctx is canceled, the caller must
 	// explicitly arrange a goroutine that does so.
+	//
+	// Per-lock Orphan() now exists for graceful shutdown/handoff (bounded-TTL
+	// takeover, no release RPC). Locker.Shutdown/Close remains deferred
+	// (DISTLOCK-LOCKER-SHUTDOWN-01).
 	//
 	// Idiomatic patterns for combining lock-end with caller-ctx:
 	//
@@ -223,6 +228,10 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 
 	id := l.mgr.nextID.Add(1)
 
+	// release and orphan share ONE sync.Once so Orphan() and Release() are
+	// mutually exclusive: whichever is called first wins; all later calls of
+	// either are no-ops. This eliminates the Release-after-Orphan and
+	// Orphan-after-Release races without additional locking.
 	var once sync.Once
 	var releaseErr error
 	release := func() error {
@@ -230,6 +239,11 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 			releaseErr = l.mgr.remove(id)
 		})
 		return releaseErr
+	}
+	orphan := func() {
+		once.Do(func() {
+			l.mgr.orphan(id)
+		})
 	}
 
 	// valueLookup exposes caller-ctx values (trace IDs, auth claims) via
@@ -240,7 +254,7 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	// satisfies "no context.Context field on long-lived struct").
 	// ref: stdlib context.WithoutCancel — Go 1.21+
 	valuesCtx := context.WithoutCancel(ctx)
-	lock := newLock(valuesCtx.Value, release)
+	lock := newLock(valuesCtx.Value, release, orphan)
 
 	state := &lockState{
 		id:    id,
