@@ -8,6 +8,7 @@
 package platformshared
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -50,26 +51,23 @@ var WellKnownDemoKeys = []string{
 	"l2-test-hmac-key-32-bytes-pad!!!",
 	"l2-audit-cursor-key-32-bytes!!!!",
 	"l2-config-cursor-key-32-bytes!!!",
+	// starter-dev-secret-32-bytes-ok!! is the hardcoded HMAC secret used by
+	// examples/corebundlestarter (devServiceSecret const). Must be caught by
+	// RejectDemoKey to prevent accidental copy to a real GOCELL_SERVICE_SECRET.
+	//
+	// #nosec G101 -- known public demo value; presence here is the security mechanism.
+	"starter-dev-secret-32-bytes-ok!!",
 }
 
 // RejectDemoKey returns an error in real mode when key matches a well-known
-// demo value.
+// demo value.  The comparison is performed with crypto/subtle.ConstantTimeCompare
+// to avoid timing oracles (startup, not hot-path).
 func RejectDemoKey(adapterMode, envName string, key []byte) error {
 	if !IsRealMode(adapterMode) {
 		return nil
 	}
 	for _, demo := range WellKnownDemoKeys {
-		if len(key) != len(demo) {
-			continue
-		}
-		match := true
-		for i := range key {
-			if key[i] != demo[i] {
-				match = false
-				break
-			}
-		}
-		if match {
+		if subtle.ConstantTimeCompare(key, []byte(demo)) == 1 {
 			return fmt.Errorf("%s is set to a well-known demo key; "+
 				"rotate to a fresh random 32-byte secret before running in real adapter mode", envName)
 		}
