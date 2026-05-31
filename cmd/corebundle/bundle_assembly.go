@@ -37,7 +37,7 @@ func buildAssembly(
 }
 
 func durabilityModeForTopology(topo bootstrap.Topology) outbox.DurabilityMode {
-	if topo.StorageBackend == "postgres" {
+	if topo.StorageBackend() == "postgres" {
 		return outbox.DurabilityDurable
 	}
 	return outbox.DurabilityDemo

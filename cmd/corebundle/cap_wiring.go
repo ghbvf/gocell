@@ -68,7 +68,7 @@ func provisionCapabilities(ctx context.Context, shared *composition.SharedDeps, 
 // In memory mode the pool is not opened and shared.PG stays nil; cell modules
 // fall through to their in-memory storage path.
 func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, locals *cmdLocals) error {
-	if shared.Topology.StorageBackend != "postgres" {
+	if shared.Topology.StorageBackend() != "postgres" {
 		return nil
 	}
 	pgCfg, err := LoadPGConfig("CONFIGCORE")

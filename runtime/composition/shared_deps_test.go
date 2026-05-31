@@ -1,6 +1,7 @@
 package composition
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -48,8 +50,12 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	claimer := idempotency.NewInMemClaimer(clk)
 	issuer, verifier := buildTestJWTPair(t, clk)
 
-	return &SharedDeps{
+	topo, err := bootstrap.NewTopology("", "memory", false)
+	require.NoError(t, err)
+
+	s, err := NewSharedDeps(SharedDeps{
 		Clock:                  clk,
+		Topology:               topo,
 		JWTIssuer:              issuer,
 		JWTVerifier:            verifier,
 		MetricsProvider:        mp,
@@ -57,7 +63,9 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		ConfigEventCollector:   cec,
 		EventbusCacheCollector: ebc,
 		ConsumerClaimer:        claimer,
-	}
+	})
+	require.NoError(t, err)
+	return s
 }
 
 // minimalSharedDeps is a helper alias used by builder_test.go.
@@ -68,12 +76,43 @@ func minimalSharedDeps(t *testing.T) *SharedDeps {
 
 func TestSharedDeps_Validate_ValidDeps(t *testing.T) {
 	s := buildTestSharedDeps(t)
-	require.NoError(t, s.Validate())
+	require.NoError(t, s.validate())
+}
+
+// TestSharedDeps_SealedMarker_Unexported asserts the validity marker is an
+// unexported field so a package-external literal cannot stamp it — the
+// sealed-construction invariant Build relies on.
+func TestSharedDeps_SealedMarker_Unexported(t *testing.T) {
+	rt := reflect.TypeOf(SharedDeps{})
+	f, ok := rt.FieldByName("valid")
+	require.True(t, ok, "SharedDeps must retain the 'valid' sealed-construction marker")
+	assert.False(t, f.IsExported(),
+		"SharedDeps.valid must be unexported so only NewSharedDeps can set it")
+}
+
+// TestNewSharedDeps_StampsAndValidates verifies NewSharedDeps rejects a missing
+// required field and stamps a valid dep set on success.
+func TestNewSharedDeps_StampsAndValidates(t *testing.T) {
+	s := buildTestSharedDeps(t)
+	// buildTestSharedDeps already routed through NewSharedDeps; the returned
+	// instance must satisfy validate and carry the marker.
+	require.NoError(t, s.validate())
+	assert.True(t, s.valid)
+
+	// Missing Topology (zero value) is rejected.
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	issuer, verifier := buildTestJWTPair(t, clk)
+	_, err := NewSharedDeps(SharedDeps{
+		Clock:       clk,
+		JWTIssuer:   issuer,
+		JWTVerifier: verifier,
+	})
+	require.Error(t, err)
 }
 
 func TestSharedDeps_Validate_NilReceiver(t *testing.T) {
 	var s *SharedDeps
-	err := s.Validate()
+	err := s.validate()
 	require.Error(t, err)
 }
 
@@ -123,7 +162,7 @@ func TestSharedDeps_Validate_MissingFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := buildTestSharedDeps(t)
 			tc.mutFn(s)
-			err := s.Validate()
+			err := s.validate()
 			assert.Error(t, err, "expected error for %s", tc.name)
 		})
 	}

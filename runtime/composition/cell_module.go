@@ -5,8 +5,40 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
+
+// ModuleExports is the typed, additive set of values a module hands to later
+// modules during [Builder.Build]. Each field is a sealed domain type; a zero
+// ModuleExports means "this module exported nothing". Builder threads exports
+// left-to-right (see [Builder.Build]): a later module reads what earlier modules
+// produced via the in parameter of [CellModule.Provide].
+//
+// This replaces the former mutable-bag handoff (a module writing a field on the
+// shared *SharedDeps mid-Build): the data flow is now an explicit typed return,
+// not a hidden field write, and a reader fails fast if its required upstream
+// export is absent.
+type ModuleExports struct {
+	// BootstrapLedgerStore is the sealed handle to the bootstrap auth-fail audit
+	// chain. It is produced by the auditcore module's Provide and consumed by the
+	// accesscore module's Provide (audit.NewBootstrapAuthFailObserver). auditcore
+	// MUST be registered before accesscore in [Builder.With]
+	// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01); accesscore fails fast if this
+	// is nil.
+	BootstrapLedgerStore *audit.BootstrapLedgerStore
+}
+
+// merge returns the combination of in and out: each non-zero field of out
+// overrides in, while zero fields of out preserve in. It lets Builder accumulate
+// exports across modules without any module clobbering an earlier producer's
+// value with a zero.
+func (in ModuleExports) merge(out ModuleExports) ModuleExports {
+	if out.BootstrapLedgerStore != nil {
+		in.BootstrapLedgerStore = out.BootstrapLedgerStore
+	}
+	return in
+}
 
 // CellModule is the contract by which a Cell declares itself to [Builder.Build].
 // Each Cell provides a single *_module.go file that implements this interface,
@@ -24,9 +56,11 @@ type CellModule interface {
 	ID() string
 
 	// Provide resolves Cell-specific dependencies from the shared context and
-	// returns:
+	// the accumulated upstream module exports, and returns:
 	//
 	//   - cell: the constructed Cell. Must be non-nil on success.
+	//   - exports: typed values this module hands to later modules (zero
+	//     [ModuleExports] if it exports nothing).
 	//   - opts: bootstrap.Options the Cell needs (e.g. WithManagedResource for
 	//     its PoolResource).
 	//   - provisional: ManagedResources opened during Provide that must be
@@ -41,10 +75,11 @@ type CellModule interface {
 	// returned opts via bootstrap.WithManagedResource so that bootstrap.Run
 	// manages their lifecycle on the happy path.
 	//
-	// Some modules pass cross-module state by writing to shared (e.g.
-	// SharedDeps.BootstrapLedgerStore is written by the auditcore module so
-	// that the accesscore module can read it).  When this pattern is used,
-	// [Builder.With] order matters: the writing module must be registered
-	// before the reading module.
-	Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error)
+	// Cross-module values flow through the in parameter (what earlier modules
+	// exported) and the returned exports (what this module hands downstream).
+	// A module that consumes an upstream export must be registered after its
+	// producer in [Builder.With]; consult [ModuleExports] field godoc for the
+	// ordering constraints.
+	Provide(ctx context.Context, shared *SharedDeps, in ModuleExports) (
+		cell.Cell, ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error)
 }

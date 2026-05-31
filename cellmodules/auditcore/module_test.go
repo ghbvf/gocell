@@ -42,11 +42,11 @@ func TestModule_Provide_MemMode(t *testing.T) {
 	ctx := context.Background()
 	shared := buildMemSharedDeps(t)
 
-	c, _, _, err := auditcore.Module().Provide(ctx, shared)
+	c, exports, _, _, err := auditcore.Module().Provide(ctx, shared, composition.ModuleExports{})
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	assert.Equal(t, "auditcore", c.ID())
-	assert.NotNil(t, shared.BootstrapLedgerStore, "Provide must populate BootstrapLedgerStore")
+	assert.NotNil(t, exports.BootstrapLedgerStore, "Provide must export BootstrapLedgerStore")
 }
 
 // buildMemSharedDeps constructs a memory-mode *composition.SharedDeps for tests.
@@ -71,9 +71,12 @@ func buildMemSharedDeps(t *testing.T) *composition.SharedDeps {
 	ring, err := auth.NewHMACKeyRing([]byte("test-hmac-key-for-internal-ring!"), nil)
 	require.NoError(t, err)
 
-	shared := &composition.SharedDeps{
+	topo, err := bootstrap.NewTopology("", "memory", false)
+	require.NoError(t, err)
+
+	shared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                  clk,
-		Topology:               bootstrap.Topology{AdapterMode: "dev", StorageBackend: "memory"},
+		Topology:               topo,
 		JWTIssuer:              issuer,
 		JWTVerifier:            verifier,
 		MetricsProvider:        kernelmetrics.NopProvider{},
@@ -87,7 +90,7 @@ func buildMemSharedDeps(t *testing.T) *composition.SharedDeps {
 		HealthHTTPAddr:         "127.0.0.1:9091",
 		VerboseDisabled:        true,
 		ConfigStaleCipherInc:   func() {},
-	}
-	require.NoError(t, shared.Validate())
+	})
+	require.NoError(t, err)
 	return shared
 }

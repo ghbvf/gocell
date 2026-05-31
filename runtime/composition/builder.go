@@ -55,10 +55,11 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // a ready-to-run [App].
 //
 // Flow:
-//  1. Nil-guard and [SharedDeps.Validate] — startup invariant check.
+//  1. Guard that shared was produced by [NewSharedDeps] (sealed-construction
+//     marker check) and that runtimeOptsFn is non-nil — startup invariants.
 //  2. For each module: nil-guard, call [CellModule.Provide], accumulate cells +
-//     cellOpts + provisional ManagedResources, with LIFO Close(ctx) rollback on
-//     any failure; nil-cell guard.
+//     cellOpts + provisional ManagedResources + merge typed exports, with LIFO
+//     Close(ctx) rollback on any failure; nil-cell guard.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
 //  4. allOpts := runtimeOpts ++ cellOpts.
@@ -69,25 +70,36 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // on all accumulated resources in reverse order (LIFO) before returning the error.
 // This prevents resource leaks when the assembly cannot complete.
 //
-// Note: module order is significant when modules share fields via *SharedDeps.
-// A module that writes a shared field during Provide (e.g. auditcore writing
-// SharedDeps.BootstrapLedgerStore) must appear before any module that reads that
-// field.  Consult each SharedDeps field godoc for ordering constraints.
+// Note: module order is significant when a module consumes another's typed
+// [ModuleExports]. A module that produces an export (e.g. auditcore producing
+// ModuleExports.BootstrapLedgerStore) must appear before any module that reads
+// it via the in parameter. Consult each ModuleExports field godoc for ordering
+// constraints.
 //
 // ref: uber-go/fx fx.New(opts...) — single assembly entry point used by both
 // production (main) and tests (fxtest.New).
 // ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
 // Manager.Start(ctx) error.
+// validateBuildInputs enforces the two Build preconditions: shared must have been
+// produced by [NewSharedDeps] (sealed-construction marker) and runtimeOptsFn must
+// be non-nil (error-first public API).
+func validateBuildInputs(shared *SharedDeps, runtimeOptsFn RuntimeOptionsFunc) error {
+	if shared == nil || !shared.valid {
+		return fmt.Errorf("composition.Builder.Build: shared deps must be built via composition.NewSharedDeps")
+	}
+	if runtimeOptsFn == nil {
+		return fmt.Errorf("composition.Builder.Build: runtimeOptsFn must be non-nil")
+	}
+	return nil
+}
+
 func (b *Builder) Build(
 	ctx context.Context,
 	shared *SharedDeps,
 	runtimeOptsFn RuntimeOptionsFunc,
 ) (*App, error) {
-	if shared == nil {
-		return nil, fmt.Errorf("composition.Builder.Build: shared deps must be non-nil")
-	}
-	if err := shared.Validate(); err != nil {
-		return nil, fmt.Errorf("composition.Builder.Build: shared deps validation: %w", err)
+	if err := validateBuildInputs(shared, runtimeOptsFn); err != nil {
+		return nil, err
 	}
 
 	var cells []cell.Cell
@@ -105,12 +117,13 @@ func (b *Builder) Build(
 		}
 	}
 
+	var exports ModuleExports
 	for _, m := range b.modules {
 		if m == nil {
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module list contains nil")
 		}
-		c, mOpts, mRes, err := m.Provide(ctx, shared)
+		c, out, mOpts, mRes, err := m.Provide(ctx, shared, exports)
 		if err != nil {
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module %q Provide: %w", m.ID(), err)
@@ -123,6 +136,7 @@ func (b *Builder) Build(
 		cells = append(cells, c)
 		cellOpts = append(cellOpts, mOpts...)
 		provisional = append(provisional, mRes...)
+		exports = exports.merge(out)
 	}
 
 	runtimeOpts, err := runtimeOptsFn(cells)

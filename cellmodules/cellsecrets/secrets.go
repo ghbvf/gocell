@@ -11,6 +11,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,11 +30,14 @@ func IsRealMode(adapterMode string) bool {
 	return adapterMode == RealAdapterMode
 }
 
-// WellKnownDemoKeys is the append-only list of key material shipped as public
-// dev defaults. Real-mode startup must refuse any of these values.
+// wellKnownDemoKeys is the append-only list of key material shipped as public
+// dev defaults. Real-mode startup must refuse any of these values. It is
+// unexported so this security-critical denylist cannot be reassigned or mutated
+// by importers; read it via WellKnownDemoKeys() (returns a copy) or the
+// IsWellKnownDemoKey predicate.
 //
 // DO NOT COPY TO PRODUCTION — these values are public in git history.
-var WellKnownDemoKeys = []string{
+var wellKnownDemoKeys = []string{
 	"dev-hmac-key-replace-in-prod!!!!",
 	"dev-hmac-bootstrap-replace-32b!!",
 	"gocell-demo-AUDIT--CORE-key-32!!",
@@ -59,18 +63,34 @@ var WellKnownDemoKeys = []string{
 	"starter-dev-secret-32-bytes-ok!!",
 }
 
+// WellKnownDemoKeys returns a copy of the demo-key denylist for callers that
+// must enumerate every value (e.g. tests asserting each is rejected in real
+// mode). Returning a clone prevents mutation of the unexported backing slice.
+func WellKnownDemoKeys() []string {
+	return slices.Clone(wellKnownDemoKeys)
+}
+
+// IsWellKnownDemoKey reports whether key matches a shipped public dev default.
+// The comparison uses crypto/subtle.ConstantTimeCompare to avoid timing oracles
+// (startup, not hot-path).
+func IsWellKnownDemoKey(key []byte) bool {
+	for _, demo := range wellKnownDemoKeys {
+		if subtle.ConstantTimeCompare(key, []byte(demo)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // RejectDemoKey returns an error in real mode when key matches a well-known
-// demo value.  The comparison is performed with crypto/subtle.ConstantTimeCompare
-// to avoid timing oracles (startup, not hot-path).
+// demo value.
 func RejectDemoKey(adapterMode, envName string, key []byte) error {
 	if !IsRealMode(adapterMode) {
 		return nil
 	}
-	for _, demo := range WellKnownDemoKeys {
-		if subtle.ConstantTimeCompare(key, []byte(demo)) == 1 {
-			return fmt.Errorf("%s is set to a well-known demo key; "+
-				"rotate to a fresh random 32-byte secret before running in real adapter mode", envName)
-		}
+	if IsWellKnownDemoKey(key) {
+		return fmt.Errorf("%s is set to a well-known demo key; "+
+			"rotate to a fresh random 32-byte secret before running in real adapter mode", envName)
 	}
 	return nil
 }

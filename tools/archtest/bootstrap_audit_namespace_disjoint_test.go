@@ -4,7 +4,7 @@
 // Medium archtest backstop for issue #1121 / ADR 202605270230 — the audit chain
 // physical-isolation invariant.
 //
-// The Hard upstream defense is the type system: SharedDeps.BootstrapLedgerStore
+// The Hard upstream defense is the type system: ModuleExports.BootstrapLedgerStore
 // is *audit.BootstrapLedgerStore, NewBootstrapLedgerStore enforces non-nil,
 // and audit.AppendBootstrapAuthFail / NewBootstrapAuthFailObserver accept only
 // the typed wrapper — passing an auditcore-namespace ledger.Store is a compile

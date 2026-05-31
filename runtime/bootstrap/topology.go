@@ -21,20 +21,62 @@ const adapterInfoInMemory = "in-memory"
 // validates once and is passed everywhere.
 // ref: go-kratos/kratos config.Config — full-lifecycle configuration object
 // passed through the entire runtime stack.
+//
+// Sealed construction: all fields are unexported, so a package-external struct
+// literal cannot populate (let alone mis-populate) a Topology. The only ways to
+// obtain a non-zero Topology are NewTopology / TopologyFromEnv, both of which run
+// validate(); the illegal postgres+non-real combination is therefore
+// unconstructable outside this package. The zero value Topology{} reads as
+// dev/memory (adapterMode "", storageBackend "" → treated as memory) and is safe.
+// Field set frozen by TestTopologyZeroExportedFields (TOPOLOGY-SEALED-FIELD-FROZEN-01).
 type Topology struct {
-	// AdapterMode mirrors GOCELL_ADAPTER_MODE: "" (dev) or "real" (production).
-	AdapterMode string
+	// adapterMode mirrors GOCELL_ADAPTER_MODE: "" (dev) or "real" (production).
+	adapterMode string
 
-	// StorageBackend mirrors GOCELL_CELL_ADAPTER_MODE: "memory" or "postgres".
-	StorageBackend string
+	// storageBackend mirrors GOCELL_CELL_ADAPTER_MODE: "memory" or "postgres".
+	storageBackend string
 
-	// SinglePodReplayProtection is set when GOCELL_SINGLE_POD=1, acknowledging
+	// singlePodReplayProtection is set when GOCELL_SINGLE_POD=1, acknowledging
 	// that the deployment is single-pod and in-memory replay protection is
 	// sufficient. In real adapter mode, an in-memory NonceStore is rejected at
 	// startup unless this field is true or a distributed store is injected.
 	// Multi-pod deployments must leave this unset and inject a distributed
 	// NonceStore via auth.WithServiceTokenNonceStore.
-	SinglePodReplayProtection bool
+	singlePodReplayProtection bool
+}
+
+// AdapterMode returns the resolved GOCELL_ADAPTER_MODE: "" (dev) or "real".
+func (t Topology) AdapterMode() string { return t.adapterMode }
+
+// StorageBackend returns the resolved GOCELL_CELL_ADAPTER_MODE: "memory" or
+// "postgres". A zero-value Topology returns "" (treated as memory by consumers).
+func (t Topology) StorageBackend() string { return t.storageBackend }
+
+// SinglePodReplayProtection reports whether the deployment opted into single-pod
+// in-memory replay protection (GOCELL_SINGLE_POD=1).
+func (t Topology) SinglePodReplayProtection() bool { return t.singlePodReplayProtection }
+
+// NewTopology validates an adapter-mode / storage-backend / single-pod
+// combination and returns the sealed Topology. An empty storageBackend is
+// normalized to "memory" (the dev default). The postgres+non-real coupling and
+// the AdapterMode allowlist are enforced via validate(); invalid combinations
+// return an error and a zero Topology — they cannot be constructed.
+//
+// This is the single validating constructor; TopologyFromEnv delegates here so
+// the normalization and coupling rules live in exactly one place.
+func NewTopology(adapterMode, storageBackend string, singlePod bool) (Topology, error) {
+	if storageBackend == "" {
+		storageBackend = "memory"
+	}
+	t := Topology{
+		adapterMode:               adapterMode,
+		storageBackend:            storageBackend,
+		singlePodReplayProtection: singlePod,
+	}
+	if err := t.validate(); err != nil {
+		return Topology{}, err
+	}
+	return t, nil
 }
 
 // TopologyFromEnv reads GOCELL_CELL_ADAPTER_MODE and GOCELL_ADAPTER_MODE,
@@ -47,27 +89,12 @@ type Topology struct {
 //
 // ref: go-zero serviceconf — single config drives all gates; misalignment is fatal.
 func TopologyFromEnv() (Topology, error) {
-	storageBackend := os.Getenv("GOCELL_CELL_ADAPTER_MODE")
-	if storageBackend == "" {
-		storageBackend = "memory"
-	}
-
-	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
-
 	singlePod := os.Getenv("GOCELL_SINGLE_POD")
-	singlePodReplayProtection := singlePod == "1" || singlePod == "true"
-
-	topo := Topology{
-		AdapterMode:               adapterMode,
-		StorageBackend:            storageBackend,
-		SinglePodReplayProtection: singlePodReplayProtection,
-	}
-
-	if err := topo.validate(); err != nil {
-		return Topology{}, err
-	}
-
-	return topo, nil
+	return NewTopology(
+		os.Getenv("GOCELL_ADAPTER_MODE"),
+		os.Getenv("GOCELL_CELL_ADAPTER_MODE"),
+		singlePod == "1" || singlePod == "true",
+	)
 }
 
 // validate checks that the topology is self-consistent.
@@ -89,21 +116,21 @@ func TopologyFromEnv() (Topology, error) {
 // ref: go-zero core/conf/config.go validate(v) — single validation gate at
 // the unmarshal boundary, not deferred to downstream consumers.
 func (t Topology) validate() error {
-	switch t.AdapterMode {
+	switch t.adapterMode {
 	case "", "real":
 		// allowlisted; proceed to storage coupling check.
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown GOCELL_ADAPTER_MODE; known values: \"\" (unset = dev) or \"real\"",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("mode=%q", t.AdapterMode))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("mode=%q", t.adapterMode))))
 	}
 
-	switch t.StorageBackend {
+	switch t.storageBackend {
 	case "memory":
 		// memory allows any adapter mode
 		return nil
 	case "postgres":
-		if t.AdapterMode != "real" {
+		if t.adapterMode != "real" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real "+
 					"(real persistence demands production key loading, "+
@@ -113,7 +140,7 @@ func (t Topology) validate() error {
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown GOCELL_CELL_ADAPTER_MODE; known values: \"\" (unset = memory) or \"postgres\"",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("backend=%q", t.StorageBackend))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("backend=%q", t.storageBackend))))
 	}
 }
 
@@ -131,7 +158,7 @@ func (t Topology) validate() error {
 // backend determines whether a PG pool is owned, while this predicate
 // determines whether anonymous control-plane access is rejected.
 func (t Topology) RequireProductionControlPlane() bool {
-	return t.AdapterMode == "real"
+	return t.adapterMode == "real"
 }
 
 // AdapterInfo returns a map of topology metadata for the /readyz?verbose
@@ -142,13 +169,13 @@ func (t Topology) RequireProductionControlPlane() bool {
 func (t Topology) AdapterInfo() map[string]string {
 	storageMode := adapterInfoInMemory
 	outboxStorage := adapterInfoInMemory
-	if t.StorageBackend == "postgres" {
+	if t.storageBackend == "postgres" {
 		storageMode = "postgres"
 		outboxStorage = "postgres"
 	}
 
 	effectiveMode := adapterInfoInMemory
-	if t.AdapterMode == "real" {
+	if t.adapterMode == "real" {
 		effectiveMode = "real-keys-" + storageMode + "-storage"
 	}
 

@@ -6,6 +6,18 @@
 > 读者: 要给某个 cell 接 PostgreSQL 的开发者
 > 前置阅读: docs/architecture/ 里的分层规则 + docs/ops/env-vars.md 的 env 命名表
 
+> ⚠️ **组装层已迁移（#1085）**：本文档 Chapter 1 起描述的 `BuildApp(...)` +
+> `cmd/corebundle/<cell>_module.go` + `bundle_<cell>_storage.go` 模式**已废弃**。
+> 平台 cell 的 composition module 现在活在 `cellmodules/<cell>/module.go`，实现公开的
+> `composition.CellModule` 接口（`Provide(ctx, shared, in ModuleExports) (cell.Cell,
+> ModuleExports, []bootstrap.Option, []lifecycle.ManagedResource, error)`），由
+> `composition.New().With(modules...).Build(ctx, shared, runtimeOptsFn)` 组装；
+> `SharedDeps` 经 `composition.NewSharedDeps(...)` 构造（sealed marker），`Topology`
+> 经 `bootstrap.NewTopology(...)` 构造（postgres 强制 real）。**canonical 参考实现见
+> `cellmodules/configcore/module.go` + `cellmodules/configcore/storage.go`**。下文的
+> PG storage 接线逻辑（pool / TxManager / OutboxWriter / migration）仍然准确，只是
+> 承载它的文件位置与组装入口变了——按上述新位置套用。
+
 ---
 
 ## Chapter 1 — 模型总览

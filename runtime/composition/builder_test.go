@@ -35,13 +35,13 @@ type fakeCellModule struct {
 
 func (f *fakeCellModule) ID() string { return f.id }
 func (f *fakeCellModule) Provide(
-	_ context.Context, _ *SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	_ context.Context, _ *SharedDeps, _ ModuleExports,
+) (cell.Cell, ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	f.called = true
 	if f.provideErr != nil {
-		return nil, nil, nil, f.provideErr
+		return nil, ModuleExports{}, nil, nil, f.provideErr
 	}
-	return f.cell, f.opts, f.mres, nil
+	return f.cell, ModuleExports{}, f.opts, f.mres, nil
 }
 
 // closedOrder captures the sequence of Close calls for LIFO verification.
@@ -193,6 +193,31 @@ func TestBuilder_NilSharedDeps(t *testing.T) {
 		return nil, nil
 	})
 	require.Error(t, err)
+}
+
+// TestBuilder_UnsealedSharedDeps_Rejected verifies the sealed-construction
+// invariant: a *SharedDeps not produced by NewSharedDeps (no validity marker)
+// is rejected by Build even if all its fields are populated.
+func TestBuilder_UnsealedSharedDeps_Rejected(t *testing.T) {
+	ctx := context.Background()
+	// Bare literal: exported fields can be set, but the unexported marker cannot,
+	// so Build must reject it.
+	bare := &SharedDeps{}
+	_, err := New().Build(ctx, bare, func([]cell.Cell) ([]bootstrap.Option, error) {
+		return nil, nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NewSharedDeps")
+}
+
+// TestBuilder_NilRuntimeOptsFn_Rejected verifies Build returns an error (not a
+// panic) when runtimeOptsFn is nil — error-first public API.
+func TestBuilder_NilRuntimeOptsFn_Rejected(t *testing.T) {
+	ctx := context.Background()
+	shared := minimalSharedDeps(t)
+	_, err := New().Build(ctx, shared, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runtimeOptsFn")
 }
 
 // TestBuilder_With_Accumulates verifies that With() calls accumulate modules.

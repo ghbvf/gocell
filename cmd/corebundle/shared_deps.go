@@ -37,7 +37,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	if err != nil {
 		return nil, nil, err
 	}
-	adapterMode := topo.AdapterMode
+	adapterMode := topo.AdapterMode()
 
 	jwt, err := buildJWTDeps(adapterMode, clk)
 	if err != nil {
@@ -109,7 +109,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// must not reach runtime/composition or platform/configcore.
 	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
 	cfgKeyProvider, cfgStaleCipherInc, err := buildConfigCoreKeyProvider(
-		topo.StorageBackend, adapterMode,
+		topo.StorageBackend(), adapterMode,
 		cfgProviderName, cfgMasterKey, cfgPrevMasterKey,
 		clk,
 		metricsDeps.PromStack.registry,
@@ -122,7 +122,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// Build composition.SharedDeps (public, interface-only fields consumed by
 	// platform cell modules). Prometheus adapter types, internalGuard, and
 	// consumerClaimerKind stay in cmdLocals.
-	compShared := &composition.SharedDeps{
+	compShared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                  clk,
 		Topology:               topo,
 		JWTIssuer:              jwt.issuer,
@@ -143,10 +143,8 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		ProjectRoot:            os.Getenv("GOCELL_PROJECT_ROOT"),
 		ConfigKeyProvider:      cfgKeyProvider,
 		ConfigStaleCipherInc:   cfgStaleCipherInc,
-	}
-
-	// Validate composition.SharedDeps (cross-cutting interface-level fields).
-	if err := compShared.Validate(); err != nil {
+	})
+	if err != nil {
 		slog.Warn("corebundle: SharedDeps validation failed",
 			slog.String("requested_mode", adapterMode),
 			slog.String("effective_mode", topo.AdapterInfo()["mode"]))

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,14 +11,14 @@ import (
 )
 
 func TestRejectDemoKey_DevMode_AlwaysPasses(t *testing.T) {
-	for _, demo := range cellsecrets.WellKnownDemoKeys {
+	for _, demo := range cellsecrets.WellKnownDemoKeys() {
 		err := cellsecrets.RejectDemoKey("", "X_TEST_ENV", []byte(demo))
 		require.NoError(t, err, "dev mode must not reject demo key %q", demo)
 	}
 }
 
 func TestRejectDemoKey_RealMode_RejectsEachDemoValue(t *testing.T) {
-	for _, demo := range cellsecrets.WellKnownDemoKeys {
+	for _, demo := range cellsecrets.WellKnownDemoKeys() {
 		t.Run(demo, func(t *testing.T) {
 			err := cellsecrets.RejectDemoKey("real", "X_TEST_ENV", []byte(demo))
 			require.Error(t, err, "real mode must reject demo key %q", demo)
@@ -53,7 +52,7 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	}
 	for _, dd := range devDefaults {
 		t.Run(dd, func(t *testing.T) {
-			if slices.Contains(cellsecrets.WellKnownDemoKeys, dd) {
+			if cellsecrets.IsWellKnownDemoKey([]byte(dd)) {
 				return
 			}
 			t.Errorf("dev default %q is not in WellKnownDemoKeys — real mode will silently accept it; add to cellsecrets", dd)
@@ -65,7 +64,7 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 // hex-encoded master key is listed in WellKnownDemoKeys.
 func TestMasterKeyDemoHex_IsInWellKnownDemoKeys(t *testing.T) {
 	const demoHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if slices.Contains(cellsecrets.WellKnownDemoKeys, demoHex) {
+	if cellsecrets.IsWellKnownDemoKey([]byte(demoHex)) {
 		return
 	}
 	t.Errorf("demo master key hex %q not found in WellKnownDemoKeys — real mode will accept it; add to cellsecrets", demoHex)
@@ -81,8 +80,9 @@ func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
 		"gocell-demo-ORDER-CELL-key-32b!!", // examples/todoorder/cells/ordercell/cell.go
 		"gocell-demo-DEVICE-CELL-key-32!!", // examples/iotdevice/cells/devicecell/cell.go
 	}
-	wellKnownSet := make(map[string]bool, len(cellsecrets.WellKnownDemoKeys))
-	for _, k := range cellsecrets.WellKnownDemoKeys {
+	demoKeys := cellsecrets.WellKnownDemoKeys()
+	wellKnownSet := make(map[string]bool, len(demoKeys))
+	for _, k := range demoKeys {
 		wellKnownSet[k] = true
 	}
 	for _, ck := range cellDemoKeys {

@@ -98,10 +98,10 @@ func runStarter(ctx context.Context) error {
 func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, error) {
 	clk := clock.Real()
 
-	// Topology: dev adapter mode, in-memory storage backend.
-	topo := bootstrap.Topology{
-		AdapterMode:    "dev",
-		StorageBackend: "memory",
+	// Topology: dev adapter mode (empty string), in-memory storage backend.
+	topo, err := bootstrap.NewTopology("", "memory", false)
+	if err != nil {
+		return nil, fmt.Errorf("topology: %w", err)
 	}
 
 	eb := eventbus.New(clk)
@@ -129,7 +129,7 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 		return nil, fmt.Errorf("HMAC key ring: %w", err)
 	}
 
-	shared := &composition.SharedDeps{
+	shared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                  clk,
 		Topology:               topo,
 		JWTIssuer:              jwtIssuer,
@@ -146,10 +146,9 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 		VerboseDisabled:        true,
 		ConfigStaleCipherInc:   func() {}, // no-op in this example
 		// PG / Redis are nil → all platform modules take the in-memory path.
-	}
-
-	if err := shared.Validate(); err != nil {
-		return nil, fmt.Errorf("SharedDeps.Validate: %w", err)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("composition.NewSharedDeps: %w", err)
 	}
 	return shared, nil
 }

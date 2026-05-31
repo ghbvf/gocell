@@ -73,11 +73,11 @@ func TestStarterBootsAndRespondsHealthz(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use unique test ports to avoid conflicts with a running corebundlestarter.
+	// Listener addresses are not validated fields, and the sealed-construction
+	// marker set by NewSharedDeps survives this post-construction override.
 	shared.PrimaryHTTPAddr = "127.0.0.1:0"
 	shared.InternalHTTPAddr = "127.0.0.1:0"
 	shared.HealthHTTPAddr = "127.0.0.1:0"
-	// Re-validate after address override (Validate only checks required fields).
-	require.NoError(t, shared.Validate())
 
 	app, err := composition.New().
 		With(

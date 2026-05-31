@@ -27,7 +27,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -645,10 +644,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t 
 	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	shared := &composition.SharedDeps{
-		Topology: bootstrap.Topology{
-			AdapterMode:               "real",
-			SinglePodReplayProtection: true,
-		},
+		Topology: mkTopo("real", "", true),
 	}
 	guard := guardWithStore(t, store)
 	locals := &cmdLocals{internalGuard: guard}
@@ -684,30 +680,21 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 		{
 			name: "dev mode (single-pod ack ignored)",
 			shared: &composition.SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "",
-					SinglePodReplayProtection: true,
-				},
+				Topology: mkTopo("", "", true),
 			},
 			locals: &cmdLocals{internalGuard: guardWithStore(t, inMemStore)},
 		},
 		{
 			name: "real mode without GOCELL_SINGLE_POD (multi-pod path; validateCorebundleDeps would reject upstream)",
 			shared: &composition.SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "real",
-					SinglePodReplayProtection: false,
-				},
+				Topology: mkTopo("real", "", false),
 			},
 			locals: &cmdLocals{internalGuard: guardWithStore(t, inMemStore)},
 		},
 		{
 			name: "nil internal guard",
 			shared: &composition.SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "real",
-					SinglePodReplayProtection: true,
-				},
+				Topology: mkTopo("real", "", true),
 			},
 			locals: &cmdLocals{internalGuard: nil},
 		},
@@ -721,10 +708,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 			// ns == nil branch in logSinglePodNonceStoreAcknowledgement — must stay silent.
 			name: "non-nil guard with nil nonce store",
 			shared: &composition.SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "real",
-					SinglePodReplayProtection: true,
-				},
+				Topology: mkTopo("real", "", true),
 			},
 			locals: &cmdLocals{internalGuard: guardWithStore(t, nil)},
 		},

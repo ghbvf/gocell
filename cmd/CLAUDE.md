@@ -24,20 +24,28 @@ cmd/corebundle/ 是 Composition Root，负责组装所有 Cell、配置三个 li
 
 ```go
 // 第一层：环境变量注入 + 模块工厂
+// LoadSharedDepsFromEnv 内部经 composition.NewSharedDeps(...) 构造并校验，返回
+// 已盖 sealed-construction marker 的 *composition.SharedDeps（裸字面量 Build 会拒）。
 shared, _ := LoadSharedDepsFromEnv(ctx)
-modules, _ := corebundleModules(assemblyCellIDs)
+modules, _ := corebundleModules(assemblyID, assemblyCellIDs)
 
-// 第二层：BuildApp 组装 cells + bootstrap.Option（失败按 LIFO 回滚资源）
-cells, cellOpts, _ := BuildApp(ctx, shared, modules...)
-asm, _ := buildAssembly(shared.PromStack, assemblyID, mode, cells...)
-
-// 第三层：三 listener + bootstrap
-opts, err := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+// 第二层：公开 composition API 组装 cells + bootstrap.Option（失败按 LIFO 回滚资源）。
+// RuntimeOptionsFunc 在 cmd 内构造 assembly + 三 listener auth（composition 层禁构造 AuthPlan）。
+app, err := composition.New().
+    With(modules...).
+    Build(ctx, shared, func(cells []cell.Cell) ([]bootstrap.Option, error) {
+        asm, err := buildAssembly(shared.PromStack, assemblyID, mode, cells...)
+        if err != nil {
+            return nil, err
+        }
+        return defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+    })
 if err != nil {
-    return fmt.Errorf("defaultRuntimeOptions: %w", err)
+    return fmt.Errorf("composition.Build: %w", err)
 }
-opts = append(opts, cellOpts...)
-bootstrap.New(opts...).Run(ctx)
+
+// 第三层：运行
+app.Run(ctx)
 ```
 
 ## Listener 配置
@@ -75,16 +83,22 @@ bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
 
 ## CellModule 接口
 
-每个模块实现 `CellModule`，提供 Cell + bootstrap.Option + ManagedResource：
+每个模块实现 `composition.CellModule`，提供 Cell + 向下游模块传递的 typed
+`ModuleExports` + bootstrap.Option + ManagedResource：
 
 ```go
 type CellModule interface {
     ID() string
-    Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []lifecycle.ManagedResource, error)
+    Provide(ctx context.Context, shared *SharedDeps, in ModuleExports) (
+        cell.Cell, ModuleExports, []bootstrap.Option, []lifecycle.ManagedResource, error)
 }
 ```
 
-参考实现：`access_module.go`、`config_module.go`、`audit_module.go`。
+`in` 是先注册模块的累积导出；返回值 `ModuleExports` 是本模块向下游交付的 typed
+值（如 auditcore 产出 `BootstrapLedgerStore`，accesscore 经 `in` 消费并在缺失时
+fail-fast）。不再经可变 `*SharedDeps` 字段做 mid-Build handoff。
+
+参考实现：`cellmodules/{accesscore,auditcore,configcore}/module.go`。
 
 ## SharedDeps 关键字段
 
@@ -102,5 +116,5 @@ type CellModule interface {
 |------|------|---------|
 | `GOCELL_JWT_ISSUER` | JWT iss claim | fail-fast |
 | `GOCELL_SERVICE_SECRET` | /internal/v1/* HMAC 密钥（≥32 字节） | fail-fast |
-| `GOCELL_CELL_ADAPTER_MODE` | `dev`（默认）/ `real` | — |
-| `GOCELL_STORAGE_BACKEND` | `memory`（默认）/ `postgres` | — |
+| `GOCELL_ADAPTER_MODE` | 适配器模式：`""`（dev，默认）/ `real` | — |
+| `GOCELL_CELL_ADAPTER_MODE` | 存储后端：`memory`（默认）/ `postgres`（`postgres` 经 Topology 耦合规则强制要求 `GOCELL_ADAPTER_MODE=real`） | — |

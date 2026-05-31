@@ -596,7 +596,7 @@ See `docs/guides/integration-testing.md` for full details and environment variab
 ### 步骤
 
 1. **assembly.yaml 加 cell**：在 `assemblies/<assemblyID>/assembly.yaml` 的 `cells:` 列表追加新 cell ID
-2. **cmd/<assemblyID>/ 加 *Module struct**：在 `cmd/<assemblyID>/<cell>_module.go` 定义 `<GoStructName>Module` 实现 `CellModule` 接口（参考 `cmd/corebundle/access_module.go` 模板）
+2. **加 composition module**：实现公开的 `composition.CellModule` 接口（`Provide(ctx, shared, in ModuleExports) (...)`）。平台 cell 放在 `cellmodules/<cell>/module.go`（参考 `cellmodules/accesscore/module.go`，由 `composition.New().With(...).Build(...)` 组装）；example assembly 的 cell 放在 `cmd/<assemblyID>/<cell>_module.go` 或 `examples/<assemblyID>/`
 3. **跑 codegen**：`gocell generate assembly --id=<assemblyID>` 派生新 `cmd/<assemblyID>/modules_gen.go`
 4. **CI drift gate**：`gocell verify codegen-assembly` 自动校验 modules_gen.go ↔ assembly.yaml 一致性
 

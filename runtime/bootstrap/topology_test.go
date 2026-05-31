@@ -2,10 +2,73 @@ package bootstrap
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// INVARIANT: TOPOLOGY-SEALED-FIELD-FROZEN-01
+//
+// TestTopologyZeroExportedFields enforces the sealed-construction invariant: a
+// Topology must have zero exported fields so the only way to populate one is the
+// validated NewTopology / TopologyFromEnv constructors. If any field is exported,
+// package-external code could build an unvalidated Topology (e.g. the illegal
+// postgres+non-real combination) via a struct literal, defeating the seal.
+func TestTopologyZeroExportedFields(t *testing.T) {
+	rt := reflect.TypeOf(Topology{})
+	for i := 0; i < rt.NumField(); i++ {
+		if f := rt.Field(i); f.IsExported() {
+			t.Errorf("Topology.%s is exported; all fields must be unexported so the only "+
+				"construction path is NewTopology (validated)", f.Name)
+		}
+	}
+}
+
+func TestNewTopology(t *testing.T) {
+	cases := []struct {
+		name            string
+		adapterMode     string
+		storageBackend  string
+		singlePod       bool
+		wantErr         bool
+		wantStorage     string
+		wantRequireProd bool
+	}{
+		{"empty normalizes to memory dev", "", "", false, false, "memory", false},
+		{"explicit memory dev", "", "memory", false, false, "memory", false},
+		{"memory real", "real", "memory", false, false, "memory", true},
+		{"postgres real", "real", "postgres", true, false, "postgres", true},
+		{"postgres non-real rejected", "", "postgres", false, true, "", false},
+		{"unknown adapter mode rejected", "bogus", "memory", false, true, "", false},
+		{"unknown backend rejected", "", "bogusbackend", false, true, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			topo, err := NewTopology(tc.adapterMode, tc.storageBackend, tc.singlePod)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (topo=%+v)", topo)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if topo.StorageBackend() != tc.wantStorage {
+				t.Errorf("StorageBackend() = %q, want %q", topo.StorageBackend(), tc.wantStorage)
+			}
+			if topo.RequireProductionControlPlane() != tc.wantRequireProd {
+				t.Errorf("RequireProductionControlPlane() = %v, want %v",
+					topo.RequireProductionControlPlane(), tc.wantRequireProd)
+			}
+			if topo.SinglePodReplayProtection() != tc.singlePod {
+				t.Errorf("SinglePodReplayProtection() = %v, want %v",
+					topo.SinglePodReplayProtection(), tc.singlePod)
+			}
+		})
+	}
+}
 
 func TestTopologyFromEnv_PostgresRequiresReal(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
@@ -34,8 +97,8 @@ func TestTopologyFromEnv_MemoryAllowsAnyMode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected no error for memory + %q adapter mode, got %v", tc.adapterMode, err)
 			}
-			if topo.StorageBackend != "memory" {
-				t.Errorf("expected StorageBackend=memory, got %q", topo.StorageBackend)
+			if topo.StorageBackend() != "memory" {
+				t.Errorf("expected StorageBackend=memory, got %q", topo.StorageBackend())
 			}
 		})
 	}
@@ -49,8 +112,8 @@ func TestTopologyFromEnv_EmptyCellAdapterModeDefaultsToMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for empty modes (memory default), got %v", err)
 	}
-	if topo.StorageBackend != "memory" {
-		t.Errorf("expected StorageBackend=memory, got %q", topo.StorageBackend)
+	if topo.StorageBackend() != "memory" {
+		t.Errorf("expected StorageBackend=memory, got %q", topo.StorageBackend())
 	}
 }
 
@@ -166,9 +229,9 @@ func TestTopologyValidate_AllErrorsAreErrcode(t *testing.T) {
 }
 
 func TestTopologyAdapterInfo_PostgresMode(t *testing.T) {
-	topo := Topology{
-		StorageBackend: "postgres",
-		AdapterMode:    "real",
+	topo, err := NewTopology("real", "postgres", false)
+	if err != nil {
+		t.Fatalf("NewTopology: %v", err)
 	}
 
 	info := topo.AdapterInfo()

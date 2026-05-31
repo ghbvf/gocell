@@ -64,10 +64,6 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		}
 	}()
 
-	// Set AssemblyID on the composition.SharedDeps (used by platform modules for
-	// logging and observability).
-	compShared.AssemblyID = assemblyID
-
 	mods, err := corebundleModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
@@ -201,7 +197,7 @@ func logSinglePodNonceStoreAcknowledgement(shared *composition.SharedDeps, local
 		return
 	}
 	if !shared.Topology.RequireProductionControlPlane() ||
-		!shared.Topology.SinglePodReplayProtection {
+		!shared.Topology.SinglePodReplayProtection() {
 		return
 	}
 	slog.Info("controlplane: in-memory nonce store acknowledged for single-pod deployment",

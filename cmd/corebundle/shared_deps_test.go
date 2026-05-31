@@ -16,46 +16,32 @@ import (
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
-// TestCompositionSharedDeps_Validate_PostgresWithoutKeyProvider_OK verifies that
-// composition.SharedDeps.Validate() does not check KeyProvider presence —
-// that check lives in platform/configcore.Module.Provide (per-cell responsibility).
-func TestCompositionSharedDeps_Validate_PostgresWithoutKeyProvider_OK(t *testing.T) {
+// TestCompositionSharedDeps_NewSharedDeps_PostgresWithoutKeyProvider verifies that
+// composition.NewSharedDeps does not check KeyProvider presence — that check
+// lives in cellmodules/configcore.Module.Provide (per-cell responsibility).
+func TestCompositionSharedDeps_NewSharedDeps_PostgresWithoutKeyProvider(t *testing.T) {
 	// Build a minimal composition.SharedDeps; other required fields are nil,
-	// so Validate will still error, but NOT for the key-provider check.
-	deps := &composition.SharedDeps{
-		Topology: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+	// so NewSharedDeps will still error, but NOT for the key-provider check.
+	_, err := composition.NewSharedDeps(composition.SharedDeps{
+		Topology: mkTopo("real", "postgres", false),
 		// Deliberately leave other fields zero to isolate the specific check.
-	}
-
-	err := deps.Validate()
-	// Deps fields are not fully populated, so Validate must return an error.
-	require.Error(t, err, "minimal SharedDeps must fail Validate due to missing required fields")
+	})
+	require.Error(t, err, "minimal SharedDeps must fail validation due to missing required fields")
 	assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER",
-		"SharedDeps.Validate must not check key provider — that is platform/configcore.Module.Provide's job")
+		"NewSharedDeps must not check key provider — that is configcore.Module.Provide's job")
 	assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER",
-		"old env name must not appear in SharedDeps.Validate")
+		"old env name must not appear in NewSharedDeps validation")
 }
 
-// TestCompositionSharedDeps_Validate_MemoryTopology_OK verifies that memory mode
+// TestCompositionSharedDeps_NewSharedDeps_MemoryTopology verifies that memory mode
 // does not require any key-provider configuration.
-func TestCompositionSharedDeps_Validate_MemoryTopology_OK(t *testing.T) {
-	deps := &composition.SharedDeps{
-		Topology: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
-	}
-
-	err := deps.Validate()
-	// Deps fields are not fully populated, so Validate must return an error.
-	require.Error(t, err, "minimal SharedDeps must fail Validate due to missing required fields")
+func TestCompositionSharedDeps_NewSharedDeps_MemoryTopology(t *testing.T) {
+	_, err := composition.NewSharedDeps(composition.SharedDeps{
+		Topology: mkTopo("", "memory", false),
+	})
+	require.Error(t, err, "minimal SharedDeps must fail validation due to missing required fields")
 	assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER")
 	assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER")
-}
-
-// TestCompositionSharedDeps_Validate_NilReceiver verifies the defensive nil check.
-func TestCompositionSharedDeps_Validate_NilReceiver(t *testing.T) {
-	var deps *composition.SharedDeps
-	err := deps.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nil receiver")
 }
 
 // TestValidateCorebundleDeps_VerboseEndpoint is a focused table-driven test for
@@ -63,8 +49,8 @@ func TestCompositionSharedDeps_Validate_NilReceiver(t *testing.T) {
 // SharedDeps that has no verbose token and has not explicitly waived the
 // endpoint.
 func TestValidateCorebundleDeps_VerboseEndpoint(t *testing.T) {
-	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
-	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
+	prodTopo := mkTopo("real", "postgres", true)
+	devTopo := mkTopo("", "memory", false)
 
 	tests := []struct {
 		name         string
@@ -133,7 +119,7 @@ func TestValidateCorebundleDeps_VerboseEndpoint(t *testing.T) {
 }
 
 func TestValidateCorebundleDeps_RealModeRejectsLoopbackHealthAddrWithoutLocalOnlyWaiver(t *testing.T) {
-	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
+	prodTopo := mkTopo("real", "postgres", true)
 
 	tests := []struct {
 		name            string
@@ -173,8 +159,8 @@ func TestValidateCorebundleDeps_InternalListenerRequiresAddrAndGuard(t *testing.
 		name string
 		topo bootstrap.Topology
 	}{
-		{name: "dev", topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}},
-		{name: "real", topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}},
+		{name: "dev", topo: mkTopo("", "memory", false)},
+		{name: "real", topo: mkTopo("real", "postgres", true)},
 	}
 
 	for _, tc := range tests {
@@ -202,11 +188,7 @@ func TestValidateCorebundleDeps_InternalListenerRequiresAddrAndGuard(t *testing.
 }
 
 func TestValidateCorebundleDeps_RealMultiPodInMemoryNonceStore_LogsWarnAndErrors(t *testing.T) {
-	topo := bootstrap.Topology{
-		StorageBackend:            "postgres",
-		AdapterMode:               "real",
-		SinglePodReplayProtection: false,
-	}
+	topo := mkTopo("real", "postgres", false)
 	shared, locals := newValidatedSharedDepsAndLocals(t, topo)
 
 	buf, restore := captureSlogWarnLines(t)
@@ -258,11 +240,7 @@ func (validateDistributedNonceStore) CheckAndMark(context.Context, string) error
 }
 
 func TestValidateCorebundleDeps_RealMultiPodRejectsInMemoryClaimerCode(t *testing.T) {
-	topo := bootstrap.Topology{
-		StorageBackend:            "postgres",
-		AdapterMode:               "real",
-		SinglePodReplayProtection: false,
-	}
+	topo := mkTopo("real", "postgres", false)
 	shared, locals := newValidatedSharedDepsAndLocals(t, topo)
 	// Use a distributed nonce store so we only test the claimer check.
 	locals.internalGuard = &internalGuard{
@@ -314,20 +292,4 @@ func TestIsLoopbackBindAddr(t *testing.T) {
 			assert.Equal(t, tc.want, got, "addr=%q", tc.addr)
 		})
 	}
-}
-
-// TestCorebundleValidate_DoesNotRequireBootstrapLedgerStore documents that
-// composition.SharedDeps.Validate() and validateCorebundleDeps do NOT check
-// BootstrapLedgerStore — it is wired by platform/auditcore.Module.Provide
-// during composition.Builder.Build, which runs after validation.
-func TestCorebundleValidate_DoesNotRequireBootstrapLedgerStore(t *testing.T) {
-	deps := &composition.SharedDeps{
-		Topology: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
-		// BootstrapLedgerStore left as zero-value (nil interface) deliberately.
-	}
-	err := deps.Validate()
-	require.Error(t, err, "minimal SharedDeps must fail other required-field checks")
-	assert.NotContains(t, err.Error(), "BootstrapLedgerStore",
-		"BootstrapLedgerStore is wired by auditcore.Module.Provide AFTER LoadSharedDepsFromEnv; "+
-			"Validate must not check it (see BOOTSTRAP-AUDIT-CHAIN-WIRING-01 plan 039 W1-2)")
 }

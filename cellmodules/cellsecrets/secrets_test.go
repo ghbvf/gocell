@@ -49,7 +49,7 @@ func TestRejectDemoKey_DevMode_AllowsDemoKey(t *testing.T) {
 }
 
 func TestRejectDemoKey_RealMode_RejectsAllWellKnownKeys(t *testing.T) {
-	for _, demo := range cellsecrets.WellKnownDemoKeys {
+	for _, demo := range cellsecrets.WellKnownDemoKeys() {
 		err := cellsecrets.RejectDemoKey(cellsecrets.RealAdapterMode, "TEST_KEY", []byte(demo))
 		assert.Error(t, err, "real mode must reject demo key %q", demo)
 	}

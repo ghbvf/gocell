@@ -3,7 +3,7 @@
 // dependencies from [composition.SharedDeps].
 //
 // This is a composition-root-layer package: it may import cells/, adapters/,
-// and platform/internal/. It must NOT be imported by cells/, runtime/, or
+// and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
 // adapters/.
 //
 // ref: uber-go/fx fx.Module("accesscore", ...) — self-contained module.
@@ -74,46 +74,56 @@ func (module) ID() string { return "accesscore" }
 // GOCELL_ACCESSCORE_CURSOR_KEY, GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY from
 // the environment.
 func (m module) Provide(
-	_ context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	_ context.Context, shared *composition.SharedDeps, in composition.ModuleExports,
+) (cell.Cell, composition.ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	creds, err := loadBootstrapCredentials(
 		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME"),
 		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD"),
 	)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 	if creds.Username == nil {
-		return nil, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+		return nil, composition.ModuleExports{}, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"GOCELL_BOOTSTRAP_ADMIN_USERNAME and GOCELL_BOOTSTRAP_ADMIN_PASSWORD are required "+
 				"to protect setup/admin endpoint")
 	}
 
 	accessOpts, sessionProto, err := buildAccessBaseOpts(shared)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 
 	innerSessionStore, storageOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 	accessOpts = storageOpts
 
 	sessionStore, err := wrapSessionStoreWithCache(innerSessionStore, shared, nil)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 	accessOpts = append(accessOpts, accesscell.WithSessionStore(sessionStore))
+
+	// auditcore hands the bootstrap ledger store down via the typed
+	// ModuleExports return; a nil here means accesscore was registered before
+	// auditcore (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01) — fail fast.
+	if in.BootstrapLedgerStore == nil {
+		return nil, composition.ModuleExports{}, nil, nil, errcode.New(errcode.KindInternal,
+			errcode.ErrCellInvalidConfig,
+			"accesscore: requires auditcore's BootstrapLedgerStore export; "+
+				"register auditcore before accesscore")
+	}
 
 	// Construct BEFORE ratelimit.New: observer is a pure nil-check (no
 	// goroutine, no resource), so its fail-fast must precede the limiter
 	// which spawns a cleanup goroutine needing ManagedResource teardown.
 	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
-		slog.Default(), shared.BootstrapLedgerStore, shared.Clock,
+		slog.Default(), in.BootstrapLedgerStore, shared.Clock,
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("accesscore: build bootstrap audit observer: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("accesscore: build bootstrap audit observer: %w", err)
 	}
 	rlLimiter := ratelimit.New(ratelimit.Config{
 		Rate:  bootstrapRateLimitPerSec,
@@ -127,7 +137,8 @@ func (m module) Provide(
 	accessOpts = append(accessOpts, accesscell.WithBootstrapAuth(bootstrapMW))
 
 	c := accesscell.NewAccessCore(shared.Clock, accessOpts...)
-	return c, nil, []kernellifecycle.ManagedResource{bootstrapLimiterResource{lim: rlLimiter}}, nil
+	return c, composition.ModuleExports{}, nil,
+		[]kernellifecycle.ManagedResource{bootstrapLimiterResource{lim: rlLimiter}}, nil
 }
 
 // buildAccessBaseOpts builds the base accesscore options and session protocol.
@@ -135,7 +146,7 @@ func (m module) Provide(
 func buildAccessBaseOpts(shared *composition.SharedDeps) ([]accesscell.Option, *session.Protocol, error) {
 	accessPrimary, accessPrevious := cellsecrets.LoadCursorKeys("ACCESSCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
-		AdapterMode: shared.Topology.AdapterMode,
+		AdapterMode: shared.Topology.AdapterMode(),
 		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
 		Primary:     accessPrimary,
@@ -231,7 +242,7 @@ func resolveAccessStorageOpts(
 	sessionProto *session.Protocol,
 	base []accesscell.Option,
 ) (session.Store, []accesscell.Option, error) {
-	if shared.Topology.StorageBackend == "postgres" {
+	if shared.Topology.StorageBackend() == "postgres" {
 		pgOpts, pgSessionStore, err := accessPostgresOptions(shared, sessionProto)
 		if err != nil {
 			return nil, nil, err

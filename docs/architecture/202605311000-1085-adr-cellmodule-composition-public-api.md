@@ -22,9 +22,10 @@
 
 | 类型 | 职责 |
 |---|---|
-| `CellModule` | 接口：`ID() string` + `Provide(ctx, *SharedDeps) (cell.Cell, []Option, []ManagedResource, error)` |
-| `SharedDeps` | 跨 cell 共享依赖的公开 bag（接口字段，无 adapter 具体类型） |
-| `Builder` | `New() / With(...) / Build(ctx, *SharedDeps, RuntimeOptionsFunc) (*App, error)` |
+| `CellModule` | 接口：`ID() string` + `Provide(ctx, *SharedDeps, ModuleExports) (cell.Cell, ModuleExports, []Option, []ManagedResource, error)` |
+| `ModuleExports` | 模块间 typed handoff（如 `BootstrapLedgerStore`）；Builder 左→右累积，下游模块经 `in` 参数消费（取代可变 `*SharedDeps` 字段突变） |
+| `SharedDeps` | 跨 cell 共享依赖的公开 bag（接口字段，无 adapter 具体类型）；**sealed construction**——经 `NewSharedDeps(...)` 构造盖 marker，`Build` 拒未盖戳实例 |
+| `Builder` | `New() / With(...) / Build(ctx, *SharedDeps, RuntimeOptionsFunc) (*App, error)`；`Build` 校验 marker + `runtimeOptsFn` 非 nil |
 | `App` | `Run(ctx) error`（委托 bootstrap.New(...).Run） |
 | `RuntimeOptionsFunc` | `func(cells []cell.Cell) ([]bootstrap.Option, error)` |
 
@@ -95,7 +96,7 @@ composition.New().
 
 **注**：`platform/` 与 `cmd/` 同属 composition-root 层，既有 composition-root archtests（cas/session/ledger 协议位置、wrapper 调用点）已通过 `platform/` 前缀覆盖，不存在扫描盲区。
 
-**延后改进**：`BootstrapLedgerStore` 通过 `*SharedDeps` 字段突变在 auditcore module → accesscore module 之间传递（module 顺序由 MODULE-ORDER archtest 守卫 + nil-check 守卫）。该 handoff 在功能上已受 nil-check 保护，但属于可变共享状态风格；未来可将其重构为类型化 channel 或显式 return value，以达到 Hard 等级。该重构追踪于 backlog，不阻塞当前 PR。
+**已落地（#1085 review 收口）**：原先 `BootstrapLedgerStore` 通过 `*SharedDeps` 字段突变在 auditcore module → accesscore module 之间传递的可变共享状态，已重构为 typed `ModuleExports` return：auditcore.Provide 返回 `ModuleExports{BootstrapLedgerStore: ...}`，Builder 左→右累积并经 `in` 参数喂给 accesscore.Provide（缺失时 fail-fast）。`SharedDeps` 同步去除该字段，成为构造后不再被 mid-Build 突变的 sealed bag。module 顺序仍由 `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` archtest 守卫；handoff 值类型 `*audit.BootstrapLedgerStore` 本身 sealed（NewBootstrapLedgerStore 非 nil + 命名空间校验），顺序门控为运行时 nil-check（Medium，Go 无法编译期表达「module X 必先于 Y」）。
 
 ---
 

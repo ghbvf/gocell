@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -16,7 +15,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -25,8 +23,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/audit"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -95,9 +91,9 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 
 	guard := newTestInternalGuard(t)
 
-	shared := &composition.SharedDeps{
+	shared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                  clock.Real(),
-		Topology:               bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		Topology:               mkTopo("", "memory", false),
 		JWTIssuer:              issuer,
 		JWTVerifier:            verifier,
 		MetricsProvider:        ps.metricProvider,
@@ -111,10 +107,8 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
-		// Pre-wire BootstrapLedgerStore so tests that call Provide directly
-		// see a non-nil store.
-		BootstrapLedgerStore: buildTestBootstrapLedgerStore(t),
-	}
+	})
+	require.NoError(t, err)
 
 	locals := &cmdLocals{
 		registry:            ps.registry,
@@ -186,24 +180,6 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 	locals.initVaultMetricsFactory()
 
 	return shared, locals
-}
-
-// buildTestBootstrapLedgerStore builds an in-memory *audit.BootstrapLedgerStore
-// suitable for non-integration unit tests (no //go:build integration tag).
-func buildTestBootstrapLedgerStore(t *testing.T) *audit.BootstrapLedgerStore {
-	t.Helper()
-	proto, err := ledger.NewProtocol(
-		audit.BootstrapNamespace(),
-		[]byte("test-bootstrap-hmac-key-32bytes!"),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	require.NoError(t, err, "audit protocol")
-	mem, err := ledger.NewMemStore(proto, clockmock.New(time.Now()))
-	require.NoError(t, err, "audit mem store")
-	wrapped, err := audit.NewBootstrapLedgerStore(mem)
-	require.NoError(t, err, "wrap bootstrap ledger store")
-	return wrapped
 }
 
 // fakeManagedResource implements lifecycle.ManagedResource for tests.
@@ -295,7 +271,7 @@ func TestBuildConsumerBase_ReturnsNonNil(t *testing.T) {
 }
 
 func TestBuildConsumerBase_RealMultiPodMissingDistributedClaimerErrors(t *testing.T) {
-	shared, _ := newValidatedSharedDepsAndLocals(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
+	shared, _ := newValidatedSharedDepsAndLocals(t, mkTopo("real", "postgres", false))
 	shared.ConsumerClaimer = nil
 
 	cb, err := buildConsumerBase(shared)
@@ -360,11 +336,7 @@ func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
-	shared, locals := newValidatedSharedDepsAndLocals(t, bootstrap.Topology{
-		StorageBackend:            "postgres",
-		AdapterMode:               "real",
-		SinglePodReplayProtection: true,
-	})
+	shared, locals := newValidatedSharedDepsAndLocals(t, mkTopo("real", "postgres", true))
 
 	info := adapterInfoForSharedDeps(shared, locals)
 
@@ -391,8 +363,8 @@ func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
 func TestCorebundleDepsValidate(t *testing.T) {
 	// SinglePodReplayProtection=true acknowledges in-memory replay defense scope
 	// for single-pod deployments (mirrors GOCELL_SINGLE_POD=1).
-	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
-	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
+	prodTopo := mkTopo("real", "postgres", true)
+	devTopo := mkTopo("", "memory", false)
 
 	cases := []struct {
 		name         string
@@ -454,7 +426,7 @@ func TestCorebundleDepsValidate(t *testing.T) {
 		},
 		{
 			name:         "real multi-pod with in-memory claimer rejected",
-			topo:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
+			topo:         mkTopo("real", "postgres", false),
 			mutateShared: func(*composition.SharedDeps) {},
 			mutateLocals: func(l *cmdLocals) { l.consumerClaimerKind = consumerClaimerKindInMemory },
 			wantErr:      true, wantSubstr: "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED",
@@ -475,7 +447,7 @@ func TestCorebundleDepsValidate(t *testing.T) {
 		},
 		{
 			name:         "real mode + in_memory + single_pod=false → error",
-			topo:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
+			topo:         mkTopo("real", "postgres", false),
 			mutateShared: func(*composition.SharedDeps) {},
 			mutateLocals: func(*cmdLocals) {
 				// guard already has InMemoryNonceStore from newTestInternalGuard;
@@ -485,7 +457,7 @@ func TestCorebundleDepsValidate(t *testing.T) {
 		},
 		{
 			name:         "real mode + in_memory + single_pod=true → ok",
-			topo:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true},
+			topo:         mkTopo("real", "postgres", true),
 			mutateShared: func(*composition.SharedDeps) {},
 			mutateLocals: func(*cmdLocals) {},
 			wantErr:      false,
@@ -593,17 +565,17 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 	}{
 		{
 			name: "memory real remains demo",
-			topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "real"},
+			topo: mkTopo("real", "memory", false),
 			want: outbox.DurabilityDemo,
 		},
 		{
 			name: "postgres real is durable",
-			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+			topo: mkTopo("real", "postgres", false),
 			want: outbox.DurabilityDurable,
 		},
 		{
 			name: "memory dev remains demo",
-			topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
+			topo: mkTopo("", "memory", false),
 			want: outbox.DurabilityDemo,
 		},
 	}

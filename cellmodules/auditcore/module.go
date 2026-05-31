@@ -3,7 +3,7 @@
 // dependencies from [composition.SharedDeps].
 //
 // This is a composition-root-layer package: it may import cells/, adapters/,
-// and platform/internal/. It must NOT be imported by cells/, runtime/, or
+// and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
 // adapters/.
 //
 // ref: uber-go/fx fx.Module("auditcore", ...) — self-contained module.
@@ -45,12 +45,12 @@ func (module) ID() string { return "auditcore" }
 //   - GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY (bootstrap chain HMAC, namespace="bootstrap")
 //   - GOCELL_AUDITCORE_CURSOR_KEY / *_PREVIOUS_KEY (cursor codec)
 func (m module) Provide(
-	ctx context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	ctx context.Context, shared *composition.SharedDeps, _ composition.ModuleExports,
+) (cell.Cell, composition.ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// Cursor codec for auditcore.
 	auditPrimary, auditPrevious := cellsecrets.LoadCursorKeys("AUDITCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
-		AdapterMode: shared.Topology.AdapterMode,
+		AdapterMode: shared.Topology.AdapterMode(),
 		EnvName:     "GOCELL_AUDITCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
 		Primary:     auditPrimary,
@@ -59,55 +59,55 @@ func (m module) Provide(
 		Label:       "audit",
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
 	}
 
 	// Build the auditcore relay protocol (HMAC key A, namespace="auditcore").
 	auditNamespace, err := ledger.ParseNamespaceID("auditcore")
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
 	}
-	auditProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode,
+	auditProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode(),
 		"GOCELL_AUDITCORE_HMAC_KEY",
 		cellsecrets.LoadCellHMACKey("AUDITCORE"),
 		"dev-hmac-key-replace-in-prod!!!!",
 		auditNamespace)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
 	}
 
 	// Build the bootstrap protocol (HMAC key B, namespace="bootstrap").
 	// Independent HMAC key per chain (ref: hashicorp/vault audit/backend.go
 	// per-device Salt) so compromise of one chain's key cannot forge entries
 	// in the other.
-	bootstrapProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode,
+	bootstrapProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode(),
 		"GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY",
 		cellsecrets.LoadCellHMACKey("AUDIT_BOOTSTRAP"),
 		"dev-hmac-bootstrap-replace-32b!!",
 		audit.BootstrapNamespace())
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("bootstrap audit HMAC key: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("bootstrap audit HMAC key: %w", err)
 	}
 
 	// Build the two ledger.Store instances (PG or mem).
 	auditcoreStore, bootstrapInnerStore, err := buildAuditStores(shared, auditProtocol, bootstrapProtocol)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 
 	// Run strict tail verify against the bootstrap chain at composition time.
 	bootstrapWrapped, err := audit.NewBootstrapLedgerStore(bootstrapInnerStore)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("wrap bootstrap audit store: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("wrap bootstrap audit store: %w", err)
 	}
 	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, nil); err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 
 	// Build the read-side aggregator. auditquery reads across both chains.
 	multiStore, err := ledger.NewMultiStore(auditcoreStore, bootstrapInnerStore)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("audit multi-store: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("audit multi-store: %w", err)
 	}
 
 	auditOpts := []auditcell.Option{
@@ -119,7 +119,7 @@ func (m module) Provide(
 		auditcell.WithMetricsProvider(shared.MetricsProvider),
 	}
 
-	if shared.Topology.StorageBackend == "postgres" {
+	if shared.Topology.StorageBackend() == "postgres" {
 		auditOpts = append(
 			auditOpts,
 			auditcell.WithOutboxDeps(nil, outbox.WrapWriterForCell(shared.PG.OutboxWriter())),
@@ -127,15 +127,14 @@ func (m module) Provide(
 		)
 	}
 
-	// Cross-module wiring (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2):
-	// shared.BootstrapLedgerStore is consumed by platform/accesscore.Module.Provide
-	// to build the bootstrap auth-fail observer.
-	// Module order (auditcore before accesscore in assembly.yaml) is the
-	// happens-before contract.
-	shared.BootstrapLedgerStore = bootstrapWrapped
-
 	c := auditcell.NewAuditCore(shared.Clock, auditOpts...)
-	return c, nil, nil, nil
+
+	// Cross-module wiring (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2): the
+	// bootstrap ledger store is handed downstream via the typed ModuleExports
+	// return. accesscore consumes it (audit.NewBootstrapAuthFailObserver). Module
+	// order (auditcore before accesscore in assembly.yaml) is the happens-before
+	// contract; accesscore fails fast if the export is absent.
+	return c, composition.ModuleExports{BootstrapLedgerStore: bootstrapWrapped}, nil, nil, nil
 }
 
 // buildAuditProtocol assembles a ledger.Protocol with an isolated HMAC key.
@@ -165,7 +164,7 @@ func buildAuditStores(
 	shared *composition.SharedDeps,
 	auditProtocol, bootstrapProtocol *ledger.Protocol,
 ) (ledger.Store, ledger.Store, error) {
-	if shared.Topology.StorageBackend == "postgres" {
+	if shared.Topology.StorageBackend() == "postgres" {
 		if shared.PG == nil {
 			return nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires the postgres capability provider " +
 				"(provisionCapabilities must run before BuildApp)")

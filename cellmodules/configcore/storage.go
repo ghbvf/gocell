@@ -43,12 +43,12 @@ type configCoreModuleResult struct {
 // buildConfigCoreOpts selects storage-adapter options based on topology.
 func buildConfigCoreOpts(clk clock.Clock, cfg configCoreModuleConfig) (configCoreModuleResult, error) {
 	clock.MustHaveClock(clk, "platform/configcore.buildConfigCoreOpts")
-	switch cfg.topology.StorageBackend {
+	switch cfg.topology.StorageBackend() {
 	case "postgres":
 		return buildConfigCorePostgresOpts(clk, cfg)
 
 	case "memory":
-		slog.Info("configcore: using in-memory storage", slog.String("cell_adapter_mode", cfg.topology.StorageBackend))
+		slog.Info("configcore: using in-memory storage", slog.String("cell_adapter_mode", cfg.topology.StorageBackend()))
 		return configCoreModuleResult{
 			cellOptions: []configcell.Option{
 				configcell.WithInMemoryDefaults(),
@@ -59,7 +59,7 @@ func buildConfigCoreOpts(clk clock.Clock, cfg configCoreModuleConfig) (configCor
 	default:
 		return configCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"buildConfigCoreOpts: unexpected StorageBackend (topology validation bypass)",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("backend=%q", cfg.topology.StorageBackend))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("backend=%q", cfg.topology.StorageBackend()))))
 	}
 }
 
@@ -86,7 +86,7 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 	if storageErr != nil {
 		return configCoreModuleResult{}, storageErr
 	}
-	slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", cfg.topology.StorageBackend))
+	slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", cfg.topology.StorageBackend()))
 	cellOpts := []configcell.Option{
 		storageOpt,
 		configcell.WithOutboxDeps(outbox.WrapPublisherForCell(cfg.publisher), outbox.WrapWriterForCell(outboxWriter)),
@@ -104,7 +104,7 @@ func buildConfigCoreResult(
 	c *configcell.ConfigCore,
 	kp kcrypto.KeyProvider,
 	modResult configCoreModuleResult,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource) {
 	var opts []bootstrap.Option
 	var provisional []kernellifecycle.ManagedResource
 
@@ -114,7 +114,7 @@ func buildConfigCoreResult(
 		opts = append(opts, bootstrap.WithManagedResource(kpRes))
 		provisional = append(provisional, kpRes)
 	}
-	return c, opts, provisional, nil
+	return c, opts, provisional
 }
 
 // buildConfigCorePGRelay constructs the configcore PG relay.

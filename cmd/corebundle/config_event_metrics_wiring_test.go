@@ -27,17 +27,6 @@ func newConfigEventEntry(t *testing.T, id string) outbox.Entry {
 	return entry
 }
 
-func TestCompositionSharedDepsValidateRequiresConfigEventCollector(t *testing.T) {
-	// composition.SharedDeps.Validate() checks ConfigEventCollector.
-	shared, _ := buildTestSharedDepsAndLocals(t)
-	shared.ConfigEventCollector = nil
-
-	err := shared.Validate()
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ConfigEventCollector")
-}
-
 func TestConfigEventConsumerMiddlewareUsesSubscriptionOwnerMetadata(t *testing.T) {
 	collector := &recordingCoreConfigEventCollector{}
 	mw := configEventConsumerMiddleware(collector)

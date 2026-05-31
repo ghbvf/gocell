@@ -10,7 +10,6 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
-	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
@@ -24,23 +23,37 @@ import (
 // kernel/runtime interface counterparts so that this package never imports
 // adapters/ or prometheus/client_golang.
 //
+// Sealed construction: SharedDeps carries an unexported validity marker (valid)
+// that only [NewSharedDeps] stamps after running validate(). [Builder.Build]
+// refuses any instance whose marker is unset, so a package-external struct
+// literal — which can populate the exported fields but can never set the
+// unexported marker — cannot be fed to Build. The single construction surface is
+// NewSharedDeps, so an unvalidated dep set is unconstructable for the consumer.
+// Bare literals remain legal for reads (e.g. unit tests that exercise a helper
+// reading one field without ever calling Build); only Build gates on the marker.
+//
 // Fields are flat (no concern-grouped sub-structs): SharedDeps is a
-// composition-root bag whose fields cross consumer boundaries.  Forcing a
+// composition-root bag whose fields cross consumer boundaries. Forcing a
 // sub-struct layout would make cross-cutting consumptions look like boundary
 // violations when in fact they are the natural shape of a composition root.
-// Per-concern file split is appropriate; the struct itself stays flat,
-// matching runtime/bootstrap/bootstrap.go which adopted the same trade-off.
 //
 // ref: uber-go/fx fx.Supply — shared values provided once to all modules.
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
 // all required fields validated in one place before startup.
 type SharedDeps struct {
+	// valid is the sealed-construction marker. It is unexported, so only code in
+	// this package (NewSharedDeps) can set it; Build rejects instances where it
+	// is false. Frozen by SHAREDDEPS-SEALED-MARKER-01.
+	valid bool
+
 	// Clock is the single root clock instance threaded through every adapter,
-	// service, and middleware.  Tests inject clockmock.FakeClock; production
+	// service, and middleware. Tests inject clockmock.FakeClock; production
 	// wires clock.Real() exactly once at the entry point.
 	Clock clock.Clock
 
-	// Topology is the resolved adapter-mode / storage-backend combination.
+	// Topology is the resolved adapter-mode / storage-backend combination. It
+	// must be obtained from bootstrap.NewTopology / TopologyFromEnv (it is a
+	// sealed type); a zero Topology fails validation.
 	Topology bootstrap.Topology
 
 	// JWTIssuer signs access tokens for the accesscore cell.
@@ -51,7 +64,7 @@ type SharedDeps struct {
 	// Source: runtime/auth.NewJWTVerifier (via authconfig.NewJWTVerifierFromRegistry).
 	JWTVerifier *auth.JWTVerifier
 
-	// MetricsProvider is the kernel-neutral metrics backend.  Production
+	// MetricsProvider is the kernel-neutral metrics backend. Production
 	// callers assign a *promadapter.MetricProvider (which satisfies
 	// kernelmetrics.Provider); tests may use kernelmetrics.NopProvider{}.
 	//
@@ -74,36 +87,19 @@ type SharedDeps struct {
 	// ConsumerClaimer coordinates outbox consumer idempotency.
 	ConsumerClaimer idempotency.Claimer
 
-	// BootstrapLedgerStore is the sealed handle to the bootstrap auth-fail
-	// audit chain, wired by AuditCoreModule.Provide and consumed by
-	// AccessCoreModule.Provide via audit.NewBootstrapAuthFailObserver.
-	//
-	// Set by the auditcore module during CellModule.Provide; auditcore MUST
-	// appear before accesscore in Builder.With
-	// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01).
-	//
-	// Not checked by Validate() — it is populated during BuildApp (after
-	// Validate has already run).  See cmd/corebundle shared_deps_validate.go
-	// for the rationale.
-	BootstrapLedgerStore *audit.BootstrapLedgerStore
-
-	// PG is the assembly's single postgres capability provider.  Nil in
+	// PG is the assembly's single postgres capability provider. Nil in
 	// non-postgres modes; cell modules take their in-memory path.
 	PG capability.PGProvider
 
-	// Redis is the assembly's shared redis capability provider.  Nil in modes
+	// Redis is the assembly's shared redis capability provider. Nil in modes
 	// without redis.
 	Redis capability.RedisProvider
 
 	// InternalHMACRing is the HMAC key ring for /internal/v1/* service-token
-	// signing and verification.  Promoted from cmd/corebundle's private
+	// signing and verification. Promoted from cmd/corebundle's private
 	// internalGuard struct so cell modules can sign outbound requests without
 	// coupling to the cmd-private type.
 	InternalHMACRing *auth.HMACKeyRing
-
-	// AssemblyID is the stable identifier for this assembly (from assembly.yaml).
-	// Empty in test mode.
-	AssemblyID string
 
 	// PrimaryHTTPAddr is the bind address for the public HTTP listener.
 	PrimaryHTTPAddr string
@@ -136,31 +132,40 @@ type SharedDeps struct {
 
 	// ConfigKeyProvider is the configcore value-encryption key provider.
 	// Built in cmd/corebundle (which may import adapters/vault + prometheus),
-	// passed to platform/configcore.Module so that the platform layer never
-	// imports adapter-specific packages.
-	// Nil means no key provider configured; configcore uses NoopTransformer.
+	// passed to cellmodules/configcore.Module so that the composition module
+	// layer never imports adapter-specific packages. Nil means no key provider;
+	// in real adapter mode configcore rejects nil (NoopTransformer is dev-only).
 	ConfigKeyProvider kcrypto.KeyProvider
 
 	// ConfigStaleCipherInc is a zero-arg callback that increments the
 	// stale-cipher counter once per config value read that is encrypted with a
-	// non-current key version.  Built in cmd/corebundle from a prometheus counter
+	// non-current key version. Built in cmd/corebundle from a prometheus counter
 	// so that runtime/composition never imports github.com/prometheus/client_golang.
 	// Nil means no-op (acceptable in tests that do not exercise PG + encryption).
 	ConfigStaleCipherInc func()
 }
 
-// Validate checks that all required cross-cutting dependencies are present.
-// It mirrors the field-presence half of cmd/corebundle's validateCore, but
-// omits production-control-plane checks (nonce store kind, claimer kind,
-// health reachability) that depend on cmd-private types.
-//
-// BootstrapLedgerStore is intentionally NOT checked here — it is populated
-// during BuildApp after Validate has already run (same rationale as
-// cmd/corebundle shared_deps_validate.go::validateCore).
+// NewSharedDeps validates a populated SharedDeps and returns a sealed copy. The
+// returned *SharedDeps carries the unexported validity marker that
+// [Builder.Build] requires; a package-external SharedDeps literal cannot set it,
+// so Build rejects any instance not produced here. This is the single
+// construction surface for a Build-able SharedDeps.
 //
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
 // validates all fields before any component is constructed.
-func (d *SharedDeps) Validate() error {
+func NewSharedDeps(d SharedDeps) (*SharedDeps, error) {
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	d.valid = true
+	return &d, nil
+}
+
+// validate checks that all required cross-cutting dependencies are present. It
+// mirrors the field-presence half of cmd/corebundle's validateCore, but omits
+// production-control-plane checks (nonce store kind, claimer kind, health
+// reachability) that depend on cmd-private types.
+func (d *SharedDeps) validate() error {
 	if d == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"SharedDeps: nil receiver")
@@ -180,6 +185,12 @@ func (d *SharedDeps) Validate() error {
 
 	if d.Clock == nil {
 		missing("Clock")
+	}
+	// A zero-value Topology has an empty StorageBackend; a Topology obtained from
+	// bootstrap.NewTopology / TopologyFromEnv always normalizes it to "memory" or
+	// "postgres", so an empty backend means the caller forgot to set Topology.
+	if d.Topology.StorageBackend() == "" {
+		missing("Topology")
 	}
 	if d.JWTIssuer == nil {
 		missing("JWTIssuer")

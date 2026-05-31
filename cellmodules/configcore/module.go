@@ -3,7 +3,7 @@
 // dependencies from [composition.SharedDeps].
 //
 // This is a composition-root-layer package: it may import cells/, adapters/,
-// and platform/internal/. It must NOT be imported by cells/, runtime/, or
+// and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
 // adapters/.
 //
 // # Key provider and stale-cipher counter routing
@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -67,12 +68,12 @@ func (*module) ID() string { return "configcore" }
 // Provide resolves all configcore-specific dependencies and returns the
 // constructed cell, bootstrap options, and provisional resources.
 func (m *module) Provide(
-	ctx context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	_ context.Context, shared *composition.SharedDeps, _ composition.ModuleExports,
+) (cell.Cell, composition.ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// 1. Cursor codec.
 	cfgPrimary, cfgPrevious := cellsecrets.LoadCursorKeys("CONFIGCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
-		AdapterMode: shared.Topology.AdapterMode,
+		AdapterMode: shared.Topology.AdapterMode(),
 		EnvName:     "GOCELL_CONFIGCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
 		Primary:     cfgPrimary,
@@ -81,12 +82,15 @@ func (m *module) Provide(
 		Label:       "config",
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
+		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
 	}
 
 	// 2. KeyProvider (test override OR cmd-supplied via SharedDeps).
 	kp := m.resolveKeyProvider(shared)
-	vt := keyProviderToTransformer(kp)
+	vt, err := resolveValueTransformer(kp, shared.Topology.StorageBackend() == "postgres")
+	if err != nil {
+		return nil, composition.ModuleExports{}, nil, nil, err
+	}
 
 	// 3. Stale-cipher increment callback (supplied by cmd via SharedDeps).
 	staleCipherInc := shared.ConfigStaleCipherInc
@@ -106,13 +110,13 @@ func (m *module) Provide(
 		},
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 
 	// 5. CAS protocol (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest).
 	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, composition.ModuleExports{}, nil, nil, err
 	}
 
 	baseOpts := []configcell.Option{
@@ -125,7 +129,8 @@ func (m *module) Provide(
 	baseOpts = append(baseOpts, modResult.cellOptions...)
 	c := configcell.NewConfigCore(shared.Clock, baseOpts...)
 
-	return buildConfigCoreResult(c, kp, modResult)
+	builtCell, opts, res := buildConfigCoreResult(c, kp, modResult)
+	return builtCell, composition.ModuleExports{}, opts, res, nil
 }
 
 // resolveKeyProvider returns the test override when set, otherwise uses the
@@ -137,13 +142,28 @@ func (m *module) resolveKeyProvider(shared *composition.SharedDeps) kcrypto.KeyP
 	return shared.ConfigKeyProvider
 }
 
-// keyProviderToTransformer wraps a KeyProvider in a ValueTransformer.
-// A nil provider means "no key configured" — the NoopTransformer path.
-func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
+// resolveValueTransformer maps a KeyProvider to its ValueTransformer. A nil
+// provider is permitted only when config values are not persisted to disk
+// (memory storage), where it resolves to an explicit NoopTransformer (no
+// encryption). With postgres storage a nil provider is rejected fail-closed:
+// persisting config values unencrypted is a security fault, not a silent
+// fallback. (postgres storage implies real adapter mode via the Topology
+// coupling rule, so this is the production-persistence guard.)
+//
+// This is the sole sanctioned construction site for crypto.NoopTransformer{},
+// guarded by archtest CONFIG-NOOP-TRANSFORMER-FUNNEL-01 — the explicit branch
+// makes the no-encryption path greppable and the postgres rejection closes the
+// silent-plaintext-persistence hole (F3).
+func resolveValueTransformer(kp kcrypto.KeyProvider, postgresStorage bool) (kcrypto.ValueTransformer, error) {
 	if kp == nil {
-		return crypto.NoopTransformer{}
+		if postgresStorage {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"configcore: postgres storage requires a ConfigKeyProvider; NoopTransformer "+
+					"is dev-only (refusing to persist config values unencrypted)")
+		}
+		return crypto.NoopTransformer{}, nil
 	}
-	return crypto.NewValueTransformer(kp)
+	return crypto.NewValueTransformer(kp), nil
 }
 
 // newConfigCoreCASProtocol builds the CAS protocol used by configcore.

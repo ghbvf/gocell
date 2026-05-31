@@ -54,6 +54,10 @@
           "description": "Deployment template identifier. Omit to use the parser-applied default \"k8s\" (the JSON Schema `default` keyword is documentation only — actual defaulting happens in metadata.applyAssemblyDerivations).",
           "enum": ["k8s", "compose", "binary"],
           "default": "k8s"
+        },
+        "compositionAPI": {
+          "type": "boolean",
+          "description": "When true, GenerateModulesGen emits the runtime/composition.CellModule form (platform/{cell}.Module() constructors) instead of the legacy local-CellModule-type form. Set true only in platform assemblies (currently assemblies/corebundle)."
         }
       }
     }

@@ -39,6 +39,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	"github.com/stretchr/testify/assert"
@@ -93,9 +94,21 @@ func buildE2EConfigCoreShared(
 ) *composition.SharedDeps {
 	t.Helper()
 	shared, _ := buildTestSharedDepsAndLocals(t)
-	shared.Topology = bootstrap.Topology{StorageBackend: "postgres", AdapterMode: ""}
+	// The sealed Topology forbids postgres with a non-real adapter mode, and F3
+	// requires a real ConfigKeyProvider for real postgres persistence (no
+	// NoopTransformer fallback). Run the e2e PG path under real mode and wire the
+	// real-mode cursor key + key provider from the env the caller set.
+	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	shared.Topology = mkTopo("real", "postgres", true)
 	shared.PG = pgProvider
 	shared.EventBus = eb
+
+	providerName, masterKey, prevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
+	kp, err := buildKeyProviderFromName(
+		"postgres", "real", providerName, masterKey, prevMasterKey, clock.Real(), nil,
+	)
+	require.NoError(t, err, "build configcore key provider for e2e")
+	shared.ConfigKeyProvider = kp
 	return shared
 }
 
@@ -144,7 +157,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	eb := eventbus.New(clock.Real())
 
 	// Set env vars required by platform/configcore.Module().Provide() in postgres mode.
-	// AdapterMode="" (dev) so cursor codec uses the dev default; no GOCELL_CONFIGCORE_CURSOR_KEY needed.
+	// buildE2EConfigCoreShared runs the path under real mode (postgres requires it)
+	// and wires the cursor key + key provider from these env values.
 	t.Setenv("GOCELL_CONFIGCORE_KEY_PROVIDER", "local-aes")
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 

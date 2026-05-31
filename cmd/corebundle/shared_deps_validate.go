@@ -101,7 +101,7 @@ func validateControlPlane(shared *composition.SharedDeps, locals *cmdLocals) []e
 				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
 				"via WithServiceTokenNonceStore"))
 	} else if kind == kauth.NonceStoreKindInMemory &&
-		!shared.Topology.SinglePodReplayProtection &&
+		!shared.Topology.SinglePodReplayProtection() &&
 		shared.Topology.RequireProductionControlPlane() {
 		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
 			slog.String("nonce_store_kind", string(kind)),

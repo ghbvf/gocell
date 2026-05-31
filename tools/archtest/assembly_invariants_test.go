@@ -704,10 +704,28 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
 	)
 }
 
+// compositionPkgPath is the import path of the public composition CellModule
+// type. The generated composition-API modules_gen.go must return
+// []composition.CellModule from this exact package. Derived from
+// PlatformModulePath per ARCHTEST-MODULE-PATH-FUNNEL-01.
+const compositionPkgPath = PlatformModulePath + "/runtime/composition"
+
 // hasCompositionCellModuleReturnType returns true when af contains a top-level
-// function named "generatedCellModules" whose return type is []<qualifier>.CellModule
-// (i.e. a SelectorExpr with Sel.Name == "CellModule"). This is the composition
-// API form where CellModule is imported from an external package.
+// function named "generatedCellModules" whose return type is
+// []<qualifier>.CellModule AND <qualifier> resolves (via af's import
+// declarations) to compositionPkgPath. This is the composition-API form where
+// CellModule is imported from runtime/composition.
+//
+// AI-robust grade: Medium. The qualifier→import-path resolution is performed at
+// the AST level (alias-aware), so a decoy `otherpkg.CellModule` selector — or a
+// hostile package aliased as `composition` but pointing elsewhere — does NOT
+// satisfy it; only a real import of runtime/composition does. This is stronger
+// than a bare Sel.Name check but is not full go/types resolution (this guard
+// runs under the AST-only Run, not RunTyped). The Hard upstream for the
+// generated form lives in the codegen golden TestGenerateModulesGen_CompositionForm
+// (kernel/assembly), which byte-locks the emitted []composition.CellModule
+// return type and its import; this archtest is the type-aware backstop for the
+// non-generated / legacy entrypoint dirs where no golden applies.
 func hasCompositionCellModuleReturnType(af *ast.File) bool {
 	_, ok := FindFirstInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) bool {
 		if fn.Recv != nil || fn.Name.Name != "generatedCellModules" {
@@ -726,9 +744,38 @@ func hasCompositionCellModuleReturnType(af *ast.File) bool {
 			return false
 		}
 		sel, isSel := arr.Elt.(*ast.SelectorExpr)
-		return isSel && sel.Sel.Name == "CellModule"
+		if !isSel || sel.Sel.Name != "CellModule" {
+			return false
+		}
+		qualifier, isIdent := sel.X.(*ast.Ident)
+		if !isIdent {
+			return false
+		}
+		return importPathForQualifier(af, qualifier.Name) == compositionPkgPath
 	})
 	return ok
+}
+
+// importPathForQualifier resolves a package qualifier (as it appears before a
+// selector, e.g. "composition" in composition.CellModule) to its import path by
+// scanning af's import declarations. It honors explicit aliases and falls back
+// to the path's last segment for unaliased imports. Returns "" when no import
+// matches the qualifier.
+func importPathForQualifier(af *ast.File, qualifier string) string {
+	for _, imp := range af.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := path[strings.LastIndex(path, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name == qualifier {
+			return path
+		}
+	}
+	return ""
 }
 
 // hasTopLevelTypeDecl reports whether af contains a top-level type declaration
