@@ -20,20 +20,24 @@
 //
 //	A2 (Downstream Hard — form-lock on contextHandler.Handle and WithAttrs):
 //	   Within runtime/observability/logging.contextHandler:
-//	   (a) Handle's body must contain an r.Attrs callback where every AddAttrs
-//	       call passes redaction.RedactSlogAttr as the transformation; message
-//	       must pass through redaction.RedactString.
-//	   (b) WithAttrs's body must contain a loop over the attrs slice where every
-//	       assignment to redacted[i] uses redaction.RedactSlogAttr(a).
+//	   (a) Handle's r.Attrs callback must pass EVERY AddAttrs argument through
+//	       redaction.RedactSlogAttr (per-arg form-lock — a bare AddAttrs(rawAttr)
+//	       fails); message must pass through redaction.RedactString.
+//	   (b) WithAttrs must NOT pass the raw attrs param to inner.WithAttrs and must
+//	       build the bound slice via redaction.RedactSlogAttr (anti raw-passthrough
+//	       form-lock). #1036 review F4 + round-3 upgraded both from presence checks.
 //	   AST form-lock: the shape is structurally matched. A future edit that
-//	   drops the redaction call fails A2.
+//	   drops the redaction call, adds a bare AddAttrs, or binds the raw param
+//	   fails A2.
 //
-//	A3 (Upstream Medium — entry point SetDefault caller allowlist):
-//	   The four production entry point functions (runCorebundle, runIotdevice,
+//	A3 (Upstream Medium — entry point SetDefault present AND first-ordered):
+//	   The production entry point functions (runCorebundle, runIotdevice,
 //	   runTodoorder, main in examples/ssobff/main.go) must each contain a
-//	   slog.SetDefault(slog.New(logging.NewHandler(...))) call. This is a
-//	   caller-allowlist Medium gate: Go cannot enforce that SetDefault must be
-//	   called at process startup, and cannot seal the entry before early logs.
+//	   slog.SetDefault(slog.New(logging.NewHandler(...))) call AS THE FIRST
+//	   call-bearing statement (ordering form-lock, #1036 review round-3 — nothing
+//	   fallible/logging may run before the seal). Medium: the lock is scoped to
+//	   the entry-point FuncDecl body; Go cannot gate package init() / other
+//	   goroutines touching slog.Default before the entry point runs.
 //	   Hard-upgrade path: codegen injection of a generated first-line seal into
 //	   each assembly entrypoint. Tracked in gh #1401.
 //
@@ -56,25 +60,23 @@
 //     production file outside logging/ implements slog.Handler (production
 //     implementations of the Handler interface should only be in logging/).
 //
-//   - A2 uses AST matching for the presence of redaction.RedactSlogAttr and
-//     redaction.RedactString in the Handle body; it verifies the key call shapes
-//     but not every possible execution branch (e.g., a conditional path that
-//     bypasses redaction). Reverse self-check
-//     TestSlogHandlerSealedFunnel_A2_DetectsViolation exercises the detection
-//     logic on synthetic source (injects a fake Handle body missing the
-//     RedactSlogAttr call and confirms a violation is reported).
+//   - A2 form-locks the Handle r.Attrs callback (every AddAttrs arg) and the
+//     WithAttrs bound slice (anti raw-passthrough), but does not trace data flow
+//     through arbitrary helper functions (e.g. attrs redacted inside a separate
+//     unexported helper then returned). Reverse self-check
+//     TestSlogHandlerSealedFunnel_A2_DetectsViolation injects a fake Handle body
+//     with a bare AddAttrs and confirms a violation is reported.
 //
-//   - A3 checks function bodies using EachInSubtree full recursive traversal,
-//     so SetDefault inside a nested if/defer/closure within the entry-point
-//     function body WILL be detected. The true blind spot is a SetDefault call
-//     inside a separate helper function called from the entry point — cross-
-//     FuncDecl call chains are not tracked. Reverse self-check
-//     TestSlogHandlerSealedFunnel_A3_DetectsViolation verifies that the
-//     production runCorebundle contains the required SetDefault call.
-//
-//   - A3 does not cover the timing gap between process startup and the SetDefault
-//     call (early package-level slog calls before the seal). This is the primary
-//     reason A3 is Medium rather than Hard. The Hard-upgrade path is gh #1401.
+//   - A3 form-locks ordering WITHIN the entry-point body (the seal must be the
+//     first call-bearing statement; a fallible/logging call before it fails).
+//     The residual blind spots are (i) a SetDefault inside a separate helper
+//     called from the entry point (cross-FuncDecl flow is not traced), and
+//     (ii) the process-init window — a package init() or goroutine touching
+//     slog.Default before the entry point runs. Both are why A3 stays Medium;
+//     the #1401 codegen path (seal as the generated main's first line) is the
+//     Hard upgrade. Reverse self-check
+//     TestSlogHandlerSealedFunnel_A3_DetectsViolation verifies the production
+//     runCorebundle contains and orders the required SetDefault call.
 //
 // Note on REPO-LOG-KEY-ID-REDACT-01 (tools/archtest/repoerr_test.go):
 //
@@ -296,36 +298,67 @@ func contextHandlerHandleRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []D
 	return ds
 }
 
-// contextHandlerWithAttrsRedactCheck verifies that inside contextHandler.WithAttrs,
-// the per-element assignment uses redaction.RedactSlogAttr.
+// contextHandlerWithAttrsRedactCheck form-locks contextHandler.WithAttrs
+// (#1036 review round-3): a presence "RedactSlogAttr appears once" check would
+// still pass if the raw attrs param were accidentally bound into the inner
+// handler. This form-lock instead requires BOTH:
+//   - the raw input attrs param is NOT passed directly to any .WithAttrs(...)
+//     call (anti raw-passthrough); and
+//   - a per-element redaction assignment `redacted[i] = redaction.RedactSlogAttr(a)`
+//     exists.
+//
+// Together these reject "forgot to redact, passed raw" and "redacted into a
+// slice but bound the raw param".
 func contextHandlerWithAttrsRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []Diagnostic {
 	redactionLocal := redactionLocalName(f)
-	if redactionLocal == "" {
+	mkDiag := func(msg string) []Diagnostic {
 		pos := p.Fset.Position(fn.Pos())
 		return []Diagnostic{{
-			Rel:  filepath.ToSlash(p.Rel(f)),
-			Line: pos.Line,
-			Message: "contextHandler.WithAttrs must import pkg/redaction and call" +
-				" RedactSlogAttr — SLOG-HANDLER-SEALED-FUNNEL-01 A2",
+			Rel:     filepath.ToSlash(p.Rel(f)),
+			Line:    pos.Line,
+			Message: msg + " — SLOG-HANDLER-SEALED-FUNNEL-01 A2",
 		}}
 	}
+	if redactionLocal == "" {
+		return mkDiag("contextHandler.WithAttrs must import pkg/redaction and call RedactSlogAttr")
+	}
 
-	// Check: WithAttrs body must call redaction.RedactSlogAttr at least once
-	// (for the per-element redaction loop).
-	foundRedactSlogAttr := false
+	// Name of the first parameter (the raw attrs slice).
+	paramName := ""
+	if fn.Type.Params != nil && len(fn.Type.Params.List) > 0 && len(fn.Type.Params.List[0].Names) > 0 {
+		paramName = fn.Type.Params.List[0].Names[0].Name
+	}
+
+	// (1) the raw param must NOT be passed directly to any .WithAttrs(...) call.
+	rawPassthrough := false
 	EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		if callMatches(call, redactionLocal, slogFunnelRedactSlogAttrFunc) {
-			foundRedactSlogAttr = true
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "WithAttrs" {
+			return
+		}
+		if paramName == "" || len(call.Args) != 1 {
+			return
+		}
+		if id, ok := call.Args[0].(*ast.Ident); ok && id.Name == paramName {
+			rawPassthrough = true
 		}
 	})
-	if !foundRedactSlogAttr {
-		pos := p.Fset.Position(fn.Pos())
-		return []Diagnostic{{
-			Rel:  filepath.ToSlash(p.Rel(f)),
-			Line: pos.Line,
-			Message: "contextHandler.WithAttrs must call redaction.RedactSlogAttr" +
-				" for each pre-bound attr — SLOG-HANDLER-SEALED-FUNNEL-01 A2",
-		}}
+	if rawPassthrough {
+		return mkDiag("contextHandler.WithAttrs must not pass the raw attrs param" +
+			" to inner.WithAttrs; bind a redaction.RedactSlogAttr-built slice")
+	}
+
+	// (2) a per-element redaction assignment must exist (RHS is RedactSlogAttr).
+	foundRedactAssign := false
+	EachInSubtree[ast.AssignStmt](fn.Body, func(as *ast.AssignStmt) {
+		EachInChildren[ast.CallExpr](as, func(rhs *ast.CallExpr) {
+			if callMatches(rhs, redactionLocal, slogFunnelRedactSlogAttrFunc) {
+				foundRedactAssign = true
+			}
+		})
+	})
+	if !foundRedactAssign {
+		return mkDiag("contextHandler.WithAttrs must redact each pre-bound attr via `redacted[i] = redaction.RedactSlogAttr(a)`")
 	}
 	return nil
 }
@@ -431,14 +464,42 @@ func slogSetDefaultShape(info *types.Info, call *ast.CallExpr, loggingPkgPath st
 	return IsCallToPkgFunc(info, newHandler, loggingPkgPath, slogFunnelNewHandlerFunc)
 }
 
+// firstCallBearingStmtSatisfies reports whether the FIRST top-level statement in
+// body that contains any call expression has a call satisfying pred. Statements
+// with no call (bare var decls etc.) are skipped. This is the pure-AST ordering
+// traversal behind the A3 ordering form-lock — separated from the typed seal
+// predicate so it can be reverse-self-checked with synthetic source
+// (TestSlogHandlerSealedFunnel_A3_Order_DetectsViolation).
+func firstCallBearingStmtSatisfies(body *ast.BlockStmt, pred func(*ast.CallExpr) bool) bool {
+	for _, stmt := range body.List {
+		hasCall := false
+		ok := false
+		EachInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) {
+			hasCall = true
+			if pred(call) {
+				ok = true
+			}
+		})
+		if !hasCall {
+			continue
+		}
+		return ok
+	}
+	return false
+}
+
 // TestSlogHandlerSealedFunnel_A3_EntryPointSeal enforces A3 (upstream Medium):
-// each production entry point function must contain a
-// slog.SetDefault(slog.New(logging.NewHandler(...))) call.
+// each production entry point function must (a) contain a
+// slog.SetDefault(slog.New(logging.NewHandler(...))) call, AND (b) that call
+// must be the FIRST call-bearing statement in the function body — no fallible or
+// logging call may run before the seal (ordering form-lock, #1036 review
+// round-3; a presence-only check would pass even if a log call preceded it).
 //
-// This is Medium (caller-allowlist) because Go provides no mechanism to guarantee
-// SetDefault is called before any slog.Default() usage; in particular, there is
-// no type-system gate for "first instruction at process start". The Hard upgrade
-// path is codegen injection tracked at gh #1401.
+// This remains Medium (not Hard) because the lock is scoped to the entry-point
+// FuncDecl body: Go provides no mechanism to guarantee the entry point itself
+// runs before package init() / other goroutines that may call slog.Default().
+// The Hard upgrade path is codegen injection of the seal as the first generated
+// line, tracked at gh #1401.
 func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 	t.Parallel()
 
@@ -456,6 +517,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 	var all []Diagnostic
 	for _, ep := range slogHandlerEntryPoints {
 		found := false
+		sealIsFirstCall := false
 		RunTyped(t, TypedOpts{Tests: false}, []string{ep.pkgPattern},
 			func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil {
@@ -473,26 +535,43 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 						if fn.Name.Name != ep.funcName {
 							return
 						}
-						// Look for a slog.SetDefault(slog.New(logging.NewHandler(...))) call
-						// in the function body.
+						// Existence: a slog.SetDefault(slog.New(logging.NewHandler(...))) call.
 						EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 							if slogSetDefaultShape(p.TypesInfo, call, loggingPkgPath) {
 								found = true
 							}
 						})
+						// Ordering form-lock (#1036 review round-3): the FIRST
+						// top-level statement that contains ANY call must contain
+						// the seal — nothing fallible or logging may run before
+						// SetDefault. A presence-only check would pass even if a
+						// log/fallible call preceded the seal.
+						sealIsFirstCall = firstCallBearingStmtSatisfies(fn.Body,
+							func(call *ast.CallExpr) bool {
+								return slogSetDefaultShape(p.TypesInfo, call, loggingPkgPath)
+							})
 					})
 				}
 				return nil
 			})
 
-		if !found {
+		switch {
+		case !found:
 			all = append(all, Diagnostic{
 				Rel:  ep.relPath,
 				Line: 0,
 				Message: "entry point function " + ep.funcName +
 					" must call slog.SetDefault(slog.New(logging.NewHandler(...)))" +
-					" before any log emission — SLOG-HANDLER-SEALED-FUNNEL-01 A3;" +
-					" Hard-upgrade path tracked at gh #1401",
+					" — SLOG-HANDLER-SEALED-FUNNEL-01 A3; Hard-upgrade path gh #1401",
+			})
+		case !sealIsFirstCall:
+			all = append(all, Diagnostic{
+				Rel:  ep.relPath,
+				Line: 0,
+				Message: "entry point function " + ep.funcName +
+					" must call slog.SetDefault(...) as the FIRST call-bearing" +
+					" statement (no fallible or logging call before the seal) —" +
+					" SLOG-HANDLER-SEALED-FUNNEL-01 A3; Hard-upgrade path gh #1401",
 			})
 		}
 	}
@@ -688,6 +767,176 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	if !handleChecked {
 		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A2 non-vacuity: %s.%s not found in %s",
 			slogFunnelContextHandlerTypeName, slogFunnelContextHandlerHandleMethod, slogFunnelLoggingPkgRelDir)
+	}
+}
+
+// TestSlogHandlerSealedFunnel_A2_WithAttrs_DetectsViolation is the reverse
+// self-check for the WithAttrs form-lock (#1036 review round-3): it confirms the
+// check flags (a) binding the RAW attrs param to inner.WithAttrs and (b) a body
+// with no per-element RedactSlogAttr assignment — neither of which a
+// presence-only "RedactSlogAttr appears once" check would catch.
+func TestSlogHandlerSealedFunnel_A2_WithAttrs_DetectsViolation(t *testing.T) {
+	t.Parallel()
+	const redactionImport = `"github.com/ghbvf/gocell/pkg/redaction"`
+	cases := []struct {
+		name    string
+		src     string
+		wantVio bool
+		desc    string
+	}{
+		{
+			name: "raw_passthrough",
+			src: `package logging
+import (
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	redacted := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		redacted[i] = redaction.RedactSlogAttr(a)
+	}
+	return &contextHandler{inner: h.inner.WithAttrs(attrs)}
+}
+`,
+			wantVio: true,
+			desc:    "binds raw attrs to inner.WithAttrs despite building a redacted slice",
+		},
+		{
+			name: "missing_redact_assign",
+			src: `package logging
+import (
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	_ = redaction.RedactString("noop")
+	return &contextHandler{inner: h.inner.WithAttrs(make([]slog.Attr, 0))}
+}
+`,
+			wantVio: true,
+			desc:    "no per-element RedactSlogAttr assignment",
+		},
+		{
+			name: "compliant",
+			src: `package logging
+import (
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	redacted := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		redacted[i] = redaction.RedactSlogAttr(a)
+	}
+	return &contextHandler{inner: h.inner.WithAttrs(redacted)}
+}
+`,
+			wantVio: false,
+			desc:    "binds the redacted slice — compliant",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "logging.go", tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err, "synthetic fixture must parse: %s", tc.desc)
+			p := &Pass{
+				Fset:  fset,
+				Files: []*ast.File{file},
+				Rel:   func(*ast.File) string { return "logging.go" },
+			}
+			var viols []Diagnostic
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Name == nil || fn.Body == nil {
+					return
+				}
+				if !HasReceiver(fn, slogFunnelContextHandlerTypeName) || fn.Name.Name != slogFunnelContextHandlerWithAttrsMethod {
+					return
+				}
+				viols = append(viols, contextHandlerWithAttrsRedactCheck(p, file, fn)...)
+			})
+			if tc.wantVio {
+				assert.NotEmpty(t, viols, "WithAttrs form-lock must detect %q: %s", tc.name, tc.desc)
+			} else {
+				assert.Empty(t, viols, "WithAttrs form-lock must not flag %q: %s; got %v", tc.name, tc.desc, viols)
+			}
+		})
+	}
+}
+
+// TestSlogHandlerSealedFunnel_A3_Order_DetectsViolation is the reverse self-check
+// for the A3 ordering form-lock (#1036 review round-3): it proves
+// firstCallBearingStmtSatisfies returns false when a non-matching call precedes
+// the target call, and true when the target is the first call-bearing statement.
+// Uses a pure-AST name predicate (.SetDefault) so no go/types is needed.
+func TestSlogHandlerSealedFunnel_A3_Order_DetectsViolation(t *testing.T) {
+	t.Parallel()
+	isSetDefault := func(call *ast.CallExpr) bool {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		return ok && sel.Sel != nil && sel.Sel.Name == "SetDefault"
+	}
+	cases := []struct {
+		name   string
+		src    string
+		wantOK bool
+		desc   string
+	}{
+		{
+			name: "seal_first",
+			src: `package main
+func run() {
+	slog.SetDefault(x)
+	other()
+}`,
+			wantOK: true,
+			desc:   "SetDefault is the first call-bearing statement",
+		},
+		{
+			name: "fallible_call_before_seal",
+			src: `package main
+func run() {
+	mods, err := loadModules()
+	_ = err
+	slog.SetDefault(x)
+	_ = mods
+}`,
+			wantOK: false,
+			desc:   "a fallible call precedes the seal — ordering violation",
+		},
+		{
+			name: "non_call_decls_before_seal_ok",
+			src: `package main
+func run() {
+	var n int
+	n = 1
+	slog.SetDefault(x)
+	_ = n
+}`,
+			wantOK: true,
+			desc:   "non-call statements before the seal are skipped",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "main.go", tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err, "synthetic fixture must parse: %s", tc.desc)
+			var got bool
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Name != nil && fn.Name.Name == "run" && fn.Body != nil {
+					got = firstCallBearingStmtSatisfies(fn.Body, isSetDefault)
+				}
+			})
+			assert.Equal(t, tc.wantOK, got, "A3 ordering: %s", tc.desc)
+		})
 	}
 }
 
