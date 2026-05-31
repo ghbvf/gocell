@@ -51,8 +51,10 @@ const (
 	// const surfaces as a declCount/file-anchor failure rather than a silent
 	// false-negative classification at runtime.
 	lastAdminSentinelConstName = "lastAdminTriggerSentinel"
-	lastAdminSentinelConstPkg  = "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres"
-	lastAdminSentinelConstRel  = "cells/accesscore/internal/adapters/postgres/lastadmin.go"
+	// Derive the platform import path from PlatformModulePath rather than a bare
+	// literal (ARCHTEST-MODULE-PATH-FUNNEL-01).
+	lastAdminSentinelConstPkg = PlatformModulePath + "/cells/accesscore/internal/adapters/postgres"
+	lastAdminSentinelConstRel = "cells/accesscore/internal/adapters/postgres/lastadmin.go"
 
 	// lastAdminMigrationsDir is the flat migrations directory (NNN_xxx.sql).
 	lastAdminMigrationsDir = "adapters/postgres/migrations"

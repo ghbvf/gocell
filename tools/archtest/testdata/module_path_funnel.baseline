@@ -38,7 +38,6 @@ tools/archtest/governance_rules_invariants_test.go
 tools/archtest/health_aggregation_test.go
 tools/archtest/health_verbose_invariants_test.go
 tools/archtest/healthz_invariants_test.go
-tools/archtest/identitymanage_last_admin_protection_test.go
 tools/archtest/kernel_poolstats_location_test.go
 tools/archtest/l2_outbox_atomicity_coverage_test.go
 tools/archtest/metrics_cancel_ctx_conformance_test.go
