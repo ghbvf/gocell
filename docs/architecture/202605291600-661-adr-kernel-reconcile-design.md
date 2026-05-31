@@ -161,13 +161,33 @@ for i := 0; i < c.MaxConcurrentReconciles; i++ {
   success→`Queue.Forget`；terminal error→记 metric 不重排；
 - `RecoverPanic`（默认开）：`Reconcile` 内 panic 被 recover → 转 `fmt.Errorf("panic: %v")`。
 
-**GoCell 适配（由 PR-A3 交付）**：`Loop` 起 `MaxConcurrentReconciles` 个 worker（默认 1）从
-内部 queue 取 `Request`；`process()` 做同 ID 串行（`sync.Map` inflight，level-triggered
-下重复触发安全丢弃 = `resultSkipped`）+ panic recovery（`safeReconcile`，单实体 panic 不杀
-worker，转 transient）+ 按 `Result`/error 重排。**未采纳 workqueue 的 dirty/processing 去重 +
-rate-limited delaying queue**：A3 用「skip-if-busy（丢重复，level-triggered 安全）+ per-requeue
-goroutine（受 runCtx 取消、WaitGroup 跟踪、无泄漏）」，比上游 workqueue 简（见 §7 威胁矩阵
-T-LEAK）；指数退避 rate limiter 是 PR-A5 的事（上游 default `5ms..1000s`，见 §2.4）。
+**GoCell 适配（由 PR-A3 交付，PR-A5 #1166 完善）**：`Loop` 起 `MaxConcurrentReconciles`
+个 worker（默认 1）从内部 queue 取 `Request`；`process()` 做同 ID 串行 + panic recovery
+（`recoverReconcile`，单实体 panic 不杀 worker，转 transient）+ 按 `Result`/error 重排。
+
+**§Amendment 2026-06-01 (PR-A5 #1166)**：原 §2.2 描述"未采纳 dirty/processing 去重 + rate-limited
+delaying queue"已被 PR-A5 落地实现取代，以下为当前真值（旧描述不保留，避免两套真理源）：
+
+- **F5 dirty/processing dedup（PR-A5 已落地）**：替换 A3 的「skip-if-busy（丢重复）+ sync.Map
+  inflight」方案。`Loop` 在 `entityMu` 下维护 `processing` + `dirty` 两张 map：一个 trigger
+  在 in-flight 期间到达时，写入 `dirty[entityID] = req`（latest wins，coalesced）而非丢弃；
+  in-flight 完成后检查 dirty——若有则以 delay=0 立即 re-enqueue（一次 re-run，不论中间积压多少
+  duplicate）。集合内的 set/clear 全在 entityMu 下原子完成，消除 lost-wakeup 窗口。
+  skipped metric 仍记录（对进行中实体的 coalesced trigger）；re-run 是新的 full reconcile，
+  不带 backoff（dirty re-run 是收敛，非失败重试）。
+
+- **F6 共享 rate-limited delaying queue（PR-A5 已落地）**：替换 A3 的「per-requeue goroutine」
+  方案。ONE `waitingLoop` goroutine 使用 `container/heap`（`waitingHeap`，readyAt min-heap，
+  对标 client-go `delaying_queue.go`）+ ONE reusable timer（`controlPlaneClock{}.newRequeueTimer`，
+  sealed real-clock，对齐 T-CLOCK carve-out）。所有重排路径（success/transient/dirty-re-run）
+  统一经 `enqueueDelayed` → `addCh` channel → waitingLoop heap，不再创建 per-entity goroutine。
+  goroutine 由 runCtx 取消退出（WaitGroup 跟踪），goleak-clean（`TestLoop_SharedWaitingLoopNoLeak`
+  守）。
+
+- **per-entity 指数退避（PR-A5 已落地）**：`entityBackoff`（`backoff.go`）对标 client-go
+  `ItemExponentialFailureRateLimiter`：`base·2^n`（n = 连续失败次数），base=5ms，max=1000s，
+  无 jitter。transient error 调 `backoff.When(entityID)` 递增 n；success 调 `backoff.Forget`
+  归零；dirty re-run 不经 backoff（delay=0）。
 
 ### 2.3 `pkg/builder/controller.go` — Builder DSL
 
@@ -478,9 +498,9 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 |----|------|------|------|
 | **T-IFACE** | 接口被错误泛化（加 namespace / Priority / Requeue bool，重新引入 K8s 残留） | `RECONCILE-{INTERFACE,REQUEST-FIELDS,RESULT-FIELDS}-FROZEN-01` reflect golden 锁字段/方法集 + 显式拒残留 + 反向盲区自检（由 PR-A2 交付） | **Hard**（违反不可表达——加字段即 CI 红，无 string-anchor 逃逸） |
 | **T-CLOCK** | 控制面 probe/requeue/duration 被注入非实时（fake）clock → Start 死锁 / 时间错乱 | `controlPlaneClock` 包私有 sealed type（包外不可构造/替换）+ `PROD-CLOCK-INJECTION-01` host-set 扩 `kernel/reconcile/`（gate(a) + (method,callee) form-uniqueness：`newProbeTimer/newRequeueTimer→NewTimer`、`now→Now`）+ GREEN/RED fixtures（由 PR-A3 交付）。**F4 amendment 重评（A4）**：原描述含「ticker」，但 as-built Loop **无 ticker**（Source + requeue 驱动）；周期节拍由 `TickerTrigger`（§3.2）持有并走**注入 clock**（fake-able 是刻意可测性，非威胁），故 carve-out **不加** `newTicker`——格子不退化，威胁面反而收窄（少一个 real-clock 调用点）。 | **Medium**（永久天花板——stdlib `time.NewTimer`/`Now` free function 在 Go 不可 uncallable；receiver-type 限制 + form-uniqueness 是该形状可达上限，同 runtime/command controlPlaneClock 自评） |
-| **T-LEAK** | Loop goroutine（worker / pump / requeue 定时）在 Stop/owner-cancel 后泄漏 | 全 goroutine 由 runCtx 派生 + `WaitGroup` 跟踪 + `done` channel；`Stop` cancel→等 done（StopTimeout budget）；per-requeue goroutine 双 select runCtx.Done。`goleak.VerifyNone` 守 6 个生命周期测试（由 PR-A3 交付，`-race` 通过） | **Medium**（runtime guard + goleak 测试；Go 无法在类型层表达「无 goroutine 泄漏」） |
-| **T-PANIC** | 单实体 Reconcile panic 杀 worker goroutine → 整进程崩 / 其他实体停摆 | `safeReconcile` recover → 转 transient error → 记 metric → 不影响其他实体；`TestLoop_PanicRecoveredAndOtherEntitiesUnaffected` 守（由 PR-A3 交付）。A5 细化 panic 分类/taxonomy | **Medium**（runtime recover guard + 测试；对标 controller-runtime `RecoverPanic`） |
-| **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | **leader election 非 fencing**（§4，client-go 明示不保证单 leader）——只 best-effort 收窄窗口。跨副本正确性靠 §4.3 `FencedRepository` + monotonic-epoch 写路径 CAS（结构拒 stale-epoch 写）+ §4.4 消费方幂等；同实例内同 EntityID 由 `inflight` sync.Map 串行（level-triggered 丢重复=skipped，由 PR-A3 交付，`TestLoop_SameEntityIDSerial` 守） | 同实例串行 **Medium**（runtime guard + 测试，已兑现）；跨副本正确性 **设计**（A6：`FencedWriter` 上游 Hard + `RECONCILE-FENCED-WRITE-FUNNEL-01` 下游 Hard + `RunFencingConformance` real-failure-injection 后定级；leader election 永远只是 best-effort 收窄，不计入正确性保证） |
+| **T-LEAK** | Loop goroutine（worker / pump / waitingLoop）在 Stop/owner-cancel 后泄漏 | 全 goroutine 由 runCtx 派生 + `WaitGroup` 跟踪 + `done` channel；`Stop` cancel→等 done（StopTimeout budget）。**PR-A5 amendment**：per-requeue goroutine 已被 ONE shared `waitingLoop` goroutine 取代（F6），消除「n 次 transient 泄漏 n 个 goroutine」的放大路径；`waitingLoop` 在 `runCtx.Done()` 退出（clean exit，pending heap items 被 abandoned 而非 channel-blocked）。`goleak.VerifyNone` 守 6 个生命周期测试 + `TestLoop_SharedWaitingLoopNoLeak`（PR-A5 新增，专项验证单-waitingLoop 形态）。**T-LEAK 评级维持 ✅ 不退化**：旧 per-requeue goroutine 设计同样 leak-free（双 select runCtx.Done），A5 是结构简化，非威胁修复；新设计泄漏面更小（固定 goroutine 数 vs 动态）。 | **Medium**（runtime guard + goleak 测试；Go 无法在类型层表达「无 goroutine 泄漏」） |
+| **T-PANIC** | 单实体 Reconcile panic 杀 worker goroutine → 整进程崩 / 其他实体停摆 | `recoverReconcile`（PR-A5，替换 A3 的 `safeReconcile`）recover → 转 transient error → 记 metric（resultTransient，无独立 panic label）→ 不影响其他实体；`TestLoop_PanicRecoveredAndOtherEntitiesUnaffected` + `TestRecovery_PanicConvertsToError` + `TestRecovery_PanicMetricRecorded` 守（PR-A5 #1166 落地，panic → transient 语义已兑现） | **Medium**（runtime recover guard + 测试；对标 controller-runtime `RecoverPanic`） |
+| **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | **leader election 非 fencing**（§4，client-go 明示不保证单 leader）——只 best-effort 收窄窗口。跨副本正确性靠 §4.3 `FencedRepository` + monotonic-epoch 写路径 CAS（结构拒 stale-epoch 写）+ §4.4 消费方幂等；同实例内同 EntityID 由 dirty/processing dedup（F5，PR-A5 已落地）串行：processing 标记下互斥（同时到达的 trigger 被 coalesced 到 dirty 等待一次 re-run，非多路并行），`TestLoop_SameEntityIDSerial` + `TestLoop_DirtyDedup_CoalescesDuplicates` 守。**T-DUAL 评级维持 ✅ 不退化**：F5 是对 A3 sync.Map skip-if-busy 的强化——旧方案丢弃 duplicate（level-triggered 安全，但错过了一次 re-run）；新方案将 duplicate coalesced 为一次 re-run，收敛更快，不引入新的 dual-execution 路径。 | 同实例串行 **Medium**（runtime guard + 测试，已兑现）；跨副本正确性 **设计**（A6：`FencedWriter` 上游 Hard + `RECONCILE-FENCED-WRITE-FUNNEL-01` 下游 Hard + `RunFencingConformance` real-failure-injection 后定级；leader election 永远只是 best-effort 收窄，不计入正确性保证） |
 | **T-LEADER** | leader 流转失败（双 leader / 长期空窗） | lease/renew 模型（§4.1–4.2）+ lost-lease ctx-cancel 中断（§4.2，收窄）；fail-closed（lease 故障 follower 不抢）；RTO ≤ LeaseDuration+1s（接管延迟，**非**双执行保证）。**双 leader 不靠 lease 排除**——靠 §4.3 epoch fencing CAS 让旧 leader 迟到写被结构拒绝 | **设计**（A6 落地 lease 模型 + epoch fencing + real-failure-injection conformance 后定级；明确 leader election ≠ fencing） |
 | **T-FENCE** | 旧 leader 迟到设备写绕过 fencing → 落地为重复命令（leader election 残余窗口的兜底失效） | §4.3 `FencedRepository`：`Loop` 只给 Reconciler epoch-bound `FencedWriter`，写路径 CAS 拒 `incoming_epoch < 已见最高`（**单调 epoch**，非 outbox 的 UUID identity-fencing）；绕过在 type system 不可表达（消费方无裸写面） | **设计**（A6：上游 Hard = `FencedWriter` 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + conformance 入列；leader election ≠ fencing 由本行结构兜底） |
 | **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | 终态 Builder funnel：`Loop` 构造私有化 + `RECONCILE-BUILDER-FUNNEL-01`（PR-A7）；A3–A6 exported-`Loop` 窗口期由临时 Medium archtest `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 机器守（见下注，**非** code review 兜底） | **过渡**（A3–A6：Medium 上游 archtest allowlist + 下游 Hard callsite）→ **A7 闭环**（上游 Hard 构造私有化 + 下游 Hard callsite） |
@@ -507,6 +527,27 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 > - 没有格子从 ✅ 退化为 ❌ 而无补偿：跨副本正确性原本就标「设计」（A6 未落地），本次只是把
 >   *保证来源* 从 lease（错）改为 epoch fencing + 幂等（对），并把 A6 验收门槛写死，使 A6 实现者
 >   无法回退到「信 lease」的旧错。fencing 设计是 docs（不建代码），不违反 §6 trigger gate。
+
+> **§Amendment 2026-06-01 (PR-A5 #1166) — F5/F6 落地威胁矩阵逐行重评**：
+> PR-A5 落地 F5（dirty/processing dedup）+ F6（shared waitingLoop delaying queue）+
+> per-entity 指数退避（5ms..1000s no-jitter）。依 AI-robust §"ADR amendment 落地必查"规则，
+> 逐行重评：
+> - **T-LEAK**：旧描述「per-requeue goroutine 双 select runCtx.Done」已被 ONE shared waitingLoop
+>   goroutine 取代（F6），goroutine 在 runCtx.Done() 退出，pending heap items abandoned（clean
+>   exit）。旧设计 leak-free；新设计泄漏面更小（固定 goroutine 数）。
+>   **结论：✅ 不退化**（仍 leak-free）。goleak regression test `TestLoop_SharedWaitingLoopNoLeak`
+>   (PR-A5) 专项验证单-waitingLoop 形态。缓解列已同 PR 重写为当前真值，不保留旧描述。
+> - **T-DUAL**：旧描述「sync.Map inflight 串行，level-triggered 丢重复=skipped」已被 F5
+>   dirty/processing dedup 取代（processing 标记 + dirty map，coalesced re-run）。F5 是强化，
+>   不引入新的 dual-execution 路径——同 EntityID 仍严格串行（`entityMu` 下互斥）。
+>   **结论：✅ 不退化**（更强：duplicate 不再丢弃，而是 coalesced 触发一次 re-run）。
+>   缓解列已同 PR 重写为当前真值。
+> - **T-PANIC**：旧描述「A5 细化 panic 分类/taxonomy（待落地）」已落地（`recoverReconcile`
+>   wrapper，panic → transient，无独立 panic label）。
+>   **结论：✅ 不退化**。缓解列已更新为当前真值（`recoverReconcile` 取代 `safeReconcile`）。
+> - **其他格子**（T-IFACE / T-CLOCK / T-LEADER / T-FENCE / T-BUILDER）：PR-A5 不涉及这些域，
+>   评级不变，无需重评。
+> - **没有格子从 ✅ 退化为 ⚠️/❌**：F5/F6 是调度内核的结构简化 + 强化，非行为退步。
 
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：

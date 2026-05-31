@@ -133,8 +133,8 @@ func (h *waitingHeap) Pop() any {
 // transplanted from runtime/command.SweeperLifecycle; the per-entity worker
 // dispatch and requeue are reconcile-specific.
 //
-// Construct via the Builder (a later PR) in production; the exported fields
-// support direct struct construction for tests and the kernel/command migration.
+// Construct via the Builder (PR-A7, not yet landed) in production; the exported
+// fields support direct struct construction for tests and the kernel/command migration.
 //
 // Owner ctx (controller-runtime Runnable.Start semantics): Start receives the
 // long-lived owner ctx and derives the workers' runCtx from it, so assembly
@@ -154,7 +154,7 @@ type Loop struct {
 	ReconcilerID string
 	// Reconciler is the required convergence callback.
 	Reconciler Reconciler
-	// Source feeds Requests into the Loop (a Trigger produces it in a later PR;
+	// Source feeds Requests into the Loop (a Trigger, PR-A4, produces it;
 	// tests inject a channel directly). nil means "no external feed" — the Loop
 	// still runs and self-sustains entities already seeded via requeue.
 	Source <-chan Request

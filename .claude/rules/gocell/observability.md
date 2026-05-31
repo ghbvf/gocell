@@ -255,8 +255,8 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 
 | Archtest ID | 摘要 | 评级 |
 |---|---|---|
-| `RECONCILE-RESULT-LABEL-VALUES-FROZEN-01` | `result` label 值集冻结（4 个 `result*` const 字符串值 vs. hardcoded golden） | Medium（archtest；Hard 升级路径 = metricschema golden 字节锁，追踪 gh #<TBD-result-label-golden>） |
-| `RECONCILE-REQUEUE-ENQUEUE-CALLER-01` | kernel/reconcile 内所有 `SendStmt` 必须在受认可函数范围内（enclosing FuncDecl allowlist） | Medium（archtest；Hard 升级路径 = channel send-end 接口封装 + 构造 seal，追踪 gh #<TBD-requeue-enqueue-hard>） |
+| `RECONCILE-RESULT-LABEL-VALUES-FROZEN-01` | `result` label 值集冻结（4 个 `result*` const 字符串值 vs. hardcoded golden） | Medium（archtest；Hard 升级路径 = metricschema golden 字节锁，追踪 gh #1416） |
+| `RECONCILE-REQUEUE-ENQUEUE-CALLER-01` | kernel/reconcile 内所有 `SendStmt` 必须在受认可函数范围内（enclosing FuncDecl allowlist） | Medium（archtest；Hard 升级路径 = channel send-end 接口封装 + 构造 seal，追踪 gh #1418） |
 
 完整盲区清单 + 反向自检活在各 archtest 的 package godoc；本节只做导航。
 

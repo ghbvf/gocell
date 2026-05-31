@@ -45,7 +45,7 @@
 // interface whose Send method is the only write surface, and seal construction
 // so only waitingLoop can hold the send-end. That would make "calling Send
 // from outside the sanctioned goroutine" a type-system violation (Hard). Tracked
-// at gh #<TBD-requeue-enqueue-hard> (open this issue after merging PR-A5).
+// at gh #1418.
 //
 // # Blind spots (per ai-robust.md §"工具选定后强制盲区自检")
 //

@@ -6,9 +6,11 @@
 // from runtime/command.SweeperLifecycle — which is present from that commit on;
 // PR-A4 landed the Trigger source abstraction (TickerTrigger / ChannelTrigger).
 // Comments here describe how each type is consumed by the Loop to pin its
-// contract. Later PRs refine scheduling (PR-A5 adds a rate-limited delaying
-// queue + dirty dedup) and construction (PR-A7 privatizes the Loop constructor
-// behind a Builder, wiring a Trigger's output into the Loop's queue); see the
+// contract. PR-A5 (#1166) refined scheduling: it added the shared heap-based
+// delaying queue (F6, one waitingLoop goroutine) + dirty/processing dedup (F5,
+// coalescing in-flight triggers into a single re-run) + per-entity exponential
+// backoff (5ms..1000s, no jitter). PR-A7 will privatize the Loop constructor
+// behind a Builder, wiring a Trigger's output into the Loop's queue; see the
 // design ADR for the staged plan.
 //
 // # When to use

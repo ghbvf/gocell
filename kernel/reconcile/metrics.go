@@ -25,8 +25,9 @@ const (
 
 // Reconcile result label values for reconcile_total{result=...}. This is the
 // frozen value set (FR-010): success / transient / permanent / skipped. A
-// recovered reconciler panic is classified transient (it is retryable); a
-// dedicated panic disposition is deferred to the backoff/recovery PR.
+// recovered reconciler panic is classified transient (it is retryable); there
+// is no separate "panic" label — recovery.go::recoverReconcile wraps panics as
+// transient errors and classify() routes them to resultTransient (PR-A5 #1166).
 const (
 	resultSuccess   = "success"
 	resultTransient = "transient"

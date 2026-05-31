@@ -23,8 +23,7 @@
 // Hard upgrade path: enroll the result value set into the metricschema golden
 // so a value-freeze is byte-locked at codegen time. That would make "adding a
 // 5th result value without updating the golden" a codegen-diff CI failure
-// (Hard). Tracked at gh #<TBD-result-label-golden> (open this issue after
-// merging PR-A5).
+// (Hard). Tracked at gh #1416.
 //
 // # Blind spots (per ai-robust.md §"工具选定后强制盲区自检")
 //
