@@ -20,14 +20,14 @@
 // but fail the physical-isolation contract — both writers share one chain.
 //
 // AUDIT-NS-DISJOINT-01 closes this gap with an AST-level invariant: every
-// production platform/auditcore source taken together must invoke both
+// production cellmodules/auditcore source taken together must invoke both
 // audit.BootstrapNamespace() at least once AND must contain at least one
 // reference to a distinct "auditcore" NamespaceID. Reverse self-check fixtures
 // confirm the scanner actually catches a single-namespace configuration.
 //
-// Scope: platform/auditcore/ production (non-test) packages — the audit-chain
-// wiring moved from cmd/corebundle to the platform/ composition-root layer in
-// issue #1085 (AuditCoreModule.Provide now lives in platform/auditcore). Tests
+// Scope: cellmodules/auditcore/ production (non-test) packages — the audit-chain
+// wiring moved from cmd/corebundle to the cellmodules/ composition-root layer in
+// issue #1085 (AuditCoreModule.Provide now lives in cellmodules/auditcore). Tests
 // intentionally excluded — they may exercise single-namespace paths for unit
 // coverage of helpers.
 package archtest
@@ -122,11 +122,11 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 		ruleAuditNSDisjoint01, scanPkgPath)
 
 	assert.True(t, bootstrapNamespaceFound,
-		"%s: platform/auditcore production must call audit.BootstrapNamespace() at least once "+
+		"%s: cellmodules/auditcore production must call audit.BootstrapNamespace() at least once "+
 			"(issue #1121 / ADR 202605270230 — bootstrap chain wiring must be present in the composition root)",
 		ruleAuditNSDisjoint01)
 	assert.True(t, nonBootstrapNSFound,
-		"%s: platform/auditcore production must construct at least one ledger.NamespaceID "+
+		"%s: cellmodules/auditcore production must construct at least one ledger.NamespaceID "+
 			"distinct from \"bootstrap\" (the auditcore relay chain) — single-namespace "+
 			"configurations re-introduce the dual-writer fork bug (issue #1121)",
 		ruleAuditNSDisjoint01)

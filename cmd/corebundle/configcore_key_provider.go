@@ -48,9 +48,9 @@ func buildConfigCoreKeyProvider(
 	return kp, incFn, nil
 }
 
-// buildKeyProviderFromName is the adapter-aware key-provider factory formerly
-// located in platform/configcore/key_provider.go. It lives in cmd/ because it
-// imports adapters/vault (vault-transit path).
+// buildKeyProviderFromName is the adapter-aware key-provider factory that lives
+// in cmd/ rather than cellmodules/configcore because it imports adapters/vault
+// (vault-transit path).
 //
 // Returns nil (no provider) when providerName is empty and storageBackend is
 // not postgres. Callers must treat nil as "use NoopTransformer".
@@ -68,7 +68,7 @@ func buildKeyProviderFromName(
 					"NoopTransformer fallback is disabled because it would "+
 					"persist sensitive values unencrypted.")
 		}
-		// Return nil → platform/configcore will use NoopTransformer (memory mode).
+		// Return nil → cellmodules/configcore will use NoopTransformer (memory mode).
 		return nil, nil //nolint:nilnil // memory mode: nil KeyProvider is the documented no-key sentinel
 	}
 	switch providerName {

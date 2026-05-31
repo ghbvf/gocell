@@ -200,9 +200,9 @@ func matchCellOwnedSubpackage(modPrefix, dep string) (ownerPrefix string, ok boo
 }
 
 // isCellOwnedSubpackageExempt reports whether srcPath is permitted to
-// import a cell-owned subpackage rooted at ownerPrefix. cmd/, platform/, and
+// import a cell-owned subpackage rooted at ownerPrefix. cmd/, cellmodules/, and
 // examples/ are universally unrestricted composition-root layers; the owning
-// cell's tree may import freely. platform/ is the importable Composition Root
+// cell's tree may import freely. cellmodules/ is the importable Composition Root
 // layer (#1085 LayerCellModules) and must have the same exemptions as cmd/.
 func isCellOwnedSubpackageExempt(modPrefix, srcPath, srcLayer, ownerPrefix string) bool {
 	if srcLayer == "cmd" || srcLayer == "cellmodules" || srcLayer == "examples" {

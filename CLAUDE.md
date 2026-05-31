@@ -28,7 +28,7 @@ runtime/      — 通用运行时（http / auth / worker / observability）
 adapters/     — 外部系统适配（postgres / redis / rabbitmq / websocket / s3 / oidc）
 pkg/          — 共享工具包（errcode / ctxkeys / httputil / query）
 cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
-platform/     — Composition Root 层：将平台 Cell 绑定到 adapter，对外暴露 Module() composition.CellModule（accesscore / auditcore / configcore + 共享 helper cellsecrets）
+cellmodules/  — Composition Root 层：将平台 Cell 绑定到 adapter，对外暴露 Module() composition.CellModule（accesscore / auditcore / configcore + 共享 helper cellsecrets）
 examples/     — 示例项目（ssobff / todoorder / iotdevice / corebundlestarter），可内置示例 cells/contracts/journeys
 generated/    — 工具生成产物（codegen 契约派生，禁止手工编辑）
 actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型的系统）
@@ -40,7 +40,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 - cells/ 依赖 kernel/ 和 runtime/，不依赖 adapters/（通过接口解耦）
 - runtime/ 可依赖 kernel/ 和 pkg/，不依赖 cells/、adapters/
 - adapters/ 实现 kernel/ 或 runtime/ 定义的接口
-- platform/ 是 Composition Root 层，可依赖所有层（绑定 cell↔adapter，对外暴露 Module() composition.CellModule）
+- cellmodules/ 是 Composition Root 层，可依赖所有层（绑定 cell↔adapter，对外暴露 Module() composition.CellModule）
 - examples/ 可以依赖所有层
 
 ### Cell 开发规则

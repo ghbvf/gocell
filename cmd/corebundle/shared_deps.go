@@ -106,7 +106,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 
 	// Build configcore key provider + stale-cipher counter callback.
 	// These live in cmd because they import adapters/vault + prometheus which
-	// must not reach runtime/composition or platform/configcore.
+	// must not reach runtime/composition or cellmodules/configcore.
 	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
 	cfgKeyProvider, cfgStaleCipherInc, err := buildConfigCoreKeyProvider(
 		topo.StorageBackend(), adapterMode,

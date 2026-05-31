@@ -62,13 +62,19 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 //     Close(ctx) rollback on any failure; nil-cell guard.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
-//  4. allOpts := runtimeOpts ++ cellOpts.
+//  4. allOpts := runtimeOpts ++ cellOpts ++ one bootstrap.WithManagedResource per
+//     accumulated module resource — handing each resource to the bootstrap
+//     lifecycle so phase10 shutdown calls its Close(ctx).
 //  5. Return &App{clk: shared.Clock, opts: allOpts}.
 //
-// Cleanup-on-failure: resources returned by each module's Provide are accumulated
-// into a provisional stack.  If any subsequent step fails, Build calls Close(ctx)
-// on all accumulated resources in reverse order (LIFO) before returning the error.
-// This prevents resource leaks when the assembly cannot complete.
+// Resource ownership: resources returned by each module's Provide are accumulated
+// into a provisional stack. If any step before a successful return fails, Build
+// calls Close(ctx) on all accumulated resources in reverse order (LIFO) and returns
+// the error — bootstrap never runs, so there is no double-close. On the success
+// path the same resources are instead promoted to bootstrap.WithManagedResource
+// options, so phase10 graceful shutdown stops them (e.g. a rate limiter's cleanup
+// goroutine). Dropping them on success — as an earlier version did — leaked those
+// goroutines.
 //
 // Note: module order is significant when a module consumes another's typed
 // [ModuleExports]. A module that produces an export (e.g. auditcore producing
@@ -146,5 +152,12 @@ func (b *Builder) Build(
 	}
 
 	allOpts := append(runtimeOpts, cellOpts...) //nolint:gocritic // intentional: runtime opts first, then cell opts
+	// Promote the accumulated module resources to bootstrap-owned lifecycle
+	// resources so phase10 shutdown closes them. Until this point they were only
+	// tracked for failure rollback; the success path must hand them off or their
+	// teardown (e.g. rate-limiter cleanup goroutine) never runs.
+	for _, r := range provisional {
+		allOpts = append(allOpts, bootstrap.WithManagedResource(r))
+	}
 	return &App{clk: shared.Clock, opts: allOpts}, nil
 }

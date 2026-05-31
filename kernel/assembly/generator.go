@@ -119,7 +119,7 @@ type modulesContext struct {
 // modulesCompositionContext is the template context for
 // modules_gen_composition.go.tpl. Used when assembly.yaml declares
 // build.compositionAPI: true — the composition API form uses
-// runtime/composition.CellModule and platform/{cellID}.Module() calls
+// runtime/composition.CellModule and cellmodules/{cellID}.Module() calls
 // instead of local *Module struct types.
 type modulesCompositionContext struct {
 	AssemblyID    string
@@ -243,7 +243,7 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 // assembly.yaml.cells (not sorted), preserving runtime startup order.
 //
 // When assembly.yaml declares build.compositionAPI: true, the output uses
-// the runtime/composition.CellModule form (platform/{cellID}.Module() calls)
+// the runtime/composition.CellModule form (cellmodules/{cellID}.Module() calls)
 // — see modules_gen_composition.go.tpl. Otherwise, the legacy local-type
 // form is emitted (modules_gen.go.tpl), which is used by examples/.
 //

@@ -156,7 +156,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// --- Step 3: Build production-shaped bundle: eb is the relay publisher ---
 	eb := eventbus.New(clock.Real())
 
-	// Set env vars required by platform/configcore.Module().Provide() in postgres mode.
+	// Set env vars required by cellmodules/configcore.Module().Provide() in postgres mode.
 	// buildE2EConfigCoreShared runs the path under real mode (postgres requires it)
 	// and wires the cursor key + key provider from these env values.
 	t.Setenv("GOCELL_CONFIGCORE_KEY_PROVIDER", "local-aes")
@@ -474,7 +474,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// --- Step 3: Build production-shaped bundle ---
 	eb := eventbus.New(clock.Real())
 
-	// Set env vars required by platform/configcore.Module().Provide() in postgres mode.
+	// Set env vars required by cellmodules/configcore.Module().Provide() in postgres mode.
 	t.Setenv("GOCELL_CONFIGCORE_KEY_PROVIDER", "local-aes")
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 

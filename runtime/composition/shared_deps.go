@@ -3,6 +3,8 @@ package composition
 import (
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -161,10 +163,12 @@ func NewSharedDeps(d SharedDeps) (*SharedDeps, error) {
 	return &d, nil
 }
 
-// validate checks that all required cross-cutting dependencies are present. It
-// mirrors the field-presence half of cmd/corebundle's validateCore, but omits
-// production-control-plane checks (nonce store kind, claimer kind, health
-// reachability) that depend on cmd-private types.
+// validate checks that all required cross-cutting dependencies are present and
+// runs the topology-derivable startup guards that depend only on public
+// SharedDeps fields (health-listener reachability). It omits the
+// production-control-plane checks that depend on cmd-private types (nonce store
+// kind, claimer kind, internal guard, verbose-endpoint token) — those stay in
+// cmd/corebundle's validateCorebundleDeps.
 func (d *SharedDeps) validate() error {
 	if d == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -214,5 +218,47 @@ func (d *SharedDeps) validate() error {
 		missing("ConsumerClaimer")
 	}
 
+	errs = append(errs, d.validateHealthReachability()...)
+
 	return errors.Join(errs...)
+}
+
+// validateHealthReachability rejects a loopback-only health-listener bind address
+// in production adapter mode, where kubelet HTTP probes and Prometheus PodIP /
+// Service scrapes cannot reach container loopback. It reads only public SharedDeps
+// fields (Topology, HealthHTTPAddr, HealthLocalOnly), so every composition
+// consumer — not just cmd/corebundle — inherits the guard. Set HealthLocalOnly
+// (GOCELL_HTTP_HEALTH_LOCAL_ONLY=1) only for same-pod sidecar / exec-probe
+// deployments.
+func (d *SharedDeps) validateHealthReachability() []error {
+	if !d.Topology.RequireProductionControlPlane() || d.HealthLocalOnly {
+		return nil
+	}
+	if d.HealthHTTPAddr == "" || !isLoopbackBindAddr(d.HealthHTTPAddr) {
+		return nil
+	}
+	return []error{errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"GOCELL_HTTP_HEALTH_ADDR is loopback-only in adapter mode \"real\"; "+
+			"kubelet HTTP probes and Prometheus PodIP/Service scrapes cannot "+
+			"reach container loopback. Set GOCELL_HTTP_HEALTH_ADDR=:9091 "+
+			"(or a Pod-reachable address), or set GOCELL_HTTP_HEALTH_LOCAL_ONLY=1 "+
+			"only for same-pod sidecar or exec-probe deployments.")}
+}
+
+// isLoopbackBindAddr reports whether addr binds a loopback host (localhost or a
+// loopback IP). A bare host with no port is treated as the host.
+func isLoopbackBindAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

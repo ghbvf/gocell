@@ -2,7 +2,7 @@
 //
 // This example demonstrates how an external "independent repository" can
 // assemble the three GoCell platform cells (accesscore, auditcore, configcore)
-// using the public runtime/composition API and platform/<cell>.Module()
+// using the public runtime/composition API and cellmodules/<cell>.Module()
 // constructors — with zero external infrastructure (memory mode).
 //
 // It is the M11 dogfood target for issue #1085

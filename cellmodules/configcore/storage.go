@@ -42,7 +42,7 @@ type configCoreModuleResult struct {
 
 // buildConfigCoreOpts selects storage-adapter options based on topology.
 func buildConfigCoreOpts(clk clock.Clock, cfg configCoreModuleConfig) (configCoreModuleResult, error) {
-	clock.MustHaveClock(clk, "platform/configcore.buildConfigCoreOpts")
+	clock.MustHaveClock(clk, "cellmodules/configcore.buildConfigCoreOpts")
 	switch cfg.topology.StorageBackend() {
 	case "postgres":
 		return buildConfigCorePostgresOpts(clk, cfg)
@@ -68,7 +68,7 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 	if cfg.pg == nil {
 		return configCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"configcore postgres mode requires the postgres capability provider "+
-				"(provisionCapabilities must run before BuildApp)")
+				"(provisionCapabilities must run before Build)")
 	}
 	db, err := cellsecrets.PgxPoolFromProvider(cfg.pg)
 	if err != nil {

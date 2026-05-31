@@ -12,7 +12,7 @@
 // constructed in cmd/corebundle (which may import adapters/vault and
 // github.com/prometheus/client_golang). They are passed to this module via
 // composition.SharedDeps.ConfigKeyProvider and
-// composition.SharedDeps.ConfigStaleCipherInc so that platform/configcore
+// composition.SharedDeps.ConfigStaleCipherInc so that cellmodules/configcore
 // never imports those adapter-specific packages.
 //
 // ref: uber-go/fx fx.Module("configcore", ...) — self-contained module.

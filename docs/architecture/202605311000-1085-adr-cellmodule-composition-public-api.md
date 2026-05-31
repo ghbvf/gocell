@@ -1,8 +1,9 @@
-# ADR-1085: CellModule / SharedDeps / Builder / App 公开 Composition API 与 platform/ 层
+# ADR-1085: CellModule / SharedDeps / Builder / App 公开 Composition API 与 cellmodules/ 层
 
 **状态**：Accepted  
 **日期**：2026-05-31  
-**关联 Issue**：#1085（sub-issue of bundle-parent #1081 "cell development in independent repository"）
+**关联 Issue**：#1085（sub-issue of bundle-parent #1081 "cell development in independent repository"）  
+**实现说明**：本 ADR 原提案层名为 `platform/`，落地时重命名为 `cellmodules/`（helper pkg `platformshared` → `cellsecrets`）以避免与「平台 cell」概念及外部仓库产品名（如 zerotrust-platform）混淆；下文已统一为最终名 `cellmodules/`。
 
 ---
 
@@ -31,20 +32,20 @@
 
 `SharedDeps` 字段全部为接口或 kernel/runtime 类型（`kernelmetrics.Provider`、`idempotency.Claimer`、`*auth.JWTIssuer` 等），**不包含**任何 `adapters/prometheus` 或 `prometheus/client_golang` 具体类型，使 `runtime/composition` 不向 adapters/ 引入依赖。
 
-### 新建 `platform/` Composition Root 层
+### 新建 `cellmodules/` Composition Root 层
 
-将原 `cmd/corebundle/*_module.go` 中的 cell-to-adapter 绑定逻辑提取到新的 `platform/<cell>/module.go`：
+将原 `cmd/corebundle/*_module.go` 中的 cell-to-adapter 绑定逻辑提取到新的 `cellmodules/<cell>/module.go`：
 
-- `platform/accesscore.Module() composition.CellModule`
-- `platform/auditcore.Module() composition.CellModule`
-- `platform/configcore.Module(opts ...ModuleOption) composition.CellModule`
-- `platform/cellsecrets/`：共享 helper（cursor codec、HMAC key、env loader、demo key reject 等）
+- `cellmodules/accesscore.Module() composition.CellModule`
+- `cellmodules/auditcore.Module() composition.CellModule`
+- `cellmodules/configcore.Module(opts ...ModuleOption) composition.CellModule`
+- `cellmodules/cellsecrets/`：共享 helper（cursor codec、HMAC key、env loader、demo key reject 等）
 
-`platform/` 是与 `cmd/` 平行的 Composition Root 层，可依赖所有层（kernel/cells/runtime/adapters）。
+`cellmodules/` 是与 `cmd/` 平行的 Composition Root 层，可依赖所有层（kernel/cells/runtime/adapters）。
 
 ### `cmd/corebundle` depguard 升级
 
-`corebundle-no-cells` depguard rule：`cmd/corebundle` 禁止直接 import `cells/`，所有 cell 业务 wiring 必须通过 `platform/` 暴露的 `Module()` 消费。
+`corebundle-no-cells` depguard rule：`cmd/corebundle` 禁止直接 import `cells/`，所有 cell 业务 wiring 必须通过 `cellmodules/` 暴露的 `Module()` 消费。
 
 ### M11 Dogfood：`examples/corebundlestarter`
 
@@ -62,11 +63,11 @@ composition.New().
 
 ## 与 issue 字面方案的三处刻意偏差
 
-### (a) `Module()` 定义在 `platform/<cell>` 而非 `cells/<cell>`
+### (a) `Module()` 定义在 `cellmodules/<cell>` 而非 `cells/<cell>`
 
 **issue 建议**：让 `cells/<cell>` 直接暴露 `Module()`。
 
-**偏差理由**：`cells/` 依赖规则（`go-standards.md`、`cells-isolation` depguard）明确禁止 `cells/` 依赖 `adapters/`。`platform/accesscore.Module()` 构造了 `adapterpg.NewSessionStore`、`adapterredis.NewCache` 等 adapter 具体类型——这些调用必须在允许依赖 adapters 的层中发生。把 `Module()` 放在 `cells/` 会直接破坏 cells-isolation 约束。`platform/` 层作为 Composition Root 可依赖所有层，是正确的承载位置。
+**偏差理由**：`cells/` 依赖规则（`go-standards.md`、`cells-isolation` depguard）明确禁止 `cells/` 依赖 `adapters/`。`cellmodules/accesscore.Module()` 构造了 `adapterpg.NewSessionStore`、`adapterredis.NewCache` 等 adapter 具体类型——这些调用必须在允许依赖 adapters 的层中发生。把 `Module()` 放在 `cells/` 会直接破坏 cells-isolation 约束。`cellmodules/` 层作为 Composition Root 可依赖所有层，是正确的承载位置。
 
 ### (b) error-first `Build()` 而非 `MustBuild()`
 
@@ -88,13 +89,13 @@ composition.New().
 |---|---|---|
 | `cmd/corebundle` 不直接 import `cells/` | `.golangci.yml` `corebundle-no-cells` depguard | Hard（depguard，CI fail-closed） |
 | `runtime/composition` 不 import `adapters/` | `.golangci.yml` `runtime-isolation` depguard | Hard（depguard，CI fail-closed） |
-| `cells/` / `runtime/` / `adapters/` / `kernel/` / `pkg/` 不反向 import `platform/` | `.golangci.yml` 各 isolation rule 的 `deny: platform` 条目 | Hard（depguard，CI fail-closed） |
-| wrapper 函数只在 `platform/*` / `cmd/*` / `examples/<demo>/{main,app,run}.go` 调用 | archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01`（`tools/archtest/wrapper_location_test.go`，`isWrapperCallerAllowed` 已含 `platform/` 前缀） | Medium（archtest type-aware，nightly CI） |
-| prom 构造只在允许位置调用 | archtest `PROM-CALLER-*`（nightly CI allowlist 含 platform/） | Medium（同上） |
+| `cells/` / `runtime/` / `adapters/` / `kernel/` / `pkg/` 不反向 import `cellmodules/` | `.golangci.yml` 各 isolation rule 的 deny `github.com/ghbvf/gocell/cellmodules` 条目 | Hard（depguard，CI fail-closed） |
+| wrapper 函数只在 `cellmodules/*` / `cmd/*` / `examples/<demo>/{main,app,run}.go` 调用 | archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01`（`tools/archtest/wrapper_location_test.go`，`isWrapperCallerAllowed` 已含 `cellmodules/` 前缀） | Medium（archtest type-aware，nightly CI） |
+| prom 构造只在允许位置调用 | archtest `PROM-CALLER-*`（nightly CI allowlist 含 cellmodules/） | Medium（同上） |
 | `Build()` error-first，无 Must | type system（函数签名，无 MustBuild 导出符号） | Hard |
-| `platform/` 独立层分类（`LayerCellModules = "platform"`，区别于 `LayerCmd`） | `kernel/depgraph/layer.go` + `tools/archtest/archtest_test.go` LAYER-06 豁免扩展 | Medium（archtest LAYER-06，nightly CI） |
+| `cellmodules/` 独立层分类（`LayerCellModules = "cellmodules"`，区别于 `LayerCmd`） | `kernel/depgraph/layer.go` + `tools/archtest/archtest_test.go` LAYER-06 豁免扩展 | Medium（archtest LAYER-06，nightly CI） |
 
-**注**：`platform/` 与 `cmd/` 同属 composition-root 层，既有 composition-root archtests（cas/session/ledger 协议位置、wrapper 调用点）已通过 `platform/` 前缀覆盖，不存在扫描盲区。
+**注**：`cellmodules/` 与 `cmd/` 同属 composition-root 层，既有 composition-root archtests（cas/session/ledger 协议位置、wrapper 调用点）已通过 `cellmodules/` 前缀覆盖，不存在扫描盲区。
 
 **已落地（#1085 review 收口）**：原先 `BootstrapLedgerStore` 通过 `*SharedDeps` 字段突变在 auditcore module → accesscore module 之间传递的可变共享状态，已重构为 typed `ModuleExports` return：auditcore.Provide 返回 `ModuleExports{BootstrapLedgerStore: ...}`，Builder 左→右累积并经 `in` 参数喂给 accesscore.Provide（缺失时 fail-fast）。`SharedDeps` 同步去除该字段，成为构造后不再被 mid-Build 突变的 sealed bag。module 顺序仍由 `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` archtest 守卫；handoff 值类型 `*audit.BootstrapLedgerStore` 本身 sealed（NewBootstrapLedgerStore 非 nil + 命名空间校验），顺序门控为运行时 nil-check（Medium，Go 无法编译期表达「module X 必先于 Y」）。
 
@@ -105,7 +106,7 @@ composition.New().
 **无安全回归**：
 
 - auth plan（`NewAuthJWTFromAssembly`、`NewAuthServiceToken`）的构造仍在 composition root（`cmd/corebundle/bundle_options.go`、`examples/corebundlestarter/run.go`），严格符合 AUTH-PLAN-04。
-- `SharedDeps.InternalHMACRing` 字段由 cmd/ 在 env 解析阶段构造（`internalGuardFromEnv`），platform/ 消费该接口字段但不构造 HMAC key，符合单源原则。
+- `SharedDeps.InternalHMACRing` 字段由 cmd/ 在 env 解析阶段构造（`internalGuardFromEnv`），cellmodules/ 消费该接口字段但不构造 HMAC key，符合单源原则。
 - `SharedDeps` 仅携带接口字段，不暴露 adapter 实现细节，secrets 不在 wire layer 泄漏。
 
 ---
@@ -123,13 +124,13 @@ composition.New().
 | 文件 | 类型 |
 |---|---|
 | `runtime/composition/{cell_module,shared_deps,builder,app}.go` | 新建（公开 API） |
-| `platform/accesscore/module.go` | 新建（platform 层） |
-| `platform/auditcore/module.go` | 新建 |
-| `platform/configcore/{module,storage}.go` | 新建 |
-| `platform/cellsecrets/{env,secrets}.go` | 新建（共享 helper） |
+| `cellmodules/accesscore/module.go` | 新建（cellmodules 层） |
+| `cellmodules/auditcore/module.go` | 新建 |
+| `cellmodules/configcore/{module,storage}.go` | 新建 |
+| `cellmodules/cellsecrets/{env,secrets}.go` | 新建（共享 helper） |
 | `examples/corebundlestarter/{main,run,run_test}.go` | 新建（M11 dogfood） |
-| `cmd/corebundle/modules_gen.go` | 修改（调用 platform.Module()） |
-| `CLAUDE.md` | 修改（platform/ 层入 分层结构 + 依赖规则） |
-| `.claude/rules/gocell/go-standards.md` | 修改（platform/ 行入依赖表） |
-| `.claude/rules/gocell/cell-patterns.md` | 修改（platform/* 入 wrapper-location 允许列表） |
-| `cmd/CLAUDE.md` | 修改（platform/ 业务 wiring 说明 + corebundle-no-cells depguard 记录） |
+| `cmd/corebundle/modules_gen.go` | 修改（调用 cellmodules.Module()） |
+| `CLAUDE.md` | 修改（cellmodules/ 层入 分层结构 + 依赖规则） |
+| `.claude/rules/gocell/go-standards.md` | 修改（cellmodules/ 行入依赖表） |
+| `.claude/rules/gocell/cell-patterns.md` | 修改（cellmodules/* 入 wrapper-location 允许列表） |
+| `cmd/CLAUDE.md` | 修改（cellmodules/ 业务 wiring 说明 + corebundle-no-cells depguard 记录） |

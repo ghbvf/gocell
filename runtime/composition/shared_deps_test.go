@@ -113,6 +113,83 @@ func TestNewSharedDeps_StampsAndValidates(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestSharedDeps_Validate_RealModeRejectsLoopbackHealthAddr verifies that the
+// health-listener reachability guard — moved from cmd/corebundle to
+// composition.validate (#1085 follow-up) so external consumers inherit it —
+// rejects a loopback HealthHTTPAddr in production adapter mode unless
+// HealthLocalOnly waives it.
+func TestSharedDeps_Validate_RealModeRejectsLoopbackHealthAddr(t *testing.T) {
+	prodTopo, err := bootstrap.NewTopology("real", "postgres", true)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		addr            string
+		healthLocalOnly bool
+		wantErr         bool
+	}{
+		{name: "loopback rejected", addr: "127.0.0.1:9091", wantErr: true},
+		{name: "localhost rejected", addr: "localhost:9091", wantErr: true},
+		{name: "ipv6 loopback rejected", addr: "[::1]:9091", wantErr: true},
+		{name: "wildcard accepted", addr: ":9091"},
+		{name: "zero wildcard accepted", addr: "0.0.0.0:9091"},
+		{name: "pod reachable accepted", addr: "10.0.0.12:9091"},
+		{name: "loopback accepted with explicit local-only waiver", addr: "127.0.0.1:9091", healthLocalOnly: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			s := buildTestSharedDeps(t)
+			s.Topology = prodTopo
+			s.HealthHTTPAddr = tc.addr
+			s.HealthLocalOnly = tc.healthLocalOnly
+
+			err := s.validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "GOCELL_HTTP_HEALTH_ADDR")
+			assert.Contains(t, err.Error(), "GOCELL_HTTP_HEALTH_LOCAL_ONLY=1")
+		})
+	}
+}
+
+// TestIsLoopbackBindAddr table-drives the address parser used by
+// validateHealthReachability.
+func TestIsLoopbackBindAddr(t *testing.T) {
+	cases := []struct {
+		name string
+		addr string
+		want bool
+	}{
+		{"ipv4 loopback with port", "127.0.0.1:8080", true},
+		{"ipv4 loopback bare", "127.0.0.1", true},
+		{"ipv4 loopback alt range", "127.0.0.5:9090", true},
+		{"ipv6 loopback bracketed", "[::1]:8080", true},
+		{"ipv6 loopback bracketed bare", "[::1]", true},
+		{"ipv6 loopback unbracketed", "::1", true},
+		{"hostname localhost lowercase", "localhost:9090", true},
+		{"hostname localhost mixed case", "LocalHost:9090", true},
+		{"port-only colon means all interfaces", ":8080", false},
+		{"empty string", "", false},
+		{"public ipv4", "8.8.8.8:80", false},
+		{"private ipv4", "10.0.0.5:8080", false},
+		{"unspecified ipv4", "0.0.0.0:8080", false},
+		{"unspecified ipv6", "[::]:8080", false},
+		{"bare hostname not localhost", "example.com:443", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := isLoopbackBindAddr(tc.addr)
+			assert.Equal(t, tc.want, got, "addr=%q", tc.addr)
+		})
+	}
+}
+
 func TestSharedDeps_Validate_NilReceiver(t *testing.T) {
 	var s *SharedDeps
 	err := s.validate()

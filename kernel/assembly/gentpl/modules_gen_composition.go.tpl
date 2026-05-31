@@ -6,7 +6,9 @@ import (
 {{- range .ModuleImports}}
 	{{.}}
 {{- end}}
+{{- if .Capabilities}}
 	"github.com/ghbvf/gocell/runtime/capability"
+{{- end}}
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 

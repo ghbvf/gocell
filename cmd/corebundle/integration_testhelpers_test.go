@@ -127,7 +127,7 @@ var _ outbox.Publisher = discardPublisher{}
 
 // configCoreProvideResult mirrors the result shape of the old buildConfigCoreOpts
 // (pre-platform-migration). Integration tests use it to get configcore cell opts +
-// relay bootstrap opts without direct access to the now-unexported platform/configcore
+// relay bootstrap opts without direct access to the now-unexported cellmodules/configcore
 // internals.
 type configCoreProvideResult struct {
 	// Cell is the pre-built *configcore.ConfigCore cell.
@@ -138,7 +138,7 @@ type configCoreProvideResult struct {
 	Resources []kernellifecycle.ManagedResource
 }
 
-// buildConfigCoreCellFromShared calls platform/configcore.Module().Provide(ctx, shared)
+// buildConfigCoreCellFromShared calls cellmodules/configcore.Module().Provide(ctx, shared)
 // and returns the result in a test-friendly struct. Tests that need the
 // pre-built configcore cell + relay bootstrap opts use this instead of the
 // deleted cmd-internal buildConfigCoreOpts + ConfigCoreModuleConfig path.
@@ -153,7 +153,7 @@ func buildConfigCoreCellFromShared(
 ) configCoreProvideResult {
 	t.Helper()
 	c, _, opts, res, err := platformconfigcore.Module().Provide(ctx, shared, composition.ModuleExports{})
-	require.NoError(t, err, "platform/configcore.Module().Provide must succeed")
+	require.NoError(t, err, "cellmodules/configcore.Module().Provide must succeed")
 	require.NotNil(t, c, "configcore cell must be non-nil")
 	return configCoreProvideResult{
 		Cell:          c,

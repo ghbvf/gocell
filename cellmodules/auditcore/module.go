@@ -167,7 +167,7 @@ func buildAuditStores(
 	if shared.Topology.StorageBackend() == "postgres" {
 		if shared.PG == nil {
 			return nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires the postgres capability provider " +
-				"(provisionCapabilities must run before BuildApp)")
+				"(provisionCapabilities must run before Build)")
 		}
 		db, poolErr := cellsecrets.PgxPoolFromProvider(shared.PG)
 		if poolErr != nil {

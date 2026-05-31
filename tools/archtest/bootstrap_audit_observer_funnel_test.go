@@ -389,7 +389,7 @@ func exprStringForLog(c *ast.CallExpr) string {
 
 // TestBootstrapAuditObserverFunnelUpstreamMedium01 enforces the upstream
 // half: every production call to auth.NewBootstrapMiddleware in cmd/corebundle,
-// examples/ssobff, or platform/accesscore must hand the funnel-built observer
+// examples/ssobff, or cellmodules/accesscore must hand the funnel-built observer
 // as its third positional argument. The observer may be either the direct
 // CallExpr to audit.NewBootstrapAuthFailObserver or an identifier
 // short-declared from it in the same source file. All three packages share
@@ -397,7 +397,7 @@ func exprStringForLog(c *ast.CallExpr) string {
 // production wiring rule to keep an in-repo regression out of the funnel
 // impossible.
 //
-// platform/accesscore (#1085): composition-root layer added in Batch 3 of the
+// cellmodules/accesscore (#1085): composition-root layer added in Batch 3 of the
 // 577-composition-public-api refactor. It wires accesscore's bootstrap auth
 // middleware and must route the observer through the same funnel.
 //
@@ -419,7 +419,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	scanPaths := map[string]bool{
 		corebundlePkgPath: true,
 		ssobffPkgPath:     true,
-		// platform/accesscore is a composition-root layer (#1085) that wires the
+		// cellmodules/accesscore is a composition-root layer (#1085) that wires the
 		// bootstrap auth-fail observer; it must route through audit.NewBootstrapAuthFailObserver.
 		platformAccesscorePkgPath: true,
 	}
@@ -494,7 +494,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 		t.Logf("%s: %s — %s", ruleBootstrapAuditObserverFunnelUpstreamMedium01, v.location, v.reason)
 	}
 	assert.Empty(t, upstreamViolations,
-		"%s: cmd/corebundle, examples/ssobff, and platform/accesscore production callers of auth.%s "+
+		"%s: cmd/corebundle, examples/ssobff, and cellmodules/accesscore production callers of auth.%s "+
 			"must route through audit.%s; recovering to slog-only observers "+
 			"(the pre-PR shape) is what this rule prevents",
 		ruleBootstrapAuditObserverFunnelUpstreamMedium01, bootstrapMiddlewareName, observerFnName)

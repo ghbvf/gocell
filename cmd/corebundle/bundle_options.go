@@ -92,10 +92,12 @@ func newBootstrapFromOptions(clk clock.Clock, opts []bootstrap.Option) *bootstra
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the
 // shared cross-cutting deps, a pre-built assembly, a ConsumerBase, a metrics
-// handler, and the adapter info map. Called by runCorebundle after BuildApp returns.
+// handler, and the adapter info map. Invoked from the RuntimeOptionsFunc passed
+// to composition.Builder.Build.
 //
-// PoolResource options are contributed per-Cell by CellModule.Provide (via
-// BuildApp opts). This function covers only the cross-cutting concerns:
+// PoolResource options are contributed per-Cell by CellModule.Provide (and
+// threaded into bootstrap by the Builder). This function covers only the
+// cross-cutting concerns:
 // HTTP addr, publisher/subscriber, public/exempt endpoints, metrics, etc.
 func defaultRuntimeOptions(
 	shared *composition.SharedDeps,

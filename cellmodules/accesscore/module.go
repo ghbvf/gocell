@@ -197,7 +197,7 @@ func buildAccessBaseOpts(shared *composition.SharedDeps) ([]accesscell.Option, *
 func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session.Protocol) ([]accesscell.Option, session.Store, error) {
 	if shared.PG == nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires the postgres capability provider " +
-			"(provisionCapabilities must run before BuildApp)")
+			"(provisionCapabilities must run before Build)")
 	}
 	db, poolErr := cellsecrets.PgxPoolFromProvider(shared.PG)
 	if poolErr != nil {

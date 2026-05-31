@@ -94,6 +94,37 @@ func TestBuilder_HappyPath(t *testing.T) {
 	assert.True(t, m2.called)
 }
 
+// TestBuilder_HappyPath_ManagedResourcesThreaded verifies that on the success
+// path each module's ManagedResources are promoted to bootstrap.WithManagedResource
+// options (so phase10 shutdown closes them) instead of being dropped — the F1
+// fix. With empty runtime/cell opts, allOpts must contain exactly one option per
+// accumulated resource, and no resource may be Closed (success path never rolls
+// back).
+func TestBuilder_HappyPath_ManagedResourcesThreaded(t *testing.T) {
+	ctx := context.Background()
+
+	order := &closedOrder{}
+	r1 := &orderedMR{id: "r1", order: order}
+	r2 := &orderedMR{id: "r2", order: order}
+
+	c1 := stubCell("cell-1")
+	c2 := stubCell("cell-2")
+	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
+	m2 := &fakeCellModule{id: "mod2", cell: c2, mres: []kernellifecycle.ManagedResource{r2}}
+
+	app, err := New().With(m1, m2).Build(ctx, minimalSharedDeps(t),
+		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+	require.NoError(t, err)
+	require.NotNil(t, app)
+
+	// runtimeOpts (0) ++ cellOpts (0) ++ one WithManagedResource per resource (2).
+	assert.Len(t, app.opts, 2,
+		"each module ManagedResource must be threaded into bootstrap opts on success")
+	// Success path must not roll back: resources stay open for the bootstrap
+	// lifecycle to close at shutdown.
+	assert.Empty(t, order.calls, "no resource may be Closed on the success path")
+}
+
 // TestBuilder_NilModule_RollsBack verifies LIFO rollback when a nil module is encountered.
 func TestBuilder_NilModule_RollsBack(t *testing.T) {
 	ctx := context.Background()

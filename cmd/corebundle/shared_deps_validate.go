@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-	"strings"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
@@ -14,9 +12,11 @@ import (
 )
 
 // validateCorebundleDeps runs cmd-side production validation that depends on
-// cmd-private types (nonce store kind, claimer kind, health reachability,
+// cmd-private types (nonce store kind, claimer kind, internal guard,
 // control-plane token checks). Called after composition.SharedDeps.Validate()
-// in LoadSharedDepsFromEnv.
+// in LoadSharedDepsFromEnv. Health-listener reachability moved to
+// composition.SharedDeps.validate() (#1085 follow-up): it reads only public
+// fields, so every composition consumer inherits it.
 //
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
 // validates all fields before any component is constructed.
@@ -25,7 +25,6 @@ func validateCorebundleDeps(shared *composition.SharedDeps, locals *cmdLocals) e
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "SharedDeps: nil receiver")
 	}
 	errs := validateVerboseEndpoint(shared)
-	errs = append(errs, validateHealthReachability(shared)...)
 	errs = append(errs, validateInternalListenerGuard(shared, locals)...)
 	errs = append(errs, validateControlPlane(shared, locals)...)
 	return errors.Join(errs...)
@@ -130,35 +129,4 @@ func validateInternalListenerGuard(shared *composition.SharedDeps, locals *cmdLo
 	}
 	return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
 		"SharedDeps.InternalGuard must be set to protect /internal/v1/*; set GOCELL_SERVICE_SECRET")}
-}
-
-func validateHealthReachability(shared *composition.SharedDeps) []error {
-	if !shared.Topology.RequireProductionControlPlane() || shared.HealthLocalOnly {
-		return nil
-	}
-	if shared.HealthHTTPAddr == "" || !isLoopbackBindAddr(shared.HealthHTTPAddr) {
-		return nil
-	}
-	return []error{errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"GOCELL_HTTP_HEALTH_ADDR is loopback-only in adapter mode \"real\"; "+
-			"kubelet HTTP probes and Prometheus PodIP/Service scrapes cannot "+
-			"reach container loopback. Set GOCELL_HTTP_HEALTH_ADDR=:9091 "+
-			"(or a Pod-reachable address), or set GOCELL_HTTP_HEALTH_LOCAL_ONLY=1 "+
-			"only for same-pod sidecar or exec-probe deployments.")}
-}
-
-func isLoopbackBindAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	host = strings.Trim(host, "[]")
-	if host == "" {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

@@ -47,8 +47,8 @@ func TestRejectDemoKey_RealMode_EmptyKeyPasses(t *testing.T) {
 func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	devDefaults := []string{
 		"dev-hmac-key-replace-in-prod!!!!", // buildAuditProtocol("GOCELL_AUDITCORE_HMAC_KEY", ...)
-		"corebundle-audit-cursor-key-32b!", // platform/auditcore BuildCursorCodec(AUDITCORE)
-		"corebundle-cfg-cursor-key--32bb!", // platform/configcore BuildCursorCodec(CONFIGCORE)
+		"corebundle-audit-cursor-key-32b!", // cellmodules/auditcore BuildCursorCodec(AUDITCORE)
+		"corebundle-cfg-cursor-key--32bb!", // cellmodules/configcore BuildCursorCodec(CONFIGCORE)
 	}
 	for _, dd := range devDefaults {
 		t.Run(dd, func(t *testing.T) {

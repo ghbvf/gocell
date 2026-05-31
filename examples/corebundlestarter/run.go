@@ -1,13 +1,13 @@
 // run.go is the hand-written composition root for the corebundlestarter example.
 // It demonstrates the public runtime/composition API: constructing a
 // *composition.SharedDeps in dev/memory mode and assembling the three platform
-// cells via platform/<cell>.Module() — with zero external infrastructure.
+// cells via cellmodules/<cell>.Module() — with zero external infrastructure.
 //
 // This is the M11 dogfood target for issue #1085
 // (CellModule / SharedDeps / Builder / App public API).
 //
 // AUTH-PLAN-04: auth construction (NewAuthJWTFromAssembly, NewAuthServiceToken)
-// lives HERE in examples/ — not inside runtime/composition or platform/.
+// lives HERE in examples/ — not inside runtime/composition or cellmodules/.
 //
 // ref: uber-go/fx fx.New — single assembly entry point used by both production
 // and tests.

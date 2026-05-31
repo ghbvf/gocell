@@ -1,10 +1,10 @@
-// Package cellsecrets provides helpers shared across the platform/ cell
+// Package cellsecrets provides helpers shared across the cellmodules/ cell
 // modules (accesscore, auditcore, configcore) and cmd/corebundle.
 //
-// Unlike platform/internal/cellsecrets, this package is importable by
-// cmd/corebundle (composition root). It contains helpers that both platform/
-// cell modules and cmd/ need: demo-key rejection, cursor codec construction,
-// HMAC key loading, JWT key set loading, and the pgxpool type assertion.
+// This package is importable by cmd/corebundle (composition root). It contains
+// helpers that both cellmodules/ cell modules and cmd/ need: demo-key rejection,
+// cursor codec construction, HMAC key loading, JWT key set loading, and the
+// pgxpool type assertion.
 package cellsecrets
 
 import (
@@ -206,15 +206,15 @@ func LoadKeySet(adapterMode string, clk clock.Clock) (*auth.KeySet, error) {
 }
 
 // PgxPoolFromProvider is the single type-assertion site for the
-// capability.PGProvider's any-typed DB() seam. Placed here so all platform
+// capability.PGProvider's any-typed DB() seam. Placed here so all cellmodules/
 // cell modules and cmd/ reuse it without duplicating the assertion.
 //
-// platform/cellsecrets is a composition-root layer (like cmd/) so
+// cellmodules/cellsecrets is a composition-root layer (like cmd/) so
 // importing adapters/ (pgxpool) is architecturally acceptable.
 func PgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 	pool, ok := pg.DB().(*pgxpool.Pool)
 	if !ok {
-		return nil, fmt.Errorf("platform: PG provider DB() is not *pgxpool.Pool (got %T)", pg.DB())
+		return nil, fmt.Errorf("cellsecrets: PG provider DB() is not *pgxpool.Pool (got %T)", pg.DB())
 	}
 	return pool, nil
 }

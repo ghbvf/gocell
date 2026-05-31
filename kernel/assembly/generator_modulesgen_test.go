@@ -291,6 +291,13 @@ func TestGenerateModulesGen_CompositionForm(t *testing.T) {
 	assert.Contains(t, content, "cellmodulesconfigcore.Module()")
 	// No legacy local-struct form.
 	assert.NotContains(t, content, "AccessCoreModule{}")
+	// Zero-capability composition form: the runtime/capability import and the
+	// generatedCapabilities() block must both be omitted. The import is gated on
+	// the same {{if .Capabilities}} as the function; emitting it unconditionally
+	// (the pre-fix template bug) would produce an unused import that fails to
+	// compile for any compositionAPI assembly whose cells require nothing.
+	assert.NotContains(t, content, "runtime/capability")
+	assert.NotContains(t, content, "generatedCapabilities")
 	// Module calls preserve assembly cell order (configcore, auditcore, accesscore).
 	posConfig := indexOfStr(content, "cellmodulesconfigcore.Module()")
 	posAudit := indexOfStr(content, "cellmodulesauditcore.Module()")

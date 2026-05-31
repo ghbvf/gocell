@@ -5,7 +5,7 @@
 // outbox.WrapPublisherForCell / outbox.WrapWriterForCell /
 // outbox.WrapEmitterForCell / projection.WrapCheckpointStoreForCell are the
 // sole authorized paths for handing raw infra types into a cell's With* Option. They MUST be called only from
-// composition roots (cmd/* + platform/* + examples/<demo>/main.go +
+// composition roots (cmd/* + cellmodules/* + examples/<demo>/main.go +
 // examples/<demo>/app.go + examples/<demo>/run.go) or *_test.go, plus the kernel-internal resolution
 // funnel kernel/outbox/mode_resolver.go (ResolveCellEmitter wraps the
 // kernel-built DirectEmitter/WriterEmitter into a sealed CellEmitter — the
@@ -94,7 +94,7 @@ func isWrapperCallerAllowed(rel string) bool {
 	if strings.HasPrefix(rel, "cmd/") {
 		return true
 	}
-	// platform/<cell> is the composition-root layer that binds platform cells
+	// cellmodules/<cell> is the composition-root layer that binds platform cells
 	// to adapters behind the public runtime/composition API (#1085
 	// COMPOSITION-MODULE-API-01). It is a sibling composition root to cmd/ —
 	// the cell-module wiring that used to live in cmd/corebundle/*_module.go.
