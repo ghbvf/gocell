@@ -69,9 +69,9 @@ import (
 )
 
 const (
-	collectorIfacePkg            = "github.com/ghbvf/gocell/runtime/observability/metrics"
+	collectorIfacePkg            = PlatformModulePath + "/runtime/observability/metrics"
 	collectorIfaceName           = "Collector"
-	collectorConformancePkg      = "github.com/ghbvf/gocell/runtime/observability/metrics/metricstest"
+	collectorConformancePkg      = PlatformModulePath + "/runtime/observability/metrics/metricstest"
 	collectorConformanceFuncName = "RunCollectorConformance"
 )
 
