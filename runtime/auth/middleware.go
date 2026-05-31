@@ -160,12 +160,20 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 // On verify failure the input ctx is returned unchanged together with the raw
 // verifier error; callers classify it (errcode.IsExpected4xx / KindUnavailable)
 // to render their transport-specific rejection.
+//
+// G1.A: tokens with an empty "sub" claim are rejected before any principal or
+// ctxkeys are injected. An empty subject indicates a JWT signing bug or OIDC
+// misconfiguration; accepting it would allow a bearer with roles to pass
+// RequireAnyRole unchecked (aligned with authenticator.go G1.A).
 func AuthenticateBearer(ctx context.Context, verifier IntentTokenVerifier, token string) (context.Context, *Principal, error) {
 	claims, err := verifier.VerifyIntent(ctx, token, TokenIntentAccess)
 	if err != nil {
 		return ctx, nil, err
 	}
 	p := jwtClaimsToPrincipal(claims)
+	if p.Kind == PrincipalUser && p.Subject == "" {
+		return ctx, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token subject missing")
+	}
 	ctx = WithPrincipal(ctx, p)
 	ctx = injectPrincipalCtxKeys(ctx, p)
 	return ctx, p, nil

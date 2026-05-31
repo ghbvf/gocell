@@ -105,6 +105,88 @@ func TestUnaryTracingPropagation(t *testing.T) {
 			t.Fatalf("no upstream trace id should be mirrored when metadata is absent")
 		}
 	})
+
+	// F6: b3 fallback and W3C precedence.
+
+	t.Run("b3 single-header continues upstream trace", func(t *testing.T) {
+		// b3 single-header format: {traceID}-{spanID}-{flags}
+		const traceID = "a3ce929d0e0e47364bf92f3577b34da6"
+		md := metadata.Pairs("b3", traceID+"-00f067aa0ba902b7-1")
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+
+		tr := &recordingTracer{span: &recordingSpan{}}
+		var seen string
+		_, _ = UnaryTracing(tr)(ctx, nil, info, func(c context.Context, _ any) (any, error) {
+			seen, _ = ctxkeys.TraceIDFrom(c)
+			return "ok", nil
+		})
+		if seen != traceID {
+			t.Fatalf("trace id = %q, want %q (b3 single-header not continued)", seen, traceID)
+		}
+	})
+
+	t.Run("b3 multi-header continues upstream trace", func(t *testing.T) {
+		// b3 multi-header: x-b3-traceid / x-b3-spanid / x-b3-sampled
+		const traceID = "b3ce929d0e0e47364bf92f3577b34da6"
+		md := metadata.Pairs(
+			"x-b3-traceid", traceID,
+			"x-b3-spanid", "00f067aa0ba902b7",
+			"x-b3-sampled", "1",
+		)
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+
+		tr := &recordingTracer{span: &recordingSpan{}}
+		var seen string
+		_, _ = UnaryTracing(tr)(ctx, nil, info, func(c context.Context, _ any) (any, error) {
+			seen, _ = ctxkeys.TraceIDFrom(c)
+			return "ok", nil
+		})
+		if seen != traceID {
+			t.Fatalf("trace id = %q, want %q (b3 multi-header not continued)", seen, traceID)
+		}
+	})
+
+	t.Run("invalid W3C traceparent falls back to b3", func(t *testing.T) {
+		// Malformed traceparent causes W3C to extract no remote span context;
+		// b3 single-header must be used as fallback.
+		const traceID = "c3ce929d0e0e47364bf92f3577b34da6"
+		md := metadata.Pairs(
+			"traceparent", "not-a-valid-traceparent",
+			"b3", traceID+"-00f067aa0ba902b7-1",
+		)
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+
+		tr := &recordingTracer{span: &recordingSpan{}}
+		var seen string
+		_, _ = UnaryTracing(tr)(ctx, nil, info, func(c context.Context, _ any) (any, error) {
+			seen, _ = ctxkeys.TraceIDFrom(c)
+			return "ok", nil
+		})
+		if seen != traceID {
+			t.Fatalf("trace id = %q, want %q (b3 fallback after invalid W3C not working)", seen, traceID)
+		}
+	})
+
+	t.Run("W3C takes precedence over b3 when both present", func(t *testing.T) {
+		// Both W3C traceparent and b3 are present; W3C must win.
+		const w3cTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+		const b3TraceID = "d3ce929d0e0e47364bf92f3577b34da6"
+		md := metadata.Pairs(
+			"traceparent", "00-"+w3cTraceID+"-00f067aa0ba902b7-01",
+			"b3", b3TraceID+"-00f067aa0ba902b7-1",
+		)
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+
+		tr := &recordingTracer{span: &recordingSpan{}}
+		var seen string
+		_, _ = UnaryTracing(tr)(ctx, nil, info, func(c context.Context, _ any) (any, error) {
+			seen, _ = ctxkeys.TraceIDFrom(c)
+			return "ok", nil
+		})
+		if seen != w3cTraceID {
+			t.Fatalf("trace id = %q, want W3C id %q (W3C must take precedence over b3)", seen, w3cTraceID)
+		}
+	})
 }
 
 func TestMetadataCarrier(t *testing.T) {

@@ -63,6 +63,33 @@ func TestAuthenticateBearer(t *testing.T) {
 	})
 }
 
+func TestAuthenticateBearer_EmptySubject(t *testing.T) {
+	// G1.A: a JWT whose "sub" claim is empty is a signing bug / OIDC
+	// misconfiguration. AuthenticateBearer must reject it before injecting any
+	// principal or ctxkeys, keeping the input ctx unmodified (matching the
+	// verify-failure contract documented in the AuthenticateBearer godoc).
+	v := bearerCoreVerifier{claims: Claims{Subject: ""}} // user JWT with empty sub
+	base := context.Background()
+
+	ctx, p, err := AuthenticateBearer(base, v, "tok")
+	if err == nil {
+		t.Fatal("expected non-nil error for empty subject, got nil")
+	}
+	if p != nil {
+		t.Fatalf("principal = %+v, want nil on empty-subject rejection", p)
+	}
+	// ctx must be the input ctx — no principal or ctxkeys must leak.
+	if _, ok := FromContext(ctx); ok {
+		t.Fatal("principal leaked into ctx after empty-subject rejection")
+	}
+	if _, ok := ctxkeys.ActorIDFrom(ctx); ok {
+		t.Fatal("actor ctxkey leaked into ctx after empty-subject rejection")
+	}
+	if _, ok := ctxkeys.SubjectIDFrom(ctx); ok {
+		t.Fatal("subject ctxkey leaked into ctx after empty-subject rejection")
+	}
+}
+
 func TestPasswordResetBlocked(t *testing.T) {
 	tests := []struct {
 		name   string

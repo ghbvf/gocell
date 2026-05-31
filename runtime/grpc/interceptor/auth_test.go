@@ -142,6 +142,16 @@ func TestUnaryAuth(t *testing.T) {
 		}
 	})
 
+	t.Run("panicking publicMethod predicate returns Internal (not a raw panic)", func(t *testing.T) {
+		v := stubVerifier{claims: kauth.Claims{Subject: "u"}}
+		panicPred := WithPublicMethod(func(m string) bool { panic("predicate exploded") })
+		_, err := UnaryAuth(v, panicPred)(context.Background(), nil, info,
+			func(context.Context, any) (any, error) { return "ok", nil })
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("code = %v, want Internal (predicate panic must not escape)", status.Code(err))
+		}
+	})
+
 	t.Run("nil verifier panics at construction (fail-fast wiring)", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r == nil {
@@ -164,6 +174,8 @@ func TestBearerFromMetadata(t *testing.T) {
 		{name: "wrong scheme", md: metadata.Pairs(authMetadataKey, "Basic abc"), wantOK: false},
 		{name: "empty token", md: metadata.Pairs(authMetadataKey, "Bearer  "), wantOK: false},
 		{name: "no key", md: metadata.Pairs("other", "x"), wantOK: false},
+		// F8: multiple authorization values are ambiguous — reject.
+		{name: "multiple authorization values", md: metadata.MD{authMetadataKey: []string{"Bearer tok1", "Bearer tok2"}}, wantOK: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

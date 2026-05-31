@@ -3,6 +3,7 @@ package interceptor
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -76,7 +77,11 @@ func UnaryAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Unary
 		o(&cfg)
 	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if cfg.publicMethod != nil && cfg.publicMethod(info.FullMethod) {
+		isPublic, err := callPredicate(ctx, cfg.publicMethod, info.FullMethod)
+		if err != nil {
+			return nil, err
+		}
+		if isPublic {
 			return handler(ctx, req)
 		}
 
@@ -90,13 +95,40 @@ func UnaryAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Unary
 			return nil, authErrorToStatus(err)
 		}
 
-		exempt := cfg.passwordResetExempt != nil && cfg.passwordResetExempt(info.FullMethod)
+		exempt, err := callPredicate(ctx, cfg.passwordResetExempt, info.FullMethod)
+		if err != nil {
+			return nil, err
+		}
 		if auth.PasswordResetBlocked(p, exempt) {
 			return nil, status.Error(codes.PermissionDenied, "password reset required before accessing this method")
 		}
 
 		return handler(ctx, req)
 	}
+}
+
+// callPredicate invokes an externally-supplied auth predicate (public-method /
+// password-reset-exempt) and converts any panic into a codes.Internal status.
+// The Auth interceptor runs OUTSIDE UnaryRecovery (Recovery wraps only the
+// handler), so without this guard a panicking predicate would escape the chain
+// unobserved by the outer Metrics/Tracing interceptors and surface as an opaque
+// transport error rather than a clean codes.Internal. A nil predicate reports
+// false (the fail-closed default).
+func callPredicate(ctx context.Context, pred func(string) bool, method string) (result bool, err error) {
+	if pred == nil {
+		return false, nil
+	}
+	defer func() {
+		if v := recover(); v != nil {
+			slog.ErrorContext(ctx, "grpc auth predicate panicked",
+				slog.String("method", method),
+				slog.Any("panic", v),
+			)
+			result = false
+			err = status.Error(codes.Internal, "internal server error")
+		}
+	}()
+	return pred(method), nil
 }
 
 // bearerFromMetadata extracts the bearer token from the lowercase
@@ -109,6 +141,12 @@ func bearerFromMetadata(ctx context.Context) (string, bool) {
 	}
 	vals := md.Get(authMetadataKey)
 	if len(vals) == 0 {
+		return "", false
+	}
+	// Multiple authorization values are ambiguous — there is no single
+	// unambiguous bearer credential, so reject rather than silently pick the
+	// first (F8 credential-confusion guard).
+	if len(vals) > 1 {
 		return "", false
 	}
 	scheme, token, found := strings.Cut(vals[0], " ")
