@@ -93,7 +93,13 @@ func appendAccessLogContextAttrs(attrs []any, ctx context.Context) []any {
 
 // appendPrincipalAttrs adds caller identity fields from the auth.Principal:
 //   - service principal: caller_cell (non-empty CallerCellID only)
-//   - user principal: subject
+//   - user principal:    subject
+//   - device principal:  device (the device id carried in Subject)
+//   - anonymous/unknown: no identity attr (nothing to attribute)
+//
+// The switch is exhaustive over auth.PrincipalKind by design — guarded by
+// archtest PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01 so a new kind forces a conscious
+// access-log decision here.
 func appendPrincipalAttrs(ctx context.Context, attrs []any) []any {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
@@ -108,6 +114,12 @@ func appendPrincipalAttrs(ctx context.Context, attrs []any) []any {
 		if p.Subject != "" {
 			attrs = append(attrs, slog.String("subject", p.Subject))
 		}
+	case auth.PrincipalDevice:
+		if p.Subject != "" {
+			attrs = append(attrs, slog.String("device", p.Subject))
+		}
+	case auth.PrincipalAnonymous, auth.PrincipalUnknown:
+		// No caller identity to log for anonymous or uninitialised principals.
 	}
 	return attrs
 }

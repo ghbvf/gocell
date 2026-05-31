@@ -472,6 +472,12 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	if sid, ok := mc["sid"].(string); ok {
 		c.SessionID = sid
 	}
+	// tenant_id is mapped verbatim here (pure decode, like sub/sid); the
+	// authenticator validates/canonicalizes it via pkg/tenant.ParseTenantID and
+	// fails closed on a malformed value. A non-string tenant_id leaves it empty.
+	if tid, ok := mc["tenant_id"].(string); ok {
+		c.TenantID = tid
+	}
 	// password_reset_required is only written when true; absence means false
 	// (backward compatible with tokens issued before Phase 3.5).
 	if v, ok := mc["password_reset_required"].(bool); ok && v {
@@ -527,6 +533,7 @@ var standardClaims = map[string]struct{}{
 	"exp": {}, "iat": {}, "nbf": {}, "roles": {},
 	tokenUseClaim:             {},
 	"sid":                     {},
+	"tenant_id":               {},
 	"password_reset_required": {},
 	"jti":                     {},
 	// S4d: authz_epoch removed from standardClaims so that any token still

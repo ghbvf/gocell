@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -99,6 +100,19 @@ func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
 		if claims.Subject == "" {
 			return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token subject missing")
 		}
+		// Validate + canonicalize the tenant claim at the request trust
+		// boundary (fail-closed): a present-but-malformed tenant_id is a broken
+		// or forged token, mapped to the generic unauthorized response like
+		// every other verify failure (enumeration defense). Absent tenant is
+		// the single-tenant path and passes through. Downstream therefore sees
+		// either an empty tenant or a canonical lowercase UUID.
+		if claims.TenantID != "" {
+			tid, err := tenant.ParseTenantID(claims.TenantID)
+			if err != nil {
+				return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token")
+			}
+			claims.TenantID = tid.String()
+		}
 		return jwtClaimsToPrincipal(claims), true, nil
 	})
 }
@@ -114,6 +128,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 		Subject:               c.Subject,
 		Roles:                 roles,
 		AuthMethod:            "jwt",
+		TenantID:              c.TenantID,
 		PasswordResetRequired: c.PasswordResetRequired,
 		Claims: map[string]string{
 			"sid":       c.SessionID,

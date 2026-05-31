@@ -24,9 +24,9 @@ import (
 // the key, never by an empty TenantID reaching a repo.
 //
 // A non-empty TenantID MUST be a canonical (lowercase) UUID. GoCell issues
-// tenant identifiers itself and stores them in a PostgreSQL `uuid` column with
-// RLS `NULLIF(current_setting('app.tenant_id', true), '')::uuid` (PR-3), so
-// the type boundary enforces the same UUID shape the database casts to.
+// tenant identifiers itself and stores them in a PostgreSQL uuid column whose
+// RLS predicate casts the app.tenant_id setting to uuid (PR-3), so the type
+// boundary enforces the same UUID shape the database casts to.
 //
 // Empty/malformed rejection is RUNTIME fail-fast (Validate / ParseTenantID /
 // UnmarshalJSON), not type-system Hard — an empty string is a legal Go
