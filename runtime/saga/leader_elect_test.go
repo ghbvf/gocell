@@ -149,14 +149,18 @@ func TestAcquireLead_SingleProcess_AlwaysLeads(t *testing.T) {
 	if c.locker != nil {
 		t.Fatal("expected nil locker for single-process coordinator")
 	}
-	release, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
+	release, orphan, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
 	if !lead {
 		t.Fatal("single-process acquireLead lead=false, want true")
 	}
 	if release == nil {
 		t.Fatal("single-process acquireLead release=nil, want non-nil no-op")
 	}
+	if orphan == nil {
+		t.Fatal("single-process acquireLead orphan=nil, want non-nil no-op")
+	}
 	release() // must not panic
+	orphan()  // must not panic
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +192,7 @@ func TestAcquireLead_MutualExclusion(t *testing.T) {
 	ci := claimedFixture(clk.Now())
 
 	// c1 acquires.
-	release1, lead1 := c1.acquireLead(ctx, ci)
+	release1, _, lead1 := c1.acquireLead(ctx, ci)
 	if !lead1 {
 		t.Fatal("c1 acquireLead lead=false, want true")
 	}
@@ -200,17 +204,20 @@ func TestAcquireLead_MutualExclusion(t *testing.T) {
 	}
 
 	// c2 cannot acquire the same instance.
-	release2, lead2 := c2.acquireLead(ctx, ci)
+	release2, orphan2, lead2 := c2.acquireLead(ctx, ci)
 	if lead2 {
 		t.Fatal("c2 acquireLead lead=true while c1 holds the lock, want false (skip)")
 	}
 	if release2 != nil {
 		t.Error("c2 acquireLead release must be nil when lead=false")
 	}
+	if orphan2 != nil {
+		t.Error("c2 acquireLead orphan must be nil when lead=false")
+	}
 
 	// c1 releases; c2 can now acquire.
 	release1()
-	release3, lead3 := c2.acquireLead(ctx, ci)
+	release3, _, lead3 := c2.acquireLead(ctx, ci)
 	if !lead3 {
 		t.Fatal("c2 acquireLead lead=false after c1 release, want true")
 	}
@@ -244,12 +251,15 @@ func TestAcquireLead_IOError_FailClosed(t *testing.T) {
 	reg, _ := ksaga.NewInMemoryRegistry()
 	c, _ := newLeaderElectCoordinator(t, j, clk, reg, locker)
 
-	release, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
+	release, orphan, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
 	if lead {
 		t.Fatal("acquireLead lead=true on I/O error, want false (fail-closed)")
 	}
 	if release != nil {
 		t.Error("acquireLead release must be nil when lead=false")
+	}
+	if orphan != nil {
+		t.Error("acquireLead orphan must be nil when lead=false")
 	}
 }
 
@@ -517,7 +527,7 @@ func TestLogLeaderSkip_Levels(t *testing.T) {
 			clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 			var buf bytes.Buffer
 			c := captureLeaderCoord(t, clk, tc.locker(t, clk), &buf)
-			_, lead := c.acquireLead(tc.ctx(), claimedFixture(clk.Now()))
+			_, _, lead := c.acquireLead(tc.ctx(), claimedFixture(clk.Now()))
 			if lead {
 				t.Fatal("expected lead=false (acquire should fail)")
 			}
@@ -539,7 +549,7 @@ func TestAcquireLead_ReleaseFail_LogsWarn(t *testing.T) {
 	var buf bytes.Buffer
 	c := captureLeaderCoord(t, clk, locker, &buf)
 
-	release, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
+	release, _, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
 	if !lead {
 		t.Fatal("expected lead=true")
 	}
@@ -679,18 +689,25 @@ func TestLeaderElectLockKey_Injective(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F1 — Stop releases in-flight distlocks so takeover is not blocked by a
-//      wedged (non-cooperative) step
+// F1 — Stop orphans in-flight distlocks (bounded-TTL handoff, no shutdown I/O)
 // ---------------------------------------------------------------------------
 
-// TestStop_ReleasesInflightLockOnShutdown asserts that when Stop's drain budget
+// TestStop_OrphansInflightLockOnShutdown asserts that when Stop's drain budget
 // is exhausted by a non-cooperative step (one that ignores ctx.Done()), the
-// in-flight distlock is explicitly released so another coordinator can take
-// over (journal lease_id CAS fences the orphaned step at commit). Without the
-// fix the distlock auto-renews until the step returns or the process dies,
-// blocking takeover indefinitely (vs the bounded-TTL takeover etcd/redsync
-// guarantee).
-func TestStop_ReleasesInflightLockOnShutdown(t *testing.T) {
+// in-flight distlock is orphaned — renewal is stopped without performing a
+// Driver.Release RPC — so another coordinator can take over within ≤1×TTL.
+//
+// Key assertions:
+//   - fd.Calls("Release") == 0 after Stop: Orphan must NOT have performed a
+//     Driver.Release I/O for the in-flight lock (the whole point of the
+//     bounded-TTL no-I/O handoff). The FakeDriver records Release calls; if
+//     Orphan triggered a Release, the count would be > 0.
+//   - fd.Snapshot() still has the key after Stop: Orphan intentionally does NOT
+//     delete the backend key (the key expires via TTL after ≤1×TTL). A
+//     competitor coordinator can acquire it once TTL expires. This is the
+//     bounded-TTL handoff guarantee — no Release I/O means no blocking on an
+//     unreachable backend during shutdown.
+func TestStop_OrphansInflightLockOnShutdown(t *testing.T) {
 	t.Parallel()
 	const defID idutil.SafeID = "stopdef"
 
@@ -747,16 +764,25 @@ func TestStop_ReleasesInflightLockOnShutdown(t *testing.T) {
 	if len(fd.Snapshot()) != 1 {
 		t.Fatalf("distlock not held while drive in-flight; snapshot=%v", fd.Snapshot())
 	}
+	// Reset Release counter so only Stop-path calls are counted.
+	fd.ResetCalls()
 
 	// Short Stop budget: the wedged step outlives drain, forcing the explicit
-	// release path. Stop returns a drain-timeout error; the lock release is
+	// orphan path. Stop returns a drain-timeout error; the lock orphan is
 	// what we assert.
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D200ms)
 	defer stopCancel()
 	_ = c.Stop(stopCtx)
 
-	if len(fd.Snapshot()) != 0 {
-		t.Errorf("distlock still held after Stop with a wedged step; F1: Stop must release in-flight locks. snapshot=%v", fd.Snapshot())
+	// Orphan must NOT have called Driver.Release (bounded-TTL handoff, I/O-free).
+	if got := fd.Calls("Release"); got != 0 {
+		t.Errorf("Stop called Driver.Release %d time(s); want 0 — Stop must orphan (no I/O), not release", got)
+	}
+	// The backend key is intentionally left in the FakeDriver after Orphan:
+	// renewal was stopped but the key expires via TTL (≤1×LeaseDuration).
+	// A competitor coordinator can acquire it once TTL expires.
+	if len(fd.Snapshot()) != 1 {
+		t.Errorf("expected FakeDriver to still hold the key after Orphan (backend key left for TTL expiry); snapshot=%v", fd.Snapshot())
 	}
 
 	// Cleanup: unblock the step + cancel so goroutines drain (goleak TestMain).
@@ -766,5 +792,43 @@ func TestStop_ReleasesInflightLockOnShutdown(t *testing.T) {
 	case <-startDone:
 	case <-time.After(testtime.D3s):
 		t.Error("coordinator goroutine did not exit after unblocking step")
+	}
+}
+
+// TestTickOnce_NormalCompletion_ReleasesNotOrphans asserts that when a step
+// completes normally (cooperative, not drain-budget-exhausted), tickOnce calls
+// release (Driver.Release I/O) and NOT orphan. This is the "work done →
+// immediate release" fast-path.
+func TestTickOnce_NormalCompletion_ReleasesNotOrphans(t *testing.T) {
+	t.Parallel()
+	const defID idutil.SafeID = "normaldef"
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	fd := locktest.NewFakeDriverWithClock(clk.Now)
+	locker, _ := distlock.New(fd, clk)
+	j, _ := journal.NewMemJournal(clk)
+	ran := false
+	reg, _ := ksaga.NewInMemoryRegistry(oneStepDef(defID, func() { ran = true }))
+	c, _ := newLeaderElectCoordinator(t, j, clk, reg, locker)
+
+	ctx := context.Background()
+	inst := ksaga.NewInstance("normalinst", defID, clk.Now())
+	if err := j.Enqueue(ctx, inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	if err := c.tickOnce(ctx); err != nil {
+		t.Fatalf("tickOnce: %v", err)
+	}
+
+	if !ran {
+		t.Error("Step.Run was not executed")
+	}
+	// Normal completion: Release must have been called (immediate handoff).
+	if got := fd.Calls("Release"); got < 1 {
+		t.Errorf("normal completion: Driver.Release calls = %d, want >= 1", got)
+	}
+	// Lock must be free after the drive.
+	if len(fd.Snapshot()) != 0 {
+		t.Errorf("lock still held after normal completion; snapshot=%v", fd.Snapshot())
 	}
 }
