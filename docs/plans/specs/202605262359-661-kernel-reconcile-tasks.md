@@ -147,11 +147,11 @@
 
 ## Phase 3: Triggers + Backoff（B4 — 并行）
 
-### PR-A4 — feat: Trigger interface + TickerTrigger + ChannelTrigger + clock carve-out archtest
+### PR-A4 — feat: Trigger interface + TickerTrigger + ChannelTrigger + interface-frozen archtest
 
-**Goal**: 抽象触发源（最小 2 种实现）；Loop clock 走 carve-out 等同 `PROD-CLOCK-INJECTION-01`。
+**Goal**: 抽象触发源（最小 2 种实现）；TickerTrigger 节拍走注入 `clock.Clock`（无 carve-out，因 ticker 不调 stdlib `time.*`，`PROD-CLOCK-INJECTION-01` 保持 GREEN）。
 
-**Independent Test**: `TickerTrigger(1*time.Second)` 在 1s 内触发 1 次（业务时钟可注入测试不依赖 wall-clock）；`ChannelTrigger(ch)` 在 ch 写入 Request 后立即调度。
+**Independent Test**: `TickerTrigger(clk, 1*time.Second)` 在 1s 内触发 1 次（业务时钟可注入测试不依赖 wall-clock）；`ChannelTrigger(ch)` 在 ch 写入 Request 后立即调度。
 
 #### Tests for PR-A4 (TDD)
 
@@ -166,17 +166,17 @@
 
 - [ ] **T14** [PR-A4] `kernel/reconcile/trigger.go`：
   - `type Trigger interface { Start(ctx context.Context, queue chan<- Request) error }`
-  - `func TickerTrigger(interval time.Duration) Trigger`
+  - `func TickerTrigger(clk clock.Clock, interval time.Duration) Trigger`（clock 强制位置参 per `CLOCK-POSITIONAL-INJECTION-01`）
   - `func ChannelTrigger(in <-chan Request) Trigger`
   - 估算：250 LoC
-- [ ] **T15** [PR-A4] `tools/archtest/reconcile_loop_clock_carveout_test.go`：
-  - `RECONCILE-LOOP-CLOCK-CARVEOUT-01`：mirror `PROD-CLOCK-INJECTION-01`，把 kernel/reconcile.Loop 的 control-plane ticker 加入白名单
-  - 估算：100 LoC
-- [ ] **T16** [PR-A4] `tools/archtest/reconcile_trigger_interface_frozen_test.go`：
-  - `RECONCILE-TRIGGER-INTERFACE-FROZEN-01`：reflect 锁 Trigger 接口
-  - 估算：50 LoC（合并到 T15 文件可选）
+- [ ] **T15** [PR-A4] clock carve-out archtest（取消）：
+  - TickerTrigger 节拍走注入 `clock.Clock`，不调 stdlib `time.*`，故无需 mirror `PROD-CLOCK-INJECTION-01` 的白名单；clock discipline 由既有 `CLOCK-POSITIONAL-INJECTION-01`（漏传 clk = 编译错误）守，`PROD-CLOCK-INJECTION-01` 保持 GREEN
+  - 估算：0 LoC（删除原计划的 `reconcile_loop_clock_carveout_test.go`）
+- [ ] **T16** [PR-A4] `tools/archtest/reconcile_invariants_test.go`：
+  - `RECONCILE-TRIGGER-INTERFACE-FROZEN-01`：reflect 锁 Trigger 接口（含 send-only sink 方向）+ 反向盲区自检；并入既有 reconcile 主题文件
+  - 估算：50 LoC
 
-**Checkpoint A4**: Trigger 接口 frozen；Loop 业务时钟可注入
+**Checkpoint A4**: Trigger 接口 frozen；TickerTrigger 业务时钟可注入
 
 ---
 
@@ -344,7 +344,7 @@
   - 估算：50 LoC（diff）
 - [ ] **T40** [PR-A8] 更新 `tools/archtest/clock_invariants_test.go`：
   - 删除 `controlPlaneTicker` / `controlPlaneProbeTimer` 在 runtime/command 的 carve-out（已迁出）
-  - kernel/reconcile.Loop 的 carve-out 在 PR-A4 已加
+  - kernel/reconcile.Loop 的 carve-out 在 PR-A3 已加（Loop 平移自 SweeperLifecycle，control-plane clock 同步纳入 `PROD-CLOCK-INJECTION-01`；PR-A4 的 TickerTrigger 不用此 carve-out，走注入 clock）
   - 估算：30 LoC（diff）
 
 **Checkpoint A8**: SweeperLifecycle 命名完全删除；kernel/command.Sweeper 成为 reconcile 首个示例消费方
@@ -369,7 +369,7 @@
 #### Implementation for PR-A9
 
 - [ ] **T43** [PR-A9] `examples/iotdevice/cells/devicecell/cell.go`：
-  - 从 `runtime/command.NewSweeperLifecycle(...)` 切换到 `reconcile.New(sweeper).WithTrigger(reconcile.TickerTrigger(30*time.Second)).Build()`
+  - 从 `runtime/command.NewSweeperLifecycle(...)` 切换到 `reconcile.New(sweeper).WithTrigger(reconcile.TickerTrigger(clk, 30*time.Second)).Build()`（clk 为 cell 注入的业务时钟）
   - 估算：200 LoC（含 wiring 重写）
 - [ ] **T44** [PR-A9] `examples/iotdevice/cells/devicecell/sweeper_lifecycle_test.go`：
   - 删除（被 cell_reconcile_test.go 取代）

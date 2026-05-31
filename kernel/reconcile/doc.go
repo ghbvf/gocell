@@ -65,6 +65,23 @@
 //	type certRenewer struct{ repo CertRepo }
 //
 //	func (r *certRenewer) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+//		// A zero-value Request{} (empty EntityID) is the TickerTrigger resync
+//		// pulse — "re-observe everything you own". Fan out to every owned entity;
+//		// the targeted branch below handles each concrete EntityID. The ticker
+//		// re-emits the pulse each interval, so a sweep that aborts early is
+//		// re-driven on the next tick (level-triggered — nothing is lost).
+//		if req.EntityID == "" {
+//			ids, err := r.repo.ListPending(ctx)
+//			if err != nil {
+//				return reconcile.Result{}, err // transient: Loop backs off + retries
+//			}
+//			for _, id := range ids {
+//				if _, err := r.Reconcile(ctx, reconcile.Request{EntityID: id}); err != nil {
+//					return reconcile.Result{}, err // re-driven on the next resync pulse
+//				}
+//			}
+//			return reconcile.Result{}, nil
+//		}
 //		cert, err := r.repo.Get(ctx, req.EntityID)
 //		if err != nil {
 //			return reconcile.Result{}, err // transient: Loop backs off + retries
