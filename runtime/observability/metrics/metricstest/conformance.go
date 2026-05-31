@@ -8,8 +8,8 @@
 // counter on a provider), the suite is parameterised through CollectorHarness:
 // each implementation supplies its own New() constructor that returns a
 // self-contained (Collector, CollectorObserver) pair. All observation state is
-// local to that pair; the harness itself holds no mutable shared state, making
-// parallel subtest execution safe.
+// local to that pair; the harness itself holds no mutable shared state. Subtests
+// run serially (see RunCollectorConformance) so the suite is deterministic.
 //
 // The suite file is a plain .go file (not _test.go) so it can be imported by
 // _test.go files in other packages without being stripped from the build graph
@@ -32,8 +32,8 @@ type BodyLimitRejectionKey = metrics.BodyLimitRejectionKey
 
 // CollectorObserver is the read-side companion returned by
 // CollectorHarness.New. It is bound exclusively to the Collector returned in
-// the same New call; parallel subtests each hold their own observer instance
-// with no cross-subtest sharing.
+// the same New call; each subtest holds its own observer instance with no
+// cross-subtest sharing.
 //
 //   - RequestCount: returns how many times RecordRequest was called for the
 //     given key on that Collector. Returns 0 if the key has not been recorded.
@@ -52,13 +52,12 @@ type CollectorObserver interface {
 // CollectorHarness wraps one Collector implementation with a factory that
 // produces self-contained (Collector, CollectorObserver) pairs. The harness
 // itself must hold no mutable state; all per-subtest state lives in the
-// returned pair. This guarantees race-freedom when RunCollectorConformance
-// runs subtests in parallel.
+// returned pair, so each subtest is fully isolated.
 type CollectorHarness interface {
 	// New constructs a fresh Collector and its bound CollectorObserver for one
 	// subtest. The returned observer's read methods reflect only the Collector
-	// returned alongside it. New may be called concurrently from different
-	// goroutines; implementations must not write to shared harness fields.
+	// returned alongside it. Implementations must not write to shared harness
+	// fields, so the harness can be reused across subtests.
 	New(t *testing.T) (metrics.Collector, CollectorObserver)
 }
 
@@ -91,10 +90,12 @@ func RunCollectorConformance(t *testing.T, h CollectorHarness) {
 		{"RecordBodyLimitRejection_NoSideEffectOnRequest", conformBodyLimitRejectionNoSideEffect},
 		{"RecordBodyLimitRejection_KeyIsolation", conformBodyLimitRejectionKeyIsolation},
 	}
+	// Subtests run serially, not in parallel: each case is a sub-millisecond
+	// in-memory counting check, so parallelism yields no wall-clock benefit and
+	// only widens the surface for harness/observer state races. Serial execution
+	// makes the suite deterministic.
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			tc.run(t, h)
 		})
 	}

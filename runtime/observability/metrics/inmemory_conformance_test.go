@@ -17,7 +17,7 @@ func TestInMemoryCollector_Conformance(t *testing.T) {
 
 // inMemoryHarness implements metricstest.CollectorHarness for InMemoryCollector.
 // It holds no mutable state; each New call returns a self-contained
-// (Collector, CollectorObserver) pair, making parallel subtests race-free.
+// (Collector, CollectorObserver) pair, fully isolating each subtest.
 type inMemoryHarness struct{}
 
 func (inMemoryHarness) New(_ *testing.T) (metrics.Collector, metricstest.CollectorObserver) {

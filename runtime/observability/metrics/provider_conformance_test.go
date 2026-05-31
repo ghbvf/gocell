@@ -20,7 +20,7 @@ func TestProviderCollector_Conformance(t *testing.T) {
 // providerCollectorHarness implements metricstest.CollectorHarness for
 // providerCollector. It holds no mutable state; each New call returns a
 // self-contained (Collector, CollectorObserver) pair backed by a fresh
-// spyProvider, so parallel subtests are race-free.
+// spyProvider, fully isolating each subtest.
 type providerCollectorHarness struct{}
 
 func (providerCollectorHarness) New(t *testing.T) (metrics.Collector, metricstest.CollectorObserver) {
