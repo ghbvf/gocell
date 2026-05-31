@@ -92,10 +92,12 @@ var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setupContractHandler(t testing.TB) http.Handler {
 	t.Helper()
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+		store.RoleRepository(),
 		WithTokenIssuer(contractStubIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
@@ -105,11 +107,13 @@ func setupContractHandler(t testing.TB) http.Handler {
 
 func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecordingWriter) {
 	t.Helper()
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
 	writer := &contractRecordingWriter{}
 	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+		store.RoleRepository(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(contractTxRunner{})),
 		WithTokenIssuer(contractStubIssuer))
 	if err != nil {
@@ -139,6 +143,7 @@ func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Hand
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(issuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithIssuer: %v", err)

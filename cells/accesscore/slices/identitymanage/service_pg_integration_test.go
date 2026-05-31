@@ -183,6 +183,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 		repo,
 		inv,
 		slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(stub),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
