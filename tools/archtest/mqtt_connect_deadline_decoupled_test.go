@@ -4,7 +4,7 @@
 //
 //  1. autopaho.NewConnection(ctx, …) receives Open's lifecycle ctx param —
 //     the ConnectionManager retries/reconnects bound to it (autopaho godoc:
-//     "will retry until the context is cancelled").
+//     "will retry until the context is canceled").
 //  2. (*Connection).waitFirstConnection(connectCtx) receives a SEPARATE
 //     context derived from context.WithTimeout/WithDeadline — the bounded
 //     bootstrap first-connection wait.

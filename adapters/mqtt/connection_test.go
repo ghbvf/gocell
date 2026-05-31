@@ -169,9 +169,9 @@ func TestConnection_Close_IdempotentAndTerminal(t *testing.T) {
 // TestConnection_ConnectDeadline_FailFast verifies that Open against an
 // unreachable address fails-fast on the cfg.ConnectDeadline budget — NOT on the
 // lifecycle ctx. The lifecycle ctx passed here is context.Background() (never
-// cancelled), so the only thing that can terminate the bootstrap wait is the
+// canceled), so the only thing that can terminate the bootstrap wait is the
 // connectCtx derived from ConnectDeadline. This is the #1388 regression guard:
-// previously a never-cancelled ctx meant Open hung forever.
+// previously a never-canceled ctx meant Open hung forever.
 func TestConnection_ConnectDeadline_FailFast(t *testing.T) {
 	clk := clock.Real()
 	id, _ := mqtt.ParseEphemeralClientID("test", "never")
@@ -206,14 +206,14 @@ func TestConnection_ConnectDeadline_Decoupled_CMSurvives(t *testing.T) {
 
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
-	cfg.ConnectDeadline = testtime.D2s // short; connectCtx is cancelled on Open return
+	cfg.ConnectDeadline = testtime.D2s // short; connectCtx is canceled on Open return
 
 	conn, err := mqtt.Open(context.Background(), clk, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 
-	// connectCtx (WithTimeout child) is already cancelled by Open's defer; if the
+	// connectCtx (WithTimeout child) is already canceled by Open's defer; if the
 	// CM were bound to it the connection would be down. Health == nil proves the
 	// CM survives on the lifecycle ctx.
 	assert.NoError(t, conn.Health(context.Background()))

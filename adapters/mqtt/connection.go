@@ -175,9 +175,18 @@ func WithConnectionCollector(c ConnectionCollector) ConnectionOption {
 }
 
 // Open validates cfg, builds the autopaho ClientConfig, wires the three
-// callbacks, starts the manager, and blocks (bounded by ctx) until the first
-// connection comes up OR a bootstrap-fatal / first-attempt permanent error
-// is received.
+// callbacks, starts the manager, and blocks until the first connection comes up
+// OR a bootstrap-fatal / first-attempt permanent error is received OR the
+// bootstrap deadline elapses.
+//
+// Two contexts, two lifetimes (decoupled per #1388):
+//   - ctx (lifecycle) binds the ConnectionManager — autopaho retries and
+//     reconnects until ctx is canceled. It typically lives for the whole app.
+//   - cfg.ConnectDeadline derives a separate WithTimeout child that bounds ONLY
+//     the bootstrap first-connection wait. When the broker is unreachable Open
+//     fails fast on this deadline instead of hanging on an effectively-unbounded
+//     lifecycle ctx. A successful connect is unaffected: the deadline child is
+//     canceled on return without tearing down the ConnectionManager.
 //
 // Validation: Open calls cfg.Validate() before any side effect. Callers do
 // not need to call Validate explicitly. Archtest MQTT-CONFIG-VALIDATE-FIRST-01
@@ -186,13 +195,17 @@ func WithConnectionCollector(c ConnectionCollector) ConnectionOption {
 // Bootstrap-fatal CONNACK reason codes (0x81/0x82/0x84/0x85/0x8A/0x95) and TLS
 // handshake errors cause Open to return a non-transient error immediately.
 //
-// A context cancellation before first connection up returns a transient error
-// (the server may become reachable later).
+// A bootstrap-deadline elapse before first connection up returns a transient
+// error (the server may become reachable later).
 //
 // clk is a required positional parameter (CLOCK-POSITIONAL-INJECTION-01);
 // call clock.MustHaveClock before passing to Open.
 //
-// ref: autopaho/auto.go NewConnection
+// The ctx/connectCtx split is locked by archtest
+// MQTT-CONNECT-DEADLINE-DECOUPLED-01.
+//
+// ref: autopaho/auto.go NewConnection (lifecycle) + AwaitConnection (the
+// separate bounded first-connection wait this split restores).
 func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOption) (*Connection, error) {
 	clock.MustHaveClock(clk, "mqtt.Open")
 	if err := cfg.Validate(); err != nil {
@@ -246,6 +259,9 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 		},
 	}
 
+	// ctx (lifecycle) binds the ConnectionManager — autopaho retries/reconnects
+	// until ctx is canceled. It is deliberately NOT the context that bounds the
+	// bootstrap wait below.
 	cm, err := autopaho.NewConnection(ctx, autoCfg)
 	if err != nil {
 		return nil, errcode.WrapInfra(ErrAdapterMQTTConnect,
@@ -253,8 +269,15 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 	}
 	c.cm = cm
 
-	// Block until first outcome (connected or permErr) or ctx canceled.
-	if waitErr := c.waitFirstConnection(ctx); waitErr != nil {
+	// connectCtx (bootstrap deadline) is a separate child bounded by
+	// cfg.ConnectDeadline. It caps the first-connection wait so an unreachable
+	// broker fails Open fast instead of hanging on an unbounded lifecycle ctx
+	// (#1388). The deferred cancel does NOT tear down cm — cm lives on ctx.
+	connectCtx, cancel := context.WithTimeout(ctx, cfg.ConnectDeadline)
+	defer cancel()
+
+	// Block until first outcome (connected or permErr) or connectCtx elapses.
+	if waitErr := c.waitFirstConnection(connectCtx); waitErr != nil {
 		// Best-effort shutdown of the manager; ignore error.
 		_ = cm.Disconnect(context.Background())
 		return nil, waitErr
@@ -282,18 +305,20 @@ func connectPacketBuilder(cfg Config) func(*paho.Connect, *url.URL) (*paho.Conne
 }
 
 // waitFirstConnection blocks until the first bootstrapOutcome arrives on
-// outcomeCh, or ctx is canceled. Single-channel design eliminates the prior
-// `select` race between connectedCh and bootstrapErrCh.
-func (c *Connection) waitFirstConnection(ctx context.Context) error {
+// outcomeCh, or connectCtx is done (the cfg.ConnectDeadline-bounded child Open
+// derives, or lifecycle-ctx cancellation propagated through it). Single-channel
+// design eliminates the prior `select` race between connectedCh and
+// bootstrapErrCh.
+func (c *Connection) waitFirstConnection(connectCtx context.Context) error {
 	select {
 	case outcome := <-c.outcomeCh:
 		if outcome.permErr != nil {
 			return outcome.permErr
 		}
 		return nil
-	case <-ctx.Done():
+	case <-connectCtx.Done():
 		return errcode.WrapInfra(ErrAdapterMQTTConnectTimeout,
-			"mqtt: context canceled before first connection", nil)
+			"mqtt: connect deadline elapsed before first connection", nil)
 	}
 }
 
