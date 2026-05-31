@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -87,6 +89,36 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		}
 	}
 
+	// Build cmdLocals for cmd-private wiring (prometheus adapter types,
+	// vault-metrics factory, internalGuard, consumerClaimerKind, etc.).
+	// locals must be built before the configcore key-provider so that
+	// locals.vaultTransitMetrics (the once-guarded factory) is available.
+	locals := &cmdLocals{
+		registry:            metricsDeps.PromStack.registry,
+		hookObserver:        metricsDeps.PromStack.hookObserver,
+		metricProvider:      metricsDeps.PromStack.metricProvider,
+		internalGuard:       guard,
+		consumerClaimerKind: replay.ConsumerClaimerKind,
+		metricsHandler:      metricsHandler,
+	}
+	locals.redisClient = replay.RedisClient
+	locals.initVaultMetricsFactory()
+
+	// Build configcore key provider + stale-cipher counter callback.
+	// These live in cmd because they import adapters/vault + prometheus which
+	// must not reach runtime/composition or platform/configcore.
+	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := platformshared.LoadConfigCoreKeyProvider()
+	cfgKeyProvider, cfgStaleCipherInc, err := buildConfigCoreKeyProvider(
+		topo.StorageBackend, adapterMode,
+		cfgProviderName, cfgMasterKey, cfgPrevMasterKey,
+		clk,
+		metricsDeps.PromStack.registry,
+		locals.vaultTransitMetrics,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configcore key provider: %w", err)
+	}
+
 	// Build composition.SharedDeps (public, interface-only fields consumed by
 	// platform cell modules). Prometheus adapter types, internalGuard, and
 	// consumerClaimerKind stay in cmdLocals.
@@ -109,20 +141,9 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		VerboseToken:           verboseToken,
 		VerboseDisabled:        verboseDisabled,
 		ProjectRoot:            os.Getenv("GOCELL_PROJECT_ROOT"),
+		ConfigKeyProvider:      cfgKeyProvider,
+		ConfigStaleCipherInc:   cfgStaleCipherInc,
 	}
-
-	// Build cmdLocals for cmd-private wiring (prometheus adapter types,
-	// vault-metrics factory, internalGuard, consumerClaimerKind, etc.).
-	locals := &cmdLocals{
-		registry:            metricsDeps.PromStack.registry,
-		hookObserver:        metricsDeps.PromStack.hookObserver,
-		metricProvider:      metricsDeps.PromStack.metricProvider,
-		internalGuard:       guard,
-		consumerClaimerKind: replay.ConsumerClaimerKind,
-		metricsHandler:      metricsHandler,
-	}
-	locals.redisClient = replay.RedisClient
-	locals.initVaultMetricsFactory()
 
 	// Validate composition.SharedDeps (cross-cutting interface-level fields).
 	if err := compShared.Validate(); err != nil {

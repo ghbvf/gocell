@@ -10,7 +10,6 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
 )
 
 // cmdLocals holds cmd-private wiring that is NOT on composition.SharedDeps —
@@ -54,9 +53,9 @@ type cmdLocals struct {
 	redisClient *adapterredis.Client
 
 	// vaultTransitMetrics is a sync.Once-guarded factory for the vault-transit
-	// metric set. Passed to platform/configcore via WithVaultMetrics so that
-	// local-aes / memory deployments never register gocell_vault_* series.
-	vaultTransitMetrics platformconfigcore.VaultMetricsFactory
+	// metric set. Used by buildConfigCoreKeyProvider in configcore_key_provider.go
+	// so that local-aes / memory deployments never register gocell_vault_* series.
+	vaultTransitMetrics func() (*adaptervault.TransitMetrics, error)
 
 	// vaultMetricsOnce / vaultMetrics / vaultMetricsErr implement the lazy
 	// once-guarded pattern for the vault-transit metric set. Kept here (cmd)

@@ -53,7 +53,7 @@ func buildBootstrapFromShared(
 
 	// Propagate caller mutations (e.g. shared.MetricsToken) by using the
 	// caller-provided shared directly in the runtimeOptsFunc closure.
-	mods := generatedCellModules(locals)
+	mods := generatedCellModules()
 
 	// runtimeOptsFunc mirrors the production runCorebundle path but simplified for
 	// testing: no real-mode validation, inline listener construction.

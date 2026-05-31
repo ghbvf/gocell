@@ -112,7 +112,8 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 	// the three platform modules (configcore/auditcore/accesscore) successfully
 	// Provide their cells using shared.PG. The runtime bootstrap options (listener
 	// auth, consumer base, etc.) are not under test here.
-	mods := generatedCellModules(locals)
+	_ = locals // locals used only for shared deps construction, not module wiring
+	mods := generatedCellModules()
 	app, err := composition.New().With(mods...).Build(ctx, shared,
 		func(_ []cell.Cell) ([]bootstrap.Option, error) {
 			return nil, nil

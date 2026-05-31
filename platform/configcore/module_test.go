@@ -24,11 +24,6 @@ func TestModule_ImplementsCellModule(*testing.T) {
 	_ = []composition.CellModule{configcore.Module()}
 }
 
-func TestModule_WithVaultMetrics_DoesNotPanic(t *testing.T) {
-	m := configcore.Module(configcore.WithVaultMetrics(nil))
-	require.NotNil(t, m)
-}
-
 func TestModule_WithKeyProviderOverride_DoesNotPanic(t *testing.T) {
 	m := configcore.Module(configcore.WithKeyProviderOverride(nil))
 	require.NotNil(t, m)

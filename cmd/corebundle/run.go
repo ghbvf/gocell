@@ -68,7 +68,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	// logging and observability).
 	compShared.AssemblyID = assemblyID
 
-	mods, err := corebundleModules(assemblyID, assemblyCellIDs, locals)
+	mods, err := corebundleModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
 	}
@@ -116,8 +116,8 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	return app.Run(ctx)
 }
 
-func corebundleModules(assemblyID string, cellIDs []string, locals *cmdLocals) ([]composition.CellModule, error) {
-	mods := generatedCellModules(locals)
+func corebundleModules(assemblyID string, cellIDs []string) ([]composition.CellModule, error) {
+	mods := generatedCellModules()
 	if err := assertModuleIDsMatch(assemblyID, cellIDs, mods); err != nil {
 		return nil, err
 	}

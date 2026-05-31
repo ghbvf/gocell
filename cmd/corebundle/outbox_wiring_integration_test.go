@@ -48,7 +48,8 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	writer := adapterpg.NewOutboxWriter(shared.Clock)
 	shared.PG = capability.NewPGProvider(txMgr, writer, pool.DB())
 
-	mods := generatedCellModules(locals)
+	mods := generatedCellModules()
+	_ = locals // locals used only for shared deps construction, not module wiring
 	// The RuntimeOptionsFunc captures bootstrap options contributed by cell modules
 	// (e.g. WithRelay from the configcore postgres path). These are exercised by
 	// the composition.Builder.Build call here; we assert they are non-empty to guard

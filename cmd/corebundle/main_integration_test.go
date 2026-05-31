@@ -80,7 +80,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	// composition.Builder.Build verifies that platform modules can Provide
 	// with the PG capability. Bootstrap options (listeners, auth) are omitted
 	// in this unit-level wiring test.
-	mods := generatedCellModules(locals)
+	mods := generatedCellModules()
 	app, buildErr := composition.New().With(mods...).Build(ctx, shared,
 		func(_ []cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
 	require.NoError(t, buildErr, "Builder.Build must succeed with a fully migrated DB")

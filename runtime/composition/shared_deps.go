@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -123,6 +124,20 @@ type SharedDeps struct {
 
 	// ProjectRoot is the directory used by the devtools catalog endpoint.
 	ProjectRoot string
+
+	// ConfigKeyProvider is the configcore value-encryption key provider.
+	// Built in cmd/corebundle (which may import adapters/vault + prometheus),
+	// passed to platform/configcore.Module so that the platform layer never
+	// imports adapter-specific packages.
+	// Nil means no key provider configured; configcore uses NoopTransformer.
+	ConfigKeyProvider kcrypto.KeyProvider
+
+	// ConfigStaleCipherInc is a zero-arg callback that increments the
+	// stale-cipher counter once per config value read that is encrypted with a
+	// non-current key version.  Built in cmd/corebundle from a prometheus counter
+	// so that runtime/composition never imports github.com/prometheus/client_golang.
+	// Nil means no-op (acceptable in tests that do not exercise PG + encryption).
+	ConfigStaleCipherInc func()
 }
 
 // Validate checks that all required cross-cutting dependencies are present.
