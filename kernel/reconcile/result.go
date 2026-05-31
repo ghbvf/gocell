@@ -65,9 +65,9 @@ func (e *permanentError) Unwrap() error {
 }
 
 // PermanentError wraps err to mark the entity non-retryable: retrying cannot
-// change the outcome (revoked cert, malformed row, policy rejection). Once the
-// Loop lands (PR-A3) it records a dead-letter metric and stops scheduling the
-// entity until a fresh trigger re-observes it. PermanentError(nil) returns nil
+// change the outcome (revoked cert, malformed row, policy rejection). The Loop
+// records a dead-letter metric and stops scheduling the entity until a fresh
+// trigger re-observes it. PermanentError(nil) returns nil
 // (no spurious wrapper) — this nil-guard is load-bearing for IsPermanent's
 // construction proof: a genuine permanentError always has a non-nil cause.
 func PermanentError(err error) error {

@@ -34,6 +34,7 @@ func testLogger(buf *bytes.Buffer) *slog.Logger {
 // TestRecovery_PanicConvertsToError verifies that a panicking Reconciler
 // produces a non-nil error and a zero Result, without re-panicking.
 func TestRecovery_PanicConvertsToError(t *testing.T) {
+	t.Parallel()
 	rec := panicReconciler{payload: "kaboom"}
 	req := Request{EntityID: "e1"}
 
@@ -49,6 +50,7 @@ func TestRecovery_PanicConvertsToError(t *testing.T) {
 // returns resultTransient — proving the recovered panic never creates a 5th
 // metric label.
 func TestRecovery_PanicMetricRecorded(t *testing.T) {
+	t.Parallel()
 	rec := panicReconciler{payload: "boom"}
 	req := Request{EntityID: "e-metric"}
 
@@ -64,6 +66,7 @@ func TestRecovery_PanicMetricRecorded(t *testing.T) {
 // call-scoped: a panicking call for one entity does not affect a subsequent
 // call for a different entity.
 func TestRecovery_OtherEntityNotAffected(t *testing.T) {
+	t.Parallel()
 	pRec := panicReconciler{payload: "boom"}
 	req1 := Request{EntityID: "boom-entity"}
 	_, err1 := recoverReconcile(context.Background(), pRec, req1, slog.Default(), "test_reconciler")
@@ -81,6 +84,7 @@ func TestRecovery_OtherEntityNotAffected(t *testing.T) {
 // an Error-level log entry containing the entity ID and reconciler ID, so
 // operators see it distinctly from ordinary transient noise (O3).
 func TestRecovery_PanicLogsAtErrorLevel(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := testLogger(&buf)
 
@@ -102,6 +106,7 @@ func TestRecovery_PanicLogsAtErrorLevel(t *testing.T) {
 //   - plain error → resultTransient
 //   - wrapped PermanentError → resultPermanent
 func TestClassify(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		err  error
@@ -123,6 +128,7 @@ func TestClassify(t *testing.T) {
 // TestClassify_WrappedPermanentViaErrorf verifies that classify recognizes a
 // PermanentError wrapped with fmt.Errorf("%w").
 func TestClassify_WrappedPermanentViaErrorf(t *testing.T) {
+	t.Parallel()
 	inner := PermanentError(errors.New("revoked cert"))
 	wrapped := fmt.Errorf("operation failed: %w", inner)
 	assert.Equal(t, resultPermanent, classify(wrapped))

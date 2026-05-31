@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // classify maps an error to its metric result label. It is the single source
-// of classification truth for the Loop's process() switch — the loop agent
-// will delete (*Loop).safeReconcile and call recoverReconcile + classify
-// instead.
+// of classification truth for the Loop's process() switch — process() calls
+// recoverReconcile then classify.
 //
 // Mapping:
 //   - nil   → resultSuccess
@@ -43,7 +44,8 @@ func classify(err error) string {
 func recoverReconcile(ctx context.Context, rec Reconciler, req Request, logger *slog.Logger, reconcilerID string) (res Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("reconcile: recovered panic in Reconcile(entity=%q): %v", req.EntityID, r)
+			safe := redaction.RedactString(fmt.Sprintf("%v", r))
+			err = fmt.Errorf("reconcile: recovered panic in Reconcile(entity=%q): %s", req.EntityID, safe)
 			res = Result{}
 			// Log at Error: a reconciler panic is a correctness bug, not ordinary
 			// transient noise. The entity will be requeued (transient semantics), but

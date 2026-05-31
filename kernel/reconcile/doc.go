@@ -122,6 +122,12 @@
 //     no stdlib time.* call.
 //   - RECONCILE-TRIGGER-INTERFACE-FROZEN-01 (PR-A4): Trigger's method set is
 //     exactly Start(context.Context, chan<- Request) error (send-only sink).
+//   - RECONCILE-RESULT-LABEL-VALUES-FROZEN-01 (PR-A5): the result* const value
+//     set is frozen to {success, transient, permanent, skipped}; recovered panics
+//     map to "transient" — no 5th "panic" label.
+//   - RECONCILE-REQUEUE-ENQUEUE-CALLER-01 (PR-A5): every channel send in
+//     kernel/reconcile must be inside one of the three sanctioned functions
+//     (drainReadyItems / feedFromSource / enqueueDelayed).
 //
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: docs/architecture/202605291600-661-adr-kernel-reconcile-design.md

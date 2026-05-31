@@ -250,6 +250,7 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 `reconcile_total{result=...}` 的 `result` label 值集冻结为 `{success, transient, permanent, skipped}`（FR-010）。关键约束：
 
 - **recovered panic → `transient`**（不引入第 5 个 `panic` label；panic 是可重试的瞬态失败）
+- **`skipped` = trigger 合并到脏重跑，非丢弃**：`skipped` 表示 trigger 到达时实体正在处理中（processing=true），trigger 被 coalesced 进 dirty map；当前飞行 reconcile 完成后 **保证立即（delay=0）触发一次 re-run**（F5 dirty re-run）。收敛性不受影响——没有 trigger 被静默丢弃。（此语义由 PR-A5 取代 A3 的 skip-if-drop 实现；A3 阶段 skipped = 丢弃，A5 阶段 skipped = coalesced 待 re-run。）
 - 值集唯一来源：`kernel/reconcile/metrics.go` 的 `result*` 未导出常量；`recovery.go::classify()` 是唯一分类函数
 - **单 requeue 路径**：所有向工作队列或延迟队列的 channel send 必须经由三个受认可函数之一（`drainReadyItems` / `(*Loop).feedFromSource` / `(*Loop).enqueueDelayed`）；禁止引入 `go func(){ queue <- req }()` 或 `go func(){ addCh <- item }()` per-entity goroutine
 

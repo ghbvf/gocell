@@ -148,7 +148,8 @@ type Loop struct {
 	// ReconcilerID is the metric/log owner dimension; when empty it defaults to
 	// the "_runtime" sentinel (see reconcilerIDSentinel). When set it MUST be a
 	// low-cardinality, label-safe identifier: Start rejects any value that fails
-	// validateReconcilerID (lowercase [a-z0-9_], leading [a-z_], ≤48 runes) so a
+	// validateReconcilerID (lowercase [a-z0-9_], leading [a-z_], ≤48 bytes
+	// (ASCII-only)) so a
 	// high-cardinality or separator-bearing owner cannot blow up / corrupt the
 	// reconciler metric label.
 	ReconcilerID string
@@ -173,7 +174,7 @@ type Loop struct {
 	Metrics Metrics
 
 	// BaseDelay is the initial (first-retry) backoff delay for transient errors.
-	// Zero means use the default of 5ms (mirroring client-go
+	// Zero or negative means use the default of 5ms (mirroring client-go
 	// ItemExponentialFailureRateLimiter). The delay doubles on each consecutive
 	// transient failure for the same entity, capped at MaxDelay.
 	//
@@ -183,8 +184,8 @@ type Loop struct {
 	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
 	BaseDelay time.Duration
 	// MaxDelay is the cap on the transient-error backoff delay for a single
-	// entity. Zero means use the default of 1000s (mirroring client-go
-	// ItemExponentialFailureRateLimiter). After MaxDelay is reached, retries
+	// entity. Zero or negative means use the default of 1000s (mirroring
+	// client-go ItemExponentialFailureRateLimiter). After MaxDelay is reached, retries
 	// continue at MaxDelay until the entity succeeds (backoff.Forget) or is
 	// dead-lettered (permanent error).
 	//
@@ -519,6 +520,13 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	if wasDirty {
 		// Re-enqueue the coalesced dirty trigger immediately (delay=0).
 		// This is a fresh convergence run, not a backoff retry.
+		//
+		// Intentional double-enqueue: dispatchResult already enqueued the normal
+		// success/transient requeue above (at the Interval or backoff delay). This
+		// second enqueue at delay=0 is the F5 dirty re-run. Two heap entries for
+		// one entity is safe under level-triggered semantics: delay=0 fires first
+		// as the convergence run; the later Interval/backoff entry is a redundant
+		// idempotent re-observe. Future maintainers: this is NOT a bug.
 		l.enqueueDelayed(runCtx, dirtyReq, 0, addCh)
 	}
 }
@@ -552,10 +560,11 @@ func (l *Loop) dispatchResult(
 		// consumer resets the entity's state.
 	default: // resultTransient (including recovered panics)
 		delay := backoff.When(req.EntityID)
-		l.logger().Error("reconcile: transient error (requeued with backoff)",
+		l.logger().Warn("reconcile: transient error (requeued with backoff)",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()),
 			slog.String("entity", req.EntityID),
+			slog.Duration("backoff_delay", delay),
 			slog.Any("error", redaction.RedactError(err)))
 		l.enqueueDelayed(runCtx, req, delay, addCh)
 	}

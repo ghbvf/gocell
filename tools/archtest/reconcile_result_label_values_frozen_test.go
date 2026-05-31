@@ -69,6 +69,12 @@ import (
 // (2) kernel/reconcile/recovery.go classify() mapping, (3) dashboards/alerts
 // referencing reconcile_total{result=...}, and (4) the observability.md
 // §"Reconcile Metrics result Label" doc契约.
+//
+// Semantic note — "skipped": a `skipped` result does NOT mean the trigger was
+// silently dropped. It means the trigger arrived while the entity was in-flight
+// (processing=true) and was coalesced into the dirty map; a follow-up reconcile
+// at delay=0 is guaranteed after the in-flight run completes (F5 dirty re-run).
+// Convergence is preserved: no trigger is ever lost.
 var wantResultLabelValues = []string{
 	"success",
 	"transient",

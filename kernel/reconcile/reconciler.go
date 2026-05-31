@@ -11,9 +11,9 @@ import "context"
 //     tick interval.
 //   - Return (Result{}, err) with a transient err to have the Loop back off and
 //     retry (Result is ignored when err != nil).
-//   - Return (Result{}, PermanentError(err)) when retrying cannot help; once the
-//     Loop lands (PR-A3) it records a dead-letter metric and stops scheduling
-//     this entity until a fresh trigger re-observes it.
+//   - Return (Result{}, PermanentError(err)) when retrying cannot help; the
+//     Loop records a dead-letter metric and stops scheduling this entity until
+//     a fresh trigger re-observes it.
 //
 // Idempotency contract (P1): Reconcile MUST be idempotent. The framework may
 // invoke it multiple times for the same entity without an intervening state

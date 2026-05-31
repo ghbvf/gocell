@@ -64,11 +64,7 @@ func (b *entityBackoff) When(entityID string) time.Duration {
 	if ns > math.MaxInt64 || time.Duration(ns) > b.max {
 		return b.max
 	}
-	d := time.Duration(ns)
-	if d > b.max {
-		return b.max
-	}
-	return d
+	return time.Duration(ns)
 }
 
 // Forget clears the failure count for entityID so the next When call

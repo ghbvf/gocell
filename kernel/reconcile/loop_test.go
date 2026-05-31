@@ -330,7 +330,14 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 
 	// Release the blocking reconcile. The dirty re-run is enqueued at delay=0
 	// and will be picked up by a worker; Stop drains it.
+	// The exactly-once-more guarantee is further verified by asserting total call
+	// count == 2 after Stop (one in-flight + one dirty re-run). This complements
+	// TestLoop_F5_DirtyDedupCoalescedRerun which also asserts this guarantee.
+	secondCall := p.signalWhenCounterReaches(
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}, 2)
 	close(rec.release)
+	testwait.Deterministic(t, secondCall, "dirty-rerun-success")
+	assert.EqualValues(t, 2, rec.calls.Load(), "exactly 2 reconcile calls: in-flight + coalesced dirty re-run")
 	sc, cancel := stopCtx(t)
 	defer cancel()
 	require.NoError(t, l.Stop(sc))
@@ -661,12 +668,10 @@ func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
 	require.NoError(t, l.Stop(sc))
 }
 
-// TestLoop_TransientExponentialBackoff verifies that transient errors produce
-// exponentially increasing retry delays (via entityBackoff). With a tiny
-// BaseDelay the loop retries quickly in tests; with a non-trivial MaxDelay the
-// delays would grow. We use signalWhenCounterReaches to assert the loop DOES
-// retry multiple times (confirming the delaying queue feeds retries back),
-// not wall-clock timing assertions (which are inherently racy).
+// TestLoop_TransientExponentialBackoff is a count-based integration check: it
+// asserts the loop retries a transient entity multiple times (confirming the
+// delaying queue feeds retries back). No timing assertions are made here — the
+// exponential/reset timing property is unit-covered by backoff_test.go.
 func TestLoop_TransientExponentialBackoff(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -704,13 +709,11 @@ func TestLoop_TransientExponentialBackoff(t *testing.T) {
 	require.NoError(t, l.Stop(sc))
 }
 
-// TestLoop_SuccessForgetsBackoff verifies that a successful reconcile resets the
-// exponential backoff for an entity, so the next transient error restarts at
-// BaseDelay rather than continuing from accumulated failure depth.
-//
-// Observable behavior: after transient→success→transient, the entity retries
-// quickly (BaseDelay, not accumulated exponential delay). Verified by asserting
-// the total transient counter reaches ≥2 quickly enough without hanging.
+// TestLoop_SuccessForgetsBackoff is a count-based integration check: it
+// confirms that after transient→success→transient the entity retries again
+// (i.e. the loop does re-schedule after a success clears the backoff). No
+// timing assertions are made here — the reset timing property is unit-covered
+// by TestBackoff_ResetOnSuccess in backoff_test.go.
 func TestLoop_SuccessForgetsBackoff(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -917,6 +920,64 @@ func TestLoop_ResyncSentinelIsolation(t *testing.T) {
 
 	// Both the sentinel ("") and the real entity must reconcile successfully.
 	testwait.Deterministic(t, successTwice, "both-sentinel-and-real-reconciled")
+
+	sc, cancel := stopCtx(t)
+	defer cancel()
+	require.NoError(t, l.Stop(sc))
+}
+
+// TestLoop_SuccessRequeueAfterPositive verifies that a Reconciler returning
+// Result{RequeueAfter: d} (d > 0) causes the entity to be re-enqueued via the
+// shared delaying queue at delay d — specifically that the
+// `delay = res.normalizedRequeueAfter()` branch in dispatchResult is exercised
+// and the entity is reconciled a second time.
+//
+// Design: the reconciler returns a small positive RequeueAfter on the first call
+// and a long RequeueAfter on the second (so no spurious third call during the
+// test). We wait for two successes using signalWhenCounterReaches — no wall-clock
+// sleeps.
+func TestLoop_SuccessRequeueAfterPositive(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+
+	successLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}
+	// Register BEFORE Start so no success count is missed.
+	successTwice := p.signalWhenCounterReaches(successLabels, 2)
+
+	var callCount atomic.Int64
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			// First call: small positive RequeueAfter — drives the delaying-queue path.
+			return Result{RequeueAfter: testtime.D1ms}, nil
+		}
+		// Second call: requeue far out so the test ends promptly.
+		return Result{RequeueAfter: testtime.D1h}, nil
+	})
+
+	src := make(chan Request, 1)
+	src <- Request{EntityID: "requeue-after-entity"}
+
+	l := &Loop{
+		ReconcilerID: "rc",
+		Reconciler:   rec,
+		Source:       src,
+		Interval:     testtime.D1h,
+		Metrics:      m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+	require.NoError(t, l.Start(ownerCtx))
+
+	// Wait for 2 successes: first call + re-enqueued second call via delaying queue.
+	// This deterministically confirms the RequeueAfter > 0 path feeds the entity
+	// back through the shared delaying queue.
+	testwait.Deterministic(t, successTwice, "two-successes-via-requeue-after")
+	assert.EqualValues(t, 2, callCount.Load(),
+		"entity must have been reconciled twice: once initial, once via RequeueAfter delaying queue")
 
 	sc, cancel := stopCtx(t)
 	defer cancel()

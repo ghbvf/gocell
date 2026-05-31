@@ -13,6 +13,7 @@ import (
 // first call returns base (5ms), then 10ms, 20ms, … capped at max (1000s).
 // Sequence must be monotone non-decreasing and never negative or zero.
 func TestBackoff_ExponentialBounded(t *testing.T) {
+	t.Parallel()
 	const (
 		base = 5 * time.Millisecond
 		max  = 1000 * time.Second
@@ -52,6 +53,7 @@ func TestBackoff_ExponentialBounded(t *testing.T) {
 // TestBackoff_ResetOnSuccess verifies that Forget resets the counter so the
 // next When call returns base again.
 func TestBackoff_ResetOnSuccess(t *testing.T) {
+	t.Parallel()
 	b := newEntityBackoff(5*time.Millisecond, 1000*time.Second)
 	entity := "reset-entity"
 
@@ -71,6 +73,7 @@ func TestBackoff_ResetOnSuccess(t *testing.T) {
 // TestBackoff_Defaults verifies that zero or negative base/max get clamped to
 // the defaults (5ms and 1000s).
 func TestBackoff_Defaults(t *testing.T) {
+	t.Parallel()
 	b := newEntityBackoff(0, 0) // should use defaults
 	d := b.When("e")
 	assert.Equal(t, 5*time.Millisecond, d, "zero base should use default 5ms")
@@ -79,6 +82,7 @@ func TestBackoff_Defaults(t *testing.T) {
 // TestBackoff_ConcurrencySmoke verifies that concurrent When/Forget calls do
 // not race (run with -race).
 func TestBackoff_ConcurrencySmoke(t *testing.T) {
+	t.Parallel()
 	b := newEntityBackoff(5*time.Millisecond, 1000*time.Second)
 	entities := []string{"ea", "eb", "ec"}
 
@@ -104,8 +108,36 @@ func TestBackoff_ConcurrencySmoke(t *testing.T) {
 // TestBackoff_ForgetUnknownEntity verifies that Forget on an unknown entity
 // is a no-op (no panic).
 func TestBackoff_ForgetUnknownEntity(t *testing.T) {
+	t.Parallel()
 	b := newEntityBackoff(5*time.Millisecond, 1000*time.Second)
 	require.NotPanics(t, func() {
 		b.Forget("not-registered")
 	})
+}
+
+// TestBackoff_NoOverflowAtLargeN exercises the ns > math.MaxInt64 overflow guard
+// branch in When. With base=1s and max=1000s, calling When 64 times on the same
+// entity drives float64(base) * 2^n far past MaxInt64 (which is ~9.2e18 ns =
+// ~9.2e9 s >> 1000 s). Every result must be > 0 and <= max — never negative,
+// never wrapped-around.
+//
+// This closes coverage gap SC-005: the existing 5ms-base test reaches the cap
+// via the time.Duration(ns) > b.max branch; this test forces the ns > MaxInt64
+// branch (the float64 overflow guard).
+func TestBackoff_NoOverflowAtLargeN(t *testing.T) {
+	t.Parallel()
+	const (
+		base = time.Second
+		max  = 1000 * time.Second
+	)
+	b := newEntityBackoff(base, max)
+	entity := "overflow-entity"
+
+	for i := 0; i < 64; i++ {
+		d := b.When(entity)
+		assert.Greater(t, d, time.Duration(0),
+			"When must never return zero or negative (call %d)", i)
+		assert.LessOrEqual(t, d, max,
+			"When must never exceed max (call %d)", i)
+	}
 }

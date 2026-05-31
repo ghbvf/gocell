@@ -368,6 +368,11 @@ struct 字面量构造，供测试 + kernel/command 迁移过渡）；A7 收口�
 > FR-010、tasks.md T18（`TestRecovery_PanicMetricRecorded` 断言 `result="transient"`）、
 > 本 §3.6 三处一致——**不存在** `result="panic"` 第 5 标签。若未来 A5 确需独立 panic
 > disposition，必须由 A5 同 PR 同步修订 FR-010 + tasks.md T18 + 本 §3.6 三处，不得单点漂移。
+>
+> **`skipped` 语义（PR-A5 修订）**：`skipped` 不是 trigger 丢弃，而是 trigger 到达时实体
+> 正在处理中（F5 dirty/processing dedup）——trigger 被 coalesced 进 dirty map，当前飞行 reconcile
+> 完成后 **立即（delay=0）触发一次 re-run**（dirty re-run）。A3 阶段 skipped = 丢弃（skip-if-busy）；
+> A5 阶段 skipped = coalesced 待 re-run；收敛性更强，没有 trigger 被静默丢弃。
 
 ---
 
@@ -548,6 +553,10 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 > - **其他格子**（T-IFACE / T-CLOCK / T-LEADER / T-FENCE / T-BUILDER）：PR-A5 不涉及这些域，
 >   评级不变，无需重评。
 > - **没有格子从 ✅ 退化为 ⚠️/❌**：F5/F6 是调度内核的结构简化 + 强化，非行为退步。
+> - **残余风险（已知）**：无界 distinct EntityID 来源（如受攻击的 Source）可使 heap/backoff map 无
+>   上界增长；缓解：§3.1 S1 bounded-set 契约（EntityID 必须来自 cell-local 表主键集）+
+>   `MaxConcurrentReconciles` 限制并发。硬 cap（上限整数）作为 defense-in-depth 已评估并
+>   延后（A5 scope 外，deferred）。
 
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：

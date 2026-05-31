@@ -38,7 +38,7 @@
 // Honest ceiling: Go cannot express "exactly one goroutine drives the delaying
 // queue" or "sends must traverse backoff" at compile time. The achievable
 // ceiling is this Medium archtest + the goleak single-waitingLoop regression
-// test in loop_test.go (TestLoopGoleak). Same permanent-ceiling shape as
+// test in loop_test.go (TestLoop_SharedWaitingLoopNoLeak). Same permanent-ceiling shape as
 // SPAN-SETATTR-HOLDER-SEAL-01 (#851) / HEALTHZ-HOLDER-SEAL-01 (#893).
 //
 // Hard upgrade path: privatize the `queue` and `addCh` channels behind an
@@ -70,6 +70,10 @@
 //     outside the allowlist. This is intentional: a goroutine closure inside even a
 //     sanctioned function is a new execution context and should be explicitly listed.
 //     Current production: none of the three sanctioned functions contain a FuncLit.
+//     Trigger producer sends (tickerTrigger.Start and channelTrigger.Start both send
+//     to `queue` inside goroutine closures) are intentionally out of scope: this
+//     invariant guards Loop-internal dispatch only. Trigger.Start is a separate
+//     execution boundary and its sends are not funneled through enqueueDelayed.
 //
 // # Non-vacuous proof
 //
