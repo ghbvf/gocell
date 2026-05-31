@@ -41,6 +41,35 @@ func absentPrincipal() *Principal {
 	return &Principal{}
 }
 
+// NewBearerHeaderAuthenticator returns an Authenticator that extracts a Bearer
+// token from the Authorization header and delegates verification plus
+// Principal construction to AuthenticateBearer.
+//
+// Outcomes:
+//
+//	(p, true, nil)                 — Bearer token present and valid.
+//	(absentPrincipal(), false, nil) — no Authorization header, or non-Bearer scheme.
+//	(nil, false, err)              — Bearer token present but verification rejected it.
+//
+// This is intentionally a single-scheme authenticator, not a chain/fan-out
+// combinator. Callers that mount it beside other schemes should use separate
+// listener/mount points rather than unioning multiple authenticators.
+//
+// ref: kubernetes/apiserver pkg/authentication/request/bearertoken/bearertoken.go
+func NewBearerHeaderAuthenticator(v IntentTokenVerifier) Authenticator {
+	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
+		token, _ := extractBearerTokenWithReason(r)
+		if token == "" {
+			return absentPrincipal(), false, nil
+		}
+		_, p, err := AuthenticateBearer(r.Context(), v, token)
+		if err != nil {
+			return nil, false, err
+		}
+		return p, true, nil
+	})
+}
+
 // jwtClaimsToPrincipal converts verified JWT Claims to a Principal.
 // Roles is a defensive copy so callers cannot mutate the underlying slice.
 // The Claims map contains exactly three entries (sid, iss, token_use);
