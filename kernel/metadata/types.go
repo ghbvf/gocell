@@ -493,9 +493,9 @@ type BuildMeta struct {
 	Binary         string `yaml:"binary,omitempty"`
 	DeployTemplate string `yaml:"deployTemplate,omitempty"`
 	// CompositionAPI when true instructs GenerateModulesGen to emit the
-	// runtime/composition.CellModule form (platform/ module functions) instead
+	// runtime/composition.CellModule form (cellmodules/ module functions) instead
 	// of the legacy local-CellModule-type form used by examples/.
-	// Set to true in assemblies that use platform/{cell}/Module() constructors
+	// Set to true in assemblies that use cellmodules/{cell}.Module() constructors
 	// (currently only assemblies/corebundle/assembly.yaml).
 	CompositionAPI bool `yaml:"compositionAPI,omitempty"`
 }

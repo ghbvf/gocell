@@ -72,7 +72,7 @@ func setRealModeEnv(t *testing.T, dsn string) {
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 }
 
-// TestBuildApp_Postgres_UsesConfigCoreDatabaseURL verifies the complete
+// TestCorebundlePG_UsesConfigCoreDatabaseURL verifies the complete
 // env-to-pool contract: setting GOCELL_CONFIGCORE_DATABASE_URL=<dsn> and
 // running the full LoadSharedDepsFromEnv → provisionCapabilities →
 // composition.Builder.Build path results in a successfully wired assembly
@@ -83,7 +83,7 @@ func setRealModeEnv(t *testing.T, dsn string) {
 // by calling buildConfigCoreOpts directly. Post capability-provider refactor the
 // pool is opened by provisionCapabilities (not by any cell module), so
 // the test must run that step before Build.
-func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
+func TestCorebundlePG_UsesConfigCoreDatabaseURL(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
 

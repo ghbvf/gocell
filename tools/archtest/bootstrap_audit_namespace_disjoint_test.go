@@ -49,9 +49,9 @@ const (
 	parseNamespaceIDFnName   = "ParseNamespaceID"
 	ledgerPkgSuffix          = "/runtime/audit/ledger"
 
-	// platformAuditcorePkgSuffix is where AuditCoreModule.Provide lives after
+	// cellmodulesAuditcorePkgSuffix is where AuditCoreModule.Provide lives after
 	// the #1085 cell-wiring relocation out of cmd/corebundle.
-	platformAuditcorePkgSuffix = "/cellmodules/auditcore"
+	cellmodulesAuditcorePkgSuffix = "/cellmodules/auditcore"
 )
 
 // TestAuditNamespaceDisjoint01 enforces that cmd/corebundle production code
@@ -78,7 +78,7 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 	modPath := readModulePath(t, root)
 	auditPkgPath := modPath + auditPkgSuffix
 	ledgerPkgPath := modPath + ledgerPkgSuffix
-	scanPkgPath := modPath + platformAuditcorePkgSuffix
+	scanPkgPath := modPath + cellmodulesAuditcorePkgSuffix
 
 	var (
 		bootstrapNamespaceFound bool

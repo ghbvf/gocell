@@ -57,7 +57,7 @@
         },
         "compositionAPI": {
           "type": "boolean",
-          "description": "When true, GenerateModulesGen emits the runtime/composition.CellModule form (platform/{cell}.Module() constructors) instead of the legacy local-CellModule-type form. Set true only in platform assemblies (currently assemblies/corebundle)."
+          "description": "When true, GenerateModulesGen emits the runtime/composition.CellModule form (cellmodules/{cell}.Module() constructors) instead of the legacy local-CellModule-type form. Set true only in cellmodules-based assemblies (currently assemblies/corebundle)."
         }
       }
     }

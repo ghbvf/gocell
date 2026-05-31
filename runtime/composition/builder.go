@@ -62,19 +62,26 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 //     Close(ctx) rollback on any failure; nil-cell guard.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
-//  4. allOpts := runtimeOpts ++ cellOpts ++ one bootstrap.WithManagedResource per
-//     accumulated module resource — handing each resource to the bootstrap
-//     lifecycle so phase10 shutdown calls its Close(ctx).
+//  4. allOpts := runtimeOpts ++ cellOpts.
 //  5. Return &App{clk: shared.Clock, opts: allOpts}.
 //
-// Resource ownership: resources returned by each module's Provide are accumulated
-// into a provisional stack. If any step before a successful return fails, Build
-// calls Close(ctx) on all accumulated resources in reverse order (LIFO) and returns
-// the error — bootstrap never runs, so there is no double-close. On the success
-// path the same resources are instead promoted to bootstrap.WithManagedResource
-// options, so phase10 graceful shutdown stops them (e.g. a rate limiter's cleanup
-// goroutine). Dropping them on success — as an earlier version did — leaked those
-// goroutines.
+// Resource ownership (two channels, distinct phases — see pg-cell-template
+// Chapter 4):
+//   - Steady-state lifecycle: a module registers a resource by returning
+//     bootstrap.WithManagedResource(res) in its opts (3rd return value). Those
+//     opts flow into allOpts, so bootstrap.Run manages health/worker/LIFO-Close
+//     for the resource during the normal run (phase10 shutdown closes it).
+//   - Pre-Run rollback: the module ALSO returns the same resource in its 4th
+//     return value ([]ManagedResource). Build accumulates these into a
+//     provisional stack and, if any later step fails before returning the App,
+//     calls Close(ctx) in reverse order (LIFO) so resources opened so far are
+//     released even though bootstrap.Run never starts.
+//
+// The two channels never double-close: the rollback path fires only on failure
+// (bootstrap.Run does not run), and the WithManagedResource path fires only on
+// success. Build does not itself convert provisional resources into bootstrap
+// options — steady-state registration is the module's responsibility via its
+// opts, so a resource appears at most once in the bootstrap managed set.
 //
 // Note: module order is significant when a module consumes another's typed
 // [ModuleExports]. A module that produces an export (e.g. auditcore producing
@@ -152,12 +159,5 @@ func (b *Builder) Build(
 	}
 
 	allOpts := append(runtimeOpts, cellOpts...) //nolint:gocritic // intentional: runtime opts first, then cell opts
-	// Promote the accumulated module resources to bootstrap-owned lifecycle
-	// resources so phase10 shutdown closes them. Until this point they were only
-	// tracked for failure rollback; the success path must hand them off or their
-	// teardown (e.g. rate-limiter cleanup goroutine) never runs.
-	for _, r := range provisional {
-		allOpts = append(allOpts, bootstrap.WithManagedResource(r))
-	}
 	return &App{clk: shared.Clock, opts: allOpts}, nil
 }

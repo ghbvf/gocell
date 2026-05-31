@@ -3,7 +3,7 @@
 //
 // MODULE-ORDER-CONFIGCORE-FIRST-01 was removed when the postgres pool moved out
 // of ConfigCoreModule.Provide into the assembly-level provisionCapabilities
-// (cap_wiring.go): the pool is provisioned before BuildApp and registered as the
+// (cap_wiring.go): the pool is provisioned before composition.Build and registered as the
 // first ManagedResource by runtimeBaseOptions, so cell module order no longer
 // carries the pool happens-before contract. See ADR
 // docs/architecture/202605251500-adr-capability-provider-interface.md §Decision.
@@ -44,7 +44,7 @@ type assemblyOrderFixture struct {
 //
 // This is now the only cell-module-order invariant: the postgres pool no longer
 // rides on slot-zero (configcore) — it is provisioned assembly-level before
-// BuildApp (provisionCapabilities), so the former
+// composition.Build (provisionCapabilities), so the former
 // MODULE-ORDER-CONFIGCORE-FIRST-01 was removed.
 func TestModuleOrderAuditcoreBeforeAccesscore01(t *testing.T) {
 	root := findModuleRoot(t)

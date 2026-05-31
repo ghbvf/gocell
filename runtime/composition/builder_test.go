@@ -94,34 +94,42 @@ func TestBuilder_HappyPath(t *testing.T) {
 	assert.True(t, m2.called)
 }
 
-// TestBuilder_HappyPath_ManagedResourcesThreaded verifies that on the success
-// path each module's ManagedResources are promoted to bootstrap.WithManagedResource
-// options (so phase10 shutdown closes them) instead of being dropped — the F1
-// fix. With empty runtime/cell opts, allOpts must contain exactly one option per
-// accumulated resource, and no resource may be Closed (success path never rolls
-// back).
-func TestBuilder_HappyPath_ManagedResourcesThreaded(t *testing.T) {
+// TestBuilder_HappyPath_TwoChannelResourceContract verifies the two-channel
+// resource ownership contract (pg-cell-template Chapter 4):
+//   - A module's bootstrap.Option (3rd return, e.g. bootstrap.WithManagedResource)
+//     flows into App.opts so bootstrap.Run owns the steady-state lifecycle.
+//   - A module's []ManagedResource (4th return) is rollback-only: Build must NOT
+//     additionally convert it into bootstrap opts on the success path, or the
+//     resource would be registered twice (the module already registered it via
+//     its own opts) and double-closed at shutdown.
+//
+// Mirrors cellmodules/accesscore: WithManagedResource(limiter) in opts +
+// the same limiter in the 4th channel for pre-Run rollback.
+func TestBuilder_HappyPath_TwoChannelResourceContract(t *testing.T) {
 	ctx := context.Background()
 
 	order := &closedOrder{}
 	r1 := &orderedMR{id: "r1", order: order}
-	r2 := &orderedMR{id: "r2", order: order}
 
 	c1 := stubCell("cell-1")
-	c2 := stubCell("cell-2")
-	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
-	m2 := &fakeCellModule{id: "mod2", cell: c2, mres: []kernellifecycle.ManagedResource{r2}}
+	m1 := &fakeCellModule{
+		id:   "mod1",
+		cell: c1,
+		opts: []bootstrap.Option{bootstrap.WithManagedResource(r1)},
+		mres: []kernellifecycle.ManagedResource{r1},
+	}
 
-	app, err := New().With(m1, m2).Build(ctx, minimalSharedDeps(t),
+	app, err := New().With(m1).Build(ctx, minimalSharedDeps(t),
 		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
-	// runtimeOpts (0) ++ cellOpts (0) ++ one WithManagedResource per resource (2).
-	assert.Len(t, app.opts, 2,
-		"each module ManagedResource must be threaded into bootstrap opts on success")
-	// Success path must not roll back: resources stay open for the bootstrap
-	// lifecycle to close at shutdown.
+	// Exactly the module's own opt is present — the 4th-channel resource is NOT
+	// additionally threaded (that would double-register against the module's
+	// own WithManagedResource).
+	assert.Len(t, app.opts, 1,
+		"module opts flow through; Builder must not also convert mres into opts")
+	// Success path never rolls back.
 	assert.Empty(t, order.calls, "no resource may be Closed on the success path")
 }
 

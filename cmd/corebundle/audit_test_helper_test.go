@@ -15,7 +15,7 @@ import (
 
 // buildTestAuditProtocol creates a ledger.Protocol for integration tests.
 // The HMAC key is sealed inside the protocol; cells never hold the raw key.
-// ref: cellmodules/auditcore/module.go — production composition uses MustNewProtocol.
+// ref: cellmodules/auditcore/module.go — production composition uses NewProtocol.
 func buildTestAuditProtocol(t testing.TB, hmacKey []byte) *ledger.Protocol {
 	t.Helper()
 	ns, err := ledger.ParseNamespaceID("auditcore")

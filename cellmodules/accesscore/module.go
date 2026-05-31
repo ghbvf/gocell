@@ -137,8 +137,19 @@ func (m module) Provide(
 	accessOpts = append(accessOpts, accesscell.WithBootstrapAuth(bootstrapMW))
 
 	c := accesscell.NewAccessCore(shared.Clock, accessOpts...)
-	return c, composition.ModuleExports{}, nil,
-		[]kernellifecycle.ManagedResource{bootstrapLimiterResource{lim: rlLimiter}}, nil
+	// The bootstrap rate limiter spawns a cleanup goroutine, so it must be
+	// managed in two places (pg-cell-template Chapter 4 contract):
+	//   - opts: bootstrap.WithManagedResource so bootstrap.Run closes it at
+	//     phase10 shutdown during the normal run (the steady-state lifecycle).
+	//   - 4th return value: so Builder.Build closes it (LIFO) if a *later*
+	//     module's Provide fails before bootstrap.Run starts (rollback).
+	// The same value flows through both; bootstrap registers it once (only the
+	// success path reaches bootstrap.Run), the rollback path only fires on
+	// pre-Run failure, so there is no double-close.
+	limiterRes := bootstrapLimiterResource{lim: rlLimiter}
+	return c, composition.ModuleExports{},
+		[]bootstrap.Option{bootstrap.WithManagedResource(limiterRes)},
+		[]kernellifecycle.ManagedResource{limiterRes}, nil
 }
 
 // buildAccessBaseOpts builds the base accesscore options and session protocol.

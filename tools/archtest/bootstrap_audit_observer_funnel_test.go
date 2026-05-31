@@ -100,14 +100,14 @@ const (
 	ruleBootstrapAuditObserverFunnelDownstreamHard01 = "BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-DOWNSTREAM-HARD-01"
 	ruleBootstrapAuditObserverFunnelUpstreamMedium01 = "BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01"
 
-	auditPkgSuffix              = "/runtime/audit"
-	authPkgSuffix               = "/runtime/auth"
-	corebundlePkgSuffix         = "/cmd/corebundle"
-	ssobffPkgSuffix             = "/examples/ssobff"
-	platformAccesscorePkgSuffix = "/cellmodules/accesscore"
-	observerFnName              = "NewBootstrapAuthFailObserver"
-	appendFnName                = "AppendBootstrapAuthFail"
-	bootstrapMiddlewareName     = "NewBootstrapMiddleware"
+	auditPkgSuffix                 = "/runtime/audit"
+	authPkgSuffix                  = "/runtime/auth"
+	corebundlePkgSuffix            = "/cmd/corebundle"
+	ssobffPkgSuffix                = "/examples/ssobff"
+	cellmodulesAccesscorePkgSuffix = "/cellmodules/accesscore"
+	observerFnName                 = "NewBootstrapAuthFailObserver"
+	appendFnName                   = "AppendBootstrapAuthFail"
+	bootstrapMiddlewareName        = "NewBootstrapMiddleware"
 )
 
 // TestBootstrapAuditObserverFunnelDownstreamHard01 enforces the downstream
@@ -415,13 +415,13 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	authPkgPath := modPath + authPkgSuffix
 	corebundlePkgPath := modPath + corebundlePkgSuffix
 	ssobffPkgPath := modPath + ssobffPkgSuffix
-	platformAccesscorePkgPath := modPath + platformAccesscorePkgSuffix
+	cellmodulesAccesscorePkgPath := modPath + cellmodulesAccesscorePkgSuffix
 	scanPaths := map[string]bool{
 		corebundlePkgPath: true,
 		ssobffPkgPath:     true,
 		// cellmodules/accesscore is a composition-root layer (#1085) that wires the
 		// bootstrap auth-fail observer; it must route through audit.NewBootstrapAuthFailObserver.
-		platformAccesscorePkgPath: true,
+		cellmodulesAccesscorePkgPath: true,
 	}
 	// Reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): record
 	// which scope packages were actually visited so we fail loudly if a
