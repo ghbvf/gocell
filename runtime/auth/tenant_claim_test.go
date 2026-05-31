@@ -46,6 +46,29 @@ func signAccessTokenWithTenant(t *testing.T, ks *KeySet, tenantID string) string
 	return s
 }
 
+// signAccessTokenWithRawTenant signs an access JWT whose tenant_id claim is
+// ALWAYS present and set to the given raw value (any JSON type). Unlike
+// signAccessTokenWithTenant it does not omit the claim, so it can exercise the
+// present-but-empty-string and present-but-non-string fail-closed paths.
+func signAccessTokenWithRawTenant(t *testing.T, ks *KeySet, tenantVal any) string {
+	t.Helper()
+	raw := jwt.MapClaims{
+		"sub":       "user-1",
+		"iss":       "gocell",
+		"aud":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": string(TokenIntentAccess),
+		"tenant_id": tenantVal,
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, raw)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
+	s, err := tok.SignedString(ks.SigningKey())
+	require.NoError(t, err)
+	return s
+}
+
 func newTenantTestVerifier(t *testing.T) (IntentTokenVerifier, *KeySet) {
 	t.Helper()
 	ks := mustTestKeySet(t)
@@ -71,10 +94,12 @@ func TestMapClaimsToClaims_TenantID_NotInExtra(t *testing.T) {
 	assert.False(t, inExtra, "tenant_id must not leak into Claims.Extra")
 }
 
-// TestMapClaimsToClaims_TenantID_NonString_Absent verifies a non-string
-// tenant_id claim leaves Claims.TenantID empty (treated as absent at the pure
-// mapping layer; the verifier never sees a value to reject).
-func TestMapClaimsToClaims_TenantID_NonString_Absent(t *testing.T) {
+// TestMapClaimsToClaims_TenantID_NonString_Empty verifies a non-string
+// tenant_id claim leaves Claims.TenantID empty at the PURE mapping layer. This
+// is not the security gate: the verifier (parseAndVerify) independently inspects
+// the raw claims map and fails closed on a present-but-non-string tenant_id —
+// see TestVerifyIntent_TenantClaim_NonString_Rejected.
+func TestMapClaimsToClaims_TenantID_NonString_Empty(t *testing.T) {
 	mc := jwt.MapClaims{"sub": "u1", "tenant_id": 12345}
 	c := mapClaimsToClaims(mc)
 	assert.Equal(t, "", c.TenantID, "non-string tenant_id must not populate Claims.TenantID")
@@ -119,6 +144,32 @@ func TestVerifyIntent_TenantClaim_Absent_OK(t *testing.T) {
 	claims, err := v.VerifyIntent(context.Background(), signAccessTokenWithTenant(t, ks, ""), TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "", claims.TenantID)
+}
+
+// TestVerifyIntent_TenantClaim_EmptyString_Rejected verifies a present-but-empty
+// tenant_id claim fails closed. An empty string is a malformed tenant identifier
+// (TenantID has no absent semantic) and must NOT be silently collapsed to the
+// single-tenant path — that conflation is exactly the fail-open this guards.
+func TestVerifyIntent_TenantClaim_EmptyString_Rejected(t *testing.T) {
+	v, ks := newTenantTestVerifier(t)
+	_, err := v.VerifyIntent(context.Background(), signAccessTokenWithRawTenant(t, ks, ""), TokenIntentAccess)
+	require.Error(t, err, "present-but-empty tenant_id must be rejected, not treated as absent")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ec.Code)
+}
+
+// TestVerifyIntent_TenantClaim_NonString_Rejected verifies a present-but-non-
+// string tenant_id claim (e.g. a JSON number) fails closed. A non-string tenant
+// claim is a broken/forged or federated-IdP-misconfigured token; treating it as
+// "no tenant" would bypass the fail-closed boundary.
+func TestVerifyIntent_TenantClaim_NonString_Rejected(t *testing.T) {
+	v, ks := newTenantTestVerifier(t)
+	_, err := v.VerifyIntent(context.Background(), signAccessTokenWithRawTenant(t, ks, 12345), TokenIntentAccess)
+	require.Error(t, err, "present-but-non-string tenant_id must be rejected, not treated as absent")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ec.Code)
 }
 
 // --- production HTTP path (AuthMiddleware → handleAuthRequest) ---

@@ -44,14 +44,17 @@ const canonicalUUIDLen = 36
 // String returns the underlying string.
 func (t TenantID) String() string { return string(t) }
 
-// Validate returns nil only for a non-empty, canonical (36-char dashed) UUID.
-// The empty value is rejected (a tenant boundary cannot be absent at the
-// point a TenantID is required); any non-canonical-UUID string is rejected.
+// Validate returns nil only for a non-empty TenantID that is ALREADY in
+// canonical form: a 36-char dashed, lowercase UUID. The empty value is rejected
+// (a tenant boundary cannot be absent at the point a TenantID is required), and
+// any non-canonical form — including a valid-but-uppercase UUID — is rejected.
 //
-// Validate only CHECKS validity; it does NOT normalize the receiver. A value
-// that passes Validate is already canonical only if it was produced by
-// ParseTenantID / UnmarshalJSON. To obtain the canonical lowercase form from a
-// raw string, use ParseTenantID.
+// Validate does NOT normalize the receiver: it asserts the value is canonical
+// rather than coercing it. This makes Validate a true post-construction
+// invariant check (e.g. on a TenantID repo parameter) — a value that passes is
+// safe to use verbatim against the PostgreSQL uuid column / RLS predicate. To
+// obtain the canonical lowercase form from a raw (possibly uppercase) string,
+// use ParseTenantID, which normalizes.
 func (t TenantID) Validate() error {
 	return validateTenantIDString(string(t))
 }
@@ -106,9 +109,18 @@ func parseCanonical(s string) (TenantID, error) {
 	return TenantID(u.String()), nil
 }
 
-// validateTenantIDString validates without producing the canonical form, so
-// Validate() can run on an already-constructed value (e.g. a struct field).
+// validateTenantIDString asserts that s is ALREADY canonical: it must parse as
+// a valid TenantID AND equal its own canonical form. parseCanonical normalizes
+// (lowercases) on the way through, so comparing s to the canonical result is
+// what rejects a valid-but-uppercase UUID — a check Validate needs but
+// ParseTenantID / UnmarshalJSON (which deliberately normalize) must not apply.
 func validateTenantIDString(s string) error {
-	_, err := parseCanonical(s)
-	return err
+	canonical, err := parseCanonical(s)
+	if err != nil {
+		return err
+	}
+	if string(canonical) != s {
+		return fmt.Errorf("tenant: TenantID must be a canonical lowercase UUID; use ParseTenantID to normalize")
+	}
+	return nil
 }

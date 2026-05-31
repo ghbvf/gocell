@@ -25,7 +25,8 @@
 //     switch. The only Hard path would be a codegen funnel that generates the
 //     String() method + a keyless-struct-literal compile-exhaustion table from a
 //     single enum source (the SAGA-STATUS-FANOUT-COVERAGE-01 shape); that is
-//     disproportionate for a five-value enum with a single fan-out site today.
+//     disproportionate for a five-value enum with only a couple of fan-out sites
+//     today (PrincipalKind.String() and middleware.appendPrincipalAttrs).
 //     This matches the spec's Medium rating (tasks.md T1.3). No gh upgrade issue
 //     is opened: the codegen-funnel cost exceeds its benefit here, recorded in
 //     this godoc rather than tracked as latent work.
@@ -35,10 +36,11 @@
 //   - if/else-if chains comparing p.Kind (e.g. `if p.Kind == PrincipalUser`) are
 //     NOT switches and are out of scope — they are not exhaustiveness carriers,
 //     and a new kind that falls through such a chain is handled by the chain's
-//     terminal branch by construction. The fanout review (#1339) confirmed the
-//     only PrincipalKind switch today is String(); the if-chains in authz.go are
-//     correct for PrincipalDevice without change (device is neither user nor
-//     service). This blind spot is proven a non-false-positive by
+//     terminal branch by construction. The production PrincipalKind switches
+//     today are PrincipalKind.String() and middleware.appendPrincipalAttrs (the
+//     access-log fanout #1339 added); the if-chains in authz.go are correct for
+//     PrincipalDevice without change (device is neither user nor service). This
+//     blind spot is proven a non-false-positive by
 //     TestPrincipalKindExhaustiveSwitch01_IfChainNotScanned (a non-exhaustive
 //     if-chain fixture must yield ZERO diagnostics).
 //   - Nested switches: only direct CaseClause children of the matched SwitchStmt
@@ -62,7 +64,9 @@ import (
 )
 
 const (
-	principalKindPkgPath  = "github.com/ghbvf/gocell/runtime/auth"
+	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01) so a
+	// module rename updates exactly one place — never a bare literal.
+	principalKindPkgPath  = PlatformModulePath + "/runtime/auth"
 	principalKindTypeName = "PrincipalKind"
 )
 
@@ -216,17 +220,13 @@ func principalKindDeclaredConsts(t types.Type) map[string]bool {
 // in the direct case clauses of sw (a default clause contributes nothing).
 func principalKindCaseConsts(sw *ast.SwitchStmt, info *types.Info) map[string]bool {
 	got := map[string]bool{}
-	for _, stmt := range sw.Body.List {
-		cc, ok := stmt.(*ast.CaseClause)
-		if !ok {
-			continue
-		}
+	EachInChildren[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
 		for _, e := range cc.List {
 			if name, ok := principalKindCaseConstName(e, info); ok {
 				got[name] = true
 			}
 		}
-	}
+	})
 	return got
 }
 

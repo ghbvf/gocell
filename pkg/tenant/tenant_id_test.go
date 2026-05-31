@@ -25,7 +25,7 @@ func TestTenantID_Validate(t *testing.T) {
 		{"empty rejected", TenantID(""), true},
 		{"non-uuid rejected", TenantID("not-a-uuid"), true},
 		{"safe-charset but not uuid rejected", TenantID("acme-tenant"), true},
-		{"uppercase uuid accepted by parser", TenantID(validTenantUUIDUp), false},
+		{"uppercase uuid rejected as non-canonical", TenantID(validTenantUUIDUp), true},
 		{"injection chars rejected", TenantID("3f2504e0-4f89-41d3-9a0c-0305e82c3301\n"), true},
 		// Forms google/uuid.Parse accepts but the canonical 36-char guard rejects:
 		{"compact 32-char rejected", TenantID("3f2504e04f8941d39a0c0305e82c3301"), true},

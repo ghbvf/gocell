@@ -209,26 +209,11 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	if err := v.checkIssuer(claims); err != nil {
 		return Claims{}, err
 	}
-	// Tenant claim validation (fail-closed) — armed at the single unbypassable
-	// chokepoint: VerifyIntent is the sole producer of Claims (mapClaimsToClaims
-	// is reachable only through parseAndVerify→VerifyIntent), so EVERY path that
-	// turns a JWT into a Principal (the HTTP AuthMiddleware path AND the
-	// NewJWTAuthenticator path) sees an already-validated, canonical tenant.
-	// A present-but-malformed tenant_id is a broken/forged token; reject it with
-	// the generic unauthorized envelope (enumeration defense), distinguishable
-	// only in server-side logs. Absent tenant is the single-tenant path and
-	// passes through. Downstream therefore sees either an empty tenant or a
-	// canonical lowercase UUID — never an unvalidated string.
-	if claims.TenantID != "" {
-		tid, perr := tenant.ParseTenantID(claims.TenantID)
-		if perr != nil {
-			return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-				"invalid token",
-				errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a valid UUID")),
-				errcode.WithCategory(errcode.CategoryAuth))
-		}
-		claims.TenantID = tid.String()
-	}
+	// Tenant claim is validated + canonicalized inside parseAndVerify (the decode
+	// boundary where the raw claims map is available, so present-but-non-string
+	// and present-but-empty are distinguishable from absent). By the time
+	// VerifyIntent sees claims, claims.TenantID is either empty (single-tenant
+	// path) or a canonical lowercase UUID — never an unvalidated string.
 	return claims, nil
 }
 
@@ -274,8 +259,9 @@ func stringFromHeader(header map[string]any, key string) string {
 }
 
 // parseAndVerify decodes the token, validates its signature, and returns both
-// the Claims and the raw JOSE header. It is the shared path of Verify and
-// VerifyIntent.
+// the Claims and the raw JOSE header. It is the sole internal path of
+// VerifyIntent (the only public verifier entry point), so the tenant-claim
+// fail-closed gate it arms covers every JWT→Principal path.
 func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims, map[string]any, error) {
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
 		// Inner errors use bare fmt.Errorf because jwt.Parse wraps them
@@ -339,7 +325,46 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return Claims{}, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token claims")
 	}
 
-	return mapClaimsToClaims(mapClaims), token.Header, nil
+	claims := mapClaimsToClaims(mapClaims)
+	if err := validateAndCanonicalizeTenant(mapClaims, &claims); err != nil {
+		return Claims{}, nil, err
+	}
+	return claims, token.Header, nil
+}
+
+// validateAndCanonicalizeTenant fails closed on the tenant_id claim and, on
+// success, rewrites claims.TenantID to its canonical lowercase UUID form. It
+// reads the RAW claims map (not the lossy mapped string) so that the three
+// cases are distinguishable:
+//
+//   - absent           → single-tenant path, claims.TenantID stays empty.
+//   - present non-string → 401 (broken/forged or federated-IdP-misconfigured token).
+//   - present string     → tenant.ParseTenantID rejects empty / non-canonical /
+//     non-UUID values with 401; a valid value is canonicalized.
+//
+// All rejections use the generic unauthorized envelope (enumeration defense);
+// the specific reason lives only in the server-side internal detail.
+func validateAndCanonicalizeTenant(mc jwt.MapClaims, claims *Claims) error {
+	raw, present := mc["tenant_id"]
+	if !present {
+		return nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"invalid token",
+			errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a string")),
+			errcode.WithCategory(errcode.CategoryAuth))
+	}
+	tid, err := tenant.ParseTenantID(s)
+	if err != nil {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"invalid token",
+			errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a valid UUID")),
+			errcode.WithCategory(errcode.CategoryAuth))
+	}
+	claims.TenantID = tid.String()
+	return nil
 }
 
 // JWTIssuer signs JWT tokens with RS256 using the active key from a SigningKeyProvider.
