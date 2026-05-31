@@ -56,6 +56,18 @@ func fetchViaGet() (*http.Response, error) {
 	return http.Get("http://10.0.0.1/") // VIOLATION A3 (http.Get)
 }
 
+func fetchViaPost() (*http.Response, error) {
+	return http.Post("http://10.0.0.1/", "application/json", http.NoBody) // VIOLATION A3 (http.Post)
+}
+
+func fetchViaPostForm() (*http.Response, error) {
+	return http.PostForm("http://10.0.0.1/", nil) // VIOLATION A3 (http.PostForm)
+}
+
+func fetchViaHead() (*http.Response, error) {
+	return http.Head("http://10.0.0.1/") // VIOLATION A3 (http.Head)
+}
+
 func transportRef() http.RoundTripper {
 	return http.DefaultTransport // VIOLATION A3 (http.DefaultTransport)
 }

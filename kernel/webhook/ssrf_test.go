@@ -57,12 +57,12 @@ func canceledContext(t *testing.T) context.Context {
 // ssrfBlockedCIDRStrings so a newly added CIDR is automatically covered.
 func TestSafeDialer_BlocksEveryBlocklistCIDR(t *testing.T) {
 	t.Parallel()
-	dial := NewSafeDialer()
+	p := NewSafePolicy()
 	for _, cidr := range ssrfBlockedCIDRStrings {
 		host := strings.SplitN(cidr, "/", 2)[0] // network address is contained in the CIDR
 		t.Run(cidr, func(t *testing.T) {
 			t.Parallel()
-			_, err := dial(context.Background(), "tcp", net.JoinHostPort(host, "443"))
+			_, err := p.DialContext(context.Background(), "tcp", net.JoinHostPort(host, "443"))
 			require.Error(t, err)
 			assert.Truef(t, isSSRFBlocked(t, err), "expected SSRF-blocked for %s, got %v", host, err)
 		})
@@ -100,12 +100,12 @@ func TestSafeDialer_IPLiteralCases(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dial := NewSafeDialer(tc.opts...)
+			p := NewSafePolicy(tc.opts...)
 			ctx := context.Background()
 			if !tc.wantBlocked {
 				ctx = canceledContext(t) // got past vet → fail fast, no network
 			}
-			_, err := dial(ctx, "tcp", net.JoinHostPort(tc.host, "443"))
+			_, err := p.DialContext(ctx, "tcp", net.JoinHostPort(tc.host, "443"))
 			require.Error(t, err)
 			if tc.wantBlocked {
 				assert.Truef(t, isSSRFBlocked(t, err), "expected SSRF-blocked, got %v", err)
@@ -160,12 +160,12 @@ func TestSafeDialer_DNSRebinding(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dial := NewSafeDialer(withResolver(tc.resolver))
+			p := NewSafePolicy(withResolver(tc.resolver))
 			ctx := context.Background()
 			if !tc.wantBlocked {
 				ctx = canceledContext(t)
 			}
-			_, err := dial(ctx, "tcp", "evil.example.com:443")
+			_, err := p.DialContext(ctx, "tcp", "evil.example.com:443")
 			require.Error(t, err)
 			if tc.wantBlocked {
 				assert.Truef(t, isSSRFBlocked(t, err), "expected SSRF-blocked, got %v", err)
@@ -179,7 +179,7 @@ func TestSafeDialer_DNSRebinding(t *testing.T) {
 
 func TestSafeDialer_MalformedAddress(t *testing.T) {
 	t.Parallel()
-	dial := NewSafeDialer()
+	p := NewSafePolicy()
 	tests := []struct {
 		name string
 		addr string
@@ -192,41 +192,78 @@ func TestSafeDialer_MalformedAddress(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := dial(context.Background(), "tcp", tc.addr)
+			_, err := p.DialContext(context.Background(), "tcp", tc.addr)
 			require.Error(t, err)
 			assert.Truef(t, isSSRFBlocked(t, err), "malformed address must fail closed as SSRF-blocked, got %v", err)
+			assert.Equalf(t, "malformed_address", internalReason(t, err),
+				"malformed address reject must carry stable Internal reason, got %v", err)
 		})
 	}
+}
+
+// internalReason extracts the stable "reason" InternalDetail from an
+// errcode.Error reject path (server-only observability field, never on the
+// wire). Returns "" when absent.
+func internalReason(t *testing.T, err error) string {
+	t.Helper()
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		return ""
+	}
+	for _, d := range ec.InternalDetails {
+		if a := d.AsSlogAttr(); a.Key == "reason" {
+			return a.Value.String()
+		}
+	}
+	return ""
 }
 
 func TestValidateTargetURL(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		rawURL  string
-		wantErr bool
+		name       string
+		rawURL     string
+		opts       []SafeOption
+		wantErr    bool
+		wantReason string // stable Internal "reason" when wantErr (empty = don't assert)
 	}{
 		{name: "https_ok", rawURL: "https://hooks.example.com/v1", wantErr: false},
 		{name: "http_ok", rawURL: "http://internal-mesh.svc/webhook", wantErr: false},
 		{name: "public_ip_literal_ok", rawURL: "https://8.8.8.8/x", wantErr: false},
-		{name: "ftp_blocked", rawURL: "ftp://x.example.com/f", wantErr: true},
-		{name: "file_blocked", rawURL: "file:///etc/passwd", wantErr: true},
-		{name: "gopher_blocked", rawURL: "gopher://x.example.com/", wantErr: true},
-		{name: "private_ip_literal_blocked", rawURL: "http://10.0.0.1/x", wantErr: true},
-		{name: "metadata_ip_literal_blocked", rawURL: "http://169.254.169.254/latest/meta-data/", wantErr: true},
-		{name: "mapped_private_literal_blocked", rawURL: "http://[::ffff:10.0.0.1]/x", wantErr: true},
-		{name: "unparseable_blocked", rawURL: "ht!tp://\x7f", wantErr: true},
+		{name: "ftp_blocked", rawURL: "ftp://x.example.com/f", wantErr: true, wantReason: "scheme_not_allowed"},
+		{name: "file_blocked", rawURL: "file:///etc/passwd", wantErr: true, wantReason: "scheme_not_allowed"},
+		{name: "gopher_blocked", rawURL: "gopher://x.example.com/", wantErr: true, wantReason: "scheme_not_allowed"},
+		{name: "private_ip_literal_blocked", rawURL: "http://10.0.0.1/x", wantErr: true, wantReason: "ssrf_blocked"},
+		{name: "metadata_ip_literal_blocked", rawURL: "http://169.254.169.254/latest/meta-data/", wantErr: true, wantReason: "ssrf_blocked"},
+		{name: "mapped_private_literal_blocked", rawURL: "http://[::ffff:10.0.0.1]/x", wantErr: true, wantReason: "ssrf_blocked"},
+		{name: "unparseable_blocked", rawURL: "ht!tp://\x7f", wantErr: true, wantReason: "unparseable"},
+		// F1: an empty host (http:///x) is un-vettable → fail closed, not silently OK.
+		{name: "empty_host_blocked", rawURL: "http:///x", wantErr: true, wantReason: "empty_host"},
+		// F2: loopback exemption is policy-coherent — the pre-flight honors
+		// WithAllowLoopback exactly as the dial does, instead of rejecting a
+		// literal loopback the dialer is configured to allow.
+		{name: "loopback_literal_blocked_default", rawURL: "http://127.0.0.1:8080/", wantErr: true, wantReason: "ssrf_blocked"},
+		{name: "loopback_literal_ok_with_optin", rawURL: "http://127.0.0.1:8080/", opts: []SafeOption{WithAllowLoopback()}, wantErr: false},
+		{name: "ipv6_loopback_ok_with_optin", rawURL: "http://[::1]:8080/", opts: []SafeOption{WithAllowLoopback()}, wantErr: false},
+		{
+			name: "private_still_blocked_with_optin", rawURL: "http://10.0.0.1/x",
+			opts: []SafeOption{WithAllowLoopback()}, wantErr: true, wantReason: "ssrf_blocked",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := ValidateTargetURL(tc.rawURL)
+			err := NewSafePolicy(tc.opts...).ValidateTargetURL(tc.rawURL)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				return
 			}
 			require.Error(t, err)
 			assert.Truef(t, isSSRFBlocked(t, err), "expected SSRF-blocked, got %v", err)
+			if tc.wantReason != "" {
+				assert.Equalf(t, tc.wantReason, internalReason(t, err),
+					"reject must carry stable Internal reason, got %v", err)
+			}
 		})
 	}
 }
@@ -251,9 +288,10 @@ func TestDenyRedirect(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rerr := DenyRedirect(req, tc.via)
+			rerr := NewSafePolicy().DenyRedirect(req, tc.via)
 			require.Error(t, rerr)
 			assert.True(t, isSSRFBlocked(t, rerr))
+			assert.Equal(t, "redirect_denied", internalReason(t, rerr))
 
 			var ec *errcode.Error
 			require.ErrorAs(t, rerr, &ec)

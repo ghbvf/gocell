@@ -13,17 +13,21 @@ who can register or influence a target URL points it at `169.254.169.254` (cloud
 metadata), an internal service, or loopback, turning the dispatcher into a
 confused-deputy proxy into the trust boundary.
 
-This PR ships the pure-computation SSRF guard (`kernel/webhook/ssrf.go`): a
-`SafeDialContext` plus a redirect-deny `http.Client.CheckRedirect` and a
-scheme/URL pre-flight. There is **no production consumer in this PR** — the
-dispatcher that wires the guard into an `http.Transport` is PR-5. The policy is
-decided here, in the same PR that implements it, rather than deferred: the dialer
-code IS the decision, and the blocklist is security-critical.
+This PR ships the pure-computation SSRF guard (`kernel/webhook/ssrf.go`) as a
+**single-source policy object**, `SafePolicy`, whose three methods —
+`DialContext` (the vetted dialer), `DenyRedirect` (an `http.Client.CheckRedirect`)
+and `ValidateTargetURL` (the scheme/URL pre-flight) — share one config. Bundling
+them means a policy knob (e.g. `WithAllowLoopback`) applies **identically** to the
+pre-flight and the dial, with no divergent per-surface vetting path. There is **no
+production consumer in this PR** — the dispatcher that holds a `*SafePolicy` and
+wires its methods into an `*http.Client` is PR-5. The policy is decided here, in
+the same PR that implements it, rather than deferred: the dialer code IS the
+decision, and the blocklist is security-critical.
 
 ## Decision
 
-1. **`resolve → vet → dial-literal-IP`, single path.** `SafeDialContext` parses
-   the address; if the host is an IP literal it vets it directly; otherwise it
+1. **`resolve → vet → dial-literal-IP`, single path.** `SafePolicy.DialContext`
+   parses the address; if the host is an IP literal it vets it directly; otherwise it
    resolves the hostname via an injectable resolver, vets **every** returned IP
    against the blocklist (fail-closed: any blocked IP rejects the whole dial),
    then dials the **first vetted IP literal** with an inner `net.Dialer`. Because
@@ -50,19 +54,27 @@ code IS the decision, and the blocklist is security-critical.
    dead weight, and without normalization it would over-block legitimate public
    IPv4-mapped addresses. Listing it would be a redundant/incorrect double path.
 
-4. **Redirect deny-all.** `DenyRedirect` (an `http.Client.CheckRedirect`) refuses
-   every 3xx. A redirect from a vetted target could otherwise bounce egress to an
-   unvetted internal `Location`; webhook delivery is one-shot, so any redirect is
-   an error.
+4. **Redirect deny-all.** `SafePolicy.DenyRedirect` (an `http.Client.CheckRedirect`)
+   refuses every 3xx. A redirect from a vetted target could otherwise bounce egress
+   to an unvetted internal `Location`; webhook delivery is one-shot, so any redirect
+   is an error.
 
-5. **Scheme allowlist {http, https}.** `ValidateTargetURL` rejects every other
-   scheme (`file`, `gopher`, `ftp`, …) and rejects a target whose host is an IP
-   literal already in the blocklist (cheap pre-flight; hostnames are still vetted
-   at dial time).
+5. **Scheme allowlist {http, https} + fail-closed pre-flight.**
+   `SafePolicy.ValidateTargetURL` rejects every other scheme (`file`, `gopher`,
+   `ftp`, …), rejects an **empty host** (an un-vettable target — e.g. `http:///x` —
+   fails closed rather than passing silently), and rejects a target whose host is
+   an IP literal blocked by the policy. The IP-literal check **reuses the same
+   `vet`** as the dial path, so the pre-flight and the dial cannot diverge (a
+   literal the dialer would accept is never falsely rejected at pre-flight, and
+   vice versa). Hostnames are still vetted at dial time (resolving at pre-flight
+   would create a TOCTOU window).
 
-6. **`WithAllowLoopback` is dev/CI only.** It exempts ONLY loopback (so
-   testcontainers can reach `127.0.0.1`); every other private/reserved range
-   stays blocked even when it is set. It must never be enabled in production.
+6. **`WithAllowLoopback` is dev/CI only — and policy-coherent.** It exempts ONLY
+   loopback (so testcontainers can reach `127.0.0.1`); every other private/reserved
+   range stays blocked even when it is set. Because the pre-flight and the dial
+   share one config and one `vet`, the exemption applies to **both** surfaces: with
+   it set, `ValidateTargetURL("http://127.0.0.1/")` passes exactly as the dial
+   does. It must never be enabled in production.
 
 7. **All errors are `KindPermissionDenied` → HTTP 403** via the existing
    `errcode.ErrWebhookSSRFBlocked` sentinel (no new sentinel). The blocked IP is
@@ -104,11 +116,21 @@ blind-spot list live in that test's package godoc (per ai-robust.md "落地实�
 | Sub-rule | Guards | Rating |
 |----------|--------|--------|
 | A1 | `net.Dial`/`DialTCP`/`DialUDP`/`DialIP`/`DialUnix`/`DialTimeout` package funcs banned in kernel/webhook | downstream **Hard** |
-| A2 | `net.Dialer.DialContext` has a single callsite (`dial` in ssrf.go) — the sole vetted outbound | downstream **Hard** |
+| A2 | `net.Dialer.DialContext` callable only from `(*SafePolicy).DialContext` — allowance bound to the go/types **FullName method identity** (not a func name or filename), the sole vetted outbound | downstream **Hard** |
 | A3 | `http.DefaultClient`/`DefaultTransport`/`Get`/`Post`/`PostForm`/`Head` banned in kernel/webhook | downstream **Hard** |
 
+A2 legitimately covers **two** callsites inside `(*SafePolicy).DialContext` (the
+IP-literal and the resolved-hostname dial); the identity binding allows exactly
+that method and nothing else. A rename of the method flips every `DialContext`
+callsite to a violation (fail-closed), forcing the author to update the
+sanctioned-identity const in the same change. The reverse fixture
+(`testdata/webhook_ssrf_violate`) exercises the full A1 banned set, a raw
+`net.Dialer{}.DialContext` (A2), and **every** A3 global + convenience callee
+(`Get`/`Post`/`PostForm`/`Head`), so dropping any one banned entry fails the
+blind-spot self-test instead of passing on the others.
+
 **Upstream is Medium = a permanent Go-language ceiling.** The holder axis —
-"only `NewSafeDialer` may produce a dialer that a struct holds" — is
+"only a `*SafePolicy` that a dispatcher holds may produce egress" — is
 inexpressible in Go's type system; package visibility constrains implementers,
 not who may declare a field of a type. This is the same permanent ceiling as
 `SPAN-SETATTR-HOLDER-SEAL` (#851) and `HEALTHZ-HOLDER-SEAL` (#893). Per
@@ -118,13 +140,14 @@ issue: **won't-do gh #1375**, named in the funnel godoc.
 **PR-4 vs PR-5 split.** The implementation plan's PR-4 row called for a
 `Dispatcher.client` field-type downstream lock. `Dispatcher` does not exist until
 PR-5 — a field scan now would pass vacuously, which is worse than absent. The
-`Dispatcher.client` typed-field lock (a single-sanctioned-holder Hard: a typed
-field whose only constructor wraps `NewSafeDialer`) is therefore deferred to
-PR-5, where it is the dispatcher-specific upstream tightening that complements
-this PR's package-level callsite ban.
+single-source `SafePolicy` makes that future lock **cleaner**: PR-5's dispatcher
+holds one `*SafePolicy` field (not three free funcs), so the single-sanctioned-
+holder Hard is a typed field whose only constructor is `NewSafePolicy`. It is
+therefore deferred to PR-5, where it is the dispatcher-specific upstream
+tightening that complements this PR's package-level callsite ban.
 
 **Documented blind spot (B1).** A hand-rolled `http.Transport` whose
-`DialContext` is not the SafeDialContext, invoked via `Transport.RoundTrip`,
+`DialContext` is not `SafePolicy.DialContext`, invoked via `Transport.RoundTrip`,
 bypasses the funnel. `RoundTrip` has no resolvable package-callee form
 distinguishing a safe vs unsafe transport; catching it needs type-level dataflow
 we do not have. Bounded response: the realistic egress path is `http.Client.Do`
@@ -141,40 +164,48 @@ over the SSRF transport, locked when the dispatcher lands in PR-5.
 | Multi-answer split (one public + one private A record) | every resolved IP vetted; any blocked IP fails the whole dial (fail-closed) | ✅ |
 | Redirect to internal `Location` after passing vet | `DenyRedirect` refuses all 3xx | ✅ |
 | Non-HTTP scheme abuse (`file://`, `gopher://`) | `ValidateTargetURL` scheme allowlist {http, https} | ✅ |
+| Un-vettable empty-host URL (`http:///x`) slipping past pre-flight | `ValidateTargetURL` rejects empty host (fail-closed) | ✅ |
+| Pre-flight ↔ dial policy divergence (loopback exempt at dial but rejected at pre-flight, or a blocklist drift between the two) | both share one `vet` on one config — single source, structurally cannot diverge | ✅ |
 | Resolver failure / empty answer fail-open | both return `ErrWebhookSSRFBlocked` (fail-closed) | ✅ |
 | Blocked-IP value leaking to wire client | IP only in `WithInternal` (server slog); 403 wire body carries no IP | ✅ |
 | CIDR list drift (code vs fixture) | `ssrf_fixtures_test.go` bidirectional set-equality drift guard | ✅ |
 | Un-vetted egress added later in kernel/webhook | WEBHOOK-SSRF-GUARD-01 A1/A2/A3 callsite bans (downstream Hard) | ✅ in-package; ⚠️ `Transport.RoundTrip` (B1) is a documented static blind spot, closed by the PR-5 `Client.Do` funnel |
 
 No row depends on `WithAllowLoopback`, which is dev/CI-only and exempts loopback
-alone.
+alone — uniformly across the pre-flight and the dial (one shared `vet`).
 
 ## Consequences
 
-PR-5's dispatcher consumes `NewSafeDialer` as the only outbound dialer, sets
-`CheckRedirect: DenyRedirect`, and calls `ValidateTargetURL` before issuing a
-request; the A1/A2/A3 bans mean it cannot wire an un-vetted egress path without
-tripping CI. The intended wiring:
+PR-5's dispatcher holds one `*SafePolicy` and wires its three methods: the
+`DialContext` as the only outbound dialer, `DenyRedirect` as `CheckRedirect`, and
+`ValidateTargetURL` before issuing a request; the A1/A2/A3 bans mean it cannot
+wire an un-vetted egress path without tripping CI. The intended wiring:
 
 ```go
 // PR-5 dispatcher (canonical wiring).
-t := &http.Transport{DialContext: webhook.NewSafeDialer()} // ONLY DialContext;
+policy := webhook.NewSafePolicy()                          // one policy, shared config
+t := &http.Transport{DialContext: policy.DialContext}      // ONLY DialContext;
 // do NOT set DialTLSContext — http.Transport derives the TLS ServerName (SNI +
 // cert host) from the request URL host above the dialer, so dialing a vetted
 // literal IP does not break TLS. A custom DialTLSContext would bypass the vet.
-client := &http.Client{Transport: t, CheckRedirect: webhook.DenyRedirect}
-if err := webhook.ValidateTargetURL(targetURL); err != nil { /* reject before send */ }
+client := &http.Client{Transport: t, CheckRedirect: policy.DenyRedirect}
+if err := policy.ValidateTargetURL(targetURL); err != nil { /* reject before send */ }
 ```
 
 The blocklist evolves by editing `ssrfBlockedCIDRStrings` **and** the fixture in
 the same change (the drift guard enforces this).
 
 **Observability.** PR-4 surfaces an SSRF rejection only via
-`errcode.ErrWebhookSSRFBlocked` + server-side `slog` Internal attributes
-(`reason` / `host` / `target_host` / `ip` / `from_url`, correlated by
-`request_id`) — there is no metric, because `kernel/webhook` is pure-computation
-and must not depend on an instrumentation adapter. PR-5's wiring layer is the
-place to increment a counter (e.g. `webhook_ssrf_blocked_total{reason}`) on
+`errcode.ErrWebhookSSRFBlocked` + server-side `slog` Internal attributes — there
+is no metric, because `kernel/webhook` is pure-computation and must not depend on
+an instrumentation adapter. **Every** reject path carries a stable `reason`
+enum suitable for a future `{reason}` metric label —
+`malformed_address` / `resolution_failed` / `no_addresses` / `ssrf_blocked`
+(dial); `unparseable` / `empty_host` / `scheme_not_allowed` / `ssrf_blocked`
+(pre-flight); `redirect_denied` (redirect) — alongside the relevant target field
+(`address` / `host` / `ip` / `scheme` / `target_host` / `from_url`), correlated by
+`request_id`. PR-5's wiring layer is the place to increment a counter (e.g.
+`webhook_ssrf_blocked_total{reason}`) on
 `errors.As(err, &ec) && ec.Code == ErrWebhookSSRFBlocked` at the
 `Transport`/`CheckRedirect` error boundary.
 
@@ -182,7 +213,7 @@ place to increment a counter (e.g. `webhook_ssrf_blocked_total{reason}`) on
 today only by godoc (a Soft constraint). PR-5's wiring layer (corebundle /
 assembly) must not pass it; a Medium archtest banning `WithAllowLoopback`
 references in non-`_test.go` production files should land with PR-5 once there is
-a production callsite to guard (tracked alongside #1375 follow-ups). The upstream
+a production callsite to guard (tracked: gh #1378). The upstream
 holder-axis Hard-ization remains a won't-do permanent ceiling (#1375); PR-5 adds
 the dispatcher-specific `Dispatcher.client` typed-field lock as the practical
 upstream tightening.

@@ -2,25 +2,29 @@
 //
 // WEBHOOK-SSRF-GUARD-01 — kernel/webhook outbound network funnel (KERNEL-WEBHOOK-01).
 //
-// PR-4 ships the pure SSRF building block (SafeDialContext). The dispatcher
-// that holds the SSRF-wrapped *http.Client is PR-5; the Dispatcher.client
-// typed-field upstream lock is therefore deferred to PR-5 (the struct does not
-// exist yet — a field scan now would pass vacuously). This invariant locks the
-// package-level callsite bans that ARE meaningful for a pure building block:
-// any outbound network primitive in kernel/webhook must funnel through the
-// vetted dialer, so PR-5 cannot wire an un-vetted egress path.
+// PR-4 ships the pure SSRF building block: SafePolicy, the single-source policy
+// whose DialContext / ValidateTargetURL / DenyRedirect methods share one config.
+// The dispatcher that HOLDS the *SafePolicy and wires its methods into an
+// *http.Client is PR-5; the Dispatcher.client typed-field upstream lock is
+// therefore deferred to PR-5 (the struct does not exist yet — a field scan now
+// would pass vacuously). This invariant locks the package-level callsite bans
+// that ARE meaningful for a pure building block: any outbound network primitive
+// in kernel/webhook must funnel through the vetted dialer, so PR-5 cannot wire
+// an un-vetted egress path.
 //
 //   - A1 (downstream Hard): the net package dial-family FUNCTIONS
 //     (net.Dial / DialTCP / DialUDP / DialIP / DialUnix / DialTimeout) are
 //     banned anywhere in kernel/webhook production code. Detection:
 //     ResolvePackageRef(callee) == ("net", <dial-func>).
-//   - A2 (downstream Hard): the net.Dialer.DialContext METHOD has exactly one
-//     callsite — the dial function in ssrf.go (the sanctioned vetted dialer).
-//     A DialContext on any net.Dialer anywhere else fails. This is the
-//     callsite-uniqueness lock analogous to computeMAC/hmac.New: a rogue raw
-//     net.Dialer{}.DialContext would bypass the IP vet. Detection:
-//     ResolveMethodCall(sel) == net.DialContext AND (basename != ssrf.go OR
-//     enclosing func != dial).
+//   - A2 (downstream Hard): the net.Dialer.DialContext METHOD may be called
+//     ONLY from inside (*SafePolicy).DialContext — the sanctioned vetted dialer
+//     (which legitimately has two callsites: the IP-literal and the
+//     resolved-hostname dial). The allowance binds to the go/types FullName
+//     identity of the enclosing func, not its name or file, so a rogue func
+//     that merely shares the name cannot inherit it and the method may move
+//     files freely. A raw net.Dialer{}.DialContext anywhere else bypasses the
+//     IP vet and fails. Detection: ResolveMethodCall(sel) == net.DialContext
+//     AND enclosing-func FullName != (*SafePolicy).DialContext.
 //   - A3 (downstream Hard): the global HTTP client/transport in net/http —
 //     http.DefaultClient / http.DefaultTransport (package vars) and the
 //     convenience callees http.Get / Post / PostForm / Head — are banned in
@@ -31,13 +35,15 @@
 //
 //	下游 Hard — A1/A2/A3 are form-unique, type-resolved callsite bans
 //	  (ResolvePackageRef / ResolveMethodCall resolve import aliases and
-//	  value-refs; there is no "looks-like" grey zone).
-//	上游 Medium = Go 永久天花板 — the holder axis ("only NewSafeDialer may
-//	  produce a dialer that a struct holds") is inexpressible in Go's type
+//	  value-refs; A2 binds the allowance to a go/types FullName method identity,
+//	  not a name or filename — there is no "looks-like" grey zone).
+//	上游 Medium = Go 永久天花板 — the holder axis ("only a *SafePolicy a
+//	  dispatcher holds may produce egress") is inexpressible in Go's type
 //	  system; package visibility only constrains implementers, not who may
 //	  declare a field of a type. This is the same permanent ceiling as
 //	  SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893). Tracked
-//	  won't-do: gh #1375. The PR-5 Dispatcher.client typed-field lock is the
+//	  won't-do: gh #1375. The PR-5 Dispatcher.client typed-field lock — now a
+//	  single *SafePolicy field rather than three free funcs — is the
 //	  dispatcher-specific single-sanctioned-holder Hard that complements this
 //	  package-level ban.
 //
@@ -72,10 +78,17 @@ import (
 )
 
 const (
-	ssrfFileBasename = "ssrf.go"
-	ssrfDialFuncName = "dial"
-	ssrfNetPkgPath   = "net"
-	ssrfHTTPPkgPath  = "net/http"
+	ssrfNetPkgPath  = "net"
+	ssrfHTTPPkgPath = "net/http"
+	// ssrfSanctionedDialFunc is the go/types canonical FullName of the ONE
+	// method allowed to call net.Dialer.DialContext: (*SafePolicy).DialContext.
+	// Binding the A2 allowance to this type-resolved identity (not a func name
+	// or a filename) means a stray func that merely shares the name "dial" /
+	// "DialContext" elsewhere cannot inherit the allowance, and the sanctioned
+	// method can move files freely. A rename of the method flips every
+	// DialContext callsite to a violation (fail-closed), forcing the author to
+	// update this const in the same change.
+	ssrfSanctionedDialFunc = "(*" + PlatformModulePath + "/kernel/webhook.SafePolicy).DialContext"
 )
 
 // ssrfBannedNetDialFuncs is the A1 banned set: net package functions that open
@@ -124,10 +137,10 @@ func scanSSRFNetDial(fset *token.FileSet, file *ast.File, rel string, info *type
 }
 
 // scanSSRFDialerDialContext implements A2: net.Dialer.DialContext may be called
-// only inside the dial function of ssrf.go (callsite uniqueness).
+// only from inside the (*SafePolicy).DialContext method (callsite identity,
+// resolved via go/types FullName — file- and name-independent).
 func scanSSRFDialerDialContext(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
-	inSSRFFile := filepath.Base(filepath.ToSlash(rel)) == ssrfFileBasename
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
@@ -137,16 +150,14 @@ func scanSSRFDialerDialContext(fset *token.FileSet, file *ast.File, rel string, 
 		if !ok || fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != ssrfNetPkgPath || fn.Name() != "DialContext" {
 			return
 		}
-		if inSSRFFile {
-			if enc, ok := ResolveEnclosingFunc(info, file, call); ok && enc != nil && enc.Name() == ssrfDialFuncName {
-				return
-			}
+		if enc, ok := ResolveEnclosingFunc(info, file, call); ok && enc != nil && enc.FullName() == ssrfSanctionedDialFunc {
+			return
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
 			Line: fset.Position(call.Pos()).Line,
-			Message: "net.Dialer.DialContext called outside ssrf.go dial(); the vetted dialer is the " +
-				"sole sanctioned outbound callsite (WEBHOOK-SSRF-GUARD-01/A2)",
+			Message: "net.Dialer.DialContext called outside (*SafePolicy).DialContext; the vetted dialer is " +
+				"the sole sanctioned outbound callsite (WEBHOOK-SSRF-GUARD-01/A2)",
 		})
 	})
 	return out
@@ -245,5 +256,9 @@ func TestWebhookSSRFGuard_ReverseFixture(t *testing.T) {
 	assert.GreaterOrEqual(t, len(a1), len(ssrfBannedNetDialFuncs),
 		"A1 reverse fixture: expected one diagnostic per banned net.Dial* func (Dial/DialTCP/DialUDP/DialIP/DialUnix/DialTimeout)")
 	assert.GreaterOrEqual(t, len(a2), 1, "A2 reverse fixture: expected ≥1 raw net.Dialer.DialContext diagnostic")
-	assert.GreaterOrEqual(t, len(a3), 2, "A3 reverse fixture: expected ≥2 http global diagnostics")
+	// Cover the FULL A3 banned set — both globals (DefaultClient/DefaultTransport)
+	// AND every convenience callee (Get/Post/PostForm/Head) — so dropping any one
+	// banned entry fails this self-test instead of passing on the others.
+	assert.GreaterOrEqual(t, len(a3), len(ssrfBannedHTTPGlobals)+len(ssrfBannedHTTPCallees),
+		"A3 reverse fixture: expected one diagnostic per banned http global + convenience func")
 }
