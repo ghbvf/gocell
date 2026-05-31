@@ -71,6 +71,7 @@ func WithCoordinator(p healthz.RepoProber) Option {
 }
 
 // OrderCell is the orderfulfillmentcell Cell implementation.
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type OrderCell struct {
 	*cell.BaseCell
 
@@ -162,24 +163,6 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	c.orderstatusSvc = statusSvc
 	c.orderstatusHandler = orderstatusgen.NewHandler(orderstatusslice.NewHandler(statusSvc))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderstatusslice.SliceMetadata()))
-
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.PrimaryListener,
-		Prefix:   "/api/v1",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			captureErr := func(err error) {
-				if err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			mux.Route("/orders", func(s cell.RouteMux) {
-				captureErr(c.placeorderHandler.RegisterRoutes(s))
-				captureErr(c.orderstatusHandler.RegisterRoutes(s))
-			})
-			return firstErr
-		},
-	})
 
 	return nil
 }

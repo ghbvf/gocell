@@ -22,6 +22,8 @@ import (
 	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -85,7 +87,5 @@ func TestHttpOrderfulfillmentOrderstatusV1Serve_NotFound(t *testing.T) {
 	req.SetPathValue("id", missingID)
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != 404 {
-		t.Errorf("expected 404, got %d; body: %s", rec.Code, rec.Body.String())
-	}
+	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrOrderNotFound)
 }

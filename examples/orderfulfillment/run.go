@@ -69,9 +69,6 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		// Bound to loopback only — demo mode must not expose to untrusted networks.
 		bootstrap.WithListener(cell.PrimaryListener, "127.0.0.1:8083",
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),
-		// Internal listener: demo loopback.
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9083",
-			[]kauth.ListenerAuth{kauth.AuthNone{}}),
 		// Health listener: /healthz, /readyz, /metrics.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093",
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),

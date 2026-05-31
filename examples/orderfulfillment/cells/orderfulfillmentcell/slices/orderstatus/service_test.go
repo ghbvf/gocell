@@ -2,7 +2,6 @@ package orderstatus_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 )
 
 func newService(t *testing.T) (*orderstatus.Service, *mem.OrderRepository) {
@@ -37,13 +37,7 @@ func TestGetOrderStatus_NotFound(t *testing.T) {
 	t.Parallel()
 	svc, _ := newService(t)
 	_, err := svc.GetOrderStatus(context.Background(), "ord-nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent order, got nil")
-	}
-	var ec *errcode.Error
-	if !errors.As(err, &ec) || ec.Kind != errcode.KindNotFound {
-		t.Errorf("expected KindNotFound, got %v", err)
-	}
+	errcodetest.AssertCode(t, err, errcode.ErrOrderNotFound)
 }
 
 func TestGetOrderStatus_Accepted(t *testing.T) {

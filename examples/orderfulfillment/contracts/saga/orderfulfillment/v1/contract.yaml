@@ -5,7 +5,6 @@ consistencyLevel: L3
 lifecycle: active
 endpoints:
   server: orderfulfillmentcell
-codegen: true
 saga:
   timeout: "30s"
   compensationOrder: reverse

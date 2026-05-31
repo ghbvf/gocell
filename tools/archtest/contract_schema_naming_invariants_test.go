@@ -55,6 +55,7 @@ import (
 var contractRootBases = []string{
 	"contracts",
 	"examples/iotdevice/contracts",
+	"examples/orderfulfillment/contracts",
 	"examples/todoorder/contracts",
 }
 
