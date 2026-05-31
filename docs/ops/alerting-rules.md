@@ -58,8 +58,47 @@ remote-write 或业务专用 Prometheus 若不需要 runtime series，可在 scr
 ```yaml
 metric_relabel_configs:
 - source_labels: [__name__, cell]
-  regex: 'gocell_http_(requests_total|request_duration_seconds(_bucket|_sum|_count)?);_runtime'
+  regex: 'gocell_http_(requests_total|request_duration_seconds(_bucket|_sum|_count)?|request_body_limit_rejections_total);_runtime'
   action: drop
+```
+
+## HTTP Body-Limit 拒绝计数器
+
+`gocell_http_request_body_limit_rejections_total{cell, route}` 记录 BodyLimit 中间件
+因 Content-Length 超限（fast-path）返回 413 的次数。流式超限（MaxBytesReader）已通过
+`gocell_http_requests_total{status="413"}` 覆盖，不重复计数。
+
+Label 语义：
+
+| label | 含义 |
+|---|---|
+| `cell` | 同 `http_requests_total.cell`：路由归属 cell ID，或 `_runtime`（框架路径） |
+| `route` | 低基数路由模板（同 RouteFor 返回值；fast-path 期间 ServeMux 尚未写入 pattern recorder，回退到 RouteResolver 或 `"unmatched"`） |
+
+推荐告警（短时突增，提示 client 配置错误或资源滥用）：
+
+```yaml
+- alert: GoCellHTTPBodyLimitRejectionSpike
+  expr: |
+    sum(rate(gocell_http_request_body_limit_rejections_total{cell!="_runtime"}[5m])) by (cell, route) > 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "HTTP body-limit rejections spiking ({{ $labels.cell }}/{{ $labels.route }})"
+    description: |
+      Cell {{ $labels.cell }} route {{ $labels.route }} is rejecting requests
+      with Content-Length > body limit at >1/sec for 5m.
+      Possible causes: client sending oversized payloads, misconfigured body limit,
+      or DDoS amplification attempt.
+      Check slog for "request body too large" and review WithBodyLimit configuration.
+```
+
+调试 PromQL：
+
+```promql
+# 按 cell / route 分组的 body-limit 拒绝速率
+sum(rate(gocell_http_request_body_limit_rejections_total[5m])) by (cell, route)
 ```
 
 ---

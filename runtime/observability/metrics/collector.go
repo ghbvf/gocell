@@ -60,9 +60,9 @@ type BodyLimitRejectionKey struct {
 
 // Snapshot is a point-in-time view of recorded metrics.
 type Snapshot struct {
-	RequestCounts        map[RequestKey]int64
-	DurationSumsMs       map[RequestKey]int64
-	BodyLimitRejections  map[BodyLimitRejectionKey]int64
+	RequestCounts       map[RequestKey]int64
+	DurationSumsMs      map[RequestKey]int64
+	BodyLimitRejections map[BodyLimitRejectionKey]int64
 }
 
 // InMemoryCollector is a simple in-memory metrics collector for development

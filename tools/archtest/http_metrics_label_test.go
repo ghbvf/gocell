@@ -6,6 +6,7 @@ package archtest
 //   - INVARIANT: HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01
 //   - INVARIANT: HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01
 //   - INVARIANT: HTTP-METRICS-LABEL-ROUTER-ATTRIBUTION-01
+//   - INVARIANT: HTTP-METRICS-LABEL-BODYLIMIT-CTXSOURCE-01
 //
 // http_metrics_label_test.go enforces the HTTP-METRICS-LABEL-REALIGN
 // contract (D1, 2026-05-04): cell identity is a router-root request
@@ -26,11 +27,12 @@ import (
 )
 
 const (
-	ruleHTTPMetricsLabelCtxSource01       = "HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01"
-	ruleHTTPMetricsLabelNoAssemblyDerive  = "HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01"
-	ruleHTTPMetricsLabelNoConfigCellID    = "HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01"
-	ruleHTTPMetricsLabelRuntimeSentinel   = "HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01"
-	ruleHTTPMetricsLabelRouterAttribution = "HTTP-METRICS-LABEL-ROUTER-ATTRIBUTION-01"
+	ruleHTTPMetricsLabelCtxSource01          = "HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01"
+	ruleHTTPMetricsLabelNoAssemblyDerive     = "HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01"
+	ruleHTTPMetricsLabelNoConfigCellID       = "HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01"
+	ruleHTTPMetricsLabelRuntimeSentinel      = "HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01"
+	ruleHTTPMetricsLabelRouterAttribution    = "HTTP-METRICS-LABEL-ROUTER-ATTRIBUTION-01"
+	ruleHTTPMetricsLabelBodyLimitCtxSource01 = "HTTP-METRICS-LABEL-BODYLIMIT-CTXSOURCE-01"
 )
 
 func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
@@ -401,6 +403,93 @@ func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
 		}
 	}
 	return false
+}
+
+// TestHTTPMetricsLabelBodyLimitCtxSource01 enforces that the body-limit
+// rejection recording helper (recordBodyLimitRejection in body_limit.go):
+//
+//  1. Reads the cell label from ctxkeys.CellIDFrom.
+//  2. Falls back to RuntimeCellIDSentinel when the ctx key is absent.
+//  3. Calls collector.RecordBodyLimitRejection AFTER the CellIDFrom read.
+//
+// AI-robust rating: Medium (AST form check + position ordering; Hard path =
+// sealed collector interface that forces routing through a typed funnel,
+// tracked in gh #1166).
+//
+// Blind spots:
+//   - Does not trace through function-value fields (the collector argument is
+//     passed as a parameter, not stored in a named struct field).
+//   - Does not verify that the ctx passed to RecordBodyLimitRejection equals
+//     r.Context() — only that RecordBodyLimitRejection is called.
+//
+// Reverse self-check: asserts the old shape (inline ctxkeys read without
+// SafeObserve) does not appear in body_limit.go production code.
+func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
+	root := findModuleRoot(t)
+	target := filepath.Join(root, "runtime", "http", "middleware", "body_limit.go")
+	rel := slashRel(t, root, target)
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, target, nil, parser.SkipObjectResolution)
+	require.NoErrorf(t, err, "%s: parse failed", rel)
+
+	// Find the recordBodyLimitRejection helper function.
+	helperFn := findHTTPMetricsFuncDecl(t, file, "recordBodyLimitRejection")
+
+	var (
+		readsCellIDFrom     bool
+		usesRuntimeSentinel bool
+		callsRecordBLR      bool
+		ctxCellIDPos        token.Pos
+		runtimeSentinelPos  token.Pos
+		recordBLRPos        token.Pos
+	)
+
+	scanner.EachInSubtree[ast.CallExpr](helperFn.Body, func(v *ast.CallExpr) {
+		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
+			readsCellIDFrom = true
+			rememberFirstPos(&ctxCellIDPos, v.Pos())
+		}
+		if isSelectorCall(v, "collector", "RecordBodyLimitRejection") {
+			callsRecordBLR = true
+			rememberFirstPos(&recordBLRPos, v.Pos())
+		}
+	})
+	scanner.EachInSubtree[ast.Ident](helperFn.Body, func(v *ast.Ident) {
+		if v.Name == "RuntimeCellIDSentinel" {
+			usesRuntimeSentinel = true
+			rememberFirstPos(&runtimeSentinelPos, v.Pos())
+		}
+	})
+
+	assert.Truef(t, readsCellIDFrom,
+		"%s: %s — recordBodyLimitRejection must read cell label from ctxkeys.CellIDFrom",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, usesRuntimeSentinel,
+		"%s: %s — recordBodyLimitRejection must fall back to RuntimeCellIDSentinel when ctx key is absent",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, callsRecordBLR,
+		"%s: %s — recordBodyLimitRejection must call collector.RecordBodyLimitRejection",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, ctxCellIDPos.IsValid() && recordBLRPos.IsValid() && ctxCellIDPos < recordBLRPos,
+		"%s: %s — ctxkeys.CellIDFrom must be called before collector.RecordBodyLimitRejection",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, runtimeSentinelPos.IsValid() && recordBLRPos.IsValid() && runtimeSentinelPos < recordBLRPos,
+		"%s: %s — RuntimeCellIDSentinel fallback must appear before collector.RecordBodyLimitRejection",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+
+	// Reverse self-check: the BodyLimit outer function must NOT contain a
+	// direct ctxkeys.CellIDFrom call (it must delegate to the helper).
+	bodyLimitFn := findHTTPMetricsFuncDecl(t, file, "BodyLimit")
+	var outerCellIDFromCalls int
+	scanner.EachInSubtree[ast.CallExpr](bodyLimitFn.Body, func(v *ast.CallExpr) {
+		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
+			outerCellIDFromCalls++
+		}
+	})
+	assert.Zerof(t, outerCellIDFromCalls,
+		"%s: %s — BodyLimit must delegate cell resolution to recordBodyLimitRejection, not call ctxkeys.CellIDFrom directly",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 }
 
 func rememberFirstPos(dst *token.Pos, pos token.Pos) {
