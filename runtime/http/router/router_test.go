@@ -466,6 +466,13 @@ func TestMountRouteGroup_CellAttribution_BodyLimitReject(t *testing.T) {
 	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
 		"configcore", http.MethodPost, "/api/v1/upload/blob", http.StatusRequestEntityTooLarge,
 	)])
+	// Verify body-limit rejection counter is incremented with the correct labels.
+	// The Content-Length fast-path fires after CellAttribution has set cellID,
+	// so the cell label must be "configcore" and the route must be the matched template.
+	assert.Equal(t, int64(1), snap.BodyLimitRejections[metrics.BodyLimitRejectionKey{
+		Cell:  "configcore",
+		Route: "/api/v1/upload/blob",
+	}], "body-limit rejection counter must record cell=configcore and route template")
 }
 
 func TestMountRouteGroup_CellAttribution_EmptyPrefixNestedRoutes(t *testing.T) {

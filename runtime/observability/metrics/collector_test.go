@@ -77,5 +77,36 @@ func TestInMemoryCollector_PerCellSeparation(t *testing.T) {
 	}])
 }
 
+func TestInMemoryCollector_RecordBodyLimitRejection(t *testing.T) {
+	ctx := context.Background()
+	c := NewInMemoryCollector()
+
+	c.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
+	c.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
+	c.RecordBodyLimitRejection(ctx, "configcore", "/api/v1/config")
+
+	snap := c.Snapshot()
+	assert.Equal(t, int64(2), snap.BodyLimitRejections[BodyLimitRejectionKey{
+		Cell:  "accesscore",
+		Route: "/api/v1/upload",
+	}])
+	assert.Equal(t, int64(1), snap.BodyLimitRejections[BodyLimitRejectionKey{
+		Cell:  "configcore",
+		Route: "/api/v1/config",
+	}])
+}
+
+func TestInMemoryCollector_RecordBodyLimitRejection_NoSideEffectOnRequest(t *testing.T) {
+	ctx := context.Background()
+	c := NewInMemoryCollector()
+
+	c.RecordBodyLimitRejection(ctx, "_runtime", "unmatched")
+
+	snap := c.Snapshot()
+	// RecordRequest map must remain empty.
+	assert.Empty(t, snap.RequestCounts,
+		"body-limit rejection must not affect the request counts map")
+}
+
 // Verify interface compliance at compile time.
 var _ Collector = (*InMemoryCollector)(nil)

@@ -31,6 +31,17 @@ type Collector interface {
 	// framework-owned paths (healthz/readyz/metrics, unmatched 404s, listeners
 	// with no business RouteGroup attached).
 	RecordRequest(ctx context.Context, cellID, method, route string, status int, durationSeconds float64)
+
+	// RecordBodyLimitRejection increments the body-limit rejection counter for
+	// the given cell and route. It is called only on the Content-Length
+	// fast-path reject (r.ContentLength > maxBytes before the request body is
+	// read). Streaming overruns after MaxBytesReader kicks in are already
+	// captured by http_requests_total{status=413} via RecordRequest.
+	//
+	// cellID follows the same semantics as RecordRequest: use the owning cell
+	// ID or RuntimeCellIDSentinel ("_runtime") for framework paths.
+	// route is the low-cardinality route pattern from RouteFor.
+	RecordBodyLimitRejection(ctx context.Context, cellID, route string)
 }
 
 // RequestKey identifies one low-cardinality HTTP request metric series.
@@ -41,25 +52,35 @@ type RequestKey struct {
 	Status int
 }
 
+// BodyLimitRejectionKey identifies one body-limit rejection metric series.
+type BodyLimitRejectionKey struct {
+	Cell  string
+	Route string
+}
+
 // Snapshot is a point-in-time view of recorded metrics.
 type Snapshot struct {
-	RequestCounts  map[RequestKey]int64
-	DurationSumsMs map[RequestKey]int64
+	RequestCounts        map[RequestKey]int64
+	DurationSumsMs       map[RequestKey]int64
+	BodyLimitRejections  map[BodyLimitRejectionKey]int64
 }
 
 // InMemoryCollector is a simple in-memory metrics collector for development
-// and testing. It records request counts and cumulative duration.
+// and testing. It records request counts, cumulative duration, and body-limit
+// rejection counts.
 type InMemoryCollector struct {
-	mu        sync.RWMutex
-	counts    map[RequestKey]*atomic.Int64
-	durations map[RequestKey]*atomic.Int64 // cumulative duration in microseconds
+	mu                  sync.RWMutex
+	counts              map[RequestKey]*atomic.Int64
+	durations           map[RequestKey]*atomic.Int64 // cumulative duration in microseconds
+	bodyLimitRejections map[BodyLimitRejectionKey]*atomic.Int64
 }
 
 // NewInMemoryCollector creates an InMemoryCollector.
 func NewInMemoryCollector() *InMemoryCollector {
 	return &InMemoryCollector{
-		counts:    make(map[RequestKey]*atomic.Int64),
-		durations: make(map[RequestKey]*atomic.Int64),
+		counts:              make(map[RequestKey]*atomic.Int64),
+		durations:           make(map[RequestKey]*atomic.Int64),
+		bodyLimitRejections: make(map[BodyLimitRejectionKey]*atomic.Int64),
 	}
 }
 
@@ -93,20 +114,46 @@ func (c *InMemoryCollector) RecordRequest(_ context.Context, cellID, method, rou
 	dur.Add(int64(durationSeconds * 1e6)) // microseconds
 }
 
+// RecordBodyLimitRejection increments the body-limit rejection counter for the
+// given cell and route. Mirrors the RLock fast-path + Lock lazy-init pattern
+// of RecordRequest.
+func (c *InMemoryCollector) RecordBodyLimitRejection(_ context.Context, cellID, route string) {
+	key := BodyLimitRejectionKey{Cell: cellID, Route: route}
+
+	c.mu.RLock()
+	ctr, ok := c.bodyLimitRejections[key]
+	c.mu.RUnlock()
+
+	if !ok {
+		c.mu.Lock()
+		if _, exists := c.bodyLimitRejections[key]; !exists {
+			c.bodyLimitRejections[key] = &atomic.Int64{}
+		}
+		ctr = c.bodyLimitRejections[key]
+		c.mu.Unlock()
+	}
+
+	ctr.Add(1)
+}
+
 // Snapshot returns a point-in-time copy of all metrics.
 func (c *InMemoryCollector) Snapshot() Snapshot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	snap := Snapshot{
-		RequestCounts:  make(map[RequestKey]int64, len(c.counts)),
-		DurationSumsMs: make(map[RequestKey]int64, len(c.durations)),
+		RequestCounts:       make(map[RequestKey]int64, len(c.counts)),
+		DurationSumsMs:      make(map[RequestKey]int64, len(c.durations)),
+		BodyLimitRejections: make(map[BodyLimitRejectionKey]int64, len(c.bodyLimitRejections)),
 	}
 	for k, v := range c.counts {
 		snap.RequestCounts[k] = v.Load()
 	}
 	for k, v := range c.durations {
 		snap.DurationSumsMs[k] = v.Load() / 1000 // microseconds → milliseconds
+	}
+	for k, v := range c.bodyLimitRejections {
+		snap.BodyLimitRejections[k] = v.Load()
 	}
 	return snap
 }
