@@ -1,9 +1,11 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,13 +26,18 @@ func (s successReconciler) Reconcile(_ context.Context, _ Request) (Result, erro
 	return s.result, nil
 }
 
+// testLogger returns a slog.Logger that writes JSON to buf.
+func testLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
 // TestRecovery_PanicConvertsToError verifies that a panicking Reconciler
 // produces a non-nil error and a zero Result, without re-panicking.
 func TestRecovery_PanicConvertsToError(t *testing.T) {
 	rec := panicReconciler{payload: "kaboom"}
 	req := Request{EntityID: "e1"}
 
-	res, err := recoverReconcile(context.Background(), rec, req)
+	res, err := recoverReconcile(context.Background(), rec, req, slog.Default(), "test_reconciler")
 
 	require.Error(t, err, "panic must be converted to an error")
 	assert.Equal(t, Result{}, res, "Result must be zero on panic")
@@ -45,7 +52,7 @@ func TestRecovery_PanicMetricRecorded(t *testing.T) {
 	rec := panicReconciler{payload: "boom"}
 	req := Request{EntityID: "e-metric"}
 
-	_, err := recoverReconcile(context.Background(), rec, req)
+	_, err := recoverReconcile(context.Background(), rec, req, slog.Default(), "test_reconciler")
 
 	require.Error(t, err)
 	label := classify(err)
@@ -59,15 +66,34 @@ func TestRecovery_PanicMetricRecorded(t *testing.T) {
 func TestRecovery_OtherEntityNotAffected(t *testing.T) {
 	pRec := panicReconciler{payload: "boom"}
 	req1 := Request{EntityID: "boom-entity"}
-	_, err1 := recoverReconcile(context.Background(), pRec, req1)
+	_, err1 := recoverReconcile(context.Background(), pRec, req1, slog.Default(), "test_reconciler")
 	require.Error(t, err1, "first call must surface the panic as an error")
 
 	want := Result{RequeueAfter: 42}
 	sRec := successReconciler{result: want}
 	req2 := Request{EntityID: "ok-entity"}
-	res2, err2 := recoverReconcile(context.Background(), sRec, req2)
+	res2, err2 := recoverReconcile(context.Background(), sRec, req2, slog.Default(), "test_reconciler")
 	require.NoError(t, err2, "second reconciler must be unaffected")
 	assert.Equal(t, want, res2, "second reconciler must return its real Result")
+}
+
+// TestRecovery_PanicLogsAtErrorLevel verifies that a recovered panic produces
+// an Error-level log entry containing the entity ID and reconciler ID, so
+// operators see it distinctly from ordinary transient noise (O3).
+func TestRecovery_PanicLogsAtErrorLevel(t *testing.T) {
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	rec := panicReconciler{payload: "oh no"}
+	req := Request{EntityID: "panicking-entity"}
+
+	_, err := recoverReconcile(context.Background(), rec, req, logger, "my_reconciler")
+	require.Error(t, err)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, `"level":"ERROR"`, "panic must be logged at Error level")
+	assert.Contains(t, logOutput, "panicking-entity", "log must include entity ID")
+	assert.Contains(t, logOutput, "my_reconciler", "log must include reconciler ID")
 }
 
 // TestClassify verifies the classify helper's full table:

@@ -172,13 +172,24 @@ type Loop struct {
 	// Metrics holds optional pre-bound instruments (nil-safe).
 	Metrics Metrics
 
-	// BaseDelay is the initial backoff delay for transient errors; defaults to
-	// 5ms when zero. Primarily useful in tests to shrink delays.
+	// BaseDelay is the initial (first-retry) backoff delay for transient errors.
+	// Zero means use the default of 5ms (mirroring client-go
+	// ItemExponentialFailureRateLimiter). The delay doubles on each consecutive
+	// transient failure for the same entity, capped at MaxDelay.
+	//
+	// BaseDelay governs ONLY the transient-error exponential backoff — it does
+	// NOT affect the success-path Interval requeue.
 	//
 	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
 	BaseDelay time.Duration
-	// MaxDelay is the maximum backoff delay for transient errors; defaults to
-	// 1000s when zero. Primarily useful in tests to shrink delays.
+	// MaxDelay is the cap on the transient-error backoff delay for a single
+	// entity. Zero means use the default of 1000s (mirroring client-go
+	// ItemExponentialFailureRateLimiter). After MaxDelay is reached, retries
+	// continue at MaxDelay until the entity succeeds (backoff.Forget) or is
+	// dead-lettered (permanent error).
+	//
+	// MaxDelay governs ONLY the transient-error exponential backoff — it does
+	// NOT affect the success-path Interval requeue.
 	//
 	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
 	MaxDelay time.Duration
@@ -193,6 +204,26 @@ type Loop struct {
 	gen uint64
 
 	// entityMu guards processing and dirty — the F5 dirty/processing maps.
+	//
+	// Concurrency invariants (DX2) — read this before touching process():
+	//
+	//  (1) What entityMu protects: the processing map (entities currently being
+	//      reconciled) and the dirty map (coalesced latest trigger per entity
+	//      received while that entity is in-flight). No other state.
+	//
+	//  (2) Lost-wakeup-safety: a trigger arriving during in-flight processing
+	//      EITHER sets dirty (→ guaranteed single re-run on completion) OR, if
+	//      it races past the completion window and the entity is no longer marked
+	//      processing, lands as a fresh enqueue via the normal queue path. A
+	//      trigger is NEVER silently dropped.
+	//
+	//  (3) Atomicity requirement: the dirty read+clear and the processing-marker
+	//      delete MUST happen atomically under entityMu in the completion path
+	//      (process's post-reconcile block). Separating these two operations
+	//      opens a window where a new trigger arrives after dirty is cleared but
+	//      before processing is deleted: it sees processing=true, sets dirty again,
+	//      but the completion path already read dirty and won't re-enqueue it —
+	//      a lost-wakeup. Keep them in the same Lock/Unlock block.
 	entityMu   sync.Mutex
 	processing map[string]bool    // entities currently being reconciled
 	dirty      map[string]Request // coalesced dirty trigger per entity
@@ -252,7 +283,7 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	}
 	if l.Source != nil {
 		wg.Add(1)
-		go l.pump(runCtx, queue, &wg)
+		go l.feedFromSource(runCtx, queue, &wg)
 	}
 
 	// F6: single shared delaying queue — ONE goroutine, ONE timer.
@@ -289,6 +320,9 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 
 // drainReadyItems pops all items from h whose readyAt is not after now and
 // pushes each Request into queue. Returns false if runCtx was canceled.
+//
+// Paired with enqueueDelayed, which is the sole path that adds items to the heap
+// via the addCh channel consumed by waitingLoop.
 //
 // ref: kubernetes/client-go util/workqueue/delaying_queue.go
 func drainReadyItems(runCtx context.Context, h *waitingHeap, now time.Time, queue chan<- Request) bool {
@@ -399,8 +433,8 @@ func (l *Loop) watchDrain(gen uint64, done chan struct{}, wg *sync.WaitGroup) {
 	close(done)
 }
 
-// pump copies Source into the internal queue until the run ctx is canceled.
-func (l *Loop) pump(runCtx context.Context, queue chan<- Request, wg *sync.WaitGroup) {
+// feedFromSource copies Source into the internal queue until the run ctx is canceled.
+func (l *Loop) feedFromSource(runCtx context.Context, queue chan<- Request, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		select {
@@ -467,7 +501,7 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	defer l.Metrics.inFlightDelta(runCtx, l.reconcilerID(), -1)
 
 	start := controlPlaneClock{}.now()
-	res, err := recoverReconcile(runCtx, l.Reconciler, req)
+	res, err := recoverReconcile(runCtx, l.Reconciler, req, l.logger(), l.reconcilerID())
 	l.Metrics.observeDuration(runCtx, l.reconcilerID(), controlPlaneClock{}.now().Sub(start).Seconds())
 
 	label := classify(err)
@@ -530,6 +564,9 @@ func (l *Loop) dispatchResult(
 // enqueueDelayed sends a waitingItem to the shared delaying queue.
 // If delay <= 0 the item is considered immediately ready (readyAt = now).
 // Respects runCtx cancellation so a shutting-down Loop doesn't leak goroutines.
+//
+// Paired with drainReadyItems, which moves ready items from the heap to the
+// worker queue inside waitingLoop.
 func (l *Loop) enqueueDelayed(runCtx context.Context, req Request, delay time.Duration, addCh chan<- waitingItem) {
 	readyAt := controlPlaneClock{}.now()
 	if delay > 0 {
@@ -579,7 +616,7 @@ func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, rea
 	return nil
 }
 
-// Stop cancels the Loop and waits for all goroutines (workers, pump, waitingLoop)
+// Stop cancels the Loop and waits for all goroutines (workers, feedFromSource, waitingLoop)
 // to exit within ctx's budget.
 //
 // State (l.cancel / l.done) is cleared by watchDrain ONLY after the goroutines

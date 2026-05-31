@@ -820,6 +820,63 @@ func TestLoop_SharedWaitingLoopNoLeak(t *testing.T) {
 	// goleak.VerifyNone at defer confirms no leaked goroutines.
 }
 
+// TestLoop_StopCleansEntityMaps verifies that the processing and dirty maps are
+// empty (no residual state) after Stop, even when entities were in-flight or
+// dirty at shutdown. This guards against state-leak across Loop restarts (S2).
+//
+// Design: we send one entity into a blocking reconcile, then send duplicates to
+// ensure dirty state is set. We then release and Stop; by the time Stop returns
+// (watchDrain has run), all goroutines have exited and entity maps are empty.
+func TestLoop_StopCleansEntityMaps(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	const entity = "in-flight-entity"
+
+	rec := newBlockingReconciler()
+	src := make(chan Request)
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+
+	// Register skip signal before Start so no increment is missed.
+	skippedOnce := p.signalWhenCounterReaches(
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSkipped}, 1)
+
+	l := &Loop{
+		ReconcilerID:            "rc",
+		Reconciler:              rec,
+		Source:                  src,
+		MaxConcurrentReconciles: 4,
+		Interval:                testtime.D1h,
+		BaseDelay:               testtime.D1h,
+		MaxDelay:                testtime.D1h,
+		Metrics:                 m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+	require.NoError(t, l.Start(ownerCtx))
+
+	// First request enters reconcile (processing=true); second is coalesced as dirty.
+	src <- Request{EntityID: entity}
+	testwait.Deterministic(t, rec.firstCallSig, "first-reconcile-entered")
+	src <- Request{EntityID: entity} // coalesced as dirty
+	testwait.Deterministic(t, skippedOnce, "dirty-set")
+
+	// Release the in-flight reconcile, then Stop.
+	close(rec.release)
+	sc, cancel := stopCtx(t)
+	defer cancel()
+	require.NoError(t, l.Stop(sc))
+
+	// After Stop: both maps must be empty (no residual state).
+	l.entityMu.Lock()
+	processingLen := len(l.processing)
+	dirtyLen := len(l.dirty)
+	l.entityMu.Unlock()
+	assert.Equal(t, 0, processingLen, "processing map must be empty after Stop")
+	assert.Equal(t, 0, dirtyLen, "dirty map must be empty after Stop")
+}
+
 // TestLoop_ResyncSentinelIsolation verifies that the empty-EntityID ("") resync
 // sentinel participates in the dirty/processing and backoff maps like any other
 // entity key — isolated from real entity keys and not subject to special-casing.

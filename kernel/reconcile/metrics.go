@@ -32,7 +32,13 @@ const (
 	resultSuccess   = "success"
 	resultTransient = "transient"
 	resultPermanent = "permanent"
-	resultSkipped   = "skipped"
+	// resultSkipped is recorded when a duplicate trigger arrives for an entity
+	// that is already being reconciled (F5 dirty/processing dedup). The trigger
+	// is NOT dropped: it is coalesced into a pending dirty re-run so the entity
+	// is guaranteed to be re-reconciled once the in-flight reconcile completes.
+	// "skipped" means "this specific trigger was absorbed into the dirty set",
+	// not "the entity will be skipped".
+	resultSkipped = "skipped"
 )
 
 // reconcileDurationBuckets are explicit upper bounds (seconds) for

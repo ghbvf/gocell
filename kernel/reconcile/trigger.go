@@ -99,7 +99,7 @@ type channelTrigger struct {
 // a programmer error: it panics at construction. When in is closed, the
 // forwarding goroutine exits cleanly — the Loop keeps running but receives no
 // further Requests from this Trigger (the source is responsible for its own
-// lifecycle, mirroring Loop.pump over a closed Source).
+// lifecycle, mirroring Loop.feedFromSource over a closed Source).
 func ChannelTrigger(in <-chan Request) Trigger {
 	if in == nil {
 		panic(panicregister.Approved("reconcile-channel-trigger-nil-source",

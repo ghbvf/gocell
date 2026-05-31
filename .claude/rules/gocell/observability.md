@@ -251,7 +251,7 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 
 - **recovered panic → `transient`**（不引入第 5 个 `panic` label；panic 是可重试的瞬态失败）
 - 值集唯一来源：`kernel/reconcile/metrics.go` 的 `result*` 未导出常量；`recovery.go::classify()` 是唯一分类函数
-- **单 requeue 路径**：所有向工作队列或延迟队列的 channel send 必须经由三个受认可函数之一（`drainReadyItems` / `(*Loop).pump` / `(*Loop).enqueueDelayed`）；禁止引入 `go func(){ queue <- req }()` 或 `go func(){ addCh <- item }()` per-entity goroutine
+- **单 requeue 路径**：所有向工作队列或延迟队列的 channel send 必须经由三个受认可函数之一（`drainReadyItems` / `(*Loop).feedFromSource` / `(*Loop).enqueueDelayed`）；禁止引入 `go func(){ queue <- req }()` 或 `go func(){ addCh <- item }()` per-entity goroutine
 
 | Archtest ID | 摘要 | 评级 |
 |---|---|---|
