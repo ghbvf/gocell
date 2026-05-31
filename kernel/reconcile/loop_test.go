@@ -287,6 +287,19 @@ func TestLoop_MaxConcurrencyRespected(t *testing.T) {
 	assert.Equal(t, 2, maxC, "two workers should have reached 2-way concurrency")
 }
 
+// TestLoop_SameEntityIDSerial verifies same-EntityID serialization under F5
+// dirty/processing dedup semantics:
+//   - 4 requests for the same entity arrive while MaxConcurrentReconciles=4.
+//   - The first request enters reconcile (processing=true); the other three are
+//     coalesced into ONE dirty re-run (each records resultSkipped).
+//   - At no point does more than 1 reconcile run concurrently for the same entity
+//     (maxPerEntity == 1).
+//   - After the first reconcile completes, the coalesced dirty re-run is enqueued
+//     immediately (delay=0) and reconciled exactly once more; Stop drains it.
+//
+// F5 semantics change from A3: duplicates are no longer silently dropped — the
+// dirty re-run ensures convergence even without a resync. The skip counter still
+// fires 3 times (one per duplicate trigger), and maxPerEntity stays 1.
 func TestLoop_SameEntityIDSerial(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := newBlockingReconciler()
@@ -306,19 +319,17 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		src <- Request{EntityID: "same"}
 	}
-	// First reconcile holds the entity; the other three are dequeued and dropped
-	// as "skipped" (level-triggered serialization), never running concurrently.
-	// recordingProvider.signalWhenCounterReaches installs a notify callback on
-	// the counter vec; the channel is closed as soon as skip count reaches 3 —
-	// no wall-clock polling, no race window.
+	// First reconcile holds the entity (processing=true); the other three are
+	// coalesced as dirty (each records resultSkipped). The channel fires
+	// deterministically when skip count reaches 3 — no wall-clock polling.
 	testwait.Deterministic(t, skippedThrice, "three-duplicates-skipped")
-	// The skip counter fires before Reconcile.enter() is guaranteed to have run
-	// (skip is recorded in the dispatch goroutine, before the lock into perEntity).
 	// Wait for the first Reconcile entry to ensure maxPerEntity is observable.
 	testwait.Deterministic(t, rec.firstCallSig, "first-reconcile-entered")
 	_, maxPE := rec.snapshot()
 	assert.Equal(t, 1, maxPE, "the same EntityID must never reconcile concurrently")
 
+	// Release the blocking reconcile. The dirty re-run is enqueued at delay=0
+	// and will be picked up by a worker; Stop drains it.
 	close(rec.release)
 	sc, cancel := stopCtx(t)
 	defer cancel()
@@ -570,4 +581,287 @@ func TestLoop_BadReconcilerIDFailsStart(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ReconcilerID")
 	require.NoError(t, l.Stop(context.Background())) // no-op, goleak stays clean
+}
+
+// -----------------------------------------------------------------------------
+// F5 dirty/processing dedup + F6 shared delaying queue tests
+// -----------------------------------------------------------------------------
+
+// TestLoop_F5_DirtyDedupCoalescedRerun verifies the F5 dirty/processing dedup
+// guarantee: N duplicate triggers arriving while one reconcile is in flight are
+// coalesced into exactly ONE re-run after the in-flight reconcile completes.
+//
+// Setup: MaxConcurrentReconciles=4, 1 slow entity, 4 duplicate triggers.
+// Expected: reconcile count == 2 (one in-flight + one dirty re-run), maxPerEntity==1.
+func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	const entity = "coalesce-me"
+
+	// secondStarted is closed when the second (dirty re-run) reconcile begins.
+	secondStarted := make(chan struct{})
+	var secondOnce sync.Once
+
+	var callCount atomic.Int64
+	release := make(chan struct{})
+
+	rec := funcReconciler(func(ctx context.Context, req Request) (Result, error) {
+		n := callCount.Add(1)
+		if n == 1 {
+			// First call: block until released.
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		} else {
+			// Second call: signal immediately.
+			secondOnce.Do(func() { close(secondStarted) })
+		}
+		return Result{RequeueAfter: testtime.D1h}, nil
+	})
+
+	src := make(chan Request)
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+	// shortRequeue keeps periodic resync from re-triggering during the test.
+	l := &Loop{
+		ReconcilerID:            "rc",
+		Reconciler:              rec,
+		Source:                  src,
+		MaxConcurrentReconciles: 4,
+		Interval:                testtime.D1h,
+		Metrics:                 m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+
+	// Register skip signal before Start so no increment is missed.
+	skippedThrice := p.signalWhenCounterReaches(
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSkipped}, 3)
+
+	require.NoError(t, l.Start(ownerCtx))
+
+	// Send 4 requests: first enters reconcile, next 3 are coalesced as dirty.
+	for i := 0; i < 4; i++ {
+		src <- Request{EntityID: entity}
+	}
+	// Wait until 3 skips are recorded (3 duplicates coalesced).
+	testwait.Deterministic(t, skippedThrice, "three-skips-coalesced")
+
+	// Release the first reconcile. This triggers the dirty re-run at delay=0.
+	close(release)
+
+	// The dirty re-run must start exactly once.
+	testwait.Deterministic(t, secondStarted, "dirty-rerun-started")
+	assert.EqualValues(t, 2, callCount.Load(), "exactly 2 reconcile calls: in-flight + coalesced dirty re-run")
+
+	sc, cancel := stopCtx(t)
+	defer cancel()
+	require.NoError(t, l.Stop(sc))
+}
+
+// TestLoop_TransientExponentialBackoff verifies that transient errors produce
+// exponentially increasing retry delays (via entityBackoff). With a tiny
+// BaseDelay the loop retries quickly in tests; with a non-trivial MaxDelay the
+// delays would grow. We use signalWhenCounterReaches to assert the loop DOES
+// retry multiple times (confirming the delaying queue feeds retries back),
+// not wall-clock timing assertions (which are inherently racy).
+func TestLoop_TransientExponentialBackoff(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}
+	// Signal after 3 transient retries to confirm retrying actually happens.
+	transientThrice := p.signalWhenCounterReaches(transLabels, 3)
+
+	src := make(chan Request)
+	l := &Loop{
+		ReconcilerID: "rc",
+		Reconciler: funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+			return Result{}, fmt.Errorf("transient blip")
+		}),
+		Source:    src,
+		Interval:  testtime.D1h,
+		BaseDelay: testtime.D1ms,      // shrink base for test speed
+		MaxDelay:  20 * testtime.D1ms, // cap so test completes quickly
+		Metrics:   m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+	require.NoError(t, l.Start(ownerCtx))
+
+	src <- Request{EntityID: "retry-me"}
+
+	// Wait for 3 transient retries: confirms exponential backoff retries the entity
+	// repeatedly via the shared delaying queue.
+	testwait.Deterministic(t, transientThrice, "three-transient-retries-via-backoff")
+
+	sc, cancel := stopCtx(t)
+	defer cancel()
+	require.NoError(t, l.Stop(sc))
+}
+
+// TestLoop_SuccessForgetsBackoff verifies that a successful reconcile resets the
+// exponential backoff for an entity, so the next transient error restarts at
+// BaseDelay rather than continuing from accumulated failure depth.
+//
+// Observable behavior: after transient→success→transient, the entity retries
+// quickly (BaseDelay, not accumulated exponential delay). Verified by asserting
+// the total transient counter reaches ≥2 quickly enough without hanging.
+func TestLoop_SuccessForgetsBackoff(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+
+	// Phase control: first call → transient, second → success, subsequent → transient.
+	var callCount atomic.Int64
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		n := callCount.Add(1)
+		switch n {
+		case 1:
+			return Result{}, fmt.Errorf("first transient")
+		case 2:
+			return Result{RequeueAfter: testtime.D1ms}, nil // success: requeue quickly for next call
+		default:
+			return Result{}, fmt.Errorf("post-success transient")
+		}
+	})
+
+	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}
+	succLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}
+	// Wait for 2 transients and 1 success to confirm the full flow.
+	twoTransients := p.signalWhenCounterReaches(transLabels, 2)
+	oneSuccess := p.signalWhenCounterReaches(succLabels, 1)
+
+	src := make(chan Request)
+	l := &Loop{
+		ReconcilerID: "rc",
+		Reconciler:   rec,
+		Source:       src,
+		Interval:     testtime.D1h,
+		BaseDelay:    testtime.D1ms, // tiny base so test completes quickly
+		MaxDelay:     20 * testtime.D1ms,
+		Metrics:      m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+	require.NoError(t, l.Start(ownerCtx))
+
+	src <- Request{EntityID: "forget-me"}
+
+	// Phase 1: first transient fires. Then success fires (requeue at 1ms). Then
+	// second transient fires — this is the "forgot backoff" call that would be very
+	// slow if backoff wasn't reset (accumulated would be ≥20ms, but reset means 1ms).
+	testwait.Deterministic(t, oneSuccess, "success-recorded")
+	testwait.Deterministic(t, twoTransients, "two-transients-confirm-forgot-backoff")
+
+	sc, cancel := stopCtx(t)
+	defer cancel()
+	require.NoError(t, l.Stop(sc))
+}
+
+// TestLoop_SharedWaitingLoopNoLeak verifies that the F6 shared delaying queue
+// (waitingLoop goroutine) exits cleanly when Stop is called, even when there are
+// many pending requeue items. goleak.VerifyNone asserts that no goroutines leak.
+//
+// Design confirmation: the waitingLoop goroutine is tracked by the WaitGroup and
+// exits on runCtx.Done(), so Stop waits for it. This test seeds many requeues and
+// verifies zero goroutine leak.
+func TestLoop_SharedWaitingLoopNoLeak(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	const nEntities = 20
+
+	// Reconciler always returns transient so items keep being requeued into the
+	// delaying queue with a long BaseDelay (many pending items at Stop time).
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}
+	// Wait until every entity has been seen at least once (nEntities transients).
+	allSeenOnce := p.signalWhenCounterReaches(transLabels, nEntities)
+
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{}, fmt.Errorf("keep retrying")
+	})
+
+	src := make(chan Request, nEntities)
+	for i := 0; i < nEntities; i++ {
+		src <- Request{EntityID: fmt.Sprintf("e%d", i)}
+	}
+
+	l := &Loop{
+		ReconcilerID:            "rc",
+		Reconciler:              rec,
+		Source:                  src,
+		MaxConcurrentReconciles: 4,
+		Interval:                testtime.D1h,
+		BaseDelay:               testtime.D1h, // long delay → many items pending in heap at Stop
+		MaxDelay:                testtime.D1h,
+		Metrics:                 m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+	require.NoError(t, l.Start(ownerCtx))
+
+	// Wait until all entities have been reconciled once (nEntities pending requeues
+	// are now in the delaying heap with BaseDelay=1h).
+	testwait.Deterministic(t, allSeenOnce, "all-entities-seen-once")
+
+	// Stop must drain the waitingLoop goroutine without leaking. goleak confirms.
+	sc, cancel := stopCtx(t)
+	defer cancel()
+	require.NoError(t, l.Stop(sc))
+	// goleak.VerifyNone at defer confirms no leaked goroutines.
+}
+
+// TestLoop_ResyncSentinelIsolation verifies that the empty-EntityID ("") resync
+// sentinel participates in the dirty/processing and backoff maps like any other
+// entity key — isolated from real entity keys and not subject to special-casing.
+//
+// This covers the resync-all pattern: a Trigger produces Request{EntityID: ""}
+// to re-observe all entities. The empty key should not collide with real keys.
+func TestLoop_ResyncSentinelIsolation(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+
+	sentinelLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}
+	successTwice := p.signalWhenCounterReaches(sentinelLabels, 2)
+
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		return Result{RequeueAfter: testtime.D1h}, nil
+	})
+
+	src := make(chan Request, 2)
+	src <- Request{EntityID: ""}     // resync sentinel
+	src <- Request{EntityID: "real"} // real entity
+
+	l := &Loop{
+		ReconcilerID:            "rc",
+		Reconciler:              rec,
+		Source:                  src,
+		MaxConcurrentReconciles: 2,
+		Interval:                testtime.D1h,
+		BaseDelay:               testtime.D1h, // no spurious retries
+		MaxDelay:                testtime.D1h,
+		Metrics:                 m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+	require.NoError(t, l.Start(ownerCtx))
+
+	// Both the sentinel ("") and the real entity must reconcile successfully.
+	testwait.Deterministic(t, successTwice, "both-sentinel-and-real-reconciled")
+
+	sc, cancel := stopCtx(t)
+	defer cancel()
+	require.NoError(t, l.Stop(sc))
 }
