@@ -459,6 +459,7 @@ func TestMountRouteGroup_CellAttribution_BodyLimitReject(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload/blob", strings.NewReader("too-large"))
+	req.ContentLength = int64(len("too-large"))
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 

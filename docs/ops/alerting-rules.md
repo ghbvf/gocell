@@ -59,6 +59,8 @@ remote-write 或业务专用 Prometheus 若不需要 runtime series，可在 scr
 metric_relabel_configs:
 - source_labels: [__name__, cell]
   regex: 'gocell_http_(requests_total|request_duration_seconds(_bucket|_sum|_count)?|request_body_limit_rejections_total);_runtime'
+  # Note: request_body_limit_rejections_total is a counter — it has no _bucket/_sum/_count
+  # suffixes (those belong to histograms/summaries only). The regex matches the bare metric name.
   action: drop
 ```
 
@@ -73,7 +75,7 @@ Label 语义：
 | label | 含义 |
 |---|---|
 | `cell` | 同 `http_requests_total.cell`：路由归属 cell ID，或 `_runtime`（框架路径） |
-| `route` | 低基数路由模板（同 RouteFor 返回值；fast-path 期间 ServeMux 尚未写入 pattern recorder，回退到 RouteResolver 或 `"unmatched"`） |
+| `route` | 低基数路由模板（同 RouteFor 返回值）。当请求路径与已注册路由匹配时，RouteResolver 返回路由模板（如 `/api/v1/upload/blob`）；仅当路径无法匹配任何已注册路由时才回退到 `"unmatched"`。fast-path 期间 ServeMux 尚未写入 pattern recorder，故由 RouteResolver（ctx 中由 CellAttribution 注入）负责模板解析。 |
 
 推荐告警（短时突增，提示 client 配置错误或资源滥用）：
 

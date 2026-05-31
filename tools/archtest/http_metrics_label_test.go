@@ -414,7 +414,7 @@ func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
 //
 // AI-robust rating: Medium (AST form check + position ordering; Hard path =
 // sealed collector interface that forces routing through a typed funnel,
-// tracked in gh #1166).
+// tracked in gh #1398).
 //
 // Blind spots:
 //   - Does not trace through function-value fields (the collector argument is

@@ -21,7 +21,11 @@ const DefaultBodyLimit int64 = 1 << 20
 // when collector is non-nil. Streaming overruns after MaxBytesReader kicks in
 // are captured by http_requests_total{status=413} through RecordRequest.
 // Pass 0 or a negative value to use DefaultBodyLimit.
-// Pass nil collector to disable body-limit rejection recording.
+//
+// collector=nil disables only the body-limit fast-path rejection counter
+// (RecordBodyLimitRejection); it does not affect streaming 413 accounting.
+// Streaming overruns are independently recorded by the Metrics middleware via
+// RecordRequest and remain observable regardless of the collector value here.
 func BodyLimit(maxBytes int64, collector metrics.Collector) func(http.Handler) http.Handler {
 	if maxBytes <= 0 {
 		maxBytes = DefaultBodyLimit
