@@ -245,6 +245,21 @@ readyz 各字段归属：
 
 audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extractActor`），非 `entry.Principal().ActorID`——actor 是被审计动作的执行者（login 期 `session.created` 无 auth principal 时仍可用），Principal 族是正交的 request-context。详见 ADR §Amendment 2026-05-29 "actor 来源决议"。
 
+## Reconcile Metrics `result` Label
+
+`reconcile_total{result=...}` 的 `result` label 值集冻结为 `{success, transient, permanent, skipped}`（FR-010）。关键约束：
+
+- **recovered panic → `transient`**（不引入第 5 个 `panic` label；panic 是可重试的瞬态失败）
+- 值集唯一来源：`kernel/reconcile/metrics.go` 的 `result*` 未导出常量；`recovery.go::classify()` 是唯一分类函数
+- **单 requeue 路径**：所有向工作队列或延迟队列的 channel send 必须经由三个受认可函数之一（`drainReadyItems` / `(*Loop).pump` / `(*Loop).enqueueDelayed`）；禁止引入 `go func(){ queue <- req }()` 或 `go func(){ addCh <- item }()` per-entity goroutine
+
+| Archtest ID | 摘要 | 评级 |
+|---|---|---|
+| `RECONCILE-RESULT-LABEL-VALUES-FROZEN-01` | `result` label 值集冻结（4 个 `result*` const 字符串值 vs. hardcoded golden） | Medium（archtest；Hard 升级路径 = metricschema golden 字节锁，追踪 gh #<TBD-result-label-golden>） |
+| `RECONCILE-REQUEUE-ENQUEUE-CALLER-01` | kernel/reconcile 内所有 `SendStmt` 必须在受认可函数范围内（enclosing FuncDecl allowlist） | Medium（archtest；Hard 升级路径 = channel send-end 接口封装 + 构造 seal，追踪 gh #<TBD-requeue-enqueue-hard>） |
+
+完整盲区清单 + 反向自检活在各 archtest 的 package godoc；本节只做导航。
+
 ## Audit Payload Redaction
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
