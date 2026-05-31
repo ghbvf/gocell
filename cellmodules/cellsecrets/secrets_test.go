@@ -1,4 +1,4 @@
-package platformshared_test
+package cellsecrets_test
 
 import (
 	"testing"
@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/platform/platformshared"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 )
 
 // testDemoKey is the first well-known demo key for RejectDemoKey tests.
@@ -27,60 +27,60 @@ const testFreshKey2 = "another-fresh-key-not-in-list!!!"
 const testCursorDevDefault = "corebundle-access-cursor-key32!!"
 
 func TestRejectDemoKey_RealMode_RejectsDemoKey(t *testing.T) {
-	err := platformshared.RejectDemoKey(platformshared.RealAdapterMode, "TEST_KEY", []byte(testDemoKey))
+	err := cellsecrets.RejectDemoKey(cellsecrets.RealAdapterMode, "TEST_KEY", []byte(testDemoKey))
 	require.Error(t, err, "real mode must reject a well-known demo key")
 	assert.Contains(t, err.Error(), "well-known demo key")
 }
 
 func TestRejectDemoKey_RealMode_RejectsStarterSecret(t *testing.T) {
 	// Ensure examples/corebundlestarter's devServiceSecret is caught.
-	err := platformshared.RejectDemoKey(platformshared.RealAdapterMode, "GOCELL_SERVICE_SECRET", []byte(testStarterDemoKey))
+	err := cellsecrets.RejectDemoKey(cellsecrets.RealAdapterMode, "GOCELL_SERVICE_SECRET", []byte(testStarterDemoKey))
 	require.Error(t, err, "real mode must reject the corebundlestarter demo secret")
 }
 
 func TestRejectDemoKey_RealMode_AllowsFreshKey(t *testing.T) {
-	err := platformshared.RejectDemoKey(platformshared.RealAdapterMode, "TEST_KEY", []byte(testFreshKey))
+	err := cellsecrets.RejectDemoKey(cellsecrets.RealAdapterMode, "TEST_KEY", []byte(testFreshKey))
 	assert.NoError(t, err, "real mode must allow a key not in WellKnownDemoKeys")
 }
 
 func TestRejectDemoKey_DevMode_AllowsDemoKey(t *testing.T) {
-	err := platformshared.RejectDemoKey("dev", "TEST_KEY", []byte(testDemoKey))
+	err := cellsecrets.RejectDemoKey("dev", "TEST_KEY", []byte(testDemoKey))
 	assert.NoError(t, err, "dev mode must not reject demo keys")
 }
 
 func TestRejectDemoKey_RealMode_RejectsAllWellKnownKeys(t *testing.T) {
-	for _, demo := range platformshared.WellKnownDemoKeys {
-		err := platformshared.RejectDemoKey(platformshared.RealAdapterMode, "TEST_KEY", []byte(demo))
+	for _, demo := range cellsecrets.WellKnownDemoKeys {
+		err := cellsecrets.RejectDemoKey(cellsecrets.RealAdapterMode, "TEST_KEY", []byte(demo))
 		assert.Error(t, err, "real mode must reject demo key %q", demo)
 	}
 }
 
 func TestResolveAndRejectDemoKey_RealMode_EmptyPrimary_ReturnsError(t *testing.T) {
-	_, err := platformshared.ResolveAndRejectDemoKey(platformshared.RealAdapterMode, "ENV_KEY", "", "")
+	_, err := cellsecrets.ResolveAndRejectDemoKey(cellsecrets.RealAdapterMode, "ENV_KEY", "", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be set in adapter mode")
 }
 
 func TestResolveAndRejectDemoKey_RealMode_DemoKeyPrimary_ReturnsError(t *testing.T) {
-	_, err := platformshared.ResolveAndRejectDemoKey(platformshared.RealAdapterMode, "ENV_KEY", testDemoKey, "")
+	_, err := cellsecrets.ResolveAndRejectDemoKey(cellsecrets.RealAdapterMode, "ENV_KEY", testDemoKey, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "well-known demo key")
 }
 
 func TestResolveAndRejectDemoKey_DevMode_FallsBackToDevDefault(t *testing.T) {
-	key, err := platformshared.ResolveAndRejectDemoKey("dev", "ENV_KEY", "", testFreshKey)
+	key, err := cellsecrets.ResolveAndRejectDemoKey("dev", "ENV_KEY", "", testFreshKey)
 	require.NoError(t, err)
 	assert.Equal(t, []byte(testFreshKey), key)
 }
 
 func TestResolveAndRejectDemoKey_DevMode_PrimaryTakesPrecedence(t *testing.T) {
-	key, err := platformshared.ResolveAndRejectDemoKey("dev", "ENV_KEY", testFreshKey, testDemoKey)
+	key, err := cellsecrets.ResolveAndRejectDemoKey("dev", "ENV_KEY", testFreshKey, testDemoKey)
 	require.NoError(t, err)
 	assert.Equal(t, []byte(testFreshKey), key)
 }
 
 func TestBuildCursorCodec_DevMode_DevDefaultPath(t *testing.T) {
-	codec, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
+	codec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
 		AdapterMode: "dev",
 		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
@@ -94,8 +94,8 @@ func TestBuildCursorCodec_DevMode_DevDefaultPath(t *testing.T) {
 }
 
 func TestBuildCursorCodec_RealMode_EmptyPrimary_ReturnsError(t *testing.T) {
-	_, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
-		AdapterMode: platformshared.RealAdapterMode,
+	_, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
+		AdapterMode: cellsecrets.RealAdapterMode,
 		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
 		Primary:     "",
@@ -108,8 +108,8 @@ func TestBuildCursorCodec_RealMode_EmptyPrimary_ReturnsError(t *testing.T) {
 }
 
 func TestBuildCursorCodec_RealMode_DemoKeyPrimary_ReturnsError(t *testing.T) {
-	_, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
-		AdapterMode: platformshared.RealAdapterMode,
+	_, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
+		AdapterMode: cellsecrets.RealAdapterMode,
 		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
 		Primary:     testCursorDevDefault,
@@ -123,7 +123,7 @@ func TestBuildCursorCodec_RealMode_DemoKeyPrimary_ReturnsError(t *testing.T) {
 
 func TestBuildCursorCodec_WithPreviousKey_LogsRotation(t *testing.T) {
 	// Primary and previous must differ; both are fresh (not demo keys).
-	codec, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
+	codec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
 		AdapterMode: "dev",
 		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
@@ -137,8 +137,8 @@ func TestBuildCursorCodec_WithPreviousKey_LogsRotation(t *testing.T) {
 }
 
 func TestBuildCursorCodec_RealMode_DemoKeyPrevious_ReturnsError(t *testing.T) {
-	_, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
-		AdapterMode: platformshared.RealAdapterMode,
+	_, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
+		AdapterMode: cellsecrets.RealAdapterMode,
 		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
 		Primary:     testFreshKey,
@@ -151,7 +151,7 @@ func TestBuildCursorCodec_RealMode_DemoKeyPrevious_ReturnsError(t *testing.T) {
 }
 
 func TestBuildHMACKey_DevMode_FallsBack(t *testing.T) {
-	key, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
+	key, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
 		AdapterMode: "dev",
 		EnvName:     "GOCELL_TEST_HMAC_KEY",
 		Primary:     "",
@@ -162,8 +162,8 @@ func TestBuildHMACKey_DevMode_FallsBack(t *testing.T) {
 }
 
 func TestBuildHMACKey_RealMode_EmptyPrimary_ReturnsError(t *testing.T) {
-	_, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
-		AdapterMode: platformshared.RealAdapterMode,
+	_, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
+		AdapterMode: cellsecrets.RealAdapterMode,
 		EnvName:     "GOCELL_TEST_HMAC_KEY",
 		Primary:     "",
 		DevDefault:  testFreshKey,
@@ -205,7 +205,7 @@ func TestInternalAddrToBaseURL(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := platformshared.InternalAddrToBaseURL(tc.addr)
+			got := cellsecrets.InternalAddrToBaseURL(tc.addr)
 			assert.Equal(t, tc.want, got)
 		})
 	}

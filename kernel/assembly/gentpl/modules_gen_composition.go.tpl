@@ -3,7 +3,7 @@
 package main
 
 import (
-{{- range .PlatformImports}}
+{{- range .ModuleImports}}
 	{{.}}
 {{- end}}
 	"github.com/ghbvf/gocell/runtime/capability"

@@ -98,7 +98,7 @@ func isWrapperCallerAllowed(rel string) bool {
 	// to adapters behind the public runtime/composition API (#1085
 	// COMPOSITION-MODULE-API-01). It is a sibling composition root to cmd/ —
 	// the cell-module wiring that used to live in cmd/corebundle/*_module.go.
-	if strings.HasPrefix(rel, "platform/") {
+	if strings.HasPrefix(rel, "cellmodules/") {
 		return true
 	}
 	switch rel {
@@ -189,7 +189,7 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 // message — drift between code and message becomes structurally
 // impossible.
 func allowlistDescription() string {
-	return "cmd/* | platform/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
+	return "cmd/* | cellmodules/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
 		"kernel/{persistence,outbox,projection}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
 		"kernel/outbox/mode_resolver.go | kernel/outbox/outboxtest/recorder.go | " +
 		"cells/accesscore/{mem,postgres}/bundle.go"

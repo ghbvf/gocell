@@ -122,11 +122,11 @@ type modulesContext struct {
 // runtime/composition.CellModule and platform/{cellID}.Module() calls
 // instead of local *Module struct types.
 type modulesCompositionContext struct {
-	AssemblyID      string
-	SourcePath      string   // path to the assembly.yaml that drove generation
-	Modules         []string // Module call expressions, e.g. "platformconfigcore.Module()"
-	PlatformImports []string // aliased import lines, e.g. `platformconfigcore "github.com/ghbvf/gocell/platform/configcore"`
-	Capabilities    []string
+	AssemblyID    string
+	SourcePath    string   // path to the assembly.yaml that drove generation
+	Modules       []string // Module call expressions, e.g. "platformconfigcore.Module()"
+	ModuleImports []string // aliased import lines, e.g. `platformconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"`
+	Capabilities  []string
 }
 
 // capabilityConstNames maps cell.yaml `requires` enum values to their
@@ -338,7 +338,7 @@ func (g *Generator) generateModulesGenLegacy(
 
 // generateModulesGenComposition emits the composition.CellModule form used by
 // platform assemblies (assembly.yaml build.compositionAPI: true).
-// Each cell maps to platform{cellID}.Module() with a matching import alias.
+// Each cell maps to cellmodules{cellID}.Module() with a matching import alias.
 func (g *Generator) generateModulesGenComposition(
 	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
 ) ([]byte, error) {
@@ -352,27 +352,27 @@ func (g *Generator) generateModulesGenComposition(
 				"assembly references unknown cell",
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
 		}
-		alias := "platform" + cellID
+		alias := "cellmodules" + cellID
 		if !seen[cellID] {
 			seen[cellID] = true
 			importLines = append(importLines, fmt.Sprintf("%s %q",
-				alias, g.module+"/platform/"+cellID))
+				alias, g.module+"/cellmodules/"+cellID))
 		}
 		moduleCalls = append(moduleCalls, alias+".Module()")
 	}
 	// Sort import lines by their (alias, path) string so the rendered import
 	// block is gofmt-clean regardless of cell declaration order. The alias is
-	// "platform"+cellID and the path ends in /platform/cellID, so string-sorting
+	// "platform"+cellID and the path ends in /cellmodules/cellID, so string-sorting
 	// the import lines matches gofmt's path-based ordering. moduleCalls stay in
 	// cell (assembly.yaml) order — that order is runtime-significant (e.g.
 	// auditcore before accesscore for the BootstrapLedgerStore handoff).
 	sort.Strings(importLines)
 	ctx := modulesCompositionContext{
-		AssemblyID:      assemblyID,
-		SourcePath:      asm.File,
-		Modules:         moduleCalls,
-		PlatformImports: importLines,
-		Capabilities:    capConsts,
+		AssemblyID:    assemblyID,
+		SourcePath:    asm.File,
+		Modules:       moduleCalls,
+		ModuleImports: importLines,
+		Capabilities:  capConsts,
 	}
 	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
 }

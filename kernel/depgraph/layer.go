@@ -11,19 +11,19 @@ const (
 	LayerCells    = "cells"
 	LayerPkg      = "pkg"
 	LayerCmd      = "cmd"
-	// LayerPlatform is the composition-root layer for platform/<cell> modules.
+	// LayerCellModules is the composition-root layer for cellmodules/<cell> modules.
 	// It wires platform Cell modules by importing cells/ + adapters/ + runtime/
 	// and is the importable counterpart to cmd/ (which is an unimportable CLI
-	// binary). Unlike cmd/, platform/ packages are designed to be imported by
+	// binary). Unlike cmd/, cellmodules/ packages are designed to be imported by
 	// examples/ and external composition roots (#1085 CellModule public API).
-	LayerPlatform   = "platform"
-	LayerExamples   = "examples"
-	LayerTools      = "tools"
-	LayerTests      = "tests"
-	LayerGenerated  = "generated"
-	LayerRoot       = "root"
-	LayerStdlib     = "stdlib"
-	LayerThirdParty = "thirdparty"
+	LayerCellModules = "cellmodules"
+	LayerExamples    = "examples"
+	LayerTools       = "tools"
+	LayerTests       = "tests"
+	LayerGenerated   = "generated"
+	LayerRoot        = "root"
+	LayerStdlib      = "stdlib"
+	LayerThirdParty  = "thirdparty"
 	// LayerUnknown marks a package whose import path is module-internal
 	// (lives under the module root) but whose first segment is not in
 	// internalLayerByDir. This is distinct from LayerThirdParty so that
@@ -46,14 +46,14 @@ var internalLayerByDir = map[string]string{
 	"tools":     LayerTools,
 	"tests":     LayerTests,
 	"generated": LayerGenerated,
-	// platform/ is the importable Composition Root layer (#1085): it wires
+	// cellmodules/ is the importable Composition Root layer (#1085): it wires
 	// platform Cell modules (accesscore / auditcore / configcore) by importing
 	// cells/ + adapters/ + runtime/, and exposes Module() constructors for
 	// external composition roots (cmd/corebundle, examples/corebundlestarter).
-	// Unlike cmd/ (an unimportable CLI binary), platform/ is an importable
-	// library. Uses LayerPlatform (not LayerCmd) so governance rules can
+	// Unlike cmd/ (an unimportable CLI binary), cellmodules/ is an importable
+	// library. Uses LayerCellModules (not LayerCmd) so governance rules can
 	// distinguish between the two composition-root forms.
-	"platform": LayerPlatform,
+	"cellmodules": LayerCellModules,
 }
 
 // LayerOf classifies importPath relative to module. module must be the

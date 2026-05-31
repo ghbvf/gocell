@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	platformaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
+	platformauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
+	platformconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	platformaccesscore "github.com/ghbvf/gocell/platform/accesscore"
-	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
-	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 

@@ -1,11 +1,11 @@
-// Package platformshared provides helpers shared across the platform/ cell
+// Package cellsecrets provides helpers shared across the platform/ cell
 // modules (accesscore, auditcore, configcore) and cmd/corebundle.
 //
-// Unlike platform/internal/platformshared, this package is importable by
+// Unlike platform/internal/cellsecrets, this package is importable by
 // cmd/corebundle (composition root). It contains helpers that both platform/
 // cell modules and cmd/ need: demo-key rejection, cursor codec construction,
 // HMAC key loading, JWT key set loading, and the pgxpool type assertion.
-package platformshared
+package cellsecrets
 
 import (
 	"crypto/subtle"
@@ -189,7 +189,7 @@ func LoadKeySet(adapterMode string, clk clock.Clock) (*auth.KeySet, error) {
 // capability.PGProvider's any-typed DB() seam. Placed here so all platform
 // cell modules and cmd/ reuse it without duplicating the assertion.
 //
-// platform/platformshared is a composition-root layer (like cmd/) so
+// platform/cellsecrets is a composition-root layer (like cmd/) so
 // importing adapters/ (pgxpool) is architecturally acceptable.
 func PgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 	pool, ok := pg.DB().(*pgxpool.Pool)

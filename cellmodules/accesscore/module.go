@@ -22,6 +22,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	accesscell "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
@@ -32,7 +33,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -133,8 +133,8 @@ func (m module) Provide(
 // buildAccessBaseOpts builds the base accesscore options and session protocol.
 // Extracted from Provide to keep its cognitive complexity within the limit.
 func buildAccessBaseOpts(shared *composition.SharedDeps) ([]accesscell.Option, *session.Protocol, error) {
-	accessPrimary, accessPrevious := platformshared.LoadCursorKeys("ACCESSCORE")
-	cursorCodec, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
+	accessPrimary, accessPrevious := cellsecrets.LoadCursorKeys("ACCESSCORE")
+	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
 		AdapterMode: shared.Topology.AdapterMode,
 		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
@@ -188,7 +188,7 @@ func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session
 		return nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires the postgres capability provider " +
 			"(provisionCapabilities must run before BuildApp)")
 	}
-	db, poolErr := platformshared.PgxPoolFromProvider(shared.PG)
+	db, poolErr := cellsecrets.PgxPoolFromProvider(shared.PG)
 	if poolErr != nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: %w", poolErr)
 	}
@@ -216,7 +216,7 @@ func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session
 	// Wire the ConfigGetter using shared.InternalHMACRing (promoted from
 	// cmd-private internalGuard.ring onto composition.SharedDeps).
 	if shared.InternalHMACRing != nil {
-		internalBaseURL := platformshared.InternalAddrToBaseURL(shared.InternalHTTPAddr)
+		internalBaseURL := cellsecrets.InternalAddrToBaseURL(shared.InternalHTTPAddr)
 		accessOpts = append(
 			accessOpts,
 			configgetter.WithHTTP(internalBaseURL, shared.InternalHMACRing, shared.Clock),

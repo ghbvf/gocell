@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/auth"
 	authconfig "github.com/ghbvf/gocell/runtime/auth/config"
 )
@@ -28,7 +28,7 @@ type jwtDeps struct {
 // ref: Hydra internal/driver/config.DefaultProvider — single Registry pattern
 // plan: docs/plans/202604191515-auth-federated-whistle.md §F1
 func buildJWTDeps(adapterMode string, clk clock.Clock) (jwtDeps, error) {
-	keySet, err := platformshared.LoadKeySet(adapterMode, clk)
+	keySet, err := cellsecrets.LoadKeySet(adapterMode, clk)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("load JWT key set: %w", err)
 	}

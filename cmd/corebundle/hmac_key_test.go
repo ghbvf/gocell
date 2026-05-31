@@ -7,13 +7,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/platform/platformshared"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 )
 
 // TestBuildHMACKey_DevDefault_Succeeds confirms that in dev mode (empty
 // AdapterMode) with an empty Primary, the DevDefault is returned as bytes.
 func TestBuildHMACKey_DevDefault_Succeeds(t *testing.T) {
-	key, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
+	key, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
 		AdapterMode: "",
 		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "",
@@ -26,7 +26,7 @@ func TestBuildHMACKey_DevDefault_Succeeds(t *testing.T) {
 // TestBuildHMACKey_RealModePrimaryEmpty_FailFast asserts that in adapter
 // mode "real" an empty Primary triggers the hard-error branch.
 func TestBuildHMACKey_RealModePrimaryEmpty_FailFast(t *testing.T) {
-	key, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
+	key, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
 		AdapterMode: "real",
 		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "",
@@ -43,7 +43,7 @@ func TestBuildHMACKey_RealModePrimaryEmpty_FailFast(t *testing.T) {
 // TestBuildHMACKey_RealModeRejectsDemoKey verifies that a well-known demo key
 // is rejected in real mode.
 func TestBuildHMACKey_RealModeRejectsDemoKey(t *testing.T) {
-	key, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
+	key, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
 		AdapterMode: "real",
 		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "dev-hmac-key-replace-in-prod!!!!",
@@ -57,7 +57,7 @@ func TestBuildHMACKey_RealModeRejectsDemoKey(t *testing.T) {
 // TestBuildHMACKey_DevModeAcceptsDemoKey verifies that a well-known demo key is
 // accepted in dev mode (not real mode).
 func TestBuildHMACKey_DevModeAcceptsDemoKey(t *testing.T) {
-	key, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
+	key, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
 		AdapterMode: "",
 		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "dev-hmac-key-replace-in-prod!!!!",
@@ -71,7 +71,7 @@ func TestBuildHMACKey_DevModeAcceptsDemoKey(t *testing.T) {
 // production-quality HMAC key.
 func TestBuildHMACKey_RealModeWithFreshKey(t *testing.T) {
 	freshKey := strings.Repeat("x", 32)
-	key, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
+	key, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
 		AdapterMode: "real",
 		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     freshKey,

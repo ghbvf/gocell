@@ -3,18 +3,18 @@
 package main
 
 import (
-	platformaccesscore "github.com/ghbvf/gocell/platform/accesscore"
-	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
-	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
+	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
+	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
+	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
 func generatedCellModules() []composition.CellModule {
 	return []composition.CellModule{
-		platformconfigcore.Module(),
-		platformauditcore.Module(),
-		platformaccesscore.Module(),
+		cellmodulesconfigcore.Module(),
+		cellmodulesauditcore.Module(),
+		cellmodulesaccesscore.Module(),
 	}
 }
 

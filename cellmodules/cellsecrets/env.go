@@ -1,4 +1,4 @@
-package platformshared
+package cellsecrets
 
 import "os"
 

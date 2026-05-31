@@ -104,7 +104,7 @@ const (
 	authPkgSuffix               = "/runtime/auth"
 	corebundlePkgSuffix         = "/cmd/corebundle"
 	ssobffPkgSuffix             = "/examples/ssobff"
-	platformAccesscorePkgSuffix = "/platform/accesscore"
+	platformAccesscorePkgSuffix = "/cellmodules/accesscore"
 	observerFnName              = "NewBootstrapAuthFailObserver"
 	appendFnName                = "AppendBootstrapAuthFail"
 	bootstrapMiddlewareName     = "NewBootstrapMiddleware"

@@ -12,7 +12,7 @@ var topLevelDirs = []string{
 	"runtime",
 	"adapters",
 	"cells",
-	"platform",
+	"cellmodules",
 	"examples",
 	"pkg",
 }

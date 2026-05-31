@@ -1,4 +1,4 @@
-package accesscore_test
+package auditcore_test
 
 import (
 	"context"
@@ -8,11 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cellmodules/auditcore"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/platform/accesscore"
-	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
@@ -20,49 +19,37 @@ import (
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// testJWTAccessTokenTTL is used for the JWT issuer in tests.
+// testJWTAccessTokenTTL is the JWT TTL used in mem-mode tests.
 const testJWTAccessTokenTTL = 15 * time.Minute
 
 func TestModule_ReturnsNonNilCellModule(t *testing.T) {
-	m := accesscore.Module()
+	m := auditcore.Module()
 	require.NotNil(t, m, "Module() must return a non-nil composition.CellModule")
 }
 
 func TestModule_CorrectID(t *testing.T) {
-	m := accesscore.Module()
-	assert.Equal(t, "accesscore", m.ID(), "Module ID must be 'accesscore'")
+	m := auditcore.Module()
+	assert.Equal(t, "auditcore", m.ID(), "Module ID must be 'auditcore'")
 }
 
 func TestModule_ImplementsCellModule(*testing.T) {
-	_ = []composition.CellModule{accesscore.Module()}
+	_ = []composition.CellModule{auditcore.Module()}
 }
 
-// TestModule_Provide_MemMode exercises accesscore.Module().Provide with a
-// memory-mode SharedDeps (no Postgres, no Redis).
-//
-// accesscore.Provide requires shared.BootstrapLedgerStore (wired by auditcore),
-// so we first run auditcore.Module().Provide to populate it — mirroring the real
-// composition assembly order (auditcore before accesscore).
+// TestModule_Provide_MemMode exercises auditcore.Module().Provide with a
+// memory-mode SharedDeps (no Postgres).
 func TestModule_Provide_MemMode(t *testing.T) {
-	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "admin")
-	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "admin-test-pass")
-
 	ctx := context.Background()
 	shared := buildMemSharedDeps(t)
 
-	// auditcore must run first: it populates shared.BootstrapLedgerStore.
-	_, _, _, err := platformauditcore.Module().Provide(ctx, shared)
-	require.NoError(t, err, "auditcore.Provide must succeed before accesscore")
-	require.NotNil(t, shared.BootstrapLedgerStore, "auditcore.Provide must set BootstrapLedgerStore")
-
-	c, _, _, err := accesscore.Module().Provide(ctx, shared)
+	c, _, _, err := auditcore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
 	require.NotNil(t, c)
-	assert.Equal(t, "accesscore", c.ID())
+	assert.Equal(t, "auditcore", c.ID())
+	assert.NotNil(t, shared.BootstrapLedgerStore, "Provide must populate BootstrapLedgerStore")
 }
 
-// buildMemSharedDeps constructs a memory-mode *composition.SharedDeps suitable
-// for all three platform module Provide tests.
+// buildMemSharedDeps constructs a memory-mode *composition.SharedDeps for tests.
 func buildMemSharedDeps(t *testing.T) *composition.SharedDeps {
 	t.Helper()
 	clk := clock.Real()

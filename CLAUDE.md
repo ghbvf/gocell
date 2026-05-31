@@ -28,7 +28,7 @@ runtime/      — 通用运行时（http / auth / worker / observability）
 adapters/     — 外部系统适配（postgres / redis / rabbitmq / websocket / s3 / oidc）
 pkg/          — 共享工具包（errcode / ctxkeys / httputil / query）
 cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
-platform/     — Composition Root 层：将平台 Cell 绑定到 adapter，对外暴露 Module() composition.CellModule（accesscore / auditcore / configcore + 共享 helper platformshared）
+platform/     — Composition Root 层：将平台 Cell 绑定到 adapter，对外暴露 Module() composition.CellModule（accesscore / auditcore / configcore + 共享 helper cellsecrets）
 examples/     — 示例项目（ssobff / todoorder / iotdevice / corebundlestarter），可内置示例 cells/contracts/journeys
 generated/    — 工具生成产物（codegen 契约派生，禁止手工编辑）
 actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型的系统）

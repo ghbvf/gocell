@@ -203,9 +203,9 @@ func matchCellOwnedSubpackage(modPrefix, dep string) (ownerPrefix string, ok boo
 // import a cell-owned subpackage rooted at ownerPrefix. cmd/, platform/, and
 // examples/ are universally unrestricted composition-root layers; the owning
 // cell's tree may import freely. platform/ is the importable Composition Root
-// layer (#1085 LayerPlatform) and must have the same exemptions as cmd/.
+// layer (#1085 LayerCellModules) and must have the same exemptions as cmd/.
 func isCellOwnedSubpackageExempt(modPrefix, srcPath, srcLayer, ownerPrefix string) bool {
-	if srcLayer == "cmd" || srcLayer == "platform" || srcLayer == "examples" {
+	if srcLayer == "cmd" || srcLayer == "cellmodules" || srcLayer == "examples" {
 		return true
 	}
 	srcRel := strings.TrimPrefix(srcPath, modPrefix)

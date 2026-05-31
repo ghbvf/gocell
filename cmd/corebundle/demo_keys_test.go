@@ -8,20 +8,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/platform/platformshared"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 )
 
 func TestRejectDemoKey_DevMode_AlwaysPasses(t *testing.T) {
-	for _, demo := range platformshared.WellKnownDemoKeys {
-		err := platformshared.RejectDemoKey("", "X_TEST_ENV", []byte(demo))
+	for _, demo := range cellsecrets.WellKnownDemoKeys {
+		err := cellsecrets.RejectDemoKey("", "X_TEST_ENV", []byte(demo))
 		require.NoError(t, err, "dev mode must not reject demo key %q", demo)
 	}
 }
 
 func TestRejectDemoKey_RealMode_RejectsEachDemoValue(t *testing.T) {
-	for _, demo := range platformshared.WellKnownDemoKeys {
+	for _, demo := range cellsecrets.WellKnownDemoKeys {
 		t.Run(demo, func(t *testing.T) {
-			err := platformshared.RejectDemoKey("real", "X_TEST_ENV", []byte(demo))
+			err := cellsecrets.RejectDemoKey("real", "X_TEST_ENV", []byte(demo))
 			require.Error(t, err, "real mode must reject demo key %q", demo)
 			assert.Contains(t, err.Error(), "X_TEST_ENV")
 			assert.Contains(t, err.Error(), "well-known demo key")
@@ -31,20 +31,20 @@ func TestRejectDemoKey_RealMode_RejectsEachDemoValue(t *testing.T) {
 
 func TestRejectDemoKey_RealMode_AcceptsFreshSecret(t *testing.T) {
 	fresh := bytes.Repeat([]byte("z"), 32)
-	err := platformshared.RejectDemoKey("real", "GOCELL_AUDITCORE_CURSOR_KEY", fresh)
+	err := cellsecrets.RejectDemoKey("real", "GOCELL_AUDITCORE_CURSOR_KEY", fresh)
 	require.NoError(t, err, "real mode must accept a non-demo secret")
 }
 
 func TestRejectDemoKey_RealMode_EmptyKeyPasses(t *testing.T) {
 	// Empty keys are handled upstream by loadSecret; rejectDemoKey must not
 	// treat them as a demo match (len mismatch).
-	err := platformshared.RejectDemoKey("real", "GOCELL_AUDITCORE_CURSOR_KEY", nil)
+	err := cellsecrets.RejectDemoKey("real", "GOCELL_AUDITCORE_CURSOR_KEY", nil)
 	require.NoError(t, err)
 }
 
 // TestDevDefaults_AreAllInWellKnownDemoKeys guards against the pattern where
 // a new dev-only default is added to platform cell module call sites without
-// being appended to platformshared.WellKnownDemoKeys.
+// being appended to cellsecrets.WellKnownDemoKeys.
 func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	devDefaults := []string{
 		"dev-hmac-key-replace-in-prod!!!!", // buildAuditProtocol("GOCELL_AUDITCORE_HMAC_KEY", ...)
@@ -53,10 +53,10 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	}
 	for _, dd := range devDefaults {
 		t.Run(dd, func(t *testing.T) {
-			if slices.Contains(platformshared.WellKnownDemoKeys, dd) {
+			if slices.Contains(cellsecrets.WellKnownDemoKeys, dd) {
 				return
 			}
-			t.Errorf("dev default %q is not in WellKnownDemoKeys — real mode will silently accept it; add to platformshared", dd)
+			t.Errorf("dev default %q is not in WellKnownDemoKeys — real mode will silently accept it; add to cellsecrets", dd)
 		})
 	}
 }
@@ -65,15 +65,15 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 // hex-encoded master key is listed in WellKnownDemoKeys.
 func TestMasterKeyDemoHex_IsInWellKnownDemoKeys(t *testing.T) {
 	const demoHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if slices.Contains(platformshared.WellKnownDemoKeys, demoHex) {
+	if slices.Contains(cellsecrets.WellKnownDemoKeys, demoHex) {
 		return
 	}
-	t.Errorf("demo master key hex %q not found in WellKnownDemoKeys — real mode will accept it; add to platformshared", demoHex)
+	t.Errorf("demo master key hex %q not found in WellKnownDemoKeys — real mode will accept it; add to cellsecrets", demoHex)
 }
 
 // TestCellDemoKeys_AreAllInWellKnownDemoKeys guards against a cell being added
 // with a new per-cell demo codec key without the value also appearing in
-// platformshared.WellKnownDemoKeys.
+// cellsecrets.WellKnownDemoKeys.
 func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
 	cellDemoKeys := []string{
 		"gocell-demo-AUDIT--CORE-key-32!!", // cells/auditcore/cell.go
@@ -81,14 +81,14 @@ func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
 		"gocell-demo-ORDER-CELL-key-32b!!", // examples/todoorder/cells/ordercell/cell.go
 		"gocell-demo-DEVICE-CELL-key-32!!", // examples/iotdevice/cells/devicecell/cell.go
 	}
-	wellKnownSet := make(map[string]bool, len(platformshared.WellKnownDemoKeys))
-	for _, k := range platformshared.WellKnownDemoKeys {
+	wellKnownSet := make(map[string]bool, len(cellsecrets.WellKnownDemoKeys))
+	for _, k := range cellsecrets.WellKnownDemoKeys {
 		wellKnownSet[k] = true
 	}
 	for _, ck := range cellDemoKeys {
 		t.Run(ck, func(t *testing.T) {
 			if !wellKnownSet[ck] {
-				t.Errorf("cell demo key %q not in WellKnownDemoKeys — real mode will accept it; add to platformshared", ck)
+				t.Errorf("cell demo key %q not in WellKnownDemoKeys — real mode will accept it; add to cellsecrets", ck)
 			}
 		})
 	}

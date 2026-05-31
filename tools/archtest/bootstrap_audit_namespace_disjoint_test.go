@@ -51,7 +51,7 @@ const (
 
 	// platformAuditcorePkgSuffix is where AuditCoreModule.Provide lives after
 	// the #1085 cell-wiring relocation out of cmd/corebundle.
-	platformAuditcorePkgSuffix = "/platform/auditcore"
+	platformAuditcorePkgSuffix = "/cellmodules/auditcore"
 )
 
 // TestAuditNamespaceDisjoint01 enforces that cmd/corebundle production code

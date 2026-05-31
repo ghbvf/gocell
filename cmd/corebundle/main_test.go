@@ -22,10 +22,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
@@ -167,7 +167,7 @@ func TestLoadKeySet(t *testing.T) {
 			t.Setenv(auth.EnvJWTPublicKey, tc.envPub)
 			t.Setenv(auth.EnvJWTPrevPublicKey, tc.envPrevPub)
 
-			ks, err := platformshared.LoadKeySet(tc.mode, clock.Real())
+			ks, err := cellsecrets.LoadKeySet(tc.mode, clock.Real())
 			if tc.wantErr {
 				require.Error(t, err)
 				if tc.errContains != "" {

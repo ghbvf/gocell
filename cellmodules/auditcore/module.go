@@ -17,12 +17,12 @@ import (
 	"fmt"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	auditcell "github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -48,8 +48,8 @@ func (m module) Provide(
 	ctx context.Context, shared *composition.SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// Cursor codec for auditcore.
-	auditPrimary, auditPrevious := platformshared.LoadCursorKeys("AUDITCORE")
-	cursorCodec, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
+	auditPrimary, auditPrevious := cellsecrets.LoadCursorKeys("AUDITCORE")
+	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
 		AdapterMode: shared.Topology.AdapterMode,
 		EnvName:     "GOCELL_AUDITCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
@@ -69,7 +69,7 @@ func (m module) Provide(
 	}
 	auditProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode,
 		"GOCELL_AUDITCORE_HMAC_KEY",
-		platformshared.LoadCellHMACKey("AUDITCORE"),
+		cellsecrets.LoadCellHMACKey("AUDITCORE"),
 		"dev-hmac-key-replace-in-prod!!!!",
 		auditNamespace)
 	if err != nil {
@@ -82,7 +82,7 @@ func (m module) Provide(
 	// in the other.
 	bootstrapProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode,
 		"GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY",
-		platformshared.LoadCellHMACKey("AUDIT_BOOTSTRAP"),
+		cellsecrets.LoadCellHMACKey("AUDIT_BOOTSTRAP"),
 		"dev-hmac-bootstrap-replace-32b!!",
 		audit.BootstrapNamespace())
 	if err != nil {
@@ -140,7 +140,7 @@ func (m module) Provide(
 
 // buildAuditProtocol assembles a ledger.Protocol with an isolated HMAC key.
 func buildAuditProtocol(adapterMode, envName, primary, devDefault string, ns ledger.NamespaceID) (*ledger.Protocol, error) {
-	hmacKey, err := platformshared.BuildHMACKey(platformshared.HMACKeyConfig{
+	hmacKey, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
 		AdapterMode: adapterMode,
 		EnvName:     envName,
 		Primary:     primary,
@@ -170,7 +170,7 @@ func buildAuditStores(
 			return nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires the postgres capability provider " +
 				"(provisionCapabilities must run before BuildApp)")
 		}
-		db, poolErr := platformshared.PgxPoolFromProvider(shared.PG)
+		db, poolErr := cellsecrets.PgxPoolFromProvider(shared.PG)
 		if poolErr != nil {
 			return nil, nil, fmt.Errorf("auditcore: %w", poolErr)
 		}

@@ -163,7 +163,7 @@ linters:
                 on stdlib + pkg + gopkg.in/yaml.v3). Already implicitly denied by strict
                 mode; explicit deny makes the constraint self-documenting and prevents
                 accidental re-allowance. Ref: DX4 PR #578 A4 reciprocal guard.
-            - pkg: github.com/ghbvf/gocell/platform
+            - pkg: github.com/ghbvf/gocell/cellmodules
               desc: |
                 platform/ is a Composition Root layer that wires cells/ + adapters/;
                 kernel/ must never depend on it (reverse import = layer violation).
@@ -186,7 +186,7 @@ linters:
             - gopkg.in/yaml.v3
             - github.com/jackc/pgx/v5/pgconn  # pkg/pgquery SQLSTATE classifier single-source (DX4); leaf wire-error package, no internal import cycle, required so cells/ + adapters/ share one classifier without violating cells↛adapters
           deny:
-            - pkg: github.com/ghbvf/gocell/platform
+            - pkg: github.com/ghbvf/gocell/cellmodules
               desc: |
                 platform/ is a Composition Root layer; pkg/ must not import it
                 (reverse import = layer violation, import cycle risk).
@@ -224,7 +224,7 @@ linters:
                 implicitly denied by strict mode; explicit deny makes the constraint
                 self-documenting and prevents accidental re-allowance. Ref: DX4 PR #578
                 A4 reciprocal guard.
-            - pkg: github.com/ghbvf/gocell/platform
+            - pkg: github.com/ghbvf/gocell/cellmodules
               desc: |
                 platform/ is a Composition Root layer that wires cells/ + adapters/;
                 runtime/ must never depend on it (reverse import = layer violation).
@@ -316,7 +316,7 @@ linters:
             - golang.org/x/oauth2
             - golang.org/x/time
           deny:
-            - pkg: github.com/ghbvf/gocell/platform
+            - pkg: github.com/ghbvf/gocell/cellmodules
               desc: |
                 platform/ is a Composition Root layer; adapters/ must not import it
                 (reverse import = layer violation). Belt-and-suspenders alongside strict
@@ -346,7 +346,7 @@ linters:
             - github.com/jackc/pgx
             - golang.org/x/crypto
           deny:
-            - pkg: github.com/ghbvf/gocell/platform
+            - pkg: github.com/ghbvf/gocell/cellmodules
               desc: |
                 platform/ is a Composition Root layer; cells/ must not import it
                 (reverse import = layer violation — platform/ imports cells/, not

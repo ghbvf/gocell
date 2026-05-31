@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -107,7 +107,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// Build configcore key provider + stale-cipher counter callback.
 	// These live in cmd because they import adapters/vault + prometheus which
 	// must not reach runtime/composition or platform/configcore.
-	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := platformshared.LoadConfigCoreKeyProvider()
+	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
 	cfgKeyProvider, cfgStaleCipherInc, err := buildConfigCoreKeyProvider(
 		topo.StorageBackend, adapterMode,
 		cfgProviderName, cfgMasterKey, cfgPrevMasterKey,

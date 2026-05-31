@@ -22,11 +22,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	configcell "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -70,8 +70,8 @@ func (m *module) Provide(
 	ctx context.Context, shared *composition.SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// 1. Cursor codec.
-	cfgPrimary, cfgPrevious := platformshared.LoadCursorKeys("CONFIGCORE")
-	cursorCodec, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
+	cfgPrimary, cfgPrevious := cellsecrets.LoadCursorKeys("CONFIGCORE")
+	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
 		AdapterMode: shared.Topology.AdapterMode,
 		EnvName:     "GOCELL_CONFIGCORE_CURSOR_KEY",
 		PrevEnvName: "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",

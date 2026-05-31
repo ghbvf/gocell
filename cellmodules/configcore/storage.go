@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	configcell "github.com/ghbvf/gocell/cells/configcore"
 	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -17,7 +18,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -70,7 +70,7 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 			"configcore postgres mode requires the postgres capability provider "+
 				"(provisionCapabilities must run before BuildApp)")
 	}
-	db, err := platformshared.PgxPoolFromProvider(cfg.pg)
+	db, err := cellsecrets.PgxPoolFromProvider(cfg.pg)
 	if err != nil {
 		return configCoreModuleResult{}, fmt.Errorf("configcore: %w", err)
 	}

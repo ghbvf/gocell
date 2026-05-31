@@ -37,7 +37,7 @@
 - `platform/accesscore.Module() composition.CellModule`
 - `platform/auditcore.Module() composition.CellModule`
 - `platform/configcore.Module(opts ...ModuleOption) composition.CellModule`
-- `platform/platformshared/`：共享 helper（cursor codec、HMAC key、env loader、demo key reject 等）
+- `platform/cellsecrets/`：共享 helper（cursor codec、HMAC key、env loader、demo key reject 等）
 
 `platform/` 是与 `cmd/` 平行的 Composition Root 层，可依赖所有层（kernel/cells/runtime/adapters）。
 
@@ -91,7 +91,7 @@ composition.New().
 | wrapper 函数只在 `platform/*` / `cmd/*` / `examples/<demo>/{main,app,run}.go` 调用 | archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01`（`tools/archtest/wrapper_location_test.go`，`isWrapperCallerAllowed` 已含 `platform/` 前缀） | Medium（archtest type-aware，nightly CI） |
 | prom 构造只在允许位置调用 | archtest `PROM-CALLER-*`（nightly CI allowlist 含 platform/） | Medium（同上） |
 | `Build()` error-first，无 Must | type system（函数签名，无 MustBuild 导出符号） | Hard |
-| `platform/` 独立层分类（`LayerPlatform = "platform"`，区别于 `LayerCmd`） | `kernel/depgraph/layer.go` + `tools/archtest/archtest_test.go` LAYER-06 豁免扩展 | Medium（archtest LAYER-06，nightly CI） |
+| `platform/` 独立层分类（`LayerCellModules = "platform"`，区别于 `LayerCmd`） | `kernel/depgraph/layer.go` + `tools/archtest/archtest_test.go` LAYER-06 豁免扩展 | Medium（archtest LAYER-06，nightly CI） |
 
 **注**：`platform/` 与 `cmd/` 同属 composition-root 层，既有 composition-root archtests（cas/session/ledger 协议位置、wrapper 调用点）已通过 `platform/` 前缀覆盖，不存在扫描盲区。
 
@@ -125,7 +125,7 @@ composition.New().
 | `platform/accesscore/module.go` | 新建（platform 层） |
 | `platform/auditcore/module.go` | 新建 |
 | `platform/configcore/{module,storage}.go` | 新建 |
-| `platform/platformshared/{env,secrets}.go` | 新建（共享 helper） |
+| `platform/cellsecrets/{env,secrets}.go` | 新建（共享 helper） |
 | `examples/corebundlestarter/{main,run,run_test}.go` | 新建（M11 dogfood） |
 | `cmd/corebundle/modules_gen.go` | 修改（调用 platform.Module()） |
 | `CLAUDE.md` | 修改（platform/ 层入 分层结构 + 依赖规则） |

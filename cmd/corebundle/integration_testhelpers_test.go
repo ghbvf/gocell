@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
+	platformconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 )

@@ -9,10 +9,10 @@ import (
 
 	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
@@ -86,12 +86,12 @@ func buildKeyProviderFromName(
 // buildCmdLocalAESKeyProvider constructs the local-aes KeyProvider.
 func buildCmdLocalAESKeyProvider(adapterMode, masterKey, prevMasterKey string) (kcrypto.KeyProvider, error) {
 	lowerMK := []byte(strings.ToLower(masterKey))
-	if err := platformshared.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", lowerMK); err != nil {
+	if err := cellsecrets.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", lowerMK); err != nil {
 		return nil, err
 	}
 	if prevMasterKey != "" {
 		lowerPrev := []byte(strings.ToLower(prevMasterKey))
-		if err := platformshared.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", lowerPrev); err != nil {
+		if err := cellsecrets.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", lowerPrev); err != nil {
 			return nil, err
 		}
 	}
@@ -112,7 +112,7 @@ func buildCmdVaultTransitKeyProvider(
 	if err != nil {
 		return nil, err
 	}
-	kp, err := adaptervault.NewTransitKeyProviderFromEnv(platformshared.IsRealMode(adapterMode), clk, metrics)
+	kp, err := adaptervault.NewTransitKeyProviderFromEnv(cellsecrets.IsRealMode(adapterMode), clk, metrics)
 	if err != nil {
 		return nil, fmt.Errorf("vault-transit key provider: %w", err)
 	}
