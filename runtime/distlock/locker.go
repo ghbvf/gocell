@@ -51,7 +51,10 @@ const MinTTL = time.Millisecond
 type Locker interface {
 	// Acquire blocks until the lock is granted or ctx is canceled.
 	//
-	// On success it returns a *Lock; caller MUST eventually call lock.Release.
+	// On success it returns a *Lock; caller MUST eventually end the lock via
+	// lock.Release() (delete the backend key now) or lock.Orphan() (stop
+	// renewal; the key expires on its own after at most 1xTTL). Both are
+	// terminal and mutually exclusive.
 	//
 	// Lock-end signals (lock.Done() closed; lock.Cause() reports):
 	//   - ErrLockReleased — Release() was called (normal end-of-critical-section)
