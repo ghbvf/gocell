@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // testBundle holds a Service together with its backing repository and
@@ -74,7 +75,7 @@ func createOrder(t *testing.T, b testBundle) string {
 func claimLease(t *testing.T, jrnl *journal.MemJournal) idutil.SafeID {
 	t.Helper()
 	ctx := context.Background()
-	claimed, leaseID, err := jrnl.ClaimPending(ctx, 10, 30*time.Second)
+	claimed, leaseID, err := jrnl.ClaimPending(ctx, 10, testtime.D30s)
 	if err != nil {
 		t.Fatalf("ClaimPending: %v", err)
 	}
