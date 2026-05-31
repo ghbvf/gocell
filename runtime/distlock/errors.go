@@ -44,7 +44,8 @@ var (
 	// caller error, not a backend conflict.
 	//
 	// ref: etcd-io/etcd client/v3/concurrency/session.go Session.Orphan
-	ErrLockOrphaned = errcode.New(errcode.KindInternal, errcode.ErrDistlockLockOrphaned, "distlock: lock orphaned by caller (renewal stopped; key expires after TTL)")
+	ErrLockOrphaned = errcode.New(errcode.KindInternal, errcode.ErrDistlockLockOrphaned,
+		"distlock: lock orphaned by caller (renewal stopped; key expires after TTL)")
 )
 
 // ErrLockTimeout is a package-level alias for errcode.ErrDistlockTimeout.
