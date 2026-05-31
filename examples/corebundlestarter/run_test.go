@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	platformaccesscore "github.com/ghbvf/gocell/platform/accesscore"
 	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
 	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
@@ -25,12 +25,7 @@ const smokeBootDuration = 5 * time.Second
 // Extracted per TEST-TIME-LITERAL-01 archtest requirement.
 const smokeHTTPTimeout = 2 * time.Second
 
-// smokeBindWait is the static sleep duration given to the bootstrap HTTP
-// listener to complete port binding before the test attempts to probe it.
-// Extracted per TEST-TIME-LITERAL-01 archtest requirement.
-const smokeBindWait = 300 * time.Millisecond
-
-// smokeRetryInterval is the sleep between successive /healthz probe retries.
+// smokeRetryInterval is the poll tick between successive /healthz probe retries.
 // Extracted per TEST-TIME-LITERAL-01 archtest requirement.
 const smokeRetryInterval = 200 * time.Millisecond
 
@@ -98,14 +93,12 @@ func TestStarterBootsAndRespondsHealthz(t *testing.T) {
 	runErrCh := make(chan error, 1)
 	go func() { runErrCh <- app.Run(ctx) }()
 
-	// Wait briefly for the server to bind.
-	time.Sleep(smokeBindWait) // short static sleep: wait for bootstrap HTTP listener to bind
-
 	// /healthz uses the HealthHTTPAddr listener.  In ":0" mode bootstrap picks
-	// an ephemeral port.  We skip the HTTP probe when addr is ephemeral because
-	// there is no exported way to discover the bound port in this example; the
-	// build+no-error assertion above is the primary coverage guarantee.
-	// A production smoke would configure a fixed addr and probe /healthz.
+	// an ephemeral port and there is no exported way to discover the bound port
+	// in this example (#1085 follow-up: a composition.App bound-address API), so
+	// this test asserts the lifecycle (clean build + Run + graceful shutdown)
+	// rather than probing /healthz — TestStarterHealthzHTTP covers the HTTP probe
+	// on fixed ports. No bind-wait sleep is needed (TEST-SLEEP-DISCIPLINE-01).
 
 	// Cancel and wait for clean shutdown.
 	cancel()
@@ -163,24 +156,18 @@ func TestStarterHealthzHTTP(t *testing.T) {
 	client := &http.Client{Timeout: smokeHTTPTimeout}
 	healthURL := "http://" + healthAddr + "/healthz"
 
-	var lastErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(smokeRetryInterval)     // short retry sleep: wait for HTTP server to accept connections
+	// Synchronous polling of the bootstrap HTTP listener readiness — an
+	// external condition — via testwait.External (TEST-SLEEP-DISCIPLINE-01:
+	// no bare time.Sleep in tests; the poll interval is the tick arg).
+	testwait.External(t, "starter-healthz-200", func() bool {
 		resp, err := client.Get(healthURL) //nolint:noctx // test-only smoke probe; no ctx needed
 		if err != nil {
-			lastErr = err
-			continue
+			return false
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			lastErr = nil
-			break
-		}
-		lastErr = fmt.Errorf("/healthz returned %d", resp.StatusCode) //nolint:goerr113 // dynamic error message in test smoke; not exported
-	}
+		return resp.StatusCode == http.StatusOK
+	}, smokeBootDuration, smokeRetryInterval, "starter /healthz must return 200 within smoke boot window")
 
 	cancel()
 	<-runErrCh
-
-	require.NoError(t, lastErr, "/healthz must return 200 within smoke boot window")
 }
