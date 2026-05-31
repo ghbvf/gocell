@@ -2,6 +2,7 @@ package composition
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -166,10 +167,15 @@ func (d *SharedDeps) Validate() error {
 	}
 
 	var errs []error
+	// The missing field name is carried in the Internal channel: this is a
+	// composition-root STARTUP config error (never a wire 4xx), surfaced to
+	// operators/logs and to library callers via err.Error() — which renders
+	// the Internal "_" attr but not Public Details. Internal is therefore the
+	// channel that actually makes the field name visible where it's read.
 	missing := func(field string) {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"SharedDeps field must be set",
-			errcode.WithDetails(errcode.PublicString("field", field))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=%s", field)))))
 	}
 
 	if d.Clock == nil {

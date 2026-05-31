@@ -13,16 +13,21 @@ import (
 
 // synthesisFieldExemptions lists AssemblyMeta yaml-bearing field paths that
 // synthesizeAssemblyMeta intentionally does not populate. Each entry maps
-// the dotted yaml path (e.g. "build.binary") to a documented reason. The
-// map MUST be empty under the current implementation — all yaml-bearing
-// fields have a synthesizable spec source. Future additions that genuinely
-// cannot be derived from AssemblyScaffoldSpec should add an entry with a
-// reason before the new field reaches AssemblyMeta.
-// Empty under the current implementation: every yaml-bearing AssemblyMeta field
-// is synthesizable from AssemblyScaffoldSpec. (The former "capabilities" entry
-// was removed with the field itself — Design Y, #855: the assembly capability
-// set is now derived from cells' requires, not an assembly-level field.)
-var synthesisFieldExemptions = map[string]string{}
+// the dotted yaml path (e.g. "build.binary") to a documented reason. Future
+// additions that genuinely cannot be derived from AssemblyScaffoldSpec should
+// add an entry with a reason before the new field reaches AssemblyMeta.
+// (The former "capabilities" entry was removed with the field itself —
+// Design Y, #855: the assembly capability set is now derived from cells'
+// requires, not an assembly-level field.)
+var synthesisFieldExemptions = map[string]string{
+	// build.compositionAPI selects the runtime/composition.CellModule
+	// modules_gen form. It is an in-tree opt-in reserved for the platform
+	// corebundle (#1085); newly scaffolded assemblies always use the legacy
+	// local-CellModule form (compositionAPI=false), so AssemblyScaffoldSpec
+	// has no field to derive it from and the zero value (false) is the
+	// intended scaffold output.
+	"build.compositionAPI": "scaffold uses legacy modules_gen; composition API form is in-tree corebundle opt-in (#1085), not scaffold input",
+}
 
 // TestAssemblyMetaSynthesisFieldGuard uses reflection to assert that
 // synthesizeAssemblyMeta populates every yaml-bearing field on
