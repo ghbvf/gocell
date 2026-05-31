@@ -25,6 +25,15 @@ const smokeBootDuration = 5 * time.Second
 // Extracted per TEST-TIME-LITERAL-01 archtest requirement.
 const smokeHTTPTimeout = 2 * time.Second
 
+// smokeBindWait is the static sleep duration given to the bootstrap HTTP
+// listener to complete port binding before the test attempts to probe it.
+// Extracted per TEST-TIME-LITERAL-01 archtest requirement.
+const smokeBindWait = 300 * time.Millisecond
+
+// smokeRetryInterval is the sleep between successive /healthz probe retries.
+// Extracted per TEST-TIME-LITERAL-01 archtest requirement.
+const smokeRetryInterval = 200 * time.Millisecond
+
 // TestStarterBuildSucceeds verifies that buildStarterMemSharedDeps +
 // composition.New().With(...).Build() completes without error and returns a
 // non-nil *App.  This is a pure-memory, infra-free smoke test.
@@ -90,7 +99,7 @@ func TestStarterBootsAndRespondsHealthz(t *testing.T) {
 	go func() { runErrCh <- app.Run(ctx) }()
 
 	// Wait briefly for the server to bind.
-	time.Sleep(300 * time.Millisecond) // short static sleep: wait for bootstrap HTTP listener to bind
+	time.Sleep(smokeBindWait) // short static sleep: wait for bootstrap HTTP listener to bind
 
 	// /healthz uses the HealthHTTPAddr listener.  In ":0" mode bootstrap picks
 	// an ephemeral port.  We skip the HTTP probe when addr is ephemeral because
@@ -114,12 +123,19 @@ func TestStarterBootsAndRespondsHealthz(t *testing.T) {
 }
 
 // TestStarterHealthzHTTP is an optional deeper smoke: probes /healthz over HTTP
-// using a fixed port.  It is skipped when HealthHTTPAddr is ":0" (ephemeral).
+// using fixed high-numbered ports (19098/18088/18089).
+//
+// Port collision note: proper ":0" ephemeral-port probing requires discovering
+// the bound address after bootstrap.Run starts, which needs a composition.App
+// bound-address API that does not yet exist (#1085 follow-up). Until that API
+// lands, we use fixed high-numbered ports that are unlikely to conflict in CI.
+// If they do collide the test will fail with "bind: address already in use" —
+// that is an acceptable flakiness risk for an example smoke test.
 func TestStarterHealthzHTTP(t *testing.T) {
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testadminpass1!")
 
-	// Use fixed test ports, one set higher to avoid conflicts.
+	// Use fixed high-numbered test ports to reduce collision risk with other tests.
 	const healthAddr = "127.0.0.1:19098"
 
 	ctx, cancel := context.WithTimeout(context.Background(), smokeBootDuration)
@@ -149,7 +165,7 @@ func TestStarterHealthzHTTP(t *testing.T) {
 
 	var lastErr error
 	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond) // short retry sleep: wait for HTTP server to accept connections
+		time.Sleep(smokeRetryInterval)     // short retry sleep: wait for HTTP server to accept connections
 		resp, err := client.Get(healthURL) //nolint:noctx // test-only smoke probe; no ctx needed
 		if err != nil {
 			lastErr = err

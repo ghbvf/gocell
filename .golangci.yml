@@ -163,6 +163,11 @@ linters:
                 on stdlib + pkg + gopkg.in/yaml.v3). Already implicitly denied by strict
                 mode; explicit deny makes the constraint self-documenting and prevents
                 accidental re-allowance. Ref: DX4 PR #578 A4 reciprocal guard.
+            - pkg: github.com/ghbvf/gocell/platform
+              desc: |
+                platform/ is a Composition Root layer that wires cells/ + adapters/;
+                kernel/ must never depend on it (reverse import = layer violation).
+                Belt-and-suspenders alongside strict allow-list; mirrors pgquery deny pattern.
         pkg-isolation:
           # pkg/ is foundational: stdlib + a minimal external surface. Must not
           # depend on kernel/runtime/cells/adapters/cmd/examples/tests/tools to
@@ -180,6 +185,12 @@ linters:
             - golang.org/x/sys/unix  # pkg/pathsafe fd-anchored openat/mkdirat/unlinkat on non-Windows platforms (stdlib syscall.Openat is linux-only; x/sys/unix provides unified linux/darwin/freebsd API)
             - gopkg.in/yaml.v3
             - github.com/jackc/pgx/v5/pgconn  # pkg/pgquery SQLSTATE classifier single-source (DX4); leaf wire-error package, no internal import cycle, required so cells/ + adapters/ share one classifier without violating cells↛adapters
+          deny:
+            - pkg: github.com/ghbvf/gocell/platform
+              desc: |
+                platform/ is a Composition Root layer; pkg/ must not import it
+                (reverse import = layer violation, import cycle risk).
+                Belt-and-suspenders alongside strict allow-list.
         runtime-isolation:
           # LAYER-03: runtime/ depends on kernel/ + pkg/ + curated externals.
           # storetest/ test-helper packages (non-_test.go) use testify by design.
@@ -213,6 +224,11 @@ linters:
                 implicitly denied by strict mode; explicit deny makes the constraint
                 self-documenting and prevents accidental re-allowance. Ref: DX4 PR #578
                 A4 reciprocal guard.
+            - pkg: github.com/ghbvf/gocell/platform
+              desc: |
+                platform/ is a Composition Root layer that wires cells/ + adapters/;
+                runtime/ must never depend on it (reverse import = layer violation).
+                Belt-and-suspenders alongside strict allow-list; mirrors pgquery deny pattern.
         saga-executor-no-journal-import:
           # SAGA-JOURNAL-HOLDER-SEAL-01 / #1209 companion. runtime/saga/executor
           # declares its OWN narrow Heartbeater interface (heartbeat.go) precisely
@@ -299,6 +315,12 @@ linters:
             - go.opentelemetry.io/otel
             - golang.org/x/oauth2
             - golang.org/x/time
+          deny:
+            - pkg: github.com/ghbvf/gocell/platform
+              desc: |
+                platform/ is a Composition Root layer; adapters/ must not import it
+                (reverse import = layer violation). Belt-and-suspenders alongside strict
+                allow-list; mirrors the existing pgquery / cells deny pattern.
         cells-isolation:
           # LAYER-02: cells/ depend on kernel/ + runtime/ + pkg/. Cell-internal
           # adapters legitimately import SDKs (pgx etc.) — those externals are
@@ -323,6 +345,12 @@ linters:
             - github.com/google/uuid
             - github.com/jackc/pgx
             - golang.org/x/crypto
+          deny:
+            - pkg: github.com/ghbvf/gocell/platform
+              desc: |
+                platform/ is a Composition Root layer; cells/ must not import it
+                (reverse import = layer violation — platform/ imports cells/, not
+                the other way around). Belt-and-suspenders alongside strict allow-list.
         # Per-example cells-isolation rules. Examples are public-facing demos
         # of the framework's architecture; they must follow the SAME cell
         # discipline as platform cells/ (no cross-layer shortcuts) — otherwise

@@ -87,9 +87,15 @@ composition.New().
 |---|---|---|
 | `cmd/corebundle` 不直接 import `cells/` | `.golangci.yml` `corebundle-no-cells` depguard | Hard（depguard，CI fail-closed） |
 | `runtime/composition` 不 import `adapters/` | `.golangci.yml` `runtime-isolation` depguard | Hard（depguard，CI fail-closed） |
+| `cells/` / `runtime/` / `adapters/` / `kernel/` / `pkg/` 不反向 import `platform/` | `.golangci.yml` 各 isolation rule 的 `deny: platform` 条目 | Hard（depguard，CI fail-closed） |
 | wrapper 函数只在 `platform/*` / `cmd/*` / `examples/<demo>/{main,app,run}.go` 调用 | archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01`（`tools/archtest/wrapper_location_test.go`，`isWrapperCallerAllowed` 已含 `platform/` 前缀） | Medium（archtest type-aware，nightly CI） |
 | prom 构造只在允许位置调用 | archtest `PROM-CALLER-*`（nightly CI allowlist 含 platform/） | Medium（同上） |
 | `Build()` error-first，无 Must | type system（函数签名，无 MustBuild 导出符号） | Hard |
+| `platform/` 独立层分类（`LayerPlatform = "platform"`，区别于 `LayerCmd`） | `kernel/depgraph/layer.go` + `tools/archtest/archtest_test.go` LAYER-06 豁免扩展 | Medium（archtest LAYER-06，nightly CI） |
+
+**注**：`platform/` 与 `cmd/` 同属 composition-root 层，既有 composition-root archtests（cas/session/ledger 协议位置、wrapper 调用点）已通过 `platform/` 前缀覆盖，不存在扫描盲区。
+
+**延后改进**：`BootstrapLedgerStore` 通过 `*SharedDeps` 字段突变在 auditcore module → accesscore module 之间传递（module 顺序由 MODULE-ORDER archtest 守卫 + nil-check 守卫）。该 handoff 在功能上已受 nil-check 保护，但属于可变共享状态风格；未来可将其重构为类型化 channel 或显式 return value，以达到 Hard 等级。该重构追踪于 backlog，不阻塞当前 PR。
 
 ---
 

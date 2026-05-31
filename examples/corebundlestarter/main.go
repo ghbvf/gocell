@@ -10,10 +10,14 @@
 //
 // Usage:
 //
-//	GOCELL_JWT_ISSUER=starter-dev GOCELL_JWT_AUDIENCE=starter \
-//	GOCELL_SERVICE_SECRET=starter-dev-secret-32-bytes!!!! \
 //	GOCELL_BOOTSTRAP_ADMIN_USERNAME=admin GOCELL_BOOTSTRAP_ADMIN_PASSWORD=adminpass1 \
 //	go run ./examples/corebundlestarter
+//
+// Note: GOCELL_JWT_ISSUER, GOCELL_JWT_AUDIENCE, and GOCELL_SERVICE_SECRET are
+// NOT consumed by this example. The starter uses ephemeral in-process JWT keys
+// and a hardcoded dev HMAC key (devServiceSecret const in run.go) for
+// memory-mode demo purposes. Those env vars are only relevant to cmd/corebundle
+// (the production binary).
 package main
 
 import (

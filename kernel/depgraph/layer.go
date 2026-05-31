@@ -5,12 +5,18 @@ import "strings"
 // Layer constants name the buckets used by archtest layering rules and the
 // `gocell graph` CLI. They are the JSON values for Node.Layer.
 const (
-	LayerKernel     = "kernel"
-	LayerRuntime    = "runtime"
-	LayerAdapters   = "adapters"
-	LayerCells      = "cells"
-	LayerPkg        = "pkg"
-	LayerCmd        = "cmd"
+	LayerKernel   = "kernel"
+	LayerRuntime  = "runtime"
+	LayerAdapters = "adapters"
+	LayerCells    = "cells"
+	LayerPkg      = "pkg"
+	LayerCmd      = "cmd"
+	// LayerPlatform is the composition-root layer for platform/<cell> modules.
+	// It wires platform Cell modules by importing cells/ + adapters/ + runtime/
+	// and is the importable counterpart to cmd/ (which is an unimportable CLI
+	// binary). Unlike cmd/, platform/ packages are designed to be imported by
+	// examples/ and external composition roots (#1085 CellModule public API).
+	LayerPlatform   = "platform"
 	LayerExamples   = "examples"
 	LayerTools      = "tools"
 	LayerTests      = "tests"
@@ -40,11 +46,14 @@ var internalLayerByDir = map[string]string{
 	"tools":     LayerTools,
 	"tests":     LayerTests,
 	"generated": LayerGenerated,
-	// platform/ is a composition-root layer (sibling to cmd/ and examples/):
-	// it wires platform Cell modules by importing cells/ + adapters/ + runtime/
-	// and is the new home for corebundle's AccessCoreModule / AuditCoreModule /
-	// ConfigCoreModule (#1085).
-	"platform": LayerCmd,
+	// platform/ is the importable Composition Root layer (#1085): it wires
+	// platform Cell modules (accesscore / auditcore / configcore) by importing
+	// cells/ + adapters/ + runtime/, and exposes Module() constructors for
+	// external composition roots (cmd/corebundle, examples/corebundlestarter).
+	// Unlike cmd/ (an unimportable CLI binary), platform/ is an importable
+	// library. Uses LayerPlatform (not LayerCmd) so governance rules can
+	// distinguish between the two composition-root forms.
+	"platform": LayerPlatform,
 }
 
 // LayerOf classifies importPath relative to module. module must be the
