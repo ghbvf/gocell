@@ -193,9 +193,16 @@ func TestConnection_ConnectDeadline_FailFast(t *testing.T) {
 	}
 
 	// Lifecycle ctx never cancels — only ConnectDeadline can end the wait.
+	start := time.Now()
 	_, err := mqtt.Open(context.Background(), clk, cfg)
+	elapsed := time.Since(start)
 	require.Error(t, err)
 	assertErrCode(t, err, mqtt.ErrAdapterMQTTConnectTimeout)
+	// Upper bound proves Open actually fails-fast on ConnectDeadline (300ms) and
+	// does NOT hang on the never-canceled lifecycle ctx — generous slack absorbs
+	// the bounded fail-branch cm.Disconnect(ConnectTimeout) teardown + CI jitter.
+	require.Less(t, elapsed, testtime.D5s,
+		"Open must fail-fast near ConnectDeadline, not hang on lifecycle ctx")
 }
 
 // TestConnection_ConnectDeadline_Decoupled_CMSurvives verifies the other half of

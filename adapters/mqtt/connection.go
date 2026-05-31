@@ -323,8 +323,17 @@ func (c *Connection) waitFirstConnection(connectCtx context.Context) error {
 		}
 		return nil
 	case <-connectCtx.Done():
-		return errcode.WrapInfra(ErrAdapterMQTTConnectTimeout,
-			"mqtt: connect deadline elapsed before first connection", nil)
+		// Distinguish "deadline budget elapsed" (slow/unreachable broker) from
+		// "explicitly canceled" (caller abort or propagated lifecycle-ctx cancel),
+		// preserving the context cause — collapsing both into one timeout code
+		// would misdirect ops triage. ctx.Err returns the bare sentinels, so == is
+		// exact; context.Cause carries the richer underlying cause when present.
+		if connectCtx.Err() == context.DeadlineExceeded {
+			return errcode.WrapInfra(ErrAdapterMQTTConnectTimeout,
+				"mqtt: connect deadline elapsed before first connection", context.Cause(connectCtx))
+		}
+		return errcode.WrapInfra(ErrAdapterMQTTConnectCanceled,
+			"mqtt: context canceled before first connection", context.Cause(connectCtx))
 	}
 }
 
@@ -967,8 +976,14 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 		case <-ch:
 			// State changed; re-check at top of loop.
 		case <-ctx.Done():
-			return errcode.WrapInfra(ErrAdapterMQTTConnectTimeout,
-				"mqtt: WaitConnected canceled", ctx.Err())
+			// Same deadline-vs-cancel distinction as waitFirstConnection: a caller
+			// deadline → timeout code; an explicit cancel → canceled code.
+			if ctx.Err() == context.DeadlineExceeded {
+				return errcode.WrapInfra(ErrAdapterMQTTConnectTimeout,
+					"mqtt: WaitConnected deadline elapsed", context.Cause(ctx))
+			}
+			return errcode.WrapInfra(ErrAdapterMQTTConnectCanceled,
+				"mqtt: WaitConnected canceled", context.Cause(ctx))
 		}
 	}
 }

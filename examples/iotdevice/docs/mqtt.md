@@ -72,7 +72,7 @@ body 是 outbox envelope（含 `eventId` 与 `payload`，payload 内 `name=senso
 
 - `/readyz`（HealthListener，默认 `127.0.0.1:9093`）开启 MQTT 通道时包含
   `mqtt_ready` 探针，反映 broker 可达性（broker 断开 → 探针非 nil → readyz 降级）。
-- 连接由框架 LIFO shutdown 关闭（`bootstrap.WithManagedCloser`）。
+- 连接（`mqtt_ready` 探针 + disconnect）经 `bootstrap.WithManagedResource` 注册，Publisher（drain in-flight publishes）经 `bootstrap.WithManagedCloser` 注册；二者均参与框架 LIFO shutdown。
 
 ## broker 不可用时
 

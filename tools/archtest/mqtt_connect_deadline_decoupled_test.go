@@ -6,8 +6,12 @@
 //     the ConnectionManager retries/reconnects bound to it (autopaho godoc:
 //     "will retry until the context is canceled").
 //  2. (*Connection).waitFirstConnection(connectCtx) receives a SEPARATE
-//     context derived from context.WithTimeout/WithDeadline — the bounded
-//     bootstrap first-connection wait.
+//     context derived from context.WithTimeout(ctx, cfg.ConnectDeadline) — the
+//     bounded bootstrap first-connection wait. Both semantic args are locked
+//     (base = the lifecycle ctx param, budget = the Config.ConnectDeadline
+//     field), so a decoy like WithTimeout(context.Background(), 1*time.Hour)
+//     does NOT satisfy A2 — the guard binds the deadline to its config source,
+//     not merely to "some timeout context".
 //
 // Collapsing the two (passing the same ctx to both, as Open did before #1388)
 // makes the first-connection wait inherit the lifecycle ctx's lifetime; when
@@ -105,8 +109,11 @@ func TestMQTTConnectDeadlineDecoupled01(t *testing.T) {
 	}
 
 	// Collect connect-deadline-source objects: vars assigned from
-	// context.WithTimeout / context.WithDeadline inside Open's body.
-	deadlineObjs := collectDeadlineCtxObjects(openFD.Body, info)
+	// context.WithTimeout(ctx, cfg.ConnectDeadline) inside Open's body — both
+	// semantic args locked (base = lifecycle ctx param, budget = ConnectDeadline
+	// field), so a `WithTimeout(context.Background(), 1*time.Hour)` decoy does not
+	// qualify.
+	deadlineObjs := collectDeadlineCtxObjects(openFD.Body, info, ctxObj)
 
 	// A2: (*Connection).waitFirstConnection(arg0) — arg0 must be a deadline-derived
 	// ctx, NOT the lifecycle ctx param.
@@ -145,10 +152,21 @@ func openCtxParamObject(t *testing.T, fd *ast.FuncDecl, info *types.Info, ruleID
 }
 
 // collectDeadlineCtxObjects returns the set of var objects assigned from a
-// context.WithTimeout / context.WithDeadline call inside body. Both return
-// (ctx, cancel), so the assignment form `cctx, cancel := context.WithTimeout(…)`
-// is the only compilable shape; the LHS[0] object is the derived ctx.
-func collectDeadlineCtxObjects(body *ast.BlockStmt, info *types.Info) map[types.Object]struct{} {
+// context.WithTimeout(ctxObj, cfg.ConnectDeadline) call inside body. Both
+// semantic args are locked, NOT just the WithTimeout form:
+//   - arg 0 (base ctx) MUST resolve to ctxObj (Open's lifecycle ctx param) — a
+//     fresh context.Background()/TODO() base would decouple the bootstrap wait
+//     from the lifecycle ctx in the wrong direction and is rejected.
+//   - arg 1 (budget) MUST be the mqtt.Config.ConnectDeadline field selector — an
+//     arbitrary literal (e.g. 1*time.Hour) or a different duration field is
+//     rejected, so the regression guard genuinely binds the deadline source.
+//
+// WithTimeout returns (ctx, cancel), so the assignment form
+// `cctx, cancel := context.WithTimeout(…)` is the only compilable shape; the
+// LHS[0] object is the derived ctx. (WithDeadline takes a time.Time, not the
+// ConnectDeadline duration, so it cannot satisfy the budget check — only
+// WithTimeout qualifies in practice.)
+func collectDeadlineCtxObjects(body *ast.BlockStmt, info *types.Info, ctxObj types.Object) map[types.Object]struct{} {
 	out := map[types.Object]struct{}{}
 	EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
 		if len(as.Rhs) != 1 || len(as.Lhs) == 0 {
@@ -162,6 +180,18 @@ func collectDeadlineCtxObjects(body *ast.BlockStmt, info *types.Info) map[types.
 		if !ok || pkgPath != "context" || (name != "WithTimeout" && name != "WithDeadline") {
 			return
 		}
+		if len(call.Args) != 2 {
+			return
+		}
+		// arg 0: base ctx must be Open's lifecycle ctx param.
+		baseIdent, ok := call.Args[0].(*ast.Ident)
+		if !ok || info.ObjectOf(baseIdent) != ctxObj {
+			return
+		}
+		// arg 1: budget must be the mqtt.Config.ConnectDeadline field.
+		if !isConnectDeadlineField(call.Args[1], info) {
+			return
+		}
 		if id, ok := as.Lhs[0].(*ast.Ident); ok {
 			if obj := info.ObjectOf(id); obj != nil {
 				out[obj] = struct{}{}
@@ -169,4 +199,25 @@ func collectDeadlineCtxObjects(body *ast.BlockStmt, info *types.Info) map[types.
 		}
 	})
 	return out
+}
+
+// isConnectDeadlineField reports whether expr is a selector resolving to the
+// ConnectDeadline field of mqtt.Config (e.g. `cfg.ConnectDeadline`).
+func isConnectDeadlineField(expr ast.Expr, info *types.Info) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "ConnectDeadline" {
+		return false
+	}
+	selection, ok := info.Selections[sel]
+	if !ok || selection.Kind() != types.FieldVal {
+		return false
+	}
+	recv := selection.Recv()
+	if ptr, isPtr := recv.(*types.Pointer); isPtr {
+		recv = ptr.Elem()
+	}
+	named, ok := recv.(*types.Named)
+	return ok && named.Obj().Pkg() != nil &&
+		named.Obj().Pkg().Path() == mqttPkgPath &&
+		named.Obj().Name() == "Config"
 }
