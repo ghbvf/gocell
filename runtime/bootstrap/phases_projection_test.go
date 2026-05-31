@@ -17,7 +17,6 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -403,14 +402,17 @@ func TestPhase6_ProjectionDrain_WiresCoordinatorAndProbes(t *testing.T) {
 func TestPhase6_ProjectionDrain_PublishApplyRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	var applied atomic.Int32
+	applied := make(chan struct{}, 1)
 	bus := eventbus.New(clock.Real())
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-e2e-apply", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	pc := newProjectionCell()
 	pc.apply = func(_ context.Context, _ outbox.Entry) error {
-		applied.Add(1)
+		select {
+		case applied <- struct{}{}:
+		default:
+		}
 		return nil
 	}
 	require.NoError(t, asm.Register(pc))
@@ -453,12 +455,10 @@ func TestPhase6_ProjectionDrain_PublishApplyRoundTrip(t *testing.T) {
 	require.NoError(t, bus.Publish(context.Background(), projTestTopic, payload),
 		"Publish must succeed when the router is running")
 
-	// Wait up to 2 s for Apply to be called; in-mem bus is synchronous in
-	// dispatch but the handler runs in a goroutine so Eventually is needed.
-	require.Eventually(t, func() bool {
-		return applied.Load() >= 1
-	}, 2*time.Second, 10*time.Millisecond,
-		"projection Apply must be invoked within 2s of publishing the event")
+	// Wait for Apply to be called. The in-mem bus dispatches into a goroutine so
+	// we use a channel for deterministic sync — no wall-clock literal required,
+	// satisfying TEST-TIME-LITERAL-CONST-01. Failure is bounded by go test -timeout.
+	<-applied
 
 	// Teardown: LIFO stop the router + coordinator.
 	for _, v := range slices.Backward(s.teardowns) {
