@@ -122,20 +122,45 @@ References:
 - **`WithMaxLockAge` safety net** for forgotten `Release()`. May add later if a
   real caller demonstrates the need; deferred to keep the minimal surface. See
   §"Consequences / Negative".
-- **Explicit `Locker.Shutdown()` / `Close()` entry point.** The manager's
-  `runOnce` loop and `markCause` plumbing already support a third lock-end
-  signal beyond `ErrLockReleased` / `ErrLockLost` (e.g. `context.Canceled`
-  on forced shutdown), but no public method exposes that path in this
-  iteration — no production caller currently needs it, and shipping
-  unreachable dead code violates the "dead code = lie" principle. When a
-  bootstrap / lifecycle integration requires it, add `Close() error` to
-  `Locker` (or expose a separate `Shutdown` API) and re-instate the
-  shutdown markCause path under that entry point. Tests covering the
-  shutdown semantics must accompany that change. Tracked as backlog
-  `DISTLOCK-LOCKER-SHUTDOWN-01` (open when first ManagedResource integrator
-  arrives). **Still deferred after the 2026-05-31 amendment** — that
-  amendment added a *per-lock* `Orphan()`, not the *locker-level* shutdown
-  this bullet describes; `DISTLOCK-LOCKER-SHUTDOWN-01` stays open.
+- **Explicit `Locker.Shutdown()` / `Close()` entry point.** Deferred — but the
+  reason is *no caller-relevant work for it to do today*, not the absence of an
+  integrator (the original "open when first ManagedResource integrator arrives"
+  framing was imprecise; corrected here per the 2026-05-31 review).
+
+  Verified facts at 2026-05-31 (grep over the tree, not assertion):
+  - **A `Locker` lifecycle integrator already exists** — `cmd/corebundle`'s saga
+    module is where a `distlock.Locker` would be constructed and a saga
+    `Coordinator.Stop()` is wired. So "no integrator" was never the real blocker.
+  - **There is no hard blocker** to adding `Close()`. The manager's `runOnce` /
+    `markCause` plumbing already supports a third lock-end cause; adding the
+    method is mechanically straightforward.
+  - **What makes it dead code *today*** is twofold: (1) there are **zero
+    production `distlock.New(...)` construction sites and zero `WithLeaderElect`
+    callers** — saga leader-election has not been wired into a production bundle
+    yet (the only `distlock.New` / `WithLeaderElect` references are tests and the
+    `adapters/redis` doc example); and (2) the `Manager` **self-drains**: once
+    every lock reaches a terminal disposition (`Release` or `Orphan`) the
+    `pendingReleases` counter hits zero, `Drained()` closes, and the manager
+    goroutine exits — so there is no leaked goroutine for a process-wide
+    `Close()` to reclaim. A `Close()` shipped now would have no live caller and
+    no resource to free → unreachable code, which violates the "dead code = lie"
+    principle this ADR holds.
+
+  When saga leader-election is wired into a production bundle (a real
+  `distlock.New` + `WithLeaderElect` callsite), `Close() error` becomes
+  caller-relevant — as a backstop for the case where `Coordinator.Stop()` is
+  skipped/panics, or where a future second consumer shares one `Locker`. At that
+  point add `Close()` (force-orphan all residual locks → stop manager → **no**
+  release I/O, consistent with the Orphan philosophy that shutdown must not
+  depend on backend reachability), register the `Locker` as a
+  `bootstrap.WithManagedCloser`, and add shutdown-semantics tests. Tracked as
+  backlog `DISTLOCK-LOCKER-SHUTDOWN-01`; **trigger = saga enters production**,
+  not "an integrator appears" (it already has).
+
+  **Still deferred after the 2026-05-31 amendment** — that amendment added a
+  *per-lock* `Orphan()` (which has a real production caller, `Coordinator.Stop`),
+  not the *locker-level* shutdown this bullet describes; `DISTLOCK-LOCKER-SHUTDOWN-01`
+  stays open.
 
 ### Amendment 2026-05-31 — per-lock `Orphan()` (issue #1116)
 

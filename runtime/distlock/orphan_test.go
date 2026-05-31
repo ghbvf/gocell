@@ -3,6 +3,7 @@ package distlock_test
 import (
 	"context"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -386,5 +387,74 @@ func TestLock_Orphan_SiblingStillRenewed(t *testing.T) {
 		t.Errorf("lockB should NOT be done after lockA orphan; cause=%v", lockB.Cause())
 	default:
 		// Good — lockB still live.
+	}
+}
+
+// TestLock_Orphan_ManagerSelfDrainsNoGoroutineLeak proves the load-bearing
+// claim behind deferring locker-level Close() (ADR §"Out of scope"): the
+// Manager goroutine self-drains after every lock reaches a terminal disposition
+// via Orphan. Once pendingReleases hits zero, Drained() closes and the manager
+// goroutine exits, returning NumGoroutine to baseline — so there is no leaked
+// goroutine for a process-wide Close()/Shutdown() to reclaim, which is why
+// shipping Close() today would be unreachable dead code.
+//
+// This is the Orphan-path analog of TC-9 (which covers the Release path).
+// NOT parallel: NumGoroutine() is process-global.
+func TestLock_Orphan_ManagerSelfDrainsNoGoroutineLeak(t *testing.T) {
+	fc := clockmock.New(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	baseline := runtime.NumGoroutine()
+
+	const n = 50
+	locks := make([]*distlock.Lock, 0, n)
+	for i := range n {
+		acquired, err := l.Acquire(context.Background(), "selfdrain-"+strconv.Itoa(i), testtime.D1min)
+		if err != nil {
+			t.Fatalf("Acquire %d: %v", i, err)
+		}
+		locks = append(locks, acquired)
+	}
+
+	<-mgr(l).Started()
+
+	// All N held by ONE manager goroutine (0 per-lock goroutines).
+	after := runtime.NumGoroutine()
+	if after-baseline > 3 { // 1 manager + 2 slack
+		t.Errorf("goroutine count jumped by %d (baseline %d → %d); expected ≤ 3 "+
+			"(1 manager + 2 slack — 0 per-lock goroutines)", after-baseline, baseline, after)
+	}
+
+	// Orphan every lock (no Driver.Release I/O on any of them).
+	for _, lk := range locks {
+		lk.Orphan()
+	}
+	if got := fd.Calls("Release"); got != 0 {
+		t.Fatalf("Release called %d times across orphan-only disposition; want 0", got)
+	}
+
+	// Manager self-drains once the last lock is orphaned.
+	select {
+	case <-mgr(l).Drained():
+	case <-time.After(testtime.D30s):
+		t.Fatal("manager did not drain after orphaning all locks")
+	}
+
+	// The manager goroutine must have exited — NumGoroutine returns to baseline.
+	// Poll: goroutine teardown is asynchronous after Drained() closes.
+	deadline := time.Now().Add(testtime.EventuallyLong)
+	for {
+		current := runtime.NumGoroutine()
+		if current <= baseline+2 { // 2 slack for test-framework goroutines
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("goroutines after orphan-drain: %d (baseline %d); expected ≤ %d — "+
+				"manager goroutine leaked (would invalidate the 'Close() has nothing to reclaim' ADR claim)",
+				current, baseline, baseline+2)
+			break
+		}
+		runtime.Gosched()
 	}
 }
