@@ -14,28 +14,34 @@ import (
 // suite against providerCollector (via spyProvider). This satisfies the
 // enrollment requirement checked by COLLECTOR-CONFORMANCE-ENROLLMENT-01.
 func TestProviderCollector_Conformance(t *testing.T) {
-	metricstest.RunCollectorConformance(t, &providerCollectorHarness{})
+	metricstest.RunCollectorConformance(t, providerCollectorHarness{})
 }
 
-// providerCollectorHarness adapts providerCollector (built on spyProvider) to
-// metricstest.CollectorHarness.
-type providerCollectorHarness struct {
-	spy *spyProvider
-}
+// providerCollectorHarness implements metricstest.CollectorHarness for
+// providerCollector. It holds no mutable state; each New call returns a
+// self-contained (Collector, CollectorObserver) pair backed by a fresh
+// spyProvider, so parallel subtests are race-free.
+type providerCollectorHarness struct{}
 
-func (h *providerCollectorHarness) New(t *testing.T) metrics.Collector {
+func (providerCollectorHarness) New(t *testing.T) (metrics.Collector, metricstest.CollectorObserver) {
 	t.Helper()
-	h.spy = newSpyProvider()
-	col, err := metrics.NewProviderCollector(h.spy, metrics.ProviderCollectorConfig{})
+	spy := newSpyProvider()
+	col, err := metrics.NewProviderCollector(spy, metrics.ProviderCollectorConfig{})
 	if err != nil {
 		t.Fatalf("providerCollectorHarness.New: %v", err)
 	}
-	return col
+	return col, &providerCollectorObserver{spy: spy}
 }
 
-func (h *providerCollectorHarness) RequestCount(key metricstest.RequestKey) int64 {
+// providerCollectorObserver is the read-side for a single providerCollector
+// instance. It is bound to one spyProvider and never shared across subtests.
+type providerCollectorObserver struct {
+	spy *spyProvider
+}
+
+func (o *providerCollectorObserver) RequestCount(key metricstest.RequestKey) int64 {
 	var total int64
-	for _, op := range h.spy.counterOps["http_requests_total"] {
+	for _, op := range o.spy.counterOps["http_requests_total"] {
 		if matchRequestKey(op.labels, key) {
 			total += int64(op.value)
 		}
@@ -43,9 +49,9 @@ func (h *providerCollectorHarness) RequestCount(key metricstest.RequestKey) int6
 	return total
 }
 
-func (h *providerCollectorHarness) BodyLimitRejectionCount(key metricstest.BodyLimitRejectionKey) int64 {
+func (o *providerCollectorObserver) BodyLimitRejectionCount(key metricstest.BodyLimitRejectionKey) int64 {
 	var total int64
-	for _, op := range h.spy.counterOps["http_request_body_limit_rejections_total"] {
+	for _, op := range o.spy.counterOps["http_request_body_limit_rejections_total"] {
 		if op.labels["cell"] == key.Cell && op.labels["route"] == key.Route {
 			total += int64(op.value)
 		}
@@ -55,8 +61,8 @@ func (h *providerCollectorHarness) BodyLimitRejectionCount(key metricstest.BodyL
 
 // LastCtxForBodyLimitRejection returns the ctx from the most recent
 // RecordBodyLimitRejection call, proving ctx forwarding to the instrument.
-func (h *providerCollectorHarness) LastCtxForBodyLimitRejection() context.Context {
-	ops := h.spy.counterOps["http_request_body_limit_rejections_total"]
+func (o *providerCollectorObserver) LastCtxForBodyLimitRejection() context.Context {
+	ops := o.spy.counterOps["http_request_body_limit_rejections_total"]
 	if len(ops) == 0 {
 		return nil
 	}

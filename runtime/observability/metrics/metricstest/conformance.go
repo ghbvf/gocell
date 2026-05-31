@@ -6,7 +6,10 @@
 // Because Collector is a write-only sink and the two production implementations
 // have different observation mechanisms (InMemoryCollector.Snapshot vs. spy
 // counter on a provider), the suite is parameterised through CollectorHarness:
-// each implementation supplies its own New() constructor and read-back helpers.
+// each implementation supplies its own New() constructor that returns a
+// self-contained (Collector, CollectorObserver) pair. All observation state is
+// local to that pair; the harness itself holds no mutable shared state, making
+// parallel subtest execution safe.
 //
 // The suite file is a plain .go file (not _test.go) so it can be imported by
 // _test.go files in other packages without being stripped from the build graph
@@ -27,38 +30,36 @@ type RequestKey = metrics.RequestKey
 // BodyLimitRejectionKey mirrors metrics.BodyLimitRejectionKey.
 type BodyLimitRejectionKey = metrics.BodyLimitRejectionKey
 
-// CollectorHarness wraps one Collector implementation with the observation
-// surface the conformance suite needs. Each implementation provides:
+// CollectorObserver is the read-side companion returned by
+// CollectorHarness.New. It is bound exclusively to the Collector returned in
+// the same New call; parallel subtests each hold their own observer instance
+// with no cross-subtest sharing.
 //
-//   - New: builds a fresh, isolated Collector instance. Called once per subtest.
 //   - RequestCount: returns how many times RecordRequest was called for the
-//     given key on the last collector produced by New. Returns 0 if the key has
-//     not been recorded.
+//     given key on that Collector. Returns 0 if the key has not been recorded.
 //   - BodyLimitRejectionCount: returns how many times RecordBodyLimitRejection
 //     was called for the given key. Returns 0 if never recorded.
 //   - LastCtxForBodyLimitRejection: returns the context that was passed to the
 //     most recent RecordBodyLimitRejection call, or nil if no call was made.
 //     Implementations that cannot observe ctx may return nil; the corresponding
 //     harness subtest will skip the ctx-forwarding assertion.
-type CollectorHarness interface {
-	// New constructs a fresh Collector instance for one subtest. The returned
-	// Collector is the target of all subsequent Read-side observations until
-	// the next New call.
-	New(t *testing.T) metrics.Collector
-
-	// RequestCount returns the accumulated count for the given key on the
-	// last Collector created by New.
+type CollectorObserver interface {
 	RequestCount(key RequestKey) int64
-
-	// BodyLimitRejectionCount returns the accumulated count for the given
-	// key on the last Collector created by New.
 	BodyLimitRejectionCount(key BodyLimitRejectionKey) int64
-
-	// LastCtxForBodyLimitRejection returns the context.Context that was
-	// supplied to the most recent RecordBodyLimitRejection call, or nil if
-	// no call was made or the implementation cannot observe the ctx. A nil
-	// return causes the ctx-forwarding assertion to be skipped.
 	LastCtxForBodyLimitRejection() context.Context
+}
+
+// CollectorHarness wraps one Collector implementation with a factory that
+// produces self-contained (Collector, CollectorObserver) pairs. The harness
+// itself must hold no mutable state; all per-subtest state lives in the
+// returned pair. This guarantees race-freedom when RunCollectorConformance
+// runs subtests in parallel.
+type CollectorHarness interface {
+	// New constructs a fresh Collector and its bound CollectorObserver for one
+	// subtest. The returned observer's read methods reflect only the Collector
+	// returned alongside it. New may be called concurrently from different
+	// goroutines; implementations must not write to shared harness fields.
+	New(t *testing.T) (metrics.Collector, CollectorObserver)
 }
 
 // RunCollectorConformance runs the full Collector conformance suite against
@@ -102,14 +103,14 @@ func RunCollectorConformance(t *testing.T, h CollectorHarness) {
 // conformRecordRequestCount verifies RecordRequest increments per unique key.
 func conformRecordRequestCount(t *testing.T, h CollectorHarness) {
 	t.Helper()
-	col := h.New(t)
+	col, obs := h.New(t)
 
 	ctx := context.Background()
 	col.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
 	col.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.02)
 
 	key := RequestKey{Cell: "accesscore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
-	got := h.RequestCount(key)
+	got := obs.RequestCount(key)
 	if got != 2 {
 		t.Errorf("RecordRequest count: got %d, want 2 (two calls same key)", got)
 	}
@@ -120,7 +121,7 @@ func conformRecordRequestCount(t *testing.T, h CollectorHarness) {
 // counter entry.
 func conformRecordRequestLabelIsolation(t *testing.T, h CollectorHarness) {
 	t.Helper()
-	col := h.New(t)
+	col, obs := h.New(t)
 
 	ctx := context.Background()
 	col.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
@@ -128,10 +129,10 @@ func conformRecordRequestLabelIsolation(t *testing.T, h CollectorHarness) {
 
 	key1 := RequestKey{Cell: "accesscore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
 	key2 := RequestKey{Cell: "auditcore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
-	if got := h.RequestCount(key1); got != 1 {
+	if got := obs.RequestCount(key1); got != 1 {
 		t.Errorf("accesscore count: got %d, want 1", got)
 	}
-	if got := h.RequestCount(key2); got != 1 {
+	if got := obs.RequestCount(key2); got != 1 {
 		t.Errorf("auditcore count: got %d, want 1", got)
 	}
 }
@@ -140,14 +141,14 @@ func conformRecordRequestLabelIsolation(t *testing.T, h CollectorHarness) {
 // the body-limit rejection counter.
 func conformBodyLimitRejectionCount(t *testing.T, h CollectorHarness) {
 	t.Helper()
-	col := h.New(t)
+	col, obs := h.New(t)
 
 	ctx := context.Background()
 	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
 	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
 
 	key := BodyLimitRejectionKey{Cell: "accesscore", Route: "/api/v1/upload"}
-	if got := h.BodyLimitRejectionCount(key); got != 2 {
+	if got := obs.BodyLimitRejectionCount(key); got != 2 {
 		t.Errorf("BodyLimitRejection count: got %d, want 2", got)
 	}
 }
@@ -157,14 +158,14 @@ func conformBodyLimitRejectionCount(t *testing.T, h CollectorHarness) {
 // LastCtxForBodyLimitRejection (implementation cannot observe ctx).
 func conformBodyLimitRejectionCtxForwarded(t *testing.T, h CollectorHarness) {
 	t.Helper()
-	col := h.New(t)
+	col, obs := h.New(t)
 
 	type sentinelKey struct{}
 	want := "sentinel-ctx-value"
 	ctx := context.WithValue(context.Background(), sentinelKey{}, want)
 	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
 
-	lastCtx := h.LastCtxForBodyLimitRejection()
+	lastCtx := obs.LastCtxForBodyLimitRejection()
 	if lastCtx == nil {
 		t.Skip("harness cannot observe forwarded ctx — skipping ctx-forwarding assertion")
 	}
@@ -178,9 +179,8 @@ func conformBodyLimitRejectionCtxForwarded(t *testing.T, h CollectorHarness) {
 // not pollute the RecordRequest counter series.
 func conformBodyLimitRejectionNoSideEffect(t *testing.T, h CollectorHarness) {
 	t.Helper()
-	col := h.New(t)
+	col, obs := h.New(t)
 
-	_ = col
 	ctx := context.Background()
 	col.RecordBodyLimitRejection(ctx, "_runtime", "unmatched")
 
@@ -190,7 +190,7 @@ func conformBodyLimitRejectionNoSideEffect(t *testing.T, h CollectorHarness) {
 	for _, status := range []int{200, 413, 500} {
 		for _, method := range []string{"GET", "POST"} {
 			key := RequestKey{Cell: "_runtime", Method: method, Route: "unmatched", Status: status}
-			if got := h.RequestCount(key); got != 0 {
+			if got := obs.RequestCount(key); got != 0 {
 				t.Errorf("RecordBodyLimitRejection polluted request counter at %+v: got %d, want 0", key, got)
 			}
 		}
@@ -201,7 +201,7 @@ func conformBodyLimitRejectionNoSideEffect(t *testing.T, h CollectorHarness) {
 // keyed per (cell, route): two distinct keys must not affect each other.
 func conformBodyLimitRejectionKeyIsolation(t *testing.T, h CollectorHarness) {
 	t.Helper()
-	col := h.New(t)
+	col, obs := h.New(t)
 
 	ctx := context.Background()
 	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
@@ -209,10 +209,10 @@ func conformBodyLimitRejectionKeyIsolation(t *testing.T, h CollectorHarness) {
 
 	key1 := BodyLimitRejectionKey{Cell: "accesscore", Route: "/api/v1/upload"}
 	key2 := BodyLimitRejectionKey{Cell: "configcore", Route: "/api/v1/config"}
-	if got := h.BodyLimitRejectionCount(key1); got != 1 {
+	if got := obs.BodyLimitRejectionCount(key1); got != 1 {
 		t.Errorf("accesscore/upload count: got %d, want 1", got)
 	}
-	if got := h.BodyLimitRejectionCount(key2); got != 1 {
+	if got := obs.BodyLimitRejectionCount(key2); got != 1 {
 		t.Errorf("configcore/config count: got %d, want 1", got)
 	}
 }
