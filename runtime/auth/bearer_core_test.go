@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // bearerCoreVerifier is a minimal IntentTokenVerifier stub for exercising the
@@ -74,6 +75,15 @@ func TestAuthenticateBearer_EmptySubject(t *testing.T) {
 	ctx, p, err := AuthenticateBearer(base, v, "tok")
 	if err == nil {
 		t.Fatal("expected non-nil error for empty subject, got nil")
+	}
+	// The rejection must carry the generic auth-unauthorized code (a malformed
+	// JWT must not be distinguishable from other 401s on the wire).
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ecErr.Code != errcode.ErrAuthUnauthorized {
+		t.Errorf("expected ErrAuthUnauthorized, got %v", ecErr.Code)
 	}
 	if p != nil {
 		t.Fatalf("principal = %+v, want nil on empty-subject rejection", p)

@@ -422,8 +422,3 @@ func extractBearerTokenWithReason(r *http.Request) (token, reason string) {
 	}
 	return strings.TrimSpace(parts[1]), ""
 }
-
-func extractBearerToken(r *http.Request) string {
-	token, _ := extractBearerTokenWithReason(r)
-	return token
-}

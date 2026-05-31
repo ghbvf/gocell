@@ -2,11 +2,12 @@
 //
 // An Authenticator inspects an *http.Request and returns one of three outcomes:
 //
-//	(p, true, nil)                 — credential present and valid; caller stops the chain.
-//	(absentPrincipal(), false, nil) — credential absent; caller should try the next authenticator.
-//	(nil, false, err)              — credential present but invalid; caller MUST NOT fall through.
+//	(p, true, nil)                 — credential present and valid; caller accepts the principal.
+//	(absentPrincipal(), false, nil) — credential absent; caller decides (fail-closed by default).
+//	(nil, false, err)              — credential present but invalid; caller MUST reject.
 //
-// ref: kubernetes/apiserver pkg/authentication/request/union/union.go (FailOnError=true)
+// Implementations are consumed directly (one Authenticator per mount point, e.g.
+// the WebSocket upgrade slot); there is no fan-out combinator.
 package auth
 
 import (
@@ -38,73 +39,6 @@ func (f AuthenticatorFunc) Authenticate(r *http.Request) (*Principal, bool, erro
 
 func absentPrincipal() *Principal {
 	return &Principal{}
-}
-
-// UnionAuthenticator tries each child in order and returns the first successful
-// result. An error from any child short-circuits the chain (FailOnError semantics).
-type UnionAuthenticator struct {
-	children []Authenticator
-}
-
-// NewUnionAuthenticator returns a UnionAuthenticator that delegates to children
-// in the order provided.
-func NewUnionAuthenticator(children ...Authenticator) *UnionAuthenticator {
-	return &UnionAuthenticator{children: children}
-}
-
-// Authenticate iterates over child authenticators and returns the first result
-// that indicates a valid credential. If a child returns an error the chain stops
-// immediately and the error is propagated (credential present but invalid).
-func (u *UnionAuthenticator) Authenticate(r *http.Request) (*Principal, bool, error) {
-	for _, child := range u.children {
-		p, ok, err := child.Authenticate(r)
-		if err != nil {
-			// Credential present but invalid — short-circuit, no fallthrough.
-			return nil, false, err
-		}
-		if ok {
-			// Credential valid — stop the chain.
-			return p, true, nil
-		}
-		// Credential absent — try the next authenticator.
-	}
-	return absentPrincipal(), false, nil
-}
-
-// NewJWTAuthenticator returns an Authenticator that extracts a Bearer token
-// from the Authorization header and verifies its "access" intent using v.
-//
-// Outcomes:
-//
-//	(p, true, nil)                 — token present and valid; Principal populated from claims.
-//	(absentPrincipal(), false, nil) — no Authorization header, or non-Bearer scheme (let Union continue).
-//	(nil, false, err)              — Bearer token present but VerifyIntent rejected it (short-circuit).
-//
-// ref: kubernetes/apiserver pkg/authentication/request/bearertoken/bearertoken.go
-func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
-	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
-		token := extractBearerToken(r)
-		if token == "" {
-			// No Bearer credential — absent, let the Union try the next authenticator.
-			return absentPrincipal(), false, nil
-		}
-		claims, err := v.VerifyIntent(r.Context(), token, TokenIntentAccess)
-		if err != nil {
-			// Credential present but invalid — short-circuit.
-			return nil, false, err
-		}
-		// G1.A: Reject tokens with an empty subject. An empty "sub" claim
-		// indicates a JWT signing bug or OIDC misconfiguration; accepting it
-		// would allow a bearer with roles to pass RequireAnyRole unchecked.
-		if claims.Subject == "" {
-			return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token subject missing")
-		}
-		// claims.TenantID is already validated + canonicalized by the verifier
-		// (JWTVerifier.VerifyIntent, the single unbypassable chokepoint); no
-		// per-authenticator tenant check is needed or wanted here (a second
-		// validation site would be a redundant truth source).
-		return jwtClaimsToPrincipal(claims), true, nil
-	})
 }
 
 // jwtClaimsToPrincipal converts verified JWT Claims to a Principal.
@@ -294,17 +228,14 @@ func validateCallerCell(callerCell string) error {
 // Outcomes:
 //
 //	(p, true, nil)                 — Principal found in ctx, Kind != PrincipalUnknown.
-//	(absentPrincipal(), false, nil) — no Principal in ctx (chain may continue).
+//	(absentPrincipal(), false, nil) — no Principal in ctx.
 //
-// This Authenticator never returns an error; callers that want a strict
-// fail-closed mode should compose with a guard that rejects (false, nil)
-// outcomes (the typical /api/v1/* listener already does this via JWT
-// short-circuit).
-//
-// 警告：当挂载在已有 JWT listener 上时，ContextAuthenticator 应是 chain 中
-// 唯一的 authenticator（不通过 UnionAuthenticator 组合）；absent-credential
-// 结果（false, nil）不会阻止 Union 继续尝试下一个 authenticator，可能造成
-// 意料之外的 fall-through 路径。
+// This Authenticator never returns an error. The absent (false, nil) outcome
+// means "the listener middleware did not stamp a Principal"; the consuming
+// adapter MUST treat that as unauthenticated and fail closed (the WebSocket
+// upgrade slot rejects with 401). It is mounted as the sole Authenticator for
+// its endpoint — already-authenticated traffic from a JWT listener is the only
+// expected source.
 func NewContextAuthenticator() Authenticator {
 	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
 		if p, ok := FromContext(r.Context()); ok {
