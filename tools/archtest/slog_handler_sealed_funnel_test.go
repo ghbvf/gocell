@@ -94,6 +94,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // slog funnel constants — single source for production enforcement and reverse
@@ -234,15 +236,11 @@ func contextHandlerHandleRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []D
 			return
 		}
 		// Each argument to AddAttrs must be redaction.RedactSlogAttr(...).
-		for _, arg := range call.Args {
-			argCall, ok := arg.(*ast.CallExpr)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.CallExpr](call, func(argCall *ast.CallExpr) {
 			if callMatches(argCall, redactionLocal, slogFunnelRedactSlogAttrFunc) {
 				foundRedactSlogAttr = true
 			}
-		}
+		})
 	})
 	if !foundRedactSlogAttr {
 		pos := p.Fset.Position(fn.Pos())
@@ -683,8 +681,8 @@ func TestSlogHandlerSealedFunnel_NoBlindspotsInProduction(t *testing.T) {
 			if !ok {
 				continue
 			}
-			// Check pointer and value receiver forms.
-			if types.Implements(named, slogHandlerIface) || types.Implements(types.NewPointer(named), slogHandlerIface) {
+			// Check pointer and value receiver forms via the sanctioned funnel.
+			if typesutil.ImplementsInterface(named, slogHandlerIface) {
 				pos := p.Fset.Position(obj.Pos())
 				ds = append(ds, Diagnostic{
 					Rel:  filepath.ToSlash(p.Rel(findFileAtPos(p, obj.Pos()))),
