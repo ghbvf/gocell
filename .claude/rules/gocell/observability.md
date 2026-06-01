@@ -98,8 +98,11 @@ slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.Form
 For **generated assemblies** the seal is injected by the `gocell generate
 assembly` template (`kernel/assembly/gentpl/main.go.tpl`) as the first statement
 of the generated `run()` — no hand-maintained list, covers every current and
-future assembly automatically. For the two **hand-written** entry points
-(`examples/ssobff`, `examples/corebundlestarter`) the seal is hand-written.
+future assembly automatically. For the **hand-written** entry points
+(`examples/ssobff`, `examples/corebundlestarter`, and `cmd/gocell`) the seal is
+hand-written. Long-running services seal with `FormatJSON` (above); the
+`cmd/gocell` governance/codegen CLI seals with `FormatText` (human-readable
+output) — both route through the same redacting `contextHandler`.
 
 The `contextHandler` provides three layers of protection on every `Handle` call:
 
@@ -116,7 +119,8 @@ Entry points:
 - **Generated** (seal in generated `run()`, via assembly template): `cmd/corebundle`,
   `examples/iotdevice`, `examples/todoorder`, `examples/orderfulfillment`, + any
   future `gocell generate assembly` output.
-- **Hand-written** (seal in `main()`): `examples/ssobff`, `examples/corebundlestarter`.
+- **Hand-written** (seal in `main()`): `examples/ssobff`, `examples/corebundlestarter`,
+  `cmd/gocell` (CLI — `FormatText`).
 
 **Archtest**: `SLOG-HANDLER-SEALED-FUNNEL-01`
 (`tools/archtest/slog_handler_sealed_funnel_test.go`):
