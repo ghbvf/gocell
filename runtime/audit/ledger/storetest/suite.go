@@ -265,6 +265,8 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_InvalidCursor_Rejected", func(t *testing.T) { runQueryInvalidCursorRejected(t, factory) })
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
 	t.Run("PrincipalFields_RoundTrip", func(t *testing.T) { RunPrincipalFieldsRoundTrip(t, factory, protocol) })
+	t.Run("Query_ByTraceID", func(t *testing.T) { runQueryByTraceID(t, factory) })
+	t.Run("TraceID_NotInHashChain", func(t *testing.T) { runTraceIDNotInHashChain(t, factory, protocol) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -1056,6 +1058,119 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 	if got.Hash != want {
 		t.Errorf("Hash parity broken with populated Principal fields:\n  store=%s\n  ref  =%s",
 			got.Hash, want)
+	}
+}
+
+// runQueryByTraceID verifies that Query with AuditFilters{TraceID:...} returns
+// only entries whose trace_id matches, and that an empty TraceID filter matches
+// all entries. Cross-backend contract: every Store must index or scan by
+// trace_id correctly so operational trace correlation works uniformly.
+//
+// Three entries are seeded: two share the same trace_id ("trace-abc") and one
+// has a distinct trace_id ("trace-xyz"). The assertions mirror
+// TestMemStore_Query_ByTraceID in mem_store_test.go and the one-off PG
+// integration test, consolidating both into the shared conformance suite.
+func runQueryByTraceID(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	seed := []struct {
+		eventID string
+		traceID string
+	}{
+		{"trace-suite-1", "trace-abc"},
+		{"trace-suite-2", "trace-abc"},
+		{"trace-suite-3", "trace-xyz"},
+	}
+	for _, s := range seed {
+		e := &ledger.Entry{
+			EventID:   s.eventID,
+			EventType: "trace.suite.test",
+			ActorID:   "actor",
+			TraceID:   s.traceID,
+			Timestamp: fc.Now(),
+			Payload:   []byte(`{}`),
+		}
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append %s: %v", s.eventID, err)
+		}
+	}
+
+	// Exact-match filter — must return the two "trace-abc" entries only.
+	results, err := store.Query(context.Background(),
+		ledger.AuditFilters{TraceID: "trace-abc"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(TraceID=trace-abc): %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Query(TraceID=trace-abc): got %d results, want 2", len(results))
+	}
+	for _, r := range results {
+		if r.TraceID != "trace-abc" {
+			t.Errorf("Query(TraceID=trace-abc) returned unexpected TraceID %q", r.TraceID)
+		}
+	}
+
+	// Empty TraceID filter must return all 3 entries.
+	all, err := store.Query(context.Background(),
+		ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(empty TraceID): %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("Query(empty TraceID): got %d results, want 3", len(all))
+	}
+}
+
+// runTraceIDNotInHashChain verifies that two entries differing ONLY in TraceID
+// produce the SAME Protocol.ComputeHash value. This proves trace_id is excluded
+// from the HMAC chain so the presence or absence of trace context does not
+// invalidate historical entries or break chain continuity across instrumented
+// and non-instrumented code paths.
+//
+// The invariant is cross-backend: every future Store implementation must honor
+// it because chain integrity depends on trace_id being a non-chained
+// observability field. Consolidates TestMemStore_TraceID_NotInHashChain
+// (mem_store_test.go) into the shared suite.
+func runTraceIDNotInHashChain(t *testing.T, factory Factory, protocol *ledger.Protocol) {
+	// Consume factory first so backend resources (e.g. PG schema reset) are
+	// allocated and released via cleanup before any protocol assertions.
+	_, _, cleanup := factory(t)
+	defer cleanup()
+
+	// This case exercises Protocol.ComputeHash directly rather than Store.Append
+	// so that the non-chained invariant is proven at the protocol layer, not just
+	// at the storage layer. A storage backend that silently dropped TraceID from
+	// the HMAC input would produce the same hashes — and that is exactly the
+	// correct behavior we are asserting.
+	baseTs := epochAnchor
+
+	withTrace := &ledger.Entry{
+		EventID:   "suite-hash-chain-evt",
+		EventType: "hash.chain.suite.test",
+		ActorID:   "actor-1",
+		TraceID:   "4bf92f3577b34da6a3ce929d0e0e4736",
+		Timestamp: baseTs,
+		Payload:   []byte(`{"a":1}`),
+	}
+	withoutTrace := &ledger.Entry{
+		EventID:   "suite-hash-chain-evt",
+		EventType: "hash.chain.suite.test",
+		ActorID:   "actor-1",
+		TraceID:   "",
+		Timestamp: baseTs,
+		Payload:   []byte(`{"a":1}`),
+	}
+
+	hashWith := protocol.ComputeHash("", withTrace)
+	hashWithout := protocol.ComputeHash("", withoutTrace)
+
+	if hashWith != hashWithout {
+		t.Errorf("TraceID must NOT affect HMAC hash (non-chained observability invariant):\n"+
+			"  hash(with trace)    = %s\n  hash(without trace) = %s",
+			hashWith, hashWithout)
 	}
 }
 

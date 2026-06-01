@@ -48,13 +48,20 @@ sealed construction（`OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`）。audit ledger �
   `correlation_id`/`actor_id`/… 的 NOT-NULL-no-default「explicit zero value」语义一致）。trace_id 非
   链入 HMAC，backfill `''` 不破坏既有行 hash。
 
-### D3 — `/correlate` 双模：`trace_id` XOR `cell`，不做 event_type→cell 推断
+### D3 — `/correlate` 双模：`traceId` XOR `cell`，不做 event_type→cell 推断
 
 audit entry 不记录 source cell（且补 source cell 需动冻结 wire envelope，与 D1 矛盾）。两条反查
 本质 keyed 不同，故双模、恰好二选一：
 
-- `?trace_id=<id>` → audit 反查：返回匹配 entries（id / eventType / actorId / subjectId / occurredAt /
-  timestamp / correlationId）。
+- `?traceId=<id>` → audit 反查：返回匹配 entries，wire 字段集为
+  `id / eventType / actorId / occurredAt / timestamp / correlationId`。
+  **刻意 EXCLUDE**：`subjectId / tenantId / sessionId / payload`——minimal-PII
+  fail-closed 设计，该端点无 cell 调用方，deeper identity 需走 JWT-authed
+  auditquery endpoint。`actorId`（触发主体）是 trace 关联所需的最小身份，明确保留。
+- **注意：`?traceId=` 仅返回 audit entries，不含 cell owner 信息。**
+  audit entries 刻意不记录 source cell（补 source cell 需改冻结 wire envelope，与 D1 矛盾）。
+  oncall 两步工作流：先用 `?traceId=<id>` 定位活动（trace→audit），再用 `?cell=<id>` 查
+  owner——这是接受的 UX trade-off，不是缺陷。
 - `?cell=<id>` → owner 反查：cell.yaml owner（Topology）+ metric/alert selector 指针。alert 本就带
   `cell` label，故 alert→owner 从 cell 起步，不经 trace。
 - both / neither → 400；未命中 → 404。
@@ -77,7 +84,13 @@ TSDB，反查 API 不查 Prometheus。
   不注入 `RequireCallerCell` ⇒ **任意合法 service-token 放行（无 caller-cell allowlist）**。这是**刻意的
   ops 姿态**：网络隔离边界 = InternalListener loopback（`127.0.0.1:9090`）+ service-token（HMAC + nonce
   防重放）。FinalizeAuth 的 internal-path↔InternalListener 亲和性校验通过（已验证）。
-- wire-out 仅携带 metadata，**不含 payload、不含 sessionId** 等敏感字段；slog 出口经全局 sink redaction。
+- wire-out minimal-PII：`?traceId=` 响应仅含 `id / eventType / actorId / occurredAt / timestamp /
+  correlationId`；`subjectId / tenantId / sessionId / payload` **刻意排除**（fail-closed，无 cell
+  调用方端点）。`?cell=` 响应仅含 cell owner metadata，不含 audit 内容。slog 出口经全局 sink redaction。
+- **路径与参数命名约定**：端点物理路径为 `/internal/v1/audit/correlate`（resource-grouped，
+  遵循 API versioning 规范），而非 issue #1048 原文的 `/internal/v1/correlate`——`audit` 子路径
+  明确了资源归属。查询参数为 `traceId`（camelCase，遵循 CLAUDE.md Query-param 约定），
+  而非 `trace_id`（DB snake_case 约定仅适用于数据库字段）。
 
 ### D5 — cell→owner 拓扑 codegen 单源派生
 
@@ -117,8 +130,8 @@ issue 范围项 2 含「metric exemplar 自动注入」。本 PR **不实现**�
 |------|------|
 | 业务代码伪造 audit trace_id | appender 唯一 injection 站点（`AUDIT-TRACE-ID-WRITE-CALLER-01`）；且即便伪造，trace_id 非链入 HMAC，不影响被审计事件 tamper-evidence |
 | 伪造 Correlation 视图绕过 W0 | sealed construction：包外不可构造/fabricate |
-| `/correlate` 越权访问（无 caller-cell gate） | InternalListener loopback 隔离 + service-token（HMAC + nonce 防重放）；端点只读、只回 metadata（无 payload / sessionId）；ops 面非业务面，无 cell 调用方故无 allowlist 可言 |
-| 反查响应泄漏 PII | wire-out 排除 payload / sessionId；slog 出口全局 sink redaction |
+| `/correlate` 越权访问（无 caller-cell gate） | InternalListener loopback 隔离 + service-token（HMAC + nonce 防重放）；端点只读，`?traceId=` 仅返 `id/eventType/actorId/occurredAt/timestamp/correlationId`，`?cell=` 仅返 owner metadata；ops 面非业务面，无 cell 调用方故无 allowlist 可言 |
+| 反查响应泄漏 PII | `?traceId=` 响应刻意排除 `subjectId / tenantId / sessionId / payload`（minimal-PII fail-closed）；`actorId` 保留（trace 关联最小身份）；deeper identity 走 JWT-authed auditquery endpoint；slog 出口全局 sink redaction |
 | 拓扑漂移（owner 错配） | 单源 codegen + golden byte-lock；漂移 = CI 红 |
 
 ## Alternatives rejected

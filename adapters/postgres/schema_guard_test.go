@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 39 migrations: 001-033 contiguous, plus 040-045 (intentional gap
+	// Currently 41 migrations: 001-033 contiguous, plus 040-047 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -70,9 +70,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 044 adds principal (JSONB NOT NULL) and occurred_at (TIMESTAMPTZ NOT NULL) to
 	// outbox_entries for the sealed-construction principal-injection feature (#1229);
 	// 045 creates projection_checkpoints for the CQRS projection harness PG CheckpointStore
-	// (#1174 / W10 PR-02 — owner column reserved, v1 unread/unwritten).
-	assert.Equal(t, int64(45), v,
-		"expected version should be exactly 45 (current migration max — 045 projection_checkpoints)")
+	// (#1174 / W10 PR-02 — owner column reserved, v1 unread/unwritten);
+	// 046 adds audit_entries.trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch 1-B);
+	// 047 creates idx_audit_namespace_trace_id CONCURRENTLY (split from 046 per
+	// migrations/README.md rule 1 — large-table indexes must use CONCURRENTLY).
+	assert.Equal(t, int64(47), v,
+		"expected version should be exactly 47 (current migration max — 047 audit_entries trace_id index)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

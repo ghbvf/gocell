@@ -53,7 +53,7 @@ func sampleEntry(traceID string) *ledger.Entry {
 		ID:            "entry-1",
 		EventType:     "user.login",
 		ActorID:       "actor-abc",
-		SubjectID:     "subject-xyz",
+		SubjectID:     "subject-xyz", // stored in ledger but NOT in the wire DTO
 		CorrelationID: "corr-001",
 		TraceID:       traceID,
 		OccurredAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -127,12 +127,13 @@ func TestCorrelateByTrace_Found(t *testing.T) {
 	if got.ActorID != entry.ActorID {
 		t.Errorf("actorId: got %q, want %q", got.ActorID, entry.ActorID)
 	}
-	if got.SubjectID != entry.SubjectID {
-		t.Errorf("subjectId: got %q, want %q", got.SubjectID, entry.SubjectID)
-	}
 	if got.CorrelationID != entry.CorrelationID {
 		t.Errorf("correlationId: got %q, want %q", got.CorrelationID, entry.CorrelationID)
 	}
+	// subjectId is deliberately excluded from the DTO (end-user PII, not needed
+	// for trace correlation). result.TraceID being accessible confirms the
+	// exported TraceResult type is returned.
+	_ = result.TraceID
 }
 
 func TestCorrelateByTrace_NotFound(t *testing.T) {
@@ -263,6 +264,10 @@ func TestCorrelateByCell_SelectorFormat(t *testing.T) {
 	wantMetric := `{cell="configcore"}`
 	if result.Selectors.Metric != wantMetric {
 		t.Errorf("metric selector: got %q, want %q", result.Selectors.Metric, wantMetric)
+	}
+	wantAlert := `alertname=~".+",cell="configcore"`
+	if result.Selectors.Alert != wantAlert {
+		t.Errorf("alert selector: got %q, want %q", result.Selectors.Alert, wantAlert)
 	}
 }
 

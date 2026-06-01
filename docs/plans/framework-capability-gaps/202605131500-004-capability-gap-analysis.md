@@ -98,9 +98,9 @@ Principal 是 transport-coupled——HTTP 路径才有，进入事件 / Worker /
 
 cell label 对齐了，但 trace_id → audit / metric exemplar / alert → cell.yaml owner 反查链路缺失。
 
-**设计骨架**：`kernel/observability/correlation.Correlation` envelope；outbox + audit ledger 自动注入 trace_id；提供 `/internal/v1/correlate?trace_id=` 反查 API。
+**设计骨架**：`kernel/observability/correlation.Correlation` envelope；outbox + audit ledger 自动注入 trace_id；提供 `/internal/v1/audit/correlate?traceId=` 反查 API。
 
-**✅ Core 切分已交付（#1048，2026-06-02）**：sealed `correlation.Correlation` read-model（从 W0 envelope 派生）+ audit `trace_id` 非链入列自动注入 + 双模 `/internal/v1/audit/correlate?trace_id=|cell=` ops-plane framework route（runtime 注册，非 cell contract）+ cell→owner 拓扑 codegen。设计决策见 ADR `202606021400-1048-adr-observability-correlate-reverse-lookup.md`。**延后**：OTel metric exemplar 自动注入（独立 SDK 机制，反查不依赖；tracking issue #1447）。
+**✅ Core 切分已交付（#1048，2026-06-02）**：sealed `correlation.Correlation` read-model（从 W0 envelope 派生）+ audit `trace_id` 非链入列自动注入 + 双模 `/internal/v1/audit/correlate?traceId=|cell=` ops-plane framework route（runtime 注册，非 cell contract）+ cell→owner 拓扑 codegen。设计决策见 ADR `202606021400-1048-adr-observability-correlate-reverse-lookup.md`。**延后**：OTel metric exemplar 自动注入（独立 SDK 机制，反查不依赖；tracking issue #1447）。
 
 ### 缺口 12：Large Payload / Stream
 

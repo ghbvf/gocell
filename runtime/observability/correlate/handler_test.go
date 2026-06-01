@@ -67,7 +67,7 @@ func TestHandler_TraceMode_Found_200(t *testing.T) {
 		ID:            "e1",
 		EventType:     "user.login",
 		ActorID:       "actor-1",
-		SubjectID:     "sub-1",
+		SubjectID:     "SENSITIVE-SUBJECT", // must NOT appear in wire body
 		CorrelationID: "corr-1",
 		TraceID:       traceID,
 		SessionID:     "SENSITIVE-SESSION", // must NOT appear in wire body
@@ -94,11 +94,15 @@ func TestHandler_TraceMode_Found_200(t *testing.T) {
 				ID            string `json:"id"`
 				EventType     string `json:"eventType"`
 				ActorID       string `json:"actorId"`
-				SubjectID     string `json:"subjectId"`
 				CorrelationID string `json:"correlationId"`
 			} `json:"auditEntries"`
 		} `json:"data"`
 	}
+	// Snapshot body before decoding (bytes.Buffer is consumed by Decode).
+	bodySnapshot := rec.Body.String()
+	rec.Body.Reset()
+	rec.Body.WriteString(bodySnapshot)
+
 	decodeJSON(t, rec, &resp)
 
 	if resp.Data.Query.TraceID != traceID {
@@ -114,17 +118,18 @@ func TestHandler_TraceMode_Found_200(t *testing.T) {
 	if ae.EventType != "user.login" {
 		t.Errorf("eventType: got %q", ae.EventType)
 	}
+	// actorId must be present: it is the correlation-relevant triggering principal.
 	if ae.ActorID != "actor-1" {
-		t.Errorf("actorId: got %q", ae.ActorID)
-	}
-	if ae.SubjectID != "sub-1" {
-		t.Errorf("subjectId: got %q", ae.SubjectID)
+		t.Errorf("actorId: got %q, want actor-1", ae.ActorID)
 	}
 	if ae.CorrelationID != "corr-1" {
-		t.Errorf("correlationId: got %q", ae.CorrelationID)
+		t.Errorf("correlationId: got %q, want corr-1", ae.CorrelationID)
 	}
 
-	assertNoSensitiveFields(t, rec)
+	// subjectId, sessionId, tenantId, payload must NOT appear in the wire body.
+	assertNoSensitiveFieldsInBody(t, bodySnapshot)
+	// eventType, actorId, correlationId must be present in the wire body.
+	assertRequiredFieldsInBody(t, bodySnapshot)
 }
 
 func TestHandler_TraceMode_NotFound_404(t *testing.T) {
@@ -239,13 +244,36 @@ func TestHandler_CellMode_TooLong_400(t *testing.T) {
 // --- security: no sensitive fields in wire body ---
 
 // assertNoSensitiveFields confirms that the response body does not contain
-// known sensitive field names (sessionId, payload).
+// known sensitive field names. The correlate endpoint deliberately excludes
+// subjectId (OAuth sub = end-user PII), tenantId, sessionId, and payload
+// from the wire DTO; only the fields needed for trace correlation are returned.
 func assertNoSensitiveFields(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
-	body := rec.Body.String()
-	for _, field := range []string{"sessionId", "SessionID", "\"payload\"", "\"Payload\""} {
+	assertNoSensitiveFieldsInBody(t, rec.Body.String())
+}
+
+// assertNoSensitiveFieldsInBody checks a pre-captured body string.
+func assertNoSensitiveFieldsInBody(t *testing.T, body string) {
+	t.Helper()
+	for _, field := range []string{
+		"subjectId", "SubjectID",
+		"tenantId", "TenantID",
+		"sessionId", "SessionID",
+		"\"payload\"", "\"Payload\"",
+	} {
 		if containsSubstring(body, field) {
 			t.Errorf("response body must not contain sensitive field %q; body: %s", field, body)
+		}
+	}
+}
+
+// assertRequiredFieldsInBody confirms that the correlation-relevant fields are
+// present in the pre-captured body string for a trace-mode 200 response.
+func assertRequiredFieldsInBody(t *testing.T, body string) {
+	t.Helper()
+	for _, field := range []string{"actorId", "eventType", "correlationId"} {
+		if !containsSubstring(body, field) {
+			t.Errorf("response body must contain field %q; body: %s", field, body)
 		}
 	}
 }

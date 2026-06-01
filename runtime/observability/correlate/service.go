@@ -27,19 +27,22 @@ import (
 
 const (
 	// traceQueryLimit is the upper bound on entries returned for a single
-	// trace reverse-lookup. A trace correlating more than this count is
-	// unusual enough that ops should use the full audit query endpoint.
+	// trace reverse-lookup. 500 intentionally matches the global list-pagination
+	// cap (CLAUDE.md §"列表接口强制分页，limit 上限 500"); any increase here
+	// must also relax that cap.
 	traceQueryLimit = 500
 )
 
 // auditEntryDTO is the wire shape for a single audit entry in trace-mode
-// responses. Sensitive fields (SessionID, Payload, TenantID) are deliberately
-// omitted — ops use this for correlation lookup, not full audit trail access.
+// responses. Only the fields needed for trace correlation are included:
+// id, eventType, actorId, occurredAt, timestamp, correlationId.
+// subjectId (OAuth sub, end-user PII), tenantId, sessionId, payload, hash,
+// prevHash, and eventId are deliberately excluded — minimal-PII, fail-closed
+// for a no-caller-cell ops endpoint.
 type auditEntryDTO struct {
 	ID            string    `json:"id"`
 	EventType     string    `json:"eventType"`
 	ActorID       string    `json:"actorId"`
-	SubjectID     string    `json:"subjectId"`
 	OccurredAt    time.Time `json:"occurredAt"`
 	Timestamp     time.Time `json:"timestamp"`
 	CorrelationID string    `json:"correlationId"`
@@ -56,18 +59,20 @@ type ownerDTO struct {
 type selectorsDTO struct {
 	// Metric is a PromQL label-selector hint: {cell="<id>"}
 	Metric string `json:"metric"`
-	// Alert is a short human-readable hint for finding alerts by cell label.
+	// Alert is a stable label-selector string for finding alerts by cell label,
+	// e.g. alertname=~".+",cell="<id>". Programmatically parseable; symmetric
+	// with the Metric selector.
 	Alert string `json:"alert"`
 }
 
-// traceResult is the result type for correlateByTrace.
-type traceResult struct {
+// TraceResult is the result type for CorrelateByTrace.
+type TraceResult struct {
 	TraceID      string          `json:"traceId"`
 	AuditEntries []auditEntryDTO `json:"auditEntries"`
 }
 
-// cellResult is the result type for correlateByCell.
-type cellResult struct {
+// CellResult is the result type for CorrelateByCell.
+type CellResult struct {
 	Owner     ownerDTO     `json:"owner"`
 	Selectors selectorsDTO `json:"selectors"`
 }
@@ -102,27 +107,31 @@ func NewService(store ledger.QueryStore, topo correlation.Topology, logger *slog
 }
 
 // CorrelateByTrace queries the audit ledger for entries with the given traceID
-// and returns a traceResult. Returns KindNotFound when no entries match.
+// and returns a TraceResult. Returns KindNotFound when no entries match.
 //
 // The query uses a fixed ListParams with traceQueryLimit rows, sorted by the
 // canonical ledger order (timestamp DESC, id ASC). For production-scale
 // deployments with very high trace entry counts, callers should use the full
 // auditquery endpoint.
-func (s *Service) CorrelateByTrace(ctx context.Context, traceID string) (traceResult, error) {
+func (s *Service) CorrelateByTrace(ctx context.Context, traceID string) (TraceResult, error) {
 	params := query.ListParams{
 		Limit: traceQueryLimit,
 		Sort:  ledger.QuerySort(),
 	}
 	entries, err := s.store.Query(ctx, ledger.AuditFilters{TraceID: traceID}, params)
 	if err != nil {
-		return traceResult{}, fmt.Errorf("correlate: query by trace: %w", err)
+		s.logger.ErrorContext(ctx, "correlate: query by trace",
+			slog.String("trace_id", traceID),
+			slog.Any("error", err),
+		)
+		return TraceResult{}, fmt.Errorf("correlate: query by trace: %w", err)
 	}
 	if len(entries) == 0 {
-		return traceResult{}, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		return TraceResult{}, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"no audit entries found for trace ID",
 			errcode.WithDetails(errcode.PublicString("traceId", traceID)))
 	}
-	return traceResult{
+	return TraceResult{
 		TraceID:      traceID,
 		AuditEntries: toAuditEntryDTOs(entries),
 	}, nil
@@ -131,14 +140,14 @@ func (s *Service) CorrelateByTrace(ctx context.Context, traceID string) (traceRe
 // CorrelateByCell resolves the owner of cellID from the topology and returns
 // metric/alert selector hints. Returns KindNotFound when cellID is not in the
 // topology map.
-func (s *Service) CorrelateByCell(ctx context.Context, cellID string) (cellResult, error) {
+func (s *Service) CorrelateByCell(ctx context.Context, cellID string) (CellResult, error) {
 	owner, ok := s.topo.Owner(cellID)
 	if !ok {
-		return cellResult{}, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
+		return CellResult{}, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
 			"cell not found in topology",
 			errcode.WithDetails(errcode.PublicString("cellId", cellID)))
 	}
-	return cellResult{
+	return CellResult{
 		Owner: ownerDTO{
 			CellID: cellID,
 			Team:   owner.Team,
@@ -149,19 +158,18 @@ func (s *Service) CorrelateByCell(ctx context.Context, cellID string) (cellResul
 }
 
 // buildSelectors constructs the metric and alert selector hints for a cell ID.
-// The metric selector is a PromQL label-selector string; the alert selector is
-// a human-readable hint referencing the cell label convention documented in
-// .claude/rules/gocell/observability.md §HTTP Metrics cell Label.
+// Both selectors use stable, programmatically parseable label-selector strings.
 func buildSelectors(cellID string) selectorsDTO {
 	return selectorsDTO{
 		Metric: fmt.Sprintf(`{cell=%q}`, cellID),
-		Alert:  fmt.Sprintf("filter alerts by label cell=%q (see docs/ops/alerting-rules.md)", cellID),
+		Alert:  fmt.Sprintf(`alertname=~".+",cell=%q`, cellID),
 	}
 }
 
 // toAuditEntryDTOs maps a slice of *ledger.Entry to []auditEntryDTO.
-// Sensitive fields (SessionID, Payload, TenantID, SeqNo, Hash, PrevHash,
-// EventID) are deliberately excluded from the DTO.
+// Only id, eventType, actorId, occurredAt, timestamp, correlationId are
+// included. subjectId (end-user PII), tenantId, sessionId, payload, hash,
+// prevHash, and eventId are deliberately excluded from the DTO.
 func toAuditEntryDTOs(entries []*ledger.Entry) []auditEntryDTO {
 	out := make([]auditEntryDTO, 0, len(entries))
 	for _, e := range entries {
@@ -175,7 +183,6 @@ func toAuditEntryDTO(e *ledger.Entry) auditEntryDTO {
 		ID:            e.ID,
 		EventType:     e.EventType,
 		ActorID:       e.ActorID,
-		SubjectID:     e.SubjectID,
 		OccurredAt:    e.OccurredAt,
 		Timestamp:     e.Timestamp,
 		CorrelationID: e.CorrelationID,

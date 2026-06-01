@@ -261,16 +261,19 @@ func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 // WithCorrelateRoutes enables the ops/tooling reverse-lookup endpoint
 // GET /internal/v1/audit/correlate on InternalListener.
 //
-// svc must be non-nil; nil is a silent no-op (endpoint stays absent). This
-// follows the devtools-catalog precedent (WithDevtoolsCatalog nil → no
-// endpoint) rather than the strong-dependency wiring pattern, because the
-// correlate service is optional infrastructure that Batch 3 wires with real
-// dependencies; callers that have not yet constructed the service leave the
-// endpoint disabled.
+// A nil svc is a deliberate no-op: the correlate endpoint stays absent and
+// bootstrap proceeds normally. This mirrors WithDevtoolsCatalog — an optional
+// framework endpoint that may be absent in deploys that do not need it.
 //
-// The service is constructed by the composition root (cmd/ or cellmodules/)
-// via correlate.NewService(store, topology, logger); bootstrap.Run mounts
-// its RouteGroups during phase5 alongside HealthRouteGroups.
+// In practice, the corebundle composition root calls buildCorrelateOption before
+// reaching this option. buildCorrelateOption fail-fasts on a nil or typed-nil
+// ledger.QueryStore (auditcore absent = wiring bug), so the no-op path here
+// is a safety valve — not the intended production path — reached only when a
+// future caller deliberately omits the correlate wiring.
+//
+// The service is constructed by the composition root via
+// correlate.NewService(store, topology, logger); bootstrap.Run mounts its
+// RouteGroups during phase5 alongside HealthRouteGroups.
 //
 // ref: WithDevtoolsCatalog — same nil-silent-noop convention for optional
 // framework endpoints.

@@ -35,6 +35,12 @@ type ModuleExports struct {
 	// to construct the correlate reverse-lookup service (#1048 Batch 3). The
 	// store is the same multiStore instance passed to auditcell.WithQueryStore,
 	// ensuring no second store is constructed.
+	//
+	// Exactly one producer (auditcore) is expected in the corebundle assembly.
+	// merge() applies last-non-nil-wins semantics: if a second module were to
+	// set this field, it would silently overwrite the auditcore value. Avoid
+	// registering a second producer; control ordering via Builder.With if you
+	// intentionally need a replacement store.
 	AuditQueryStore ledger.QueryStore
 }
 

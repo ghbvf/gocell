@@ -42,7 +42,7 @@ type queryInfo struct {
 //   - only traceId  → trace mode
 //   - only cell     → cell mode
 //
-// Each param value must be 1–256 characters.
+// Each param value must be 1–256 bytes.
 //
 // Auth is listener-level (InternalListener service-token); this handler does
 // not perform authentication.
@@ -91,7 +91,7 @@ func (s *Service) respondTrace(ctx context.Context, w http.ResponseWriter, trace
 		httputil.WriteError(ctx, w, err)
 		return
 	}
-	writeJSON(ctx, w, correlateResponse{
+	s.writeJSON(ctx, w, correlateResponse{
 		Data: correlateData{
 			Query:        &queryInfo{TraceID: result.TraceID},
 			AuditEntries: result.AuditEntries,
@@ -109,7 +109,7 @@ func (s *Service) respondCell(ctx context.Context, w http.ResponseWriter, cellID
 		httputil.WriteError(ctx, w, err)
 		return
 	}
-	writeJSON(ctx, w, correlateResponse{
+	s.writeJSON(ctx, w, correlateResponse{
 		Data: correlateData{
 			Owner:     &result.Owner,
 			Selectors: &result.Selectors,
@@ -118,7 +118,8 @@ func (s *Service) respondCell(ctx context.Context, w http.ResponseWriter, cellID
 }
 
 // validateParamLength returns ErrValidationFailed when value is empty or
-// longer than maxParamLen (256 characters).
+// longer than maxParamLen (256 bytes). Trace and cell IDs are ASCII opaque
+// identifiers; byte-count semantics are correct and intentional.
 func validateParamLength(value, paramName string) error {
 	const maxParamLen = 256
 	if len(value) == 0 {
@@ -140,10 +141,11 @@ func validateParamLength(value, paramName string) error {
 }
 
 // writeJSON encodes v as JSON and writes it with status 200.
-func writeJSON(ctx context.Context, w http.ResponseWriter, v any) {
+// Encoding errors are logged via the service logger with structured fields.
+func (s *Service) writeJSON(ctx context.Context, w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.ErrorContext(ctx, "correlate: write response", slog.Any("error", err))
+		s.logger.ErrorContext(ctx, "correlate: write response", slog.Any("error", err))
 	}
 }

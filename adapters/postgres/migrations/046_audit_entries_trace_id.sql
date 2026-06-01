@@ -17,23 +17,20 @@
 --     NOT-NULL-no-default semantics established in 043_audit_entries_v2.sql.
 --   - Backfilling '' does NOT break existing-row hashes: trace_id is excluded
 --     from the HMAC chain, so existing rows retain their valid chain hashes.
---   - The index (namespace, trace_id) covers the exact-match filter
---     AuditFilters.TraceID so trace-id lookups are efficient. Uses
---     CREATE INDEX rather than CONCURRENTLY because this migration runs
---     against a table that may have data; the table is small in pre-v1.0
---     deployments (no production traffic yet). Operators on large tables
---     should migrate manually with CONCURRENTLY if needed.
+--   - The (namespace, trace_id) index is created in a separate migration 047
+--     using CREATE INDEX CONCURRENTLY to comply with the repository rule that
+--     large-table indexes must not hold ACCESS EXCLUSIVE locks (migrations/README.md
+--     rule 1). Migration 047 uses the no-transaction directive required by CONCURRENTLY.
 --
 -- ref: 043_audit_entries_v2.sql — NOT NULL no-DEFAULT pattern for correlation_id
 -- ref: runtime/audit/ledger/protocol.go — auditHashInput struct (trace_id absent)
+-- ref: 047_audit_entries_trace_id_index.sql — CONCURRENTLY index creation
 
 -- +goose Up
 
 ALTER TABLE audit_entries ADD COLUMN trace_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE audit_entries ALTER COLUMN trace_id DROP DEFAULT;
-CREATE INDEX idx_audit_namespace_trace_id ON audit_entries (namespace, trace_id);
 
 -- +goose Down
 
-DROP INDEX IF EXISTS idx_audit_namespace_trace_id;
 ALTER TABLE audit_entries DROP COLUMN IF EXISTS trace_id;
