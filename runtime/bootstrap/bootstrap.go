@@ -37,6 +37,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/correlate"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/shutdown"
@@ -181,6 +182,10 @@ type Bootstrap struct {
 	devtoolsRoot          string                     // displayed in Document.Root
 	devtoolsPkgGraph      *kerneldepgraph.Graph      // build-time generated package dep graph (nil = omit packageDeps block)
 	devtoolsWireSummaries []metadata.CellWireSummary // optional; nil → wireSummary omitted from all Cell entities
+
+	// --- correlate reverse-lookup endpoint (#1048) ---
+	// nil = endpoint not registered (Batch 3 wires the concrete Service).
+	correlateSvc *correlate.Service
 
 	// --- runtime guard ---
 	runOnce sync.Once // Run() single-execution guard

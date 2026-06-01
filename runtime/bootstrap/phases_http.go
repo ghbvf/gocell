@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/devtools"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/correlate"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	runtimewebhook "github.com/ghbvf/gocell/runtime/webhook"
 )
@@ -137,6 +138,9 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 	groups := HealthRouteGroups(s.hh, s.healthRouteGroupOpts...)
 	if s.devtoolsHandler != nil {
 		groups = append(groups, devtools.RouteGroup(s.devtoolsHandler))
+	}
+	if b.correlateSvc != nil {
+		groups = append(groups, correlate.CorrelateRouteGroups(b.correlateSvc)...)
 	}
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]

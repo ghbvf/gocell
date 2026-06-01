@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/correlate"
 )
 
 // WithHealthAggregator injects a custom healthz.Aggregator into the bootstrap.
@@ -254,5 +255,32 @@ func WithDevtoolsCatalog(
 func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 	return func(b *Bootstrap) {
 		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)
+	}
+}
+
+// WithCorrelateRoutes enables the ops/tooling reverse-lookup endpoint
+// GET /internal/v1/audit/correlate on InternalListener.
+//
+// svc must be non-nil; nil is a silent no-op (endpoint stays absent). This
+// follows the devtools-catalog precedent (WithDevtoolsCatalog nil → no
+// endpoint) rather than the strong-dependency wiring pattern, because the
+// correlate service is optional infrastructure that Batch 3 wires with real
+// dependencies; callers that have not yet constructed the service leave the
+// endpoint disabled.
+//
+// The service is constructed by the composition root (cmd/ or cellmodules/)
+// via correlate.NewService(store, topology, logger); bootstrap.Run mounts
+// its RouteGroups during phase5 alongside HealthRouteGroups.
+//
+// ref: WithDevtoolsCatalog — same nil-silent-noop convention for optional
+// framework endpoints.
+func WithCorrelateRoutes(svc *correlate.Service) Option {
+	return func(b *Bootstrap) {
+		// nil is a silent noop — endpoint stays absent; mirrors WithDevtoolsCatalog
+		// nil precedent (concrete *T pointer, bare nil check suffices, no typed-nil risk).
+		if svc == nil {
+			return
+		}
+		b.correlateSvc = svc
 	}
 }
