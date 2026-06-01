@@ -143,13 +143,16 @@ func TestNewFrameworkHTTP_BadPrefixPanics(t *testing.T) {
 				_ = contractbuild.NewFrameworkHTTP(tc.id, "GET", "/x")
 			}()
 			if recovered == nil {
-				t.Errorf("expected panic for id=%q, got none", tc.id)
+				t.Fatalf("expected panic for id=%q, got none", tc.id)
 			}
-			// The panic value should be an error wrapping the assertion message.
-			if msg, ok := recovered.(interface{ Error() string }); ok {
-				if !strings.Contains(msg.Error(), "http.framework.") {
-					t.Errorf("panic message %q should mention the required prefix", msg.Error())
-				}
+			// The panic value must be an error (panicregister.Approved wraps an
+			// errcode.Assertion). A non-error payload is a contract violation.
+			err, ok := recovered.(error)
+			if !ok {
+				t.Fatalf("panic value should be an error, got %T", recovered)
+			}
+			if !strings.Contains(err.Error(), "http.framework.") {
+				t.Errorf("panic message %q should mention the required prefix", err.Error())
 			}
 		})
 	}

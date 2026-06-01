@@ -72,8 +72,9 @@ import (
 // TestNO_MANUAL_CONTRACTSPEC_LITERAL_01 scans production .go files under
 // cells/, examples/*/cells/, and runtime/ for contractspec.ContractSpec{…}
 // composite literals and contractspec.EventSpec(…) call expressions,
-// failing on any found. The typed funnels in kernel/contractspec/framework.go
-// are the only legitimate runtime-side construction paths.
+// failing on any found. The typed funnels in runtime/internal/contractbuild
+// (#1038) are the only legitimate runtime-side construction paths; that
+// package is excluded from the scan as the sanctioned funnel home.
 func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -90,6 +91,31 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 	sort.Strings(violations)
 	for _, v := range violations {
 		t.Errorf("NO-MANUAL-CONTRACTSPEC-LITERAL-01: %s", v)
+	}
+}
+
+// TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesContractbuild pins the funnel
+// home (runtime/internal/contractbuild) exclusion. contractbuild.go legitimately
+// constructs contractspec.ContractSpec{…} literals; if contractbuildFunnelDir
+// drifts (e.g. a missing trailing slash), those literals re-enter the scan and
+// the main test reds — but with a confusing "funnel home flagged" message. This
+// test asserts the exclusion directly AND that it is load-bearing (the funnel
+// file exists), so a path typo surfaces here with a clear cause.
+func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesContractbuild(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	for _, f := range collectContractSpecScanFiles(t, root) {
+		rel, _ := filepath.Rel(root, f)
+		if strings.HasPrefix(filepath.ToSlash(rel), contractbuildFunnelDir) {
+			t.Errorf("funnel home must be excluded from scan, but collected: %s", rel)
+		}
+	}
+	// Guard against a vacuous exclusion: the funnel file must exist so the
+	// exclusion is actually protecting real ContractSpec literals.
+	funnelFile := filepath.Join(root, filepath.FromSlash(contractbuildFunnelDir), "contractbuild.go")
+	if _, err := os.Stat(funnelFile); err != nil {
+		t.Fatalf("funnel file %q must exist for the exclusion to be load-bearing: %v",
+			contractbuildFunnelDir, err)
 	}
 }
 

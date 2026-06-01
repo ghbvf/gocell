@@ -142,14 +142,15 @@ func scanForContractspecUsage(fset *token.FileSet, path, rel string) []string {
 		return nil // file does not import kernel/contractspec
 	}
 
-	// blockedNames covers the ContractSpec type itself and the typed funnels
-	// (NewFrameworkHTTP / NewEventDerivation). The funnels are for runtime/
-	// framework infra only — cells/ must use generated NewSubscription /
-	// NewHandler adapters from generated/contracts/**.
+	// blockedNames covers the ContractSpec type itself — the only symbol
+	// kernel/contractspec still exports that a cells/ file could reference.
+	// The typed funnels (NewFrameworkHTTP / NewEventDerivation) moved to
+	// runtime/internal/contractbuild (#1038), which cells/ cannot import at
+	// all (Go internal/ rule), so they are no longer reachable selectors here.
+	// cells/ must use generated NewSubscription / NewHandler adapters from
+	// generated/contracts/**.
 	blockedNames := map[string]bool{
-		"ContractSpec":       true,
-		"NewFrameworkHTTP":   true,
-		"NewEventDerivation": true,
+		"ContractSpec": true,
 	}
 
 	var violations []string
