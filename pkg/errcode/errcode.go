@@ -974,6 +974,16 @@ type errorEnvelope struct {
 // 5xx detail-strip + public-code normalization and never emits the operator-only
 // SourceCode/Status fields on the public surface, so the HTTP wire body matches
 // the v1 schema's additionalProperties:false error object exactly.
+//
+// Caller contract: this is a framework-layer primitive — business handlers must
+// emit errors via httputil.WriteError / WriteErrorWithStatus, which call this
+// and add the fail-closed sentinel fallback. requestID is trusted as opaque
+// correlation metadata sourced from ctxkeys.RequestIDFrom (framework RequestID
+// middleware, UUID-shaped); it is written to the wire verbatim, so callers must
+// not pass user-controlled input. The receiver may be nil (PublicProjection
+// returns a valid ErrInternal 500 envelope). The output carries no trailing
+// newline (unlike json.Encoder.Encode); joined error chains are not expanded —
+// use the package-level PublicProjection(error) for those.
 func (e *Error) MarshalHTTPEnvelope(requestID string) ([]byte, error) {
 	pub := e.PublicProjection()
 	pub.RequestID = requestID

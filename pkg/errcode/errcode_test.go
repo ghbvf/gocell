@@ -687,4 +687,16 @@ func TestError_MarshalHTTPEnvelope(t *testing.T) {
 		assert.Contains(t, string(raw), `"value":9007199254740993`,
 			"single-pass marshal must not coerce int64 to float64")
 	})
+
+	t.Run("nil receiver yields valid ErrInternal 500 envelope", func(t *testing.T) {
+		t.Parallel()
+		var ec *Error
+		raw, err := ec.MarshalHTTPEnvelope("req-nil")
+		require.NoError(t, err)
+		assert.JSONEq(t,
+			`{"error":{"code":"ERR_INTERNAL","message":"internal server error",`+
+				`"details":[],"requestId":"req-nil"}}`,
+			string(raw),
+			"nil *Error must fall back to the PublicProjection ErrInternal envelope")
+	})
 }
