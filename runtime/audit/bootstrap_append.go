@@ -1,13 +1,20 @@
 // Package audit centralizes bootstrap-period audit-chain helpers used by
-// composition roots that wire runtime/auth.NewBootstrapMiddleware.
+// auditcore's auditappendbootstrap slice handler.
 //
-// The single dependency direction is runtime/audit → runtime/auth (type
-// alias for BootstrapAuthFailObserver) plus runtime/audit → runtime/audit/ledger
-// for the hash-chain Store interface. runtime/auth deliberately does not
-// import this package, preserving the documented "runtime/auth must not
-// depend on cells/ or higher-level audit machinery" rule.
+// The bootstrap auth-fail event flow is:
 //
-// Hard / Medium funnel: see tools/archtest/bootstrap_audit_observer_funnel_test.go.
+//  1. runtime/auth.NewBootstrapMiddleware calls the observer closure on 401/429.
+//  2. The observer (constructed in cellmodules/accesscore) calls
+//     cells/accesscore/slices/setup.Service.RecordBootstrapAuthFail, which emits
+//     event.auth.bootstrap-failed.v1 via outbox (inside a transaction).
+//  3. auditcore's auditappendbootstrap slice consumes the event and calls
+//     AppendBootstrapAuthFail → BootstrapLedgerStore.Append.
+//
+// The emit path is covered by EMIT-DECL-COVER-01 + the event contract.
+// The MODULE-PROVIDE-NO-VALUE-HANDOFF-01 archtest ensures the composition root
+// cannot pass a BootstrapLedgerStore across cell boundaries via ModuleExports.
+// The bootstrap namespace is physically isolated from the relay chain via
+// BootstrapNamespace() (ADR 202605270230).
 package audit
 
 import (

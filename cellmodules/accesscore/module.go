@@ -12,6 +12,7 @@ package accesscore
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -120,12 +121,16 @@ func (m module) Provide(
 
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
 	//
-	// The observer captures a pointer-to-pointer cellPtr. After the cell is
-	// constructed, *cellPtr is set so the closure can call
-	// (*cellPtr).RecordBootstrapAuthFail. The observer is invoked only AFTER
-	// HTTP servers start (i.e. after Init has completed), so *cellPtr is always
-	// non-nil when the observer fires — Init sets c.setupSvc which
-	// RecordBootstrapAuthFail calls internally.
+	// Two-phase init: setupSvc (inside AccessCore) is only available after Init,
+	// but WithBootstrapAuth needs the observer at construction time — creating
+	// a forward reference that cannot be resolved with a single constructor call.
+	// Solution: declare cellPtr here (nil), pass the observer closure to
+	// WithBootstrapAuth, then set cellPtr after NewAccessCore returns. This is
+	// not a true cyclic dependency — it is a sequencing constraint (observer
+	// must be registered before Init; setupSvc is populated inside Init).
+	//
+	// The observer fires only AFTER HTTP servers start (post-Init), so cellPtr
+	// is always non-nil when the observer runs.
 	//
 	// The SRE channel (slog.Error) is emitted unconditionally; the compliance
 	// channel (event emit via outbox) is best-effort with a 2s detached ctx cap.
@@ -140,7 +145,8 @@ func (m module) Provide(
 		if cellPtr == nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
-				slog.String("reason", "cell not yet initialized"),
+				slog.String("auth_reason", reason),
+				slog.String("failure", "cell not yet initialized"),
 				slog.String("client_ip", ip))
 			return
 		}
@@ -150,8 +156,9 @@ func (m module) Provide(
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
-				slog.String("reason", reason),
+				slog.String("auth_reason", reason),
 				slog.String("client_ip", ip),
+				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
 				slog.Any("error", err))
 		}
 	}

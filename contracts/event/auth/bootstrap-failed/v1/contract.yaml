@@ -7,6 +7,7 @@ endpoints:
   publisher: accesscore
 schemaRefs:
   payload: payload.schema.json
+  headers: headers.schema.json
 replayable: true
 idempotencyKey: eventId
 deliverySemantics: at-least-once

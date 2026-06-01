@@ -18,7 +18,7 @@ import (
 var sliceMeta = &metadata.SliceMeta{
 	ID:               "auditappendbootstrap",
 	BelongsToCell:    "auditcore",
-	ConsistencyLevel: "L2",
+	ConsistencyLevel: "L1",
 	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.auth.bootstrap-failed.v1", Role: "subscribe", Handler: "HandleEvent"},

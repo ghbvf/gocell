@@ -427,10 +427,13 @@ func NewAccessCore(clk clock.Clock, opts ...Option) *AccessCore {
 // RecordBootstrapAuthFail records a bootstrap authentication failure by emitting
 // event.auth.bootstrap-failed.v1 via the setup slice's outbox.
 //
-// This is called from the bootstrap auth-fail observer closure (Wave-1 #1423):
-// the observer is invoked by runtime/auth.NewBootstrapMiddleware after a 401/429
-// is written. The setup service is only available after Init completes; the
-// observer runs after HTTP servers start, so this is always safe.
+// Intended caller: the composition-root bootstrap-auth observer closure in
+// cellmodules/accesscore (Wave-1 #1423). The observer is invoked by
+// runtime/auth.NewBootstrapMiddleware after a 401/429 is written. Do not call
+// this method from cells/ or runtime/ code.
+//
+// The setup service is only available after Init completes; the observer runs
+// after HTTP servers start, so this is always safe.
 //
 // Returns an error if the setup service has not been initialized yet (Init not
 // called) or if emitting the event fails. Callers (the observer closure) log

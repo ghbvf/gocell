@@ -61,6 +61,11 @@ type Service struct {
 // production). Production assemblies must always inject a real store via
 // WithBootstrapStore; the nil path exists only so cell tests that do not need
 // bootstrap-chain coverage can Init the cell without wiring the full chain.
+//
+// Deliberate deviation from REQUIRED-DEP-NIL-GUARD-01: bootstrapStore is
+// intentionally optional here (nil = no-op mode, not a wiring error). The
+// production nil-guard lives in cellmodules/auditcore, which always injects
+// a real store before bootstrap.Run.
 func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "auditappendbootstrap.NewService")
 	svc := &Service{
@@ -87,10 +92,7 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 //   - Transient AppendBootstrapAuthFail failure → Requeue (ConsumerBase retries)
 //   - Success → Ack
 //
-// Consumer: cg-auditcore-auditappendbootstrap
-// Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
-// Disposition: Ack on success / Requeue on transient / Reject on permanent
-// DLX: broker-native via DispositionReject → Nack(requeue=false).
+// Consumer declaration: see package-level godoc.
 func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	// bootstrapStore is nil in demo/test mode (no bootstrap chain wired).
 	// Requeue so events are not permanently lost while the store is absent;
@@ -105,6 +107,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		s.logger.ErrorContext(ctx, "auditappendbootstrap: unmarshal payload failed",
 			slog.String("event_id", entry.ID()),
+			slog.Int("payload_len", len(entry.Payload())),
 			slog.Any("error", err))
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -124,6 +127,13 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 			slog.String("event_id", entry.ID()),
 			slog.String("reason", payload.Reason),
 			slog.Any("error", err))
+		// ErrValidationFailed (unknown reason, nil store/clock) is a permanent
+		// schema violation — the payload cannot be corrected by retrying.
+		// Any other error (ledger write failure, infra) is treated as transient.
+		if errcode.IsExpected4xx(err) {
+			return outbox.Reject(outbox.NewPermanentError(
+				fmt.Errorf("auditappendbootstrap: append permanent: %w", err)))
+		}
 		return outbox.Requeue(fmt.Errorf("auditappendbootstrap: append: %w", err))
 	}
 	return outbox.Ack()

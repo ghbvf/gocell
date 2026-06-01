@@ -4,7 +4,8 @@
   "type": "object",
   "properties": {
     "reason": {
-      "type": "string"
+      "type": "string",
+      "enum": ["missing_header", "wrong_credentials", "rate_limited"]
     },
     "clientIp": {
       "type": "string"

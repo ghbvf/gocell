@@ -128,9 +128,10 @@ func TestHandleEvent_EmptyReason_Rejects(t *testing.T) {
 	assert.ErrorAs(t, result.Err, &permErr, "empty reason must be a permanent error")
 }
 
-func TestHandleEvent_UnknownReason_Requeues(t *testing.T) {
-	// Unknown reason goes to AppendBootstrapAuthFail which rejects it with ErrValidationFailed.
-	// AppendBootstrapAuthFail returns an error (not permanent) so HandleEvent Requeues.
+func TestHandleEvent_UnknownReason_Rejects(t *testing.T) {
+	// Unknown reason passes through to AppendBootstrapAuthFail which returns
+	// ErrValidationFailed (KindInvalid / IsExpected4xx). This is a permanent
+	// schema violation — HandleEvent must Reject (DLX), not Requeue.
 	bs := newTestBootstrapStore(t)
 	svc, err := auditappendbootstrap.NewService(clock.Real(),
 		auditappendbootstrap.WithBootstrapStore(bs))
@@ -139,6 +140,9 @@ func TestHandleEvent_UnknownReason_Requeues(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{"reason": "unknown_reason"})
 	entry := mustNewEntry(t, payload)
 	result := svc.HandleEvent(context.Background(), entry)
-	// AppendBootstrapAuthFail rejects unknown reasons with an error, which HandleEvent wraps as Requeue.
-	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition,
+		"unknown reason must Reject (permanent schema violation, not retryable)")
+	require.NotNil(t, result.Err, "Reject must carry an error")
+	var permErr *outbox.PermanentError
+	assert.ErrorAs(t, result.Err, &permErr, "unknown reason must be a permanent error")
 }

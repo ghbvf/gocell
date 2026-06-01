@@ -880,3 +880,50 @@ func TestService_RecordBootstrapAuthFail_EmitterFailure_Propagates(t *testing.T)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "broker down")
 }
+
+// TestService_RecordBootstrapAuthFail_EmitsInsideTx mirrors
+// TestService_CreateAdmin_WithSetupLock_AcquiresInsideTxBeforeEmit and verifies
+// that RecordBootstrapAuthFail calls outbox.Emit INSIDE txRunner.RunInTx.
+// A markerTxRunner tags the context; the stubWriter asserts the tag is present
+// when the emit is received.
+func TestService_RecordBootstrapAuthFail_EmitsInsideTx(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	var emitHappenedInsideTx bool
+	w := &stubWriter{onWrite: func() {
+		// This callback runs when outbox.Write is called; the ctx value propagated
+		// by markerTxRunner must be present on the context flowing through the tx.
+		emitHappenedInsideTx = true
+	}}
+	// txMarkerWriter wraps stubWriter and checks the tx context marker at write time.
+	txChecked := false
+	txWriter := &txCheckWriter{inner: w, key: setupLockTxMarkerKey{}, onCheck: func(insideTx bool) {
+		txChecked = true
+		emitHappenedInsideTx = insideTx
+	}}
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil,
+		setup.WithTxManager(persistence.WrapForCell(markerTxRunner{})),
+		setup.WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, txWriter))),
+	)
+
+	err := svc.RecordBootstrapAuthFail(context.Background(), "rate_limited", "1.2.3.4")
+	require.NoError(t, err)
+	assert.True(t, txChecked, "txCheckWriter must be invoked")
+	assert.True(t, emitHappenedInsideTx,
+		"outbox.Emit must be called inside txRunner.RunInTx for RecordBootstrapAuthFail")
+}
+
+// txCheckWriter is a write-once outbox.Writer that validates the tx context
+// marker at write time.  key is the context key injected by markerTxRunner;
+// onCheck is called with true when the key is present, false otherwise.
+type txCheckWriter struct {
+	inner   *stubWriter
+	key     interface{}
+	onCheck func(bool)
+}
+
+func (w *txCheckWriter) Write(ctx context.Context, e outbox.Entry) error {
+	if w.onCheck != nil {
+		w.onCheck(ctx.Value(w.key) == true)
+	}
+	return w.inner.Write(ctx, e)
+}
