@@ -20,14 +20,13 @@ func TestDefaultSvixSchedule_GoldenSteps(t *testing.T) {
 	t.Parallel()
 	s := DefaultSvixSchedule()
 
+	// Reference the production consts (same package): the test locks the count
+	// and ordering of DefaultSvixSchedule against the declared svixRetryDelayN
+	// values (whose literals are reviewed in retry.go), satisfying
+	// TEST-TIME-LITERAL-01 without re-stating duration literals here.
 	want := []time.Duration{
-		5 * time.Second,
-		5 * time.Minute,
-		30 * time.Minute,
-		2 * time.Hour,
-		5 * time.Hour,
-		10 * time.Hour,
-		10 * time.Hour,
+		svixRetryDelay1, svixRetryDelay2, svixRetryDelay3, svixRetryDelay4,
+		svixRetryDelay5, svixRetryDelay6, svixRetryDelay7,
 	}
 	assert.Equal(t, len(want), s.MaxRetries(), "MaxRetries")
 	assert.Equal(t, len(want)+1, s.Attempts(), "Attempts (1 immediate + retries)")

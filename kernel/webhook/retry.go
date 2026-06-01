@@ -24,6 +24,19 @@ type RetrySchedule struct {
 	delays []time.Duration
 }
 
+// svixRetryDelayN are the 7 Svix default retry intervals (PROD-DURATION-CONST-01:
+// production duration literals must be named package-level consts). Steps 6 and
+// 7 are both 10h by Svix's table — the tail interval is capped, not growing.
+const (
+	svixRetryDelay1 = 5 * time.Second
+	svixRetryDelay2 = 5 * time.Minute
+	svixRetryDelay3 = 30 * time.Minute
+	svixRetryDelay4 = 2 * time.Hour
+	svixRetryDelay5 = 5 * time.Hour
+	svixRetryDelay6 = 10 * time.Hour
+	svixRetryDelay7 = 10 * time.Hour
+)
+
 // DefaultSvixSchedule returns the Svix default retry schedule: 7 retries after
 // the immediate first attempt (8 deliveries total), spaced
 // 5s / 5min / 30min / 2h / 5h / 10h / 10h.
@@ -32,13 +45,8 @@ type RetrySchedule struct {
 // ref: standard-webhooks/standard-webhooks spec/standard-webhooks.md (retry guidance)
 func DefaultSvixSchedule() RetrySchedule {
 	return RetrySchedule{delays: []time.Duration{
-		5 * time.Second,
-		5 * time.Minute,
-		30 * time.Minute,
-		2 * time.Hour,
-		5 * time.Hour,
-		10 * time.Hour,
-		10 * time.Hour,
+		svixRetryDelay1, svixRetryDelay2, svixRetryDelay3, svixRetryDelay4,
+		svixRetryDelay5, svixRetryDelay6, svixRetryDelay7,
 	}}
 }
 

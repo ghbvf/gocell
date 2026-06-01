@@ -19,6 +19,10 @@ import (
 
 const dispatchTestTS = 1700000000
 
+// shortDeliveryTimeout is the per-attempt delivery timeout for the timeout-path
+// test (TEST-TIME-LITERAL-01: named package-level const, not an inline literal).
+const shortDeliveryTimeout = 20 * time.Millisecond
+
 func dispatchTestSource(t *testing.T) Source {
 	t.Helper()
 	src, err := NewSource(MustSourceID("dispatch-src"), minSecret())
@@ -175,21 +179,25 @@ func TestDispatcher_Handle_SSRFBlocked_Reject(t *testing.T) {
 	assert.Equal(t, errcode.ErrWebhookSSRFBlocked, ee.Code)
 }
 
-// TestDispatcher_Handle_Timeout_Requeue drives a slow server past a short
-// delivery timeout; a transport timeout is transient → Requeue. The handler
-// sleeps a bounded interval (not block-on-context) so srv.Close cannot hang if
-// the server is slow to observe the client disconnect.
+// TestDispatcher_Handle_Timeout_Requeue drives a server that never responds
+// within the short delivery timeout; a transport timeout is transient →
+// Requeue. The handler blocks on a test-controlled channel (deterministic, no
+// time.Sleep) that is closed BEFORE srv.Close — so the handler unblocks and
+// srv.Close cannot hang, independent of how the server observes the client
+// disconnect.
 func TestDispatcher_Handle_Timeout_Requeue(t *testing.T) {
 	t.Parallel()
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(300 * time.Millisecond) // outlasts the 20ms delivery timeout
+		<-release // block until the test releases, after the client has timed out
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer srv.Close()
+	defer srv.Close()    // runs second: handler already released, returns promptly
+	defer close(release) // runs first (LIFO): unblock the handler
 
 	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
 		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL),
-		WithDeliveryTimeout(20*time.Millisecond))
+		WithDeliveryTimeout(shortDeliveryTimeout))
 	require.NoError(t, err)
 
 	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
