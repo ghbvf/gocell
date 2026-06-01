@@ -364,7 +364,7 @@ func TestWithGRPCListener_Phase0ConfigValidation(t *testing.T) {
 	}{
 		{
 			name: "negative_shutdown_grace",
-			opt:  WithGRPCListener(stubGRPCServer{}, ":0", WithGRPCListenerShutdownGrace(-1*time.Second)),
+			opt:  WithGRPCListener(stubGRPCServer{}, ":0", WithGRPCListenerShutdownGrace(-testtime.D2s)),
 			want: "negative shutdownGrace",
 		},
 		{
