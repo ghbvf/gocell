@@ -363,6 +363,7 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 			TenantID:      src.TenantID,
 			SessionID:     src.SessionID,
 			CorrelationID: src.CorrelationID,
+			TraceID:       src.TraceID,
 			OccurredAt:    src.OccurredAt,
 			Timestamp:     src.Timestamp,
 			Payload:       src.Payload,

@@ -275,13 +275,15 @@ func TestAuditLedgerStore_HashFormatConstraint(t *testing.T) {
 	insertRow := func(ns string, seq int64, prevHash, hash string) error {
 		// event_id is gen_random_uuid()::text so the 021 (namespace, event_id)
 		// UNIQUE index never collides — this test isolates ck_audit_hash_format.
+		// trace_id is supplied as '' (empty) — it is NOT NULL no-DEFAULT after
+		// migration 046 but is excluded from the HMAC chain (observability only).
 		_, err := p.DB().Exec(ctx,
 			`INSERT INTO audit_entries
 			   (id, namespace, seq_no, event_id, event_type, actor_id,
-			    subject_id, tenant_id, session_id, correlation_id, occurred_at,
+			    subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
 			    timestamp, payload, prev_hash, hash)
 			 VALUES (gen_random_uuid(), $1, $2, gen_random_uuid()::text, 'type', 'actor',
-			         '', '', '', '', '1970-01-01 00:00:00+00'::timestamptz,
+			         '', '', '', '', '', '1970-01-01 00:00:00+00'::timestamptz,
 			         now(), '\x7b7d'::bytea, $3, $4)`,
 			ns, seq, prevHash, hash)
 		return err
@@ -624,4 +626,67 @@ func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), tail.SeqNo, "committed entry must be seq 1 (rolled-back one consumed no seq)")
 	assert.Equal(t, int64(1), tail.EntryCount, "committed Tail must count the persisted entry")
+}
+
+// ---------------------------------------------------------------------------
+// TestAuditLedgerStore_TraceID_RoundTripAndFilter (migration 046)
+// ---------------------------------------------------------------------------
+
+// TestAuditLedgerStore_TraceID_RoundTripAndFilter verifies that:
+//  1. trace_id is persisted and retrieved correctly (round-trip).
+//  2. AuditFilters.TraceID narrows Query results to matching rows.
+//  3. Two entries differing ONLY in trace_id produce the SAME Hash — proving
+//     trace_id is excluded from the HMAC chain (non-chained invariant).
+func TestAuditLedgerStore_TraceID_RoundTripAndFilter(t *testing.T) {
+	ctx := context.Background()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	protocol := newTestLedgerProtocol(t, ns)
+
+	store, cleanup := newIsolatedLedgerStore(t, protocol, clockmock.New(storetest.EpochAnchor()))
+	t.Cleanup(cleanup)
+
+	fc := clockmock.New(storetest.EpochAnchor())
+
+	// --- Round-trip ---
+	e1 := storetest.NewEntryFixture(t, "trace-rt-1", "trace.roundtrip", "actor", fc.Now())
+	e1.TraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	require.NoError(t, store.Append(ctx, e1), "Append trace-rt-1")
+
+	got1, err := store.GetBySeq(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", got1.TraceID, "trace_id round-trip")
+
+	// --- Filter ---
+	e2 := storetest.NewEntryFixture(t, "trace-rt-2", "trace.roundtrip", "actor", fc.Now())
+	e2.TraceID = "4bf92f3577b34da6a3ce929d0e0e4736" // same trace
+	require.NoError(t, store.Append(ctx, e2), "Append trace-rt-2")
+
+	e3 := storetest.NewEntryFixture(t, "trace-rt-3", "trace.roundtrip", "actor", fc.Now())
+	e3.TraceID = "different-trace-id"
+	require.NoError(t, store.Append(ctx, e3), "Append trace-rt-3")
+
+	byTrace, err := store.Query(ctx,
+		ledger.AuditFilters{TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	require.NoError(t, err)
+	assert.Len(t, byTrace, 2, "Query(traceID=...) must return only matching entries")
+	for _, e := range byTrace {
+		assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", e.TraceID)
+	}
+
+	// --- Non-chained invariant ---
+	// Two Entries differing ONLY in TraceID must produce the SAME Hash.
+	// We compare seq=1's hash (trace present) with what ComputeHash produces
+	// on a copy with TraceID cleared. Since trace_id is outside auditHashInput,
+	// the hashes must be byte-for-byte identical.
+	withTrace := *got1
+	withoutTrace := *got1
+	withoutTrace.TraceID = ""
+
+	hashWith := protocol.ComputeHash(withTrace.PrevHash, &withTrace)
+	hashWithout := protocol.ComputeHash(withoutTrace.PrevHash, &withoutTrace)
+	assert.Equal(t, hashWith, hashWithout,
+		"trace_id must NOT affect HMAC hash (non-chained invariant): "+
+			"changing TraceID alone must not change the chain hash")
 }

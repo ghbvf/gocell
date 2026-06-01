@@ -149,6 +149,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		TenantID:      string(principal.TenantID),
 		SessionID:     string(principal.SessionID),
 		CorrelationID: string(entry.Observability().CorrelationID),
+		TraceID:       string(entry.Observability().TraceID),
 		OccurredAt:    entry.OccurredAt(),
 		Timestamp:     tsForLedger(entry, s.clk, s.logger, s.spec.name),
 		Payload:       entry.Payload(),
