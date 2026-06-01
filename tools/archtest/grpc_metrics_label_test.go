@@ -2,7 +2,7 @@
 // source contract, the gRPC mirror of the HTTP CELLID-CTXSOURCE / RUNTIME-SENTINEL
 // invariants in http_metrics_label_test.go.
 //
-//   - INVARIANT: GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01
+// INVARIANT: GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01
 //
 // # What this guards
 //
@@ -101,12 +101,20 @@ func TestGRPCMetricsLabelCellIDCtxSource01(t *testing.T) {
 		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
 			return nil
 		}
+		// The interceptor package loaded; the outer !visited Fatalf below now
+		// only fires for a genuine "package not loaded" (production scope gap),
+		// never for a renamed UnaryMetrics — that case emits its own diagnostic.
+		visited = true
 
 		fn := findUnaryMetricsFuncDecl(p.Files)
 		if fn == nil {
-			return nil
+			return []Diagnostic{{
+				Rel: p.Rel(p.Files[0]),
+				Message: fmt.Sprintf("%s: func %s not found in %s — renamed or moved? "+
+					"the gRPC metrics cell-label reader contract is no longer locked",
+					grpcMetricsRuleCtxSource, grpcMetricsUnaryMetricsName, grpcInterceptorPkgPath),
+			}}
 		}
-		visited = true
 
 		rel := relForFunc(p, fn)
 		info := p.TypesInfo

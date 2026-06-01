@@ -558,9 +558,10 @@ func rememberFirstPos(dst *token.Pos, pos token.Pos) {
 
 // isRuntimeCellSentinelRef reports whether sel is a reference to the
 // single-source sentinel metrics.RuntimeCellSentinel ("_runtime"). The HTTP
-// middleware no longer declares its own RuntimeCellIDSentinel constant; it reads
-// the transport-neutral runtime/observability/metrics.RuntimeCellSentinel, so
-// the fallback now appears as a qualified selector rather than a bare ident.
+// middleware used to declare a local sentinel constant of its own; that was
+// deleted in favor of reading the transport-neutral
+// runtime/observability/metrics.RuntimeCellSentinel, so the fallback now appears
+// as a qualified selector rather than a bare ident.
 func isRuntimeCellSentinelRef(sel *ast.SelectorExpr) bool {
 	return selectorQualifier(sel.X) == "metrics" && sel.Sel != nil && sel.Sel.Name == "RuntimeCellSentinel"
 }

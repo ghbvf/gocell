@@ -191,7 +191,7 @@ emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：c
 - **业务请求**：`cell=<cellID>` — 由 `runtime/http/router.Router.MountRouteGroup` 记录 `RouteGroup.CellID` 与 HTTP namespace 的 ownership，listener-root `CellAttribution` middleware 在 tracing/access-log/metrics/protection 之前写入 `kernel/ctxkeys.CellID`。成功 handler、auth/rate-limit/circuit-breaker/body-limit 前置拒绝、chi 405 都必须使用同一 cell。
 - **框架/未匹配请求**：`cell="_runtime"` 哨兵 — `runtime/http/middleware.Metrics` 在 `ctxkeys.CellID` 缺失时使用 `metrics.RuntimeCellSentinel`，覆盖 `/healthz`、`/readyz`、`/metrics` 自身、listener 外 404 等所有未落入业务 RouteGroup 的请求。
 
-`_runtime` 哨兵单源 = `runtime/observability/metrics.RuntimeCellSentinel`（HTTP middleware 与 gRPC metrics interceptor 共读同一常量，全仓仅此一处 `"_runtime"` 字面量）。**gRPC 指标**（`grpc_server_requests_total` / `grpc_server_request_duration_seconds`）复用同一 `cell` label 语义，但 gRPC cell attribution 接线尚未落地（`FullMethod → cellID` 归属随 epic PR-7/8，tracking #1383），故当前 gRPC 的 `cell` 恒为 `_runtime`——运维侧不要对 gRPC 指标用 `cell!="_runtime"` 过滤，详见 `docs/ops/alerting-rules.md`。reader 侧契约（取自 `ctxkeys.CellID` + 缺失回退 sentinel）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01` 守卫。
+`_runtime` 哨兵单源 = `runtime/observability/metrics.RuntimeCellSentinel`（HTTP middleware 与 gRPC metrics interceptor 共读同一常量，全仓仅此一处 `"_runtime"` 字面量）。
 
 `RouteGroup.Prefix` 非空时按 path segment 前缀归属；`Prefix == ""` 不表示拥有整个 listener，而是从该 RouteGroup 内实际注册的 `Route` / `Handle` / `Mount` / `auth.Mount` 合同路径派生归属。重叠 namespace 按最长前缀/最长模板胜出；同一 listener 内跨 cell 声明完全相同的 owner path/template 必须 fail-fast，不能靠注册顺序抢占。
 
@@ -202,6 +202,10 @@ emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：c
 - 不做代码侧 backward-compat / double-write：禁止恢复 `ProviderCollectorConfig.CellID`、assembly/default 推导、旧 label 复制，或同时写新旧 HTTP 指标序列。
 - `cell` 是粗粒度 owner 维度，不是 slice / contract / tenant / user 维度；业务 SLO / 告警默认过滤 `cell!="_runtime"`，运行时探针与未匹配流量排查使用 `cell="_runtime"`。
 - 旧 dashboard / alert 需要过渡时，在 Prometheus 侧用 recording rule 聚合新序列；remote-write 或业务专用 Prometheus 需要降噪时，用 metric relabel drop `_runtime` 序列。示例见 `docs/ops/alerting-rules.md`。
+
+## gRPC Metrics `cell` Label（当前恒为 `_runtime`）
+
+`grpc_server_requests_total` / `grpc_server_request_duration_seconds` 复用与 HTTP 同一 `cell` label 语义与同一 `_runtime` 哨兵单源（`runtime/observability/metrics.RuntimeCellSentinel`）。但 gRPC cell attribution 接线尚未落地——HTTP 侧 router-root `CellAttribution` 从 `RouteGroup.CellID` 归属 cell，gRPC 对应的 `FullMethod → cellID` 归属（生成式 registrar 派生）随 epic PR-7/8 落地（tracking #1383）。**在此之前所有 gRPC 流量的 `cell` 恒为 `_runtime`，运维侧不要对 gRPC 指标用 `cell!="_runtime"` 过滤**（详见 `docs/ops/alerting-rules.md`）。reader 侧契约（cell label 取自 `ctxkeys.CellID`，缺失回退 `RuntimeCellSentinel`，禁硬编码）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01` 守卫，故 attribution 一旦接线，`cell` 自动反映归属 cell 而无需改 interceptor。
 
 ## Redis Key Namespace（owner 维度的 keyspace 等价物）
 
