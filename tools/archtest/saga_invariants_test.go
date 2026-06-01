@@ -9,6 +9,7 @@
 //   - INVARIANT: SAGA-STEP-RUN-OUTSIDE-TX-01
 //   - INVARIANT: SAGA-INVARIANTS-FILE-CONSOLIDATED-01
 //   - INVARIANT: SAGA-CONSTRUCTOR-NIL-GUARD-01
+//   - INVARIANT: SAGA-METRIC-LABEL-VALUES-FROZEN-01
 //
 // saga_invariants_test.go — consolidated saga-theme archtest invariants.
 //
@@ -38,6 +39,7 @@ import (
 	"go/types"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -868,7 +870,8 @@ func scanHeartbeatSelectors(p *Pass, file *ast.File, rel string) []Diagnostic {
 					"non-step heartbeat (e.g. extending lease across an outer operation), "+
 					"call Executor.RunWithHeartbeat — do NOT re-introduce a centralized "+
 					"heartbeat goroutine.",
-				sagaCoordinatorNoHeartbeatLoopRule),
+				sagaCoordinatorNoHeartbeatLoopRule,
+			),
 		})
 	})
 	return out
@@ -1544,7 +1547,8 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 					"both calls sagajournaltest.RunConformanceSuite(t, factory) "+
 					"AND constructs %s inside the factory closure (impl-level "+
 					"enrollment).",
-				implKey, pkgPath, implKey),
+				implKey, pkgPath, implKey,
+			),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
@@ -1960,7 +1964,8 @@ func journalFieldSealMessage(kind journalFieldKind, holderName string) string {
 	if kind == journalFieldCore {
 		return fmt.Sprintf(
 			"%s: struct %q holds a journal.JournalCore field; only %q may hold it",
-			sagaJournalHolderSealRule, holderName, allowedSagaJournalHolder)
+			sagaJournalHolderSealRule, holderName, allowedSagaJournalHolder,
+		)
 	}
 	// journalFieldFull / journalFieldHeartbeater — a Heartbeat-bearing field.
 	return fmt.Sprintf(
@@ -1969,7 +1974,8 @@ func journalFieldSealMessage(kind journalFieldKind, holderName string) string {
 			"persist a Heartbeat-capable field — hold journal.JournalCore instead. The "+
 			"full Journal exists transiently only as the NewCoordinator parameter handed "+
 			"to executor.NewExecutor (the sanctioned per-step heartbeat funnel).",
-		sagaJournalHolderSealRule, holderName)
+		sagaJournalHolderSealRule, holderName,
+	)
 }
 
 // heartbeatFuncFieldDiag (rule 3) flags a struct field whose type is a func —
@@ -2013,7 +2019,8 @@ func heartbeatFuncFieldDiag(p *Pass, rel, holderName string, field *ast.Field) (
 				"no struct in runtime/saga may persist a Heartbeat-capable callable (interface OR func) "+
 				"— a persisted heartbeat func reconstructs the centralized-loop anti-pattern from a value "+
 				"passed in from outside runtime/saga. Funnel per-step heartbeat through executor.",
-			sagaJournalHolderSealRule, holderName),
+			sagaJournalHolderSealRule, holderName,
+		),
 	}, true
 }
 
@@ -2167,7 +2174,8 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 						"%s-B1: type alias %q = journal.%s in runtime/saga; remove the alias "+
 							"and reference the journal interface directly — aliases create an "+
 							"evasion path for the holder-seal invariant",
-						sagaJournalHolderSealRule, ts.Name.Name, aliased),
+						sagaJournalHolderSealRule, ts.Name.Name, aliased,
+					),
 				})
 			})
 		}
@@ -2987,13 +2995,15 @@ func sfcDiagsTerminalEventKind(isTerminal, tekCases map[string]bool, rel string,
 	for name := range isTerminal {
 		if !tekCases[name] {
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
-				"terminal saga.%s missing a case in journal.TerminalEventKind switch", name)})
+				"terminal saga.%s missing a case in journal.TerminalEventKind switch", name,
+			)})
 		}
 	}
 	for name := range tekCases {
 		if !isTerminal[name] {
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
-				"journal.TerminalEventKind has case saga.%s which Status.IsTerminal() does not classify terminal", name)})
+				"journal.TerminalEventKind has case saga.%s which Status.IsTerminal() does not classify terminal", name,
+			)})
 		}
 	}
 	return diags
@@ -3087,7 +3097,8 @@ func sfcDiagsConstSetValidRange(typeLabel string, declared map[int64]string, loo
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
 				"%s const %s (value %d) is declared but %s.Valid() excludes it from the `for v := …; v.Valid(); v++` enumeration — "+
 					"Render() and the fanout golden cannot cover it; extend Valid() (and IsTerminal()/String()/the fanout carriers) to admit it",
-				typeLabel, name, v, typeLabel)})
+				typeLabel, name, v, typeLabel,
+			)})
 		}
 	}
 	for v := range loop {
@@ -3095,7 +3106,8 @@ func sfcDiagsConstSetValidRange(typeLabel string, declared map[int64]string, loo
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
 				"%s.Valid() admits value %d which no declared const carries — Valid()'s range exceeds the "+
 					"const set; tighten Valid() or declare the missing const",
-				typeLabel, v)})
+				typeLabel, v,
+			)})
 		}
 	}
 	return diags
@@ -3112,7 +3124,8 @@ func sfcGoldenDiags(art sagacoveragegen.Artifacts, gen, readyz, alerting []byte)
 
 	if !bytes.Equal(gen, art.TerminalCoverageGo) {
 		diags = append(diags, Diagnostic{Rel: sfcGenFileRel, Line: 1, Message: sfcRegenMsg(
-			"terminal_coverage_gen.go drifted from the saga.Status const set")})
+			"terminal_coverage_gen.go drifted from the saga.Status const set",
+		)})
 	}
 
 	diags = append(diags, sfcRegionDiag(readyz, sfcReadyzDocRel, art.ReadyzTable,
@@ -3376,7 +3389,8 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 	all = append(all, sfcDiagsTerminalEventKind(
 		map[string]bool{"StatusSucceeded": true},
 		map[string]bool{"StatusFailed": true},
-		"kernel/saga/journal/event.go", 135)...)
+		"kernel/saga/journal/event.go", 135,
+	)...)
 	all = append(all, sfcGoldenDiags(art, []byte("drift\n"),
 		[]byte("no markers"), []byte("no markers"))...)
 	all = append(all, sfcDiagsConstSetValidRange("saga.Status",
@@ -4418,7 +4432,8 @@ func sagaConsolidationDiags(byFile map[string][]sagaThemeHit, relOf map[string]s
 				Message: fmt.Sprintf(
 					"saga-theme invariant %s declared in %s — saga invariants must be consolidated into %s "+
 						"(per .claude/rules/gocell/ai-robust.md §\"archtest 文件命名\"; move it to %s)",
-					hit.id, base, sagaConsolidatedFile, sagaConsolidatedFile),
+					hit.id, base, sagaConsolidatedFile, sagaConsolidatedFile,
+				),
 			})
 		}
 	}
@@ -4474,6 +4489,7 @@ var knownSagaInvariantIDs = []string{
 	"SAGA-STEP-RUN-OUTSIDE-TX-01",
 	"SAGA-INVARIANTS-FILE-CONSOLIDATED-01",
 	"SAGA-CONSTRUCTOR-NIL-GUARD-01",
+	"SAGA-METRIC-LABEL-VALUES-FROZEN-01",
 }
 
 // TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent closes blind-spot B1:
@@ -4552,4 +4568,307 @@ func TestSagaInvariantsConsolidated_REDFixture(t *testing.T) {
 	assert.NotZero(t, d.Line, "diagnostic must carry a non-zero Line")
 	assert.Equal(t, "tools/archtest/saga_stray_test.go", d.Rel, "diagnostic must point at the stray file")
 	assert.Contains(t, d.Message, "SAGA-STRAY-01", "diagnostic must name the stray invariant ID")
+}
+
+// ===========================================================================
+// INVARIANT: SAGA-METRIC-LABEL-VALUES-FROZEN-01
+//
+// The string value sets of the four sealed string-typed label enums in
+// runtime/saga/executor — the values that reach the saga_* metric `reason` /
+// `result` labels via SagaCollector — are frozen to:
+//
+//	HeartbeatFailureReason: {"infra_error", "stale_lease"}
+//	TickResult:             {"claimed", "empty", "error"}
+//	DriveResult:            {"ok", "error"}
+//	LeaderSkipReason:       {"contended", "ctx_canceled", "backend_error"}
+//
+// (Outcome is an int enum mapped through outcomeLabel's fail-closed panic-default
+// switch, so it is guarded at runtime there and is intentionally NOT in scope.)
+//
+// Two prongs, mirroring RECONCILE-RESULT-LABEL-VALUES-FROZEN-01:
+//
+//   - A1 freeze: enumerate the string consts of each enum TYPE and compare to an
+//     independent hardcoded want-set (anti-tautology, order-insensitive).
+//   - A2 callsite guard: a `type X string` does NOT stop an inline literal —
+//     ObserveLeaderSkip(ctx, id, "typo") and LeaderSkipReason("typo") both
+//     compile. The guard bans any compile-time-constant argument of one of the
+//     four enum types unless it is a bare reference to a declared const, so the
+//     only values that can reach a metric label are the frozen consts or a
+//     non-constant (the classifyLeaderSkip / direct-const fan-out).
+//
+// AI-robust rating: Medium (string-typed-concept funnel). Downstream: archtest
+// type-aware callsite guard binding the argument's go/types named-type identity
+// to the executor enum set. Upstream: the `type X string` defined type
+// constrains the producer signature, but Go assigns an untyped literal to a
+// defined string type, so the type system cannot seal the value set from inside
+// the package — the archtest is the external frozen-witness. Hard upgrade path:
+// enroll the saga metric label value sets into the metricschema golden so the
+// freeze is byte-locked at codegen time (shared with reconcile at gh #1416),
+// retiring this archtest. Enrolls the PRE-EXISTING HeartbeatFailureReason
+// alongside the three new enums (modernize-consistency).
+//
+// Blind spots (per ai-robust.md): A1 enumerates by sealed enum TYPE identity (not
+// name prefix), so a const renamed off its mnemonic but still typed the enum is
+// counted and an N+1 const fails the count assertion; A1/A2 do not verify
+// classifyLeaderSkip returns one of the 3 reasons in every path (covered by
+// TestClassifyLeaderSkip in runtime/saga); A2 binds on the ARGUMENT's named type
+// being a frozen executor enum, so a non-enum sink (string(reason)) carries a
+// non-constant arg and is not flagged. Reverse self-check:
+// TestSagaMetricLabelValuesFrozen01_NegativeControl + the callsite fixtures.
+
+const sagaExecutorPkg = PlatformModulePath + "/runtime/saga/executor"
+
+// sagaLabelEnumWant maps each frozen executor label-enum type name to its
+// frozen string value set. Updating any entry requires a simultaneous update to:
+// (1) the enum consts in runtime/saga/executor/observer.go, (2) the classifier
+// feeding it (classifyLeaderSkip / driveResult mapping / tick branches in
+// runtime/saga), (3) dashboards/alerts in docs/ops/alerting-rules.md, and (4)
+// any saga metric label doc契约.
+var sagaLabelEnumWant = map[string][]string{
+	"HeartbeatFailureReason": {"infra_error", "stale_lease"},
+	"TickResult":             {"claimed", "empty", "error"},
+	"DriveResult":            {"ok", "error"},
+	"LeaderSkipReason":       {"contended", "ctx_canceled", "backend_error"},
+}
+
+// sagaEnumTypeName returns the enum type name if t is one of the frozen executor
+// label-enum named types, else "".
+func sagaEnumTypeName(t types.Type) string {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return ""
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaExecutorPkg {
+		return ""
+	}
+	if _, frozen := sagaLabelEnumWant[obj.Name()]; frozen {
+		return obj.Name()
+	}
+	return ""
+}
+
+// collectSagaEnumConsts enumerates, per frozen enum type, the string constant
+// values declared in the executor package (p must be that package Pass).
+func collectSagaEnumConsts(p *Pass) map[string][]string {
+	if p.Pkg == nil {
+		return nil
+	}
+	got := make(map[string][]string)
+	scope := p.Pkg.Scope()
+	for _, name := range scope.Names() {
+		c, ok := scope.Lookup(name).(*types.Const)
+		if !ok {
+			continue
+		}
+		typeName := sagaEnumTypeName(c.Type())
+		if typeName == "" {
+			continue
+		}
+		got[typeName] = append(got[typeName], strings.Trim(c.Val().ExactString(), `"`))
+	}
+	return got
+}
+
+// sagaValueSetDiff returns "" when got and want hold the same set
+// (order-insensitive), else a human-readable extra/missing description.
+func sagaValueSetDiff(got, want []string) string {
+	gs, ws := slices.Clone(got), slices.Clone(want)
+	slices.Sort(gs)
+	slices.Sort(ws)
+	if slices.Equal(gs, ws) {
+		return ""
+	}
+	wantSet := make(map[string]struct{}, len(want))
+	for _, k := range want {
+		wantSet[k] = struct{}{}
+	}
+	gotSet := make(map[string]struct{}, len(got))
+	var extra, missing []string
+	for _, k := range got {
+		gotSet[k] = struct{}{}
+		if _, ok := wantSet[k]; !ok {
+			extra = append(extra, k)
+		}
+	}
+	for _, k := range want {
+		if _, ok := gotSet[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	slices.Sort(extra)
+	slices.Sort(missing)
+	return "  extra:   " + sliceOrNone(extra) + "\n  missing: " + sliceOrNone(missing)
+}
+
+// TestSagaMetricLabelValuesFrozen01 freezes each executor label-enum's const
+// value set against the independent hardcoded want-set.
+func TestSagaMetricLabelValuesFrozen01(t *testing.T) {
+	t.Parallel()
+
+	var got map[string][]string
+	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != sagaExecutorPkg {
+			return nil
+		}
+		got = collectSagaEnumConsts(p)
+		return nil
+	})
+
+	if got == nil {
+		t.Fatalf("SAGA-METRIC-LABEL-VALUES-FROZEN-01: executor package %s not scanned — path changed?", sagaExecutorPkg)
+	}
+	for typeName, want := range sagaLabelEnumWant {
+		gotVals, ok := got[typeName]
+		if !ok || len(gotVals) == 0 {
+			t.Fatalf("SAGA-METRIC-LABEL-VALUES-FROZEN-01: enum %s has 0 string consts — renamed/removed?", typeName)
+		}
+		if diff := sagaValueSetDiff(gotVals, want); diff != "" {
+			t.Fatalf("SAGA-METRIC-LABEL-VALUES-FROZEN-01: %s value set drifted from the frozen want-set.\n%s\n"+
+				"Update ALL sync points in the same PR: (1) the enum consts in "+
+				"runtime/saga/executor/observer.go, (2) the classifier feeding it, "+
+				"(3) sagaLabelEnumWant here, (4) docs/ops/alerting-rules.md.", typeName, diff)
+		}
+		if len(gotVals) != len(want) {
+			t.Errorf("SAGA-METRIC-LABEL-VALUES-FROZEN-01: %s has %d consts, want exactly %d",
+				typeName, len(gotVals), len(want))
+		}
+	}
+}
+
+// isSagaEnumConversion reports whether call is a type conversion to one of the
+// frozen executor label enums (e.g. executor.LeaderSkipReason("x")). The
+// conversion's operand is itself recorded by go/types with the enum type, so
+// scanning it would double-flag; we skip the operands here and let the parent
+// call flag the conversion expression once (as its argument).
+func isSagaEnumConversion(info *types.Info, call *ast.CallExpr) bool {
+	var sel *ast.Ident
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		sel = f
+	case *ast.SelectorExpr:
+		sel = f.Sel
+	default:
+		return false
+	}
+	tn, ok := info.ObjectOf(sel).(*types.TypeName)
+	if !ok {
+		return false
+	}
+	return sagaEnumTypeName(tn.Type()) != ""
+}
+
+// isSagaDeclaredConstRef reports whether arg is a bare reference to a declared
+// const (a same-package Ident or a qualified pkg.Const SelectorExpr), as opposed
+// to an inline literal or a T("x") conversion.
+func isSagaDeclaredConstRef(info *types.Info, arg ast.Expr) bool {
+	switch e := arg.(type) {
+	case *ast.Ident:
+		_, ok := info.ObjectOf(e).(*types.Const)
+		return ok
+	case *ast.SelectorExpr:
+		_, ok := info.ObjectOf(e.Sel).(*types.Const)
+		return ok
+	default:
+		return false
+	}
+}
+
+// scanSagaEnumLabelCallsites flags any CallExpr argument whose go/types type is a
+// frozen executor label-enum AND is a compile-time constant that is not a bare
+// declared-const reference (an inline string literal or a T("x") conversion).
+func scanSagaEnumLabelCallsites(p *Pass) []Diagnostic {
+	info := p.TypesInfo
+	if info == nil {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		rel := p.Rel(file)
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			if isSagaEnumConversion(info, call) {
+				return // operand handled by the parent call that receives the conversion
+			}
+			for _, arg := range call.Args {
+				tv, ok := info.Types[arg]
+				if !ok || tv.Value == nil {
+					continue // non-constant — allowed (classify() output, vars)
+				}
+				typeName := sagaEnumTypeName(tv.Type)
+				if typeName == "" {
+					continue // not an enum-typed arg
+				}
+				if isSagaDeclaredConstRef(info, arg) {
+					continue // a declared const (frozen by A1) — allowed
+				}
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(arg.Pos()).Line,
+					Message: "inline constant of saga label enum " + typeName +
+						" reaches a metric label — pass a declared executor." + typeName +
+						" const (or a classify() result), not a string literal or " +
+						typeName + "(...) conversion (SAGA-METRIC-LABEL-VALUES-FROZEN-01 callsite guard)",
+				})
+			}
+		})
+	}
+	return diags
+}
+
+// TestSagaMetricLabelValuesFrozen01_CallsiteGuard is the production GREEN
+// baseline: every saga label enum value reaching a callsite is a declared const
+// or a non-constant (classifyLeaderSkip output / direct executor.Tick* const).
+func TestSagaMetricLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
+	t.Parallel()
+	var allDiags []Diagnostic
+	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		allDiags = append(allDiags, scanSagaEnumLabelCallsites(p)...)
+		return nil
+	})
+	Report(t, "SAGA-METRIC-LABEL-VALUES-FROZEN-01", allDiags)
+}
+
+// TestSagaMetricLabelValuesFrozen01_NegativeControl proves the freeze comparison
+// is non-vacuous.
+func TestSagaMetricLabelValuesFrozen01_NegativeControl(t *testing.T) {
+	t.Parallel()
+	base := sagaLabelEnumWant["LeaderSkipReason"]
+	if diff := sagaValueSetDiff(append(slices.Clone(base), "rogue"), base); diff == "" {
+		t.Fatal("negative control: an extra value produced an empty diff — comparison is vacuous")
+	}
+	renamed := []string{"contended", "ctx_canceled", "io_error"}
+	if diff := sagaValueSetDiff(renamed, base); diff == "" {
+		t.Fatal("negative control: a renamed value produced an empty diff — comparison is vacuous")
+	}
+	if diff := sagaValueSetDiff(base, base); diff != "" {
+		t.Fatalf("negative control: identical sets produced a non-empty diff: %s", diff)
+	}
+}
+
+// TestSagaMetricLabelValuesFrozen01_CallsiteGuard_Fixtures proves the callsite
+// guard flags an inline literal/conversion (red) and not a declared const (green).
+func TestSagaMetricLabelValuesFrozen01_CallsiteGuard_Fixtures(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		dir  string
+		want int
+	}{
+		{"red_literal", 2},
+		{"green", 0},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.dir, func(t *testing.T) {
+			t.Parallel()
+			pattern := "./tools/archtest/testdata/saga_metric_label_values_fixtures/" + c.dir
+			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanSagaEnumLabelCallsites)
+			if len(diags) != c.want {
+				t.Fatalf("callsite-guard fixture %s: want %d diagnostic(s), got %d: %v",
+					c.dir, c.want, len(diags), diags)
+			}
+		})
+	}
 }
