@@ -28,7 +28,7 @@
 // silently allowed.
 //
 // This archtest pins the production callsite identity of AuthenticateBearer to
-// the two transport request-boundary bridges:
+// the sanctioned transport request-boundary bridges:
 //
 //   - runtime/auth/middleware.go — handleAuthRequest, the HTTP AuthMiddleware
 //     verify→principal→ctx bridge. NOTE this is a SAME-PACKAGE caller (it lives
@@ -37,6 +37,11 @@
 //     "Detection" below).
 //   - runtime/grpc/interceptor/auth.go — UnaryAuth, the gRPC unary-interceptor
 //     bridge. This is a CROSS-PACKAGE caller (auth.AuthenticateBearer selector).
+//   - runtime/auth/authenticator.go — NewBearerHeaderAuthenticator, the
+//     Authenticator adapter for mount points (e.g. WebSocket upgrade slots)
+//     that need a single Bearer-header scheme without reintroducing union
+//     fan-out. It delegates to the same core so JWT→Principal mapping cannot
+//     drift in adapter/composition-root code.
 //
 // No producer (cells/* or examples/*) and no other runtime/adapter site may
 // call it.
@@ -112,10 +117,11 @@ import (
 const authPkgPath = PlatformModulePath + "/runtime/auth"
 
 // authenticateBearerCallerAllowlist is the set of production files allowed to
-// reference runtime/auth.AuthenticateBearer — the two transport request-boundary
-// bridges (HTTP + gRPC). middleware.go is a same-package (bare-ident) caller;
-// interceptor/auth.go is a cross-package (selector) caller.
+// reference runtime/auth.AuthenticateBearer — sanctioned transport request-boundary
+// bridges. middleware.go and authenticator.go are same-package (bare-ident)
+// callers; interceptor/auth.go is a cross-package (selector) caller.
 var authenticateBearerCallerAllowlist = map[string]struct{}{
+	"runtime/auth/authenticator.go":    {}, // Bearer-header Authenticator adapter for WebSocket/custom mount points
 	"runtime/auth/middleware.go":       {}, // HTTP handleAuthRequest bridge (same-package bare ident)
 	"runtime/grpc/interceptor/auth.go": {}, // gRPC UnaryAuth bridge (cross-package selector)
 }

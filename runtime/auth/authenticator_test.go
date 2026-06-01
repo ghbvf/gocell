@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -17,19 +16,6 @@ import (
 )
 
 const authnDNeg6min = -6 * time.Minute
-
-// stubAuthenticator is a test double for the Authenticator interface.
-type stubAuthenticator struct {
-	principal *Principal
-	ok        bool
-	err       error
-	calls     int
-}
-
-func (s *stubAuthenticator) Authenticate(_ *http.Request) (*Principal, bool, error) {
-	s.calls++
-	return s.principal, s.ok, s.err
-}
 
 func newRequest(t *testing.T) *http.Request {
 	t.Helper()
@@ -53,198 +39,15 @@ func TestAuthenticatorFunc_Adapter(t *testing.T) {
 	}
 }
 
-func TestUnionAuthenticator_FirstMatchWins(t *testing.T) {
-	want := &Principal{Kind: PrincipalUser, Subject: "first"}
-	first := &stubAuthenticator{principal: want, ok: true}
-	second := &stubAuthenticator{principal: &Principal{Subject: "second"}, ok: true}
-	third := &stubAuthenticator{principal: &Principal{Subject: "third"}, ok: true}
+// --- T2: jwtClaimsToPrincipal mapping tests ---
 
-	u := NewUnionAuthenticator(first, second, third)
-	got, ok, err := u.Authenticate(newRequest(t))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if got != want {
-		t.Errorf("expected first principal, got %v", got)
-	}
-	if second.calls != 0 {
-		t.Errorf("second authenticator should not have been called, got %d calls", second.calls)
-	}
-	if third.calls != 0 {
-		t.Errorf("third authenticator should not have been called, got %d calls", third.calls)
-	}
-}
-
-func TestUnionAuthenticator_SkipAbsentCredential(t *testing.T) {
-	want := &Principal{Kind: PrincipalService, Subject: "svc"}
-	first := &stubAuthenticator{principal: nil, ok: false, err: nil}
-	second := &stubAuthenticator{principal: want, ok: true}
-
-	u := NewUnionAuthenticator(first, second)
-	got, ok, err := u.Authenticate(newRequest(t))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if got != want {
-		t.Errorf("expected second principal, got %v", got)
-	}
-	if first.calls != 1 {
-		t.Errorf("first authenticator should have been called once, got %d", first.calls)
-	}
-	if second.calls != 1 {
-		t.Errorf("second authenticator should have been called once, got %d", second.calls)
-	}
-}
-
-func TestUnionAuthenticator_InvalidCredentialShortCircuits(t *testing.T) {
-	errInvalid := errors.New("token expired")
-	first := &stubAuthenticator{principal: nil, ok: false, err: errInvalid}
-	second := &stubAuthenticator{principal: &Principal{Subject: "should-not-reach"}, ok: true}
-
-	u := NewUnionAuthenticator(first, second)
-	got, ok, err := u.Authenticate(newRequest(t))
-	if !errors.Is(err, errInvalid) {
-		t.Errorf("expected errInvalid, got %v", err)
-	}
-	if ok {
-		t.Error("expected ok=false on error")
-	}
-	if got != nil {
-		t.Errorf("expected nil principal on error, got %v", got)
-	}
-	if second.calls != 0 {
-		t.Errorf("second authenticator must not be called on error, got %d calls", second.calls)
-	}
-}
-
-func TestUnionAuthenticator_EmptyChildren(t *testing.T) {
-	u := NewUnionAuthenticator()
-	got, ok, err := u.Authenticate(newRequest(t))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ok {
-		t.Error("expected ok=false with no children")
-	}
-	if got == nil {
-		t.Error("expected absent principal sentinel")
-	}
-}
-
-func TestUnionAuthenticator_AllAbsent(t *testing.T) {
-	first := &stubAuthenticator{principal: nil, ok: false}
-	second := &stubAuthenticator{principal: nil, ok: false}
-
-	u := NewUnionAuthenticator(first, second)
-	got, ok, err := u.Authenticate(newRequest(t))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ok {
-		t.Error("expected ok=false when all absent")
-	}
-	if got == nil {
-		t.Error("expected absent principal sentinel")
-	}
-	if first.calls != 1 {
-		t.Errorf("first should be called once, got %d", first.calls)
-	}
-	if second.calls != 1 {
-		t.Errorf("second should be called once, got %d", second.calls)
-	}
-}
-
-// --- T2: JWT Authenticator tests ---
-
-// stubVerifier is a minimal IntentTokenVerifier test double.
-type stubVerifier struct {
-	claims Claims
-	err    error
-}
-
-func (s *stubVerifier) VerifyIntent(_ context.Context, _ string, _ TokenIntent) (Claims, error) {
-	return s.claims, s.err
-}
-
-func newGetRequest(t *testing.T, authHeader string) *http.Request {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
-	if authHeader != "" {
-		req.Header.Set("Authorization", authHeader)
-	}
-	return req
-}
-
-func TestJWTAuthenticator_NoAuthHeader_Absent(t *testing.T) {
-	v := &stubVerifier{}
-	a := NewJWTAuthenticator(v)
-	p, ok, err := a.Authenticate(newGetRequest(t, ""))
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if ok {
-		t.Fatal("expected ok=false (absent credential)")
-	}
-	if p == nil {
-		t.Fatal("expected absent principal sentinel")
-	}
-}
-
-func TestJWTAuthenticator_NonBearerScheme_Absent(t *testing.T) {
-	v := &stubVerifier{}
-	a := NewJWTAuthenticator(v)
-	// Non-Bearer scheme must be treated as absent so Union can try next authenticator.
-	p, ok, err := a.Authenticate(newGetRequest(t, "Basic dXNlcjpwYXNz"))
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if ok {
-		t.Fatal("expected ok=false for non-Bearer scheme")
-	}
-	if p == nil {
-		t.Fatal("expected absent principal sentinel")
-	}
-}
-
-func TestJWTAuthenticator_InvalidToken_Error(t *testing.T) {
-	errInvalid := errors.New("signature invalid")
-	v := &stubVerifier{err: errInvalid}
-	a := NewJWTAuthenticator(v)
-	p, ok, err := a.Authenticate(newGetRequest(t, "Bearer bad-token"))
-	if !errors.Is(err, errInvalid) {
-		t.Fatalf("expected errInvalid, got: %v", err)
-	}
-	if ok {
-		t.Fatal("expected ok=false on error")
-	}
-	if p != nil {
-		t.Fatalf("expected nil principal on error, got %v", p)
-	}
-}
-
-func TestJWTAuthenticator_IntentMismatch_Error(t *testing.T) {
-	errIntent := errors.New("wrong intent: refresh token presented at access endpoint")
-	v := &stubVerifier{err: errIntent}
-	a := NewJWTAuthenticator(v)
-	p, ok, err := a.Authenticate(newGetRequest(t, "Bearer refresh-token"))
-	if !errors.Is(err, errIntent) {
-		t.Fatalf("expected intent error, got: %v", err)
-	}
-	if ok {
-		t.Fatal("expected ok=false on intent mismatch")
-	}
-	if p != nil {
-		t.Fatalf("expected nil principal on error, got %v", p)
-	}
-}
-
-func TestJWTAuthenticator_Success_PrincipalShape(t *testing.T) {
+// TestJWTClaimsToPrincipal_Shape pins the verified-Claims → *Principal mapping
+// that AuthenticateBearer relies on: scalar fields, defensive-copied Roles, the
+// exactly-three-entry Claims map, and ExpiresAt plumbing. The mapping is tested
+// directly (no Authenticator wrapper) since jwtClaimsToPrincipal is the live
+// conversion shared by the HTTP and gRPC auth cores.
+func TestJWTClaimsToPrincipal_Shape(t *testing.T) {
+	exp := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
 	claims := Claims{
 		Subject:               "user-42",
 		Roles:                 []string{"admin", "user"},
@@ -253,17 +56,11 @@ func TestJWTAuthenticator_Success_PrincipalShape(t *testing.T) {
 		TokenUse:              TokenIntentAccess,
 		Audience:              []string{"gocell"},
 		PasswordResetRequired: true,
+		TenantID:              tenantClaimUUID,
+		ExpiresAt:             exp,
 	}
-	v := &stubVerifier{claims: claims}
-	a := NewJWTAuthenticator(v)
 
-	p, ok, err := a.Authenticate(newGetRequest(t, "Bearer valid-access-token"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true on success")
-	}
+	p := jwtClaimsToPrincipal(claims)
 	if p == nil {
 		t.Fatal("expected non-nil principal")
 	}
@@ -271,10 +68,13 @@ func TestJWTAuthenticator_Success_PrincipalShape(t *testing.T) {
 	assertJWTPrincipalScalars(t, p, claims)
 	assertJWTPrincipalRoles(t, p, claims)
 	assertJWTPrincipalClaimsMap(t, p, claims)
+	if !p.ExpiresAt.Equal(exp) {
+		t.Errorf("ExpiresAt not plumbed: got %v want %v", p.ExpiresAt, exp)
+	}
 }
 
 // assertJWTPrincipalScalars verifies scalar fields (Kind, Subject, AuthMethod,
-// PasswordResetRequired) on the Principal produced by NewJWTAuthenticator.
+// TenantID, PasswordResetRequired) on the Principal produced by jwtClaimsToPrincipal.
 func assertJWTPrincipalScalars(t *testing.T, p *Principal, claims Claims) {
 	t.Helper()
 	if p.Kind != PrincipalUser {
@@ -285,6 +85,9 @@ func assertJWTPrincipalScalars(t *testing.T, p *Principal, claims Claims) {
 	}
 	if p.AuthMethod != "jwt" {
 		t.Errorf("expected AuthMethod=%q, got %q", "jwt", p.AuthMethod)
+	}
+	if p.TenantID != claims.TenantID {
+		t.Errorf("expected TenantID=%q, got %q", claims.TenantID, p.TenantID)
 	}
 	if !p.PasswordResetRequired {
 		t.Error("expected PasswordResetRequired=true")
@@ -606,98 +409,6 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	// The old assertions on Subject=ServiceNameInternal and Roles=BuiltinServiceRoles(...)
 	// are removed here; TestNewServiceTokenAuthenticator_PrincipalCallerCell (below)
 	// pins the Wave 2 CallerCellID shape and will be RED until Wave 2 ships.
-}
-
-// TestJWTAuthenticator_EmptySubject_Error verifies that a JWT token with an
-// empty "sub" claim is rejected at the Authenticator layer (G1.A primary defense).
-// An empty subject indicates a malformed JWT — downstream code must never
-// receive a PrincipalUser with Subject="".
-func TestJWTAuthenticator_EmptySubject_Error(t *testing.T) {
-	// Verifier succeeds but returns claims with empty Subject.
-	v := &stubVerifier{claims: Claims{
-		Subject:   "",
-		Roles:     []string{"admin"},
-		SessionID: "sess-1",
-		Issuer:    "gocell-issuer",
-		TokenUse:  TokenIntentAccess,
-	}}
-	a := NewJWTAuthenticator(v)
-
-	p, ok, err := a.Authenticate(newGetRequest(t, "Bearer token-with-empty-sub"))
-	if err == nil {
-		t.Fatal("expected error for JWT with empty subject, got nil")
-	}
-	if ok {
-		t.Fatal("expected ok=false for JWT with empty subject")
-	}
-	if p != nil {
-		t.Fatalf("expected nil principal for JWT with empty subject, got %v", p)
-	}
-	// Must be an auth unauthorized error.
-	var ecErr *errcode.Error
-	if !errors.As(err, &ecErr) {
-		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-	}
-	if ecErr.Code != errcode.ErrAuthUnauthorized {
-		t.Errorf("expected ErrAuthUnauthorized, got %v", ecErr.Code)
-	}
-}
-
-// --- F3: Union cross-bleed test ---
-
-// TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed verifies that when
-// Union(JWT, ServiceToken) receives "Authorization: ServiceToken <payload>",
-// the JWT authenticator returns absent (non-nil sentinel, false, nil) — because it sees a
-// non-Bearer scheme — and the ServiceToken authenticator validates the
-// credential and returns a valid Principal. No cross-bleed between the two.
-func TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed(t *testing.T) {
-	ring := mustTestRing(t, testHMACKey, "")
-	now := time.Now()
-
-	// trackingVerifier records whether VerifyIntent was called.
-	// The JWT authenticator short-circuits before calling VerifyIntent when
-	// extractBearerToken returns "" (non-Bearer scheme), so it must NOT be called.
-	verifierCalled := false
-	trackingVerifier := &trackingIntentVerifier{onVerify: func() { verifierCalled = true }}
-
-	jwtAuth := NewJWTAuthenticator(trackingVerifier)
-	svcAuth := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
-		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
-	union := NewUnionAuthenticator(jwtAuth, svcAuth)
-
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
-	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
-	req.Header.Set("Authorization", "ServiceToken "+token)
-
-	p, ok, err := union.Authenticate(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true: ServiceToken authenticator should have matched")
-	}
-	if p == nil {
-		t.Fatal("expected non-nil principal")
-	}
-	if p.Kind != PrincipalService {
-		t.Errorf("expected Kind=PrincipalService, got %v", p.Kind)
-	}
-	if verifierCalled {
-		t.Error("JWT VerifyIntent must not be called for a ServiceToken header (non-Bearer scheme returns absent before verification)")
-	}
-}
-
-// trackingIntentVerifier is a test double that calls onVerify when VerifyIntent
-// is invoked, then returns zero Claims and nil error.
-type trackingIntentVerifier struct {
-	onVerify func()
-}
-
-func (v *trackingIntentVerifier) VerifyIntent(_ context.Context, _ string, _ TokenIntent) (Claims, error) {
-	if v.onVerify != nil {
-		v.onVerify()
-	}
-	return Claims{}, nil
 }
 
 // --- F4: ServiceToken Authenticator — legacy 2-part + future timestamp ---
@@ -1031,41 +742,4 @@ func TestNewContextAuthenticator_NoPrincipalInCtx(t *testing.T) {
 	if p == nil || p.Kind != PrincipalUnknown {
 		t.Errorf("expected absentPrincipal, got %v", p)
 	}
-}
-
-// JWT authenticator must plumb Claims.ExpiresAt to Principal.ExpiresAt.
-func TestJWTAuthenticator_PlumbsExpiresAt(t *testing.T) {
-	exp := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
-	v := &stubVerifierForExp{
-		claims: Claims{
-			Subject:   "u1",
-			Issuer:    "iss",
-			ExpiresAt: exp,
-			TokenUse:  TokenIntentAccess,
-		},
-	}
-	a := NewJWTAuthenticator(v)
-	req := newRequest(t)
-	req.Header.Set("Authorization", "Bearer x")
-
-	p, ok, err := a.Authenticate(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if !p.ExpiresAt.Equal(exp) {
-		t.Errorf("ExpiresAt not plumbed: got %v want %v", p.ExpiresAt, exp)
-	}
-}
-
-// stubVerifierForExp helps TestJWTAuthenticator_PlumbsExpiresAt; minimal implementation.
-type stubVerifierForExp struct {
-	claims Claims
-	err    error
-}
-
-func (s *stubVerifierForExp) VerifyIntent(_ context.Context, _ string, _ TokenIntent) (Claims, error) {
-	return s.claims, s.err
 }

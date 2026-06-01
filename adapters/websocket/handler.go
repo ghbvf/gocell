@@ -55,7 +55,6 @@ type UpgradeConfig struct {
 	// cannot read the response body, so envelope JSON is meaningless).
 	//
 	// Composition root selects one of:
-	//   - auth.NewJWTAuthenticator(verifier)        — token-via-Authorization-header
 	//   - auth.NewContextAuthenticator()            — already authenticated by listener middleware
 	//   - auth.NewAnonymousAuthenticator()          — explicit unauthenticated channel
 	//   - custom auth.AuthenticatorFunc             — query-param / cookie / subprotocol token

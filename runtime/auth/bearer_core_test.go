@@ -3,9 +3,13 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // bearerCoreVerifier is a minimal IntentTokenVerifier stub for exercising the
@@ -17,6 +21,137 @@ type bearerCoreVerifier struct {
 
 func (v bearerCoreVerifier) VerifyIntent(_ context.Context, _ string, _ TokenIntent) (Claims, error) {
 	return v.claims, v.err
+}
+
+func TestNewBearerHeaderAuthenticator(t *testing.T) {
+	exp := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
+	claims := Claims{
+		Subject:               "user-1",
+		Roles:                 []string{"admin", "viewer"},
+		SessionID:             "sess-9",
+		Issuer:                "gocell-issuer",
+		TokenUse:              TokenIntentAccess,
+		TenantID:              tenantClaimUUID,
+		PasswordResetRequired: true,
+		ExpiresAt:             exp,
+	}
+
+	t.Run("success delegates to shared bearer core", func(t *testing.T) {
+		v := bearerCoreVerifier{claims: claims}
+		a := NewBearerHeaderAuthenticator(v)
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		req.Header.Set("Authorization", "Bearer tok")
+
+		p, ok, err := a.Authenticate(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if p == nil {
+			t.Fatal("expected non-nil principal")
+		}
+		if p.Subject != claims.Subject {
+			t.Errorf("Subject = %q, want %q", p.Subject, claims.Subject)
+		}
+		if p.TenantID != claims.TenantID {
+			t.Errorf("TenantID = %q, want %q", p.TenantID, claims.TenantID)
+		}
+		if !p.PasswordResetRequired {
+			t.Error("PasswordResetRequired = false, want true")
+		}
+		if p.Claims["sid"] != claims.SessionID {
+			t.Errorf("Claims[sid] = %q, want %q", p.Claims["sid"], claims.SessionID)
+		}
+		if p.Claims["iss"] != claims.Issuer {
+			t.Errorf("Claims[iss] = %q, want %q", p.Claims["iss"], claims.Issuer)
+		}
+		if p.Claims["token_use"] != string(claims.TokenUse) {
+			t.Errorf("Claims[token_use] = %q, want %q", p.Claims["token_use"], claims.TokenUse)
+		}
+		if !p.ExpiresAt.Equal(exp) {
+			t.Errorf("ExpiresAt = %v, want %v", p.ExpiresAt, exp)
+		}
+		originalFirstRole := claims.Roles[0]
+		p.Roles[0] = "mutated"
+		if claims.Roles[0] != originalFirstRole {
+			t.Error("Roles must be a defensive copy")
+		}
+	})
+
+	t.Run("missing header is absent", func(t *testing.T) {
+		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{})
+		p, ok, err := a.Authenticate(httptest.NewRequest(http.MethodGet, "/ws", nil))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatal("expected ok=false")
+		}
+		if p == nil {
+			t.Fatal("expected absent principal sentinel")
+		}
+	})
+
+	t.Run("wrong scheme is absent", func(t *testing.T) {
+		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{})
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		req.Header.Set("Authorization", "ServiceToken abc")
+
+		p, ok, err := a.Authenticate(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatal("expected ok=false")
+		}
+		if p == nil {
+			t.Fatal("expected absent principal sentinel")
+		}
+	})
+
+	t.Run("verify failure returns error and nil principal", func(t *testing.T) {
+		sentinel := errors.New("verify boom")
+		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{err: sentinel})
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		req.Header.Set("Authorization", "Bearer bad")
+
+		p, ok, err := a.Authenticate(req)
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("err = %v, want sentinel", err)
+		}
+		if ok {
+			t.Fatal("expected ok=false")
+		}
+		if p != nil {
+			t.Fatalf("principal = %+v, want nil", p)
+		}
+	})
+
+	t.Run("empty subject is rejected by shared bearer core", func(t *testing.T) {
+		a := NewBearerHeaderAuthenticator(bearerCoreVerifier{claims: Claims{Subject: ""}})
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		req.Header.Set("Authorization", "Bearer tok")
+
+		p, ok, err := a.Authenticate(req)
+		if err == nil {
+			t.Fatal("expected error for empty subject")
+		}
+		if ok {
+			t.Fatal("expected ok=false")
+		}
+		if p != nil {
+			t.Fatalf("principal = %+v, want nil", p)
+		}
+		var ecErr *errcode.Error
+		if !errors.As(err, &ecErr) {
+			t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+		}
+		if ecErr.Code != errcode.ErrAuthUnauthorized {
+			t.Errorf("Code = %v, want %v", ecErr.Code, errcode.ErrAuthUnauthorized)
+		}
+	})
 }
 
 func TestAuthenticateBearer(t *testing.T) {
@@ -74,6 +209,15 @@ func TestAuthenticateBearer_EmptySubject(t *testing.T) {
 	ctx, p, err := AuthenticateBearer(base, v, "tok")
 	if err == nil {
 		t.Fatal("expected non-nil error for empty subject, got nil")
+	}
+	// The rejection must carry the generic auth-unauthorized code (a malformed
+	// JWT must not be distinguishable from other 401s on the wire).
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ecErr.Code != errcode.ErrAuthUnauthorized {
+		t.Errorf("expected ErrAuthUnauthorized, got %v", ecErr.Code)
 	}
 	if p != nil {
 		t.Fatalf("principal = %+v, want nil on empty-subject rejection", p)
