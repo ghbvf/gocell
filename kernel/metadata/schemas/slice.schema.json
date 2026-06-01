@@ -90,6 +90,10 @@
             "then": { "required": ["projection"] }
           },
           {
+            "if": { "required": ["projection"] },
+            "then": { "not": { "required": ["group"] } }
+          },
+          {
             "if": {
               "properties": { "role": { "const": "webhook-receive" } },
               "required": ["role"]

@@ -247,6 +247,37 @@ func TestProjectionSliceCU_WebhookReceiveWithProjectionFails(t *testing.T) {
 		"webhook-receive role carrying projection must fail slice schema validation")
 }
 
+// TestProjectionSliceCU_SubscribeProjectionWithGroupFails verifies that a
+// subscribe projection CU carrying group: is rejected by the schema.
+// The consumer group for a projection is derived from cellID+projectionID
+// by cellgen; a hand-written group is dead config and must fail.
+func TestProjectionSliceCU_SubscribeProjectionWithGroupFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "orderquery",
+		"belongsToCell": "ordercell",
+		"consistencyLevel": "L3",
+		"contractUsages": [
+			{
+				"contract": "event.order.placed.v1",
+				"role": "subscribe",
+				"handler": "HandleOrderPlaced",
+				"projection": "order_read_model",
+				"group": "my-custom-group"
+			}
+		],
+		"verify": {
+			"unit": [],
+			"contract": []
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"subscribe projection CU with group must fail slice schema validation")
+}
+
 // TestProjectionSliceCU_WebhookDispatchWithOnResetFails verifies that a
 // webhook-dispatch CU carrying onReset is rejected.
 func TestProjectionSliceCU_WebhookDispatchWithOnResetFails(t *testing.T) {

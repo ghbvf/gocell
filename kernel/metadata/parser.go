@@ -735,45 +735,96 @@ func validateProjectionUniqueness(pm *ProjectMeta) error {
 	return nil
 }
 
-// checkSliceProjections validates all subscribe CUs in a single slice for
-// projection coupling and uniqueness within the cell. seen is updated in-place.
+const (
+	msgDuplicateProjection = "duplicate projection id within cell"
+	msgOnResetWithoutProj  = "onReset requires projection on the same subscribe contractUsage"
+	// F1: projection/onReset are subscribe-only placement columns.
+	msgProjectionNonSubscribe = "projection and onReset are only valid on a role=subscribe contractUsage"
+	// F2: group: is dead config on a projection CU; cellgen derives the
+	// consumer group from cellID+projectionID, not from group:.
+	msgGroupOnProjectionCU = "group is not allowed on a projection contractUsage" +
+		" (the projection consumer group is derived from cellID and projectionID)"
+)
+
+// checkSliceProjections validates all CUs in a single slice for projection
+// coupling, uniqueness within the cell, and placement correctness.
+// seen is updated in-place (keyed by cellID → projectionID → first sliceID).
 func checkSliceProjections(sl *SliceMeta, seen map[string]map[string]string) error {
-	const (
-		msgDuplicateProjection = "duplicate projection id within cell"
-		msgOnResetWithoutProj  = "onReset requires projection on the same subscribe contractUsage"
-	)
 	for _, cu := range sl.ContractUsages {
-		if cu.Role != "subscribe" {
+		if err := checkProjectionCUPlacement(sl, cu); err != nil {
+			return err
+		}
+		if cu.Role != "subscribe" || cu.Projection == "" {
 			continue
 		}
-		if cu.OnReset != "" && cu.Projection == "" {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				msgOnResetWithoutProj,
-				errcode.WithDetails(
-					errcode.PublicString("slice", sl.ID),
-					errcode.PublicString("contract", cu.Contract),
-					errcode.PublicString("onReset", cu.OnReset),
-				))
+		if err := recordProjectionSeen(sl, cu, seen); err != nil {
+			return err
 		}
-		if cu.Projection == "" {
-			continue
-		}
-		cellID := sl.BelongsToCell
-		if seen[cellID] == nil {
-			seen[cellID] = make(map[string]string)
-		}
-		if firstSlice, dup := seen[cellID][cu.Projection]; dup {
-			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
-				msgDuplicateProjection,
-				errcode.WithDetails(
-					errcode.PublicString("cellID", cellID),
-					errcode.PublicString("projectionID", cu.Projection),
-					errcode.PublicString("firstSliceID", firstSlice),
-					errcode.PublicString("conflictSliceID", sl.ID),
-				))
-		}
-		seen[cellID][cu.Projection] = sl.ID
 	}
+	return nil
+}
+
+// checkProjectionCUPlacement checks placement rules for a single CU:
+// F1 (non-subscribe carrying projection/onReset), onReset-without-projection,
+// and F2 (group forbidden on projection CU).
+func checkProjectionCUPlacement(sl *SliceMeta, cu ContractUsage) error {
+	// F1: fail-closed before the role-guard so non-subscribe CUs carrying
+	// projection/onReset are rejected rather than silently skipped.
+	if cu.Role != "subscribe" && (cu.Projection != "" || cu.OnReset != "") {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			msgProjectionNonSubscribe,
+			errcode.WithDetails(
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("role", cu.Role),
+			))
+	}
+	if cu.Role != "subscribe" {
+		return nil
+	}
+	if cu.OnReset != "" && cu.Projection == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			msgOnResetWithoutProj,
+			errcode.WithDetails(
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("onReset", cu.OnReset),
+			))
+	}
+	// F2: group is forbidden on a projection CU.
+	if cu.Projection != "" && cu.Group != "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			msgGroupOnProjectionCU,
+			errcode.WithDetails(
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("projection", cu.Projection),
+				errcode.PublicString("group", cu.Group),
+			))
+	}
+	return nil
+}
+
+// recordProjectionSeen registers a projection CU in the seen map and returns
+// a KindConflict error if the projection id was already claimed by another
+// slice in the same cell. F9: the error includes the contract id.
+func recordProjectionSeen(sl *SliceMeta, cu ContractUsage, seen map[string]map[string]string) error {
+	cellID := sl.BelongsToCell
+	if seen[cellID] == nil {
+		seen[cellID] = make(map[string]string)
+	}
+	if firstSlice, dup := seen[cellID][cu.Projection]; dup {
+		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			msgDuplicateProjection,
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("projectionID", cu.Projection),
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("firstSliceID", firstSlice),
+				errcode.PublicString("conflictSliceID", sl.ID),
+			))
+	}
+	seen[cellID][cu.Projection] = sl.ID
 	return nil
 }
 
