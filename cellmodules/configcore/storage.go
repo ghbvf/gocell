@@ -68,7 +68,7 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 	if cfg.pg == nil {
 		return configCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"configcore postgres mode requires the postgres capability provider "+
-				"(provisionCapabilities must run before Build)")
+				"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")
 	}
 	db, err := cellsecrets.PgxPoolFromProvider(cfg.pg)
 	if err != nil {
