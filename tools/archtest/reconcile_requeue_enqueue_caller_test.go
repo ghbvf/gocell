@@ -182,7 +182,7 @@ func reconcileSendSiteName(s reconcileSendSite) string {
 func TestReconcileRequeueEnqueueCaller01(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = "github.com/ghbvf/gocell/kernel/reconcile"
+	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
 
 	var allDiags []Diagnostic
 	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
@@ -208,7 +208,7 @@ func TestReconcileRequeueEnqueueCaller01(t *testing.T) {
 func TestReconcileRequeueEnqueueCaller01_NonVacuousProof(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = "github.com/ghbvf/gocell/kernel/reconcile"
+	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
 
 	var totalFound int
 	var foundInSanctioned int

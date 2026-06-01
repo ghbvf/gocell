@@ -72,7 +72,9 @@ func TestRecovery_OtherEntityNotAffected(t *testing.T) {
 	_, err1 := recoverReconcile(context.Background(), pRec, req1, slog.Default(), "test_reconciler")
 	require.Error(t, err1, "first call must surface the panic as an error")
 
-	want := Result{RequeueAfter: 42}
+	// Arbitrary non-zero RequeueAfter; the value is immaterial — this only
+	// checks the Result passes through recoverReconcile unchanged.
+	want := Result{RequeueAfter: defaultBackoffBase}
 	sRec := successReconciler{result: want}
 	req2 := Request{EntityID: "ok-entity"}
 	res2, err2 := recoverReconcile(context.Background(), sRec, req2, slog.Default(), "test_reconciler")

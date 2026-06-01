@@ -9,16 +9,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Doubling backoff sequence (base·2^i) for TestBackoff_ExponentialBounded,
+// expressed as multiples of the production base so every time.Duration literal
+// lives in a package-level const (TEST-TIME-LITERAL-01).
+const (
+	backoffStep0 = defaultBackoffBase      // 5ms
+	backoffStep1 = 2 * defaultBackoffBase  // 10ms
+	backoffStep2 = 4 * defaultBackoffBase  // 20ms
+	backoffStep3 = 8 * defaultBackoffBase  // 40ms
+	backoffStep4 = 16 * defaultBackoffBase // 80ms
+	backoffStep5 = 32 * defaultBackoffBase // 160ms
+)
+
 // TestBackoff_ExponentialBounded verifies the client-go mirrored sequence:
 // first call returns base (5ms), then 10ms, 20ms, … capped at max (1000s).
 // Sequence must be monotone non-decreasing and never negative or zero.
 func TestBackoff_ExponentialBounded(t *testing.T) {
 	t.Parallel()
-	const (
-		base = 5 * time.Millisecond
-		max  = 1000 * time.Second
-	)
-	b := newEntityBackoff(base, max)
+	b := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
 	entity := "entity-a"
 
 	prev := time.Duration(0)
@@ -26,23 +34,23 @@ func TestBackoff_ExponentialBounded(t *testing.T) {
 		d := b.When(entity)
 		require.Greater(t, d, time.Duration(0), "backoff must never be zero or negative (call %d)", i)
 		assert.GreaterOrEqual(t, d, prev, "backoff must be monotone non-decreasing (call %d)", i)
-		assert.LessOrEqual(t, d, max, "backoff must be capped at max (call %d)", i)
+		assert.LessOrEqual(t, d, defaultBackoffMax, "backoff must be capped at max (call %d)", i)
 		prev = d
 	}
 	// After enough calls, result must be exactly max.
 	last := b.When(entity)
-	assert.Equal(t, max, last, "backoff must reach and stay at max")
+	assert.Equal(t, defaultBackoffMax, last, "backoff must reach and stay at max")
 
 	// Verify the exact initial sequence: 5ms, 10ms, 20ms, 40ms, 80ms, 160ms.
-	b2 := newEntityBackoff(base, max)
+	b2 := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
 	entity2 := "seq-check"
 	expected := []time.Duration{
-		5 * time.Millisecond,
-		10 * time.Millisecond,
-		20 * time.Millisecond,
-		40 * time.Millisecond,
-		80 * time.Millisecond,
-		160 * time.Millisecond,
+		backoffStep0,
+		backoffStep1,
+		backoffStep2,
+		backoffStep3,
+		backoffStep4,
+		backoffStep5,
 	}
 	for i, want := range expected {
 		got := b2.When(entity2)
@@ -54,7 +62,7 @@ func TestBackoff_ExponentialBounded(t *testing.T) {
 // next When call returns base again.
 func TestBackoff_ResetOnSuccess(t *testing.T) {
 	t.Parallel()
-	b := newEntityBackoff(5*time.Millisecond, 1000*time.Second)
+	b := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
 	entity := "reset-entity"
 
 	// Grow the backoff a few times.
@@ -62,12 +70,12 @@ func TestBackoff_ResetOnSuccess(t *testing.T) {
 	b.When(entity)       // 10ms
 	b.When(entity)       // 20ms
 	d1 := b.When(entity) // 40ms
-	assert.Greater(t, d1, 5*time.Millisecond, "backoff should have grown")
+	assert.Greater(t, d1, defaultBackoffBase, "backoff should have grown")
 
 	// After Forget, next When should return base.
 	b.Forget(entity)
 	d2 := b.When(entity)
-	assert.Equal(t, 5*time.Millisecond, d2, "Forget must reset backoff to base")
+	assert.Equal(t, defaultBackoffBase, d2, "Forget must reset backoff to base")
 }
 
 // TestBackoff_Defaults verifies that zero or negative base/max get clamped to
@@ -76,14 +84,14 @@ func TestBackoff_Defaults(t *testing.T) {
 	t.Parallel()
 	b := newEntityBackoff(0, 0) // should use defaults
 	d := b.When("e")
-	assert.Equal(t, 5*time.Millisecond, d, "zero base should use default 5ms")
+	assert.Equal(t, defaultBackoffBase, d, "zero base should use default 5ms")
 }
 
 // TestBackoff_ConcurrencySmoke verifies that concurrent When/Forget calls do
 // not race (run with -race).
 func TestBackoff_ConcurrencySmoke(t *testing.T) {
 	t.Parallel()
-	b := newEntityBackoff(5*time.Millisecond, 1000*time.Second)
+	b := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
 	entities := []string{"ea", "eb", "ec"}
 
 	var wg sync.WaitGroup
@@ -109,7 +117,7 @@ func TestBackoff_ConcurrencySmoke(t *testing.T) {
 // is a no-op (no panic).
 func TestBackoff_ForgetUnknownEntity(t *testing.T) {
 	t.Parallel()
-	b := newEntityBackoff(5*time.Millisecond, 1000*time.Second)
+	b := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
 	require.NotPanics(t, func() {
 		b.Forget("not-registered")
 	})
@@ -126,18 +134,15 @@ func TestBackoff_ForgetUnknownEntity(t *testing.T) {
 // branch (the float64 overflow guard).
 func TestBackoff_NoOverflowAtLargeN(t *testing.T) {
 	t.Parallel()
-	const (
-		base = time.Second
-		max  = 1000 * time.Second
-	)
-	b := newEntityBackoff(base, max)
+	const base = time.Second
+	b := newEntityBackoff(base, defaultBackoffMax)
 	entity := "overflow-entity"
 
 	for i := 0; i < 64; i++ {
 		d := b.When(entity)
 		assert.Greater(t, d, time.Duration(0),
 			"When must never return zero or negative (call %d)", i)
-		assert.LessOrEqual(t, d, max,
+		assert.LessOrEqual(t, d, defaultBackoffMax,
 			"When must never exceed max (call %d)", i)
 	}
 }

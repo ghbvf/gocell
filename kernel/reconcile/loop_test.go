@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -668,6 +669,89 @@ func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
 	require.NoError(t, l.Stop(sc))
 }
 
+// TestLoop_F5_LostWakeupStress stresses the F5 dirty/processing completion
+// window. Many goroutines call process() concurrently for ONE entity (so all
+// but one in-flight call coalesce as dirty); runtime.Gosched widens the
+// interleaving so the {clear-dirty, delete-processing} critical section is hit
+// across runs. Run under -race; `-count=N` amplifies window coverage.
+//
+// Liveness invariant (the lost-wakeup detector): once every process() call has
+// returned, no entity may remain marked dirty or processing. A lost wakeup — a
+// trigger that set dirty in the window after completion read+cleared dirty but
+// before it deleted the processing marker — would orphan the dirty entry with
+// no re-run ever scheduled, leaving l.dirty non-empty here. The atomicity that
+// prevents it (entityMu held across both the dirty read+clear and the
+// processing delete, loop.go process()) is what this test exercises; -race
+// additionally proves no unlocked access to the maps.
+//
+// This is the deterministic-under-correct-code complement to the precise-window
+// approach: GoCell does not inject a test-only synchronization hook into the
+// production critical section (that would put test scaffolding on the hot path
+// for marginal gain over the mutex-by-construction guarantee), so a probabilistic
+// stress sweep is the cleanest available coverage.
+func TestLoop_F5_LostWakeupStress(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	const (
+		entity   = "stress-entity"
+		triggers = 256
+	)
+
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		runtime.Gosched()
+		return Result{RequeueAfter: testtime.D1h}, nil
+	})
+	l := &Loop{
+		ReconcilerID: "rc",
+		Reconciler:   rec,
+		Source:       make(chan Request),
+		Interval:     testtime.D1h,
+		Metrics:      m,
+	}
+
+	// White-box: initialize the F5 maps the way Start does, then drive process()
+	// directly (no worker pool) to stress its critical sections in isolation.
+	l.processing = make(map[string]bool)
+	l.dirty = make(map[string]Request)
+	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
+	runCtx := context.Background()
+
+	// Discard requeue / dirty re-run items so enqueueDelayed never blocks; the
+	// invariant under test is the dirty map state, not re-run execution.
+	addCh := make(chan waitingItem, triggers*4)
+	drainDone := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-addCh:
+			case <-drainDone:
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < triggers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runtime.Gosched()
+			l.process(runCtx, Request{EntityID: entity}, addCh, backoff)
+		}()
+	}
+	wg.Wait()
+	close(drainDone)
+
+	l.entityMu.Lock()
+	defer l.entityMu.Unlock()
+	assert.Empty(t, l.dirty, "no orphaned dirty entry (lost-wakeup) after quiescence")
+	assert.Empty(t, l.processing, "no entity left marked processing after quiescence")
+}
+
 // TestLoop_TransientExponentialBackoff is a count-based integration check: it
 // asserts the loop retries a transient entity multiple times (confirming the
 // delaying queue feeds retries back). No timing assertions are made here — the
@@ -690,8 +774,8 @@ func TestLoop_TransientExponentialBackoff(t *testing.T) {
 		}),
 		Source:    src,
 		Interval:  testtime.D1h,
-		BaseDelay: testtime.D1ms,      // shrink base for test speed
-		MaxDelay:  20 * testtime.D1ms, // cap so test completes quickly
+		BaseDelay: testtime.D1ms, // shrink base for test speed
+		MaxDelay:  shortRequeue,  // cap so test completes quickly
 		Metrics:   m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
@@ -748,7 +832,7 @@ func TestLoop_SuccessForgetsBackoff(t *testing.T) {
 		Source:       src,
 		Interval:     testtime.D1h,
 		BaseDelay:    testtime.D1ms, // tiny base so test completes quickly
-		MaxDelay:     20 * testtime.D1ms,
+		MaxDelay:     shortRequeue,
 		Metrics:      m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)

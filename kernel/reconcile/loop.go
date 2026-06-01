@@ -29,6 +29,12 @@ const (
 	// startProbeTimeout bounds how long Start waits for the worker pool to
 	// confirm it is running before returning (fast-return OnStart contract).
 	startProbeTimeout = 50 * time.Millisecond
+	// waitingQueueIdleDelay is the "never" sentinel the delaying-queue timer
+	// sleeps for when the heap is empty; it is reset to a real readyAt as soon
+	// as an item arrives. Mirrors client-go delaying_queue.go maxWait.
+	//
+	// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+	waitingQueueIdleDelay = 24 * time.Hour
 	// queueBuffer sizes the internal work queue. Source and requeue both feed
 	// it; backpressure (a full buffer) blocks the producer, never drops.
 	queueBuffer = 1024
@@ -339,13 +345,12 @@ func drainReadyItems(runCtx context.Context, h *waitingHeap, now time.Time, queu
 }
 
 // nextWaitingDelay returns how long to sleep until the earliest item in h is
-// ready. Returns never (24h sentinel) when h is empty.
+// ready. Returns the idle sentinel (waitingQueueIdleDelay) when h is empty.
 //
 // ref: kubernetes/client-go util/workqueue/delaying_queue.go
 func nextWaitingDelay(h *waitingHeap, now time.Time) time.Duration {
-	const never = 24 * time.Hour
 	if h.Len() == 0 {
-		return never
+		return waitingQueueIdleDelay
 	}
 	d := (*h)[0].readyAt.Sub(now)
 	if d < 0 {
@@ -381,7 +386,7 @@ func (l *Loop) waitingLoop(runCtx context.Context, addCh <-chan waitingItem, que
 	heap.Init(&h)
 
 	clk := controlPlaneClock{}
-	timer := clk.newRequeueTimer(24 * time.Hour) // sentinel: empty heap
+	timer := clk.newRequeueTimer(waitingQueueIdleDelay) // sentinel: empty heap
 	defer timer.Stop()
 
 	for {

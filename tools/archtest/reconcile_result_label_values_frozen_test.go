@@ -151,7 +151,7 @@ func resultValuesDiff(got, want []string) string {
 func TestReconcileResultLabelValuesFrozen01(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = "github.com/ghbvf/gocell/kernel/reconcile"
+	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
 	var gotValues []string
 
 	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
