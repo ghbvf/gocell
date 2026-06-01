@@ -803,7 +803,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 func TestSlogHandlerSealedFunnel_A1_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"
 
 	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"},

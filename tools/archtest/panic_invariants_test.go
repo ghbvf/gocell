@@ -109,7 +109,7 @@ func TestPanicLogRedact(t *testing.T) {
 func TestPanicLogRedact_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/testdata/panic_log_redact_fixtures/violation"
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/panic_log_redact_fixtures/violation"
 
 	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/testdata/panic_log_redact_fixtures/violation"},

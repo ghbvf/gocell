@@ -330,7 +330,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 func TestHTTPUtil5xxLogRedact_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/testdata/httputil_log_redact_fixtures/violation"
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/httputil_log_redact_fixtures/violation"
 
 	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/testdata/httputil_log_redact_fixtures/violation"},
