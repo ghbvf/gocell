@@ -183,7 +183,7 @@ func buildStarterJWT(clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error
 //
 // AUTH-PLAN-04 allows examples/ to construct auth plans.
 func starterRuntimeOptions(shared *composition.SharedDeps) composition.RuntimeOptionsFunc {
-	return func(cells []cell.Cell) ([]bootstrap.Option, error) {
+	return func(cells []cell.Cell, _ composition.ModuleExports) ([]bootstrap.Option, error) {
 		return buildStarterBootstrapOpts(shared, cells)
 	}
 }

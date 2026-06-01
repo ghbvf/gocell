@@ -86,8 +86,10 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	logSinglePodNonceStoreAcknowledgement(compShared, locals)
 
 	// runtimeOptsFunc stays in cmd: auth construction is AUTH-PLAN-04-allowlisted
-	// to cmd/.
-	runtimeOptsFunc := func(cells []cell.Cell) ([]bootstrap.Option, error) {
+	// to cmd/. The exports parameter carries cross-module values produced during
+	// composition.Build (e.g. AuditQueryStore from auditcore for the correlate
+	// reverse-lookup service, #1048 Batch 3).
+	runtimeOptsFunc := func(cells []cell.Cell, exports composition.ModuleExports) ([]bootstrap.Option, error) {
 		logAssemblyMaturity(cells)
 
 		asm, buildErr := buildAssembly(locals, assemblyID, durabilityModeForTopology(compShared.Topology), compShared.Clock, cells...)
@@ -104,6 +106,19 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		if rtErr != nil {
 			return nil, fmt.Errorf("default runtime options: %w", rtErr)
 		}
+
+		// Wire the correlate reverse-lookup endpoint (#1048 Batch 3).
+		// generatedCellOwners() is compile-time static; AuditQueryStore is the
+		// same multiStore instance constructed by auditcore, not a second store.
+		// auditcore is a fixed corebundle cell, so a nil AuditQueryStore here is a
+		// composition wiring bug, not a tolerable degradation — fail-fast (no soft
+		// fallback / silent endpoint disable).
+		correlateOpt, correlateErr := buildCorrelateOption(exports.AuditQueryStore)
+		if correlateErr != nil {
+			return nil, fmt.Errorf("wire correlate endpoint: %w", correlateErr)
+		}
+		opts = append(opts, correlateOpt)
+
 		return opts, nil
 	}
 

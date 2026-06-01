@@ -13,8 +13,9 @@ import (
 
 // RuntimeOptionsFunc lets the composition root supply the fully-assembled
 // runtime bootstrap options (assembly, three listeners + auth, consumer base,
-// health/metrics).  It receives the constructed cells so the caller can build
-// the assembly from them.
+// health/metrics). It receives the constructed cells and the accumulated
+// [ModuleExports] from all modules so the caller can build the assembly and
+// consume cross-module exports (e.g. AuditQueryStore for the correlate service).
 //
 // Listener and auth construction MUST live in the caller (cmd/ or examples/),
 // never inside runtime/composition — this package is forbidden by AUTH-PLAN-04
@@ -27,7 +28,7 @@ import (
 // Returns (nil, nil) if there are no runtime-specific options to add.
 //
 // See examples/corebundlestarter/run.go for a runnable RuntimeOptionsFunc.
-type RuntimeOptionsFunc func(cells []cell.Cell) ([]bootstrap.Option, error)
+type RuntimeOptionsFunc func(cells []cell.Cell, exports ModuleExports) ([]bootstrap.Option, error)
 
 // Builder assembles a GoCell application from an ordered set of [CellModule]s.
 //
@@ -164,7 +165,7 @@ func (b *Builder) Build(
 		exports = exports.merge(out)
 	}
 
-	runtimeOpts, err := runtimeOptsFn(cells)
+	runtimeOpts, err := runtimeOptsFn(cells, exports)
 	if err != nil {
 		rollback()
 		return nil, fmt.Errorf("composition.Builder.Build: runtime options: %w", err)

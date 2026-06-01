@@ -57,7 +57,7 @@ func buildBootstrapFromShared(
 
 	// runtimeOptsFunc mirrors the production runCorebundle path but simplified for
 	// testing: no real-mode validation, inline listener construction.
-	runtimeOptsFunc := func(cells []cell.Cell) ([]bootstrap.Option, error) {
+	runtimeOptsFunc := func(cells []cell.Cell, _ composition.ModuleExports) ([]bootstrap.Option, error) {
 		asm, err := buildAssembly(locals, "corebundle-test",
 			durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 		if err != nil {

@@ -127,6 +127,16 @@ type modulesCompositionContext struct {
 	Modules       []string // Module call expressions, e.g. "cellmodulesconfigcore.Module()"
 	ModuleImports []string // aliased import lines, e.g. `cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"`
 	Capabilities  []string
+	// CellOwners is the ordered list of cell→owner entries derived from each
+	// cell's cell.yaml owner block. Used to emit generatedCellOwners().
+	CellOwners []cellOwnerEntry
+}
+
+// cellOwnerEntry is a single cell→owner mapping entry for the template.
+type cellOwnerEntry struct {
+	CellID string
+	Team   string
+	Role   string
 }
 
 // capabilityConstNames maps cell.yaml `requires` enum values to their
@@ -367,12 +377,29 @@ func (g *Generator) generateModulesGenComposition(
 	// cell (assembly.yaml) order — that order is runtime-significant (e.g.
 	// auditcore before accesscore for the BootstrapLedgerStore handoff).
 	sort.Strings(importLines)
+
+	// Build the cell→owner entries in assembly.yaml cell declaration order so
+	// the generated map literal is deterministic across regenerations.
+	cellOwners := make([]cellOwnerEntry, 0, len(asm.Cells))
+	for _, cellID := range asm.Cells {
+		cm := g.cells.Get(cellID)
+		if cm == nil {
+			continue // already guarded above; defensive skip
+		}
+		cellOwners = append(cellOwners, cellOwnerEntry{
+			CellID: cellID,
+			Team:   cm.Owner.Team,
+			Role:   cm.Owner.Role,
+		})
+	}
+
 	ctx := modulesCompositionContext{
 		AssemblyID:    assemblyID,
 		SourcePath:    asm.File,
 		Modules:       moduleCalls,
 		ModuleImports: importLines,
 		Capabilities:  capConsts,
+		CellOwners:    cellOwners,
 	}
 	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
 }

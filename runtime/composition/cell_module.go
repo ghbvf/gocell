@@ -6,6 +6,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/audit"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -27,6 +28,14 @@ type ModuleExports struct {
 	// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01); accesscore fails fast if this
 	// is nil.
 	BootstrapLedgerStore *audit.BootstrapLedgerStore
+
+	// AuditQueryStore is the read-side ledger.QueryStore that spans all audit
+	// chains (auditcore relay + bootstrap). It is produced by the auditcore
+	// module's Provide and consumed by the composition root's RuntimeOptionsFunc
+	// to construct the correlate reverse-lookup service (#1048 Batch 3). The
+	// store is the same multiStore instance passed to auditcell.WithQueryStore,
+	// ensuring no second store is constructed.
+	AuditQueryStore ledger.QueryStore
 }
 
 // merge returns the combination of in and out: each non-zero field of out
@@ -36,6 +45,9 @@ type ModuleExports struct {
 func (in ModuleExports) merge(out ModuleExports) ModuleExports {
 	if out.BootstrapLedgerStore != nil {
 		in.BootstrapLedgerStore = out.BootstrapLedgerStore
+	}
+	if out.AuditQueryStore != nil {
+		in.AuditQueryStore = out.AuditQueryStore
 	}
 	return in
 }

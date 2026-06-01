@@ -7,6 +7,7 @@ import (
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/kernel/observability/correlation"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -28,5 +29,17 @@ func generatedCapabilities() []capability.Kind {
 	return []capability.Kind{
 		capability.Postgres,
 		capability.Redis,
+	}
+}
+
+// generatedCellOwners returns the compile-time cell→owner topology derived from
+// each cell's cell.yaml owner block. The map is keyed by cell ID; values are
+// correlation.CellOwner{Team, Role}. Used by the composition root to build the
+// correlation.Topology passed to the correlate reverse-lookup service.
+func generatedCellOwners() map[string]correlation.CellOwner {
+	return map[string]correlation.CellOwner{
+		"configcore": {Team: "platform", Role: "cell-owner"},
+		"auditcore": {Team: "platform", Role: "cell-owner"},
+		"accesscore": {Team: "platform", Role: "cell-owner"},
 	}
 }

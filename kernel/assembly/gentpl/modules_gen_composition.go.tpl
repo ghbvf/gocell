@@ -9,6 +9,7 @@ import (
 {{- if .Capabilities}}
 	"github.com/ghbvf/gocell/runtime/capability"
 {{- end}}
+	"github.com/ghbvf/gocell/kernel/observability/correlation"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -35,3 +36,15 @@ func generatedCapabilities() []capability.Kind {
 	}
 }
 {{- end}}
+
+// generatedCellOwners returns the compile-time cell→owner topology derived from
+// each cell's cell.yaml owner block. The map is keyed by cell ID; values are
+// correlation.CellOwner{Team, Role}. Used by the composition root to build the
+// correlation.Topology passed to the correlate reverse-lookup service.
+func generatedCellOwners() map[string]correlation.CellOwner {
+	return map[string]correlation.CellOwner{
+{{- range .CellOwners}}
+		{{printf "%q" .CellID}}: {Team: {{printf "%q" .Team}}, Role: {{printf "%q" .Role}}},
+{{- end}}
+	}
+}

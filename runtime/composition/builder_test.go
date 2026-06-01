@@ -75,7 +75,7 @@ func TestBuilder_HappyPath(t *testing.T) {
 	m2 := &fakeCellModule{id: "mod2", cell: c2}
 
 	var runtimeCells []cell.Cell
-	rtFn := func(cells []cell.Cell) ([]bootstrap.Option, error) {
+	rtFn := func(cells []cell.Cell, _ ModuleExports) ([]bootstrap.Option, error) {
 		runtimeCells = cells
 		return nil, nil
 	}
@@ -120,7 +120,7 @@ func TestBuilder_HappyPath_TwoChannelResourceContract(t *testing.T) {
 	}
 
 	app, err := New().With(m1).Build(ctx, minimalSharedDeps(t),
-		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+		func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) { return nil, nil })
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -145,7 +145,7 @@ func TestBuilder_NilModule_RollsBack(t *testing.T) {
 	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1, r2}}
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1, nil).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New().With(m1, nil).Build(ctx, shared, func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -170,7 +170,7 @@ func TestBuilder_ProvideError_RollsBack(t *testing.T) {
 	m2 := &fakeCellModule{id: "mod2", provideErr: errors.New("provide failed")}
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1, m2).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New().With(m1, m2).Build(ctx, shared, func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -194,7 +194,7 @@ func TestBuilder_NilCell_RollsBack(t *testing.T) {
 	m2 := &fakeCellModule{id: "mod2", cell: nil} // nil cell
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1, m2).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New().With(m1, m2).Build(ctx, shared, func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -215,7 +215,7 @@ func TestBuilder_RuntimeFnError_RollsBack(t *testing.T) {
 	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New().With(m1).Build(ctx, shared, func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) {
 		return nil, errors.New("runtime fn error")
 	})
 	require.Error(t, err)
@@ -228,7 +228,7 @@ func TestBuilder_RuntimeFnError_RollsBack(t *testing.T) {
 // TestBuilder_NilSharedDeps verifies that Build rejects a nil *SharedDeps.
 func TestBuilder_NilSharedDeps(t *testing.T) {
 	ctx := context.Background()
-	_, err := New().Build(ctx, nil, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New().Build(ctx, nil, func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -242,7 +242,7 @@ func TestBuilder_UnsealedSharedDeps_Rejected(t *testing.T) {
 	// Bare literal: exported fields can be set, but the unexported marker cannot,
 	// so Build must reject it.
 	bare := &SharedDeps{}
-	_, err := New().Build(ctx, bare, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New().Build(ctx, bare, func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -265,7 +265,7 @@ func TestBuilder_MutatedAfterSeal_Rejected(t *testing.T) {
 
 	c1 := stubCell("cell-1")
 	m1 := &fakeCellModule{id: "mod1", cell: c1}
-	_, err := New().With(m1).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New().With(m1).Build(ctx, shared, func([]cell.Cell, ModuleExports) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)

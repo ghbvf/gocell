@@ -129,12 +129,19 @@ func (m module) Provide(
 
 	c := auditcell.NewAuditCore(shared.Clock, auditOpts...)
 
-	// Cross-module wiring (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2): the
-	// bootstrap ledger store is handed downstream via the typed ModuleExports
-	// return. accesscore consumes it (audit.NewBootstrapAuthFailObserver). Module
-	// order (auditcore before accesscore in assembly.yaml) is the happens-before
-	// contract; accesscore fails fast if the export is absent.
-	return c, composition.ModuleExports{BootstrapLedgerStore: bootstrapWrapped}, nil, nil, nil
+	// Cross-module wiring:
+	// 1. BOOTSTRAP-AUDIT-CHAIN-WIRING-01 (plan 039 W1-2): the bootstrap ledger
+	//    store is handed downstream via typed ModuleExports. accesscore consumes
+	//    it (audit.NewBootstrapAuthFailObserver). Module order (auditcore before
+	//    accesscore in assembly.yaml) is the happens-before contract; accesscore
+	//    fails fast if the export is absent.
+	// 2. AuditQueryStore (#1048 Batch 3): the read-side multiStore that spans
+	//    both chains is exported so the composition root can construct the
+	//    correlate reverse-lookup service without allocating a second store.
+	return c, composition.ModuleExports{
+		BootstrapLedgerStore: bootstrapWrapped,
+		AuditQueryStore:      multiStore,
+	}, nil, nil, nil
 }
 
 // buildAuditProtocol assembles a ledger.Protocol with an isolated HMAC key.

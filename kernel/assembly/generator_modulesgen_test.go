@@ -353,6 +353,67 @@ func TestGenerateModulesGen_CompositionUnknownCellRef(t *testing.T) {
 	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
 }
 
+// TestGenerateModulesGen_CompositionForm_CellOwners verifies that the composition
+// codegen branch emits a generatedCellOwners() function that maps each assembly
+// cell ID to the correlation.CellOwner derived from its cell.yaml owner block.
+// This covers issue #1048 Batch 3: the Topology is compile-time static,
+// derived from cell.yaml at `gocell generate assembly` time.
+func TestGenerateModulesGen_CompositionForm_CellOwners(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	asm.Cells = []string{
+		metadatatest.CellIDConfigCore,
+		metadatatest.CellIDAuditCore,
+		metadatatest.CellIDAccessCore,
+	}
+	// Set distinct owners so the test is not trivially satisfied by zero values.
+	project.Cells[metadatatest.CellIDConfigCore].Owner = metadata.OwnerMeta{Team: "platform", Role: "config-owner"}
+	project.Cells[metadatatest.CellIDAuditCore].Owner = metadata.OwnerMeta{Team: "platform", Role: "audit-owner"}
+	project.Cells[metadatatest.CellIDAccessCore].Owner = metadata.OwnerMeta{Team: "platform", Role: "access-owner"}
+
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+
+	content := string(out)
+	// Function and import must be present.
+	assert.Contains(t, content, "func generatedCellOwners() map[string]correlation.CellOwner")
+	assert.Contains(t, content, `"github.com/ghbvf/gocell/kernel/observability/correlation"`)
+	// Each cell must appear with its owner in the map literal.
+	assert.Contains(t, content, `"configcore": {Team: "platform", Role: "config-owner"}`)
+	assert.Contains(t, content, `"auditcore": {Team: "platform", Role: "audit-owner"}`)
+	assert.Contains(t, content, `"accesscore": {Team: "platform", Role: "access-owner"}`)
+	// Entry order in the map literal must follow assembly declaration order
+	// (configcore, auditcore, accesscore) for deterministic regeneration.
+	posConfig := indexOfStr(content, `"configcore"`)
+	posAudit := indexOfStr(content, `"auditcore"`)
+	posAccess := indexOfStr(content, `"accesscore"`)
+	assert.Less(t, posConfig, posAudit, "configcore entry must precede auditcore entry")
+	assert.Less(t, posAudit, posAccess, "auditcore entry must precede accesscore entry")
+}
+
+// TestGenerateModulesGen_CompositionForm_CellOwners_EmptyOwner verifies that a
+// cell whose cell.yaml has no explicit owner block produces an entry with empty
+// Team and Role (zero value) — no silent default is injected.
+func TestGenerateModulesGen_CompositionForm_CellOwners_EmptyOwner(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	asm.Cells = []string{metadatatest.CellIDAccessCore}
+	// Leave Owner at zero value (Team:"", Role:"").
+
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+
+	content := string(out)
+	// Even with empty owner fields, the entry must still be present and correct.
+	assert.Contains(t, content, `"accesscore": {Team: "", Role: ""}`)
+}
+
 // indexOfStr returns the byte position of substr in s, or -1 if not found.
 func indexOfStr(s, substr string) int {
 	for i := range len(s) - len(substr) + 1 {
