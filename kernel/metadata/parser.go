@@ -107,6 +107,9 @@ func (p *Parser) parseWith(loc *Locator) (*ProjectMeta, error) {
 	if err := deriveWebhookEndpoints(pm); err != nil {
 		return nil, err
 	}
+	if err := validateProjectionUniqueness(pm); err != nil {
+		return nil, err
+	}
 	return pm, nil
 }
 
@@ -707,6 +710,71 @@ func applyWebhookCU(cu ContractUsage, sl *SliceMeta, c *ContractMeta, idx *webho
 		return validateWebhookReceive(cu, sl, c, idx)
 	}
 	return validateWebhookDispatch(cu, sl, c, idx)
+}
+
+// validateProjectionUniqueness checks that within a single cell no two
+// contractUsages (across any slices) share the same projection id. A slice may
+// declare multiple subscribe CUs, but each projection id must be unique within
+// the (cellID, projectionID) namespace — two CUs with the same id in the same
+// cell would produce ambiguous RegisterProjection registrations at runtime.
+//
+// It also validates the onReset coupling rule: a CU carrying onReset without
+// a sibling projection field on the same CU is a declaration error.
+//
+// Skip conditions (no error — other governance rules cover these cases):
+//   - CU role != "subscribe"
+//   - CU.Projection == "" (no projection on this CU)
+func validateProjectionUniqueness(pm *ProjectMeta) error {
+	// cellID → projectionID → first sliceID that claimed it.
+	seen := make(map[string]map[string]string)
+	for _, sl := range pm.Slices {
+		if err := checkSliceProjections(sl, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSliceProjections validates all subscribe CUs in a single slice for
+// projection coupling and uniqueness within the cell. seen is updated in-place.
+func checkSliceProjections(sl *SliceMeta, seen map[string]map[string]string) error {
+	const (
+		msgDuplicateProjection = "duplicate projection id within cell"
+		msgOnResetWithoutProj  = "onReset requires projection on the same subscribe contractUsage"
+	)
+	for _, cu := range sl.ContractUsages {
+		if cu.Role != "subscribe" {
+			continue
+		}
+		if cu.OnReset != "" && cu.Projection == "" {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				msgOnResetWithoutProj,
+				errcode.WithDetails(
+					errcode.PublicString("slice", sl.ID),
+					errcode.PublicString("contract", cu.Contract),
+					errcode.PublicString("onReset", cu.OnReset),
+				))
+		}
+		if cu.Projection == "" {
+			continue
+		}
+		cellID := sl.BelongsToCell
+		if seen[cellID] == nil {
+			seen[cellID] = make(map[string]string)
+		}
+		if firstSlice, dup := seen[cellID][cu.Projection]; dup {
+			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+				msgDuplicateProjection,
+				errcode.WithDetails(
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("projectionID", cu.Projection),
+					errcode.PublicString("firstSliceID", firstSlice),
+					errcode.PublicString("conflictSliceID", sl.ID),
+				))
+		}
+		seen[cellID][cu.Projection] = sl.ID
+	}
+	return nil
 }
 
 // dedupSorted returns a new sorted slice with duplicate strings removed.
