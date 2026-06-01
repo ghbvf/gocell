@@ -626,3 +626,77 @@ func TestProjectionFallbacksAndMethodStrings(t *testing.T) {
 	assert.Empty(t, nilErr.PublicString())
 	assert.Empty(t, nilErr.OperatorString())
 }
+
+// TestError_MarshalHTTPEnvelope locks the single-pass wire envelope contract:
+// MarshalHTTPEnvelope renders {"error":{...}} with requestId injected into the
+// inner error object (omitted when empty), applies the 5xx detail-strip +
+// public-code normalization via PublicProjection, and preserves int64 detail
+// precision (no map[string]any float64 coercion). This is the choke point all
+// HTTP error responses funnel through (pkg/httputil.writeErrorBody).
+func TestError_MarshalHTTPEnvelope(t *testing.T) {
+	t.Parallel()
+
+	const bigInt int64 = 9007199254740993 // 2^53 + 1, not representable in float64
+
+	t.Run("4xx with details and requestID", func(t *testing.T) {
+		t.Parallel()
+		ec := New(KindNotFound, ErrCellNotFound, "cell not found",
+			WithDetails(PublicString("cellId", "abc"), PublicInt("retryCount", 3)))
+		raw, err := ec.MarshalHTTPEnvelope("req-123")
+		require.NoError(t, err)
+		assert.JSONEq(t,
+			`{"error":{"code":"ERR_CELL_NOT_FOUND","message":"cell not found",`+
+				`"details":[{"key":"cellId","value":"abc"},{"key":"retryCount","value":3}],`+
+				`"requestId":"req-123"}}`,
+			string(raw))
+	})
+
+	t.Run("empty requestID omits the key", func(t *testing.T) {
+		t.Parallel()
+		ec := New(KindInvalid, ErrValidationFailed, "bad input")
+		raw, err := ec.MarshalHTTPEnvelope("")
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), "requestId",
+			"omitempty must drop requestId when empty")
+		assert.JSONEq(t,
+			`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad input","details":[]}}`,
+			string(raw))
+	})
+
+	t.Run("5xx strips details and normalizes code, no operator fields", func(t *testing.T) {
+		t.Parallel()
+		ec := New(KindInternal, ErrAuthRoleFetchFailed, "role lookup failed",
+			WithDetails(PublicString("dsn", "postgres://u:p@h")))
+		raw, err := ec.MarshalHTTPEnvelope("req-5xx")
+		require.NoError(t, err)
+		s := string(raw)
+		assert.Contains(t, s, `"code":"ERR_INTERNAL"`, "5xx code normalized to public sentinel")
+		assert.Contains(t, s, `"details":[]`, "5xx details stripped")
+		assert.NotContains(t, s, "postgres://", "5xx must not leak detail values")
+		assert.NotContains(t, s, "sourceCode", "public envelope must not carry operator fields")
+		assert.NotContains(t, s, `"status"`, "public envelope must not carry operator fields")
+		assert.Contains(t, s, `"requestId":"req-5xx"`)
+	})
+
+	t.Run("int64 detail beyond 2^53 retains precision", func(t *testing.T) {
+		t.Parallel()
+		ec := New(KindInvalid, ErrValidationFailed, "too big",
+			WithDetails(PublicInt("size", bigInt)))
+		raw, err := ec.MarshalHTTPEnvelope("")
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), `"value":9007199254740993`,
+			"single-pass marshal must not coerce int64 to float64")
+	})
+
+	t.Run("nil receiver yields valid ErrInternal 500 envelope", func(t *testing.T) {
+		t.Parallel()
+		var ec *Error
+		raw, err := ec.MarshalHTTPEnvelope("req-nil")
+		require.NoError(t, err)
+		assert.JSONEq(t,
+			`{"error":{"code":"ERR_INTERNAL","message":"internal server error",`+
+				`"details":[],"requestId":"req-nil"}}`,
+			string(raw),
+			"nil *Error must fall back to the PublicProjection ErrInternal envelope")
+	})
+}

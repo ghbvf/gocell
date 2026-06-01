@@ -2,11 +2,9 @@
 package httputil
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -295,71 +293,41 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 var sentinelInternalErrorBody = []byte(
 	`{"error":{"code":"ERR_INTERNAL","message":"internal server error","details":[]}}`)
 
-// writeErrorBody serializes ecErr through Error.MarshalJSON so the wire form
-// is governed by the errcode package alone (single source of truth for the
-// details: array<{key,value}> shape and 5xx details strip). requestId is
-// merged into the inner error object before encoding because the canonical
-// error envelope places it alongside code/message/details, not in the outer
-// wrapper (see contracts/shared/errors/error-response-v1.schema.json).
+// writeErrorBody serializes ecErr through errcode.MarshalHTTPEnvelope so the
+// wire form is governed by the errcode package alone (single source of truth
+// for the {"error":{...}} envelope, the details: array<{key,value}> shape, the
+// 5xx details strip, and requestId injection into the inner error object — the
+// canonical envelope places requestId alongside code/message/details, not in
+// the outer wrapper; see contracts/shared/errors/error-response-v1.schema.json).
 //
-// Buffer-then-commit: the full pipeline (marshal → decode → merge → encode)
-// runs into a bytes.Buffer before any header or status is written to w. Only
-// when the buffer is ready does the function commit headers + status + body.
-// Pipeline failure → sentinelInternalErrorBody at HTTP 500 (headers not yet
-// written). ref: oapi-codegen strict-responses pattern.
+// Single-pass marshal: the envelope is produced directly from PublicProjection
+// with no intermediate map[string]any, so int64/uint64 details retain full
+// precision (a map round-trip would coerce them to float64 and truncate beyond
+// 2^53). The prior marshal → decode(UseNumber) → merge → encode round-trip
+// existed only to inject requestId; MarshalHTTPEnvelope does that in one pass.
 //
-// Numeric precision: the merge step decodes ecErr's marshaled bytes back
-// through json.Decoder with UseNumber() so int64/uint64 details survive
-// the round-trip without being coerced to float64. The default decoder
-// would silently truncate any int beyond 2^53.
-//
-// Fail-closed: if any pipeline step fails, the response still gets HTTP 500 +
-// sentinelInternalErrorBody. There is no path that returns an empty 200 body.
-// ref: net/http.Error — stdlib never returns a body without first writing a
-// status; this function holds the same invariant.
+// Marshal-then-commit fail-closed: the body is marshaled into a []byte before
+// any header or status is written. Only on success does the function commit
+// headers + status + body. Marshal failure → sentinelInternalErrorBody at HTTP
+// 500 (headers not yet written). Marshal failure is unreachable in production
+// (sealed PublicDetail scalars + copyDetails filter never fail to marshal); the
+// branch is kept as a defensive guard. There is no path that returns an empty
+// 200 body. ref: net/http.Error — stdlib never returns a body without first
+// writing a status; this function holds the same invariant.
 func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecErr *errcode.Error) {
-	var buf bytes.Buffer
-	if err := encodeErrorEnvelopeTo(&buf, ctx, ecErr); err != nil {
+	reqID, _ := ctxkeys.RequestIDFrom(ctx)
+	body, err := ecErr.MarshalHTTPEnvelope(reqID)
+	if err != nil {
 		attrs := AppendCorrelationAttrs(ctx, []any{slog.Any("error", err)})
-		slog.ErrorContext(ctx, "httputil: encode error envelope", attrs...)
+		slog.ErrorContext(ctx, "httputil: marshal error envelope", attrs...)
 		writeInternalErrorSentinel(w)
 		return
 	}
 	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(status)
-	if _, writeErr := buf.WriteTo(w); writeErr != nil {
+	if _, writeErr := w.Write(body); writeErr != nil {
 		slog.Error("httputil: write error response", slog.Any("error", writeErr))
 	}
-}
-
-// encodeErrorEnvelopeTo writes the canonical wire envelope into out, including
-// numeric-precision merge and requestId injection. Returns an error if any
-// step fails — caller writes sentinelInternalErrorBody to the wire instead.
-//
-// Three error paths exist:
-//  1. json.Marshal(ecErr) — unreachable in production: errcode.Error has a
-//     custom MarshalJSON that emits a fixed schema and never returns err.
-//  2. dec.Decode(&inner) — unreachable: input is the bytes we just marshaled,
-//     so it is well-formed JSON object by construction.
-//  3. json.NewEncoder(out).Encode(...) — reachable: io.Writer can fail (this
-//     is the path TestEncodeErrorEnvelopeTo_FailingWriter exercises).
-func encodeErrorEnvelopeTo(out io.Writer, ctx context.Context, ecErr *errcode.Error) error {
-	innerJSON, err := json.Marshal(ecErr)
-	if err != nil {
-		return err
-	}
-	dec := json.NewDecoder(bytes.NewReader(innerJSON))
-	dec.UseNumber()
-	var inner map[string]any
-	if err := dec.Decode(&inner); err != nil {
-		return err
-	}
-	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
-		inner["requestId"] = reqID
-	}
-	return json.NewEncoder(out).Encode(map[string]any{
-		"error": inner,
-	})
 }
 
 // writeInternalErrorSentinel writes a hard-coded 500 response with the
