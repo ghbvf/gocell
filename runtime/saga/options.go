@@ -79,7 +79,7 @@ func WithTracer(t wrapper.Tracer) Option {
 // the Executor that NewCoordinator constructs internally.
 //
 // #1181 F8 typed-nil guard: WithObserver uses validation.IsNilInterface so a
-// nil *SagaStepCollector is rejected and NopObserver is kept.
+// nil *SagaCollector is rejected and NopObserver is kept.
 //
 // For why the Coordinator owns Executor construction (rather than accepting an
 // injected Executor), see runtime/saga/coordinator.go Coordinator struct

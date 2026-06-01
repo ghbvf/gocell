@@ -76,10 +76,19 @@
 //   - Per-step parallelism: deferred to PR-06+ (tracked in #983).
 //   - Coordinator-level Start API for producers (typed producer facade):
 //     deferred to PR-07/PR-09.
-//   - Metrics emission (tick / heartbeat / drive counters, plus the PR-05
-//     leader-elect skip / lock-acquire-failure counters) deferred to a future
-//     PR (tracked in #1109). Until then slog provides minimal observability:
-//     leader-elect skips and ctx-cancel are Debug, backend I/O errors Warn.
+//
+// Metrics emission is complete (#1109): the Coordinator and Executor fan all
+// observability out through executor.Observer, which runtime/observability/
+// metrics.SagaCollector turns into six counters — saga_step_outcome_total,
+// saga_step_retry_total, saga_heartbeat_failed_total (step-level) plus
+// saga_tick_total, saga_drive_total, and saga_leader_elect_skip_total
+// (coordinator-level; leader-elect skip carries reason=contended/ctx_canceled/
+// backend_error, where backend_error is the lock-acquire failure rate). slog
+// remains the per-instance correlation channel (leader-elect skips and
+// ctx-cancel are Debug, backend I/O errors Warn). The counters are only emitted
+// when a real metrics Provider is wired via WithObserver; saga is not yet in a
+// production cell (examples/orderfulfillment uses NopProvider), so production
+// Provider wiring lands with the saga-as-cell migration (PR-09, #978).
 //
 // # Coordinator lifecycle
 //
