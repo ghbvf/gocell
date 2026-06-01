@@ -40,7 +40,9 @@ ORDER BY updated_at ASC;
 
 ## 场景 2：补偿失败（StatusCompensationFailed，status=8）
 
-**症状**：`saga_instance_status_total{status="compensation_failed"} > 0` — 至少一个 saga 实例的补偿阶段本身失败（`status=8` in PG，即 `StatusCompensationFailed`）。这与 `status=failed`（前向阶段失败，未进入补偿）是不同的终态；两者可通过终态值本身区分，无需读取事件日志。
+**症状**：`saga_instances` 表中出现 `status=8`（`StatusCompensationFailed`）的行 —— 至少一个 saga 实例的补偿阶段本身失败（≥1 个 `CompensateFunc` 返回非 nil）。这与 `status=failed`（前向阶段失败，未进入补偿）是不同的终态；两者可通过终态值本身区分，无需读取事件日志。
+
+**检测**：无 instance-level status counter 指标；CompensationFailed 是终态，经下方诊断 SQL 直接查 `saga_instances`，或在前向 step 失败率告警（`gocell_saga_step_outcome_total{outcome="failed"}`，见 `docs/ops/alerting-rules.md` §Saga）触发后下钻确认是否进入补偿失败终态。
 
 **诊断 SQL**：
 
@@ -66,7 +68,7 @@ ORDER BY version ASC;
 
 > `kind` 数值速查见 `docs/ops/alerting-rules.md` §Saga（`saga-event-kind-legend` 生成区，`kind=10` = `step_compensation_failed`，`kind=11` = `saga_compensation_failed`）。
 
-> **⚠️ 手工改库前提（所有分支通用）**：下列处置涉及直接写 `saga_instances` / `saga_events`，绕过 `MarkTerminal` 的 lease fencing CAS。执行前**必须**：(1) 确认无 Coordinator 仍在驱动该 instance——lease 已过期或经 `Orphan()` 主动释放（否则 `ClaimPending` 会与你的手工写产生竞争）；(2) 在维护窗口内操作；(3) **不要手工 INSERT 终态 kind**（`kind` ∈ {6,7,8,9,11}）——终态事件只能由 `MarkTerminal` 原子写入并翻转 status 投影，手插会使 event log 折叠结果与 `saga_instances.status` 不一致，破坏 append-only journal 不变式。处置决策优先写 audit log，而非改 `saga_events`。
+> **⚠️ 手工改库前提（所有分支通用）**：下列处置涉及直接写 `saga_instances` / `saga_events`，绕过 `MarkTerminal` 的 lease fencing CAS。执行前**必须**：(1) 确认无 Coordinator 仍在驱动该 instance——lease 已过期或经 `Orphan()` 主动释放（否则 `ClaimPending` 会与你的手工写产生竞争）；验证 lease 状态用场景 1 的诊断 SQL（查 `lease_id` / `lease_expires_at`）；(2) 在维护窗口内操作；(3) **不要手工 INSERT 终态 kind**（`kind` ∈ {6,7,8,9,11}）——终态事件只能由 `MarkTerminal` 原子写入并翻转 status 投影，手插会使 event log 折叠结果与 `saga_instances.status` 不一致，破坏 append-only journal 不变式。处置决策优先写 audit log，而非改 `saga_events`。
 
 **决策树**：
 
@@ -116,6 +118,7 @@ GROUP BY definition_id ORDER BY events DESC;
 - 单事件已有 `Event.MaxPayloadBytes`（64 KiB）上限，单行不会无界。
 - 整表归档 / 截断是 **W10 Projection / Replay**（从 `saga_events` replay 任意时点状态）的范畴，独立 wave，当前未实现——在它落地前不要手工 `DELETE` 终态实例的事件（会破坏 replay/forensic 能力）。
 - 短期容量压力：扩 PG 存储 / 调整 retention 策略，不删 saga_events。
+- **告警引导**：无专属增长指标；用 PG 表体积监控（`pg_total_relation_size('saga_events')`）设容量阈值告警，或监控 `saga_instances` 中长期非终态行数（`status IN (1,2,3)` 且 `updated_at` 老化）作为驱动停滞的间接信号。
 
 ---
 

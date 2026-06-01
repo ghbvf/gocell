@@ -75,7 +75,7 @@ Journal.MarkSagaTerminal(Succeeded | Failed | Compensated | Expired | Compensati
 | D1 | **编程式（Go func Step）** 优先；声明式 DSL 留 v1.2+ | YAML DSL 第一版 | 业务编排不可避免读外部 state、调多个 ports；声明式覆盖率低，YAML 反而成新约束源 |
 | D2 | **state journal = append-only**（每个状态变化一行），instance/step 状态 = 投影 | mutable instance row | 与现有 outbox / audit hash chain 一致；replay / forensic / time-travel 自然得到 |
 | D3 | **每个 saga instance 单 leader**（distlock key = `saga:{definitionID}:{instanceID}`） | 无 leader / 分片路由 | 反应式编排里多个进程同时驱动同一 instance 会复杂化 lease fencing；现有 distlock 复用零成本 |
-| D4 | **Step dispatch 走 outbox**（payload 含 step 名 + input snapshot），不直接 in-proc 调 | 直接同步调用 Step.Run | 一致性：与 L2 outbox-fact 模型同源；transactional safety：journal append + outbox emit 共享同一 Tx |
+| D4 | **Step dispatch 走 outbox**（payload 含 step 名 + input snapshot），不直接 in-proc 调 〔计划期形态；实际 step 执行/事务边界以 ADR D4 + `SAGA-STEP-RUN-OUTSIDE-TX-01` 为准〕 | 直接同步调用 Step.Run | 一致性：与 L2 outbox-fact 模型同源；transactional safety：journal append + outbox emit 共享同一 Tx |
 | D5 | **Compensate 必须幂等 + 纯反向**（不读外部 state）| 复杂 Compensate（含分支） | dtm / Temporal 实战经验：Compensate 有分支 = bug 温床；archtest 静态拦 |
 | D6 | **三层 timeout**：`Step.Timeout`（执行）/`SagaDefinition.Timeout`（总）/`Heartbeat`（长 Step 续期） | 单层 Step timeout | 复用 `kernel/command` 三层 timeout 模板（已 production-proven） |
 | D7 | **L3 cell.yaml** 强制声明 `saga.*` contractUsage，governance rule 拦 | 让 L3 cell 隐式可用 | 与 `consistencyLevel` 名实对齐：L3 不持有 saga 声明 = governance error |

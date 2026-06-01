@@ -28,7 +28,7 @@
 | D5 | **Compensate 必须幂等 + 纯反向**：不读外部 state、不持事务层。dtm/Temporal 实战经验：Compensate 带分支 = bug 温床 | `SAGA-STEP-COMPENSATE-PURE-01`（`CompensateFunc` 赋值槽函数体禁调 `outbox.Writer/Emitter`、`persistence.TxRunner`、`*sql.Tx`、`pgx.Tx`） | **Hard**（类型识别赋值槽 + `types.Implements` 识别禁用 receiver；import alias 无效） |
 | D6 | **三层 timeout**：`Step.Timeout`（单步执行）/ `SagaDefinition.Timeout`（总）/ `Heartbeat`（长步续租）。复用 `kernel/command` 三层 timeout 模板。心跳由 `runtime/saga/executor` 的 per-step goroutine 独立维护，Coordinator **不持集中式心跳循环** | `SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01`（`Coordinator.journal` 收窄为无 `Heartbeat` 方法的 `JournalCore`）+ `SAGA-EXECUTOR-RAND-INJECTED-01`（jitter 源可注入） | **Hard 上游**（`JournalCore` 无 Heartbeat，集中循环 compile 不可表达）+ **Medium 下游**（callsite 残留扫描） |
 | D7 | **L3 cell 必须声明 saga contractUsage**：`role: orchestrate` ⟹ `cell.yaml consistencyLevel: L3`（**单向**蕴含，L3 ≠ saga，详见 §5） | governance rule `SAGA-CELL-LEVEL-L3-DECLARE-01`（`gocell validate` PhaseBase CI gate） | **Medium**（governance rule） |
-| D8 | **AfterCommit hook 仅 transient 副作用**：cache invalidation / metric / log / WS broadcast / saga dispatcher kick。allow stateful 必复活 outbox 想消灭的反模式 | `AFTERCOMMIT-HOOK-PURE-TRANSIENT-01`（PR-00 落地，funnel 白名单） | **Hard**（archtest funnel）；语义边界中非 archtest 覆盖部分 = **Soft / 文档约定** |
+| D8 | **AfterCommit hook 仅 transient 副作用**：cache invalidation / metric / log / WS broadcast / saga dispatcher kick。allow stateful 必复活 outbox 想消灭的反模式 | `AFTERCOMMIT-HOOK-PURE-TRANSIENT-01`（PR-00 落地，funnel 白名单） | A1 **Hard**（callee=RegisterAfterCommit + arg=FuncLit 形态唯一）/ A2 **Medium**（closure body 禁调持久化接口，one-level helper 启发，深层链未覆盖）/ A3 **Hard 下游**（callsite allowlist）+ **Medium 上游**（五 runner 跨包，无 type-seal） |
 
 **追加决策（046 §2 凝固后落地，本 ADR 首次正式记录）：**
 
@@ -57,6 +57,8 @@
 ---
 
 ## 4. 终态模型（D9 扇出真值，机器守卫 `SAGA-STATUS-FANOUT-COVERAGE-01`）
+
+> 下表是决策快照（便于 ADR 自包含阅读）。**权威渲染**在 `docs/ops/readyz.md` §Saga 与 `alerting-rules.md` §Saga 的生成区（受 fanout archtest 守）。本表**不在**生成区、不受 `SAGA-STATUS-FANOUT-COVERAGE-01` 自动守护——新增 status/eventkind 时需随 §8 演进手工跟随本表。
 
 `saga.Status`（`kernel/saga/status.go`，iota+1，零值非法）8 个值，其中 5 个终态：
 
@@ -106,10 +108,10 @@ D7 是**单向**：用 saga 编排 ⟹ L3；但 L3 不等价于 saga。`accessco
 | 补偿本身失败 | `StatusCompensationFailed` 终态 + `KindStepCompensationFailed`/`KindSagaCompensationFailed`；运维经 `saga_events` 人工介入（runbook `docs/ops/saga-runbook.md`） | ⚠️ | 无自动二级补偿（刻意）——人工 runbook 兜底；自动重试入口未做 |
 | step 在持锁事务内长执行 | `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 Hard | ✅ | A2 closure 传递链 Medium（gh #980） |
 | journal 无界增长 | `Event.MaxPayloadBytes` 64KiB cap；append-only 增长需归档 | ⚠️ | 归档/replay 截断 = W10 独立 wave，未做 |
-| Coordinator 无 leader 误并发 | `WithLeaderElect` option 注入 distlock；缺省 unsafe 模式 `Start()` 打 `UnsafeModeLabel` 警告 | ⚠️ | 生产装配必须显式注入 leader；缺注入只告警不强制 |
+| Coordinator 无 leader 误并发 | `WithLeaderElect` option 注入 distlock；缺省 unsafe 模式 `Start()` 打 `UnsafeModeLabel` 警告 | ⚠️ | 刻意设计取舍（非待修缺陷，故无 issue）：unsafe 模式供单进程/开发；生产装配契约 = 必须经 `WithLeaderElect` 注入 leader |
 | coordinator readiness 不可观测 | `ProbeCoordinatorReady` (`saga_coordinator_ready`) 已声明 | ❌ | **未 wired**——coordinator 尚非一等 Cell，cell-side `RegisterReadiness` 待 saga-as-cell 迁移（gh **#978**） |
 
-> ⚠️/❌ 行的遗留项均有 gh issue 跟踪或属显式 out-of-scope（W10 / 人工 runbook）；无 silent 缺口。
+> ⚠️/❌ 行的遗留项均有 gh issue 跟踪、属显式 out-of-scope（W10 / 人工 runbook），或为刻意设计取舍（unsafe-mode leader）；无 silent 缺口。
 
 ---
 

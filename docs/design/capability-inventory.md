@@ -216,7 +216,7 @@
 
 ## 5. Cells 层（3 platform Cells, 22 platform Slices）
 
-### 5.1 accesscore (L2, core)
+### 5.1 accesscore (L3, core)
 | Slice | 功能 | 端点 |
 |-------|------|------|
 | sessionlogin | 密码登录 + JWT 签发 | POST /api/v1/access/sessions/login |
@@ -234,7 +234,7 @@ Domain: User (PasswordHash/Status/CreatedAt) + Session (TokenPair/ExpiresAt/Prev
 Ports: UserRepository + SessionRepository + RoleRepository
 Adapters: internal/mem (in-memory)
 
-### 5.2 auditcore (L3, core)
+### 5.2 auditcore (L2, core)
 | Slice | 功能 |
 |-------|------|
 | auditappendconfig | event.config.entry-upserted.v1 → event.audit.appended.v1（hash chain 追加） |
@@ -244,10 +244,10 @@ Adapters: internal/mem (in-memory)
 | auditquery | GET /api/v1/audit/entries + time.Parse 400 校验 + 出站 redaction |
 
 Domain: AuditEntry (PrevHash/Hash/Payload)，HMAC-SHA256 hash chain
-Ports: `runtime/audit/ledger.Store`（Append/Tail + RepoReady → `audit_ledger_ready` probe）
+Ports: `runtime/audit/ledger.Store`（Append/Tail + RepoReady → `auditcore_repo_ready` probe）
 Adapters: internal/mem + PG-backed ledger store（`audit_entries` JSONB）
 
-### 5.3 configcore (L2, core)
+### 5.3 configcore (L3, core)
 | Slice | 功能 |
 |-------|------|
 | configread | GET /api/v1/config/{key} + GET /api/v1/config/ (public, admin-gated) |
