@@ -23,10 +23,7 @@ var errRedisTestFactory = errors.New("redis factory failed")
 
 func TestLoadRedisConfigFromEnv_RealMultiPodMissingAddrFailFast(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 
 	_, configured, err := loadRedisConfigFromEnv(topo)
 
@@ -39,11 +36,7 @@ func TestLoadRedisConfigFromEnv_RealMultiPodMissingAddrFailFast(t *testing.T) {
 
 func TestLoadRedisConfigFromEnv_MissingAddrWhenDistributedReplayNotRequired(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
-	topo := bootstrap.Topology{
-		AdapterMode:               "real",
-		StorageBackend:            "postgres",
-		SinglePodReplayProtection: true,
-	}
+	topo := mkTopo("real", "postgres", true)
 
 	cfg, configured, err := loadRedisConfigFromEnv(topo)
 
@@ -57,7 +50,7 @@ func TestLoadRedisConfigFromEnv_ConfiguredParsesPasswordAndDB(t *testing.T) {
 	t.Setenv(envRedisPassword, "secret")
 	t.Setenv(envRedisDB, "3")
 
-	cfg, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+	cfg, configured, err := loadRedisConfigFromEnv(mkTopo("", "memory", false))
 
 	require.NoError(t, err)
 	assert.True(t, configured)
@@ -81,26 +74,19 @@ func TestLoadRedisConfigFromEnv_AllowUnsafeNoPasswordMatrix(t *testing.T) {
 	}{
 		{
 			name:            "dev mode allows missing password",
-			topo:            bootstrap.Topology{AdapterMode: "dev"},
+			topo:            mkTopo("", "memory", false),
 			wantAllowUnsafe: true,
 			wantConfigDescr: "dev never requires production credentials",
 		},
 		{
-			name: "real + single-pod allows missing password (e2e/single-pod prod)",
-			topo: bootstrap.Topology{
-				AdapterMode:               "real",
-				StorageBackend:            "postgres",
-				SinglePodReplayProtection: true,
-			},
+			name:            "real + single-pod allows missing password (e2e/single-pod prod)",
+			topo:            mkTopo("real", "postgres", true),
 			wantAllowUnsafe: true,
 			wantConfigDescr: "single-pod real with localhost Redis is a recognized e2e shape",
 		},
 		{
-			name: "real multi-pod fails closed without password",
-			topo: bootstrap.Topology{
-				AdapterMode:    "real",
-				StorageBackend: "postgres",
-			},
+			name:            "real multi-pod fails closed without password",
+			topo:            mkTopo("real", "postgres", false),
 			wantAllowUnsafe: false,
 			wantConfigDescr: "production multi-pod must set GOCELL_REDIS_PASSWORD",
 		},
@@ -129,10 +115,7 @@ func TestLoadRedisConfigFromEnv_InvalidDBFailFast(t *testing.T) {
 		{name: "negative", db: "-1"},
 	}
 
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,7 +144,7 @@ func TestLoadRedisConfigFromEnv_ClusterAddrsBuildClusterMode(t *testing.T) {
 	t.Setenv(envRedisClusterAddrs, "node-a:7000,node-b:7000,node-c:7000")
 	t.Setenv(envRedisPassword, "secret")
 
-	cfg, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+	cfg, configured, err := loadRedisConfigFromEnv(mkTopo("", "memory", false))
 
 	require.NoError(t, err)
 	assert.True(t, configured)
@@ -175,7 +158,7 @@ func TestLoadRedisConfigFromEnv_ClusterAndAddrMutuallyExclusive(t *testing.T) {
 	t.Setenv(envRedisAddr, "redis:6379")
 	t.Setenv(envRedisClusterAddrs, "node-a:7000")
 
-	_, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+	_, configured, err := loadRedisConfigFromEnv(mkTopo("", "memory", false))
 
 	require.Error(t, err)
 	assert.False(t, configured)
@@ -188,7 +171,7 @@ func TestLoadRedisConfigFromEnv_ClusterRejectsNonZeroDB(t *testing.T) {
 	t.Setenv(envRedisClusterAddrs, "node-a:7000")
 	t.Setenv(envRedisDB, "2")
 
-	_, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+	_, configured, err := loadRedisConfigFromEnv(mkTopo("", "memory", false))
 
 	require.Error(t, err)
 	assert.False(t, configured)
@@ -202,7 +185,7 @@ func TestLoadRedisConfigFromEnv_ClusterRejectsEmptyEntries(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 	t.Setenv(envRedisClusterAddrs, "node-a:7000,,node-c:7000")
 
-	_, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+	_, configured, err := loadRedisConfigFromEnv(mkTopo("", "memory", false))
 
 	require.Error(t, err)
 	assert.False(t, configured)
@@ -217,7 +200,7 @@ func TestLoadRedisConfigFromEnv_ClusterTrimAndDedupe(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 	t.Setenv(envRedisClusterAddrs, " node-a:7000 , node-b:7000 ,node-a:7000")
 
-	cfg, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+	cfg, configured, err := loadRedisConfigFromEnv(mkTopo("", "memory", false))
 
 	require.NoError(t, err)
 	assert.True(t, configured)
@@ -229,10 +212,7 @@ func TestLoadRedisConfigFromEnv_ClusterTrimAndDedupe(t *testing.T) {
 func TestLoadRedisConfigFromEnv_ClusterAddrsSatisfyMultiPodRequirement(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 	t.Setenv(envRedisClusterAddrs, "node-a:7000,node-b:7000")
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 
 	cfg, configured, err := loadRedisConfigFromEnv(topo)
 
@@ -244,7 +224,7 @@ func TestLoadRedisConfigFromEnv_ClusterAddrsSatisfyMultiPodRequirement(t *testin
 func TestBuildRedisClient_NotConfiguredReturnsNil(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 
-	result, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
+	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.NoError(t, err)
 	assert.Nil(t, result.Client)
@@ -260,7 +240,7 @@ func TestBuildRedisClient_UsesConfiguredFactory(t *testing.T) {
 		return new(adapterredis.Client), nil
 	})
 
-	result, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
+	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.NoError(t, err)
 	client := result.Client
@@ -276,7 +256,7 @@ func TestBuildRedisClient_FactoryErrorWrapped(t *testing.T) {
 		return nil, errRedisTestFactory
 	})
 
-	result, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
+	result, err := buildRedisClient(context.Background(), mkTopo("", "memory", false))
 
 	require.Error(t, err)
 	assert.Nil(t, result.Client)
@@ -285,11 +265,7 @@ func TestBuildRedisClient_FactoryErrorWrapped(t *testing.T) {
 }
 
 func TestBuildReplayDependencies_RealSinglePodUsesInMemory(t *testing.T) {
-	topo := bootstrap.Topology{
-		AdapterMode:               "real",
-		StorageBackend:            "postgres",
-		SinglePodReplayProtection: true,
-	}
+	topo := mkTopo("real", "postgres", true)
 
 	nonceStore, err := buildServiceNonceStore(topo, nil, clock.Real())
 	require.NoError(t, err)
@@ -305,10 +281,7 @@ func TestBuildReplayDependencies_RealSinglePodUsesInMemory(t *testing.T) {
 }
 
 func TestBuildServiceNonceStore_RealMultiPodRequiresRedisClient(t *testing.T) {
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 
 	store, err := buildServiceNonceStore(topo, nil, clock.Real())
 
@@ -318,10 +291,7 @@ func TestBuildServiceNonceStore_RealMultiPodRequiresRedisClient(t *testing.T) {
 }
 
 func TestBuildServiceNonceStore_DistributedFactoryErrorWrapped(t *testing.T) {
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error) {
 		return nil, errRedisTestFactory
 	})
@@ -335,10 +305,7 @@ func TestBuildServiceNonceStore_DistributedFactoryErrorWrapped(t *testing.T) {
 }
 
 func TestBuildConsumerClaimer_RealMultiPodRequiresRedisClient(t *testing.T) {
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 
 	claimer, kind, err := buildConsumerClaimer(topo, nil, clock.Real())
 
@@ -355,10 +322,7 @@ func TestBuildConsumerClaimer_RealMultiPodRequiresRedisClient(t *testing.T) {
 // consumerClaimerKindUnknown + a wrap message containing the original
 // error. Mirrors TestBuildServiceNonceStore_DistributedFactoryErrorWrapped.
 func TestBuildConsumerClaimer_DistributedFactoryErrorWrapped(t *testing.T) {
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 	restoreRedisClaimerFactory(t, func(*adapterredis.Client) (idempotency.Claimer, error) {
 		return nil, errRedisTestFactory
 	})
@@ -373,10 +337,7 @@ func TestBuildConsumerClaimer_DistributedFactoryErrorWrapped(t *testing.T) {
 }
 
 func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStores(t *testing.T) {
-	topo := bootstrap.Topology{
-		AdapterMode:    "real",
-		StorageBackend: "postgres",
-	}
+	topo := mkTopo("real", "postgres", false)
 	client := new(adapterredis.Client)
 	var gotNonceClient *adapterredis.Client
 	var gotNonceTTL time.Duration

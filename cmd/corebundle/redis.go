@@ -69,7 +69,7 @@ const (
 )
 
 func requiresDistributedReplay(topo bootstrap.Topology) bool {
-	return topo.RequireProductionControlPlane() && !topo.SinglePodReplayProtection
+	return topo.RequireProductionControlPlane() && !topo.SinglePodReplayProtection()
 }
 
 func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool, error) {

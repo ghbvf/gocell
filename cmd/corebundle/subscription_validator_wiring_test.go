@@ -72,7 +72,7 @@ func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Regist
 // Approach B (E2E reject): actual bootstrap.Run with a cell that registers a
 // disqualified subscription; no private-field access or reflection required.
 func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
-	shared := buildTestSharedDeps(t)
+	shared, locals := buildTestSharedDepsAndLocals(t)
 
 	// Build an assembly that contains our misbehaving test cell.
 	asm := assembly.New(clock.Real(), assembly.Config{
@@ -84,24 +84,20 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	consumerBase, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 
-	opts := runtimeBaseOptions(shared, asm, consumerBase, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	opts := runtimeBaseOptions(shared, locals, asm, consumerBase, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
 	// Wire the minimum required listeners so phase0–phase5 do not fail before
-	// phase6. PrimaryListener uses the pre-built verifier from shared.JWTDeps
-	// (no authProvider cell needed in the assembly).
-	// HealthListener is required because runtimeBaseOptions adds
-	// WithMetricsHandler, which demands a dedicated HealthListener.
-	// InternalListener satisfies the internal guard requirement.
+	// phase6.
 	opts = append(opts,
 		bootstrap.WithListener(
 			cell.PrimaryListener, "127.0.0.1:0",
-			[]auth.ListenerAuth{authtest.MustAuthJWT(shared.JWTDeps.verifier)},
+			[]auth.ListenerAuth{authtest.MustAuthJWT(shared.JWTVerifier)},
 		),
 		bootstrap.WithListener(
 			cell.HealthListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{auth.AuthNone{}},
 		),
 		func() bootstrap.Option {
-			chain, err := buildInternalAuthChain(shared.InternalGuard)
+			chain, err := buildInternalAuthChain(locals.internalGuard)
 			require.NoError(t, err)
 			return bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, chain)
 		}(),

@@ -596,15 +596,18 @@ See `docs/guides/integration-testing.md` for full details and environment variab
 ### 步骤
 
 1. **assembly.yaml 加 cell**：在 `assemblies/<assemblyID>/assembly.yaml` 的 `cells:` 列表追加新 cell ID
-2. **cmd/<assemblyID>/ 加 *Module struct**：在 `cmd/<assemblyID>/<cell>_module.go` 定义 `<GoStructName>Module` 实现 `CellModule` 接口（参考 `cmd/corebundle/access_module.go` 模板）
+2. **加 composition module**：实现公开的 `composition.CellModule` 接口（`Provide(ctx, shared, in ModuleExports) (...)`）。平台 cell 放在 `cellmodules/<cell>/module.go`（参考 `cellmodules/accesscore/module.go`，由 `composition.New().With(...).Build(...)` 组装）；example assembly 的 cell 放在 `cmd/<assemblyID>/<cell>_module.go` 或 `examples/<assemblyID>/`
 3. **跑 codegen**：`gocell generate assembly --id=<assemblyID>` 派生新 `cmd/<assemblyID>/modules_gen.go`
 4. **CI drift gate**：`gocell verify codegen-assembly` 自动校验 modules_gen.go ↔ assembly.yaml 一致性
 
 ### 命名约定
 
-`modules_gen.go` 内的 factory 类型名按 `{cell.GoStructName}Module` 派生（例：cell.GoStructName=`AccessCore` → `AccessCoreModule{}` 字面量）。`<cell>_module.go` 必须按此命名定义 struct。
+`modules_gen.go` 的形态由 assembly.yaml 的 `build.compositionAPI` 决定（模板选择见 `kernel/assembly/generator.go`）：
 
-archtest **ASSEMBLY-CELLMODULE-TYPE-04** 静态守卫每个 assembly 的 entrypoint 目录（`cmd/{id}/` 或 `examples/{id}/`，由 `asm.Build.Entrypoint` 元数据派生）含 `modules_gen.go` 时必含 `CellModule` 类型声明。
+- **`compositionAPI: true`（平台 assembly，如 corebundle）**：`generatedCellModules()` 返回 `[]composition.CellModule`，每个元素调用 `cellmodules/<cell>.Module()`——平台 cell 的 module wiring 活在 `cellmodules/<cell>/module.go` 暴露的公开 `Module() composition.CellModule` 工厂，由 `composition.New().With(...).Build(...)` 组装。**此路径没有 `{GoStructName}Module` 本地 factory 类型**。
+- **`compositionAPI: false`（默认，example assembly 如 todoorder / iotdevice）**：`generatedCellModules()` 返回本地 `[]CellModule`，每个元素是 `{cell.GoStructName}Module{}` 字面量（例：cell.GoStructName=`OrderCell` → `OrderCellModule{}`）。`<cell>_module.go` 必须按此命名定义 struct。
+
+archtest **ASSEMBLY-CELLMODULE-TYPE-04** 静态守卫每个 assembly 的 entrypoint 目录（`cmd/{id}/` 或 `examples/{id}/`，由 `asm.Build.Entrypoint` 元数据派生）含 `modules_gen.go` 时，必须声明本地 `CellModule` 类型（legacy 形态）**或**引用 `composition.CellModule`（compositionAPI 形态）——二者满足其一即可。
 archtest **ASSEMBLY-MODULES-GEN-01** 守 generated marker。
 archtest **ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02** 守 assembly composition root（`cmd/{id}/` 或 `examples/{id}/`）的直接子文件不退化到手工 cell-ID switch；扫描范围限于 entrypoint 目录下的 `.go` 文件，不递归进子目录（如 `examples/{id}/cells/`）。
 

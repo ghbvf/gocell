@@ -4,233 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
-	"sync"
 
-	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	adaptervault "github.com/ghbvf/gocell/adapters/vault"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
-
-// SharedDeps holds cross-cutting dependencies required by every Cell module.
-// Cell-specific dependencies (KeyProvider, PoolResource, cursor codecs, HMAC key)
-// are managed by the corresponding *_module.go file.
-//
-// SharedDeps is passed directly to BuildApp and each CellModule.Provide,
-// giving type-safe access to all cross-cutting fields without type-assertion.
-//
-// Fields are flat (no concern-grouped sub-structs): SharedDeps is a
-// composition-root bag whose fields cross consumer boundaries (Clock /
-// Topology / PG consumed by every Cell module). Forcing a sub-struct
-// layout would make those cross-cutting consumptions look like boundary
-// violations when in fact they are the natural shape of a composition root.
-// Per-concern *file* split is in shared_deps_build.go (build helpers) and
-// shared_deps_validate.go (startup invariants); the struct itself stays flat,
-// matching runtime/bootstrap/bootstrap.go which adopted the same trade-off.
-//
-// ref: uber-go/fx fx.Supply — shared values provided once to all modules.
-// ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
-// all required fields validated in one place before startup.
-// ref: runtime/bootstrap/bootstrap.go:50-71 — flat struct + per-concern file
-// split rationale (PR-A66 BOOTSTRAP-STRUCT-DECOMPOSE).
-type SharedDeps struct {
-	// Clock is the single root clock instance threaded through every adapter,
-	// service, and middleware constructed by BuildApp / its module builders.
-	// Tests inject a clockmock.FakeClock to drive time deterministically;
-	// production wires clock.Real() exactly once at the entry point.
-	Clock clock.Clock
-
-	// Topology is the resolved adapter-mode / storage-backend combination.
-	Topology bootstrap.Topology
-
-	// JWTDeps holds the JWT issuer and verifier.
-	JWTDeps jwtDeps
-
-	// PromStack holds the Prometheus registry, hook observer, and metric provider.
-	PromStack promStack
-
-	// EventBus is the in-process event bus used for both publish and subscribe.
-	EventBus *eventbus.InMemoryEventBus
-
-	// ConfigEventCollector records config consumer process and settlement
-	// metrics for accesscore and configcore. It is registered once against the
-	// shared metrics provider and then injected into both Cells plus middleware.
-	ConfigEventCollector obmetrics.ConfigEventCollector
-
-	// EventbusCacheCollector records configsubscribe subscriber-cache tombstone
-	// GC evictions. Registered once against the shared metrics provider and
-	// injected into configcore (the only owner — Cache is service-private).
-	EventbusCacheCollector obmetrics.EventbusCacheCollector
-
-	// BootstrapLedgerStore is the sealed handle to the bootstrap auth-fail
-	// audit chain, wired into audit.NewBootstrapAuthFailObserver.
-	//
-	// Since issue #1121 (ADR 202605270230) the field type is the typed
-	// *audit.BootstrapLedgerStore wrapper rather than the raw ledger.Store
-	// interface — passing an auditcore-namespace store to the observer
-	// constructor is a compile error instead of a runtime chain fork.
-	//
-	// Happens-before contract (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2):
-	//   - AuditCoreModule.Provide MUST run before AccessCoreModule.Provide so
-	//     the store is populated before access reads it. Module order is
-	//     locked in assemblies/corebundle/assembly.yaml (configcore →
-	//     auditcore → accesscore) and guarded by
-	//     MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01 archtest.
-	//   - The nil fail-fast is owned by AccessCoreModule.Provide via
-	//     audit.NewBootstrapAuthFailObserver, which rejects a nil store at
-	//     construction time before any bootstrap-auth 401/429 can fire.
-	//     SharedDeps.Validate intentionally does NOT check
-	//     BootstrapLedgerStore here because LoadSharedDepsFromEnv runs
-	//     Validate BEFORE BuildApp populates this field; see
-	//     shared_deps_validate.go::validateCore for the rationale comment
-	//     kept beside the code path.
-	//
-	// Callers that bypass BuildApp (direct AccessCoreModule.Provide invocation)
-	// must pre-populate this field; see bundle_test.go::buildTestBootstrapLedgerStore
-	// for the test pattern.
-	BootstrapLedgerStore *audit.BootstrapLedgerStore
-
-	// PG is the assembly's single postgres capability provider, provisioned once
-	// by provisionCapabilities (cap_wiring.go) before BuildApp. It exposes the
-	// pool-bound TxManager + OutboxWriter + raw *pgxpool.Pool handle (DB() any).
-	// AccessCoreModule / AuditCoreModule / ConfigCoreModule consume the same
-	// injected provider instead of constructing adapter primitives — the sealed
-	// upstream half of CAPABILITY-PROVIDER-FUNNEL-01.
-	//
-	// Happens-before contract (load-bearing, do not break): the pool is recorded
-	// as poolMR and registered by runtimeBaseOptions as the first ManagedResource,
-	// so bootstrap's LIFO shutdown closes it LAST — after every PG consumer
-	// (relay, EventRouter goroutines, ConsumerBase workers, cell tx) which are
-	// registered later via cell opts. Provisioning before BuildApp (not inside a
-	// cell module) is what dissolves the old MODULE-ORDER-CONFIGCORE-FIRST-01
-	// constraint.
-	//
-	// Nil in non-postgres modes (in-memory); cell modules take their memory path.
-	PG capability.PGProvider
-
-	// poolMR is the postgres pool as a ManagedResource, set by provisionPostgres
-	// alongside PG. Registered first by runtimeBaseOptions for LIFO last-close.
-	// Nil in non-postgres modes.
-	poolMR kernellifecycle.ManagedResource
-
-	// Redis is the assembly's shared redis capability provider, wrapping the
-	// client built in buildSharedReplayDeps. Consumers obtain the raw
-	// *adapterredis.Client via Redis.Client(). Nil in modes without redis.
-	Redis capability.RedisProvider
-
-	// redisClient holds the raw client constructed in LoadSharedDepsFromEnv
-	// (buildSharedReplayDeps); provisionRedis wraps it into Redis. Unexported
-	// composition-root plumbing — public consumers use Redis.Client().
-	redisClient *adapterredis.Client
-
-	// ConsumerClaimer coordinates outbox consumer idempotency. The separate
-	// kind field is corebundle-local metadata; kernel/idempotency.Claimer stays
-	// behavior-only and does not grow a topology method.
-	ConsumerClaimer     idempotency.Claimer
-	ConsumerClaimerKind consumerClaimerKind
-
-	// InternalGuard is the service-token guard protecting /internal/v1/*.
-	// Required in every mode; internalGuardFromEnv rejects an empty
-	// GOCELL_SERVICE_SECRET before runtime listener wiring.
-	//
-	// Held as a typed value (rather than a bare middleware closure) so
-	// validateControlPlane can inspect the backing NonceStore and reject
-	// Noop implementations in production — a middleware func would make the
-	// replay-defense class invisible to SharedDeps.Validate.
-	InternalGuard *internalGuard
-
-	// PrimaryHTTPAddr is the bind address for the public HTTP listener
-	// (/api/v1/*, infra endpoints). Env GOCELL_HTTP_PRIMARY_ADDR; default ":8080".
-	PrimaryHTTPAddr string
-
-	// InternalHTTPAddr is the bind address for the internal HTTP listener
-	// (/internal/v1/* control-plane). Env GOCELL_HTTP_INTERNAL_ADDR;
-	// default "127.0.0.1:9090". Must be bound to an internal network segment in
-	// production so service-token / mTLS enforcement is the primary defense.
-	InternalHTTPAddr string
-
-	// HealthHTTPAddr is the bind address for the health+metrics listener
-	// (/healthz /readyz /metrics). Env GOCELL_HTTP_HEALTH_ADDR;
-	// default "127.0.0.1:9091" for local/dev only. Production deployments
-	// using kubelet HTTP probes or Prometheus PodIP/Service scrapes must bind a
-	// Pod-reachable address such as ":9091"; loopback is allowed in real mode
-	// only when HealthLocalOnly explicitly opts into same-pod/exec access.
-	HealthHTTPAddr string
-
-	// HealthLocalOnly explicitly waives the real-mode guard that rejects
-	// loopback-only HealthHTTPAddr values. Set via GOCELL_HTTP_HEALTH_LOCAL_ONLY=1
-	// only for deployments where health/metrics are reached from the same
-	// network namespace (local dev, same-pod sidecar, or exec-probe style).
-	HealthLocalOnly bool
-
-	// MetricsToken is the token guarding /metrics. Required in production
-	// topology; may be empty in dev mode.
-	MetricsToken string
-
-	// VerboseToken is the token guarding /readyz?verbose. After PR-A35
-	// Validate() requires a non-empty token in every adapter mode unless
-	// VerboseDisabled is true — the previous "empty in dev mode = open
-	// verbose" backward-compat path was removed so that an unset environment
-	// variable never silently exposes internal topology.
-	VerboseToken string
-
-	// VerboseDisabled declares that /readyz?verbose must not be served on
-	// this deployment. When true, Validate() no longer requires VerboseToken
-	// and Bootstrap is wired with WithVerboseDisabled so the handler answers
-	// every ?verbose request with the plain aggregate body. Set it via
-	// GOCELL_READYZ_VERBOSE_DISABLED=1 for ephemeral deployments that waive
-	// the debug channel.
-	VerboseDisabled bool
-
-	// ProjectRoot is the directory used by the devtools catalog endpoint to
-	// locate cell.yaml / slice.yaml metadata. Read from GOCELL_PROJECT_ROOT;
-	// empty when the var is unset (endpoint is disabled gracefully).
-	ProjectRoot string
-
-	// vaultTransitMetricsOnce / vaultTransitMetrics / vaultTransitMetricsErr
-	// implement lazy + once construction for vault-transit metrics.
-	// ProvideVaultTransitMetrics is the SOLE sanctioned construction path —
-	// only the vault-transit branch of buildKeyProvider calls it, so local-aes
-	// deployments never register gocell_vault_* zero-value series. Eager
-	// construction in buildSharedMetricsDeps was incorrect (would pollute
-	// local-aes scrape footprint with always-zero vault metrics).
-	vaultTransitMetricsOnce sync.Once
-	vaultTransitMetrics     *adaptervault.TransitMetrics
-	vaultTransitMetricsErr  error
-
-	// metricsHandler is the Prometheus HTTP handler built once in
-	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
-	metricsHandler http.Handler
-}
-
-// ProvideVaultTransitMetrics lazily constructs and registers the vault-transit
-// metric set on PromStack.registry. Idempotent across repeated calls on the
-// same SharedDeps (sync.Once). Returns the cached error on subsequent calls
-// if the first construction failed.
-//
-// Callers: only the vault-transit branch of buildKeyProvider should invoke
-// this. local-aes / passthrough providers must not call it — that's the entire
-// point of moving from eager to lazy construction.
-func (s *SharedDeps) ProvideVaultTransitMetrics() (*adaptervault.TransitMetrics, error) {
-	s.vaultTransitMetricsOnce.Do(func() {
-		m, err := adaptervault.NewTransitMetrics(s.PromStack.registry)
-		if err != nil {
-			s.vaultTransitMetricsErr = fmt.Errorf("build vault transit metrics: %w", err)
-			return
-		}
-		s.vaultTransitMetrics = m
-	})
-	return s.vaultTransitMetrics, s.vaultTransitMetricsErr
-}
 
 // SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so
 // `cp .env.example .env && go run ./cmd/corebundle` works without first
@@ -241,35 +23,35 @@ func (s *SharedDeps) ProvideVaultTransitMetrics() (*adaptervault.TransitMetrics,
 const SampleVerbosePlaceholder = "dev-readyz-verbose-token-change-me"
 
 // LoadSharedDepsFromEnv reads all environment variables and builds a fully
-// populated SharedDeps for cross-cutting concerns. Cell-specific dependencies
-// (cursor codecs, HMAC key, KeyProvider, PG config) are constructed in each
-// CellModule.Provide.
+// populated composition.SharedDeps (for platform cell modules) and cmdLocals
+// (for cmd-private wiring: prometheus adapter types, internal guard, claimer
+// kind, pool MR, metrics handler).
 //
 // ref: go-zero serviceconf.MustLoad — single parse-validate call at startup.
-func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
+func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLocals, error) {
 	// Single root clock: constructed exactly once here and threaded through
-	// every adapter, service, and middleware via SharedDeps.Clock.
+	// every adapter, service, and middleware.
 	clk := clock.Real()
 
 	topo, err := bootstrap.TopologyFromEnv()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	adapterMode := topo.AdapterMode
+	adapterMode := topo.AdapterMode()
 
 	jwt, err := buildJWTDeps(adapterMode, clk)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	metricsDeps, err := buildSharedMetricsDeps()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	replay, err := buildSharedReplayDeps(ctx, topo, clk)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	loaded := false
 	defer func() {
@@ -282,9 +64,9 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 
-	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore, clk)
+	guard, err := internalGuardFromEnv(adapterMode, replay.NonceStore, clk)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
@@ -298,9 +80,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 
 	// PR-A14a: surface the pre-PR-A14a env var rename so operators upgrading
 	// from a single-listener binary see a clear signal if they have only the
-	// old var set. Without this warn the addrs would silently fall through
-	// to defaults, binding 8080/9090 instead of whatever the old
-	// GOCELL_HTTP_ADDR pointed at.
+	// old var set.
 	if legacy := os.Getenv("GOCELL_HTTP_ADDR"); legacy != "" {
 		if os.Getenv("GOCELL_HTTP_PRIMARY_ADDR") == "" && os.Getenv("GOCELL_HTTP_INTERNAL_ADDR") == "" {
 			slog.Warn("GOCELL_HTTP_ADDR is no longer consumed (PR-A14a dual-listener);"+
@@ -309,18 +89,50 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		}
 	}
 
-	deps := &SharedDeps{
+	// Build cmdLocals for cmd-private wiring (prometheus adapter types,
+	// vault-metrics factory, internalGuard, consumerClaimerKind, etc.).
+	// locals must be built before the configcore key-provider so that
+	// locals.vaultTransitMetrics (the once-guarded factory) is available.
+	locals := &cmdLocals{
+		registry:            metricsDeps.PromStack.registry,
+		hookObserver:        metricsDeps.PromStack.hookObserver,
+		metricProvider:      metricsDeps.PromStack.metricProvider,
+		internalGuard:       guard,
+		consumerClaimerKind: replay.ConsumerClaimerKind,
+		metricsHandler:      metricsHandler,
+	}
+	locals.redisClient = replay.RedisClient
+	locals.initVaultMetricsFactory()
+
+	// Build configcore key provider + stale-cipher counter callback.
+	// These live in cmd because they import adapters/vault + prometheus which
+	// must not reach runtime/composition or cellmodules/configcore.
+	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
+	cfgKeyProvider, cfgStaleCipherInc, err := buildConfigCoreKeyProvider(
+		topo.StorageBackend(), adapterMode,
+		cfgProviderName, cfgMasterKey, cfgPrevMasterKey,
+		clk,
+		metricsDeps.PromStack.registry,
+		locals.vaultTransitMetrics,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configcore key provider: %w", err)
+	}
+
+	// Build composition.SharedDeps (public, interface-only fields consumed by
+	// platform cell modules). Prometheus adapter types, internalGuard, and
+	// consumerClaimerKind stay in cmdLocals.
+	compShared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                  clk,
 		Topology:               topo,
-		JWTDeps:                jwt,
-		PromStack:              metricsDeps.PromStack,
+		JWTIssuer:              jwt.issuer,
+		JWTVerifier:            jwt.verifier,
+		MetricsProvider:        metricsDeps.PromStack.metricProvider,
 		EventBus:               eb,
 		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
 		EventbusCacheCollector: metricsDeps.EventbusCacheCollector,
-		redisClient:            replay.RedisClient,
 		ConsumerClaimer:        replay.ConsumerClaimer,
-		ConsumerClaimerKind:    replay.ConsumerClaimerKind,
-		InternalGuard:          internalGuard,
+		InternalHMACRing:       guard.ring,
 		PrimaryHTTPAddr:        primaryAddr,
 		InternalHTTPAddr:       internalAddr,
 		HealthHTTPAddr:         healthAddr,
@@ -328,23 +140,30 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		MetricsToken:           metricsToken,
 		VerboseToken:           verboseToken,
 		VerboseDisabled:        verboseDisabled,
-		metricsHandler:         metricsHandler,
 		ProjectRoot:            os.Getenv("GOCELL_PROJECT_ROOT"),
-	}
-
-	if err := deps.Validate(); err != nil {
-		// Surface adapter mode on the failure path so operators can correlate the
-		// validation error with the requested vs. effective topology without
-		// chasing the typed Error's structured fields. The success-path Info log
-		// below intentionally fires only after Validate passes (see Wave 4 fix).
+		ConfigKeyProvider:      cfgKeyProvider,
+		ConfigStaleCipherInc:   cfgStaleCipherInc,
+	})
+	if err != nil {
 		slog.Warn("corebundle: SharedDeps validation failed",
 			slog.String("requested_mode", adapterMode),
 			slog.String("effective_mode", topo.AdapterInfo()["mode"]))
-		return nil, err
+		return nil, nil, err
 	}
+
+	// Cmd-side production validation (nonce store kind, claimer kind, health
+	// reachability, control-plane tokens) that depends on cmd-private types.
+	if err := validateCorebundleDeps(compShared, locals); err != nil {
+		slog.Warn("corebundle: cmd-side validation failed",
+			slog.String("requested_mode", adapterMode),
+			slog.String("effective_mode", topo.AdapterInfo()["mode"]))
+		return nil, nil, err
+	}
+
 	slog.Info("adapter mode",
 		slog.String("requested", adapterMode),
 		slog.String("effective", topo.AdapterInfo()["mode"]))
+
 	loaded = true
-	return deps, nil
+	return compShared, locals, nil
 }

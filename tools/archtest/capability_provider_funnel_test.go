@@ -8,7 +8,7 @@
 //	adapters/redis.NewClient
 //
 // may only be invoked from the assembly's single provisioning site
-// (cmd/corebundle/cap_wiring.go). Cell module files (cmd/<assembly>/*_module.go)
+// (cmd/corebundle/cap_wiring.go). Cell module files (cellmodules/<cell>/module.go)
 // and every other cmd/ file must consume the injected capability.PGProvider /
 // capability.RedisProvider instead of constructing the shared pool / client / the
 // pool-bound TxManager+OutboxWriter themselves.

@@ -9,12 +9,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 )
 
 // buildAssembly constructs the runtime Assembly and registers the generated
 // cell list. Extracted to keep runCorebundle cognitive complexity <= 15.
 func buildAssembly(
-	ps promStack,
+	locals *cmdLocals,
 	assemblyID string,
 	mode outbox.DurabilityMode,
 	clk clock.Clock,
@@ -23,8 +24,8 @@ func buildAssembly(
 	asm := assembly.New(clk, assembly.Config{
 		ID:              assemblyID,
 		DurabilityMode:  mode,
-		HookObserver:    ps.hookObserver,
-		MetricsProvider: ps.metricProvider,
+		HookObserver:    locals.hookObserver,
+		MetricsProvider: locals.metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
 	})
 	for _, c := range cells {
@@ -36,7 +37,7 @@ func buildAssembly(
 }
 
 func durabilityModeForTopology(topo bootstrap.Topology) outbox.DurabilityMode {
-	if topo.StorageBackend == "postgres" {
+	if topo.StorageBackend() == "postgres" {
 		return outbox.DurabilityDurable
 	}
 	return outbox.DurabilityDemo
@@ -44,7 +45,7 @@ func durabilityModeForTopology(topo bootstrap.Topology) outbox.DurabilityMode {
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected
 // idempotency claimer built in LoadSharedDepsFromEnv.
-func buildConsumerBase(deps *SharedDeps) (*outbox.ConsumerBase, error) {
+func buildConsumerBase(deps *composition.SharedDeps) (*outbox.ConsumerBase, error) {
 	if deps == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"construct ConsumerBase: SharedDeps is nil")

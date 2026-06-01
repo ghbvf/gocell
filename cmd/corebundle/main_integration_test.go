@@ -11,11 +11,9 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -45,13 +43,13 @@ func setupPostgresForMain(t *testing.T) (string, func()) {
 	return dsn, cleanup
 }
 
-// TestBuildConfigCoreOpts_Postgres_SchemaMatched verifies that buildConfigCoreOpts
-// returns (non-nil cell options, non-empty bootstrap opts, nil error) when a real
+// TestBuildConfigCoreOpts_Postgres_SchemaMatched verifies that provisionCapabilities
+// succeeds and the full composition.Builder.Build succeeds when a real
 // PostgreSQL container is available and all migrations have been applied.
 //
-// Pool provisioning has moved to provisionCapabilities; this test opens a pool
-// directly, wraps it into a capability.PGProvider, and injects it so buildConfigCoreOpts
-// can consume it without opening its own pool.
+// Pool provisioning is now handled by provisionCapabilities; this test calls
+// LoadSharedDepsFromEnv, then provisionCapabilities, then composition.Builder.Build
+// to assert the full postgres wiring path (equivalent to the old BuildApp path).
 func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
@@ -67,29 +65,26 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
 	_ = migPool.Close(ctx)
 
-	// Open a fresh pool for the test; wrap into PGProvider for injection.
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
-	require.NoError(t, err, "open pool for test must succeed")
-	defer func() { _ = pool.Close(ctx) }()
+	// Set minimal env vars for postgres mode.
+	setRealModeEnv(t, dsn)
 
-	txMgr := adapterpg.NewTxManager(pool)
-	writer := adapterpg.NewOutboxWriter(clock.Real())
-	pgProvider := capability.NewPGProvider(txMgr, writer, pool.DB())
+	shared, locals, err := LoadSharedDepsFromEnv(ctx)
+	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed")
 
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+	// provisionCapabilities opens the pool + verifies schema.
+	require.NoError(t, provisionCapabilities(ctx, shared, locals),
+		"provisionCapabilities must succeed with a fully migrated DB")
+	require.NotNil(t, shared.PG, "shared.PG must be provisioned in postgres mode")
+	defer func() { _ = locals.poolMR.Close(ctx) }()
 
-	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
-		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PG:               pgProvider,
-		Publisher:        discardPublisher{},
-		MetricsProvider:  kernelmetrics.NopProvider{},
-		ValueTransformer: crypto.NoopTransformer{},
-	})
-
-	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
-	assert.NotNil(t, result.CellOptions, "cellOpts must be non-nil")
-	// Relay is registered via bootstrap opts, not via PoolResource.
-	assert.NotEmpty(t, result.BootstrapOpts, "bootstrapOpts must carry relay ManagedResource (A11 wire guard)")
+	// composition.Builder.Build verifies that platform modules can Provide
+	// with the PG capability. Bootstrap options (listeners, auth) are omitted
+	// in this unit-level wiring test.
+	mods := generatedCellModules()
+	app, buildErr := composition.New().With(mods...).Build(ctx, shared,
+		func(_ []cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+	require.NoError(t, buildErr, "Builder.Build must succeed with a fully migrated DB")
+	assert.NotNil(t, app, "App must be non-nil after successful Build")
 }
 
 // TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that

@@ -122,7 +122,7 @@ warn 日志提示当前运行在 demo 模式——这是预期行为。
 在 composition root 中拿到真实的 adapter 实例后 wrap：
 
 ```go
-// cmd/corebundle/access_module.go（composition root）
+// cellmodules/accesscore/module.go（composition root）
 import (
     "github.com/ghbvf/gocell/kernel/outbox"
     "github.com/ghbvf/gocell/kernel/persistence"

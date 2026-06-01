@@ -195,7 +195,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 // TestSetupEndpoints_FirstRunFlow_PG mirrors TestSetupEndpoints_FirstRunFlow
 // but with a real PostgreSQL container backing the accesscore user / role
 // repositories. Closes A26-R4 (SETUP-ORPHAN-E2E-01) and validates the
-// cmd/corebundle PG wiring path landed in S3+S5 (access_module.go).
+// cmd/corebundle PG wiring path landed in S3+S5 (cellmodules/accesscore/module.go).
 //
 // Steps mirror the mem variant exactly:
 //

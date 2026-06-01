@@ -116,6 +116,19 @@ type modulesContext struct {
 	Capabilities []string
 }
 
+// modulesCompositionContext is the template context for
+// modules_gen_composition.go.tpl. Used when assembly.yaml declares
+// build.compositionAPI: true — the composition API form uses
+// runtime/composition.CellModule and cellmodules/{cellID}.Module() calls
+// instead of local *Module struct types.
+type modulesCompositionContext struct {
+	AssemblyID    string
+	SourcePath    string   // path to the assembly.yaml that drove generation
+	Modules       []string // Module call expressions, e.g. "cellmodulesconfigcore.Module()"
+	ModuleImports []string // aliased import lines, e.g. `cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"`
+	Capabilities  []string
+}
+
 // capabilityConstNames maps cell.yaml `requires` enum values to their
 // runtime/capability.Kind const identifiers. The enum is closed and mirrored by
 // metadata.CapabilityEnum + cell.schema.json + runtime/capability.Kind;
@@ -229,8 +242,13 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 // CellModule factory list. cells appear in the order declared in
 // assembly.yaml.cells (not sorted), preserving runtime startup order.
 //
+// When assembly.yaml declares build.compositionAPI: true, the output uses
+// the runtime/composition.CellModule form (cellmodules/{cellID}.Module() calls)
+// — see modules_gen_composition.go.tpl. Otherwise, the legacy local-type
+// form is emitted (modules_gen.go.tpl), which is used by examples/.
+//
 // Each cell must have GoStructName set (cell.yaml schema extension consumed
-// by codegen). The generated factory references {GoStructName}Module by
+// by codegen). The legacy factory references {GoStructName}Module by
 // convention; the *Module struct is hand-written in cmd/{assemblyID}/.
 //
 // generatedCapabilities() is the sorted, de-duplicated union of the assembly
@@ -245,30 +263,32 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
 
-	modules := make([]string, 0, len(asm.Cells))
+	capConsts, err := g.collectCapabilityConsts(assemblyID, asm.Cells)
+	if err != nil {
+		return nil, err
+	}
+
+	if asm.Build.CompositionAPI {
+		return g.generateModulesGenComposition(assemblyID, asm, capConsts)
+	}
+	return g.generateModulesGenLegacy(assemblyID, asm, capConsts)
+}
+
+// collectCapabilityConsts returns the sorted de-duplicated capability.Kind
+// const names for all cells in the assembly.
+func (g *Generator) collectCapabilityConsts(assemblyID string, cellIDs []string) ([]string, error) {
 	capSet := make(map[string]struct{})
-	for _, cellID := range asm.Cells {
+	for _, cellID := range cellIDs {
 		cm := g.cells.Get(cellID)
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
 				"assembly references unknown cell",
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
 		}
-		if cm.GoStructName.IsZero() {
-			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-				"cell missing GoStructName for modules_gen factory derivation",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
-		}
-		modules = append(modules, cm.GoStructName.String()+"Module")
 		for _, c := range cm.Requires {
 			capSet[c] = struct{}{}
 		}
 	}
-
-	// Design Y (#855): the assembly's provisioned capability set is the sorted,
-	// de-duplicated union of its cells' `requires` — the single source. Sorting
-	// makes generatedCapabilities() deterministic regardless of cell iteration
-	// or per-cell requires declaration order.
 	requiredCaps := make([]string, 0, len(capSet))
 	for c := range capSet {
 		requiredCaps = append(requiredCaps, c)
@@ -284,7 +304,29 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		}
 		capConsts = append(capConsts, name)
 	}
+	return capConsts, nil
+}
 
+// generateModulesGenLegacy emits the legacy local-CellModule-type form used
+// by examples/ assemblies.
+func (g *Generator) generateModulesGenLegacy(
+	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
+) ([]byte, error) {
+	modules := make([]string, 0, len(asm.Cells))
+	for _, cellID := range asm.Cells {
+		cm := g.cells.Get(cellID)
+		if cm == nil {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
+				"assembly references unknown cell",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
+		}
+		if cm.GoStructName.IsZero() {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"cell missing GoStructName for modules_gen factory derivation",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
+		}
+		modules = append(modules, cm.GoStructName.String()+"Module")
+	}
 	ctx := modulesContext{
 		AssemblyID:   assemblyID,
 		SourcePath:   asm.File,
@@ -292,6 +334,47 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		Capabilities: capConsts,
 	}
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
+}
+
+// generateModulesGenComposition emits the composition.CellModule form used by
+// platform assemblies (assembly.yaml build.compositionAPI: true).
+// Each cell maps to cellmodules{cellID}.Module() with a matching import alias.
+func (g *Generator) generateModulesGenComposition(
+	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
+) ([]byte, error) {
+	moduleCalls := make([]string, 0, len(asm.Cells))
+	importLines := make([]string, 0, len(asm.Cells))
+	seen := make(map[string]bool, len(asm.Cells))
+	for _, cellID := range asm.Cells {
+		cm := g.cells.Get(cellID)
+		if cm == nil {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
+				"assembly references unknown cell",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
+		}
+		alias := "cellmodules" + cellID
+		if !seen[cellID] {
+			seen[cellID] = true
+			importLines = append(importLines, fmt.Sprintf("%s %q",
+				alias, g.module+"/cellmodules/"+cellID))
+		}
+		moduleCalls = append(moduleCalls, alias+".Module()")
+	}
+	// Sort import lines by their (alias, path) string so the rendered import
+	// block is gofmt-clean regardless of cell declaration order. The alias is
+	// "platform"+cellID and the path ends in /cellmodules/cellID, so string-sorting
+	// the import lines matches gofmt's path-based ordering. moduleCalls stay in
+	// cell (assembly.yaml) order — that order is runtime-significant (e.g.
+	// auditcore before accesscore for the BootstrapLedgerStore handoff).
+	sort.Strings(importLines)
+	ctx := modulesCompositionContext{
+		AssemblyID:    assemblyID,
+		SourcePath:    asm.File,
+		Modules:       moduleCalls,
+		ModuleImports: importLines,
+		Capabilities:  capConsts,
+	}
+	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
 }
 
 // PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new

@@ -50,7 +50,7 @@
 //	    ),
 //	)
 //
-// Composition root only (cmd/corebundle/access_module.go):
+// Composition root only (cellmodules/accesscore/module.go):
 //
 //	proto, err := session.NewProtocol(...)
 //

@@ -2,13 +2,19 @@
 // Source: assemblies/corebundle/assembly.yaml
 package main
 
-import "github.com/ghbvf/gocell/runtime/capability"
+import (
+	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
+	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
+	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/runtime/composition"
+)
 
-func generatedCellModules() []CellModule {
-	return []CellModule{
-		ConfigCoreModule{},
-		AuditCoreModule{},
-		AccessCoreModule{},
+func generatedCellModules() []composition.CellModule {
+	return []composition.CellModule{
+		cellmodulesconfigcore.Module(),
+		cellmodulesauditcore.Module(),
+		cellmodulesaccesscore.Module(),
 	}
 }
 

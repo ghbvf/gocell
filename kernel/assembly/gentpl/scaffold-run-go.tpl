@@ -7,7 +7,7 @@
 // canonical three-layer composition root pattern (see cmd/CLAUDE.md):
 //
 //  1. Env injection + module factory ({{.HelperName}}Modules)
-//  2. BuildApp assembles cells + bootstrap.Option
+//  2. composition.New().With(modules...).Build(ctx, shared, runtimeOptsFn) assembles cells + bootstrap.Option
 //  3. Three listeners + bootstrap.New(opts...).Run(ctx)
 package main
 
@@ -76,7 +76,7 @@ type CellModule interface {
 
 // Stub *Module types per cell — declared so modules_gen.go compiles. Each
 // concrete CellModule receiver returns the cell ID; replace each with a
-// real composition root struct (see cmd/corebundle/access_module.go for a
+// real composition root struct (see cellmodules/accesscore/module.go for a
 // production example) carrying construction + Provide() once the assembly
 // is wired to real dependencies.
 {{range .CellModules}}

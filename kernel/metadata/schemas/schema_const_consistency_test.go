@@ -223,6 +223,53 @@ func asStringSlice(t *testing.T, leaf any) []string {
 	return out
 }
 
+// TestBuildMetaFieldsCoveredBySchema guards BuildMeta ↔ assembly.schema.json
+// build.properties drift. The build block declares additionalProperties:false,
+// so every yaml-tagged exported BuildMeta field MUST appear as a declared
+// property — otherwise a valid assembly.yaml using that field would fail strict
+// schema validation, and the schema (the on-disk authority) silently diverges
+// from the Go struct (the runtime authority). Enumerating from the struct toward
+// the schema means "add a BuildMeta field, forget the schema property" fails
+// here instead of surfacing in a downstream tool.
+func TestBuildMetaFieldsCoveredBySchema(t *testing.T) {
+	t.Parallel()
+
+	props, ok := walkSchema(t, "assembly.schema.json",
+		[]string{"properties", "build", "properties"}).(map[string]any)
+	require.True(t, ok, "assembly.schema.json build.properties must be an object")
+
+	rt := reflect.TypeOf(metadata.BuildMeta{})
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		tag := f.Tag.Get("yaml")
+		name := tag
+		if idx := indexByte(tag, ','); idx >= 0 {
+			name = tag[:idx]
+		}
+		if name == "" || name == "-" {
+			continue
+		}
+		_, declared := props[name]
+		require.True(t, declared,
+			"metadata.BuildMeta.%s (yaml:%q) is missing from assembly.schema.json build.properties; "+
+				"build has additionalProperties:false so an assembly.yaml using it would fail strict validation",
+			f.Name, name)
+	}
+}
+
+// indexByte returns the index of the first occurrence of b in s, or -1.
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
 // readSchemaString walks the JSON path and returns the string at the leaf.
 func readSchemaString(t *testing.T, file string, path []string) string {
 	t.Helper()

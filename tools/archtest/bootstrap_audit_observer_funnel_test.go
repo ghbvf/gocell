@@ -100,13 +100,14 @@ const (
 	ruleBootstrapAuditObserverFunnelDownstreamHard01 = "BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-DOWNSTREAM-HARD-01"
 	ruleBootstrapAuditObserverFunnelUpstreamMedium01 = "BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01"
 
-	auditPkgSuffix          = "/runtime/audit"
-	authPkgSuffix           = "/runtime/auth"
-	corebundlePkgSuffix     = "/cmd/corebundle"
-	ssobffPkgSuffix         = "/examples/ssobff"
-	observerFnName          = "NewBootstrapAuthFailObserver"
-	appendFnName            = "AppendBootstrapAuthFail"
-	bootstrapMiddlewareName = "NewBootstrapMiddleware"
+	auditPkgSuffix                 = "/runtime/audit"
+	authPkgSuffix                  = "/runtime/auth"
+	corebundlePkgSuffix            = "/cmd/corebundle"
+	ssobffPkgSuffix                = "/examples/ssobff"
+	cellmodulesAccesscorePkgSuffix = "/cellmodules/accesscore"
+	observerFnName                 = "NewBootstrapAuthFailObserver"
+	appendFnName                   = "AppendBootstrapAuthFail"
+	bootstrapMiddlewareName        = "NewBootstrapMiddleware"
 )
 
 // TestBootstrapAuditObserverFunnelDownstreamHard01 enforces the downstream
@@ -387,13 +388,18 @@ func exprStringForLog(c *ast.CallExpr) string {
 }
 
 // TestBootstrapAuditObserverFunnelUpstreamMedium01 enforces the upstream
-// half: every production call to auth.NewBootstrapMiddleware in cmd/corebundle
-// or examples/ssobff must hand the funnel-built observer as its third
-// positional argument. The observer may be either the direct CallExpr to
-// audit.NewBootstrapAuthFailObserver or an identifier short-declared from it
-// in the same source file. Both packages share the same upstream Medium
-// posture; the demo composition root is held to the production wiring rule
-// to keep an in-repo regression out of the funnel impossible.
+// half: every production call to auth.NewBootstrapMiddleware in cmd/corebundle,
+// examples/ssobff, or cellmodules/accesscore must hand the funnel-built observer
+// as its third positional argument. The observer may be either the direct
+// CallExpr to audit.NewBootstrapAuthFailObserver or an identifier
+// short-declared from it in the same source file. All three packages share
+// the same upstream Medium posture; the demo composition root is held to the
+// production wiring rule to keep an in-repo regression out of the funnel
+// impossible.
+//
+// cellmodules/accesscore (#1085): composition-root layer added in Batch 3 of the
+// 577-composition-public-api refactor. It wires accesscore's bootstrap auth
+// middleware and must route the observer through the same funnel.
 //
 // Why a small Medium gap exists: a function-level "X = func(ctx, reason){...}"
 // assignment with the same identifier as a legitimate funnel-built observer
@@ -409,9 +415,13 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	authPkgPath := modPath + authPkgSuffix
 	corebundlePkgPath := modPath + corebundlePkgSuffix
 	ssobffPkgPath := modPath + ssobffPkgSuffix
+	cellmodulesAccesscorePkgPath := modPath + cellmodulesAccesscorePkgSuffix
 	scanPaths := map[string]bool{
 		corebundlePkgPath: true,
 		ssobffPkgPath:     true,
+		// cellmodules/accesscore is a composition-root layer (#1085) that wires the
+		// bootstrap auth-fail observer; it must route through audit.NewBootstrapAuthFailObserver.
+		cellmodulesAccesscorePkgPath: true,
 	}
 	// Reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): record
 	// which scope packages were actually visited so we fail loudly if a
@@ -484,7 +494,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 		t.Logf("%s: %s — %s", ruleBootstrapAuditObserverFunnelUpstreamMedium01, v.location, v.reason)
 	}
 	assert.Empty(t, upstreamViolations,
-		"%s: cmd/corebundle and examples/ssobff production callers of auth.%s "+
+		"%s: cmd/corebundle, examples/ssobff, and cellmodules/accesscore production callers of auth.%s "+
 			"must route through audit.%s; recovering to slog-only observers "+
 			"(the pre-PR shape) is what this rule prevents",
 		ruleBootstrapAuditObserverFunnelUpstreamMedium01, bootstrapMiddlewareName, observerFnName)

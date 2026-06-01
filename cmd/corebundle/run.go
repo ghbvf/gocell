@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/lifecycle"
 	"github.com/ghbvf/gocell/runtime/observability/logging"
 )
@@ -49,51 +50,35 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	// emitting any log; tests invoke bootstrap directly and are unaffected.
 	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
 
-	shared, err := LoadSharedDepsFromEnv(ctx)
+	compShared, locals, err := LoadSharedDepsFromEnv(ctx)
 	if err != nil {
 		return err
 	}
+
+	// Close shared infrastructure (postgres pool + redis client) if startup aborts
+	// before bootstrap.Run takes ownership of the ManagedResources (provisionCapabilities /
+	// composition.Builder.Build / buildAssembly / option wiring failures). The redis
+	// client is created inside LoadSharedDepsFromEnv (which already closes it on its own
+	// internal failure); registering this defer immediately after Load covers the whole
+	// window from here to handedToBootstrap — including provisionCapabilities. The closure
+	// reads handedToBootstrap lazily at exit.
+	// Once bootstrap.Run is reached both resources are managed by bootstrap's LIFO teardown.
+	handedToBootstrap := false
+	defer func() { releaseUnhandedResources(ctx, locals, handedToBootstrap) }()
 
 	// Provision assembly-level shared infrastructure (postgres pool / redis
 	// client → cap.*Provider) once, before any module consumes it. Mirrors
 	// fx.New() resolve-before-start ordering.
-	if err := provisionCapabilities(ctx, shared); err != nil {
+	if err := provisionCapabilities(ctx, compShared, locals); err != nil {
 		return err
 	}
-	// Close the pool if startup aborts before bootstrap.Run takes ownership of
-	// the ManagedResource (BuildApp / buildAssembly / option wiring failures).
-	// Once bootstrap.Run is reached the pool is managed by bootstrap's LIFO
-	// teardown. Mirrors BuildApp's provisional-rollback for pre-Run resources.
-	handedToBootstrap := false
-	defer func() {
-		if !handedToBootstrap && shared.poolMR != nil {
-			_ = shared.poolMR.Close(ctx)
-		}
-	}()
 
-	modules, err := corebundleModules(assemblyID, assemblyCellIDs)
-	if err != nil {
-		return err
-	}
-	cells, cellOpts, err := BuildApp(ctx, shared, modules...)
-	if err != nil {
-		return err
-	}
-	logAssemblyMaturity(cells)
-
-	asm, err := buildAssembly(shared.PromStack, assemblyID, durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
-	if err != nil {
-		return fmt.Errorf("build assembly: %w", err)
-	}
-
-	consumerBase, err := buildConsumerBase(shared)
+	mods, err := corebundleModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
 	}
 
-	metricsHandler := shared.metricsHandler
-
-	adapterInfo := adapterInfoForSharedDeps(shared)
+	adapterInfo := adapterInfoForSharedDeps(compShared, locals)
 	slog.Info("corebundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
@@ -103,19 +88,57 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		slog.String("service_token_nonce_store", adapterInfo["service_token_nonce_store"]),
 		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]))
 
-	logSinglePodNonceStoreAcknowledgement(shared)
+	logSinglePodNonceStoreAcknowledgement(compShared, locals)
 
-	opts, err := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
-	if err != nil {
-		return fmt.Errorf("default runtime options: %w", err)
+	// runtimeOptsFunc stays in cmd: auth construction is AUTH-PLAN-04-allowlisted
+	// to cmd/.
+	runtimeOptsFunc := func(cells []cell.Cell) ([]bootstrap.Option, error) {
+		logAssemblyMaturity(cells)
+
+		asm, buildErr := buildAssembly(locals, assemblyID, durabilityModeForTopology(compShared.Topology), compShared.Clock, cells...)
+		if buildErr != nil {
+			return nil, fmt.Errorf("build assembly: %w", buildErr)
+		}
+
+		consumerBase, cbErr := buildConsumerBase(compShared)
+		if cbErr != nil {
+			return nil, cbErr
+		}
+
+		opts, rtErr := defaultRuntimeOptions(compShared, locals, asm, consumerBase, locals.metricsHandler, adapterInfo)
+		if rtErr != nil {
+			return nil, fmt.Errorf("default runtime options: %w", rtErr)
+		}
+		return opts, nil
 	}
-	opts = append(opts, cellOpts...)
+
+	app, err := composition.New().With(mods...).Build(ctx, compShared, runtimeOptsFunc)
+	if err != nil {
+		return err
+	}
 
 	handedToBootstrap = true
-	return bootstrap.New(shared.Clock, opts...).Run(ctx)
+	return app.Run(ctx)
 }
 
-func corebundleModules(assemblyID string, cellIDs []string) ([]CellModule, error) {
+// releaseUnhandedResources closes the assembly's shared infrastructure (postgres
+// pool + redis client) that startup opened but bootstrap.Run never took ownership
+// of. It is the body of runCorebundle's startup-abort defer. When
+// handedToBootstrap is true, bootstrap owns the resources via its LIFO teardown,
+// so this is a no-op. Both fields are nil-safe: poolMR is nil until
+// provisionPostgres sets it, and closeRedisClientAfterFailedLoad tolerates a nil
+// redis client.
+func releaseUnhandedResources(ctx context.Context, locals *cmdLocals, handedToBootstrap bool) {
+	if handedToBootstrap {
+		return
+	}
+	if locals.poolMR != nil {
+		_ = locals.poolMR.Close(ctx)
+	}
+	closeRedisClientAfterFailedLoad(ctx, locals.redisClient)
+}
+
+func corebundleModules(assemblyID string, cellIDs []string) ([]composition.CellModule, error) {
 	mods := generatedCellModules()
 	if err := assertModuleIDsMatch(assemblyID, cellIDs, mods); err != nil {
 		return nil, err
@@ -171,7 +194,7 @@ func logAssemblyMaturity(cells []cell.Cell) {
 // assertModuleIDsMatch fails-fast when assembly.yaml.cells (cellIDs) drifts from
 // the generated module list. The two should be 1:1 in declaration order; any
 // mismatch indicates a missing `gocell generate assembly` run.
-func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []CellModule) error {
+func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []composition.CellModule) error {
 	hint := fmt.Sprintf("run `gocell generate assembly --id=%s`", assemblyID)
 	if len(cellIDs) != len(mods) {
 		return fmt.Errorf(
@@ -191,16 +214,16 @@ func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []CellModule
 // logSinglePodNonceStoreAcknowledgement emits a positive-path Info log when
 // the deployment is real-mode + single-pod + InMemory NonceStore, making the
 // operator's explicit single-pod replay-protection choice visible at startup.
-func logSinglePodNonceStoreAcknowledgement(shared *SharedDeps) {
-	if shared == nil || shared.InternalGuard == nil {
+func logSinglePodNonceStoreAcknowledgement(shared *composition.SharedDeps, locals *cmdLocals) {
+	if shared == nil || locals == nil || locals.internalGuard == nil {
 		return
 	}
-	ns := shared.InternalGuard.NonceStore()
+	ns := locals.internalGuard.NonceStore()
 	if ns == nil || ns.Kind() != kauth.NonceStoreKindInMemory {
 		return
 	}
 	if !shared.Topology.RequireProductionControlPlane() ||
-		!shared.Topology.SinglePodReplayProtection {
+		!shared.Topology.SinglePodReplayProtection() {
 		return
 	}
 	slog.Info("controlplane: in-memory nonce store acknowledged for single-pod deployment",

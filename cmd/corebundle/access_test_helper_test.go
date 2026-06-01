@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
 // buildAccessCoreMemOptions returns the explicit option set that replaces the
@@ -46,4 +47,17 @@ func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Opti
 		accesscore.WithSessionStore(sessionStore),
 		accesscore.WithRefreshStore(refreshStore),
 	}
+}
+
+// mustNewCASProtocol constructs a CAS Protocol with the given version field.
+// This documents the invariant that cells never call cas.NewProtocol directly
+// (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest guards that cells never call it
+// directly); integration tests are in cmd/ and are explicitly allowed to do so.
+func mustNewCASProtocol(t testing.TB, versionField string) *cas.Protocol {
+	t.Helper()
+	p, err := cas.NewProtocol(cas.WithVersionField(versionField))
+	if err != nil {
+		t.Fatalf("cas.NewProtocol: %v", err)
+	}
+	return p
 }

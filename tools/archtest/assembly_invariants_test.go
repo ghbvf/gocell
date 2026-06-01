@@ -205,6 +205,17 @@ func TestAssemblyModulesGen_ScopeCoversExamples(t *testing.T) {
 
 // checkModulesGenFile verifies the three ASSEMBLY-MODULES-GEN-01 invariants
 // for a single modules_gen.go file.
+//
+// Two valid forms for generatedCellModules are accepted:
+//
+//  1. Legacy (examples/): func generatedCellModules() []CellModule
+//     — local CellModule type in the same package.
+//  2. Composition API (corebundle): func generatedCellModules() []composition.CellModule
+//     — qualified reference to runtime/composition.CellModule via an import alias.
+//
+// Both forms satisfy the ASSEMBLY-MODULES-GEN-01 intent: the function exists,
+// it returns a slice of the well-typed element type, and modules_gen.go is
+// the single source of the module list.
 func checkModulesGenFile(t *testing.T, path, rel string) {
 	t.Helper()
 
@@ -232,14 +243,22 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 		"%s: %s must declare `package main`", ruleAssemblyModulesGen01, rel)
 
 	assert.True(t, hasGeneratedCellModulesFunc(af),
-		"%s: %s must declare top-level `func generatedCellModules() []CellModule`; "+
-			"run `gocell generate assembly` to regenerate",
+		"%s: %s must declare top-level `func generatedCellModules() []CellModule` "+
+			"(local type) or `func generatedCellModules() []composition.CellModule` "+
+			"(qualified type); run `gocell generate assembly` to regenerate",
 		ruleAssemblyModulesGen01, rel,
 	)
 }
 
 // hasGeneratedCellModulesFunc returns true when the file contains a top-level
-// function declaration `func generatedCellModules() []CellModule`.
+// function declaration `func generatedCellModules() []CellModule` (legacy form)
+// or `func generatedCellModules() []<qualifier>.CellModule` (composition API form).
+//
+// Both forms are valid:
+//   - Legacy: `[]CellModule` — local package type; used by examples/.
+//   - Composition API: `[]composition.CellModule` — qualified import of
+//     runtime/composition.CellModule; used by assemblies with build.compositionAPI: true
+//     (currently only corebundle).
 func hasGeneratedCellModulesFunc(af *ast.File) bool {
 	_, ok := FindFirstInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) bool {
 		if fn.Recv != nil {
@@ -253,7 +272,7 @@ func hasGeneratedCellModulesFunc(af *ast.File) bool {
 		if ft.Params != nil && len(ft.Params.List) != 0 {
 			return false
 		}
-		// Returns exactly one result: []CellModule.
+		// Returns exactly one result: either []CellModule or []<pkg>.CellModule.
 		if ft.Results == nil || len(ft.Results.List) != 1 {
 			return false
 		}
@@ -262,8 +281,15 @@ func hasGeneratedCellModulesFunc(af *ast.File) bool {
 		if !isArr || arr.Len != nil {
 			return false
 		}
-		id, isIdent := arr.Elt.(*ast.Ident)
-		return isIdent && id.Name == "CellModule"
+		// Form 1: legacy local type  — []CellModule
+		if id, isIdent := arr.Elt.(*ast.Ident); isIdent {
+			return id.Name == "CellModule"
+		}
+		// Form 2: composition API — []<qualifier>.CellModule
+		if sel, isSel := arr.Elt.(*ast.SelectorExpr); isSel {
+			return sel.Sel.Name == "CellModule"
+		}
+		return false
 	})
 	return ok
 }
@@ -514,22 +540,28 @@ func findStructDecl(af *ast.File, name string) *ast.StructType {
 // INVARIANT: ASSEMBLY-CELLMODULE-TYPE-04
 //
 // TestAssemblyCellModuleTypePresent enforces ASSEMBLY-CELLMODULE-TYPE-04:
-// whenever an assembly entrypoint directory contains modules_gen.go, the same
-// package must declare a top-level type named "CellModule" (interface or struct,
-// both are valid). Without it, modules_gen.go cannot compile because it
-// references CellModule in its return type, but the resulting compiler error
-// ("undefined: CellModule") gives no actionable guidance. This rule provides
-// a fail-fast message that points users to the correct scaffold command.
+// whenever an assembly entrypoint directory contains modules_gen.go, the
+// package must either:
+//
+//	(a) declare a top-level type named "CellModule" (legacy form, used by
+//	    examples/ that keep a local CellModule interface/struct), or
+//	(b) import a package that exports "CellModule" via a selector expression
+//	    in the modules_gen.go return type (composition API form, used by
+//	    assemblies with build.compositionAPI: true like corebundle, where
+//	    the return type is []composition.CellModule from runtime/composition).
+//
+// The intent is: "the module list has a well-typed element type whose definition
+// is reachable from the package." A qualified import of the public interface
+// runtime/composition.CellModule satisfies that intent.
+//
+// Without a reachable CellModule type, modules_gen.go cannot compile. This
+// rule provides a fail-fast message that points users to the correct scaffold
+// command or assembly.yaml configuration.
 //
 // Discovery rating: Medium — scope derived from project.Assemblies (same
 // metadata source as TestAssemblyModulesGen_HasGeneratedMarker / PR #867 F6).
 // Previously scoped to "cmd/" only (Soft); now covers examples/<id>/ as well
 // by deriving each entrypoint dir from asm.Build.Entrypoint.
-//
-// rationale: K#10 introduced the cmd-package-local type contract
-// (modules_gen.go references CellModule type). Guarding it here prevents
-// silent breakage and follows the three-piece constraint closure rule:
-// static guard + documentation contract + regression test.
 //
 // Reverse self-check: TestAssemblyCellModuleType_ScopeCoversExamples asserts
 // that at least one examples/ dir is included in the checked set.
@@ -610,8 +642,13 @@ func TestAssemblyCellModuleType_ScopeCoversExamples(t *testing.T) {
 }
 
 // checkCellModuleTypePresentInDir scans all non-test *.go files in entrypointDir
-// for a top-level type declaration named "CellModule". It reports an
-// ASSEMBLY-CELLMODULE-TYPE-04 violation when no such declaration is found.
+// for either:
+//
+//	(a) a top-level type declaration named "CellModule" (legacy form), or
+//	(b) a modules_gen.go function whose return type is []<qualifier>.CellModule
+//	    (composition API form — the type is from an imported package).
+//
+// It reports an ASSEMBLY-CELLMODULE-TYPE-04 violation when neither is found.
 // entrypointDir is an absolute path to the assembly composition root (e.g.
 // /root/cmd/corebundle or /root/examples/todoorder).
 func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
@@ -626,14 +663,28 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
 		}),
 	)
 
+	// found covers both the local-type form and the composition API form.
 	found := false
 	Run(t, scope, func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			if found {
 				return nil
 			}
+			// Form (a): local type declaration `type CellModule ...`
 			if hasTopLevelTypeDecl(file, "CellModule") {
 				found = true
+				return nil
+			}
+			// Form (b): modules_gen.go uses []<qualifier>.CellModule return type.
+			// This is the composition API form: the CellModule type comes from an
+			// imported package (runtime/composition) rather than being declared locally.
+			if hasGeneratedCellModulesFunc(file) {
+				// hasGeneratedCellModulesFunc already accepts the []<qualifier>.CellModule
+				// form. If the function uses a qualified CellModule selector, the type
+				// requirement is satisfied via the import.
+				if hasCompositionCellModuleReturnType(file) {
+					found = true
+				}
 			}
 		}
 		return nil
@@ -643,12 +694,91 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
 	}
 
 	t.Errorf(
-		"%s: %s/modules_gen.go references CellModule but %s/ has no "+
-			"top-level CellModule type declaration. "+
-			"Define `type CellModule interface { ID() string; ... }` (or compatible) "+
-			"in the same package.",
+		"%s: %s/modules_gen.go references CellModule but %s/ has neither "+
+			"a top-level CellModule type declaration nor a composition-API "+
+			"import of CellModule (e.g. []composition.CellModule). "+
+			"Either define `type CellModule interface { ID() string; ... }` in "+
+			"the same package (legacy form), or set build.compositionAPI: true in "+
+			"assembly.yaml and use the composition API module form.",
 		ruleAssemblyCellModuleType04, dirRel, dirRel,
 	)
+}
+
+// compositionPkgPath is the import path of the public composition CellModule
+// type. The generated composition-API modules_gen.go must return
+// []composition.CellModule from this exact package. Derived from
+// PlatformModulePath per ARCHTEST-MODULE-PATH-FUNNEL-01.
+const compositionPkgPath = PlatformModulePath + "/runtime/composition"
+
+// hasCompositionCellModuleReturnType returns true when af contains a top-level
+// function named "generatedCellModules" whose return type is
+// []<qualifier>.CellModule AND <qualifier> resolves (via af's import
+// declarations) to compositionPkgPath. This is the composition-API form where
+// CellModule is imported from runtime/composition.
+//
+// AI-robust grade: Medium. The qualifier→import-path resolution is performed at
+// the AST level (alias-aware), so a decoy `otherpkg.CellModule` selector — or a
+// hostile package aliased as `composition` but pointing elsewhere — does NOT
+// satisfy it; only a real import of runtime/composition does. This is stronger
+// than a bare Sel.Name check but is not full go/types resolution (this guard
+// runs under the AST-only Run, not RunTyped). The Hard upstream for the
+// generated form lives in the codegen golden TestGenerateModulesGen_CompositionForm
+// (kernel/assembly), which byte-locks the emitted []composition.CellModule
+// return type and its import; this archtest is the type-aware backstop for the
+// non-generated / legacy entrypoint dirs where no golden applies.
+//
+// 上游 Medium 天花板（与 SharedDeps/Topology seal 同形态，Go 包可见性限制）登记于
+// gh #1412（won't-do 跟踪）。
+func hasCompositionCellModuleReturnType(af *ast.File) bool {
+	_, ok := FindFirstInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) bool {
+		if fn.Recv != nil || fn.Name.Name != "generatedCellModules" {
+			return false
+		}
+		ft := fn.Type
+		if ft.Params != nil && len(ft.Params.List) != 0 {
+			return false
+		}
+		if ft.Results == nil || len(ft.Results.List) != 1 {
+			return false
+		}
+		result := ft.Results.List[0]
+		arr, isArr := result.Type.(*ast.ArrayType)
+		if !isArr || arr.Len != nil {
+			return false
+		}
+		sel, isSel := arr.Elt.(*ast.SelectorExpr)
+		if !isSel || sel.Sel.Name != "CellModule" {
+			return false
+		}
+		qualifier, isIdent := sel.X.(*ast.Ident)
+		if !isIdent {
+			return false
+		}
+		return importPathForQualifier(af, qualifier.Name) == compositionPkgPath
+	})
+	return ok
+}
+
+// importPathForQualifier resolves a package qualifier (as it appears before a
+// selector, e.g. "composition" in composition.CellModule) to its import path by
+// scanning af's import declarations. It honors explicit aliases and falls back
+// to the path's last segment for unaliased imports. Returns "" when no import
+// matches the qualifier.
+func importPathForQualifier(af *ast.File, qualifier string) string {
+	for _, imp := range af.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := path[strings.LastIndex(path, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name == qualifier {
+			return path
+		}
+	}
+	return ""
 }
 
 // hasTopLevelTypeDecl reports whether af contains a top-level type declaration

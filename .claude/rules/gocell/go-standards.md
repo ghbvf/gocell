@@ -20,6 +20,7 @@ paths:
 | runtime/ | kernel/ + pkg/ | cells/ adapters/ |
 | adapters/ | kernel/ + runtime/（实现其接口） | cells/ |
 | pkg/ | 标准库 | kernel/ cells/ runtime/ adapters/ |
+| cellmodules/ | 所有层（Composition Root：绑定 cell↔adapter） | — |
 | examples/ | 所有层 | — |
 
 ## DDD 分层（适用于 cells/ 和 examples/）

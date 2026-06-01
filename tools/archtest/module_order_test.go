@@ -3,7 +3,7 @@
 //
 // MODULE-ORDER-CONFIGCORE-FIRST-01 was removed when the postgres pool moved out
 // of ConfigCoreModule.Provide into the assembly-level provisionCapabilities
-// (cap_wiring.go): the pool is provisioned before BuildApp and registered as the
+// (cap_wiring.go): the pool is provisioned before composition.Build and registered as the
 // first ManagedResource by runtimeBaseOptions, so cell module order no longer
 // carries the pool happens-before contract. See ADR
 // docs/architecture/202605251500-adr-capability-provider-interface.md §Decision.
@@ -36,14 +36,15 @@ type assemblyOrderFixture struct {
 }
 
 // TestModuleOrderAuditcoreBeforeAccesscore01 enforces that auditcore's
-// CellModule.Provide runs before accesscore's so that
-// SharedDeps.BootstrapLedgerStore is populated by the time AccessCoreModule
-// builds the bootstrap auth-fail observer via audit.NewBootstrapAuthFailObserver
-// (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2).
+// CellModule.Provide runs before accesscore's so that auditcore's typed
+// ModuleExports.BootstrapLedgerStore export is available by the time
+// AccessCoreModule builds the bootstrap auth-fail observer via
+// audit.NewBootstrapAuthFailObserver (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039
+// W1-2). accesscore.Provide fails fast if the export is absent.
 //
 // This is now the only cell-module-order invariant: the postgres pool no longer
 // rides on slot-zero (configcore) — it is provisioned assembly-level before
-// BuildApp (provisionCapabilities), so the former
+// composition.Build (provisionCapabilities), so the former
 // MODULE-ORDER-CONFIGCORE-FIRST-01 was removed.
 func TestModuleOrderAuditcoreBeforeAccesscore01(t *testing.T) {
 	root := findModuleRoot(t)
@@ -67,8 +68,8 @@ func TestModuleOrderAuditcoreBeforeAccesscore01(t *testing.T) {
 	require.NotEqual(t, -1, accessIdx,
 		"%s: corebundle assembly must include accesscore", ruleModuleOrderAuditcoreBeforeAccesscore01)
 	assert.Less(t, auditIdx, accessIdx,
-		"%s: auditcore must Provide before accesscore so SharedDeps.BootstrapLedgerStore "+
-			"is wired before AccessCoreModule reads it (audit.NewBootstrapAuthFailObserver)",
+		"%s: auditcore must Provide before accesscore so its ModuleExports.BootstrapLedgerStore "+
+			"export is available before AccessCoreModule reads it (audit.NewBootstrapAuthFailObserver)",
 		ruleModuleOrderAuditcoreBeforeAccesscore01)
 }
 

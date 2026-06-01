@@ -312,7 +312,7 @@ metrics:
         - "100"
         - "200"
         - "500"
-      file: cmd/corebundle/bundle_configcore_storage.go
+      file: cellmodules/configcore/storage.go
     - name: outbox_cleaned_total
       fqName: gocell_outbox_cleaned_total
       namespace: gocell
@@ -321,7 +321,7 @@ metrics:
       labels:
         - cell
         - status
-      file: cmd/corebundle/bundle_configcore_storage.go
+      file: cellmodules/configcore/storage.go
     - name: outbox_consumer_rejected_total
       fqName: gocell_outbox_consumer_rejected_total
       namespace: gocell
@@ -369,7 +369,7 @@ metrics:
         - "2.5"
         - "5"
         - "10"
-      file: cmd/corebundle/bundle_configcore_storage.go
+      file: cellmodules/configcore/storage.go
     - name: outbox_reclaimed_total
       fqName: gocell_outbox_reclaimed_total
       namespace: gocell
@@ -377,7 +377,7 @@ metrics:
       help: Total number of stale entries reclaimed by the relay.
       labels:
         - cell
-      file: cmd/corebundle/bundle_configcore_storage.go
+      file: cellmodules/configcore/storage.go
     - name: outbox_relayed_total
       fqName: gocell_outbox_relayed_total
       namespace: gocell
@@ -386,7 +386,7 @@ metrics:
       labels:
         - cell
         - outcome
-      file: cmd/corebundle/bundle_configcore_storage.go
+      file: cellmodules/configcore/storage.go
     - name: projection_event_replay_lag_seconds
       fqName: gocell_projection_event_replay_lag_seconds
       namespace: gocell
@@ -469,7 +469,7 @@ metrics:
       type: counter
       help: Number of config values read that are encrypted with a non-current key version.
       labels: []
-      file: cmd/corebundle/config_module.go
+      file: cmd/corebundle/configcore_key_provider.go
     - name: token_auth_healthy
       fqName: gocell_vault_token_auth_healthy
       namespace: gocell

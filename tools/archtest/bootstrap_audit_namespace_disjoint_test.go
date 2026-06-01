@@ -4,7 +4,7 @@
 // Medium archtest backstop for issue #1121 / ADR 202605270230 — the audit chain
 // physical-isolation invariant.
 //
-// The Hard upstream defense is the type system: SharedDeps.BootstrapLedgerStore
+// The Hard upstream defense is the type system: ModuleExports.BootstrapLedgerStore
 // is *audit.BootstrapLedgerStore, NewBootstrapLedgerStore enforces non-nil,
 // and audit.AppendBootstrapAuthFail / NewBootstrapAuthFailObserver accept only
 // the typed wrapper — passing an auditcore-namespace ledger.Store is a compile
@@ -20,14 +20,16 @@
 // but fail the physical-isolation contract — both writers share one chain.
 //
 // AUDIT-NS-DISJOINT-01 closes this gap with an AST-level invariant: every
-// production cmd/corebundle source taken together must invoke both
+// production cellmodules/auditcore source taken together must invoke both
 // audit.BootstrapNamespace() at least once AND must contain at least one
 // reference to a distinct "auditcore" NamespaceID. Reverse self-check fixtures
 // confirm the scanner actually catches a single-namespace configuration.
 //
-// Scope: cmd/corebundle/ production (non-test) packages. Tests intentionally
-// excluded — they may exercise single-namespace paths for unit coverage of
-// helpers.
+// Scope: cellmodules/auditcore/ production (non-test) packages — the audit-chain
+// wiring moved from cmd/corebundle to the cellmodules/ composition-root layer in
+// issue #1085 (AuditCoreModule.Provide now lives in cellmodules/auditcore). Tests
+// intentionally excluded — they may exercise single-namespace paths for unit
+// coverage of helpers.
 package archtest
 
 import (
@@ -46,6 +48,10 @@ const (
 	bootstrapNamespaceFnName = "BootstrapNamespace"
 	parseNamespaceIDFnName   = "ParseNamespaceID"
 	ledgerPkgSuffix          = "/runtime/audit/ledger"
+
+	// cellmodulesAuditcorePkgSuffix is where AuditCoreModule.Provide lives after
+	// the #1085 cell-wiring relocation out of cmd/corebundle.
+	cellmodulesAuditcorePkgSuffix = "/cellmodules/auditcore"
 )
 
 // TestAuditNamespaceDisjoint01 enforces that cmd/corebundle production code
@@ -72,7 +78,7 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 	modPath := readModulePath(t, root)
 	auditPkgPath := modPath + auditPkgSuffix
 	ledgerPkgPath := modPath + ledgerPkgSuffix
-	corebundlePkgPath := modPath + corebundlePkgSuffix
+	scanPkgPath := modPath + cellmodulesAuditcorePkgSuffix
 
 	var (
 		bootstrapNamespaceFound bool
@@ -81,7 +87,7 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 	)
 
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != corebundlePkgPath {
+		if p.Pkg == nil || p.Pkg.Path() != scanPkgPath {
 			return nil
 		}
 		visited = true
@@ -113,14 +119,14 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 
 	require.True(t, visited,
 		"%s: RunTypedProduction did not visit %q — scope coverage gap, AUDIT-NS-DISJOINT-01 would pass vacuously",
-		ruleAuditNSDisjoint01, corebundlePkgPath)
+		ruleAuditNSDisjoint01, scanPkgPath)
 
 	assert.True(t, bootstrapNamespaceFound,
-		"%s: cmd/corebundle production must call audit.BootstrapNamespace() at least once "+
+		"%s: cellmodules/auditcore production must call audit.BootstrapNamespace() at least once "+
 			"(issue #1121 / ADR 202605270230 — bootstrap chain wiring must be present in the composition root)",
 		ruleAuditNSDisjoint01)
 	assert.True(t, nonBootstrapNSFound,
-		"%s: cmd/corebundle production must construct at least one ledger.NamespaceID "+
+		"%s: cellmodules/auditcore production must construct at least one ledger.NamespaceID "+
 			"distinct from \"bootstrap\" (the auditcore relay chain) — single-namespace "+
 			"configurations re-introduce the dual-writer fork bug (issue #1121)",
 		ruleAuditNSDisjoint01)

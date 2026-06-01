@@ -22,11 +22,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 )
 
 // freshTestServiceSecret returns a cryptographically random 32-byte hex string
@@ -165,7 +166,7 @@ func TestLoadKeySet(t *testing.T) {
 			t.Setenv(auth.EnvJWTPublicKey, tc.envPub)
 			t.Setenv(auth.EnvJWTPrevPublicKey, tc.envPrevPub)
 
-			ks, err := loadKeySet(tc.mode, clock.Real())
+			ks, err := cellsecrets.LoadKeySet(tc.mode, clock.Real())
 			if tc.wantErr {
 				require.Error(t, err)
 				if tc.errContains != "" {
@@ -642,18 +643,16 @@ func guardWithStore(t *testing.T, store kauth.NonceStore) *internalGuard {
 func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t *testing.T) {
 	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	shared := &SharedDeps{
-		Topology: bootstrap.Topology{
-			AdapterMode:               "real",
-			SinglePodReplayProtection: true,
-		},
-		InternalGuard: guardWithStore(t, store),
+	shared := &composition.SharedDeps{
+		Topology: mkTopo("real", "", true),
 	}
+	guard := guardWithStore(t, store)
+	locals := &cmdLocals{internalGuard: guard}
 
 	buf, restore := captureSlogInfoLines(t)
 	t.Cleanup(restore)
 
-	logSinglePodNonceStoreAcknowledgement(shared)
+	logSinglePodNonceStoreAcknowledgement(shared, locals)
 
 	out := buf.String()
 	require.NotEmpty(t, out, "expected an Info log line; got empty buffer")
@@ -675,54 +674,43 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 
 	cases := []struct {
 		name   string
-		shared *SharedDeps
+		shared *composition.SharedDeps
+		locals *cmdLocals
 	}{
 		{
 			name: "dev mode (single-pod ack ignored)",
-			shared: &SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "",
-					SinglePodReplayProtection: true,
-				},
-				InternalGuard: guardWithStore(t, inMemStore),
+			shared: &composition.SharedDeps{
+				Topology: mkTopo("", "", true),
 			},
+			locals: &cmdLocals{internalGuard: guardWithStore(t, inMemStore)},
 		},
 		{
-			name: "real mode without GOCELL_SINGLE_POD (multi-pod path; SharedDeps.Validate would reject upstream)",
-			shared: &SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "real",
-					SinglePodReplayProtection: false,
-				},
-				InternalGuard: guardWithStore(t, inMemStore),
+			name: "real mode without GOCELL_SINGLE_POD (multi-pod path; validateCorebundleDeps would reject upstream)",
+			shared: &composition.SharedDeps{
+				Topology: mkTopo("real", "", false),
 			},
+			locals: &cmdLocals{internalGuard: guardWithStore(t, inMemStore)},
 		},
 		{
 			name: "nil internal guard",
-			shared: &SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "real",
-					SinglePodReplayProtection: true,
-				},
-				InternalGuard: nil,
+			shared: &composition.SharedDeps{
+				Topology: mkTopo("real", "", true),
 			},
+			locals: &cmdLocals{internalGuard: nil},
 		},
 		{
 			name:   "nil shared",
 			shared: nil,
+			locals: &cmdLocals{},
 		},
 		{
-			// InternalGuard is non-nil but nonceStore is nil (e.g. guard built
-			// before a store is wired). Exercises the ns == nil branch in
-			// logSinglePodNonceStoreAcknowledgement (main.go) — must stay silent.
+			// internalGuard is non-nil but nonceStore is nil. Exercises the
+			// ns == nil branch in logSinglePodNonceStoreAcknowledgement — must stay silent.
 			name: "non-nil guard with nil nonce store",
-			shared: &SharedDeps{
-				Topology: bootstrap.Topology{
-					AdapterMode:               "real",
-					SinglePodReplayProtection: true,
-				},
-				InternalGuard: guardWithStore(t, nil),
+			shared: &composition.SharedDeps{
+				Topology: mkTopo("real", "", true),
 			},
+			locals: &cmdLocals{internalGuard: guardWithStore(t, nil)},
 		},
 	}
 
@@ -731,7 +719,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 			buf, restore := captureSlogInfoLines(t)
 			t.Cleanup(restore)
 
-			logSinglePodNonceStoreAcknowledgement(tc.shared)
+			logSinglePodNonceStoreAcknowledgement(tc.shared, tc.locals)
 
 			assert.False(t,
 				strings.Contains(buf.String(), "in-memory nonce store acknowledged for single-pod"),

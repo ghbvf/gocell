@@ -12,11 +12,13 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 func runtimeBaseOptions(
-	shared *SharedDeps,
+	shared *composition.SharedDeps,
+	locals *cmdLocals,
 	asm *assembly.CoreAssembly,
 	consumerBase *outbox.ConsumerBase,
 	metricsHandler http.Handler,
@@ -51,14 +53,14 @@ func runtimeBaseOptions(
 		bootstrap.WithSubscriptionValidator(obmetrics.ConfigEventOwnerValidator),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
-		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
+		bootstrap.WithMetricsProvider(locals.metricProvider),
 	}
 	// Register the assembly's shared infrastructure as the FIRST ManagedResources
 	// so bootstrap's LIFO teardown closes them LAST — after every consumer
 	// registered later via cell opts (relay, EventRouter goroutines, ConsumerBase
 	// workers, cell tx). Provisioned in provisionCapabilities (cap_wiring.go).
-	if shared.poolMR != nil {
-		opts = append(opts, bootstrap.WithManagedResource(shared.poolMR))
+	if locals.poolMR != nil {
+		opts = append(opts, bootstrap.WithManagedResource(locals.poolMR))
 	}
 	if shared.Redis != nil {
 		if mr, ok := shared.Redis.Client().(kernellifecycle.ManagedResource); ok {
@@ -68,7 +70,7 @@ func runtimeBaseOptions(
 	return opts
 }
 
-func consumerMiddlewares(shared *SharedDeps) []outbox.SubscriptionMiddleware {
+func consumerMiddlewares(shared *composition.SharedDeps) []outbox.SubscriptionMiddleware {
 	return []outbox.SubscriptionMiddleware{
 		configEventConsumerMiddleware(shared.ConfigEventCollector),
 	}
@@ -90,13 +92,16 @@ func newBootstrapFromOptions(clk clock.Clock, opts []bootstrap.Option) *bootstra
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the
 // shared cross-cutting deps, a pre-built assembly, a ConsumerBase, a metrics
-// handler, and the adapter info map. Called by runCorebundle after BuildApp returns.
+// handler, and the adapter info map. Invoked from the RuntimeOptionsFunc passed
+// to composition.Builder.Build.
 //
-// PoolResource options are contributed per-Cell by CellModule.Provide (via
-// BuildApp opts). This function covers only the cross-cutting concerns:
+// PoolResource options are contributed per-Cell by CellModule.Provide (and
+// threaded into bootstrap by the Builder). This function covers only the
+// cross-cutting concerns:
 // HTTP addr, publisher/subscriber, public/exempt endpoints, metrics, etc.
 func defaultRuntimeOptions(
-	shared *SharedDeps,
+	shared *composition.SharedDeps,
+	locals *cmdLocals,
 	asm *assembly.CoreAssembly,
 	consumerBase *outbox.ConsumerBase,
 	metricsHandler http.Handler,
@@ -117,7 +122,7 @@ func defaultRuntimeOptions(
 	// for ?verbose=true requests; mismatches return 401 ErrReadyzVerboseDenied.
 	//
 	// ref: go-kratos/kratos app.go — per-server option pattern.
-	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts := runtimeBaseOptions(shared, locals, asm, consumerBase, metricsHandler, adapterInfo)
 	if shared.PrimaryHTTPAddr != "" {
 		primaryAuth, err := auth.NewAuthJWTFromAssembly(asm)
 		if err != nil {
@@ -128,7 +133,7 @@ func defaultRuntimeOptions(
 			[]auth.ListenerAuth{primaryAuth},
 		))
 	}
-	internalChain, err := buildInternalAuthChain(shared.InternalGuard)
+	internalChain, err := buildInternalAuthChain(locals.internalGuard)
 	if err != nil {
 		return nil, fmt.Errorf("internal listener auth: %w", err)
 	}

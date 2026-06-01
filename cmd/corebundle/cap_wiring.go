@@ -4,24 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/runtime/composition"
 )
-
-// pgxPoolFromProvider is the single type-assertion site for the capability.PGProvider's
-// any-typed DB() seam (runtime/capability stays adapter-free; the assertion lives here
-// in the cmd/* consumer per the ADR). Cell modules call this to obtain the raw
-// *pgxpool.Pool their per-cell stores need, rather than asserting themselves.
-func pgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
-	pool, ok := pg.DB().(*pgxpool.Pool)
-	if !ok {
-		return nil, fmt.Errorf("corebundle: PG provider DB() is not *pgxpool.Pool (got %T)", pg.DB())
-	}
-	return pool, nil
-}
 
 // provisionCapabilities is the assembly's single shared-infrastructure
 // provisioning site. It is the sole sanctioned caller of the banned adapter
@@ -37,10 +24,10 @@ func pgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 // the injected provider (shared.PG / shared.Redis) and never construct adapter
 // primitives themselves.
 //
-// Called from runCorebundle after LoadSharedDepsFromEnv and before BuildApp so
-// the providers are present (or fail-fast) before any module.Provide runs —
+// Called from runCorebundle after LoadSharedDepsFromEnv and before composition.Builder.Build
+// so the providers are present (or fail-fast) before any module.Provide runs —
 // mirroring fx.New()'s resolve-before-start ordering (ref: uber-go/fx app.go).
-func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
+func provisionCapabilities(ctx context.Context, shared *composition.SharedDeps, locals *cmdLocals) error {
 	// INVARIANT: generatedCapabilities() exists because the corebundle assembly's
 	// cells declare a non-empty `requires` union (auditcore/configcore require
 	// postgres). The codegen template emits generatedCapabilities() iff that union
@@ -50,11 +37,11 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 	for _, c := range generatedCapabilities() {
 		switch c {
 		case capability.Postgres:
-			if err := provisionPostgres(ctx, shared); err != nil {
+			if err := provisionPostgres(ctx, shared, locals); err != nil {
 				return err
 			}
 		case capability.Redis:
-			provisionRedis(shared)
+			provisionRedis(shared, locals)
 		default:
 			// Reached when a cell requires a capability that is a recognized enum
 			// member but has no provisioning path here — today only rabbitmq (it is
@@ -74,14 +61,14 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 // provisionPostgres opens the assembly's single postgres pool (postgres
 // StorageBackend only), runs the schema/shape/index fail-fast checks, and wraps
 // the pool-bound TxManager + OutboxWriter + raw *pgxpool.Pool handle into the
-// sealed capability.PGProvider. The pool is recorded as shared.poolMR so bundle_options
+// sealed capability.PGProvider. The pool is recorded as locals.poolMR so bundle_options
 // registers it as the first ManagedResource (LIFO: closed last, after every PG
 // consumer — relay, cell workers, tx).
 //
 // In memory mode the pool is not opened and shared.PG stays nil; cell modules
 // fall through to their in-memory storage path.
-func provisionPostgres(ctx context.Context, shared *SharedDeps) error {
-	if shared.Topology.StorageBackend != "postgres" {
+func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, locals *cmdLocals) error {
+	if shared.Topology.StorageBackend() != "postgres" {
 		return nil
 	}
 	pgCfg, err := LoadPGConfig("CONFIGCORE")
@@ -106,17 +93,44 @@ func provisionPostgres(ctx context.Context, shared *SharedDeps) error {
 	txMgr := adapterpg.NewTxManager(pool)
 	writer := adapterpg.NewOutboxWriter(shared.Clock)
 	shared.PG = capability.NewPGProvider(txMgr, writer, pool.DB())
-	shared.poolMR = pool
+	locals.poolMR = pool
 	return nil
 }
 
 // provisionRedis wraps the shared redis client (constructed in
-// LoadSharedDepsFromEnv via buildSharedReplayDeps and held on shared.redisClient)
-// into the sealed capability.RedisProvider. The client construction itself
-// (adapterredis.NewClient via the redisClientFactory) lives in redis.go; this
-// step only wraps it. Nil (no-op) in modes without redis.
-func provisionRedis(shared *SharedDeps) {
-	if shared.redisClient != nil {
-		shared.Redis = capability.NewRedisProvider(shared.redisClient)
+// LoadSharedDepsFromEnv via buildSharedReplayDeps and held on locals.redisClient)
+// into the sealed capability.RedisProvider. Nil (no-op) in modes without redis.
+func provisionRedis(shared *composition.SharedDeps, locals *cmdLocals) {
+	if locals.redisClient != nil {
+		shared.Redis = capability.NewRedisProvider(locals.redisClient)
 	}
+}
+
+// verifyPGPreconditions runs the three configcore PG fail-fast checks in
+// order. Caller owns pool lifecycle; on error caller must close the pool.
+func verifyPGPreconditions(ctx context.Context, pool *adapterpg.Pool) error {
+	if schemaErr := verifyConfigCorePGSchema(ctx, pool); schemaErr != nil {
+		return schemaErr
+	}
+	// S3+S5: column-existence fail-fast catches partial migrations.
+	if shapeErr := adapterpg.VerifyExpectedShape(ctx, pool); shapeErr != nil {
+		return fmt.Errorf("configcore PG schema shape: %w", shapeErr)
+	}
+	// B2-X-03: operators must DROP INVALID indexes manually before start —
+	// silent continue can hide INSERT-time failures in tests / staging.
+	if idxErr := adapterpg.VerifyNoInvalidIndexes(ctx, pool); idxErr != nil {
+		return fmt.Errorf("configcore PG invalid indexes: %w", idxErr)
+	}
+	return nil
+}
+
+func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		return fmt.Errorf("configcore PG migrations fs: %w", err)
+	}
+	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS); err != nil {
+		return fmt.Errorf("configcore PG schema guard: %w", err)
+	}
+	return nil
 }

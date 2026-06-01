@@ -51,7 +51,7 @@ const (
 // are package-local and are reused by walkthrough_test.go (same package
 // main) as the single source of truth for the demo Basic Auth header.
 // Production deployments inject credentials via GOCELL_BOOTSTRAP_ADMIN_*
-// env (see cmd/corebundle/access_module.go); the demo path never reads
+// env (see cellmodules/accesscore/module.go); the demo path never reads
 // the env in order to keep `go run ./examples/ssobff` self-contained.
 const (
 	ssobffBootstrapUsername = "ssobff-ops"
@@ -271,7 +271,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	// P1.5 fix (PR-CFG-L2-DIVERGENCE review): durable mode requires an outbox
 	// relay; without it events stay in outbox_entries pending and subscribers
-	// never receive them. Mirrors cmd/corebundle/bundle_configcore_storage.go
+	// never receive them. Mirrors cellmodules/configcore/storage.go
 	// PG path (lines 109-118 + WithRelay).
 	// outbox_entries table health is covered by the pool-level postgres_ready probe —
 	// acceptable for this demo example; production bundles use per-cell repo probes.
@@ -315,7 +315,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 // buildSSOBFFAuditCore wires the ssobff auditcore Cell backed by PostgreSQL —
 // ledger.Protocol is owned by the composition root; cells never hold the raw
-// HMAC key. Mirrors cmd/corebundle/audit_module.go durable path but uses
+// HMAC key. Mirrors cellmodules/auditcore/module.go durable path but uses
 // in-source demo HMAC keys (production deployments must inject from a secret
 // manager).
 //

@@ -30,7 +30,7 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 	base := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
 
 	// Build two protocol/store pairs on disjoint namespaces — mirrors the
-	// production wire shape established by cmd/corebundle/audit_module.go
+	// production wire shape established by cellmodules/auditcore/module.go
 	// after issue #1121.
 	relayNS, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)

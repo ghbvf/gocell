@@ -203,7 +203,7 @@ func newL2Harness(t *testing.T) *l2Harness {
 // The body is composed of focused helpers (buildPGStores / buildAuthLayer /
 // buildCells / runBootstrap / seedAdmin) to keep this entry point readable and
 // each step independently auditable. The same shape mirrors cmd/corebundle's
-// composition root (SharedDeps + BuildApp + buildAssembly + bootstrap.New).
+// composition root (SharedDeps + composition.Build + buildAssembly + bootstrap.New).
 func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	t.Helper()
 	h := bootL2Assembly(t, pgOutboxOverride)

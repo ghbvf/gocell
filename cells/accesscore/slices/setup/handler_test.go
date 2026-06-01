@@ -256,7 +256,7 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 // newHandlerWithBootstrapCreds creates a handler mux whose admin endpoint is
 // protected by the real bootstrap middleware (runtime/auth.NewBootstrapMiddleware).
 // Both NoCreds and WrongUsername/Password tests use this helper; the production
-// wiring in cmd/corebundle/access_module.go follows the same WithBootstrapAuth +
+// wiring in cellmodules/accesscore/module.go follows the same WithBootstrapAuth +
 // bootstrap middleware path.
 //
 // The rate limiter is testAllowAllLimiter (file-local; see top of file) —
@@ -321,7 +321,7 @@ func TestHandler_CreateAdmin_WrongUsername_Returns401(t *testing.T) {
 // define the admin user. Env=op:opSecret123, body creates alice.
 //
 // Uses the real runtime/auth.NewBootstrapMiddleware via newHandlerWithBootstrapCreds —
-// the production path of cmd/corebundle.access_module.go. The "closed contract"
+// the production path of cellmodules/accesscore/module.go. The "closed contract"
 // codified in PR #392 review: NewHandler accepts bootstrapAuth as a required
 // parameter; there is no separate "JWT-exempt + no auth" intermediate state.
 func TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201(t *testing.T) {

@@ -6,3 +6,5 @@ cells:
 owner:
   team: platform-core
   role: maintainer
+build:
+  compositionAPI: true

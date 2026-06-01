@@ -1,8 +1,5 @@
 // per_cell_adapter.go: per-cell env-loading helpers for adapter configuration.
 //
-// Each function reads a cell-namespaced env prefix so that adapter configuration
-// is private to the owning module. No global env names are read here.
-//
 // ref: Kratos config/env prefix-strip convention — each module reads its own namespace.
 // ref: uber-go/fx fx.Module + fx.Private — module-private dependencies.
 package main
@@ -66,45 +63,4 @@ func LoadPGConfig(cellEnvPrefix string) (adapterpg.Config, error) {
 	}
 
 	return cfg, nil
-}
-
-// LoadCursorKeys reads the cursor HMAC primary and previous keys for a cell.
-//
-// Env variables read:
-//
-//	GOCELL_<CELLID>_CURSOR_KEY
-//	GOCELL_<CELLID>_CURSOR_PREVIOUS_KEY
-//
-// Either or both may be empty; callers are responsible for validation via
-// buildCursorCodec.
-func LoadCursorKeys(cellEnvPrefix string) (primary, previous string) {
-	prefix := "GOCELL_" + cellEnvPrefix + "_CURSOR_"
-	return os.Getenv(prefix + "KEY"), os.Getenv(prefix + "PREVIOUS_KEY")
-}
-
-// LoadConfigCoreKeyProvider reads the configcore-specific KeyProvider
-// configuration:
-//
-//	GOCELL_CONFIGCORE_KEY_PROVIDER
-//	GOCELL_CONFIGCORE_MASTER_KEY
-//	GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS
-//
-// Returns (providerName, masterKey, prevMasterKey). Any or all may be empty;
-// buildKeyProvider validates the values before constructing a KeyProvider.
-func LoadConfigCoreKeyProvider() (providerName, masterKey, prevMasterKey string) {
-	return os.Getenv("GOCELL_CONFIGCORE_KEY_PROVIDER"),
-		os.Getenv("GOCELL_CONFIGCORE_MASTER_KEY"),
-		os.Getenv("GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS")
-}
-
-// LoadCellHMACKey reads the HMAC key env var for a specific cell using the
-// per-cell namespace convention (GOCELL_<CELLID>_HMAC_KEY). The returned value
-// is the raw env string — callers pass it to buildHMACKey for dev-fallback,
-// demo-key rejection, and real-mode fail-fast validation.
-//
-// cellEnvPrefix is the uppercase cell id (e.g. "AUDITCORE").
-//
-// ref: Kratos config/env prefix-strip convention.
-func LoadCellHMACKey(cellEnvPrefix string) string {
-	return os.Getenv("GOCELL_" + cellEnvPrefix + "_HMAC_KEY")
 }

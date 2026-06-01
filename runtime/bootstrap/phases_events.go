@@ -261,7 +261,7 @@ func (b *Bootstrap) checkNoEventConsumersWhenSubscriberNil(s *phaseState) error 
 // AttachObserver runs before ConsumerBase processes any delivered entry.
 //
 // PendingDepth wiring is NOT done here — each composition-root module (e.g.
-// corebundle/bundle_configcore_storage.go) constructs a per-cell
+// cellmodules/configcore/storage.go) constructs a per-cell
 // OutboxPendingDepthCollector and injects it directly via
 // relay.WithPendingDepthObserver. This keeps the cell label accurate: the
 // bootstrap auto-wire path has no per-cell context.

@@ -389,7 +389,10 @@ const adapterPromPkg = "github.com/ghbvf/gocell/adapters/prometheus"
 // surface entirely. Once #885 lands, these four entries and the public
 // NewCounter/NewCounterVec/NewGauge/NewGaugeFunc exports are deleted.
 var adapterPromCallerAllowlist = map[string]map[string]struct{}{
-	"RegisterOrReuseCounter": {"cmd/corebundle/config_module.go": {}},
+	// configcore stale-cipher counter wiring moved back to cmd/corebundle (#1085,
+	// Batch 4 Part A): adapter construction lives in cmd/ so cellmodules/configcore
+	// never imports github.com/prometheus/client_golang.
+	"RegisterOrReuseCounter": {"cmd/corebundle/configcore_key_provider.go": {}},
 	"NewCounter":             {"adapters/vault/transit_metrics.go": {}},
 	// NewCounterVec is a labeled-metric carve-out pending removal (issue #885):
 	// vault's loginOutcome migrates to metrics.Provider.CounterVec, after which
