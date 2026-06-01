@@ -48,6 +48,8 @@
 
 ## 2. 设计骨架（一句话总结）
 
+> **权威指针**：本节是计划期设计骨架快照。落地后的权威决策（D1–D10 + enforcement 档位 + 威胁矩阵 + 演进路径）见 ADR `docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`；与下文冲突时以 ADR + 代码 godoc 为准。
+
 ```
 Saga Instance (PG/mem) ── lease_id CAS ──► Coordinator (leader-elect via distlock)
         │
@@ -61,8 +63,10 @@ Saga Instance (PG/mem) ── lease_id CAS ──► Coordinator (leader-elect v
         │              Step.Compensate(ctx, state)
         │
         ▼
-Journal.MarkSagaTerminal(Succeeded | Failed | Compensated)
+Journal.MarkSagaTerminal(Succeeded | Failed | Compensated | Expired | CompensationFailed)
 ```
+
+> 终态共 5 个（`saga.Status` 8 态中的终态子集）：`Succeeded` / `Failed`（前向失败无回滚）/ `Compensated`（回滚干净）/ `Expired`（总超时）/ `CompensationFailed`（回滚本身失败，#1210 新增）。早期"dead-letter saga 表"方案已被 `CompensationFailed` 独立终态取代。
 
 **关键决策**（每条决策都对应一个 ADR 段落）：
 
@@ -439,14 +443,14 @@ PR-10 ────────────────────────�
 | 2 计划 | 跳过（L1） |
 | 3 worktree | `worktrees/069-saga-docs` |
 | 4 TDD | n/a |
-| 5 实施 | (i) ADR `202605231400-adr-saga-l3-orchestration-engine.md`：决策 D1–D8 + 拒绝的备选 + 威胁矩阵；(ii) `docs/ops/saga-runbook.md`：故障排查（lease 卡死 / 补偿失败 / journal 满）；(iii) `CLAUDE.md` 加一节 "L3 Saga"；(iv) `docs/design/capability-inventory.md` 加 saga 一节；(v) `.claude/rules/gocell/saga.md` 终稿 |
+| 5 实施 | (i) ADR `202606021000-adr-saga-l3-orchestration-engine.md`（实际落地名；计划期钦定的 `202605231400-...` 因时间戳撞 `202605231400-002-required-dep...` 且不合 `yyyyMMddHHmm-编号-名` 格式而改名）：决策 D1–D10 + 拒绝的备选 + 威胁矩阵；(ii) `docs/ops/saga-runbook.md`：故障排查（lease 卡死 / 补偿失败 / journal 满）；(iii) `CLAUDE.md` 加一节 "L3 Saga"；(iv) `docs/design/capability-inventory.md` 加 saga 一节；(v) `.claude/rules/gocell/saga.md` 终稿 |
 | 6 PR | title: `docs(saga): ADR + ops runbook + CLAUDE.md + capability-inventory (W6 step 10/10)` |
 | 7 review | 1 reviewer |
 | 8 fix | Cx3：CLAUDE.md 加章节位置 |
 | 9 人工确认 | ADR 威胁矩阵覆盖 |
 
 **Files**：
-- `docs/architecture/202605231400-adr-saga-l3-orchestration-engine.md` +400
+- `docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md` +400
 - `docs/ops/saga-runbook.md` +200
 - `CLAUDE.md` +30
 - `docs/design/capability-inventory.md` +50
@@ -505,7 +509,7 @@ PR-06  runtime/saga/executor     [ ]  worktrees/065-saga-executor
 PR-07  contracts/saga + codegen  [ ]  worktrees/066-saga-contractgen
 PR-08  governance + archtest     [ ]  worktrees/067-saga-archtest
 PR-09  example orderfulfillment  [ ]  worktrees/068-saga-example
-PR-10  ADR + runbook + docs      [ ]  worktrees/069-saga-docs
+PR-10  ADR + runbook + docs      [x]  worktrees/069-saga-docs  (PR 待填)
 ```
 
 合并后回此处把 `[ ]` 改 `[x]`，注明 PR 号 + merge SHA。
