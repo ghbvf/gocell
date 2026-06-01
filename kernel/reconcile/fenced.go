@@ -25,6 +25,17 @@ import (
 // may land after several L1→L2→L3 handoffs and only "older than highest-seen"
 // can reject an out-of-order late write.
 //
+// A type-assertion failure on mutation is a programmer error (the wrong mutation
+// type was passed to the writer). The implementation SHOULD return a non-nil error
+// (transient or wrapped with reconcile.PermanentError to dead-letter) rather than
+// panic, so the Loop can classify and log it correctly.
+//
+// The implementation MUST forward ctx to all I/O operations. Ignoring ctx
+// cancellation defeats the lost-lease interrupt (ADR §4.2): a lease loss cancels
+// the ctx so the in-flight Reconcile terminates promptly; an implementation that
+// ignores the ctx will proceed with a write after the lease is gone, which is the
+// split-brain scenario fencing exists to prevent.
+//
 // mutation is `any` deliberately. The reconciler reaches FencedWriter through a
 // non-generic context value (Reconciler.Reconcile is frozen single-method and
 // takes no extra param), so a generic FencedRepository[M] would have to be boxed
@@ -110,9 +121,10 @@ func withFencedWriter(ctx context.Context, w FencedWriter) context.Context {
 
 // FencedWriterFrom returns the epoch-bound writer the Loop injected for this
 // Reconcile call. ok is false when the Loop runs without a FencedRepository
-// (single-process / no-fencing mode, or pre-2027 consumers): a reconciler that
-// needs fenced writes MUST treat !ok as "no lease-scoped write surface" and skip
-// the side effect (or be wired only under a FencedRepository + LeaderElector).
+// (single-process / no-fencing mode, or consumers that do not wire a FencedRepo):
+// a reconciler that needs fenced writes MUST treat !ok as "no lease-scoped write
+// surface" and skip the side effect (or be wired only under a FencedRepository +
+// LeaderElector).
 func FencedWriterFrom(ctx context.Context) (FencedWriter, bool) {
 	w, ok := ctx.Value(fencedWriterCtxKey{}).(FencedWriter)
 	return w, ok

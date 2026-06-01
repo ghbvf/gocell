@@ -123,6 +123,11 @@ func confRenewAfterTakeoverIsLost(t *testing.T, newElector ElectorFactory) {
 // FakeFencedRepository standing in for a consumer's epoch-aware store (no real
 // consumer ships in PR-A6). This proves "leader election ≠ fencing": even though
 // both leaders briefly believed they led, only the higher-epoch write lands.
+//
+// Uses plain testing.T (no testify) per the kernel test-support isolation rule.
+//
+// This drives ApplyFenced directly to validate elector epoch monotonicity + CAS;
+// the Loop end-to-end FencedWriter path is covered by loop_leader_test.go.
 func RunFencingConformance(t *testing.T, newElector ElectorFactory) {
 	t.Helper()
 	ctx := context.Background()

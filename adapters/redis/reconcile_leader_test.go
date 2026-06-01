@@ -40,7 +40,7 @@ func (m *reconcileMockCmdable) Eval(_ context.Context, script string, keys []str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
-	case len(keys) == 2 && len(args) == 2: // acquire {acquired, epoch}
+	case len(keys) == 2 && len(args) >= 2: // acquire {acquired, epoch}; ARGV[3] (epoch TTL) tolerated, ignored
 		m.evalReconcileAcquire(cmd, keys, args)
 	case len(keys) == 1: // renew (2 args) / release (1 arg): reuse base ownership-guarded sim
 		cmd.SetVal(m.simulateScript(script, keys, args))
@@ -129,6 +129,40 @@ func TestReconcileElector_ContentionReportsLeaseHeld(t *testing.T) {
 	require.ErrorIs(t, err, reconcile.ErrLeaseHeld)
 }
 
+// TestParseAcquireResult covers the three error paths and the happy path of the
+// parseAcquireResult helper (F7 — test coverage for the newly-guarded nil epoch case).
+func TestParseAcquireResult(t *testing.T) {
+	t.Parallel()
+	t.Run("error_wrong_len", func(t *testing.T) {
+		_, _, err := parseAcquireResult([]any{int64(1)})
+		require.Error(t, err, "len!=2 must error")
+	})
+	t.Run("error_flag_not_int64", func(t *testing.T) {
+		_, _, err := parseAcquireResult([]any{"bad", int64(1)})
+		require.Error(t, err, "non-int64 flag must error")
+	})
+	t.Run("error_epoch_not_int64", func(t *testing.T) {
+		_, _, err := parseAcquireResult([]any{int64(1), "bad"})
+		require.Error(t, err, "non-int64 epoch must error")
+	})
+	t.Run("error_epoch_negative", func(t *testing.T) {
+		_, _, err := parseAcquireResult([]any{int64(1), int64(-1)})
+		require.Error(t, err, "negative epoch must error")
+	})
+	t.Run("happy_path_acquired", func(t *testing.T) {
+		acquired, epoch, err := parseAcquireResult([]any{int64(1), int64(5)})
+		require.NoError(t, err)
+		require.True(t, acquired)
+		require.Equal(t, uint64(5), epoch)
+	})
+	t.Run("happy_path_not_acquired", func(t *testing.T) {
+		acquired, epoch, err := parseAcquireResult([]any{int64(0), int64(0)})
+		require.NoError(t, err)
+		require.False(t, acquired)
+		require.Equal(t, uint64(0), epoch)
+	})
+}
+
 // TestReconcileElector_AcquireScriptContent golden-locks the acquire Lua so an
 // accidental edit (which the mock would not catch) fails at unit-test time.
 func TestReconcileElector_AcquireScriptContent(t *testing.T) {
@@ -136,10 +170,13 @@ func TestReconcileElector_AcquireScriptContent(t *testing.T) {
 		"if cur == false then\n" +
 		"    redis.call(\"SET\", KEYS[1], ARGV[1], \"PX\", ARGV[2])\n" +
 		"    local e = redis.call(\"INCR\", KEYS[2])\n" +
+		"    redis.call(\"EXPIRE\", KEYS[2], ARGV[3])\n" +
 		"    return {1, e}\n" +
 		"elseif cur == ARGV[1] then\n" +
 		"    redis.call(\"PEXPIRE\", KEYS[1], ARGV[2])\n" +
 		"    local e = redis.call(\"GET\", KEYS[2])\n" +
+		"    if e == false then e = 0 end\n" +
+		"    redis.call(\"EXPIRE\", KEYS[2], ARGV[3])\n" +
 		"    return {1, tonumber(e)}\n" +
 		"else\n" +
 		"    return {0, 0}\n" +

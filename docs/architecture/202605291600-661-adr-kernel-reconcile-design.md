@@ -462,7 +462,13 @@ controller-runtime 也明确二者正交）。
 
 ## §6 trigger 满足条件 + 激活流程
 
-### 6.1 Trigger Gate（A4–A10 实施前必须满足）
+### 6.1 Trigger Gate（真实业务消费方 cell + examples 端到端切换实施前必须满足）
+
+> **gate 范围说明（§6.2 Amendment 2026-06-02 收窄）**：本 gate 仅针对**真实业务消费方 cell**
+> （T1–T4：pkicell.rotation / mdmcell.command / devicelifecycle.cronsweep /
+> zerotrust.trustscore）的建设 + `examples` 端到端切换，**不门 kernel 基建 A1–A8**。
+> kernel 基建（接口 / Trigger / backoff / LeaderElector + adapter / Builder /
+> kernel/command 迁移）已经 maintainer 逐 PR 显式 un-park，不再受本 gate 约束——详见 §6.2。
 
 | # | 触发条件 | 预计 |
 |---|---------|------|
@@ -496,8 +502,7 @@ trigger gate 的原始约束（spec.md §Trigger Gate）是「trigger 满足前�
 > A6 不动它（无双轨破裂）。**§6.1 trigger gate 语义同步收窄**：T1–T4 现仅门**真实业务消费方 cell**
 > （pkicell.rotation / mdmcell.command / devicelifecycle.cronsweep / zerotrust.trustscore）的建设
 > + `examples` 端到端切换，**不门 kernel 基建**。这与 §6.2 item 3「不引入业务 cell」是同一条线的
-> 延伸，非新政策。本 amendment 与 §6.1 表头「A4–A10 实施前必须满足」的旧措辞冲突——以本
-> amendment 为准（kernel 基建已 un-park）。
+> 延伸，非新政策。§6.1 表头已同步更新为与本 amendment 一致，冲突已在源头解决。
 
 ### 6.3 激活流程（A4–A10）
 

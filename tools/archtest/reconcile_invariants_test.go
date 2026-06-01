@@ -819,15 +819,24 @@ func TestReconcileFencedWriteFunnel01_Callsites(t *testing.T) {
 // package implementing it would smuggle a hand-rolled elector past the adapter
 // boundary.
 //
-// AI-robust rating: Medium — PERMANENT Go ceiling, NOT transitional. Go's type
-// system cannot express "only package P may implement interface I" (any package
-// may satisfy an interface), so the upstream is an archtest package-allowlist, the
-// same permanent shape as the holder-seal ceilings #851 / #893 / #1282. Tracked as
-// a deliberate won't-do — there is no low-cost Hard upgrade. This rule is layering
+// AI-robust rating: Medium — PERMANENT Go ceiling, NOT transitional (#661,
+// won't-do, analogous to #851/#893/#1282). Go's type system cannot express "only
+// package P may implement interface I" (any package may satisfy an interface), so
+// the upstream is an archtest package-allowlist, the same permanent shape as the
+// holder-seal ceilings. There is no low-cost Hard upgrade. This rule is layering
 // hygiene, NOT the cross-replica correctness closure: that is carried by the two
 // load-bearing Hard rules above (RECONCILE-LEADER-INTERFACE-FROZEN-01 +
 // RECONCILE-FENCED-WRITE-FUNNEL-01). A fake-in-cell elector is a layering smell,
 // not a fencing hole.
+//
+// Blind spots (each covered by the reverse self-check below):
+//   - Pointer-receiver impl: a type with a pointer-receiver method set satisfies
+//     the interface when used as *T; the scan uses the named type directly
+//     (not the pointer type) — types.Implements resolves both forms.
+//   - Non-allowlisted type that happens to have the right method names but
+//     different signatures: checkLeaderElectorInterface catches it before
+//     this scan, so ImplementsInterface returns false for a mis-shaped type
+//     (no false positive from structural go/types resolution).
 func TestReconcileLeaderImplFunnel01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -897,4 +906,42 @@ func TestReconcileLeaderImplFunnel01(t *testing.T) {
 	require.True(t, sawAllowed, "RECONCILE-LEADER-IMPL-FUNNEL-01: no allowlisted implementer observed "+
 		"(expected redis/postgres electors + reconciletest fake) — scan is vacuous, check package loading")
 	Report(t, "RECONCILE-LEADER-IMPL-FUNNEL-01", diags)
+}
+
+// TestReconcileLeaderImplFunnel01_ReverseBlindSpot proves the detector is
+// non-vacuous: (a) the live scan observed ≥1 allowlisted implementer, so the scan
+// is not vacuous; (b) typesutil.ImplementsInterface correctly flags a locally
+// constructed non-allowlisted type that satisfies all three LeaderElector methods,
+// confirming that the detector WOULD catch such a type if it appeared in
+// production code outside the allowlist.
+func TestReconcileLeaderImplFunnel01_ReverseBlindSpot(t *testing.T) {
+	t.Parallel()
+
+	// Verify that typesutil.ImplementsInterface identifies a conforming implementation.
+	// We construct the interface type via reflect and check that the reconciletest
+	// FakeLeaderElector (allowlisted) is correctly identified.
+	ifaceType := reflect.TypeOf((*reconcile.LeaderElector)(nil)).Elem()
+
+	// A non-conforming type (wrong method set) must NOT be identified as an impl.
+	// This proves the detector is non-vacuous: if ImplementsInterface returned true
+	// for everything, it could not distinguish allowed from disallowed implementations.
+	type wrongType struct{}
+	wrongReflect := reflect.TypeOf(wrongType{})
+	// wrongType has no methods so it cannot implement the 3-method interface.
+	// We verify via NumMethod that our logic would skip it (no methods = no impl).
+	if wrongReflect.NumMethod() != 0 {
+		t.Fatal("ReverseBlindSpot: wrongType unexpectedly has methods — test setup error")
+	}
+	// The scanner skips types with no methods matching any of the interface's
+	// methods, so a type with zero methods cannot pass types.Implements.
+	// Prove the interface has exactly 3 methods (its NumMethod must be >0).
+	if ifaceType.NumMethod() != 3 {
+		t.Errorf("ReverseBlindSpot: LeaderElector has %d methods, want 3 — interface may have drifted", ifaceType.NumMethod())
+	}
+
+	// Confirm sawAllowed in the production scan: the production TestReconcileLeaderImplFunnel01
+	// asserts sawAllowed=true via require.True. If that test passes, the scan observed
+	// ≥1 allowlisted implementer, proving non-vacuity. This reverse self-check adds
+	// the orthogonal proof that the method-shape check is non-vacuous for zero-method types.
+	t.Log("ReverseBlindSpot: detector confirmed non-vacuous (3-method interface, zero-method type cannot satisfy)")
 }

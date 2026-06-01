@@ -846,6 +846,62 @@ increase(gocell_saga_heartbeat_failed_total{reason="stale_lease"}[5m])
 
 ---
 
+## Reconcile Leader 可观测性
+
+`gocell_reconcile_leader{reconciler}` 是一个 Gauge，值为 1 当该实例持有对应 reconcilerID
+的 lease，否则为 0（由 kernel/reconcile/metrics.go 的 `metricReconcileLeader` 注册）。
+在 leader-elect 模式下，任意时刻健康集群中**每个 reconcilerID 恰好应有 1 个实例持有 lease**；
+0 代表 leader 空缺，>1 代表脑裂异常（应由 fencing 机制阻止写放大，但 gauge 层面不应出现）。
+
+### ReconcileLeaderVacancy
+
+leader 空缺持续超过 LeaseDuration + 1s：无实例持有 lease，reconcile 工作停摆。
+
+```yaml
+- alert: GoCellReconcileLeaderVacancy
+  expr: |
+    sum(gocell_reconcile_leader{reconciler="<id>"}) == 0
+  for: 16s
+  labels:
+    severity: critical
+  annotations:
+    summary: "Reconcile leader vacant ({{ $labels.reconciler }})"
+    description: |
+      No instance holds the reconcile lease for reconciler={{ $labels.reconciler }}.
+      All reconcile work is paused until a follower acquires the lease.
+      Typical causes: all replicas crashed, Redis/PG backend unreachable, or
+      lease TTL misconfiguration (RenewInterval >= TTL causes spurious lease loss).
+      Triage: check logs for "lease lost; relinquishing leadership" /
+      "renew I/O error; abandoning lease term" and verify elector backend health.
+      Note: for=16s assumes a default lease TTL of ~15s (LeaseDuration+1s headroom);
+      adjust to match your configured leaseDuration + 1s.
+```
+
+### ReconcileLeaderSplitBrain
+
+多个实例同时持有 gauge=1：脑裂异常信号。正常 handoff 期间可能出现短暂双重 gauge=1，
+但持续 > 2s 表示 fencing 层以上的 gauge 未及时更新（或 lease backend 状态异常）。
+
+```yaml
+- alert: GoCellReconcileLeaderSplitBrain
+  expr: |
+    sum(gocell_reconcile_leader{reconciler="<id>"}) > 1
+  for: 2s
+  labels:
+    severity: critical
+  annotations:
+    summary: "Reconcile leader split-brain anomaly ({{ $labels.reconciler }})"
+    description: |
+      More than one instance reports reconcile_leader=1 for
+      reconciler={{ $labels.reconciler }}. Cross-replica correctness is guarded
+      by the epoch-fencing CAS (ErrFencedWriteStale will dead-letter stale writes),
+      but the gauge anomaly indicates the lease backend or gauge update path is
+      inconsistent. Investigate elector backend state and lease TTL configuration.
+      Short transient doubles during handoff are expected; sustained > 2s is not.
+```
+
+---
+
 ## 注意事项
 
 1. **fqName 单前缀**：所有规则中的指标名已包含 `gocell_` 前缀。若部署时 Prometheus

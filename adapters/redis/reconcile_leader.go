@@ -13,6 +13,14 @@ import (
 // Compile-time assertion: *RedisReconcileElector satisfies reconcile.LeaderElector.
 var _ reconcile.LeaderElector = (*RedisReconcileElector)(nil)
 
+// reconcileEpochKeyTTL is the TTL set on the epoch key (KEYS[2]) on every
+// acquire. The epoch key must outlive any lease so fencing is never broken by
+// Redis eviction, but it must have SOME TTL so it is not permanently retained
+// under allkeys-* eviction policies. 30 days is far longer than any realistic
+// lease TTL (typically seconds to minutes) while still being evictable when
+// truly stale.
+const reconcileEpochKeyTTL = 30 * 24 * time.Hour
+
 // reconcileAcquireScript atomically acquires the leader lease and returns
 // {acquired, epoch}. The monotonic epoch (KEYS[2]) is INCR'd only when the holder
 // key (KEYS[1]) is free — i.e. on a real holder change (free / TTL-expired /
@@ -22,16 +30,25 @@ var _ reconcile.LeaderElector = (*RedisReconcileElector)(nil)
 // reconcile.LeaseToken.Epoch.
 //
 //	KEYS[1] = holder key   KEYS[2] = epoch key
-//	ARGV[1] = holderID     ARGV[2] = lease TTL (ms)
+//	ARGV[1] = holderID     ARGV[2] = lease TTL (ms)   ARGV[3] = epoch key TTL (s)
+//
+// The epoch key is given a long TTL (ARGV[3]) on every acquire so it survives
+// Redis allkeys-* eviction. Without a TTL the key can be evicted, resetting the
+// monotonic counter to 0 and breaking fencing. In the same-holder branch we also
+// guard against a nil GET (race where the epoch key was evicted between the holder
+// check and the GET) by treating false as 0.
 const reconcileAcquireScript = `
 local cur = redis.call("GET", KEYS[1])
 if cur == false then
     redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
     local e = redis.call("INCR", KEYS[2])
+    redis.call("EXPIRE", KEYS[2], ARGV[3])
     return {1, e}
 elseif cur == ARGV[1] then
     redis.call("PEXPIRE", KEYS[1], ARGV[2])
     local e = redis.call("GET", KEYS[2])
+    if e == false then e = 0 end
+    redis.call("EXPIRE", KEYS[2], ARGV[3])
     return {1, tonumber(e)}
 else
     return {0, 0}
@@ -106,7 +123,7 @@ func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID s
 	now := e.clk.Now()
 	res, err := e.rdb.Eval(ctx, reconcileAcquireScript,
 		[]string{e.holderKey(reconcilerID), e.epochKey(reconcilerID)},
-		e.holderID, e.leaseDuration.Milliseconds()).Slice()
+		e.holderID, e.leaseDuration.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Slice()
 	if err != nil {
 		return reconcile.LeaseToken{}, fmt.Errorf("redis reconcile elector: acquire: %w", err)
 	}

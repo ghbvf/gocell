@@ -87,6 +87,8 @@ type ReconcileElector struct {
 // NewReconcileElector builds a PG leader elector. holderID identifies this replica
 // and MUST be unique per process (production callers pass idutil.NewUUID(); tests
 // pass a stable label). leaseDuration is the lease TTL window.
+// Unlike the Redis elector, no clock.Clock is needed — lease timestamps are
+// computed by the DB (now()), the single wall-clock authority across replicas.
 func NewReconcileElector(pool *Pool, holderID string, leaseDuration time.Duration) (*ReconcileElector, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: pool is nil")

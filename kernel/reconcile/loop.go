@@ -62,8 +62,9 @@ const (
 // in kernel/reconcile. It is an empty package-private struct: no package outside
 // kernel/reconcile can name, construct, or substitute it, so "drive the Loop's
 // probe / requeue timers, or its duration measurement, with a non-real (e.g.
-// fake) clock" is unrepresentable. Its three methods are the sole sanctioned
-// sites for stdlib time.NewTimer / time.Now in this package.
+// fake) clock" is unrepresentable. Its four methods are the sole sanctioned
+// sites for stdlib time.NewTimer / time.NewTicker / time.Now in this package;
+// newRenewTicker handles the lease renew cadence ticker.
 //
 // kernel/reconcile is a sanctioned control-plane host alongside runtime/command:
 // PROD-CLOCK-INJECTION-01's path gate accepts both, and the (method, callee)
@@ -243,6 +244,8 @@ type Loop struct {
 	// TTL the elector adapter is configured with. The LeaseToken TTL itself is
 	// owned by the elector (AcquireLease takes no duration — ADR §3.4), not the
 	// Loop. An explicit value MUST be shorter than the elector's TTL.
+	// Setting RenewInterval >= the elector's lease TTL causes spurious
+	// ErrReconcileLeaseLost; prefer the default (derived as TTL/3).
 	RenewInterval time.Duration
 
 	mu     sync.Mutex
@@ -470,6 +473,7 @@ func (l *Loop) runLeaseTerm(runCtx context.Context, gen uint64, token LeaseToken
 	var leaseWG sync.WaitGroup
 	var termReadyOnce sync.Once
 	termReady := make(chan struct{})
+	// termReady is a throwaway per-term probe; Start's probe was already fired by leaderManage.
 	l.spawnActive(leaseCtx, &leaseWG, &termReadyOnce, termReady)
 
 	l.renewLoop(leaseCtx, leaseCancel, token)
@@ -494,7 +498,7 @@ func (l *Loop) renewLoop(leaseCtx context.Context, leaseCancel context.CancelFun
 			return
 		case <-ticker.C:
 			if err := l.Leader.RenewLease(leaseCtx, token); err != nil {
-				l.logLeaseLost(leaseCtx, err)
+				l.logLeaseLost(leaseCtx, token, err)
 				leaseCancel()
 				return
 			}
@@ -514,6 +518,7 @@ func (l *Loop) releaseLease(runCtx context.Context, token LeaseToken) {
 		l.logger().Warn("reconcile: lease release failed (will expire on TTL)",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()),
+			slog.Uint64("epoch", token.Epoch),
 			slog.Any("error", redaction.RedactError(err)))
 	}
 }
@@ -568,12 +573,19 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // logLeaderAcquireSkip logs a failed/contended AcquireLease at Debug when it is a
-// normal contention/shutdown signal (another holder owns the lease, or ctx
-// canceled) and Warn otherwise (backend I/O fault that an operator should see).
+// normal contention/shutdown signal (another holder owns the lease, or the loop's
+// own ctx is canceled/deadline-exceeded) and Warn otherwise (backend I/O fault
+// that an operator should see).
+//
+// ctx.Err() != nil is used instead of errors.Is(err, context.Canceled/DeadlineExceeded)
+// so that only the Loop's OWN ctx cancellation is downgraded to Debug. A
+// DeadlineExceeded that originates from an adapter-internal deadline while the
+// loop ctx is still alive is a real I/O fault and should stay Warn.
 func (l *Loop) logLeaderAcquireSkip(ctx context.Context, err error) {
 	level := slog.LevelWarn
-	if errors.Is(err, ErrLeaseHeld) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		// Contention / shutdown are expected steady-state signals, not faults.
+	if errors.Is(err, ErrLeaseHeld) || ctx.Err() != nil {
+		// Contention (another holder owns the lease) or loop-shutdown (ctx canceled
+		// or loop-owned deadline exceeded) are expected steady-state signals, not faults.
 		level = slog.LevelDebug
 	}
 	l.logger().Log(ctx, level, "reconcile: leader-elect skip (lease not acquired)",
@@ -582,14 +594,30 @@ func (l *Loop) logLeaderAcquireSkip(ctx context.Context, err error) {
 		slog.Any("error", redaction.RedactError(err)))
 }
 
-// logLeaseLost logs a lost lease at Warn (the leader is relinquishing mid-term —
-// an operationally interesting handoff). It threads the lease ctx so the record
-// carries the run's trace/request correlation fields.
-func (l *Loop) logLeaseLost(ctx context.Context, err error) {
-	l.logger().WarnContext(ctx, "reconcile: lease lost; relinquishing leadership",
-		slog.String("loop", l.name()),
-		slog.String("reconciler", l.reconcilerID()),
-		slog.Any("error", redaction.RedactError(err)))
+// logLeaseLost logs a renewal failure at Warn. Two distinct cases:
+//   - ErrReconcileLeaseLost: normal expected handoff (another holder took the
+//     lease after our TTL expired); logs "lease lost; relinquishing leadership"
+//     with the epoch so ops can correlate with the fencing audit trail.
+//   - any other error: I/O fault (backend error, network issue); logs a distinct
+//     message with io_fault=true so dashboards / alerts can route separately.
+//
+// Both paths cancel the lease ctx (via the caller), interrupting in-flight
+// Reconcile per ADR §4.2.
+func (l *Loop) logLeaseLost(ctx context.Context, token LeaseToken, err error) {
+	if errors.Is(err, ErrReconcileLeaseLost) {
+		l.logger().WarnContext(ctx, "reconcile: lease lost; relinquishing leadership",
+			slog.String("loop", l.name()),
+			slog.String("reconciler", l.reconcilerID()),
+			slog.Uint64("epoch", token.Epoch),
+			slog.Any("error", redaction.RedactError(err)))
+	} else {
+		l.logger().WarnContext(ctx, "reconcile: renew I/O error; abandoning lease term",
+			slog.String("loop", l.name()),
+			slog.String("reconciler", l.reconcilerID()),
+			slog.Uint64("epoch", token.Epoch),
+			slog.Bool("io_fault", true),
+			slog.Any("error", redaction.RedactError(err)))
+	}
 }
 
 // drainReadyItems pops all items from h whose readyAt is not after now and
@@ -836,6 +864,11 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	// the live lease (currentEpoch()); single-process mode binds Epoch 0 (no
 	// fencing). runCtx is the lease-scoped ctx in leader-elect mode, so a lost
 	// lease cancels this Reconcile's ctx mid-write.
+	//
+	// Note: single-process mode binds Epoch 0 (always-accept, no fencing). A store
+	// seeded from a prior leader-elect run (lastEpoch≥1) would reject epoch-0
+	// writes. Do NOT point a single-process Loop at a store shared with a
+	// leader-elect deployment — use distinct stores or a fresh store.
 	reconcileCtx := runCtx
 	if l.FencedRepo != nil {
 		reconcileCtx = withFencedWriter(runCtx, newFencedWriter(l.FencedRepo, l.currentEpoch()))
@@ -903,11 +936,21 @@ func (l *Loop) dispatchResult(
 		// place, would re-reconcile a now-dead-lettered entity once it fires. A
 		// fresh Source trigger re-observes it if the consumer resets its state.
 		l.enqueueCancel(runCtx, req.EntityID, cancelCh)
-		l.logger().Error("reconcile: permanent error (dead-letter; not requeued)",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()),
-			slog.String("entity", req.EntityID),
-			slog.Any("error", redaction.RedactError(err)))
+		// ErrFencedWriteStale is an expected fencing race (this replica is no longer
+		// the epoch owner); log at Warn, not Error, to avoid false-alarm alerting.
+		// All other permanent errors are real dead-letters and warrant Error level.
+		if errors.Is(err, ErrFencedWriteStale) {
+			l.logger().Warn("reconcile: stale-epoch write rejected (fencing race); awaiting fresh trigger",
+				slog.String("loop", l.name()),
+				slog.String("reconciler", l.reconcilerID()),
+				slog.String("entity", req.EntityID))
+		} else {
+			l.logger().Error("reconcile: permanent error (dead-letter; not requeued)",
+				slog.String("loop", l.name()),
+				slog.String("reconciler", l.reconcilerID()),
+				slog.String("entity", req.EntityID),
+				slog.Any("error", redaction.RedactError(err)))
+		}
 	default: // resultTransient (including recovered panics)
 		delay := backoff.When(req.EntityID)
 		l.logger().Warn("reconcile: transient error (requeued with backoff)",

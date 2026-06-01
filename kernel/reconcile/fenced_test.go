@@ -83,6 +83,42 @@ func TestFencedWriter_UnboundIsProgrammerError(t *testing.T) {
 	}
 }
 
+// TestFencedWriter_EqualEpochAccepted verifies that writing at the same epoch twice
+// is accepted (equal epoch is not rejected by the monotonic CAS: epoch >= highest).
+func TestFencedWriter_EqualEpochAccepted(t *testing.T) {
+	t.Parallel()
+	repo := newFakeFencedRepo()
+	// First write at epoch 5 → accepted, highest becomes 5.
+	if err := newFencedWriter(repo, 5).Write(context.Background(), "dev-1", "cmd-1"); err != nil {
+		t.Fatalf("first write at epoch 5: %v", err)
+	}
+	// Second write at epoch 5 → still accepted (equal epoch ≥ highest).
+	if err := newFencedWriter(repo, 5).Write(context.Background(), "dev-1", "cmd-2"); err != nil {
+		t.Fatalf("second write at equal epoch 5: %v", err)
+	}
+	if len(repo.calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(repo.calls))
+	}
+}
+
+// TestFencedWriter_HigherEpochAccepted verifies that a strictly higher epoch is
+// accepted after a lower one has set the highest-seen mark.
+func TestFencedWriter_HigherEpochAccepted(t *testing.T) {
+	t.Parallel()
+	repo := newFakeFencedRepo()
+	// Write at epoch 5.
+	if err := newFencedWriter(repo, 5).Write(context.Background(), "dev-1", "cmd-a"); err != nil {
+		t.Fatalf("write at epoch 5: %v", err)
+	}
+	// Write at epoch 6 (higher) → accepted, highest advances to 6.
+	if err := newFencedWriter(repo, 6).Write(context.Background(), "dev-1", "cmd-b"); err != nil {
+		t.Fatalf("write at epoch 6: %v", err)
+	}
+	if repo.highest["dev-1"] != 6 {
+		t.Fatalf("highest epoch = %d, want 6", repo.highest["dev-1"])
+	}
+}
+
 func TestFencedWriterFrom_PresentAndAbsent(t *testing.T) {
 	t.Parallel()
 	// Absent: a ctx with no writer reports ok=false (single-process / no-fencing).
