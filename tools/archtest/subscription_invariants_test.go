@@ -50,7 +50,10 @@
 // (Go cannot force two test functions to share a function), the same permanent
 // language ceiling as #851 / #893 holder-seals. The reachable maximum is a
 // single shared collector per invariant (no duplicated logic), which this file
-// satisfies.
+// satisfies. No gh issue tracks a Hard upgrade: the ceiling is identical to
+// #851 / #893 (Go cannot express "two test functions must share a function"),
+// so there is no deferred low-cost Hard path to track — this is a permanent
+// ceiling, not a shortcut.
 package archtest
 
 import (
@@ -297,13 +300,18 @@ func collectObservabilityIDViolations(f *ast.File, fset *token.FileSet, label st
 			return
 		}
 		// Receiver type must be Subscription (value or pointer).
-		recvType := fn.Recv.List[0].Type
+		recvField := fn.Recv.List[0]
+		recvType := recvField.Type
 		if star, ok := recvType.(*ast.StarExpr); ok {
 			recvType = star.X
 		}
 		ident, ok := recvType.(*ast.Ident)
 		if !ok || ident.Name != "Subscription" {
 			return
+		}
+		var recvName string
+		if len(recvField.Names) == 1 && recvField.Names[0] != nil {
+			recvName = recvField.Names[0].Name
 		}
 		found = true
 		if fn.Body == nil {
@@ -329,6 +337,18 @@ func collectObservabilityIDViolations(f *ast.File, fset *token.FileSet, label st
 		if !ok || sel.Sel == nil || sel.Sel.Name != "CellID" {
 			violations = append(violations, fmt.Sprintf("%s:%d: ObservabilityID body must return s.CellID "+
 				"directly (no fallback)", label, fset.Position(fn.Body.Pos()).Line))
+			return
+		}
+		// The selector base must be the receiver itself (s.CellID), not some
+		// other value's CellID field — `return other.CellID` would otherwise
+		// satisfy the field-name check while reading a different source.
+		if recvName != "" {
+			base, ok := sel.X.(*ast.Ident)
+			if !ok || base.Name != recvName {
+				violations = append(violations, fmt.Sprintf("%s:%d: ObservabilityID body must return the "+
+					"receiver's CellID (%s.CellID), not another value's CellID",
+					label, fset.Position(fn.Body.Pos()).Line, recvName))
+			}
 		}
 	})
 	return found, violations
@@ -380,6 +400,21 @@ func TestSubscriptionObservabilityNoFallback_DetectorFixtures(t *testing.T) {
 type Subscription struct{}
 func (s Subscription) ObservabilityID() string { return s.CellID }`,
 			wantFound: true,
+		},
+		{
+			name: "green_ptr_receiver",
+			src: `package fixture
+type Subscription struct{}
+func (s *Subscription) ObservabilityID() string { return s.CellID }`,
+			wantFound: true,
+		},
+		{
+			name: "red_returns_other_dot_cellid",
+			src: `package fixture
+type Subscription struct{}
+func (s Subscription) ObservabilityID() string { return other.CellID }`,
+			wantFound:      true,
+			wantViolations: true,
 		},
 		{
 			name: "red_if_fallback",
@@ -579,6 +614,7 @@ func subscribeFuncTypeFromSrc(t *testing.T, src string) (*ast.FuncType, *token.F
 				if name.Name == "Subscribe" {
 					if mt, ok := m.Type.(*ast.FuncType); ok {
 						ft = mt
+						return
 					}
 				}
 			}
@@ -613,6 +649,14 @@ type Registrar interface {
 			src: `package fixture
 type Registrar interface {
 	Subscribe(spec ContractSpec, handler EntryHandler, consumerGroup, cellID string, opts ...SubscriptionOption) error
+}`,
+			wantViolations: true,
+		},
+		{
+			name: "red_3rd_not_string",
+			src: `package fixture
+type Registrar interface {
+	Subscribe(spec ContractSpec, handler EntryHandler, consumerGroup ConsumerGroupID, cellID string, opts ...SubscriptionOption) error
 }`,
 			wantViolations: true,
 		},
