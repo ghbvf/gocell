@@ -194,6 +194,8 @@ const (
 	dryRunCreatePathFmt = "(dry-run) Would create %s\n"
 	withBothFlag        = "with-both"
 	withBothUsage       = "include both HTTP and event example contracts in the bundle"
+	withProjectionFlag  = "projection"
+	withProjectionUsage = "scaffold a projection slice (subscribe + provide CUs, L3) + kind:projection contract + internal/projection/doc.go; the event source contract is also scaffolded so the subscribe target resolves"
 	// internalFieldFmt is the WithInternal format string for field-level
 	// validation context. Extracted to avoid duplicate-literal smell across
 	// validateScaffoldID and validateScaffoldText call sites.
@@ -255,7 +257,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"Create cell skeleton + example slice + example contract.",
 			"--id=<id> --team=<team> --role=<role>",
 			"[--type=core|edge|support] [--level=L0..L4]",
-			"[--with-http] [--with-events] [--with-both]",
+			"[--with-http] [--with-events] [--with-both] [--projection]",
 			"[--skip-generate] [--dry-run]",
 			scaffoldIDNote,
 		},
@@ -346,7 +348,7 @@ func reportScaffold(r scaffoldReport) {
 type scaffoldCellInputs struct {
 	ID                                                                         scaffoldid.ScaffoldID
 	ResolvedStruct, Package, ModulePath, OwnerTeam, OwnerRole, CellType, Level string
-	WithHTTP, WithEvents, WithBoth                                             bool
+	WithHTTP, WithEvents, WithBoth, WithProjection                             bool
 }
 
 // buildScaffoldCellSpec constructs a cellgen.ScaffoldSpec from the parsed
@@ -366,6 +368,7 @@ func buildScaffoldCellSpec(in scaffoldCellInputs) cellgen.ScaffoldSpec {
 		WithHTTP:         in.WithHTTP,
 		WithEvents:       in.WithEvents,
 		WithBoth:         in.WithBoth,
+		WithProjection:   in.WithProjection,
 	}
 }
 
@@ -420,6 +423,7 @@ func scaffoldCell(root string, args []string) error {
 	withHTTP := fs.Bool(withHTTPFlag, false, withHTTPUsage)
 	withEvents := fs.Bool(withEventsFlag, false, withEventsUsage)
 	withBoth := fs.Bool(withBothFlag, false, withBothUsage)
+	withProjection := fs.Bool(withProjectionFlag, false, withProjectionUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -460,6 +464,7 @@ func scaffoldCell(root string, args []string) error {
 		WithHTTP:       *withHTTP,
 		WithEvents:     *withEvents,
 		WithBoth:       *withBoth,
+		WithProjection: *withProjection,
 	})
 	spec.SkipGenerate = *skipGenerate
 

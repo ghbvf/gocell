@@ -1,0 +1,100 @@
+{{define "projection-slice-yaml"}}id: {{.SliceID}}
+belongsToCell: {{.CellID}}
+# L3=WorkflowEventual — projection slices consume events to build a read model
+consistencyLevel: L3
+lifecycle: experimental
+contractUsages:
+  - contract: event.{{.CellNoDash}}.example.v1
+    role: subscribe
+    handler: HandleExampleCreated
+    projection: {{.ProjectionID}}
+  - contract: projection.{{.CellNoDash}}.summary.v1
+    role: provide
+verify:
+  unit:
+    - unit.{{.SliceID}}.service
+  contract:
+    - contract.event.{{.CellNoDash}}.example.v1.subscribe
+    - contract.projection.{{.CellNoDash}}.summary.v1.provide
+allowedFiles:
+  - cells/{{.CellID}}/slices/{{.SliceID}}/**
+{{end}}
+
+{{define "projection-service-go"}}// Package {{.SlicePackage}} implements the L3 CQRS projection for the {{.CellID}} cell.
+// Replace the stub with real read-model construction logic that consumes
+// event.{{.CellNoDash}}.example.v1 and materialises the {{.ProjectionID}} projection.
+package {{.SlicePackage}}
+
+// Service is the projection service skeleton. Wire a store (ports.ProjectionStore)
+// and any required dependencies via constructor parameters as the slice grows.
+type Service struct{}
+
+// NewService returns a new projection Service.
+func NewService() *Service {
+	return &Service{}
+}
+
+// HandleExampleCreated processes an example.created event and updates the
+// read-model projection. Replace with real domain logic.
+func (s *Service) HandleExampleCreated(message string) string {
+	return message
+}
+{{end}}
+
+{{define "projection-service-test-go"}}package {{.SlicePackage}}
+
+import "testing"
+
+// TestService_HandleExampleCreated verifies the projection handler stub.
+func TestService_HandleExampleCreated(t *testing.T) {
+	t.Parallel()
+	svc := NewService()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "simple", in: "event-payload", want: "event-payload"},
+		{name: "empty", in: "", want: ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := svc.HandleExampleCreated(tc.in); got != tc.want {
+				t.Errorf("HandleExampleCreated(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+{{end}}
+
+{{define "projection-contract-yaml"}}id: projection.{{.CellNoDash}}.summary.v1
+kind: projection
+ownerCell: {{.CellID}}
+consistencyLevel: L3
+lifecycle: experimental
+replayable: true
+endpoints:
+  provider: {{.CellID}}
+schemaRefs:
+  payload: payload.schema.json
+{{end}}
+
+{{define "projection-payload-schema"}}{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "{{.CellID}}.projection.summary",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Resource identifier"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Projection summary field — replace with real read-model shape"
+    }
+  }
+}
+{{end}}

@@ -54,6 +54,12 @@ var sliceBundleTemplate = template.Must(template.New("scaffold-slice.tmpl").
 var contractBundleTemplate = template.Must(template.New("scaffold-contract.tmpl").
 	ParseFS(templateFS, "templates/scaffold-contract.tmpl"))
 
+// projectionBundleTemplate parses scaffold-projection.tmpl which defines the
+// projection slice.yaml, service.go, service_test.go, projection contract.yaml,
+// and payload.schema.json template blocks.
+var projectionBundleTemplate = template.Must(template.New("scaffold-projection.tmpl").
+	ParseFS(templateFS, "templates/scaffold-projection.tmpl"))
+
 // bundleData is the shared template context for slice + contract bundle
 // templates. Computed once in planCellBundle from a ScaffoldSpec.
 type bundleData struct {
@@ -106,12 +112,16 @@ func PlanCellBundleScaffold(realRoot string, spec ScaffoldSpec) ([]pathsafe.Plan
 // minCellConsistencyLevel returns the minimum cell consistency level required
 // for the given bundle variants. The mapping follows CLAUDE.md §一致性等级:
 //
+//   - withProjection (projection role) → L3 WorkflowEventual
 //   - withEvents (publish role) → slice at least L2 → cell at least L2
 //   - withHTTP only (serve role) → slice L1 → cell at least L1
 //   - neither → L0
 //
 // Returns the minimum level as a string (e.g. "L2").
-func minCellConsistencyLevel(withHTTP, withEvents bool) string {
+func minCellConsistencyLevel(withHTTP, withEvents, withProjection bool) string {
+	if withProjection {
+		return "L3"
+	}
 	if withEvents {
 		return "L2"
 	}
@@ -141,11 +151,12 @@ func consistencyLevelOrdinal(level string) int {
 }
 
 // validateBundleConsistencyLevel checks that spec.ConsistencyLevel is not
-// lower than the minimum required by the bundle variants (withHTTP/withEvents).
+// lower than the minimum required by the bundle variants
+// (withHTTP/withEvents/withProjection).
 // Returns an error if the declared level is below the minimum.
 func validateBundleConsistencyLevel(spec ScaffoldSpec) error {
 	withHTTP, withEvents := resolveBundleVariants(spec)
-	minLevel := minCellConsistencyLevel(withHTTP, withEvents)
+	minLevel := minCellConsistencyLevel(withHTTP, withEvents, spec.WithProjection)
 	declaredOrd := consistencyLevelOrdinal(spec.ConsistencyLevel)
 	minOrd := consistencyLevelOrdinal(minLevel)
 	if declaredOrd < minOrd {
@@ -156,6 +167,7 @@ func validateBundleConsistencyLevel(spec ScaffoldSpec) error {
 				errcode.PublicString("minimum", minLevel),
 				errcode.PublicBool("withHTTP", withHTTP),
 				errcode.PublicBool("withEvents", withEvents),
+				errcode.PublicBool("withProjection", spec.WithProjection),
 			))
 	}
 	return nil
@@ -203,6 +215,13 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 	}
 	if withEvents {
 		items, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, sliceID, withHTTP)
+		if err != nil {
+			return nil, err
+		}
+		plan = append(plan, items...)
+	}
+	if spec.WithProjection {
+		items, err := planProjectionExampleArtifacts(realRoot, spec, cellNoDash, withHTTP || withEvents)
 		if err != nil {
 			return nil, err
 		}
@@ -302,9 +321,12 @@ func planInternalArchLayers(realRoot, cellID, modulePath string) ([]pathsafe.Pla
 
 // resolveBundleVariants picks the contract variants to scaffold from the
 // spec's WithHTTP / WithEvents / WithBoth flags. When all three are unset
-// (default) the bundle includes HTTP only.
+// AND WithProjection is also false (default) the bundle includes HTTP only.
+// When WithProjection is the only flag set the default HTTP gate does NOT
+// fire, keeping the projection-only output clean.
 func resolveBundleVariants(spec ScaffoldSpec) (withHTTP, withEvents bool) {
-	withHTTP = spec.WithHTTP || spec.WithBoth || (!spec.WithHTTP && !spec.WithEvents && !spec.WithBoth)
+	noneSet := !spec.WithHTTP && !spec.WithEvents && !spec.WithBoth
+	withHTTP = spec.WithHTTP || spec.WithBoth || (noneSet && !spec.WithProjection)
 	withEvents = spec.WithEvents || spec.WithBoth
 	return withHTTP, withEvents
 }
@@ -360,6 +382,112 @@ func planEventExampleArtifacts(
 		return nil, err
 	}
 	return append(sliceItems, contractItems...), nil
+}
+
+// projectionBundleData is the template context for projection slice + contract
+// bundle templates. It extends bundleData with projection-specific fields.
+type projectionBundleData struct {
+	CellID       string
+	CellNoDash   string // CellID with dashes removed — used in contract IDs / handler names
+	SliceID      string
+	SlicePackage string
+	ProjectionID string // snake_case projection store key, e.g. "myprojcell_summary"
+}
+
+// planProjectionExampleArtifacts renders the projection slice + kind:projection
+// contract pair, the event source contract (so the subscribe CU target exists),
+// and the internal/projection/doc.go starter. Returns them as PlannedFiles.
+//
+// otherSlicePresent should be true when another slice variant (HTTP or event)
+// is also being scaffolded in the same bundle, causing the event source slice
+// to use a distinct sliceID (cellNoDash+"eventexample") to avoid AbsPath
+// collisions — mirrors the same gate in planEventExampleArtifacts.
+//
+// Produced paths (relative to realRoot):
+//
+//	cells/{id}/slices/{id}projection/{slice.yaml,service.go,service_test.go}
+//	contracts/projection/{id}/summary/v1/{contract.yaml,payload.schema.json}
+//	contracts/event/{id}/example/v1/{contract.yaml,payload.schema.json,headers.schema.json}
+//	cells/{id}/internal/projection/doc.go
+func planProjectionExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash string, otherSlicePresent bool) ([]pathsafe.PlannedFile, error) {
+	projSliceID := cellNoDash + "projection"
+	projectionID := cellNoDash + "_summary"
+
+	pd := projectionBundleData{
+		CellID:       spec.CellID.String(),
+		CellNoDash:   cellNoDash,
+		SliceID:      projSliceID,
+		SlicePackage: projSliceID,
+		ProjectionID: projectionID,
+	}
+
+	// 1. Projection slice (slice.yaml + service.go + service_test.go).
+	projSliceFiles := []bundleFileSpec{
+		{Name: "slice.yaml", Section: "projection-slice-yaml", IsGoSource: false, Description: "projection slice metadata"},
+		{Name: "service.go", Section: "projection-service-go", IsGoSource: true, Description: "projection service stub"},
+		{Name: "service_test.go", Section: "projection-service-test-go", IsGoSource: true, Description: "projection service test"},
+	}
+	sliceItems, err := planBundleFiles(
+		realRoot, spec.ModulePath,
+		filepath.Join("cells", spec.CellID.String(), "slices", projSliceID),
+		projSliceFiles, projectionBundleTemplate, pd, "projection-slice",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Projection contract (contract.yaml + payload.schema.json).
+	projContractFiles := []bundleFileSpec{
+		{Name: "contract.yaml", Section: "projection-contract-yaml", Description: "projection contract metadata"},
+		{Name: "payload.schema.json", Section: "projection-payload-schema", Description: "projection payload schema"},
+	}
+	projContractItems, err := planBundleFiles(
+		realRoot, spec.ModulePath,
+		filepath.Join("contracts", "projection", cellNoDash, "summary", "v1"),
+		projContractFiles, projectionBundleTemplate, pd, "projection-contract",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Event source contract so the subscribe CU target exists.
+	// Pass otherSlicePresent as withHTTP to planEventExampleArtifacts so the
+	// event slice gets a distinct sliceID when another slice variant (HTTP or
+	// event) is also present in the same bundle — mirrors the same gate used
+	// inside planCellBundle for the pure --with-events case.
+	eventItems, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, cellNoDash+"example", otherSlicePresent)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. internal/projection/doc.go starter.
+	const projPkg = "projection"
+	const projSummary = "is the read-model store layer for the L3 CQRS projection of the %s cell.\n" +
+		"// It holds the materialised view built from consumed events and exposes\n" +
+		"// typed queries for the projection contract provider."
+	targetDir := filepath.Join("cells", spec.CellID.String(), "internal", projPkg)
+	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold projection: internal layer path failed", err)
+	}
+	src := fmt.Sprintf("// Package %s %s\npackage %s\n",
+		projPkg, fmt.Sprintf(projSummary, spec.CellID.String()), projPkg)
+	formatted, err := codegen.FormatGoSource(spec.ModulePath, "", []byte(src))
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold projection: format internal/projection/doc.go failed", err)
+	}
+
+	var plan []pathsafe.PlannedFile
+	plan = append(plan, sliceItems...)
+	plan = append(plan, projContractItems...)
+	plan = append(plan, eventItems...)
+	plan = append(plan, pathsafe.PlannedFile{
+		AbsPath: filepath.Join(absDir, "doc.go"),
+		Content: formatted,
+	})
+	return plan, nil
 }
 
 // sliceBundleFiles returns the canonical set of files emitted under each

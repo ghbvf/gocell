@@ -66,9 +66,16 @@ type ScaffoldSpec struct {
 	// variant. WithHTTP produces an HTTP request/response contract (default
 	// when none of the three flags are set). WithEvents produces an event
 	// payload/headers contract. WithBoth produces both.
-	WithHTTP   bool
-	WithEvents bool
-	WithBoth   bool
+	// WithProjection produces a projection slice (subscribe + provide CUs) +
+	// kind:projection contract + internal/projection/doc.go starter. It is
+	// orthogonal to the HTTP/event variants: --projection alone skips the
+	// default HTTP gate; --projection --with-http produces both. The projection
+	// variant always scaffolds the event source contract so the subscribe CU
+	// target resolves.
+	WithHTTP       bool
+	WithEvents     bool
+	WithBoth       bool
+	WithProjection bool
 }
 
 // cellGoTemplate is parsed once from the shared templateFS. Uses
