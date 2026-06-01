@@ -355,7 +355,7 @@ func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, 
 		value:  token,
 		expiry: time.Now().Add(time.Duration(leaseMs) * time.Millisecond),
 	}
-	cmd.SetVal(int64(1)) // ClaimAcquired = 1
+	cmd.SetVal(int64(1)) // Lua returns code one for the acquired state.
 }
 
 // evalRecord simulates recordScript:
