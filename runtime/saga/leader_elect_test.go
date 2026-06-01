@@ -695,7 +695,8 @@ func TestLeaderElectLockKey_Injective(t *testing.T) {
 // TestStop_OrphansInflightLockOnShutdown asserts that when Stop's drain budget
 // is exhausted by a non-cooperative step (one that ignores ctx.Done()), the
 // in-flight distlock is orphaned — renewal is stopped without performing a
-// Driver.Release RPC — so another coordinator can take over within ≤1×TTL.
+// Driver.Release RPC — so another coordinator can take over once the lease
+// lapses (~1×TTL from the last successful renewal, best-effort).
 //
 // Key assertions:
 //   - fd.Calls("Release") == 0 after Stop: Orphan must NOT have performed a
@@ -703,8 +704,9 @@ func TestLeaderElectLockKey_Injective(t *testing.T) {
 //     bounded-TTL no-I/O handoff). The FakeDriver records Release calls; if
 //     Orphan triggered a Release, the count would be > 0.
 //   - fd.Snapshot() still has the key after Stop: Orphan intentionally does NOT
-//     delete the backend key (the key expires via TTL after ≤1×TTL). A
-//     competitor coordinator can acquire it once TTL expires. This is the
+//     delete the backend key (the key expires on its lease TTL — ~1×TTL from the
+//     last successful renewal). A competitor coordinator can acquire it once the
+//     lease lapses. This is the
 //     bounded-TTL handoff guarantee — no Release I/O means no blocking on an
 //     unreachable backend during shutdown.
 func TestStop_OrphansInflightLockOnShutdown(t *testing.T) {

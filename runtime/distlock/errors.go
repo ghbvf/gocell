@@ -35,9 +35,10 @@ var (
 
 	// ErrLockOrphaned is returned by Lock.Cause() when Lock.Orphan() is called
 	// by the application. Renewal is stopped and the backend key is NOT deleted
-	// — it expires naturally after ≤1×TTL, handing the lock to a competitor
-	// within one TTL window WITHOUT a Release round-trip that could hang or fail
-	// at shutdown. KindInternal (HTTP 500) matches ErrLockReleased: an orphaned
+	// — it expires on its lease TTL (~1×TTL from the last successful renewal;
+	// best-effort, see Lock.Orphan godoc), handing the lock to a competitor
+	// WITHOUT a Release round-trip that could hang or fail at shutdown.
+	// KindInternal (HTTP 500) matches ErrLockReleased: an orphaned
 	// lock surfacing to an HTTP handler is a server-side programming bug — 500
 	// is preferable to a misleading 409 (external conflict). Orphan is a
 	// deliberate local action; if it reaches an HTTP boundary that is a

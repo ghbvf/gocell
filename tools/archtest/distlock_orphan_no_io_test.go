@@ -4,25 +4,26 @@
 // # DISTLOCK-ORPHAN-NO-DRIVER-IO-01
 //
 // Within runtime/distlock, the function handleOrphan — AND every same-package
-// helper it calls directly (1-hop, currently just detachLock) — MUST NOT call
-// any method of the distlock.Driver interface (SetNX / Renew / Release).
+// function in its transitive call closure (e.g. detachLock, markCause) — MUST
+// NOT call any method of the distlock.Driver interface (SetNX / Renew / Release).
 //
 // Rationale: Lock.Orphan() is designed to stop lease renewal WITHOUT any
 // backend I/O so that callers can hand off the lock during graceful shutdown
-// even when the backend (Redis) is unreachable. If handleOrphan — or its shared
-// detachLock helper — were to call Driver.SetNX / Driver.Renew / Driver.Release,
-// the no-IO contract would be silently violated: shutdown could block or fail
-// exactly when it must not. detachLock is shared with handleRemove, so a Driver
-// call added there (even one offloaded to a goroutine) would leak I/O onto the
-// orphan path — hence the 1-hop scan flags ANY Driver call in helper bodies,
-// regardless of go-statement nesting.
+// even when the backend (Redis) is unreachable. If handleOrphan — or any helper
+// it reaches at any depth — were to call Driver.SetNX / Driver.Renew /
+// Driver.Release, the no-IO contract would be silently violated: shutdown could
+// block or fail exactly when it must not. detachLock is shared with handleRemove,
+// so a Driver call added there (even one offloaded to a goroutine) would leak
+// I/O onto the orphan path — hence the scan flags ANY Driver call in any
+// reachable body, regardless of go-statement nesting.
 //
-// Detection: type-aware callee resolution via TypesInfo.Selections — each
-// *ast.SelectorExpr call-target is resolved to its *types.Func, then its
-// receiver interface type is compared against distlock.Driver to identify
-// method calls on that interface. The scan set is handleOrphan plus its
-// type-resolved same-package 1-hop callees, derived generically so it tracks
-// the helper set automatically.
+// Detection: build the full same-package transitive call closure rooted at
+// handleOrphan (BFS worklist; callees resolved via TypesInfo.ObjectOf, covering
+// both method selectors and bare same-package func idents), then scan every body
+// in the closure. A Driver call is identified by resolving the *ast.SelectorExpr
+// call-target to its *types.Func and comparing its receiver interface type
+// against distlock.Driver. The closure is derived generically, so it tracks
+// handleOrphan's helper set automatically at any depth.
 //
 // AI-robust evaluation:
 //
@@ -39,13 +40,13 @@
 //     exceeds the benefit given the single-function scope.
 //
 // Blind spots (stated per ai-robust.md §"工具选定后强制盲区自检"):
-//   - Deep (>1-hop) indirect dispatch: 1-hop helpers of handleOrphan (e.g.
-//     detachLock) ARE now scanned (F3). A helper-of-a-helper (handleOrphan →
-//     detachLock → deeperHelper → Driver) is still NOT detected — full
-//     transitive callee analysis is too costly for a single archtest pass.
-//     Residual gap; acknowledged. DISTLOCK-MANAGER-DRIVER-IO-OFFLOADED-01
-//     provides a partial backstop (every Driver call package-wide must sit in a
-//     goroutine), but it does not assert *absence* on the orphan path.
+//   - Deep indirect dispatch via plain call graph: CLOSED (F3). The scan walks
+//     the full same-package transitive closure rooted at handleOrphan, so a
+//     Driver call added at any depth (handleOrphan → detachLock → deeperHelper →
+//     Driver) is flagged, not just 1-hop. The closure stops at the package
+//     boundary; a cross-package helper that itself calls Driver is out of scope
+//     (and structurally impossible here — Driver lives in this package and
+//     handleOrphan's reachable helpers are all package-local).
 //   - Local-variable method-value invocation: `rel := m.driver.Release;
 //     rel(ctx, key, tok)` — the SelectorExpr `m.driver.Release` on the
 //     right-hand side is resolved by TypesInfo.Selections (detected), but
@@ -58,12 +59,14 @@
 //   - TestDistlockOrphanNoDriverIO01_BlindSpotSelfCheck: builds a synthetic
 //     function body that DOES call a Driver method and asserts the detector
 //     flags it. Proves the detection logic is not a no-op.
+//   - TestDistlockOrphanNoDriverIO01_TransitiveClosureSelfCheck: builds a
+//     synthetic 3-deep call chain (root → mid → leaf→Driver) and asserts the
+//     closure walk reaches the leaf and flags it. Proves the >1-hop traversal is
+//     not a no-op (guards the deep-indirect closure claim above).
 //   - TestDistlockOrphanNoDriverIO01_ReverseCheck_LocalVarMethodValue: asserts
 //     the local-var-method-value blind spot form does NOT appear in production.
 //   - TestDistlockOrphanNoDriverIO01_ReverseCheck_DriverFuncField: asserts the
 //     function-pointer-field blind spot form does NOT appear in production.
-//   - Indirect-dispatch blind spot: residual — full transitive callee analysis
-//     is too costly for a single archtest pass; acknowledged as known gap.
 //
 // # DISTLOCK-MANAGER-DRIVER-IO-OFFLOADED-01
 //
@@ -124,13 +127,13 @@ const (
 )
 
 // TestDistlockOrphanNoDriverIO01 asserts that handleOrphan in runtime/distlock
-// — AND every same-package helper it calls directly (1-hop) — does not call any
-// method of the distlock.Driver interface. The 1-hop extension (F3) closes the
-// indirect-dispatch blind spot for handleOrphan's sole helper, detachLock:
-// without it, a Driver call added to the shared detachLock helper (even one
-// offloaded to a goroutine) would silently give the orphan path backend I/O.
-// The helper set is derived generically (any same-package callee of
-// handleOrphan), so it auto-extends if handleOrphan gains another helper.
+// — AND every same-package function in its transitive call closure — does not
+// call any method of the distlock.Driver interface. The transitive-closure walk
+// (F3) closes the indirect-dispatch blind spot: a Driver call added to any
+// helper reachable from handleOrphan at any depth (e.g. the shared detachLock
+// helper, even one offloaded to a goroutine) would silently give the orphan path
+// backend I/O. The closure is derived generically from type-resolved callees, so
+// it auto-extends if handleOrphan gains helpers at any depth.
 func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -212,29 +215,59 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 							Rel:  p.Rel(fe.file),
 							Line: pos.Line,
 							Message: name + " must not call Driver." + fn.Name() +
-								"; the orphan path (handleOrphan + its 1-hop helpers) is a no-I/O operation",
+								"; handleOrphan's transitive same-package closure is a no-I/O operation",
 						})
 					}
 				})
 			}
 
-			// Scan set = handleOrphan + every same-package function it calls
-			// directly (1-hop). Derived from type-resolved callees so it tracks
-			// handleOrphan's helper set automatically.
-			scanSet := map[string]funcEntry{handleOrphanFuncName: orphan}
-			EachInSubtree[ast.CallExpr](orphan.fd.Body, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return
+			// samePkgCallee resolves a CallExpr's target to a same-package
+			// *types.Func name, or "" if the callee is a builtin / stdlib / other
+			// package / non-func. Handles both method selectors (m.detachLock) and
+			// bare same-package function idents.
+			samePkgCallee := func(call *ast.CallExpr) string {
+				var id *ast.Ident
+				switch fun := call.Fun.(type) {
+				case *ast.SelectorExpr:
+					id = fun.Sel
+				case *ast.Ident:
+					id = fun
+				default:
+					return ""
 				}
-				fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-				if !ok || fn == nil || fn.Pkg() == nil || fn.Pkg() != p.Pkg {
-					return
+				fn, ok := p.TypesInfo.ObjectOf(id).(*types.Func)
+				if !ok || fn.Pkg() == nil || fn.Pkg() != p.Pkg {
+					return ""
 				}
-				if helper, ok := funcByName[fn.Name()]; ok && helper.fd.Body != nil {
-					scanSet[fn.Name()] = helper
+				return fn.Name()
+			}
+
+			// Scan set = handleOrphan plus the FULL transitive closure of its
+			// same-package callees (BFS worklist). The closure rooted at a single
+			// function is small and bounded (the orphan path reaches detachLock +
+			// markCause, then only builtins/stdlib), so the cost that rules out a
+			// package-wide transitive scan does not apply here. This closes the
+			// deep (>1-hop) indirect-dispatch blind spot: a Driver call added at
+			// ANY depth reachable from handleOrphan is flagged.
+			scanSet := map[string]funcEntry{}
+			queue := []string{handleOrphanFuncName}
+			for len(queue) > 0 {
+				name := queue[0]
+				queue = queue[1:]
+				if _, seen := scanSet[name]; seen {
+					continue
 				}
-			})
+				fe, ok := funcByName[name]
+				if !ok || fe.fd.Body == nil {
+					continue
+				}
+				scanSet[name] = fe
+				EachInSubtree[ast.CallExpr](fe.fd.Body, func(call *ast.CallExpr) {
+					if callee := samePkgCallee(call); callee != "" {
+						queue = append(queue, callee)
+					}
+				})
+			}
 
 			for name, fe := range scanSet {
 				if name == detachLockFuncName {
@@ -347,6 +380,131 @@ func (m *FakeMgr) syntheticOrphan(ctx context.Context, key, token string) {
 			"detection logic is broken and would silently miss real Driver calls "+
 			"in handleOrphan. Check isTypeOrPtrImplementsIface and the "+
 			"TypesInfo.Selections resolution path.")
+}
+
+// TestDistlockOrphanNoDriverIO01_TransitiveClosureSelfCheck proves the
+// transitive-closure walk is not a no-op for deep (>1-hop) chains. It builds a
+// synthetic 3-deep call chain root → mid → leaf where leaf calls a Driver
+// method, runs the same BFS closure + Driver-detection logic the forward check
+// uses, and asserts (a) the walk reaches leaf 2 hops from root and (b) the
+// leaf's Driver call is flagged. Without a working >1-hop traversal the
+// deep-indirect blind-spot closure claim in the package doc would be false.
+func TestDistlockOrphanNoDriverIO01_TransitiveClosureSelfCheck(t *testing.T) {
+	t.Parallel()
+
+	src := `package fixture
+import "context"
+
+type FakeDriver interface {
+	Release(ctx context.Context, key, token string) error
+}
+
+type FakeMgr struct{ d FakeDriver }
+
+// root → mid → leaf; only leaf (2 hops down) calls a Driver method.
+func (m *FakeMgr) root(ctx context.Context) { m.mid(ctx) }
+func (m *FakeMgr) mid(ctx context.Context)  { m.leaf(ctx) }
+func (m *FakeMgr) leaf(ctx context.Context) { _ = m.d.Release(ctx, "k", "t") }
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", src, 0)
+	require.NoError(t, err, "parse fixture")
+	info := &types.Info{
+		Defs:       make(map[*ast.Ident]types.Object),
+		Uses:       make(map[*ast.Ident]types.Object),
+		Selections: make(map[*ast.SelectorExpr]*types.Selection),
+	}
+	conf := types.Config{Importer: importer.Default()}
+	pkg, err := conf.Check("fixture", fset, []*ast.File{file}, info)
+	require.NoError(t, err, "type-check fixture")
+
+	driverObj := pkg.Scope().Lookup("FakeDriver")
+	require.NotNil(t, driverObj, "FakeDriver not in scope")
+	driverNamed, ok := driverObj.Type().(*types.Named)
+	require.True(t, ok, "FakeDriver must be *types.Named")
+	driverIface, ok := driverNamed.Underlying().(*types.Interface)
+	require.True(t, ok, "FakeDriver must have interface underlying type")
+
+	funcByName := map[string]*ast.FuncDecl{}
+	for _, decl := range file.Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name != nil {
+			funcByName[fd.Name.Name] = fd
+		}
+	}
+
+	samePkgCallee := func(call *ast.CallExpr) string {
+		var id *ast.Ident
+		switch fun := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			id = fun.Sel
+		case *ast.Ident:
+			id = fun
+		default:
+			return ""
+		}
+		fn, ok := info.ObjectOf(id).(*types.Func)
+		if !ok || fn.Pkg() == nil || fn.Pkg() != pkg {
+			return ""
+		}
+		return fn.Name()
+	}
+
+	// BFS closure from root — mirrors the forward check's traversal.
+	closure := map[string]bool{}
+	reachedLeaf := false
+	queue := []string{"root"}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if closure[name] {
+			continue
+		}
+		fd, ok := funcByName[name]
+		if !ok || fd.Body == nil {
+			continue
+		}
+		closure[name] = true
+		if name == "leaf" {
+			reachedLeaf = true
+		}
+		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+			if c := samePkgCallee(call); c != "" {
+				queue = append(queue, c)
+			}
+		})
+	}
+	require.True(t, reachedLeaf,
+		"TransitiveClosureSelfCheck: closure walk did not reach leaf (2 hops from "+
+			"root); the >1-hop traversal is broken and deep Driver calls would be missed")
+
+	// Scan the closure for Driver calls; the leaf's Release must be flagged.
+	detected := false
+	for name := range closure {
+		EachInSubtree[ast.CallExpr](funcByName[name].Body, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			sel2, ok := info.Selections[sel]
+			if !ok {
+				return
+			}
+			fn, ok := sel2.Obj().(*types.Func)
+			if !ok {
+				return
+			}
+			sig, ok := fn.Type().(*types.Signature)
+			if !ok || sig.Recv() == nil {
+				return
+			}
+			if isTypeOrPtrImplementsIface(sig.Recv().Type(), driverIface) {
+				detected = true
+			}
+		})
+	}
+	assert.True(t, detected,
+		"TransitiveClosureSelfCheck: leaf calls FakeDriver.Release 2 hops from root "+
+			"but the closure scan did not flag it; the deep-indirect closure claim is false")
 }
 
 // isTypeOrPtrImplementsIface reports whether t or *t implements iface.

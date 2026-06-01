@@ -94,8 +94,9 @@ func leaderElectLockKey(definitionID, instanceID idutil.SafeID) string {
 // when lead is false. release frees the distlock immediately via Driver.Release
 // I/O — optimal for normal per-tick completion (work done → immediate handoff).
 // orphan stops renewal without a shutdown-time release round-trip; the key
-// expires within ≤1×TTL so a competitor can take over — used by Stop (I/O-free,
-// cannot hang on an unreachable backend during shutdown).
+// expires on its lease TTL (~1×TTL from the last successful renewal,
+// best-effort — see distlock.Lock.Orphan) so a competitor can take over — used
+// by Stop (I/O-free, cannot hang on an unreachable backend during shutdown).
 func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstance) (release func(), orphan func(), lead bool) {
 	if c.locker == nil {
 		noop := func() { /* no-op: no distributed locker configured, single-coordinator mode */ }

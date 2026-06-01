@@ -228,7 +228,8 @@ func (m *Manager) remove(id lockID) error {
 }
 
 // orphan asks the manager to stop renewing a lock WITHOUT calling Driver.Release.
-// The backend key expires naturally after ≤1×TTL. Blocks until the manager has
+// The backend key expires on its lease TTL (~1×TTL from the last successful
+// renewal, best-effort — see Lock.Orphan). Blocks until the manager has
 // detached the lock from its heap (fast — no I/O). Always returns nil.
 // Idempotent: the sync.Once in the Acquire closure ensures orphan is called at
 // most once per lock.
@@ -672,8 +673,9 @@ func (m *Manager) handleRemove(
 
 // handleOrphan processes an orphan event. Unlike handleRemove it does NOT call
 // Driver.Release: the backend key is intentionally left in place and will expire
-// naturally after ≤1×TTL. This hands the lock to a competitor within one TTL
-// window without any backend I/O, so handleOrphan never blocks on reachability.
+// on its lease TTL (~1×TTL from the last successful renewal, best-effort — see
+// Lock.Orphan). This hands the lock to a competitor without any backend I/O, so
+// handleOrphan never blocks on reachability.
 // ev.resultCh is always signaled (nil) so the orphan() caller unblocks immediately.
 func (m *Manager) handleOrphan(
 	ev managerEvent,

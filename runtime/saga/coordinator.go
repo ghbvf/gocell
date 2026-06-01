@@ -218,8 +218,10 @@ type Coordinator struct {
 // work done → immediate release is optimal.
 //
 // orphan stops lease renewal without a shutdown-time release round-trip; the
-// distlock key expires within ≤1×TTL so a competitor can take over (no-op in
-// single-process mode). Used by Stop/shutdown so the release RPC cannot hang on
+// distlock key expires on its lease TTL (~1×TTL from the last successful
+// renewal, best-effort — see distlock.Lock.Orphan) so a competitor can take
+// over (no-op in single-process mode). Used by Stop/shutdown so the release RPC
+// cannot hang on
 // an unreachable backend during process teardown. A still-running wedged step
 // keeps its lock until TTL while the journal lease_id CAS continues to fence
 // its late commits.
@@ -379,8 +381,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 //     Executor heartbeat goroutine has by then exited, so the journal lease expires.
 //   - In leader-elect mode, Stop orphans every in-flight distlock
 //     (orphanInflightLocks): renewal is stopped without a shutdown-time release
-//     round-trip, so the distlock key expires within ≤1×TTL and a competitor
-//     coordinator can take over — bounded-TTL handoff, I/O-free so it cannot hang
+//     round-trip, so the distlock key expires on its lease TTL (~1×TTL from the
+//     last successful renewal, best-effort) and a competitor coordinator can
+//     take over — bounded-TTL handoff, I/O-free so it cannot hang
 //     on an unreachable backend during shutdown. After Stop, per-instance distlock
 //     keys linger in the backend for up to Config.LeaseDuration before expiring
 //     (vs the previous immediate-release behavior); a coordinator restarting within

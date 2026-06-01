@@ -53,13 +53,14 @@ type Locker interface {
 	//
 	// On success it returns a *Lock; caller MUST eventually end the lock via
 	// lock.Release() (delete the backend key now) or lock.Orphan() (stop
-	// renewal; the key expires on its own after at most 1xTTL). Both are
-	// terminal and mutually exclusive.
+	// renewal; the key expires on its lease TTL — ~1×TTL from the last
+	// successful renewal, best-effort). Both are terminal and mutually
+	// exclusive.
 	//
 	// Lock-end signals (lock.Done() closed; lock.Cause() reports):
 	//   - ErrLockReleased — Release() was called (normal end-of-critical-section)
 	//   - ErrLockLost     — renewal failed or backend reports ownership taken
-	//   - ErrLockOrphaned — Orphan() was called (renewal stopped; key expires after ≤1×TTL)
+	//   - ErrLockOrphaned — Orphan() was called (renewal stopped; key expires on its lease TTL — see Lock.Orphan)
 	//
 	// Notably absent: caller-ctx cancellation does NOT end the lock. If the
 	// caller wants the lock to end when its ctx is canceled, the caller must

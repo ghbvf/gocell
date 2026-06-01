@@ -688,8 +688,9 @@ const (
 	ErrDistlockLockReleased Code = "ERR_DISTLOCK_LOCK_RELEASED"
 	// ErrDistlockLockOrphaned signals that Lock.Orphan() was called by the
 	// application: renewal has stopped and the backend key is NOT deleted —
-	// it expires naturally after ≤1×TTL, handing the lock to a competitor
-	// within one TTL window without a Release round-trip. Returned by
+	// it expires on its lease TTL (~1×TTL from the last successful renewal,
+	// best-effort; see runtime/distlock.Lock.Orphan), handing the lock to a
+	// competitor without a Release round-trip. Returned by
 	// Lock.Cause() after the manager calls Lock.markCause(ErrLockOrphaned).
 	// KindInternal matches ErrDistlockLockReleased: an orphaned lock surfacing
 	// to an HTTP handler is a server-side programming bug (caller chose
