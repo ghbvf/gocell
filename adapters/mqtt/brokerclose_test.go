@@ -27,10 +27,10 @@ import (
 //  2. Timeout-guarded close: runs srv.Close() in a goroutine and selects on
 //     done vs testtime.D5s. If Close returns, we're done. If it exceeds the
 //     budget (the mochi Clients-lock deadlock) a diagnostic is logged and the
-//     helper returns so the test fails fast instead of hanging for ~10 min.
-//     The timeout path only logs (it does not fail the test): a teardown Close
-//     deadlock is a known library bug, not a real-test-assertion failure, so
-//     failing here would trade a rare hang for a rare flaky FAIL.
+//     helper returns promptly so teardown completes instead of hanging for
+//     ~10 min. The timeout path only logs (it does not fail the test): a
+//     teardown Close deadlock is a known library bug, not a real-test-assertion
+//     failure, so failing here would trade a rare hang for a rare flaky FAIL.
 //
 // t may be nil: the shared-broker stop closure (initSharedInternalBroker)
 // captures CloseBrokerSafely(nil, srv) and is invoked from TestMain via
