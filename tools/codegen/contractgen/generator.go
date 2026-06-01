@@ -161,7 +161,7 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		}
 	}
 
-	// spec_gen.go + subscription_gen.go — only for kind=event.
+	// spec_gen.go + subscription_gen.go + projection_gen.go — only for kind=event.
 	if spec.Kind == "event" {
 		specPath := filepath.Join(pkgDir, "spec_gen.go")
 		errPfxSpec := "contractgen generate: render spec " + contractID
@@ -172,6 +172,12 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		subPath := filepath.Join(pkgDir, "subscription_gen.go")
 		errPfxSub := "contractgen generate: render subscription " + contractID
 		if err := renderWriteContract(root, "subscription.tmpl", spec, subPath, opts, res, errPfxSub); err != nil {
+			return err
+		}
+
+		projPath := filepath.Join(pkgDir, "projection_gen.go")
+		errPfxProj := "contractgen generate: render projection " + contractID
+		if err := renderWriteContract(root, "projection.tmpl", spec, projPath, opts, res, errPfxProj); err != nil {
 			return err
 		}
 	}
@@ -313,7 +319,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 		out = append(out, CodegenArtifact{Path: handlerRel, Content: handlerContent})
 	}
 
-	// spec_gen.go + subscription_gen.go — only for kind=event.
+	// spec_gen.go + subscription_gen.go + projection_gen.go — only for kind=event.
 	if spec.Kind == "event" {
 		specPath := filepath.Join(pkgDir, "spec_gen.go")
 		specContent, err := codegen.Render(modulePath, codegen.RenderOptions{
@@ -346,6 +352,22 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 			return nil, err
 		}
 		out = append(out, CodegenArtifact{Path: subRel, Content: subContent})
+
+		projPath := filepath.Join(pkgDir, "projection_gen.go")
+		projContent, err := codegen.Render(modulePath, codegen.RenderOptions{
+			TemplateName: "projection.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     projPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q projection: %w", contractID, err)
+		}
+		projRel, err := relFromRoot(root, projPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: projRel, Content: projContent})
 	}
 
 	// saga_gen.go — only for kind=saga.
