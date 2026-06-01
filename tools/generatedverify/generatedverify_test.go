@@ -566,9 +566,9 @@ import (
 	"os"
 )
 
-type Format int
+type Format string
 
-const FormatJSON Format = 0
+const FormatJSON Format = "json"
 
 type Options struct {
 	Format Format

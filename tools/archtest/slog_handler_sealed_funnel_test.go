@@ -1277,6 +1277,12 @@ func findFileAtPos(p *Pass, pos token.Pos) *ast.File {
 // Exclusion: cmd/gocell does not import runtime/bootstrap (CLI tool, not a
 // long-running service) — naturally excluded by the bootstrap-import filter.
 //
+// Blind spot: the trigger filter uses p.Pkg.Imports() (DIRECT imports only), so a
+// hand-written entry point that reaches runtime/bootstrap only TRANSITIVELY (via a
+// wrapper package) would not be flagged. In practice every bootstrap entry point
+// imports it directly (it calls bootstrap.Run / bootstrap.New), so this is a
+// Go-language Medium ceiling, not a practical gap. Folded into the #1424 won't-do.
+//
 // AI-robust rating: generated coverage is Hard (marker-derived, self-covering);
 // the residual hand-written allowlist is Medium (gh #1424).
 func TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage(t *testing.T) {
