@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -250,12 +252,15 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// so acPtr is always non-nil by then.
 	var acPtr *accesscore.AccessCore
 	ssobffLogger := cfg.logger
-	authFailObserver := auth.BootstrapAuthFailObserver(func(ctx context.Context, reason string) {
+	authFailObserver := func(ctx context.Context, reason string) {
 		ip, _ := ctxkeys.RealIPFrom(ctx)
+		// C3: slog uses hashed IP; ledger payload keeps plaintext for compliance.
+		ipHash := redaction.HashIPForLog(ip)
 		ssobffLogger.ErrorContext(ctx, "bootstrap_auth_failed",
 			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("namespace", "bootstrap"),
 			slog.String("reason", reason),
-			slog.String("client_ip", ip))
+			slog.String("client_ip_hash", ipHash))
 		if acPtr == nil {
 			return
 		}
@@ -264,11 +269,13 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		if err := acPtr.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
 			ssobffLogger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
-				slog.String("reason", reason),
-				slog.String("client_ip", ip),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("client_ip_hash", ipHash),
+				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
 				slog.Any("error", err))
 		}
-	})
+	}
 
 	ssobffBootstrapCreds := auth.BootstrapCredentials{
 		Username: []byte(ssobffBootstrapUsername),

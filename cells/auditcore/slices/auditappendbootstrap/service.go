@@ -17,11 +17,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit"
 )
 
@@ -29,6 +29,8 @@ import (
 // payload wire shape (cells-internal; not exported). Cell isolation requires
 // auditcore to maintain its own typed view — the accesscore dto package is
 // inaccessible to cells/auditcore by the IMPL-DECL-COVER-01 rule.
+//
+// Schema: contracts/event/auth/bootstrap-failed/v1/payload.schema.json.
 type bootstrapAuthFailedPayload struct {
 	Reason   string `json:"reason"`
 	ClientIP string `json:"clientIp,omitempty"`
@@ -53,19 +55,24 @@ type Service struct {
 	bootstrapStore *audit.BootstrapLedgerStore
 	clk            clock.Clock
 	logger         *slog.Logger
+	// nilStoreOnce ensures the "no bootstrap store" warning is emitted at most
+	// once across all events (F15: avoid per-event warn flood).
+	nilStoreOnce sync.Once
 }
 
 // NewService constructs a Service. clk is required; bootstrapStore is optional
-// (nil → service runs in no-op mode: events are Requeued with an explanatory
-// error, which is safe but retryable until the store is wired correctly in
-// production). Production assemblies must always inject a real store via
-// WithBootstrapStore; the nil path exists only so cell tests that do not need
-// bootstrap-chain coverage can Init the cell without wiring the full chain.
+// (nil → service runs in no-op mode: events are permanently rejected with an
+// explanatory error, which routes them to DLX. This is the correct behavior
+// because nil store is a permanent misconfiguration, not a transient error —
+// retrying would burn the budget to no effect). Production assemblies must
+// always inject a real store via WithBootstrapStore; the nil path exists only
+// so cell tests that do not need bootstrap-chain coverage can Init the cell
+// without wiring the full chain.
 //
 // Deliberate deviation from REQUIRED-DEP-NIL-GUARD-01: bootstrapStore is
-// intentionally optional here (nil = no-op mode, not a wiring error). The
-// production nil-guard lives in cellmodules/auditcore, which always injects
-// a real store before bootstrap.Run.
+// intentionally optional here (nil = permanent misconfiguration detected at
+// event-handle time, not at construction time). The startup fail-fast guard
+// for durable assemblies lives in cellmodules/auditcore/module.go.
 func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "auditappendbootstrap.NewService")
 	svc := &Service{
@@ -75,10 +82,9 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 	for _, o := range opts {
 		o(svc)
 	}
-	if validation.IsNilInterface(svc.clk) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"auditappendbootstrap: clock required")
-	}
+	// F27: validation.IsNilInterface(svc.clk) is dead code here — clock.MustHaveClock
+	// panics on nil above, and there is no WithClock option that could re-set it to nil.
+	// Removed to reduce noise.
 	return svc, nil
 }
 
@@ -86,7 +92,7 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 // bootstrap ledger via audit.AppendBootstrapAuthFail.
 //
 // Disposition table:
-//   - bootstrapStore == nil (no-op mode): Requeue (until store is wired)
+//   - bootstrapStore == nil (permanent misconfiguration): Reject → DLX (C4)
 //   - Permanent unmarshal failure (non-JSON payload) → Reject (routes to DLX)
 //   - Unknown/empty reason → Reject (schema violation, non-retryable)
 //   - Transient AppendBootstrapAuthFail failure → Requeue (ConsumerBase retries)
@@ -95,17 +101,24 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 // Consumer declaration: see package-level godoc.
 func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	// bootstrapStore is nil in demo/test mode (no bootstrap chain wired).
-	// Requeue so events are not permanently lost while the store is absent;
-	// production assemblies must always wire a real store.
+	// This is a permanent misconfiguration: retrying wastes the retry budget.
+	// Reject → DLX so the operator sees the misconfiguration immediately.
+	// nilStoreOnce ensures the warning is emitted at most once, not per-event.
 	if s.bootstrapStore == nil {
-		s.logger.WarnContext(ctx, "auditappendbootstrap: no bootstrap store wired; requeuing event",
-			slog.String("event_id", entry.ID()))
-		return outbox.Requeue(fmt.Errorf("auditappendbootstrap: bootstrapStore not configured"))
+		s.nilStoreOnce.Do(func() {
+			s.logger.WarnContext(ctx, "auditappendbootstrap: no bootstrap store wired; rejecting events (permanent misconfiguration)",
+				slog.String("namespace", "bootstrap"),
+				slog.String("event_id", entry.ID()))
+		})
+		return outbox.Reject(outbox.NewPermanentError(
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"auditappendbootstrap: bootstrapStore not configured (permanent misconfiguration)")))
 	}
 
 	var payload bootstrapAuthFailedPayload
 	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		s.logger.ErrorContext(ctx, "auditappendbootstrap: unmarshal payload failed",
+			slog.String("namespace", "bootstrap"),
 			slog.String("event_id", entry.ID()),
 			slog.Int("payload_len", len(entry.Payload())),
 			slog.Any("error", err))
@@ -116,6 +129,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	}
 	if payload.Reason == "" {
 		s.logger.ErrorContext(ctx, "auditappendbootstrap: empty reason in payload",
+			slog.String("namespace", "bootstrap"),
 			slog.String("event_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -124,6 +138,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 
 	if err := audit.AppendBootstrapAuthFail(ctx, s.bootstrapStore, s.clk, payload.Reason, payload.ClientIP); err != nil {
 		s.logger.ErrorContext(ctx, "auditappendbootstrap: append failed",
+			slog.String("namespace", "bootstrap"),
 			slog.String("event_id", entry.ID()),
 			slog.String("reason", payload.Reason),
 			slog.Any("error", err))

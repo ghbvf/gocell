@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/audit"
 )
 
 // Password bounds for the setup endpoint:
@@ -337,11 +338,14 @@ func setupRetiredError() error {
 }
 
 // validBootstrapAuthFailReasons is the whitelist for RecordBootstrapAuthFail.
-// Values mirror runtime/audit.Reason* constants; cells/ must not import runtime/audit.
+// Keyed by runtime/audit.Reason* constants (the authoritative source); using
+// the constants directly ensures drift is caught at compile time.
+// The BOOTSTRAP-REASON-SET-EQUIVALENCE-01 archtest cross-validates the set
+// against runtime/auth/bootstrap.go inline literals.
 var validBootstrapAuthFailReasons = map[string]struct{}{
-	"missing_header":    {},
-	"wrong_credentials": {},
-	"rate_limited":      {},
+	audit.ReasonMissingHeader:    {},
+	audit.ReasonWrongCredentials: {},
+	audit.ReasonRateLimited:      {},
 }
 
 // RecordBootstrapAuthFail emits event.auth.bootstrap-failed.v1 inside a

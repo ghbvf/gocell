@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,17 +116,18 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	// Wave-1 #1423: the bootstrap auth-fail observer no longer writes auditcore's
 	// ledger directly. It emits event.auth.bootstrap-failed.v1 via accesscore's
 	// setup service (RecordBootstrapAuthFail); auditcore subscribes and writes the
-	// bootstrap-namespace ledger. The closure captures acPtr (set after the cell
-	// is constructed); it only fires after HTTP servers start, so acPtr is non-nil.
-	var acPtr *accesscore.AccessCore
+	// bootstrap-namespace ledger. C7: atomic.Pointer eliminates the unsynchronized
+	// late-assignment; Store runs before bootstrap.Run, Load fires post-Init.
+	var acAtomicPtr atomic.Pointer[accesscore.AccessCore]
 	bootstrapAuthObserver := auth.BootstrapAuthFailObserver(func(ctx context.Context, reason string) {
 		ip, _ := ctxkeys.RealIPFrom(ctx)
-		if acPtr == nil {
+		ac := acAtomicPtr.Load()
+		if ac == nil {
 			return
 		}
 		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, testtime.D2s)
 		defer cancel()
-		_ = acPtr.RecordBootstrapAuthFail(appendCtx, reason, ip)
+		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, ip)
 	})
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
@@ -145,7 +147,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	acPtr = ac
+	acAtomicPtr.Store(ac)
 	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
@@ -452,15 +454,17 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	require.NoError(t, err)
 
 	// Wave-1 #1423: event-based observer (see TestSetupEndpoints_FirstRunFlow).
-	var acPtr *accesscore.AccessCore
+	// C7: atomic.Pointer eliminates the unsynchronized late-assignment.
+	var acAtomicPtr2 atomic.Pointer[accesscore.AccessCore]
 	bootstrapObserver := auth.BootstrapAuthFailObserver(func(ctx context.Context, reason string) {
 		ip, _ := ctxkeys.RealIPFrom(ctx)
-		if acPtr == nil {
+		ac := acAtomicPtr2.Load()
+		if ac == nil {
 			return
 		}
 		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, testtime.D2s)
 		defer cancel()
-		_ = acPtr.RecordBootstrapAuthFail(appendCtx, reason, ip)
+		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, ip)
 	})
 
 	limiter := &setupTestBlockAfterNLimiter{remaining: capacity}
@@ -482,7 +486,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	acPtr = ac
+	acAtomicPtr2.Store(ac)
 	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
@@ -584,6 +588,9 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
+	// F24: require.Len (exactly 1) is safe here because the test sends a single
+	// rate-limited request. The two prior requests passed Bootstrap auth and
+	// produced no auth-fail event. Serial execution means exactly 1 entry.
 	require.Len(t, entries, 1, "exactly one rate_limited entry expected")
 
 	var payload struct {

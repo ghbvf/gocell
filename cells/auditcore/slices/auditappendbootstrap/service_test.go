@@ -3,14 +3,20 @@ package auditappendbootstrap_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendbootstrap"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -27,19 +33,84 @@ func newTestBootstrapStore(t *testing.T) *audit.BootstrapLedgerStore {
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	require.NoError(t, err)
-	store, err := ledger.NewMemStore(p, clock.Real())
+	// F21: use a deterministic clockmock instead of clock.Real() to avoid
+	// wall-clock dependencies in the test.
+	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	store, err := ledger.NewMemStore(p, fc)
 	require.NoError(t, err)
 	bs, err := audit.NewBootstrapLedgerStore(store)
 	require.NoError(t, err)
 	return bs
 }
 
+// testClock returns a deterministic fake clock for use in tests (F21).
+func testClock() *clockmock.FakeClock {
+	return clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+}
+
 func mustNewEntry(t *testing.T, payload []byte) outbox.Entry {
 	t.Helper()
-	entry, err := outbox.NewEntry(clock.Real(), context.Background(),
+	// F21: use a deterministic clockmock instead of clock.Real().
+	entry, err := outbox.NewEntry(testClock(), context.Background(),
 		"event.auth.bootstrap-failed.v1", payload)
 	require.NoError(t, err)
 	return entry
+}
+
+// newErrAppendBootstrapStore creates a *audit.BootstrapLedgerStore backed by
+// an errLedgerStore that always returns appendErr on Append. Used by F17 to
+// test the transient-append-failure → Requeue path.
+func newErrAppendBootstrapStore(t *testing.T, appendErr error) *audit.BootstrapLedgerStore {
+	t.Helper()
+	ns := audit.BootstrapNamespace()
+	p, nerr := ledger.NewProtocol(
+		ns,
+		testHMACKey,
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, nerr)
+	inner, nerr := ledger.NewMemStore(p, testClock())
+	require.NoError(t, nerr)
+	bs, nerr := audit.NewBootstrapLedgerStore(&errLedgerStore{inner: inner, appendErr: appendErr})
+	require.NoError(t, nerr)
+	return bs
+}
+
+// errLedgerStore wraps a ledger.Store and injects an error on Append.
+// Implements ledger.Store for test use by delegating all other methods.
+type errLedgerStore struct {
+	inner     ledger.Store
+	appendErr error
+}
+
+func (e *errLedgerStore) Protocol() *ledger.Protocol { return e.inner.Protocol() }
+
+func (e *errLedgerStore) Append(ctx context.Context, entry *ledger.Entry) error {
+	if e.appendErr != nil {
+		return e.appendErr
+	}
+	return e.inner.Append(ctx, entry)
+}
+
+func (e *errLedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
+	return e.inner.Tail(ctx)
+}
+
+func (e *errLedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, error) {
+	return e.inner.GetBySeq(ctx, seq)
+}
+
+func (e *errLedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, params query.ListParams) ([]*ledger.Entry, error) {
+	return e.inner.Query(ctx, filters, params)
+}
+
+func (e *errLedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (bool, int64, error) {
+	return e.inner.Verify(ctx, fromSeq, toSeq)
+}
+
+func (e *errLedgerStore) RepoReady(ctx context.Context) error {
+	return e.inner.RepoReady(ctx)
 }
 
 // --- NewService tests -------------------------------------------------------
@@ -54,14 +125,14 @@ func TestNewService_NilClock_Error(t *testing.T) {
 
 func TestNewService_NoStore_OK(t *testing.T) {
 	// No-op mode: no store wired. Service must be created successfully.
-	svc, err := auditappendbootstrap.NewService(clock.Real())
+	svc, err := auditappendbootstrap.NewService(testClock())
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 }
 
 func TestNewService_WithStore_OK(t *testing.T) {
 	bs := newTestBootstrapStore(t)
-	svc, err := auditappendbootstrap.NewService(clock.Real(),
+	svc, err := auditappendbootstrap.NewService(testClock(),
 		auditappendbootstrap.WithBootstrapStore(bs))
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -69,20 +140,25 @@ func TestNewService_WithStore_OK(t *testing.T) {
 
 // --- HandleEvent tests ------------------------------------------------------
 
-func TestHandleEvent_NoStore_Requeues(t *testing.T) {
-	// When no bootstrap store is configured, HandleEvent must Requeue (not Reject).
-	svc, err := auditappendbootstrap.NewService(clock.Real())
+func TestHandleEvent_NoStore_Rejects(t *testing.T) {
+	// C4: When no bootstrap store is configured, HandleEvent must Reject (not Requeue).
+	// A nil store is a permanent misconfiguration — retrying burns the budget.
+	svc, err := auditappendbootstrap.NewService(testClock())
 	require.NoError(t, err)
 
 	payload, _ := json.Marshal(map[string]string{"reason": "rate_limited"})
 	entry := mustNewEntry(t, payload)
 	result := svc.HandleEvent(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition,
+		"nil store must Reject (permanent misconfiguration, not transient)")
+	require.NotNil(t, result.Err, "Reject must carry an error")
+	var permErr *outbox.PermanentError
+	assert.ErrorAs(t, result.Err, &permErr, "nil store must be a permanent error")
 }
 
 func TestHandleEvent_ValidReasons_Ack(t *testing.T) {
 	bs := newTestBootstrapStore(t)
-	svc, err := auditappendbootstrap.NewService(clock.Real(),
+	svc, err := auditappendbootstrap.NewService(testClock(),
 		auditappendbootstrap.WithBootstrapStore(bs))
 	require.NoError(t, err)
 
@@ -101,7 +177,7 @@ func TestHandleEvent_ValidReasons_Ack(t *testing.T) {
 
 func TestHandleEvent_InvalidJSON_Rejects(t *testing.T) {
 	bs := newTestBootstrapStore(t)
-	svc, err := auditappendbootstrap.NewService(clock.Real(),
+	svc, err := auditappendbootstrap.NewService(testClock(),
 		auditappendbootstrap.WithBootstrapStore(bs))
 	require.NoError(t, err)
 
@@ -115,7 +191,7 @@ func TestHandleEvent_InvalidJSON_Rejects(t *testing.T) {
 
 func TestHandleEvent_EmptyReason_Rejects(t *testing.T) {
 	bs := newTestBootstrapStore(t)
-	svc, err := auditappendbootstrap.NewService(clock.Real(),
+	svc, err := auditappendbootstrap.NewService(testClock(),
 		auditappendbootstrap.WithBootstrapStore(bs))
 	require.NoError(t, err)
 
@@ -133,7 +209,7 @@ func TestHandleEvent_UnknownReason_Rejects(t *testing.T) {
 	// ErrValidationFailed (KindInvalid / IsExpected4xx). This is a permanent
 	// schema violation — HandleEvent must Reject (DLX), not Requeue.
 	bs := newTestBootstrapStore(t)
-	svc, err := auditappendbootstrap.NewService(clock.Real(),
+	svc, err := auditappendbootstrap.NewService(testClock(),
 		auditappendbootstrap.WithBootstrapStore(bs))
 	require.NoError(t, err)
 
@@ -146,3 +222,68 @@ func TestHandleEvent_UnknownReason_Rejects(t *testing.T) {
 	var permErr *outbox.PermanentError
 	assert.ErrorAs(t, result.Err, &permErr, "unknown reason must be a permanent error")
 }
+
+// F17: transient append error → Requeue.
+func TestHandleEvent_TransientAppendError_Requeues(t *testing.T) {
+	// A non-validation error from AppendBootstrapAuthFail (e.g. DB write failure)
+	// must Requeue — ConsumerBase will retry with backoff.
+	transientErr := fmt.Errorf("db: connection refused")
+	bs := newErrAppendBootstrapStore(t, transientErr)
+	svc, err := auditappendbootstrap.NewService(testClock(),
+		auditappendbootstrap.WithBootstrapStore(bs))
+	require.NoError(t, err)
+
+	payload, _ := json.Marshal(map[string]string{"reason": "rate_limited"})
+	entry := mustNewEntry(t, payload)
+	result := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionRequeue, result.Disposition,
+		"transient infra error must Requeue for retry")
+	require.NotNil(t, result.Err, "Requeue must carry the original error")
+	assert.False(t, errors.As(result.Err, new(*outbox.PermanentError)),
+		"transient error must NOT be wrapped in PermanentError")
+}
+
+// F18: idempotency / duplicate-delivery — same payload delivered twice must Ack both times.
+// The ledger uses IdempotencyContentFingerprint which deduplicates by content hash;
+// the second Append for the same payload is a no-op success, so both must Ack.
+func TestHandleEvent_DuplicateDelivery_BothAck(t *testing.T) {
+	bs := newTestBootstrapStore(t)
+	svc, err := auditappendbootstrap.NewService(testClock(),
+		auditappendbootstrap.WithBootstrapStore(bs))
+	require.NoError(t, err)
+
+	payload, _ := json.Marshal(map[string]string{"reason": "wrong_credentials", "clientIp": "10.0.0.1"})
+	entry := mustNewEntry(t, payload)
+
+	result1 := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result1.Disposition, "first delivery must Ack")
+
+	result2 := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result2.Disposition,
+		"duplicate delivery must Ack (idempotency via content fingerprint)")
+}
+
+// F19: Reject path (nil store and invalid-JSON) must carry an error whose inner
+// errcode has code ErrValidationFailed — pinning the inner code so callers
+// relying on errcode.IsExpected4xx get consistent classification.
+func TestHandleEvent_RejectPins_ErrValidationFailed(t *testing.T) {
+	svc, err := auditappendbootstrap.NewService(testClock())
+	require.NoError(t, err)
+
+	payload, _ := json.Marshal(map[string]string{"reason": "rate_limited"})
+	entry := mustNewEntry(t, payload)
+	result := svc.HandleEvent(context.Background(), entry)
+	require.Equal(t, outbox.DispositionReject, result.Disposition)
+
+	// The inner error wrapped in PermanentError must be an *errcode.Error with
+	// ErrValidationFailed — callers use this to classify permanent errors.
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, result.Err, &permErr)
+	var ec *errcode.Error
+	require.ErrorAs(t, permErr.Unwrap(), &ec, "inner error must be *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"permanent error must pin ErrValidationFailed code")
+}
+
+// Ensure clock package is used (suppress any unused-import lint errors).
+var _ clock.Clock = testClock()

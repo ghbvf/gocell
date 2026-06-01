@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -36,6 +37,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -121,43 +123,44 @@ func (m module) Provide(
 
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
 	//
-	// Two-phase init: setupSvc (inside AccessCore) is only available after Init,
-	// but WithBootstrapAuth needs the observer at construction time — creating
-	// a forward reference that cannot be resolved with a single constructor call.
-	// Solution: declare cellPtr here (nil), pass the observer closure to
-	// WithBootstrapAuth, then set cellPtr after NewAccessCore returns. This is
-	// not a true cyclic dependency — it is a sequencing constraint (observer
-	// must be registered before Init; setupSvc is populated inside Init).
-	//
-	// The observer fires only AFTER HTTP servers start (post-Init), so cellPtr
-	// is always non-nil when the observer runs.
-	//
-	// The SRE channel (slog.Error) is emitted unconditionally; the compliance
-	// channel (event emit via outbox) is best-effort with a 2s detached ctx cap.
-	var cellPtr *accesscell.AccessCore
+	// C7: use atomic.Pointer to eliminate the unsynchronized late-assignment.
+	// The observer closure is registered before NewAccessCore returns, so we
+	// need a forward reference to the cell. atomic.Pointer provides a safe
+	// load/store without a mutex, which is sufficient because:
+	//   - Store happens once (immediately after NewAccessCore) in Provide.
+	//   - Load happens from observer goroutines only after HTTP servers start
+	//     (post-Init), which is after Provide returns and cellPtr.Store has run.
+	// A nil Load still results in a defensive fast-path (see below).
+	var cellAtomicPtr atomic.Pointer[accesscell.AccessCore]
 	logger := slog.Default()
 	bootstrapAuthObserver := func(ctx context.Context, reason string) {
 		ip, _ := ctxkeys.RealIPFrom(ctx)
+		// C3: slog uses hashed IP for observability; ledger payload keeps plaintext
+		// IP for compliance (RecordBootstrapAuthFail passes ip unchanged).
+		ipHash := redaction.HashIPForLog(ip)
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
 			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("namespace", "bootstrap"),
 			slog.String("reason", reason),
-			slog.String("client_ip", ip))
-		if cellPtr == nil {
-			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
-				slog.String("auth_reason", reason),
-				slog.String("failure", "cell not yet initialized"),
-				slog.String("client_ip", ip))
-			return
-		}
-		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, bootstrapAppendDetachedTimeout)
-		defer cancel()
-		if err := cellPtr.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+			slog.String("client_ip_hash", ipHash))
+		c := cellAtomicPtr.Load()
+		if c == nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
-				slog.String("client_ip", ip),
+				slog.String("failure", "cell not yet initialized"),
+				slog.String("client_ip_hash", ipHash))
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, bootstrapAppendDetachedTimeout)
+		defer cancel()
+		if err := c.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("client_ip_hash", ipHash),
 				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
 				slog.Any("error", err))
 		}
@@ -171,11 +174,10 @@ func (m module) Provide(
 	accessOpts = append(accessOpts, accesscell.WithBootstrapAuth(bootstrapMW))
 
 	c := accesscell.NewAccessCore(shared.Clock, accessOpts...)
-	// Set the cell pointer AFTER construction so the observer closure can
-	// reach RecordBootstrapAuthFail. This is safe: the observer only fires
-	// after Init (HTTP servers start post-Init), and cellPtr is set before
-	// Build returns.
-	cellPtr = c
+	// Store the cell pointer atomically so the observer closure can reach
+	// RecordBootstrapAuthFail. Store runs before Build returns; observer fires
+	// only after HTTP servers start (post-Init), so Load always sees non-nil.
+	cellAtomicPtr.Store(c)
 
 	// The bootstrap rate limiter spawns a cleanup goroutine, so it must be
 	// managed in two places (pg-cell-template Chapter 4 contract):

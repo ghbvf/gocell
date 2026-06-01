@@ -13,6 +13,17 @@ import (
 // self-managing all Cell-specific dependency wiring (KeyProvider, PoolResource,
 // cellOpts, etc.).
 //
+// # Cross-cell communication
+//
+// Cells communicate with each other exclusively via contracts: HTTP contracts
+// (request/response) and event contracts (publish/subscribe). In-process Go
+// handle passing between Cells at composition time is prohibited — the former
+// ModuleExports type has been removed (Wave-1 #1423). If a Cell needs to react
+// to another Cell's state change, it subscribes to an event contract; it does
+// not receive a direct reference to the other Cell's internal store or service.
+//
+// See MODULE-PROVIDE-NO-VALUE-HANDOFF-01 archtest for the machine enforcement.
+//
 // ref: uber-go/fx fx.Module(name, opts...) — each module is self-contained and
 // registers its own providers.
 // ref: Go proverbs "accept interfaces, return structs" — when there is only one

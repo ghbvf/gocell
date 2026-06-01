@@ -104,6 +104,17 @@ func (m module) Provide(
 		return nil, nil, nil, err
 	}
 
+	// C4 durable-mode fail-fast: in durable (postgres) mode, bootstrapWrapped
+	// must always be non-nil before the cell starts. Nil store would cause
+	// auditappendbootstrap.HandleEvent to reject every bootstrap-failed event
+	// (Reject → DLX) — a permanent data loss in production.
+	// Demo/memory mode allows nil (in-memory stores are always non-nil here
+	// anyway, but the guard is storage-mode scoped to mirror existing patterns).
+	if bootstrapWrapped == nil && shared.Topology.StorageBackend() == "postgres" {
+		return nil, nil, nil, fmt.Errorf("auditcore: bootstrap ledger store is nil in durable mode (postgres); " +
+			"this is a permanent misconfiguration — auditappendbootstrap would Reject all events")
+	}
+
 	// Build the read-side aggregator. auditquery reads across both chains.
 	multiStore, err := ledger.NewMultiStore(auditcoreStore, bootstrapInnerStore)
 	if err != nil {

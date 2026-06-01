@@ -1,5 +1,4 @@
-// invariants:
-//   - INVARIANT: AUDIT-NS-DISJOINT-01
+// INVARIANT: AUDIT-NS-DISJOINT-01
 //
 // Medium archtest backstop for issue #1121 / ADR 202605270230 — the audit chain
 // physical-isolation invariant.
