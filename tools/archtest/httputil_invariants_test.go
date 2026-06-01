@@ -14,24 +14,24 @@ package archtest
 //
 // HTTPUTIL-5XX-LOG-REDACT-01 was retired as a Soft "RedactSlogAttr appears" check
 // in PR #1036 Batch 2 (sink-side redaction superseded its value-redaction role).
-// It is RESTORED here (#1432) as a NARROW Medium form-lock — not the old global
-// Soft form — to keep the call-site defense-in-depth from silently regressing in
-// the two named functions (log4xx / log5xx) that log error Details: those run in
-// library code that may execute before any process-global slog seal is installed
-// (pkg/httputil is imported by tests / tools), so the call-site wrap is the only
-// protection there. The lock binds every `d.AsSlogAttr()` call in those two
-// functions to a `redaction.RedactSlogAttr(...)` wrapper (AST form-lock); a bare
-// AsSlogAttr append is flagged.
+// It is RESTORED here (#1432) as a NARROW Medium TYPED form-lock — NOT the old
+// global Soft string-anchor form — to keep the call-site defense-in-depth from
+// silently regressing in the two named functions (log4xx / log5xx) that log error
+// Details: those run in library code that may execute before any process-global
+// slog seal is installed (pkg/httputil is imported by tests / tools), so the
+// call-site wrap is the only protection there. The lock binds every errcode-detail
+// `d.AsSlogAttr()` call (go/types ObjectOf → pkg/errcode method) in those two
+// functions to a `redaction.RedactSlogAttr(...)` wrapper (IsCallToPkgFunc →
+// pkg/redaction); both callee and locator are typed-resolved, not string-anchored.
+// A bare AsSlogAttr append is flagged.
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
+	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
@@ -222,21 +222,47 @@ var httputilLogRedactTargets = map[string]bool{
 	"log5xx": true,
 }
 
+// isErrcodeAsSlogAttrCall reports whether call is `<d>.AsSlogAttr()` where the
+// resolved method is defined in pkg/errcode (go/types ObjectOf → *types.Func →
+// defining package). This is the typed locator for the detail-attr appends that
+// must be redacted — NOT a bare method-name string anchor.
+func isErrcodeAsSlogAttrCall(info *types.Info, call *ast.CallExpr) bool {
+	if info == nil {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "AsSlogAttr" {
+		return false
+	}
+	fn, ok := info.ObjectOf(sel.Sel).(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return false
+	}
+	return fn.Pkg().Path() == errcodePkgPath
+}
+
 // httputilLogRedactViolations is the HTTPUTIL-5XX-LOG-REDACT-01 detector: within
-// each target function, every `<d>.AsSlogAttr()` call must be a direct argument
-// of a `redaction.RedactSlogAttr(...)` call. A bare AsSlogAttr append (no wrap)
-// is flagged. Shared by the production rule and the reverse self-check.
+// each target function, every `<d>.AsSlogAttr()` call (typed-resolved to a
+// pkg/errcode method) must be a direct argument of a redaction.RedactSlogAttr(...)
+// call (typed-resolved via IsCallToPkgFunc). A bare AsSlogAttr append (no wrap) is
+// flagged. Both the wrapper callee and the AsSlogAttr locator are resolved through
+// go/types (not import-local-name / method-name string anchors), so the rule is
+// Medium, not Soft. Requires p.TypesInfo (typed load). Shared by the production
+// rule and the fixture reverse self-check.
 func httputilLogRedactViolations(p *Pass, f *ast.File) []Diagnostic {
-	redactionLocal := redactionLocalName(f)
+	if p.TypesInfo == nil {
+		return nil
+	}
 	var ds []Diagnostic
 	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Body == nil || !httputilLogRedactTargets[fn.Name.Name] {
 			return
 		}
-		// Collect AsSlogAttr() CallExprs that are direct args of redaction.RedactSlogAttr(...).
+		// Collect AsSlogAttr() CallExprs that are direct args of a typed
+		// redaction.RedactSlogAttr(...) call.
 		wrapped := make(map[*ast.CallExpr]bool)
 		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-			if redactionLocal == "" || !callMatches(call, redactionLocal, slogFunnelRedactSlogAttrFunc) {
+			if !IsCallToPkgFunc(p.TypesInfo, call, redactionPkgPath, slogFunnelRedactSlogAttrFunc) {
 				return
 			}
 			// Direct CallExpr children of this RedactSlogAttr(...) call are its
@@ -246,8 +272,7 @@ func httputilLogRedactViolations(p *Pass, f *ast.File) []Diagnostic {
 			})
 		})
 		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil || sel.Sel.Name != "AsSlogAttr" {
+			if !isErrcodeAsSlogAttrCall(p.TypesInfo, call) {
 				return
 			}
 			if wrapped[call] {
@@ -257,8 +282,8 @@ func httputilLogRedactViolations(p *Pass, f *ast.File) []Diagnostic {
 			ds = append(ds, Diagnostic{
 				Rel:  filepath.ToSlash(p.Rel(f)),
 				Line: pos.Line,
-				Message: "AsSlogAttr() in " + fn.Name.Name + " must be wrapped in" +
-					" redaction.RedactSlogAttr(...) — call-site defense-in-depth must not" +
+				Message: "errcode-detail AsSlogAttr() in " + fn.Name.Name + " must be wrapped" +
+					" in redaction.RedactSlogAttr(...) — call-site defense-in-depth must not" +
 					" regress (HTTPUTIL-5XX-LOG-REDACT-01)",
 			})
 		})
@@ -269,93 +294,60 @@ func httputilLogRedactViolations(p *Pass, f *ast.File) []Diagnostic {
 // INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
 //
 // TestHTTPUtil5xxLogRedact enforces HTTPUTIL-5XX-LOG-REDACT-01: log4xx and log5xx
-// in pkg/httputil/response.go must wrap every error-Detail AsSlogAttr() in
-// redaction.RedactSlogAttr. AI-robust rating: Medium (AST form-lock scoped to two
-// named functions, callee resolved via the redaction import local name; not the
-// retired global Soft form). See file-header note for the defense-in-depth rationale.
+// in pkg/httputil/response.go must wrap every pkg/errcode-detail AsSlogAttr() in
+// redaction.RedactSlogAttr. AI-robust rating: Medium — both the redaction wrapper
+// (IsCallToPkgFunc → pkg/redaction.RedactSlogAttr) and the AsSlogAttr locator
+// (go/types ObjectOf → pkg/errcode method) are typed-resolved, scoped to two named
+// function bodies; NOT the retired Soft string-anchor form. Typed load required.
 func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	t.Parallel()
-	diags := runHTTPUtilResponseRule(t, "HTTPUTIL-5XX-LOG-REDACT-01", func(p *Pass) []Diagnostic {
+	const targetRel = "pkg/httputil/response.go"
+	var foundFile bool
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/httputil"}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
 		var ds []Diagnostic
 		for _, f := range p.Files {
+			if filepath.ToSlash(p.Rel(f)) != targetRel {
+				continue
+			}
+			foundFile = true
 			ds = append(ds, httputilLogRedactViolations(p, f)...)
 		}
 		return ds
 	})
+	require.True(t, foundFile, "HTTPUTIL-5XX-LOG-REDACT-01: %s not found (renamed/deleted/scope drift)", targetRel)
 	Report(t, "HTTPUTIL-5XX-LOG-REDACT-01", diags)
 }
 
-// TestHTTPUtil5xxLogRedact_DetectsViolation is the reverse self-check: a synthetic
-// log5xx whose AsSlogAttr() append drops the redaction.RedactSlogAttr wrap must be
-// flagged; the wrapped form must not be.
+// TestHTTPUtil5xxLogRedact_DetectsViolation is the reverse self-check: it runs the
+// typed detector against a real fixture package (loaded type-checked via
+// RunTypedFixture) whose log4xx/log5xx contain bare (unwrapped) errcode-detail
+// AsSlogAttr() appends alongside a compliant wrapped one — asserting exactly the
+// two bare appends are flagged. Type-checking is required for the go/types
+// resolution of both RedactSlogAttr and the errcode AsSlogAttr methods.
 func TestHTTPUtil5xxLogRedact_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	const redactionImport = `"github.com/ghbvf/gocell/pkg/redaction"`
-	cases := map[string]struct {
-		src     string
-		wantVio bool
-		desc    string
-	}{
-		"bare_asslogattr": {
-			src: `package httputil
-import (
-	"log/slog"
-	` + redactionImport + `
-)
-func log5xx(ecErr fakeErr) {
-	logAttrs := []any{}
-	for _, d := range ecErr.Details {
-		logAttrs = append(logAttrs, d.AsSlogAttr())  // VIOLATION: not wrapped
-	}
-	_ = logAttrs
-	_ = slog.Int
-	_ = redaction.Mask
-}
-`,
-			wantVio: true,
-			desc:    "bare d.AsSlogAttr() append (no RedactSlogAttr wrap) must be flagged",
-		},
-		"wrapped_asslogattr": {
-			src: `package httputil
-import (
-	"log/slog"
-	` + redactionImport + `
-)
-func log5xx(ecErr fakeErr) {
-	logAttrs := []any{}
-	for _, d := range ecErr.Details {
-		logAttrs = append(logAttrs, redaction.RedactSlogAttr(d.AsSlogAttr()))
-	}
-	_ = logAttrs
-	_ = slog.Int
-}
-`,
-			wantVio: false,
-			desc:    "wrapped redaction.RedactSlogAttr(d.AsSlogAttr()) is compliant",
-		},
-	}
+	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/testdata/httputil_log_redact_fixtures/violation"
 
-	for name, tc := range cases {
-		tc := tc
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, "response.go", tc.src, parser.SkipObjectResolution)
-			require.NoError(t, err, "fixture must parse: %s", tc.desc)
-			p := &Pass{
-				Fset:  fset,
-				Files: []*ast.File{file},
-				Rel:   func(*ast.File) string { return "pkg/httputil/response.go" },
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/testdata/httputil_log_redact_fixtures/violation"},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
+				return nil
 			}
-			diags := httputilLogRedactViolations(p, file)
-			if tc.wantVio {
-				assert.NotEmpty(t, diags, "must detect %q: %s", name, tc.desc)
-			} else {
-				assert.Empty(t, diags, "must not flag %q: %s; got %v", name, tc.desc, diags)
+			var ds []Diagnostic
+			for _, f := range p.Files {
+				ds = append(ds, httputilLogRedactViolations(p, f)...)
 			}
+			return ds
 		})
-	}
+
+	require.Len(t, diags, 2,
+		"HTTPUTIL-5XX-LOG-REDACT-01 must flag exactly 2 bare AsSlogAttr() appends"+
+			" (log5xx + log4xx); the wrapped one must NOT be flagged; got: %v", diags)
 }
 
 // collectExportedFuncs returns a set of top-level exported function names

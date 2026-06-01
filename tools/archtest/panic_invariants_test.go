@@ -45,10 +45,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// panicRedactionPkgPath is the import path of pkg/redaction, used by
-// PANIC-LOG-REDACT-01 to resolve redaction.RedactAny via go/types.
-const panicRedactionPkgPath = "github.com/ghbvf/gocell/pkg/redaction"
-
 // panicLogRedactViol is the PANIC-LOG-REDACT-01 diagnostic.
 const panicLogRedactViol = `slog.Any("panic", X) must wrap X with redaction.RedactAny(X)` +
 	` — call-site defense-in-depth must not regress (PANIC-LOG-REDACT-01)`
@@ -78,7 +74,7 @@ func panicLogRedactViolations(p *Pass, f *ast.File, rel string) []Diagnostic {
 			return
 		}
 		if valCall, ok := call.Args[1].(*ast.CallExpr); ok &&
-			IsCallToPkgFunc(p.TypesInfo, valCall, panicRedactionPkgPath, "RedactAny") {
+			IsCallToPkgFunc(p.TypesInfo, valCall, redactionPkgPath, "RedactAny") {
 			return // compliant
 		}
 		pos := p.Fset.Position(call.Pos())

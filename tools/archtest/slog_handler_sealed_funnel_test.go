@@ -325,6 +325,16 @@ func contextHandlerHandleRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []D
 	// of some other expression, is rejected. Upgraded from a presence check
 	// ("RedactString appears somewhere"), which would pass even if the message
 	// itself was forwarded raw and RedactString was only applied elsewhere.
+	//
+	// Accepted constraint (NOT a false-negative): the form-lock requires the
+	// INLINE form. A pre-assigned variable — `msg := redaction.RedactString(r.Message);
+	// slog.NewRecord(..., msg, ...)` — is flagged even though it is safe, because
+	// the 3rd arg is then an *ast.Ident, not the RedactString CallExpr. This is a
+	// false-POSITIVE (rejects a safe refactor), never a false-negative (an unsafe
+	// bare-message variable is likewise an Ident and rejected). The canonical
+	// inline form is the sanctioned shape; the WithAttrs / A3 form-locks share the
+	// same "must be the canonical inline form" property. Reverse self-check case
+	// "var_assigned_message" pins this behavior.
 	recordParam := recordParamName(fn)
 	var newRecordCall *ast.CallExpr
 	EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
@@ -930,6 +940,30 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 `,
 			wantVio: true,
 			desc:    "message form-lock: RedactString of a non-Message expression must be flagged",
+		},
+		{
+			name: "var_assigned_message",
+			src: `package logging
+import (
+	"context"
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
+	// Pinned accepted constraint: the inline form is required, so this safe
+	// pre-assigned form is FLAGGED (false-positive, never false-negative).
+	msg := redaction.RedactString(r.Message)
+	nr := slog.NewRecord(r.Time, r.Level, msg, r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(redaction.RedactSlogAttr(a))
+		return true
+	})
+	return h.inner.Handle(ctx, nr)
+}
+`,
+			wantVio: true,
+			desc:    "message form-lock requires the INLINE form; a pre-assigned RedactString var is flagged",
 		},
 	}
 
