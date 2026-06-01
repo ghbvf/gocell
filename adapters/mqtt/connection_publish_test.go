@@ -87,7 +87,7 @@ func initSharedInternalBroker(t *testing.T) {
 			return true
 		}, testtime.D2s, testtime.D10ms)
 
-		sharedInternalBrokerStop = func() { closeBrokerSafely(nil, srv) }
+		sharedInternalBrokerStop = func() { CloseBrokerSafely(nil, srv) }
 	})
 }
 

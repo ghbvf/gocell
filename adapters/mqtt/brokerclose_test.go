@@ -10,23 +10,34 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
-// closeBrokerSafely closes a mochi v2 broker with two defenses against the
-// mochi v2.7.9 Clients-lock deadlock:
+// CloseBrokerSafely is the single shared helper that closes a mochi v2 broker
+// across both the internal (package mqtt) and external (package mqtt_test) test
+// packages in this directory. It is exported only so the external test package
+// can reach it via mqtt.CloseBrokerSafely; it never appears in non-test builds.
 //
-//  1. Best-effort drain: when t is non-nil, polls srv.Clients.Len() == 0 for
-//     up to testtime.D2s so any in-flight client disconnects settle before
-//     Close is called. Drain is non-fatal; if the budget expires the guarded
-//     close proceeds regardless.
+// It applies two defenses against the mochi v2.7.9 Clients-lock deadlock
+// (issue #1315 — there is no fixed upstream release; v2.7.9 is the latest):
+//
+//  1. Best-effort drain (quiesce-before-Close): when t is non-nil, polls
+//     srv.Clients.Len() == 0 for up to testtime.D2s so any in-flight client
+//     disconnects settle before Close is called — this closes the deadlock
+//     window. Drain is non-fatal; if the budget expires the guarded close
+//     proceeds regardless.
 //
 //  2. Timeout-guarded close: runs srv.Close() in a goroutine and selects on
 //     done vs testtime.D5s. If Close returns, we're done. If it exceeds the
 //     budget (the mochi Clients-lock deadlock) a diagnostic is logged and the
-//     helper returns so the test fails fast instead of hanging for ~10 min.
+//     helper returns promptly so teardown completes instead of hanging for
+//     ~10 min. The timeout path only logs (it does not fail the test): a
+//     teardown Close deadlock is a known library bug, not a real-test-assertion
+//     failure, so failing here would trade a rare hang for a rare flaky FAIL.
 //
-// t may be nil when called from TestMain after m.Run() (e.g. the shared
-// broker stop path). In that case drain is skipped and slog.Warn is used
-// instead of t.Logf so the goroutine does not reference a finished test.
-func closeBrokerSafely(t testing.TB, srv *mqttserver.Server) {
+// t may be nil: the shared-broker stop closure (initSharedInternalBroker)
+// captures CloseBrokerSafely(nil, srv) and is invoked from TestMain via
+// stopSharedInternalBroker after m.Run(). In that case drain is skipped and
+// slog.Warn is used instead of t.Logf so the goroutine does not reference a
+// finished test.
+func CloseBrokerSafely(t testing.TB, srv *mqttserver.Server) {
 	if t != nil {
 		t.Helper()
 	}
@@ -44,6 +55,7 @@ func closeBrokerSafely(t testing.TB, srv *mqttserver.Server) {
 			case <-drainTimer.C:
 				break drainLoop
 			case <-drainTick.C:
+				// tick: re-check srv.Clients.Len() on the next iteration.
 			}
 		}
 		drainTimer.Stop()
