@@ -8,3 +8,8 @@ type Payload struct {
 	Reason   string `json:"reason"`
 	ClientIP string `json:"clientIp,omitempty"`
 }
+
+// Headers — event.auth.bootstrap-failed.v1.headers
+type Headers struct {
+	EventID string `json:"eventId"`
+}
