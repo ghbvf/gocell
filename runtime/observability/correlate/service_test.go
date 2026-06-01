@@ -3,6 +3,7 @@ package correlate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,12 +15,18 @@ import (
 )
 
 // fakeQueryStore implements ledger.QueryStore for tests without importing adapters.
+// It records the last AuditFilters passed to Query so callers can assert the
+// filter was correctly wired.
 type fakeQueryStore struct {
-	entries  []*ledger.Entry
-	queryErr error
+	entries        []*ledger.Entry
+	queryErr       error
+	lastFilters    ledger.AuditFilters
+	lastFiltersSet bool
 }
 
 func (f *fakeQueryStore) Query(_ context.Context, filters ledger.AuditFilters, _ query.ListParams) ([]*ledger.Entry, error) {
+	f.lastFilters = filters
+	f.lastFiltersSet = true
 	if f.queryErr != nil {
 		return nil, f.queryErr
 	}
@@ -33,8 +40,19 @@ func (f *fakeQueryStore) Query(_ context.Context, filters ledger.AuditFilters, _
 	return out, nil
 }
 
+// recordingStore wraps fakeQueryStore and exposes the captured filters.
+// Used in tests that assert on the AuditFilters passed to the store.
+type recordingStore struct {
+	fakeQueryStore
+}
+
 func newTestStore(entries []*ledger.Entry, err error) ledger.QueryStore {
 	return &fakeQueryStore{entries: entries, queryErr: err}
+}
+
+// newRecordingStore returns a *recordingStore so tests can read lastFilters.
+func newRecordingStore(entries []*ledger.Entry, err error) *recordingStore {
+	return &recordingStore{fakeQueryStore{entries: entries, queryErr: err}}
 }
 
 // --- helpers ---
@@ -51,6 +69,7 @@ func newService(t *testing.T, store ledger.QueryStore, topo correlation.Topology
 func sampleEntry(traceID string) *ledger.Entry {
 	return &ledger.Entry{
 		ID:            "entry-1",
+		EventID:       "evid-0001-0001-0001-000000000001",
 		EventType:     "user.login",
 		ActorID:       "actor-abc",
 		SubjectID:     "subject-xyz", // stored in ledger but NOT in the wire DTO
@@ -190,6 +209,119 @@ func TestCorrelateByTrace_ResultHasTraceID(t *testing.T) {
 	}
 	if result.TraceID != traceID {
 		t.Errorf("result.TraceID: got %q, want %q", result.TraceID, traceID)
+	}
+}
+
+// TestCorrelateByTrace_FilterWired asserts that CorrelateByTrace passes
+// AuditFilters{TraceID: traceID} to the store. The store mixes two distinct
+// trace IDs so a missing or wrong filter would return incorrect entries.
+func TestCorrelateByTrace_FilterWired(t *testing.T) {
+	wantTraceID := "trace-want-111"
+	otherTraceID := "trace-other-222"
+	entries := []*ledger.Entry{
+		{ID: "e1", EventType: "a.done", TraceID: wantTraceID, OccurredAt: time.Now(), Timestamp: time.Now()},
+		{ID: "e2", EventType: "b.done", TraceID: otherTraceID, OccurredAt: time.Now(), Timestamp: time.Now()},
+		{ID: "e3", EventType: "a.started", TraceID: wantTraceID, OccurredAt: time.Now(), Timestamp: time.Now()},
+	}
+	rs := newRecordingStore(entries, nil)
+	svc := newService(t, rs, nil)
+
+	result, err := svc.CorrelateByTrace(context.Background(), wantTraceID)
+	if err != nil {
+		t.Fatalf("CorrelateByTrace: %v", err)
+	}
+	// Verify the filter was wired with the correct TraceID.
+	if !rs.lastFiltersSet {
+		t.Fatal("store Query was not called")
+	}
+	if rs.lastFilters.TraceID != wantTraceID {
+		t.Errorf("AuditFilters.TraceID: got %q, want %q", rs.lastFilters.TraceID, wantTraceID)
+	}
+	// Only entries for wantTraceID must be returned (fake filters correctly).
+	for _, ae := range result.AuditEntries {
+		if ae.ID == "e2" {
+			t.Errorf("entry e2 belongs to a different trace_id and must not appear in result")
+		}
+	}
+	if len(result.AuditEntries) != 2 {
+		t.Errorf("expected 2 entries for wantTraceID, got %d", len(result.AuditEntries))
+	}
+}
+
+// TestCorrelateByTrace_HasMoreSentinel verifies that when the store returns
+// traceQueryLimit+1 entries (N+1 hasMore sentinel), CorrelateByTrace trims the
+// sentinel, sets HasMore=true, and Returned==traceQueryLimit.
+func TestCorrelateByTrace_HasMoreSentinel(t *testing.T) {
+	// traceQueryLimit is 500; produce 501 entries to trigger the sentinel path.
+	const n = 501
+	traceID := "trace-overflow"
+	entries := make([]*ledger.Entry, n)
+	for i := range entries {
+		entries[i] = &ledger.Entry{
+			ID:         fmt.Sprintf("e%d", i),
+			EventType:  "tick",
+			TraceID:    traceID,
+			OccurredAt: time.Now(),
+			Timestamp:  time.Now(),
+		}
+	}
+	store := newTestStore(entries, nil)
+	svc := newService(t, store, nil)
+
+	result, err := svc.CorrelateByTrace(context.Background(), traceID)
+	if err != nil {
+		t.Fatalf("CorrelateByTrace: %v", err)
+	}
+	if !result.HasMore {
+		t.Error("HasMore: got false, want true")
+	}
+	if len(result.AuditEntries) != 500 {
+		t.Errorf("AuditEntries count: got %d, want 500 (sentinel trimmed)", len(result.AuditEntries))
+	}
+	if result.Returned != 500 {
+		t.Errorf("Returned: got %d, want 500", result.Returned)
+	}
+}
+
+// TestCorrelateByTrace_HasMoreFalse verifies that when entries <= traceQueryLimit,
+// HasMore is false and Returned equals the actual count.
+func TestCorrelateByTrace_HasMoreFalse(t *testing.T) {
+	traceID := "trace-small"
+	entries := []*ledger.Entry{sampleEntry(traceID)}
+	store := newTestStore(entries, nil)
+	svc := newService(t, store, nil)
+
+	result, err := svc.CorrelateByTrace(context.Background(), traceID)
+	if err != nil {
+		t.Fatalf("CorrelateByTrace: %v", err)
+	}
+	if result.HasMore {
+		t.Error("HasMore: got true, want false for single entry")
+	}
+	if result.Returned != 1 {
+		t.Errorf("Returned: got %d, want 1", result.Returned)
+	}
+}
+
+// TestCorrelateByTrace_EventIDPresent confirms that eventId is populated in the
+// returned auditEntryDTOs.
+func TestCorrelateByTrace_EventIDPresent(t *testing.T) {
+	traceID := "trace-evid"
+	entry := sampleEntry(traceID)
+	entry.EventID = "evid-uuid-0000-0000-0000-000000000042"
+	store := newTestStore([]*ledger.Entry{entry}, nil)
+	svc := newService(t, store, nil)
+
+	result, err := svc.CorrelateByTrace(context.Background(), traceID)
+	if err != nil {
+		t.Fatalf("CorrelateByTrace: %v", err)
+	}
+	if len(result.AuditEntries) == 0 {
+		t.Fatal("expected at least one audit entry")
+	}
+	got := result.AuditEntries[0].EventID
+	if got != entry.EventID {
+		t.Errorf("eventId: got %q, want %q", got, entry.EventID)
 	}
 }
 

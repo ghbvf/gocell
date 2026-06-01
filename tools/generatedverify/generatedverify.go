@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
@@ -163,7 +164,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	}
 	sort.Strings(ids)
 
-	gen := assembly.NewGenerator(project, module, root)
+	gen := assembly.NewGenerator(project, module, root, assembly.WithGoFormatter(codegen.FormatGoSource))
 	artifacts := make([]Artifact, 0, len(ids)*3+1)
 	for _, id := range ids {
 		asm := project.Assemblies[id]

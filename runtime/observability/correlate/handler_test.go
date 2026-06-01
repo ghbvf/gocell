@@ -44,6 +44,32 @@ func TestHandler_BothParams_400(t *testing.T) {
 	assertNoSensitiveFields(t, rec)
 }
 
+// TestHandler_BothParams_OneEmpty_400 verifies that providing both keys even
+// when one has an empty value is rejected: the key-presence XOR check fires
+// before validateParamLength.
+func TestHandler_BothParams_OneEmpty_400(t *testing.T) {
+	store := newTestStore(nil, nil)
+	svc, err := correlate.NewService(store, nil, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"traceId=&cell=x", "/internal/v1/audit/correlate?traceId=&cell=x"},
+		{"traceId=x&cell=", "/internal/v1/audit/correlate?traceId=x&cell="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doGet(t, svc.HTTPHandler(), tc.url)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status: got %d, want 400; body: %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
 // --- tests: neither params ---
 
 func TestHandler_NeitherParam_400(t *testing.T) {
@@ -59,12 +85,40 @@ func TestHandler_NeitherParam_400(t *testing.T) {
 	assertNoSensitiveFields(t, rec)
 }
 
+// TestHandler_PresentEmptyParam_400 verifies that a present-but-empty key
+// (?traceId= or ?cell=) is not silently treated as "absent" and re-routed to
+// the other mode. The key is present (q.Has returns true), so the routing goes
+// to the correct branch; validateParamLength then rejects the empty value.
+func TestHandler_PresentEmptyParam_400(t *testing.T) {
+	store := newTestStore(nil, nil)
+	svc, err := correlate.NewService(store, nil, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"traceId present empty", "/internal/v1/audit/correlate?traceId="},
+		{"cell present empty", "/internal/v1/audit/correlate?cell="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doGet(t, svc.HTTPHandler(), tc.url)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status: got %d, want 400 for %s; body: %s", rec.Code, tc.name, rec.Body)
+			}
+		})
+	}
+}
+
 // --- tests: trace mode ---
 
 func TestHandler_TraceMode_Found_200(t *testing.T) {
 	traceID := "trace-handler-001"
 	entry := &ledger.Entry{
 		ID:            "e1",
+		EventID:       "evid-0001-0001-0001-handler001",
 		EventType:     "user.login",
 		ActorID:       "actor-1",
 		SubjectID:     "SENSITIVE-SUBJECT", // must NOT appear in wire body
@@ -92,10 +146,13 @@ func TestHandler_TraceMode_Found_200(t *testing.T) {
 			} `json:"query"`
 			AuditEntries []struct {
 				ID            string `json:"id"`
+				EventID       string `json:"eventId"`
 				EventType     string `json:"eventType"`
 				ActorID       string `json:"actorId"`
 				CorrelationID string `json:"correlationId"`
 			} `json:"auditEntries"`
+			HasMore  *bool `json:"hasMore"`
+			Returned *int  `json:"returned"`
 		} `json:"data"`
 	}
 	// Snapshot body before decoding (bytes.Buffer is consumed by Decode).
@@ -115,6 +172,9 @@ func TestHandler_TraceMode_Found_200(t *testing.T) {
 	if ae.ID != "e1" {
 		t.Errorf("id: got %q, want e1", ae.ID)
 	}
+	if ae.EventID != entry.EventID {
+		t.Errorf("eventId: got %q, want %q", ae.EventID, entry.EventID)
+	}
 	if ae.EventType != "user.login" {
 		t.Errorf("eventType: got %q", ae.EventType)
 	}
@@ -125,11 +185,24 @@ func TestHandler_TraceMode_Found_200(t *testing.T) {
 	if ae.CorrelationID != "corr-1" {
 		t.Errorf("correlationId: got %q, want corr-1", ae.CorrelationID)
 	}
+	// hasMore must be present and false for a single-entry result.
+	if resp.Data.HasMore == nil {
+		t.Error("hasMore: must be present in trace-mode response, got nil")
+	} else if *resp.Data.HasMore {
+		t.Error("hasMore: got true for single entry, want false")
+	}
+	if resp.Data.Returned == nil {
+		t.Error("returned: must be present in trace-mode response, got nil")
+	} else if *resp.Data.Returned != 1 {
+		t.Errorf("returned: got %d, want 1", *resp.Data.Returned)
+	}
 
 	// subjectId, sessionId, tenantId, payload must NOT appear in the wire body.
 	assertNoSensitiveFieldsInBody(t, bodySnapshot)
-	// eventType, actorId, correlationId must be present in the wire body.
+	// eventType, actorId, correlationId, eventId must be present in the wire body.
 	assertRequiredFieldsInBody(t, bodySnapshot)
+	// hasMore must always be present in trace-mode responses.
+	assertHasMorePresentInBody(t, bodySnapshot)
 }
 
 func TestHandler_TraceMode_NotFound_404(t *testing.T) {
@@ -269,12 +342,24 @@ func assertNoSensitiveFieldsInBody(t *testing.T, body string) {
 
 // assertRequiredFieldsInBody confirms that the correlation-relevant fields are
 // present in the pre-captured body string for a trace-mode 200 response.
+// eventId is included because it is a non-PII UUID enabling forward-correlation
+// to outbox/logs (C5 fix).
 func assertRequiredFieldsInBody(t *testing.T, body string) {
 	t.Helper()
-	for _, field := range []string{"actorId", "eventType", "correlationId"} {
+	for _, field := range []string{"actorId", "eventType", "correlationId", "eventId"} {
 		if !containsSubstring(body, field) {
 			t.Errorf("response body must contain field %q; body: %s", field, body)
 		}
+	}
+}
+
+// assertHasMorePresentInBody confirms that the hasMore field is present in the
+// trace-mode response wire body. It may be true or false; the field itself must
+// always be present so callers can rely on it without checking for key absence.
+func assertHasMorePresentInBody(t *testing.T, body string) {
+	t.Helper()
+	if !containsSubstring(body, "hasMore") {
+		t.Errorf("trace-mode response body must contain 'hasMore' field; body: %s", body)
 	}
 }
 

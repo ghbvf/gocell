@@ -258,7 +258,8 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 			"[]kauth.ListenerAuth{<svcTokenAuth from kauth.NewAuthServiceToken(store, ring)>}) "+
 			"and optionally layer kauth.AuthMTLS{} with verified client TLS",
 		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
-			"count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", ")))))
+			"count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", "),
+		))))
 }
 
 func declaredInternalRoutes(rtr *router.Router) []string {
@@ -436,7 +437,8 @@ func (b *Bootstrap) phase5DrainWebhookReceivers(s *phaseState) ([]cell.RouteGrou
 				return nil, fmt.Errorf(
 					"bootstrap: cell %s webhook receiver drift: declared CellID=%q but snapshot owner=%q"+
 						" (codegen should inject cellID from cell metadata; check cellgen + contractgen templates)",
-					id, req.Spec.CellID, id)
+					id, req.Spec.CellID, id,
+				)
 			}
 			reqs = append(reqs, req)
 		}

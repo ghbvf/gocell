@@ -75,6 +75,35 @@
 //     ceiling as SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL
 //     (#893 won't-do).
 //
+// # Allowlist semantics — three categories
+//
+// The allowlist is split by semantic role:
+//
+//   - INJECTION allowlist (traceIDInjectionAllowlist): the sole site that
+//     sets TraceID to a value derived from the observability envelope.
+//     Composite literal and assignment scans are SKIPPED for these files
+//     (the write is sanctioned by design).
+//
+//   - RECONSTRUCTION (NOT in any allowlist): the postgres adapter takes
+//     &e.TraceID as a scan-address passed to pgx rows.Scan() for DB row
+//     reconstruction. The scanner cannot distinguish a Scan(&e.TraceID)
+//     address-take from a pointer-write (blind spot #1), so the address-
+//     take is documented and accepted. HOWEVER, the postgres file is NOT in
+//     traceIDInjectionAllowlist, so the value-write scanner still runs on
+//     it. Composite literal and assignment writes of ledger.Entry.TraceID
+//     in the postgres file ARE violations and WILL fire the scanner. Only
+//     the &e.TraceID UnaryExpr scan-address shape (not an AssignStmt LHS)
+//     naturally escapes detection. A future value-assignment in the
+//     postgres file WILL fire the scanner immediately (F6 invariant).
+//
+//   - TEST CONFORMANCE (traceIDInjectionAllowlist): storetest/ provides
+//     contract test fixtures for Store implementations; it writes TraceID
+//     in fixture entries for Append. Exclusively test infrastructure
+//     (imported only from *_test.go files).
+//
+//   - _test.go files: always allowed (tests legitimately build Entry
+//     fixtures for table-driven cases).
+//
 // # Tool blind spots (charter §"工具选定后强制盲区自检")
 //
 // The following shapes are NOT detected by the type-aware scanner and are
@@ -84,17 +113,18 @@
 //
 //  1. Reconstruction scan address-take (&e.TraceID passed to Scan()):
 //     adapters/postgres/audit_ledger_store.go passes &e.TraceID to
-//     pgx rows.Scan() for DB row reconstruction. This is structurally
-//     identical to a pointer-write but is semantically a reconstruction
-//     path (storage → memory). The scanner CANNOT distinguish a
-//     Scan(&e.TraceID) address-take from a by-pointer write. The
-//     postgres adapter is added to the explicit allowlist so the known
-//     reconstruction site does not produce spurious violations.
-//     Blind spot: a NEW file could take &e.TraceID and pass it to some
-//     other function that writes through the pointer — this would not be
-//     flagged unless the file is outside the reconstruction allowlist.
-//     Mitigation: the postgres adapter allowlist is stable and reviewed;
-//     new address-takes of ledger.Entry fields are conspicuous in code review.
+//     pgx rows.Scan() for DB row reconstruction. This is a UnaryExpr &
+//     applied to a SelectorExpr in a function-call argument position —
+//     NOT an AssignStmt LHS, so the assignment scanner does not fire.
+//     The postgres file is NOT in any allowlist, so value-assignment and
+//     composite-literal writes in that file WILL fire the scanner. Only
+//     the &e.TraceID UnaryExpr scan-address (a call argument, not an
+//     AssignStmt LHS) naturally escapes. Blind spot: a new file not
+//     explicitly reviewed could take &e.TraceID and pass it to some
+//     other function that writes through the pointer — this would not
+//     be flagged.
+//     Mitigation: new address-takes of ledger.Entry fields are
+//     conspicuous in code review; DB reconstruction sites are stable.
 //
 //  2. reflect.Value.FieldByName("TraceID") or unsafe.Pointer offset write:
 //     Dynamic field writes via reflection or unsafe pointer arithmetic
@@ -139,25 +169,20 @@ const (
 )
 
 // traceIDInjectionAllowlist maps module-relative file paths to a description
-// of why they are permitted to write ledger.Entry.TraceID. Every non-test
-// file in this map must be observed at least once during the production scan
-// (anti-vacuity); stale entries are surfaced as a diagnostic.
+// of why they are permitted to write ledger.Entry.TraceID via a value-write
+// (composite literal or assignment). Every non-test file in this map must be
+// observed at least once during the production scan (anti-vacuity); stale
+// entries are surfaced as a diagnostic.
 //
-// Files are categorized as either INJECTION (setting TraceID from the
-// observability envelope) or RECONSTRUCTION (taking &e.TraceID for a DB scan).
-// Both categories are semantically write paths but serve orthogonal purposes
-// that cannot be distinguished by the AST scanner.
+// Files in this map are INJECTION or TEST CONFORMANCE sites — their scans are
+// skipped entirely. The RECONSTRUCTION category (postgres adapter) is NOT in
+// this map: those files are scanned normally for value-writes; only the
+// &e.TraceID UnaryExpr scan-address shape (not an AssignStmt LHS) naturally
+// escapes detection (blind spot #1, documented above).
 var traceIDInjectionAllowlist = map[string]string{
 	// INJECTION — sole sanctioned source of TraceID value.
 	// Writes TraceID: string(entry.Observability().TraceID) in HandleEvent.
 	"cells/auditcore/internal/appender/service.go": "injection: sole sanctioned appender",
-
-	// RECONSTRUCTION — postgres adapter takes &e.TraceID for pgx rows.Scan.
-	// This is a pointer address-take for DB column scan (storage → memory),
-	// not a value fabrication. Treated as allowlisted to avoid false positives
-	// from the scanner's blind spot #1 (cannot distinguish scan-address from
-	// by-pointer write).
-	"adapters/postgres/audit_ledger_store.go": "reconstruction: pgx Scan address-take",
 
 	// TEST CONFORMANCE — ledger/storetest package provides contract tests for
 	// Store implementations; it writes TraceID in test fixture entries passed
@@ -170,6 +195,13 @@ var traceIDInjectionAllowlist = map[string]string{
 // ledger.Entry.TraceID without triggering a violation. _test.go files are
 // always allowed (tests legitimately build Entry fixtures for table-driven
 // cases).
+//
+// Reconstruction files (e.g. adapters/postgres/audit_ledger_store.go) are
+// NOT exempted here — they pass through the value-write scanner normally.
+// Only the &e.TraceID UnaryExpr scan-address shape (a function-call
+// argument, not an AssignStmt LHS) naturally avoids detection (blind spot #1).
+// This means a future value-assignment in the postgres file WILL fire the
+// scanner immediately, which is the F6 granularity requirement.
 func isTraceIDWriteAllowed(rel string) bool {
 	if strings.HasSuffix(rel, "_test.go") {
 		return true
@@ -190,10 +222,15 @@ func isTraceIDWriteAllowed(rel string) bool {
 //     SelectorExpr nodes resolved via types.Info.Selections to FieldVal
 //     of ledger.Entry.TraceID.
 //
-// The anti-vacuity reverse check ensures every allowlist file is live: if
-// an allowlisted file no longer writes TraceID (e.g. the appender is
-// refactored), the stale allowlist entry is surfaced so it cannot become a
-// silent bypass slot.
+// Reconstruction files (e.g. adapters/postgres/audit_ledger_store.go) are
+// NOT in any allowlist and run through the same scanners. Only the &e.TraceID
+// UnaryExpr scan-address shape (a call argument, not an AssignStmt LHS)
+// naturally avoids detection (blind spot #1).
+//
+// The anti-vacuity reverse check ensures every injection allowlist file is
+// live: if an allowlisted file no longer writes TraceID (e.g. the appender
+// is refactored), the stale allowlist entry is surfaced so it cannot become
+// a silent bypass slot.
 func TestAuditTraceIDWriteCaller01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -210,30 +247,32 @@ func TestAuditTraceIDWriteCaller01(t *testing.T) {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if isTraceIDWriteAllowed(rel) {
-				// Observe allowed files so anti-vacuity can verify them.
+				// Observe injection-allowlist files so anti-vacuity can verify them.
 				if _, inAllowlist := traceIDInjectionAllowlist[rel]; inAllowlist {
 					observed[rel] = struct{}{}
 				}
 				continue
 			}
-			// Scan composite literals (e.g. &ledger.Entry{..., TraceID: val, ...}).
+			// Reconstruction files are NOT skipped — run the full write scanner.
+			// The &e.TraceID scan-address shape is a UnaryExpr in call args, not
+			// an AssignStmt LHS, so it does not produce a false positive.
 			d = append(d, scanTraceIDCompositeLitWrites(p, file, rel)...)
-			// Scan assignment statements (e.g. e.TraceID = val).
 			d = append(d, scanTraceIDAssignWrites(p, file, rel)...)
 		}
 		return d
 	})
 
-	// Anti-vacuity: confirm every non-test allowlist entry was actually observed
-	// writing TraceID. A stale entry is as dangerous as a missing check — it
-	// silently reserves a bypass slot. _test.go and storetest paths are
-	// allowed to be unobserved by RunTypedProduction (Tests: false) because
-	// storetest/ is only loaded when the storetest package is explicitly scanned
-	// and the production run may not include it. We therefore only assert
-	// vacuity for the injection and reconstruction sites.
+	// Anti-vacuity: confirm every non-test injection-allowlist entry was
+	// actually observed writing TraceID. A stale entry is as dangerous as a
+	// missing check — it silently reserves a bypass slot.
+	//
+	// The storetest path is excluded: RunTypedProduction (Tests: false) does
+	// not load storetest/ unless explicitly scanned, so it may not appear.
+	// Reconstruction files (e.g. adapters/postgres) are not vacuity-checked:
+	// they are not in the injection allowlist and the &e.TraceID scan-address
+	// shape is not caught by the assignment scanner (blind spot #1).
 	vacuityCheck := []string{
 		"cells/auditcore/internal/appender/service.go",
-		"adapters/postgres/audit_ledger_store.go",
 	}
 	for _, f := range vacuityCheck {
 		if _, seen := observed[f]; !seen {
@@ -243,7 +282,8 @@ func TestAuditTraceIDWriteCaller01(t *testing.T) {
 						"production write of ledger.Entry.TraceID observed in that file. "+
 						"Either the scanner regressed or the write was removed/refactored. "+
 						"Drop the stale entry so it cannot become a silent bypass slot.",
-					f),
+					f,
+				),
 			})
 		}
 	}
@@ -289,7 +329,8 @@ func scanTraceIDCompositeLitWrites(p *Pass, file *ast.File, rel string) []Diagno
 						"observability envelope via cells/auditcore/internal/appender "+
 						"(AUDIT-TRACE-ID-WRITE-CALLER-01). To add a new sanctioned site, "+
 						"add it to traceIDInjectionAllowlist with a rationale.",
-					rel, pos.Line, rel),
+					rel, pos.Line, rel,
+				),
 			})
 		}
 	})
@@ -323,7 +364,8 @@ func scanTraceIDAssignWrites(p *Pass, file *ast.File, rel string) []Diagnostic {
 						"observability envelope via cells/auditcore/internal/appender "+
 						"(AUDIT-TRACE-ID-WRITE-CALLER-01). To add a new sanctioned site, "+
 						"add it to traceIDInjectionAllowlist with a rationale.",
-					rel, pos.Line, rel),
+					rel, pos.Line, rel,
+				),
 			})
 		}
 	})
@@ -389,12 +431,15 @@ func isLedgerEntryNamedType(t types.Type) bool {
 // ---------------------------------------------------------------------------
 
 // TestAuditTraceIDWriteCaller01_RedFixture verifies that the scanner fires
-// against the deliberate violation in audittraceididfixture. The fixture
-// contains exactly one composite literal write of ledger.Entry.TraceID from
-// a non-allowlisted path — the scanner must report ≥ 1 violation.
+// against both deliberate violations in audittraceididfixture:
+//  1. badCompositeLit — composite literal write of ledger.Entry.TraceID.
+//  2. badAssignment   — direct assignment write of ledger.Entry.TraceID.
 //
-// This is the "scanner catches the violation" proof: without this test,
-// a broken scanner could green-light the rule vacuously.
+// The scanner must report ≥ 2 violations (one per write shape). This
+// also validates the F6 granularity requirement: a value-assignment inside
+// a file that would otherwise only contain &e.TraceID scan-address takes
+// IS caught — confirming that the tightened reconstruction-file handling
+// works correctly.
 func TestAuditTraceIDWriteCaller01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -415,11 +460,50 @@ func TestAuditTraceIDWriteCaller01_RedFixture(t *testing.T) {
 			}
 			return nil
 		})
-	assert.GreaterOrEqual(t, found, 1,
+	assert.GreaterOrEqual(t, found, 2,
 		"AUDIT-TRACE-ID-WRITE-CALLER-01 RED fixture self-check FAILED: "+
-			"expected ≥ 1 violation from audittraceididfixture (badWrite composite literal), "+
-			"got 0. The scanner is not detecting the violation shape — check "+
-			"isLedgerEntryType / scanTraceIDCompositeLitWrites logic.")
+			"expected ≥ 2 violations from audittraceididfixture "+
+			"(badCompositeLit + badAssignment), got %d. "+
+			"The scanner is not detecting one or both violation shapes — check "+
+			"isLedgerEntryType / scanTraceIDCompositeLitWrites / scanTraceIDAssignWrites.",
+		found)
+}
+
+// TestAuditTraceIDWriteCaller01_ReconstructionFileValueWriteFires asserts
+// that a value-assignment write of ledger.Entry.TraceID would fire the
+// scanner even when it coexists with legitimate &e.TraceID scan-address takes
+// (as found in adapters/postgres/audit_ledger_store.go).
+//
+// This is the key invariant of F6: reconstruction files are NOT exempted from
+// value-write detection. Only the &e.TraceID UnaryExpr scan-address shape (a
+// function-call argument, not an AssignStmt LHS) naturally escapes the
+// scanner. The fixture's badAssignment function simulates the scenario where
+// someone adds `e.TraceID = userInput` alongside a legitimate Scan call.
+func TestAuditTraceIDWriteCaller01_ReconstructionFileValueWriteFires(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var assignFound int
+	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/audittraceididfixture"},
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				assignFound += len(scanTraceIDAssignWrites(p, file, rel))
+			}
+			return nil
+		})
+	assert.GreaterOrEqual(t, assignFound, 1,
+		"AUDIT-TRACE-ID-WRITE-CALLER-01 reconstruction granularity check FAILED: "+
+			"expected the assignment scanner to fire ≥ 1 time on the fixture "+
+			"(simulating a value-assignment inside a postgres-reconstruction-like file), "+
+			"got 0. Reconstruction files must NOT suppress value-write detection; "+
+			"only the &e.TraceID UnaryExpr scan-address is exempt (blind spot #1).")
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +523,20 @@ func TestAuditTraceIDWriteCaller01_BlindSpot_ReflectNotPresent(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
+	hits := collectReflectFieldByNameHits(t, ledgerTraceID)
+	assert.Empty(t, hits,
+		"AUDIT-TRACE-ID-WRITE-CALLER-01 blind-spot #2 check: found "+
+			"reflect.Value.FieldByName(\"TraceID\") calls in production code. "+
+			"These bypass the SelectorExpr scanner and must be reviewed. "+
+			"Add the files to traceIDInjectionAllowlist or redesign the write path.")
+}
+
+// collectReflectFieldByNameHits scans cells/, runtime/, adapters/, and cmd/
+// for reflect.Value.FieldByName calls with the given fieldName literal.
+// Extracted to keep TestAuditTraceIDWriteCaller01_BlindSpot_ReflectNotPresent
+// within the ≤15 cognitive complexity guideline.
+func collectReflectFieldByNameHits(t *testing.T, fieldName string) []string {
+	t.Helper()
 	var hits []string
 	_ = RunTyped(t, TypedOpts{}, []string{
 		"./cells/...",
@@ -454,37 +552,37 @@ func TestAuditTraceIDWriteCaller01_BlindSpot_ReflectNotPresent(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				// Look for .FieldByName("TraceID") calls on reflect.Value.
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil || sel.Sel.Name != "FieldByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return
-				}
-				// Strip surrounding quotes.
-				val := strings.Trim(lit.Value, `"`)
-				if val != ledgerTraceID {
-					return
-				}
-				pos := p.Fset.Position(call.Pos())
-				hits = append(hits, fmt.Sprintf("%s:%d", rel, pos.Line))
-			})
+			hits = append(hits, scanFieldByNameCalls(p, file, rel, fieldName)...)
 		}
 		return nil
 	})
-
 	sort.Strings(hits)
-	assert.Empty(t, hits,
-		"AUDIT-TRACE-ID-WRITE-CALLER-01 blind-spot #2 check: found "+
-			"reflect.Value.FieldByName(\"TraceID\") calls in production code. "+
-			"These bypass the SelectorExpr scanner and must be reviewed. "+
-			"Add the files to traceIDInjectionAllowlist or redesign the write path.")
+	return hits
+}
+
+// scanFieldByNameCalls walks the file for .FieldByName("<fieldName>") call
+// expressions and returns their locations. Extracted for complexity budget.
+func scanFieldByNameCalls(p *Pass, file *ast.File, rel, fieldName string) []string {
+	var hits []string
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "FieldByName" {
+			return
+		}
+		if len(call.Args) != 1 {
+			return
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return
+		}
+		val := strings.Trim(lit.Value, `"`)
+		if val == fieldName {
+			pos := p.Fset.Position(call.Pos())
+			hits = append(hits, fmt.Sprintf("%s:%d", rel, pos.Line))
+		}
+	})
+	return hits
 }
 
 // TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent asserts that
@@ -498,6 +596,20 @@ func TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
+	hits := collectDotImportHits(t, ledgerPkgPath)
+	assert.Empty(t, hits,
+		"AUDIT-TRACE-ID-WRITE-CALLER-01 blind-spot #4 check: found dot-import of "+
+			"runtime/audit/ledger in production code. Dot-imports change the AST shape "+
+			"for composite literal type-checking and are a documented scanner blind spot. "+
+			"Remove the dot-import or add an explicit type-aware check for dot-import form.")
+}
+
+// collectDotImportHits scans cells/, runtime/, adapters/, and cmd/ for
+// dot-imports of the given package path. Extracted to keep
+// TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent within the
+// ≤15 cognitive complexity guideline.
+func collectDotImportHits(t *testing.T, pkgPath string) []string {
+	t.Helper()
 	var hits []string
 	_ = RunTyped(t, TypedOpts{}, []string{
 		"./cells/...",
@@ -513,24 +625,27 @@ func TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			for _, imp := range file.Imports {
-				if imp.Name == nil || imp.Name.Name != "." {
-					continue
-				}
-				path := strings.Trim(imp.Path.Value, `"`)
-				if path == ledgerPkgPath {
-					pos := p.Fset.Position(imp.Pos())
-					hits = append(hits, fmt.Sprintf("%s:%d", rel, pos.Line))
-				}
-			}
+			hits = append(hits, scanDotImports(p, file, rel, pkgPath)...)
 		}
 		return nil
 	})
-
 	sort.Strings(hits)
-	assert.Empty(t, hits,
-		"AUDIT-TRACE-ID-WRITE-CALLER-01 blind-spot #4 check: found dot-import of "+
-			"runtime/audit/ledger in production code. Dot-imports change the AST shape "+
-			"for composite literal type-checking and are a documented scanner blind spot. "+
-			"Remove the dot-import or add an explicit type-aware check for dot-import form.")
+	return hits
+}
+
+// scanDotImports walks the file's imports for a dot-import of pkgPath.
+// Extracted for complexity budget.
+func scanDotImports(p *Pass, file *ast.File, rel, pkgPath string) []string {
+	var hits []string
+	for _, imp := range file.Imports {
+		if imp.Name == nil || imp.Name.Name != "." {
+			continue
+		}
+		path := strings.Trim(imp.Path.Value, `"`)
+		if path == pkgPath {
+			pos := p.Fset.Position(imp.Pos())
+			hits = append(hits, fmt.Sprintf("%s:%d", rel, pos.Line))
+		}
+	}
+	return hits
 }

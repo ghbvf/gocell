@@ -24,40 +24,59 @@ GET /internal/v1/audit/correlate?traceId=<otel-trace-id>
 Authorization: Bearer <service-token>
 ```
 
-返回与该 trace_id 关联的 audit entries 列表。
+返回与该 trace_id 关联的 audit entries 列表（最多 500 条，单页无游标）。
 
 ### 响应字段（200）
 
 ```json
 {
-  "data": [
-    {
-      "id":            "audit-entry-uuid",
-      "eventType":     "session.created",
-      "actorId":       "user-uuid",
-      "occurredAt":    "2026-06-02T14:30:00.000000000Z",
-      "timestamp":     "2026-06-02T14:30:00.123456789Z",
-      "correlationId": "correlation-uuid"
-    }
-  ]
+  "data": {
+    "query": { "traceId": "4bf92f3577b34da6a3ce929d0e0e4736" },
+    "auditEntries": [
+      {
+        "id":            "audit-entry-uuid",
+        "eventId":       "outbox-event-uuid",
+        "eventType":     "session.created",
+        "actorId":       "user-uuid",
+        "occurredAt":    "2026-06-02T14:30:00.000000000Z",
+        "timestamp":     "2026-06-02T14:30:00.123456789Z",
+        "correlationId": "correlation-uuid"
+      }
+    ],
+    "hasMore": false,
+    "returned": 1
+  }
 }
 ```
 
-**保留字段**：`id / eventType / actorId / occurredAt / timestamp / correlationId`
+**保留字段**：`id / eventId / eventType / actorId / occurredAt / timestamp / correlationId`
 
-**刻意排除**：`subjectId / tenantId / sessionId / payload`——minimal-PII fail-closed 设计。
-`actorId`（触发主体）是 trace 关联所需的最小身份，明确保留。
+**刻意排除**：`subjectId / tenantId / sessionId / payload / hash / prevHash`——minimal-PII fail-closed 设计。
+`actorId`（触发主体）是 trace 关联所需的最小身份，明确保留；它可能与终端用户身份重合，
+由 InternalListener loopback + service-token 双重边界缓解。`eventId` 是非 PII 的 UUID，
+用于 forward-correlation（从 audit entry 回查 outbox / 日志）。
 deeper identity（subject / tenant / session）及事件 payload 需走 JWT-authed auditquery endpoint
 （`/api/v1/audit/entries`）。
 
 | 字段 | 含义 |
 |------|------|
 | `id` | audit entry UUID（HMAC hash-chain key） |
+| `eventId` | outbox 事件 UUID（非 PII，用于 forward-correlation 回查 outbox / 日志） |
 | `eventType` | 事件类型（如 `session.created`） |
-| `actorId` | 触发主体 ID（从 outbox entry 的 actor 字段提取） |
+| `actorId` | 触发主体 ID（从 outbox entry 的 actor 字段提取；minimal-PII，可能与终端用户身份重合） |
 | `occurredAt` | 域事件时间（RFC3339Nano，HMAC chain 输入之一，精度不可截断） |
 | `timestamp` | audit store 落盘时间（RFC3339Nano） |
 | `correlationId` | 跨 cell 关联 ID（从 W0 observability envelope 注入） |
+| `hasMore` | `true` 表示该 trace_id 关联的 audit entries 超过 500 条（`traceQueryLimit`），结果已截断 |
+| `returned` | 本次实际返回的条目数 |
+
+### 分页说明
+
+trace-mode 是 **单页 point-lookup**（上限 `traceQueryLimit=500`），**不支持游标分页**。
+`hasMore=true` 说明共享该 trace_id 的 audit entries 超过 500 条，结果已截断。此时：
+
+- 缩小时间窗口（在告警平台或 Jaeger 中定位更具体的 trace_id）再重查；
+- 或改用 JWT-authed auditquery endpoint（`GET /api/v1/audit/entries`），该端点支持完整游标分页。
 
 ### 未命中
 
@@ -121,7 +140,16 @@ GoCell 不内嵌 TSDB，不查 Prometheus。
 curl -s \
   -H "Authorization: Bearer $(gocell-token gen --cell ops-client)" \
   "http://127.0.0.1:9090/internal/v1/audit/correlate?traceId=4bf92f3577b34da6a3ce929d0e0e4736" \
-  | jq .
+  | jq '.data.auditEntries[] | {id, eventId, eventType, actorId, occurredAt}'
+```
+
+要同时查看分页状态：
+
+```bash
+curl -s \
+  -H "Authorization: Bearer $(gocell-token gen --cell ops-client)" \
+  "http://127.0.0.1:9090/internal/v1/audit/correlate?traceId=4bf92f3577b34da6a3ce929d0e0e4736" \
+  | jq '{hasMore: .data.hasMore, returned: .data.returned, entries: .data.auditEntries}'
 ```
 
 ### 查 cell owner

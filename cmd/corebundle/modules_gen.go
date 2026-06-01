@@ -6,8 +6,8 @@ import (
 	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
-	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/kernel/observability/correlation"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -39,7 +39,7 @@ func generatedCapabilities() []capability.Kind {
 func generatedCellOwners() map[string]correlation.CellOwner {
 	return map[string]correlation.CellOwner{
 		"configcore": {Team: "platform", Role: "cell-owner"},
-		"auditcore": {Team: "platform", Role: "cell-owner"},
+		"auditcore":  {Team: "platform", Role: "cell-owner"},
 		"accesscore": {Team: "platform", Role: "cell-owner"},
 	}
 }

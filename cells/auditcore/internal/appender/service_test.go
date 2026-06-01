@@ -522,6 +522,80 @@ func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_TraceIDFromObservabilityEnvelope asserts the sole injection
+// wiring end-to-end: when the consumed outbox.Entry carries an observability
+// envelope with a non-empty TraceID, the resulting ledger.Entry.TraceID must
+// equal string(entry.Observability().TraceID).
+//
+// This proves that TraceID flows exclusively through the observability
+// envelope (not through a separate parameter, a Principal field, or business
+// Metadata) and that the appender correctly extracts it via
+// string(entry.Observability().TraceID) — the sole sanctioned injection path
+// locked by AUDIT-TRACE-ID-WRITE-CALLER-01.
+func TestHandleEvent_TraceIDFromObservabilityEnvelope(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	svc := newService(t, spec, cap, p)
+
+	occ := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	wantTraceID := idutil.SafeID("4bf92f3577b34da6a3ce929d0e0e4736")
+
+	e, err := outbox.EntryScan{
+		ID:         "evt-traceid-inject",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1", "userId": "usr-1"}),
+		OccurredAt: occ,
+		CreatedAt:  occ,
+		Observability: outbox.ObservabilityMetadata{
+			TraceID:       wantTraceID,
+			CorrelationID: idutil.SafeID("corr-xyz"),
+		},
+	}.ToEntry()
+	require.NoError(t, err)
+
+	result := svc.HandleEvent(context.Background(), e)
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"HandleEvent must Ack a valid entry; err=%v", result.Err)
+	require.Len(t, cap.appended, 1, "must have appended exactly one ledger entry")
+
+	got := cap.appended[0]
+	// F4 assertion: TraceID must equal string(entry.Observability().TraceID).
+	// This end-to-end assertion proves the sole injection wiring is correct:
+	// the appender extracts the TraceID from the observability envelope, not
+	// from any other source.
+	assert.Equal(t, string(wantTraceID), got.TraceID,
+		"ledger.Entry.TraceID must equal string(entry.Observability().TraceID) — "+
+			"the observability envelope is the sole sanctioned injection path "+
+			"(AUDIT-TRACE-ID-WRITE-CALLER-01)")
+
+	// Verify that an empty observability envelope produces an empty TraceID,
+	// confirming the field is not populated from any fallback source.
+	inner2, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap2 := &captureStore{Store: inner2}
+	svc2 := newService(t, spec, cap2, p)
+
+	eNoTrace, err := outbox.EntryScan{
+		ID:         "evt-traceid-empty",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-2", "userId": "usr-2"}),
+		OccurredAt: occ,
+		CreatedAt:  occ,
+		// Observability with no TraceID — CorrelationID only.
+		Observability: outbox.ObservabilityMetadata{CorrelationID: idutil.SafeID("corr-2")},
+	}.ToEntry()
+	require.NoError(t, err)
+
+	result2 := svc2.HandleEvent(context.Background(), eNoTrace)
+	require.Equal(t, outbox.DispositionAck, result2.Disposition)
+	require.Len(t, cap2.appended, 1)
+	assert.Equal(t, "", cap2.appended[0].TraceID,
+		"ledger.Entry.TraceID must be empty when entry.Observability().TraceID is empty")
+}
+
 // TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn asserts that when
 // outbox.Entry.CreatedAt is zero, the service falls back to clk.Now() AND
 // emits a Warn-level log record.

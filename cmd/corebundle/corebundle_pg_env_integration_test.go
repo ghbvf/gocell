@@ -115,7 +115,7 @@ func TestCorebundlePG_UsesConfigCoreDatabaseURL(t *testing.T) {
 	_ = locals // locals used only for shared deps construction, not module wiring
 	mods := generatedCellModules()
 	app, err := composition.New().With(mods...).Build(ctx, shared,
-		func(_ []cell.Cell) ([]bootstrap.Option, error) {
+		func(_ []cell.Cell, _ composition.ModuleExports) ([]bootstrap.Option, error) {
 			return nil, nil
 		})
 	_ = app // app.Run not needed — Build success is the invariant

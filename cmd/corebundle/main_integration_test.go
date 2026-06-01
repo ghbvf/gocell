@@ -24,7 +24,8 @@ func setupPostgresForMain(t *testing.T) (string, func()) {
 	testutil.RequireDocker(t)
 
 	ctx := context.Background()
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+	container, err := tcpostgres.Run(
+		ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("testmain"),
 		tcpostgres.WithUsername("testmain"),
 		tcpostgres.WithPassword("testmain"),
@@ -82,7 +83,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	// in this unit-level wiring test.
 	mods := generatedCellModules()
 	app, buildErr := composition.New().With(mods...).Build(ctx, shared,
-		func(_ []cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+		func(_ []cell.Cell, _ composition.ModuleExports) ([]bootstrap.Option, error) { return nil, nil })
 	require.NoError(t, buildErr, "Builder.Build must succeed with a fully migrated DB")
 	assert.NotNil(t, app, "App must be non-nil after successful Build")
 }

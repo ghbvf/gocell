@@ -195,7 +195,8 @@ func logAssemblyMaturity(cells []cell.Cell) {
 		}
 	}
 
-	slog.Info("corebundle: assembly maturity composition",
+	slog.Info(
+		"corebundle: assembly maturity composition",
 		slog.Int("total_cells", len(cells)),
 		slog.Group("lifecycle", lcAttrs...),
 	)
@@ -209,13 +210,15 @@ func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []compositio
 	if len(cellIDs) != len(mods) {
 		return fmt.Errorf(
 			"%s: assembly.yaml cells (%d) ↔ modules_gen.go (%d) length mismatch; %s",
-			assemblyID, len(cellIDs), len(mods), hint)
+			assemblyID, len(cellIDs), len(mods), hint,
+		)
 	}
 	for i, want := range cellIDs {
 		if got := mods[i].ID(); got != want {
 			return fmt.Errorf(
 				"%s: assembly.yaml cells[%d]=%q ↔ modules_gen.go=%q drift; %s",
-				assemblyID, i, want, got, hint)
+				assemblyID, i, want, got, hint,
+			)
 		}
 	}
 	return nil

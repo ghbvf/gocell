@@ -241,7 +241,8 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 
 		// Step 7: insert the row.
 		id := uuid.New()
-		if _, insertErr := s.db.Exec(txCtx, insertEntrySQL,
+		if _, insertErr := s.db.Exec(
+			txCtx, insertEntrySQL,
 			id.String(), ns, e.SeqNo,
 			e.EventID, e.EventType, e.ActorID,
 			e.SubjectID, e.TenantID, e.SessionID, e.CorrelationID, e.TraceID, e.OccurredAt,
@@ -375,7 +376,8 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 		&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		return nil, errcode.New(
+			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
@@ -536,7 +538,8 @@ func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int
 		return "", nil
 	}
 	var baselineHash string
-	err := s.db.QueryRow(ctx,
+	err := s.db.QueryRow(
+		ctx,
 		`SELECT hash FROM audit_entries WHERE namespace=$1 AND seq_no=$2`,
 		ns, fromSeq-1,
 	).Scan(&baselineHash)
@@ -592,7 +595,8 @@ func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq
 			ErrAdapterPGQuery, "audit ledger: verify rows error")
 	}
 	if expectedSeq <= toSeq {
-		return false, expectedSeq, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		return false, expectedSeq, errcode.New(
+			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found during Verify",
 			errcode.WithDetails(errcode.PublicInt("missingSeqNo", expectedSeq)),
 		)
@@ -610,7 +614,8 @@ func validateAuditPayloadJSON(payload []byte) error {
 	}
 	var m map[string]any
 	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&m); err != nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(
+			errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: payload must be a JSON object or null",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("json decode: %v", err))),
 		)

@@ -55,7 +55,7 @@ func generateAssemblyModulesGen(
 	}
 	sort.Strings(ids)
 
-	gen := assembly.NewGenerator(project, modulePath, root)
+	gen := assembly.NewGenerator(project, modulePath, root, assembly.WithGoFormatter(codegen.FormatGoSource))
 	var result assemblyDriftResult
 	for _, asmID := range ids {
 		asm := project.Assemblies[asmID]

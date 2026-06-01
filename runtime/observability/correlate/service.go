@@ -35,12 +35,17 @@ const (
 
 // auditEntryDTO is the wire shape for a single audit entry in trace-mode
 // responses. Only the fields needed for trace correlation are included:
-// id, eventType, actorId, occurredAt, timestamp, correlationId.
+// id, eventId, eventType, actorId, occurredAt, timestamp, correlationId.
 // subjectId (OAuth sub, end-user PII), tenantId, sessionId, payload, hash,
-// prevHash, and eventId are deliberately excluded — minimal-PII, fail-closed
-// for a no-caller-cell ops endpoint.
+// and prevHash are deliberately excluded — minimal-PII, fail-closed for a
+// no-caller-cell ops endpoint.
+//
+// eventId (the audit Entry.EventID) is a non-PII UUID that enables
+// forward-correlation to outbox entries and application logs; it is
+// intentionally included to aid incident investigation.
 type auditEntryDTO struct {
 	ID            string    `json:"id"`
+	EventID       string    `json:"eventId"`
 	EventType     string    `json:"eventType"`
 	ActorID       string    `json:"actorId"`
 	OccurredAt    time.Time `json:"occurredAt"`
@@ -66,9 +71,17 @@ type selectorsDTO struct {
 }
 
 // TraceResult is the result type for CorrelateByTrace.
+//
+// HasMore signals that more than traceQueryLimit audit entries share this
+// trace_id; the returned set has been truncated to traceQueryLimit. When
+// HasMore is true, callers should narrow the time window or use the
+// JWT-authed auditquery endpoint for full pagination. Returned holds the
+// count of entries actually returned (len(AuditEntries)).
 type TraceResult struct {
 	TraceID      string          `json:"traceId"`
 	AuditEntries []auditEntryDTO `json:"auditEntries"`
+	HasMore      bool            `json:"hasMore"`
+	Returned     int             `json:"returned"`
 }
 
 // CellResult is the result type for CorrelateByCell.
@@ -109,10 +122,12 @@ func NewService(store ledger.QueryStore, topo correlation.Topology, logger *slog
 // CorrelateByTrace queries the audit ledger for entries with the given traceID
 // and returns a TraceResult. Returns KindNotFound when no entries match.
 //
-// The query uses a fixed ListParams with traceQueryLimit rows, sorted by the
-// canonical ledger order (timestamp DESC, id ASC). For production-scale
-// deployments with very high trace entry counts, callers should use the full
-// auditquery endpoint.
+// The query passes Limit=traceQueryLimit so the store returns up to
+// traceQueryLimit+1 rows (N+1 hasMore detection per QueryStore.Query godoc).
+// When more than traceQueryLimit entries exist, the +1 sentinel is trimmed,
+// TraceResult.HasMore is set to true, and TraceResult.Returned reflects the
+// capped count. For production-scale deployments with very high trace entry
+// counts, callers should use the full auditquery endpoint for pagination.
 func (s *Service) CorrelateByTrace(ctx context.Context, traceID string) (TraceResult, error) {
 	params := query.ListParams{
 		Limit: traceQueryLimit,
@@ -120,7 +135,8 @@ func (s *Service) CorrelateByTrace(ctx context.Context, traceID string) (TraceRe
 	}
 	entries, err := s.store.Query(ctx, ledger.AuditFilters{TraceID: traceID}, params)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "correlate: query by trace",
+		s.logger.ErrorContext(
+			ctx, "correlate: query by trace",
 			slog.String("trace_id", traceID),
 			slog.Any("error", err),
 		)
@@ -131,9 +147,16 @@ func (s *Service) CorrelateByTrace(ctx context.Context, traceID string) (TraceRe
 			"no audit entries found for trace ID",
 			errcode.WithDetails(errcode.PublicString("traceId", traceID)))
 	}
+	hasMore := len(entries) > traceQueryLimit
+	if hasMore {
+		entries = entries[:traceQueryLimit]
+	}
+	dtos := toAuditEntryDTOs(entries)
 	return TraceResult{
 		TraceID:      traceID,
-		AuditEntries: toAuditEntryDTOs(entries),
+		AuditEntries: dtos,
+		HasMore:      hasMore,
+		Returned:     len(dtos),
 	}, nil
 }
 
@@ -167,9 +190,9 @@ func buildSelectors(cellID string) selectorsDTO {
 }
 
 // toAuditEntryDTOs maps a slice of *ledger.Entry to []auditEntryDTO.
-// Only id, eventType, actorId, occurredAt, timestamp, correlationId are
-// included. subjectId (end-user PII), tenantId, sessionId, payload, hash,
-// prevHash, and eventId are deliberately excluded from the DTO.
+// Included fields: id, eventId, eventType, actorId, occurredAt, timestamp,
+// correlationId. subjectId (end-user PII), tenantId, sessionId, payload,
+// hash, and prevHash are deliberately excluded from the DTO.
 func toAuditEntryDTOs(entries []*ledger.Entry) []auditEntryDTO {
 	out := make([]auditEntryDTO, 0, len(entries))
 	for _, e := range entries {
@@ -181,6 +204,7 @@ func toAuditEntryDTOs(entries []*ledger.Entry) []auditEntryDTO {
 func toAuditEntryDTO(e *ledger.Entry) auditEntryDTO {
 	return auditEntryDTO{
 		ID:            e.ID,
+		EventID:       e.EventID,
 		EventType:     e.EventType,
 		ActorID:       e.ActorID,
 		OccurredAt:    e.OccurredAt,

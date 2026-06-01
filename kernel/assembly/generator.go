@@ -35,20 +35,46 @@ type Generator struct {
 	contracts   *registry.ContractRegistry
 	module      string // Go module path (e.g., "github.com/ghbvf/gocell")
 	projectRoot string // absolute path to project root for reading schema files (empty = skip)
+	goFormatter GoFormatter
+}
+
+// GoFormatter normalizes generated Go source to the repo-canonical form
+// (goimports → gofumpt). Its signature matches tools/codegen.FormatGoSource;
+// kernel/assembly only declares the func type (stdlib args) so it stays within
+// the kernel dependency budget (no gofumpt/goimports import). The CLI / tools
+// layers inject the real implementation via WithGoFormatter — the assembly
+// generator must not emit non-gofumpt-canonical output (the gofumpt CI gate,
+// hack/verify-gofumpt.sh, fails otherwise; map-literal value alignment is
+// data-width-dependent and cannot be pre-aligned in the text/template).
+type GoFormatter func(modulePath, filename string, src []byte) ([]byte, error)
+
+// Option configures a Generator at construction time.
+type Option func(*Generator)
+
+// WithGoFormatter injects the canonical Go formatter applied to generated Go
+// artifacts (currently modules_gen.go). Production callers (cmd/gocell, tools)
+// MUST pass WithGoFormatter(codegen.FormatGoSource); unit tests that compare
+// raw template output may omit it.
+func WithGoFormatter(f GoFormatter) Option {
+	return func(g *Generator) { g.goFormatter = f }
 }
 
 // NewGenerator creates a Generator from project metadata, a Go module path,
 // and the absolute filesystem path to the project root (the directory
 // containing go.mod). projectRoot is required when contracts reference schema
 // files.
-func NewGenerator(project *metadata.ProjectMeta, module, projectRoot string) *Generator {
-	return &Generator{
+func NewGenerator(project *metadata.ProjectMeta, module, projectRoot string, opts ...Option) *Generator {
+	g := &Generator{
 		project:     project,
 		cells:       registry.NewCellRegistry(project),
 		contracts:   registry.NewContractRegistry(project),
 		module:      module,
 		projectRoot: projectRoot,
 	}
+	for _, o := range opts {
+		o(g)
+	}
+	return g
 }
 
 // entrypointContext is the template context for main.go.tpl.
@@ -278,10 +304,25 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		return nil, err
 	}
 
+	var raw []byte
 	if asm.Build.CompositionAPI {
-		return g.generateModulesGenComposition(assemblyID, asm, capConsts)
+		raw, err = g.generateModulesGenComposition(assemblyID, asm, capConsts)
+	} else {
+		raw, err = g.generateModulesGenLegacy(assemblyID, asm, capConsts)
 	}
-	return g.generateModulesGenLegacy(assemblyID, asm, capConsts)
+	if err != nil {
+		return nil, err
+	}
+	// Normalize to the gofumpt-canonical form. The text/template cannot
+	// pre-align map-literal values (cell-id widths vary per assembly), so the
+	// raw render is gofmt-valid but not gofumpt-canonical; the injected
+	// formatter (goimports → gofumpt) closes that gap so the gofumpt CI gate
+	// stays green across regenerations. Unit tests without the formatter get
+	// raw output; all production callers inject WithGoFormatter.
+	if g.goFormatter != nil {
+		return g.goFormatter(g.module, "modules_gen.go", raw)
+	}
+	return raw, nil
 }
 
 // collectCapabilityConsts returns the sorted de-duplicated capability.Kind

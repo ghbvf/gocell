@@ -85,7 +85,8 @@ func runStarter(ctx context.Context) error {
 		return fmt.Errorf("corebundlestarter: Build: %w", err)
 	}
 
-	slog.Info("corebundlestarter: starting",
+	slog.Info(
+		"corebundlestarter: starting",
 		slog.String("primary", shared.PrimaryHTTPAddr),
 		slog.String("internal", shared.InternalHTTPAddr),
 		slog.String("health", shared.HealthHTTPAddr),

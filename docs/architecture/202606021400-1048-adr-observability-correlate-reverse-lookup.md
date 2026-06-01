@@ -54,10 +54,21 @@ audit entry 不记录 source cell（且补 source cell 需动冻结 wire envelop
 本质 keyed 不同，故双模、恰好二选一：
 
 - `?traceId=<id>` → audit 反查：返回匹配 entries，wire 字段集为
-  `id / eventType / actorId / occurredAt / timestamp / correlationId`。
-  **刻意 EXCLUDE**：`subjectId / tenantId / sessionId / payload`——minimal-PII
-  fail-closed 设计，该端点无 cell 调用方，deeper identity 需走 JWT-authed
-  auditquery endpoint。`actorId`（触发主体）是 trace 关联所需的最小身份，明确保留。
+  `id / eventId / eventType / actorId / occurredAt / timestamp / correlationId`，外加顶层元数据
+  `hasMore` (bool) + `returned` (int)。
+  - `eventId`：outbox 事件 UUID，**非 PII**，明确添回——用于 forward-correlation（从 audit entry
+    回查 outbox relay 日志 / event payload 调试）。
+  - `actorId`：触发主体 ID，是 trace 关联所需的**最小身份**，**刻意保留**。`actorId` 可能
+    与终端用户身份重合（业务 actor 即 user UUID），缓解措施：InternalListener loopback 隔离
+    + service-token（HMAC + nonce）；deeper/target identity（subjectId/tenantId/sessionId）
+    仅通过 JWT-authed auditquery 获取。
+  - **刻意 EXCLUDE**：`subjectId / tenantId / sessionId / payload / hash / prevHash`——
+    minimal-PII fail-closed 设计，该端点无 cell 调用方。
+  - **单页 point-lookup**：结果上限 `traceQueryLimit=500`，**不支持游标分页**；响应带
+    `hasMore` flag（对齐 Kubernetes list-completeness 模式）。`hasMore=true` 说明匹配
+    entries 超过 500 条，结果已截断——oncall 应缩小时间窗口或改用 JWT-authed auditquery
+    endpoint（`GET /api/v1/audit/entries`）进行完整游标分页。完整游标分页功能活在 auditquery，
+    不在 `/correlate`（ops point-lookup 语义）。
 - **注意：`?traceId=` 仅返回 audit entries，不含 cell owner 信息。**
   audit entries 刻意不记录 source cell（补 source cell 需改冻结 wire envelope，与 D1 矛盾）。
   oncall 两步工作流：先用 `?traceId=<id>` 定位活动（trace→audit），再用 `?cell=<id>` 查
@@ -84,9 +95,12 @@ TSDB，反查 API 不查 Prometheus。
   不注入 `RequireCallerCell` ⇒ **任意合法 service-token 放行（无 caller-cell allowlist）**。这是**刻意的
   ops 姿态**：网络隔离边界 = InternalListener loopback（`127.0.0.1:9090`）+ service-token（HMAC + nonce
   防重放）。FinalizeAuth 的 internal-path↔InternalListener 亲和性校验通过（已验证）。
-- wire-out minimal-PII：`?traceId=` 响应仅含 `id / eventType / actorId / occurredAt / timestamp /
-  correlationId`；`subjectId / tenantId / sessionId / payload` **刻意排除**（fail-closed，无 cell
-  调用方端点）。`?cell=` 响应仅含 cell owner metadata，不含 audit 内容。slog 出口经全局 sink redaction。
+- wire-out minimal-PII：`?traceId=` 响应字段集为
+  `id / eventId / eventType / actorId / occurredAt / timestamp / correlationId`（含 `hasMore` / `returned`
+  顶层元数据）；`subjectId / tenantId / sessionId / payload / hash / prevHash` **刻意排除**
+  （fail-closed，无 cell 调用方端点）。`eventId` 是非 PII UUID；`actorId` 是 trace 关联最小身份，
+  刻意保留（详见 D3 `actorId` 决策说明）。`?cell=` 响应仅含 cell owner metadata，不含 audit 内容。
+  slog 出口经全局 sink redaction。
 - **路径与参数命名约定**：端点物理路径为 `/internal/v1/audit/correlate`（resource-grouped，
   遵循 API versioning 规范），而非 issue #1048 原文的 `/internal/v1/correlate`——`audit` 子路径
   明确了资源归属。查询参数为 `traceId`（camelCase，遵循 CLAUDE.md Query-param 约定），
@@ -130,8 +144,9 @@ issue 范围项 2 含「metric exemplar 自动注入」。本 PR **不实现**�
 |------|------|
 | 业务代码伪造 audit trace_id | appender 唯一 injection 站点（`AUDIT-TRACE-ID-WRITE-CALLER-01`）；且即便伪造，trace_id 非链入 HMAC，不影响被审计事件 tamper-evidence |
 | 伪造 Correlation 视图绕过 W0 | sealed construction：包外不可构造/fabricate |
-| `/correlate` 越权访问（无 caller-cell gate） | InternalListener loopback 隔离 + service-token（HMAC + nonce 防重放）；端点只读，`?traceId=` 仅返 `id/eventType/actorId/occurredAt/timestamp/correlationId`，`?cell=` 仅返 owner metadata；ops 面非业务面，无 cell 调用方故无 allowlist 可言 |
-| 反查响应泄漏 PII | `?traceId=` 响应刻意排除 `subjectId / tenantId / sessionId / payload`（minimal-PII fail-closed）；`actorId` 保留（trace 关联最小身份）；deeper identity 走 JWT-authed auditquery endpoint；slog 出口全局 sink redaction |
+| `/correlate` 越权访问（无 caller-cell gate） | InternalListener loopback 隔离 + service-token（HMAC + nonce 防重放）；端点只读，`?traceId=` 仅返 `id/eventId/eventType/actorId/occurredAt/timestamp/correlationId`，`?cell=` 仅返 owner metadata；ops 面非业务面，无 cell 调用方故无 allowlist 可言 |
+| 反查响应泄漏 PII | `?traceId=` 响应刻意排除 `subjectId / tenantId / sessionId / payload / hash / prevHash`（minimal-PII fail-closed）；`eventId` 是非 PII UUID（outbox 事件 ID），明确保留用于 forward-correlation；`actorId` 是 trace 关联最小身份，**刻意保留**——它可能与终端用户身份重合，缓解措施：InternalListener loopback + service-token 边界（非公网），deeper/target identity 走 JWT-authed auditquery；slog 出口全局 sink redaction |
+| 截断响应（hasMore=true）误导 oncall 以为已完整查看 | 响应体明确携带 `hasMore` flag + `returned` 计数（K8s list-completeness 模式），指引使用 auditquery 完整分页；ops 文档记录 500 上限与缩小时间窗口建议 |
 | 拓扑漂移（owner 错配） | 单源 codegen + golden byte-lock；漂移 = CI 红 |
 
 ## Alternatives rejected

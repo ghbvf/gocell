@@ -18,11 +18,17 @@ type correlateResponse struct {
 }
 
 // correlateData holds the payload. Exactly one mode's fields are populated.
-// Trace mode populates Query + AuditEntries; cell mode populates Owner + Selectors.
+// Trace mode populates Query, AuditEntries, HasMore, and Returned; cell mode
+// populates Owner and Selectors.
 type correlateData struct {
 	// Trace mode
 	Query        *queryInfo      `json:"query,omitempty"`
 	AuditEntries []auditEntryDTO `json:"auditEntries,omitempty"`
+	// HasMore is true when the trace has more than traceQueryLimit audit
+	// entries; the returned set has been truncated. See TraceResult.HasMore.
+	HasMore *bool `json:"hasMore,omitempty"`
+	// Returned is the count of entries actually included in AuditEntries.
+	Returned *int `json:"returned,omitempty"`
 
 	// Cell mode
 	Owner     *ownerDTO     `json:"owner,omitempty"`
@@ -54,11 +60,16 @@ func (s *Service) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
 
-	traceID := q.Get("traceId")
-	cellID := q.Get("cell")
+	// Use q.Has for key-presence detection: q.Get conflates absent (?key not
+	// present) with present-but-empty (?key=). The XOR routing must treat
+	// ?traceId= (present, empty) as 400 via validateParamLength, not silently
+	// route to the other mode. After routing, validateParamLength still rejects
+	// a present-but-empty value.
+	hasTrace := q.Has("traceId")
+	hasCell := q.Has("cell")
 
 	switch {
-	case traceID != "" && cellID != "":
+	case hasTrace && hasCell:
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindInvalid,
 			errcode.ErrValidationFailed,
@@ -66,7 +77,7 @@ func (s *Service) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			errcode.WithDetails(errcode.PublicString("field", "traceId,cell")),
 		))
 		return
-	case traceID == "" && cellID == "":
+	case !hasTrace && !hasCell:
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindInvalid,
 			errcode.ErrValidationFailed,
@@ -74,10 +85,10 @@ func (s *Service) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			errcode.WithDetails(errcode.PublicString("field", "traceId,cell")),
 		))
 		return
-	case traceID != "":
-		s.respondTrace(ctx, w, traceID)
+	case hasTrace:
+		s.respondTrace(ctx, w, q.Get("traceId"))
 	default:
-		s.respondCell(ctx, w, cellID)
+		s.respondCell(ctx, w, q.Get("cell"))
 	}
 }
 
@@ -91,10 +102,14 @@ func (s *Service) respondTrace(ctx context.Context, w http.ResponseWriter, trace
 		httputil.WriteError(ctx, w, err)
 		return
 	}
+	hasMore := result.HasMore
+	returned := result.Returned
 	s.writeJSON(ctx, w, correlateResponse{
 		Data: correlateData{
 			Query:        &queryInfo{TraceID: result.TraceID},
 			AuditEntries: result.AuditEntries,
+			HasMore:      &hasMore,
+			Returned:     &returned,
 		},
 	})
 }
@@ -123,13 +138,15 @@ func (s *Service) respondCell(ctx context.Context, w http.ResponseWriter, cellID
 func validateParamLength(value, paramName string) error {
 	const maxParamLen = 256
 	if len(value) == 0 {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(
+			errcode.KindInvalid, errcode.ErrValidationFailed,
 			"query parameter must not be empty",
 			errcode.WithDetails(errcode.PublicString("param", paramName)),
 		)
 	}
 	if len(value) > maxParamLen {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(
+			errcode.KindInvalid, errcode.ErrValidationFailed,
 			"query parameter exceeds maximum length",
 			errcode.WithDetails(
 				errcode.PublicString("param", paramName),

@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/pkg/scaffoldid"
+	"github.com/ghbvf/gocell/tools/codegen"
 )
 
 // scaffoldAssembly is the subcommand entry for `gocell scaffold assembly`.
@@ -74,7 +75,7 @@ func scaffoldAssembly(root string, args []string) error {
 		SkipGenerate: *skipGenerate,
 	}
 
-	gen := assembly.NewGenerator(project, mod, root)
+	gen := assembly.NewGenerator(project, mod, root, assembly.WithGoFormatter(codegen.FormatGoSource))
 	plan, err := gen.PlanAssemblyScaffold(spec)
 	if err != nil {
 		return err

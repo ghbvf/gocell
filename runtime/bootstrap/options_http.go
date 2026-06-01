@@ -66,7 +66,8 @@ func WithRouterOptions(opts ...router.Option) Option {
 // ref: go-zero — observability configuration at app level
 func WithTracer(t wrapper.Tracer) Option {
 	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts,
+		b.routerOpts = append(
+			b.routerOpts,
 			router.WithTracer(t),
 			// Skip span creation for canonical infra probe endpoints
 			// (/healthz, /readyz, /metrics) so high-rate liveness/readiness

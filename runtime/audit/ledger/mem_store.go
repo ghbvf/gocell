@@ -156,7 +156,8 @@ func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if seq < 1 || int(seq) > len(m.entries) {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		return nil, errcode.New(
+			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
@@ -283,7 +284,8 @@ func validatePayloadJSON(payload []byte) error {
 	}
 	var m map[string]any
 	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&m); err != nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(
+			errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: payload must be a JSON object or null",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("json decode: %v", err))),
 		)

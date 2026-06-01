@@ -223,7 +223,7 @@ func assemblyIDsToGenerate(project *metadata.ProjectMeta, id string, all bool) [
 
 func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id string) error {
 	// Generate.
-	gen := assembly.NewGenerator(project, mod, root)
+	gen := assembly.NewGenerator(project, mod, root, assembly.WithGoFormatter(codegen.FormatGoSource))
 
 	entrypoint, err := gen.GenerateEntrypoint(id)
 	if err != nil {

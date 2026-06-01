@@ -329,7 +329,8 @@ func TestVerifyExpectedShape_RequiresAuthzEpochPositiveChecks(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.table+"/"+tc.constraint, func(t *testing.T) {
-			assert.True(t,
+			assert.True(
+				t,
 				containsCheck(tc.table, tc.constraint),
 				"expectedChecks must include %s.%s (migration 028 authz_epoch positive invariant)",
 				tc.table, tc.constraint,
@@ -356,7 +357,8 @@ func TestVerifyExpectedShape_RequiresLockoutColumns(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run("users/"+tc.column, func(t *testing.T) {
-			assert.True(t,
+			assert.True(
+				t,
 				containsColumn("users", tc.column),
 				"expectedColumns must include users.%s (migration 032 auto-lockout)",
 				tc.column,
@@ -371,7 +373,8 @@ func TestVerifyExpectedShape_RequiresLockoutColumns(t *testing.T) {
 // application path that bypasses the domain layer (which clamps to
 // maxFailedLoginCount via the in-memory aggregate) is still caught at storage.
 func TestVerifyExpectedShape_RequiresLockoutCountPositiveCheck(t *testing.T) {
-	assert.True(t,
+	assert.True(
+		t,
 		containsCheck("users", "users_failed_login_count_positive"),
 		"expectedChecks must include users.users_failed_login_count_positive "+
 			"(migration 032 auto-lockout counter non-negativity)",
