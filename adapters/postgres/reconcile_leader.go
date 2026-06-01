@@ -3,35 +3,38 @@ package postgres
 import (
 	"context"
 	"errors"
-	"sync"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 // Compile-time assertion: *ReconcileElector satisfies reconcile.LeaderElector.
 var _ reconcile.LeaderElector = (*ReconcileElector)(nil)
 
 const (
-	// pgTryAdvisoryLockSQL takes a SESSION-scoped advisory lock keyed on the
-	// reconcilerID hash. It is held for the lease lifetime on a dedicated pooled
-	// connection, so a crashed leader's lock auto-releases when its session drops
-	// (instant failover — the ADR §4.1 rationale for advisory over pure TTL).
-	pgTryAdvisoryLockSQL = `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`
-	pgAdvisoryUnlockSQL  = `SELECT pg_advisory_unlock(hashtextextended($1, 0))`
-
-	// pgReconcileUpsertSQL records the holder + lease window and returns the
-	// monotonic epoch: bumped on a holder CHANGE (or post-expiry re-acquire), kept
-	// on an idempotent same-holder still-live re-acquire. Only the advisory-lock
-	// holder reaches this statement, so the row is mutated by one writer at a time.
-	// Timestamps use the DB clock (now()) — the single time authority across
-	// replicas — so the adapter needs no injected Go clock; $3 is the lease TTL in
-	// milliseconds. RETURNING reflects the DB-computed window back into the token.
-	pgReconcileUpsertSQL = `
+	// pgReconcileAcquireSQL is the row-TTL lease authority: a single atomic UPSERT
+	// whose ON CONFLICT WHERE clause makes the reconcile_leases ROW (its expires_at
+	// TTL) — NOT a session advisory lock — the lease authority. A follower can take
+	// over once expires_at has passed, so failover triggers on TTL expiry even when
+	// the previous leader's process is hung (TCP session alive, no crash) — the case
+	// a session-scoped pg_try_advisory_lock could NOT express (ADR §4.1 corrected,
+	// PR-A6 review C2). Postgres' row lock during the UPSERT serializes concurrent
+	// acquirers (the loser re-evaluates WHERE against the winner's fresh row and
+	// gets 0 rows), so no advisory lock is needed.
+	//
+	// Epoch (the monotonic fencing token) is bumped on a holder CHANGE or a
+	// post-expiry takeover and kept on an idempotent same-holder live re-acquire.
+	// Timestamps use the DB clock now() — the single time authority across replicas,
+	// so no Go clock is injected. $3 is the lease TTL in milliseconds.
+	//
+	// WHERE (expired OR ours): a live lease held by ANOTHER holder fails the WHERE,
+	// so the UPDATE touches 0 rows → RETURNING is empty → contention (ErrLeaseHeld).
+	pgReconcileAcquireSQL = `
 INSERT INTO reconcile_leases (reconciler_id, holder_id, epoch, acquired_at, expires_at)
 VALUES ($1, $2, 1, now(), now() + ($3 * interval '1 millisecond'))
 ON CONFLICT (reconciler_id) DO UPDATE SET
@@ -42,21 +45,25 @@ ON CONFLICT (reconciler_id) DO UPDATE SET
     END,
     holder_id = EXCLUDED.holder_id,
     acquired_at = now(),
-    expires_at = now() + ($3 * interval '1 millisecond')
+    expires_at = EXCLUDED.expires_at
+WHERE reconcile_leases.expires_at < now() OR reconcile_leases.holder_id = EXCLUDED.holder_id
 RETURNING epoch, acquired_at, expires_at`
 
-	// pgReconcileRenewSQL extends the lease window, holder-guarded (the row-level
-	// correctness CAS atop the advisory lock). 0 rows ⟹ no longer the holder.
+	// pgReconcileRenewSQL extends the lease window, guarded on still-ours AND
+	// still-live (expires_at > now()): a renew of an already-lapsed or taken-over
+	// lease affects 0 rows ⟹ ErrReconcileLeaseLost (fail-closed — a follower may
+	// have taken over the instant our TTL passed).
 	pgReconcileRenewSQL = `
 UPDATE reconcile_leases SET expires_at = now() + ($3 * interval '1 millisecond')
-WHERE reconciler_id = $1 AND holder_id = $2`
+WHERE reconciler_id = $1 AND holder_id = $2 AND expires_at > now()`
 
-	// pgReconcileRefreshSQL is the idempotent same-holder re-acquire: refresh the
-	// window and return the (unchanged) epoch + DB-computed timestamps.
-	pgReconcileRefreshSQL = `
-UPDATE reconcile_leases SET expires_at = now() + ($3 * interval '1 millisecond')
-WHERE reconciler_id = $1 AND holder_id = $2
-RETURNING epoch, acquired_at, expires_at`
+	// pgReconcileReleaseSQL relinquishes our lease by marking it expired (a graceful
+	// handoff: the next acquirer sees expires_at < now() and takes over). The epoch
+	// row persists so the next holder's takeover bumps from the current epoch
+	// (monotonicity). Holder-guarded + idempotent (0 rows if not ours).
+	pgReconcileReleaseSQL = `
+UPDATE reconcile_leases SET expires_at = now() - interval '1 second'
+WHERE reconciler_id = $1 AND holder_id = $2`
 )
 
 // epochToUint64 converts the BIGINT epoch column to uint64. reconcile_leases.epoch
@@ -69,98 +76,61 @@ func epochToUint64(e int64) uint64 {
 	return uint64(e)
 }
 
-// ReconcileElector implements reconcile.LeaderElector using a session-scoped
-// pg_try_advisory_lock for the holder gate and a reconcile_leases row for the
-// monotonic fencing epoch + lease window. Each held lease keeps a dedicated
-// pooled connection for its advisory-lock session lifetime; ReleaseLease unlocks
-// and returns it (destroying the physical connection if the unlock fails, so a
-// stuck lock never rides a reused pooled connection).
+// ReconcileElector implements reconcile.LeaderElector using the reconcile_leases
+// ROW's expires_at TTL as the lease authority (row-TTL CAS), NOT a session
+// advisory lock. It is STATELESS — every call is one pool query, so it is safe for
+// concurrent use across reconcilerIDs and holds no connection between calls.
+// Failover triggers on TTL expiry (a hung-but-alive leader's lease lapses and a
+// follower takes over), matching the Redis and fake electors.
 type ReconcileElector struct {
 	pool          *Pool
 	holderID      string
 	leaseDuration time.Duration
-
-	mu   sync.Mutex
-	held map[string]*pgxpool.Conn // reconcilerID -> held advisory-lock session conn
 }
 
-// NewReconcileElector builds a PG leader elector. holderID identifies this replica
-// and MUST be unique per process (production callers pass idutil.NewUUID(); tests
-// pass a stable label). leaseDuration is the lease TTL window.
-// Unlike the Redis elector, no clock.Clock is needed — lease timestamps are
-// computed by the DB (now()), the single wall-clock authority across replicas.
-func NewReconcileElector(pool *Pool, holderID string, leaseDuration time.Duration) (*ReconcileElector, error) {
+// NewReconcileElector builds a PG leader elector. The holderID (this replica's
+// identity) is minted INTERNALLY as a fresh UUID — making accidental cross-process
+// holderID reuse (which would be treated as the same holder, defeating mutual
+// exclusion — PR-A6 review C4) impossible by construction rather than relying on a
+// caller contract. leaseDuration is the lease TTL window. Unlike the Redis elector,
+// no clock.Clock is needed — lease timestamps are computed by the DB (now()), the
+// single wall-clock authority across replicas.
+func NewReconcileElector(pool *Pool, leaseDuration time.Duration) (*ReconcileElector, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: pool is nil")
-	}
-	if holderID == "" {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: holderID is required")
 	}
 	if leaseDuration <= 0 {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: leaseDuration must be positive")
 	}
-	return &ReconcileElector{pool: pool, holderID: holderID, leaseDuration: leaseDuration, held: make(map[string]*pgxpool.Conn)}, nil
+	holderID, err := idutil.NewUUID()
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres reconcile elector: mint holderID", err)
+	}
+	slog.Info("postgres reconcile elector: created", slog.String("holder_id", holderID))
+	return &ReconcileElector{pool: pool, holderID: holderID, leaseDuration: leaseDuration}, nil
 }
 
-// AcquireLease implements reconcile.LeaderElector.
+// AcquireLease implements reconcile.LeaderElector via the row-TTL UPSERT CAS.
 func (e *ReconcileElector) AcquireLease(ctx context.Context, reconcilerID string) (reconcile.LeaseToken, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	leaseMs := e.leaseDuration.Milliseconds()
-
-	// Idempotent re-acquire: we already hold this lease's session — refresh + keep epoch.
-	if conn, ok := e.held[reconcilerID]; ok {
-		var epoch int64
-		var acquiredAt, expiresAt time.Time
-		err := conn.QueryRow(ctx, pgReconcileRefreshSQL, reconcilerID, e.holderID, leaseMs).Scan(&epoch, &acquiredAt, &expiresAt)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			e.releaseConn(ctx, reconcilerID, conn) // row vanished — drop stale conn, fall through to fresh acquire
-		case err != nil:
-			return reconcile.LeaseToken{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: refresh", err)
-		default:
-			return leaseToken(reconcilerID, e.holderID, epochToUint64(epoch), acquiredAt, expiresAt), nil
-		}
-	}
-
-	conn, err := e.pool.DB().Acquire(ctx)
-	if err != nil {
-		return reconcile.LeaseToken{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect,
-			"postgres reconcile elector: acquire connection", err)
-	}
-
-	var locked bool
-	if err := conn.QueryRow(ctx, pgTryAdvisoryLockSQL, reconcilerID).Scan(&locked); err != nil {
-		conn.Release()
-		return reconcile.LeaseToken{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: advisory lock", err)
-	}
-	if !locked {
-		conn.Release()
-		return reconcile.LeaseToken{}, reconcile.ErrLeaseHeld
-	}
-
 	var epoch int64
 	var acquiredAt, expiresAt time.Time
-	if err := conn.QueryRow(ctx, pgReconcileUpsertSQL, reconcilerID, e.holderID, leaseMs).Scan(&epoch, &acquiredAt, &expiresAt); err != nil {
-		e.releaseConn(ctx, reconcilerID, conn) // unlock + return the conn before surfacing the error
-		return reconcile.LeaseToken{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: upsert epoch", err)
+	err := e.pool.DB().
+		QueryRow(ctx, pgReconcileAcquireSQL, reconcilerID, e.holderID, e.leaseDuration.Milliseconds()).
+		Scan(&epoch, &acquiredAt, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// ON CONFLICT WHERE matched no row: a live lease is held by another holder.
+		return reconcile.LeaseToken{}, reconcile.ErrLeaseHeld
 	}
-	e.held[reconcilerID] = conn
+	if err != nil {
+		return reconcile.LeaseToken{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: acquire", err)
+	}
 	return leaseToken(reconcilerID, e.holderID, epochToUint64(epoch), acquiredAt, expiresAt), nil
 }
 
-// RenewLease implements reconcile.LeaderElector. We hold the advisory lock on a
-// pinned connection, so the holder-guarded row UPDATE confirms ownership; a
-// missing held connection (we released) or a 0-row UPDATE (holder changed) is a
-// lost lease.
+// RenewLease implements reconcile.LeaderElector (holder + still-live guarded). 0
+// rows ⟹ lease lapsed or taken over ⟹ ErrReconcileLeaseLost.
 func (e *ReconcileElector) RenewLease(ctx context.Context, token reconcile.LeaseToken) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	conn, ok := e.held[token.ReconcilerID]
-	if !ok {
-		return reconcile.ErrReconcileLeaseLost
-	}
-	tag, err := conn.Exec(ctx, pgReconcileRenewSQL, token.ReconcilerID, e.holderID, e.leaseDuration.Milliseconds())
+	tag, err := e.pool.DB().Exec(ctx, pgReconcileRenewSQL, token.ReconcilerID, e.holderID, e.leaseDuration.Milliseconds())
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: renew", err)
 	}
@@ -170,37 +140,14 @@ func (e *ReconcileElector) RenewLease(ctx context.Context, token reconcile.Lease
 	return nil
 }
 
-// ReleaseLease implements reconcile.LeaderElector (unlock + return the pinned
-// connection; idempotent). The epoch row is left intact so the next holder
-// observes a strictly higher epoch on takeover.
-func (e *ReconcileElector) ReleaseLease(_ context.Context, token reconcile.LeaseToken) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	conn, ok := e.held[token.ReconcilerID]
-	if !ok {
-		return nil
+// ReleaseLease implements reconcile.LeaderElector (marks our lease expired for a
+// fast handoff; idempotent — 0 rows if no longer ours). The epoch row persists so
+// the next holder observes a strictly higher epoch on takeover.
+func (e *ReconcileElector) ReleaseLease(ctx context.Context, token reconcile.LeaseToken) error {
+	if _, err := e.pool.DB().Exec(ctx, pgReconcileReleaseSQL, token.ReconcilerID, e.holderID); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: release", err)
 	}
-	e.releaseConn(context.Background(), token.ReconcilerID, conn)
 	return nil
-}
-
-// releaseConn unlocks the session advisory lock and returns the pinned connection
-// to the pool. If the unlock fails (or reports the lock was not held), the
-// physical connection is destroyed via Hijack+Close so a stuck advisory lock
-// never rides a reused pooled connection. Caller MUST hold e.mu. Uses a detached
-// ctx so a shutdown release still attempts the unlock.
-func (e *ReconcileElector) releaseConn(_ context.Context, reconcilerID string, conn *pgxpool.Conn) {
-	delete(e.held, reconcilerID)
-	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var unlocked bool
-	err := conn.QueryRow(unlockCtx, pgAdvisoryUnlockSQL, reconcilerID).Scan(&unlocked)
-	if err != nil || !unlocked {
-		raw := conn.Hijack()
-		_ = raw.Close(unlockCtx)
-		return
-	}
-	conn.Release()
 }
 
 func leaseToken(reconcilerID, holderID string, epoch uint64, acquiredAt, expiresAt time.Time) reconcile.LeaseToken {

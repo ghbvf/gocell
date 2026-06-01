@@ -857,17 +857,28 @@ increase(gocell_saga_heartbeat_failed_total{reason="stale_lease"}[5m])
 
 leader 空缺持续超过 LeaseDuration + 1s：无实例持有 lease，reconcile 工作停摆。
 
+`sum by (reconciler)` keeps the per-reconciler dimension (so each reconcilerID
+alerts independently and `{{ $labels.reconciler }}` is populated — a bare `sum`
+would collapse all reconcilers and drop the label). The vacancy rule has TWO arms:
+the `== 0` arm catches "exporting but no holder"; the `absent(...)` arm catches
+"the whole series vanished" (every replica down / scrape lost), which `== 0` alone
+would miss (a comparison on an empty vector yields no samples → no alert). Replace
+`<id>` in the `absent()` arm with each reconcilerID you run (absent() needs a fully
+specified series).
+
 ```yaml
 - alert: GoCellReconcileLeaderVacancy
   expr: |
-    sum(gocell_reconcile_leader{reconciler="<id>"}) == 0
+    sum by (reconciler) (gocell_reconcile_leader) == 0
+    or absent(gocell_reconcile_leader{reconciler="<id>"})
   for: 16s
   labels:
     severity: critical
   annotations:
     summary: "Reconcile leader vacant ({{ $labels.reconciler }})"
     description: |
-      No instance holds the reconcile lease for reconciler={{ $labels.reconciler }}.
+      No instance holds the reconcile lease for reconciler={{ $labels.reconciler }}
+      (or the metric series is entirely absent — total scrape loss / all replicas down).
       All reconcile work is paused until a follower acquires the lease.
       Typical causes: all replicas crashed, Redis/PG backend unreachable, or
       lease TTL misconfiguration (RenewInterval >= TTL causes spurious lease loss).
@@ -885,7 +896,7 @@ leader 空缺持续超过 LeaseDuration + 1s：无实例持有 lease，reconcile
 ```yaml
 - alert: GoCellReconcileLeaderSplitBrain
   expr: |
-    sum(gocell_reconcile_leader{reconciler="<id>"}) > 1
+    sum by (reconciler) (gocell_reconcile_leader) > 1
   for: 2s
   labels:
     severity: critical

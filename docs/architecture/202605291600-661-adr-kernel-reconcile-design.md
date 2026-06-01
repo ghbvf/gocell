@@ -392,10 +392,22 @@ not guarantee that only one client is acting as a leader (a.k.a. fencing)."* STW
 
 | adapter | 机制 | 续约 | 失败语义 |
 |---------|------|------|---------|
-| `adapters/redis` | `SET key holderID NX PX leaseMs`（SETNX + TTL） | 周期 `PEXPIRE`（< LeaseDuration） | TTL 到期自动释放，follower SETNX 接管 |
-| `adapters/postgres` | `pg_try_advisory_lock(hash(reconcilerID))` | session-scoped lock + heartbeat goroutine | session 断 → lock 自动释放 |
+| `adapters/redis` | `SET key holderID NX PX leaseMs`（SETNX + TTL）+ INCR epoch key（{rid} hashtag colocate） | 周期 `PEXPIRE` holder + `EXPIRE` epoch（< LeaseDuration） | TTL 到期自动释放，follower SETNX 接管 |
+| `adapters/postgres` | **row-TTL CAS**：`INSERT … ON CONFLICT … WHERE expires_at<now() OR holder=self`（**无 advisory lock**） | `UPDATE … WHERE holder=self AND expires_at>now()` | `expires_at` 到期 follower 接管（与 redis/fake 一致） |
 
 复用 `adapters/redis` Cache 的 cell-namespaced key 约定（lease key 带 namespace 前缀）。
+
+> **§4.1 Amendment 2026-06-02 round-2（PR-A6 深审 C2）**：原 PG 行用 **session-scoped
+> `pg_try_advisory_lock`** 作 lease 权威——**这是错的**：session advisory lock 持有到 session 显式
+> 结束，**不随 `expires_at` 过期**，故 leader 进程**挂起但 TCP 不断**（长 GC / 网络分区连接未掉）时
+> follower **无法**在 LeaseDuration+1s 内接管（只有 crash/session-death 触发 failover），违反 SC-004。
+> as-built 改为 **row（`expires_at` TTL）作权威**：单条 `ON CONFLICT … WHERE 过期或自己` UPSERT
+> 即原子 CAS（Postgres 行锁串行化并发 acquirer，败者重评 WHERE 得 0 行 → 竞争），**不需要 advisory
+> lock**，failover 由 TTL 驱动，与 redis/fake 同语义。elector 因此**无状态**（每次调用一条 pool query，
+> 无 held-conn map / 无 Hijack）。原「session 断即时 failover」的优点换成「TTL 接管」——但 TTL 接管
+> 对挂起场景正确，advisory-lock 对挂起场景**错误**，故净收益为正。redis 两 key 用 `{reconcilerID}`
+> hashtag colocate（否则 Redis Cluster 多 key Lua = CROSSSLOT，C1/F2）；epoch key 在 acquire **与
+> renew** 均刷新 TTL（否则长持有 leader 的 epoch key 到期 → 单调计数器归零 → fencing 失效，C1/F1）。
 
 ### 4.2 lease/token 模型 + RTO + lost-lease 中断
 
@@ -585,12 +597,12 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 >   LostLeaseCancelsInflight` 守）+ fail-closed（`AcquireLease` 错误→不 dispatch）已落地；接口由
 >   `RECONCILE-LEADER-INTERFACE-FROZEN-01`（**Hard** reflect golden）冻结。**评级：Hard**（接口冻结）
 >   + 行为 Medium（runtime guard + 测试）。leader election ≠ fencing 维持不变（best-effort 收窄）。
-> - **T-DUAL / T-FENCE**：跨副本正确性从「设计」更新为 **已兑现**：`FencedWriter` 上游
->   **type-system Hard**（`repo`/`epoch` 字段 + `newFencedWriter` 构造器全 unexported，包外无法
->   伪造 epoch；`RECONCILE-FENCED-WRITE-FUNNEL-01` reflect 锁 seal 形态）+ 下游 **Hard**（mint
->   callsite ⊆ {loop.go, fenced.go}）；`RunFencingConformance` real-failure-injection（epoch-N 写在
->   epoch-N+1 接管后重放 → 单调 CAS 拒绝 + 无重复 effect）对 fake/redis/postgres 三实现入列。
->   monotonic-epoch（非 outbox UUID identity-fencing）已落地。**评级：上下游均 Hard**（已兑现）。
+> - **T-DUAL / T-FENCE**：跨副本正确性从「设计」更新为 **已兑现**（fencing 评级口径见下方
+>   round-2 amendment C3——「上下游均 Hard」是 overclaim，已更正为三向量评级：伪造 epoch =
+>   type-system Hard / mint = Hard / 消费方直调 ApplyFenced = archtest 下游）。`FencedWriter` 字段
+>   + 构造器 unexported（reflect 锁 seal）；`RunFencingConformance` real-failure-injection（epoch-N
+>   写在 epoch-N+1 接管后重放 → 单调 CAS 拒绝 + 无重复 effect）对 fake/redis/postgres 三实现入列。
+>   monotonic-epoch（非 outbox UUID identity-fencing）已落地。
 > - **新增 enforcement T-IMPL**（分层卫生）：`RECONCILE-LEADER-IMPL-FUNNEL-01` 限定 `LeaderElector`
 >   实现 ⊆ {adapters/redis, adapters/postgres, reconciletest fake}。**评级：Medium，永久 Go 天花板**
 >   （Go 无法 seal interface 实现，同 #851/#893/#1282；won't-do）。**非正确性闭环**——跨副本正确性
@@ -602,11 +614,35 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 >   `log.Fatal()` 退进程；GoCell `Loop` 是 cell lifecycle hook 而非独立进程，故丢 lease 后
 >   `leaseCancel()` 中断 in-flight + 转 follower 重新竞争（不退进程）——cancel-and-recontend，理由
 >   见 `loop.go::leaderManage` godoc。
-> - **as-built 偏离 §4.1（PG 时间源）**：§4.1 描述 PG「session-scoped lock + heartbeat」；as-built
->   PG 的 lease 时间戳由 **DB `now()`**（单一时间权威，跨副本无时钟漂移）计算并 RETURNING 回填
->   token，adapter 不注入 Go clock（redis 因无服务端时钟仍注入 `clock.Clock`）。advisory-lock 仍
->   session-scoped（crash → session 断 → 锁自动释放，即时 failover），与 §4.1 一致；仅时间源细化
->   为 DB 侧，威胁面不变。
+> - **PG 时间源 + 机制（已被 round-2 修订取代）**：as-built PG lease 时间戳由 DB `now()` 计算
+>   （单一时间权威）。**注意**：本条原文称 PG 用 session-scoped advisory lock 且「与 §4.1 一致」——
+>   该机制在 round-2 深审（C2）被判定为**错误**并整体替换为 row-TTL CAS（见 §4.1 Amendment
+>   2026-06-02 round-2 + 下方 round-2 amendment）；本行仅保留「时间源 = DB now()」结论，机制描述
+>   以 §4.1 Amendment 为准。
+
+> **§Amendment 2026-06-02 round-2 (PR-A6 #1167 深审 C1–C5) — 生产语义修正**：
+> 第二轮深审（带 Redis Cluster / PG advisory-lock / fencing 边界的生产/开源对标）暴露了
+> 首版的核心正确性缺陷，逐项修正：
+> - **C2（PG，架构）**：session advisory-lock 非 TTL 权威 → 改 **row-TTL CAS**（见 §4.1 Amendment）。
+>   挂起-不崩溃的 leader 现在也会在 `expires_at` 后被接管。
+> - **C1（Redis，正确性）**：① epoch key 仅 acquire 设 TTL、renew 不刷新 → 长持有 leader 的 epoch
+>   到期归零破坏 fencing → renew 同步刷新 epoch key TTL（专用 `reconcileRenewScript`）；② holder/epoch
+>   两 key 无共享 hashtag → Redis Cluster CROSSSLOT → 改 `{reconcilerID}` hashtag colocate。
+> - **C3（fencing Hard 过度声明，诚实重评）**：T-DUAL/T-FENCE 行原称「`FencedWriter` 上游
+>   type-system Hard」覆盖整个「消费方无法发未 fenced 写」——**overclaim**。诚实三向量评级：
+>   (1) 伪造 writer 的 epoch = type-system Hard；(2) 越过 mint/inject = Hard（unexported）；
+>   (3) 消费方**直调自己的 `ApplyFenced(ctx,id,epoch,mut)`** 绕过 writer = **archtest 下游
+>   caller-allowlist**（非 type-system；epoch 是消费方存储 CAS 的必需入参，本质无法在类型层封死）。
+>   故整体不是「结构上不可能」，而是「Loop 必供正确 epoch（Hard）+ 消费方不能 out-of-band 触达
+>   ApplyFenced（archtest）」。enforcement = `RECONCILE-FENCED-WRITE-FUNNEL-01` 新增 ApplyFenced
+>   caller-allowlist（⊆ fenced.go + conformance.go）。
+> - **C4（identity）**：holderID 由 adapter 构造期 `idutil.NewUUID()` **内部铸造**（不再取参），
+>   跨进程 holderID 复用（被当同一 holder 重入）在构造上不可能。
+> - **C5（运维/DX）**：`leaderRetryPeriod` 2s→1s（兑现 graceful P99≤1s）；告警 PromQL 改
+>   `sum by (reconciler)` + `absent()` 兜底全 series 消失；`reconcile_leases` 纳入 schema_guard；
+>   Loop.Leader/FencedRepo 加 Start 期 typed-nil fail-fast。
+> 受影响威胁格子均不退化：T-LEADER/T-DUAL/T-FENCE 的「已兑现」结论仍成立，只是**实现机制**
+> （PG row-TTL、redis hashtag、fencing 三向量评级）被更正为生产可用 + 诚实形态。
 
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：

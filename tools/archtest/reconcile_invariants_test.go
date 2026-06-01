@@ -725,22 +725,35 @@ func TestReconcileLeaderInterfaceFrozen01_ReverseBlindSpot(t *testing.T) {
 //
 // # RECONCILE-FENCED-WRITE-FUNNEL-01
 //
-// The epoch-bound FencedWriter is the L4 reconciler's ONLY write surface (design
-// ADR §4.3). Its two fields (repo, epoch) and its constructor (newFencedWriter)
-// are unexported, so a consumer in another package can receive a FencedWriter
-// (from FencedWriterFrom) but can NEVER compose one with a chosen epoch —
-// reconcile.FencedWriter{epoch: 999} is a compile error outside the package. The
-// epoch is therefore always the live lease's, never consumer-chosen.
+// The epoch-bound FencedWriter is the L4 reconciler's intended write surface
+// (design ADR §4.3). Its two fields (repo, epoch) and its constructor
+// (newFencedWriter) are unexported, so a consumer in another package can receive a
+// FencedWriter (from FencedWriterFrom) but can NEVER compose one with a chosen
+// epoch — reconcile.FencedWriter{epoch: 999} is a compile error outside the package.
 //
-// AI-robust 双向锁:
-//   - Upstream: Hard (type-system seal). The reflect freeze below locks the field
-//     set + UNEXPORTED visibility so the seal cannot drift (e.g. Epoch becoming an
-//     exported field would re-open forging). Go visibility makes external
-//     construction inexpressible.
-//   - Downstream: Hard. newFencedWriter / withFencedWriter are unexported, so Go
-//     makes any call outside kernel/reconcile a compile error; the callsite scan
-//     pins the in-package sites to {loop.go, fenced.go} so an internal drift
-//     (a second, unsanctioned mint site) is caught too.
+// HONEST GRADE (PR-A6 review C3/F4 — corrected from an earlier "type-system Hard
+// closes the whole consumer-write vector" overclaim): there are THREE distinct
+// vectors, with three different ceilings:
+//   1. Forge a FencedWriter with a chosen epoch → **type-system Hard** (unexported
+//      field + ctor; the reflect freeze below locks the seal against drift such as
+//      Epoch becoming exported). The epoch a FencedWriter carries is always the
+//      Loop's live-lease value.
+//   2. Mint/inject a writer out-of-band (newFencedWriter / withFencedWriter) →
+//      **Hard** (both unexported → uncallable outside the package; the callsite
+//      scan pins the in-package sites to {loop.go, fenced.go}).
+//   3. Bypass the writer entirely by calling the consumer's own
+//      FencedRepository.ApplyFenced(ctx, id, anyEpoch, mut) DIRECTLY with a forged
+//      epoch → NOT closable by the type system (ApplyFenced is the consumer's own
+//      public method with epoch as a caller-supplied param). This vector is closed
+//      DOWNSTREAM by an archtest caller-allowlist (ApplyFenced calls ⊆ kernel/reconcile)
+//      — Medium-archtest, NOT type-system Hard. A consumer's ApplyFenced *implementation*
+//      that ignores the epoch is consumer-correctness, out of any framework's reach.
+//
+// So the overall claim is NOT "a consumer structurally cannot emit an unfenced
+// write" — it is "the Loop always supplies the right epoch (Hard) and a consumer
+// cannot reach ApplyFenced out-of-band (archtest)". Tracked honestly; no gh issue
+// for vector 3 because epoch-as-storage-CAS-input is inherent (the consumer's store
+// must see the epoch to compare it).
 
 var fencedWriterFields = []structField{
 	{"repo", "reconcile.FencedRepository"},
@@ -804,6 +817,75 @@ func TestReconcileFencedWriteFunnel01_Callsites(t *testing.T) {
 		}
 		return d
 	})
+	Report(t, "RECONCILE-FENCED-WRITE-FUNNEL-01", diags)
+}
+
+// TestReconcileFencedWriteFunnel01_ApplyFencedCaller closes vector 3 (review C3):
+// a direct call to a FencedRepository.ApplyFenced (the consumer's own method, whose
+// epoch is a caller-supplied param) bypasses the FencedWriter. Production callers of
+// ApplyFenced are allowlisted to the FencedWriter.Write site (fenced.go) and the
+// fencing conformance driver (reconciletest/conformance.go); any other production
+// call is a fencing bypass. This is the archtest (not type-system) half of the
+// honestly-graded funnel.
+func TestReconcileFencedWriteFunnel01_ApplyFencedCaller(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err)
+	reconcilePkg := modPath + "/kernel/reconcile"
+	allowed := map[string]bool{
+		"kernel/reconcile/fenced.go":                    true, // FencedWriter.Write — the sanctioned delegate
+		"kernel/reconcile/reconciletest/conformance.go": true, // RunFencingConformance real-failure-injection
+	}
+
+	var iface *types.Interface
+	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+		if p.Pkg != nil && p.Pkg.Path() == reconcilePkg {
+			if obj := p.Pkg.Scope().Lookup("FencedRepository"); obj != nil {
+				if named, ok := obj.Type().(*types.Named); ok {
+					if i, ok := named.Underlying().(*types.Interface); ok {
+						iface = i.Complete()
+					}
+				}
+			}
+		}
+		return nil
+	})
+	require.NotNil(t, iface, "RECONCILE-FENCED-WRITE-FUNNEL-01: failed to resolve reconcile.FencedRepository")
+
+	sawSanctioned := false
+	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				if sel.Sel == nil || sel.Sel.Name != "ApplyFenced" {
+					return
+				}
+				recv := p.TypesInfo.TypeOf(sel.X)
+				if recv == nil || !typesutil.ImplementsInterface(recv, iface) {
+					return
+				}
+				if allowed[rel] {
+					sawSanctioned = true
+					return
+				}
+				d = append(d, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(sel.Pos()).Line,
+					Message: "RECONCILE-FENCED-WRITE-FUNNEL-01: direct FencedRepository.ApplyFenced call " +
+						"bypasses the epoch-bound FencedWriter — reconcilers must write only via " +
+						"FencedWriterFrom(ctx).Write (allowed callers: fenced.go, conformance.go).",
+				})
+			})
+		}
+		return d
+	})
+	require.True(t, sawSanctioned, "RECONCILE-FENCED-WRITE-FUNNEL-01: no sanctioned ApplyFenced call observed "+
+		"(expected FencedWriter.Write + RunFencingConformance) — scan vacuous, check package loading")
 	Report(t, "RECONCILE-FENCED-WRITE-FUNNEL-01", diags)
 }
 

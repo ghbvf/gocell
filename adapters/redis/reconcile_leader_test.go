@@ -40,14 +40,30 @@ func (m *reconcileMockCmdable) Eval(_ context.Context, script string, keys []str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
-	case len(keys) == 2 && len(args) >= 2: // acquire {acquired, epoch}; ARGV[3] (epoch TTL) tolerated, ignored
+	case script == reconcileAcquireScript: // 2-key {acquired, epoch}
 		m.evalReconcileAcquire(cmd, keys, args)
-	case len(keys) == 1: // renew (2 args) / release (1 arg): reuse base ownership-guarded sim
+	case script == reconcileRenewScript: // 2-key ownership-guarded TTL refresh → 1/0
+		m.evalReconcileRenew(cmd, keys, args)
+	case len(keys) == 1: // release (releaseLockScript): reuse base ownership-guarded sim
 		cmd.SetVal(m.simulateScript(script, keys, args))
 	default:
 		cmd.SetVal(int64(0))
 	}
 	return cmd
+}
+
+// evalReconcileRenew mirrors reconcileRenewScript (ownership-guarded refresh of
+// both holder + epoch key TTL). Caller holds m.mu.
+func (m *reconcileMockCmdable) evalReconcileRenew(cmd *goredis.Cmd, keys []string, args []any) {
+	holderKey := keys[0]
+	holderID := toString(args[0])
+	ttl := time.Duration(toInt64(args[1])) * time.Millisecond
+	if cur, live := m.liveValue(holderKey); live && cur == holderID {
+		m.store[holderKey] = mockEntry{value: holderID, expiry: time.Now().Add(ttl)}
+		cmd.SetVal(int64(1))
+		return
+	}
+	cmd.SetVal(int64(0))
 }
 
 // evalReconcileAcquire mirrors reconcileAcquireScript. Caller holds m.mu.
@@ -97,9 +113,12 @@ func (m *reconcileMockCmdable) readEpoch(epochKey string) int64 {
 	return 0
 }
 
-func mustElector(t *testing.T, rdb cmdable, holderID string) *RedisReconcileElector {
+// mustElector builds a mock-backed elector. holderID is minted internally (each
+// call → a distinct UUID), so two electors over the same mock contend as distinct
+// holders without a caller-supplied label.
+func mustElector(t *testing.T, rdb cmdable) *RedisReconcileElector {
 	t.Helper()
-	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", holderID, 30*time.Second, clock.Real())
+	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", 30*time.Second, clock.Real())
 	require.NoError(t, err)
 	return e
 }
@@ -109,11 +128,11 @@ func mustElector(t *testing.T, rdb cmdable, holderID string) *RedisReconcileElec
 // is covered by reconcile_leader_integration_test.go.
 func TestReconcileElector_Conformance(t *testing.T) {
 	mock := newReconcileMock()
-	factory := func(h string) reconcile.LeaderElector { return mustElector(t, mock, h) }
+	factory := func(string) reconcile.LeaderElector { return mustElector(t, mock) }
 	t.Run("Leader", func(t *testing.T) { reconciletest.RunLeaderConformance(t, factory) })
 
 	mock2 := newReconcileMock()
-	factory2 := func(h string) reconcile.LeaderElector { return mustElector(t, mock2, h) }
+	factory2 := func(string) reconcile.LeaderElector { return mustElector(t, mock2) }
 	t.Run("Fencing", func(t *testing.T) { reconciletest.RunFencingConformance(t, factory2) })
 }
 
@@ -121,7 +140,7 @@ func TestReconcileElector_Conformance(t *testing.T) {
 // to reconcile.ErrLeaseHeld (logged at Debug by the Loop).
 func TestReconcileElector_ContentionReportsLeaseHeld(t *testing.T) {
 	mock := newReconcileMock()
-	a, b := mustElector(t, mock, "A"), mustElector(t, mock, "B")
+	a, b := mustElector(t, mock), mustElector(t, mock)
 	ctx := context.Background()
 	_, err := a.AcquireLease(ctx, "rid")
 	require.NoError(t, err)
@@ -182,4 +201,17 @@ func TestReconcileElector_AcquireScriptContent(t *testing.T) {
 		"    return {0, 0}\n" +
 		"end\n"
 	assert.Equal(t, want, reconcileAcquireScript, "reconcileAcquireScript must not be modified without updating the golden")
+}
+
+// TestReconcileElector_RenewScriptContent golden-locks the renew Lua (which refreshes
+// BOTH the holder and epoch key TTL — the F1 fix the mock cannot otherwise catch).
+func TestReconcileElector_RenewScriptContent(t *testing.T) {
+	want := "\nif redis.call(\"GET\", KEYS[1]) == ARGV[1] then\n" +
+		"    redis.call(\"PEXPIRE\", KEYS[1], ARGV[2])\n" +
+		"    redis.call(\"EXPIRE\", KEYS[2], ARGV[3])\n" +
+		"    return 1\n" +
+		"else\n" +
+		"    return 0\n" +
+		"end\n"
+	assert.Equal(t, want, reconcileRenewScript, "reconcileRenewScript must not be modified without updating the golden")
 }

@@ -3,11 +3,13 @@ package redis
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 // Compile-time assertion: *RedisReconcileElector satisfies reconcile.LeaderElector.
@@ -32,11 +34,17 @@ const reconcileEpochKeyTTL = 30 * 24 * time.Hour
 //	KEYS[1] = holder key   KEYS[2] = epoch key
 //	ARGV[1] = holderID     ARGV[2] = lease TTL (ms)   ARGV[3] = epoch key TTL (s)
 //
-// The epoch key is given a long TTL (ARGV[3]) on every acquire so it survives
-// Redis allkeys-* eviction. Without a TTL the key can be evicted, resetting the
-// monotonic counter to 0 and breaking fencing. In the same-holder branch we also
-// guard against a nil GET (race where the epoch key was evicted between the holder
-// check and the GET) by treating false as 0.
+// The epoch key is given a long TTL (ARGV[3]) on every acquire AND every renew
+// (see reconcileRenewScript) so it survives Redis allkeys-* eviction AND never
+// expires under a long-held leader. Without a refreshed TTL the key can be evicted
+// or simply lapse mid-term, resetting the monotonic counter to 0 and breaking
+// fencing (PR-A6 review C1/F1). In the same-holder branch we also guard against a
+// nil GET (race where the epoch key was evicted between the holder check and the
+// GET) by treating false as 0.
+//
+// Both keys share a Redis Cluster hash tag ({reconcilerID}) so they colocate on a
+// single slot — a multi-key Lua script touching two different slots is a CROSSSLOT
+// error on Redis Cluster (PR-A6 review C1/F2).
 const reconcileAcquireScript = `
 local cur = redis.call("GET", KEYS[1])
 if cur == false then
@@ -55,15 +63,32 @@ else
 end
 `
 
+// reconcileRenewScript extends the holder-key TTL AND refreshes the epoch-key TTL
+// (so the monotonic epoch never lapses while a leader keeps renewing — PR-A6
+// review C1/F1), ownership-guarded. Returns 1 if still held, 0 if ownership lost.
+// Two keys, colocated via the shared {reconcilerID} hash tag.
+//
+//	KEYS[1] = holder key   KEYS[2] = epoch key
+//	ARGV[1] = holderID     ARGV[2] = lease TTL (ms)   ARGV[3] = epoch key TTL (s)
+const reconcileRenewScript = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    redis.call("PEXPIRE", KEYS[1], ARGV[2])
+    redis.call("EXPIRE", KEYS[2], ARGV[3])
+    return 1
+else
+    return 0
+end
+`
+
 // RedisReconcileElector implements reconcile.LeaderElector using Redis SET NX PX
 // for the holder lease and an INCR'd epoch key for the monotonic fencing token.
-// Renew/Release reuse the package's ownership-guarded Lua scripts
-// (renewLockScript / releaseLockScript); the epoch key is never deleted on
-// release so a subsequent holder always observes a strictly higher epoch.
+// Release reuses the package's ownership-guarded releaseLockScript (the epoch key
+// is never deleted on release so a subsequent holder always observes a strictly
+// higher epoch); acquire/renew use the reconcile-specific scripts above.
 //
-// All keys are KeyNamespace-prefixed (per-cell / role-scoped) like the other
-// redis primitives. The holder lease key is "<ns>:reconcile:lease:<reconcilerID>"
-// and the epoch key is "<ns>:reconcile:epoch:<reconcilerID>".
+// Both keys are KeyNamespace-prefixed AND share a {reconcilerID} hash tag so they
+// colocate on one Redis Cluster slot: the holder key is "<ns>:{<rid>}:lease" and
+// the epoch key is "<ns>:{<rid>}:epoch".
 type RedisReconcileElector struct {
 	rdb           cmdable
 	ns            KeyNamespace
@@ -72,27 +97,27 @@ type RedisReconcileElector struct {
 	clk           clock.Clock
 }
 
-// NewRedisReconcileElector builds a leader elector. holderID identifies this
-// replica and MUST be unique per process (production callers pass idutil.NewUUID();
-// tests pass a stable label). leaseDuration is the lease TTL; the reconcile Loop
-// derives its renew cadence as TTL/3 unless overridden. clk is the injected clock
-// stamping the token window (Redis has no server-side wall clock to return). ns /
-// client / holderID / leaseDuration / clk are validated up front so
-// misconfiguration fails fast.
+// NewRedisReconcileElector builds a leader elector. The holderID (this replica's
+// identity) is minted INTERNALLY as a fresh UUID, so accidental cross-process
+// holderID reuse (treated as the same holder, defeating mutual exclusion — PR-A6
+// review C4) is impossible by construction. leaseDuration is the lease TTL; the
+// reconcile Loop derives its renew cadence as TTL/3 unless overridden. clk is the
+// injected clock stamping the token window (Redis has no server-side wall clock to
+// return). ns / client / leaseDuration / clk are validated up front.
 func NewRedisReconcileElector(
-	client *Client, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock,
+	client *Client, ns KeyNamespace, leaseDuration time.Duration, clk clock.Clock,
 ) (*RedisReconcileElector, error) {
 	if client == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: client is nil")
 	}
-	return newReconcileElectorFromCmdable(client.cmdable(), ns, holderID, leaseDuration, clk)
+	return newReconcileElectorFromCmdable(client.cmdable(), ns, leaseDuration, clk)
 }
 
 // newReconcileElectorFromCmdable is the cmdable-level constructor used by unit
 // tests that inject a mock cmdable. Same validation contract as the public
-// constructor (mirrors newRedisDriverFromCmdable).
+// constructor (mirrors newRedisDriverFromCmdable). holderID is minted internally.
 func newReconcileElectorFromCmdable(
-	rdb cmdable, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock,
+	rdb cmdable, ns KeyNamespace, leaseDuration time.Duration, clk clock.Clock,
 ) (*RedisReconcileElector, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
@@ -100,22 +125,24 @@ func newReconcileElectorFromCmdable(
 	if rdb == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: cmdable is nil")
 	}
-	if holderID == "" {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: holderID is required")
-	}
 	if leaseDuration <= 0 {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: leaseDuration must be positive")
 	}
 	clock.MustHaveClock(clk, "redis reconcile elector")
+	holderID, err := idutil.NewUUID()
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: mint holderID", err)
+	}
+	slog.Info("redis reconcile elector: created", slog.String("holder_id", holderID))
 	return &RedisReconcileElector{rdb: rdb, ns: ns, holderID: holderID, leaseDuration: leaseDuration, clk: clk}, nil
 }
 
 func (e *RedisReconcileElector) holderKey(reconcilerID string) string {
-	return e.ns.apply("reconcile:lease:" + reconcilerID)
+	return e.ns.applyHashtag(reconcilerID, "lease")
 }
 
 func (e *RedisReconcileElector) epochKey(reconcilerID string) string {
-	return e.ns.apply("reconcile:epoch:" + reconcilerID)
+	return e.ns.applyHashtag(reconcilerID, "epoch")
 }
 
 // AcquireLease implements reconcile.LeaderElector.
@@ -143,12 +170,14 @@ func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID s
 	}, nil
 }
 
-// RenewLease implements reconcile.LeaderElector (ownership-guarded TTL extend,
-// epoch unchanged). Returns ErrReconcileLeaseLost when no longer the holder.
+// RenewLease implements reconcile.LeaderElector (ownership-guarded TTL extend for
+// BOTH the holder key and the epoch key, epoch value unchanged). Refreshing the
+// epoch-key TTL here is what keeps the monotonic counter alive under a long-held
+// leader. Returns ErrReconcileLeaseLost when no longer the holder.
 func (e *RedisReconcileElector) RenewLease(ctx context.Context, token reconcile.LeaseToken) error {
-	held, err := e.rdb.Eval(ctx, renewLockScript,
-		[]string{e.holderKey(token.ReconcilerID)},
-		e.holderID, e.leaseDuration.Milliseconds()).Int64()
+	held, err := e.rdb.Eval(ctx, reconcileRenewScript,
+		[]string{e.holderKey(token.ReconcilerID), e.epochKey(token.ReconcilerID)},
+		e.holderID, e.leaseDuration.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Int64()
 	if err != nil {
 		return fmt.Errorf("redis reconcile elector: renew: %w", err)
 	}

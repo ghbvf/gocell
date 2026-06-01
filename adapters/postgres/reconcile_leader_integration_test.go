@@ -21,8 +21,8 @@ import (
 func TestIntegration_ReconcileElectorConformance(t *testing.T) {
 	pool := migratedPool(t)
 
-	factory := func(holderID string) reconcile.LeaderElector {
-		e, err := NewReconcileElector(pool, holderID, 30*time.Second)
+	factory := func(string) reconcile.LeaderElector {
+		e, err := NewReconcileElector(pool, 30*time.Second)
 		require.NoError(t, err)
 		return e
 	}

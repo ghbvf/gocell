@@ -22,8 +22,8 @@ func TestIntegration_ReconcileElectorConformance(t *testing.T) {
 	client, cleanup := startRedis(t)
 	defer cleanup()
 
-	factory := func(holderID string) reconcile.LeaderElector {
-		e, err := NewRedisReconcileElector(client, "reconcile", holderID, 30*time.Second, clock.Real())
+	factory := func(string) reconcile.LeaderElector {
+		e, err := NewRedisReconcileElector(client, "reconcile", 30*time.Second, clock.Real())
 		require.NoError(t, err)
 		return e
 	}

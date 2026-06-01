@@ -48,15 +48,20 @@ type FencedRepository interface {
 	ApplyFenced(ctx context.Context, entityID string, epoch uint64, mutation any) (accepted bool, err error)
 }
 
-// FencedWriter is the reconciler's sole write surface for one Reconcile call. It
-// is a STRUCT with unexported fields and an unexported constructor
+// FencedWriter is the reconciler's intended write surface for one Reconcile call.
+// It is a STRUCT with unexported fields and an unexported constructor
 // (newFencedWriter), so a consumer in another package can RECEIVE one (from
 // FencedWriterFrom) but can never COMPOSE one with an attacker-chosen epoch —
 // reconcile.FencedWriter{epoch: 999} is a compile error outside this package.
-// The epoch is therefore always whatever the Loop pulled from the live
-// LeaseToken; forging a higher/lower epoch is unrepresentable in Go's type
-// system. This is the upstream-Hard half of RECONCILE-FENCED-WRITE-FUNNEL-01
-// (sole write surface + sealed construction).
+// The epoch a FencedWriter carries is therefore always the Loop's live-lease
+// value; forging it is unrepresentable in Go's type system (type-system Hard).
+//
+// Honest scope (PR-A6 review C3): this seal closes "forge a writer with a chosen
+// epoch", NOT "a consumer cannot emit an unfenced write at all". A consumer's own
+// FencedRepository.ApplyFenced(ctx, id, epoch, mut) takes epoch as a caller param,
+// so a direct call bypasses this writer — that vector is closed DOWNSTREAM by the
+// RECONCILE-FENCED-WRITE-FUNNEL-01 ApplyFenced caller-allowlist (archtest, not the
+// type system). See that archtest's godoc for the full three-vector grade.
 type FencedWriter struct {
 	repo  FencedRepository
 	epoch uint64

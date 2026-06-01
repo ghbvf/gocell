@@ -50,9 +50,13 @@ const (
 	// ref: kubernetes/client-go tools/leaderelection/leaderelection.go
 	defaultRenewInterval = 5 * time.Second
 	// leaderRetryPeriod is how long leaderManage waits after a failed/contended
-	// AcquireLease before retrying (follower poll). 2s mirrors client-go RetryPeriod.
-	// ref: kubernetes/client-go tools/leaderelection/leaderelection.go
-	leaderRetryPeriod = 2 * time.Second
+	// AcquireLease before retrying (follower poll). It bounds the graceful-handoff
+	// RTO: after a leader's ReleaseLease frees the lease, a follower acquires on its
+	// next poll, so this is the SC-004 "graceful shutdown → follower P99 ≤ 1s" knob
+	// (PR-A6 review C5/F8). 1s (shorter than client-go's 2s RetryPeriod) honors that
+	// ≤1s promise; crash failover is separately bounded by LeaseDuration + this poll.
+	// ref: kubernetes/client-go tools/leaderelection/leaderelection.go (RetryPeriod)
+	leaderRetryPeriod = 1 * time.Second
 	// leaseReleaseTimeout bounds the best-effort ReleaseLease attempt on shutdown
 	// so a hung backend cannot stall Stop; the lease then expires on its TTL.
 	leaseReleaseTimeout = 5 * time.Second
@@ -320,6 +324,16 @@ func (l *Loop) preStartValidate() error {
 	// interval — surface it as a Start error instead.
 	if l.BaseDelay > 0 && l.MaxDelay > 0 && l.BaseDelay > l.MaxDelay {
 		return fmt.Errorf("reconcile: BaseDelay (%s) must not exceed MaxDelay (%s)", l.BaseDelay, l.MaxDelay)
+	}
+	// Typed-nil fail-fast (PR-A6 review C5/F11): a typed-nil interface stored in
+	// Leader/FencedRepo is != nil, so it would slip past the leader==nil mode gate
+	// and panic inside leaderManage / process (a goroutine) rather than at Start.
+	// Surface it here so a misconstructed Loop fails at OnStart (bootstrap rolls back).
+	if l.Leader != nil && validation.IsNilInterface(l.Leader) {
+		return fmt.Errorf("reconcile: Loop.Leader is a typed-nil LeaderElector; leave it nil for single-process mode")
+	}
+	if l.FencedRepo != nil && validation.IsNilInterface(l.FencedRepo) {
+		return fmt.Errorf("reconcile: Loop.FencedRepo is a typed-nil FencedRepository; leave it nil when no fenced write surface is wired")
 	}
 	return l.Metrics.preflight(l.reconcilerID())
 }

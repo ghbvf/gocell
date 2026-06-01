@@ -28,7 +28,30 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 	t.Run("ReleaseUnblocksFollower", func(t *testing.T) { confReleaseUnblocksFollower(t, newElector) })
 	t.Run("RenewKeepsLeaseAndEpoch", func(t *testing.T) { confRenewKeepsLeaseAndEpoch(t, newElector) })
 	t.Run("HandoffBumpsEpoch", func(t *testing.T) { confHandoffBumpsEpoch(t, newElector) })
+	t.Run("ReacquireAfterReleaseBumpsEpoch", func(t *testing.T) { confReacquireAfterReleaseBumps(t, newElector) })
 	t.Run("RenewAfterTakeoverIsLost", func(t *testing.T) { confRenewAfterTakeoverIsLost(t, newElector) })
+}
+
+// confReacquireAfterReleaseBumps pins the fencing contract for a SAME-holder
+// release→reacquire: it MUST bump the epoch (a release frees the lease — a gap —
+// so the reacquire is a takeover of a free lease, conservatively fencing the
+// holder's own pre-release in-flight writes). Uses one elector instance so the
+// holderID is stable across the release/reacquire.
+func confReacquireAfterReleaseBumps(t *testing.T, newElector ElectorFactory) {
+	ctx := context.Background()
+	const rid = "conf-reacquire"
+	a := newElector("holder-A")
+
+	tok1, err := a.AcquireLease(ctx, rid)
+	mustNoErr(t, err, "first acquire")
+	mustNoErr(t, a.ReleaseLease(ctx, tok1), "release")
+
+	tok2, err := a.AcquireLease(ctx, rid)
+	mustNoErr(t, err, "reacquire by same holder")
+	defer func() { _ = a.ReleaseLease(ctx, tok2) }()
+	if tok2.Epoch <= tok1.Epoch {
+		t.Fatalf("same-holder reacquire after release must bump the epoch: got %d, want > %d", tok2.Epoch, tok1.Epoch)
+	}
 }
 
 func confAcquireExclusive(t *testing.T, newElector ElectorFactory) {
