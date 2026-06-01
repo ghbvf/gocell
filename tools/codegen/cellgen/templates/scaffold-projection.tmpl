@@ -25,46 +25,44 @@ allowedFiles:
 // event.{{.CellNoDash}}.example.v1 and materialises the {{.ProjectionID}} projection.
 package {{.SlicePackage}}
 
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
 // Service is the projection service skeleton. Wire a store (ports.ProjectionStore)
 // and any required dependencies via constructor parameters as the slice grows.
 type Service struct{}
 
 // NewService returns a new projection Service.
-func NewService() *Service {
-	return &Service{}
-}
+func NewService() *Service { return &Service{} }
 
-// HandleExampleCreated processes an example.created event and updates the
-// read-model projection. Replace with real domain logic.
-func (s *Service) HandleExampleCreated(message string) string {
-	return message
+// HandleExampleCreated applies an example.created event to the read-model
+// projection. It implements cell.ProjectionApply: the transaction is ambient in
+// ctx (persistence.TxFromContext); the harness commits this apply together with
+// the checkpoint SaveOffset in one CellTx. Replace with real domain logic.
+func (s *Service) HandleExampleCreated(ctx context.Context, event outbox.Entry) error {
+	_ = ctx
+	_ = event
+	return nil
 }
 {{end}}
 
 {{define "projection-service-test-go"}}package {{.SlicePackage}}
 
-import "testing"
+import (
+	"context"
+	"testing"
 
-// TestService_HandleExampleCreated verifies the projection handler stub.
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
 func TestService_HandleExampleCreated(t *testing.T) {
 	t.Parallel()
 	svc := NewService()
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{name: "simple", in: "event-payload", want: "event-payload"},
-		{name: "empty", in: "", want: ""},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := svc.HandleExampleCreated(tc.in); got != tc.want {
-				t.Errorf("HandleExampleCreated(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
+	if err := svc.HandleExampleCreated(context.Background(), outbox.Entry{}); err != nil {
+		t.Fatalf("HandleExampleCreated returned error: %v", err)
 	}
 }
 {{end}}
