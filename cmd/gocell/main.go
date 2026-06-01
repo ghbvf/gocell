@@ -23,6 +23,15 @@ func main() {
 	// governance/codegen CLI, not a runtime binary, so it seals with FormatText
 	// (human-readable) rather than FormatJSON — both route through the redacting
 	// contextHandler. Tests invoke app.RunWithSignal directly and are unaffected.
-	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatText})))
+	//
+	// Writer MUST be os.Stderr: cmd/gocell writes machine output (export JSON/YAML,
+	// validate/check/verify results, SARIF) to STDOUT, so diagnostics must go to
+	// STDERR or they corrupt that data stream (CLI convention stdout=data /
+	// stderr=diagnostics, cf. spf13/cobra OutOrStdout / ErrOrStderr). The
+	// logging.NewHandler default Writer is os.Stdout — do not rely on it here.
+	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{
+		Format: logging.FormatText,
+		Writer: os.Stderr,
+	})))
 	os.Exit(app.RunWithSignal(os.Args[1:]))
 }

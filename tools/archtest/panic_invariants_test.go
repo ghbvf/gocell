@@ -91,14 +91,32 @@ func panicLogRedactViolations(p *Pass, f *ast.File, rel string) []Diagnostic {
 // locator, the RedactAny wrapper is the typed lock). See file-header note.
 func TestPanicLogRedact(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	rule := func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
 			ds = append(ds, panicLogRedactViolations(p, f, filepath.ToSlash(p.Rel(f)))...)
 		}
 		return ds
-	})
-	Report(t, "PANIC-LOG-REDACT-01", diags)
+	}
+	// Two passes: default build tags PLUS the project's full non-default tag union
+	// (FlatNonDefaultTags), so tag-gated production files (`//go:build integration`
+	// etc.) that recover-and-log a panic are also scanned — same coverage discipline
+	// as the sibling PANIC-REGISTERED-01. A single default-tag pass would silently
+	// skip those files. Dedup by rel:line:message (a file may appear in both passes).
+	seen := make(map[string]bool)
+	var all []Diagnostic
+	both := append(
+		RunTypedProduction(t, TypedOpts{Tests: false}, rule),
+		RunTypedProduction(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, rule)...,
+	)
+	for _, d := range both {
+		key := d.Rel + ":" + strconv.Itoa(d.Line) + ":" + d.Message
+		if !seen[key] {
+			seen[key] = true
+			all = append(all, d)
+		}
+	}
+	Report(t, "PANIC-LOG-REDACT-01", all)
 }
 
 // TestPanicLogRedact_DetectsViolation is the reverse self-check: it runs the
