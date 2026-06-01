@@ -251,6 +251,14 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	if err := validateReconcilerID(l.ReconcilerID); err != nil {
 		return err
 	}
+	// Fail fast on an inverted backoff window. Both must be explicitly set
+	// (>0) to be a misconfiguration; a zero field means "use the default"
+	// (newEntityBackoff fills it in). With base > max the first When would
+	// already return max, silently violating the documented [base, max]
+	// interval — surface it as a Start error instead.
+	if l.BaseDelay > 0 && l.MaxDelay > 0 && l.BaseDelay > l.MaxDelay {
+		return fmt.Errorf("reconcile: BaseDelay (%s) must not exceed MaxDelay (%s)", l.BaseDelay, l.MaxDelay)
+	}
 	if err := l.Metrics.preflight(l.reconcilerID()); err != nil {
 		return err
 	}
@@ -326,15 +334,18 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 }
 
 // drainReadyItems pops all items from h whose readyAt is not after now and
-// pushes each Request into queue. Returns false if runCtx was canceled.
+// pushes each Request into queue, removing each popped entity from pending (the
+// EntityID→item index that addOrMergeWaiting maintains). Returns false if runCtx
+// was canceled.
 //
 // Paired with enqueueDelayed, which is the sole path that adds items to the heap
 // via the addCh channel consumed by waitingLoop.
 //
 // ref: kubernetes/client-go util/workqueue/delaying_queue.go
-func drainReadyItems(runCtx context.Context, h *waitingHeap, now time.Time, queue chan<- Request) bool {
+func drainReadyItems(runCtx context.Context, h *waitingHeap, pending map[string]*waitingItem, now time.Time, queue chan<- Request) bool {
 	for h.Len() > 0 && !(*h)[0].readyAt.After(now) {
 		it := heap.Pop(h).(*waitingItem)
+		delete(pending, it.req.EntityID)
 		select {
 		case queue <- it.req:
 		case <-runCtx.Done():
@@ -342,6 +353,26 @@ func drainReadyItems(runCtx context.Context, h *waitingHeap, now time.Time, queu
 		}
 	}
 	return true
+}
+
+// addOrMergeWaiting inserts item into the delaying-queue heap, or — when an item
+// for the same EntityID is already waiting — keeps whichever readyAt is earlier
+// (heap.Fix repositions the existing entry). At most one heap entry exists per
+// distinct entity, so a repeat requeue cannot grow the heap and a sooner
+// (delay=0 dirty re-run) supersedes a later (interval/backoff) entry.
+//
+// ref: kubernetes/client-go util/workqueue/delaying_queue.go (waitingForMap merge)
+func addOrMergeWaiting(h *waitingHeap, pending map[string]*waitingItem, item waitingItem) {
+	if existing, ok := pending[item.req.EntityID]; ok {
+		if item.readyAt.Before(existing.readyAt) {
+			existing.readyAt = item.readyAt
+			heap.Fix(h, existing.index)
+		}
+		return
+	}
+	it := item // copy to take a stable address shared by heap and pending
+	heap.Push(h, &it)
+	pending[item.req.EntityID] = &it
 }
 
 // nextWaitingDelay returns how long to sleep until the earliest item in h is
@@ -385,12 +416,22 @@ func (l *Loop) waitingLoop(runCtx context.Context, addCh <-chan waitingItem, que
 	var h waitingHeap
 	heap.Init(&h)
 
+	// pending indexes the heap by EntityID so a repeat requeue for an entity
+	// already waiting MERGES into the existing item (keeping the earlier readyAt)
+	// rather than pushing a duplicate. This bounds the heap to one entry per
+	// distinct waiting entity and gives client-go's "only update if sooner"
+	// convergence: a dirty re-run at delay=0 supersedes a later interval/backoff
+	// entry for the same entity instead of leaving two heap entries.
+	//
+	// ref: kubernetes/client-go util/workqueue/delaying_queue.go (waitingForMap)
+	pending := make(map[string]*waitingItem)
+
 	clk := controlPlaneClock{}
 	timer := clk.newRequeueTimer(waitingQueueIdleDelay) // sentinel: empty heap
 	defer timer.Stop()
 
 	for {
-		if !drainReadyItems(runCtx, &h, clk.now(), queue) {
+		if !drainReadyItems(runCtx, &h, pending, clk.now(), queue) {
 			return
 		}
 
@@ -400,8 +441,7 @@ func (l *Loop) waitingLoop(runCtx context.Context, addCh <-chan waitingItem, que
 		case <-runCtx.Done():
 			return
 		case item := <-addCh:
-			it := item // copy
-			heap.Push(&h, &it)
+			addOrMergeWaiting(&h, pending, item)
 		case <-timer.C:
 			// Timer fired — loop back to drain ready items.
 		}
@@ -526,12 +566,12 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 		// Re-enqueue the coalesced dirty trigger immediately (delay=0).
 		// This is a fresh convergence run, not a backoff retry.
 		//
-		// Intentional double-enqueue: dispatchResult already enqueued the normal
-		// success/transient requeue above (at the Interval or backoff delay). This
-		// second enqueue at delay=0 is the F5 dirty re-run. Two heap entries for
-		// one entity is safe under level-triggered semantics: delay=0 fires first
-		// as the convergence run; the later Interval/backoff entry is a redundant
-		// idempotent re-observe. Future maintainers: this is NOT a bug.
+		// dispatchResult already enqueued the normal success/transient requeue
+		// above (at the Interval or backoff delay). addOrMergeWaiting MERGES this
+		// delay=0 re-run with that later entry for the same entity (earlier
+		// readyAt wins), so the entity ends up with ONE heap entry that fires
+		// immediately as the convergence run — not two. Convergence is preserved
+		// without leaving a duplicate pending item.
 		l.enqueueDelayed(runCtx, dirtyReq, 0, addCh)
 	}
 }
@@ -542,7 +582,7 @@ func (l *Loop) dispatchResult(
 	req Request,
 	res Result,
 	err error,
-	label string,
+	label resultLabel,
 	addCh chan<- waitingItem,
 	backoff *entityBackoff,
 ) {

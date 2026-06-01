@@ -16,7 +16,7 @@ import (
 //   - nil   → resultSuccess
 //   - IsPermanent(err) → resultPermanent
 //   - otherwise        → resultTransient
-func classify(err error) string {
+func classify(err error) resultLabel {
 	if err == nil {
 		return resultSuccess
 	}

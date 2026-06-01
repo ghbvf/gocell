@@ -23,22 +23,31 @@ const (
 	labelResult     = "result"
 )
 
+// resultLabel is the sealed (package-private) string type for the
+// reconcile_total{result=...} label. recordResult and classify deal only in
+// resultLabel, so the value set is enumerable by TYPE (not by name prefix) and
+// a stray string variable cannot reach the metric. The remaining hole — an
+// untyped string literal is assignable to resultLabel — is closed downstream by
+// the RECONCILE-RESULT-LABEL-VALUES-FROZEN-01 callsite guard, which bans any
+// recordResult argument that is not one of the declared result* consts.
+type resultLabel string
+
 // Reconcile result label values for reconcile_total{result=...}. This is the
 // frozen value set (FR-010): success / transient / permanent / skipped. A
 // recovered reconciler panic is classified transient (it is retryable); there
 // is no separate "panic" label — recovery.go::recoverReconcile wraps panics as
 // transient errors and classify() routes them to resultTransient (PR-A5 #1166).
 const (
-	resultSuccess   = "success"
-	resultTransient = "transient"
-	resultPermanent = "permanent"
+	resultSuccess   resultLabel = "success"
+	resultTransient resultLabel = "transient"
+	resultPermanent resultLabel = "permanent"
 	// resultSkipped is recorded when a duplicate trigger arrives for an entity
 	// that is already being reconciled (F5 dirty/processing dedup). The trigger
 	// is NOT dropped: it is coalesced into a pending dirty re-run so the entity
 	// is guaranteed to be re-reconciled once the in-flight reconcile completes.
 	// "skipped" means "this specific trigger was absorbed into the dirty set",
 	// not "the entity will be skipped".
-	resultSkipped = "skipped"
+	resultSkipped resultLabel = "skipped"
 )
 
 // reconcileDurationBuckets are explicit upper bounds (seconds) for
@@ -126,7 +135,7 @@ func (m Metrics) preflight(reconcilerID string) (err error) {
 		}
 	}()
 	if m.Total != nil {
-		_ = m.Total.With(kernelmetrics.Labels{labelReconciler: reconcilerID, labelResult: resultSuccess})
+		_ = m.Total.With(kernelmetrics.Labels{labelReconciler: reconcilerID, labelResult: string(resultSuccess)})
 	}
 	if m.Duration != nil {
 		_ = m.Duration.With(kernelmetrics.Labels{labelReconciler: reconcilerID})
@@ -140,12 +149,15 @@ func (m Metrics) preflight(reconcilerID string) (err error) {
 	return nil
 }
 
-// recordResult increments reconcile_total{reconciler, result} when wired.
-func (m Metrics) recordResult(ctx context.Context, reconcilerID, result string) {
+// recordResult increments reconcile_total{reconciler, result} when wired. The
+// result parameter is the sealed resultLabel type; the archtest callsite guard
+// (RECONCILE-RESULT-LABEL-VALUES-FROZEN-01) additionally bans any caller passing
+// a value that is not one of the declared result* consts.
+func (m Metrics) recordResult(ctx context.Context, reconcilerID string, result resultLabel) {
 	if m.Total == nil {
 		return
 	}
-	m.Total.With(kernelmetrics.Labels{labelReconciler: reconcilerID, labelResult: result}).Inc(ctx)
+	m.Total.With(kernelmetrics.Labels{labelReconciler: reconcilerID, labelResult: string(result)}).Inc(ctx)
 }
 
 // observeDuration records reconcile_duration_seconds{reconciler} when wired.

@@ -112,7 +112,7 @@ func TestClassify(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
-		want string
+		want resultLabel
 	}{
 		{"nil", nil, resultSuccess},
 		{"permanent", PermanentError(errors.New("bad")), resultPermanent},

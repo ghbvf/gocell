@@ -30,10 +30,13 @@
 //
 // # AI-robust rating
 //
-// Medium. Mechanism: typed AST scan — for each FuncDecl in kernel/reconcile
-// production files, walk its body (stopping at nested FuncLit boundaries) and
-// find SendStmt nodes; assert each enclosing FuncDecl identity is in the
-// sanctioned allowlist.
+// Medium. Mechanism: AST scan — for each FuncDecl in kernel/reconcile
+// production files, walk its ENTIRE body (descending into nested FuncLit /
+// goroutine-closure bodies) for SendStmt nodes; assert each enclosing FuncDecl
+// identity is in the sanctioned allowlist. Descending into FuncLit is essential:
+// the stray-goroutine form this invariant bans — `go func(){ addCh <- item }()`
+// — lives inside a closure, so a scan that stopped at FuncLit boundaries would
+// never see it (the false-negative this rule was hardened against).
 //
 // Honest ceiling: Go cannot express "exactly one goroutine drives the delaying
 // queue" or "sends must traverse backoff" at compile time. The achievable
@@ -63,17 +66,15 @@
 //     caught/flagged respectively. Current production has no such helpers; documented
 //     as a potential coverage gap for future helpers.
 //
-//   - SendStmt inside a FuncLit nested directly inside a sanctioned FuncDecl: the
-//     scan STOPS at FuncLit boundaries (EachInSubtreeStopAt), so a send inside a
-//     `go func(){ ... }()` closure WITHIN a sanctioned function is NOT credited to
-//     that function — it would appear as having no FuncDecl enclosure and thus fall
-//     outside the allowlist. This is intentional: a goroutine closure inside even a
-//     sanctioned function is a new execution context and should be explicitly listed.
-//     Current production: none of the three sanctioned functions contain a FuncLit.
-//     Trigger producer sends (tickerTrigger.Start and channelTrigger.Start both send
-//     to `queue` inside goroutine closures) are intentionally out of scope: this
-//     invariant guards Loop-internal dispatch only. Trigger.Start is a separate
-//     execution boundary and its sends are not funneled through enqueueDelayed.
+//   - SendStmt inside a FuncLit: the scan DESCENDS into FuncLit bodies and credits
+//     each send to its enclosing FuncDecl, so `go func(){ addCh <- item }()` inside
+//     an unsanctioned function (e.g. a reintroduced stray per-entity goroutine in
+//     process/dispatchResult) IS flagged. The two Trigger producers
+//     (tickerTrigger.Start / channelTrigger.Start) send to `queue` inside goroutine
+//     closures and are LEGITIMATE external producers — they are explicitly listed
+//     in reconcileRequeueSanctionedSet rather than excluded by a FuncLit-stop trick.
+//     TestReconcileRequeueEnqueueCaller01_RedClosureSend proves a closure send in an
+//     unsanctioned function is caught (the prior FuncLit-stop scan missed it).
 //
 // # Non-vacuous proof
 //
@@ -84,8 +85,12 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // reconcileRequeueSanctionedSet is the allowlist of (receiverType, funcName)
@@ -93,14 +98,21 @@ import (
 // delaying-queue input channel. The receiver type is "" for package-level
 // functions.
 //
-// Sanctioned set (PR-A5, loop.go):
-//   - ("", "drainReadyItems"): package-level helper — drains heap into queue.
-//   - ("Loop", "feedFromSource"): goroutine body — copies Source into queue.
-//   - ("Loop", "enqueueDelayed"): sole send funnel into addCh.
+// Sanctioned set (PR-A5, loop.go + trigger.go). Because the scan descends into
+// FuncLit bodies (so a goroutine-closure send is credited to its enclosing
+// FuncDecl), the two Trigger producers — whose sends live inside `go func(){…}`
+// — are explicitly listed here rather than being silently invisible:
+//   - ("", "drainReadyItems"):          package-level helper — drains heap into queue.
+//   - ("Loop", "feedFromSource"):       goroutine body — copies Source into queue.
+//   - ("Loop", "enqueueDelayed"):       sole send funnel into addCh.
+//   - ("tickerTrigger", "Start"):       external producer — ticks resync into queue.
+//   - ("channelTrigger", "Start"):      external producer — forwards a chan into queue.
 var reconcileRequeueSanctionedSet = map[reconcileSendSite]bool{
-	{recv: "", name: "drainReadyItems"}:    true,
-	{recv: "Loop", name: "feedFromSource"}: true,
-	{recv: "Loop", name: "enqueueDelayed"}: true,
+	{recv: "", name: "drainReadyItems"}:     true,
+	{recv: "Loop", name: "feedFromSource"}:  true,
+	{recv: "Loop", name: "enqueueDelayed"}:  true,
+	{recv: "tickerTrigger", name: "Start"}:  true,
+	{recv: "channelTrigger", name: "Start"}: true,
 }
 
 // reconcileSendSite identifies a function or method by its receiver type name
@@ -126,8 +138,8 @@ func reconcileSendSiteOf(fd *ast.FuncDecl) reconcileSendSite {
 
 // scanReconcileRequeueEnqueueCallers walks all FuncDecl bodies in p's files
 // (production files only, _test.go excluded), finds SendStmt nodes within each
-// FuncDecl (stopping at FuncLit boundaries), and emits a diagnostic for any
-// SendStmt whose enclosing FuncDecl is not in the sanctioned allowlist.
+// FuncDecl (descending into nested FuncLit bodies), and emits a diagnostic for
+// any SendStmt whose enclosing FuncDecl is not in the sanctioned allowlist.
 //
 // Returns (diagnostics, totalSendStmtsFound) so the caller can assert non-vacuity.
 func scanReconcileRequeueEnqueueCallers(p *Pass) ([]Diagnostic, int) {
@@ -138,34 +150,43 @@ func scanReconcileRequeueEnqueueCallers(p *Pass) ([]Diagnostic, int) {
 		if strings.HasSuffix(p.Rel(file), "_test.go") {
 			continue
 		}
-		rel := p.Rel(file)
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-			if fd.Body == nil {
-				return
-			}
-			site := reconcileSendSiteOf(fd)
-
-			// Walk the FuncDecl body for SendStmt nodes, stopping at nested
-			// FuncLit boundaries (a send inside a goroutine closure is a
-			// separate execution context and must not be credited to fd).
-			EachInSubtreeStopAt[ast.SendStmt](fd.Body,
-				func(n ast.Node) bool { _, isLit := n.(*ast.FuncLit); return isLit },
-				func(send *ast.SendStmt) {
-					totalFound++
-					if !reconcileRequeueSanctionedSet[site] {
-						diags = append(diags, Diagnostic{
-							Rel:  rel,
-							Line: p.Fset.Position(send.Pos()).Line,
-							Message: "channel send in unsanctioned function " +
-								reconcileSendSiteName(site) +
-								" — add to reconcileRequeueSanctionedSet or " +
-								"route through enqueueDelayed (RECONCILE-REQUEUE-ENQUEUE-CALLER-01)",
-						})
-					}
-				},
-			)
-		})
+		fileDiags, found := reconcileSendDiagsForFile(p.Fset, file, p.Rel(file))
+		diags = append(diags, fileDiags...)
+		totalFound += found
 	}
+	return diags, totalFound
+}
+
+// reconcileSendDiagsForFile is the pure-AST core of the scan (no types.Info
+// needed): for every top-level FuncDecl it walks the WHOLE body — INCLUDING
+// nested FuncLit bodies — for SendStmt nodes and credits each to the enclosing
+// FuncDecl. A send inside `go func(){ addCh <- item }()` is therefore credited
+// to the surrounding function: if that function is not sanctioned, the stray
+// goroutine send is flagged (this is the form the invariant exists to ban).
+// Go has no nested FuncDecls, so every SendStmt belongs to exactly one FuncDecl
+// — no double counting. Returns (diagnostics, totalSendStmtsFound).
+func reconcileSendDiagsForFile(fset *token.FileSet, file *ast.File, rel string) ([]Diagnostic, int) {
+	var diags []Diagnostic
+	var totalFound int
+	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
+		}
+		site := reconcileSendSiteOf(fd)
+		EachInSubtree[ast.SendStmt](fd.Body, func(send *ast.SendStmt) {
+			totalFound++
+			if !reconcileRequeueSanctionedSet[site] {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: fset.Position(send.Pos()).Line,
+					Message: "channel send in unsanctioned function " +
+						reconcileSendSiteName(site) +
+						" — add to reconcileRequeueSanctionedSet or " +
+						"route through enqueueDelayed (RECONCILE-REQUEUE-ENQUEUE-CALLER-01)",
+				})
+			}
+		})
+	})
 	return diags, totalFound
 }
 
@@ -232,18 +253,18 @@ func TestReconcileRequeueEnqueueCaller01_NonVacuousProof(t *testing.T) {
 				if !reconcileRequeueSanctionedSet[site] {
 					return
 				}
-				EachInSubtreeStopAt[ast.SendStmt](fd.Body,
-					func(n ast.Node) bool { _, isLit := n.(*ast.FuncLit); return isLit },
-					func(_ *ast.SendStmt) {
-						foundInSanctioned++
-					},
-				)
+				EachInSubtree[ast.SendStmt](fd.Body, func(_ *ast.SendStmt) {
+					foundInSanctioned++
+				})
 			})
 		}
 		return nil
 	})
 
-	const wantMinSends = 3 // one per sanctioned function (drainReadyItems, feedFromSource, enqueueDelayed)
+	// One send each in the five sanctioned functions: drainReadyItems,
+	// feedFromSource, enqueueDelayed, tickerTrigger.Start, channelTrigger.Start
+	// (the latter two are FuncLit-closure sends now credited via the descend scan).
+	const wantMinSends = 5
 	if foundInSanctioned < wantMinSends {
 		t.Errorf("RECONCILE-REQUEUE-ENQUEUE-CALLER-01 non-vacuous proof: "+
 			"found %d SendStmt(s) in sanctioned functions, want ≥ %d. "+
@@ -258,5 +279,49 @@ func TestReconcileRequeueEnqueueCaller01_NonVacuousProof(t *testing.T) {
 			"found 0 SendStmt nodes in kernel/reconcile — the scan is vacuous " +
 			"(package path changed or all sends removed). " +
 			"Check that the reconcilePkg constant matches the actual package path.")
+	}
+}
+
+// reconcileSendDiagsForSrc parses src and runs the pure-AST send scan, returning
+// the diagnostic count. Helper for the RED/GREEN closure-send controls.
+func reconcileSendDiagsForSrc(t *testing.T, src string) int {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fixture.go", src, 0)
+	require.NoError(t, err)
+	diags, _ := reconcileSendDiagsForFile(fset, f, "fixture.go")
+	return len(diags)
+}
+
+// TestReconcileRequeueEnqueueCaller01_RedClosureSend is the RED control: a stray
+// `go func(){ addCh <- item }()` inside an UNSANCTIONED function must be flagged.
+// The prior FuncLit-stop scan missed this exact form (the false negative F3
+// hardened); this proves the descend-into-FuncLit scan catches it.
+func TestReconcileRequeueEnqueueCaller01_RedClosureSend(t *testing.T) {
+	t.Parallel()
+	const red = `package reconcile
+type Loop struct{}
+func (l *Loop) strayDispatch(addCh chan int, item int) {
+	go func() { addCh <- item }()
+}`
+	if got := reconcileSendDiagsForSrc(t, red); got != 1 {
+		t.Fatalf("RED closure-send control: want 1 diagnostic for the stray goroutine send, got %d "+
+			"(the descend-into-FuncLit scan must flag a closure send in an unsanctioned function)", got)
+	}
+}
+
+// TestReconcileRequeueEnqueueCaller01_GreenClosureSend is the GREEN over-fire
+// guard: a closure send inside a SANCTIONED function (Trigger producer) must NOT
+// be flagged.
+func TestReconcileRequeueEnqueueCaller01_GreenClosureSend(t *testing.T) {
+	t.Parallel()
+	const green = `package reconcile
+type tickerTrigger struct{}
+func (t *tickerTrigger) Start(queue chan int) {
+	go func() { queue <- 1 }()
+}`
+	if got := reconcileSendDiagsForSrc(t, green); got != 0 {
+		t.Fatalf("GREEN closure-send control: want 0 diagnostics for a sanctioned Trigger producer's "+
+			"closure send, got %d", got)
 	}
 }

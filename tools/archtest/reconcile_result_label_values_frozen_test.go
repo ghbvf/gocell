@@ -27,22 +27,24 @@
 //
 // # Blind spots (per ai-robust.md §"工具选定后强制盲区自检")
 //
-//   - This test enumerates consts by NAME prefix ("result") and by STRING kind,
-//     then compares their VALUES to the frozen set. It does NOT verify that
-//     classify() actually returns one of the 4 values in every code path — that
-//     behavioral invariant is covered by TestClassify (kernel/reconcile unit
-//     tests) and TestRecovery_PanicMetricRecorded, not here. "Value in const set
-//     but not enforced by classify" is out of scope for this golden.
+//   - This test enumerates consts by the sealed resultLabel TYPE (not by name
+//     prefix) and by STRING kind, then compares their VALUES to the frozen set.
+//     It does NOT verify that classify() actually returns one of the 4 values in
+//     every code path — that behavioral invariant is covered by TestClassify
+//     (kernel/reconcile unit tests) and TestRecovery_PanicMetricRecorded, not
+//     here. "Value in const set but not enforced by classify" is out of scope.
 //
-//   - The detector enumerates consts whose NAMES begin with "result". A future
-//     author could add a 5th result label via a const named "myresultFoo" or an
-//     unnamed string literal passed directly to recordResult — this archtest
-//     would not catch those two forms. Reverse self-check B (below) proves the
-//     name-prefix filter works for the prefix-match form; the literal form is a
-//     documented blind spot (same limitation as OUTBOX-RESERVED-METADATA-KEYS-
-//     FROZEN-01 which reads a package-var, not consts). The behavioral witness
-//     (TestClassify) mitigates: classify() is the single source, and adding a
-//     4th branch to classify() with a bare literal would be caught by review.
+//   - Two former blind spots are now CLOSED:
+//     (a) "5th const renamed off the result prefix" — enumeration is by
+//     resultLabel type identity, so a const named myFoo of type resultLabel
+//     is still counted (and a 5th const still fails the count assertion).
+//     (b) "inline string literal passed to recordResult" — recordResult's
+//     result parameter is the sealed resultLabel type, and the downstream
+//     callsite guard (scanRecordResultCallsites /
+//     TestReconcileResultLabelValuesFrozen01_CallsiteGuard) bans any inline
+//     constant argument (a string literal or resultLabel(...) conversion),
+//     so the only values that can reach the metric are the declared consts
+//     or a typed (non-constant) resultLabel from classify().
 //
 //   - The test only runs on the kernel/reconcile package Pass (filtered by
 //     p.Pkg.Path()). A const named result* outside that package is not scanned.
@@ -56,6 +58,7 @@
 package archtest
 
 import (
+	"go/ast"
 	"go/constant"
 	"go/types"
 	"slices"
@@ -82,24 +85,42 @@ var wantResultLabelValues = []string{
 	"skipped",
 }
 
-// collectReconcileResultConsts enumerates the string constant values of all
-// package-scope consts in p (which must be the kernel/reconcile package) whose
-// names begin with "result". Returns the collected string values. This mirrors
-// the sfcCollectDeclaredConsts pattern in saga_invariants_test.go, adapted for
-// string-valued (not int64-valued) consts.
+// resultLabelType returns the kernel/reconcile package's sealed `resultLabel`
+// named type, or (nil, false) if it is absent (renamed/removed). Enumerating
+// the result value set BY TYPE (not by name prefix) makes the freeze rename-proof:
+// a const renamed off the "result" prefix but still typed resultLabel is still
+// counted, and a 5th resultLabel const is still caught.
+func resultLabelType(p *Pass) (types.Type, bool) {
+	if p.Pkg == nil {
+		return nil, false
+	}
+	obj := p.Pkg.Scope().Lookup("resultLabel")
+	tn, ok := obj.(*types.TypeName)
+	if !ok {
+		return nil, false
+	}
+	return tn.Type(), true
+}
+
+// collectReconcileResultConsts enumerates the string constant values of every
+// package-scope const in p (which must be the kernel/reconcile package) whose
+// TYPE is the sealed resultLabel named type. Returns the collected string values.
 func collectReconcileResultConsts(p *Pass) []string {
 	if p.Pkg == nil || p.TypesInfo == nil {
+		return nil
+	}
+	labelType, ok := resultLabelType(p)
+	if !ok {
 		return nil
 	}
 	scope := p.Pkg.Scope()
 	var values []string
 	for _, name := range scope.Names() {
-		if !strings.HasPrefix(name, "result") {
+		c, ok := scope.Lookup(name).(*types.Const)
+		if !ok {
 			continue
 		}
-		obj := scope.Lookup(name)
-		c, ok := obj.(*types.Const)
-		if !ok {
+		if !types.Identical(c.Type(), labelType) {
 			continue
 		}
 		if c.Val().Kind() != constant.String {
@@ -187,6 +208,79 @@ func TestReconcileResultLabelValuesFrozen01(t *testing.T) {
 	}
 }
 
+// scanRecordResultCallsites is the downstream callsite guard: it flags any
+// (Metrics).recordResult call whose result argument (index 2) is a compile-time
+// CONSTANT that is not a bare reference to a declared const. This closes the one
+// hole the sealed resultLabel type cannot — Go assigns an untyped string literal
+// to a defined string type, so recordResult(ctx, id, "panic") would otherwise
+// compile and introduce a 5th label value invisibly. Allowed: a named const
+// Ident (resultSuccess/…/resultSkipped — the freeze test bounds that set to 4),
+// or any non-constant resultLabel expression (the `label` var from classify(),
+// a classify() call). Banned: a string literal or a resultLabel("x") conversion.
+func scanRecordResultCallsites(p *Pass) []Diagnostic {
+	info := p.TypesInfo
+	if info == nil {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		rel := p.Rel(file)
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "recordResult" {
+				return
+			}
+			fn, ok := ResolveMethodCall(info, sel)
+			if !ok || fn.Name() != "recordResult" || len(call.Args) < 3 {
+				return
+			}
+			arg := call.Args[2]
+			tv, ok := info.Types[arg]
+			if !ok || tv.Value == nil {
+				return // non-constant (typed var / func call) — allowed
+			}
+			// A compile-time-constant value is reaching recordResult: allow ONLY a
+			// bare Ident bound to a declared const (the freeze test caps that set).
+			if id, isIdent := arg.(*ast.Ident); isIdent {
+				if _, isConst := info.ObjectOf(id).(*types.Const); isConst {
+					return
+				}
+			}
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: p.Fset.Position(arg.Pos()).Line,
+				Message: "recordResult result argument is an inline constant — pass a declared " +
+					"result* const (resultSuccess/resultTransient/resultPermanent/resultSkipped), " +
+					"not a string literal or resultLabel(...) conversion " +
+					"(RECONCILE-RESULT-LABEL-VALUES-FROZEN-01 callsite guard)",
+			})
+		})
+	}
+	return diags
+}
+
+// TestReconcileResultLabelValuesFrozen01_CallsiteGuard is the production GREEN
+// baseline for the downstream funnel: every recordResult call in kernel/reconcile
+// passes a declared const or a typed (non-constant) resultLabel value — never an
+// inline literal.
+func TestReconcileResultLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
+	t.Parallel()
+
+	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
+	var allDiags []Diagnostic
+	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != reconcilePkg {
+			return nil
+		}
+		allDiags = append(allDiags, scanRecordResultCallsites(p)...)
+		return nil
+	})
+	Report(t, "RECONCILE-RESULT-LABEL-VALUES-FROZEN-01", allDiags)
+}
+
 // TestReconcileResultLabelValuesFrozen01_NegativeControl proves the comparison is
 // non-vacuous: a synthetically drifted set (a 5th value added, one value renamed)
 // MUST produce a non-empty diff (blind-spot self-check A per ai-robust.md).
@@ -211,5 +305,31 @@ func TestReconcileResultLabelValuesFrozen01_NegativeControl(t *testing.T) {
 	if diff := resultValuesDiff(wantResultLabelValues, wantResultLabelValues); diff != "" {
 		t.Fatalf("RECONCILE-RESULT-LABEL-VALUES-FROZEN-01 negative control: the frozen want-set "+
 			"compared against itself produced a non-empty diff — the comparison has a bug: %s", diff)
+	}
+}
+
+// TestReconcileResultLabelValuesFrozen01_CallsiteGuard_Fixtures proves the
+// callsite guard is non-vacuous: the RED fixture (inline "panic" literal) is
+// flagged, the GREEN fixture (named const + typed var) is not.
+func TestReconcileResultLabelValuesFrozen01_CallsiteGuard_Fixtures(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		dir  string
+		want int
+	}{
+		{"red_literal", 1},
+		{"green", 0},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.dir, func(t *testing.T) {
+			t.Parallel()
+			pattern := "./tools/archtest/testdata/reconcile_result_callsite_fixtures/" + c.dir
+			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanRecordResultCallsites)
+			if len(diags) != c.want {
+				t.Fatalf("callsite-guard fixture %s: want %d diagnostic(s), got %d: %v",
+					c.dir, c.want, len(diags), diags)
+			}
+		})
 	}
 }

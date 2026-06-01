@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -314,7 +316,7 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 	// Register the deterministic signal BEFORE Start so no skip increment is
 	// missed between Start and the first Request send.
 	skippedThrice := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSkipped}, 3)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 3)
 	require.NoError(t, l.Start(ownerCtx))
 
 	for i := 0; i < 4; i++ {
@@ -335,7 +337,7 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 	// count == 2 after Stop (one in-flight + one dirty re-run). This complements
 	// TestLoop_F5_DirtyDedupCoalescedRerun which also asserts this guarantee.
 	secondCall := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}, 2)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}, 2)
 	close(rec.release)
 	testwait.Deterministic(t, secondCall, "dirty-rerun-success")
 	assert.EqualValues(t, 2, rec.calls.Load(), "exactly 2 reconcile calls: in-flight + coalesced dirty re-run")
@@ -366,7 +368,7 @@ func TestLoop_PanicRecoveredAndOtherEntitiesUnaffected(t *testing.T) {
 	require.NoError(t, err)
 	// Register the transient-counter signal before Start so no increment is missed.
 	panicTransient := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}, 1)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}, 1)
 	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: testtime.D1h, Metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -400,8 +402,8 @@ func TestLoop_PermanentNotRequeued_TransientRequeued(t *testing.T) {
 	require.NoError(t, err)
 	// Register the deterministic signal before Start so no increment is missed
 	// between Start and the first Request send.
-	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}
-	permLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultPermanent}
+	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}
+	permLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultPermanent)}
 	transientThrice := p.signalWhenCounterReaches(transLabels, 3)
 	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: shortRequeue, Metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
@@ -434,7 +436,7 @@ func TestLoop_RecordsSuccessMetrics(t *testing.T) {
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
 	// Register the deterministic signal before Start so no increment is missed.
-	successLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}
+	successLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}
 	successSig := p.signalWhenCounterReaches(successLabels, 1)
 	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: testtime.D1h, Metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
@@ -646,7 +648,7 @@ func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
 
 	// Register skip signal before Start so no increment is missed.
 	skippedThrice := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSkipped}, 3)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 3)
 
 	require.NoError(t, l.Start(ownerCtx))
 
@@ -752,6 +754,91 @@ func TestLoop_F5_LostWakeupStress(t *testing.T) {
 	assert.Empty(t, l.processing, "no entity left marked processing after quiescence")
 }
 
+// -----------------------------------------------------------------------------
+// F5: delaying-queue heap ordering / earlier-readyAt preemption (direct tests)
+// -----------------------------------------------------------------------------
+
+// TestWaitingHeap_OrdersByReadyAt proves the min-heap pops entries in ascending
+// readyAt order regardless of insertion order (Less is by readyAt).
+func TestWaitingHeap_OrdersByReadyAt(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(0, 0)
+	var h waitingHeap
+	heap.Init(&h)
+	heap.Push(&h, &waitingItem{req: Request{EntityID: "c"}, readyAt: base.Add(testtime.D30ms)})
+	heap.Push(&h, &waitingItem{req: Request{EntityID: "a"}, readyAt: base.Add(testtime.D1ms)})
+	heap.Push(&h, &waitingItem{req: Request{EntityID: "b"}, readyAt: base.Add(testtime.D10ms)})
+
+	var order []string
+	for h.Len() > 0 {
+		order = append(order, heap.Pop(&h).(*waitingItem).req.EntityID)
+	}
+	assert.Equal(t, []string{"a", "b", "c"}, order, "heap must pop earliest readyAt first")
+}
+
+// TestAddOrMergeWaiting_EarlierReadyAtWins proves the per-entity merge (F1): a
+// repeat requeue for an already-waiting entity keeps a SINGLE heap entry and
+// adopts the earlier readyAt (a sooner dirty re-run preempts a later
+// interval/backoff entry); a later readyAt never supersedes a sooner one.
+func TestAddOrMergeWaiting_EarlierReadyAtWins(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(0, 0)
+	var h waitingHeap
+	heap.Init(&h)
+	pending := map[string]*waitingItem{}
+
+	addOrMergeWaiting(&h, pending, waitingItem{req: Request{EntityID: "x"}, readyAt: base.Add(testtime.D30ms)})
+	addOrMergeWaiting(&h, pending, waitingItem{req: Request{EntityID: "x"}, readyAt: base.Add(testtime.D5ms)})
+	require.Equal(t, 1, h.Len(), "same entity must occupy exactly one heap entry")
+	assert.Equal(t, base.Add(testtime.D5ms), h[0].readyAt, "earlier readyAt must win the merge")
+
+	addOrMergeWaiting(&h, pending, waitingItem{req: Request{EntityID: "x"}, readyAt: base.Add(testtime.D50ms)})
+	require.Equal(t, 1, h.Len(), "merge must not add a second entry for the same entity")
+	assert.Equal(t, base.Add(testtime.D5ms), h[0].readyAt, "a later readyAt must not supersede the earlier one")
+}
+
+// TestDrainReadyItems_PopsOnlyReadyAndClearsPending proves drainReadyItems moves
+// only entries whose readyAt has arrived into the queue, leaves future entries
+// on the heap, and keeps the pending index in sync (drained entity removed,
+// not-yet-ready entity retained).
+func TestDrainReadyItems_PopsOnlyReadyAndClearsPending(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(0, 0)
+	var h waitingHeap
+	heap.Init(&h)
+	pending := map[string]*waitingItem{}
+	addOrMergeWaiting(&h, pending, waitingItem{req: Request{EntityID: "ready"}, readyAt: base})
+	addOrMergeWaiting(&h, pending, waitingItem{req: Request{EntityID: "future"}, readyAt: base.Add(testtime.D1h)})
+
+	queue := make(chan Request, 4)
+	require.True(t, drainReadyItems(context.Background(), &h, pending, base, queue))
+
+	require.Len(t, queue, 1, "only the ready entity is drained")
+	assert.Equal(t, "ready", (<-queue).EntityID)
+	_, hasReady := pending["ready"]
+	_, hasFuture := pending["future"]
+	assert.False(t, hasReady, "drained entity must be removed from pending")
+	assert.True(t, hasFuture, "not-yet-ready entity must stay in pending")
+	assert.Equal(t, 1, h.Len(), "the future item remains on the heap")
+}
+
+// TestLoop_BaseDelayExceedsMaxDelayFailsStart proves F6: an inverted backoff
+// window (BaseDelay > MaxDelay, both explicitly set) is rejected at Start.
+func TestLoop_BaseDelayExceedsMaxDelayFailsStart(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	l := &Loop{
+		ReconcilerID: "rc",
+		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
+		BaseDelay:    testtime.D1h,
+		MaxDelay:     shortRequeue,
+	}
+	err := l.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BaseDelay")
+	assert.Contains(t, err.Error(), "MaxDelay")
+	require.NoError(t, l.Stop(context.Background()))
+}
+
 // TestLoop_TransientExponentialBackoff is a count-based integration check: it
 // asserts the loop retries a transient entity multiple times (confirming the
 // delaying queue feeds retries back). No timing assertions are made here — the
@@ -762,7 +849,7 @@ func TestLoop_TransientExponentialBackoff(t *testing.T) {
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
-	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}
+	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}
 	// Signal after 3 transient retries to confirm retrying actually happens.
 	transientThrice := p.signalWhenCounterReaches(transLabels, 3)
 
@@ -819,8 +906,8 @@ func TestLoop_SuccessForgetsBackoff(t *testing.T) {
 		}
 	})
 
-	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}
-	succLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}
+	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}
+	succLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}
 	// Wait for 2 transients and 1 success to confirm the full flow.
 	twoTransients := p.signalWhenCounterReaches(transLabels, 2)
 	oneSuccess := p.signalWhenCounterReaches(succLabels, 1)
@@ -869,7 +956,7 @@ func TestLoop_SharedWaitingLoopNoLeak(t *testing.T) {
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
-	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultTransient}
+	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}
 	// Wait until every entity has been seen at least once (nEntities transients).
 	allSeenOnce := p.signalWhenCounterReaches(transLabels, nEntities)
 
@@ -927,7 +1014,7 @@ func TestLoop_StopCleansEntityMaps(t *testing.T) {
 
 	// Register skip signal before Start so no increment is missed.
 	skippedOnce := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSkipped}, 1)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 1)
 
 	l := &Loop{
 		ReconcilerID:            "rc",
@@ -977,7 +1064,7 @@ func TestLoop_ResyncSentinelIsolation(t *testing.T) {
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
 
-	sentinelLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}
+	sentinelLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}
 	successTwice := p.signalWhenCounterReaches(sentinelLabels, 2)
 
 	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) {
@@ -1027,7 +1114,7 @@ func TestLoop_SuccessRequeueAfterPositive(t *testing.T) {
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
 
-	successLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: resultSuccess}
+	successLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}
 	// Register BEFORE Start so no success count is missed.
 	successTwice := p.signalWhenCounterReaches(successLabels, 2)
 
