@@ -583,9 +583,10 @@ func (l *Loop) logLeaderAcquireSkip(ctx context.Context, err error) {
 }
 
 // logLeaseLost logs a lost lease at Warn (the leader is relinquishing mid-term —
-// an operationally interesting handoff).
+// an operationally interesting handoff). It threads the lease ctx so the record
+// carries the run's trace/request correlation fields.
 func (l *Loop) logLeaseLost(ctx context.Context, err error) {
-	l.logger().Warn("reconcile: lease lost; relinquishing leadership",
+	l.logger().WarnContext(ctx, "reconcile: lease lost; relinquishing leadership",
 		slog.String("loop", l.name()),
 		slog.String("reconciler", l.reconcilerID()),
 		slog.Any("error", redaction.RedactError(err)))

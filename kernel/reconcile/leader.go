@@ -34,7 +34,7 @@ import (
 // is a public-contract change that must be made together with the design ADR.
 //
 // ref: kubernetes/client-go tools/leaderelection/leaderelection.go (lease/renew
-// model + the explicit "not fencing" disclaimer)
+// model + the explicit "not fencing" disclaimer).
 type LeaderElector interface {
 	// AcquireLease attempts to become the leader for reconcilerID. On success it
 	// returns a LeaseToken whose ExpiresAt is now+LeaseDuration and whose Epoch is

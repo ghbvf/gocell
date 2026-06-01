@@ -62,7 +62,9 @@ type RedisReconcileElector struct {
 // stamping the token window (Redis has no server-side wall clock to return). ns /
 // client / holderID / leaseDuration / clk are validated up front so
 // misconfiguration fails fast.
-func NewRedisReconcileElector(client *Client, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock) (*RedisReconcileElector, error) {
+func NewRedisReconcileElector(
+	client *Client, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock,
+) (*RedisReconcileElector, error) {
 	if client == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: client is nil")
 	}
@@ -72,7 +74,9 @@ func NewRedisReconcileElector(client *Client, ns KeyNamespace, holderID string, 
 // newReconcileElectorFromCmdable is the cmdable-level constructor used by unit
 // tests that inject a mock cmdable. Same validation contract as the public
 // constructor (mirrors newRedisDriverFromCmdable).
-func newReconcileElectorFromCmdable(rdb cmdable, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock) (*RedisReconcileElector, error) {
+func newReconcileElectorFromCmdable(
+	rdb cmdable, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock,
+) (*RedisReconcileElector, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
 	}
