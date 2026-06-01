@@ -116,9 +116,10 @@ var idempotentMethods = map[string]bool{
 type Option func(*middlewareConfig)
 
 type middlewareConfig struct {
-	maxBodyBytes int
-	leaseTTL     time.Duration
-	doneTTL      time.Duration
+	maxBodyBytes  int
+	leaseTTL      time.Duration
+	doneTTL       time.Duration
+	exemptMatcher func(*http.Request) bool
 }
 
 func defaultConfig() middlewareConfig {
@@ -181,6 +182,22 @@ func WithDoneTTL(d time.Duration) Option {
 	}
 }
 
+// WithExemptMatcher installs a predicate that opts individual routes out of
+// idempotency recording. When fn(r) returns true the middleware passes the
+// request directly to the next handler — no Claim is issued, no response is
+// recorded, and any Idempotency-Key header sent by the client is silently
+// ignored. The check runs BEFORE reading the request body so exempt routes
+// pay no body-buffering cost.
+//
+// A nil fn is a no-op (all routes remain subject to idempotency tracking).
+// Router.buildMux wires this via a lazy closure so FinalizeAuth can compile
+// the exempt set after the middleware is constructed.
+func WithExemptMatcher(fn func(*http.Request) bool) Option {
+	return func(c *middlewareConfig) {
+		c.exemptMatcher = fn
+	}
+}
+
 // Middleware returns an HTTP middleware that enforces per-(tenant,user,key)
 // idempotency for mutating methods (POST, PUT, PATCH, DELETE).
 //
@@ -217,24 +234,7 @@ func Middleware(clk clock.Clock, store Store, opts ...Option) func(http.Handler)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !shouldIntercept(r) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			p, ok := extractIdentity(r.Context())
-			if !ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-			idemKey := r.Header.Get(headerIdempotencyKey)
-			if !validateIdempotencyKey(r.Context(), w, idemKey) {
-				return
-			}
-			fp, ok := readBodyFingerprint(r.Context(), w, r)
-			if !ok {
-				return
-			}
-			handleWithIdempotency(w, r, next, p, idemKey, fp, clk, store, cfg)
+			serveWithIdempotency(w, r, next, clk, store, cfg)
 		})
 	}
 }
@@ -276,6 +276,44 @@ func readBodyFingerprint(ctx context.Context, w http.ResponseWriter, r *http.Req
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	return computeFingerprint(body), true
+}
+
+// serveWithIdempotency executes the per-request idempotency decision for a
+// single request, reducing the cognitive complexity of the closure returned by
+// Middleware. It checks exempt status first (before body read), then the method
+// gate, then principal identity, key validation, and finally the full claim flow.
+func serveWithIdempotency(
+	w http.ResponseWriter,
+	r *http.Request,
+	next http.Handler,
+	clk clock.Clock,
+	store Store,
+	cfg middlewareConfig,
+) {
+	// Exempt check runs first — before method gate and before body read,
+	// so exempt routes pay zero body-buffering cost.
+	if cfg.exemptMatcher != nil && cfg.exemptMatcher(r) {
+		next.ServeHTTP(w, r)
+		return
+	}
+	if !shouldIntercept(r) {
+		next.ServeHTTP(w, r)
+		return
+	}
+	p, ok := extractIdentity(r.Context())
+	if !ok {
+		next.ServeHTTP(w, r)
+		return
+	}
+	idemKey := r.Header.Get(headerIdempotencyKey)
+	if !validateIdempotencyKey(r.Context(), w, idemKey) {
+		return
+	}
+	fp, ok := readBodyFingerprint(r.Context(), w, r)
+	if !ok {
+		return
+	}
+	handleWithIdempotency(w, r, next, p, idemKey, fp, clk, store, cfg)
 }
 
 // shouldIntercept returns true when the request method and Idempotency-Key

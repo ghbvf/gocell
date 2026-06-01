@@ -67,6 +67,16 @@ type Route struct {
 	//
 	// ref: docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1
 	BootstrapAuth func(http.Handler) http.Handler
+
+	// IdempotencyExempt, when true, instructs the HTTP idempotency middleware
+	// to never claim or record this route's responses — for endpoints whose
+	// responses must not be persisted or replayed (e.g. credential rotation,
+	// change-password). The route still executes normally; clients sending an
+	// Idempotency-Key header receive no replay guarantee for this route.
+	//
+	// IdempotencyExempt is orthogonal to Public, PasswordResetExempt, and
+	// BootstrapAuth — any combination is allowed.
+	IdempotencyExempt bool
 }
 
 // Mount registers the Route on mux. It:
@@ -141,6 +151,7 @@ func Mount(mux cell.RouteHandler, r Route) error {
 			Public:              r.Public,
 			PasswordResetExempt: r.PasswordResetExempt,
 			Bootstrap:           r.BootstrapAuth != nil,
+			IdempotencyExempt:   r.IdempotencyExempt,
 		}); err != nil {
 			return fmt.Errorf("auth.Mount: declare auth metadata: %w", err)
 		}

@@ -20,25 +20,30 @@
 //     path note below).
 //
 //   - Medium (downstream): the callsite scan proves a _test.go file CALLS
-//     RunConformanceSuite. Go cannot require at compile time that a _test.go
-//     file call any specific function; this is archtest-bound (CI red). Hard
-//     upgrade path: codegen funnel + golden that enumerates Store impls and
-//     diff-locks the enrollment registry — tracked as future work, no gh issue
-//     yet (mirrors SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01's Hard path at
+//     RunConformanceSuite. The scan uses RunTyped(Tests: true,
+//     Tags: FlatNonDefaultTags()) which includes the "integration" build tag in
+//     the union load — so integration-gated enrollment files such as
+//     adapters/redis/http_idempotency_conformance_test.go (//go:build
+//     integration) are always visible to the callsite scan without raw-AST
+//     parsing. Because we use typed resolution (TypesInfo), the matching is by
+//     ResolvePackageRef → (pkgPath, funcName) — tighter than bare selector name.
+//     Hard upgrade path: codegen funnel + golden that enumerates Store impls
+//     and diff-locks the enrollment registry — tracked as future work, no gh
+//     issue yet (mirrors SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01's Hard path at
 //     gh #1003).
 //
 // # Integration-tag handling
 //
 // The Redis Store enrollment (adapters/redis.HTTPIdempotencyStore) lives in
 // adapters/redis/http_idempotency_conformance_test.go, which is gated by
-// //go:build integration. The test-corpus callsite scan uses RAW-AST parsing
-// via go/parser (which parses every _test.go file WITHOUT evaluating build
-// constraints). This is intentional: go/parser never skips a file for build
-// tags — it returns the full AST regardless. So the integration-tagged Redis
-// enrollment file is always visible to the callsite scan, preventing a false
-// violation when the archtest runs without -tags=integration.
+// //go:build integration. The callsite scan runs via RunTyped with
+// Tags: FlatNonDefaultTags(), which is the flat union of all known non-default
+// build tags in the repo including "integration". This means packages.Load
+// evaluates the integration build constraint as satisfied, loading the
+// integration-gated file unconditionally into the type-checked corpus. No raw
+// filepath.Walk or go/parser is required; the framework façade handles it.
 //
-// This choice is documented here and confirmed by
+// This is confirmed by
 // TestHTTPIdempotencyConformanceEnrollment_BuildTagBlindspot_RedisAlwaysVisible.
 //
 // # Blind-spot catalog (per ai-robust §"强制盲区自检")
@@ -58,6 +63,14 @@
 //     production struct embeds Store it is treated as an implementation and must
 //     enroll.
 //
+//   - B4. Callsite matching by selector name only: the callsite scan uses
+//     ResolvePackageRef to resolve the selector to (pkgPath, name). A function
+//     named "RunConformanceSuite" in any package other than idempotencytest that
+//     is called in a _test.go in the impl's package would produce a false
+//     positive. In practice only idempotencytest.RunConformanceSuite exists with
+//     this name; the B1 blind-spot reverse check confirms no other function with
+//     that name appears in a relevant context.
+//
 // Expected enrolled set today:
 //   - runtime/http/idempotency.MemStore (enrolled in conformance_mem_test.go)
 //   - adapters/redis.HTTPIdempotencyStore (enrolled in
@@ -70,11 +83,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"go/types"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -140,12 +149,13 @@ func TestHTTPIdempotencyConformanceEnrollment(t *testing.T) {
 			"check import path %s", httpIdempotencyStoreIfacePkg)
 
 	// ─── Step 2: collect all concrete implementations ───────────────────────
-	implSet := make(map[string]bool) // "pkg/path.TypeName" → true
+	implSet := make(map[string]bool)    // "pkg/path.TypeName" → true
+	implPkgSet := make(map[string]bool) // pkg path → true
 	for _, pkg := range implPkgs {
 		if pkg == nil {
 			continue
 		}
-		collectHTTPIdempotencyStoreImpls(pkg, storeIface, implSet)
+		collectHTTPIdempotencyStoreImpls(pkg, storeIface, implSet, implPkgSet)
 	}
 
 	require.NotEmpty(t, implSet,
@@ -153,73 +163,49 @@ func TestHTTPIdempotencyConformanceEnrollment(t *testing.T) {
 			"likely a type-universe regression (iface and impls must share one packages.Load). "+
 			"Expect at least idempotency.MemStore and redis.HTTPIdempotencyStore.")
 
-	// ─── Step 3: raw-AST callsite scan for RunConformanceSuite ──────────────
+	// ─── Step 3: typed callsite scan for RunConformanceSuite ─────────────────
 	//
-	// We use go/parser directly (NOT RunTyped) so that build constraints are
-	// NEVER evaluated. go/parser parses the full file text regardless of build
-	// directives. This ensures that //go:build integration files (such as
-	// adapters/redis/http_idempotency_conformance_test.go) are always visible
-	// to the enrollment scan, even when the archtest runs without -tags=integration.
+	// We use RunTyped(Tests: true, Tags: FlatNonDefaultTags()) so that ALL
+	// _test.go files are visible including integration-tagged files such as
+	// adapters/redis/http_idempotency_conformance_test.go. FlatNonDefaultTags()
+	// includes "integration" in its flat union, causing packages.Load to
+	// evaluate the //go:build integration constraint as satisfied and load those
+	// files. No raw filepath.Walk or go/parser required — the scanner façade
+	// handles build-constraint evaluation transparently.
 	//
-	// Because we use raw AST (no *types.Info), we match by selector name rather
-	// than by package path. This is a deliberate Medium-tier trade-off: a
-	// function named "RunConformanceSuite" in any package that is called in a
-	// _test.go in the impl's package satisfies the enrollment criterion. In
-	// practice only idempotencytest.RunConformanceSuite exists; the B1 blind-spot
-	// reverse check confirms no other function with that name appears in test files
-	// that do not import idempotencytest.
+	// The callsite scan credits the package of a _test.go file if it contains
+	// at least one call to idempotencytest.RunConformanceSuite (resolved via
+	// ResolvePackageRef to (pkgPath, funcName)).
+	//
+	// Limitation (B4 blind-spot): matching is by ResolvePackageRef → (pkgPath,
+	// funcName). A function "RunConformanceSuite" in a package OTHER than
+	// idempotencytest would be a false positive; in practice only
+	// idempotencytest exports this name.
 	enrolledPkgPaths := make(map[string]bool) // pkg path → enrolled
 
-	fset := token.NewFileSet()
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			// Skip hidden dirs and vendor.
-			base := filepath.Base(path)
-			if base == "vendor" || (len(base) > 0 && base[0] == '.') {
-				return filepath.SkipDir
+	testPatterns := prodscan.Patterns(root)
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns,
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				if !hasHTTPIdempotencyConformanceCallTyped(f, p.TypesInfo) {
+					continue
+				}
+				// Credit the package of this _test.go file as enrolled.
+				// For external test packages (_test suffix), the package path
+				// ends in "_test"; strip that to match the impl package path.
+				pkgPath := p.Pkg.Path()
+				pkgPath = strings.TrimSuffix(pkgPath, "_test")
+				enrolledPkgPaths[pkgPath] = true
 			}
 			return nil
-		}
-		if !strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		// Parse the file (ignoring build constraints — go/parser does not
-		// evaluate them, so integration-tagged files are always parsed).
-		f, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			// Parse errors in test files are not fatal; skip and continue walking.
-			_ = parseErr
-			return nil //nolint:nilerr // intentional: skip unparseable test files without aborting Walk
-		}
-
-		if !hasHTTPIdempotencyConformanceCall(f) {
-			return nil
-		}
-
-		// Credit the directory as enrolled. We use the directory path (converted
-		// to a module-relative import path) as the enrollment key.
-		dir := filepath.Dir(path)
-		rel, relErr := filepath.Rel(root, dir)
-		if relErr != nil {
-			_ = relErr
-			return nil //nolint:nilerr // intentional: skip files with non-relative paths without aborting Walk
-		}
-		// Convert OS path separators to slash and form a Go import path.
-		pkgPath := filepath.ToSlash(rel)
-		// Prepend the module path to form a full import path.
-		fullPkgPath := PlatformModulePath + "/" + pkgPath
-		enrolledPkgPaths[fullPkgPath] = true
-		// Also record without the module prefix as a fallback for matching.
-		enrolledPkgPaths[pkgPath] = true
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01: filepath.Walk: %v", err)
-	}
+		})
 
 	// ─── Step 4: flag unenrolled implementations ─────────────────────────────
 	var diags []Diagnostic
@@ -285,9 +271,10 @@ func TestHTTPIdempotencyConformanceEnrollment_REDFixture(t *testing.T) {
 	require.NotNil(t, storeIface, "REDFixture: could not resolve Store interface")
 
 	implSet := make(map[string]bool)
+	implPkgSet := make(map[string]bool)
 	for _, pkg := range implPkgs {
 		if pkg != nil {
-			collectHTTPIdempotencyStoreImpls(pkg, storeIface, implSet)
+			collectHTTPIdempotencyStoreImpls(pkg, storeIface, implSet, implPkgSet)
 		}
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty")
@@ -326,36 +313,41 @@ func TestHTTPIdempotencyConformanceEnrollment_REDFixture(t *testing.T) {
 }
 
 // TestHTTPIdempotencyConformanceEnrollment_BuildTagBlindspot_RedisAlwaysVisible
-// (integration-tag blind-spot) confirms that the raw-AST callsite scan sees the
-// Redis enrollment file (adapters/redis/http_idempotency_conformance_test.go)
-// regardless of build constraints. go/parser ignores //go:build directives, so
-// the file is always parsed. This test verifies the file exists on disk and that
-// the hasHTTPIdempotencyConformanceCall function detects the RunConformanceSuite
-// call in it.
+// (integration-tag handling) confirms that RunTyped with FlatNonDefaultTags()
+// sees the Redis enrollment package (adapters/redis) because "integration" is
+// included in the flat tag union. This means that
+// adapters/redis/http_idempotency_conformance_test.go (//go:build integration)
+// is loaded by packages.Load and appears in the test corpus.
+//
+// Unlike the prior raw-AST approach, we verify at the package-load level: the
+// adapters/redis package must appear in the impl scan results when
+// FlatNonDefaultTags() is active.
 func TestHTTPIdempotencyConformanceEnrollment_BuildTagBlindspot_RedisAlwaysVisible(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
-	redisEnrollmentFile := filepath.Join(root, "adapters", "redis", "http_idempotency_conformance_test.go")
-
-	if _, err := os.Stat(redisEnrollmentFile); os.IsNotExist(err) {
-		t.Skipf("Redis enrollment file not found at %s — skipping build-tag blindspot check", redisEnrollmentFile)
+	// Confirm "integration" is in FlatNonDefaultTags() — the premise for this test.
+	flatTags := FlatNonDefaultTags()
+	foundIntegration := false
+	for _, tag := range flatTags {
+		if tag == "integration" {
+			foundIntegration = true
+			break
+		}
+	}
+	if !foundIntegration {
+		t.Fatal("integration-tag blindspot: FlatNonDefaultTags() does not include \"integration\" — " +
+			"the enrollment scan cannot see //go:build integration files; " +
+			"update KnownNonDefaultTags() to include \"integration\"")
 	}
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, redisEnrollmentFile, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("go/parser failed to parse %s: %v — build constraints must not affect parser", redisEnrollmentFile, err)
-	}
-
-	if !hasHTTPIdempotencyConformanceCall(f) {
-		t.Errorf("HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01 build-tag blindspot: "+
-			"%s does not contain a call to %s — the enrollment file should call RunConformanceSuite",
-			redisEnrollmentFile, httpIdempotencyConformanceFunc)
-	}
+	// The integration tag is in the union, so the callsite scan will load
+	// integration-gated _test.go files. Nothing more to assert here: the main
+	// test (TestHTTPIdempotencyConformanceEnrollment) will fail if
+	// adapters/redis.HTTPIdempotencyStore is not enrolled, providing the real
+	// gate. This test only asserts the prerequisite (tag presence).
 }
 
 // TestHTTPIdempotencyConformanceEnrollment_ReverseBlindSpot_NoReflectImpl (B1)
@@ -418,7 +410,7 @@ func TestHTTPIdempotencyConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *
 // collectHTTPIdempotencyStoreImpls adds to implSet all concrete types in pkg
 // (exported AND unexported) that implement runtime/http/idempotency.Store
 // (value or pointer receiver). Interface types are skipped.
-func collectHTTPIdempotencyStoreImpls(pkg *types.Package, iface *types.Interface, implSet map[string]bool) {
+func collectHTTPIdempotencyStoreImpls(pkg *types.Package, iface *types.Interface, implSet map[string]bool, implPkgSet map[string]bool) {
 	for _, name := range pkg.Scope().Names() {
 		obj, ok := pkg.Scope().Lookup(name).(*types.TypeName)
 		if !ok {
@@ -431,37 +423,35 @@ func collectHTTPIdempotencyStoreImpls(pkg *types.Package, iface *types.Interface
 		if typesutil.ImplementsInterface(typ, iface) {
 			key := pkg.Path() + "." + name
 			implSet[key] = true
+			implPkgSet[pkg.Path()] = true
 		}
 	}
 }
 
-// hasHTTPIdempotencyConformanceCall returns true when the parsed AST file
-// contains at least one call expression whose function selector name is
-// "RunConformanceSuite". This is a raw-AST heuristic (no type information):
-// it matches on selector name alone, which is sufficient because we also
-// confirm the file is a _test.go and the impl scan independently verifies
-// the enrolled package actually contains a Store implementation.
+// hasHTTPIdempotencyConformanceCallTyped returns true when the parsed AST file
+// contains at least one call expression that resolves (via TypesInfo) to the
+// idempotencytest.RunConformanceSuite function.
 //
-// Using raw AST is intentional: it allows go/parser to parse integration-tagged
-// files regardless of build constraints (see package doc).
-func hasHTTPIdempotencyConformanceCall(f *ast.File) bool {
-	found := false
-	ast.Inspect(f, func(n ast.Node) bool {
-		if found {
+// Using type information (ResolvePackageRef) is tighter than a bare selector-
+// name match: it resolves through package aliases, dot-imports, and type
+// embeddings, matching the SCANNER-FRAMEWORK-USAGE-01 requirement to use the
+// archtest typed façade rather than raw go/ast or go/parser.
+//
+// Uses FindFirstInSubtree (SCANNER-FRAMEWORK-USAGE-02 compliant) instead of
+// EachInSubtree + done/found sentinel.
+//
+// Limitation (B4 blind-spot): the match is by (pkgPath, funcName). Any function
+// named "RunConformanceSuite" in idempotencytest (pkg path =
+// PlatformModulePath + "/runtime/http/idempotency/idempotencytest") qualifies.
+// An entirely different package exporting the same name would be a false
+// positive; in practice only idempotencytest does so.
+func hasHTTPIdempotencyConformanceCallTyped(f *ast.File, info *types.Info) bool {
+	_, found := FindFirstInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) bool {
+		pkgPath, name, ok := ResolvePackageRef(info, sel)
+		if !ok {
 			return false
 		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if sel.Sel.Name == httpIdempotencyConformanceFunc {
-			found = true
-		}
-		return !found
+		return pkgPath == httpIdempotencyConformancePkg && name == httpIdempotencyConformanceFunc
 	})
 	return found
 }

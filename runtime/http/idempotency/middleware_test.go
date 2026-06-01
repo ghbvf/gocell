@@ -703,3 +703,173 @@ func TestMiddleware_HandlerPanicReleasesLease(t *testing.T) {
 		t.Errorf("after panic, lease must be released so handler re-runs; callCount=%d, want 2", callCount)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// WithExemptMatcher tests (C2)
+// ---------------------------------------------------------------------------
+
+// TestMiddleware_ExemptMatcher_ExemptPathNotRecorded verifies that when the
+// exempt matcher returns true for a path, the middleware passes through
+// without claiming or recording — the handler is called every time even with
+// the same Idempotency-Key.
+func TestMiddleware_ExemptMatcher_ExemptPathNotRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+
+	exemptPath := "/api/v1/users/abc/password"
+	exemptMatcher := func(r *http.Request) bool {
+		return r.URL.Path == exemptPath
+	}
+	mw := Middleware(clk, ms, WithExemptMatcher(exemptMatcher))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := mw(inner)
+
+	// First request to exempt path.
+	r1 := requestWithUserCtx("POST", exemptPath, "idem-key-123", "tenant1", "user-a")
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, r1)
+	if rr1.Code != 200 {
+		t.Errorf("first exempt call: code=%d, want 200", rr1.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("first exempt call: handler call count=%d, want 1", callCount)
+	}
+
+	// Second request to exempt path with the same Idempotency-Key:
+	// handler must be called again (not replayed).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r1)
+	if rr2.Code != 200 {
+		t.Errorf("second exempt call: code=%d, want 200", rr2.Code)
+	}
+	if callCount != 2 {
+		t.Errorf("exempt path must not be recorded; handler must run every time; callCount=%d, want 2", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "" {
+		t.Errorf("Idempotency-Replayed must not be set for exempt paths")
+	}
+}
+
+// TestMiddleware_ExemptMatcher_NonExemptPathStillRecorded verifies that the
+// exempt matcher only bypasses the declared path — non-exempt sibling paths
+// still go through the full idempotency flow.
+func TestMiddleware_ExemptMatcher_NonExemptPathStillRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+
+	exemptPath := "/api/v1/users/abc/password"
+	exemptMatcher := func(r *http.Request) bool {
+		return r.URL.Path == exemptPath
+	}
+	mw := Middleware(clk, ms, WithExemptMatcher(exemptMatcher))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	handler := mw(inner)
+
+	// First request to a non-exempt path.
+	normalPath := "/api/v1/orders"
+	r := requestWithUserCtx("POST", normalPath, "idem-key-order-1", "tenant1", "user-a")
+
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, r)
+	if rr1.Code != 201 {
+		t.Errorf("first non-exempt call: code=%d, want 201", rr1.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("first non-exempt call: handler count=%d, want 1", callCount)
+	}
+
+	// Second request with same Idempotency-Key: should be replayed (not invoke handler).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Code != 201 {
+		t.Errorf("replayed non-exempt call: code=%d, want 201", rr2.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("non-exempt path must be replayed on second call; handler count=%d, want 1", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("Idempotency-Replayed must be set to true for replayed non-exempt paths; got %q",
+			rr2.Header().Get("Idempotency-Replayed"))
+	}
+}
+
+// TestMiddleware_ExemptMatcher_NilMatcher_AllRoutesTracked verifies that a nil
+// exempt matcher (the zero value) is a noop — all qualifying routes continue
+// to be tracked as normal.
+func TestMiddleware_ExemptMatcher_NilMatcher_AllRoutesTracked(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms, WithExemptMatcher(nil))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/api/v1/orders", "idem-nil-matcher", "t1", "u1")
+
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, r)
+	if rr1.Code != 201 {
+		t.Errorf("first call: code=%d, want 201", rr1.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("nil exempt matcher must not affect recording; Idempotency-Replayed=%q, want true",
+			rr2.Header().Get("Idempotency-Replayed"))
+	}
+	if callCount != 1 {
+		t.Errorf("nil exempt matcher must not affect replay; callCount=%d, want 1", callCount)
+	}
+}
+
+// TestMiddleware_ExemptMatcher_ShortCircuitsBeforeBodyRead verifies that the
+// exempt check runs before the body is read — the request body is available
+// to the handler intact (not consumed by the middleware body fingerprinting).
+func TestMiddleware_ExemptMatcher_ShortCircuitsBeforeBodyRead(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+
+	exemptMatcher := func(r *http.Request) bool { return true }
+	mw := Middleware(clk, ms, WithExemptMatcher(exemptMatcher))
+
+	bodyReceived := ""
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodyReceived = string(b)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := mw(inner)
+
+	req := httptest.NewRequest("POST", "/api/v1/any", strings.NewReader("hello-body"))
+	req.Header.Set("Idempotency-Key", "some-key")
+	ctx := auth.WithPrincipal(req.Context(), &auth.Principal{
+		Kind:    auth.PrincipalUser,
+		Subject: "user-1",
+	})
+	req = req.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if bodyReceived != "hello-body" {
+		t.Errorf("body must be intact for exempt routes (not consumed by middleware); got %q", bodyReceived)
+	}
+}
