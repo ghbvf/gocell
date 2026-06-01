@@ -803,13 +803,6 @@ type PublicError struct {
 	// failures without exposing InternalDetails, Cause, or server-side Details.
 	SourceCode Code `json:"sourceCode,omitempty"`
 	Status     int  `json:"status,omitempty"`
-
-	// RequestID is the ctx-derived correlation id injected only on the HTTP
-	// wire path (MarshalHTTPEnvelope). The v1 error-response schema places it
-	// inside the inner error object alongside code/message/details. omitempty
-	// keeps CLI/operator and machine-output projections unchanged — only the
-	// HTTP envelope path ever sets it.
-	RequestID string `json:"requestId,omitempty"`
 }
 
 // MarshalJSON keeps the details field schema-stable even when callers build a
@@ -955,11 +948,26 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 	return json.Marshal(e.PublicProjection())
 }
 
+// httpErrorObject is the inner error object of the v1 HTTP wire envelope. It is
+// deliberately NARROWER than PublicError: it carries only the four wire fields
+// (code/message/details/requestId) and structurally cannot express the
+// operator-only SourceCode/Status fields, so those can never leak onto the HTTP
+// wire regardless of how the projection is constructed — the type system is the
+// guard, not an omitempty zero-value coincidence. Field set is frozen by the v1
+// schema's additionalProperties:false constraint (any new field must update
+// contracts/shared/errors/error-response-v1.schema.json + the envelope tests).
+type httpErrorObject struct {
+	Code      Code           `json:"code"`
+	Message   string         `json:"message"`
+	Details   []PublicDetail `json:"details"`
+	RequestID string         `json:"requestId,omitempty"`
+}
+
 // errorEnvelope is the canonical outer {"error":{...}} wrapper defined by
 // contracts/shared/errors/error-response-v1.schema.json. It exists so the wire
 // envelope can be produced in a single marshal pass (see MarshalHTTPEnvelope).
 type errorEnvelope struct {
-	Error PublicError `json:"error"`
+	Error httpErrorObject `json:"error"`
 }
 
 // MarshalHTTPEnvelope renders the canonical v1 wire envelope {"error":{...}} in
@@ -970,10 +978,11 @@ type errorEnvelope struct {
 // Because the result is built directly from PublicProjection — with no
 // intermediate map[string]any — int64 detail values retain full precision
 // (json.Marshal encodes int64 exactly; a map[string]any round-trip would coerce
-// them to float64 and truncate beyond 2^53). PublicProjection also performs the
-// 5xx detail-strip + public-code normalization and never emits the operator-only
-// SourceCode/Status fields on the public surface, so the HTTP wire body matches
-// the v1 schema's additionalProperties:false error object exactly.
+// them to float64 and truncate beyond 2^53). PublicProjection performs the 5xx
+// detail-strip + public-code normalization, and the narrowed httpErrorObject
+// makes the operator-only SourceCode/Status fields type-level unrepresentable on
+// the wire, so the body matches the v1 schema's additionalProperties:false error
+// object exactly.
 //
 // Caller contract: this is a framework-layer primitive — business handlers must
 // emit errors via httputil.WriteError / WriteErrorWithStatus, which call this
@@ -986,8 +995,12 @@ type errorEnvelope struct {
 // use the package-level PublicProjection(error) for those.
 func (e *Error) MarshalHTTPEnvelope(requestID string) ([]byte, error) {
 	pub := e.PublicProjection()
-	pub.RequestID = requestID
-	return json.Marshal(errorEnvelope{Error: pub})
+	return json.Marshal(errorEnvelope{Error: httpErrorObject{
+		Code:      pub.Code,
+		Message:   pub.Message,
+		Details:   pub.Details,
+		RequestID: requestID,
+	}})
 }
 
 // Error returns a formatted string representation for logging/diagnostics.
