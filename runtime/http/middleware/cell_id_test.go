@@ -34,7 +34,3 @@ func TestCellAttribution_UnresolvedLeavesCtxkeyAbsent(t *testing.T) {
 
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
 }
-
-func TestRuntimeCellIDSentinel_IsExportedConstant(t *testing.T) {
-	assert.Equal(t, "_runtime", RuntimeCellIDSentinel)
-}

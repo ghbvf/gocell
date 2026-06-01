@@ -46,7 +46,7 @@ type Collector interface {
 	// call httputil.WriteError will not produce a 413 in http_requests_total.
 	//
 	// cellID follows the same semantics as RecordRequest: use the owning cell
-	// ID or RuntimeCellIDSentinel ("_runtime") for framework paths.
+	// ID or RuntimeCellSentinel ("_runtime") for framework paths.
 	// route is the low-cardinality route pattern from RouteFor.
 	RecordBodyLimitRejection(ctx context.Context, cellID, route string)
 }

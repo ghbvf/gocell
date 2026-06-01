@@ -64,6 +64,29 @@ metric_relabel_configs:
   action: drop
 ```
 
+## gRPC Metrics `cell` Label（当前恒为 `_runtime`）
+
+gRPC 指标 `gocell_grpc_server_requests_total` 与
+`gocell_grpc_server_request_duration_seconds` 的 `cell` label 与 HTTP 共享同一
+`_runtime` 哨兵语义与单源（`runtime/observability/metrics.RuntimeCellSentinel`）。
+
+**重要**：gRPC cell attribution 尚未接线——HTTP 侧从 router-root `CellAttribution`
+中间件按 `RouteGroup.CellID` 归属 cell，gRPC 侧对应的 `FullMethod → cellID` 归属
+机制（由生成式 registrar 派生）随 epic PR-7/8 落地（tracking issue #1383）。在此
+之前，**所有 gRPC 流量的 `cell` label 恒为 `_runtime`**。
+
+运维影响：
+
+- 业务 SLO / 告警**不要**对 gRPC 指标使用 `{cell!="_runtime"}` 过滤——会过滤掉
+  全部 gRPC 流量。在 attribution 落地前，gRPC 流量按 `{cell="_runtime"}` 或不
+  过滤 `cell` 来观察。
+- gRPC 指标的 reader 侧契约（cell label 取自 `ctxkeys.CellID`，缺失回退
+  `RuntimeCellSentinel`）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01`
+  守卫，故 attribution 一旦接线，`cell` label 会自动反映归属 cell 而无需改
+  interceptor。
+- attribution 落地（#1383）后，本节将更新为与 HTTP 一致的 `{cell!="_runtime"}`
+  推荐过滤。
+
 ## HTTP Body-Limit 拒绝计数器
 
 `gocell_http_request_body_limit_rejections_total{cell, route}` 记录 BodyLimit 中间件
