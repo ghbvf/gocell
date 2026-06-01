@@ -7,10 +7,15 @@
 //   - generated/contracts/**/*_gen.go — business contract specs (codegen output)
 //   - kernel/contractspec/** itself  — the ContractSpec type definition
 //
-// Hand-written production code under cells/, examples/**/cells/, and runtime/
-// must NOT define ContractSpec literals. Framework-owned HTTP infra (health
-// probes, devtools catalog) and event-tracing derivations use the typed
-// funnels NewFrameworkHTTP / NewEventDerivation in
+// Hand-written production code across EVERY non-test production tree that can
+// import kernel/contractspec — cells/, examples/, runtime/, kernel/, cmd/,
+// adapters/, cellmodules/ (see productionScanDirs) — must NOT define
+// ContractSpec literals. The scope is intentionally repo-wide (not just
+// cells/+examples-cells/+runtime/) so the "non-runtime code cannot hand-write a
+// framework ContractSpec" claim in runtime/internal/contractbuild/doc.go holds
+// for cmd/, adapters/, kernel/, cellmodules/ too (#1038 review C1/F2).
+// Framework-owned HTTP infra (health probes, devtools catalog) and event-tracing
+// derivations use the typed funnels NewFrameworkHTTP / NewEventDerivation in
 // runtime/internal/contractbuild (issue #1038 moved them there from
 // kernel/contractspec — see below).
 //
@@ -34,8 +39,9 @@
 //
 // AI-robust:
 //   - Composite-literal ban: Hard (downstream) — `contractspec.ContractSpec{…}`
-//     under cells/ + examples/ + runtime/ is unrepresentable (archtest fails
-//     CI), the typed funnels are the only surviving form.
+//     under every production tree in productionScanDirs (cells/ + examples/ +
+//     runtime/ + kernel/ + cmd/ + adapters/ + cellmodules/) is unrepresentable
+//     (archtest fails CI), the typed funnels are the only surviving form.
 //   - NewFrameworkHTTP upstream: Hard — runtime/internal/ placement; non-runtime
 //     callers are a compile error. Content Hard via frameworkHTTPIDPrefix panic.
 //   - NewEventDerivation upstream: Hard — same runtime/internal/ placement.
@@ -94,28 +100,31 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 	}
 }
 
-// TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesContractbuild pins the funnel
-// home (runtime/internal/contractbuild) exclusion. contractbuild.go legitimately
-// constructs contractspec.ContractSpec{…} literals; if contractbuildFunnelDir
-// drifts (e.g. a missing trailing slash), those literals re-enter the scan and
-// the main test reds — but with a confusing "funnel home flagged" message. This
-// test asserts the exclusion directly AND that it is load-bearing (the funnel
-// file exists), so a path typo surfaces here with a clear cause.
-func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesContractbuild(t *testing.T) {
+// TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesConstructionHomes pins the
+// construction-home exclusions (runtime/internal/contractbuild/ +
+// kernel/contractspec/). Both homes legitimately hold contractspec.ContractSpec
+// values; if a home prefix drifts (e.g. a missing trailing slash), its files
+// re-enter the scan and the main test reds with a confusing "home flagged"
+// message. This test asserts each home is excluded directly AND load-bearing
+// (the home dir exists with at least one production .go file), so a path typo
+// surfaces here with a clear cause.
+func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesConstructionHomes(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	for _, f := range collectContractSpecScanFiles(t, root) {
-		rel, _ := filepath.Rel(root, f)
-		if strings.HasPrefix(filepath.ToSlash(rel), contractbuildFunnelDir) {
-			t.Errorf("funnel home must be excluded from scan, but collected: %s", rel)
+	collected := collectContractSpecScanFiles(t, root)
+	for _, home := range contractSpecConstructionHomes {
+		for _, f := range collected {
+			rel, _ := filepath.Rel(root, f)
+			if strings.HasPrefix(filepath.ToSlash(rel), home) {
+				t.Errorf("construction home %q must be excluded from scan, but collected: %s", home, rel)
+			}
 		}
-	}
-	// Guard against a vacuous exclusion: the funnel file must exist so the
-	// exclusion is actually protecting real ContractSpec literals.
-	funnelFile := filepath.Join(root, filepath.FromSlash(contractbuildFunnelDir), "contractbuild.go")
-	if _, err := os.Stat(funnelFile); err != nil {
-		t.Fatalf("funnel file %q must exist for the exclusion to be load-bearing: %v",
-			contractbuildFunnelDir, err)
+		// Guard against a vacuous exclusion: the home dir must exist (a typo'd
+		// prefix that matches nothing would silently excuse nothing).
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(home)))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("construction home %q must exist as a directory for the exclusion to be load-bearing: %v", home, err)
+		}
 	}
 }
 
@@ -126,40 +135,62 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesContractbuild(t *testing.T) {
 // runtime/http/devtools, runtime/eventrouter) and contractbuild's own unit
 // test: a rename/removal/signature change of either funnel breaks those.
 
-// contractbuildFunnelDir is the sanctioned runtime-side ContractSpec funnel
-// home (runtime/internal/contractbuild). It legitimately constructs
-// ContractSpec{…} literals inside NewFrameworkHTTP / NewEventDerivation, so it
-// is excluded from this scan — analogous to the kernel/contractspec/** type
-// home being outside scope. See package doc (#1038).
-const contractbuildFunnelDir = "runtime/internal/contractbuild/"
+// contractSpecConstructionHomes are the two sanctioned ContractSpec
+// construction sites excluded from this scan:
+//   - runtime/internal/contractbuild/ — the typed funnels (NewFrameworkHTTP /
+//     NewEventDerivation) legitimately build ContractSpec{…} literals here.
+//   - kernel/contractspec/ — the type-definition home (it may construct
+//     zero-value / helper literals of its own type).
+//
+// generated/contracts/**/*_gen.go is excluded separately via the _gen.go
+// suffix filter (and DirsScope's default "generated" dir skip).
+var contractSpecConstructionHomes = []string{
+	"runtime/internal/contractbuild/",
+	"kernel/contractspec/",
+}
+
+// productionScanDirs are the top-level production trees scanned for raw
+// ContractSpec{…} literals. The set covers EVERY non-test production tree that
+// can import kernel/contractspec — not just cells/ — so the "non-runtime code
+// cannot hand-write a framework ContractSpec" claim in
+// runtime/internal/contractbuild/doc.go is repo-wide true, not only for
+// cells/+examples-cells/+runtime/ (#1038 review C1/F2). DirsScope auto-skips
+// vendor / testdata / worktrees / generated / *_test.go.
+var productionScanDirs = []string{
+	"runtime", "kernel", "cmd", "adapters", "cellmodules", "examples",
+}
 
 // collectContractSpecScanFiles returns production .go files to scan.
 // Scope: cells (top-level cells/ + examples/*/cells/) discovered via
-// findCellProductionGoFiles (metadata-driven), plus runtime/ via DirsScope
-// directory walk. kernel/contractspec owns the ContractSpec type definition
-// and runtime/internal/contractbuild owns the typed funnels (NewFrameworkHTTP
-// / NewEventDerivation), so both are intentionally outside this scope.
-// *_gen.go files are excluded from the unioned set.
+// findCellProductionGoFiles (metadata-driven), unioned with productionScanDirs
+// via DirsScope directory walk. The two construction homes
+// (contractSpecConstructionHomes) and *_gen.go files are excluded from the
+// unioned set.
 func collectContractSpecScanFiles(t *testing.T, root string) []string {
 	t.Helper()
 	cellFiles, err := findCellProductionGoFiles(root)
 	if err != nil {
 		t.Fatalf("metadata.NewParser: %v", err)
 	}
-	runtimeFiles, err := scanner.DirsScope(root, []string{"runtime"}).Files()
+	dirFiles, err := scanner.DirsScope(root, productionScanDirs).Files()
 	if err != nil {
-		t.Fatalf("scanner.DirsScope(runtime): %v", err)
+		t.Fatalf("scanner.DirsScope(%v): %v", productionScanDirs, err)
 	}
-	seen := make(map[string]struct{}, len(cellFiles)+len(runtimeFiles))
-	out := make([]string, 0, len(cellFiles)+len(runtimeFiles))
-	for _, f := range slices.Concat(cellFiles, runtimeFiles) {
+	seen := make(map[string]struct{}, len(cellFiles)+len(dirFiles))
+	out := make([]string, 0, len(cellFiles)+len(dirFiles))
+	for _, f := range slices.Concat(cellFiles, dirFiles) {
 		if strings.HasSuffix(f, "_gen.go") {
 			continue
 		}
-		// Exclude the sanctioned funnel home (runtime/internal/contractbuild).
-		if rel, relErr := filepath.Rel(root, f); relErr == nil &&
-			strings.HasPrefix(filepath.ToSlash(rel), contractbuildFunnelDir) {
-			continue
+		// Exclude the sanctioned construction homes.
+		rel, relErr := filepath.Rel(root, f)
+		if relErr == nil {
+			relSlash := filepath.ToSlash(rel)
+			if slices.ContainsFunc(contractSpecConstructionHomes, func(home string) bool {
+				return strings.HasPrefix(relSlash, home)
+			}) {
+				continue
+			}
 		}
 		if _, dup := seen[f]; dup {
 			continue

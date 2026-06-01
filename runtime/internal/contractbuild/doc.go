@@ -54,10 +54,15 @@
 // non-runtime packages (cells/, examples/, cmd/, adapters/, kernel/). Two
 // orthogonal vectors:
 //
-//   - Non-runtime construction: Hard (compiler). Those packages can neither
-//     import this package (Go internal/ rule) nor write a
-//     contractspec.ContractSpec{…} literal (NO-MANUAL-CONTRACTSPEC-LITERAL-01
-//     scans cells/ + examples/ + runtime/). Both forms are unrepresentable.
+//   - Non-runtime construction: Hard. Those packages can neither import this
+//     package (Go internal/ rule — compiler Hard) nor write a
+//     contractspec.ContractSpec{…} literal: NO-MANUAL-CONTRACTSPEC-LITERAL-01
+//     scans EVERY production tree that can import kernel/contractspec — cells/,
+//     examples/, runtime/, kernel/, cmd/, adapters/, cellmodules/ (#1038 review
+//     C1/F2 widened the scan beyond the original cells/+examples-cells/+runtime/
+//     so this claim is repo-wide true, not just for cells/). Both forms are
+//     unrepresentable. (The literal-ban is archtest-enforced, not a compiler
+//     gate; per the established grading it is the funnel's downstream Hard.)
 //   - Within-runtime construction: open by design for the funnel CALL (any
 //     runtime/ framework infra may call NewFrameworkHTTP / NewEventDerivation —
 //     these are framework-owned infra, not business contracts), while a raw
@@ -81,9 +86,11 @@
 //     drift guard are RETIRED: once the compiler seals non-runtime callers and
 //     Validate() seals content, the single-caller rule guarded only a
 //     non-security tracing projection whose output must still pass Validate() —
-//     pure ceremony. If a future concern needs single-package Hard, move
-//     NewEventDerivation into the eventrouter package as an unexported helper
-//     (cost: one NO-MANUAL exclusion).
+//     pure ceremony. The residual gap (any runtime/ pkg may build an event spec
+//     from primitives without Subscription provenance) is tracked at gh #1445;
+//     the preferred fix is a typed outbox.Subscription parameter (provenance via
+//     type, no new exclusion), with the eventrouter-unexported move as the
+//     fallback (cost: one NO-MANUAL exclusion).
 //   - ContractSpec{…} literal ban: downstream Hard (unchanged,
 //     NO-MANUAL-CONTRACTSPEC-LITERAL-01). runtime/internal/contractbuild is the
 //     sanctioned funnel home and is excluded from that scan, analogous to the
