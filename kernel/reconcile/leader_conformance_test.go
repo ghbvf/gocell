@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
 )
@@ -16,12 +17,12 @@ func TestFakeLeaderElector_Conformance(t *testing.T) {
 	t.Parallel()
 	t.Run("Leader", func(t *testing.T) {
 		t.Parallel()
-		backend := reconciletest.NewFakeLeaseBackend()
+		backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 		reconciletest.RunLeaderConformance(t, func(h string) reconcile.LeaderElector { return backend.Elector(h) })
 	})
 	t.Run("Fencing", func(t *testing.T) {
 		t.Parallel()
-		backend := reconciletest.NewFakeLeaseBackend()
+		backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 		reconciletest.RunFencingConformance(t, func(h string) reconcile.LeaderElector { return backend.Elector(h) })
 	})
 }
@@ -30,7 +31,7 @@ func TestFakeLeaderElector_Conformance(t *testing.T) {
 func TestLeaderElector_AcquireExclusive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	backend := reconciletest.NewFakeLeaseBackend()
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	a, b := backend.Elector("A"), backend.Elector("B")
 
 	_, err := a.AcquireLease(ctx, "rid")
@@ -43,7 +44,7 @@ func TestLeaderElector_AcquireExclusive(t *testing.T) {
 func TestLeaderElector_ReleaseUnblocksFollower(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	backend := reconciletest.NewFakeLeaseBackend()
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	a, b := backend.Elector("A"), backend.Elector("B")
 
 	tok, err := a.AcquireLease(ctx, "rid")
@@ -57,7 +58,7 @@ func TestLeaderElector_ReleaseUnblocksFollower(t *testing.T) {
 func TestLeaderElector_RenewKeepsLease(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	backend := reconciletest.NewFakeLeaseBackend()
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	a, b := backend.Elector("A"), backend.Elector("B")
 
 	tok, err := a.AcquireLease(ctx, "rid")
@@ -76,7 +77,7 @@ func TestLeaderElector_RenewKeepsLease(t *testing.T) {
 func TestLeaderElector_StaleFollowerAcquiresOnExpiry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	backend := reconciletest.NewFakeLeaseBackend()
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	a, b := backend.Elector("A"), backend.Elector("B")
 
 	tokA, err := a.AcquireLease(ctx, "rid")

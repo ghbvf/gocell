@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
 )
@@ -98,7 +99,7 @@ func (m *reconcileMockCmdable) readEpoch(epochKey string) int64 {
 
 func mustElector(t *testing.T, rdb cmdable, holderID string) *RedisReconcileElector {
 	t.Helper()
-	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", holderID, 30*time.Second)
+	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", holderID, 30*time.Second, clock.Real())
 	require.NoError(t, err)
 	return e
 }

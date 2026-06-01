@@ -28,27 +28,30 @@ const (
 	// monotonic epoch: bumped on a holder CHANGE (or post-expiry re-acquire), kept
 	// on an idempotent same-holder still-live re-acquire. Only the advisory-lock
 	// holder reaches this statement, so the row is mutated by one writer at a time.
+	// Timestamps use the DB clock (now()) — the single time authority across
+	// replicas — so the adapter needs no injected Go clock; $3 is the lease TTL in
+	// milliseconds. RETURNING reflects the DB-computed window back into the token.
 	pgReconcileUpsertSQL = `
 INSERT INTO reconcile_leases (reconciler_id, holder_id, epoch, acquired_at, expires_at)
-VALUES ($1, $2, 1, $3, $4)
+VALUES ($1, $2, 1, now(), now() + ($3 * interval '1 millisecond'))
 ON CONFLICT (reconciler_id) DO UPDATE SET
     epoch = CASE
-        WHEN reconcile_leases.holder_id = EXCLUDED.holder_id AND reconcile_leases.expires_at > $3
+        WHEN reconcile_leases.holder_id = EXCLUDED.holder_id AND reconcile_leases.expires_at > now()
         THEN reconcile_leases.epoch
         ELSE reconcile_leases.epoch + 1
     END,
     holder_id = EXCLUDED.holder_id,
-    acquired_at = EXCLUDED.acquired_at,
-    expires_at = EXCLUDED.expires_at
-RETURNING epoch`
+    acquired_at = now(),
+    expires_at = now() + ($3 * interval '1 millisecond')
+RETURNING epoch, acquired_at, expires_at`
 
 	// pgReconcileRenewSQL extends the lease window, holder-guarded (the row-level
 	// correctness CAS atop the advisory lock). 0 rows ⟹ no longer the holder.
-	pgReconcileRenewSQL = `UPDATE reconcile_leases SET expires_at = $3 WHERE reconciler_id = $1 AND holder_id = $2`
+	pgReconcileRenewSQL = `UPDATE reconcile_leases SET expires_at = now() + ($3 * interval '1 millisecond') WHERE reconciler_id = $1 AND holder_id = $2`
 
 	// pgReconcileRefreshSQL is the idempotent same-holder re-acquire: refresh the
-	// window and return the (unchanged) epoch.
-	pgReconcileRefreshSQL = `UPDATE reconcile_leases SET expires_at = $3 WHERE reconciler_id = $1 AND holder_id = $2 RETURNING epoch`
+	// window and return the (unchanged) epoch + DB-computed timestamps.
+	pgReconcileRefreshSQL = `UPDATE reconcile_leases SET expires_at = now() + ($3 * interval '1 millisecond') WHERE reconciler_id = $1 AND holder_id = $2 RETURNING epoch, acquired_at, expires_at`
 )
 
 // ReconcileElector implements reconcile.LeaderElector using a session-scoped
@@ -86,20 +89,20 @@ func NewReconcileElector(pool *Pool, holderID string, leaseDuration time.Duratio
 func (e *ReconcileElector) AcquireLease(ctx context.Context, reconcilerID string) (reconcile.LeaseToken, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	now := time.Now()
-	expires := now.Add(e.leaseDuration)
+	leaseMs := e.leaseDuration.Milliseconds()
 
 	// Idempotent re-acquire: we already hold this lease's session — refresh + keep epoch.
 	if conn, ok := e.held[reconcilerID]; ok {
 		var epoch int64
-		err := conn.QueryRow(ctx, pgReconcileRefreshSQL, reconcilerID, e.holderID, expires).Scan(&epoch)
+		var acquiredAt, expiresAt time.Time
+		err := conn.QueryRow(ctx, pgReconcileRefreshSQL, reconcilerID, e.holderID, leaseMs).Scan(&epoch, &acquiredAt, &expiresAt)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			e.releaseConn(ctx, reconcilerID, conn) // row vanished — drop stale conn, fall through to fresh acquire
 		case err != nil:
 			return reconcile.LeaseToken{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: refresh", err)
 		default:
-			return leaseToken(reconcilerID, e.holderID, uint64(epoch), now, expires), nil
+			return leaseToken(reconcilerID, e.holderID, uint64(epoch), acquiredAt, expiresAt), nil
 		}
 	}
 
@@ -119,12 +122,13 @@ func (e *ReconcileElector) AcquireLease(ctx context.Context, reconcilerID string
 	}
 
 	var epoch int64
-	if err := conn.QueryRow(ctx, pgReconcileUpsertSQL, reconcilerID, e.holderID, now, expires).Scan(&epoch); err != nil {
+	var acquiredAt, expiresAt time.Time
+	if err := conn.QueryRow(ctx, pgReconcileUpsertSQL, reconcilerID, e.holderID, leaseMs).Scan(&epoch, &acquiredAt, &expiresAt); err != nil {
 		e.releaseConn(ctx, reconcilerID, conn) // unlock + return the conn before surfacing the error
 		return reconcile.LeaseToken{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: upsert epoch", err)
 	}
 	e.held[reconcilerID] = conn
-	return leaseToken(reconcilerID, e.holderID, uint64(epoch), now, expires), nil
+	return leaseToken(reconcilerID, e.holderID, uint64(epoch), acquiredAt, expiresAt), nil
 }
 
 // RenewLease implements reconcile.LeaderElector. We hold the advisory lock on a
@@ -138,7 +142,7 @@ func (e *ReconcileElector) RenewLease(ctx context.Context, token reconcile.Lease
 	if !ok {
 		return reconcile.ErrReconcileLeaseLost
 	}
-	tag, err := conn.Exec(ctx, pgReconcileRenewSQL, token.ReconcilerID, e.holderID, time.Now().Add(e.leaseDuration))
+	tag, err := conn.Exec(ctx, pgReconcileRenewSQL, token.ReconcilerID, e.holderID, e.leaseDuration.Milliseconds())
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres reconcile elector: renew", err)
 	}

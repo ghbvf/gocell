@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 )
 
@@ -35,6 +36,7 @@ const defaultFakeLeaseTTL = 30 * time.Second
 // adapters.
 type FakeLeaseBackend struct {
 	mu     sync.Mutex
+	clk    clock.Clock
 	leases map[string]*fakeLeaseState
 }
 
@@ -45,9 +47,11 @@ type fakeLeaseState struct {
 	expiresAt  time.Time
 }
 
-// NewFakeLeaseBackend returns an empty shared lease backend.
-func NewFakeLeaseBackend() *FakeLeaseBackend {
-	return &FakeLeaseBackend{leases: make(map[string]*fakeLeaseState)}
+// NewFakeLeaseBackend returns an empty shared lease backend. clk stamps the lease
+// window (callers pass clock.Real() or a test clock).
+func NewFakeLeaseBackend(clk clock.Clock) *FakeLeaseBackend {
+	clock.MustHaveClock(clk, "reconciletest.FakeLeaseBackend")
+	return &FakeLeaseBackend{clk: clk, leases: make(map[string]*fakeLeaseState)}
 }
 
 // Elector returns a FakeLeaderElector for holderID backed by b with the default
@@ -68,7 +72,7 @@ func (b *FakeLeaseBackend) Expire(reconcilerID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if st := b.leases[reconcilerID]; st != nil {
-		st.expiresAt = time.Now().Add(-time.Second)
+		st.expiresAt = b.clk.Now().Add(-time.Second)
 	}
 }
 
@@ -90,7 +94,7 @@ func (e *FakeLeaderElector) AcquireLease(ctx context.Context, reconcilerID strin
 	b := e.backend
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	now := time.Now()
+	now := b.clk.Now()
 	st := b.leases[reconcilerID]
 	live := st != nil && st.expiresAt.After(now)
 	switch {
@@ -125,7 +129,7 @@ func (e *FakeLeaderElector) ReleaseLease(ctx context.Context, token reconcile.Le
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if st := b.leases[token.ReconcilerID]; st != nil && st.holder == e.holderID {
-		st.expiresAt = time.Now().Add(-time.Second) // mark free
+		st.expiresAt = b.clk.Now().Add(-time.Second) // mark free
 	}
 	return nil
 }
@@ -136,7 +140,7 @@ func (e *FakeLeaderElector) RenewLease(ctx context.Context, token reconcile.Leas
 	b := e.backend
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	now := time.Now()
+	now := b.clk.Now()
 	st := b.leases[token.ReconcilerID]
 	if st == nil || st.holder != e.holderID || !st.expiresAt.After(now) {
 		return reconcile.ErrReconcileLeaseLost

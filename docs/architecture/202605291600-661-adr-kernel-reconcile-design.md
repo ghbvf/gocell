@@ -484,8 +484,20 @@ trigger gate 的原始约束（spec.md §Trigger Gate）是「trigger 满足前�
    （≥80% reuse / 接口最小性 / panic 隔离 / leak-free）的**验证手段**，不是预建产能。
 2. 当前 repo 只有 gocell 自身、无外部调用方（CLAUDE.md），un-park 决策由 maintainer 行使。
 3. A1–A3 不引入任何业务 cell / `mdm/` 目录（plan-D §10 禁止预建的是业务产能，非 kernel 基建）。
-4. A4–A10（leader adapter / Builder funnel / kernel/command 迁移 / examples 切换）**仍 parked**，
-   `runtime/command.SweeperLifecycle` 旧路径不动（无双轨破裂）。
+4. ~~A4–A10 仍 parked~~ **（已 superseded，见 §6.2 Amendment 2026-06-02）**。
+
+> **§6.2 Amendment 2026-06-02（PR-A6 落地，AI-robust §ADR amendment 落地必查）**：
+> §6.2 原 item 4 称「A4–A10 仍 parked」已与现实矛盾——A4（Trigger，#1373）、A5（backoff +
+> panic recovery，#1419）、A6（LeaderElector + epoch fencing，#1167，本 PR）均经 maintainer
+> **逐 PR 显式 un-park** 后合入 develop。统一决议：**kernel 基建 A1–A8（接口 / Trigger /
+> backoff / LeaderElector + adapter / Builder / kernel/command 迁移）不在 trigger gate 内**——
+> §6.2 item 1–3 的 un-park 理由（无外部调用方 + 可运行实现是 ADR 论断的验证手段 + 不引入业务
+> cell / `mdm/` 目录）对 A4–A8 同等成立。`runtime/command.SweeperLifecycle` 旧路径在 A8 才删，
+> A6 不动它（无双轨破裂）。**§6.1 trigger gate 语义同步收窄**：T1–T4 现仅门**真实业务消费方 cell**
+> （pkicell.rotation / mdmcell.command / devicelifecycle.cronsweep / zerotrust.trustscore）的建设
+> + `examples` 端到端切换，**不门 kernel 基建**。这与 §6.2 item 3「不引入业务 cell」是同一条线的
+> 延伸，非新政策。本 amendment 与 §6.1 表头「A4–A10 实施前必须满足」的旧措辞冲突——以本
+> amendment 为准（kernel 基建已 un-park）。
 
 ### 6.3 激活流程（A4–A10）
 
@@ -557,6 +569,39 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 >   上界增长；缓解：§3.1 S1 bounded-set 契约（EntityID 必须来自 cell-local 表主键集）+
 >   `MaxConcurrentReconciles` 限制并发。硬 cap（上限整数）作为 defense-in-depth 已评估并
 >   延后（A5 scope 外，deferred）。
+
+> **§Amendment 2026-06-02 (PR-A6 #1167) — leader-elect + epoch fencing 落地威胁矩阵逐行重评**：
+> PR-A6 落地 `LeaderElector`（lease/renew + monotonic Epoch）+ 2 adapter（redis SETNX+INCR /
+> postgres session advisory-lock + 行级 epoch CAS）+ `FencedRepository`/`FencedWriter` sealed
+> seam + `RunLeaderConformance`/`RunFencingConformance`。依 AI-robust §"ADR amendment 落地必查"
+> 逐行重评受影响格子（无格子 ✅→⚠️/❌）：
+> - **T-LEADER**：缓解列从「（A6 落地…后定级）设计」更新为 **已兑现**：lease/renew 模型 +
+>   lost-lease ctx-cancel 中断（`Loop.renewLoop` 失败瞬间 `leaseCancel()`，`TestLoop_LeaderElect
+>   LostLeaseCancelsInflight` 守）+ fail-closed（`AcquireLease` 错误→不 dispatch）已落地；接口由
+>   `RECONCILE-LEADER-INTERFACE-FROZEN-01`（**Hard** reflect golden）冻结。**评级：Hard**（接口冻结）
+>   + 行为 Medium（runtime guard + 测试）。leader election ≠ fencing 维持不变（best-effort 收窄）。
+> - **T-DUAL / T-FENCE**：跨副本正确性从「设计」更新为 **已兑现**：`FencedWriter` 上游
+>   **type-system Hard**（`repo`/`epoch` 字段 + `newFencedWriter` 构造器全 unexported，包外无法
+>   伪造 epoch；`RECONCILE-FENCED-WRITE-FUNNEL-01` reflect 锁 seal 形态）+ 下游 **Hard**（mint
+>   callsite ⊆ {loop.go, fenced.go}）；`RunFencingConformance` real-failure-injection（epoch-N 写在
+>   epoch-N+1 接管后重放 → 单调 CAS 拒绝 + 无重复 effect）对 fake/redis/postgres 三实现入列。
+>   monotonic-epoch（非 outbox UUID identity-fencing）已落地。**评级：上下游均 Hard**（已兑现）。
+> - **新增 enforcement T-IMPL**（分层卫生）：`RECONCILE-LEADER-IMPL-FUNNEL-01` 限定 `LeaderElector`
+>   实现 ⊆ {adapters/redis, adapters/postgres, reconciletest fake}。**评级：Medium，永久 Go 天花板**
+>   （Go 无法 seal interface 实现，同 #851/#893/#1282；won't-do）。**非正确性闭环**——跨副本正确性
+>   由 T-DUAL/T-FENCE 的 Hard 兜底，本规则只防「业务包手搓 elector 绕过 adapter 边界」的分层 smell。
+> - **T-BUILDER**：A6 新增 `Loop.Leader` / `Loop.FencedRepo` exported 字段，仍由
+>   `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01`（Medium 上游 + Hard 下游）守，**posture 不回退**；
+>   上游 Hard 闭环仍待 A7 Builder（#661/A7）。
+> - **as-built 偏离 controller-runtime（已核实并记录）**：client-go/controller-runtime 丢 lease 时
+>   `log.Fatal()` 退进程；GoCell `Loop` 是 cell lifecycle hook 而非独立进程，故丢 lease 后
+>   `leaseCancel()` 中断 in-flight + 转 follower 重新竞争（不退进程）——cancel-and-recontend，理由
+>   见 `loop.go::leaderManage` godoc。
+> - **as-built 偏离 §4.1（PG 时间源）**：§4.1 描述 PG「session-scoped lock + heartbeat」；as-built
+>   PG 的 lease 时间戳由 **DB `now()`**（单一时间权威，跨副本无时钟漂移）计算并 RETURNING 回填
+>   token，adapter 不注入 Go clock（redis 因无服务端时钟仍注入 `clock.Clock`）。advisory-lock 仍
+>   session-scoped（crash → session 断 → 锁自动释放，即时 failover），与 §4.1 一致；仅时间源细化
+>   为 DB 侧，威胁面不变。
 
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：

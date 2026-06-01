@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
 )
@@ -22,7 +23,7 @@ func TestIntegration_ReconcileElectorConformance(t *testing.T) {
 	defer cleanup()
 
 	factory := func(holderID string) reconcile.LeaderElector {
-		e, err := NewRedisReconcileElector(client, "reconcile", holderID, 30*time.Second)
+		e, err := NewRedisReconcileElector(client, "reconcile", holderID, 30*time.Second, clock.Real())
 		require.NoError(t, err)
 		return e
 	}

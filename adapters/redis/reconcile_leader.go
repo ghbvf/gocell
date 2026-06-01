@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -51,33 +52,27 @@ type RedisReconcileElector struct {
 	ns            KeyNamespace
 	holderID      string
 	leaseDuration time.Duration
+	clk           clock.Clock
 }
 
 // NewRedisReconcileElector builds a leader elector. holderID identifies this
 // replica and MUST be unique per process (production callers pass idutil.NewUUID();
 // tests pass a stable label). leaseDuration is the lease TTL; the reconcile Loop
-// derives its renew cadence as TTL/3 unless overridden. ns / client / holderID /
-// leaseDuration are validated up front so misconfiguration fails fast.
-func NewRedisReconcileElector(client *Client, ns KeyNamespace, holderID string, leaseDuration time.Duration) (*RedisReconcileElector, error) {
-	if err := ns.Validate(); err != nil {
-		return nil, err
-	}
+// derives its renew cadence as TTL/3 unless overridden. clk is the injected clock
+// stamping the token window (Redis has no server-side wall clock to return). ns /
+// client / holderID / leaseDuration / clk are validated up front so
+// misconfiguration fails fast.
+func NewRedisReconcileElector(client *Client, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock) (*RedisReconcileElector, error) {
 	if client == nil {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: client is nil")
 	}
-	if holderID == "" {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: holderID is required")
-	}
-	if leaseDuration <= 0 {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: leaseDuration must be positive")
-	}
-	return newReconcileElectorFromCmdable(client.cmdable(), ns, holderID, leaseDuration)
+	return newReconcileElectorFromCmdable(client.cmdable(), ns, holderID, leaseDuration, clk)
 }
 
 // newReconcileElectorFromCmdable is the cmdable-level constructor used by unit
 // tests that inject a mock cmdable. Same validation contract as the public
 // constructor (mirrors newRedisDriverFromCmdable).
-func newReconcileElectorFromCmdable(rdb cmdable, ns KeyNamespace, holderID string, leaseDuration time.Duration) (*RedisReconcileElector, error) {
+func newReconcileElectorFromCmdable(rdb cmdable, ns KeyNamespace, holderID string, leaseDuration time.Duration, clk clock.Clock) (*RedisReconcileElector, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
 	}
@@ -90,7 +85,8 @@ func newReconcileElectorFromCmdable(rdb cmdable, ns KeyNamespace, holderID strin
 	if leaseDuration <= 0 {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis reconcile elector: leaseDuration must be positive")
 	}
-	return &RedisReconcileElector{rdb: rdb, ns: ns, holderID: holderID, leaseDuration: leaseDuration}, nil
+	clock.MustHaveClock(clk, "redis reconcile elector")
+	return &RedisReconcileElector{rdb: rdb, ns: ns, holderID: holderID, leaseDuration: leaseDuration, clk: clk}, nil
 }
 
 func (e *RedisReconcileElector) holderKey(reconcilerID string) string {
@@ -103,7 +99,7 @@ func (e *RedisReconcileElector) epochKey(reconcilerID string) string {
 
 // AcquireLease implements reconcile.LeaderElector.
 func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID string) (reconcile.LeaseToken, error) {
-	now := time.Now()
+	now := e.clk.Now()
 	res, err := e.rdb.Eval(ctx, reconcileAcquireScript,
 		[]string{e.holderKey(reconcilerID), e.epochKey(reconcilerID)},
 		e.holderID, e.leaseDuration.Milliseconds()).Slice()

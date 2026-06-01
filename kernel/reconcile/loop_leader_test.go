@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
 )
@@ -19,7 +20,7 @@ import (
 // write surface — and that the write lands at that epoch.
 func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	backend := reconciletest.NewFakeLeaseBackend()
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	repo := reconciletest.NewFakeFencedRepository()
 	src := make(chan reconcile.Request, 1)
 	got := make(chan uint64, 1)
@@ -64,7 +65,7 @@ func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
 // the lease-scoped ctx, interrupting the in-flight Reconcile.
 func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	backend := reconciletest.NewFakeLeaseBackend()
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	src := make(chan reconcile.Request, 1)
 	started := make(chan struct{}, 1)
 	ctxErr := make(chan error, 1)
@@ -114,7 +115,7 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 // only the lease holder dispatches Reconcile; the follower holds idle.
 func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	backend := reconciletest.NewFakeLeaseBackend()
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	var aCount, bCount atomic.Int64
 	mkRec := func(c *atomic.Int64) reconciletest.FakeReconciler {
 		return reconciletest.FakeReconciler{Fn: func(_ context.Context, _ reconcile.Request) (reconcile.Result, error) {
