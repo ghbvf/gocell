@@ -718,12 +718,13 @@ func applyWebhookCU(cu ContractUsage, sl *SliceMeta, c *ContractMeta, idx *webho
 // the (cellID, projectionID) namespace — two CUs with the same id in the same
 // cell would produce ambiguous RegisterProjection registrations at runtime.
 //
-// It also validates the onReset coupling rule: a CU carrying onReset without
-// a sibling projection field on the same CU is a declaration error.
+// Placement is fail-closed (delegated to checkProjectionCUPlacement): a
+// non-subscribe CU carrying projection/onReset is rejected (F1), as is group on
+// a projection CU (F2) and onReset without a sibling projection (coupling rule).
 //
-// Skip conditions (no error — other governance rules cover these cases):
-//   - CU role != "subscribe"
-//   - CU.Projection == "" (no projection on this CU)
+// Uniqueness recording (the (cellID, projectionID) dedup) is skipped only for
+// CUs that declare no projection to record — i.e. role != "subscribe", or a
+// subscribe CU with an empty projection field. Those are valid, not errors.
 func validateProjectionUniqueness(pm *ProjectMeta) error {
 	// cellID → projectionID → first sliceID that claimed it.
 	seen := make(map[string]map[string]string)
