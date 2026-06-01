@@ -26,16 +26,12 @@ import (
 
 // Bootstrap auth-fail reason values are the authoritative source for valid
 // reason strings. These constants mirror the literal vocabulary used by
-// runtime/auth/bootstrap.go and serve as the authoritative source for the
-// audit-side serialization shape (payload "reason" field, slog "reason"
-// attr). runtime/auth does NOT import runtime/audit (cells/runtime layering
-// rule documented in tools/archtest/bootstrap_audit_observer_funnel_test.go),
-// so the runtime/auth side keeps its own string literals — drift is
-// prevented by archtest-level testing rather than import-level coupling.
-//
-// The typed string funnel upgrade (`type BootstrapAuthFailReason string`
-// + sealed constructor) is tracked as BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01
-// (arm b: reason typed).
+// runtime/auth/bootstrap.go and are re-declared in
+// cells/accesscore/internal/dto (which cannot import runtime/audit) and in
+// cells/accesscore/slices/setup (reason whitelist for RecordBootstrapAuthFail).
+// Drift is prevented by the event contract (event.auth.bootstrap-failed.v1
+// payload.schema.json) and the validate/whitelist checks in both producer and
+// consumer code paths.
 const (
 	ReasonMissingHeader    = "missing_header"
 	ReasonWrongCredentials = "wrong_credentials"
@@ -90,8 +86,8 @@ type bootstrapAuthFailPayload struct {
 //   - ErrValidationFailed when store / clock is nil, or reason is not in
 //     {missing_header, wrong_credentials, rate_limited}.
 //   - The wrapped Append error otherwise — most commonly ledger duplicate
-//     fingerprint or chain-write failure; callers (typically the observer
-//     in NewBootstrapAuthFailObserver) log and continue.
+//     fingerprint or chain-write failure; callers (auditappendbootstrap.Service.HandleEvent)
+//     log and Requeue on transient errors.
 func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, clk clock.Clock, reason, clientIP string) error {
 	if store == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

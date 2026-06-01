@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/appender"
+	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendbootstrap"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendconfig"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendrole"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendsession"
@@ -24,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -85,6 +87,21 @@ func WithQueryStore(s ledger.QueryStore) Option {
 			return
 		}
 		c.queryStore = s
+	}
+}
+
+// WithBootstrapStore injects the sealed *audit.BootstrapLedgerStore into the
+// Cell so the auditappendbootstrap subscriber slice can write bootstrap-chain
+// entries. This is an internal wiring option — it is only callable from the
+// cellmodules/auditcore composition-root layer.
+//
+// Bare-nil inputs are silently ignored; the final nil validation happens in
+// initSlices when the auditappendbootstrap.Service is constructed.
+func WithBootstrapStore(s *audit.BootstrapLedgerStore) Option {
+	return func(c *AuditCore) {
+		if s != nil {
+			c.bootstrapStore = s
+		}
 	}
 }
 
@@ -182,6 +199,14 @@ type AuditCore struct {
 	appendConfigSvc *auditappendconfig.Service
 
 	appendRoleSvc *auditappendrole.Service
+
+	// bootstrapStore is the sealed handle for the bootstrap audit chain,
+	// injected via WithBootstrapStore from the cellmodules/auditcore composition
+	// root. It feeds the auditappendbootstrap subscriber slice. Not exported —
+	// this is an internal wiring detail.
+	bootstrapStore *audit.BootstrapLedgerStore
+
+	appendBootstrapSvc *auditappendbootstrap.Service
 
 	// +slice:route:slice=auditquery,subPath=
 	queryHandler *auditquery.Handler
@@ -357,7 +382,8 @@ func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
 	return nil
 }
 
-// initSlices constructs the 4 auditappend sub-slices.
+// initSlices constructs the 4 auditappend sub-slices plus the
+// auditappendbootstrap subscriber slice.
 // auditquery is initialized separately in initQuerySlice after cursor codec resolve.
 //
 // All 4 auditappend* slices share the same appender.Service implementation;
@@ -393,6 +419,18 @@ func (c *AuditCore) initSlices() error {
 		*a.target = svc
 		c.AddSlice(cell.MustNewBaseSliceFromMeta(a.metadata()))
 	}
+
+	// Bootstrap subscriber slice — always initialized. When bootstrapStore is nil
+	// (demo/test mode) the service runs in no-op mode (Requeue until wired).
+	// Production assemblies wire a real store via WithBootstrapStore.
+	bootstrapSvc, err := auditappendbootstrap.NewService(c.clk,
+		auditappendbootstrap.WithBootstrapStore(c.bootstrapStore),
+	)
+	if err != nil {
+		return fmt.Errorf("auditappendbootstrap: %w", err)
+	}
+	c.appendBootstrapSvc = bootstrapSvc
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(auditappendbootstrap.SliceMetadata()))
 
 	return nil
 }

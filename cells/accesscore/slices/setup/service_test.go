@@ -822,3 +822,61 @@ func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *
 		"already provisioned must return 410 ErrSetupAlreadyInitialized")
 	assert.Empty(t, w.entries, "no event emitted on 410 path")
 }
+
+// --- RecordBootstrapAuthFail ------------------------------------------------
+
+func TestService_RecordBootstrapAuthFail_ValidReasons(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		reason   string
+		clientIP string
+	}{
+		{reason: "missing_header", clientIP: "192.0.2.1"},
+		{reason: "wrong_credentials", clientIP: "10.0.0.1"},
+		{reason: "rate_limited", clientIP: ""},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.reason, func(t *testing.T) {
+			t.Parallel()
+			store := mem.NewStore(clock.Real())
+			w := &stubWriter{}
+			svc := newService(t, store.UserRepository(), store.RoleRepository(), w)
+
+			err := svc.RecordBootstrapAuthFail(context.Background(), tc.reason, tc.clientIP)
+			require.NoError(t, err)
+			require.Len(t, w.entries, 1, "exactly one outbox entry emitted")
+
+			var payload dto.BootstrapAuthFailedEvent
+			require.NoError(t, json.Unmarshal(w.entries[0].Payload(), &payload))
+			assert.Equal(t, tc.reason, payload.Reason)
+			assert.Equal(t, tc.clientIP, payload.ClientIP)
+			assert.Equal(t, dto.TopicBootstrapAuthFailed, w.entries[0].EventType())
+		})
+	}
+}
+
+func TestService_RecordBootstrapAuthFail_InvalidReason_Error(t *testing.T) {
+	t.Parallel()
+	store := mem.NewStore(clock.Real())
+	w := &stubWriter{}
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), w)
+
+	err := svc.RecordBootstrapAuthFail(context.Background(), "invalid_reason", "1.2.3.4")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Empty(t, w.entries, "no outbox entry on invalid reason")
+}
+
+func TestService_RecordBootstrapAuthFail_EmitterFailure_Propagates(t *testing.T) {
+	t.Parallel()
+	store := mem.NewStore(clock.Real())
+	w := &stubWriter{err: errors.New("broker down")}
+	svc := newService(t, store.UserRepository(), store.RoleRepository(), w)
+
+	err := svc.RecordBootstrapAuthFail(context.Background(), "rate_limited", "1.2.3.4")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "broker down")
+}

@@ -1,5 +1,20 @@
 package dto
 
+// TopicBootstrapAuthFailed is the outbox topic for event.auth.bootstrap-failed.v1.
+// Emitted by the setup slice when the bootstrap middleware rejects a request
+// (missing header, wrong credentials, or rate limit exceeded).
+const TopicBootstrapAuthFailed = "event.auth.bootstrap-failed.v1"
+
+// BootstrapAuthFailedEvent is the payload for event.auth.bootstrap-failed.v1.
+//
+// Reason values mirror runtime/audit.ReasonMissingHeader / ReasonWrongCredentials
+// / ReasonRateLimited constants (the runtime/audit constants are the authoritative
+// names; dto keeps typed copies to remain runtime/audit-import-free from cells/).
+type BootstrapAuthFailedEvent struct {
+	Reason   string `json:"reason"`
+	ClientIP string `json:"clientIp,omitempty"`
+}
+
 // Topic constants for user-lifecycle events (L2 OutboxFact).
 //
 // Shared between accesscore slices that produce user events (identitymanage,

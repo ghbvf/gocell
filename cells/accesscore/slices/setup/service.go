@@ -336,6 +336,35 @@ func setupRetiredError() error {
 	)
 }
 
+// validBootstrapAuthFailReasons is the whitelist for RecordBootstrapAuthFail.
+// Values mirror runtime/audit.Reason* constants; cells/ must not import runtime/audit.
+var validBootstrapAuthFailReasons = map[string]struct{}{
+	"missing_header":    {},
+	"wrong_credentials": {},
+	"rate_limited":      {},
+}
+
+// RecordBootstrapAuthFail emits event.auth.bootstrap-failed.v1 inside a
+// transaction so the outbox row is persisted atomically with the emitter
+// database write. Called from the accesscore bootstrap observer closure after
+// a 401/429 response is written; errors are logged by the caller and not
+// surfaced to the HTTP response (best-effort audit for non-durable emitters,
+// persistent outbox row for durable mode).
+//
+// reason must be one of "missing_header", "wrong_credentials", "rate_limited".
+// clientIP may be empty when the middleware did not set ctxkeys.RealIP.
+func (s *Service) RecordBootstrapAuthFail(ctx context.Context, reason, clientIP string) error {
+	if _, ok := validBootstrapAuthFailReasons[reason]; !ok {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"setup: RecordBootstrapAuthFail: reason not in whitelist",
+			errcode.WithInternal(errcode.InternalAttr("reason", reason)))
+	}
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicBootstrapAuthFailed,
+			dto.BootstrapAuthFailedEvent{Reason: reason, ClientIP: clientIP})
+	})
+}
+
 func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) error {
 	// First-run admin bootstrap has no caller principal yet — by definition
 	// this is the very first admin. Audit chain attributes the action to the

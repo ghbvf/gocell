@@ -45,8 +45,8 @@ func (module) ID() string { return "auditcore" }
 //   - GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY (bootstrap chain HMAC, namespace="bootstrap")
 //   - GOCELL_AUDITCORE_CURSOR_KEY / *_PREVIOUS_KEY (cursor codec)
 func (m module) Provide(
-	ctx context.Context, shared *composition.SharedDeps, _ composition.ModuleExports,
-) (cell.Cell, composition.ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	ctx context.Context, shared *composition.SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// Cursor codec for auditcore.
 	auditPrimary, auditPrevious := cellsecrets.LoadCursorKeys("AUDITCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
@@ -59,13 +59,13 @@ func (m module) Provide(
 		Label:       "audit",
 	})
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
+		return nil, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
 	}
 
 	// Build the auditcore relay protocol (HMAC key A, namespace="auditcore").
 	auditNamespace, err := ledger.ParseNamespaceID("auditcore")
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
+		return nil, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
 	}
 	auditProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode(),
 		"GOCELL_AUDITCORE_HMAC_KEY",
@@ -73,7 +73,7 @@ func (m module) Provide(
 		"dev-hmac-key-replace-in-prod!!!!",
 		auditNamespace)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
+		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
 	}
 
 	// Build the bootstrap protocol (HMAC key B, namespace="bootstrap").
@@ -86,28 +86,28 @@ func (m module) Provide(
 		"dev-hmac-bootstrap-replace-32b!!",
 		audit.BootstrapNamespace())
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("bootstrap audit HMAC key: %w", err)
+		return nil, nil, nil, fmt.Errorf("bootstrap audit HMAC key: %w", err)
 	}
 
 	// Build the two ledger.Store instances (PG or mem).
 	auditcoreStore, bootstrapInnerStore, err := buildAuditStores(shared, auditProtocol, bootstrapProtocol)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Run strict tail verify against the bootstrap chain at composition time.
 	bootstrapWrapped, err := audit.NewBootstrapLedgerStore(bootstrapInnerStore)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("wrap bootstrap audit store: %w", err)
+		return nil, nil, nil, fmt.Errorf("wrap bootstrap audit store: %w", err)
 	}
 	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, nil); err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Build the read-side aggregator. auditquery reads across both chains.
 	multiStore, err := ledger.NewMultiStore(auditcoreStore, bootstrapInnerStore)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("audit multi-store: %w", err)
+		return nil, nil, nil, fmt.Errorf("audit multi-store: %w", err)
 	}
 
 	auditOpts := []auditcell.Option{
@@ -117,6 +117,13 @@ func (m module) Provide(
 		auditcell.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
 		auditcell.WithCursorCodec(cursorCodec),
 		auditcell.WithMetricsProvider(shared.MetricsProvider),
+		// Wire the bootstrap ledger store into the cell so the auditappendbootstrap
+		// subscriber slice can append bootstrap-chain entries. Previously this was
+		// exported via ModuleExports.BootstrapLedgerStore to accesscore; after Wave-1
+		// #1423 the bootstrap chain write-path is event-driven (accesscore publishes
+		// event.auth.bootstrap-failed.v1 → auditcore subscriber appends). The store
+		// stays auditcore-internal.
+		auditcell.WithBootstrapStore(bootstrapWrapped),
 	}
 
 	if shared.Topology.StorageBackend() == "postgres" {
@@ -129,12 +136,7 @@ func (m module) Provide(
 
 	c := auditcell.NewAuditCore(shared.Clock, auditOpts...)
 
-	// Cross-module wiring (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2): the
-	// bootstrap ledger store is handed downstream via the typed ModuleExports
-	// return. accesscore consumes it (audit.NewBootstrapAuthFailObserver). Module
-	// order (auditcore before accesscore in assembly.yaml) is the happens-before
-	// contract; accesscore fails fast if the export is absent.
-	return c, composition.ModuleExports{BootstrapLedgerStore: bootstrapWrapped}, nil, nil, nil
+	return c, nil, nil, nil
 }
 
 // buildAuditProtocol assembles a ledger.Protocol with an isolated HMAC key.

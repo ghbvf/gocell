@@ -111,8 +111,8 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 	// Init
 	require.NoError(t, c.Init(ctx, recorder))
 	// auditappendsession, auditappenduser, auditappendconfig, auditappendrole,
-	// auditquery = 5 slices (auditverify removed; cell.go GREEN since Wave 2 Batch D).
-	assert.Equal(t, 5, len(c.OwnedSlices()), "should have 5 slices after auditverify removal")
+	// auditquery, auditappendbootstrap = 6 slices (auditverify removed; auditappendbootstrap added Wave-1 #1423).
+	assert.Equal(t, 6, len(c.OwnedSlices()), "should have 6 slices after auditappendbootstrap addition")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -381,8 +381,10 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	// All 13 topics registered across 4 sub-slices.
+	// All 14 topics registered across 5 sub-slices (Wave-1 #1423: +auditappendbootstrap).
 	expectedTopics := []string{
+		// 1 bootstrap auth-fail event
+		"event.auth.bootstrap-failed.v1",
 		// 4 config events
 		"event.config.entry-deleted.v1",
 		"event.config.entry-upserted.v1",

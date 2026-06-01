@@ -4,14 +4,13 @@
 // Medium archtest backstop for issue #1121 / ADR 202605270230 — the audit chain
 // physical-isolation invariant.
 //
-// The Hard upstream defense is the type system: ModuleExports.BootstrapLedgerStore
-// is *audit.BootstrapLedgerStore, NewBootstrapLedgerStore enforces non-nil,
-// and audit.AppendBootstrapAuthFail / NewBootstrapAuthFailObserver accept only
-// the typed wrapper — passing an auditcore-namespace ledger.Store is a compile
-// error. The Hard downstream defense is the narrow ledger.QueryStore interface:
-// ledger.MultiStore implements only that subset, so injecting it into the
-// appender (auditcore.WithLedgerStore, signature ledger.Store) is a compile
-// error.
+// Hard upstream defenses (unchanged after Wave-1 #1423):
+//   - *audit.BootstrapLedgerStore is the only type accepted by AppendBootstrapAuthFail
+//     and auditcore.WithBootstrapStore — passing an auditcore-namespace ledger.Store is a
+//     compile error.
+//   - The Hard downstream defense is the narrow ledger.QueryStore interface:
+//     ledger.MultiStore implements only that subset, so injecting it into the
+//     appender (auditcore.WithLedgerStore, signature ledger.Store) is a compile error.
 //
 // What the type system cannot enforce: that the composition root actually
 // constructs *two* protocol/store pairs (one per namespace). A misconfigured
@@ -24,6 +23,11 @@
 // audit.BootstrapNamespace() at least once AND must contain at least one
 // reference to a distinct "auditcore" NamespaceID. Reverse self-check fixtures
 // confirm the scanner actually catches a single-namespace configuration.
+//
+// Wave-1 #1423 update: ModuleExports.BootstrapLedgerStore has been deleted;
+// the bootstrap store is now wired via auditcore.WithBootstrapStore. The two-
+// namespace construction invariant is unchanged — it still lives in
+// cellmodules/auditcore/module.go.
 //
 // Scope: cellmodules/auditcore/ production (non-test) packages — the audit-chain
 // wiring moved from cmd/corebundle to the cellmodules/ composition-root layer in
@@ -47,7 +51,10 @@ const (
 
 	bootstrapNamespaceFnName = "BootstrapNamespace"
 	parseNamespaceIDFnName   = "ParseNamespaceID"
-	ledgerPkgSuffix          = "/runtime/audit/ledger"
+	// auditPkgSuffix is the package path suffix for runtime/audit.
+	// Formerly defined in bootstrap_audit_observer_funnel_test.go (retired Wave-1 #1423).
+	auditPkgSuffix  = "/runtime/audit"
+	ledgerPkgSuffix = "/runtime/audit/ledger"
 
 	// cellmodulesAuditcorePkgSuffix is where AuditCoreModule.Provide lives after
 	// the #1085 cell-wiring relocation out of cmd/corebundle.
@@ -151,9 +158,8 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 //   - Reflection-constructed NamespaceID: `reflect.ValueOf(ledger.NamespaceID("bootstrap")).Interface()`.
 //     Type-info resolution doesn't trace dynamic values.
 //
-// Both are unreachable today (no such helpers exist in cmd/corebundle); the
-// SSA-reachability upgrade tracked alongside BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-
-// DOWNSTREAM-HARD-01 would close both.
+// Both are unreachable today (no such helpers exist in cellmodules/auditcore);
+// SSA-reachability analysis (golang.org/x/tools/go/ssa) would close both blind spots.
 func TestAuditNamespaceDisjoint01_ReverseCheck(t *testing.T) {
 	t.Parallel()
 

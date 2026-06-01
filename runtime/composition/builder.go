@@ -58,8 +58,8 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 //  1. Guard that shared was produced by [NewSharedDeps] (sealed-construction
 //     marker check) and that runtimeOptsFn is non-nil — startup invariants.
 //  2. For each module: nil-guard, call [CellModule.Provide], accumulate cells +
-//     cellOpts + provisional ManagedResources + merge typed exports, with LIFO
-//     Close(ctx) rollback on any failure; nil-cell guard.
+//     cellOpts + provisional ManagedResources, with LIFO Close(ctx) rollback on
+//     any failure; nil-cell guard.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
 //  4. allOpts := runtimeOpts ++ cellOpts.
@@ -68,10 +68,10 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // Resource ownership (two channels, distinct phases — see pg-cell-template
 // Chapter 4):
 //   - Steady-state lifecycle: a module registers a resource by returning
-//     bootstrap.WithManagedResource(res) in its opts (3rd return value). Those
+//     bootstrap.WithManagedResource(res) in its opts (2nd return value). Those
 //     opts flow into allOpts, so bootstrap.Run manages health/worker/LIFO-Close
 //     for the resource during the normal run (phase10 shutdown closes it).
-//   - Pre-Run rollback: the module ALSO returns the same resource in its 4th
+//   - Pre-Run rollback: the module ALSO returns the same resource in its 3rd
 //     return value ([]ManagedResource). Build accumulates these into a
 //     provisional stack and, if any later step fails before returning the App,
 //     calls Close(ctx) in reverse order (LIFO) so resources opened so far are
@@ -83,11 +83,9 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // options — steady-state registration is the module's responsibility via its
 // opts, so a resource appears at most once in the bootstrap managed set.
 //
-// Note: module order is significant when a module consumes another's typed
-// [ModuleExports]. A module that produces an export (e.g. auditcore producing
-// ModuleExports.BootstrapLedgerStore) must appear before any module that reads
-// it via the in parameter. Consult each ModuleExports field godoc for ordering
-// constraints.
+// Cross-module value handoff (formerly via ModuleExports) has been removed.
+// Cell modules are now fully self-contained; cross-cell communication happens
+// via events, not in-process Go handles (Wave-1 #1423 / MODULE-PROVIDE-NO-VALUE-HANDOFF-01).
 //
 // ref: uber-go/fx fx.New(opts...) — single assembly entry point used by both
 // production (main) and tests (fxtest.New).
@@ -142,13 +140,12 @@ func (b *Builder) Build(
 		}
 	}
 
-	var exports ModuleExports
 	for _, m := range b.modules {
 		if m == nil {
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module list contains nil")
 		}
-		c, out, mOpts, mRes, err := m.Provide(ctx, shared, exports)
+		c, mOpts, mRes, err := m.Provide(ctx, shared)
 		if err != nil {
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module %q Provide: %w", m.ID(), err)
@@ -161,7 +158,6 @@ func (b *Builder) Build(
 		cells = append(cells, c)
 		cellOpts = append(cellOpts, mOpts...)
 		provisional = append(provisional, mRes...)
-		exports = exports.merge(out)
 	}
 
 	runtimeOpts, err := runtimeOptsFn(cells)

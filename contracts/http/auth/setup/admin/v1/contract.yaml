@@ -5,6 +5,7 @@ consistencyLevel: L2
 lifecycle: active
 triggers:
   - event.user.created.v1
+  - event.auth.bootstrap-failed.v1
 endpoints:
   server: accesscore
   clients:

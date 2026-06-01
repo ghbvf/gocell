@@ -32,8 +32,9 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -67,6 +68,12 @@ func Module() composition.CellModule { return module{} }
 // ID returns the stable identifier used in error messages and logs.
 func (module) ID() string { return "accesscore" }
 
+// bootstrapAppendDetachedTimeout caps the audit-append emit write so a stalled
+// PG outbox write cannot block the bootstrap rate-limited endpoint indefinitely.
+// 2s mirrors the single-statement INSERT budget under healthy PG (same value as
+// the prior direct-write observer in runtime/audit/bootstrap_observer.go).
+const bootstrapAppendDetachedTimeout = 2 * time.Second
+
 // Provide resolves all accesscore-specific dependencies and returns the
 // constructed cell, bootstrap options, and lifecycle resources.
 //
@@ -74,61 +81,81 @@ func (module) ID() string { return "accesscore" }
 // GOCELL_ACCESSCORE_CURSOR_KEY, GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY from
 // the environment.
 func (m module) Provide(
-	_ context.Context, shared *composition.SharedDeps, in composition.ModuleExports,
-) (cell.Cell, composition.ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	_ context.Context, shared *composition.SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	creds, err := loadBootstrapCredentials(
 		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME"),
 		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD"),
 	)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 	if creds.Username == nil {
-		return nil, composition.ModuleExports{}, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+		return nil, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"GOCELL_BOOTSTRAP_ADMIN_USERNAME and GOCELL_BOOTSTRAP_ADMIN_PASSWORD are required "+
 				"to protect setup/admin endpoint")
 	}
 
 	accessOpts, sessionProto, err := buildAccessBaseOpts(shared)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	innerSessionStore, storageOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 	accessOpts = storageOpts
 
 	sessionStore, err := wrapSessionStoreWithCache(innerSessionStore, shared, nil)
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 	accessOpts = append(accessOpts, accesscell.WithSessionStore(sessionStore))
 
-	// auditcore hands the bootstrap ledger store down via the typed
-	// ModuleExports return; a nil here means accesscore was registered before
-	// auditcore (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01) — fail fast.
-	if in.BootstrapLedgerStore == nil {
-		return nil, composition.ModuleExports{}, nil, nil, errcode.New(errcode.KindInternal,
-			errcode.ErrCellInvalidConfig,
-			"accesscore: requires auditcore's BootstrapLedgerStore export; "+
-				"register auditcore before accesscore")
-	}
-
-	// Construct BEFORE ratelimit.New: observer is a pure nil-check (no
-	// goroutine, no resource), so its fail-fast must precede the limiter
-	// which spawns a cleanup goroutine needing ManagedResource teardown.
-	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
-		slog.Default(), in.BootstrapLedgerStore, shared.Clock,
-	)
-	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("accesscore: build bootstrap audit observer: %w", err)
-	}
 	rlLimiter := ratelimit.New(ratelimit.Config{
 		Rate:  bootstrapRateLimitPerSec,
 		Burst: bootstrapRateLimitBurst,
 	}, shared.Clock)
+
+	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
+	//
+	// The observer captures a pointer-to-pointer cellPtr. After the cell is
+	// constructed, *cellPtr is set so the closure can call
+	// (*cellPtr).RecordBootstrapAuthFail. The observer is invoked only AFTER
+	// HTTP servers start (i.e. after Init has completed), so *cellPtr is always
+	// non-nil when the observer fires — Init sets c.setupSvc which
+	// RecordBootstrapAuthFail calls internally.
+	//
+	// The SRE channel (slog.Error) is emitted unconditionally; the compliance
+	// channel (event emit via outbox) is best-effort with a 2s detached ctx cap.
+	var cellPtr *accesscell.AccessCore
+	logger := slog.Default()
+	bootstrapAuthObserver := func(ctx context.Context, reason string) {
+		ip, _ := ctxkeys.RealIPFrom(ctx)
+		logger.ErrorContext(ctx, "bootstrap_auth_failed",
+			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("reason", reason),
+			slog.String("client_ip", ip))
+		if cellPtr == nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("reason", "cell not yet initialized"),
+				slog.String("client_ip", ip))
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, bootstrapAppendDetachedTimeout)
+		defer cancel()
+		if err := cellPtr.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("reason", reason),
+				slog.String("client_ip", ip),
+				slog.Any("error", err))
+		}
+	}
+
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{Username: creds.Username, Password: creds.Password},
 		rlLimiter,
@@ -137,17 +164,23 @@ func (m module) Provide(
 	accessOpts = append(accessOpts, accesscell.WithBootstrapAuth(bootstrapMW))
 
 	c := accesscell.NewAccessCore(shared.Clock, accessOpts...)
+	// Set the cell pointer AFTER construction so the observer closure can
+	// reach RecordBootstrapAuthFail. This is safe: the observer only fires
+	// after Init (HTTP servers start post-Init), and cellPtr is set before
+	// Build returns.
+	cellPtr = c
+
 	// The bootstrap rate limiter spawns a cleanup goroutine, so it must be
 	// managed in two places (pg-cell-template Chapter 4 contract):
 	//   - opts: bootstrap.WithManagedResource so bootstrap.Run closes it at
 	//     phase10 shutdown during the normal run (the steady-state lifecycle).
-	//   - 4th return value: so Builder.Build closes it (LIFO) if a *later*
+	//   - 3rd return value: so Builder.Build closes it (LIFO) if a *later*
 	//     module's Provide fails before bootstrap.Run starts (rollback).
 	// The same value flows through both; bootstrap registers it once (only the
 	// success path reaches bootstrap.Run), the rollback path only fires on
 	// pre-Run failure, so there is no double-close.
 	limiterRes := bootstrapLimiterResource{lim: rlLimiter}
-	return c, composition.ModuleExports{},
+	return c,
 		[]bootstrap.Option{bootstrap.WithManagedResource(limiterRes)},
 		[]kernellifecycle.ManagedResource{limiterRes}, nil
 }

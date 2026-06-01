@@ -17,6 +17,10 @@ contracts:
   # Adding a query criterion here without closing that backlog entry is
   # a silent carryover and forbidden.
   - http.audit.list.v1
+  # event.auth.bootstrap-failed.v1: accesscore publishes on 401/429 from
+  # setup/admin; auditcore subscribes and writes bootstrap hash chain.
+  # Part of Epic #1423 Wave-1 BootstrapLedgerStore decoupling.
+  - event.auth.bootstrap-failed.v1
 # passCriteria scope (PR #588): 2 mode:auto criteria cover the publish →
 # consume → hash-chain path. A future "accesscore projection" criterion
 # (roadmap 029 C6 三段 describe) requires accesscore to subscribe to
