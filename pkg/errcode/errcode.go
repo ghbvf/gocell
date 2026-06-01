@@ -803,6 +803,13 @@ type PublicError struct {
 	// failures without exposing InternalDetails, Cause, or server-side Details.
 	SourceCode Code `json:"sourceCode,omitempty"`
 	Status     int  `json:"status,omitempty"`
+
+	// RequestID is the ctx-derived correlation id injected only on the HTTP
+	// wire path (MarshalHTTPEnvelope). The v1 error-response schema places it
+	// inside the inner error object alongside code/message/details. omitempty
+	// keeps CLI/operator and machine-output projections unchanged — only the
+	// HTTP envelope path ever sets it.
+	RequestID string `json:"requestId,omitempty"`
 }
 
 // MarshalJSON keeps the details field schema-stable even when callers build a
@@ -946,6 +953,31 @@ func (e *Error) FindAttr(key string) (PublicDetail, bool) {
 // Go compile error rather than a runtime panic.
 func (e *Error) MarshalJSON() ([]byte, error) {
 	return json.Marshal(e.PublicProjection())
+}
+
+// errorEnvelope is the canonical outer {"error":{...}} wrapper defined by
+// contracts/shared/errors/error-response-v1.schema.json. It exists so the wire
+// envelope can be produced in a single marshal pass (see MarshalHTTPEnvelope).
+type errorEnvelope struct {
+	Error PublicError `json:"error"`
+}
+
+// MarshalHTTPEnvelope renders the canonical v1 wire envelope {"error":{...}} in
+// a single marshal pass, injecting requestID into the inner error object
+// (omitted when empty). It is the choke point all HTTP error responses funnel
+// through via pkg/httputil.writeErrorBody.
+//
+// Because the result is built directly from PublicProjection — with no
+// intermediate map[string]any — int64 detail values retain full precision
+// (json.Marshal encodes int64 exactly; a map[string]any round-trip would coerce
+// them to float64 and truncate beyond 2^53). PublicProjection also performs the
+// 5xx detail-strip + public-code normalization and never emits the operator-only
+// SourceCode/Status fields on the public surface, so the HTTP wire body matches
+// the v1 schema's additionalProperties:false error object exactly.
+func (e *Error) MarshalHTTPEnvelope(requestID string) ([]byte, error) {
+	pub := e.PublicProjection()
+	pub.RequestID = requestID
+	return json.Marshal(errorEnvelope{Error: pub})
 }
 
 // Error returns a formatted string representation for logging/diagnostics.
