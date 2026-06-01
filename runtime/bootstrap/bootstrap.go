@@ -154,6 +154,13 @@ type Bootstrap struct {
 	webhookSourceStore kwh.SourceStore
 	webhookClaimer     idempotency.Claimer
 
+	// --- webhook: outbound-webhook dispatcher dependency ---
+	// Injected via WithWebhookSSRFPolicy. nil means "use the default
+	// production policy" (kwh.NewSafePolicy(): block all private/reserved
+	// ranges, no loopback) — phase6 builds it when any cell registers a webhook
+	// dispatcher. The dispatcher reuses webhookSourceStore for signing secrets.
+	webhookSSRFPolicy *kwh.SafePolicy
+
 	// --- projection: L3 CQRS projection harness dependencies ---
 	// Injected via WithProjectionCheckpointStore / WithProjectionTxRunner /
 	// WithProjectionReplaySource / WithProjectionCursor. nil means "not
