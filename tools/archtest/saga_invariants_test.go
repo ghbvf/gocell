@@ -9,6 +9,7 @@
 //   - INVARIANT: SAGA-STEP-RUN-OUTSIDE-TX-01
 //   - INVARIANT: SAGA-INVARIANTS-FILE-CONSOLIDATED-01
 //   - INVARIANT: SAGA-CONSTRUCTOR-NIL-GUARD-01
+//   - INVARIANT: SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
 //
 // saga_invariants_test.go — consolidated saga-theme archtest invariants.
 //
@@ -4266,6 +4267,213 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 }
 
 // ============================================================================
+// SAGA-SLOG-INSTANCE-FIELDS-CALLER-01   (per-instance log lease_id funnel, #1266)
+// ============================================================================
+// INVARIANT: SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
+//
+// SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 — caller-allowlist funnel guaranteeing the
+// invariant "every per-instance saga log carries lease_id" (#1266).
+//
+// A per-instance saga log is, by convention, any slog record that carries the
+// instance_id attribute. The funnel makes "a per-instance saga log without
+// lease_id" structurally unrepresentable by collapsing both identity attrs into
+// a single carrier, runtime/saga/internal/sagalog.InstanceFields(instanceID,
+// leaseID idutil.SafeID, extra ...slog.Attr), whose first two arguments are
+// required positional values — omitting lease_id is a compile error.
+//
+// # Detection mechanism (A1)
+//
+// Scan every production file under runtime/saga/ (typed pass; RunTyped over
+// ./runtime/saga/...). For each file, collect the body Pos/End ranges of any
+// FuncDecl named InstanceFields (collectFuncBodyRanges) — in practice only
+// sagalog.go declares one. Then flag every CallExpr that is
+// slog.String("instance_id"|"lease_id", …) whose position is NOT inside a
+// collected range. Callee resolution uses go/types (ResolvePackageRef → exact
+// log/slog.String), so a log/slog import alias does not evade detection; the key
+// is read via EvaluateConstString (covers a string literal or a const ident).
+//
+// # AI-robust rating (funnel, two axes)
+//
+//   - Downstream = Hard: lease_id is a required positional parameter of the
+//     carrier — once a site routes through InstanceFields it cannot omit it
+//     (compile error). No archtest carries the downstream guarantee; the Go type
+//     system does.
+//   - Upstream = Medium (permanent Go ceiling): Go cannot force every
+//     (*slog.Logger).LogAttrs call to route through InstanceFields. This A1
+//     caller-allowlist is the ceiling, identical in shape to the permanent
+//     holder-seal ceilings SPAN-SETATTR-HOLDER-SEAL (gh #851) /
+//     HEALTHZ-HOLDER-SEAL (gh #893) / outbox principal-write (gh #1282). No
+//     Go-level Hard-upstream path exists (cross-package, no sealing primitive),
+//     so this is a deliberate won't-do — no tracking issue, matching that
+//     precedent.
+//
+// This supersedes the per-site lease_id test assertions that PR #1263 began
+// adding (issue #1266 originally scoped 11 more). A typed funnel is NOT the
+// log-string-anchor archtest the issue ruled out as Soft; see
+// .claude/rules/gocell/ai-robust.md §"既有 Soft 补丁优先升级".
+//
+// # Blind spots (documented; closed by reverse self-checks B1/B2 below)
+//
+//   - A FuncDecl named InstanceFields declared in some OTHER runtime/saga file
+//     would create an allowed range there. Not closed structurally; the carrier
+//     is the sole InstanceFields by convention and B2 anchors the real carrier
+//     by its package path.
+//   - An identity attr built indirectly — a pre-bound slog.Attr stored in a
+//     variable, or LogAttrs fed a []slog.Attr assembled elsewhere — is not an
+//     slog.String(...) CallExpr and would not be scanned. runtime/saga does not
+//     do this; the convention is direct slog.String literals.
+//   - A per-instance log keyed under a non-standard attr name (e.g. camelCase
+//     "instanceId") would neither be flagged nor carry the invariant. The
+//     snake_case keys instance_id / lease_id are the project convention.
+//
+// # Reverse self-checks
+//
+//   - B1: the carrier body actually emits BOTH guarded keys (else A1 is vacuous).
+//   - B2: sagalog.InstanceFields has ≥1 production caller in runtime/saga/
+//     outside its own package (else the funnel is dead).
+const sagaSlogInstanceFieldsRule = "SAGA-SLOG-INSTANCE-FIELDS-CALLER-01"
+
+const (
+	sagaInstanceFieldsFuncName = "InstanceFields"
+	sagaSlogPkgPath            = "log/slog"
+	sagaSlogStringFuncName     = "String"
+	sagalogPkgPath             = "github.com/ghbvf/gocell/runtime/saga/internal/sagalog"
+)
+
+// sagaInstanceFieldsGuardedKeys are the per-instance identity attrs that may
+// only be emitted from inside the sagalog.InstanceFields carrier.
+var sagaInstanceFieldsGuardedKeys = map[string]struct{}{
+	"instance_id": {},
+	"lease_id":    {},
+}
+
+const violSagaSlogInstanceFieldsOutsideCarrier = sagaSlogInstanceFieldsRule + ": " +
+	`slog.String("instance_id"|"lease_id", …) outside sagalog.InstanceFields — ` +
+	"route every per-instance saga log through sagalog.InstanceFields so lease_id " +
+	"is structurally guaranteed (#1266)"
+
+// sagaSlogStringGuardedKey reports whether call is slog.String(k, …) with k one
+// of the guarded identity keys, returning the matched key. The callee is
+// resolved via go/types so a log/slog import alias does not evade detection.
+func sagaSlogStringGuardedKey(info *types.Info, call *ast.CallExpr) (string, bool) {
+	if info == nil || len(call.Args) < 1 {
+		return "", false
+	}
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	if !ok || pkgPath != sagaSlogPkgPath || name != sagaSlogStringFuncName {
+		return "", false
+	}
+	key, ok := EvaluateConstString(info, call.Args[0])
+	if !ok {
+		return "", false
+	}
+	if _, guarded := sagaInstanceFieldsGuardedKeys[key]; !guarded {
+		return "", false
+	}
+	return key, true
+}
+
+// TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier is the upstream
+// caller-allowlist: slog.String("instance_id"|"lease_id", …) may appear only
+// inside the sagalog.InstanceFields body across all of runtime/saga/.
+func TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier(t *testing.T) {
+	t.Parallel()
+	diags := RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			rel := filepath.ToSlash(p.Rel(file))
+			if !isRuntimeSagaProductionFile(rel) {
+				continue
+			}
+			carrierRanges := collectFuncBodyRanges(file, sagaInstanceFieldsFuncName)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				key, ok := sagaSlogStringGuardedKey(p.TypesInfo, call)
+				if !ok {
+					return
+				}
+				if posInRanges(call.Pos(), carrierRanges) {
+					return
+				}
+				pos := p.Fset.Position(call.Pos())
+				ds = append(ds, Diagnostic{
+					Rel:     rel,
+					Line:    pos.Line,
+					Message: violSagaSlogInstanceFieldsOutsideCarrier + ` (key="` + key + `")`,
+				})
+			})
+		}
+		return ds
+	})
+	Report(t, sagaSlogInstanceFieldsRule+"-A1", diags)
+}
+
+// TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys closes the
+// vacuity blind spot: if the carrier stopped emitting one of the guarded keys,
+// A1 would silently allow a per-instance log to drop it. Assert the carrier
+// body emits BOTH instance_id and lease_id.
+func TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys(t *testing.T) {
+	t.Parallel()
+	found := map[string]bool{}
+	RunTyped(t, TypedOpts{}, []string{"./runtime/saga/internal/sagalog/..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			ranges := collectFuncBodyRanges(file, sagaInstanceFieldsFuncName)
+			if len(ranges) == 0 {
+				continue
+			}
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				key, ok := sagaSlogStringGuardedKey(p.TypesInfo, call)
+				if ok && posInRanges(call.Pos(), ranges) {
+					found[key] = true
+				}
+			})
+		}
+		return nil
+	})
+	for key := range sagaInstanceFieldsGuardedKeys {
+		if !found[key] {
+			t.Errorf("%s: carrier InstanceFields does not emit slog.String(%q, …) — A1 would be vacuous",
+				sagaSlogInstanceFieldsRule, key)
+		}
+	}
+}
+
+// TestSagaSlogInstanceFieldsCaller_B2_CarrierReferencedByProductionSites closes
+// the dead-funnel blind spot: sagalog.InstanceFields must have ≥1 production
+// caller in runtime/saga/ outside its own package.
+func TestSagaSlogInstanceFieldsCaller_B2_CarrierReferencedByProductionSites(t *testing.T) {
+	t.Parallel()
+	var refs int
+	RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := filepath.ToSlash(p.Rel(file))
+			if !isRuntimeSagaProductionFile(rel) || strings.Contains(rel, "/internal/sagalog/") {
+				continue
+			}
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+				if ok && pkgPath == sagalogPkgPath && name == sagaInstanceFieldsFuncName {
+					refs++
+				}
+			})
+		}
+		return nil
+	})
+	if refs == 0 {
+		t.Fatalf("%s: sagalog.InstanceFields has no production callers in runtime/saga/ — funnel is dead",
+			sagaSlogInstanceFieldsRule)
+	}
+}
+
+// ============================================================================
 // SAGA-INVARIANTS-FILE-CONSOLIDATED-01   (new — consolidation guard, Refs #1213)
 // ============================================================================
 
@@ -4474,6 +4682,7 @@ var knownSagaInvariantIDs = []string{
 	"SAGA-STEP-RUN-OUTSIDE-TX-01",
 	"SAGA-INVARIANTS-FILE-CONSOLIDATED-01",
 	"SAGA-CONSTRUCTOR-NIL-GUARD-01",
+	"SAGA-SLOG-INSTANCE-FIELDS-CALLER-01",
 }
 
 // TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent closes blind-spot B1:

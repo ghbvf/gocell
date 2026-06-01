@@ -470,8 +470,8 @@ func makeErrLocker(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
 	return l
 }
 
-// assertLeaderSkipLog checks that the captured log contains the expected level,
-// the skip message, and the lease_id field.
+// assertLeaderSkipLog checks that the captured log contains the expected level
+// and the skip message.
 func assertLeaderSkipLog(t *testing.T, logs, wantLevel string) {
 	t.Helper()
 	if !strings.Contains(logs, `"level":"`+wantLevel+`"`) {
@@ -479,11 +479,6 @@ func assertLeaderSkipLog(t *testing.T, logs, wantLevel string) {
 	}
 	if !strings.Contains(logs, "leader-elect skip") {
 		t.Errorf("missing skip message; logs=%s", logs)
-	}
-	// lease_id (journal fencing token) correlates the skip back to the
-	// ClaimPending cycle; claimedFixture sets LeaseID="lease-inst1".
-	if !strings.Contains(logs, `"lease_id":"lease-inst1"`) {
-		t.Errorf("skip log missing lease_id; logs=%s", logs)
 	}
 }
 
@@ -565,11 +560,6 @@ func TestAcquireLead_ReleaseFail_LogsWarn(t *testing.T) {
 	}
 	if !strings.Contains(logs, `"definition_id":"def1"`) {
 		t.Errorf("release-failed log missing definition_id; logs=%s", logs)
-	}
-	// lease_id (journal fencing token) correlates the release failure back to the
-	// ClaimPending cycle; claimedFixture sets LeaseID="lease-inst1".
-	if !strings.Contains(logs, `"lease_id":"lease-inst1"`) {
-		t.Errorf("release-failed log missing lease_id; logs=%s", logs)
 	}
 }
 
