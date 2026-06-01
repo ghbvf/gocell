@@ -249,6 +249,30 @@ func TestBuilder_UnsealedSharedDeps_Rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "NewSharedDeps")
 }
 
+// TestBuilder_MutatedAfterSeal_Rejected verifies that Build re-validates the
+// dependency set at Build time, not just the sealed-construction marker: a
+// *SharedDeps produced by NewSharedDeps (marker set) but whose required field is
+// subsequently nulled out must be rejected. Without the Build-time validate()
+// call, the stale valid marker would let a broken dep set through (F1 / cluster
+// C1). Mirrors Kubernetes CompletedOptions.Validate() guarding pre-startup state.
+func TestBuilder_MutatedAfterSeal_Rejected(t *testing.T) {
+	ctx := context.Background()
+	shared := minimalSharedDeps(t) // sealed + valid
+	// Mutate a required exported field to a broken state after sealing. The
+	// unexported valid marker stays true.
+	shared.JWTVerifier = nil
+	require.True(t, shared.valid, "precondition: marker still set after mutation")
+
+	c1 := stubCell("cell-1")
+	m1 := &fakeCellModule{id: "mod1", cell: c1}
+	_, err := New().With(m1).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+		return nil, nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid at Build time")
+	assert.False(t, m1.called, "no module Provide may run when Build inputs are invalid")
+}
+
 // TestBuilder_NilRuntimeOptsFn_Rejected verifies Build returns an error (not a
 // panic) when runtimeOptsFn is nil — error-first public API.
 func TestBuilder_NilRuntimeOptsFn_Rejected(t *testing.T) {

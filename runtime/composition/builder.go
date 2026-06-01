@@ -93,12 +93,24 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // production (main) and tests (fxtest.New).
 // ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
 // Manager.Start(ctx) error.
-// validateBuildInputs enforces the two Build preconditions: shared must have been
-// produced by [NewSharedDeps] (sealed-construction marker) and runtimeOptsFn must
-// be non-nil (error-first public API).
+// validateBuildInputs enforces the Build preconditions: shared must have been
+// produced by [NewSharedDeps] (sealed-construction marker), its dependency set
+// must still satisfy validate() at Build time, and runtimeOptsFn must be non-nil
+// (error-first public API).
+//
+// The marker check alone is insufficient: NewSharedDeps stamps valid=true and
+// returns a *SharedDeps whose exported fields the caller can subsequently mutate
+// to a broken state (e.g. set JWTVerifier=nil) without clearing the marker. So
+// Build re-runs validate() against the current field values rather than trusting
+// the construction-time snapshot — mirroring Kubernetes CompletedOptions.Validate(),
+// which validates the aggregate immediately before startup, not only at parse time.
 func validateBuildInputs(shared *SharedDeps, runtimeOptsFn RuntimeOptionsFunc) error {
 	if shared == nil || !shared.valid {
 		return fmt.Errorf("composition.Builder.Build: shared deps must be built via composition.NewSharedDeps")
+	}
+	if err := shared.validate(); err != nil {
+		return fmt.Errorf("composition.Builder.Build: shared deps invalid at Build time "+
+			"(mutated after NewSharedDeps?): %w", err)
 	}
 	if runtimeOptsFn == nil {
 		return fmt.Errorf("composition.Builder.Build: runtimeOptsFn must be non-nil")

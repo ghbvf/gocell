@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 
@@ -11,6 +12,44 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 )
+
+// TestReleaseUnhandedResources_ClosesPoolWhenNotHanded verifies that the
+// startup-abort defer closes the postgres pool when bootstrap.Run never took
+// ownership (handedToBootstrap == false). Regression for F2: the same defer now
+// also covers the redis client (created in LoadSharedDepsFromEnv), which leaked
+// before the fix. The redis concrete-close path is nil-safe here and exercised
+// end-to-end in real/redis integration tests.
+func TestReleaseUnhandedResources_ClosesPoolWhenNotHanded(t *testing.T) {
+	pool := &fakeManagedResource{}
+	locals := &cmdLocals{poolMR: pool, redisClient: nil}
+
+	releaseUnhandedResources(context.Background(), locals, false)
+
+	assert.True(t, pool.closeCalled, "pool must be closed when startup aborts before handoff")
+}
+
+// TestReleaseUnhandedResources_NoCloseWhenHanded verifies the handoff gate: once
+// bootstrap.Run owns the resources (handedToBootstrap == true) the defer must be
+// a no-op, otherwise the resource would be double-closed.
+func TestReleaseUnhandedResources_NoCloseWhenHanded(t *testing.T) {
+	pool := &fakeManagedResource{}
+	locals := &cmdLocals{poolMR: pool, redisClient: nil}
+
+	releaseUnhandedResources(context.Background(), locals, true)
+
+	assert.False(t, pool.closeCalled, "handed-off resources are owned by bootstrap; defer must not close them")
+}
+
+// TestReleaseUnhandedResources_NilSafe verifies the defer tolerates a nil pool
+// and a nil redis client (the common memory-mode / pre-provision states) without
+// panicking.
+func TestReleaseUnhandedResources_NilSafe(t *testing.T) {
+	locals := &cmdLocals{poolMR: nil, redisClient: nil}
+
+	assert.NotPanics(t, func() {
+		releaseUnhandedResources(context.Background(), locals, false)
+	})
+}
 
 // withSlogCapture redirects slog.Default for the duration of the test.
 // Delegates to healthtest.NewCapture.

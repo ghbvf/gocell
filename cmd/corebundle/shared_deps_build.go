@@ -119,12 +119,13 @@ func resolveListenerAddrs() (primary, internal, health string) {
 }
 
 // closeRedisClientAfterFailedLoad is the single source of truth for "close
-// Redis with nil-safe + slog warn". Two callers, both following the same
-// `if !loaded { close }` defer pattern (one inside buildSharedReplayDeps for
-// inner-construction failure, one in LoadSharedDepsFromEnv for
-// outer-composition failure after replay deps are already attached). The
-// structure is mirrored at both sites so the two scopes can be visually
-// compared in one read.
+// Redis with nil-safe + slog warn". Three callers, all following the same
+// `if !ok { close }` defer pattern: one inside buildSharedReplayDeps for
+// inner-construction failure, one in LoadSharedDepsFromEnv for outer-composition
+// failure after replay deps are already attached, and one in runCorebundle's
+// startup-abort defer (covering the window from a successful Load to bootstrap.Run
+// taking ownership — provisionCapabilities / composition.Build / option wiring).
+// The structure is mirrored at every site so the scopes can be visually compared.
 func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.Client) {
 	if client == nil {
 		return

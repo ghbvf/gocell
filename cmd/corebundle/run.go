@@ -55,22 +55,23 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return err
 	}
 
+	// Close shared infrastructure (postgres pool + redis client) if startup aborts
+	// before bootstrap.Run takes ownership of the ManagedResources (provisionCapabilities /
+	// composition.Builder.Build / buildAssembly / option wiring failures). The redis
+	// client is created inside LoadSharedDepsFromEnv (which already closes it on its own
+	// internal failure); registering this defer immediately after Load covers the whole
+	// window from here to handedToBootstrap — including provisionCapabilities. The closure
+	// reads handedToBootstrap lazily at exit.
+	// Once bootstrap.Run is reached both resources are managed by bootstrap's LIFO teardown.
+	handedToBootstrap := false
+	defer func() { releaseUnhandedResources(ctx, locals, handedToBootstrap) }()
+
 	// Provision assembly-level shared infrastructure (postgres pool / redis
 	// client → cap.*Provider) once, before any module consumes it. Mirrors
 	// fx.New() resolve-before-start ordering.
 	if err := provisionCapabilities(ctx, compShared, locals); err != nil {
 		return err
 	}
-	// Close the pool if startup aborts before bootstrap.Run takes ownership of
-	// the ManagedResource (composition.Builder.Build / buildAssembly / option wiring
-	// failures). Once bootstrap.Run is reached the pool is managed by bootstrap's
-	// LIFO teardown.
-	handedToBootstrap := false
-	defer func() {
-		if !handedToBootstrap && locals.poolMR != nil {
-			_ = locals.poolMR.Close(ctx)
-		}
-	}()
 
 	mods, err := corebundleModules(assemblyID, assemblyCellIDs)
 	if err != nil {
@@ -118,6 +119,23 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 
 	handedToBootstrap = true
 	return app.Run(ctx)
+}
+
+// releaseUnhandedResources closes the assembly's shared infrastructure (postgres
+// pool + redis client) that startup opened but bootstrap.Run never took ownership
+// of. It is the body of runCorebundle's startup-abort defer. When
+// handedToBootstrap is true, bootstrap owns the resources via its LIFO teardown,
+// so this is a no-op. Both fields are nil-safe: poolMR is nil until
+// provisionPostgres sets it, and closeRedisClientAfterFailedLoad tolerates a nil
+// redis client.
+func releaseUnhandedResources(ctx context.Context, locals *cmdLocals, handedToBootstrap bool) {
+	if handedToBootstrap {
+		return
+	}
+	if locals.poolMR != nil {
+		_ = locals.poolMR.Close(ctx)
+	}
+	closeRedisClientAfterFailedLoad(ctx, locals.redisClient)
 }
 
 func corebundleModules(assemblyID string, cellIDs []string) ([]composition.CellModule, error) {
