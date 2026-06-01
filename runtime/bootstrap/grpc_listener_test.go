@@ -115,6 +115,13 @@ func healthListenerOpt(t *testing.T) Option {
 		[]kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn))
 }
 
+// stubGRPCServer is a no-op GRPCServer for phase0 config-validation tests that
+// must pass the nil-server guard but never actually serve.
+type stubGRPCServer struct{}
+
+func (stubGRPCServer) Serve(context.Context, net.Listener) error { return nil }
+func (stubGRPCServer) Close(context.Context) error               { return nil }
+
 // --- Case 1: phase0 fail-fast on nil server -------------------------------
 
 func TestWithGRPCListener_NilServer_Phase0FailFast(t *testing.T) {
@@ -344,5 +351,34 @@ func TestWithGRPCListener_BindFailure_DrainsHTTP(t *testing.T) {
 		assert.ErrorContains(t, err, "grpc listen", "error must identify the gRPC bind failure")
 	case <-time.After(testtime.D5s):
 		t.Fatal("Run did not return on gRPC bind failure")
+	}
+}
+
+// --- Case 7: phase0 gRPC listener config validation ------------------------
+
+func TestWithGRPCListener_Phase0ConfigValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		opt  Option
+		want string
+	}{
+		{
+			name: "negative_shutdown_grace",
+			opt:  WithGRPCListener(stubGRPCServer{}, ":0", WithGRPCListenerShutdownGrace(-1*time.Second)),
+			want: "negative shutdownGrace",
+		},
+		{
+			name: "empty_addr_no_net",
+			opt:  WithGRPCListener(stubGRPCServer{}, ""),
+			want: "non-empty addr or a pre-bound listener",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := New(clock.Real(), tc.opt)
+			err := b.Run(context.Background())
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.want)
+		})
 	}
 }

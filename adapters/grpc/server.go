@@ -79,13 +79,18 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	// Composition-root-supplied options (e.g. the unary interceptor chain) go
+	// FIRST; the adapter-owned transport credentials are appended LAST so they
+	// win. grpc.NewServer applies options in order and a later grpc.Creds
+	// overrides an earlier one, so putting the validated creds last makes the
+	// adapter's TLS/mTLS posture non-overridable by a caller-supplied grpc.Creds
+	// in ServerOptions (fail-closed: ServerOptions cannot downgrade transport
+	// security). ref: grpc-go v1.81.1 server.go NewServer + Creds.
 	var opts []grpc.ServerOption
+	opts = append(opts, cfg.ServerOptions...)
 	if creds != nil {
 		opts = append(opts, grpc.Creds(creds))
 	}
-	// Composition-root-supplied options (e.g. the unary interceptor chain) are
-	// appended after the TLS credentials so credentials always win.
-	opts = append(opts, cfg.ServerOptions...)
 
 	return &Server{
 		cfg:        cfg,

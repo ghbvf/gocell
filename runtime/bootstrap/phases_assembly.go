@@ -113,6 +113,14 @@ func (b *Bootstrap) validateNilDependencySentinels() error {
 // degrading every graceful stop into a hard stop.
 func (b *Bootstrap) validateGRPCListenerConfigs() error {
 	for _, gc := range b.grpcListenerConfigs {
+		// Mirror HTTP validateListenerConfig: a listener with neither an addr nor
+		// a pre-bound socket cannot bind. Fail fast at phase0 rather than letting
+		// net.Listen("tcp", "") fail in phase7b after HTTP has already started.
+		if gc.addr == "" && gc.net == nil {
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"bootstrap: gRPC listener requires a non-empty addr or a pre-bound "+
+					"listener via WithGRPCListenerNet")
+		}
 		if gc.shutGrace < 0 {
 			return fmt.Errorf("bootstrap: gRPC listener %q has negative shutdownGrace %v;"+
 				" use a non-negative duration or zero to inherit the global shutdownTimeout",

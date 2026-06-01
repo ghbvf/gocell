@@ -21,6 +21,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync"
 
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -44,6 +45,29 @@ func drainBufferedErrors(ch <-chan error, first error) error {
 			return errors.Join(allErrs...)
 		}
 	}
+}
+
+// drainTransports drains the HTTP and gRPC transport intakes CONCURRENTLY within
+// the shared stage-2 budget (ctx). Both are transport-intake drains that begin
+// together and run BEFORE LIFO teardown, so in-flight requests/RPCs drain while
+// workers / event router / assembly are still alive. Mirrors kube-apiserver
+// entering the drain phase for all transports at once — serializing them would
+// let a slow HTTP drain consume the shared budget and force gRPC into an
+// immediate hard-stop with a near-expired ctx. Both transports share the
+// ShutdownPhaseHTTPDrain metric (one budget bucket); per-transport error
+// attribution is preserved by the caller (teardown_http_drain / teardown_grpc_drain).
+func drainTransports(ctx context.Context, s *phaseState) (httpErr, grpcErr error) {
+	var wg sync.WaitGroup
+	if s.httpDrain != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); httpErr = s.httpDrain(ctx) }()
+	}
+	if s.grpcDrain != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); grpcErr = s.grpcDrain(ctx) }()
+	}
+	wg.Wait()
+	return httpErr, grpcErr
 }
 
 // phase9AwaitShutdownSignal blocks until one of: external ctx cancel, HTTP error,
@@ -139,19 +163,7 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	// --- stage 2: HTTP drain (explicit; runs BEFORE LIFO teardown) ---
 	m.RecordPhaseEntry(drainCtx, metricsmiddleware.ShutdownPhaseHTTPDrain)
 	drainStart := b.clock.Now()
-	var httpDrainErr error
-	if s.httpDrain != nil {
-		httpDrainErr = s.httpDrain(drainCtx)
-	}
-	// gRPC drain shares the same stage-2 budget as HTTP and likewise runs BEFORE
-	// LIFO teardown, so in-flight RPCs drain while workers / event router /
-	// assembly are still alive (symmetric with HTTP). Reuses the existing
-	// HTTP-drain shutdown phase metric — both are "stop transport intake +
-	// drain in-flight" and share one budget bucket.
-	var grpcDrainErr error
-	if s.grpcDrain != nil {
-		grpcDrainErr = s.grpcDrain(drainCtx)
-	}
+	httpDrainErr, grpcDrainErr := drainTransports(drainCtx, s)
 	m.ObservePhaseDuration(drainCtx, metricsmiddleware.ShutdownPhaseHTTPDrain, b.clock.Since(drainStart))
 
 	// --- stage 3: LIFO teardown — fresh tearCtx, independent of drainCtx ---
