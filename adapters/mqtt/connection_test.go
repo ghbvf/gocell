@@ -63,7 +63,7 @@ func startEmbeddedBroker(t *testing.T, hook mqttserver.Hook, hookID string) (add
 	}, testtime.D2s, testtime.D10ms)
 
 	return addr, func() {
-		closeBrokerSafely(t, srv)
+		mqtt.CloseBrokerSafely(t, srv)
 	}
 }
 
@@ -352,9 +352,9 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer closeCancel()
 		require.NoError(t, conn.Close(closeCtx), "connection cleanup")
-		// closeBrokerSafely drains then guards srv.Close; the explicit
+		// mqtt.CloseBrokerSafely drains then guards srv.Close; the explicit
 		// testwait drain above is now subsumed by the helper's own drain.
-		closeBrokerSafely(t, srv)
+		mqtt.CloseBrokerSafely(t, srv)
 	}()
 
 	// Initial connection must not count as a reconnect.
@@ -427,45 +427,3 @@ func (f *fakeCollector) RecordReconnect(_ context.Context) { f.count.Add(1) }
 // RecordSubscribeFailure satisfies the ConnectionCollector interface (added by
 // PR-3 review fix F7). This fake only counts reconnects, so it is a no-op here.
 func (f *fakeCollector) RecordSubscribeFailure(_ context.Context, _ mqtt.SubscribeFailureReason) {}
-
-// closeBrokerSafely closes a mochi v2 broker with two defenses against the
-// mochi v2.7.9 Clients-lock deadlock:
-//
-//  1. Best-effort drain: polls srv.Clients.Len() == 0 for up to testtime.D2s
-//     so any in-flight client disconnects settle before Close is called.
-//     Drain is non-fatal; if the budget expires the guarded close proceeds.
-//
-//  2. Timeout-guarded close: runs srv.Close() in a goroutine and selects on
-//     done vs testtime.D5s. If Close returns, we're done. If it exceeds the
-//     budget (the mochi Clients-lock deadlock) a clear diagnostic is logged
-//     via t.Logf and the helper returns so the test fails fast instead of
-//     hanging for ~10 min.
-func closeBrokerSafely(t *testing.T, srv *mqttserver.Server) {
-	t.Helper()
-
-	// Defense 1: best-effort drain (non-fatal on timeout).
-	drainTimer := time.NewTimer(testtime.D2s)
-	drainTick := time.NewTicker(testtime.D10ms)
-drainLoop:
-	for srv.Clients.Len() > 0 {
-		select {
-		case <-drainTimer.C:
-			break drainLoop
-		case <-drainTick.C:
-		}
-	}
-	drainTimer.Stop()
-	drainTick.Stop()
-
-	// Defense 2: timeout-guarded close.
-	done := make(chan error, 1)
-	go func() { done <- srv.Close() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Logf("mqtt-test: srv.Close() returned error: %v", err)
-		}
-	case <-time.After(testtime.D5s):
-		t.Logf("mqtt-test: srv.Close() exceeded %v — suspected mochi v2.7.9 Clients-lock deadlock; abandoning close", testtime.D5s)
-	}
-}
