@@ -409,7 +409,9 @@ type projectionBundleData struct {
 //	contracts/projection/{id}/summary/v1/{contract.yaml,payload.schema.json}
 //	contracts/event/{id}/example/v1/{contract.yaml,payload.schema.json,headers.schema.json}
 //	cells/{id}/internal/projection/doc.go
-func planProjectionExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash string, otherSlicePresent bool) ([]pathsafe.PlannedFile, error) {
+func planProjectionExampleArtifacts(
+	realRoot string, spec ScaffoldSpec, cellNoDash string, otherSlicePresent bool,
+) ([]pathsafe.PlannedFile, error) {
 	projSliceID := cellNoDash + "projection"
 	projectionID := cellNoDash + "_summary"
 
@@ -463,7 +465,7 @@ func planProjectionExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDa
 	// 4. internal/projection/doc.go starter.
 	const projPkg = "projection"
 	const projSummary = "is the read-model store layer for the L3 CQRS projection of the %s cell.\n" +
-		"// It holds the materialised view built from consumed events and exposes\n" +
+		"// It holds the materialized view built from consumed events and exposes\n" +
 		"// typed queries for the projection contract provider."
 	targetDir := filepath.Join("cells", spec.CellID.String(), "internal", projPkg)
 	absDir, err := pathsafe.ContainPath(realRoot, targetDir)

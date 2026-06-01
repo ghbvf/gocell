@@ -195,7 +195,7 @@ const (
 	withBothFlag        = "with-both"
 	withBothUsage       = "include both HTTP and event example contracts in the bundle"
 	withProjectionFlag  = "projection"
-	withProjectionUsage = "scaffold a projection slice (subscribe + provide CUs, L3) + kind:projection contract + internal/projection/doc.go; the event source contract is also scaffolded so the subscribe target resolves"
+	withProjectionUsage = "scaffold an L3 projection slice + kind:projection contract + internal/projection starter (event source included)"
 	// internalFieldFmt is the WithInternal format string for field-level
 	// validation context. Extracted to avoid duplicate-literal smell across
 	// validateScaffoldID and validateScaffoldText call sites.
