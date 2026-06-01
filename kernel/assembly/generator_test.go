@@ -417,6 +417,33 @@ func TestGenerateBoundary_EmptyAssembly(t *testing.T) {
 	assert.Contains(t, content, "smokeTargets:\n  []")
 }
 
+// TestClassifyBoundary_SagaIsInternal locks the F2 fix: a saga contract is
+// provider-only orchestration (registry.Consumers returns nil for saga), and
+// must NOT be classified as exported even though its consumer list is empty.
+// An http contract with the same empty consumer list IS exported (a genuine
+// external API with no in-assembly clients) — the test contrasts both to ensure
+// the saga carve-out does not over-reach.
+func TestClassifyBoundary_SagaIsInternal(t *testing.T) {
+	cellSet := map[string]bool{"orderfulfillmentcell": true}
+	exported := map[string]bool{}
+	imported := map[string]bool{}
+
+	// Saga: provider in assembly, nil consumers → internal, never on boundary.
+	classifyBoundary("saga.orderfulfillment.v1", "saga", "orderfulfillmentcell", nil,
+		cellSet, exported, imported)
+	assert.NotContains(t, exported, "saga.orderfulfillment.v1",
+		"saga is provider-only orchestration and must not be exported onto the assembly boundary")
+	assert.Empty(t, exported)
+	assert.Empty(t, imported)
+
+	// Contrast: an http contract with the same nil consumer list IS exported.
+	classifyBoundary("http.orderfulfillment.placeorder.v1", "http", "orderfulfillmentcell", nil,
+		cellSet, exported, imported)
+	assert.Contains(t, exported, "http.orderfulfillment.placeorder.v1",
+		"an http contract with no in-assembly clients is a genuine external surface and must be exported")
+	assert.Empty(t, imported)
+}
+
 func TestGenerateEntrypoint_EmptyAssembly(t *testing.T) {
 	project := buildTestProject()
 	project.Assemblies["empty"] = &metadata.AssemblyMeta{

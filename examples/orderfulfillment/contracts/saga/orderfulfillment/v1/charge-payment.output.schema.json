@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "saga.orderfulfillment.v1.chargePayment.output",
+  "type": "object",
+  "properties": {
+    "paymentId": { "type": "string" },
+    "amountCents": { "type": "integer" }
+  },
+  "required": ["paymentId", "amountCents"]
+}

@@ -56,6 +56,7 @@ func TestMirrorsManifest(t *testing.T) {
 
 	wantDestRoots := []string{
 		"examples/iotdevice",
+		"examples/orderfulfillment",
 		"examples/todoorder",
 		"tests/contracttest/testdata",
 	}
@@ -76,7 +77,7 @@ func TestMirrorsManifest(t *testing.T) {
 func TestGenerate(t *testing.T) {
 	t.Parallel()
 
-	t.Run("normal: writes all three dest files and they match canonical", func(t *testing.T) {
+	t.Run("normal: writes all dest files and they match canonical", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
 		writeCanonical(t, root)

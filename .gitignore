@@ -53,6 +53,9 @@ tmp/
 worktrees/
 .claude/scheduled_tasks.lock
 
+# orderfulfillment example binary (compiled artifact)
+/orderfulfillment
+
 # Legacy src/ directory (flattened in PR#116, may contain stale build artifacts)
 src/
 

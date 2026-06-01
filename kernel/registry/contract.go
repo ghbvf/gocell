@@ -149,7 +149,8 @@ func copyHTTPResponseMap(src map[int]metadata.HTTPResponseMeta) map[int]metadata
 
 // Provider returns the provider actor ID for a contract.
 // For http: server, event: publisher, command: handler, projection: provider,
-// webhook: ownerCell (matches metadata.ContractMeta.ProviderEndpoint).
+// webhook: ownerCell, grpc: server, saga: server (matches
+// metadata.ContractMeta.ProviderEndpoint).
 // Returns an error if the contract is not found or the kind is unknown.
 func (r *ContractRegistry) Provider(contractID string) (string, error) {
 	c := r.contracts[contractID]
@@ -171,6 +172,10 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 		return c.OwnerCell, nil
 	case "grpc":
 		return c.Endpoints.Server, nil
+	case "saga":
+		// Saga's provider is the orchestrating cell in endpoints.server
+		// (mirrors metadata.ContractMeta.ProviderEndpoint).
+		return c.Endpoints.Server, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",
@@ -182,7 +187,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 // For http: clients, event: subscribers, command: invokers, projection: readers,
 // grpc: clients, webhook: receivers (the inbound consumer cells; matches
 // governance contractConsumers/consumerFieldName). Dispatchers are outbound
-// senders, not consumers, so they are not returned here.
+// senders, not consumers, so they are not returned here. saga has no consumer
+// endpoints (the orchestrating provider drives the workflow) and returns nil.
 // Returns an error if the contract is not found or the kind is unknown.
 func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	c := r.contracts[contractID]
@@ -204,6 +210,10 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 		return append([]string(nil), c.Endpoints.Receivers...), nil
 	case "grpc":
 		return append([]string(nil), c.Endpoints.Clients...), nil
+	case "saga":
+		// Saga has no consumer endpoints: the orchestrating cell (provider)
+		// drives the workflow; there is no invoker/subscriber actor set.
+		return nil, nil
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",

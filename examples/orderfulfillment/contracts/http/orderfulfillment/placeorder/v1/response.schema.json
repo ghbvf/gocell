@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.orderfulfillment.placeorder.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["orderId", "status"]
+    }
+  },
+  "required": ["data"]
+}

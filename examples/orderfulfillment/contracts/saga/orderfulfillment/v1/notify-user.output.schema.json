@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "saga.orderfulfillment.v1.notifyUser.output",
+  "type": "object",
+  "properties": {
+    "notified": { "type": "boolean" }
+  },
+  "required": ["notified"]
+}

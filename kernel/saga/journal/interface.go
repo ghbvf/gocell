@@ -92,7 +92,16 @@ type Journal interface {
 // [Journal] and archtest SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01.
 //
 // Only runtime/saga.Coordinator may hold a JournalCore field, enforced by the
-// SAGA-JOURNAL-HOLDER-SEAL-01 archtest.
+// SAGA-JOURNAL-HOLDER-SEAL-01 archtest. Business producers and query-side
+// slices should hold narrower interfaces instead:
+//   - [Enqueuer] — saga enrollment only (e.g. an HTTP slice that places orders).
+//   - [Reader] — event-log read only (e.g. a status-query slice).
+//   - [ProducerReader] — enrollment + read, for cells that need both without
+//     the coordinator-only claim/append/commit surface.
+//
+// Note: SAGA-JOURNAL-HOLDER-SEAL-01 currently scans only runtime/saga for
+// JournalCore field holders. Business cells (examples/, cells/) holding
+// JournalCore are not yet machine-rejected (tracked in gh #1415).
 type JournalCore interface {
 	// Enqueue enrolls a new saga instance for orchestration. The instance MUST
 	// pass saga.Instance.ValidateNew (Pending, CurrentStep 0, no timestamps
@@ -198,6 +207,42 @@ type JournalCore interface {
 	// Coordinator cell that holds the Journal (PR-03); a Journal implementation
 	// only provides the RepoProber method and does not self-register.
 	RepoReady(ctx context.Context) error
+}
+
+// Enqueuer is the producer-facing narrow journal interface: saga enrollment
+// only. A business producer (e.g. an HTTP slice that places orders) needs
+// exactly Enqueue and none of the coordinator-only claim/append/commit
+// surface, so it holds Enqueuer rather than JournalCore.
+//
+// MemJournal and any PostgreSQL implementation satisfy Enqueuer automatically
+// because both satisfy the full Journal (which embeds JournalCore, which
+// contains Enqueue). No implementation change is required.
+type Enqueuer interface {
+	Enqueue(ctx context.Context, instance saga.Instance) error
+}
+
+// Reader is the query-facing narrow journal interface: event-log read only.
+// A status-query slice folds the event log via Load and needs nothing else.
+//
+// MemJournal and any PostgreSQL implementation satisfy Reader automatically
+// because both satisfy the full Journal (which embeds JournalCore, which
+// contains Load). No implementation change is required.
+type Reader interface {
+	Load(ctx context.Context, instanceID idutil.SafeID) ([]Event, error)
+}
+
+// ProducerReader composes the two narrow capabilities a business cell
+// legitimately needs — enrollment (Enqueue) and event-log read (Load) —
+// WITHOUT the coordinator-only lease/claim/commit methods
+// (ClaimPending/Append/MarkTerminal/Heartbeat). The single-sanctioned-holder
+// rule (only runtime/saga.Coordinator holds JournalCore) is unaffected:
+// business cells now hold ProducerReader, structurally unable to drive a saga.
+//
+// MemJournal and any PostgreSQL implementation satisfy ProducerReader
+// automatically (they satisfy the full Journal which is a superset).
+type ProducerReader interface {
+	Enqueuer
+	Reader
 }
 
 // Heartbeater is the single lease-renewal method split out of [Journal] (#1209).

@@ -92,6 +92,16 @@ func testProject() *metadata.ProjectMeta {
 					Clients: []string{metadatatest.CellIDAuditCore},
 				},
 			},
+			"saga-access-enroll-v1": {
+				ID:        "saga-access-enroll-v1",
+				Kind:      "saga",
+				OwnerCell: metadatatest.CellIDAccessCore,
+				Endpoints: metadata.EndpointsMeta{
+					// Saga provider is the orchestrating cell in Server; it has
+					// no consumer endpoints.
+					Server: metadatatest.CellIDAccessCore,
+				},
+			},
 		},
 	}
 }
@@ -136,6 +146,7 @@ func TestContractRegistry_ByKind(t *testing.T) {
 		{"command contracts", "command", 1},
 		{"projection contracts", "projection", 1},
 		{"grpc contracts", "grpc", 1},
+		{"saga contracts", "saga", 1},
 		{"unknown kind", "websocket", 0},
 	}
 	reg := registry.NewContractRegistry(testProject())
@@ -153,7 +164,7 @@ func TestContractRegistry_ByOwner(t *testing.T) {
 		cellID string
 		count  int
 	}{
-		{"accesscore owns 3", "accesscore", 3},
+		{"accesscore owns 4", "accesscore", 4},
 		{"auditcore owns 2", "auditcore", 2},
 		{"unknown cell", "configcore", 0},
 	}
@@ -274,6 +285,7 @@ func TestContractRegistry_Provider(t *testing.T) {
 		{"command provider is handler", "command-audit-archive-v1", "auditcore"},
 		{"projection provider is provider", "projection-audit-summary-v1", "auditcore"},
 		{"grpc provider is server", "grpc-access-session-verify-v1", "accesscore"},
+		{"saga provider is server", "saga-access-enroll-v1", "accesscore"},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -303,6 +315,7 @@ func TestContractRegistry_Consumers(t *testing.T) {
 		{"command consumers are invokers", "command-audit-archive-v1", []string{"accesscore"}},
 		{"projection consumers are readers", "projection-audit-summary-v1", []string{"accesscore", "configcore"}},
 		{"grpc consumers are clients", "grpc-access-session-verify-v1", []string{"auditcore"}},
+		{"saga has no consumers", "saga-access-enroll-v1", nil},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -394,13 +407,14 @@ func TestContractRegistry_AllIDs(t *testing.T) {
 		"grpc-access-session-verify-v1",
 		"http-auth-login-v1",
 		"projection-audit-summary-v1",
+		"saga-access-enroll-v1",
 	}
 	assert.Equal(t, expected, ids)
 }
 
 func TestContractRegistry_Count(t *testing.T) {
 	reg := registry.NewContractRegistry(testProject())
-	assert.Equal(t, 5, reg.Count())
+	assert.Equal(t, 6, reg.Count())
 }
 
 func TestContractRegistry_EmptyProject(t *testing.T) {

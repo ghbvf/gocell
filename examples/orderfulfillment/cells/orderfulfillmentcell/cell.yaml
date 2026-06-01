@@ -1,0 +1,14 @@
+id: orderfulfillmentcell
+type: core
+consistencyLevel: L3
+lifecycle: experimental
+durabilityMode: demo
+owner:
+  team: examples
+  role: fulfillment-owner
+schema:
+  primary: orders
+verify:
+  smoke:
+    - smoke.orderfulfillmentcell.startup
+goStructName: OrderCell

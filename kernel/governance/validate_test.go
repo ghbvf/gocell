@@ -1902,6 +1902,7 @@ func TestContractProviderAndConsumers(t *testing.T) {
 		endpoints     metadata.EndpointsMeta
 		wantProvider  string
 		wantConsumers []string
+		wantFieldName string
 	}{
 		{
 			kind: "http",
@@ -1911,36 +1912,50 @@ func TestContractProviderAndConsumers(t *testing.T) {
 			},
 			wantProvider:  metadatatest.CellIDSvcA,
 			wantConsumers: []string{metadatatest.CellIDSvcB, metadatatest.NewCellID("svcc")},
+			wantFieldName: "clients",
 		},
 		{
 			kind:          "event",
 			endpoints:     metadata.EndpointsMeta{Publisher: metadatatest.CellIDSvcA, Subscribers: []string{metadatatest.CellIDSvcB}},
 			wantProvider:  metadatatest.CellIDSvcA,
 			wantConsumers: []string{metadatatest.CellIDSvcB},
+			wantFieldName: "subscribers",
 		},
 		{
 			kind:          "command",
 			endpoints:     metadata.EndpointsMeta{Handler: metadatatest.CellIDSvcA, Invokers: []string{metadatatest.CellIDSvcB}},
 			wantProvider:  metadatatest.CellIDSvcA,
 			wantConsumers: []string{metadatatest.CellIDSvcB},
+			wantFieldName: "invokers",
 		},
 		{
 			kind:          "projection",
 			endpoints:     metadata.EndpointsMeta{Provider: metadatatest.CellIDSvcA, Readers: []string{metadatatest.CellIDSvcB}},
 			wantProvider:  metadatatest.CellIDSvcA,
 			wantConsumers: []string{metadatatest.CellIDSvcB},
+			wantFieldName: "readers",
 		},
 		{
 			kind:          "grpc",
 			endpoints:     metadata.EndpointsMeta{Server: metadatatest.CellIDSvcA, Clients: []string{metadatatest.CellIDSvcB}},
 			wantProvider:  metadatatest.CellIDSvcA,
 			wantConsumers: []string{metadatatest.CellIDSvcB},
+			wantFieldName: "clients",
+		},
+		{
+			// Saga has a server (orchestrating cell) but no consumer-side field.
+			kind:          "saga",
+			endpoints:     metadata.EndpointsMeta{Server: metadatatest.CellIDSvcA},
+			wantProvider:  metadatatest.CellIDSvcA,
+			wantConsumers: nil,
+			wantFieldName: "",
 		},
 		{
 			kind:          "unknown",
 			endpoints:     metadata.EndpointsMeta{},
 			wantProvider:  "",
 			wantConsumers: nil,
+			wantFieldName: "consumers",
 		},
 	}
 	for _, tt := range tests {
@@ -1948,6 +1963,7 @@ func TestContractProviderAndConsumers(t *testing.T) {
 			c := &metadata.ContractMeta{Kind: tt.kind, Endpoints: tt.endpoints}
 			assert.Equal(t, tt.wantProvider, contractProvider(c))
 			assert.Equal(t, tt.wantConsumers, contractConsumers(c))
+			assert.Equal(t, tt.wantFieldName, consumerFieldName(tt.kind))
 		})
 	}
 }
