@@ -653,7 +653,11 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 				"boundary: resolve consumers failed", consErr,
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", contractID))))
 		}
-		classifyBoundary(contractID, provider, consumers, cellSet, exportedSet, importedSet)
+		kind := ""
+		if meta := g.contracts.Get(contractID); meta != nil {
+			kind = meta.Kind
+		}
+		classifyBoundary(contractID, kind, provider, consumers, cellSet, exportedSet, importedSet)
 	}
 
 	exported = sortedKeys(exportedSet)
@@ -663,7 +667,16 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 
 // classifyBoundary categorizes a single contract as exported, imported, or internal
 // relative to the assembly cell set.
-func classifyBoundary(contractID, provider string, consumers []string, cellSet, exportedSet, importedSet map[string]bool) {
+func classifyBoundary(contractID, kind, provider string, consumers []string, cellSet, exportedSet, importedSet map[string]bool) {
+	// Saga contracts are provider-only orchestration definitions, not an external
+	// API surface: the orchestrating cell drives the workflow and there is no
+	// consumer/invoker actor set (registry.Consumers returns nil for saga). That
+	// nil consumer list would otherwise be read by isExportedContract as
+	// "exported", leaking the saga definition onto the assembly's external
+	// boundary. Saga is always internal — neither exported nor imported.
+	if kind == "saga" {
+		return
+	}
 	if cellSet[provider] {
 		if isExportedContract(consumers, cellSet) {
 			exportedSet[contractID] = true
