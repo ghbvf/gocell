@@ -49,10 +49,18 @@ const (
 // Phase label values for ShutdownPhaseCounterName.
 const (
 	ShutdownPhaseReadinessFlip = "readiness_flip"
-	ShutdownPhaseHTTPDrain     = "http_drain"
-	ShutdownPhaseLIFOTeardown  = "lifo_teardown"
-	ShutdownPhaseClosed        = "closed"
-	ShutdownPhaseTotal         = "total"
+	// ShutdownPhaseHTTPDrain covers shutdown stage 2 — the explicit transport
+	// intake drain that runs before LIFO teardown. As of #1148 this stage drains
+	// BOTH the HTTP and gRPC listeners (they share one budget), so this single
+	// label aggregates both transports' drain duration. Splitting gRPC into its
+	// own phase label is deferred to PR-9 (#1152, observability parity); until
+	// then a `phase="http_drain"` spike may be HTTP or gRPC. Per-transport error
+	// attribution is preserved in the joined error (teardown_http_drain /
+	// teardown_grpc_drain), just not in this metric label.
+	ShutdownPhaseHTTPDrain    = "http_drain"
+	ShutdownPhaseLIFOTeardown = "lifo_teardown"
+	ShutdownPhaseClosed       = "closed"
+	ShutdownPhaseTotal        = "total"
 )
 
 // shutdownRegisterErrFmt is the error-wrap format shared by every metric

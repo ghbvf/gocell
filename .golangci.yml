@@ -352,6 +352,17 @@ linters:
                 cellmodules/ is a Composition Root layer; cells/ must not import it
                 (reverse import = layer violation — cellmodules/ imports cells/, not
                 the other way around). Belt-and-suspenders alongside strict allow-list.
+            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+              desc: |
+                cells/ must not import runtime/grpc/interceptor — gRPC interceptor
+                wiring (auth/metrics/tracing/recovery via NewUnaryChain) is a
+                composition-root concern: cmd/ and examples/ build the chain and
+                inject it into adapters/grpc.Server via Config.ServerOptions, then
+                hand the server to bootstrap.WithGRPCListener. This is the gRPC
+                extension of AUTH-PLAN-04 (LAYER-09) — cells declare intent,
+                composition roots wire auth (#1148). Layered on top of
+                cells-isolation (which allows runtime/* broadly); this subtracts the
+                one interceptor package. Mirrors grpc-adapter-no-interceptor-import.
         # Per-example cells-isolation rules. Examples are public-facing demos
         # of the framework's architecture; they must follow the SAME cell
         # discipline as platform cells/ (no cross-layer shortcuts) — otherwise
@@ -370,6 +381,12 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/examples/demo
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+              desc: |
+                example cells must not import runtime/grpc/interceptor — mirrors
+                cells-isolation. gRPC interceptor wiring is a composition-root
+                concern (examples/*/run.go), not a cell concern. AUTH-PLAN-04 (#1148).
         example-cells-isolation-iotdevice:
           list-mode: strict
           files:
@@ -387,6 +404,12 @@ linters:
             # internal/adapters/postgres mirroring cells-isolation. pgx is the
             # underlying SDK — same allowance as platform cells-isolation.
             - github.com/jackc/pgx
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+              desc: |
+                example cells must not import runtime/grpc/interceptor — mirrors
+                cells-isolation. gRPC interceptor wiring is a composition-root
+                concern (examples/*/run.go), not a cell concern. AUTH-PLAN-04 (#1148).
         example-cells-isolation-todoorder:
           list-mode: strict
           files:
@@ -401,6 +424,12 @@ linters:
             - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
             - github.com/go-chi/chi/v5
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+              desc: |
+                example cells must not import runtime/grpc/interceptor — mirrors
+                cells-isolation. gRPC interceptor wiring is a composition-root
+                concern (examples/*/run.go), not a cell concern. AUTH-PLAN-04 (#1148).
         generated-contracts-isolation:
           # LAYER-GENERATED-CONTRACTS: generated/contracts/**/*_gen.go files may
           # only import stdlib + kernel/{cell,wrapper,outbox} + pkg/{httputil,errcode}
