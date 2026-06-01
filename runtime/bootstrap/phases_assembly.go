@@ -48,6 +48,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateNilDependencySentinels(); err != nil {
 		return err
 	}
+	if err := b.validateGRPCListenerConfigs(); err != nil {
+		return err
+	}
 	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
 		return err
 	}
@@ -100,6 +103,21 @@ func (b *Bootstrap) validateNilDependencySentinels() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrGRPCServerMissing,
 			"bootstrap: gRPC server must not be nil in WithGRPCListener; "+
 				"both bare-nil and typed-nil interface values are rejected at phase0")
+	}
+	return nil
+}
+
+// validateGRPCListenerConfigs rejects per-listener shutdown-grace budgets that
+// are negative, mirroring the HTTP validateListenerConfig shutGrace check. A
+// negative budget would make the drain ctx expire immediately, silently
+// degrading every graceful stop into a hard stop.
+func (b *Bootstrap) validateGRPCListenerConfigs() error {
+	for _, gc := range b.grpcListenerConfigs {
+		if gc.shutGrace < 0 {
+			return fmt.Errorf("bootstrap: gRPC listener %q has negative shutdownGrace %v;"+
+				" use a non-negative duration or zero to inherit the global shutdownTimeout",
+				gc.addr, gc.shutGrace)
+		}
 	}
 	return nil
 }

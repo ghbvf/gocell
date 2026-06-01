@@ -278,7 +278,7 @@ func TestGRPCDrain_BudgetExceeded_HardStop(t *testing.T) {
 		healthListenerOpt(t),
 		WithGRPCListener(srv, ":0",
 			WithGRPCListenerNet(lis),
-			WithGRPCListenerShutdownTimeout(testtime.D50ms),
+			WithGRPCListenerShutdownGrace(testtime.D50ms),
 		),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -301,14 +301,48 @@ func TestGRPCDrain_BudgetExceeded_HardStop(t *testing.T) {
 	}
 
 	// Cancel → stage2 drain with the tiny per-listener budget → hard stop.
+	// Close returns the deadline error, surfaced as teardown_grpc_drain, so Run
+	// returns non-nil — the contract is that a blocked RPC cannot wedge shutdown
+	// past the per-listener budget AND the exceeded budget is reported.
 	cancel()
 	select {
-	case <-done:
-		// Run returns (clean or timeout-attributed); the contract is that a
-		// blocked RPC cannot wedge shutdown past the per-listener budget.
+	case err := <-done:
+		require.Error(t, err, "drain budget exceeded must surface a non-nil shutdown error")
 	case <-time.After(testtime.D5s):
 		close(release)
 		t.Fatal("Run did not return after drain budget exceeded (hard stop failed)")
 	}
 	close(release)
+}
+
+// --- Case 6: gRPC bind failure drains the already-serving HTTP --------------
+
+func TestWithGRPCListener_BindFailure_DrainsHTTP(t *testing.T) {
+	// Occupy a TCP port, then declare a gRPC listener on the SAME addr with no
+	// pre-bound net listener: phase7b's net.Listen fails with EADDRINUSE, after
+	// HTTP (phase7) is already serving. The bind-failure path must drain HTTP
+	// (drainHTTPOnGRPCStartFailure) and surface the error.
+	occupied := newLocalListener(t)
+	defer func() { _ = occupied.Close() }()
+
+	srv := buildAdapterServer(t, healthPublic, registerHealth)
+	asm := minimalGRPCAssembly(t, "grpc-bindfail")
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		healthListenerOpt(t),
+		WithGRPCListener(srv, occupied.Addr().String()), // no WithGRPCListenerNet → net.Listen on occupied addr
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(context.Background()) }()
+
+	select {
+	case err := <-done:
+		require.Error(t, err, "gRPC bind failure must abort startup")
+		assert.ErrorContains(t, err, "grpc listen", "error must identify the gRPC bind failure")
+	case <-time.After(testtime.D5s):
+		t.Fatal("Run did not return on gRPC bind failure")
+	}
 }

@@ -27,7 +27,8 @@ import (
 
 // drainBufferedErrors collects the first error and any additional errors already
 // buffered in ch, then joins them. Called only after receiving the first error
-// from httpErrCh so the channel is guaranteed non-empty at entry.
+// from a transport error channel (httpErrCh or grpcErrCh), so the channel is
+// guaranteed non-empty at entry.
 func drainBufferedErrors(ch <-chan error, first error) error {
 	allErrs := []error{first}
 	for {
@@ -46,11 +47,11 @@ func drainBufferedErrors(ch <-chan error, first error) error {
 }
 
 // phase9AwaitShutdownSignal blocks until one of: external ctx cancel, HTTP error,
-// worker error, or router error. It returns a shutdownSignal describing what fired.
-// It does NOT cancel workerCtx or runCtx — that happens in phase10.
+// gRPC error, worker error, or router error. It returns a shutdownSignal describing
+// what fired. It does NOT cancel workerCtx or runCtx — that happens in phase10.
 //
-// CORR-04: after receiving the first HTTP error from httpErrCh, drain any remaining
-// errors and join them so no error is silently discarded.
+// CORR-04: after receiving the first HTTP or gRPC error from the respective errCh,
+// drain any remaining buffered errors and join them so no error is silently discarded.
 func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState) shutdownSignal {
 	slog.Info("bootstrap: application started successfully")
 	select {

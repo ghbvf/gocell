@@ -91,6 +91,9 @@ func closeOwnedGRPCSockets(bounds []boundGRPC) {
 func (b *Bootstrap) grpcServeAll(serveCtx context.Context, bounds []boundGRPC) chan error {
 	n := len(bounds)
 	grpcErrCh := make(chan error, n)
+	// maxListeners (math.MaxInt32) makes the int→int32 narrowing total and keeps
+	// gosec G115 happy; in practice this cap is never reached (a handful of
+	// listeners), mirroring phase7ServeAll (HTTP).
 	if n > maxListeners {
 		n = maxListeners
 	}
@@ -102,9 +105,10 @@ func (b *Bootstrap) grpcServeAll(serveCtx context.Context, bounds []boundGRPC) c
 					close(grpcErrCh)
 				}
 			}()
-			slog.Info("bootstrap: gRPC server starting", slog.String("addr", bd.lis.Addr().String()))
+			addr := bd.lis.Addr().String()
+			slog.Info("bootstrap: gRPC server starting", slog.String("addr", addr))
 			if err := bd.cfg.server.Serve(serveCtx, bd.lis); err != nil {
-				grpcErrCh <- fmt.Errorf("grpc %s: %w", bd.cfg.addr, err)
+				grpcErrCh <- fmt.Errorf("grpc %s: %w", addr, err)
 			}
 		}()
 	}
@@ -120,7 +124,7 @@ func drainAllGRPCServers(parent context.Context, bounds []boundGRPC) error {
 	resultCh := make(chan error, len(bounds))
 	for _, bd := range bounds {
 		go func() {
-			ctx, cancel := shutdownCtxFor(parent, bd.cfg.shutTimeout)
+			ctx, cancel := shutdownCtxFor(parent, bd.cfg.shutGrace)
 			defer cancel()
 			err := bd.cfg.server.Close(ctx)
 			if err != nil {

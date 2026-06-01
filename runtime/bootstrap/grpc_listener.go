@@ -38,10 +38,10 @@ type GRPCServer interface {
 // grpcListenerConfig is the resolved per-gRPC-listener wiring captured by
 // WithGRPCListener and consumed by phase7b (serve) + phase10 stage2 (drain).
 type grpcListenerConfig struct {
-	server      GRPCServer
-	addr        string
-	net         net.Listener  // optional pre-bound socket (bufconn/test); nil → bootstrap binds addr
-	shutTimeout time.Duration // optional per-listener drain budget; 0 → inherit global shutdownTimeout
+	server    GRPCServer
+	addr      string
+	net       net.Listener  // optional pre-bound socket (bufconn/test); nil → bootstrap binds addr
+	shutGrace time.Duration // optional per-listener drain budget; 0 → inherit global shutdownTimeout
 }
 
 // GRPCListenerOption configures a single gRPC listener within WithGRPCListener.
@@ -54,11 +54,12 @@ func WithGRPCListenerNet(ln net.Listener) GRPCListenerOption {
 	return func(c *grpcListenerConfig) { c.net = ln }
 }
 
-// WithGRPCListenerShutdownTimeout sets the per-listener drain budget passed to
+// WithGRPCListenerShutdownGrace sets the per-listener drain budget passed to
 // GRPCServer.Close in phase10 stage2. Zero inherits the global shutdownTimeout;
-// a negative value is stored as-is and rejected at phase0.
-func WithGRPCListenerShutdownTimeout(d time.Duration) GRPCListenerOption {
-	return func(c *grpcListenerConfig) { c.shutTimeout = d }
+// a negative value is rejected at phase0 (ErrCellInvalidConfig). Named for
+// symmetry with the HTTP WithListenerShutdownGrace.
+func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
+	return func(c *grpcListenerConfig) { c.shutGrace = d }
 }
 
 // WithGRPCListener declares a gRPC listener served on addr by the
@@ -66,11 +67,23 @@ func WithGRPCListenerShutdownTimeout(d time.Duration) GRPCListenerOption {
 // bare-nil and typed-nil are rejected at phase0 with ErrGRPCServerMissing
 // (strong-dependency wiring option, mirroring WithRateLimiter / WithManagedResource).
 //
-// The server is expected to already have its interceptor chain wired (via
-// adaptersgrpc.Config.ServerOptions = []grpc.ServerOption{interceptor.NewUnaryChain(...)})
-// and its services registered (via ServiceRegistrar) before being passed here.
-// bootstrap drives Serve in phase7b (in parallel with HTTP) and Close in phase10
-// stage2 (before LIFO teardown, so in-flight RPCs drain while backends are alive).
+// The server is expected to already have its interceptor chain wired and its
+// services registered before being passed here. bootstrap drives Serve in
+// phase7b (in parallel with HTTP) and Close in phase10 stage2 (before LIFO
+// teardown, so in-flight RPCs drain while backends are alive).
+//
+// Composition-root wiring (cmd/ or examples/, which may import adapters/grpc and
+// runtime/grpc/interceptor — cells/ may not):
+//
+//	chain := interceptor.NewUnaryChain(interceptor.Deps{
+//	    Verifier: verifier, Clock: clk, Collector: collector, Tracer: tracer,
+//	}) // always wires UnaryAuth; panics on a nil verifier (fail-closed)
+//	srv, err := adaptersgrpc.New(adaptersgrpc.Config{
+//	    Addr: ":9000", TLS: tlsCfg,
+//	    ServerOptions: []grpc.ServerOption{chain},
+//	})
+//	// register services on srv.ServiceRegistrar() ...
+//	bootstrap.New(clk, bootstrap.WithGRPCListener(srv, ":9000"))
 func WithGRPCListener(server GRPCServer, addr string, opts ...GRPCListenerOption) Option {
 	return func(b *Bootstrap) {
 		if validation.IsNilInterface(server) {
