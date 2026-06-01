@@ -325,7 +325,11 @@ func newHTTPClaimerMock() *httpClaimerMockCmdable {
 
 // evalClaimResp simulates claimRespScript:
 // KEYS=[resp_key, lease_key], ARGV=[token, leaseMs].
-// Returns int64(2) + blob for Done, int64(1) for Acquired, int64(0) for Busy.
+// The Lua script always returns a TABLE, which real go-redis surfaces as a
+// []any — even for the single-element {1}/{0} replies. The mock mirrors that
+// shape exactly (NOT a bare int64) so the production decodeClaim path is
+// exercised identically under mock and live Redis: []any{2, blob} for Done,
+// []any{1} for Acquired, []any{0} for Busy.
 // Caller MUST hold m.mu.
 func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, args []any) {
 	respKey, leaseKey := keys[0], keys[1]
@@ -344,7 +348,7 @@ func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, 
 	// Check lease key (Busy path).
 	if entry, ok := m.store[leaseKey]; ok {
 		if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
-			cmd.SetVal(int64(0)) // ClaimBusy = 0
+			cmd.SetVal([]any{int64(0)}) // ClaimBusy — Lua {0} → []any
 			return
 		}
 		delete(m.store, leaseKey) // expired
@@ -355,7 +359,7 @@ func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, 
 		value:  token,
 		expiry: time.Now().Add(time.Duration(leaseMs) * time.Millisecond),
 	}
-	cmd.SetVal(int64(1)) // Lua returns code one for the acquired state.
+	cmd.SetVal([]any{int64(1)}) // ClaimAcquired — Lua {1} → []any
 }
 
 // evalRecord simulates recordScript:

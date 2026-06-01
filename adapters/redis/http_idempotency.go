@@ -194,45 +194,66 @@ func (s *HTTPIdempotencyStore) Claim(
 	return s.decodeClaim(res, respKey, leaseKey, token)
 }
 
-// decodeClaim decodes the Lua result from claimRespScript.
+// Lua claim-result codes. claimRespScript always returns a Lua table, which
+// go-redis surfaces as a []any: {1}→[]any{int64(1)} (acquired),
+// {0}→[]any{int64(0)} (busy), {2,blob}→[]any{int64(2), string} (done). A
+// single-element Lua table is NOT flattened to a bare int64 by real Redis — the
+// reply is always a multi-bulk array — so decodeClaim treats every reply as a
+// slice and switches on the leading code element.
+const (
+	claimCodeBusy     int64 = 0
+	claimCodeAcquired int64 = 1
+	claimCodeDone     int64 = 2
+)
+
+// decodeClaim decodes the Lua result from claimRespScript. The reply is always
+// a slice (see the claimCode* doc); a bare int64 is never produced by real
+// Redis for this array reply, and the unit-test mock mirrors the []any shape so
+// the decode path is identical under mock and live Redis.
 func (s *HTTPIdempotencyStore) decodeClaim(
 	res any, respKey, leaseKey, token string,
 ) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
-	switch v := res.(type) {
-	case int64:
-		// {0} = ClaimBusy, {1} = ClaimAcquired (single-element slice decoded as int64 by go-redis).
-		// nil rec + nil err is the normal shape here: ClaimState is the discriminator,
-		// rec is only non-nil on ClaimDone (the replay branch below).
-		if v == 1 {
-			r := &httpReceipt{rdb: s.rdb, leaseKey: leaseKey, respKey: respKey, token: token}
-			return idempotency.ClaimAcquired, nil, r, nil //nolint:nilnil // ClaimState discriminates; rec nil unless ClaimDone
-		}
-		return idempotency.ClaimBusy, nil, noopHTTPReceipt{}, nil //nolint:nilnil // ClaimState discriminates; rec nil unless ClaimDone
-	case []any:
-		// {2, blob} = ClaimDone
-		return decodeClaimDone(v)
-	default:
+	arr, ok := res.([]any)
+	if !ok || len(arr) == 0 {
 		return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
 			"redis: http idempotency claim unexpected result type")
 	}
+	code, ok := arr[0].(int64)
+	if !ok {
+		return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
+			"redis: http idempotency claim reply code not an integer")
+	}
+	switch code {
+	case claimCodeAcquired:
+		r := &httpReceipt{rdb: s.rdb, leaseKey: leaseKey, respKey: respKey, token: token}
+		return idempotency.ClaimAcquired, nil, r, nil //nolint:nilnil // ClaimState discriminates; rec nil unless ClaimDone
+	case claimCodeBusy:
+		return idempotency.ClaimBusy, nil, noopHTTPReceipt{}, nil //nolint:nilnil // ClaimState discriminates; rec nil unless ClaimDone
+	case claimCodeDone:
+		return decodeClaimDone(arr)
+	default:
+		return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
+			"redis: http idempotency claim unexpected result code")
+	}
 }
 
-// decodeClaimDone decodes the {2, blob} ClaimDone result shape from claimRespScript.
-func decodeClaimDone(v []any) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
-	if len(v) >= 2 {
-		if code, ok := v[0].(int64); ok && code == 2 {
-			if blob, ok2 := v[1].(string); ok2 {
-				rec, err := idemhttp.UnmarshalRecordedResponse([]byte(blob))
-				if err != nil {
-					return 0, nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
-						"redis: http idempotency claim replay decode failed", err)
-				}
-				return idempotency.ClaimDone, &rec, noopHTTPReceipt{}, nil
-			}
-		}
+// decodeClaimDone decodes the {2, blob} ClaimDone reply (code already matched).
+func decodeClaimDone(arr []any) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
+	if len(arr) < 2 {
+		return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
+			"redis: http idempotency claim done reply missing response blob")
 	}
-	return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
-		"redis: http idempotency claim unexpected slice result shape")
+	blob, ok := arr[1].(string)
+	if !ok {
+		return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
+			"redis: http idempotency claim done reply blob not a string")
+	}
+	rec, err := idemhttp.UnmarshalRecordedResponse([]byte(blob))
+	if err != nil {
+		return 0, nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
+			"redis: http idempotency claim replay decode failed", err)
+	}
+	return idempotency.ClaimDone, &rec, noopHTTPReceipt{}, nil
 }
 
 // ---------------------------------------------------------------------------
