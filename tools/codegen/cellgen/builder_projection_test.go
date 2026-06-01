@@ -458,6 +458,106 @@ func TestBuildProjections_NonEventContract(t *testing.T) {
 	}
 }
 
+// TestBuildSliceSpec_ExcludesProjectionHandlers is the key F8 regression test:
+// a slice with two subscribe CUs — one plain (no Projection) and one projection
+// CU (Projection != "") — must produce a SliceGenSpec whose Handlers list
+// contains ONLY the plain handler. The projection handler must NOT appear in
+// the eventHandlerService interface (its signature is enforced structurally via
+// cell.ProjectionApply at the reg.RegisterProjection callsite, not via the
+// HandleResult interface).
+//
+// Before the fix BuildSliceSpec collects ALL subscribe CUs into Handlers,
+// so the projection handler would be rendered into eventHandlerService with
+// "...HandleResult" signature — making the generated slice unable to compile
+// when the service also satisfies "...error" for the same method name.
+func TestBuildSliceSpec_ExcludesProjectionHandlers(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           metadatatest.CellIDDemo,
+		Dir:          "demo",
+		File:         "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "mixedslice",
+		BelongsToCell: metadatatest.CellIDDemo,
+		Dir:           "mixedslice",
+		File:          "cells/demo/slices/mixedslice/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			// Plain subscribe CU — must appear in eventHandlerService.
+			{
+				Contract: "event.order-created.v1",
+				Role:     "subscribe",
+				Handler:  "HandleX",
+			},
+			// Projection CU — must NOT appear in eventHandlerService.
+			{
+				Contract:   "event.order-created.v1",
+				Role:       "subscribe",
+				Handler:    "HandleY",
+				Projection: "py",
+			},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+
+	spec, err := BuildSliceSpec(p, metadatatest.CellIDDemo, "mixedslice")
+	if err != nil {
+		t.Fatalf("BuildSliceSpec: %v", err)
+	}
+	if len(spec.Handlers) != 1 {
+		t.Fatalf("Handlers len = %d, want 1 (projection handler HandleY must be excluded); got %v",
+			len(spec.Handlers), spec.Handlers)
+	}
+	if spec.Handlers[0].MethodName != "HandleX" {
+		t.Errorf("Handlers[0].MethodName = %q, want HandleX", spec.Handlers[0].MethodName)
+	}
+	// Assert projection handler is NOT in the list at all.
+	for _, h := range spec.Handlers {
+		if h.MethodName == "HandleY" {
+			t.Errorf("projection handler HandleY must not appear in eventHandlerService Handlers; got %v", spec.Handlers)
+		}
+	}
+}
+
+// TestBuildSliceSpec_OnlyProjectionCUProducesZeroHandlers verifies that a slice
+// with ONLY a projection CU (no plain subscribe) produces zero Handlers, so
+// slice.tmpl omits the eventHandlerService block entirely.
+func TestBuildSliceSpec_OnlyProjectionCUProducesZeroHandlers(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           metadatatest.CellIDDemo,
+		Dir:          "demo",
+		File:         "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "projonly",
+		BelongsToCell: metadatatest.CellIDDemo,
+		Dir:           "projonly",
+		File:          "cells/demo/slices/projonly/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			// Only a projection CU — no plain subscribe.
+			{
+				Contract:   "event.order-created.v1",
+				Role:       "subscribe",
+				Handler:    "HandleZ",
+				Projection: "pz",
+			},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+
+	spec, err := BuildSliceSpec(p, metadatatest.CellIDDemo, "projonly")
+	if err != nil {
+		t.Fatalf("BuildSliceSpec: %v", err)
+	}
+	if len(spec.Handlers) != 0 {
+		t.Fatalf("Handlers len = %d, want 0 for projection-only slice; got %v",
+			len(spec.Handlers), spec.Handlers)
+	}
+}
+
 // TestEnrichProjectionsWithModulePath verifies that EnrichProjectionsWithModulePath
 // populates SpecPackage and SpecAlias on each ProjectionGenSpec.
 func TestEnrichProjectionsWithModulePath(t *testing.T) {

@@ -721,6 +721,97 @@ func TestRenderCell_WithProjectionsAddsImportsAndRegisterProjection(t *testing.T
 	mustContain(t, got, `c.proj.HandleOrderCreated, "order_status", "demo", "orderproj", c.proj.ResetOrderStatus,`)
 }
 
+// TestRenderSlice_ProjectionHandlerAbsentFromEventHandlerService is the F8
+// render-level regression: a projection slice's slice_gen.go must NOT contain
+// the projection handler method inside the eventHandlerService interface block.
+// The projection handler is referenced exclusively through the ProjectionApply
+// path in cell_gen.go (reg.RegisterProjection → NewProjectionRequest), NOT via
+// the HandleResult interface.
+//
+// Sub-assertion (a): slice_gen.go omits "HandleY" from the eventHandlerService
+// block entirely (no double-signature conflict).
+// Sub-assertion (b): slice_gen.go for a projection-only slice omits the
+// eventHandlerService block entirely (zero Handlers → no block rendered).
+//
+// The corresponding cell_gen.go assertion (sub-assertion for RegisterProjection)
+// is covered by TestRenderCell_WithProjectionsAddsImportsAndRegisterProjection.
+func TestRenderSlice_ProjectionHandlerAbsentFromEventHandlerService(t *testing.T) {
+	t.Parallel()
+
+	t.Run("mixed_plain_and_projection", func(t *testing.T) {
+		t.Parallel()
+		// SliceGenSpec with one plain handler (HandleX) and one projection handler
+		// (HandleY excluded from Handlers — mirrors the fixed BuildSliceSpec output).
+		spec := &SliceGenSpec{
+			Package: "mixedslice",
+			CellID:  "demo",
+			SliceID: "mixedslice",
+			RenderedMetaLiteral: `&metadata.SliceMeta{
+	ID:            "mixedslice",
+	BelongsToCell: "demo",
+}`,
+			// Only the plain handler appears here (projection handler excluded by
+			// BuildSliceSpec fix). This is what the fixed builder produces.
+			Handlers: []SliceHandlerSpec{
+				{MethodName: "HandleX", ContractID: "event.order-created.v1"},
+			},
+		}
+
+		out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+			TemplateName: "slice.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     "demo/slices/mixedslice/slice_gen.go",
+		})
+		if err != nil {
+			t.Fatalf("render slice: %v", err)
+		}
+		got := string(out)
+
+		// (a) eventHandlerService must contain HandleX.
+		mustContain(t, got, "HandleX(ctx context.Context, e outbox.Entry) outbox.HandleResult")
+
+		// (a) eventHandlerService must NOT contain HandleY (projection handler).
+		if strings.Contains(got, "HandleY") {
+			t.Errorf("slice_gen.go must not contain projection handler HandleY in eventHandlerService:\n%s", got)
+		}
+	})
+
+	t.Run("projection_only_no_eventhandlerservice_block", func(t *testing.T) {
+		t.Parallel()
+		// A slice with ONLY a projection CU — BuildSliceSpec produces zero Handlers.
+		// slice.tmpl must omit the eventHandlerService block entirely.
+		spec := &SliceGenSpec{
+			Package: "projonly",
+			CellID:  "demo",
+			SliceID: "projonly",
+			RenderedMetaLiteral: `&metadata.SliceMeta{
+	ID:            "projonly",
+	BelongsToCell: "demo",
+}`,
+			Handlers: nil, // zero handlers — projection-only slice
+		}
+
+		out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+			TemplateName: "slice.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     "demo/slices/projonly/slice_gen.go",
+		})
+		if err != nil {
+			t.Fatalf("render slice: %v", err)
+		}
+		got := string(out)
+
+		// (b) No eventHandlerService block — the interface block is omitted.
+		if strings.Contains(got, "eventHandlerService") {
+			t.Errorf("slice_gen.go for projection-only slice must omit eventHandlerService block:\n%s", got)
+		}
+		// Sanity: sliceMeta is still present.
+		mustContain(t, got, "func SliceMetadata()")
+	})
+}
+
 // TestRenderCell_ProjectionWithoutOnResetRendersNil verifies that when
 // ProjectionGenSpec.OnResetExpr is empty the template emits nil as the 5th
 // argument to NewProjectionRequest and does not reference the absent symbol.
