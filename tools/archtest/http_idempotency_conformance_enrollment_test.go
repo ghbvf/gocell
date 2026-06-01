@@ -82,9 +82,9 @@ import (
 )
 
 const (
-	httpIdempotencyStoreIfacePkg   = "github.com/ghbvf/gocell/runtime/http/idempotency"
+	httpIdempotencyStoreIfacePkg   = PlatformModulePath + "/runtime/http/idempotency"
 	httpIdempotencyStoreIfaceName  = "Store"
-	httpIdempotencyConformancePkg  = "github.com/ghbvf/gocell/runtime/http/idempotency/idempotencytest"
+	httpIdempotencyConformancePkg  = PlatformModulePath + "/runtime/http/idempotency/idempotencytest"
 	httpIdempotencyConformanceFunc = "RunConformanceSuite"
 )
 

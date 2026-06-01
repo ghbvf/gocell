@@ -57,6 +57,7 @@ var testHelperSubpaths = []string{
 	"/auditcoretest/",
 	"/accesscoretest/",
 	"/configcoretest/",
+	"/idempotencytest/",
 }
 
 // IsTestCode reports whether the given module-relative path is test code

@@ -27,7 +27,7 @@ type realSleepAdvancer struct{}
 func (realSleepAdvancer) AdvancePast(d time.Duration) {
 	// Add a modest margin so Redis server-side expiry fires before the next
 	// Claim call. redisExpiryMargin is conservative enough for CI and local runs.
-	time.Sleep(d + redisExpiryMargin)
+	time.Sleep(d + redisExpiryMargin) //archtest:allow:test-sleep waiting for real Redis PX TTL expiry in integration conformance
 }
 
 // TestIntegration_HTTPIdempotencyStore_Conformance runs the shared

@@ -60,7 +60,7 @@ import (
 )
 
 const (
-	httpIdempotencyPkgPath = "github.com/ghbvf/gocell/runtime/http/idempotency"
+	httpIdempotencyPkgPath = PlatformModulePath + "/runtime/http/idempotency"
 )
 
 // TestRecordedResponseSealedConstruction01_AllFieldsUnexported reflectively
