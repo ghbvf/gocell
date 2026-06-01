@@ -457,7 +457,7 @@ drain:
 	// so it cannot hang on an unreachable backend; future renewals stop and the
 	// key expires by TTL expiry (see orphanInflightLocks for the bound). The
 	// journal lease_id CAS fences the orphaned step at commit.
-	c.orphanInflightLocks()
+	c.orphanInflightLocks(ctx)
 	if cancel != nil {
 		cancel()
 	}
@@ -495,7 +495,7 @@ drain:
 // window from Stop), not a hard cap measured from the Stop call. This is the
 // deliberate cost of I/O-free shutdown (resilient even when the backend is
 // unreachable at shutdown).
-func (c *Coordinator) orphanInflightLocks() {
+func (c *Coordinator) orphanInflightLocks(ctx context.Context) {
 	var n int
 	c.inflightLocks.Range(func(key, val any) bool {
 		d, ok := val.(inflightDrive)
@@ -505,14 +505,13 @@ func (c *Coordinator) orphanInflightLocks() {
 		d.orphan()
 		n++
 		instanceID, _ := key.(idutil.SafeID)
-		// shutdown drain: no request ctx available.
-		c.logger.LogAttrs(context.Background(), slog.LevelDebug, "saga: orphaned in-flight distlock at shutdown",
+		c.logger.LogAttrs(ctx, slog.LevelDebug, "saga: orphaned in-flight distlock at shutdown",
 			sagalog.InstanceFields(instanceID, d.leaseID,
 				slog.String("definition_id", string(d.definitionID)))...)
 		return true
 	})
 	if n > 0 {
-		c.logger.Info("saga: orphaned in-flight distlocks at shutdown", slog.Int("count", n))
+		c.logger.InfoContext(ctx, "saga: orphaned in-flight distlocks at shutdown", slog.Int("count", n))
 	}
 }
 

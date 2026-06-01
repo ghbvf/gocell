@@ -31,6 +31,8 @@ import (
 //	    sagalog.InstanceFields(inst.ID, leaseID,
 //	        slog.String("definition_id", string(inst.DefinitionID)),
 //	        slog.Any("error", err))...)
+//
+// The trailing `...` spreads the returned []slog.Attr as the variadic slog.Attr args LogAttrs expects.
 func InstanceFields(instanceID, leaseID idutil.SafeID, extra ...slog.Attr) []slog.Attr {
 	attrs := make([]slog.Attr, 0, 2+len(extra))
 	attrs = append(attrs,

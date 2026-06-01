@@ -2002,6 +2002,13 @@ func TestDriveOne_FoldFailed_LogsTerminalMark(t *testing.T) {
 	if entry == nil {
 		t.Fatal("expected WARN log: fold failed, marking terminal")
 	}
+	// End-to-end proof: sagalog.InstanceFields is wired into this LogAttrs call at runtime (complements archtest B1).
+	if entry["lease_id"] != string(claimed[0].LeaseID) {
+		t.Errorf("fold-failed log lease_id = %v, want %q", entry["lease_id"], string(claimed[0].LeaseID))
+	}
+	if entry["instance_id"] != string(inst.ID) {
+		t.Errorf("fold-failed log instance_id = %v, want %q", entry["instance_id"], string(inst.ID))
+	}
 }
 
 // TestReverseWalkCompensate_UnknownStep_LogsSkip asserts the "unknown committed

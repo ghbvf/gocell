@@ -16,29 +16,48 @@ import (
 func TestInstanceFields_CarriesInstanceAndLeaseID(t *testing.T) {
 	t.Parallel()
 
-	const (
-		instanceID idutil.SafeID = "inst-123"
-		leaseID    idutil.SafeID = "lease-abc"
-	)
-
 	tests := []struct {
-		name  string
-		extra []slog.Attr
+		name       string
+		instanceID idutil.SafeID
+		leaseID    idutil.SafeID
+		extra      []slog.Attr
 		// wantKeys is the full expected key sequence (mandatory pair first).
 		wantKeys []string
 	}{
 		{
-			name:     "no extras",
-			extra:    nil,
-			wantKeys: []string{"instance_id", "lease_id"},
+			name:       "no extras",
+			instanceID: "inst-123",
+			leaseID:    "lease-abc",
+			extra:      nil,
+			wantKeys:   []string{"instance_id", "lease_id"},
 		},
 		{
-			name: "extras appended after mandatory pair, in order",
+			name:       "extras appended after mandatory pair, in order",
+			instanceID: "inst-123",
+			leaseID:    "lease-abc",
 			extra: []slog.Attr{
 				slog.String("definition_id", "def-1"),
 				slog.String("reason", "stale_lease"),
 			},
 			wantKeys: []string{"instance_id", "lease_id", "definition_id", "reason"},
+		},
+		{
+			// Zero-value IDs: carrier does no validation, still emits both keys.
+			// Documents that InstanceFields is a pure structural carrier.
+			name:       "zero-value IDs still emit both keys",
+			instanceID: "",
+			leaseID:    "",
+			extra:      nil,
+			wantKeys:   []string{"instance_id", "lease_id"},
+		},
+		{
+			// Duplicate key in extras: mandatory pair comes first, extras are
+			// appended verbatim (no deduplication). Documents the semantics.
+			name:       "duplicate lease_id in extras appended verbatim",
+			instanceID: "inst-123",
+			leaseID:    "lease-abc",
+			extra:      []slog.Attr{slog.String("lease_id", "other")},
+			wantKeys:   []string{"instance_id", "lease_id", "lease_id"},
 		},
 	}
 
@@ -46,7 +65,7 @@ func TestInstanceFields_CarriesInstanceAndLeaseID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := InstanceFields(instanceID, leaseID, tt.extra...)
+			got := InstanceFields(tt.instanceID, tt.leaseID, tt.extra...)
 
 			if len(got) != len(tt.wantKeys) {
 				t.Fatalf("attr count = %d, want %d (%v)", len(got), len(tt.wantKeys), tt.wantKeys)
@@ -62,11 +81,11 @@ func TestInstanceFields_CarriesInstanceAndLeaseID(t *testing.T) {
 			}
 
 			// The two mandatory attrs must carry the positional arg values.
-			if got[0].Key != "instance_id" || got[0].Value.String() != string(instanceID) {
-				t.Errorf("instance_id attr = %v, want %q", got[0], string(instanceID))
+			if got[0].Key != "instance_id" || got[0].Value.String() != string(tt.instanceID) {
+				t.Errorf("instance_id attr = %v, want %q", got[0], string(tt.instanceID))
 			}
-			if got[1].Key != "lease_id" || got[1].Value.String() != string(leaseID) {
-				t.Errorf("lease_id attr = %v, want %q", got[1], string(leaseID))
+			if got[1].Key != "lease_id" || got[1].Value.String() != string(tt.leaseID) {
+				t.Errorf("lease_id attr = %v, want %q", got[1], string(tt.leaseID))
 			}
 		})
 	}

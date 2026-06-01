@@ -364,6 +364,10 @@ func TestExecute_RetryExhausted_WarnLogged(t *testing.T) {
 	if _, ok := entry["error"]; !ok {
 		t.Error("log entry missing structured error field")
 	}
+	// End-to-end proof: sagalog.InstanceFields is wired into this LogAttrs call at runtime (complements archtest B1).
+	if entry["lease_id"] != "lease-warn" {
+		t.Errorf("log lease_id = %v, want %q", entry["lease_id"], "lease-warn")
+	}
 }
 
 // --- Execute per-step timeout → Expired (clock-driven, C3/F3) ---

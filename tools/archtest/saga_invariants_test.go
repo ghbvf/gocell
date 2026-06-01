@@ -4304,8 +4304,9 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 //     holder-seal ceilings SPAN-SETATTR-HOLDER-SEAL (gh #851) /
 //     HEALTHZ-HOLDER-SEAL (gh #893) / outbox principal-write (gh #1282). No
 //     Go-level Hard-upstream path exists (cross-package, no sealing primitive),
-//     so this is a deliberate won't-do — no tracking issue, matching that
-//     precedent.
+//     so this is a deliberate won't-do, tracked at gh #1452 (per ai-robust
+//     §"Funnel 双向锁评级": a Medium-upstream + Hard-downstream funnel must cite
+//     a tracking issue from its godoc).
 //
 // This supersedes the per-site lease_id test assertions that PR #1263 began
 // adding (issue #1266 originally scoped 11 more). A typed funnel is NOT the
@@ -4331,6 +4332,23 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 //   - B1: the carrier body actually emits BOTH guarded keys (else A1 is vacuous).
 //   - B2: sagalog.InstanceFields has ≥1 production caller in runtime/saga/
 //     outside its own package (else the funnel is dead).
+//   - B3: exactly one FuncDecl named InstanceFields exists in runtime/saga/
+//     production code, and it lives in runtime/saga/internal/sagalog — closes
+//     the "another InstanceFields creates an allowed range" blind spot above.
+//   - B4: no slog.Attr{Key: "instance_id"|"lease_id", …} composite literal
+//     appears in runtime/saga/ production code — closes the detectable half of
+//     the "identity attr built indirectly" blind spot (the pre-bound-variable
+//     half remains a documented residual; runtime/saga uses direct
+//     slog.String literals by convention).
+//
+// # Detector RED fixture
+//
+// TestSagaSlogInstanceFieldsCaller_Detector_RedBareInstanceIDFixture drives a
+// fixture containing a bare slog.String("instance_id", …) outside any
+// InstanceFields body through the SAME scanSagaSlogInstanceFieldsFile core as
+// A1, golden-asserting the diagnostic fires — so a regression in the detector
+// (sagaSlogStringGuardedKey / posInRanges) is caught, not silently masked by
+// production's current zero violations.
 const sagaSlogInstanceFieldsRule = "SAGA-SLOG-INSTANCE-FIELDS-CALLER-01"
 
 const (
@@ -4373,6 +4391,33 @@ func sagaSlogStringGuardedKey(info *types.Info, call *ast.CallExpr) (string, boo
 	return key, true
 }
 
+// scanSagaSlogInstanceFieldsFile is the A1 core: flag every
+// slog.String("instance_id"|"lease_id", …) CallExpr in file that is NOT inside
+// an InstanceFields body. Shared by A1 (production scan, with the
+// isRuntimeSagaProductionFile filter applied by the caller) and the RED-fixture
+// detector self-test (no production filter).
+func scanSagaSlogInstanceFieldsFile(p *Pass, file *ast.File) []Diagnostic {
+	rel := filepath.ToSlash(p.Rel(file))
+	carrierRanges := collectFuncBodyRanges(file, sagaInstanceFieldsFuncName)
+	var ds []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		key, ok := sagaSlogStringGuardedKey(p.TypesInfo, call)
+		if !ok {
+			return
+		}
+		if posInRanges(call.Pos(), carrierRanges) {
+			return
+		}
+		pos := p.Fset.Position(call.Pos())
+		ds = append(ds, Diagnostic{
+			Rel:     rel,
+			Line:    pos.Line,
+			Message: violSagaSlogInstanceFieldsOutsideCarrier + ` (key="` + key + `")`,
+		})
+	})
+	return ds
+}
+
 // TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier is the upstream
 // caller-allowlist: slog.String("instance_id"|"lease_id", …) may appear only
 // inside the sagalog.InstanceFields body across all of runtime/saga/.
@@ -4384,30 +4429,144 @@ func TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier(t *testing.T) 
 		}
 		var ds []Diagnostic
 		for _, file := range p.Files {
+			if !isRuntimeSagaProductionFile(filepath.ToSlash(p.Rel(file))) {
+				continue
+			}
+			ds = append(ds, scanSagaSlogInstanceFieldsFile(p, file)...)
+		}
+		return ds
+	})
+	Report(t, sagaSlogInstanceFieldsRule+"-A1", diags)
+}
+
+// sagaSlogInstanceFieldsFixturePattern returns the (relDir, load-pattern) pair
+// for a RED fixture under testdata/saga_slog_instance_fields_fixtures/.
+func sagaSlogInstanceFieldsFixturePattern(fix string) (dir, pattern string) {
+	return filepath.Join("tools", "archtest", "testdata", "saga_slog_instance_fields_fixtures", fix),
+		"./tools/archtest/testdata/saga_slog_instance_fields_fixtures/" + fix
+}
+
+// TestSagaSlogInstanceFieldsCaller_Detector_RedBareInstanceIDFixture proves the
+// A1 detector fires on a bare slog.String("instance_id", …) outside any
+// InstanceFields body, via the same scanSagaSlogInstanceFieldsFile core.
+func TestSagaSlogInstanceFieldsCaller_Detector_RedBareInstanceIDFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaSlogInstanceFieldsFixturePattern("red_bare_instance_id")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var out []Diagnostic
+		for _, file := range p.Files {
+			out = append(out, scanSagaSlogInstanceFieldsFile(p, file)...)
+		}
+		return out
+	})
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga closes the
+// "another InstanceFields creates an allowed range" blind spot: exactly one
+// FuncDecl named InstanceFields may exist in runtime/saga/ production code, and
+// it must live in the sagalog carrier package.
+func TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga(t *testing.T) {
+	t.Parallel()
+	var decls []string
+	RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
 			if !isRuntimeSagaProductionFile(rel) {
 				continue
 			}
-			carrierRanges := collectFuncBodyRanges(file, sagaInstanceFieldsFuncName)
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				key, ok := sagaSlogStringGuardedKey(p.TypesInfo, call)
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Name != nil && fn.Name.Name == sagaInstanceFieldsFuncName {
+					decls = append(decls, rel)
+				}
+			})
+		}
+		return nil
+	})
+	if len(decls) != 1 {
+		t.Fatalf("%s: want exactly one FuncDecl named %q in runtime/saga/ production, found %d: %v "+
+			"— a second one would create an allowed range and open an A1 bypass",
+			sagaSlogInstanceFieldsRule, sagaInstanceFieldsFuncName, len(decls), decls)
+	}
+	if !strings.Contains(decls[0], "/internal/sagalog/") {
+		t.Errorf("%s: the sole %q must live in runtime/saga/internal/sagalog, found at %s",
+			sagaSlogInstanceFieldsRule, sagaInstanceFieldsFuncName, decls[0])
+	}
+}
+
+// TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals closes the
+// detectable half of the "identity attr built indirectly" blind spot: a
+// slog.Attr{Key: "instance_id"|"lease_id", …} composite literal would carry an
+// identity key without a slog.String CallExpr for A1 to see. Assert none exists
+// in runtime/saga/ production. (The pre-bound-variable form is a documented
+// residual — runtime/saga uses direct slog.String literals by convention.)
+func TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals(t *testing.T) {
+	t.Parallel()
+	diags := RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			rel := filepath.ToSlash(p.Rel(file))
+			if !isRuntimeSagaProductionFile(rel) {
+				continue
+			}
+			EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+				key, ok := sagaSlogAttrLiteralGuardedKey(p.TypesInfo, cl)
 				if !ok {
 					return
 				}
-				if posInRanges(call.Pos(), carrierRanges) {
-					return
-				}
-				pos := p.Fset.Position(call.Pos())
+				pos := p.Fset.Position(cl.Pos())
 				ds = append(ds, Diagnostic{
-					Rel:     rel,
-					Line:    pos.Line,
-					Message: violSagaSlogInstanceFieldsOutsideCarrier + ` (key="` + key + `")`,
+					Rel:  rel,
+					Line: pos.Line,
+					Message: sagaSlogInstanceFieldsRule + ": slog.Attr{Key: \"" + key +
+						"\", …} struct literal — build identity attrs via sagalog.InstanceFields, not a raw slog.Attr literal (#1266)",
 				})
 			})
 		}
 		return ds
 	})
-	Report(t, sagaSlogInstanceFieldsRule+"-A1", diags)
+	Report(t, sagaSlogInstanceFieldsRule+"-B4", diags)
+}
+
+// sagaSlogAttrLiteralGuardedKey reports whether cl is a log/slog.Attr composite
+// literal whose Key field is one of the guarded identity keys, returning the key.
+func sagaSlogAttrLiteralGuardedKey(info *types.Info, cl *ast.CompositeLit) (string, bool) {
+	if info == nil {
+		return "", false
+	}
+	named, ok := info.TypeOf(cl).(*types.Named)
+	if !ok {
+		return "", false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Name() != "Attr" || obj.Pkg() == nil || obj.Pkg().Path() != sagaSlogPkgPath {
+		return "", false
+	}
+	for _, elt := range cl.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		ident, ok := kv.Key.(*ast.Ident)
+		if !ok || ident.Name != "Key" {
+			continue
+		}
+		key, ok := EvaluateConstString(info, kv.Value)
+		if !ok {
+			return "", false
+		}
+		if _, guarded := sagaInstanceFieldsGuardedKeys[key]; guarded {
+			return key, true
+		}
+		return "", false
+	}
+	return "", false
 }
 
 // TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys closes the
