@@ -206,9 +206,17 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 	// Collect subscribe handlers from slice contractUsages.
 	// Slices without subscribe CUs still produce slice_gen.go (sliceMeta only);
 	// the handler interface block is rendered conditionally when Handlers is non-empty.
+	//
+	// Projection CUs (cu.Projection != "") are intentionally excluded: their
+	// handler signature is cell.ProjectionApply (returns error), enforced
+	// structurally at the reg.RegisterProjection(…NewProjectionRequest(…)) callsite
+	// in cell_gen.go. Including them here would render a conflicting
+	// "…HandleResult" method with the same name in eventHandlerService, making the
+	// generated projection slice uncompilable (double-signature conflict).
+	// This mirrors the skip predicate already used in buildSubscriptionsFromSlices.
 	seen := make(map[string]bool)
 	for _, cu := range s.ContractUsages {
-		if cu.Role != roleSubscribe {
+		if cu.Role != roleSubscribe || cu.Projection != "" {
 			continue
 		}
 		if seen[cu.Handler] {
