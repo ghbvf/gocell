@@ -22,10 +22,12 @@ func TestEventAuthBootstrapFailedV1Subscribe(t *testing.T) {
 	// clientIp is optional
 	c.ValidatePayload(t, []byte(`{"reason":"missing_header"}`))
 
-	// --- payload: invalid reason (enum constraint) ---
-	c.MustRejectPayload(t, []byte(`{"reason":"unknown_reason"}`))
-	c.MustRejectPayload(t, []byte(`{"reason":""}`))
-	// missing required field
+	// --- payload: missing required reason ---
+	// Note: reason VALUE validation (the {missing_header, wrong_credentials,
+	// rate_limited} whitelist) is runtime-only — contractgen's jsonschema subset
+	// does not support the `enum` keyword, so the schema only enforces that
+	// reason is a present string. The subscriber Rejects unknown reasons at
+	// runtime (auditappendbootstrap.HandleEvent → AppendBootstrapAuthFail).
 	c.MustRejectPayload(t, []byte(`{"clientIp":"1.2.3.4"}`))
 	c.MustRejectPayload(t, []byte(`{}`))
 
