@@ -62,8 +62,8 @@
 // (e.g. routeDeadLetter returns a typed Outcome that the caller must record, or a
 // `func dropPoison(ctx, reason)` that wraps log+metric+return so the metric is
 // structurally inseparable from the drop). Then the metric call becomes
-// unrepresentable to omit. Tracked at gh #1356 follow-up (recorded in this
-// package godoc per ai-robust.md §Funnel 双向锁评级 "点名 issue 号").
+// unrepresentable to omit. Tracked at gh #1440 (recorded in this package godoc
+// per ai-robust.md §Funnel 双向锁评级 "点名 issue 号").
 //
 // # Blind-spot inventory (per ai-robust.md §载体决策原则 强制盲区自检)
 //
@@ -75,6 +75,12 @@
 //     the call site `f(...)` has no SelectorExpr callee, so A1 would not credit
 //     it. B1 asserts no method-value of RecordDeadLetter / RecordDeadLetterFailure
 //     is taken (non-call SelectorExpr) inside routeDeadLetter.
+//   - B2 defer: `defer s.collector.RecordDeadLetterFailure(ctx, r)` is a
+//     *ast.DeferStmt, not the *ast.ExprStmt A1 matches, so A1 would flag the
+//     return as silent (false-positive) — and a reader could "fix" it by moving
+//     the real signal into a defer, making the same-block scan blind. B2 asserts
+//     no defer of either signal method inside routeDeadLetter; the signal must be
+//     a direct same-block ExprStmt before the return so A1 can verify it.
 //   - Non-vacuity: A1NonVacuous asserts ≥2 ReturnStmt are seen and
 //     SignalsPresent asserts ≥1 RecordDeadLetter and ≥1 RecordDeadLetterFailure
 //     callsite resolve inside routeDeadLetter — so an empty/broken scan (wrong
@@ -98,8 +104,13 @@ import (
 )
 
 // routeDeadLetterFuncName is the method whose exit paths must each record a
-// dead-letter outcome metric.
-const routeDeadLetterFuncName = "routeDeadLetter"
+// dead-letter outcome metric. routeDeadLetterFullName is its go/types FullName,
+// used for exact identity (not a suffix) so a same-named method on a Subscriber
+// type in another package cannot satisfy the match.
+const (
+	routeDeadLetterFuncName = "routeDeadLetter"
+	routeDeadLetterFullName = "(*github.com/ghbvf/gocell/adapters/mqtt.Subscriber).routeDeadLetter"
+)
 
 // SubscriberCollector method FullName()s resolved via ResolveMethodCall. These
 // are the two dead-letter outcome signals; RecordDeadLetterFailure is the
@@ -135,7 +146,9 @@ func findRouteDeadLetter(p *Pass, f *ast.File) *ast.FuncDecl {
 		if !ok {
 			continue
 		}
-		if strings.HasSuffix(fn.FullName(), ".Subscriber).routeDeadLetter") {
+		// Exact FullName match (not HasSuffix): a same-named routeDeadLetter on a
+		// Subscriber type in any OTHER package would otherwise satisfy a suffix.
+		if fn.FullName() == routeDeadLetterFullName {
 			return fd
 		}
 	}
@@ -239,6 +252,10 @@ func countRouteDeadLetterSignals(p *Pass, fd *ast.FuncDecl) (success, failure in
 func withRouteDeadLetter(t *testing.T, fn func(p *Pass, f *ast.File, fd *ast.FuncDecl)) {
 	t.Helper()
 	found := false
+	// FlatNonDefaultTags excludes the integration tag: adapters/mqtt production
+	// files (deadletter.go etc.) carry no special build constraint, so the
+	// default+flat tag set loads routeDeadLetter. If it ever moves behind a tag,
+	// the found==false assertion below fails loudly (rule cannot go vacuous).
 	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath},
 		func(p *Pass) []Diagnostic {
@@ -344,5 +361,42 @@ func TestMQTTDLXFailureSignalFunnel_B1_NoMethodValue(t *testing.T) {
 		})
 		assert.Empty(t, diags,
 			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/B1: dead-letter signal method taken as a method-value")
+	})
+}
+
+// ─── B2: defer blind-spot reverse self-check ─────────────────────────────────
+
+// TestMQTTDLXFailureSignalFunnel_B2_NoDeferSignal asserts no dead-letter signal
+// method is invoked via `defer` inside routeDeadLetter. A1 only credits a
+// same-block *ast.ExprStmt before the return; a defer (*ast.DeferStmt) would both
+// (a) make A1 false-positive a return it actually covers, and (b) let a reader
+// relocate the real signal out of A1's same-block view. Banning defer keeps the
+// signal a direct, A1-verifiable same-block statement.
+func TestMQTTDLXFailureSignalFunnel_B2_NoDeferSignal(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	withRouteDeadLetter(t, func(p *Pass, f *ast.File, fd *ast.FuncDecl) {
+		var diags []Diagnostic
+		EachInSubtree[ast.DeferStmt](fd.Body, func(d *ast.DeferStmt) {
+			sel, ok := d.Call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || !dlxSignalMethodNames[sel.Sel.Name] {
+				return
+			}
+			pos := p.Fset.Position(d.Pos())
+			rel := p.Rel(f)
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/B2: dead-letter signal method %q invoked via defer "+
+						"at %s:%d — A1 verifies a direct same-block ExprStmt before the return; call it directly",
+					sel.Sel.Name, rel, pos.Line,
+				),
+			})
+		})
+		assert.Empty(t, diags,
+			"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/B2: dead-letter signal method invoked via defer in routeDeadLetter")
 	})
 }

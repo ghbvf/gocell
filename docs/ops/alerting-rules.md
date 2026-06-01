@@ -174,8 +174,8 @@ no-loss（leave-unacked 会复活 Option C 的 HoL stall，ADR-050 §1），因�
 
 ```yaml
 - alert: GoCellMQTTDeadLetterSinkUnhealthy
-  expr: sum(rate(mqtt_dlx_failed_total[5m])) by (cell, reason) > 0
-  for: 10m
+  expr: sum(rate(gocell_mqtt_dlx_failed_total[5m])) by (cell, reason) > 0
+  for: 2m
   labels:
     severity: critical
   annotations:
@@ -195,7 +195,7 @@ no-loss（leave-unacked 会复活 Option C 的 HoL stall，ADR-050 §1），因�
 
 ```yaml
 - alert: GoCellMQTTDeadLetterSinkSpike
-  expr: sum(increase(mqtt_dlx_failed_total[1m])) by (cell) > 50
+  expr: sum(increase(gocell_mqtt_dlx_failed_total[1m])) by (cell) > 50
   for: 2m
   labels:
     severity: critical
