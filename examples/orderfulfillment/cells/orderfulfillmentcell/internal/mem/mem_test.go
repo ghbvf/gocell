@@ -113,8 +113,12 @@ func TestInventoryStore(t *testing.T) {
 			t.Fatalf("Release unknown: %v", err)
 		}
 		// double release: must return nil
-		_, _ = s.Reserve(context.Background(), "ord-1", "widget")
-		_ = s.Release(context.Background(), "ord-1")
+		if _, err := s.Reserve(context.Background(), "ord-1", "widget"); err != nil {
+			t.Fatalf("Reserve setup: %v", err)
+		}
+		if err := s.Release(context.Background(), "ord-1"); err != nil {
+			t.Fatalf("Release setup: %v", err)
+		}
 		if err := s.Release(context.Background(), "ord-1"); err != nil {
 			t.Fatalf("double Release: %v", err)
 		}
@@ -161,7 +165,9 @@ func TestPaymentStore(t *testing.T) {
 	t.Run("refund_removes_payment", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewPaymentStore()
-		_, _ = s.Charge(context.Background(), "ord-1", 1000)
+		if _, err := s.Charge(context.Background(), "ord-1", 1000); err != nil {
+			t.Fatalf("Charge setup: %v", err)
+		}
 		if err := s.Refund(context.Background(), "ord-1"); err != nil {
 			t.Fatalf("Refund: %v", err)
 		}
@@ -179,8 +185,12 @@ func TestPaymentStore(t *testing.T) {
 			t.Fatalf("Refund unknown: %v", err)
 		}
 		// double refund
-		_, _ = s.Charge(context.Background(), "ord-2", 200)
-		_ = s.Refund(context.Background(), "ord-2")
+		if _, err := s.Charge(context.Background(), "ord-2", 200); err != nil {
+			t.Fatalf("Charge setup: %v", err)
+		}
+		if err := s.Refund(context.Background(), "ord-2"); err != nil {
+			t.Fatalf("Refund setup: %v", err)
+		}
 		if err := s.Refund(context.Background(), "ord-2"); err != nil {
 			t.Fatalf("double Refund: %v", err)
 		}
@@ -209,7 +219,9 @@ func TestShipmentStore(t *testing.T) {
 	t.Run("cancel_removes_shipment", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewShipmentStore()
-		_, _ = s.CreateShipment(context.Background(), "ord-1")
+		if _, err := s.CreateShipment(context.Background(), "ord-1"); err != nil {
+			t.Fatalf("CreateShipment setup: %v", err)
+		}
 		if err := s.CancelShipment(context.Background(), "ord-1"); err != nil {
 			t.Fatalf("CancelShipment: %v", err)
 		}
@@ -227,8 +239,12 @@ func TestShipmentStore(t *testing.T) {
 			t.Fatalf("CancelShipment unknown: %v", err)
 		}
 		// double cancel
-		_, _ = s.CreateShipment(context.Background(), "ord-2")
-		_ = s.CancelShipment(context.Background(), "ord-2")
+		if _, err := s.CreateShipment(context.Background(), "ord-2"); err != nil {
+			t.Fatalf("CreateShipment setup: %v", err)
+		}
+		if err := s.CancelShipment(context.Background(), "ord-2"); err != nil {
+			t.Fatalf("CancelShipment setup: %v", err)
+		}
 		if err := s.CancelShipment(context.Background(), "ord-2"); err != nil {
 			t.Fatalf("double CancelShipment: %v", err)
 		}

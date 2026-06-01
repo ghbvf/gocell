@@ -12,9 +12,10 @@ cells:
   - orderfulfillmentcell
 contracts:
   - http.orderfulfillment.placeorder.v1
+  - http.orderfulfillment.orderstatus.v1
   - saga.orderfulfillment.v1
 passCriteria:
-  - text: "POST /api/v1/orders/ with valid item + amountCents returns 202 Accepted with orderId in the response body"
+  - text: "User closure: POST /api/v1/orders/ returns 202 Accepted with orderId, the saga coordinator drives all four steps to KindSagaSucceeded, and GET /api/v1/orders/{id} then returns 200 with status=succeeded"
     mode: auto
     checkRef: journey.J-orderfulfillment-happy.happy-path
   - text: "Saga coordinator drives reserveInventory → chargePayment → ship → notifyUser steps to terminal KindSagaSucceeded; verified by integration test TestPlaceOrder_HappyPath"

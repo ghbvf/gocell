@@ -11,12 +11,14 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
 	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/sagaimpl"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -32,12 +34,21 @@ type testSetup struct {
 	jrnl      *journal.MemJournal
 	inventory *mem.InventoryStore
 	payments  *mem.PaymentStore
-	shipments *mem.ShipmentStore
+	shipments ports.ShipmentStore
 	coord     *saga.Coordinator
 	ctx       context.Context
 }
 
 func setup(t *testing.T) testSetup {
+	t.Helper()
+	return setupWith(t, mem.NewShipmentStore())
+}
+
+// setupWith builds the full coordinator + placeorder wiring with a
+// caller-supplied ShipmentStore. Tests inject a failing store (see
+// failingShipmentStore) to drive the multi-step reverse compensation path,
+// where ship fails after reserveInventory and chargePayment have completed.
+func setupWith(t *testing.T, ship ports.ShipmentStore) testSetup {
 	t.Helper()
 
 	clk := clock.Real()
@@ -50,7 +61,6 @@ func setup(t *testing.T) testSetup {
 	orders := mem.NewOrderRepository()
 	inv := mem.NewInventoryStore(map[string]int{"widget": 100})
 	pay := mem.NewPaymentStore()
-	ship := mem.NewShipmentStore()
 
 	impl, err := sagaimpl.NewImpl(orders, inv, pay, ship)
 	if err != nil {
@@ -314,5 +324,97 @@ func TestPlaceOrder_CompensateOnChargeFail_EventSequence(t *testing.T) {
 			(ev.Kind == journal.KindStepCompleted || ev.Kind == journal.KindStepCompensated) {
 			t.Errorf("unexpected event kind=%s for step=%s after chargePayment failure", ev.Kind, name)
 		}
+	}
+}
+
+// failingShipmentStore wraps a ShipmentStore but always fails CreateShipment.
+// It drives the ship-step failure that exercises the multi-step reverse
+// compensation path: reserveInventory and chargePayment have already completed,
+// so the coordinator must compensate them in reverse order
+// (chargePayment → reserveInventory). CancelShipment / Get delegate to the
+// embedded store so compensation and assertions behave normally.
+type failingShipmentStore struct {
+	ports.ShipmentStore
+}
+
+func (failingShipmentStore) CreateShipment(context.Context, string) (string, error) {
+	// KindConflict mirrors the payment-decline classification so the coordinator
+	// treats it as non-retryable and enters compensation rather than retrying.
+	return "", errcode.New(errcode.KindConflict, errcode.ErrConflict, "shipment carrier rejected")
+}
+
+// TestPlaceOrder_CompensateOnShipFail_EventSequence verifies the deeper
+// compensation path than chargePayment failure: when ship fails after
+// reserveInventory and chargePayment have completed, the coordinator compensates
+// BOTH prior steps in reverse order (chargePayment, then reserveInventory),
+// refunds the payment, releases the inventory, and reaches terminal
+// KindSagaCompensated. paymentShouldFail is false here — payment succeeds and is
+// then rolled back, which the chargePayment-failure case never exercises.
+// F5: multi-step reverse-order compensation coverage.
+func TestPlaceOrder_CompensateOnShipFail_EventSequence(t *testing.T) {
+	t.Parallel()
+	ts := setupWith(t, failingShipmentStore{mem.NewShipmentStore()})
+
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "int-shipcomp-1", "widget", 1299, false)
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	kind := waitTerminal(t, ts.ctx, ts.jrnl, idutil.SafeID(orderID))
+	if kind != journal.KindSagaCompensated {
+		t.Errorf("terminal kind = %s, want %s", kind, journal.KindSagaCompensated)
+	}
+
+	events, err := ts.jrnl.Load(ts.ctx, idutil.SafeID(orderID))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// reserveInventory and chargePayment must have completed before ship failed.
+	var completedSteps []string
+	for _, ev := range events {
+		if ev.Kind == journal.KindStepCompleted {
+			completedSteps = append(completedSteps, string(ev.StepName))
+		}
+	}
+	wantCompleted := []string{"reserveInventory", "chargePayment"}
+	if len(completedSteps) != len(wantCompleted) {
+		t.Errorf("completed steps = %v, want %v", completedSteps, wantCompleted)
+	} else {
+		for i, want := range wantCompleted {
+			if completedSteps[i] != want {
+				t.Errorf("completed step[%d] = %q, want %q", i, completedSteps[i], want)
+			}
+		}
+	}
+
+	// Compensation must run BOTH completed steps in reverse order.
+	var compensatedSteps []string
+	for _, ev := range events {
+		if ev.Kind == journal.KindStepCompensated {
+			compensatedSteps = append(compensatedSteps, string(ev.StepName))
+		}
+	}
+	wantCompensated := []string{"chargePayment", "reserveInventory"}
+	if len(compensatedSteps) != len(wantCompensated) {
+		t.Errorf("compensated steps = %v, want %v (reverse order)", compensatedSteps, wantCompensated)
+	} else {
+		for i, want := range wantCompensated {
+			if compensatedSteps[i] != want {
+				t.Errorf("compensated step[%d] = %q, want %q", i, compensatedSteps[i], want)
+			}
+		}
+	}
+
+	// Side effects fully rolled back: inventory restored, payment refunded,
+	// no shipment recorded.
+	if got := ts.inventory.Available("widget"); got != 100 {
+		t.Errorf("inventory.Available(widget) = %d after compensation, want 100", got)
+	}
+	if _, ok := ts.payments.Get(orderID); ok {
+		t.Errorf("payment should be refunded after compensation, but was still present for orderID=%s", orderID)
+	}
+	if _, ok := ts.shipments.Get(orderID); ok {
+		t.Errorf("shipment should not exist after ship failure, but was present for orderID=%s", orderID)
 	}
 }

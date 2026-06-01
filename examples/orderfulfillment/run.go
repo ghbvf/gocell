@@ -69,7 +69,10 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		// Bound to loopback only — demo mode must not expose to untrusted networks.
 		bootstrap.WithListener(cell.PrimaryListener, "127.0.0.1:8083",
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),
-		// Health listener: /healthz, /readyz, /metrics.
+		// Health listener: /healthz, /readyz. Demo mode wires no /metrics
+		// handler (saga metrics use NopProvider), so the framework /metrics
+		// route is not registered — see WithHealthRoutes(demoHealthOpts()) below
+		// (no bootstrap.WithMetricsHandler).
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093",
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(demoHealthOpts()...),

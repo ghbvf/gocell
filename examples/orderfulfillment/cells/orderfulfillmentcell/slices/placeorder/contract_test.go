@@ -39,6 +39,10 @@ func TestHttpOrderfulfillmentPlaceorderV1Serve(t *testing.T) {
 
 	c.ValidateRequest(t, []byte(`{"item":"widget","amountCents":1000,"idempotencyKey":"ct-happy-1"}`))
 	c.MustRejectRequest(t, []byte(`{"item":"widget","amountCents":1000,"idempotencyKey":"ct-happy-1","unknown":"bad"}`))
+	// idempotencyKey is mapped to the order ID ("ord-"+key) and queried back as a
+	// single path segment via GET /api/v1/orders/{id}; a '/' would split the segment
+	// and break the round-trip, so the schema pattern must reject it.
+	c.MustRejectRequest(t, []byte(`{"item":"widget","amountCents":1000,"idempotencyKey":"ct/with/slash"}`))
 
 	rec := httptest.NewRecorder()
 	body := `{"item":"widget","amountCents":1000,"idempotencyKey":"ct-happy-1"}`

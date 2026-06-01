@@ -92,15 +92,19 @@ type OrderCell struct {
 	// operators can observe coordinator liveness.
 	coord healthz.RepoProber
 
-	// placeorderHandler is built in initInternal and mounted by the RouteGroup
-	// declared in initInternal.
+	// placeorderHandler is built in initInternal and mounted on the
+	// PrimaryListener by the cellgen-generated RouteGroup in cell_gen.go,
+	// driven by the +slice:route marker below.
+	// +slice:route:slice=placeorder,subPath=/orders
 	placeorderHandler *placeordergen.Handler
 
 	// placeorderSvc holds the slice service for slice metadata wiring.
 	placeorderSvc *placeorderslice.Service
 
-	// orderstatusHandler is built in initInternal and mounted by the RouteGroup
-	// declared in initInternal.
+	// orderstatusHandler is built in initInternal and mounted on the
+	// PrimaryListener by the cellgen-generated RouteGroup in cell_gen.go,
+	// driven by the +slice:route marker below.
+	// +slice:route:slice=orderstatus,subPath=/orders
 	orderstatusHandler *orderstatusgen.Handler
 
 	// orderstatusSvc holds the orderstatus slice service for slice metadata wiring.
@@ -124,8 +128,11 @@ func NewOrderCell(clk clock.Clock, opts ...Option) *OrderCell {
 }
 
 // initInternal is the K#04 codegen escape hatch: business init that cannot
-// be generated (slice service construction, route mounting).
-// cell_gen.go::Init calls it after BaseCell.Init.
+// be generated (coordinator readiness registration, slice service
+// construction, repo defaults). Route mounting is generated into
+// cell_gen.go from the +slice:route markers on the handler fields.
+// cell_gen.go::Init calls it after BaseCell.Init and before the generated
+// RouteGroup blocks.
 //
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error {
