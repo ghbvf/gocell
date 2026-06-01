@@ -32,6 +32,12 @@ var listenerRefPattern = regexp.MustCompile(`^cell\.[A-Z][A-Za-z0-9_]*$`)
 // `c.<HandlerField>.<Method>(s)` and `c.<SliceField>.<Handler>` call sites.
 var goExportedIdentPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*$`)
 
+// projectionIDPattern mirrors kernel/healthz probe-name (snake_case). cellgen
+// validates here so a bad projection: id fails at codegen, not bootstrap.
+// Duplicated (not imported) to keep cellgen free of the healthz dep, matching
+// the existing local-regexp convention in this file.
+var projectionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
+
 // goLocalIdentPattern matches valid Go local (unexported) identifiers.
 // Used to validate HandlerField, which is derived from AST field names but
 // still validated defensively to catch any unexpected input.
@@ -77,6 +83,8 @@ const (
 //   - subscribe CU handler field empty
 //   - subscribe CU references a contract not declared in project
 //   - fieldIndex missing entry for subscribing slice
+//
+//nolint:funlen // pipeline of independent build steps; each step is ≤10 lines; extraction adds more lines than it removes
 func BuildCellSpec(
 	p *metadata.ProjectMeta,
 	cellID string,
@@ -156,6 +164,12 @@ func BuildCellSpec(
 	}
 	spec.WebhookDispatches = dispatches
 
+	projections, err := buildProjectionsFromSlices(p, cellID, fieldIndex)
+	if err != nil {
+		return nil, err
+	}
+	spec.Projections = projections
+
 	return spec, nil
 }
 
@@ -192,9 +206,17 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 	// Collect subscribe handlers from slice contractUsages.
 	// Slices without subscribe CUs still produce slice_gen.go (sliceMeta only);
 	// the handler interface block is rendered conditionally when Handlers is non-empty.
+	//
+	// Projection CUs (cu.Projection != "") are intentionally excluded: their
+	// handler signature is cell.ProjectionApply (returns error), enforced
+	// structurally at the reg.RegisterProjection(…NewProjectionRequest(…)) callsite
+	// in cell_gen.go. Including them here would render a conflicting
+	// "…HandleResult" method with the same name in eventHandlerService, making the
+	// generated projection slice uncompilable (double-signature conflict).
+	// This mirrors the skip predicate already used in buildSubscriptionsFromSlices.
 	seen := make(map[string]bool)
 	for _, cu := range s.ContractUsages {
-		if cu.Role != roleSubscribe {
+		if cu.Role != roleSubscribe || cu.Projection != "" {
 			continue
 		}
 		if seen[cu.Handler] {
@@ -216,6 +238,8 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 // kernel for the subscribe / webhook-receive / webhook-dispatch builders, which
 // differ only in the role string, the per-CU builder, and the element type
 // (sliceID/contractID accessors expose the two sort keys generically).
+//
+//nolint:gocognit // shared kernel for 4 builder roles; nil-guard on skip is intrinsic to the optional-filter design
 func buildSpecsFromSlices[T any](
 	p *metadata.ProjectMeta,
 	cellID, role string,
@@ -223,6 +247,7 @@ func buildSpecsFromSlices[T any](
 	build func(p *metadata.ProjectMeta, cellID, sliceID string, cu metadata.ContractUsage, fieldIndex *CellFieldIndex) (T, error),
 	sliceID func(T) string,
 	contractID func(T) string,
+	skip func(metadata.ContractUsage) bool,
 ) ([]T, error) {
 	var out []T
 	for key, s := range p.Slices {
@@ -234,6 +259,9 @@ func buildSpecsFromSlices[T any](
 		}
 		for _, cu := range s.ContractUsages {
 			if cu.Role != role {
+				continue
+			}
+			if skip != nil && skip(cu) {
 				continue
 			}
 			spec, err := build(p, cellID, s.ID, cu, fieldIndex)
@@ -258,7 +286,8 @@ func buildSpecsFromSlices[T any](
 func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]SubscriptionGenSpec, error) {
 	return buildSpecsFromSlices(p, cellID, roleSubscribe, fieldIndex, buildSubscriptionSpecFromCU,
 		func(s SubscriptionGenSpec) string { return s.SliceID },
-		func(s SubscriptionGenSpec) string { return s.ContractID })
+		func(s SubscriptionGenSpec) string { return s.ContractID },
+		func(cu metadata.ContractUsage) bool { return cu.Projection != "" })
 }
 
 // buildSubscriptionSpecFromCU validates one ContractUsage[role=subscribe]
@@ -342,7 +371,8 @@ func buildWebhookReceiversFromSlices(
 ) ([]WebhookReceiverGenSpec, error) {
 	return buildSpecsFromSlices(p, cellID, roleWebhookReceive, fieldIndex, buildWebhookReceiverSpecFromCU,
 		func(s WebhookReceiverGenSpec) string { return s.SliceID },
-		func(s WebhookReceiverGenSpec) string { return s.ContractID })
+		func(s WebhookReceiverGenSpec) string { return s.ContractID },
+		nil)
 }
 
 // resolveWebhookField resolves and validates the cell struct field name and
@@ -543,7 +573,8 @@ func buildWebhookDispatchesFromSlices(
 ) ([]WebhookDispatchGenSpec, error) {
 	return buildSpecsFromSlices(p, cellID, roleWebhookDispatch, fieldIndex, buildWebhookDispatchSpecFromCU,
 		func(s WebhookDispatchGenSpec) string { return s.SliceID },
-		func(s WebhookDispatchGenSpec) string { return s.ContractID })
+		func(s WebhookDispatchGenSpec) string { return s.ContractID },
+		nil)
 }
 
 // buildWebhookDispatchSpecFromCU validates one ContractUsage[role=webhook-dispatch]
@@ -688,6 +719,116 @@ func buildRouteGroupsFromBundle(
 	return out
 }
 
+// buildProjectionsFromSlices scans all slices belonging to cellID and converts
+// each contractUsage[role=subscribe, projection≠""] entry into a
+// ProjectionGenSpec, sorted by SliceID then ProjectionID.
+func buildProjectionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]ProjectionGenSpec, error) {
+	return buildSpecsFromSlices(p, cellID, roleSubscribe, fieldIndex, buildProjectionSpecFromCU,
+		func(s ProjectionGenSpec) string { return s.SliceID },
+		func(s ProjectionGenSpec) string { return s.ProjectionID },
+		func(cu metadata.ContractUsage) bool { return cu.Projection == "" })
+}
+
+// buildProjectionSpecFromCU validates one ContractUsage[role=subscribe, projection≠""]
+// and converts it to a ProjectionGenSpec.
+//
+// The cell struct field is resolved via fieldIndex.resolveSliceField.
+// ApplyExpr is rendered as `c.<fieldName>.<cu.Handler>`.
+// OnResetExpr is rendered as `c.<fieldName>.<cu.OnReset>` or "" when OnReset is unset.
+//
+//nolint:funlen // validation-only function: each block is a single guard clause; extraction would scatter semantically cohesive checks
+func buildProjectionSpecFromCU(
+	p *metadata.ProjectMeta,
+	cellID, sliceID string,
+	cu metadata.ContractUsage,
+	fieldIndex *CellFieldIndex,
+) (ProjectionGenSpec, error) {
+	if !goExportedIdentPattern.MatchString(cu.Handler) {
+		return ProjectionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: projection apply Handler must be a non-empty exported Go identifier",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("handler", cu.Handler),
+				errcode.PublicString("pattern", goExportedIdentPattern.String()),
+			))
+	}
+	if !projectionIDPattern.MatchString(cu.Projection) {
+		return ProjectionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: projection id must be a snake_case identifier",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("projectionID", cu.Projection),
+				errcode.PublicString("pattern", projectionIDPattern.String()),
+			))
+	}
+	if cu.OnReset != "" && !goExportedIdentPattern.MatchString(cu.OnReset) {
+		return ProjectionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: projection onReset must be an exported Go identifier",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("onReset", cu.OnReset),
+				errcode.PublicString("pattern", goExportedIdentPattern.String()),
+			))
+	}
+
+	fieldName, err := fieldIndex.resolveSliceField(cu.Field, cellID, sliceID, roleSubscribe)
+	if err != nil {
+		return ProjectionGenSpec{}, err
+	}
+	if !goLocalIdentPattern.MatchString(fieldName) {
+		return ProjectionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: projection field name must be a valid Go identifier",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("field", fieldName),
+				errcode.PublicString("pattern", goLocalIdentPattern.String()),
+			))
+	}
+
+	contract, ok := p.Contracts[cu.Contract]
+	if !ok {
+		details := []errcode.PublicDetail{
+			errcode.PublicString("cellID", cellID),
+			errcode.PublicString("sliceID", sliceID),
+			errcode.PublicString("contract", cu.Contract),
+		}
+		if stubTopicPattern.MatchString(cu.Contract) {
+			return ProjectionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
+				"cellgen build: projection consumes unknown contract (looks like a scaffold stub — replace contract with a real contract id)",
+				errcode.WithDetails(details...))
+		}
+		return ProjectionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
+			"cellgen build: projection consumes unknown contract",
+			errcode.WithDetails(details...))
+	}
+	if contract.Kind != "event" {
+		return ProjectionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: projection consumes non-event contract",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("kind", contract.Kind),
+			))
+	}
+
+	onResetExpr := ""
+	if cu.OnReset != "" {
+		onResetExpr = "c." + fieldName + "." + cu.OnReset
+	}
+	return ProjectionGenSpec{
+		ContractID:   cu.Contract,
+		SliceID:      sliceID,
+		ProjectionID: cu.Projection,
+		ApplyExpr:    "c." + fieldName + "." + cu.Handler,
+		OnResetExpr:  onResetExpr,
+	}, nil
+}
+
 // EnrichSubscriptionsWithModulePath populates SubscriptionPackage and
 // SubscriptionAlias on each subscription in the spec using the module path
 // derived from go.mod at root. This is a post-build step; BuildCellSpec does
@@ -701,5 +842,20 @@ func EnrichSubscriptionsWithModulePath(spec *CellGenSpec, modulePath string) {
 		sub := &spec.Subscriptions[i]
 		sub.SubscriptionPackage = contractpath.ContractIDToImportPath(modulePath, sub.ContractID)
 		sub.SubscriptionAlias = fmt.Sprintf("sub%d", i)
+	}
+}
+
+// EnrichProjectionsWithModulePath populates SpecPackage and SpecAlias on each
+// projection in the spec using the module path derived from go.mod at root.
+// This is a post-build step; BuildCellSpec does not read the filesystem so it
+// cannot derive the import path itself.
+//
+// SpecAlias is set to "proj<index>" (0-indexed) to guarantee uniqueness even
+// when multiple contracts share the same last path segment.
+func EnrichProjectionsWithModulePath(spec *CellGenSpec, modulePath string) {
+	for i := range spec.Projections {
+		pr := &spec.Projections[i]
+		pr.SpecPackage = contractpath.ContractIDToImportPath(modulePath, pr.ContractID)
+		pr.SpecAlias = fmt.Sprintf("proj%d", i)
 	}
 }

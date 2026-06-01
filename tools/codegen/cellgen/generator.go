@@ -174,6 +174,7 @@ func generateOneCell(
 	if len(spec.Subscriptions) > 0 {
 		EnrichSubscriptionsWithModulePath(spec, opts.ModulePath)
 	}
+	EnrichProjectionsWithModulePath(spec, opts.ModulePath)
 	if err := renderAndWrite(
 		root, opts.ModulePath, "cell.tmpl", spec, cellGenPath(root, cell),
 		opts, res, "cellgen generate: render "+cell.ID,
@@ -285,6 +286,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID, mod
 	if len(cellSpec.Subscriptions) > 0 {
 		EnrichSubscriptionsWithModulePath(cellSpec, modulePath)
 	}
+	EnrichProjectionsWithModulePath(cellSpec, modulePath)
 	cellAbs := cellGenPath(root, cell)
 	cellContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
