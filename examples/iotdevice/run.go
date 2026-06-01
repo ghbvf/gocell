@@ -32,19 +32,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
 // runIotdevice is the hand-written runtime helper for the iotdevice assembly.
 // It is called by the generated main.go and owns environment loading +
 // bootstrap wiring.
 func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []string) error {
-	// Fail-closed sink-side redaction: seal the process-global slog default with
-	// the redacting handler FIRST — before any work that may log (e.g. module
-	// drift validation below) — so every slog.Default() call is scrubbed
-	// (SLOG-HANDLER-SEALED-FUNNEL-01; #1036 review F5). logger reuses the sealed
-	// default for pre-bootstrap / cell-level logging.
-	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
+	// The redacting slog default is sealed by the generated main.go's run()
+	// (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated segment) before this function
+	// runs, so logger (and every slog.Default() call) is already scrubbed.
 	logger := slog.Default()
 
 	mods, err := runIotdeviceModules(assemblyID, assemblyCellIDs)
