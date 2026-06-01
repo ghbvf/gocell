@@ -7,20 +7,25 @@
 //
 // AI-robust rating:
 //
-//   - Hard (upstream): types.Implements(*types.Interface) is exhaustive — a new
-//     implementation cannot hide from the types.Implements scan regardless of
-//     where it lives in the module. Any concrete named type satisfying the Store
-//     interface is flagged if unenrolled. This matches the ai-robust §Hard 范本
-//     目录 "sealed construction" / "single sanctioned holder" goal: the
-//     conformance enrollment archtest is the machine gate that turns "new impl
-//     must enroll" from a convention into a CI-enforced invariant.
+//   - Medium (upstream): types.Implements(*types.Interface) is exhaustive for
+//     *finding* all concrete implementations — a new implementation cannot hide
+//     from the types.Implements scan. However, the *enrollment* requirement
+//     (must CALL RunConformanceSuite in a _test.go) is archtest-bound, not
+//     type-system-enforced. Go cannot make "new impl without conformance
+//     enrollment" a compile error. This matches the precedent of
+//     SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (saga.md: "types.Implements 类型
+//     感知扫描 + _test.go 调用点解析；Medium"). The Hard upgrade path is a
+//     codegen golden funnel that enumerates Store impls from a single source
+//     and diff-locks the enrollment registry; deferred as future work (see Hard
+//     path note below).
 //
 //   - Medium (downstream): the callsite scan proves a _test.go file CALLS
 //     RunConformanceSuite. Go cannot require at compile time that a _test.go
-//     file call any specific function; this is archtest-bound (CI red). The Hard
-//     upgrade path is a codegen funnel + golden that enumerates Store impls from
-//     a single source and diff-locks the enrollment registry; deferred as
-//     cross-PR governance work, tracked in gh issue #1044.
+//     file call any specific function; this is archtest-bound (CI red). Hard
+//     upgrade path: codegen funnel + golden that enumerates Store impls and
+//     diff-locks the enrollment registry — tracked as future work, no gh issue
+//     yet (mirrors SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01's Hard path at
+//     gh #1003).
 //
 // # Integration-tag handling
 //

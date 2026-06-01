@@ -183,20 +183,20 @@ Store 共享策略，设计复杂度较高，拆分到后续 epic（见 §Follow
 
 | Invariant ID | 摘要 | 上游评级 | 下游评级 |
 |---|---|---|---|
-| `HTTP-IDEMPOTENCY-RECORDEDRESPONSE-SEALED-01` | `RecordedResponse` 全字段 unexported → 包外 populated 字面量编译不可表达（type-system Hard 上游）；唯一导出产出函数 `= {newRecordedResponse, UnmarshalRecordedResponse}`（go/types resolver 锁定）+ `MarshalRecordedResponse` 是 sole 序列化器（hard downsteam callsite uniqueness）。盲区：reconstruct 路径上的 Store 实现可以从任意 `[]byte` decode，但 `UnmarshalRecordedResponse` 的 `recordedAt` 非零和 status 范围校验是 semantic guard。 | **Hard**（type-system，全字段 unexported）| **Hard**（go/types 锁定产出面，`RECORDEDRESPONSE-SEALED-01` A2） |
-| `HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01` | 每个满足 `idemhttp.Store` 接口的生产具名类型，其包下的 `_test.go` 必须有 `idempotencytest.RunStoreConformanceSuite` 调用；防止新增 Store 实现跳过 conformance。上游 Hard：`types.Implements` 穷举找所有实现；下游 Medium：`_test.go` 调用点解析（reflect blind spot，同 `SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01` 形态）。Hard 升级路径：codegen golden 枚举实现，追踪 gh issue 待开。 | **Hard**（types.Implements 枚举，覆盖范围 runtime/http/+adapters/+examples/）| **Medium**（_test.go 调用点解析；Hard 路径 = codegen golden 枚举） |
+| `HTTP-IDEMPOTENCY-RECORDEDRESPONSE-SEALED-01` | `RecordedResponse` 全字段 unexported → 包外 populated 字面量编译不可表达（type-system Hard 上游）；唯一**导出**产出函数集 `= {UnmarshalRecordedResponse}`（go/types resolver 锁定）。`newRecordedResponse` 是**未导出**的包内构造器，不在导出产出面锁集中；`MarshalRecordedResponse` 是 sole 序列化器（Hard downstream callsite uniqueness）。盲区：reconstruct 路径上的 Store 实现可以从任意 `[]byte` decode，但 `UnmarshalRecordedResponse` 的 `recordedAt` 非零和 status 范围校验是 semantic guard。 | **Hard**（type-system，全字段 unexported）| **Hard**（go/types 锁定导出产出面，`RECORDEDRESPONSE-SEALED-01` A2） |
+| `HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01` | 每个满足 `idemhttp.Store` 接口的生产具名类型，其包下的 `_test.go` 必须有 `idempotencytest.RunConformanceSuite` 调用；防止新增 Store 实现跳过 conformance。上游 Medium：`types.Implements` 穷举找所有实现，但 enrollment（_test.go 调用点）archtest-bound 非 type-system 强制，同 `SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01` 形态；下游 Medium：`_test.go` 调用点解析（reflect blind spot）。Hard 升级路径：codegen golden 枚举实现，未来 work（对标 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 的 Hard 路径 gh #1003）。 | **Medium**（types.Implements 枚举找实现，但 enrollment archtest-bound；同 SAGA 先例）| **Medium**（_test.go 调用点解析；Hard 路径 = codegen golden 枚举） |
 | `REDIS-KEY-NAMESPACE-01`（已有，扩展）| Redis 构造器 body 顶部强制 `ns.Validate()` 守卫；`HTTPIdempotencyStore` 新增进 `redisConstructors` 列表 | **Hard**（archtest 锁定构造器集合，alias-proof go/types）| **Hard**（form-uniqueness callsite lock） |
 
 **Funnel 双向锁评级（ai-robust §"Funnel 双向锁评级"）**：
 
 `RecordedResponse` sealed construction funnel：
 - **上游 Hard**（type-system）：`RecordedResponse` 全字段 unexported → 包外 populated 字面量编译不可表达。与 `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` 同形态。
-- **下游 Hard**（archtest `HTTP-IDEMPOTENCY-RECORDEDRESPONSE-SEALED-01` A2）：go/types 锁定唯一产出面 `{newRecordedResponse, UnmarshalRecordedResponse}`，包外新增产出面即 CI 红。
+- **下游 Hard**（archtest `HTTP-IDEMPOTENCY-RECORDEDRESPONSE-SEALED-01` A2）：go/types 锁定唯一**导出**产出面 `{UnmarshalRecordedResponse}`（`newRecordedResponse` 是包内未导出构造器，不在导出产出面锁集中），包外新增导出产出面即 CI 红。
 - 双侧均 Hard，构成闭环 funnel。
 
 `Store` conformance-enrollment funnel：
-- **上游 Hard**：`types.Implements` 穷举，枚举范围 runtime/http/+adapters/+examples/；新增 Store 实现被自动发现。
-- **下游 Medium**：`_test.go` 调用点解析；Go 语言层面无法强制测试文件中存在某个调用，同 `SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01` 的永久天花板。Hard 化路径追踪见上表 `HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01`。
+- **上游 Medium**：`types.Implements` 穷举，枚举范围 runtime/http/+adapters/+examples/；新增 Store 实现被自动发现。但 enrollment（`_test.go` 中调用 `RunConformanceSuite`）是 archtest-bound，非 type-system 强制——同 `SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01`（saga.md：Medium 评级，永久天花板）。
+- **下游 Medium**：`_test.go` 调用点解析；Go 语言层面无法强制测试文件中存在某个调用。Hard 化路径 = codegen golden 枚举实现，未来 work（见上表）。
 
 ---
 
@@ -255,11 +255,11 @@ Implementations:
   [x] runtime/http/idempotency/middleware.go (Middleware + shouldIntercept + extractIdentity + buildNamespaceKey + recordOrRelease + shouldRecord)
   [x] runtime/http/idempotency/buffering_writer.go (bufferingWriter — response capture)
   [x] runtime/http/idempotency/mem_store.go (in-mem fake for unit tests)
-  [x] runtime/http/idempotency/store_test.go (conformance helper RunStoreConformanceSuite)
+  [x] runtime/http/idempotency/store_test.go (conformance helper RunConformanceSuite)
   [x] runtime/http/router/router.go WithIdempotency + buildMux position (after BodyLimit, before composeHandler)
   [x] adapters/redis/http_idempotency.go (HTTPIdempotencyStore + httpReceipt + noopHTTPReceipt + Lua scripts)
 Conformance test:
-  - runtime/http/idempotency/idempotencytest.RunStoreConformanceSuite (in-mem + Redis)
+  - runtime/http/idempotency/idempotencytest.RunConformanceSuite (in-mem + Redis)
   - go test ./runtime/http/idempotency/... -run 'ConformanceSuite'
   - go test -tags=integration ./adapters/redis/ -run 'HTTPIdempotencyStore'
 Repro:
@@ -275,7 +275,7 @@ Dependent contracts (governance scan): none — middleware 是 framework 横切�
 
 以下内容在本 PR 范围之外，按 `feedback_pr_scope_carveouts_must_backlog` 规则同步登记 backlog：
 
-- **cross-cell / full-assembly 幂等命名空间**：多 listener 共享 Store + namespace 约定，需设计 Store 共享策略（wiring）和 namespace collision 防御。
-- **request-payload fingerprinting**：相同 `Idempotency-Key` + 不同 request body → 当前行为是用后到的请求 replay 先前结果（或先到的 ClaimAcquired）。业界建议 422 + 错误说明。实现需 hash request body 并与 lease 关联存储。
-- **Block-and-wait 并发**（可选增强）：如果 409 + Retry-After 被产品侧确认为可接受，此项关闭；否则可作为 opt-in `WithWaitOnBusy(timeout)` 选项。
-- **`HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01` Hard 化**：当前下游 Medium（`_test.go` 调用点解析），升 Hard 路径 = codegen golden 枚举 Store 实现，待开 gh issue 跟踪。
+- **cross-cell / full-assembly 幂等命名空间**（gh #1449）：多 listener 共享 Store + namespace 约定，需设计 Store 共享策略（wiring）和 namespace collision 防御。
+- **request-payload fingerprinting**（gh #1450）：相同 `Idempotency-Key` + 不同 request body → 当前行为是用后到的请求 replay 先前结果（或先到的 ClaimAcquired）。业界建议 422 + 错误说明。实现需 hash request body 并与 lease 关联存储。
+- **Block-and-wait 并发**（gh #1451，可选增强）：如果 409 + Retry-After 被产品侧确认为可接受，此项关闭；否则可作为 opt-in `WithWaitOnBusy(timeout)` 选项。
+- **`HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01` Hard 化**：当前上游和下游均为 Medium（`types.Implements` 穷举 + `_test.go` 调用点解析），升 Hard 路径 = codegen golden 枚举 Store 实现（对标 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 Hard 路径 gh #1003）。尚无独立 gh issue，标为 future work。

@@ -8,6 +8,7 @@
 package idempotencytest
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"testing"
@@ -73,6 +74,8 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"LeaseTTLExpiry_AllowsReClaim", conformLeaseTTLExpiry},
 		{"StaleToken_RecordReturnsError", conformStaleTokenRecord},
 		{"DifferentNamespaceKey_AreIndependent", conformDifferentNsKeyIndependent},
+		{"DoneTTLExpiry_AllowsReClaim", conformDoneTTLExpiry},
+		{"StaleToken_ReleaseAfterExpiry", conformStaleTokenRelease},
 	}
 
 	for _, tc := range cases {
@@ -109,6 +112,9 @@ func conformFirstClaimAcquired(t *testing.T, factory Factory) {
 
 // conformClaimDoneAfterRecord acquires a lease, records a response, then
 // verifies that a subsequent Claim returns ClaimDone with the stored response.
+// It asserts the full round-trip: status, body, and a representative header
+// value (Content-Type) must survive the Store → replay cycle unchanged.
+// Store implementations that drop body or headers will fail here.
 func conformClaimDoneAfterRecord(t *testing.T, factory Factory) {
 	t.Helper()
 	store, _, cleanup := factory(t)
@@ -120,7 +126,9 @@ func conformClaimDoneAfterRecord(t *testing.T, factory Factory) {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
 
-	resp := buildTestResponse(t, 201, []byte(`{"id":"abc"}`))
+	wantBody := []byte(`{"id":"abc"}`)
+	wantContentType := "application/json"
+	resp := buildTestResponse(t, 201, wantBody)
 	if err := receipt.Record(ctx, &resp, conformDoneTTL); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -138,6 +146,16 @@ func conformClaimDoneAfterRecord(t *testing.T, factory Factory) {
 	}
 	if rec2.Status() != 201 {
 		t.Errorf("replayed status = %d, want 201", rec2.Status())
+	}
+	// Body round-trip: Store implementations that drop the body currently pass
+	// a status-only check but fail here.
+	if !bytes.Equal(rec2.Body(), wantBody) {
+		t.Errorf("replayed body = %q, want %q", rec2.Body(), wantBody)
+	}
+	// Header round-trip: a representative header value (Content-Type) must
+	// survive the Store → replay cycle.
+	if got := rec2.Header().Get("Content-Type"); got != wantContentType {
+		t.Errorf("replayed Content-Type = %q, want %q", got, wantContentType)
 	}
 }
 
@@ -281,6 +299,99 @@ func conformDifferentNsKeyIndependent(t *testing.T, factory Factory) {
 	}
 	if state3 != idempotency.ClaimAcquired {
 		t.Errorf("Claim (ns1, altKey) state = %v, want ClaimAcquired (different key must not collide)", state3)
+	}
+}
+
+// conformDoneTTLExpiry verifies that a recorded response expires after
+// doneTTL: Claim → Record with shortDoneTTL → advance past TTL → next Claim
+// returns ClaimAcquired (the done record has expired, the key is fresh again).
+//
+// Uses the TimeAdvancer so no real time.Sleep is required for MemStore; Redis
+// backends advance via real sleep in the factory's AdvancePast implementation.
+func conformDoneTTLExpiry(t *testing.T, factory Factory) {
+	t.Helper()
+	store, adv, cleanup := factory(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Claim and record with a very short done TTL.
+	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
+	if err != nil || state != idempotency.ClaimAcquired {
+		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
+	}
+
+	resp := buildTestResponse(t, 200, []byte(`{"ok":true}`))
+	if err := receipt.Record(ctx, &resp, shortDoneTTL); err != nil {
+		t.Fatalf("Record with shortDoneTTL: %v", err)
+	}
+
+	// Verify it is in ClaimDone state immediately after Record.
+	statePre, recPre, _, errPre := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
+	if errPre != nil {
+		t.Fatalf("pre-expiry Claim: unexpected error: %v", errPre)
+	}
+	if statePre != idempotency.ClaimDone {
+		t.Errorf("pre-expiry Claim state = %v, want ClaimDone", statePre)
+	}
+	if recPre == nil {
+		t.Error("pre-expiry Claim: recorded response must be non-nil for ClaimDone")
+	}
+
+	// Advance past the done TTL so the done record expires.
+	adv.AdvancePast(shortDoneTTL)
+
+	// After expiry the key must be re-claimable as ClaimAcquired.
+	statePost, _, _, errPost := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
+	if errPost != nil {
+		t.Fatalf("post-expiry Claim: unexpected error: %v", errPost)
+	}
+	if statePost != idempotency.ClaimAcquired {
+		t.Errorf("post-expiry Claim state = %v, want ClaimAcquired (done TTL should have expired)", statePost)
+	}
+}
+
+// conformStaleTokenRelease verifies that Release on a stale receipt (whose
+// lease has expired and been taken over by a new lease holder) does not corrupt
+// the new holder's lease. Symmetric to conformStaleTokenRecord.
+//
+// Sequence: acquire A (shortLeaseTTL) → advance past TTL (A expires) →
+// acquire B (long TTL) → A.Release → B should still be ClaimBusy for a third
+// Claim (B's lease was not deleted).
+func conformStaleTokenRelease(t *testing.T, factory Factory) {
+	t.Helper()
+	store, adv, cleanup := factory(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Acquire lease A with a short TTL.
+	stateA, _, receiptA, err := store.Claim(ctx, conformNS, conformKey, shortLeaseTTL)
+	if err != nil || stateA != idempotency.ClaimAcquired {
+		t.Fatalf("Claim (A): state=%v err=%v", stateA, err)
+	}
+
+	// Let lease A expire.
+	adv.AdvancePast(shortLeaseTTL)
+
+	// Acquire lease B (new owner, long TTL).
+	stateB, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
+	if err2 != nil || stateB != idempotency.ClaimAcquired {
+		t.Fatalf("Claim (B): state=%v err=%v", stateB, err2)
+	}
+
+	// Stale Release from receipt A: token no longer matches B's lease.
+	// Contract: stale Release must be a safe no-op (does not return an error
+	// that would cause the caller to crash, and does not delete B's lease).
+	_ = receiptA.Release(ctx) // error is tolerated; the key assertion is below.
+
+	// A third Claim must return ClaimBusy because B's lease is still held.
+	stateC, _, _, err3 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
+	if err3 != nil {
+		t.Fatalf("third Claim: unexpected error: %v", err3)
+	}
+	if stateC != idempotency.ClaimBusy {
+		t.Errorf("third Claim state = %v, want ClaimBusy (stale Release must not corrupt B's lease)", stateC)
 	}
 }
 
