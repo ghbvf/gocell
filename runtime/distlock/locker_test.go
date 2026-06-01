@@ -261,41 +261,56 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 		runtime.Gosched()
 	}
 
-	// Record the Renew count before injecting the error; key3b's renew will
-	// increment this counter after key3a is lost.
+	// Record the Renew count before injecting the error.
 	renewBefore := fd.Calls("Renew")
 
-	// Inject single-shot error. With maxRenewAttempts=1, key3a's single attempt
-	// consumes this error (budget exhausted → ErrLockLost). key3b's renew call
-	// has no injected error and succeeds normally (sibling isolation).
+	// Inject single-shot error. With maxRenewAttempts=1, whichever lock renews
+	// first consumes this error and is declared lost (budget exhausted →
+	// ErrLockLost). Since both locks have the same nextRenew deadline (added at
+	// the same FakeClock time), their Renew goroutines race. The other lock's
+	// Renew call has no injected error and succeeds (sibling isolation).
 	fd.SetNextRenewError(locktest.ErrDriverIO)
 
-	// Advance to trigger the first renew (key3a, earlier in heap).
+	// Advance to trigger the first renew timer.
 	fc.Advance(time.Duration(float64(ttl) * 0.5))
 
-	// lock1 should be canceled with ErrLockLost.
+	// Wait for exactly one of the two locks to be lost. Because Renew goroutines
+	// race, we do not assume which lock wins; we only assert that exactly one is
+	// declared lost and the other survives (sibling isolation).
+	var lostLock, survivingLock *distlock.Lock
 	select {
 	case <-lock1.Done():
+		lostLock, survivingLock = lock1, lock2
+	case <-lock2.Done():
+		lostLock, survivingLock = lock2, lock1
 	case <-time.After(testTimeout):
-		t.Fatal("TC-3: lock1 should be Done after renew error budget exhausted")
+		t.Fatal("TC-3: neither lock was Done after renew error budget exhausted")
 	}
 
-	cause := lock1.Cause()
-	assertSameErrorIdentity(t, cause, distlock.ErrLockLost, "TC-3 cause")
+	assertSameErrorIdentity(t, lostLock.Cause(), distlock.ErrLockLost, "TC-3 lost lock cause")
 
-	// Sibling isolation: advance past key3b's next renewal window and verify
-	// that the manager still renews key3b (no error was injected for it).
-	waitPendingTimers(t, fc) // key3b's timer should be registered
+	// Sibling isolation: advance past the surviving lock's next renewal window
+	// and verify the manager still renews it.
+	waitPendingTimers(t, fc) // surviving lock's timer should be registered
 	fc.Advance(time.Duration(float64(ttl) * 0.5))
 
-	// Wait for at least one more Renew call (key3b's renewal).
-	// renewBefore+1 was key3a's failed renew; renewBefore+2 is key3b's renew.
+	// Wait for at least one more successful Renew call (the surviving lock's renewal).
+	// renewBefore+1 was the lost lock's failed renew; renewBefore+2 is the
+	// surviving lock's successful renew.
 	waitForRenewOnMgr(t, mgr(l), fd, renewBefore+2)
 
 	renewAfter := fd.Calls("Renew")
 	if renewAfter <= renewBefore+1 {
-		t.Errorf("TC-3: key3b Renew not observed after key3a loss; total calls before=%d after=%d",
+		t.Errorf("TC-3: surviving lock Renew not observed after sibling loss; total calls before=%d after=%d",
 			renewBefore, renewAfter)
+	}
+
+	// Ensure the surviving lock is still held.
+	select {
+	case <-survivingLock.Done():
+		t.Errorf("TC-3: surviving lock was also lost; cause=%v", survivingLock.Cause())
+	default:
+		// Good — surviving lock still live.
 	}
 }
 

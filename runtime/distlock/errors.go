@@ -32,6 +32,21 @@ var (
 	// sentinel ever reaches an HTTP handler that is a server-side programming
 	// bug — 500 surfaces it as such rather than misleading the client with 409.
 	ErrLockReleased = errcode.New(errcode.KindInternal, errcode.ErrDistlockLockReleased, "distlock: lock released")
+
+	// ErrLockOrphaned is returned by Lock.Cause() when Lock.Orphan() is called
+	// by the application. Renewal is stopped and the backend key is NOT deleted
+	// — it expires on its lease TTL (~1×TTL from the last successful renewal;
+	// best-effort, see Lock.Orphan godoc), handing the lock to a competitor
+	// WITHOUT a Release round-trip that could hang or fail at shutdown.
+	// KindInternal (HTTP 500) matches ErrLockReleased: an orphaned
+	// lock surfacing to an HTTP handler is a server-side programming bug — 500
+	// is preferable to a misleading 409 (external conflict). Orphan is a
+	// deliberate local action; if it reaches an HTTP boundary that is a
+	// caller error, not a backend conflict.
+	//
+	// ref: etcd-io/etcd client/v3/concurrency/session.go Session.Orphan
+	ErrLockOrphaned = errcode.New(errcode.KindInternal, errcode.ErrDistlockLockOrphaned,
+		"distlock: lock orphaned by caller (renewal stopped; key expires after TTL)")
 )
 
 // ErrLockTimeout is a package-level alias for errcode.ErrDistlockTimeout.

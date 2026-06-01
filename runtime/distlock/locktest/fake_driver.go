@@ -43,6 +43,8 @@ type fakeEntry struct {
 //   - persistRenewError:  if non-nil, every Renew call returns (false, err) until ClearRenewError
 //   - NextRenewHeld:      if set to false, the next Renew returns (false, nil) — simulates ownership lost
 //   - NextReleaseError:   if non-nil, the next Release call returns err — single-shot
+//   - blockRenewCh:       if non-nil, the next Renew blocks until the channel is closed — use
+//     BlockNextRenew() + UnblockRenew() for controlled blocking/unblocking
 //
 // Use NewFakeDriverWithClock when pairing with FakeClock to ensure the driver's
 // TTL expiry logic uses the same logical time as the manager.
@@ -57,6 +59,15 @@ type FakeDriver struct {
 	persistRenewError error // persistent: stays set until ClearRenewError
 	nextRenewHeld     *bool // single-shot: consumed once
 	nextReleaseError  error // single-shot: consumed once
+
+	// blockRenewCh, when non-nil, causes the next Renew call to block until
+	// the channel is closed. Closed by UnblockRenew(). Single-shot per
+	// BlockNextRenew() call.
+	blockRenewCh chan struct{}
+	// renewEnteredCh, when non-nil, is closed by the Renew call once it has
+	// entered its body (just before blocking). Allows tests to synchronize on
+	// "Renew is now in-flight" without polling.
+	renewEnteredCh chan struct{}
 
 	// clock for TTL expiry checks (defaults to real time.Now).
 	clock func() time.Time
@@ -158,6 +169,37 @@ func (fd *FakeDriver) SetNextRenewHeld(held bool) {
 	fd.nextRenewHeld = &held
 }
 
+// BlockNextRenew arms a one-shot block: the next Renew call will block until
+// UnblockRenew() is called (or the Renew context is canceled). The returned
+// entered channel is closed by the Renew call once it has entered its body but
+// before it blocks — tests can wait on it to confirm the goroutine is in-flight.
+//
+// Usage:
+//
+//	entered := fd.BlockNextRenew()
+//	<-entered            // Renew is now blocked inside FakeDriver
+//	lock.Orphan()        // should not block even though Renew is in-flight
+//	fd.UnblockRenew()    // let Renew complete
+func (fd *FakeDriver) BlockNextRenew() <-chan struct{} {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fd.blockRenewCh = make(chan struct{})
+	fd.renewEnteredCh = make(chan struct{})
+	return fd.renewEnteredCh
+}
+
+// UnblockRenew unblocks a previously blocked Renew call. Safe to call even if
+// no Renew is currently blocked.
+func (fd *FakeDriver) UnblockRenew() {
+	fd.mu.Lock()
+	ch := fd.blockRenewCh
+	fd.blockRenewCh = nil
+	fd.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
 // Calls returns the total number of times the named method was called.
 // method is one of "SetNX", "Renew", "Release".
 func (fd *FakeDriver) Calls(method string) int {
@@ -225,38 +267,14 @@ func (fd *FakeDriver) SetNX(_ context.Context, key, token string, ttl time.Durat
 // Records the deadline from ctx for test introspection via LastRenewDeadline.
 func (fd *FakeDriver) Renew(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
 	fd.calls["Renew"].Add(1)
+	fd.maybeBlockRenew(ctx)
 
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 
-	// Record the ctx deadline for TC-12 drift-factor validation.
-	if dl, ok := ctx.Deadline(); ok {
-		fd.lastRenewDeadline = dl
-	}
-
-	// Consume single-shot injected error (takes priority over persistent).
-	if fd.nextRenewError != nil {
-		err := fd.nextRenewError
-		fd.nextRenewError = nil
-		return false, err
-	}
-	// Persistent error — not consumed; stays until ClearRenewError.
-	if fd.persistRenewError != nil {
-		return false, fd.persistRenewError
-	}
-
-	// Consume injected held.
-	if fd.nextRenewHeld != nil {
-		held := *fd.nextRenewHeld
-		fd.nextRenewHeld = nil
-		if held {
-			// Actually renew in the map too.
-			if entry, ok := fd.keys[key]; ok && entry.token == token {
-				entry.expiresAt = fd.clock().Add(ttl)
-			}
-			return true, nil
-		}
-		return false, nil
+	// Consume any injected single-shot / persistent result first.
+	if handled, held, err := fd.consumeInjectedRenew(key, token, ttl); handled {
+		return held, err
 	}
 
 	entry, ok := fd.keys[key]
@@ -270,6 +288,71 @@ func (fd *FakeDriver) Renew(ctx context.Context, key, token string, ttl time.Dur
 	}
 	entry.expiresAt = fd.clock().Add(ttl)
 	return true, nil
+}
+
+// maybeBlockRenew records the ctx deadline and, if a block-hook is armed by
+// BlockNextRenew, signals "entered" then blocks until UnblockRenew closes the
+// hook channel.
+//
+// Only renewEnteredCh is cleared here (a second concurrent Renew must not
+// re-close an already-closed entered channel). blockRenewCh is left in place so
+// UnblockRenew() — the sole owner of the close — can still find and close it;
+// clearing it here would strand a blocked Renew goroutine forever (UnblockRenew
+// would read nil and no-op).
+func (fd *FakeDriver) maybeBlockRenew(ctx context.Context) {
+	fd.mu.Lock()
+	// Record the ctx deadline for TC-12 drift-factor validation.
+	if dl, ok := ctx.Deadline(); ok {
+		fd.lastRenewDeadline = dl
+	}
+	blockCh := fd.blockRenewCh
+	enteredCh := fd.renewEnteredCh
+	if blockCh != nil {
+		fd.renewEnteredCh = nil
+	}
+	fd.mu.Unlock()
+
+	if blockCh == nil {
+		return
+	}
+	if enteredCh != nil {
+		close(enteredCh)
+	}
+	// Block until the test explicitly calls UnblockRenew(). We deliberately do
+	// NOT select on ctx.Done() here so that the caller can verify that Orphan() /
+	// detachLock() return promptly even while the Renew goroutine is blocked
+	// inside the driver — that is the F1 regression being tested.
+	<-blockCh
+}
+
+// consumeInjectedRenew applies any injected single-shot error / persistent error
+// / single-shot held result. handled=true means the caller should return
+// (held, err) directly without consulting the key map. Caller holds fd.mu.
+func (fd *FakeDriver) consumeInjectedRenew(key, token string, ttl time.Duration) (handled, held bool, err error) {
+	// Single-shot injected error takes priority over persistent.
+	if fd.nextRenewError != nil {
+		e := fd.nextRenewError
+		fd.nextRenewError = nil
+		return true, false, e
+	}
+	// Persistent error — not consumed; stays until ClearRenewError.
+	if fd.persistRenewError != nil {
+		return true, false, fd.persistRenewError
+	}
+	// Single-shot injected held.
+	if fd.nextRenewHeld != nil {
+		h := *fd.nextRenewHeld
+		fd.nextRenewHeld = nil
+		if h {
+			// Actually renew in the map too.
+			if entry, ok := fd.keys[key]; ok && entry.token == token {
+				entry.expiresAt = fd.clock().Add(ttl)
+			}
+			return true, true, nil
+		}
+		return true, false, nil
+	}
+	return false, false, nil
 }
 
 // Release implements distlock.Driver.

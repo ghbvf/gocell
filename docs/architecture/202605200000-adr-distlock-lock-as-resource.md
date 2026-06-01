@@ -28,7 +28,7 @@ Industry survey (recorded in this ADR §"Industry survey") showed five out of fi
 
 ## Decision
 
-`Locker.Acquire` returns a sealed `*Lock` value, intentionally NOT a `context.Context`. The caller-supplied ctx is consumed only for the acquire RPC (SetNX). Once held, the lock lifecycle is decoupled — only `Release()` or renewal failure (`ErrLockLost`) ends it. Forced manager shutdown is deferred to a follow-up — see §"Out of scope".
+`Locker.Acquire` returns a sealed `*Lock` value, intentionally NOT a `context.Context`. The caller-supplied ctx is consumed only for the acquire RPC (SetNX). Once held, the lock lifecycle is decoupled — only `Release()`, `Orphan()` (added in §Amendment 2026-05-31), or renewal failure (`ErrLockLost`) ends it. Forced *locker-level* shutdown is deferred to a follow-up — see §"Out of scope".
 
 ```go
 type Locker interface {
@@ -39,9 +39,10 @@ type Locker interface {
 type Lock struct { /* unexported */ }
 
 func (l *Lock) Done() <-chan struct{}    // closes on lock-end
-func (l *Lock) Cause() error              // ErrLockReleased / ErrLockLost
+func (l *Lock) Cause() error              // ErrLockReleased / ErrLockOrphaned / ErrLockLost
 func (l *Lock) Value(key any) any         // caller-ctx values (no cancellation)
 func (l *Lock) Release() error            // idempotent
+func (l *Lock) Orphan()                   // idempotent; see §Amendment 2026-05-31
 ```
 
 Caller MUST `defer lock.Release()`. Process crash falls back to Redis TTL. Living caller that forgets `Release` leaks the lock until process exit (mirroring bsm/redislock and redsync behavior).
@@ -116,22 +117,126 @@ References:
 
 ## Out of scope (deferred)
 
-- **Explicit `Locker.Shutdown()` / `Close()` entry point.** The manager's
-  `runOnce` loop and `markCause` plumbing already support a third lock-end
-  signal beyond `ErrLockReleased` / `ErrLockLost` (e.g. `context.Canceled`
-  on forced shutdown), but no public method exposes that path in this
-  iteration — no production caller currently needs it, and shipping
-  unreachable dead code violates the "dead code = lie" principle. When a
-  bootstrap / lifecycle integration requires it, add `Close() error` to
-  `Locker` (or expose a separate `Shutdown` API) and re-instate the
-  shutdown markCause path under that entry point. Tests covering the
-  shutdown semantics must accompany that change. Tracked as backlog
-  `DISTLOCK-LOCKER-SHUTDOWN-01` (open when first ManagedResource integrator
-  arrives).
-- **`Lock.AsContext(parent context.Context)` escape hatch.** See
-  §"Alternatives considered".
-- **`WithMaxLockAge` safety net** for forgotten `Release()`. See
+- **`Lock.AsContext(parent context.Context)` escape hatch.** Rejected for v1
+  to keep the surface minimal and the Hard contract tight; can be added if a
+  real use case appears. See §"Alternatives considered".
+- **`WithMaxLockAge` safety net** for forgotten `Release()`. May add later if a
+  real caller demonstrates the need; deferred to keep the minimal surface. See
   §"Consequences / Negative".
+- **Explicit `Locker.Shutdown()` / `Close()` entry point.** Deferred — but the
+  reason is *no caller-relevant work for it to do today*, not the absence of an
+  integrator (the original "open when first ManagedResource integrator arrives"
+  framing was imprecise; corrected here per the 2026-05-31 review).
+
+  Verified facts at 2026-05-31 (grep over the tree, not assertion):
+  - **A `Locker` lifecycle integrator already exists** — `cmd/corebundle`'s saga
+    module is where a `distlock.Locker` would be constructed and a saga
+    `Coordinator.Stop()` is wired. So "no integrator" was never the real blocker.
+  - **There is no hard blocker** to adding `Close()`. The manager's `runOnce` /
+    `markCause` plumbing already supports a third lock-end cause; adding the
+    method is mechanically straightforward.
+  - **What makes it dead code *today*** is twofold: (1) there are **zero
+    production `distlock.New(...)` construction sites and zero `WithLeaderElect`
+    callers** — saga leader-election has not been wired into a production bundle
+    yet (the only `distlock.New` / `WithLeaderElect` references are tests and the
+    `adapters/redis` doc example); and (2) the `Manager` **self-drains**: once
+    every lock reaches a terminal disposition (`Release` or `Orphan`) the
+    `pendingReleases` counter hits zero, `Drained()` closes, and the manager
+    goroutine exits — so there is no leaked goroutine for a process-wide
+    `Close()` to reclaim. A `Close()` shipped now would have no live caller and
+    no resource to free → unreachable code, which violates the "dead code = lie"
+    principle this ADR holds.
+
+  When saga leader-election is wired into a production bundle (a real
+  `distlock.New` + `WithLeaderElect` callsite), `Close() error` becomes
+  caller-relevant — as a backstop for the case where `Coordinator.Stop()` is
+  skipped/panics, or where a future second consumer shares one `Locker`. At that
+  point add `Close()` (force-orphan all residual locks → stop manager → **no**
+  release I/O, consistent with the Orphan philosophy that shutdown must not
+  depend on backend reachability), register the `Locker` as a
+  `bootstrap.WithManagedCloser`, and add shutdown-semantics tests. Tracked as
+  backlog `DISTLOCK-LOCKER-SHUTDOWN-01`; **trigger = saga enters production**,
+  not "an integrator appears" (it already has).
+
+  **Still deferred after the 2026-05-31 amendment** — that amendment added a
+  *per-lock* `Orphan()` (which has a real production caller, `Coordinator.Stop`),
+  not the *locker-level* shutdown this bullet describes; `DISTLOCK-LOCKER-SHUTDOWN-01`
+  stays open.
+
+### Amendment 2026-05-31 — per-lock `Orphan()` (issue #1116)
+
+A real production caller arrived: `runtime/saga.Coordinator.Stop()` needs to
+let go of in-flight per-instance distlocks during graceful shutdown **without**
+a release round-trip that could hang or fail when the backend is unreachable at
+shutdown time (PR #1108 mitigated this at the consumer layer with
+release-on-cancel; this amendment moves the capability into the primitive).
+
+This is a *per-lock* disposition, distinct from the still-deferred
+*locker-level* `Shutdown()/Close()` above. It is the bounded-handoff member of
+the same family etcd `client/v3/concurrency` exposes:
+
+| GoCell | etcd equivalent | Semantics | Backend key |
+|--------|-----------------|-----------|-------------|
+| `Lock.Release()` | `Session.Close()` | end critical section now | deleted immediately (Driver.Release I/O) |
+| `Lock.Orphan()` (new) | `Session.Orphan()` | stop renewal, hand off | left to expire on its lease TTL — ~1×TTL from the last successful renewal (no I/O) |
+
+Decision:
+
+- Add `func (l *Lock) Orphan()` — stops lease renewal, sets
+  `Cause() == ErrLockOrphaned`, closes `Done()`, performs **no** `Driver`
+  call. The backend key expires on its lease TTL, handing the lock to a
+  competitor. The bound is best-effort: Orphan stops *future* renewals
+  immediately and cancels any in-flight renewal, but a renewal whose write
+  already reached the backend may extend the lease one more TTL window from its
+  commit. The takeover bound is therefore ~1×TTL from the last successful
+  renewal (not a hard cap measured from the Orphan call).
+- `Orphan()` and `Release()` are **mutually exclusive and idempotent**: both
+  closures in `Acquire` share one `sync.Once`, so the first call of either
+  wins and any later call of either is a no-op. "Double disposition" /
+  "orphan-then-release deletes the key" is therefore not representable
+  (structural Hard, no archtest needed). This also makes saga's "Stop orphans,
+  the owning tick later calls release() which degrades to a no-op" correct by
+  construction.
+- `ErrLockOrphaned` uses `KindInternal` (mirroring `ErrLockReleased`): a
+  deliberate local disposition that, if it ever surfaced to an HTTP handler,
+  would be a server-side bug — fail-closed 500, never a misleading 409.
+- The `Locker` interface is unchanged (the method lives on `*Lock`); the
+  locker-level `Shutdown/Close` remains out of scope.
+
+Enforcement: the "Orphan performs zero backend I/O" invariant — its defining
+property — is guarded by archtest `DISTLOCK-ORPHAN-NO-DRIVER-IO-01` (Medium;
+Go ceiling — `Manager.driver` is reachable from any method, so a type-system
+seal is not available; type-aware callee resolution scoped to `handleOrphan`
+is the maximum). The mutual-exclusion/idempotence invariant above is
+structural Hard (shared `sync.Once`).
+
+#### Threat-model / consequences re-evaluation (per ai-robust.md "ADR amendment 落地必查")
+
+The two §Consequences risk rows below are re-evaluated against `Orphan()`; both stay ✅ (no cell flips to ⚠️/❌). One new **availability trade-off** is added for completeness — it is not a security row and does not flip any existing ✅.
+
+- **fail-stays-held DoS surface** — ✅ unchanged. `Orphan()` does not widen the
+  ceiling: an orphaned key is bounded by the *same* TTL window as a
+  crash-fallback or a forgotten `Release()`. It strictly cannot hold longer
+  than the existing worst case (it stops renewal, so the key can only expire
+  *sooner* than a still-renewed lock). Same-key blast radius, not
+  framework-wide — identical posture to the original row.
+- **callerCtx values lifetime extension** — ✅ unchanged. `Orphan()` ends the
+  lock (closes `Done()`, the manager drops `lockState`), so captured callerCtx
+  values become GC-eligible exactly as they do after `Release()`. No new
+  pinning window.
+- **saga Stop liveness trade-off (new, availability only)** — after
+  `runtime/saga.Coordinator.Stop()`, orphaned per-instance distlock keys linger
+  in the backend for up to `Config.LeaseDuration` before expiring (vs the
+  previous immediate-release behavior). A coordinator restarting within that
+  window will skip those instances until the lease lapses. This is a **liveness
+  cost, not a safety degradation**: no existing ✅ row flips; the journal
+  `lease_id` CAS continues to fence any late commits from the orphaned step. The
+  trade-off is deliberate — I/O-free shutdown cannot hang even when the backend
+  is unreachable at shutdown time.
+
+`*Lock` still does not implement `context.Context` (Orphan adds no
+`Deadline()/Err()`), so `DISTLOCK-LOCK-NOT-CONTEXT-01` and the Enforcement
+table above are unaffected.
 
 ## Implementation notes
 

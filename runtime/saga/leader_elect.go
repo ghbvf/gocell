@@ -81,28 +81,34 @@ func leaderElectLockKey(definitionID, instanceID idutil.SafeID) string {
 // the sole leader-elect gate guarding driveOne (locked by
 // SAGA-DRIVE-BEHIND-LEADER-GATE-01).
 //
-//   - Single-process mode (c.locker == nil): always leads; returns a no-op
-//     release so the tickOnce call site is uniform.
+//   - Single-process mode (c.locker == nil): always leads; returns no-op
+//     release and orphan closures so the tickOnce call site is uniform.
 //   - Leader-elect mode: acquires the per-instance distlock. On success returns
-//     a release closure invoked after driveOne. On contention (ErrLockTimeout)
+//     a release closure and an orphan closure. On contention (ErrLockTimeout)
 //     or any other acquire error it returns lead=false (skip) — fail-closed: a
 //     Coordinator that cannot confirm leadership must not drive. ErrLockTimeout
 //     (contention) and ctx cancellation (normal shutdown) are expected (Debug);
 //     backend I/O errors are operationally interesting (Warn).
 //
-// release is non-nil iff lead is true; callers MUST NOT call release when lead
-// is false.
-func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstance) (release func(), lead bool) {
+// release and orphan are non-nil iff lead is true; callers MUST NOT call either
+// when lead is false. release frees the distlock immediately via Driver.Release
+// I/O — optimal for normal per-tick completion (work done → immediate handoff).
+// orphan stops renewal without a shutdown-time release round-trip; the key
+// expires on its lease TTL (~1×TTL from the last successful renewal,
+// best-effort — see distlock.Lock.Orphan) so a competitor can take over — used
+// by Stop (I/O-free, cannot hang on an unreachable backend during shutdown).
+func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstance) (release func(), orphan func(), lead bool) {
 	if c.locker == nil {
-		return func() { /* no-op release: no distributed locker configured, single-coordinator mode */ }, true
+		noop := func() { /* no-op: no distributed locker configured, single-coordinator mode */ }
+		return noop, noop, true
 	}
 	key := leaderElectLockKey(ci.Instance.DefinitionID, ci.Instance.ID)
 	lock, err := c.locker.Acquire(ctx, key, c.cfg.LeaseDuration)
 	if err != nil {
 		c.logLeaderSkip(ctx, ci, key, err)
-		return nil, false
+		return nil, nil, false
 	}
-	return func() {
+	rel := func() {
 		if rerr := lock.Release(); rerr != nil {
 			// lock_key names the distlock efficiency lock; lease_id is the journal
 			// fencing token (ci.LeaseID) of the ClaimPending cycle this drive ran
@@ -116,7 +122,9 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 				slog.String("lease_id", string(ci.LeaseID)),
 				slog.Any("error", rerr))
 		}
-	}, true
+	}
+	orp := func() { lock.Orphan() }
+	return rel, orp, true
 }
 
 // logLeaderSkip logs an acquireLead miss at the level matching its cause.

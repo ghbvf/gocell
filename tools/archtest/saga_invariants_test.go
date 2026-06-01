@@ -2650,25 +2650,31 @@ func bodyCallsMethodNamed(body *ast.BlockStmt, name string) bool {
 }
 
 // acquireLeadResultVar finds the assignment whose RHS is `<expr>.acquireLead(...)`
-// and returns the identifier bound to the second LHS (the lead bool). ok is
-// false when acquireLead is not assigned to a 2-element tuple or the lead slot
-// is blank (`_`) — a discarded verdict cannot gate the drive.
+// and returns the identifier bound to the last LHS element (the lead bool). ok is
+// false when acquireLead is not assigned to a tuple of at least 2 elements or the
+// lead slot is blank (`_`) — a discarded verdict cannot gate the drive.
+//
+// acquireLead currently returns 3 values (release, orphan, lead); the last LHS
+// element is always the bool gate regardless of tuple arity, so arity ≥ 2 is
+// accepted. Fixtures using the historical 2-return form also pass.
 func acquireLeadResultVar(body *ast.BlockStmt) (name string, ok bool) {
 	as, found := FindFirstInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) bool {
-		if len(as.Rhs) != 1 || len(as.Lhs) != 2 {
+		if len(as.Rhs) != 1 || len(as.Lhs) < 2 {
 			return false
 		}
 		call, isCall := as.Rhs[0].(*ast.CallExpr)
 		if !isCall || !callIsMethodNamed(call, acquireLeadMethodName) {
 			return false
 		}
-		id, isID := as.Lhs[1].(*ast.Ident)
+		last := as.Lhs[len(as.Lhs)-1]
+		id, isID := last.(*ast.Ident)
 		return isID && id.Name != "_"
 	})
 	if !found {
 		return "", false
 	}
-	id := as.Lhs[1].(*ast.Ident)
+	last := as.Lhs[len(as.Lhs)-1]
+	id := last.(*ast.Ident)
 	return id.Name, true
 }
 

@@ -211,11 +211,28 @@ type Coordinator struct {
 }
 
 // inflightDrive is the inflightLocks value: everything Stop needs about an
-// instance currently being driven. release frees the per-instance distlock
-// (a no-op in single-process mode); it is idempotent (distlock Release is
-// sync.Once-guarded) so calling it from both tickOnce and Stop is safe.
+// instance currently being driven.
+//
+// release frees the per-instance distlock immediately via Driver.Release I/O
+// (no-op in single-process mode). Used by the normal per-tick completion path:
+// work done → immediate release is optimal.
+//
+// orphan stops lease renewal without a shutdown-time release round-trip; the
+// distlock key expires on its lease TTL (~1×TTL from the last successful
+// renewal, best-effort — see distlock.Lock.Orphan) so a competitor can take
+// over (no-op in single-process mode). Used by Stop/shutdown so the release RPC
+// cannot hang on
+// an unreachable backend during process teardown. A still-running wedged step
+// keeps its lock until TTL while the journal lease_id CAS continues to fence
+// its late commits.
+//
+// Both are idempotent and mutually exclusive via distlock's shared sync.Once:
+// a tickOnce release() after a Stop orphan() is a harmless no-op.
 type inflightDrive struct {
-	release func()
+	release      func()
+	orphan       func()
+	definitionID idutil.SafeID // for per-instance shutdown log fan-out (F4)
+	leaseID      idutil.SafeID // for per-instance shutdown log fan-out (F4)
 }
 
 // NewCoordinator validates required deps and applies opts. Nil required deps
@@ -362,13 +379,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 //   - cancel() fires anyway and Stop returns (best-effort).
 //   - The orphaned step goroutine continues until it returns naturally; the
 //     Executor heartbeat goroutine has by then exited, so the journal lease expires.
-//   - In leader-elect mode the per-instance distlock would otherwise keep
-//     auto-renewing, so Stop explicitly releases every in-flight distlock
-//     (releaseInflightLocks). Together with the expiring journal lease this lets
-//     another coordinator re-claim the instance promptly — bounded takeover,
-//     matching the etcd/redsync deadman-switch model. Releasing while the orphaned
-//     step still runs is safe: its commit is fenced by journal lease_id CAS
-//     (the PR-05 efficiency-lock model, leader_elect.go).
+//   - In leader-elect mode, Stop orphans every in-flight distlock
+//     (orphanInflightLocks): renewal is stopped without a shutdown-time release
+//     round-trip, so the distlock key expires on its lease TTL (~1×TTL from the
+//     last successful renewal, best-effort) and a competitor coordinator can
+//     take over — bounded-TTL handoff, I/O-free so it cannot hang
+//     on an unreachable backend during shutdown. After Stop, per-instance distlock
+//     keys linger in the backend for up to Config.LeaseDuration before expiring
+//     (vs the previous immediate-release behavior); a coordinator restarting within
+//     that window will skip those instances until the lease lapses — a liveness
+//     cost, not a safety degradation (the journal lease_id CAS continues to fence
+//     late commits). A still-running wedged step keeps its lock until TTL while
+//     the journal lease_id CAS continues to fence its late commits (the PR-05
+//     efficiency-lock model, leader_elect.go). Cooperative steps already released
+//     via tickOnce; orphanInflightLocks idempotently covers the
+//     drain-budget-exhausted case.
 //   - This is the inherent limit of cooperative cancellation in Go: the step
 //     goroutine itself cannot be killed. Step authors are responsible for
 //     selecting on ctx.Done() inside blocking primitives — see ksaga.StepFunc
@@ -422,14 +447,19 @@ drain:
 	c.cancel = nil
 	c.mu.Unlock()
 
+	// Orphan any in-flight distlocks BEFORE canceling so the shutdown I/O-free
+	// guarantee holds: cancel() would wake a cooperative-but-unfinished step,
+	// whose tickOnce could then race a release() (Driver.Release RPC) ahead of
+	// orphan() — exactly the blocking/hangable I/O Stop is designed to avoid.
+	// Orphaning first consumes the lock's shared sync.Once, so the later
+	// tickOnce release() is a harmless no-op. Orphan stops renewal without I/O
+	// so it cannot hang on an unreachable backend; future renewals stop and the
+	// key expires by TTL expiry (see orphanInflightLocks for the bound). The
+	// journal lease_id CAS fences the orphaned step at commit.
+	c.orphanInflightLocks()
 	if cancel != nil {
 		cancel()
 	}
-	// Release any in-flight distlocks so a wedged (non-cooperative) step cannot
-	// hold its lock until process death. Cooperative steps already released via
-	// tickOnce; this idempotently covers the drain-budget-exhausted case. The
-	// journal lease_id CAS fences the orphaned step at commit.
-	c.releaseInflightLocks()
 	if done == nil {
 		return nil
 	}
@@ -444,20 +474,46 @@ drain:
 	}
 }
 
-// releaseInflightLocks frees the per-instance distlock for every drive still in
-// inflightLocks. Called from Stop after cancel so a non-cooperative step that
-// outlives the drain budget cannot hold its lock until process death. release
-// is idempotent (a no-op in single-process mode; distlock Release is
-// sync.Once-guarded), so the owning tickOnce calling release again when it
-// finally returns is harmless. Entries are left for the owning goroutine to
-// delete from the map.
-func (c *Coordinator) releaseInflightLocks() {
-	c.inflightLocks.Range(func(_, val any) bool {
-		if d, ok := val.(inflightDrive); ok {
-			d.release()
+// orphanInflightLocks stops the per-instance distlock renewal for every drive
+// still in inflightLocks, without performing a Driver.Release RPC. Called from
+// Stop after cancel so a non-cooperative step that outlives the drain budget
+// cannot hold its lock until process death. orphan is idempotent and mutually
+// exclusive with the owning tickOnce's later release() via distlock's shared
+// sync.Once — the tickOnce release() after a Stop orphan() is a harmless no-op
+// (a no-op in single-process mode as well). Entries are left for the owning
+// goroutine to delete from the map.
+//
+// After Stop, per-instance distlock keys linger in the backend until their
+// lease expires (vs the previous immediate-release behavior); a coordinator
+// restarting within that window will skip those instances until the lease
+// lapses. orphan() stops scheduling future renewals immediately and cancels
+// any in-flight renewal best-effort, but cancellation is not atomic with the
+// backend: a renewal whose write already reached the backend at orphan time
+// may extend the lease one more TTL window from its commit. The takeover bound
+// is therefore ~Config.LeaseDuration from the last successful renewal (≈one TTL
+// window from Stop), not a hard cap measured from the Stop call. This is the
+// deliberate cost of I/O-free shutdown (resilient even when the backend is
+// unreachable at shutdown).
+func (c *Coordinator) orphanInflightLocks() {
+	var n int
+	c.inflightLocks.Range(func(key, val any) bool {
+		d, ok := val.(inflightDrive)
+		if !ok {
+			return true
 		}
+		d.orphan()
+		n++
+		instanceID, _ := key.(idutil.SafeID)
+		c.logger.Debug("saga: orphaned in-flight distlock at shutdown",
+			slog.String("instance_id", string(instanceID)),
+			slog.String("definition_id", string(d.definitionID)),
+			slog.String("lease_id", string(d.leaseID)),
+		)
 		return true
 	})
+	if n > 0 {
+		c.logger.Info("saga: orphaned in-flight distlocks at shutdown", slog.Int("count", n))
+	}
 }
 
 // Ready returns a channel that is closed once Start transitions to running.
@@ -542,7 +598,7 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		// per-instance distlock drives it; others skip this tick (no-lock →
 		// skip). Single-process mode (no WithLeaderElect) always leads. This is
 		// the sole driveOne call site, locked by SAGA-DRIVE-BEHIND-LEADER-GATE-01.
-		release, lead := c.acquireLead(ctx, ci)
+		release, orphan, lead := c.acquireLead(ctx, ci)
 		if !lead {
 			continue
 		}
@@ -550,7 +606,10 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		// leaseID from ClaimPending is discarded. PG Journal (PR-04) mints
 		// per-instance tokens; using the batch token would break CAS fencing.
 		c.inflightLocks.Store(ci.Instance.ID, inflightDrive{
-			release: release,
+			release:      release,
+			orphan:       orphan,
+			definitionID: ci.Instance.DefinitionID,
+			leaseID:      ci.LeaseID,
 		})
 		if err := c.driveOne(ctx, ci); err != nil {
 			// Sentinel-aware severity: ErrSagaStaleLease (handoff race) →
