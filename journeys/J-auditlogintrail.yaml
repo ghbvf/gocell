@@ -27,6 +27,13 @@ contracts:
 # event.audit.appended.v1 first; tracked by backlog
 # JOURNEY-AUDITLOGINTRAIL-CRITERIA-EXPANSION-01. Inline criteria expansion
 # must close that backlog entry in the same PR.
+#
+# Wave-1 #1423 addition (criterion 3): covers the async bootstrap-failed path.
+# mode:manual because end-to-end relay-subscriber automation hook is not yet
+# complete (Epic #1423 Wave-2, backlog JOURNEY-AUDITLOGINTRAIL-BOOTSTRAP-AUTO-01).
+# Current partial coverage: setup_integration_test.go covers 401→emit;
+# auditappendbootstrap handler unit tests + subscription conformance test
+# cover relay→subscriber→chain write. Full auto promotion deferred to Wave-2.
 passCriteria:
   - text: session.created 事件被 auditcore 消费
     mode: auto
@@ -34,3 +41,11 @@ passCriteria:
   - text: 审计记录写入 hash chain
     mode: auto
     checkRef: journey.J-auditlogintrail.hash-chain
+  - text: >
+      /setup/admin 收到 401/429 后，accesscore 经 L2 outbox 发出
+      event.auth.bootstrap-failed.v1；relay 投递至 auditcore；
+      auditappendbootstrap subscriber 将 bootstrap.auth.fail 条目写入
+      bootstrap-namespace hash chain（namespace="bootstrap"，独立 HMAC key）；
+      GET /api/v1/audit/entries?eventType=bootstrap.auth.fail 可查到该条目。
+      （端到端自动化待 Wave-2 #1423 落地，backlog JOURNEY-AUDITLOGINTRAIL-BOOTSTRAP-AUTO-01）
+    mode: manual

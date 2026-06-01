@@ -23,14 +23,15 @@
 
 | 类型 | 职责 |
 |---|---|
-| `CellModule` | 接口：`ID() string` + `Provide(ctx, *SharedDeps, ModuleExports) (cell.Cell, ModuleExports, []Option, []ManagedResource, error)` |
-| `ModuleExports` | 模块间 typed handoff（如 `BootstrapLedgerStore`）；Builder 左→右累积，下游模块经 `in` 参数消费（取代可变 `*SharedDeps` 字段突变） |
+| `CellModule` | 接口：`ID() string` + `Provide(ctx, *SharedDeps) (cell.Cell, []Option, []ManagedResource, error)` |
 | `SharedDeps` | 跨 cell 共享依赖的公开 bag（接口字段，无 adapter 具体类型）；**sealed construction**——经 `NewSharedDeps(...)` 构造盖 marker，`Build` 拒未盖戳实例 |
 | `Builder` | `New() / With(...) / Build(ctx, *SharedDeps, RuntimeOptionsFunc) (*App, error)`；`Build` 校验 marker + `runtimeOptsFn` 非 nil |
 | `App` | `Run(ctx) error`（委托 bootstrap.New(...).Run） |
 | `RuntimeOptionsFunc` | `func(cells []cell.Cell) ([]bootstrap.Option, error)` |
 
 `SharedDeps` 字段全部为接口或 kernel/runtime 类型（`kernelmetrics.Provider`、`idempotency.Claimer`、`*auth.JWTIssuer` 等），**不包含**任何 `adapters/prometheus` 或 `prometheus/client_golang` 具体类型，使 `runtime/composition` 不向 adapters/ 引入依赖。
+
+**Amendment 2026-06-02 #1423**：`CellModule.Provide` 签名已从 `Provide(ctx, *SharedDeps, in ModuleExports) (cell.Cell, ModuleExports, []bootstrap.Option, []ManagedResource, error)` 简化为 `Provide(ctx, *SharedDeps) (cell.Cell, []bootstrap.Option, []ManagedResource, error)`。`ModuleExports` 类型已完全删除（详见本文末尾 §Amendment 2026-06-02）。
 
 ### 新建 `cellmodules/` Composition Root 层
 
@@ -94,10 +95,11 @@ composition.New().
 | prom 构造只在允许位置调用 | archtest `PROM-CALLER-*`（nightly CI allowlist 含 cellmodules/） | Medium（同上） |
 | `Build()` error-first，无 Must | type system（函数签名，无 MustBuild 导出符号） | Hard |
 | `cellmodules/` 独立层分类（`LayerCellModules = "cellmodules"`，区别于 `LayerCmd`） | `kernel/depgraph/layer.go` + `tools/archtest/archtest_test.go` LAYER-06 豁免扩展 | Medium（archtest LAYER-06，nightly CI） |
+| `CellModule.Provide` 签名冻结：2 入参（context.Context, *SharedDeps）/ 4 出参（cell.Cell, []Option, []ManagedResource, error），无跨 module 值传递通道 | archtest `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）——reflect 冻结接口方法签名；重新引入 handoff 通道 = 签名变 → CI 红 | **Hard**（reflect interface method 签名；重引入 handoff 使签名变，archtest pin 即断——上下游均 Hard） |
 
 **注**：`cellmodules/` 与 `cmd/` 同属 composition-root 层，既有 composition-root archtests（cas/session/ledger 协议位置、wrapper 调用点）已通过 `cellmodules/` 前缀覆盖，不存在扫描盲区。
 
-**已落地（#1085 review 收口）**：原先 `BootstrapLedgerStore` 通过 `*SharedDeps` 字段突变在 auditcore module → accesscore module 之间传递的可变共享状态，已重构为 typed `ModuleExports` return：auditcore.Provide 返回 `ModuleExports{BootstrapLedgerStore: ...}`，Builder 左→右累积并经 `in` 参数喂给 accesscore.Provide（缺失时 fail-fast）。`SharedDeps` 同步去除该字段，成为构造后不再被 mid-Build 突变的 sealed bag。module 顺序仍由 `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` archtest 守卫；handoff 值类型 `*audit.BootstrapLedgerStore` 本身 sealed（NewBootstrapLedgerStore 非 nil + 命名空间校验），顺序门控为运行时 nil-check（Medium，Go 无法编译期表达「module X 必先于 Y」）。
+**退役（Amendment 2026-06-02 #1423）**：`MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` archtest 已退役。事件消费者经 EventRouter 异步路由，Provide 时不存在顺序依赖（auditcore 不再向 accesscore 传递 `BootstrapLedgerStore` 构造实例）。签名冻结由 `MODULE-PROVIDE-NO-VALUE-HANDOFF-01` 接管。
 
 ---
 
@@ -134,3 +136,45 @@ composition.New().
 | `.claude/rules/gocell/go-standards.md` | 修改（cellmodules/ 行入依赖表） |
 | `.claude/rules/gocell/cell-patterns.md` | 修改（cellmodules/* 入 wrapper-location 允许列表） |
 | `cmd/CLAUDE.md` | 修改（cellmodules/ 业务 wiring 说明 + corebundle-no-cells depguard 记录） |
+
+---
+
+## Amendment 2026-06-02 #1423 — ModuleExports 删除与事件解耦
+
+**背景**：Epic #1423 Wave-1 将 `composition.ModuleExports.BootstrapLedgerStore` 这一跨 module 进程内 Go handle 传递通道替换为事件驱动（`event.auth.bootstrap-failed.v1`）。违例根因：auditcore 构造 bootstrap 链 store 后经 `ModuleExports` 传给 accesscore；accesscore 在 `/setup/admin` 返 401/429 后直接通过该 handle 写 auditcore 的 ledger，违反「L1+ 跨 cell 交互 MUST 经 contract」。
+
+**变更**：
+
+1. `composition.ModuleExports` 类型已**完全删除**（`ModuleExports` 结构体 + `merge` 方法均已移除）。
+2. `CellModule.Provide` 签名从  
+   `Provide(ctx, *SharedDeps, in ModuleExports) (cell.Cell, ModuleExports, []bootstrap.Option, []ManagedResource, error)`  
+   更改为  
+   `Provide(ctx, *SharedDeps) (cell.Cell, []bootstrap.Option, []ManagedResource, error)`  
+   每个实现均已机械更新（accesscore / auditcore / configcore + 所有 examples）。
+3. Bootstrap auth-fail 审计写入路径变更：  
+   - **旧**：accesscore 持有 auditcore 的 `*audit.BootstrapLedgerStore`，直接调 `AppendBootstrapAuthFail`（进程内跨 cell 直写）。  
+   - **新**：accesscore observer 调 `setup.Service.RecordBootstrapAuthFail`，在 tx 内 emit `event.auth.bootstrap-failed.v1`（持久 L2 outbox）→ relay 异步投递 → auditcore `auditappendbootstrap` subscriber 消费 → `AppendBootstrapAuthFail` 写 bootstrap-namespace ledger。
+4. `*audit.BootstrapLedgerStore` 类型保留，现由 auditcore cell 通过 `auditcell.WithBootstrapStore(bootstrapWrapped)` 在 auditcore 内部持有（不再 export）。Namespace/HMAC 隔离保持不变（独立 `"bootstrap"` namespace + 独立 HMAC key `GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY`，见 ADR-1121）。
+5. **archtest 变更**：  
+   - **新增** `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）：Hard，reflect 冻结 `CellModule.Provide` 签名（2 入参 / 4 出参）——重新引入跨 module 值传递通道必须改签名，archtest 即断。  
+   - **退役** `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01`：事件消费者经 EventRouter 路由，Provide 时不存在顺序依赖，前提消失。  
+   - **退役** `BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-{DOWNSTREAM-HARD,UPSTREAM-MEDIUM}-01`：observer 不再写 ledger；emit 路径由 `EMIT-DECL-COVER-01`（已存在）+ event contract + auditcore subscriber conformance test 覆盖。
+
+**威胁矩阵重评**（对应 ADR-1121 §Threat model，影响行逐项列出）：
+
+| 威胁行 | ADR-1121 结论（#1085 时） | Amendment 后结论 |
+|---|---|---|
+| 组合根忘记构造 bootstrap chain | ✅ archtest AUDIT-NS-DISJOINT-01 + typed field 失快 | ✅ 不变——`cellmodules/auditcore.Provide` 内部调 `audit.NewBootstrapLedgerStore` + `VerifyBootstrapTailOnStartup`；auditcore 构造失败则整个 `Builder.Build` 失败 |
+| accesscore 拿到 nil BootstrapLedgerStore | ✅ Module order archtest + nil-check | ✅ 结构上不可达——accesscore 不再持有该 handle；`MODULE-PROVIDE-NO-VALUE-HANDOFF-01` 确保 ModuleExports 通道无法被重新引入 |
+| 进程内跨 cell 直写 auditcore ledger | ✅ 已限制（只经 BootstrapLedgerStore handle） | ✅ 结构上消除——`ModuleExports` 通道删除 + `IMPL-DECL-COVER-01`（archtest）禁止 `cells/accesscore` import `cells/auditcore`；直写路径在 type system 层不可表达 |
+| bootstrap audit 记录丢失（observer 调用链断裂） | ✅ 失快 fail-fast | ✅ 持久性提升——旧路径是 detached best-effort 直写（失败仅 log）；新路径是 L2 outbox tx 持久化，relay 保证投递；`auditappendbootstrap` handler unmarshal 失败 Reject，写失败 Requeue |
+| 单个 HMAC key 泄漏伪造两链条目 | ✅ 独立 key（ADR-1121 D3） | ✅ 不变——两 key 仍独立，auditcore 内部持有，不在 Provide 签名传递 |
+| MultiStore 误作写 store 注入 | ✅ 编译错误（D4） | ✅ 不变 |
+| Auditcore namespace store 误作 bootstrap observer 入参 | ✅ 编译错误（`*BootstrapLedgerStore` 类型） | ✅ 不变——`AppendBootstrapAuthFail` 仍接受 `*BootstrapLedgerStore`；改为 auditcore subscriber 内部调用，隔离不弱化 |
+
+**不变的安全属性**：namespace 物理隔离（`"auditcore"` vs `"bootstrap"`）、独立 HMAC key（D3）、`*BootstrapLedgerStore` sealed handle（D2）、`ledger.MultiStore` 只实现 `QueryStore`（D4）——均保持原 ADR-1121 保证。
+
+**参考**：  
+- ADR-1121 `docs/architecture/202605270230-1121-audit-chain-bootstrap-namespace-isolation.md`（bootstrap namespace 隔离原始决策）  
+- Archtest `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`：`tools/archtest/module_provide_signature_frozen_test.go`（符号清单与盲区清单活在该文件的 package godoc）  
+- Plan：`.claude/plans/1423-issues-foamy-orbit.md`（设计裁决历程 + HTTP 方案被否原因 + DEP-02 环分析）
