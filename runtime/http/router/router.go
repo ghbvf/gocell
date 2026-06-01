@@ -33,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
+	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -204,6 +205,24 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 			return
 		}
 		r.circuitBreaker = cb
+	}
+}
+
+// WithIdempotency enables HTTP idempotency middleware for mutating methods
+// (POST/PUT/PATCH/DELETE). The middleware is placed in the chain after BodyLimit,
+// so request bodies are already bounded before idempotency key derivation.
+// When wired together with WithAuthMiddleware, idempotency runs AFTER auth so
+// the authenticated Principal is available for namespace composition.
+//
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected by NewForListener so idempotency is never silently absent.
+func WithIdempotency(store idemhttp.Store) Option {
+	return func(r *Router) {
+		if validation.IsNilInterface(store) {
+			r.idempotencyStoreNil = true
+			return
+		}
+		r.idempotencyStore = store
 	}
 }
 
@@ -385,6 +404,8 @@ type Router struct {
 	rateLimiterNil              bool
 	circuitBreaker              middleware.Allower
 	circuitBreakerNil           bool
+	idempotencyStore            idemhttp.Store
+	idempotencyStoreNil         bool
 	authVerifier                kauth.IntentTokenVerifier
 	authVerifierNil             bool
 	authMetrics                 *auth.AuthMetrics
@@ -534,6 +555,9 @@ func NewForListener(clk clock.Clock, ref kcell.ListenerRef, opts ...Option) (*Ro
 	}
 	if r.authVerifierNil {
 		return nil, fmt.Errorf("router: auth middleware verifier must not be nil")
+	}
+	if r.idempotencyStoreNil {
+		return nil, fmt.Errorf("router: idempotency store must not be nil (WithIdempotency)")
 	}
 
 	realIPMW, err := r.buildRealIPMiddleware()
@@ -688,6 +712,9 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		r.use(auth.AuthMiddleware(r.clock, r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.use(middleware.BodyLimit(r.bodyLimit, r.metricsCollector))
+	if r.idempotencyStore != nil {
+		r.use(idemhttp.Middleware(r.clock, r.idempotencyStore))
+	}
 	r.composeHandler()
 	return nil
 }
