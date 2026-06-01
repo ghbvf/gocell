@@ -1,0 +1,100 @@
+package webhook
+
+import (
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// RetrySchedule is the fixed sequence of wait intervals between outbound
+// delivery retries. The first delivery attempt is immediate; delays[i] is the
+// wait before retry i+1. The schedule is value-immutable: DefaultSvixSchedule
+// returns a fresh copy and there is no setter.
+//
+// PR-5 scope: DefaultSvixSchedule is the canonical default + the seam for the
+// broker-delay follow-up; the exact per-attempt wall-clock delays are NOT yet
+// honored at runtime (the in-process ConsumerBase backoff is capped at 30s).
+// Honoring the full Svix timeline (up to ~40h) needs broker-delay support and
+// is a tracked follow-up (see ADR webhook-retry-default). The schedule is
+// retained because that follow-up is a real future need, not a dead abstraction.
+type RetrySchedule struct {
+	delays []time.Duration
+}
+
+// DefaultSvixSchedule returns the Svix default retry schedule: 7 retries after
+// the immediate first attempt (8 deliveries total), spaced
+// 5s / 5min / 30min / 2h / 5h / 10h / 10h.
+//
+// ref: svix/svix-webhooks docs.svix.com/retries (official retry table)
+// ref: standard-webhooks/standard-webhooks spec/standard-webhooks.md (retry guidance)
+func DefaultSvixSchedule() RetrySchedule {
+	return RetrySchedule{delays: []time.Duration{
+		5 * time.Second,
+		5 * time.Minute,
+		30 * time.Minute,
+		2 * time.Hour,
+		5 * time.Hour,
+		10 * time.Hour,
+		10 * time.Hour,
+	}}
+}
+
+// MaxRetries is the number of retries after the first (immediate) attempt.
+func (s RetrySchedule) MaxRetries() int { return len(s.delays) }
+
+// Attempts is the total number of delivery attempts: the immediate first
+// delivery plus MaxRetries retries.
+func (s RetrySchedule) Attempts() int { return len(s.delays) + 1 }
+
+// DelayFor returns the wait before retry n (1-based: n==1 is the first retry).
+// ok is false when n is out of range (n < 1 or n > MaxRetries), i.e. the retry
+// budget is exhausted.
+func (s RetrySchedule) DelayFor(n int) (delay time.Duration, ok bool) {
+	if n < 1 || n > len(s.delays) {
+		return 0, false
+	}
+	return s.delays[n-1], true
+}
+
+// Classify maps an outbound delivery outcome to an outbox.Disposition per the
+// webhook retry-default ADR (standard-webhooks / Svix aligned). Exactly one of
+// the two inputs is meaningful per call: pass the transport error (statusCode
+// ignored) when client.Do failed, or statusCode with a nil error when a
+// response was received.
+//
+// Mapping:
+//   - transportErr != nil:
+//   - SSRF-blocked (ErrWebhookSSRFBlocked — bad target URL, blocked dial,
+//     or denied redirect) → Reject (permanent: a misconfigured/hostile
+//     target never succeeds on retry).
+//   - otherwise (timeout, connection refused, …) → Requeue (transient).
+//   - 2xx → Ack.
+//   - 408 Request Timeout / 429 Too Many Requests → Requeue (throttle/timeout
+//     are transient; the spec asks senders to back off and retry).
+//   - 5xx → Requeue (transient server fault).
+//   - 3xx and every other 4xx (400/401/403/404/410 …) → Reject (the request
+//     itself is faulty; retrying will not help). 3xx normally never reaches
+//     this branch because redirects are denied at the transport layer and
+//     surface as an SSRF transport error.
+func Classify(statusCode int, transportErr error) outbox.Disposition {
+	if transportErr != nil {
+		var ee *errcode.Error
+		if errors.As(transportErr, &ee) && ee.Code == errcode.ErrWebhookSSRFBlocked {
+			return outbox.DispositionReject
+		}
+		return outbox.DispositionRequeue
+	}
+	switch {
+	case statusCode >= 200 && statusCode < 300:
+		return outbox.DispositionAck
+	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests:
+		return outbox.DispositionRequeue
+	case statusCode >= 500:
+		return outbox.DispositionRequeue
+	default:
+		return outbox.DispositionReject
+	}
+}
