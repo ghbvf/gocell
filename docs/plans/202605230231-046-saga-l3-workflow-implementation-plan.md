@@ -17,7 +17,7 @@
 - `kernel/saga/` —— 状态机原语（`Step{Run, Compensate, Timeout, Retries}` + `SagaDefinition` + `SagaInstance` + `Journal` 接口）
 - `kernel/persistence` 新增 `RunTxWithBestEffortAfterCommit` —— 004 W1 缺口 5（**Saga 引擎依赖**）
 - `runtime/saga/` —— Coordinator（state journal + leader-elect 通过 `runtime/distlock` + 步骤 dispatch 通过 `kernel/outbox`）
-- `adapters/postgres/saga/` —— `saga_instances` / `saga_steps` 表 + 迁移 + lease_id CAS fencing
+- `adapters/postgres/saga/` —— `saga_instances` / `saga_events` 表 + 迁移 + lease_id CAS fencing（计划期暂记为 `saga_steps`，落地为 append-only `saga_events`）
 - `contracts/saga/` schema + `tools/codegen` `kind: saga` 派生 typed `SagaDefinition`/`Step` 接口
 - governance rules + archtest（FMT/REF/TOPO `kind:saga` ↔ `consistencyLevel:L3` 约束 + Coordinator funnel + Compensate 纯函数 archtest）
 - example：`examples/orderfulfillment` 全链 saga journey
@@ -48,6 +48,8 @@
 
 ## 2. 设计骨架（一句话总结）
 
+> **权威指针**：本节是计划期设计骨架快照。落地后的权威决策（D1–D10 + enforcement 档位 + 威胁矩阵 + 演进路径）见 ADR `docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`；与下文冲突时以 ADR + 代码 godoc 为准。
+
 ```
 Saga Instance (PG/mem) ── lease_id CAS ──► Coordinator (leader-elect via distlock)
         │
@@ -61,8 +63,10 @@ Saga Instance (PG/mem) ── lease_id CAS ──► Coordinator (leader-elect v
         │              Step.Compensate(ctx, state)
         │
         ▼
-Journal.MarkSagaTerminal(Succeeded | Failed | Compensated)
+Journal.MarkSagaTerminal(Succeeded | Failed | Compensated | Expired | CompensationFailed)
 ```
+
+> 终态共 5 个（`saga.Status` 8 态中的终态子集）：`Succeeded` / `Failed`（前向失败无回滚）/ `Compensated`（回滚干净）/ `Expired`（总超时）/ `CompensationFailed`（回滚本身失败，#1210 新增）。早期"dead-letter saga 表"方案已被 `CompensationFailed` 独立终态取代。
 
 **关键决策**（每条决策都对应一个 ADR 段落）：
 
@@ -71,7 +75,7 @@ Journal.MarkSagaTerminal(Succeeded | Failed | Compensated)
 | D1 | **编程式（Go func Step）** 优先；声明式 DSL 留 v1.2+ | YAML DSL 第一版 | 业务编排不可避免读外部 state、调多个 ports；声明式覆盖率低，YAML 反而成新约束源 |
 | D2 | **state journal = append-only**（每个状态变化一行），instance/step 状态 = 投影 | mutable instance row | 与现有 outbox / audit hash chain 一致；replay / forensic / time-travel 自然得到 |
 | D3 | **每个 saga instance 单 leader**（distlock key = `saga:{definitionID}:{instanceID}`） | 无 leader / 分片路由 | 反应式编排里多个进程同时驱动同一 instance 会复杂化 lease fencing；现有 distlock 复用零成本 |
-| D4 | **Step dispatch 走 outbox**（payload 含 step 名 + input snapshot），不直接 in-proc 调 | 直接同步调用 Step.Run | 一致性：与 L2 outbox-fact 模型同源；transactional safety：journal append + outbox emit 共享同一 Tx |
+| D4 | **Step dispatch 走 outbox**（payload 含 step 名 + input snapshot），不直接 in-proc 调 〔计划期形态；实际 step 执行/事务边界以 ADR D4 + `SAGA-STEP-RUN-OUTSIDE-TX-01` 为准〕 | 直接同步调用 Step.Run | 一致性：与 L2 outbox-fact 模型同源；transactional safety：journal append + outbox emit 共享同一 Tx |
 | D5 | **Compensate 必须幂等 + 纯反向**（不读外部 state）| 复杂 Compensate（含分支） | dtm / Temporal 实战经验：Compensate 有分支 = bug 温床；archtest 静态拦 |
 | D6 | **三层 timeout**：`Step.Timeout`（执行）/`SagaDefinition.Timeout`（总）/`Heartbeat`（长 Step 续期） | 单层 Step timeout | 复用 `kernel/command` 三层 timeout 模板（已 production-proven） |
 | D7 | **L3 cell.yaml** 强制声明 `saga.*` contractUsage，governance rule 拦 | 让 L3 cell 隐式可用 | 与 `consistencyLevel` 名实对齐：L3 不持有 saga 声明 = governance error |
@@ -439,14 +443,14 @@ PR-10 ────────────────────────�
 | 2 计划 | 跳过（L1） |
 | 3 worktree | `worktrees/069-saga-docs` |
 | 4 TDD | n/a |
-| 5 实施 | (i) ADR `202605231400-adr-saga-l3-orchestration-engine.md`：决策 D1–D8 + 拒绝的备选 + 威胁矩阵；(ii) `docs/ops/saga-runbook.md`：故障排查（lease 卡死 / 补偿失败 / journal 满）；(iii) `CLAUDE.md` 加一节 "L3 Saga"；(iv) `docs/design/capability-inventory.md` 加 saga 一节；(v) `.claude/rules/gocell/saga.md` 终稿 |
+| 5 实施 | (i) ADR `202606021000-adr-saga-l3-orchestration-engine.md`（实际落地名；计划期钦定的 `202605231400-...` 因时间戳撞 `202605231400-002-required-dep...` 且不合 `yyyyMMddHHmm-编号-名` 格式而改名）：决策 D1–D10 + 拒绝的备选 + 威胁矩阵；(ii) `docs/ops/saga-runbook.md`：故障排查（lease 卡死 / 补偿失败 / journal 满）；(iii) `CLAUDE.md` 加一节 "L3 Saga"；(iv) `docs/design/capability-inventory.md` 加 saga 一节；(v) `.claude/rules/gocell/saga.md` 终稿 |
 | 6 PR | title: `docs(saga): ADR + ops runbook + CLAUDE.md + capability-inventory (W6 step 10/10)` |
 | 7 review | 1 reviewer |
 | 8 fix | Cx3：CLAUDE.md 加章节位置 |
 | 9 人工确认 | ADR 威胁矩阵覆盖 |
 
 **Files**：
-- `docs/architecture/202605231400-adr-saga-l3-orchestration-engine.md` +400
+- `docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md` +400
 - `docs/ops/saga-runbook.md` +200
 - `CLAUDE.md` +30
 - `docs/design/capability-inventory.md` +50
@@ -495,17 +499,17 @@ go run ./cmd/gocell validate  # 0 error
 ## 7. 进度跟踪表
 
 ```
-PR-00  AfterCommit hook          [ ]  worktrees/200-aftercommit-hook
-PR-01  kernel/saga skeleton      [ ]  worktrees/060-saga-kernel-skeleton
-PR-02  kernel/saga/journal       [ ]  worktrees/061-saga-journal
-PR-03  runtime/saga Coordinator  [ ]  worktrees/062-saga-coordinator
-PR-04  adapters/postgres/saga    [ ]  worktrees/063-saga-pg-journal
-PR-05  runtime/saga leader-elect [ ]  worktrees/064-saga-leader
-PR-06  runtime/saga/executor     [ ]  worktrees/065-saga-executor
-PR-07  contracts/saga + codegen  [ ]  worktrees/066-saga-contractgen
-PR-08  governance + archtest     [ ]  worktrees/067-saga-archtest
-PR-09  example orderfulfillment  [ ]  worktrees/068-saga-example
-PR-10  ADR + runbook + docs      [ ]  worktrees/069-saga-docs
+PR-00  AfterCommit hook          [x]  #923
+PR-01  kernel/saga skeleton      [x]  #932
+PR-02  kernel/saga/journal       [x]  #952
+PR-03  runtime/saga Coordinator  [x]  #977
+PR-04  adapters/postgres/saga    [x]  #1004
+PR-05  runtime/saga leader-elect [x]  #1108
+PR-06  runtime/saga/executor     [x]  #1179
+PR-07  contracts/saga + codegen  [x]  #1283
+PR-08  governance + archtest     [x]  #1316
+PR-09  example orderfulfillment  [x]  #1374
+PR-10  ADR + runbook + docs      [x]  #1433
 ```
 
 合并后回此处把 `[ ]` 改 `[x]`，注明 PR 号 + merge SHA。

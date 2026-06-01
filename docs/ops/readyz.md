@@ -472,7 +472,7 @@ statuses:
   daemon fault.
 
 Ops diagnostics for `CompensationFailed` instances use the `saga_events` table
-(see `docs/ops/alerting-rules.md` §Saga runbook), not readyz.
+(see `docs/ops/saga-runbook.md` §场景 2), not readyz.
 
 ## Concurrent probe storms
 

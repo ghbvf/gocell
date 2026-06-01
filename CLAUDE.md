@@ -59,6 +59,18 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 | L3 WorkflowEventual | 跨 cell 最终一致 | 查询投影、合规追踪 |
 | L4 DeviceLatent | 设备长延迟闭环 | 命令回执、证书续期 |
 
+### L3 Saga 编排
+
+L3 覆盖两类场景——**单向蕴含**：用 saga 编排 ⟹ L3，但 L3 ≠ saga（`accesscore` / `configcore` / `examples/todoorder/ordercell` 是投影型 / CQRS 的 L3，不用 saga 引擎）。
+
+saga 引擎分三层：状态机原语 `kernel/saga`（`Status` 8 态 / `Step` / `SagaDefinition`）+ append-only journal `kernel/saga/journal`（mem）与 `adapters/postgres/saga`（PG，lease_id CAS）+ 编排运行时 `runtime/saga`（Coordinator + leader-elect via `runtime/distlock` + executor 重试/heartbeat）。Step 编程式（Go func），Compensate 必须纯反向幂等（archtest Hard 守）。
+
+约束 enforcement / 故障 runbook / 设计决策三处单源，不在此复制：
+
+- archtest + governance 索引：`.claude/rules/gocell/saga.md`
+- 设计决策 D1–D10 + 威胁矩阵 + 演进路径：ADR `docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`
+- 运维故障 runbook：`docs/ops/saga-runbook.md`
+
 ## Go 编码规范
 
 - 错误用 `pkg/errcode` 包
