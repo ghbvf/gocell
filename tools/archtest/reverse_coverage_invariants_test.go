@@ -78,7 +78,7 @@ func loadReverseCoverageContracts(t *testing.T) []contractDoc {
 }
 
 // loadContractDocs scans contracts/ and examples/*/contracts/ for every
-// contract.yaml and parses each one. Uses LoadContentFiles (the archtest
+// contract.yaml and parses each one. Uses loadContentFiles (the archtest
 // framework) to avoid forbidden os.ReadDir / filepath.WalkDir calls.
 func loadContractDocs(root string) ([]contractDoc, error) {
 	// Scan under two top-level dirs: contracts/ (platform) and examples/ (examples).
@@ -99,7 +99,7 @@ func loadContractDocs(root string) ([]contractDoc, error) {
 		}),
 	)
 
-	files, loadErr := LoadContentFiles(scope, []string{".yaml"})
+	files, loadErr := loadContentFiles(scope, []string{".yaml"})
 	if loadErr != nil {
 		return nil, loadErr
 	}
@@ -146,7 +146,7 @@ func loadGeneratedSourceMap(root, modPath string, kindDir, fileSuffix string) (m
 		}),
 	)
 
-	files, loadErr := LoadContentFiles(scope, []string{".go"})
+	files, loadErr := loadContentFiles(scope, []string{".go"})
 	if loadErr != nil {
 		return nil, loadErr
 	}
@@ -214,7 +214,7 @@ func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 		}),
 	)
 
-	files, loadErr := LoadContentFiles(scope, []string{".yaml"})
+	files, loadErr := loadContentFiles(scope, []string{".yaml"})
 	if loadErr != nil {
 		return nil, loadErr
 	}
@@ -256,7 +256,7 @@ func loadSliceWebhookWiring(root string) (map[string]bool, error) {
 		}),
 	)
 
-	files, loadErr := LoadContentFiles(scope, []string{".yaml"})
+	files, loadErr := loadContentFiles(scope, []string{".yaml"})
 	if loadErr != nil {
 		return nil, loadErr
 	}
@@ -1019,7 +1019,7 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 // allow for normal lifecycle changes without breaking this floor assertion.
 //
 // AI-robust funnel evaluation:
-//   - upstream: Medium — YAML full enumeration relies on LoadContentFiles
+//   - upstream: Medium — YAML full enumeration relies on loadContentFiles
 //     scanning the contracts/ tree; the source map is read from generated/
 //     iface_gen.go "// source:" comments. Both paths are deterministic given
 //     the repo tree; broken scan triggers floor assertion.
@@ -1293,7 +1293,7 @@ func TestDeadContractCover_FloorScan(t *testing.T) {
 //
 // AI-robust funnel evaluation:
 //   - upstream: Hard — YAML single-source for the deprecated contract set
-//     (LoadContentFiles scan of contracts/ tree); no hand-maintained list.
+//     (loadContentFiles scan of contracts/ tree); no hand-maintained list.
 //   - downstream: Medium — AST ImportSpec.Path + BasicLit.Value exact-match;
 //     no annotation escape, no waiver yaml, no env var skip. Blank-import form
 //     is covered (ImportSpec.Path.Value is the same regardless of import name).

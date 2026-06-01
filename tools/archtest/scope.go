@@ -35,13 +35,6 @@ type Scope = scanner.Scope
 // [IncludeTestdata], [IncludeGenerated].
 type ScopeOption = scanner.Option
 
-// FileContext is the per-file payload type defined by the internal scanner.
-// New rules should consume [Pass.Files] / [Pass.Fset] / [Pass.Rel] instead;
-// FileContext is re-exported only so callers that already hold a
-// scanner.FileContext (e.g. unmigrated legacy archtests) can refer to the
-// type by the archtest-package name during the stage 2/3 migration window.
-type FileContext = scanner.FileContext
-
 // Diagnostic represents a single rule violation. Rules accumulate Diagnostics
 // in their return slice; the caller passes the slice to [Report] together with
 // the rule ID.

@@ -41,5 +41,10 @@ type Request struct {
 	// EntityID identifies the single entity to reconcile. It is opaque to the
 	// Loop and meaningful only to the Reconciler (typically a primary key in the
 	// cell's own table).
+	//
+	// An empty EntityID is the "resync-all" sentinel emitted by TickerTrigger
+	// (a context-free interval ticker has no entity to name): a Reconciler wired
+	// to a TickerTrigger MUST treat req.EntityID == "" as a "re-observe every
+	// entity you own" sweep, fanning out to its own entity set.
 	EntityID string
 }

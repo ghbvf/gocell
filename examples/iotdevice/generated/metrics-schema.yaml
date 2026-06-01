@@ -149,6 +149,13 @@ metrics:
       labels:
         - reason
       file: kernel/assembly/hook_dispatcher.go
+    - name: http_request_body_limit_rejections_total
+      type: counter
+      help: Total number of HTTP requests rejected for exceeding the body size limit (Content-Length fast-path).
+      labels:
+        - cell
+        - route
+      file: runtime/bootstrap/phases_http.go
     - name: http_request_duration_seconds
       type: histogram
       help: HTTP request duration in seconds.
@@ -179,6 +186,97 @@ metrics:
         - status
         - cell
       file: runtime/bootstrap/phases_http.go
+    - name: mqtt_consume_duration_seconds
+      type: histogram
+      help: 'End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+      buckets:
+        - "0.001"
+        - "0.005"
+        - "0.01"
+        - "0.025"
+        - "0.05"
+        - "0.1"
+        - "0.25"
+        - "0.5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_consume_failed_total
+      type: counter
+      help: 'Total number of MQTT messages that did not result in a successful Ack, classified by reason. reason ∈ {unmarshal, reject, requeue, commit_failed, ack_failed, unknown_disposition} — closed set; alerting rules can rely on the literals. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+        - reason
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_consume_total
+      type: counter
+      help: 'Total number of MQTT messages consumed successfully (handler Ack + Settlement Commit). Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_dlx_failed_total
+      type: counter
+      help: 'Total number of messages whose dead-letter publish to $dead/<topic> FAILED (topic unmintable or broker publish error); the message was acked-as-poison WITHOUT $dead capture. A distinct, higher-severity signal from mqtt_consume_failed_total: it means the dead-letter sink itself is unhealthy. reason ∈ {unmarshal, reject} — closed set. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+        - reason
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_dlx_total
+      type: counter
+      help: 'Total number of messages routed to the app-level dead-letter sink $dead/<topic>. reason ∈ {unmarshal, reject} — closed set (poison / permanent failure). Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+        - reason
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_publish_ack_duration_seconds
+      type: histogram
+      help: 'End-to-end MQTT publish ack round-trip duration in seconds, from Publish() call to broker PUBACK. Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+      buckets:
+        - "0.001"
+        - "0.005"
+        - "0.01"
+        - "0.025"
+        - "0.05"
+        - "0.1"
+        - "0.25"
+        - "0.5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_publish_failed_total
+      type: counter
+      help: 'Total number of MQTT publish attempts that failed, classified by reason. reason ∈ {payload_too_large, closed, puback_timeout, context_canceled, publish_error, topic_outside_namespace, rate_limited, not_authorized, payload_format_invalid, rejected} — closed set; alerting rules can rely on the literals. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+        - reason
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_publish_total
+      type: counter
+      help: 'Total number of MQTT publish attempts that completed successfully (broker PUBACK received). Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_reconnect_total
+      type: counter
+      help: 'Total MQTT reconnect events observed by the adapter. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+      file: adapters/mqtt/metrics.go
+    - name: mqtt_subscribe_failed_total
+      type: counter
+      help: 'Total number of receive-path SUBSCRIBE failures (initial SUBACK rejection or reconnect re-arm), classified by reason. reason ∈ {suback_reject, transport} — closed set; alerting rules can rely on the literals. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
+      labels:
+        - cell
+        - reason
+      file: adapters/mqtt/metrics.go
     - name: outbox_consumer_rejected_total
       type: counter
       help: Total number of terminal Reject dispositions from outbox ConsumerBase. consumerGroup is not included as a label to bound time-series cardinality.

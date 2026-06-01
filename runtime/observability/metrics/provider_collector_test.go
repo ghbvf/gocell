@@ -87,6 +87,40 @@ func TestProviderCollector_ForwardsCallerCtx(t *testing.T) {
 	assertForwardedCtx("http_request_duration_seconds", p.histogramOps["http_request_duration_seconds"])
 }
 
+func TestProviderCollector_RecordBodyLimitRejection_NopProviderNoPanic(t *testing.T) {
+	c, err := metrics.NewProviderCollector(kernelmetrics.NopProvider{}, metrics.ProviderCollectorConfig{})
+	if err != nil {
+		t.Fatalf("NewProviderCollector: %v", err)
+	}
+	// Must not panic.
+	ctx := context.Background()
+	c.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
+}
+
+func TestProviderCollector_RecordBodyLimitRejection_EmitsLabels(t *testing.T) {
+	p := newSpyProvider()
+	c, err := metrics.NewProviderCollector(p, metrics.ProviderCollectorConfig{})
+	if err != nil {
+		t.Fatalf("NewProviderCollector: %v", err)
+	}
+	c.RecordBodyLimitRejection(context.Background(), "configcore", "/api/v1/config")
+
+	ops := p.counterOps["http_request_body_limit_rejections_total"]
+	if len(ops) != 1 {
+		t.Fatalf("want 1 body-limit counter op, got %d", len(ops))
+	}
+	got := ops[0].labels
+	wants := map[string]string{
+		"cell":  "configcore",
+		"route": "/api/v1/config",
+	}
+	for k, v := range wants {
+		if got[k] != v {
+			t.Errorf("label %s = %q, want %q (all=%v)", k, got[k], v, got)
+		}
+	}
+}
+
 func TestProviderCollector_PerCallCellLabel(t *testing.T) {
 	// Two calls with different cellID values must yield two distinct label sets;
 	// no global / cached cellID can leak between calls.

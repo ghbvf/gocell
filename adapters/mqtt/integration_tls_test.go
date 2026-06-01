@@ -248,8 +248,9 @@ func TestIntegrationTLS_MutualTLS_PublishRoundTrip(t *testing.T) {
 			ServerName:   "127.0.0.1",
 			MinVersion:   tls.VersionTLS12,
 		},
-		ConnectTimeout: testtime.D10s,
-		KeepAlive:      testtime.D10s,
+		ConnectTimeout:  testtime.D10s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D10s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
@@ -335,8 +336,9 @@ func TestIntegrationTLS_UntrustedClientCert_Rejected(t *testing.T) {
 			ServerName:   "127.0.0.1",
 			MinVersion:   tls.VersionTLS12,
 		},
-		ConnectTimeout: testtime.D10s,
-		KeepAlive:      testtime.D10s,
+		ConnectTimeout:  testtime.D10s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D10s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
@@ -395,8 +397,9 @@ func TestIntegrationTLS_NoClientCert_Rejected(t *testing.T) {
 			ServerName: "127.0.0.1",
 			MinVersion: tls.VersionTLS12,
 		},
-		ConnectTimeout: testtime.D10s,
-		KeepAlive:      testtime.D10s,
+		ConnectTimeout:  testtime.D10s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D10s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
@@ -432,8 +435,9 @@ func TestIntegrationTLS_InsecureSkipVerify_Rejected(t *testing.T) {
 		TLS: &tls.Config{
 			InsecureSkipVerify: true, //nolint:gosec // intentional: this is what we are testing rejection of
 		},
-		ConnectTimeout: testtime.D5s,
-		KeepAlive:      testtime.D10s,
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D10s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,

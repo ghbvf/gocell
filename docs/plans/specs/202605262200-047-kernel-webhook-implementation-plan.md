@@ -97,9 +97,13 @@ func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.Hand
 
 // kernel/webhook/ssrf.go
 type SafeDialContext func(ctx context.Context, network, address string) (net.Conn, error)
-func NewSafeDialer(opts ...SafeOption) SafeDialContext
-type SafeOption func(*safeConfig)
-func WithAllowLoopback() SafeOption  // dev-only opt-in
+type SafePolicy struct{ /* unexported config */ }         // single-source SSRF policy
+func NewSafePolicy(opts ...SafeOption) *SafePolicy
+func (p *SafePolicy) DialContext(ctx context.Context, network, address string) (net.Conn, error)
+func (p *SafePolicy) ValidateTargetURL(rawURL string) error
+func (p *SafePolicy) DenyRedirect(_ *http.Request, via []*http.Request) error
+type SafeOption func(*SafePolicy)
+func WithAllowLoopback() SafeOption  // dev-only opt-in (applies to dial AND pre-flight)
 ```
 
 ### 2.3 cellgen 派生模式（K42 接缝）
@@ -149,7 +153,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 |----|---------|------|----------------|
 | WEBHOOK-HMAC-FUNNEL-01 | `crypto/hmac.New` callsite 限定 `kernel/webhook/signer.go` | Hard 下游 + Medium 上游 | 下游 callsite allowlist；上游 `Signer` sealed interface（`sealed()` unexported marker → 包外不可实现） |
 | WEBHOOK-SIGNER-FUNNEL-01 | `Webhook-Signature` header 写入只经 Signer | Medium | 下游 AST ban literal `Header.Set("X-Webhook-Signature", ...)`；上游 Dispatcher struct field typed |
-| WEBHOOK-SSRF-GUARD-01 | dispatcher 所有 HTTP 出站经 SafeDialContext | Hard 下游 + Medium 上游 | 下游 `Dispatcher.client` 字段类型必须经 `webhook.NewSafeDialer` 包装；上游 archtest ban `http.DefaultClient` + `net.Dial` / `net.DialTCP` 直调 |
+| WEBHOOK-SSRF-GUARD-01 | dispatcher 所有 HTTP 出站经 SafePolicy | Hard 下游 + Medium 上游 | 下游 `Dispatcher.client` 持有 `*webhook.SafePolicy`（唯一构造器 `NewSafePolicy`），`net.Dialer.DialContext` 仅 `(*SafePolicy).DialContext` 可调；上游 archtest ban `http.DefaultClient` + `net.Dial` / `net.DialTCP` 直调 |
 | WEBHOOK-IDEMPOTENCY-CLAIMER-01 | Receiver 处理前必经 Claimer | Medium | 复用 `REQUIRED-DEP-NIL-GUARD-01` 框架，receiver struct claimer 字段 `gocell:"required"` |
 | WEBHOOK-SIGNED-STRING-FORM-01 | 签名串格式 `{webhookID}.{timestamp}.{body}` 与 Svix 对齐 | Medium | golden fixture（Svix 官方 test vector）+ AST 锁 `fmt.Sprintf` 模板字面量 |
 

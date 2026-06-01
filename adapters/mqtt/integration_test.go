@@ -46,10 +46,11 @@ func newTestConfig(t *testing.T, role string) Config {
 	}
 	brokerURL := testutil.LoopbackIPEndpoint(sharedBrokerURL(t))
 	return Config{
-		ClientID:       cid,
-		Brokers:        []string{brokerURL},
-		ConnectTimeout: testtime.D5s,
-		KeepAlive:      testtime.D10s,
+		ClientID:        cid,
+		Brokers:         []string{brokerURL},
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D10s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
@@ -225,10 +226,11 @@ func TestIntegration_PublisherTrueReconnect(t *testing.T) {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
 	cfg := Config{
-		ClientID:       cid,
-		Brokers:        []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
-		ConnectTimeout: testtime.D5s,
-		KeepAlive:      testtime.D10s,
+		ClientID:        cid,
+		Brokers:         []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D10s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,
@@ -556,13 +558,14 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	}
 	mkCfg := func() Config {
 		return Config{
-			ClientID:       stableID,
-			Brokers:        []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
-			ConnectTimeout: testtime.D5s,
-			KeepAlive:      testtime.D10s,
-			SessionExpiry:  testtime.D30s,
-			Backoff:        BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s},
-			PublishTimeout: testtime.D5s,
+			ClientID:        stableID,
+			Brokers:         []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+			ConnectTimeout:  testtime.D5s,
+			ConnectDeadline: testtime.D10s,
+			KeepAlive:       testtime.D10s,
+			SessionExpiry:   testtime.D30s,
+			Backoff:         BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s},
+			PublishTimeout:  testtime.D5s,
 		}
 	}
 
@@ -739,12 +742,13 @@ func TestIntegration_Subscriber_ClientIDConflict(t *testing.T) {
 	}
 	mkCfg := func() Config {
 		return Config{
-			ClientID:       stableID,
-			Brokers:        []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
-			ConnectTimeout: testtime.D5s,
-			KeepAlive:      testtime.D10s,
-			Backoff:        BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s},
-			PublishTimeout: testtime.D5s,
+			ClientID:        stableID,
+			Brokers:         []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+			ConnectTimeout:  testtime.D5s,
+			ConnectDeadline: testtime.D10s,
+			KeepAlive:       testtime.D10s,
+			Backoff:         BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s},
+			PublishTimeout:  testtime.D5s,
 		}
 	}
 

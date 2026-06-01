@@ -749,8 +749,11 @@ func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.O
 // Use the archtest façade instead:
 //   - typeseval helpers → archtest.ResolvePackageRef / .ResolveMethodCall /
 //     .EvaluateConstString / .FlatNonDefaultTags / .KnownNonDefaultTags
-//   - ParseBuildConstraint+BuildContextPredicate → pass.IsFileInScope(f)
-//   - IsGeneratedRelPath → pass.IsGenerated(f)
+//   - ParseBuildConstraint / BuildContextPredicate → the retained free funcs
+//     archtest.ParseBuildConstraint / archtest.BuildContextPredicate (raw
+//     constraint.Expr under multiple tag-set predicates); pass.IsFileInScope(f)
+//     only for the simple default-context bool case
+//   - IsGeneratedRelPath → pass.IsGenerated(f) (free func removed in #1037)
 //   - scanner.ImportBan → archtest.ImportBan (type alias, same struct API)
 //
 // Detection: SelectorExpr / bare Ident walk + typeseval.ResolvePackageRef

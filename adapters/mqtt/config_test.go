@@ -53,14 +53,53 @@ func mustClientID(t *testing.T) ClientID {
 func validConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
-		ClientID:       mustClientID(t),
-		Brokers:        []string{"tcp://127.0.0.1:1883"},
-		ConnectTimeout: testtime.D5s,
-		KeepAlive:      testtime.D30s,
+		ClientID:        mustClientID(t),
+		Brokers:         []string{"tcp://127.0.0.1:1883"},
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D30s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D500ms,
 			MaxDelay:  testtime.D30s,
 		},
+	}
+}
+
+// TestConfig_Validate_ConnectDeadline covers the bootstrap connect-deadline
+// budget: it is mandatory and must be > 0. A zero or negative value would let
+// the first-connection wait fall back to the (effectively unbounded) lifecycle
+// ctx — the exact #1388 hang this field exists to prevent — so Validate
+// fails-closed rather than accepting it.
+func TestConfig_Validate_ConnectDeadline(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		dur     time.Duration
+		wantErr bool
+	}{
+		{"zero-rejected", 0, true},
+		{"negative-rejected", -testtime.D5s, true},
+		{"positive-accepted", testtime.D10s, false},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := validConfig(t)
+			cfg.ConnectDeadline = tc.dur
+			err := cfg.Validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+			// Assert the failure is specifically the ConnectDeadline gate, not an
+			// unrelated field (e.g. validateTimings short-circuiting elsewhere).
+			assert.Contains(t, ec.Message, "ConnectDeadline")
+		})
 	}
 }
 

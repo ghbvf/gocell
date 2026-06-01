@@ -243,17 +243,34 @@ type Result struct { RequeueAfter time.Duration }
 盲区自检。`RequeueAfter` 语义：`>0` N 后重入；`==0` 按 default tick 重入；error≠nil 时忽略
 （走退避）；负值 clamp 到 0（`normalizedRequeueAfter`，PR-A2 测试）。
 
-### 3.2 Trigger（PR-A4 设计）
+### 3.2 Trigger（PR-A4 落地）
 
 ```go
 type Trigger interface { Start(ctx context.Context, queue chan<- Request) error }
-func TickerTrigger(interval time.Duration) Trigger   // 周期全量重观察（替代 controller-runtime resync Source）
-func ChannelTrigger(in <-chan Request) Trigger       // outbox 事件唤醒
+func TickerTrigger(clk clock.Clock, interval time.Duration) Trigger // 周期全量重观察脉冲（替代 controller-runtime resync Source）
+func ChannelTrigger(in <-chan Request) Trigger                      // outbox 事件唤醒
 ```
 
-替代 controller-runtime `Source`，最小 2 实现。PR-A3 的 `Loop.Source <-chan Request` 是 Trigger
-产出的原始 channel 接缝（A3 测试直接注入 channel，A4 由 Trigger 产出）。Loop 控制面时钟走
-`controlPlaneClock` carve-out（见 §7 T-CLOCK）。
+替代 controller-runtime `Source`，最小 2 实现。`Trigger.Start` 非阻塞（spawn producer 即返回）+
+block-don't-drop（queue 满阻塞不丢，level-triggered 安全）——对标 `source.Source.Start` 形态，但
+sink 削为裸 `chan<- Request`（去 client-go workqueue：去重/退避归 Loop，不归 Trigger）。
+PR-A3 的 `Loop.Source <-chan Request` 是 Trigger 产出的原始 channel 接缝（A3 测试直接注入 channel，
+A7 Builder 把 Trigger 输出 channel 接进 Loop.Source）。
+
+`TickerTrigger` 发**零值 `Request{}` resync 脉冲**（无 entity 上下文的间隔 ticker 只能发空 ID
+脉冲，消费方 `Reconcile` 从中扇出）；其节拍走**注入的 `clock.Clock`**（`clk.NewTicker(interval)`，
+fake clock `Advance` 可确定性测试，不依赖 wall-clock），构造期 `clock.MustHaveClock` +
+`clock.MustHavePositiveInterval` 守——clock 是强制位置参（`CLOCK-POSITIONAL-INJECTION-01`，禁
+`WithClock` option / 禁 Config.Clock 字段），不是 control-plane sealed clock。
+
+> **时钟归属澄清（F4 amendment 决议，AI-robust §ADR amendment 落地必查 → 见 §7 T-CLOCK 重评）**：
+> `controlPlaneClock` carve-out（§7 T-CLOCK）只覆盖 **Loop 自身**的 probe / requeue 定时器与 duration
+> 测量（real wall-clock 必需，否则 Start 死锁）；as-built 的 Loop **没有 ticker**（它是 Source +
+> requeue 驱动）。周期节拍由 `TickerTrigger` 持有，走注入 clock，**不**进 carve-out。原 spec 草图
+> `TickerTrigger(interval)`（无 clock）与 TDD「注入业务时钟、不依赖 wall-clock」+
+> `CLOCK-POSITIONAL-INJECTION-01` 冲突，A4 落地裁决为注入 clock 位置参——本节即重写后真值源，不留
+> 旧签名作历史。`RECONCILE-TRIGGER-INTERFACE-FROZEN-01`（reflect 锁 `Start(ctx, chan<- Request)
+> error`，含 send-only chan 方向）冻结接口形态。
 
 ### 3.3 PermanentError 来源裁决（由 PR-A2 交付）
 
@@ -460,7 +477,7 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 | ID | 威胁 | 缓解 | 评级 |
 |----|------|------|------|
 | **T-IFACE** | 接口被错误泛化（加 namespace / Priority / Requeue bool，重新引入 K8s 残留） | `RECONCILE-{INTERFACE,REQUEST-FIELDS,RESULT-FIELDS}-FROZEN-01` reflect golden 锁字段/方法集 + 显式拒残留 + 反向盲区自检（由 PR-A2 交付） | **Hard**（违反不可表达——加字段即 CI 红，无 string-anchor 逃逸） |
-| **T-CLOCK** | 控制面 ticker/probe/duration 被注入非实时（fake）clock → Start 死锁 / 时间错乱 | `controlPlaneClock` 包私有 sealed type（包外不可构造/替换）+ `PROD-CLOCK-INJECTION-01` host-set 扩 `kernel/reconcile/`（gate(a) + (method,callee) form-uniqueness：`newProbeTimer/newRequeueTimer→NewTimer`、`now→Now`）+ GREEN/RED fixtures（由 PR-A3 交付） | **Medium**（永久天花板——stdlib `time.NewTimer`/`Now` free function 在 Go 不可 uncallable；receiver-type 限制 + form-uniqueness 是该形状可达上限，同 runtime/command controlPlaneClock 自评） |
+| **T-CLOCK** | 控制面 probe/requeue/duration 被注入非实时（fake）clock → Start 死锁 / 时间错乱 | `controlPlaneClock` 包私有 sealed type（包外不可构造/替换）+ `PROD-CLOCK-INJECTION-01` host-set 扩 `kernel/reconcile/`（gate(a) + (method,callee) form-uniqueness：`newProbeTimer/newRequeueTimer→NewTimer`、`now→Now`）+ GREEN/RED fixtures（由 PR-A3 交付）。**F4 amendment 重评（A4）**：原描述含「ticker」，但 as-built Loop **无 ticker**（Source + requeue 驱动）；周期节拍由 `TickerTrigger`（§3.2）持有并走**注入 clock**（fake-able 是刻意可测性，非威胁），故 carve-out **不加** `newTicker`——格子不退化，威胁面反而收窄（少一个 real-clock 调用点）。 | **Medium**（永久天花板——stdlib `time.NewTimer`/`Now` free function 在 Go 不可 uncallable；receiver-type 限制 + form-uniqueness 是该形状可达上限，同 runtime/command controlPlaneClock 自评） |
 | **T-LEAK** | Loop goroutine（worker / pump / requeue 定时）在 Stop/owner-cancel 后泄漏 | 全 goroutine 由 runCtx 派生 + `WaitGroup` 跟踪 + `done` channel；`Stop` cancel→等 done（StopTimeout budget）；per-requeue goroutine 双 select runCtx.Done。`goleak.VerifyNone` 守 6 个生命周期测试（由 PR-A3 交付，`-race` 通过） | **Medium**（runtime guard + goleak 测试；Go 无法在类型层表达「无 goroutine 泄漏」） |
 | **T-PANIC** | 单实体 Reconcile panic 杀 worker goroutine → 整进程崩 / 其他实体停摆 | `safeReconcile` recover → 转 transient error → 记 metric → 不影响其他实体；`TestLoop_PanicRecoveredAndOtherEntitiesUnaffected` 守（由 PR-A3 交付）。A5 细化 panic 分类/taxonomy | **Medium**（runtime recover guard + 测试；对标 controller-runtime `RecoverPanic`） |
 | **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | **leader election 非 fencing**（§4，client-go 明示不保证单 leader）——只 best-effort 收窄窗口。跨副本正确性靠 §4.3 `FencedRepository` + monotonic-epoch 写路径 CAS（结构拒 stale-epoch 写）+ §4.4 消费方幂等；同实例内同 EntityID 由 `inflight` sync.Map 串行（level-triggered 丢重复=skipped，由 PR-A3 交付，`TestLoop_SameEntityIDSerial` 守） | 同实例串行 **Medium**（runtime guard + 测试，已兑现）；跨副本正确性 **设计**（A6：`FencedWriter` 上游 Hard + `RECONCILE-FENCED-WRITE-FUNNEL-01` 下游 Hard + `RunFencingConformance` real-failure-injection 后定级；leader election 永远只是 best-effort 收窄，不计入正确性保证） |

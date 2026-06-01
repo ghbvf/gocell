@@ -8,7 +8,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // Re-export outbox types so wrapper callers do not need to import kernel/outbox
@@ -58,11 +57,12 @@ func defaultEventSpanName(spec contractspec.ContractSpec) string {
 //
 // spec must have Kind == "event" and Topic set; fn must be non-nil.
 //
-// Error redaction is hardcoded to pkg/redaction.RedactError before any
-// span.RecordError call, so sensitive substrings (password=, token=,
-// Authorization: Bearer …) never reach the trace backend. There is no
-// caller-side opt-out — dev / test surfaces that need raw error text read
-// it from slog structured fields instead.
+// Error redaction is hardcoded at the sink (adapters/otel/span.go
+// otelSpan.RecordError) so sensitive substrings (password=, token=,
+// Authorization: Bearer …) never reach the trace backend. Callers pass the
+// raw error; the otelSpan sink applies pkg/redaction.RedactError before
+// forwarding to the OTel SDK. There is no caller-side opt-out — dev / test
+// surfaces that need raw error text read it from slog structured fields.
 // ref: hashicorp/vault audit/entry_formatter.go (log_raw=false default)
 // ref: golang/go src/net/url/url.go URL.Redacted()
 //
@@ -125,13 +125,14 @@ func WrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) (C
 	}, nil
 }
 
-// recordErr calls span.RecordError on the redacted form of err, falling back
-// to a synthetic "missing error" message (itself redacted) so ops still get
-// a recognizable event in the span even when a handler misbehaves by
-// returning a non-Ack disposition with a nil error.
+// recordErr calls span.RecordError with err, falling back to a synthetic
+// "missing error" message so ops still get a recognizable event in the span
+// even when a handler misbehaves by returning a non-Ack disposition with a
+// nil error. Redaction is applied at the sink (otelSpan.RecordError in
+// adapters/otel/span.go); callers pass the raw error.
 func recordErr(span Span, err error, fallbackMsg string) {
 	if err == nil {
 		err = errors.New(fallbackMsg)
 	}
-	span.RecordError(redaction.RedactError(err))
+	span.RecordError(err)
 }

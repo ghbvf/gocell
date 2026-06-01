@@ -28,8 +28,9 @@ type ProviderCollectorConfig struct {
 // metrics.Provider. The Provider owns registry ownership; this collector
 // only records observations.
 type providerCollector struct {
-	requests kernelmetrics.CounterVec
-	duration kernelmetrics.HistogramVec
+	requests            kernelmetrics.CounterVec
+	duration            kernelmetrics.HistogramVec
+	bodyLimitRejections kernelmetrics.CounterVec
 }
 
 var _ Collector = (*providerCollector)(nil)
@@ -69,7 +70,17 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 			"(likely duplicate — another collector on this Provider may already own the name): %w", err)
 	}
 
-	return &providerCollector{requests: reqs, duration: dur}, nil
+	blr, err := p.CounterVec(kernelmetrics.CounterOpts{
+		Name:       "http_request_body_limit_rejections_total",
+		Help:       "Total number of HTTP requests rejected for exceeding the body size limit (Content-Length fast-path).",
+		LabelNames: []string{"cell", "route"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runtime/observability/metrics: register http_request_body_limit_rejections_total "+
+			"(likely duplicate — another collector on this Provider may already own the name): %w", err)
+	}
+
+	return &providerCollector{requests: reqs, duration: dur, bodyLimitRejections: blr}, nil
 }
 
 // RecordRequest emits an increment on http_requests_total and a sample on
@@ -85,4 +96,13 @@ func (c *providerCollector) RecordRequest(ctx context.Context, cellID, method, r
 	}
 	c.requests.With(labels).Inc(ctx)
 	c.duration.With(labels).Observe(ctx, durationSeconds)
+}
+
+// RecordBodyLimitRejection emits an increment on
+// http_request_body_limit_rejections_total labeled by cell and route.
+func (c *providerCollector) RecordBodyLimitRejection(ctx context.Context, cellID, route string) {
+	c.bodyLimitRejections.With(kernelmetrics.Labels{
+		"cell":  cellID,
+		"route": route,
+	}).Inc(ctx)
 }

@@ -181,6 +181,7 @@ func TestService_WithEmitter(t *testing.T) {
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTokenIssuer(outboxStubIssuer),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
@@ -200,6 +201,7 @@ func TestService_WithTxManager(t *testing.T) {
 	txSessionStore := testutil.RealSessionRepo(t)
 	txRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), txUserRepo, newInvalidator(t, txUserRepo, txSessionStore, txRefreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithTxManager(persistence.WrapForCell(tx)), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
@@ -216,6 +218,7 @@ func TestService_Lock_WithOutbox(t *testing.T) {
 	lockSessionStore := testutil.RealSessionRepo(t)
 	lockRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), lockUserRepo, newInvalidator(t, lockUserRepo, lockSessionStore, lockRefreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTokenIssuer(outboxStubIssuer),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
@@ -269,6 +272,7 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 		createUserRepo,
 		newInvalidator(t, createUserRepo, createSessionStore, createRefreshStore),
 		slog.Default(),
+		inertRoleRepo(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))),
 		WithTokenIssuer(outboxStubIssuer),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
@@ -289,6 +293,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	createRefreshStore := newIdentityRefreshStore()
 	svcCreate, err := NewService(clock.Real(), repo, newInvalidator(t, repo, createSessionStore, createRefreshStore),
 		slog.Default(),
+		inertRoleRepo(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, &stubOutboxWriter{}))),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithTokenIssuer(outboxStubIssuer))
@@ -304,6 +309,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	lockRefreshStore := newIdentityRefreshStore()
 	svcLock, err := NewService(clock.Real(), repo, newInvalidator(t, repo, lockSessionStore, lockRefreshStore),
 		slog.Default(),
+		inertRoleRepo(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)

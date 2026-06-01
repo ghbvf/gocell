@@ -119,6 +119,13 @@ metrics:
       labels:
         - reason
       file: kernel/assembly/hook_dispatcher.go
+    - name: http_request_body_limit_rejections_total
+      type: counter
+      help: Total number of HTTP requests rejected for exceeding the body size limit (Content-Length fast-path).
+      labels:
+        - cell
+        - route
+      file: runtime/bootstrap/phases_http.go
     - name: http_request_duration_seconds
       type: histogram
       help: HTTP request duration in seconds.
@@ -170,6 +177,46 @@ metrics:
       labels:
         - cell
       file: runtime/observability/metrics/outbox.go
+    - name: projection_event_replay_lag_seconds
+      type: gauge
+      help: 'Event replay lag in seconds (now − lastApplied.OccurredAt). Labels: cell, projection.'
+      labels:
+        - cell
+        - projection
+      file: kernel/projection/metrics.go
+    - name: projection_pending_events
+      type: gauge
+      help: 'Number of events not yet reflected in the projection (Head − checkpoint). Labels: cell, projection.'
+      labels:
+        - cell
+        - projection
+      file: kernel/projection/metrics.go
+    - name: projection_rebuild_duration_seconds
+      type: histogram
+      help: 'Projection rebuild wall-clock duration in seconds. Labels: cell, projection.'
+      labels:
+        - cell
+        - projection
+      buckets:
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+        - "30"
+        - "60"
+        - "120"
+        - "300"
+        - "600"
+        - "900"
+        - "1800"
+      file: kernel/projection/metrics.go
     - name: saga_heartbeat_failed_total
       type: counter
       help: Total heartbeat tick failures observed by the saga executor, labeled by reason (infra_error = transient err; stale_lease = ok=false / another coordinator took over). Excludes definition_id and step_name — heartbeat is an infra signal, not per-step.

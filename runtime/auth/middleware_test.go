@@ -868,7 +868,10 @@ func TestMatchPathTemplate(t *testing.T) {
 // bridge: after successful auth, the principal ctxkeys are populated so a
 // downstream outbox.NewEntry carries the principal across the async boundary.
 // actor_id == subject (no "act" impersonation claim on develop), session_id is
-// the "sid" claim, and tenant_id stays unset (auth.Principal has no tenant).
+// the "sid" claim, and tenant_id stays unset when the token carries no tenant_id
+// claim (the verifier here returns claims with no tenant — the single-tenant
+// path). The valid-tenant and malformed-tenant HTTP paths are covered by
+// TestAuthMiddleware_ValidTenant_InjectsCtxKey / _MalformedTenant_Returns401.
 func TestAuthMiddleware_InjectsPrincipalCtxKeys(t *testing.T) {
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-alice", SessionID: "sess-42", Roles: []string{"admin"}},
@@ -896,7 +899,7 @@ func TestAuthMiddleware_InjectsPrincipalCtxKeys(t *testing.T) {
 	assert.Equal(t, "usr-alice", gotActor, "actor_id equals subject when no act claim exists")
 	assert.True(t, sessionOK)
 	assert.Equal(t, "sess-42", gotSession)
-	assert.False(t, tenantOK, "tenant_id has no source on develop and must stay unset")
+	assert.False(t, tenantOK, "tenant_id stays unset when the token carries no tenant_id claim")
 	assert.Empty(t, gotTenant)
 }
 

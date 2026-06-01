@@ -78,6 +78,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 	// map writes) but only Store.TxRunner() gives cross-method atomicity. See
 	// ADR docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 	svc, err := NewService(clock.Real(), userRepo, inv, slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(persistence.WrapForCell(memStore.TxRunner())),
 	)
@@ -181,6 +182,7 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	// simpleTxRunner is race-safe since PR fix/238 (per-call lock) but does
 	// not serialize across methods. ADR 202605171846-adr-mem-tx-lock-ownership.
 	svc, err := NewService(clock.Real(), userRepo, inv, slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(persistence.WrapForCell(memStore.TxRunner())),
 	)

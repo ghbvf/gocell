@@ -356,6 +356,61 @@ substitution, no opt-out — caller chooses `String()` vs `Redacted()`
 at the call site).
 ref: cockroachdb/redact (`SafeValue` marker, future direction).
 
+#### Amendment 2026-05-31 (PR #1036 Batch 2) — slog sink-side redaction replaces call-site Soft archtests
+
+**Change**: slog output is now redacted fail-closed at the **sink level** by a
+`runtime/observability/logging.contextHandler` (a `slog.Handler` implementation).
+Each production assembly entry point seals the process-global slog default with
+`slog.SetDefault(slog.New(logging.NewHandler(...)))` before any log emission.
+The `contextHandler.Handle` method passes every attribute through
+`pkg/redaction.RedactSlogAttr` (key-aware mask + free-form text scrubber) and
+every message through `pkg/redaction.RedactString` before forwarding to the
+inner JSON/Text sink.
+
+**Retired Soft archtests** (superseded by sink-side enforcement):
+
+- `PANIC-REDACT-01` — `slog.Any("panic", X)` must wrap X with
+  `redaction.RedactAny(...)`. Retired because the sink redacts error /
+  `fmt.Stringer` `Any` values at the `slog.Handler` level via `RedactSlogAttr`'s
+  KindAny branch (GoCell panics are `panicregister.Approved(errcode.Assertion)`,
+  i.e. errors). Genuinely structured `Any` values pass through to preserve
+  structured logs (Option A; #1036 review F2 — earlier blanket fmt.Sprint
+  degraded array/map output).
+- `HTTPUTIL-5XX-LOG-REDACT-01` — `log5xx` must call `redaction.RedactSlogAttr`
+  on `ecErr.Details`. Retired because the sink redacts every attr unconditionally.
+
+The corresponding **call-site redaction calls are preserved** (not deleted) as
+defence-in-depth: if the process-global seal is missing (e.g. in test-only
+contexts where `slog.SetDefault` was not called), the call-site scrubbers still
+protect that code path.
+
+**New archtest**: `SLOG-HANDLER-SEALED-FUNNEL-01`
+(`tools/archtest/slog_handler_sealed_funnel_test.go`):
+
+| Assertion | Mechanism | AI-robust rating |
+|-----------|-----------|-----------------|
+| A1 (downstream) — `slog.NewJSONHandler`/`NewTextHandler` banned outside `runtime/observability/logging` | go/types typed callee resolution (IsCallToPkgFunc); alias bypass ineffective | **Hard** |
+| A2 (downstream) — `contextHandler.Handle` and `WithAttrs` must call `RedactSlogAttr`; `Handle` must call `RedactString` on message | AST form-lock on method bodies; dropping the redaction call fails immediately | **Hard** |
+| A3 (upstream) — production entry points (`runCorebundle`, `runIotdevice`, `runTodoorder`, `main` in ssobff) must each contain `slog.SetDefault(slog.New(logging.NewHandler(...)))` | caller-allowlist (archtest asserts presence in each function body) | **Medium** |
+
+A3 is Medium because Go provides no mechanism to enforce that `SetDefault` is
+called before any `slog.Default()` usage during early process startup.
+There is a **timing gap** (package-level init logs that run before `main`
+reaches the `SetDefault` call). The accepted risk:
+
+- `⚠️` Early startup logs (before `SetDefault`) are not sink-redacted.
+  **Compensation**: call-site defence-in-depth (retained `redaction.RedactAny`/
+  `RedactSlogAttr` calls at the specific critical paths) + `#1401` Hard-upgrade
+  path (codegen injection of `SetDefault` as the first generated line in each
+  assembly entry point).
+
+**Orthogonal rule preserved**: `REPO-LOG-KEY-ID-REDACT-01`
+(`tools/archtest/repoerr_test.go`) is **not retired**. That rule is a
+**key-name prohibition** — it forbids `key_id`/`keyID` from appearing in slog
+attr **key slots** in `cells/` code, because key IDs belong to metric label
+plane, not log plane. `IsSensitiveKey` does not contain `key_id`, so the sink
+redaction does not mask `key_id` values; the two rules address orthogonal concerns.
+
 ### 9. Governance rules: FMT-18 + FMT-19 (round 4)
 
 Two new strict-only governance rules land with this PR:

@@ -131,9 +131,30 @@ func (c Config) LogValue() slog.Value {
 	}
 	return slog.GroupValue(
 		slog.String("mode", string(c.Mode)),
-		slog.String("addr", c.Addr),
+		// SEC: standalone Addr may be a redis://user:pass@host URL form
+		// (buildStandaloneOptions parses it via goredis.ParseURL), so it must
+		// be redacted exactly like cluster addrs — #1036 review F1.
+		slog.String("addr", redactAddr(c.Addr)),
 		slog.Int("db", c.DB),
 	)
+}
+
+// redactAddr passes a single Redis address through url.URL.Redacted when it is
+// URL form (rediss://user:pass@host), so the password segment is masked before
+// reaching slog. Plain host:port entries are returned verbatim; parse failures
+// return "<unparseable>" rather than the raw string so a malformed URL never
+// bypasses redaction.
+//
+// ref: net/url URL.Redacted (https://pkg.go.dev/net/url#URL.Redacted)
+func redactAddr(a string) string {
+	if !strings.Contains(a, "://") {
+		return a
+	}
+	u, err := url.Parse(a)
+	if err != nil {
+		return "<unparseable>"
+	}
+	return u.Redacted()
 }
 
 // redactClusterAddrs returns a copy of addrs with any URL-form entries
@@ -144,16 +165,7 @@ func redactClusterAddrs(addrs []string) []string {
 	}
 	out := make([]string, len(addrs))
 	for i, a := range addrs {
-		if !strings.Contains(a, "://") {
-			out[i] = a
-			continue
-		}
-		u, err := url.Parse(a)
-		if err != nil {
-			out[i] = "<unparseable>"
-			continue
-		}
-		out[i] = u.Redacted()
+		out[i] = redactAddr(a)
 	}
 	return out
 }

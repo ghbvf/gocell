@@ -32,22 +32,26 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
 // runIotdevice is the hand-written runtime helper for the iotdevice assembly.
 // It is called by the generated main.go and owns environment loading +
 // bootstrap wiring.
 func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []string) error {
+	// Fail-closed sink-side redaction: seal the process-global slog default with
+	// the redacting handler FIRST — before any work that may log (e.g. module
+	// drift validation below) — so every slog.Default() call is scrubbed
+	// (SLOG-HANDLER-SEALED-FUNNEL-01; #1036 review F5). logger reuses the sealed
+	// default for pre-bootstrap / cell-level logging.
+	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
+	logger := slog.Default()
+
 	mods, err := runIotdeviceModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
 	}
 	_ = mods // cell construction is done directly below; mods only validates drift
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
 
 	internalAuthChain, err := newInternalAuthChainFromEnv()
 	if err != nil {
@@ -64,6 +68,32 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 
 	// In-memory event bus for demo mode.
 	eb := eventbus.New(clk)
+
+	// Event publish channel selection. By default the cell publishes
+	// device-registered events to the in-memory bus (no in-process subscriber —
+	// it is a demo sink). When GOCELL_IOTDEVICE_MQTT_BROKERS is set, swap the
+	// cell's direct publisher to MQTT so events flow to a real broker, observable
+	// with `mosquitto_sub`. This is a single-channel swap, not a parallel mirror:
+	// device-registered has no second sink to mirror to. The HTTP/WS main path is
+	// unchanged. See examples/iotdevice/docs/mqtt.md.
+	var directPub outbox.Publisher = eb
+	var mqttBootstrapOpts []bootstrap.Option
+	mqttPub, mqttConn, mqttOK, err := buildMQTTDirectPublisher(ctx, clk, logger)
+	if err != nil {
+		return fmt.Errorf("build mqtt publish channel: %w", err)
+	}
+	if mqttOK {
+		directPub = mqttPub
+		// Register BOTH the connection (managed resource: mqtt_ready probe +
+		// disconnect) AND the publisher (managed closer: drains in-flight
+		// publishes). Connection.Close only disconnects — it does NOT drain, so
+		// the publisher closer is mandatory, not redundant (PR #1364 review F1).
+		// mqttChannelWiringFor derives both; its godoc documents the LIFO
+		// drain-before-disconnect ordering.
+		mqttBootstrapOpts = append(mqttBootstrapOpts,
+			mqttChannelWiringFor(mqttPub, mqttConn).bootstrapOptions()...,
+		)
+	}
 
 	// Resolve persistence: durable PG wiring when GOCELL_IOTDEVICE_DSN is set,
 	// otherwise explicit in-memory wiring. The cell never falls back silently
@@ -87,7 +117,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	dc := devicecell.NewDeviceCell(
 		clk,
 		devicecell.WithDeviceRepository(deviceRepo),
-		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(eb)),
+		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(directPub)),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithLogger(logger),
 	)
@@ -127,6 +157,8 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	}
+	// MQTT channel options (health probe + managed closer) when enabled.
+	opts = append(opts, mqttBootstrapOpts...)
 	// Durable mode: register the PG pool as a managed closer so framework
 	// LIFO teardown closes it even when app.Run returns an error followed by
 	// os.Exit(1). Defer-based cleanup would be skipped on that path.

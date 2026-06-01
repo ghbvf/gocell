@@ -1,0 +1,47 @@
+# SSRF dial-time blocklist — single source of truth.
+#
+# ssrf_fixtures_test.go asserts this set is EXACTLY equal (as a set) to
+# ssrfBlockedCIDRStrings in ssrf.go. Adding/removing a CIDR in code without
+# mirroring it here (or vice-versa) fails the drift guard.
+#
+# IPv4-mapped IPv6 (::ffff:0:0/96) is deliberately ABSENT: the dial-time vet
+# normalizes every IP via net.IP.To4() before the Contains check, so a mapped
+# private address (::ffff:10.0.0.1) is dewrapped to 10.0.0.1 and caught by
+# 10.0.0.0/8, while a mapped public address (::ffff:8.8.8.8) is correctly
+# allowed. Listing ::ffff:0:0/96 would be a dead entry (unreachable after To4)
+# or, without normalization, would wrongly block public mapped addresses.
+#
+# Source superset: doyensec/safeurl ip.go privateNetworks (IETF reserved ranges).
+blocked:
+  ipv4:
+    - { cidr: "0.0.0.0/8",       reason: "unspecified / this-host" }
+    - { cidr: "10.0.0.0/8",      reason: "rfc1918-private" }
+    - { cidr: "100.64.0.0/10",   reason: "rfc6598-cgnat" }
+    - { cidr: "127.0.0.0/8",     reason: "loopback" }
+    - { cidr: "169.254.0.0/16",  reason: "link-local-incl-cloud-metadata-169.254.169.254" }
+    - { cidr: "172.16.0.0/12",   reason: "rfc1918-private" }
+    - { cidr: "192.0.0.0/24",    reason: "ietf-protocol-assignments" }
+    - { cidr: "192.0.2.0/24",    reason: "test-net-1-documentation" }
+    - { cidr: "192.88.99.0/24",  reason: "6to4-relay-anycast" }
+    - { cidr: "192.168.0.0/16",  reason: "rfc1918-private" }
+    - { cidr: "198.18.0.0/15",   reason: "benchmarking" }
+    - { cidr: "198.51.100.0/24", reason: "test-net-2-documentation" }
+    - { cidr: "203.0.113.0/24",  reason: "test-net-3-documentation" }
+    - { cidr: "224.0.0.0/4",     reason: "multicast" }
+    - { cidr: "240.0.0.0/4",     reason: "reserved" }
+    - { cidr: "255.255.255.255/32", reason: "limited-broadcast" }
+  ipv6:
+    - { cidr: "::/128",          reason: "unspecified" }
+    - { cidr: "::1/128",         reason: "loopback" }
+    - { cidr: "64:ff9b::/96",    reason: "rfc6052-nat64-well-known" }
+    - { cidr: "64:ff9b:1::/48",  reason: "rfc8215-nat64-local-use" }
+    - { cidr: "100::/64",        reason: "discard-only" }
+    - { cidr: "2001::/23",       reason: "ietf-protocol-assignments-incl-teredo" }
+    - { cidr: "2001:2::/48",     reason: "benchmarking" }
+    - { cidr: "2001:db8::/32",   reason: "documentation" }
+    - { cidr: "2001:10::/28",    reason: "deprecated-orchid" }
+    - { cidr: "2001:20::/28",    reason: "orchidv2" }
+    - { cidr: "2002::/16",       reason: "6to4" }
+    - { cidr: "fc00::/7",        reason: "rfc4193-ula" }
+    - { cidr: "fe80::/10",       reason: "link-local" }
+    - { cidr: "ff00::/8",        reason: "multicast" }

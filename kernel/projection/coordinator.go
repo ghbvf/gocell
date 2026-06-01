@@ -19,6 +19,26 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+// SubscribeRegistrar is the minimal cell.Registrar surface the Coordinator
+// needs: it registers the projection's wrapped event subscription. The
+// Coordinator holds this narrow interface rather than the full cell.Registrar so
+// that (a) the dependency is honest (the Coordinator only ever calls Subscribe)
+// and (b) a holder injected at wiring time — e.g. the bootstrap projection
+// drain's capture adapter — need not stub the other Registrar methods (no
+// nil-embed foot-gun). cell.Registrar satisfies this interface structurally.
+//
+// The signature mirrors cell.Registrar.Subscribe exactly so a *cell.RegistryRecorder
+// (or the drain's capture adapter) is assignable without conversion.
+type SubscribeRegistrar interface {
+	Subscribe(
+		spec contractspec.ContractSpec,
+		handler outbox.EntryHandler,
+		consumerGroup string,
+		cellID string,
+		opts ...cell.SubscriptionOption,
+	) error
+}
+
 // Coordinator wires an event subscription to an Apply function, managing
 // exactly-once delivery via a CheckpointStore. Each consumed event is processed
 // inside a TxRunner.RunInTx so that the Apply mutation and the checkpoint
@@ -44,7 +64,7 @@ type Coordinator struct {
 	clk          clock.Clock
 	cellID       string
 	projectionID string
-	reg          cell.Registrar
+	reg          SubscribeRegistrar
 	txRunner     persistence.TxRunner
 	store        CheckpointStore
 	cursor       Cursor
@@ -83,7 +103,7 @@ type Coordinator struct {
 // ref: open-source consensus — Watermill cqrs.EventProcessorConfig, Axon
 // TrackingEventProcessor.Builder; kernel kernel/outbox.ConsumerBaseConfig.
 type CoordinatorConfig struct {
-	Registrar    cell.Registrar
+	Registrar    SubscribeRegistrar
 	CellID       string
 	ProjectionID string
 	TxRunner     persistence.TxRunner

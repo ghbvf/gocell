@@ -755,104 +755,142 @@ func (secretLeakingLogValuer) LogValue() slog.Value {
 	return slog.StringValue("password=hunter2")
 }
 
-// TestRedactSlogAttr_PassthroughKinds locks the baseline behavior of
-// redactSlogValue for non-string slog.Value kinds: bool, int64, float64,
-// time.Time, slog.Any (struct), and slog.LogValuer all pass through unchanged.
+// stringerWithSecret implements fmt.Stringer with a secret-bearing String() to
+// exercise the Option A KindAny error/Stringer redaction branch.
+type stringerWithSecret struct{}
+
+func (stringerWithSecret) String() string { return "api_key=sekret" }
+
+// TestRedactSlogAttr_PassthroughKinds locks the behavior of redactSlogValue for
+// all slog.Value kinds.
 //
-// This is intentional fail-open design: the regex pipeline only matches
-// `key=value` text shapes, so numeric/temporal/structured values cannot
-// carry the patterns. Runtime data entering errcode.Error must go through
-// the sealed PublicDetail / InternalDetail newtypes (errcode.PublicAttr /
-// InternalAttr), which return slog.String (KindString) for string values
-// via AsSlogAttr — the first line of defense covering the common
-// "embedded key=value inside a string" leak shape.
+// Scalar kinds (bool, int64, float64, time.Time) pass through as the same kind —
+// the regex pipeline only matches `key=value` text shapes which scalars cannot carry.
 //
-// If a new direct-write path for slog.Any(callerSuppliedStruct) is added,
-// extend redactSlogValue with ValueResolve and add cases here.
+// KindAny (Option A, #1036 review F2): only error / fmt.Stringer values are
+// stringified via fmt.Sprint and passed through RedactString (the panic / error
+// path). Genuinely structured values (slices, maps, primitives, plain structs)
+// pass through unchanged so the inner handler serializes them structurally.
+//
+// KindLogValuer passes through unchanged (NOT resolved). See the RedactSlogAttr
+// godoc: the sole production LogValuer (readyz SlogDependencyEntry) self-redacts
+// at construction, and resolving would flatten its typed value and break the
+// ops-diagnostics capture chain. A caller-controlled LogValuer carrying a secret
+// is a documented known-gap (the secret leaks), distinct from the uncontrolled
+// any of KindAny.
 func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 	t.Parallel()
 
 	fixedTime := time.Unix(1700000000, 0)
 
 	cases := []struct {
-		name           string
-		attr           slog.Attr
-		wantValueEqual bool // true = value unchanged (passthrough); false = value changed (redacted)
+		name      string
+		attr      slog.Attr
+		wantKind  slog.Kind
+		wantMask  bool   // true = result must contain Mask
+		wantValue string // non-empty = exact expected string value
 	}{
 		{
-			name:           "bool passthrough",
-			attr:           slog.Bool("flag", true),
-			wantValueEqual: true,
+			name:     "bool passthrough",
+			attr:     slog.Bool("flag", true),
+			wantKind: slog.KindBool,
 		},
 		{
-			name:           "int64 passthrough",
-			attr:           slog.Int64("count", 42),
-			wantValueEqual: true,
+			name:     "int64 passthrough",
+			attr:     slog.Int64("count", 42),
+			wantKind: slog.KindInt64,
 		},
 		{
-			name:           "float64 passthrough",
-			attr:           slog.Float64("ratio", 3.14),
-			wantValueEqual: true,
+			name:     "float64 passthrough",
+			attr:     slog.Float64("ratio", 3.14),
+			wantKind: slog.KindFloat64,
 		},
 		{
-			name:           "time passthrough",
-			attr:           slog.Time("ts", fixedTime),
-			wantValueEqual: true,
+			name:     "time passthrough",
+			attr:     slog.Time("ts", fixedTime),
+			wantKind: slog.KindTime,
 		},
 		{
-			name:           "any struct passthrough",
-			attr:           slog.Any("obj", struct{ X int }{X: 1}),
-			wantValueEqual: true,
+			// Option A: a plain struct (no error / Stringer) passes through as
+			// KindAny so the inner handler serializes its fields structurally.
+			name:     "any plain struct passthrough — structure preserved",
+			attr:     slog.Any("obj", struct{ X int }{X: 1}),
+			wantKind: slog.KindAny,
 		},
 		{
-			name:           "logvaluer passthrough",
-			attr:           slog.Any("v", customLogValuer{}),
-			wantValueEqual: true,
+			// Option A: a slice passes through as KindAny (F2: no array→string
+			// degradation).
+			name:     "any slice passthrough — structure preserved",
+			attr:     slog.Any("ids", []string{"a", "b"}),
+			wantKind: slog.KindAny,
 		},
 		{
-			// Documents fail-open boundary cost: LogValuer resolving to a
-			// sensitive string IS NOT redacted (passthrough). Acceptable
-			// because sealed PublicDetail / InternalDetail upstream route
-			// string values through AsSlogAttr as KindString; LogValuer /
-			// custom Stringer carriers are out of scope for redaction.
-			name:           "logvaluer with secret leaks by design (fail-open boundary)",
-			attr:           slog.Any("config", secretLeakingLogValuer{}),
-			wantValueEqual: true,
+			// KindLogValuer passes through unchanged (kind stays KindLogValuer);
+			// the inner slog handler resolves it at serialization time.
+			name:     "logvaluer benign passthrough — kind unchanged",
+			attr:     slog.Any("v", customLogValuer{}),
+			wantKind: slog.KindLogValuer,
 		},
 		{
-			// Control case: string with sensitive key=value IS redacted.
-			name:           "string redacted (control)",
-			attr:           slog.String("msg", "password=secret"),
-			wantValueEqual: false,
+			// Documented known-gap: a caller-controlled LogValuer whose resolved
+			// string carries a secret passes through UN-redacted. Distinct from
+			// KindAny (uncontrolled recover() value), which IS stringify+redacted.
+			// The sole production LogValuer (SlogDependencyEntry) self-redacts.
+			name:     "logvaluer with secret passthrough — known-gap, not masked",
+			attr:     slog.Any("config", secretLeakingLogValuer{}),
+			wantKind: slog.KindLogValuer,
+			wantMask: false,
+		},
+		{
+			// Option A: an error value (the panic/error path) is stringified via
+			// Error() and redacted. KindAny error → KindString masked.
+			name:     "any error value — stringified and redacted",
+			attr:     slog.Any("err", errors.New("connect failed: token=xyz")),
+			wantKind: slog.KindString,
+			wantMask: true,
+		},
+		{
+			// Option A: a fmt.Stringer value (string-semantic) is stringified via
+			// String() and redacted.
+			name:     "any stringer value — stringified and redacted",
+			attr:     slog.Any("s", stringerWithSecret{}),
+			wantKind: slog.KindString,
+			wantMask: true,
+		},
+		{
+			// Control: string with sensitive key IS redacted (unchanged behavior).
+			name:     "string redacted (control)",
+			attr:     slog.String("msg", "password=secret"),
+			wantKind: slog.KindString,
+			wantMask: true,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			original := tc.attr.Value.String()
 			got := redaction.RedactSlogAttr(tc.attr)
 
 			if got.Key != tc.attr.Key {
 				t.Errorf("RedactSlogAttr key changed: got %q, want %q", got.Key, tc.attr.Key)
 			}
-
-			resultEqual := got.Value.String() == original
-			if resultEqual != tc.wantValueEqual {
-				if tc.wantValueEqual {
-					t.Errorf(
-						"RedactSlogAttr(%v): expected passthrough (value unchanged), "+
-							"but got %q (original %q). KindLogValuer/KindAny should not be "+
-							"recursively scanned — fail-open design per Known limitations.",
-						tc.attr, got.Value.String(), original,
-					)
-				} else {
-					t.Errorf(
-						"RedactSlogAttr(%v): expected redaction (value changed), "+
-							"but value unchanged %q. String control case must trigger regex.",
-						tc.attr, got.Value.String(),
-					)
+			if got.Value.Kind() != tc.wantKind {
+				t.Errorf("RedactSlogAttr(%v): got kind %v, want %v",
+					tc.attr, got.Value.Kind(), tc.wantKind)
+			}
+			if tc.wantValue != "" {
+				gotStr := got.Value.String()
+				if gotStr != tc.wantValue {
+					t.Errorf("RedactSlogAttr(%v): got %q, want %q", tc.attr, gotStr, tc.wantValue)
 				}
+			}
+			gotStr := got.Value.String()
+			if tc.wantMask && !strings.Contains(gotStr, redaction.Mask) {
+				t.Errorf("RedactSlogAttr(%v): expected mask %q in output %q",
+					tc.attr, redaction.Mask, gotStr)
+			}
+			if !tc.wantMask && strings.Contains(gotStr, redaction.Mask) {
+				t.Errorf("RedactSlogAttr(%v): unexpected mask in output %q", tc.attr, gotStr)
 			}
 		})
 	}

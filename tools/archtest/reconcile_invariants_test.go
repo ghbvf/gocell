@@ -2,12 +2,14 @@ package archtest
 
 // reconcile_invariants_test.go locks kernel/reconcile's public surface: the
 // three-piece minimal core (Reconciler interface method set + Request / Result
-// field sets) via reflect golden freezes, plus the transition-window guard that
-// no code outside the package bare-constructs the scheduling Loop.
+// field sets) and the Trigger interface method set via reflect golden freezes,
+// plus the transition-window guard that no code outside the package
+// bare-constructs the scheduling Loop.
 //
 //   - INVARIANT: RECONCILE-INTERFACE-FROZEN-01
 //   - INVARIANT: RECONCILE-REQUEST-FIELDS-FROZEN-01
 //   - INVARIANT: RECONCILE-RESULT-FIELDS-FROZEN-01
+//   - INVARIANT: RECONCILE-TRIGGER-INTERFACE-FROZEN-01
 //   - INVARIANT: RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01
 //
 // The design ADR (docs/architecture/202605291600-661-adr-kernel-reconcile-design.md)
@@ -283,6 +285,113 @@ func TestReconcileStructShape_ReverseBlindSpot(t *testing.T) {
 	for name, dt := range badRequest {
 		if v := checkReconcileStructShape(dt, reconcileRequestWantFields); len(v) == 0 {
 			t.Errorf("RECONCILE-REQUEST self-test: detector passed malformed Request %q (blind spot)", name)
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// RECONCILE-TRIGGER-INTERFACE-FROZEN-01 — Trigger method set
+// -----------------------------------------------------------------------------
+
+// checkTriggerInterface returns violation messages for it against the frozen
+// Trigger shape (exactly one method: Start(context.Context, chan<- Request)
+// error). An empty result means it conforms. The send-only channel direction is
+// part of the freeze: a bidirectional `chan` or receive-only `<-chan` sink is a
+// different contract (it would let a Trigger drain the Loop's queue rather than
+// feed it), and reflect .String() captures the direction, so the exact-string
+// check rejects both. Extracted so the reverse self-check can prove the detector
+// is non-vacuous.
+func checkTriggerInterface(it reflect.Type) []string {
+	if it == nil || it.Kind() != reflect.Interface {
+		return []string{fmt.Sprintf("Kind = %v, want interface", it)}
+	}
+	var v []string
+	if it.NumMethod() != 1 {
+		v = append(v, fmt.Sprintf("NumMethod = %d, want exactly 1 (Start)", it.NumMethod()))
+	}
+	m, ok := it.MethodByName("Start")
+	if !ok {
+		return append(v, "missing method Start")
+	}
+	mt := m.Type // interface method Type has NO receiver
+	if mt.IsVariadic() {
+		v = append(v, "Start must not be variadic")
+	}
+	wantIn := []string{"context.Context", "chan<- reconcile.Request"}
+	if mt.NumIn() != len(wantIn) {
+		v = append(v, fmt.Sprintf("Start NumIn = %d, want %d", mt.NumIn(), len(wantIn)))
+	} else {
+		for i, w := range wantIn {
+			if got := mt.In(i).String(); got != w {
+				v = append(v, fmt.Sprintf("Start arg %d = %q, want %q", i, got, w))
+			}
+		}
+	}
+	wantOut := []string{"error"}
+	if mt.NumOut() != len(wantOut) {
+		v = append(v, fmt.Sprintf("Start NumOut = %d, want %d", mt.NumOut(), len(wantOut)))
+	} else {
+		for i, w := range wantOut {
+			if got := mt.Out(i).String(); got != w {
+				v = append(v, fmt.Sprintf("Start result %d = %q, want %q", i, got, w))
+			}
+		}
+	}
+	return v
+}
+
+func TestReconcileTriggerInterfaceFrozen01(t *testing.T) {
+	t.Parallel()
+	it := reflect.TypeOf((*reconcile.Trigger)(nil)).Elem()
+	for _, msg := range checkTriggerInterface(it) {
+		t.Errorf("RECONCILE-TRIGGER-INTERFACE-FROZEN-01: %s. The Trigger method set is frozen to "+
+			"Start(ctx, chan<- Request) error (send-only sink); if this change is intentional, update the "+
+			"design ADR §3.2 and this golden in the same PR.", msg)
+	}
+}
+
+func TestReconcileTriggerInterfaceFrozen01_ReverseBlindSpot(t *testing.T) {
+	t.Parallel()
+
+	type good interface {
+		Start(context.Context, chan<- reconcile.Request) error
+	}
+	if v := checkTriggerInterface(reflect.TypeOf((*good)(nil)).Elem()); len(v) != 0 {
+		t.Errorf("RECONCILE-TRIGGER-INTERFACE-FROZEN-01 self-test: detector flagged a conforming interface "+
+			"(vacuous-pass risk): %v", v)
+	}
+
+	type extraMethod interface {
+		Start(context.Context, chan<- reconcile.Request) error
+		Stop() error
+	}
+	type wrongArity interface {
+		Start(context.Context) error
+	}
+	type bidirectionalChan interface {
+		Start(context.Context, chan reconcile.Request) error
+	}
+	type recvOnlyChan interface {
+		Start(context.Context, <-chan reconcile.Request) error
+	}
+	type wrongReturn interface {
+		Start(context.Context, chan<- reconcile.Request)
+	}
+	type wrongReturnType interface {
+		Start(context.Context, chan<- reconcile.Request) int
+	}
+	bad := map[string]reflect.Type{
+		"extra-method":       reflect.TypeOf((*extraMethod)(nil)).Elem(),
+		"wrong-arity":        reflect.TypeOf((*wrongArity)(nil)).Elem(),
+		"bidirectional-chan": reflect.TypeOf((*bidirectionalChan)(nil)).Elem(),
+		"recv-only-chan":     reflect.TypeOf((*recvOnlyChan)(nil)).Elem(),
+		"wrong-return":       reflect.TypeOf((*wrongReturn)(nil)).Elem(),
+		"wrong-return-type":  reflect.TypeOf((*wrongReturnType)(nil)).Elem(),
+	}
+	for name, it := range bad {
+		if v := checkTriggerInterface(it); len(v) == 0 {
+			t.Errorf("RECONCILE-TRIGGER-INTERFACE-FROZEN-01 self-test: detector passed malformed interface %q "+
+				"(blind spot): expected at least one violation", name)
 		}
 	}
 }
