@@ -111,9 +111,10 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 		c.logLeaderSkip(ctx, ci, key, err, reason)
 		// Best-effort metric: backend_error is the lock-acquire failure rate;
 		// sustained contended with no drives means an instance is stuck skipping
-		// (#1109). definition_id is the bounded label; instance_id stays in logs.
+		// (#1109). definition_id is bounded to the registered set (or
+		// "_unregistered" for IDs not in the registry); instance_id stays in logs.
 		c.safeObserve(ctx, "ObserveLeaderSkip", func() {
-			c.observer.ObserveLeaderSkip(ctx, string(ci.Instance.DefinitionID), reason)
+			c.observer.ObserveLeaderSkip(ctx, c.labelDefinitionID(ci.Instance.DefinitionID), reason)
 		})
 		return nil, nil, false
 	}

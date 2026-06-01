@@ -32,18 +32,39 @@
 // PR-03; it becomes reachable via `/readyz` only after PR-09 wires it through
 // cellgen's `RegisterReadiness`.
 //
-// # Observer (PR-#1181)
+// # Observer (PR-#1181 / #1109)
 //
-// The Executor accepts an executor.Observer (set via executor.WithObserver) for
-// best-effort observability hooks. Three callbacks:
+// The Coordinator and its internal Executor share a single executor.Observer
+// (set via WithObserver; coordinator.go options.go). The interface carries
+// six callbacks, split into two groups:
+//
+// Executor-emitted (step-level):
 //   - ObserveOutcome: called once per Execute/Compensate call at the terminal Result.
 //   - ObserveRetry: called between step attempts (attempt N > 1).
 //   - ObserveHeartbeatFailure: called on infra-error or stale-lease ticks.
+//
+// Coordinator-emitted (tick/drive/leader-skip level):
+//   - ObserveTick: called once per ClaimPending poll (empty / claimed / error).
+//   - ObserveDrive: called once per instance driven (ok / error).
+//   - ObserveLeaderSkip: called when acquireLead fails (contended / ctx_canceled / backend_error).
 //
 // executor.NopObserver is the zero-cost default. executor.WithObserver(nil) is
 // silently ignored (builder-noop option); the Executor keeps NopObserver.
 // The Coordinator passes the WithObserver option through to the internal Executor
 // via NewCoordinator's options — see options.go for WithObserver.
+//
+// Both the Executor and the Coordinator guard observer calls with the same two
+// layers of fail-closed protection:
+//  1. Panic recovery: a panicking observer logs Warn with a redacted payload
+//     and execution continues (executor.recoverObserverPanic /
+//     Coordinator.recoverObserverPanic).
+//  2. Bounded goroutine wait: the observer call runs on a fresh goroutine; the
+//     caller waits at most observerCallDeadline (default
+//     executor.DefaultObserverCallDeadline = 5s) before logging Warn and
+//     returning. For the Coordinator this prevents a hung observer from leaking
+//     the per-instance distlock (release() and inflightLocks.Delete run after
+//     ObserveDrive in tickOnce) and from blocking the shutdown drain
+//     (executor.callObserverBounded / Coordinator.safeObserve).
 //
 // executor.HeartbeatFailureReason is the typed enum for ObserveHeartbeatFailure
 // reason values: HeartbeatFailureInfraError (transient backend error) and

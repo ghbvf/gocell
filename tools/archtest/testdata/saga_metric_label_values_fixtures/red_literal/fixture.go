@@ -1,10 +1,11 @@
 //go:build archtest_fixture
 
 // Package sagaenumred is a RED fixture for the SAGA-METRIC-LABEL-VALUES-FROZEN-01
-// callsite guard: an inline string literal and a LeaderSkipReason("x") conversion
+// callsite guard: inline string literals and a LeaderSkipReason("x") conversion
 // both reach an enum-typed parameter and must each be flagged — the residual hole
 // the sealed `type X string` enum cannot close (an untyped string constant is
-// assignable to a defined string type). Expect 2 diagnostics.
+// assignable to a defined string type). Expect 5 diagnostics:
+// 4 inline literals (one per enum) + 1 T("x") conversion.
 package sagaenumred
 
 import (

@@ -853,26 +853,32 @@ the distlock nor makes progress, e.g. a wedged peer holding a stale distlock.
 
 ```yaml
 # Fires when leader-elect contended skips are sustained while successful drives
-# are absent for the same cell — the "stuck skipping, not advancing" signal #1109
-# was created to surface without log scraping.
+# are absent for the same (cell, definition_id) pair — the "stuck skipping, not
+# advancing" signal #1109 was created to surface without log scraping.
 #
-# `unless` (set difference) — NOT `and ... == 0`: the worst case this alert
-# targets is a coordinator that NEVER drives, in which case the
-# gocell_saga_drive_total{result="ok"} series does not exist at all. With
+# Grouped by (cell, definition_id): if cell X has definition A stuck-skipping
+# (contended) but definition B advancing (ok-drives), collapsing to `by (cell)`
+# would mask A's stuck-skip via the `unless` set-difference. Per-definition
+# grouping surfaces the correct signal without cardinality explosion (definition_id
+# is bounded to the registered set in the producer).
+#
+# `unless on(cell, definition_id)` (set difference) — NOT `and ... == 0`: the
+# worst case this alert targets is a coordinator that NEVER drives, in which case
+# the gocell_saga_drive_total{result="ok"} series does not exist at all. With
 # `and ... == 0` the right side is an empty vector and the alert silently never
-# fires. `unless <right> > 0` keeps every contended-heavy cell that has no
-# matching cell with a positive ok-drive rate — including absent series.
+# fires. `unless <right> > 0` keeps every contended-heavy (cell, definition_id)
+# that has no matching pair with a positive ok-drive rate — including absent series.
 - alert: GoCellSagaInstanceStuckSkipping
   expr: |
-    sum(rate(gocell_saga_leader_elect_skip_total{reason="contended"}[5m])) by (cell) > 0.1
-    unless
-    sum(rate(gocell_saga_drive_total{result="ok"}[5m])) by (cell) > 0
+    sum(rate(gocell_saga_leader_elect_skip_total{reason="contended"}[5m])) by (cell, definition_id) > 0.1
+    unless on(cell, definition_id)
+    sum(rate(gocell_saga_drive_total{result="ok"}[5m])) by (cell, definition_id) > 0
   for: 10m
   labels:
     severity: warning
   annotations:
     summary: "Saga instances skipping (contended) but not advancing"
-    description: "Cell {{ $labels.cell }} has sustained leader-elect contended skips with zero successful drives over 10min. A peer may hold a stale distlock. Runbook: docs/ops/saga-runbook.md"
+    description: "Cell {{ $labels.cell }} definition {{ $labels.definition_id }} has sustained leader-elect contended skips with zero successful drives over 10min. A peer may hold a stale distlock. Runbook: docs/ops/saga-runbook.md"
 ```
 
 ### GoCellSagaLockAcquireFailures

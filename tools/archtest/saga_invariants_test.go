@@ -4758,25 +4758,56 @@ func isSagaEnumConversion(info *types.Info, call *ast.CallExpr) bool {
 	return sagaEnumTypeName(tn.Type()) != ""
 }
 
-// isSagaDeclaredConstRef reports whether arg is a bare reference to a declared
-// const (a same-package Ident or a qualified pkg.Const SelectorExpr), as opposed
-// to an inline literal or a T("x") conversion.
+// isSagaDeclaredConstRef reports whether arg is a bare reference to a const
+// declared in the runtime/saga/executor package AND typed as one of the frozen
+// executor label enums.  A const of an enum type declared in any other package
+// (e.g. `const myReason executor.LeaderSkipReason = "rogue"`) is NOT a valid
+// frozen reference and must be flagged (F1 fix).
 func isSagaDeclaredConstRef(info *types.Info, arg ast.Expr) bool {
+	var obj types.Object
 	switch e := arg.(type) {
 	case *ast.Ident:
-		_, ok := info.ObjectOf(e).(*types.Const)
-		return ok
+		obj = info.ObjectOf(e)
 	case *ast.SelectorExpr:
-		_, ok := info.ObjectOf(e.Sel).(*types.Const)
-		return ok
+		obj = info.ObjectOf(e.Sel)
 	default:
 		return false
 	}
+	c, ok := obj.(*types.Const)
+	if !ok {
+		return false
+	}
+	// The const must be declared in the executor package (not laundered in from
+	// another package) AND must be of one of the frozen enum types.
+	if c.Pkg() == nil || c.Pkg().Path() != sagaExecutorPkg {
+		return false
+	}
+	return sagaEnumTypeName(c.Type()) != ""
+}
+
+// sagaEnumConstViolation reports whether expr is an inline enum-typed constant
+// that is NOT a valid frozen executor declared-const reference.  Returns the
+// enum type name if it is a violation, "" otherwise.  Used by both the callsite
+// guard and the assignment guard to share detection logic.
+func sagaEnumConstViolation(info *types.Info, expr ast.Expr) string {
+	tv, ok := info.Types[expr]
+	if !ok || tv.Value == nil {
+		return "" // non-constant (var, func call) — allowed
+	}
+	typeName := sagaEnumTypeName(tv.Type)
+	if typeName == "" {
+		return "" // not a frozen enum type
+	}
+	if isSagaDeclaredConstRef(info, expr) {
+		return "" // valid frozen executor const reference
+	}
+	return typeName
 }
 
 // scanSagaEnumLabelCallsites flags any CallExpr argument whose go/types type is a
-// frozen executor label-enum AND is a compile-time constant that is not a bare
-// declared-const reference (an inline string literal or a T("x") conversion).
+// frozen executor label-enum AND is a compile-time constant that is not a valid
+// frozen executor declared-const reference (an inline string literal, a T("x")
+// conversion, or a const declared outside runtime/saga/executor).
 func scanSagaEnumLabelCallsites(p *Pass) []Diagnostic {
 	info := p.TypesInfo
 	if info == nil {
@@ -4793,16 +4824,9 @@ func scanSagaEnumLabelCallsites(p *Pass) []Diagnostic {
 				return // operand handled by the parent call that receives the conversion
 			}
 			for _, arg := range call.Args {
-				tv, ok := info.Types[arg]
-				if !ok || tv.Value == nil {
-					continue // non-constant — allowed (classify() output, vars)
-				}
-				typeName := sagaEnumTypeName(tv.Type)
+				typeName := sagaEnumConstViolation(info, arg)
 				if typeName == "" {
-					continue // not an enum-typed arg
-				}
-				if isSagaDeclaredConstRef(info, arg) {
-					continue // a declared const (frozen by A1) — allowed
+					continue // allowed: non-constant, not an enum, or valid frozen executor const
 				}
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
@@ -4818,14 +4842,120 @@ func scanSagaEnumLabelCallsites(p *Pass) []Diagnostic {
 	return diags
 }
 
+// scanSagaEnumLabelAssignments flags any variable declaration or assignment
+// whose LHS has a frozen executor label-enum type and whose RHS is an inline
+// constant that is NOT a valid frozen executor declared-const reference.  This
+// catches the F2 variable-relay bypass: `var x LeaderSkipReason = "typo"` has
+// tv.Value==nil at the callsite (it is a var), so the callsite guard cannot see
+// the violation; we flag it at the assignment site instead.
+func scanSagaEnumLabelAssignments(p *Pass) []Diagnostic {
+	info := p.TypesInfo
+	if info == nil {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		rel := p.Rel(file)
+		// Walk var declarations only. const GenDecls are EXCLUDED: the executor
+		// package's own enum const block (`const TickClaimed TickResult = "claimed"`
+		// …) IS the frozen-set source of truth — those declarations are enumerated
+		// by collectSagaEnumConsts and value-frozen by A1, so flagging them here
+		// would be a false positive on the canonical definitions. Only `var`
+		// laundering (`var x EnumType = "typo"`) is a bypass of the callsite guard.
+		EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
+			if gd.Tok != token.VAR {
+				return
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, val := range vs.Values {
+					// Determine the type of the LHS.  For `var x EnumType = expr`,
+					// the type is recorded on the Ident in vs.Names[i].
+					if i >= len(vs.Names) {
+						continue
+					}
+					lhsTV, ok := info.Types[vs.Names[i]]
+					if !ok {
+						// Fallback: check the spec-level type expression if present.
+						if vs.Type == nil {
+							continue
+						}
+						lhsTV, ok = info.Types[vs.Type]
+						if !ok {
+							continue
+						}
+					}
+					if sagaEnumTypeName(lhsTV.Type) == "" {
+						continue // LHS is not a frozen enum type
+					}
+					typeName := sagaEnumConstViolation(info, val)
+					if typeName == "" {
+						continue // RHS is non-constant or a valid frozen executor const
+					}
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(val.Pos()).Line,
+						Message: "variable of saga label enum " + typeName +
+							" initialized from an inline constant — use a declared executor." +
+							typeName + " const or a classify() result to avoid laundering " +
+							"an arbitrary value into the frozen set (SAGA-METRIC-LABEL-VALUES-FROZEN-01 assignment guard)",
+					})
+				}
+			}
+		})
+		// Walk AssignStmt nodes (x = expr or x := expr).
+		EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+			for i, rhs := range as.Rhs {
+				if i >= len(as.Lhs) {
+					continue
+				}
+				lhsTV, ok := info.Types[as.Lhs[i]]
+				if !ok {
+					continue
+				}
+				if sagaEnumTypeName(lhsTV.Type) == "" {
+					continue // LHS is not a frozen enum type
+				}
+				typeName := sagaEnumConstViolation(info, rhs)
+				if typeName == "" {
+					continue
+				}
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(rhs.Pos()).Line,
+					Message: "variable of saga label enum " + typeName +
+						" assigned from an inline constant — use a declared executor." +
+						typeName + " const or a classify() result to avoid laundering " +
+						"an arbitrary value into the frozen set (SAGA-METRIC-LABEL-VALUES-FROZEN-01 assignment guard)",
+				})
+			}
+		})
+	}
+	return diags
+}
+
+// scanSagaEnumLabelAll runs both the callsite guard and the assignment guard on
+// a single Pass and merges the diagnostics.  Used by the production baseline and
+// by combined fixture tests.
+func scanSagaEnumLabelAll(p *Pass) []Diagnostic {
+	return append(scanSagaEnumLabelCallsites(p), scanSagaEnumLabelAssignments(p)...)
+}
+
 // TestSagaMetricLabelValuesFrozen01_CallsiteGuard is the production GREEN
-// baseline: every saga label enum value reaching a callsite is a declared const
-// or a non-constant (classifyLeaderSkip output / direct executor.Tick* const).
+// baseline: every saga label enum value reaching a callsite or assigned to a
+// variable is a frozen executor declared const or a non-constant expression
+// (classifyLeaderSkip output / direct executor.Tick* const).
 func TestSagaMetricLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
 	t.Parallel()
 	var allDiags []Diagnostic
 	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		allDiags = append(allDiags, scanSagaEnumLabelCallsites(p)...)
+		allDiags = append(allDiags, scanSagaEnumLabelAll(p)...)
 		return nil
 	})
 	Report(t, "SAGA-METRIC-LABEL-VALUES-FROZEN-01", allDiags)
@@ -4849,22 +4979,36 @@ func TestSagaMetricLabelValuesFrozen01_NegativeControl(t *testing.T) {
 }
 
 // TestSagaMetricLabelValuesFrozen01_CallsiteGuard_Fixtures proves the callsite
-// guard flags an inline literal/conversion (red) and not a declared const (green).
+// guard flags inline literals/conversions (red) and not valid declared consts
+// (green).  The table also covers F1 (foreign-package const) and F2 (var relay)
+// reverse self-checks using the combined scanner (scanSagaEnumLabelAll).
 func TestSagaMetricLabelValuesFrozen01_CallsiteGuard_Fixtures(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		dir  string
-		want int
-	}{
-		{"red_literal", 5}, // 4 inline literals (one per enum) + 1 conversion
-		{"green", 0},
+	type fixtureCase struct {
+		dir     string
+		scanner func(*Pass) []Diagnostic
+		want    int
+	}
+	cases := []fixtureCase{
+		// Original callsite-only cases.
+		{"red_literal", scanSagaEnumLabelCallsites, 5}, // 4 inline literals (one per enum) + 1 T("x") conversion
+		{"green", scanSagaEnumLabelAll, 0},             // declared executor const + non-constant var — no diagnostics
+
+		// F1 reverse self-check: a const declared outside runtime/saga/executor
+		// but typed as a frozen enum must be flagged by the fixed
+		// isSagaDeclaredConstRef.
+		{"red_foreign_const", scanSagaEnumLabelCallsites, 1}, // rogueSkip is a foreign-pkg const
+
+		// F2 reverse self-check: a var initialized from a string literal of enum
+		// type must be flagged at the assignment site by scanSagaEnumLabelAssignments.
+		{"red_var_relay", scanSagaEnumLabelAssignments, 1}, // `var x LeaderSkipReason = "typo"`
 	}
 	for _, c := range cases {
 		c := c
 		t.Run(c.dir, func(t *testing.T) {
 			t.Parallel()
 			pattern := "./tools/archtest/testdata/saga_metric_label_values_fixtures/" + c.dir
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanSagaEnumLabelCallsites)
+			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, c.scanner)
 			if len(diags) != c.want {
 				t.Fatalf("callsite-guard fixture %s: want %d diagnostic(s), got %d: %v",
 					c.dir, c.want, len(diags), diags)

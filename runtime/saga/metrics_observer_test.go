@@ -162,11 +162,22 @@ func TestAcquireLead_Skip_EmitsLeaderSkipReason(t *testing.T) {
 		{"ctx_canceled", context.Canceled, executor.LeaderSkipCtxCanceled},
 		{"backend_error", errors.New("redis down"), executor.LeaderSkipBackendError},
 	}
+	// def-skip is registered so labelDefinitionID passes the real ID through
+	// (the unregistered → "_unregistered" sentinel path is covered separately by
+	// TestAcquireLead_Skip_UnregisteredDefinition_Sentinel).
+	skipDef := &ksaga.Definition{
+		ID:    "def-skip",
+		Steps: []ksaga.Step{{Name: "s1", Run: func(context.Context, *ksaga.Instance, []byte) ([]byte, error) { return nil, nil }}},
+	}
+	reg, err := ksaga.NewInMemoryRegistry(skipDef)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			clk := newFakeClock()
 			obs := &recordingObserver{}
-			c, err := NewCoordinator(newMemJournal(clk), newSafeFakeTxRunner(), newSafeFakeEmitter(), newRegistry(), clk,
+			c, err := NewCoordinator(newMemJournal(clk), newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
 				WithConfig(leaderElectCfg()), WithObserver(obs), WithLeaderElect(errLocker{err: tc.err}))
 			if err != nil {
 				t.Fatalf("NewCoordinator: %v", err)
@@ -190,6 +201,35 @@ func TestAcquireLead_Skip_EmitsLeaderSkipReason(t *testing.T) {
 				t.Errorf("definitionID = %q, want def-skip", skips[0].definitionID)
 			}
 		})
+	}
+}
+
+// TestAcquireLead_Skip_UnregisteredDefinition_Sentinel covers F3: a claimed
+// instance whose DefinitionID is not in the registry collapses to the
+// "_unregistered" sentinel in the metric label (bounded cardinality), rather
+// than leaking an unbounded attacker-influenced DefinitionID.
+func TestAcquireLead_Skip_UnregisteredDefinition_Sentinel(t *testing.T) {
+	clk := newFakeClock()
+	obs := &recordingObserver{}
+	c, err := NewCoordinator(newMemJournal(clk), newSafeFakeTxRunner(), newSafeFakeEmitter(), newRegistry(), clk,
+		WithConfig(leaderElectCfg()), WithObserver(obs),
+		WithLeaderElect(errLocker{err: errcode.New(errcode.KindConflict, errcode.ErrDistlockTimeout, "held")}))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	ci := journal.ClaimedInstance{
+		Instance: ksaga.NewInstance(mustNewUUID(t), "totally-unregistered-def", clk.Now()),
+		LeaseID:  "lease-1",
+	}
+	if _, _, lead := c.acquireLead(context.Background(), ci); lead {
+		t.Fatal("acquireLead returned lead=true on Acquire error")
+	}
+	skips := obs.snapshotSkips()
+	if len(skips) != 1 {
+		t.Fatalf("ObserveLeaderSkip calls = %d, want 1", len(skips))
+	}
+	if skips[0].definitionID != unregisteredDefinitionLabel {
+		t.Errorf("definitionID = %q, want %q (sentinel for unregistered def)", skips[0].definitionID, unregisteredDefinitionLabel)
 	}
 }
 
@@ -325,7 +365,7 @@ func TestTickOnce_Claimed_EmitsDriveError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// safeObserve isolates a panicking observer (no deadline goroutine)
+// safeObserve isolates a panicking observer and bounds a blocking one
 // ---------------------------------------------------------------------------
 
 func TestSafeObserve_PanicIsolation(t *testing.T) {
@@ -349,5 +389,58 @@ func TestSafeObserve_PanicIsolation(t *testing.T) {
 	}
 	if _, ok := entry["panic"]; !ok {
 		t.Errorf("expected a redacted 'panic' field in the recover log; got %v", entry)
+	}
+}
+
+// TestSafeObserve_BlockingObserver_DoesNotStall covers F4 (#1109): a blocking
+// out-of-tree observer must not stall the coordinator tick/drive loop. safeObserve
+// runs the call on a bounded goroutine; once the clock passes
+// observerCallDeadline the caller logs Warn and returns, freeing the per-instance
+// distlock (release() / inflightLocks.Delete run AFTER ObserveDrive in tickOnce).
+// Mirrors executor TestRunWithHeartbeat_BlockingObserver_DoesNotStall.
+func TestSafeObserve_BlockingObserver_DoesNotStall(t *testing.T) {
+	clk := newFakeClock()
+	buf := sloghelper.NewSyncBuffer()
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(newMemJournal(clk), newSafeFakeTxRunner(), newSafeFakeEmitter(), newRegistry(), clk,
+		WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release) // unblock the observer goroutine on exit (no leak across tests)
+
+	done := make(chan struct{})
+	go func() {
+		c.safeObserve(context.Background(), "ObserveDrive", func() {
+			close(entered)
+			<-release // block well past the deadline
+		})
+		close(done)
+	}()
+
+	// The observer call has entered. The bounded timer is created synchronously
+	// right after the goroutine spawn (no yield between `go` and NewTimerAt), so
+	// it is already registered at frozenNow+deadline before this point.
+	<-entered
+
+	// Advance past the bounded deadline; the timer fires and safeObserve returns
+	// without waiting for the still-blocked observer.
+	clk.Advance(c.observerCallDeadline + time.Second)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("safeObserve did not return despite a blocked observer past the deadline")
+	}
+
+	entry := sloghelper.FindLogEntry(buf.String(), "observer call exceeded deadline")
+	if entry == nil {
+		t.Fatalf("expected an exceeded-deadline WARN log; logs=%s", buf.String())
+	}
+	if entry["method"] != "ObserveDrive" {
+		t.Errorf("deadline log method = %v, want ObserveDrive", entry["method"])
 	}
 }

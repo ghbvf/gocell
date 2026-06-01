@@ -331,13 +331,13 @@ func TestSagaCollector_ObserveHeartbeatFailure_BothReasons(t *testing.T) {
 	}
 }
 
-// TestSagaCollector_NopObserver_DoesNotPanic verifies that the NopObserver
-// path (used when WithObserver(nil) is passed to the Executor) does not panic.
-// A nil *SagaCollector must never reach ObserveOutcome/ObserveRetry/
-// ObserveHeartbeatFailure — callers must use executor.NopObserver instead
-// (see NewSagaCollector caller contract).
-func TestSagaCollector_NopObserver_DoesNotPanic(t *testing.T) {
-	// NopObserver is the zero-cost "no metrics" path; it must never panic.
+// TestSagaCollector_AllMethods_DoNotPanic verifies that every observe method on
+// a properly constructed (non-nil) *SagaCollector — the six Observer callbacks
+// across the Executor-emitted and Coordinator-emitted groups — executes without
+// panicking. The nil-collector / NopObserver contract (callers must pass
+// executor.NopObserver via WithObserver(nil), never a nil *SagaCollector) is
+// documented on NewSagaCollector; it is not exercised here.
+func TestSagaCollector_AllMethods_DoNotPanic(t *testing.T) {
 	p := newSagaSpyProvider()
 	c, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
