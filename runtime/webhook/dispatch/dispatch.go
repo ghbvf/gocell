@@ -13,6 +13,27 @@
 // BuildRouteGroups) but the dispatch side consumes from the broker rather than
 // mounting HTTP routes, so it drains through the event router (phase6) rather
 // than the HTTP route-group drain (phase5).
+//
+// # Troubleshooting
+//
+// "webhook dispatchers declared but no source store configured":
+// Bootstrap failed because at least one cell registered a webhook-dispatch
+// contract but WithWebhookSourceStore was not passed to bootstrap. Add the
+// option and provide a populated [kwh.SourceStore].
+//
+// "webhook dispatch: signing source not registered" (sourceId in error details):
+// BuildConsumers found no entry in the SourceStore for the SourceID declared in
+// DispatchSpec. The missing sourceId is reported in the error details. Register
+// the source secret in the store before starting.
+//
+// "no cell.go struct field for subscribing slice" from gocell generate cell:
+// The cell struct lacks a field whose pointer type package name matches the
+// webhook-dispatch slice ID. Add *<sliceID>.Consumer (or equivalent) to the
+// cell struct and re-run codegen.
+//
+// "ambiguous field for slice <sliceID>" from gocell generate cell:
+// Multiple cell struct fields match the slice ID. Add field: <fieldName> to
+// the webhook-dispatch contractUsage in slice.yaml to disambiguate.
 package dispatch
 
 import (
@@ -49,6 +70,29 @@ type Consumer struct {
 	CellID        string
 }
 
+// Validate checks that all required Consumer fields are populated. buildConsumer
+// calls this as a belt-and-suspenders guard before returning, consistent with
+// ReceiverSpec.Validate and DispatchSpec.Validate.
+func (c Consumer) Validate() error {
+	if c.Spec.ID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"webhook dispatch consumer: Spec.ID must not be empty")
+	}
+	if c.Handler == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"webhook dispatch consumer: Handler must not be nil")
+	}
+	if c.ConsumerGroup == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"webhook dispatch consumer: ConsumerGroup must not be empty")
+	}
+	if c.CellID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"webhook dispatch consumer: CellID must not be empty")
+	}
+	return nil
+}
+
 // BuildConsumers turns the accumulated [cell.WebhookDispatchRequest] values
 // (from RegistrySnapshot.WebhookDispatchers) into [Consumer] values ready for
 // the bootstrap phase6 drain to register on the event router.
@@ -58,6 +102,10 @@ type Consumer struct {
 // SSRF guard wired into every dispatcher's *http.Client. Both must be non-nil.
 // Construction is eager so a missing source or bad config fails at startup
 // rather than at first delivery.
+//
+// DLX: the composition root must configure the broker subscriber's DLX exchange
+// for dispatch subscription topics; permanently-failed deliveries (Reject) are
+// Nack(requeue=false)→DLX and are otherwise silently discarded.
 func BuildConsumers(
 	clk clock.Clock,
 	reqs []cell.WebhookDispatchRequest,
@@ -86,6 +134,10 @@ func BuildConsumers(
 
 // buildConsumer constructs a single Consumer: resolve source → HMAC signer →
 // SSRF-guarded Dispatcher → synthesized event-kind subscription spec.
+//
+// Producer contract: Topic == spec.ContractID — the producing cell MUST emit
+// outbox entries on a broker topic whose value equals the webhook-dispatch
+// contract ID (same convention as event subscriptions).
 func buildConsumer(
 	clk clock.Clock,
 	req cell.WebhookDispatchRequest,
@@ -108,6 +160,7 @@ func buildConsumer(
 	if !ok {
 		return Consumer{}, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
 			"webhook dispatch: signing source not registered",
+			errcode.WithDetails(errcode.PublicString("sourceId", spec.SourceID)),
 			errcode.WithInternal(errcode.InternalAttr("source_id", spec.SourceID)))
 	}
 	signer, err := kwh.NewHMACSigner(src)
@@ -118,7 +171,7 @@ func buildConsumer(
 	if err != nil {
 		return Consumer{}, err
 	}
-	return Consumer{
+	c := Consumer{
 		Spec: contractspec.ContractSpec{
 			ID:        spec.ContractID,
 			Kind:      cellvocab.ContractEvent,
@@ -128,5 +181,9 @@ func buildConsumer(
 		Handler:       dispatcher.Handle,
 		ConsumerGroup: spec.CellID,
 		CellID:        spec.CellID,
-	}, nil
+	}
+	if err := c.Validate(); err != nil {
+		return Consumer{}, err
+	}
+	return c, nil
 }

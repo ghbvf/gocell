@@ -47,9 +47,15 @@ a custom `RetrySchedule` via a future `WithSchedule` option (not in PR-5 scope).
 
 `RetrySchedule.MaxRetries()` returns 7 (the retry count excluding the initial
 attempt); `RetrySchedule.Attempts()` returns 8 (the total delivery count).
-`DefaultSvixSchedule().MaxRetries()` is consumed by the runtime dispatch
-consumer to size `ConsumerBaseConfig.RetryCount` — the schedule is a real
-parameter, not a dead abstraction.
+
+**PR-5 ships `DefaultSvixSchedule` as a tested primitive and the documented
+seam for the broker-delay follow-up. PR-5 does NOT wire per-attempt delays or
+a per-dispatcher RetryCount at runtime**: `Dispatcher` has no schedule field,
+`runtime/webhook/dispatch.BuildConsumers` never sets `ConsumerBaseConfig.RetryCount`,
+and the global `kernel/outbox.ConsumerBase` cannot accept a per-dispatcher
+count. The dispatch consumer rides the shared ConsumerBase (default exponential
+backoff, capped 30 s). `RetrySchedule.DelayFor` is the seam the follow-up
+(gh #1458) will consume.
 
 ### D2 — HTTP status code → `outbox.HandleResult` mapping (standard-webhooks aligned)
 
@@ -121,66 +127,62 @@ The sole writer of these headers in the codebase is `(webhook.Headers).Apply`
 `WEBHOOK-SIGNER-FUNNEL-01`. No callsite may call `Header.Set` on these header
 name constants directly.
 
-### D5 — Schedule drives retry budget; exact per-attempt wall-clock delays are NOT yet honoured (explicit boundary + tracked follow-up)
+### D5 — Schedule is the canonical default seam; per-attempt wall-clock delays and RetryCount are NOT yet wired (explicit boundary + tracked follow-up)
 
 This is the most important honesty section of this ADR.
 
-`DefaultSvixSchedule().MaxRetries()` sizes `ConsumerBaseConfig.RetryCount` in
-the runtime dispatch consumer. The schedule is **genuinely consumed** at the
-constructor site; it is not a dead abstraction.
+**PR-5 does NOT wire per-attempt delays or a per-dispatcher RetryCount at
+runtime.** Specifically:
 
-**However**, the exact per-attempt wall-clock delays (5 s → 5 min → 30 min →
-2 h → 5 h → 10 h → 10 h, totalling approximately 40 h) are **NOT yet honoured
-at runtime**. `kernel/outbox.ConsumerBase` uses in-process exponential backoff
-with a hard cap at 30 s per retry interval. It has no mechanism to hold a 10 h
-delay across process restarts — it would require broker-level delayed re-delivery
-(e.g. RabbitMQ `x-delayed-message`, a delayed queue, or a scheduler) that
-GoCell does not yet wire for the dispatch consumer.
+- `Dispatcher` has no schedule field.
+- `runtime/webhook/dispatch.BuildConsumers` never sets
+  `ConsumerBaseConfig.RetryCount` from the schedule.
+- The global `kernel/outbox.ConsumerBase` cannot accept a per-dispatcher retry
+  count; the dispatch consumer rides the shared ConsumerBase with its default
+  exponential backoff capped at 30 s.
 
-This gap is **deliberate and explicitly tracked**, not silent. The schedule is
-retained in the implementation because honouring the full Svix timeline is a
-real future need: the `RetrySchedule` type and `DelayFor(n int)` method
-provide exactly the per-retry delay seam that the broker-delay wiring will
-consume. Removing the schedule now and re-adding it later would be churn with
-no benefit.
+The exact per-attempt wall-clock delays (5 s → 5 min → 30 min → 2 h → 5 h →
+10 h → 10 h, totalling approximately 40 h) are therefore **NOT honoured at
+runtime**. Honouring the full Svix timeline requires broker-level delayed
+re-delivery (e.g. RabbitMQ `x-delayed-message`, a delayed queue, or a
+scheduler) that GoCell does not yet wire for the dispatch consumer.
+
+This gap is **deliberate and explicitly tracked**, not silent. `DefaultSvixSchedule`
+is retained as the canonical default because honouring the full Svix timeline
+is a real future need: `RetrySchedule.DelayFor(n int)` is exactly the per-retry
+delay seam the broker-delay wiring will consume. Removing the schedule now and
+re-adding it later would be churn with no benefit.
 
 The follow-up work — broker-delay long-schedule wiring for the dispatch consumer
 (extend `ConsumerBase` per-attempt delay, or replace with a delay-aware relay
-that calls `DelayFor(attemptNumber)`) — is registered as a backlog item
-(label: `cap-webhook`, `pri-p2`).
+that calls `DelayFor(attemptNumber)`) — is tracked at **gh #1458**.
 
 The `RetrySchedule` godoc (`kernel/webhook/retry.go`) also states this gap
-explicitly:
-
-> PR-5 scope: the schedule is the canonical default and drives the consumer's
-> retry budget (MaxRetries == len(delays)); the exact per-attempt wall-clock
-> delays are NOT yet honoured by the in-process ConsumerBase backoff (capped at
-> 30s). Honouring the full Svix timeline (up to ~40h) needs broker-delay
-> support and is a tracked follow-up (see ADR webhook-retry-default). The
-> schedule is retained because that follow-up is a real future need, not a dead
-> abstraction.
+explicitly.
 
 ## Consequences
 
-- **Runtime dispatch consumer** (`runtime/webhook/dispatch`) calls
-  `dispatcher.Schedule().MaxRetries()` to set `ConsumerBaseConfig.RetryCount`
-  to 7; the consumer inherits `ConsumerBase` exponential back-off (capped at
-  30 s) for all seven retries.
+- **Runtime dispatch consumer** (`runtime/webhook/dispatch`) rides the shared
+  `ConsumerBase` with its default exponential back-off (capped at 30 s per
+  retry interval). PR-5 does NOT set a per-dispatcher `ConsumerBaseConfig.RetryCount`
+  from the schedule — `DefaultSvixSchedule` is the canonical default and the
+  seam for the broker-delay follow-up (gh #1458), not yet runtime-honored.
 - **Permanent failures** (SSRF-blocked, non-2xx 4xx excluding 408/429, selector
   error, signing failure, URL validation failure) route to DLX via
   `outbox.Reject`; operators must inspect the DLX queue and fix the registration
   before re-enqueuing.
 - **Transient failures** (5xx, 408, 429, transport errors) trigger
-  `ConsumerBase` retry up to `MaxRetries` times; on budget exhaustion they are
+  `ConsumerBase` retry with default backoff; on budget exhaustion they are
   escalated to Reject → DLX.
 - **Wire protocol**: receivers that verify GoCell outbound webhooks must use the
   `webhook-id` / `webhook-timestamp` / `webhook-signature` header names, not
   `svix-*`. GoCell's example receiver (`kernel/webhook.Verifier`) already uses
   these names.
-- **Broker-delay gap**: until the tracked follow-up lands, high-retry-count
-  deliveries will exhaust their budget faster than the 40 h Svix envelope
-  because ConsumerBase back-off is capped at 30 s per interval rather than
-  honouring the schedule's 2 h / 5 h / 10 h steps.
+- **Broker-delay gap (tracked gh #1458)**: until the follow-up lands, deliveries
+  exhaust their retry budget faster than the 40 h Svix envelope because
+  ConsumerBase back-off is capped at 30 s per interval rather than honouring
+  the schedule's 2 h / 5 h / 10 h steps. `RetrySchedule.DelayFor` is the seam
+  that follow-up will consume.
 
 ## References
 

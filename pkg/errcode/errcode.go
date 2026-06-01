@@ -777,8 +777,10 @@ const (
 	// PR-5 (dispatcher).
 	ErrWebhookDeliveryTimeout Code = "ERR_WEBHOOK_DELIVERY_TIMEOUT"
 	// ErrWebhookPermanentFailure signals a non-retryable delivery failure
-	// (retry budget exhausted, endpoint disabled). Constructed with KindInternal
-	// → HTTP 500. First constructed in PR-5 (dispatcher).
+	// (bad target/selector/permanent non-2xx response). Constructed with the
+	// Kind appropriate to the failure — e.g. KindInvalid (HTTP 400) for a bad
+	// target URL or permanent non-2xx response. First constructed in PR-5
+	// (dispatcher).
 	ErrWebhookPermanentFailure Code = "ERR_WEBHOOK_PERMANENT_FAILURE"
 	// ErrWebhookBodyTooLarge signals the inbound webhook body exceeded the size
 	// limit. Constructed with KindPayloadTooLarge → HTTP 413. First constructed

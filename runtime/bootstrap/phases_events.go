@@ -150,7 +150,7 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 		return nil
 	}
 	if b.webhookSourceStore == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
 			"bootstrap: webhook dispatchers declared but no source store configured; "+
 				"add WithWebhookSourceStore to bootstrap options")
 	}

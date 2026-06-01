@@ -14,12 +14,15 @@ import (
 // wait before retry i+1. The schedule is value-immutable: DefaultSvixSchedule
 // returns a fresh copy and there is no setter.
 //
-// PR-5 scope: DefaultSvixSchedule is the canonical default + the seam for the
-// broker-delay follow-up; the exact per-attempt wall-clock delays are NOT yet
-// honored at runtime (the in-process ConsumerBase backoff is capped at 30s).
-// Honoring the full Svix timeline (up to ~40h) needs broker-delay support and
-// is a tracked follow-up (see ADR webhook-retry-default). The schedule is
-// retained because that follow-up is a real future need, not a dead abstraction.
+// PR-5 ships DefaultSvixSchedule as the canonical default and the seam for the
+// broker-delay follow-up (gh #1458). PR-5 does NOT wire per-attempt delays or a
+// per-dispatcher RetryCount at runtime: the dispatch consumer rides the shared
+// ConsumerBase (default exponential backoff, capped 30 s). Honoring the full
+// Svix timeline (up to ~40 h) needs broker-delay support; DelayFor is the seam
+// the follow-up will consume. The schedule is retained because that follow-up is
+// a real future need, not a dead abstraction.
+//
+// See docs/architecture/202606012052-1160-adr-webhook-retry-default.md §D5.
 type RetrySchedule struct {
 	delays []time.Duration
 }
@@ -71,7 +74,8 @@ func (s RetrySchedule) DelayFor(n int) (delay time.Duration, ok bool) {
 // webhook retry-default ADR (standard-webhooks / Svix aligned). Exactly one of
 // the two inputs is meaningful per call: pass the transport error (statusCode
 // ignored) when client.Do failed, or statusCode with a nil error when a
-// response was received.
+// response was received. When transportErr is non-nil the statusCode is
+// ignored; pass 0 by convention.
 //
 // Mapping:
 //   - transportErr != nil:

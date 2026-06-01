@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -33,7 +34,7 @@ const dispatchBodyDrainLimit = 4 << 10 // 4 KiB
 // Construct via [NewDispatcher]; the zero value is invalid. All HTTP egress
 // flows through an *http.Client built from the injected [SafePolicy] — there is
 // no client-injection option, so SSRF protection cannot be bypassed
-// (WEBHOOK-SSRF-GUARD-01 downstream).
+// (WEBHOOK-SSRF-GUARD-01 downstream; see tools/archtest/webhook_ssrf_guard_test.go).
 type Dispatcher struct {
 	clk      clock.Clock
 	signer   Signer
@@ -106,6 +107,11 @@ func NewDispatcher(
 // Handle implements [outbox.EntryHandler]: it delivers one outbound webhook and
 // maps the outcome to a disposition via [Classify].
 //
+// Consumer: cg-webhook-dispatch (per-cell consumer group)
+// Idempotency: outbox lease_id CAS (producer side); handler is stateless
+// Disposition: Ack on 2xx / Requeue on 5xx·408·429·transport / Reject on other 4xx·3xx·SSRF
+// DLX: broker-native via DispositionReject -> Nack(requeue=false)
+//
 //	2xx                              → Ack
 //	5xx / 408 / 429 / timeout / conn → Requeue (transient)
 //	other 4xx / 3xx / SSRF-blocked   → Reject  (permanent → DLX)
@@ -114,12 +120,35 @@ func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.Hand
 	if req == nil {
 		return fail
 	}
+	deliveryID := entry.ID()
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return mapDisposition(Classify(0, err), transportReason(err))
+		reason := transportReason(err)
+		result := mapDisposition(Classify(0, err), reason)
+		logDelivery(ctx, deliveryID, result.Disposition, reason)
+		return result
 	}
 	defer drainAndClose(resp)
-	return mapDisposition(Classify(resp.StatusCode, nil), statusReason(resp.StatusCode))
+	reason := statusReason(resp.StatusCode)
+	result := mapDisposition(Classify(resp.StatusCode, nil), reason)
+	logDelivery(ctx, deliveryID, result.Disposition, reason)
+	return result
+}
+
+// logDelivery emits a structured slog record for non-Ack delivery outcomes.
+// delivery_id is the outbox entry ID used as the per-delivery idempotency key.
+// Payload, Source, and Signer are never logged to avoid secret leakage.
+func logDelivery(ctx context.Context, deliveryID string, disp outbox.Disposition, err error) {
+	switch disp {
+	case outbox.DispositionReject:
+		slog.ErrorContext(ctx, "webhook dispatcher: permanent delivery failure",
+			slog.String("delivery_id", deliveryID),
+			slog.Any("error", err))
+	case outbox.DispositionRequeue:
+		slog.WarnContext(ctx, "webhook dispatcher: transient delivery failure",
+			slog.String("delivery_id", deliveryID),
+			slog.Any("error", err))
+	}
 }
 
 // prepare runs the per-entry preflight (select target → vet URL → derive
@@ -169,6 +198,7 @@ func mapDisposition(disp outbox.Disposition, reason error) outbox.HandleResult {
 	case outbox.DispositionReject:
 		return outbox.Reject(reason)
 	default:
+		// DispositionRequeue + any unknown future disposition -> Requeue (fail-closed; never silently Ack)
 		return outbox.Requeue(reason)
 	}
 }
