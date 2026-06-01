@@ -4856,7 +4856,7 @@ func TestSagaMetricLabelValuesFrozen01_CallsiteGuard_Fixtures(t *testing.T) {
 		dir  string
 		want int
 	}{
-		{"red_literal", 2},
+		{"red_literal", 5}, // 4 inline literals (one per enum) + 1 conversion
 		{"green", 0},
 	}
 	for _, c := range cases {

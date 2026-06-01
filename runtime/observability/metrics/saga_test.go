@@ -395,6 +395,23 @@ func TestNewSagaCollector_NoHistograms(t *testing.T) {
 	}
 }
 
+// TestNewSagaCollector_PartialRegistrationFailure_RollsBack verifies the LIFO
+// atomic-registration rollback (#1181 F11): when the 4th counter (saga_tick_total)
+// fails to register, the 3 already-registered counters are torn down via
+// Unregister so the provider retains no orphans.
+func TestNewSagaCollector_PartialRegistrationFailure_RollsBack(t *testing.T) {
+	p := newSagaSpyProvider()
+	p.failOnName = "saga_tick_total" // the 4th counter in NewSagaCollector order
+	_, err := obmetrics.NewSagaCollector(p, "auditcore")
+	if err == nil {
+		t.Fatal("expected a registration error when saga_tick_total fails")
+	}
+	// outcome, retry, hbFail were registered before the tick failure → 3 rolled back.
+	if p.unregisterCount != 3 {
+		t.Errorf("unregisterCount = %d, want 3 (LIFO rollback of the 3 prior counters)", p.unregisterCount)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // sagaSpyProvider — tracks counter registrations and emissions, including
 // declared label sets (for the LabelSet_* freeze tests).
@@ -411,6 +428,11 @@ type sagaSpyProvider struct {
 	gaugeNames     map[string]struct{}
 	histogramNames map[string]struct{}
 	counterOps     map[string][]sagaSpyRecord
+
+	// failOnName, when non-empty, makes CounterVec return an error for that
+	// metric name — exercises the LIFO rollback in NewSagaCollector.
+	failOnName      string
+	unregisterCount int
 }
 
 func newSagaSpyProvider() *sagaSpyProvider {
@@ -424,6 +446,10 @@ func newSagaSpyProvider() *sagaSpyProvider {
 }
 
 func (p *sagaSpyProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	if opts.Name == p.failOnName {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"sagaSpyProvider: injected registration failure")
+	}
 	p.counterNames[opts.Name] = struct{}{}
 	p.counterLabels[opts.Name] = append([]string(nil), opts.LabelNames...)
 	return &sagaSpyCounterVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
@@ -439,7 +465,10 @@ func (p *sagaSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *sagaSpyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
+func (p *sagaSpyProvider) Unregister(_ kernelmetrics.Collector) error {
+	p.unregisterCount++
+	return nil
+}
 
 type sagaSpyCounterVec struct {
 	parent     *sagaSpyProvider

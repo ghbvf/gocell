@@ -20,6 +20,7 @@
 | SAGA-STEP-RUN-OUTSIDE-TX-01 | `runtime/saga/` 生产文件中 `kernel/saga.StepFunc` 调用必须只出现在 `safeRun` 函数体内（A1）；`TxRunner.RunInTx` 的 closure body 内禁止调用 `safeRun`（A2）；合称确保步骤不在持有数据库事务时执行 | A1 Hard（TypesInfo.ObjectOf typed callsite-uniqueness + posInRanges body gate）+ A2 Medium（AST EachInSubtree closure scan；helper 包间传递链 B2 参见 gh #980） |
 | SAGA-INVARIANTS-FILE-CONSOLIDATED-01 | 所有 `tools/archtest/*_test.go` 中声明 `// INVARIANT: SAGA-*` 的文件必须是 `saga_invariants_test.go` 本身；禁止 saga 主题规则散落在独立文件中（防止 PR #1213 清理后再度碎片化） | Medium（内容扫描 + 跨文件不变式；Hard 不可达——Go 编译不受文件分布约束） |
 | SAGA-CONSTRUCTOR-NIL-GUARD-01 | `runtime/saga` 与 `runtime/saga/executor` 下的顶层 `New*` 构造器，其非 variadic 的 interface 位置参数（`journal.Journal`、`persistence.TxRunner`、`outbox.Emitter`、`saga.Resolver`、`executor.Heartbeater`）须在函数体内经 `validation.IsNilInterface` 显式守卫，`clock.Clock` 经 `clock.MustHaveClock` 守 | Medium（**非 funnel 类约束，单轴评级**——「必填 interface 参数缺守卫」无 caller-allowlist 下游 / sealed-interface 上游可分，不套用双向锁格式。archtest type-aware：绑定参数 types.Object 身份 + callee 解析；缺守卫在 Go 可表达故非类型系统封闭。Hard 路径 = 接入 `gocell:"required"` tag funnel + `gocell generate required-deps` 生成 `validateRequired()`，追踪 gh #1317） |
+| SAGA-METRIC-LABEL-VALUES-FROZEN-01 | `runtime/saga/executor` 四个 string label 枚举（`HeartbeatFailureReason` / `TickResult` / `DriveResult` / `LeaderSkipReason`）值集冻结：A1 按枚举类型枚举 const vs golden；A2 type-bound callsite guard 禁内联字面量 / `Enum("x")` 转换达到 metric label。`SagaCollector` 落 6 个 saga 计数器（#1109） | Medium（string-typed-concept funnel；Hard 升级路径 = 把值集 enroll 进 metricschema golden 字节锁，与 reconcile 共用 gh #1416） |
 
 ---
 

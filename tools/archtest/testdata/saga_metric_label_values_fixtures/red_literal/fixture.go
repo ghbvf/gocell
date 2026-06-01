@@ -13,9 +13,17 @@ import (
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
-func leaderSink(_ context.Context, _ executor.LeaderSkipReason) {}
+// One sink per frozen executor label enum, so the A2 guard's type-binding is
+// exercised across all four (not just LeaderSkipReason).
+func leaderSink(_ context.Context, _ executor.LeaderSkipReason)   {}
+func tickSink(_ context.Context, _ executor.TickResult)           {}
+func driveSink(_ context.Context, _ executor.DriveResult)         {}
+func hbSink(_ context.Context, _ executor.HeartbeatFailureReason) {}
 
 func caller(ctx context.Context) {
 	leaderSink(ctx, "typo")                               // inline literal — MUST be flagged
 	leaderSink(ctx, executor.LeaderSkipReason("backend")) // conversion of literal — MUST be flagged
+	tickSink(ctx, "nope")                                 // TickResult literal — MUST be flagged
+	driveSink(ctx, "bad")                                 // DriveResult literal — MUST be flagged
+	hbSink(ctx, "wat")                                    // HeartbeatFailureReason literal — MUST be flagged
 }

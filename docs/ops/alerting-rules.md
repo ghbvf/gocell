@@ -855,11 +855,18 @@ the distlock nor makes progress, e.g. a wedged peer holding a stale distlock.
 # Fires when leader-elect contended skips are sustained while successful drives
 # are absent for the same cell — the "stuck skipping, not advancing" signal #1109
 # was created to surface without log scraping.
+#
+# `unless` (set difference) — NOT `and ... == 0`: the worst case this alert
+# targets is a coordinator that NEVER drives, in which case the
+# gocell_saga_drive_total{result="ok"} series does not exist at all. With
+# `and ... == 0` the right side is an empty vector and the alert silently never
+# fires. `unless <right> > 0` keeps every contended-heavy cell that has no
+# matching cell with a positive ok-drive rate — including absent series.
 - alert: GoCellSagaInstanceStuckSkipping
   expr: |
     sum(rate(gocell_saga_leader_elect_skip_total{reason="contended"}[5m])) by (cell) > 0.1
-    and
-    sum(rate(gocell_saga_drive_total{result="ok"}[5m])) by (cell) == 0
+    unless
+    sum(rate(gocell_saga_drive_total{result="ok"}[5m])) by (cell) > 0
   for: 10m
   labels:
     severity: warning
@@ -874,6 +881,10 @@ distlock backend I/O faults are preventing leader election — the coordinator
 cannot confirm leadership and skips every instance fail-closed.
 
 ```yaml
+# rate() = events/sec; `> 0.05` fires at >0.05 backend-error skips/sec (≈ 3/min)
+# over the 5m window. backend_error is distlock backend I/O (Redis) faults only
+# (contended / ctx_canceled are classified separately), so any sustained rate is
+# a real fault — tune by your distlock backend's acceptable transient-error floor.
 - alert: GoCellSagaLockAcquireFailures
   expr: sum(rate(gocell_saga_leader_elect_skip_total{reason="backend_error"}[5m])) by (cell) > 0.05
   for: 5m

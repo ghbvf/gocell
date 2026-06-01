@@ -280,6 +280,50 @@ func TestTickOnce_Claimed_EmitsTickAndDriveOK(t *testing.T) {
 	}
 }
 
+func TestTickOnce_Claimed_EmitsDriveError(t *testing.T) {
+	const defID idutil.SafeID = "tickdriveerr"
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{{
+			Name: "step1",
+			Run: func(context.Context, *ksaga.Instance, []byte) ([]byte, error) {
+				return []byte(`{"ok":true}`), nil
+			},
+		}},
+	}
+	clk := newFakeClock()
+	// failingFakeJournal fails the first Append (the step-completed event), so
+	// driveOne returns a non-nil error → ObserveDrive(DriveError).
+	j := newFailingFakeJournal(newMemJournal(clk))
+	j.failAppendOnCall = 1
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	obs := &recordingObserver{}
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithObserver(obs))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := c.tickOnce(context.Background()); err != nil {
+		t.Fatalf("tickOnce: %v", err)
+	}
+	if ticks := obs.snapshotTicks(); len(ticks) != 1 || ticks[0] != executor.TickClaimed {
+		t.Errorf("ticks = %v, want [claimed]", ticks)
+	}
+	drives := obs.snapshotDrives()
+	if len(drives) != 1 {
+		t.Fatalf("drives = %d, want 1", len(drives))
+	}
+	if drives[0].result != executor.DriveError {
+		t.Errorf("drive result = %q, want error", drives[0].result)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // safeObserve isolates a panicking observer (no deadline goroutine)
 // ---------------------------------------------------------------------------
@@ -302,5 +346,8 @@ func TestSafeObserve_PanicIsolation(t *testing.T) {
 	}
 	if entry["method"] != "ObserveTick" {
 		t.Errorf("panic log method = %v, want ObserveTick", entry["method"])
+	}
+	if _, ok := entry["panic"]; !ok {
+		t.Errorf("expected a redacted 'panic' field in the recover log; got %v", entry)
 	}
 }

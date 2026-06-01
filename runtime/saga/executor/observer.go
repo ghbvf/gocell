@@ -69,6 +69,9 @@ type Observer interface {
 	// audit / tracing — see Observer godoc for cardinality guidance.
 	ObserveHeartbeatFailure(ctx context.Context, instanceID idutil.SafeID, leaseID idutil.SafeID, reason HeartbeatFailureReason)
 
+	// --- Coordinator-emitted (called by runtime/saga.Coordinator, NOT the
+	// Executor; guarded by Coordinator.safeObserve, not callObserverBounded). ---
+
 	// ObserveTick is called once per Coordinator ClaimPending cycle that runs
 	// (the stopping-drain early return is not counted). result classifies the
 	// cycle: claimed (≥1 instance), empty (0 claimed), or error (ClaimPending
@@ -107,7 +110,8 @@ const (
 
 // TickResult is a typed enum classifying a Coordinator ClaimPending cycle. The
 // values are stable wire-facing strings used as the saga_tick_total{result}
-// metric label. Value set frozen by SAGA-METRIC-LABEL-VALUES-FROZEN-01.
+// metric label. Value set frozen by SAGA-METRIC-LABEL-VALUES-FROZEN-01
+// (tools/archtest/saga_invariants_test.go).
 type TickResult string
 
 const (
@@ -121,7 +125,8 @@ const (
 
 // DriveResult is a typed enum classifying a single driveOne completion. The
 // values are stable wire-facing strings used as the saga_drive_total{result}
-// metric label. Value set frozen by SAGA-METRIC-LABEL-VALUES-FROZEN-01.
+// metric label. Value set frozen by SAGA-METRIC-LABEL-VALUES-FROZEN-01
+// (tools/archtest/saga_invariants_test.go).
 type DriveResult string
 
 const (
@@ -135,7 +140,8 @@ const (
 // LeaderSkipReason is a typed enum of why the leader-elect gate skipped an
 // instance (acquireLead returned lead=false). The values are stable wire-facing
 // strings used as the saga_leader_elect_skip_total{reason} metric label and as
-// slog fields. Value set frozen by SAGA-METRIC-LABEL-VALUES-FROZEN-01.
+// slog fields. Value set frozen by SAGA-METRIC-LABEL-VALUES-FROZEN-01
+// (tools/archtest/saga_invariants_test.go).
 type LeaderSkipReason string
 
 const (
@@ -163,6 +169,8 @@ func (NopObserver) ObserveRetry(_ context.Context, _ idutil.SafeID, _ idutil.Saf
 // ObserveHeartbeatFailure implements Observer.
 func (NopObserver) ObserveHeartbeatFailure(_ context.Context, _ idutil.SafeID, _ idutil.SafeID, _ HeartbeatFailureReason) {
 }
+
+// Coordinator-emitted no-ops (per-tick / per-drive / per-skip).
 
 // ObserveTick implements Observer.
 func (NopObserver) ObserveTick(_ context.Context, _ TickResult) {}

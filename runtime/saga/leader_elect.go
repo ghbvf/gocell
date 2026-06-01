@@ -140,6 +140,10 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 // the saga_leader_elect_skip_total{reason} metric, so log and metric never
 // diverge. Contention (ErrDistlockTimeout) and ctx cancellation are expected;
 // anything else is a distlock backend I/O fault (the lock-acquire failure rate).
+//
+// Add new skip paths only by extending this function (and its downstream
+// consumers leaderSkipLogLevel + acquireLead's safeObserve call) — never by
+// classifying inline at a callsite, or log and metric will drift.
 func classifyLeaderSkip(err error) executor.LeaderSkipReason {
 	var ec *errcode.Error
 	switch {

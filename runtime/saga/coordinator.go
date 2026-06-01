@@ -642,7 +642,7 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 // ObserveDrive / ObserveLeaderSkip) under a panic guard so a misbehaving
 // observer never affects coordinator correctness — mirrors the Observer
 // "SHOULD NOT panic" contract enforced on the Executor side by
-// executor.callObserverBounded.
+// executor.(*Executor).callObserverBounded (executor/executor.go).
 //
 // Deliberate asymmetry vs the Executor: this does NOT spawn a deadline-bounded
 // goroutine. Coordinator-emitted events are per-tick / per-drive, not on the
@@ -656,15 +656,14 @@ func (c *Coordinator) safeObserve(ctx context.Context, method string, call func(
 }
 
 // recoverObserverPanic is the shared recover handler for Coordinator-emitted
-// observer calls. The panic payload is redacted through redaction.RedactString
+// observer calls. The panic payload is redacted through redaction.RedactAny
 // before reaching slog so a panic value carrying user data does not leak into
-// operator logs (mirrors executor.recoverObserverPanic / observability.md
-// §Span Error Redaction).
+// operator logs — same form as executor.recoverObserverPanic (executor.go).
 func (c *Coordinator) recoverObserverPanic(ctx context.Context, method string) {
 	if r := recover(); r != nil {
 		c.logger.WarnContext(ctx, "saga coordinator: observer call panicked, ignoring",
 			slog.String("method", method),
-			slog.String("panic", redaction.RedactString(fmt.Sprint(r))))
+			slog.Any("panic", redaction.RedactAny(r)))
 	}
 }
 
