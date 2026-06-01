@@ -352,6 +352,17 @@ linters:
                 cellmodules/ is a Composition Root layer; cells/ must not import it
                 (reverse import = layer violation — cellmodules/ imports cells/, not
                 the other way around). Belt-and-suspenders alongside strict allow-list.
+            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+              desc: |
+                cells/ must not import runtime/grpc/interceptor — gRPC interceptor
+                wiring (auth/metrics/tracing/recovery via NewUnaryChain) is a
+                composition-root concern: cmd/ and examples/ build the chain and
+                inject it into adapters/grpc.Server via Config.ServerOptions, then
+                hand the server to bootstrap.WithGRPCListener. This is the gRPC
+                extension of AUTH-PLAN-04 (LAYER-09) — cells declare intent,
+                composition roots wire auth (#1148). Layered on top of
+                cells-isolation (which allows runtime/* broadly); this subtracts the
+                one interceptor package. Mirrors grpc-adapter-no-interceptor-import.
         # Per-example cells-isolation rules. Examples are public-facing demos
         # of the framework's architecture; they must follow the SAME cell
         # discipline as platform cells/ (no cross-layer shortcuts) — otherwise
