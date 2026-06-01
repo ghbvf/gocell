@@ -195,7 +195,7 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 
 	ctx := context.Background()
 	// Pre-seed a lease directly via MemStore to simulate in-flight request.
-	_, _, _, err := ms.Claim(ctx, "tenant1", "user-b:in-flight", 5*time.Minute)
+	_, _, _, err := ms.Claim(ctx, "tenant1", "user-b:in-flight", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("pre-seed claim: %v", err)
 	}

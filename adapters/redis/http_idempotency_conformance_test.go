@@ -10,6 +10,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/idempotency/idempotencytest"
 )
 
+// redisExpiryMargin is a conservative buffer added to sleep durations so that
+// Redis server-side PX expiry fires before the next Claim call in conformance tests.
+const redisExpiryMargin = 100 * time.Millisecond
+
 // realSleepAdvancer implements [idempotencytest.TimeAdvancer] for Redis-backed
 // stores. Because the Redis store uses server-side PX expiry (not a Go clock),
 // the only portable way to advance past a TTL is to sleep in real time.
@@ -22,8 +26,8 @@ type realSleepAdvancer struct{}
 
 func (realSleepAdvancer) AdvancePast(d time.Duration) {
 	// Add a modest margin so Redis server-side expiry fires before the next
-	// Claim call. 100ms margin is conservative enough for CI and local runs.
-	time.Sleep(d + 100*time.Millisecond)
+	// Claim call. redisExpiryMargin is conservative enough for CI and local runs.
+	time.Sleep(d + redisExpiryMargin)
 }
 
 // TestIntegration_HTTPIdempotencyStore_Conformance runs the shared

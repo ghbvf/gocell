@@ -48,6 +48,12 @@ const (
 	conformAltKey = "conf-alt-key-001"
 	shortLeaseTTL = 50 * time.Millisecond
 	shortDoneTTL  = 50 * time.Millisecond
+	// conformLeaseTTL is a normal-length lease TTL used in conformance cases
+	// that do not exercise TTL expiry.
+	conformLeaseTTL = 30 * time.Second
+	// conformDoneTTL is the done-state TTL used when recording a response in
+	// conformance cases.
+	conformDoneTTL = 24 * time.Hour
 )
 
 // RunConformanceSuite runs the full Store conformance suite against the
@@ -86,7 +92,7 @@ func conformFirstClaimAcquired(t *testing.T, factory Factory) {
 	store, _, cleanup := factory(t)
 	defer cleanup()
 
-	state, rec, receipt, err := store.Claim(context.Background(), conformNS, conformKey, 30*time.Second)
+	state, rec, receipt, err := store.Claim(context.Background(), conformNS, conformKey, conformLeaseTTL)
 	if err != nil {
 		t.Fatalf("Claim: unexpected error: %v", err)
 	}
@@ -109,18 +115,18 @@ func conformClaimDoneAfterRecord(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	ctx := context.Background()
-	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
 
 	resp := buildTestResponse(t, 201, []byte(`{"id":"abc"}`))
-	if err := receipt.Record(ctx, &resp, 24*time.Hour); err != nil {
+	if err := receipt.Record(ctx, &resp, conformDoneTTL); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
 	// Second Claim must return ClaimDone with the stored response.
-	state2, rec2, _, err2 := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state2, rec2, _, err2 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("second Claim: unexpected error: %v", err2)
 	}
@@ -143,12 +149,12 @@ func conformClaimBusyWhileLeaseHeld(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	ctx := context.Background()
-	state, _, _, err := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state, _, _, err := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("first Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
 
-	state2, rec2, _, err2 := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state2, rec2, _, err2 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("second Claim: unexpected error: %v", err2)
 	}
@@ -168,7 +174,7 @@ func conformReleaseAllowsReClaim(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	ctx := context.Background()
-	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
@@ -177,7 +183,7 @@ func conformReleaseAllowsReClaim(t *testing.T, factory Factory) {
 		t.Fatalf("Release: %v", err)
 	}
 
-	state2, _, _, err2 := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state2, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("re-Claim after Release: unexpected error: %v", err2)
 	}
@@ -202,7 +208,7 @@ func conformLeaseTTLExpiry(t *testing.T, factory Factory) {
 	// Advance past the lease TTL so it expires.
 	adv.AdvancePast(shortLeaseTTL)
 
-	state2, _, _, err2 := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state2, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("re-Claim after TTL expiry: unexpected error: %v", err2)
 	}
@@ -231,14 +237,14 @@ func conformStaleTokenRecord(t *testing.T, factory Factory) {
 	adv.AdvancePast(shortLeaseTTL)
 
 	// Acquire lease B (new owner).
-	stateB, _, _, err2 := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	stateB, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err2 != nil || stateB != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (B): state=%v err=%v", stateB, err2)
 	}
 
 	// Receipt A (stale token) must fail.
 	resp := buildTestResponse(t, 200, []byte(`ok`))
-	err3 := receiptA.Record(ctx, &resp, 24*time.Hour)
+	err3 := receiptA.Record(ctx, &resp, conformDoneTTL)
 	if err3 == nil {
 		t.Error("stale receipt A Record must return an error, got nil")
 	}
@@ -254,13 +260,13 @@ func conformDifferentNsKeyIndependent(t *testing.T, factory Factory) {
 	ctx := context.Background()
 
 	// Claim under ns1.
-	state1, _, _, err1 := store.Claim(ctx, conformNS, conformKey, 30*time.Second)
+	state1, _, _, err1 := store.Claim(ctx, conformNS, conformKey, conformLeaseTTL)
 	if err1 != nil || state1 != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (ns1): state=%v err=%v", state1, err1)
 	}
 
 	// Claim under ns2 (different namespace, same key) must be independent.
-	state2, _, _, err2 := store.Claim(ctx, conformAltNS, conformKey, 30*time.Second)
+	state2, _, _, err2 := store.Claim(ctx, conformAltNS, conformKey, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("Claim (ns2): unexpected error: %v", err2)
 	}
@@ -269,7 +275,7 @@ func conformDifferentNsKeyIndependent(t *testing.T, factory Factory) {
 	}
 
 	// Claim under ns1 with a different key must also be independent.
-	state3, _, _, err3 := store.Claim(ctx, conformNS, conformAltKey, 30*time.Second)
+	state3, _, _, err3 := store.Claim(ctx, conformNS, conformAltKey, conformLeaseTTL)
 	if err3 != nil {
 		t.Fatalf("Claim (ns1, altKey): unexpected error: %v", err3)
 	}
