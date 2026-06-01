@@ -1515,7 +1515,7 @@ func TestCountLines_Boundaries(t *testing.T) {
 }
 
 func TestCorebundleMainLineLimit(t *testing.T) {
-	const maxLines = 30
+	const maxLines = 37 // raised from 30 when codegen-inject added slog seal in 39b75fc61
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "cmd", "corebundle", "main.go")
 	data, err := os.ReadFile(filepath.Clean(path))

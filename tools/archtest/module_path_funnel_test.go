@@ -113,7 +113,7 @@ func TestArchtestModulePathFunnel(t *testing.T) {
 
 	// offenders: rel path -> first line carrying a bare platform literal.
 	offenders := make(map[string]int)
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			if !inFunnelScope(rel) {
@@ -162,7 +162,7 @@ func TestArchtestModulePathFunnel(t *testing.T) {
 	// a cross-package const, or runtime string ops — see godoc.
 	t.Run("no-fragment-split", func(t *testing.T) {
 		var splits []string
-		_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 			constMap := make(map[string]string)
 			for _, f := range p.Files {
 				if inFunnelScope(p.Rel(f)) {
@@ -186,6 +186,7 @@ func TestArchtestModulePathFunnel(t *testing.T) {
 			}
 			return nil
 		})
+
 		if len(splits) > 0 {
 			t.Errorf("ARCHTEST-MODULE-PATH-FUNNEL-01: fragment-split platform literal in %v "+
 				"(use PlatformModulePath)", splits)

@@ -171,7 +171,7 @@ func TestPGRepoAmbientTx(t *testing.T) {
 
 	root := findModuleRoot(t)
 	patterns := prodscan.Patterns(root)
-	diags := RunTyped(t, TypedOpts{}, patterns, pgRepoAmbientTxRule)
+	diags := Run(t, Typed(TypedOpts{}, patterns), pgRepoAmbientTxRule)
 	sort.Slice(diags, func(i, j int) bool {
 		if diags[i].Rel != diags[j].Rel {
 			return diags[i].Rel < diags[j].Rel
@@ -663,10 +663,13 @@ var expectedFixtureViolations = []fixtureViolation{
 func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/pgrepoambienttxfixture/..."},
+	diags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/pgrepoambienttxfixture/..."},
+		),
+
 		pgRepoAmbientTxRule,
 	)
 
@@ -750,7 +753,7 @@ func TestPGRepoAmbientTx_InterfaceSealed(t *testing.T) {
 	const anchorPkg = "github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
 
 	var checked []string
-	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !isPgexecSubpackage(p.Pkg.Path()) {
 			return nil
 		}
@@ -778,7 +781,7 @@ func TestPGRepoApprovedSealed(t *testing.T) {
 	}
 	const approvedPkg = "github.com/ghbvf/gocell/pkg/pgrepoapproved"
 	found := false
-	_ = RunTyped(t, TypedOpts{}, []string{approvedPkg}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{approvedPkg}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != approvedPkg {
 			return nil
 		}
@@ -786,6 +789,7 @@ func TestPGRepoApprovedSealed(t *testing.T) {
 		assertSealedInterface(t, p.Pkg, "Approval", "approval")
 		return nil
 	})
+
 	assert.True(t, found, "TestPGRepoApprovedSealed: pkg/pgrepoapproved was not loaded/checked")
 }
 
@@ -887,7 +891,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// BS-1: no embedded/anonymous struct field in any production _repo.go /
 	// _store.go file should transitively expose *pgxpool.Pool.
 	var bs1Violations []string
-	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -922,6 +926,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		}
 		return nil
 	})
+
 	assert.Empty(t, bs1Violations,
 		"BS-1 self-check: no production repo/store struct may use an embedded field "+
 			"that carries *pgxpool.Pool")
@@ -929,7 +934,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// BS-3: pgexec.New must not appear as a function value (used as a value
 	// rather than directly called) in any production package.
 	var bs3Violations []string
-	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -943,6 +948,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		}
 		return nil
 	})
+
 	assert.Empty(t, bs3Violations,
 		"BS-3 self-check: pgexec.New must not be used as a function value in production")
 
@@ -951,7 +957,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// does not persist it.
 	bs5Patterns := []string{"github.com/ghbvf/gocell/cells/accesscore"}
 	var bs5PoolFieldCount int
-	_ = RunTyped(t, TypedOpts{}, bs5Patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, bs5Patterns), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -975,6 +981,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		}
 		return nil
 	})
+
 	assert.Equal(t, 0, bs5PoolFieldCount,
 		"BS-5 self-check: no struct in cells/accesscore (outside internal/) may carry "+
 			"*pgxpool.Pool — PGBundle must hold only derived primitives "+
@@ -984,7 +991,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// value rather than directly called) in any production file. A function-
 	// value call would escape R3's direct-CallExpr callee resolution.
 	var bs6Violations []string
-	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, patterns), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -998,6 +1005,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		}
 		return nil
 	})
+
 	assert.Empty(t, bs6Violations,
 		"BS-6 self-check: pgexec.ExecDirect must not be used as a function value in production")
 }

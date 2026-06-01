@@ -82,7 +82,7 @@ func TestSlowgateAllowlist(t *testing.T) {
 	loaded := map[string]bool{}           // pkgPath → found
 	funcs := map[string]map[string]bool{} // pkgPath → funcName → true
 
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}

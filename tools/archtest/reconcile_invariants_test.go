@@ -521,9 +521,10 @@ func TestReconcileLoopConstructionAllowlist01(t *testing.T) {
 	require.NoError(t, err, "read module path from go.mod")
 	reconcilePkgPath, allowed := reconcileLoopConstructionAllowed(modPath)
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanReconcileLoopConstruction(p, reconcilePkgPath, allowed)
 	})
+
 	Report(t, "RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01", diags)
 }
 
@@ -540,10 +541,13 @@ func TestReconcileLoopConstructionAllowlist01_RedFixture(t *testing.T) {
 	require.NoError(t, err, "read module path from go.mod")
 	reconcilePkgPath, allowed := reconcileLoopConstructionAllowed(modPath)
 
-	diags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/reconcileloopredfixture/..."},
+	diags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/reconcileloopredfixture/..."},
+		),
+
 		func(p *Pass) []Diagnostic {
 			return scanReconcileLoopConstruction(p, reconcilePkgPath, allowed)
 		},

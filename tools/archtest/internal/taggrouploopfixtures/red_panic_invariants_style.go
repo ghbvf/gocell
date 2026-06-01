@@ -13,8 +13,9 @@ import (
 // RSS pattern banned by TAGGROUP-LOOP-FORBIDS-RUNTYPED-01.
 func _(t *testing.T) {
 	for _, tagGroup := range archtest.KnownNonDefaultTags() {
-		_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: tagGroup},
-			[]string{"./..."},
+		_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: tagGroup},
+			[]string{"./..."}),
+
 			func(p *archtest.Pass) []archtest.Diagnostic { return nil })
 	}
 }

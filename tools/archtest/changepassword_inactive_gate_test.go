@@ -113,26 +113,28 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 	t.Parallel()
 
 	var sawTarget bool
-	diags := RunTyped(t, TypedOpts{}, []string{
+	diags := Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/slices/identitymanage/...",
-	}, func(p *Pass) []Diagnostic {
-		if !p.Typed() || p.Fset == nil {
-			return nil
-		}
-		var d []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() || p.Fset == nil {
+				return nil
 			}
-			fileDiags, found := changePasswordGateDiagnostics(p.TypesInfo, p.Fset, file, rel)
-			if found {
-				sawTarget = true
+			var d []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				fileDiags, found := changePasswordGateDiagnostics(p.TypesInfo, p.Fset, file, rel)
+				if found {
+					sawTarget = true
+				}
+				d = append(d, fileDiags...)
 			}
-			d = append(d, fileDiags...)
-		}
-		return d
-	})
+			return d
+		})
 
 	if !sawTarget {
 		t.Fatalf("%s: target function %q not found under "+
@@ -168,7 +170,7 @@ func TestChangePasswordInactiveGate_01_NegativeFixture(t *testing.T) {
 			t.Parallel()
 
 			var sawTarget bool
-			diags := RunTyped(t, TypedOpts{}, []string{fixtureBase + "/" + tc.subdir},
+			diags := Run(t, Typed(TypedOpts{}, []string{fixtureBase + "/" + tc.subdir}),
 				func(p *Pass) []Diagnostic {
 					if !p.Typed() || p.Fset == nil {
 						return nil
@@ -260,7 +262,8 @@ func checkGateOrdering(info *types.Info, fset *token.FileSet, fd *ast.FuncDecl, 
 				"changed; the inactive-gate dominance check cannot verify the gate "+
 				"precedes the password write. Update cpgMutationMethod if the repo "+
 				"method was renamed.",
-			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod)}}
+			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod,
+		)}}
 	case assertIdx == -1:
 		return []Diagnostic{{Rel: rel, Line: line(mutationNode), Message: fmt.Sprintf(
 			"%s: %s has no UNCONDITIONAL top-level credentialauthority.Assert guard "+
@@ -268,13 +271,15 @@ func checkGateOrdering(info *types.Info, fset *token.FileSet, fd *ast.FuncDecl, 
 				"be rewritten. A gate nested inside a conditional does not dominate the "+
 				"mutation; place `if err := credentialauthority.Assert(user); err != nil "+
 				"{ return ... }` as a top-level statement (issue #1017).",
-			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod)}}
+			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod,
+		)}}
 	case assertIdx >= mutationIdx:
 		return []Diagnostic{{Rel: rel, Line: line(assertNode), Message: fmt.Sprintf(
 			"%s: the credentialauthority.Assert guard does not precede %s in %s — the "+
 				"inactive gate must run BEFORE the credential mutation, else the password "+
 				"is committed before the 403 (issue #1017 regression).",
-			ruleChangePasswordInactiveGate01, cpgMutationMethod, cpgTargetFunc)}}
+			ruleChangePasswordInactiveGate01, cpgMutationMethod, cpgTargetFunc,
+		)}}
 	default:
 		return nil
 	}

@@ -18,8 +18,9 @@ import (
 // is independent of the patterns shape (full ./... vs subpath alike).
 func _(t *testing.T) {
 	for _, tagGroup := range archtest.KnownNonDefaultTags() {
-		_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: tagGroup},
-			[]string{"./cells/..."},
+		_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: tagGroup},
+			[]string{"./cells/..."}),
+
 			func(p *archtest.Pass) []archtest.Diagnostic { return nil })
 	}
 }

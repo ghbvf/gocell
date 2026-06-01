@@ -216,9 +216,11 @@ func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 		return strings.HasPrefix(rel, "pkg/errcode/")
 	}
 
-	diags := Run(t, ModuleScope(root, MatchRels(func(rel string) bool {
+	diags := Run(t, AST(ModuleScope(root, MatchRels(func(rel string) bool {
 		return !errcodeKindAllowedRel(rel)
-	})), findErrcodeErrorLiteralsPass)
+	}))),
+
+		findErrcodeErrorLiteralsPass)
 
 	Report(t, "ERRCODE-KIND-LITERAL-01", diags)
 }
@@ -418,7 +420,8 @@ func parseCarveOutADRRegistry(path string) (map[carveOut]struct{}, error) {
 			if !strings.HasPrefix(line, "| Rule") {
 				return nil, fmt.Errorf(
 					"parseCarveOutADRRegistry: %s: unexpected registry table structure at %q;"+
-						" expected header row then |---| separator", path, line)
+						" expected header row then |---| separator", path, line,
+				)
 			}
 			headerValidated = true
 			continue
@@ -428,7 +431,8 @@ func parseCarveOutADRRegistry(path string) (map[carveOut]struct{}, error) {
 			if !strings.HasPrefix(line, "|---") {
 				return nil, fmt.Errorf(
 					"parseCarveOutADRRegistry: %s: unexpected registry table structure at %q;"+
-						" expected header row then |---| separator", path, line)
+						" expected header row then |---| separator", path, line,
+				)
 			}
 			separatorValidated = true
 			continue
@@ -885,9 +889,11 @@ func TestErrcodeMessageConstLiteral(t *testing.T) {
 
 	visited := map[string]bool{}
 
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
 		patterns,
+	),
+
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {
@@ -944,7 +950,8 @@ func scanErrcodeMessageASTDiags(
 				"%s(...) message must be a const literal (got %T) "+
 					"— move runtime data to WithDetails(errcode.PublicString/PublicInt/PublicBool/PublicDuration/PublicTime(...)) or "+
 					"WithInternal(errcode.InternalAttr(...))",
-				callee.displayName, msgArg),
+				callee.displayName, msgArg,
+			),
 		})
 	})
 	return out
@@ -1101,17 +1108,19 @@ func TestErrorFirstAPI01(t *testing.T) {
 		enforcedSet[rel] = struct{}{}
 	}
 
-	diags := Run(t, ModuleScope(root, MatchRels(func(rel string) bool {
+	diags := Run(t, AST(ModuleScope(root, MatchRels(func(rel string) bool {
 		_, ok := enforcedSet[rel]
 		return ok
-	})), func(p *Pass) []Diagnostic {
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			out = append(out, scanFileForErrorFirstViolations(p.Fset, file, rel)...)
-		}
-		return out
-	})
+	}))),
+
+		func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				out = append(out, scanFileForErrorFirstViolations(p.Fset, file, rel)...)
+			}
+			return out
+		})
 
 	Report(t, ruleErrorFirstAPI01, diags)
 }
@@ -1152,7 +1161,8 @@ func scanFileForErrorFirstViolations(fset *token.FileSet, file *ast.File, rel st
 				Line: fset.Position(callPos).Line,
 				Message: fmt.Sprintf(
 					"function %s does not return error but contains panic()",
-					fd.Name.Name),
+					fd.Name.Name,
+				),
 			})
 		})
 	})
@@ -1173,7 +1183,7 @@ func TestErrorFirstTypedNil01(t *testing.T) {
 
 	enforced := errorFirstEnforcedFileMap(root)
 
-	diags := RunTyped(t, TypedOpts{Tests: false}, errorFirstPackagePatterns(),
+	diags := Run(t, Typed(TypedOpts{Tests: false}, errorFirstPackagePatterns()),
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {
@@ -1239,7 +1249,7 @@ func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
 		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
 			fixtureDir := base + "/" + dir
-			diags := RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+			diags := Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: true}, []string{"./..."}),
 				func(p *Pass) []Diagnostic {
 					var out []Diagnostic
 					for _, file := range p.Files {
@@ -1515,7 +1525,8 @@ func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.F
 				Line: fset.Position(fd.Pos()).Line,
 				Message: fmt.Sprintf(
 					"constructor %s: nil-able dependency %s is not guarded at construction time",
-					fd.Name.Name, param.name),
+					fd.Name.Name, param.name,
+				),
 			})
 		}
 	})
@@ -1625,9 +1636,11 @@ func TestExportedErrorNew(t *testing.T) {
 
 	visited := map[string]bool{}
 
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
 		patterns,
+	),
+
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {
@@ -1686,7 +1699,8 @@ func scanExportedErrorNewASTDiags(
 					Line: pos.Line,
 					Message: fmt.Sprintf(
 						"%s = errors.New(...) — migrate to errcode.New(code, message)",
-						name.Name),
+						name.Name,
+					),
 				})
 			}
 		})
@@ -1935,30 +1949,36 @@ func checkSealedKeyValueShape(name string, dt reflect.Type) []string {
 	if dt.NumField() != 2 {
 		violations = append(violations, fmt.Sprintf(
 			"%s NumField = %d, want 2 (adding a field re-opens the sealed-construction invariant; update the ADR amendment first)",
-			name, dt.NumField()))
+			name, dt.NumField(),
+		))
 		return violations
 	}
 	if keyField, ok := dt.FieldByName("key"); !ok {
 		violations = append(violations, fmt.Sprintf(
-			"%s has no 'key' field (renamed? exported? both break the sealed-construction invariant)", name))
+			"%s has no 'key' field (renamed? exported? both break the sealed-construction invariant)", name,
+		))
 	} else {
 		if keyField.PkgPath == "" {
 			violations = append(violations, fmt.Sprintf(
 				"%s.key is exported (PkgPath empty); outside-package literal construction becomes possible — re-seal by lowercasing",
-				name))
+				name,
+			))
 		}
 		if keyField.Type.Kind() != reflect.String {
 			violations = append(violations, fmt.Sprintf(
-				"%s.key Kind = %s, want String", name, keyField.Type.Kind()))
+				"%s.key Kind = %s, want String", name, keyField.Type.Kind(),
+			))
 		}
 	}
 	if valueField, ok := dt.FieldByName("value"); !ok {
 		violations = append(violations, fmt.Sprintf(
-			"%s has no 'value' field (renamed? exported? both break the sealed-construction invariant)", name))
+			"%s has no 'value' field (renamed? exported? both break the sealed-construction invariant)", name,
+		))
 	} else if valueField.PkgPath == "" {
 		violations = append(violations, fmt.Sprintf(
 			"%s.value is exported (PkgPath empty); outside-package literal construction becomes possible — re-seal by lowercasing",
-			name))
+			name,
+		))
 	}
 	return violations
 }

@@ -71,8 +71,9 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	// post-load filtering by file build constraints.
 	seen := map[string]struct{}{}
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -87,6 +88,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 			}
 			return nil
 		})
+
 	Report(t, ruleSvctokenCallerCellRequired01, diags)
 }
 
@@ -163,7 +165,8 @@ func collectGenerateServiceTokenDiagsFromFile(
 				Line: pos.Line,
 				Message: fmt.Sprintf(
 					"auth.GenerateServiceToken callerCell %q does not match metadata.CellIDPattern (%s)",
-					callerCell, metadata.CellIDPattern),
+					callerCell, metadata.CellIDPattern,
+				),
 			})
 			return
 		}
@@ -174,7 +177,8 @@ func collectGenerateServiceTokenDiagsFromFile(
 				Line: pos.Line,
 				Message: fmt.Sprintf(
 					"auth.GenerateServiceToken callerCell %q is not a known cell ID"+
-						" — register it in cells/ or actors.yaml", callerCell),
+						" — register it in cells/ or actors.yaml", callerCell,
+				),
 			})
 		}
 	})
@@ -215,8 +219,9 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *t
 
 	// Mirror the production rule's loader call (single flat-tag load) exactly.
 	loadedFiles := map[string]bool{}
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
+
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				loadedFiles[p.Rel(file)] = true

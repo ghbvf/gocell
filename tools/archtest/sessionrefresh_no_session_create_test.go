@@ -58,13 +58,11 @@ func TestSessionrefreshNoSessionStoreMutation_01(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./cells/accesscore/slices/sessionrefresh/..."}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/accesscore/slices/sessionrefresh/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
 		if p.Pkg.Path() != sessionrefreshPkgPath {
-			// Sibling subpackages (currently none) are out of scope; this
-			// keeps the rule's blast radius pinned to the slice's own code.
 			return nil
 		}
 		var ds []Diagnostic
@@ -140,7 +138,8 @@ func scanSessionrefreshFile(
 			Line: line,
 			Message: fmt.Sprintf(
 				"%s:%d: SESSIONREFRESH-NO-SESSION-CREATE-01: forbidden session.Store.%s call from refresh path",
-				rel, line, methodName),
+				rel, line, methodName,
+			),
 		})
 	})
 

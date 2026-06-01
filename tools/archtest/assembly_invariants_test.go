@@ -78,7 +78,8 @@ func loadKnownCellIDs(t *testing.T) []string {
 	// filepath.Base check would also match nested fixtures (e.g.
 	// cells/<id>/sub/cell.yaml), letting future test scaffolding silently
 	// inflate the cell ID set.
-	scope := DirsScope(root, []string{"cells"},
+	scope := DirsScope(
+		root, []string{"cells"},
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			return strings.HasPrefix(rel, "cells/") &&
@@ -228,7 +229,8 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 	require.True(t, bscan.Scan(),
 		"%s: %s is empty — must start with DO NOT EDIT marker", ruleAssemblyModulesGen01, rel)
 	firstLine := bscan.Text()
-	assert.True(t,
+	assert.True(
+		t,
 		strings.HasPrefix(firstLine, generatedMarkerPrefix),
 		"%s: %s first line must be %q; got %q",
 		ruleAssemblyModulesGen01, rel, generatedMarkerPrefix, firstLine,
@@ -242,7 +244,8 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 	assert.Equal(t, "main", af.Name.Name,
 		"%s: %s must declare `package main`", ruleAssemblyModulesGen01, rel)
 
-	assert.True(t, hasGeneratedCellModulesFunc(af),
+	assert.True(
+		t, hasGeneratedCellModulesFunc(af),
 		"%s: %s must declare top-level `func generatedCellModules() []CellModule` "+
 			"(local type) or `func generatedCellModules() []composition.CellModule` "+
 			"(qualified type); run `gocell generate assembly` to regenerate",
@@ -379,7 +382,7 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 	}
 	var violations []violation
 
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			EachInSubtree[ast.SwitchStmt](file, func(sw *ast.SwitchStmt) {
 				EachInChildren[ast.CaseClause](sw.Body, func(cc *ast.CaseClause) {
@@ -480,7 +483,8 @@ func TestAssemblyMetaMaxConsistencyDerivedTag(t *testing.T) {
 				unquoted = strings.Trim(tag, "`")
 			}
 
-			assert.True(t,
+			assert.True(
+				t,
 				containsYAMLDashTag(unquoted),
 				"%s: %s:%d AssemblyMeta.MaxConsistencyLevel struct tag is %q; "+
 					"must be `yaml:\"-\"` to prevent yaml override of derived field",
@@ -657,7 +661,8 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
 	require.NoError(t, err, "%s: rel %s", ruleAssemblyCellModuleType04, entrypointDir)
 	dirRel = filepath.ToSlash(dirRel)
 
-	scope := DirsScope(root, []string{dirRel},
+	scope := DirsScope(
+		root, []string{dirRel},
 		MatchRels(func(rel string) bool {
 			return filepath.ToSlash(filepath.Dir(rel)) == dirRel
 		}),
@@ -665,23 +670,18 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
 
 	// found covers both the local-type form and the composition API form.
 	found := false
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			if found {
 				return nil
 			}
-			// Form (a): local type declaration `type CellModule ...`
+
 			if hasTopLevelTypeDecl(file, "CellModule") {
 				found = true
 				return nil
 			}
-			// Form (b): modules_gen.go uses []<qualifier>.CellModule return type.
-			// This is the composition API form: the CellModule type comes from an
-			// imported package (runtime/composition) rather than being declared locally.
+
 			if hasGeneratedCellModulesFunc(file) {
-				// hasGeneratedCellModulesFunc already accepts the []<qualifier>.CellModule
-				// form. If the function uses a qualified CellModule selector, the type
-				// requirement is satisfied via the import.
 				if hasCompositionCellModuleReturnType(file) {
 					found = true
 				}
@@ -689,6 +689,7 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
 		}
 		return nil
 	})
+
 	if found {
 		return
 	}

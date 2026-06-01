@@ -119,7 +119,7 @@ func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
 	modulePath := readModulePath(t, root)
 
 	var hits []ledgerHit
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		hits = append(hits, scanLedgerCompositionRootPass(p, modulePath, true)...)
 		return nil
 	})
@@ -153,8 +153,9 @@ func TestAuditLedgerProtocol_ScannerCatchesAliasBypass(t *testing.T) {
 	modulePath := readModulePath(t, root)
 
 	var hits []ledgerHit
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/auditledgerfixture"},
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/auditledgerfixture"}),
+
 		func(p *Pass) []Diagnostic {
 			hits = append(hits, scanLedgerCompositionRootPass(p, modulePath, false)...)
 			return nil

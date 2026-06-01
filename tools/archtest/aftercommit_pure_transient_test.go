@@ -41,7 +41,7 @@ func TestAfterCommitHookPureTransient_A1A2_Fixtures(t *testing.T) {
 		t.Run("fixture_"+fix, func(t *testing.T) {
 			root := findModuleRoot(t)
 			relDir, pattern := afterCommitFixturePattern(fix)
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+			diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil {
 					return nil
 				}
@@ -53,6 +53,7 @@ func TestAfterCommitHookPureTransient_A1A2_Fixtures(t *testing.T) {
 				}
 				return out
 			})
+
 			AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 		})
 	}
@@ -63,7 +64,7 @@ func TestAfterCommitHookPureTransient_A1A2_Fixtures(t *testing.T) {
 func TestAfterCommitHookPureTransient_A3_Fixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := afterCommitFixturePattern("red_unallowlisted_drain")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -73,6 +74,7 @@ func TestAfterCommitHookPureTransient_A3_Fixture(t *testing.T) {
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -82,7 +84,7 @@ func TestAfterCommitHookPureTransient_A3_Fixture(t *testing.T) {
 func TestAfterCommitHookPureTransient_Escapes_Fixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := afterCommitFixturePattern("red_txfromcontext")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -92,6 +94,7 @@ func TestAfterCommitHookPureTransient_Escapes_Fixture(t *testing.T) {
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -100,7 +103,7 @@ func TestAfterCommitHookPureTransient_Escapes_Fixture(t *testing.T) {
 // (reflection MethodByName) inside production hook bodies. With no production
 // hooks yet the set is empty; the check bites when saga adds hooks.
 func TestAfterCommitHookPureTransient_BlindSpots_NoEscapeInProduction(t *testing.T) {
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -110,5 +113,6 @@ func TestAfterCommitHookPureTransient_BlindSpots_NoEscapeInProduction(t *testing
 		}
 		return out
 	})
+
 	Report(t, ruleAfterCommitHookPureTransient+"-BLINDSPOT", diags)
 }

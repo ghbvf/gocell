@@ -525,7 +525,8 @@ func validateLocalUsesResolve(repoRoot, path string, body []byte) error {
 // fixed at depth 3 (.github/actions/<name>/action.yml) — nested action.yml
 // files in deeper sub-directories are ignored, matching the original walk.
 func pinnableYAMLScope(root string) scanner.Scope {
-	return scanner.DirsScope(root, []string{".github"},
+	return scanner.DirsScope(
+		root, []string{".github"},
 		scanner.MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			parts := strings.Split(rel, "/")

@@ -27,7 +27,7 @@ func TestKernelCell_DoesNotImportRuntime(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/cell"}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/cell"}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
@@ -59,7 +59,7 @@ func TestKernelCell_RegistrarDefinedHere(t *testing.T) {
 		isIface    bool
 		pkgPath    string
 	)
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/cell"}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/cell"}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}

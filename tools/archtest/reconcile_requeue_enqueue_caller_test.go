@@ -208,7 +208,7 @@ func TestReconcileRequeueEnqueueCaller01(t *testing.T) {
 	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
 
 	var allDiags []Diagnostic
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != reconcilePkg {
 			return nil
 		}
@@ -216,6 +216,7 @@ func TestReconcileRequeueEnqueueCaller01(t *testing.T) {
 		allDiags = append(allDiags, diags...)
 		return nil
 	})
+
 	Report(t, "RECONCILE-REQUEUE-ENQUEUE-CALLER-01", allDiags)
 }
 
@@ -235,14 +236,13 @@ func TestReconcileRequeueEnqueueCaller01_NonVacuousProof(t *testing.T) {
 
 	var totalFound int
 	var foundInSanctioned int
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != reconcilePkg {
 			return nil
 		}
 		_, total := scanReconcileRequeueEnqueueCallers(p)
 		totalFound += total
 
-		// Count sends in each sanctioned function directly (to confirm matching).
 		for _, file := range p.Files {
 			if strings.HasSuffix(p.Rel(file), "_test.go") {
 				continue

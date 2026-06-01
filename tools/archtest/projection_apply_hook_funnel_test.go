@@ -204,16 +204,12 @@ func TestProjectionApplyHookFunnel01(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
 			for _, f := range p.Files {
-				// NOTE: do NOT blanket-skip generated files (p.IsGenerated) here —
-				// that would exempt healthz_gen.go / slice_gen.go too. Generated-file
-				// scoping is decided solely by isProjectionApplyHookAllowed, which
-				// allows ONLY cell_gen.go (F6). This matches the reverse-fixture scan.
 				rel := p.Rel(f)
 				absPath := p.Abs(f)
 				if isProjectionApplyHookAllowed(rel, absPath) {
@@ -265,7 +261,7 @@ func TestProjectionApplyHookFunnel01_ReverseFixture(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -313,7 +309,7 @@ func TestProjectionApplyHookFunnel01_ReverseFixture_GeneratedNotSanctioned(t *te
 
 	var diags []Diagnostic
 
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -369,13 +365,12 @@ func TestProjectionApplyHookFunnel01_ReverseBlindSpot_NoFuncValue(t *testing.T) 
 
 	var violations []string
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
-			// calleePos records positions of Ident/Sel that are in callee position
-			// of a direct Coordinator.Subscribe call — these are legitimate.
+
 			calleePos := make(map[interface{}]struct{})
 			for _, f := range p.Files {
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
@@ -406,7 +401,7 @@ func TestProjectionApplyHookFunnel01_ReverseBlindSpot_NoFuncValue(t *testing.T) 
 					if sel.Sel.Name != projectionSubscribeMethod {
 						return
 					}
-					// If already in callee position, skip.
+
 					if _, isCallee := calleePos[sel.Sel]; isCallee {
 						return
 					}

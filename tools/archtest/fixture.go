@@ -1,7 +1,5 @@
 package archtest
 
-import "testing"
-
 // fixtureBuildTag is the build-tag literal that gates archtest fixture
 // sub-packages. Three placement conventions coexist:
 //
@@ -48,11 +46,11 @@ import "testing"
 // each fixture package is a verbatim "archtest_fixture" string).
 const fixtureBuildTag = "archtest_fixture"
 
-// FixtureOpts is the option struct accepted by RunTypedFixture.
+// FixtureOpts is the option struct accepted by [Fixture].
 // It deliberately lacks a Tags field — the archtest_fixture build tag is
-// supplied exclusively by RunTypedFixture's function body. Business callers
-// therefore cannot express "load a fixture with a custom tag" at the type
-// level; passing Tags would require dropping back to RunTyped /
+// supplied exclusively by the [Run] dispatch for a fixtureRunScope. Business
+// callers therefore cannot express "load a fixture with a custom tag" at the
+// type level; passing Tags would require dropping back to Typed /
 // runTypedWithRoot, which is then caught upstream by
 // PASS-FUNNEL-FIXTURE-TAG-01 (façade bypass closure).
 //
@@ -64,50 +62,57 @@ type FixtureOpts struct {
 	Tests bool
 }
 
-// RunTypedFixture loads packages tagged with the archtest_fixture build tag,
-// then dispatches via Pass + Rule. It is the typed funnel for fixture-package
+// fixtureRunScope dispatches [Run] in typed mode over fixture-tagged packages.
+// The archtest_fixture build tag is NOT carried on this struct — it is injected
+// by the [Run] dispatch for this case, so the tag never appears at a business
+// call site.
+type fixtureRunScope struct {
+	opts     FixtureOpts
+	patterns []string
+}
+
+func (fixtureRunScope) isRunScope() {}
+
+// Fixture builds a typed [RunScope] over packages tagged with the
+// archtest_fixture build tag. It is the typed funnel for fixture-package
 // archtest loading; all fixture-load sites across archtest *_test.go MUST use
-// this entry point. The framework-internal exceptions are limited to files in
-// passFunnelPermanentExempt (pass_funnel_test.go, pass_test.go,
+// Run(t, Fixture(...), rule). The framework-internal exceptions are limited to
+// files in passFunnelPermanentExempt (pass_funnel_test.go, pass_test.go,
 // archtest_test.go in tools/archtest/), which call typeseval.SharedResolver
 // directly because they implement or directly test the funnel machinery and
 // cannot be expressed through Pass without circular dependency — see
 // pass_funnel_test.go's passFunnelPermanentExempt godoc for the structural
 // justification.
 //
-// Parameter type *testing.T (not testing.TB): fixture loading has no spy
-// fatal-path requirement. RunTyped / RunTypedProduction also use *testing.T.
-// RunTypedDir uses testing.TB for its standalone-fixture-module spy testing —
-// orthogonal use case. See ADR 202605141519 §Migration path Stage 4.
+// The archtest_fixture build tag is supplied exclusively by the [Run] dispatch
+// for a fixtureRunScope (pass.go) — not by this constructor's caller. The
+// unified Run accepts testing.TB; the fixture scope has no spy fatal-path
+// requirement, so no caller distinction is needed. See ADR 202605141519
+// §Migration path Stage 4.
 //
 // AI-robust (funnel double-lock):
 //   - Outward Hard (business callers, downstream funnel side): FixtureOpts has
-//     no Tags field; writing RunTypedFixture(t, FixtureOpts{Tags: ...}, ...)
-//     is a compile error.
+//     no Tags field, and the unified Run takes a sealed RunScope (no tag
+//     parameter at all) — there is no public surface that carries a build tag.
 //   - Cross-package Form D Hard (type system, #944): fixtureBuildTag is
 //     unexported, so business code outside package archtest cannot feed it to
 //     a loader — a compile error, not an archtest finding.
 //   - Upstream Hard (façade bypass closure): PASS-FUNNEL-FIXTURE-TAG-01
 //     archtest rejects any (callee, arg) pair where the callee resolves to a
-//     loader (archtest.RunTyped / RunTypedProduction / RunTypedDir /
-//     runTypedWithRoot, or typeseval.SharedResolver / LoadPackages /
-//     LoadProductionPackages) AND any arg subtree contains an Expr that
-//     EvaluateConstString resolves to "archtest_fixture", OR an *ast.Ident
-//     bound (same file) to a slice literal carrying such an Expr. This catches
-//     the raw literal / same-pkg const Ident / BinaryExpr const-concat /
-//     same-file var-binding forms uniformly via the helper's resolution
-//     lattice (archtest-bound (callee, arg) form-uniqueness — isomorphic to
-//     charter §Hard 范本 第 2 条 panic(panicregister.Approved) form; see
-//     pass_funnel_test.go diagsFixtureTagBypass godoc for full evidence +
-//     accepted Blind spots).
+//     loader (archtest.runTypedWithRoot, or typeseval.SharedResolver /
+//     LoadPackages / LoadProductionPackages) AND any arg subtree contains an
+//     Expr that EvaluateConstString resolves to "archtest_fixture", OR an
+//     *ast.Ident bound (same file) to a slice literal carrying such an Expr.
+//     This catches the raw literal / same-pkg const Ident / BinaryExpr
+//     const-concat / same-file var-binding forms uniformly via the helper's
+//     resolution lattice (archtest-bound (callee, arg) form-uniqueness —
+//     isomorphic to charter §Hard 范本 第 2 条 panic(panicregister.Approved)
+//     form; see pass_funnel_test.go diagsFixtureTagBypass godoc for full
+//     evidence + accepted Blind spots).
 //   - Inward Medium (framework internal): the field set of FixtureOpts itself
-//     is frozen by TestRunTypedFixture_FixtureOptsLacksTagsField via reflect
+//     is frozen by TestRun_Fixture_FixtureOptsLacksTagsField via reflect
 //     assertion (NumField == 1, sole field "Tests" of kind Bool) — drift here
 //     is a test failure, not a compile error.
-func RunTypedFixture(t *testing.T, opts FixtureOpts, patterns []string, rule Rule) []Diagnostic {
-	t.Helper()
-	return runTypedWithRoot(t, findModuleRoot(t), TypedOpts{
-		Tests: opts.Tests,
-		Tags:  []string{fixtureBuildTag},
-	}, patterns, rule)
+func Fixture(opts FixtureOpts, patterns []string) RunScope {
+	return fixtureRunScope{opts: opts, patterns: patterns}
 }

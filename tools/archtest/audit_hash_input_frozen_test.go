@@ -138,9 +138,12 @@ func TestAuditHashInputFrozen_A1_StructShape(t *testing.T) {
 // alias cannot bypass the lock.
 func TestAuditHashInputFrozen_A2_HmacCallsite(t *testing.T) {
 	t.Parallel()
-	diags := RunTyped(t, TypedOpts{}, []string{
+	diags := Run(t, Typed(TypedOpts{}, []string{
 		"./runtime/audit/ledger/...",
-	}, runAuditHashInputA2Rule)
+	}),
+
+		runAuditHashInputA2Rule)
+
 	Report(t, ruleAuditHashInputFrozen01+"/A2", diags)
 }
 

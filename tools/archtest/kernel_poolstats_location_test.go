@@ -60,7 +60,7 @@ func TestKERNEL_POOLSTATS_LOCATION_01b_ContractIsImportZero(t *testing.T) {
 	root := findModuleRoot(t)
 
 	scope := DirsScope(root, []string{poolstatsCanonicalDir})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			for _, imp := range file.Imports {
@@ -80,6 +80,7 @@ func TestKERNEL_POOLSTATS_LOCATION_01b_ContractIsImportZero(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, "KERNEL-POOLSTATS-LOCATION-01b", diags)
 }
 

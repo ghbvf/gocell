@@ -188,12 +188,11 @@ func TestReflectStringArgScanner_TypedReceiverAndConstArg(t *testing.T) {
 	const fixture = "./cells/accesscore/internal/credentialauthority/testdata/reflect_string_form_red"
 
 	var fieldHits, methodHits []reflectStringArgHit
-	_ = RunTyped(t, TypedOpts{}, []string{fixture}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{fixture}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
-		// No _test.go guard: TypedOpts{} defaults Tests:false, so p.Files holds
-		// only the fixture's non-test source.
+
 		for _, file := range p.Files {
 			fieldHits = append(fieldHits, scanReflectStringArgCalls(p, file, reflectFieldByName,
 				func(n string) bool { return n == credRevokedAt })...)

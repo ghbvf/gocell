@@ -107,7 +107,7 @@ const (
 func CheckYAMLQuoteFunnel(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 
-	return RunTypedProduction(t, TypedOpts{Tests: false, Tags: cfg.BuildTags},
+	return Run(t, Production(TypedOpts{Tests: false, Tags: cfg.BuildTags}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

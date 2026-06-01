@@ -165,8 +165,9 @@ func TestOutboxEntrySealedConstruction01_SoleReconstructionSurface(t *testing.T)
 	}
 
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/outbox/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"./kernel/outbox/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil
@@ -185,11 +186,11 @@ func TestOutboxEntrySealedConstruction01_SoleReconstructionSurface(t *testing.T)
 					continue
 				}
 				switch o := obj.(type) {
-				case *types.Func: // package-level function
+				case *types.Func:
 					if sig, ok := o.Type().(*types.Signature); ok && sigReturnsType(sig, entryType) {
 						funcs = append(funcs, name)
 					}
-				case *types.TypeName: // named type — check its methods
+				case *types.TypeName:
 					named, ok := o.Type().(*types.Named)
 					if !ok {
 						continue
@@ -209,10 +210,12 @@ func TestOutboxEntrySealedConstruction01_SoleReconstructionSurface(t *testing.T)
 
 			diags = append(diags, diffExpectedSet(
 				"reconstruction funcs (exported funcs returning outbox.Entry)",
-				reconstructionFuncAllowed, funcs)...)
+				reconstructionFuncAllowed, funcs,
+			)...)
 			diags = append(diags, diffExpectedSet(
 				"reconstruction mirrors (exported struct types with a method returning outbox.Entry)",
-				map[string]struct{}{"EntryScan": {}}, mirrors)...)
+				map[string]struct{}{"EntryScan": {}}, mirrors,
+			)...)
 			return nil
 		})
 

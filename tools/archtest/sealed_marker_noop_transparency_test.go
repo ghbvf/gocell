@@ -62,7 +62,7 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 	t.Parallel()
 
 	found := 0
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/..."}, func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/..."}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}

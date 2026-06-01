@@ -85,7 +85,8 @@ func loadContractDocs(root string) ([]contractDoc, error) {
 	// MatchRels filter restricts to files named "contract.yaml"; the path for
 	// examples must also contain a "/contracts/" segment to avoid picking up
 	// non-contract YAML files scattered under examples/.
-	scope := DirsScope(root, []string{"contracts", "examples"},
+	scope := DirsScope(
+		root, []string{"contracts", "examples"},
 		MatchRels(func(rel string) bool {
 			if !strings.HasSuffix(rel, "/contract.yaml") {
 				return false
@@ -139,7 +140,8 @@ func extractSourceComment(content []byte) string {
 // correctly (the comment carries the true source path, not the dot-to-slash
 // derived path).
 func loadGeneratedSourceMap(root, modPath string, kindDir, fileSuffix string) (map[string]string, error) {
-	scope := DirsScope(root, []string{"generated/contracts/" + kindDir},
+	scope := DirsScope(
+		root, []string{"generated/contracts/" + kindDir},
 		IncludeGenerated(),
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, fileSuffix)
@@ -208,7 +210,8 @@ type sliceSubscriberEntry struct {
 // examples slice subscribing to a platform contract is visible to
 // DEAD-CONTRACT-01.
 func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
-	scope := DirsScope(root, []string{"cells", "examples"},
+	scope := DirsScope(
+		root, []string{"cells", "examples"},
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),
@@ -250,7 +253,8 @@ func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 // are NOT populated by the static loader DEAD-CONTRACT-01 uses; the wiring must
 // be discovered from the slice scan, exactly as event subscribers are).
 func loadSliceWebhookWiring(root string) (map[string]bool, error) {
-	scope := DirsScope(root, []string{"cells", "examples"},
+	scope := DirsScope(
+		root, []string{"cells", "examples"},
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),
@@ -323,11 +327,11 @@ func TestImplDeclCover(t *testing.T) {
 		return !strings.HasSuffix(rel, "_test.go") && !strings.Contains(rel, "/testdata/")
 	}))
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var d []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// Derive the cell owning this file: cells/<A>/...
+
 			ownerCell := extractCellName(rel)
 			if ownerCell == "" {
 				continue
@@ -340,12 +344,12 @@ func TestImplDeclCover(t *testing.T) {
 				if !strings.HasPrefix(impPath, cellsPrefix) {
 					continue
 				}
-				// import is in cells/ — check it belongs to the same cell
+
 				impCell := extractCellNameFromImport(cellsPrefix, impPath)
 				if impCell == "" || impCell == ownerCell {
 					continue
 				}
-				// Cross-cell import: allow if it's under <impCell>test/
+
 				testBoundary := cellsPrefix + impCell + "/" + impCell + "test/"
 				if strings.HasPrefix(impPath, testBoundary) {
 					continue
@@ -361,6 +365,7 @@ func TestImplDeclCover(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "IMPL-DECL-COVER-01", diags)
 }
 
@@ -608,14 +613,13 @@ func TestHandlerDeclCover(t *testing.T) {
 
 	// Single pass: collect Service interfaces AND cell/example concrete types.
 	// After the pass, do the cross-check.
-	_ = RunTyped(t, TypedOpts{Tests: false}, combinedPatterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, combinedPatterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
 		pkgPath := p.Pkg.Path()
 
 		if strings.HasPrefix(pkgPath, generatedHTTPPrefix) {
-			// Collect generated Service interface.
 			obj := p.Pkg.Scope().Lookup("Service")
 			if obj == nil {
 				return nil
@@ -647,11 +651,6 @@ func TestHandlerDeclCover(t *testing.T) {
 			return nil
 		}
 
-		// Collect concrete types from cells/* + examples/*. Visibility is
-		// orthogonal to interface satisfaction: a Go idiom is to expose only
-		// the constructor and keep the receiver type unexported. Filtering by
-		// Exported() would allow an unexported impl to silently bypass the
-		// orphan check, so we visit every TypeName regardless of visibility.
 		pkgScope := p.Pkg.Scope()
 		for _, name := range pkgScope.Names() {
 			obj := pkgScope.Lookup(name)
@@ -826,14 +825,11 @@ func TestEmitDeclCover(t *testing.T) {
 		}
 	}
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
-		// Structural classifier: only contract-owned packages
-		// (cells/<X>/... or examples/<demo>/cells/<X>/...) need their emit
-		// topics validated. Framework code (runtime/, adapters/, kernel/) is
-		// structurally exempt — it has no ownerCell to anchor a contract.
+
 		cellID := extractCellIDFromPkgPath(modPath, p.Pkg.Path())
 		if cellID == "" {
 			return nil
@@ -843,10 +839,6 @@ func TestEmitDeclCover(t *testing.T) {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 
-			// Form A: outbox.Emit[T](ctx, emitter, topic, payload) — generic helper,
-			// topic at positional arg[2]. Used by cells/{accesscore/sessionlogin,
-			// accesscore/sessionlogout, configcore/configpublish, configcore/configwrite,
-			// auditcore/internal/appender} as of 2026-05.
 			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 				fun := call.Fun
 				if idx, ok := fun.(*ast.IndexExpr); ok {
@@ -858,9 +850,7 @@ func TestEmitDeclCover(t *testing.T) {
 				if !ok || pkgPath != outboxPkg || name != "Emit" {
 					return
 				}
-				// outbox.Emit signature is Emit(ctx, clk, emitter, topic, payload)
-				// since the clock became a mandatory positional arg (issue #1229):
-				// the topic is Args[3].
+
 				if len(call.Args) < 4 {
 					return
 				}
@@ -886,25 +876,12 @@ func TestEmitDeclCover(t *testing.T) {
 				}
 			})
 
-			// Form B: outbox.Entry{EventType: TOPIC, ...} composite-literal — the
-			// underlying CellEmitter.Emit(ctx, entry) public API. The topic lives
-			// in the EventType field, not in a positional arg. Used by cells/
-			// {accesscore/setup, accesscore/identitymanage, accesscore/rbacassign,
-			// accesscore/internal/accountlockout (×2)} and examples/{iotdevice/
-			// deviceregister, todoorder/ordercreate, todoorder/orderconfirm} as
-			// of 2026-05 — 8 production sites that Form A scan misses entirely.
-			//
-			// Zero-value `outbox.Entry{}` literals (return-error placeholders,
-			// no fields set) have no emission intent and are skipped.
 			EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
 				typPkg, typName, ok := ResolvePackageRef(p.TypesInfo, lit.Type)
 				if !ok || typPkg != outboxPkg || typName != "Entry" {
 					return
 				}
-				// SCANNER-FRAMEWORK-USAGE-01 Path B compliance: depth-1 typed
-				// find-first over lit.Elts for the EventType KV entry.
-				// Original `for _, elt := range lit.Elts { elt.(*ast.KeyValueExpr) }`
-				// is the Path B violation.
+
 				kv, found := FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
 					keyIdent, ok := kv.Key.(*ast.Ident)
 					return ok && keyIdent.Name == "EventType"
@@ -937,6 +914,7 @@ func TestEmitDeclCover(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "EMIT-DECL-COVER-01", diags)
 }
 
@@ -1111,7 +1089,7 @@ func TestDeadContractCover(t *testing.T) {
 	var genServiceIfaces []ifaceEntry
 	var cellNamedTypes []namedEntry
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, combinedPatterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, combinedPatterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -1146,10 +1124,7 @@ func TestDeadContractCover(t *testing.T) {
 		if !isCells && !isExamples {
 			return nil
 		}
-		// Visit every TypeName regardless of visibility (see F2 rationale on
-		// the HANDLER-DECL-COVER-01 collection loop). An unexported impl
-		// satisfying a generated Service via type-system check is just as
-		// valid as an exported one; the orphan check must catch both.
+
 		pkgScope := p.Pkg.Scope()
 		for _, name := range pkgScope.Names() {
 			obj := pkgScope.Lookup(name)
@@ -1367,11 +1342,11 @@ func TestDeadCodeCover(t *testing.T) {
 			!strings.Contains(rel, "/testdata/")
 	}))
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var d []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// Check import paths.
+
 			for _, imp := range f.Imports {
 				if imp.Path == nil {
 					continue
@@ -1387,7 +1362,7 @@ func TestDeadCodeCover(t *testing.T) {
 					})
 				}
 			}
-			// Check string literals for exact contract IDs.
+
 			EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
 				if lit.Kind.String() != "STRING" {
 					return
@@ -1409,6 +1384,7 @@ func TestDeadCodeCover(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "DEAD-CODE-01", diags)
 }
 

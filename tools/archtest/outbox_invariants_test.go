@@ -133,7 +133,7 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 	}
 
 	hits := 0
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			hits++
 			rel := p.Rel(f)
@@ -163,6 +163,7 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 		}
 		return nil
 	})
+
 	if hits == 0 {
 		t.Fatal("OUTBOX-MARK-RETURNS-BOOL-01: no runtime/outbox/relay*.go files found")
 	}
@@ -1057,7 +1058,7 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 	}
 
 	var violations []outboxTopicViolation
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -1271,7 +1272,7 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 			t.Parallel()
 
 			var violations []outboxTopicViolation
-			_ = RunTypedDir(t, fixturesRoot, TypedOpts{}, []string{c.pattern}, func(p *Pass) []Diagnostic {
+			_ = Run(t, StandaloneModule(fixturesRoot, TypedOpts{}, []string{c.pattern}), func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil || p.Fset == nil {
 					return nil
 				}
@@ -1674,16 +1675,13 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
 
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			// Explicit kernel-internal allowlist remains in force; the
-			// production-package partition has already filtered codegen
-			// output at the package level (via RunTypedProduction), so
-			// no per-file generated/ skip is needed here.
+
 			if _, ok := handleResultLiteralAllowlist[rel]; ok {
 				continue
 			}
@@ -1721,7 +1719,7 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 	t.Parallel()
 
 	var generatedFiles []string
-	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -1852,8 +1850,9 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 		return named.Obj().Pkg().Path() == outboxPkgPath
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: true},
-		[]string{outboxtestPattern},
+	_ = Run(t, Typed(TypedOpts{Tests: true},
+		[]string{outboxtestPattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -1869,7 +1868,7 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 					if !ok || !isSubscriberCloseMethod(fn) {
 						return
 					}
-					// This is a Subscriber.Close call — it must be inside closeWithBudget.
+
 					holder := enclosingFuncName(file, call.Pos())
 					if holder == sanctionedHolder {
 						return
@@ -1912,8 +1911,9 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 	}
 	var violations []violation
 
-	_ = RunTyped(t, TypedOpts{Tests: true},
-		[]string{outboxtestPattern},
+	_ = Run(t, Typed(TypedOpts{Tests: true},
+		[]string{outboxtestPattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -1921,7 +1921,6 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
 
-				// Collect all SelectorExpr positions that are in CallExpr.Fun position.
 				callFunPositions := map[ast.Node]bool{}
 				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
@@ -1929,15 +1928,12 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 					}
 				})
 
-				// Blind spot 1: SelectorExpr with Sel.Name == "Close" that is NOT
-				// in a CallExpr.Fun position — potential method-value assignment.
-				// Soft (name-only); typed-resolver upgrade tracked in #1118.
 				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 					if sel.Sel == nil || sel.Sel.Name != "Close" {
 						return
 					}
 					if callFunPositions[sel] {
-						return // legitimate direct call already covered by the main rule
+						return
 					}
 					violations = append(violations, violation{
 						rel:  rel,
@@ -1946,7 +1942,6 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 					})
 				})
 
-				// Blind spot 2: reflect.MethodByName("Close")
 				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
 					func(n string) bool { return n == "Close" }) {
 					violations = append(violations, violation{

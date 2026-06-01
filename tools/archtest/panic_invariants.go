@@ -336,9 +336,9 @@ func CheckPanicRegistered(t *testing.T, cfg ConfigForExternalCell) []Diagnostic 
 		return nil
 	}
 
-	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{}, []string{"./..."}), scan)
 	if len(cfg.BuildTags) > 0 {
-		_ = RunTyped(t, TypedOpts{Tags: cfg.BuildTags}, []string{"./..."}, scan)
+		_ = Run(t, Typed(TypedOpts{Tags: cfg.BuildTags}, []string{"./..."}), scan)
 	}
 
 	sort.Slice(violations, func(i, j int) bool {

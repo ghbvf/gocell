@@ -62,7 +62,7 @@ func TestTestSleepDiscipline(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+	diags := Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -102,7 +102,8 @@ func scanTestSleepDisciplineDiags(fset *token.FileSet, file *ast.File, rel strin
 					"or testwait.Deterministic(t, ch, ...) for channel waits "+
 					"(see pkg/testutil/testwait). "+
 					"ref: docs/plans/202605011500-029-master-roadmap.md G6",
-				sleepAllowMarker),
+				sleepAllowMarker,
+			),
 		})
 	})
 	return out

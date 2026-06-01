@@ -63,7 +63,7 @@ const contracttestLoadByIDFunc = "LoadByID"
 func TestContracttestLoadByIDLiteral01(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: true}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -81,15 +81,15 @@ func TestContracttestLoadByIDLiteral01_RedComputedID(t *testing.T) {
 	t.Parallel()
 
 	fixturePattern := "./tools/archtest/contracttest_loadbyid_literal_fixtures/red_computed_id/..."
-	diags := RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{fixturePattern},
+	diags := Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
 			return scanLoadByIDLiteralViolations(p)
-		},
-	)
+		})
 
 	require.NotEmpty(t, diags,
 		"CONTRACTTEST-LOADBYID-LITERAL-01 reverse self-check: fixture must produce ≥1 violation "+
@@ -108,15 +108,15 @@ func TestContracttestLoadByIDLiteral01_RedStructFieldID(t *testing.T) {
 	t.Parallel()
 
 	fixturePattern := "./tools/archtest/contracttest_loadbyid_literal_fixtures/red_struct_field_id/..."
-	diags := RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{fixturePattern},
+	diags := Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
 			return scanLoadByIDLiteralViolations(p)
-		},
-	)
+		})
 
 	require.NotEmpty(t, diags,
 		"CONTRACTTEST-LOADBYID-LITERAL-01 reverse self-check: fixture must produce ≥1 violation "+

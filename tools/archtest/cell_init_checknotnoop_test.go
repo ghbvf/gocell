@@ -306,9 +306,10 @@ func TestCELL_L2_INIT_CHECKNOTNOOP_CALLED_01(t *testing.T) {
 	require.NotEmpty(t, targets,
 		"expected at least one L2+ cell in cells/** — has the platform cell layout changed?")
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanCellsForInitCheckNotNoop(p, targets)
 	})
+
 	diags = append(diags, missingDiags...)
 
 	Report(t, cellInitCheckNotNoopRuleID, diags)
@@ -686,10 +687,11 @@ func fixtureModPath(t *testing.T) string {
 func TestCellInitCheckNotNoop_RedL2Missing(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "red_l2_missing", "RedL2Cell", fixtureModPath(t))
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["red_l2_missing"],
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgs["red_l2_missing"]),
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
+
 	require.Len(t, diags, 1,
 		"red_l2_missing fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
 	require.Contains(t, diags[0].Message, "does not call kernel/outbox.CheckNotNoop",
@@ -705,10 +707,11 @@ func TestCellInitCheckNotNoop_RedL2Missing(t *testing.T) {
 func TestCellInitCheckNotNoop_RedCrossPkg(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "red_cross_pkg", "RedCrossPkgCell", fixtureModPath(t))
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["red_cross_pkg"],
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgs["red_cross_pkg"]),
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
+
 	require.Len(t, diags, 1,
 		"red_cross_pkg fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
 	require.Contains(t, diags[0].Message, "does not call kernel/outbox.CheckNotNoop",
@@ -725,10 +728,11 @@ func TestCellInitCheckNotNoop_RedCrossPkg(t *testing.T) {
 func TestCellInitCheckNotNoop_RedMissingInit(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "red_missing_init", "RedMissingInitCell", fixtureModPath(t))
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["red_missing_init"],
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgs["red_missing_init"]),
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
+
 	require.Len(t, diags, 1,
 		"red_missing_init fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
 	require.Contains(t, diags[0].Message, "missing Init method",
@@ -746,10 +750,11 @@ func TestCellInitCheckNotNoop_RedMissingInit(t *testing.T) {
 func TestCellInitCheckNotNoop_RedFuncLitOnly(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "red_funclit_only", "RedFuncLitCell", fixtureModPath(t))
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["red_funclit_only"],
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgs["red_funclit_only"]),
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
+
 	require.Len(t, diags, 1,
 		"red_funclit_only fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
 	require.Contains(t, diags[0].Message, "does not call kernel/outbox.CheckNotNoop",
@@ -775,10 +780,11 @@ func TestCellInitCheckNotNoop_BoundaryL1(t *testing.T) {
 
 	// End-to-end shape: load the L1 fixture package; supply the empty
 	// target list that Phase A would produce; assert zero diagnostics.
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["boundary_l1"],
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgs["boundary_l1"]),
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, nil)
 		})
+
 	require.Empty(t, diags,
 		"boundary_l1 fixture: expected zero diagnostics with L1-dropped target list, got %+v", diags)
 }
@@ -790,10 +796,11 @@ func TestCellInitCheckNotNoop_BoundaryL1(t *testing.T) {
 func TestCellInitCheckNotNoop_BoundaryTransitive(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "boundary_transitive", "BoundaryTransitiveCell", fixtureModPath(t))
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["boundary_transitive"],
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgs["boundary_transitive"]),
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
+
 	require.Empty(t, diags,
 		"boundary_transitive fixture: expected zero diagnostics, got %+v", diags)
 }
@@ -824,7 +831,7 @@ func TestCellInitCheckNotNoop_BoundaryTransitive(t *testing.T) {
 // reference), not a string anchor.
 func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
 	t.Parallel()
-	violations := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	violations := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -850,6 +857,7 @@ func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
 		}
 		return out
 	})
+
 	require.Empty(t, violations,
 		"reverse self-check (reflect blind-spot): unexpected reflect.ValueOf(... CheckNotNoop ...) in production AST; "+
 			"each entry below documents an evasion site that bypasses Phase B's *types.Info BFS: %+v",
@@ -935,7 +943,7 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 	targets, _ := collectL2PlusTargets(t, scope, modPath)
 	require.NotEmpty(t, targets)
 
-	violations := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	violations := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Pkg == nil {
 			return nil
 		}
@@ -947,9 +955,7 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 		if initFn == nil {
 			return nil
 		}
-		// Over-approximate: scan all same-package GoStmts. False positives
-		// (goroutine outside Init reachable set) are still worth surfacing
-		// because the synchronous contract applies package-wide.
+
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -969,6 +975,7 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 		}
 		return out
 	})
+
 	require.Empty(t, violations,
 		"reverse self-check (async blind-spot): unexpected `go func` containing CheckNotNoop in L2+ cell package: %+v",
 		violations)

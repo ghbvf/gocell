@@ -81,7 +81,7 @@ func TestBASESLICE_CTOR_FUNNEL_01(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 	})
 
@@ -227,10 +227,13 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+	diags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+		),
+
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 		},
@@ -283,10 +286,13 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+	diags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+		),
+
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 		},
@@ -328,7 +334,7 @@ func TestBASESLICE_CTOR_FUNNEL_01_GreenProduction(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 	})
 

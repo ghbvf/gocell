@@ -131,7 +131,7 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 	var prodViolations []string
 	fixtureViolationCount := make(map[string]int, len(fixtureCases))
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Fset == nil || p.Pkg == nil {
 			return nil
 		}
@@ -347,7 +347,7 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt(t *testing.T) {
 	// asserts that a multi-statement body (log.Print + return) is detected.
 	// We additionally verify production absence explicitly.
 	var multiStmtFound bool
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/redis/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/redis/..."}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
@@ -364,6 +364,7 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt(t *testing.T) {
 		}
 		return nil
 	})
+
 	assert.False(t, multiStmtFound,
 		"production Revoke/RevokeForSubject body must be single-statement after GREEN fix; F1 fixture is the RED-state mirror")
 }
@@ -377,7 +378,7 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/redis/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/redis/..."}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
@@ -397,6 +398,7 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue(t *testing.T) {
 		}
 		return nil
 	})
+
 	assert.Empty(t, violations,
 		"CACHING-SESSION-REVOKE-DELEGATE-ONLY-01 blind-spot: method-value assignment of "+
 			"Revoke/RevokeForSubject found in adapters/redis production code — "+
@@ -410,7 +412,7 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/redis/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/redis/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -430,6 +432,7 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect(t *testing.T) {
 		}
 		return nil
 	})
+
 	assert.Empty(t, violations,
 		"CACHING-SESSION-REVOKE-DELEGATE-ONLY-01 blind-spot: reflect.MethodByName of "+
 			"Revoke/RevokeForSubject found in adapters/redis — refactor to direct form.")

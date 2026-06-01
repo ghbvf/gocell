@@ -314,7 +314,7 @@ func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -373,7 +373,7 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -433,7 +433,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -518,7 +518,7 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -622,22 +622,24 @@ func TestCredentialInvalidateFunnel_AllowlistEntriesAreLive(t *testing.T) {
 	t.Parallel()
 
 	hits := map[string]int{}
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
 			}
-			countUpstreamAllowlistHits(p, file, hits)
-		}
-		return nil
-	})
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				countUpstreamAllowlistHits(p, file, hits)
+			}
+			return nil
+		})
 
 	var stale []string
 	for callerID := range upstreamCallerCallsiteAllowlist {
@@ -696,8 +698,9 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -827,7 +830,7 @@ func scanApplierInterfaceCanonical(t *testing.T, patterns []string) []string {
 	t.Helper()
 	var canonical types.Type
 	var candidates []applierInterfaceCandidate
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
@@ -869,6 +872,7 @@ func scanApplierInterfaceCanonical(t *testing.T, patterns []string) []string {
 		}
 		return nil
 	})
+
 	require.NotNil(t, canonical,
 		"credentialinvalidate.Applier signature not captured — ensure "+
 			"./cells/accesscore/internal/credentialinvalidate is in the patterns slice")
@@ -958,7 +962,7 @@ func verifyRedFixtureDetectedPass(
 	t.Helper()
 
 	var found int
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -967,6 +971,7 @@ func verifyRedFixtureDetectedPass(
 		}
 		return nil
 	})
+
 	_ = diags
 	require.GreaterOrEqual(t, found, wantMin,
 		"RED fixture self-check FAILED: %s — expected ≥ %d violations, got %d. "+

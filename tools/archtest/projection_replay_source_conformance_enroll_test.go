@@ -86,7 +86,7 @@ func TestProjectionReplaySourceConformanceEnroll01(t *testing.T) {
 	var rsIface *types.Interface
 	var rsImplPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -125,7 +125,7 @@ func TestProjectionReplaySourceConformanceEnroll01(t *testing.T) {
 	// ─── Step 3: scan test corpus for RunReplaySourceConformance callsites ────
 	enrolledImpls := make(map[string]bool)
 
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -143,8 +143,7 @@ func TestProjectionReplaySourceConformanceEnroll01(t *testing.T) {
 					if !ok || pkgPath != replaySourceConformancePkg || name != replaySourceConformanceFuncName {
 						return
 					}
-					// RunReplaySourceConformance(t *testing.T, src projection.ReplaySource, seedEntries func)
-					// args[1] is the src argument.
+
 					if len(call.Args) < 2 {
 						return
 					}
@@ -179,7 +178,8 @@ func unenrolledReplaySourceDiags(implSet, enrolledImpls map[string]bool) []Diagn
 					"(PROJECTION-REPLAY-SOURCE-CONFORMANCE-ENROLL-01). Add a _test.go that "+
 					"calls projectiontest.RunReplaySourceConformance(t, <src>, seedFn) passing a "+
 					"concretely-typed instance of this impl.",
-				implKey),
+				implKey,
+			),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
@@ -204,7 +204,7 @@ func TestProjectionReplaySourceConformanceEnroll01_RedFixture(t *testing.T) {
 	// ─── Pass 1 (Tests:false): resolve iface + collect impls ─────────────────
 	var rsIface *types.Interface
 	var rsImplPkgs []*types.Package
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false}, loadPatterns,
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, loadPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -221,6 +221,7 @@ func TestProjectionReplaySourceConformanceEnroll01_RedFixture(t *testing.T) {
 			rsImplPkgs = append(rsImplPkgs, p.Pkg)
 			return nil
 		})
+
 	require.NotNil(t, rsIface, "RedFixture: could not resolve ReplaySource interface")
 
 	implSet := make(map[string]bool)
@@ -244,8 +245,9 @@ func TestProjectionReplaySourceConformanceEnroll01_RedFixture(t *testing.T) {
 
 	// ─── Pass 2 (Tests:true): scan fixture _test.go for enrollment ───────────
 	enrolledImpls := make(map[string]bool)
-	_ = RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{"./tools/archtest/internal/projectionreplayenrollfixture/..."},
+	_ = Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{"./tools/archtest/internal/projectionreplayenrollfixture/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -307,7 +309,7 @@ func TestProjectionReplaySourceConformanceEnroll01_ReverseBlindSpot_NoReflectImp
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -333,6 +335,7 @@ func TestProjectionReplaySourceConformanceEnroll01_ReverseBlindSpot_NoReflectImp
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: no production non-test file outside kernel/projection should contain "+
 			"the string literal %q as reflect bait", replaySourceIfaceName)

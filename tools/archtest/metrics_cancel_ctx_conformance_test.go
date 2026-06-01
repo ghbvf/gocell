@@ -106,7 +106,7 @@ func TestMetricsCancelCtxConformance(t *testing.T) {
 	var providerIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -145,7 +145,7 @@ func TestMetricsCancelCtxConformance(t *testing.T) {
 
 	// ─── Step 3: scan test corpus for RunCanceledCtxConformance call sites ───
 	enrolledImpls := make(map[string]bool) // "pkg/path.TypeName" → true
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -214,7 +214,7 @@ func TestMetricsCancelCtxConformance_ReverseBlindSpot(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -236,6 +236,7 @@ func TestMetricsCancelCtxConformance_ReverseBlindSpot(t *testing.T) {
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: no adapters/ non-test file should contain the string literal %q as reflect bait",
 		metricsProviderIfaceName)
@@ -314,7 +315,8 @@ func unenrolledMetricsProviders(implSet, enrolledImpls map[string]bool) []Diagno
 					"metricstest.RunCanceledCtxConformance(t, provider, readback) passing this "+
 					"concrete Provider, asserting the no-skip-on-cancel contract "+
 					"(kernel/observability/metrics/metrics.go §contract (1)).",
-				implKey, pkgPath),
+				implKey, pkgPath,
+			),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })

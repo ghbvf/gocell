@@ -70,7 +70,7 @@ var allowedChannelCloseFuncs = map[string]bool{
 func TestRMQChannelDestructionViaConn01(t *testing.T) {
 	t.Parallel()
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/rabbitmq/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/rabbitmq/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}

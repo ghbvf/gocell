@@ -283,12 +283,12 @@ func runHTTPContractVisibilityCheck(
 
 	if fixture {
 		// Fixture scan: archtest_fixture build tag injected by RunTypedFixture body.
-		_ = RunTypedFixture(t, FixtureOpts{Tests: false}, patterns, phase1Rule)
-		RunTypedFixture(t, FixtureOpts{Tests: false}, patterns, phase2Rule)
+		_ = Run(t, Fixture(FixtureOpts{Tests: false}, patterns), phase1Rule)
+		Run(t, Fixture(FixtureOpts{Tests: false}, patterns), phase2Rule)
 	} else {
 		// Production scan: no fixture tag.
-		_ = RunTyped(t, TypedOpts{Tests: false}, patterns, phase1Rule)
-		RunTyped(t, TypedOpts{Tests: false}, patterns, phase2Rule)
+		_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), phase1Rule)
+		Run(t, Typed(TypedOpts{Tests: false}, patterns), phase2Rule)
 	}
 
 	return violations

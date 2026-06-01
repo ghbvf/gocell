@@ -173,7 +173,7 @@ func TestContractPathQueryCoverage01(t *testing.T) {
 	}
 
 	coverage := newPQCoverage()
-	_ = RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: true}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -216,8 +216,9 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 
 	coverage := newPQCoverage()
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_missing_reject/..."
-	_ = RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{fixturePattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{fixturePattern}),
+		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
@@ -261,8 +262,9 @@ func TestContractPathQueryCoverage01_FixtureParamPartial(t *testing.T) {
 
 	coverage := newPQCoverage()
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_param_partial/..."
-	_ = RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{fixturePattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{fixturePattern}),
+		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
@@ -290,7 +292,7 @@ func TestContractPathQueryCoverage01_FixtureParamPartial(t *testing.T) {
 func TestContractPathQueryParamNameLiteral01(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: true}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -307,9 +309,12 @@ func TestContractPathQueryParamNameLiteral01_RedComputedParamName(t *testing.T) 
 	t.Parallel()
 
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_param_name_computed/..."
-	diags := RunTypedFixture(
-		t, FixtureOpts{Tests: true},
-		[]string{fixturePattern},
+	diags := Run(
+		t, Fixture(
+			FixtureOpts{Tests: true},
+			[]string{fixturePattern},
+		),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

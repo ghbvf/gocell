@@ -43,7 +43,7 @@ import (
 // fixture module root (stdlib, deps) are excluded via RunTypedDir's Rel filter.
 func runProdClockInjectionFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	return Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {

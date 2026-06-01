@@ -174,7 +174,8 @@ func l2EnumerateUnits(t *testing.T, root string) []l2Unit {
 	var units []l2Unit
 
 	// Scan cell.yaml files: cells/<id>/cell.yaml (depth-2 from cells/).
-	cellScope := DirsScope(root, []string{"cells"},
+	cellScope := DirsScope(
+		root, []string{"cells"},
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			return strings.HasPrefix(rel, "cells/") &&
@@ -198,7 +199,8 @@ func l2EnumerateUnits(t *testing.T, root string) []l2Unit {
 	// Scan slice.yaml files: cells/<cell-id>/slices/<slice-id>/slice.yaml.
 	// depth from cells/ is 4: cells/<cell>  /slices/<slice>/slice.yaml = 4 slashes.
 	const sliceDepthSlashCount = 4
-	sliceScope := DirsScope(root, []string{"cells"},
+	sliceScope := DirsScope(
+		root, []string{"cells"},
 		MatchRels(func(rel string) bool {
 			rel = filepath.ToSlash(rel)
 			return strings.HasPrefix(rel, "cells/") &&
@@ -266,7 +268,7 @@ func l2ResolveSliceInfos(t *testing.T, root string, units []l2Unit) map[string]l
 
 	infos := make(map[string]l2SliceInfo, len(wantMap))
 
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
@@ -413,7 +415,7 @@ func l2CollectTestFuncs(t *testing.T, root string) map[string]l2TestFuncInfo {
 	scope := ModuleScope(root, IncludeTests())
 	result := make(map[string]l2TestFuncInfo)
 
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			if !strings.HasSuffix(rel, "_test.go") {
@@ -438,6 +440,7 @@ func l2CollectTestFuncs(t *testing.T, root string) map[string]l2TestFuncInfo {
 		}
 		return nil
 	})
+
 	return result
 }
 
@@ -611,7 +614,7 @@ func TestL2OutboxAtomicityCoverage_BodyAssertsRollback(t *testing.T) {
 	}
 	matched := make(map[string]funcEntry)
 
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			if !strings.HasSuffix(rel, "_test.go") {

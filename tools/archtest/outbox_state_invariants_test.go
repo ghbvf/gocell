@@ -96,7 +96,7 @@ func containsQuotedStatusLiteral(s string) (string, bool) {
 func TestOutboxStateTransitionCompleteness(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, []string{"kernel/outbox"}), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(DirsScope(root, []string{"kernel/outbox"})), func(p *Pass) []Diagnostic {
 		declared := map[string]token.Pos{}
 		covered := map[string]struct{}{}
 		var declFile *ast.File
@@ -127,6 +127,7 @@ func TestOutboxStateTransitionCompleteness(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "OUTBOX-STATE-TRANSITION-COMPLETENESS-01", diags)
 }
 
@@ -151,12 +152,11 @@ func TestOutboxStateTransitionCompleteness(t *testing.T) {
 func TestOutboxStateLiteralBan(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, []string{"adapters/postgres"}), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(DirsScope(root, []string{"adapters/postgres"})), func(p *Pass) []Diagnostic {
 		var d []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// Scope to the outbox SQL-binding files only; runtime/outbox uses
-			// typed kout.State (slog labels there are not status values).
+
 			if strings.HasSuffix(rel, "_test.go") || !strings.Contains(rel, "outbox") {
 				continue
 			}
@@ -168,7 +168,7 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 				if err != nil {
 					return
 				}
-				// Path A: exact-match — Go string literal whose value IS a status token.
+
 				if _, banned := outboxStatusLiterals[val]; banned {
 					d = append(d, Diagnostic{
 						Rel:  rel,
@@ -178,10 +178,7 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 					})
 					return
 				}
-				// Path B: substring-match — SQL string containing a single-quoted
-				// status token like "WHERE status = 'pending'" or
-				// "SET status='dead'".  Column names like 'published_at' do not
-				// match because containsQuotedStatusLiteral checks exact tokens.
+
 				if tok, found := containsQuotedStatusLiteral(val); found {
 					d = append(d, Diagnostic{
 						Rel:  rel,
@@ -194,6 +191,7 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "OUTBOX-STATE-LITERAL-BAN-01", diags)
 }
 
@@ -261,7 +259,7 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 	modPath := readModulePath(t, root)
 	kernelOutboxPkgPath := modPath + kernelOutboxImportSuffix
 
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./" + relayMarkSettlementPkg}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./" + relayMarkSettlementPkg}), func(p *Pass) []Diagnostic {
 		var d []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -276,10 +274,7 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 				if len(marks) == 0 {
 					return
 				}
-				// Check 1: the function must call kernel/outbox.Transition (typed).
-				// We collect all CallExprs whose callee resolves via ResolvePackageRef
-				// to (kernelOutboxPkgPath, "Transition"). This prevents any same-named
-				// selector in another package from satisfying the guard.
+
 				transitionCalls := collectTypedTransitionCalls(fn.Body, p.TypesInfo, kernelOutboxPkgPath)
 				if len(transitionCalls) == 0 {
 					d = append(d, Diagnostic{
@@ -290,13 +285,7 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 					})
 					return
 				}
-				// Check 2: for each Mark called, verify that the expected
-				// Transition target state appears as the second argument of
-				// a kernel/outbox.Transition call in the same function body.
-				//
-				// We collect second-arg .Sel.Name values from typed Transition
-				// CallExprs (e.g. kout.Transition(StateClaiming, kout.StatePublished)
-				// → "StatePublished"). Each Mark must have its expected target present.
+
 				transitionTargets := collectTransitionArgTargets(transitionCalls)
 				for _, markName := range marks {
 					expectedTarget, known := markToTransitionTarget[markName]
@@ -318,6 +307,7 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "OUTBOX-STATE-TRANSITION-GUARD-01", diags)
 }
 
@@ -374,7 +364,7 @@ func TestOutboxStateTransitionGuard_BlindSpot_CrossFuncTransition(t *testing.T) 
 	// (If the guard passes in TestOutboxStateTransitionGuard, all settlement
 	// functions have inline Transition — this test is a belt-and-suspenders
 	// structural check.)
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./" + relayMarkSettlementPkg}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./" + relayMarkSettlementPkg}), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			if strings.HasSuffix(p.Rel(f), "_test.go") {
 				continue
@@ -578,14 +568,13 @@ func TestOutboxStateLiteralBan_ReverseSelfCheck(t *testing.T) {
 func TestOutboxStateTransitionCompleteness_BlindSpotShape(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	_ = Run(t, DirsScope(root, []string{"kernel/outbox"}), func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(DirsScope(root, []string{"kernel/outbox"})), func(p *Pass) []Diagnostic {
 		var sawMapComposite bool
 		for _, f := range p.Files {
 			if strings.HasSuffix(p.Rel(f), "_test.go") {
 				continue
 			}
-			// forEachVarComposite fires only when the var is a *ast.CompositeLit;
-			// a runtime-built map (make / append) would not fire this callback.
+
 			forEachVarComposite(f, stateTransitionsVarN, func(cl *ast.CompositeLit) {
 				keys := collectMapKeyIdents(f, stateTransitionsVarN)
 				if len(keys) > 0 {

@@ -1,9 +1,12 @@
 // Package archtest is the single-entry façade for GoCell architectural tests.
-// Authors write rules as [Rule] closures and dispatch them via [Run] (AST-only)
-// or [RunTyped] (with go/types info). Direct access to the underlying
-// internal/scanner and internal/typeseval primitives is forbidden by the
-// PASS-FUNNEL-* meta-archtest and the depguard archtest-no-direct-packages-load
-// rule — both wired up in this same PR (574 / archtest pass-funnel PR-1).
+// Authors write rules as [Rule] closures and dispatch them through the single
+// [Run] entry point, selecting the mode with a sealed [RunScope] constructor:
+// [AST] (AST-only, no go/types), [Typed] (with go/types info), [Production]
+// (typed, generated/ excluded), [Fixture] (typed, archtest_fixture-tagged), or
+// [StandaloneModule] (typed, standalone fixture module). Direct access to the
+// underlying internal/scanner and internal/typeseval primitives is forbidden by
+// the PASS-FUNNEL-* meta-archtest and the depguard archtest-no-direct-packages-load
+// rule.
 //
 // Hard-line defense layering:
 //

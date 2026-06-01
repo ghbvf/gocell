@@ -190,7 +190,7 @@ func TestTypesutilImplementsFunnel01(t *testing.T) {
 	var violations []Diagnostic
 	sawTestFile := false
 
-	_ = RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: true}), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			if strings.HasSuffix(p.Rel(f), "_test.go") {
 				sawTestFile = true
@@ -264,13 +264,14 @@ func TestTypesutilImplementsFunnel01_Fixtures(t *testing.T) {
 
 			var diags []Diagnostic
 			scanned := false
-			_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+			_ = Run(t, Typed(TypedOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 				if len(p.Files) > 0 {
 					scanned = true
 				}
 				diags = append(diags, collectImplementsFunnelViolations(p)...)
 				return nil
 			})
+
 			require.True(t, scanned, "fixture %s: no package loaded (path renamed?)", dir)
 
 			goldenPath := filepath.Join(root, "tools", "archtest", "testdata",

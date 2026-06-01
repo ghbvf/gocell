@@ -55,11 +55,13 @@ var accesscoreBundleForbiddenExports = map[string]struct{}{
 // Bundle migration these names must only exist as unexported (lowercase)
 // helpers called from WithMemBundle / WithPGBundle inside the same package.
 func TestAccessCoreBundleFunnel(t *testing.T) {
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false},
 		[]string{"./cells/accesscore"},
-		scanAccesscoreBundleFunnelViolations,
-	)
+	),
+
+		scanAccesscoreBundleFunnelViolations)
+
 	Report(t, accesscoreBundleFunnelRuleID, diags)
 }
 

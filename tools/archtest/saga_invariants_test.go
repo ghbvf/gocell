@@ -448,7 +448,7 @@ func sagaCompensateFixturePattern(fix string) (dir, pattern string) {
 // this fires 0 diagnostics; it guards future Compensate authors.
 func TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -456,8 +456,6 @@ func TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody(t *testing.T
 		funcDecls := sagaFuncDeclsByObject(p)
 		var out []Diagnostic
 		for _, file := range p.Files {
-			// Skip test files — tests may use CompensateFunc with banned types
-			// for mocking/conformance purposes.
 			if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
 				continue
 			}
@@ -465,6 +463,7 @@ func TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody(t *testing.T
 		}
 		return out
 	})
+
 	Report(t, sagaCompensatePureRuleID+"-A1", diags)
 }
 
@@ -474,7 +473,7 @@ func TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody(t *testing.T
 // call that may hide forbidden calls (B1 mitigation).
 func TestSagaStepCompensatePure_BlindSpot_B1_BodyStatementCount(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -487,6 +486,7 @@ func TestSagaStepCompensatePure_BlindSpot_B1_BodyStatementCount(t *testing.T) {
 		}
 		return out
 	})
+
 	Report(t, sagaCompensatePureRuleID+"-B1", diags)
 }
 
@@ -499,7 +499,7 @@ func TestSagaStepCompensatePure_BlindSpot_B1_BodyStatementCount(t *testing.T) {
 // authors. Call-graph upgrade tracked in gh issue #1182.
 func TestSagaStepCompensatePure_BlindSpot_B2_NoMethodByNameInCompensateBodies(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -539,6 +539,7 @@ func TestSagaStepCompensatePure_BlindSpot_B2_NoMethodByNameInCompensateBodies(t 
 		}
 		return out
 	})
+
 	Report(t, sagaCompensatePureRuleID+"-B2", diags)
 }
 
@@ -558,7 +559,7 @@ func TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncPassedAsArgument(t 
 	t.Parallel()
 	// The one sanctioned call site: executor passes step.Compensate to safeRunCompensate.
 	const sanctionedCallee = "safeRunCompensate"
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -569,7 +570,6 @@ func TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncPassedAsArgument(t 
 				continue
 			}
 			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				// Exclude the sanctioned safeRunCompensate call in the executor transport layer.
 				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == sanctionedCallee {
 					return
 				}
@@ -590,6 +590,7 @@ func TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncPassedAsArgument(t 
 		}
 		return out
 	})
+
 	Report(t, sagaCompensatePureRuleID+"-B3", diags)
 }
 
@@ -601,7 +602,7 @@ func TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncPassedAsArgument(t 
 func TestSagaStepCompensatePure_Detector_RedOutboxCallFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaCompensateFixturePattern("red_outbox_call")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -613,6 +614,7 @@ func TestSagaStepCompensatePure_Detector_RedOutboxCallFixture(t *testing.T) {
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -622,7 +624,7 @@ func TestSagaStepCompensatePure_Detector_RedOutboxCallFixture(t *testing.T) {
 func TestSagaStepCompensatePure_Detector_RedNamedFuncFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaCompensateFixturePattern("red_named_func")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -634,6 +636,7 @@ func TestSagaStepCompensatePure_Detector_RedNamedFuncFixture(t *testing.T) {
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -643,7 +646,7 @@ func runCompensatePureFixture(t *testing.T, fixture string) (string, []Diagnosti
 	t.Helper()
 	root := findModuleRoot(t)
 	relDir, pattern := sagaCompensateFixturePattern(fixture)
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -655,6 +658,7 @@ func runCompensatePureFixture(t *testing.T, fixture string) (string, []Diagnosti
 		}
 		return out
 	})
+
 	return filepath.Join(root, relDir, "diag.golden"), diags
 }
 
@@ -815,7 +819,7 @@ const heartbeatMethodName = "Heartbeat"
 func TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -825,8 +829,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga(t
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			// Only flag files under runtime/saga/ but exclude the executor
-			// subpackage — executor IS the sanctioned heartbeater funnel.
+
 			if !strings.HasPrefix(rel, "runtime/saga/") {
 				continue
 			}
@@ -869,7 +872,8 @@ func scanHeartbeatSelectors(p *Pass, file *ast.File, rel string) []Diagnostic {
 					"non-step heartbeat (e.g. extending lease across an outer operation), "+
 					"call Executor.RunWithHeartbeat — do NOT re-introduce a centralized "+
 					"heartbeat goroutine.",
-				sagaCoordinatorNoHeartbeatLoopRule),
+				sagaCoordinatorNoHeartbeatLoopRule,
+			),
 		})
 	})
 	return out
@@ -1002,7 +1006,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 	// scanHeartbeatSelectors but collect into a plain counter rather than
 	// reporting violations — these are expected and sanctioned callsites.
 	var executorCallsites []Diagnostic
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}, func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1011,7 +1015,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			// Only executor subpackage files.
+
 			if !strings.HasPrefix(rel, "runtime/saga/executor/") {
 				continue
 			}
@@ -1035,7 +1039,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 	// Run A1's actual scanner (including its executor exclude filter) over
 	// the executor package and assert that no violations are reported — the
 	// path filter in A1 is what prevents executor callsites from being flagged.
-	a1ViolationsInExecutor := RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}, func(p *Pass) []Diagnostic {
+	a1ViolationsInExecutor := Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1045,8 +1049,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			// Replicate A1's exact filter: only flag runtime/saga/ files
-			// that are NOT under runtime/saga/executor/.
+
 			if !strings.HasPrefix(rel, "runtime/saga/") {
 				continue
 			}
@@ -1265,7 +1268,7 @@ func sagaExecutorRandFixturePattern(fix string) (dir, pattern string) {
 //   - B2: dot-import — handled via ast.Ident walk (reverse self-test below).
 func TestSagaExecutorRandInjected_A1_NoGlobalRandInExecutor(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1279,6 +1282,7 @@ func TestSagaExecutorRandInjected_A1_NoGlobalRandInExecutor(t *testing.T) {
 		}
 		return out
 	})
+
 	Report(t, sagaRandInjectedRuleID+"-A1", diags)
 }
 
@@ -1296,7 +1300,7 @@ func TestSagaExecutorRandInjected_BlindSpot_B2_NoDotImportRandInExecutor(t *test
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"runtime/saga/executor"})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
@@ -1329,6 +1333,7 @@ func TestSagaExecutorRandInjected_BlindSpot_B2_NoDotImportRandInExecutor(t *test
 		}
 		return out
 	})
+
 	Report(t, sagaRandInjectedRuleID+"-B2", diags)
 }
 
@@ -1339,17 +1344,18 @@ func TestSagaExecutorRandInjected_BlindSpot_B2_NoDotImportRandInExecutor(t *test
 func TestSagaExecutorRandInjected_Detector_RedGlobalRandFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaExecutorRandFixturePattern("red_global_rand")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
-		// No scope filter for fixtures: scan all loaded files.
+
 		var out []Diagnostic
 		for _, file := range p.Files {
 			out = append(out, scanRandGlobalCalls(p, file)...)
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -1361,7 +1367,7 @@ func TestSagaExecutorRandInjected_Detector_RedGlobalRandFixture(t *testing.T) {
 func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaExecutorRandFixturePattern("red_dot_import_rand")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1371,6 +1377,7 @@ func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T)
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -1454,7 +1461,7 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 	var iface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1467,8 +1474,6 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 						}
 					}
 				}
-				// The iface package's MemJournal is also an impl; keep this pkg
-				// in implPkgs so its concrete types are scanned.
 			}
 			implPkgs = append(implPkgs, p.Pkg)
 			return nil
@@ -1502,7 +1507,7 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 	enrolledImpls := make(map[string]bool)
 
 	testPatterns := prodscan.Patterns(root)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1545,7 +1550,8 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 					"both calls sagajournaltest.RunConformanceSuite(t, factory) "+
 					"AND constructs %s inside the factory closure (impl-level "+
 					"enrollment).",
-				implKey, pkgPath, implKey),
+				implKey, pkgPath, implKey,
+			),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
@@ -1569,7 +1575,7 @@ func TestSagaJournalConformanceEnrollment_REDFixture(t *testing.T) {
 
 	var iface *types.Interface
 	var implPkgs []*types.Package
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1636,12 +1642,11 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// Skip test files and the saga packages that legitimately mention
-			// "Journal" in docstrings / godoc / interface names.
+
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
@@ -1670,6 +1675,7 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: no production non-test file outside saga packages should contain string literal %q", sagaJournalIfaceName)
 }
@@ -1961,7 +1967,8 @@ func journalFieldSealMessage(kind journalFieldKind, holderName string) string {
 	if kind == journalFieldCore {
 		return fmt.Sprintf(
 			"%s: struct %q holds a journal.JournalCore field; only %q may hold it",
-			sagaJournalHolderSealRule, holderName, allowedSagaJournalHolder)
+			sagaJournalHolderSealRule, holderName, allowedSagaJournalHolder,
+		)
 	}
 	// journalFieldFull / journalFieldHeartbeater — a Heartbeat-bearing field.
 	return fmt.Sprintf(
@@ -1970,7 +1977,8 @@ func journalFieldSealMessage(kind journalFieldKind, holderName string) string {
 			"persist a Heartbeat-capable field — hold journal.JournalCore instead. The "+
 			"full Journal exists transiently only as the NewCoordinator parameter handed "+
 			"to executor.NewExecutor (the sanctioned per-step heartbeat funnel).",
-		sagaJournalHolderSealRule, holderName)
+		sagaJournalHolderSealRule, holderName,
+	)
 }
 
 // heartbeatFuncFieldDiag (rule 3) flags a struct field whose type is a func —
@@ -2014,7 +2022,8 @@ func heartbeatFuncFieldDiag(p *Pass, rel, holderName string, field *ast.Field) (
 				"no struct in runtime/saga may persist a Heartbeat-capable callable (interface OR func) "+
 				"— a persisted heartbeat func reconstructs the centralized-loop anti-pattern from a value "+
 				"passed in from outside runtime/saga. Funnel per-step heartbeat through executor.",
-			sagaJournalHolderSealRule, holderName),
+			sagaJournalHolderSealRule, holderName,
+		),
 	}, true
 }
 
@@ -2030,7 +2039,7 @@ func heartbeatFuncFieldDiag(p *Pass, rel, holderName string, field *ast.Field) (
 func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -2140,7 +2149,7 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"runtime/saga"})
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
@@ -2152,7 +2161,7 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 			}
 			journalNames := journalPackageLocalNames(file)
 			if len(journalNames) == 0 {
-				continue // file does not import the journal package
+				continue
 			}
 
 			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
@@ -2168,7 +2177,8 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 						"%s-B1: type alias %q = journal.%s in runtime/saga; remove the alias "+
 							"and reference the journal interface directly — aliases create an "+
 							"evasion path for the holder-seal invariant",
-						sagaJournalHolderSealRule, ts.Name.Name, aliased),
+						sagaJournalHolderSealRule, ts.Name.Name, aliased,
+					),
 				})
 			})
 		}
@@ -2276,8 +2286,9 @@ type H = sagajournal.JournalCore
 func TestSagaJournalHolderSeal_A1_AliasFieldResolvedViaUnalias(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedFixture(t, FixtureOpts{},
-		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/aliasholder"},
+	diags := Run(t, Fixture(FixtureOpts{},
+		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/aliasholder"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -2290,9 +2301,7 @@ func TestSagaJournalHolderSeal_A1_AliasFieldResolvedViaUnalias(t *testing.T) {
 					if !ok || st.Fields == nil {
 						return
 					}
-					// holderName is never "Coordinator" for fixture structs, so
-					// the rule-2 JournalCore allowance never applies — every
-					// JournalCore field (direct or aliased) must surface.
+
 					for _, field := range st.Fields.List {
 						if d, ok := journalFieldSealDiag(p, rel, ts.Name.Name, field); ok {
 							out = append(out, d)
@@ -2335,8 +2344,9 @@ func TestSagaJournalHolderSeal_A1_AliasFieldResolvedViaUnalias(t *testing.T) {
 func TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedFixture(t, FixtureOpts{},
-		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/funcfieldholder"},
+	diags := Run(t, Fixture(FixtureOpts{},
+		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/funcfieldholder"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -2502,7 +2512,7 @@ func TestSagaLeaderGate_A1_DriveOneOnlyInTickOnce(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"runtime/saga"})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
@@ -2513,6 +2523,7 @@ func TestSagaLeaderGate_A1_DriveOneOnlyInTickOnce(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, sagaLeaderGateRule+"-A1", diags)
 }
 
@@ -2546,7 +2557,7 @@ func TestSagaLeaderGate_A2_TickOnceCallsAcquireLead(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"runtime/saga"})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
@@ -2557,6 +2568,7 @@ func TestSagaLeaderGate_A2_TickOnceCallsAcquireLead(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, sagaLeaderGateRule+"-A2", diags)
 }
 
@@ -2594,7 +2606,7 @@ func TestSagaLeaderGate_A3_LeadGatesDriveOne(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"runtime/saga"})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
@@ -2605,6 +2617,7 @@ func TestSagaLeaderGate_A3_LeadGatesDriveOne(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, sagaLeaderGateRule+"-A3", diags)
 }
 
@@ -2725,13 +2738,14 @@ func sagaLeaderGateFixturePattern(fix string) (dir, pattern string) {
 func TestSagaLeaderGate_Detector_RedDriveOutsideTick(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaLeaderGateFixturePattern("red_drive_outside_tick")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			ds = append(ds, checkLeaderGateA1(p, file)...)
 		}
 		return ds
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -2740,13 +2754,14 @@ func TestSagaLeaderGate_Detector_RedDriveOutsideTick(t *testing.T) {
 func TestSagaLeaderGate_Detector_RedTickMissingGate(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaLeaderGateFixturePattern("red_tick_missing_gate")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			ds = append(ds, checkLeaderGateA2(p, file)...)
 		}
 		return ds
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -2756,13 +2771,14 @@ func TestSagaLeaderGate_Detector_RedTickMissingGate(t *testing.T) {
 func TestSagaLeaderGate_Detector_RedTickIgnoresLead(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaLeaderGateFixturePattern("red_tick_ignores_lead")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			ds = append(ds, checkLeaderGateA3(p, file)...)
 		}
 		return ds
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -2988,13 +3004,15 @@ func sfcDiagsTerminalEventKind(isTerminal, tekCases map[string]bool, rel string,
 	for name := range isTerminal {
 		if !tekCases[name] {
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
-				"terminal saga.%s missing a case in journal.TerminalEventKind switch", name)})
+				"terminal saga.%s missing a case in journal.TerminalEventKind switch", name,
+			)})
 		}
 	}
 	for name := range tekCases {
 		if !isTerminal[name] {
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
-				"journal.TerminalEventKind has case saga.%s which Status.IsTerminal() does not classify terminal", name)})
+				"journal.TerminalEventKind has case saga.%s which Status.IsTerminal() does not classify terminal", name,
+			)})
 		}
 	}
 	return diags
@@ -3088,7 +3106,8 @@ func sfcDiagsConstSetValidRange(typeLabel string, declared map[int64]string, loo
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
 				"%s const %s (value %d) is declared but %s.Valid() excludes it from the `for v := …; v.Valid(); v++` enumeration — "+
 					"Render() and the fanout golden cannot cover it; extend Valid() (and IsTerminal()/String()/the fanout carriers) to admit it",
-				typeLabel, name, v, typeLabel)})
+				typeLabel, name, v, typeLabel,
+			)})
 		}
 	}
 	for v := range loop {
@@ -3096,7 +3115,8 @@ func sfcDiagsConstSetValidRange(typeLabel string, declared map[int64]string, loo
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
 				"%s.Valid() admits value %d which no declared const carries — Valid()'s range exceeds the "+
 					"const set; tighten Valid() or declare the missing const",
-				typeLabel, v)})
+				typeLabel, v,
+			)})
 		}
 	}
 	return diags
@@ -3113,7 +3133,8 @@ func sfcGoldenDiags(art sagacoveragegen.Artifacts, gen, readyz, alerting []byte)
 
 	if !bytes.Equal(gen, art.TerminalCoverageGo) {
 		diags = append(diags, Diagnostic{Rel: sfcGenFileRel, Line: 1, Message: sfcRegenMsg(
-			"terminal_coverage_gen.go drifted from the saga.Status const set")})
+			"terminal_coverage_gen.go drifted from the saga.Status const set",
+		)})
 	}
 
 	diags = append(diags, sfcRegionDiag(readyz, sfcReadyzDocRel, art.ReadyzTable,
@@ -3192,8 +3213,9 @@ func TestSagaStatusFanoutCoverageC4(t *testing.T) {
 	var tekRel string
 	var tekLine int
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/saga/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"./kernel/saga/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -3242,8 +3264,9 @@ func TestSagaStatusFanoutCoverageC5(t *testing.T) {
 	var statusValidRel, kindValidRel string
 	var statusValidLine, kindValidLine int
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/saga/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"./kernel/saga/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -3377,7 +3400,8 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 	all = append(all, sfcDiagsTerminalEventKind(
 		map[string]bool{"StatusSucceeded": true},
 		map[string]bool{"StatusFailed": true},
-		"kernel/saga/journal/event.go", 135)...)
+		"kernel/saga/journal/event.go", 135,
+	)...)
 	all = append(all, sfcGoldenDiags(art, []byte("drift\n"),
 		[]byte("no markers"), []byte("no markers"))...)
 	all = append(all, sfcDiagsConstSetValidRange("saga.Status",
@@ -3518,11 +3542,11 @@ const (
 //     is not caught — but runtime/saga/ does not define such interfaces.
 func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 	t.Parallel()
-	diags := RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
-		// Enforce on all production .go files in runtime/saga/ (not _test.go).
+
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
@@ -3533,6 +3557,7 @@ func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, sagaStepRunOutsideTxRule+"-A1", diags)
 }
 
@@ -3653,7 +3678,7 @@ func TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"runtime/saga"})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
@@ -3664,6 +3689,7 @@ func TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, sagaStepRunOutsideTxRule+"-A2", diags)
 }
 
@@ -3744,16 +3770,15 @@ func TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"runtime/saga"})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
-			// Skip test files — mocks/fakes may redefine StepFunc-shaped types.
+
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			// Only scan runtime/saga/ files (not subdirectories of other layers
-			// that happen to be in scope).
+
 			if !strings.HasPrefix(rel, sagaRuntimePkgPrefix) {
 				continue
 			}
@@ -3761,6 +3786,7 @@ func TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, sagaStepRunOutsideTxRule+"-B1", diags)
 }
 
@@ -3844,17 +3870,18 @@ func sagaStepRunFixturePattern(fix string) (dir, pattern string) {
 func TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaStepRunFixturePattern("red_extra_file")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
-		// No scope filter for fixtures: scan all loaded files directly.
+
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
 		}
 		return ds
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -3868,14 +3895,14 @@ func TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture(t *testing.T) {
 func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaStepRunFixturePattern("red_safe_run_in_runintx")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
-		// No scope filter for fixtures: scan all loaded files directly.
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			ds = append(ds, checkA2SafeRunNotInRunInTx(p, file)...)
 		}
 		return ds
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -4182,12 +4209,13 @@ func sagaConstructorIfaceParamObjs(p *Pass, fd *ast.FuncDecl) map[types.Object]b
 //   - B2: guard called on a reassigned alias of the parameter variable
 func TestSagaConstructorNilGuard_NoUnguardedInterfaceParam(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !sagaConstructorScopePackages[p.Pkg.Path()] {
 			return nil
 		}
 		return scanConstructorNilGuards(p)
 	})
+
 	Report(t, sagaConstructorNilGuardRuleID, diags)
 }
 
@@ -4202,7 +4230,7 @@ func TestSagaConstructorNilGuard_NoUnguardedInterfaceParam(t *testing.T) {
 func TestSagaConstructorNilGuard_Detector_RedUnguardedParamFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaConstructorNilGuardFixturePattern("red_unguarded_param")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanConstructorNilGuards)
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), scanConstructorNilGuards)
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -4215,7 +4243,7 @@ func TestSagaConstructorNilGuard_Detector_RedUnguardedParamFixture(t *testing.T)
 func TestSagaConstructorNilGuard_Detector_RedAnonymousParamFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaConstructorNilGuardFixturePattern("red_anonymous_param")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanConstructorNilGuards)
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), scanConstructorNilGuards)
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -4227,7 +4255,7 @@ func TestSagaConstructorNilGuard_Detector_RedAnonymousParamFixture(t *testing.T)
 // assigns an interface parameter to another variable.
 func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !sagaConstructorScopePackages[p.Pkg.Path()] || p.TypesInfo == nil {
 			return nil
 		}
@@ -4263,6 +4291,7 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 		}
 		return out
 	})
+
 	Report(t, sagaConstructorNilGuardRuleID+"/B2", diags)
 }
 
@@ -4466,7 +4495,7 @@ func scanSagaSlogInstanceFieldsFile(p *Pass, file *ast.File) []Diagnostic {
 // across all of runtime/saga/.
 func TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier(t *testing.T) {
 	t.Parallel()
-	diags := RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -4479,6 +4508,7 @@ func TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier(t *testing.T) 
 		}
 		return ds
 	})
+
 	Report(t, sagaSlogInstanceFieldsRule+"-A1", diags)
 }
 
@@ -4495,7 +4525,7 @@ func sagaSlogInstanceFieldsFixturePattern(fix string) (dir, pattern string) {
 func TestSagaSlogInstanceFieldsCaller_Detector_RedBareInstanceIDFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaSlogInstanceFieldsFixturePattern("red_bare_instance_id")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -4505,6 +4535,7 @@ func TestSagaSlogInstanceFieldsCaller_Detector_RedBareInstanceIDFixture(t *testi
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -4515,7 +4546,7 @@ func TestSagaSlogInstanceFieldsCaller_Detector_RedBareInstanceIDFixture(t *testi
 func TestSagaSlogInstanceFieldsCaller_Detector_RedAttrLiteralFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaSlogInstanceFieldsFixturePattern("red_attr_literal")
-	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -4525,6 +4556,7 @@ func TestSagaSlogInstanceFieldsCaller_Detector_RedAttrLiteralFixture(t *testing.
 		}
 		return out
 	})
+
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
@@ -4535,7 +4567,7 @@ func TestSagaSlogInstanceFieldsCaller_Detector_RedAttrLiteralFixture(t *testing.
 func TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga(t *testing.T) {
 	t.Parallel()
 	var decls []string
-	RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
 			if !isRuntimeSagaProductionFile(rel) {
@@ -4549,6 +4581,7 @@ func TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga(t *testi
 		}
 		return nil
 	})
+
 	if len(decls) != 1 {
 		t.Fatalf("%s: want exactly one FuncDecl named %q in runtime/saga/ production, found %d: %v "+
 			"— a second one would create an allowed range and open an A1 bypass",
@@ -4592,7 +4625,7 @@ func scanSagaSlogAttrLiteralsFile(p *Pass, file *ast.File) []Diagnostic {
 
 func TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals(t *testing.T) {
 	t.Parallel()
-	diags := RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -4605,6 +4638,7 @@ func TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals(t *testing
 		}
 		return ds
 	})
+
 	Report(t, sagaSlogInstanceFieldsRule+"-B4", diags)
 }
 
@@ -4667,7 +4701,7 @@ func sagaGuardedKeyFromExpr(info *types.Info, expr ast.Expr) (string, bool) {
 func TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys(t *testing.T) {
 	t.Parallel()
 	found := map[string]bool{}
-	RunTyped(t, TypedOpts{}, []string{"./runtime/saga/internal/sagalog/..."}, func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/internal/sagalog/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -4685,6 +4719,7 @@ func TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys(t *testing.
 		}
 		return nil
 	})
+
 	for key := range sagaInstanceFieldsGuardedKeys {
 		if !found[key] {
 			t.Errorf("%s: carrier InstanceFields does not emit an Attr ctor for key %q — A1 would be vacuous",
@@ -4699,7 +4734,7 @@ func TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys(t *testing.
 func TestSagaSlogInstanceFieldsCaller_B2_CarrierReferencedByProductionSites(t *testing.T) {
 	t.Parallel()
 	var refs int
-	RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -4717,6 +4752,7 @@ func TestSagaSlogInstanceFieldsCaller_B2_CarrierReferencedByProductionSites(t *t
 		}
 		return nil
 	})
+
 	if refs == 0 {
 		t.Fatalf("%s: sagalog.InstanceFields has no production callers in runtime/saga/ — funnel is dead",
 			sagaSlogInstanceFieldsRule)
@@ -4876,7 +4912,8 @@ func sagaConsolidationDiags(byFile map[string][]sagaThemeHit, relOf map[string]s
 				Message: fmt.Sprintf(
 					"saga-theme invariant %s declared in %s — saga invariants must be consolidated into %s "+
 						"(per .claude/rules/gocell/ai-robust.md §\"archtest 文件命名\"; move it to %s)",
-					hit.id, base, sagaConsolidatedFile, sagaConsolidatedFile),
+					hit.id, base, sagaConsolidatedFile, sagaConsolidatedFile,
+				),
 			})
 		}
 	}

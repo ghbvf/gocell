@@ -14,8 +14,9 @@ import (
 func _(t *testing.T) {
 	tagGroups := archtest.KnownNonDefaultTags()
 	for _, tagGroup := range tagGroups {
-		_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: tagGroup},
-			[]string{"./..."},
+		_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: tagGroup},
+			[]string{"./..."}),
+
 			func(p *archtest.Pass) []archtest.Diagnostic { return nil })
 	}
 }

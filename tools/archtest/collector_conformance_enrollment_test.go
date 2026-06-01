@@ -66,6 +66,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 const (
@@ -96,7 +97,7 @@ func TestCollectorConformanceEnrollment(t *testing.T) {
 	var collectorIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -142,7 +143,7 @@ func TestCollectorConformanceEnrollment(t *testing.T) {
 	enrolledPkgs := make(map[string]bool)
 
 	testPatterns := prodscan.Patterns(root)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -155,8 +156,7 @@ func TestCollectorConformanceEnrollment(t *testing.T) {
 				if !hasCollectorConformanceCall(f, p.TypesInfo) {
 					continue
 				}
-				// Credit the package that contains this test file.
-				// Strip the "_test" suffix that Go adds to external test packages.
+
 				pkgPath := strings.TrimSuffix(p.Pkg.Path(), "_test")
 				enrolledPkgs[pkgPath] = true
 			}
@@ -177,7 +177,8 @@ func TestCollectorConformanceEnrollment(t *testing.T) {
 					"not enrolled (COLLECTOR-CONFORMANCE-ENROLLMENT-01). "+
 					"Add a _test.go in package %s (or its external _test) that "+
 					"calls metricstest.RunCollectorConformance(t, harness).",
-				pkgPath, pkgPath),
+				pkgPath, pkgPath,
+			),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
@@ -200,13 +201,8 @@ func collectCollectorImpls(pkg *types.Package, iface *types.Interface, out map[s
 		if !ok {
 			continue
 		}
-		// Check value receiver.
-		if types.Implements(named, iface) {
-			out[pkg.Path()] = true
-			return
-		}
-		// Check pointer receiver.
-		if types.Implements(types.NewPointer(named), iface) {
+		// Check value or pointer receiver via typesutil.ImplementsInterface.
+		if typesutil.ImplementsInterface(named, iface) {
 			out[pkg.Path()] = true
 			return
 		}
@@ -217,28 +213,23 @@ func collectCollectorImpls(pkg *types.Package, iface *types.Interface, out map[s
 // metricstest.RunCollectorConformance. Resolution uses TypesInfo when available
 // (typed load) to bind the callee to its package path.
 func hasCollectorConformanceCall(file *ast.File, info *types.Info) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	_, found := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != collectorConformanceFuncName {
-			return
+			return false
 		}
 		if info == nil {
 			// Fallback: AST-only — check the qualifier name.
 			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "metricstest" {
-				found = true
+				return true
 			}
-			return
+			return false
 		}
 		// Typed resolution: resolve the callee's package.
 		if obj := info.ObjectOf(sel.Sel); obj != nil && obj.Pkg() != nil {
-			if obj.Pkg().Path() == collectorConformancePkg {
-				found = true
-			}
+			return obj.Pkg().Path() == collectorConformancePkg
 		}
+		return false
 	})
 	return found
 }
@@ -259,8 +250,9 @@ func TestCollectorConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *testin
 	var diags []Diagnostic
 
 	// Scan production non-test files for MethodByName("Collector") calls.
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.Patterns(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.Patterns(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -290,7 +282,8 @@ func TestCollectorConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *testin
 								"B1 blind-spot (COLLECTOR-CONFORMANCE-ENROLLMENT-01): "+
 									"reflect.MethodByName(%q) in production non-test file %s — "+
 									"implicit Collector impl bypasses archtest impl scan",
-								collectorIfaceName, rel),
+								collectorIfaceName, rel,
+							),
 						})
 					}
 				})

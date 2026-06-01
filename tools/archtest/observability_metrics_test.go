@@ -117,12 +117,16 @@ func TestGaugeVecFunnel(t *testing.T) {
 	// The fixture rule does NOT exclude the fixture package itself — only the
 	// adapter allowlist exclusions apply. This is what allows the RED check to
 	// detect the violations in the fixture.
-	redDiags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
+	redDiags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
+		),
+
 		gaugeVecFunnelRuleRaw,
 	)
+
 	for _, d := range redDiags {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
@@ -138,7 +142,7 @@ func TestGaugeVecFunnel(t *testing.T) {
 
 	// GREEN check: production code must produce zero violations.
 	// gaugeVecFunnelRule (with full exclusion set) is used for production.
-	prodDiags := RunTypedProduction(t, TypedOpts{}, gaugeVecFunnelRule)
+	prodDiags := Run(t, Production(TypedOpts{}), gaugeVecFunnelRule)
 	for _, d := range prodDiags {
 		t.Errorf("METRICS-GAUGEVEC-FUNNEL-01 %s:%d: %s", d.Rel, d.Line, d.Message)
 	}
@@ -158,10 +162,13 @@ func TestGaugeVecFunnel_BansFloat64Gauge(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	redDiags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
+	redDiags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
+		),
+
 		gaugeVecFunnelRuleRaw,
 	)
 
@@ -188,13 +195,13 @@ func TestGaugeVecFunnel_SelfCheck(t *testing.T) {
 
 	// BS-1 reverse self-check: no reflect.ValueOf call in production references
 	// the banned symbol names as string literals.
-	bs1Diags := RunTypedProduction(t, TypedOpts{}, gaugeVecBS1ReflectCheck)
+	bs1Diags := Run(t, Production(TypedOpts{}), gaugeVecBS1ReflectCheck)
 	assert.Empty(t, bs1Diags,
 		"METRICS-GAUGEVEC-FUNNEL-01 BS-1: found reflect.ValueOf with banned symbol name string; "+
 			"production code must not construct metrics via reflection")
 
 	// BS-3 reverse self-check: no function-value indirection for the banned symbols.
-	bs3Diags := RunTypedProduction(t, TypedOpts{}, gaugeVecBS3FuncValueCheck)
+	bs3Diags := Run(t, Production(TypedOpts{}), gaugeVecBS3FuncValueCheck)
 	assert.Empty(t, bs3Diags,
 		"METRICS-GAUGEVEC-FUNNEL-01 BS-3: found function-value indirection for banned symbol; "+
 			"production code must not store prom.New* or OTel Meter methods in a variable")
@@ -264,7 +271,7 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 		return nil
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./..."}), scan)
 
 	for _, c := range cases {
 		set := observed[c.importPath]
@@ -326,7 +333,7 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 		}
 		return nil
 	}
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./..."}, outerScan)
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./..."}), outerScan)
 
 	for name := range outerRingObserved {
 		if _, ok := adapterPromAllowedNewRegisterExports[name]; !ok {
@@ -467,7 +474,7 @@ func TestAdapterPromCallerAllowlist(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := RunTypedProduction(t, TypedOpts{}, adapterPromCallerAllowlistRule)
+	diags := Run(t, Production(TypedOpts{}), adapterPromCallerAllowlistRule)
 	for _, d := range diags {
 		t.Errorf("METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 %s:%d: %s", d.Rel, d.Line, d.Message)
 	}
@@ -476,7 +483,7 @@ func TestAdapterPromCallerAllowlist(t *testing.T) {
 	// adapters/prometheus references a funnel symbol as a value (function-value
 	// capture or reflect-value indirection), which would bypass the direct-call
 	// allowlist above.
-	valueRefDiags := RunTypedProduction(t, TypedOpts{}, adapterPromValueRefCheck)
+	valueRefDiags := Run(t, Production(TypedOpts{}), adapterPromValueRefCheck)
 	assert.Empty(t, valueRefDiags,
 		"METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 BS-A1/BS-A2: found a funnel symbol used as a "+
 			"value (not a direct call); this bypasses the caller allowlist — route through "+

@@ -13,7 +13,8 @@ import (
 // KnownNonDefaultTags; the rule must NOT catch this.
 func _(t *testing.T) {
 	scan := func(p *archtest.Pass) []archtest.Diagnostic { return nil }
-	_ = archtest.RunTyped(t, archtest.TypedOpts{}, []string{"./..."}, scan)
-	_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: archtest.FlatNonDefaultTags()},
-		[]string{"./..."}, scan)
+	_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{}, []string{"./..."}), scan)
+	_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: archtest.FlatNonDefaultTags()},
+		[]string{"./..."}),
+		scan)
 }

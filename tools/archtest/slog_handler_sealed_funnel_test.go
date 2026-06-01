@@ -254,11 +254,11 @@ func sealStatusInFunc(info *types.Info, f *ast.File, funcName, loggingPkgPath st
 func TestSlogHandlerSealedFunnel_A1_NoBareConstruction(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
 			rel := filepath.ToSlash(p.Rel(f))
-			// Only flag files outside the sanctioned logging package.
+
 			if strings.HasPrefix(rel, slogFunnelLoggingPkgRelDir+"/") || rel == slogFunnelLoggingPkgRelDir {
 				continue
 			}
@@ -266,6 +266,7 @@ func TestSlogHandlerSealedFunnel_A1_NoBareConstruction(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01", diags)
 }
 
@@ -539,7 +540,7 @@ func TestSlogHandlerSealedFunnel_A2_HandleFormLock(t *testing.T) {
 	var handleFound, withAttrsFound bool
 	var all []Diagnostic
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
 			rel := filepath.ToSlash(p.Rel(f))
@@ -550,7 +551,7 @@ func TestSlogHandlerSealedFunnel_A2_HandleFormLock(t *testing.T) {
 				if fn.Name == nil || fn.Body == nil {
 					return
 				}
-				// Only check methods on contextHandler.
+
 				if !HasReceiver(fn, slogFunnelContextHandlerTypeName) {
 					return
 				}
@@ -566,6 +567,7 @@ func TestSlogHandlerSealedFunnel_A2_HandleFormLock(t *testing.T) {
 		}
 		return ds
 	})
+
 	all = append(all, diags...)
 
 	if !handleFound {
@@ -683,7 +685,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 	// --- Generated segment (Hard, self-covering): scan the whole production tree
 	// for assembly-generated main.go files and require the seal in run().
 	generatedCount := 0
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -721,6 +723,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 		}
 		return nil
 	})
+
 	// Non-vacuity: the generated segment must find at least one assembly main.
 	if generatedCount == 0 {
 		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated segment: found 0"+
@@ -733,7 +736,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 		found := false
 		sealIsFirstCall := false
 		funcLine := 0
-		RunTyped(t, TypedOpts{Tests: false}, []string{ep.pkgPattern},
+		Run(t, Typed(TypedOpts{Tests: false}, []string{ep.pkgPattern}),
 			func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil {
 					return nil
@@ -742,7 +745,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 					if strings.HasSuffix(filepath.ToSlash(p.Rel(f)), "_test.go") {
 						continue
 					}
-					// Hand-written mains must not carry the generated marker.
+
 					if isGocellAssemblyGenerated(f) {
 						continue
 					}
@@ -805,8 +808,9 @@ func TestSlogHandlerSealedFunnel_A1_DetectsViolation(t *testing.T) {
 
 	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil
@@ -1011,7 +1015,7 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{slogFunnelLoggingPkgRelDir})
 	var handleChecked bool
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || fn.Body == nil {
@@ -1030,6 +1034,7 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 		}
 		return nil
 	})
+
 	if !handleChecked {
 		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A2 non-vacuity: %s.%s not found in %s",
 			slogFunnelContextHandlerTypeName, slogFunnelContextHandlerHandleMethod, slogFunnelLoggingPkgRelDir)
@@ -1228,7 +1233,7 @@ func TestSlogHandlerSealedFunnel_A3_DetectsViolation(t *testing.T) {
 	// Generated-segment non-vacuity: cmd/corebundle's generated main.go must be
 	// marker-detected AND seal in run().
 	var sawGeneratedMain, generatedSealed bool
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./cmd/corebundle"},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./cmd/corebundle"}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -1244,6 +1249,7 @@ func TestSlogHandlerSealedFunnel_A3_DetectsViolation(t *testing.T) {
 			}
 			return nil
 		})
+
 	if !sawGeneratedMain {
 		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A3 reverse check: cmd/corebundle has no" +
 			" assembly-generated main.go (marker not detected) — the generated segment" +
@@ -1258,7 +1264,7 @@ func TestSlogHandlerSealedFunnel_A3_DetectsViolation(t *testing.T) {
 	// Marker discriminator: a hand-written main (ssobff) must NOT be flagged as
 	// generated — otherwise the generated segment would silently absorb it.
 	var sawHandwrittenMain, handwrittenIsGenerated bool
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./examples/ssobff"},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./examples/ssobff"}),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				if strings.HasSuffix(filepath.ToSlash(p.Rel(f)), "_test.go") {
@@ -1275,6 +1281,7 @@ func TestSlogHandlerSealedFunnel_A3_DetectsViolation(t *testing.T) {
 			}
 			return nil
 		})
+
 	if !sawHandwrittenMain {
 		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A3 reverse check: examples/ssobff/main.go" +
 			" not found — discriminator check is vacuous")
@@ -1313,12 +1320,12 @@ func TestSlogHandlerSealedFunnel_NoBlindspotsInProduction(t *testing.T) {
 	// healthtest contains a CaptureHandler for testing (acceptable test helper).
 	// The check skips _test.go files since RunTypedProduction uses Tests:false.
 	var ds []Diagnostic
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
 		pkgPath := p.Pkg.Path()
-		// Skip the sanctioned logging package and healthtest (test helper).
+
 		if pkgPath == loggingFullPkgPath {
 			return nil
 		}
@@ -1326,7 +1333,6 @@ func TestSlogHandlerSealedFunnel_NoBlindspotsInProduction(t *testing.T) {
 			return nil
 		}
 
-		// Check whether any named type in this package implements slog.Handler.
 		slogHandlerIface := findSlogHandlerInterface(p.TypesInfo, p.Pkg)
 		if slogHandlerIface == nil {
 			return nil
@@ -1346,7 +1352,7 @@ func TestSlogHandlerSealedFunnel_NoBlindspotsInProduction(t *testing.T) {
 			if !ok {
 				continue
 			}
-			// Check pointer and value receiver forms via the sanctioned funnel.
+
 			if typesutil.ImplementsInterface(named, slogHandlerIface) {
 				pos := p.Fset.Position(obj.Pos())
 				ds = append(ds, Diagnostic{
@@ -1361,6 +1367,7 @@ func TestSlogHandlerSealedFunnel_NoBlindspotsInProduction(t *testing.T) {
 		}
 		return nil
 	})
+
 	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01-BLINDSPOT", ds)
 }
 
@@ -1448,14 +1455,13 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage(t *testing.T) {
 
 	// Scan all cmd/ and examples/ packages for bootstrap imports.
 	var ds []Diagnostic
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./cmd/...", "./examples/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cmd/...", "./examples/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
 
-			// Only consider packages that import runtime/bootstrap.
 			importsBootstrap := false
 			for _, imp := range p.Pkg.Imports() {
 				if imp.Path() == bootstrapPkgPath {
@@ -1467,8 +1473,6 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage(t *testing.T) {
 				return nil
 			}
 
-			// Exempt packages whose entry main.go is assembly-generated — covered
-			// by the A3 generated segment (seal lives in the generated run()).
 			for _, f := range p.Files {
 				if strings.HasSuffix(filepath.ToSlash(p.Rel(f)), "_test.go") {
 					continue
@@ -1478,15 +1482,13 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage(t *testing.T) {
 				}
 			}
 
-			// Derive the ./relative/pkg pattern form (strip module path prefix).
 			relPkg := strings.TrimPrefix(pkgPath, modPath+"/")
 			pkgPattern := "./" + relPkg
 
 			if handwrittenPkgs[pkgPattern] {
-				return nil // hand-written entry already enrolled — OK
+				return nil
 			}
 
-			// Hand-written package importing bootstrap but not enrolled: flag it.
 			for _, f := range p.Files {
 				if strings.HasSuffix(filepath.ToSlash(p.Rel(f)), "_test.go") {
 					continue
@@ -1501,10 +1503,11 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage(t *testing.T) {
 						" — seal it with logging.NewHandler and enroll it;" +
 						" SLOG-HANDLER-SEALED-FUNNEL-01 A3 reverse coverage (gh #1424)",
 				})
-				break // one diagnostic per package is sufficient
+				break
 			}
 			return nil
 		})
+
 	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01-A3-COVERAGE", ds)
 }
 
@@ -1585,14 +1588,13 @@ func TestSlogHandlerSealedFunnel_LogValuerSelfRedactEnrollment(t *testing.T) {
 	}
 
 	var ds []Diagnostic
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
 		pkgPath := p.Pkg.Path()
 		relPkg := strings.TrimPrefix(pkgPath, modPath+"/")
 
-		// Find slog.LogValuer interface.
 		logValuerIface := findSlogLogValuerInterface(p.TypesInfo, p.Pkg)
 		if logValuerIface == nil {
 			return nil
@@ -1631,6 +1633,7 @@ func TestSlogHandlerSealedFunnel_LogValuerSelfRedactEnrollment(t *testing.T) {
 		}
 		return nil
 	})
+
 	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01-LOGVALUER-ENROLLMENT", ds)
 }
 

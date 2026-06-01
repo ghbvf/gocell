@@ -221,14 +221,15 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 
 	// Load production sources with type info: cells/ for B1/B3, runtime/auth/ for B2.
 	seenRels := map[string]bool{}
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./cells/...", "./runtime/auth/..."},
+	diags := Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./cells/...", "./runtime/auth/..."}),
+
 		func(pass *Pass) []Diagnostic {
 			if !pass.Typed() {
 				return nil
 			}
 			var d []Diagnostic
-			// B2 funnel body on owner_guard.go (independent of targets)
+
 			for _, file := range pass.Files {
 				rel := pass.Rel(file)
 				seenRels[rel] = true
@@ -236,9 +237,7 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 					d = append(d, checkFunnelBody(pass, file, rel)...)
 				}
 			}
-			// B1+B3 per serviceOwned target: collect service.go + sibling
-			// adapter files (handler.go etc), resolve adapter-bound entry
-			// methods, then run reachability + ban predicates.
+
 			for i := range targets {
 				target := &targets[i]
 				sliceDir := path.Dir(target.rel)
@@ -385,16 +384,17 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 			t.Parallel()
 
 			pattern := "./" + fixtureBase + "/" + tc.subdir
-			diags := RunTyped(t,
+			diags := Run(t, Typed(
 				TypedOpts{Tests: false, Tags: nil},
 				[]string{pattern},
+			),
+
 				func(pass *Pass) []Diagnostic {
 					if !pass.Typed() {
 						return nil
 					}
 					var d []Diagnostic
-					// For B1/B3 fixtures, identify service.go + adapter siblings.
-					// For B2 fixtures, the package only contains owner_guard.go.
+
 					if tc.pred == predB1 || tc.pred == predB3 {
 						var serviceFile *ast.File
 						var siblings []*ast.File

@@ -128,7 +128,8 @@ func collectPGTestcontainerRunFindings(t *testing.T, root string) []string {
 		require.NoError(t, perr)
 		if ok {
 			findings = append(findings, fmt.Sprintf(
-				"%s:%d: forbidden tcpostgres.Run outside tests/testutil/pgclone", rel, line))
+				"%s:%d: forbidden tcpostgres.Run outside tests/testutil/pgclone", rel, line,
+			))
 		}
 	}
 	return findings

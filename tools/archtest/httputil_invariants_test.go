@@ -39,7 +39,8 @@ import (
 
 // httputilResponseGoScope returns a DirsScope restricted to pkg/httputil/response.go.
 func httputilResponseGoScope(root string) Scope {
-	return DirsScope(root, []string{"pkg/httputil"},
+	return DirsScope(
+		root, []string{"pkg/httputil"},
 		MatchRels(func(rel string) bool {
 			return filepath.ToSlash(rel) == "pkg/httputil/response.go"
 		}),
@@ -59,7 +60,7 @@ func runHTTPUtilResponseRule(t *testing.T, ruleID string, rule func(*Pass) []Dia
 	root := findModuleRoot(t)
 	const targetRel = "pkg/httputil/response.go"
 	var foundFile bool
-	diags := Run(t, httputilResponseGoScope(root), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(httputilResponseGoScope(root)), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			if filepath.ToSlash(p.Rel(f)) == targetRel {
 				foundFile = true
@@ -67,6 +68,7 @@ func runHTTPUtilResponseRule(t *testing.T, ruleID string, rule func(*Pass) []Dia
 		}
 		return rule(p)
 	})
+
 	require.True(t, foundFile, "%s: %s not found (renamed/deleted/scope drift)", ruleID, targetRel)
 	return diags
 }
@@ -303,7 +305,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	t.Parallel()
 	const targetRel = "pkg/httputil/response.go"
 	var foundFile bool
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/httputil"}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/httputil"}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -317,6 +319,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 		}
 		return ds
 	})
+
 	require.True(t, foundFile, "HTTPUTIL-5XX-LOG-REDACT-01: %s not found (renamed/deleted/scope drift)", targetRel)
 	Report(t, "HTTPUTIL-5XX-LOG-REDACT-01", diags)
 }
@@ -332,8 +335,9 @@ func TestHTTPUtil5xxLogRedact_DetectsViolation(t *testing.T) {
 
 	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/httputil_log_redact_fixtures/violation"
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/testdata/httputil_log_redact_fixtures/violation"},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/testdata/httputil_log_redact_fixtures/violation"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil
@@ -355,18 +359,18 @@ func TestHTTPUtil5xxLogRedact_DetectsViolation(t *testing.T) {
 // into sub-packages — same shape as the original os.ReadDir loop).
 func collectExportedFuncs(t *testing.T, root, dirRel string) map[string]bool {
 	t.Helper()
-	scope := DirsScope(root, []string{dirRel},
+	scope := DirsScope(
+		root, []string{dirRel},
 		MatchRels(func(rel string) bool {
 			// Single-dir semantics: only files directly under dirRel, no sub-pkgs.
 			return filepath.ToSlash(filepath.Dir(rel)) == filepath.ToSlash(dirRel)
 		}),
 	)
 	result := make(map[string]bool)
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Recv != nil {
-					// skip methods — only top-level functions
 					return
 				}
 				name := fn.Name.Name
@@ -377,6 +381,7 @@ func collectExportedFuncs(t *testing.T, root, dirRel string) map[string]bool {
 		}
 		return nil
 	})
+
 	return result
 }
 

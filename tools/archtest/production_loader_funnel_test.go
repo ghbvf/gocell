@@ -58,7 +58,7 @@ func TestProductionLoaderFunnel01(t *testing.T) {
 	}
 	var violations []violation
 
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {

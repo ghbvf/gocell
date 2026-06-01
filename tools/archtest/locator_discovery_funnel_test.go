@@ -222,7 +222,7 @@ func locatorConsumerScanPatterns() []string {
 // kernel/metadata/**.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, []string{"kernel/metadata"}),
+	diags := Run(t, AST(DirsScope(root, []string{"kernel/metadata"})),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -251,6 +251,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A1", diags)
 }
 
@@ -270,7 +271,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."},
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -304,6 +305,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2a", diags)
 }
 
@@ -324,7 +326,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *testing.T) {
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."},
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -362,6 +364,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2b", diags)
 }
 
@@ -391,7 +394,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 // tracking issue is opened for the Medium upstream ceiling.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	root := findModuleRoot(t)
-	concatDiags := Run(t, DirsScope(root, locatorScanDirs()),
+	concatDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -424,9 +427,10 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.CONCAT", concatDiags)
 
-	regexDiags := Run(t, DirsScope(root, locatorScanDirs()),
+	regexDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -468,13 +472,14 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.REGEX", regexDiags)
 
 	// Blind-spot #3: filepath.Join("<token>", ...) — reconstructs a
 	// conventional-layout path without any HasPrefix or ==/!= shape.
 	// Originally caught a `filepath.Join("cells", ...)` leak in
 	// kernel/governance/rules_misc_consistency.go after the M1 refactor.
-	joinDiags := Run(t, DirsScope(root, locatorScanDirs()),
+	joinDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -516,12 +521,13 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.JOIN", joinDiags)
 
 	// Blind-spot #4: strings.Contains(_, "<token>/") — substring scan for
 	// a conventional-layout prefix. Not caught by A2a (HasPrefix) because
 	// the callee differs.
-	containsDiags := Run(t, DirsScope(root, locatorScanDirs()),
+	containsDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -560,6 +566,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.CONTAINS", containsDiags)
 
 	// Blind-spot #5: strings.Replace(_, "<token>/", ...) and
@@ -567,8 +574,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	// using a conventional-layout prefix as the old-value argument. Not
 	// caught by A2a (HasPrefix), A2b (==/!=), or blind-spots #1–#4.
 	// Uses EvaluateConstString to resolve the second argument.
-	replaceDiags := RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+	replaceDiags := Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -591,8 +599,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 					if sel.Sel.Name != "Replace" && sel.Sel.Name != "ReplaceAll" {
 						return
 					}
-					// Replace: strings.Replace(s, old, new, n) — old is arg[1].
-					// ReplaceAll: strings.ReplaceAll(s, old, new) — old is arg[1].
+
 					if len(call.Args) < 2 {
 						return
 					}
@@ -616,13 +623,15 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.REPLACE", replaceDiags)
 
 	// Blind-spot #6: strings.TrimPrefix(_, "<token>/") — strips a
 	// conventional-layout prefix literal. Not caught by A2a (HasPrefix).
 	// Uses EvaluateConstString to resolve the second argument.
-	trimPrefixDiags := RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+	trimPrefixDiags := Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -665,6 +674,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.TRIMPREFIX", trimPrefixDiags)
 }
 
@@ -693,8 +703,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 	// a banned prefix. EvaluateConstString resolves it; a production occurrence
 	// would mean A2a already catches it and a developer should not be able to
 	// bypass the funnel this way.
-	hasPrefixConstDiags := RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+	hasPrefixConstDiags := Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -709,11 +720,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 					if !locatorIsCalleeStringsHasPrefix(call) || len(call.Args) < 2 {
 						return
 					}
-					// Only flag non-BasicLit second args that const-eval to a banned prefix.
-					// BasicLit forms are already caught by A2a; this catches the bypass
-					// where an Ident (cross-package const) is used instead.
+
 					if _, isLit := call.Args[1].(*ast.BasicLit); isLit {
-						return // already covered by A2a
+						return
 					}
 					lit, ok := EvaluateConstString(p.TypesInfo, call.Args[1])
 					if !ok {
@@ -735,11 +744,13 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2.BLINDSPOT.CONST-HASPFIX", hasPrefixConstDiags)
 
 	// Blind-spot BS-B: const Ident as equality operand evaluating to a banned token.
-	equalityConstDiags := RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+	equalityConstDiags := Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -754,9 +765,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 					if bin.Op != token.EQL && bin.Op != token.NEQ {
 						return
 					}
-					// Skip when either operand is a BasicLit — that form is
-					// already covered by A2b; this blind-spot catches Ident
-					// operands (cross-package const refs) specifically.
+
 					if _, isLit := bin.X.(*ast.BasicLit); isLit {
 						return
 					}
@@ -788,6 +797,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2.BLINDSPOT.CONST-EQ", equalityConstDiags)
 }
 
@@ -823,7 +833,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 //   - kernel/assembly/generator.go: write path; "assemblies"/"cmd" are the
 //     conventional scaffold output directory names, not discovery tokens.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
-	diags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
+	diags := Run(t, Typed(TypedOpts{Tests: false}, locatorConsumerScanPatterns()),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -831,16 +841,15 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				// Skip test files.
+
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				// Skip Locator funnel files (they legitimately hold layout tokens).
+
 				if locatorIsAllowedFile(rel) {
 					continue
 				}
-				// Skip A5-specific allowlisted files (write paths / layout
-				// generators / conventional-token sites with explicit guards).
+
 				if locatorA5AllowedFiles[filepath.ToSlash(rel)] {
 					continue
 				}
@@ -863,7 +872,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 										" reconstructs a conventional layout path; " +
 										"use Locator output (e.g. CellMeta.File) instead",
 								})
-								return // one diagnostic per callsite
+								return
 							}
 						}
 					}
@@ -871,6 +880,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5", diags)
 }
 
@@ -888,7 +898,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 // Both are required reverse negative tests per ai-robust §"工具选定后强制盲区自检".
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 	// Blind-spot A5-BS1: path.Join (not filepath.Join) with banned token.
-	pathJoinDiags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
+	pathJoinDiags := Run(t, Typed(TypedOpts{Tests: false}, locatorConsumerScanPatterns()),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -936,13 +946,14 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5.BLINDSPOT.PATHJOIN", pathJoinDiags)
 
 	// Blind-spot A5-BS2: string concatenation rebuilding a banned token in
 	// filepath.Join args. EvaluateConstString handles BinaryExpr ADD via
 	// go/types constant folding, so "ce"+"lls" would be resolved to "cells"
 	// and caught by A5. This negative test confirms no such form exists.
-	concatDiags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
+	concatDiags := Run(t, Typed(TypedOpts{Tests: false}, locatorConsumerScanPatterns()),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -967,7 +978,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 						if bin.Op != token.ADD {
 							return
 						}
-						// Only flag if both operands are basic literals (split literal concat).
+
 						_, lhsIsLit := bin.X.(*ast.BasicLit)
 						_, rhsIsLit := bin.Y.(*ast.BasicLit)
 						if !lhsIsLit || !rhsIsLit {
@@ -994,6 +1005,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5.BLINDSPOT.CONCAT", concatDiags)
 }
 

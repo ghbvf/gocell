@@ -74,7 +74,8 @@ func scanContractCodegenViolations(rel string, root *yaml.Node) []string {
 					"kernel/metadata.parseContract (K#09 funnel) defaults Codegen=true "+
 					"when the key is absent. Remove the line; keep `codegen: false` "+
 					"only for opt-out contracts.",
-				rel, codegenCount))
+				rel, codegenCount,
+			))
 		}
 	}
 	if codegenCount > 1 {
@@ -83,7 +84,8 @@ func scanContractCodegenViolations(rel string, root *yaml.Node) []string {
 				"declares `codegen` %d times (duplicate key). yaml.v3 struct decode "+
 				"rejects duplicate keys at parse time; the static guard also flags "+
 				"them fail-closed so order-dependent sequences cannot slip past.",
-			rel, codegenCount))
+			rel, codegenCount,
+		))
 	}
 	return violations
 }
@@ -111,7 +113,8 @@ func TestContractYAML_NoCodegenTrueLiteral(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	scope := scanner.DirsScope(root, []string{"contracts", "examples", "cells"},
+	scope := scanner.DirsScope(
+		root, []string{"contracts", "examples", "cells"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),
@@ -179,7 +182,8 @@ func TestContractYAML_NoCodegenTrueLiteral_NegativeFixture(t *testing.T) {
 				t.Fatalf("write fixture: %v", err)
 			}
 
-			scope := scanner.DirsScope(tmp, []string{"contracts"},
+			scope := scanner.DirsScope(
+				tmp, []string{"contracts"},
 				scanner.MatchRels(func(rel string) bool {
 					return filepath.Base(rel) == "contract.yaml"
 				}),

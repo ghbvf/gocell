@@ -117,7 +117,7 @@ func TestProjectionCheckpointConformanceEnroll01(t *testing.T) {
 	var cpIface *types.Interface
 	var cpImplPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -163,7 +163,7 @@ func TestProjectionCheckpointConformanceEnroll01(t *testing.T) {
 	// concrete type key via TypesInfo.
 	enrolledImpls := make(map[string]bool) // "pkg/path.TypeName" → true
 
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -176,14 +176,13 @@ func TestProjectionCheckpointConformanceEnroll01(t *testing.T) {
 				if !hasCheckpointConformanceCall(f, p.TypesInfo) {
 					continue
 				}
-				// Resolve the concrete type of the store argument.
+
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 					pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
 					if !ok || pkgPath != checkpointConformancePkg || name != checkpointConformanceFuncName {
 						return
 					}
-					// RunCheckpointConformance(t *testing.T, store projection.CheckpointStore)
-					// args[1] is the store argument.
+
 					if len(call.Args) < 2 {
 						return
 					}
@@ -222,7 +221,8 @@ func unenrolledCheckpointDiags(implSet, enrolledImpls map[string]bool) []Diagnos
 					"(PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01). Add a _test.go that "+
 					"calls projectiontest.RunCheckpointConformance(t, <store>) passing a "+
 					"concretely-typed instance of this impl.",
-				implKey),
+				implKey,
+			),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
@@ -262,7 +262,7 @@ func TestProjectionCheckpointConformanceEnroll01_RedFixture(t *testing.T) {
 	// ─── Pass 1 (Tests:false): resolve iface + collect impls in one load ─────
 	var cpIface *types.Interface
 	var cpImplPkgs []*types.Package
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false}, loadPatterns,
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, loadPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -279,6 +279,7 @@ func TestProjectionCheckpointConformanceEnroll01_RedFixture(t *testing.T) {
 			cpImplPkgs = append(cpImplPkgs, p.Pkg)
 			return nil
 		})
+
 	require.NotNil(t, cpIface, "RedFixture: could not resolve CheckpointStore interface from fixture load")
 
 	implSet := make(map[string]bool)
@@ -303,8 +304,9 @@ func TestProjectionCheckpointConformanceEnroll01_RedFixture(t *testing.T) {
 
 	// ─── Pass 2 (Tests:true): scan the fixture's _test.go for enrollment ─────
 	enrolledImpls := make(map[string]bool)
-	_ = RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{"./tools/archtest/internal/projectioncheckpointenrollfixture/..."},
+	_ = Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{"./tools/archtest/internal/projectioncheckpointenrollfixture/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -332,6 +334,7 @@ func TestProjectionCheckpointConformanceEnroll01_RedFixture(t *testing.T) {
 			}
 			return nil
 		})
+
 	require.True(t, enrolledImpls[enrolledKey],
 		"RedFixture: the enrollment scan must credit enrolledStore via its "+
 			"RunCheckpointConformance call (positive direction: arg-type resolution works)")
@@ -367,14 +370,14 @@ func TestProjectionCheckpointConformanceEnroll01_ReverseBlindSpot_NoReflectImpl(
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			// Skip kernel/projection packages that legitimately mention "CheckpointStore".
+
 			if strings.HasPrefix(rel, "kernel/projection/") {
 				continue
 			}
@@ -395,6 +398,7 @@ func TestProjectionCheckpointConformanceEnroll01_ReverseBlindSpot_NoReflectImpl(
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: no production non-test file outside kernel/projection should contain "+
 			"the string literal %q as reflect bait", checkpointStoreIfaceName)

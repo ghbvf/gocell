@@ -53,7 +53,8 @@ var kernelMetadataWireSymbols = map[string]bool{
 func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"kernel/metadata"},
+	scope := DirsScope(
+		root, []string{"kernel/metadata"},
 		MatchRels(func(rel string) bool {
 			// Single-dir semantics: only files directly under kernel/metadata,
 			// no sub-packages.
@@ -61,7 +62,7 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 		}),
 	)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
@@ -99,5 +100,6 @@ func TestKernelMetadataDoesNotContainWireSymbols(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, ruleKernelMetadataNoWire, diags)
 }

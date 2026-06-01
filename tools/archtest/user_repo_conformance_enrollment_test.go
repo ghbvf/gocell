@@ -82,12 +82,12 @@ func TestUserRepoConformanceEnrollment(t *testing.T) {
 	var userRepoIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
-			// Capture the iface from the ports package.
+
 			if p.Pkg.Path() == userRepoIfacePkg {
 				if obj := p.Pkg.Scope().Lookup(userRepoIfaceName); obj != nil {
 					if named, ok := obj.Type().(*types.Named); ok {
@@ -98,7 +98,7 @@ func TestUserRepoConformanceEnrollment(t *testing.T) {
 				}
 				return nil
 			}
-			// Collect candidate packages for impl scanning.
+
 			implPkgs = append(implPkgs, p.Pkg)
 			return nil
 		})
@@ -135,7 +135,7 @@ func TestUserRepoConformanceEnrollment(t *testing.T) {
 	enrolledPkgs := make(map[string]bool) // pkg path → true
 
 	testPatterns := prodscan.Patterns(root)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -146,8 +146,6 @@ func TestUserRepoConformanceEnrollment(t *testing.T) {
 					continue
 				}
 				if hasConformanceCall(f, p.TypesInfo) {
-					// The package path for a test variant ends with ".test" or
-					// "_test"; strip both suffixes to get the canonical prod pkg path.
 					pkgPath := canonicalPkgPath(p.Pkg.Path())
 					enrolledPkgs[pkgPath] = true
 				}
@@ -174,7 +172,8 @@ func TestUserRepoConformanceEnrollment(t *testing.T) {
 						"(USERREPO-CONFORMANCE-ENROLLMENT-01). "+
 						"Add a _test.go in package %s that calls "+
 						"conformance.RunUserRepoConformance(t, factory, features).",
-					implKey, pkgPath),
+					implKey, pkgPath,
+				),
 			})
 		}
 	}
@@ -206,7 +205,7 @@ func TestUserRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	var userRepoIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -287,7 +286,7 @@ func TestUserRepoConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *testing
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -312,6 +311,7 @@ func TestUserRepoConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *testing
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: no production non-test file should contain the string literal %q as reflect bait", userRepoIfaceName)
 }

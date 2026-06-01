@@ -185,7 +185,8 @@ func TestKnownNonDefaultTagsCoverage(t *testing.T) {
 			}
 			unknown = append(unknown, fmt.Sprintf(
 				"%q (allowlisted skip-tag found outside its sanctioned subtree at %s)",
-				tag, strings.Join(offending, ", ")))
+				tag, strings.Join(offending, ", "),
+			))
 			continue
 		}
 		example := entry.paths[0]
@@ -563,4 +564,4 @@ func repoRoot(t *testing.T) string {
 // Compile-time verification: constraint.Expr interface usage must remain
 // consistent with the standard library. This blank assignment ensures
 // the compiler validates the Eval call signature.
-var _ = (constraint.Expr)(nil)
+var _ = constraint.Expr(nil)

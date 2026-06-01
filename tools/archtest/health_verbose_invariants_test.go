@@ -207,7 +207,7 @@ type verboseShapeScan struct {
 func scanVerboseShape(t *testing.T) verboseShapeScan {
 	t.Helper()
 	var scan verboseShapeScan
-	_ = Run(t, healthScope(t), func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(healthScope(t)), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
@@ -216,6 +216,7 @@ func scanVerboseShape(t *testing.T) verboseShapeScan {
 		}
 		return nil
 	})
+
 	return scan
 }
 
@@ -528,7 +529,7 @@ func TestHealthRedactedErrorMsgCreationFunnel(t *testing.T) {
 	t.Parallel()
 
 	var funnelFound bool
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{healthPackagePattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
 				return nil
@@ -558,7 +559,7 @@ func TestHealthRedactedErrorMsgFunnelBodyRedacts(t *testing.T) {
 	t.Parallel()
 
 	var checked bool
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{healthPackagePattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
 				return nil
@@ -620,7 +621,7 @@ func TestHealthRedactedErrorMsgFieldTyped(t *testing.T) {
 	t.Parallel()
 
 	var checked bool
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{healthPackagePattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
 				return nil
@@ -678,7 +679,7 @@ func TestHealthRedactedErrorMsgFunnelFuncSig(t *testing.T) {
 	t.Parallel()
 
 	var checked bool
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{healthPackagePattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
 				return nil

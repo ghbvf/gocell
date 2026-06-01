@@ -357,13 +357,13 @@ func TestHealthzWrite01(t *testing.T) {
 
 	var a1Diags, a3Diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
-			// A1/A3 scan scope: kernel/ + cells/ + adapters/ + runtime/ + cmd/ + examples/.
+
 			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
@@ -407,7 +407,7 @@ func TestHealthzInvariants_ReverseFixture(t *testing.T) {
 	var a1Diags, a3Diags []Diagnostic
 
 	// Load the fixture module with RunTypedDir so it shares one type universe.
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -462,8 +462,9 @@ func TestHealthzInvariants_ReverseBlindSpot_NoDynamicHealthzPath(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(findModuleRoot(t)),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(findModuleRoot(t))),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -481,11 +482,11 @@ func TestHealthzInvariants_ReverseBlindSpot_NoDynamicHealthzPath(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				// Skip the sanctioned handler.
+
 				if strings.HasSuffix(filepath.ToSlash(rel), healthzA1AllowedSuffix) {
 					continue
 				}
-				// Look for fmt.Sprintf / strings.Join calls that include a healthz/readyz string literal.
+
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 					sel, ok := call.Fun.(*ast.SelectorExpr)
 					if !ok {

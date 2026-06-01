@@ -479,7 +479,7 @@ func TestNotFoundTestStrict(t *testing.T) {
 	// are skipped from the module-wide scan via shouldSkipForNotFoundStrict
 	// regardless of build tags.
 	opts := TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}
-	_ = RunTyped(t, opts, []string{"./..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(opts, []string{"./..."}), func(p *Pass) []Diagnostic {
 		for _, v := range notFoundDiagsFromPass(p) {
 			key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Name)
 			if _, dup := seen[key]; dup {
@@ -565,7 +565,7 @@ func TestNotFoundTestStrictFixtures(t *testing.T) {
 			scope := DirsScope(fixtureDir, []string{"."})
 
 			var violations []notFoundViolation
-			Run(t, scope, func(p *Pass) []Diagnostic {
+			Run(t, AST(scope), func(p *Pass) []Diagnostic {
 				for _, f := range p.Files {
 					rel := p.Rel(f)
 					violations = append(violations,

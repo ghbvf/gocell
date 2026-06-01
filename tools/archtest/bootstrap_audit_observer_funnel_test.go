@@ -142,7 +142,7 @@ func TestBootstrapAuditObserverFunnelDownstreamHard01(t *testing.T) {
 		funcLocation    string
 		passRef         *Pass
 	)
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != auditPkgPath {
 			return nil
 		}
@@ -432,7 +432,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 
 	var upstreamViolations []upstreamViolation
 
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || !scanPaths[p.Pkg.Path()] {
 			return nil
 		}
@@ -443,11 +443,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 				continue
 			}
 			observerObjects := observerObjectsInFile(p, file, auditPkgPath)
-			// Reassign scan: a funnel-built object subsequently rebound to a
-			// non-funnel RHS (FuncLit, wrapper-returned closure, …) loses the
-			// audit-chain guarantee. The reassign violation is reported even
-			// if the rebound object never reaches NewBootstrapMiddleware,
-			// because the shape itself is what the funnel forbids.
+
 			upstreamViolations = append(upstreamViolations,
 				reassignViolations(p, file, observerObjects, auditPkgPath)...)
 			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {

@@ -129,7 +129,7 @@ func TestSQLStateSingleSource(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := RunTypedProduction(t, TypedOpts{}, sqlStateSingleSourceRule)
+	diags := Run(t, Production(TypedOpts{}), sqlStateSingleSourceRule)
 	Report(t, sqlStateSingleSourceRuleID, diags)
 }
 
@@ -268,11 +268,12 @@ var expectedSQLStateFixtureLines = []int{40, 49, 62}
 func TestSQLStateSingleSource_RedFixtureDetected(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedFixture(t,
+	diags := Run(t, Fixture(
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/sqlstatesinglesourcefixture/..."},
-		sqlStateSingleSourceRule,
-	)
+	),
+
+		sqlStateSingleSourceRule)
 
 	got := make([]int, 0, len(diags))
 	for _, d := range diags {
@@ -302,7 +303,7 @@ func TestSQLStateSingleSource_SelfCheck(t *testing.T) {
 	}
 
 	actual := map[string]struct{}{}
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}

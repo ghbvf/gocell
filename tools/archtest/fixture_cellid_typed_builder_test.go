@@ -253,7 +253,7 @@ func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[str
 	scopePrefixes := []string{"kernel/"}
 	var violations []string
 	collect := func(opts TypedOpts) {
-		_ = RunTyped(t, opts, []string{"./kernel/..."}, func(p *Pass) []Diagnostic {
+		_ = Run(t, Typed(opts, []string{"./kernel/..."}), func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
 			}
@@ -570,7 +570,7 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 		pInfo *types.Info
 	}
 	var result a2Result
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadatatestPkgPath {
 			return nil
 		}
@@ -588,6 +588,7 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 		}
 		return nil
 	})
+
 	fn := result.fn
 	pInfo := result.pInfo
 	if fn == nil {
@@ -736,7 +737,7 @@ func TestFixtureCellIDTypedBuilder_VarInitializerShape(t *testing.T) {
 		specs []*ast.ValueSpec
 	}
 	var collected result
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadatatestPkgPath {
 			return nil
 		}
@@ -749,8 +750,7 @@ func TestFixtureCellIDTypedBuilder_VarInitializerShape(t *testing.T) {
 				if gd.Tok != token.VAR {
 					return
 				}
-				// SCANNER-FRAMEWORK-USAGE-01 Path B compliance: depth-1 typed
-				// walk of gd.Specs *ast.ValueSpec entries.
+
 				EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 					collected.specs = append(collected.specs, vs)
 				})
@@ -758,6 +758,7 @@ func TestFixtureCellIDTypedBuilder_VarInitializerShape(t *testing.T) {
 		}
 		return nil
 	})
+
 	if len(collected.specs) == 0 {
 		t.Fatalf("%s/A5: no var GenDecl found in kernel/metadata/metadatatest/cellid.go", fixtureCellIDRuleID)
 	}
@@ -824,7 +825,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	var violations []string
 	visitedFiles := make(map[string]struct{})
 	fixturePkgPattern := []string{"./tools/archtest/internal/fixturecellidnegfixture"}
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgPattern, func(p *Pass) []Diagnostic {
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgPattern), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -844,6 +845,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 		}
 		return nil
 	})
+
 	sort.Strings(violations)
 	violations = dedupSortedStrings(violations)
 
@@ -1057,14 +1059,13 @@ func TestMetadatatestImportScope(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
 	var violations []string
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			// The metadatatest package itself imports nothing of itself,
-			// but defensive — its own files would not be production callers.
+
 			if strings.HasPrefix(rel, "kernel/metadata/metadatatest/") {
 				continue
 			}
@@ -1078,6 +1079,7 @@ func TestMetadatatestImportScope(t *testing.T) {
 		}
 		return nil
 	})
+
 	sort.Strings(violations)
 	violations = dedupSortedStrings(violations)
 	if len(violations) > 0 {

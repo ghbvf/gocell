@@ -42,7 +42,8 @@ func TestMigrationNoTransactionRerunSafe01(t *testing.T) {
 	// convention (NNN_xxx.sql files); a future sub-directory would carry
 	// non-migration files (e.g. sql utilities) that this rule shouldn't
 	// touch. Without this predicate DirsScope would walk recursively.
-	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"},
+	scope := scanner.DirsScope(
+		root, []string{"adapters/postgres/migrations"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.ToSlash(filepath.Dir(rel)) == "adapters/postgres/migrations"
 		}),

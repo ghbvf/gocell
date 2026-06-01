@@ -120,13 +120,26 @@ import (
 const (
 	taggroupLoopRuleID         = "TAGGROUP-LOOP-FORBIDS-RUNTYPED-01"
 	taggroupLoopKnownTagsName  = "KnownNonDefaultTags"
-	taggroupLoopRunTypedName   = "RunTyped"
+	taggroupLoopRunName        = "Run"
 	taggroupLoopArchtestPkg    = PlatformModulePath + "/tools/archtest"
 	taggroupLoopTypesevalPkg   = PlatformModulePath + "/tools/archtest/internal/typeseval"
 	taggroupLoopFixtureDirSeg  = "tools/archtest/internal/taggrouploopfixtures/"
 	taggroupLoopPatternProd    = "./tools/archtest/..."
 	taggroupLoopPatternFixture = "./tools/archtest/internal/taggrouploopfixtures/..."
 )
+
+// taggroupTypedScopeCtors is the set of archtest typed-scope constructor names
+// whose result, when handed to Run inside a KnownNonDefaultTags loop, drives one
+// typeseval.SharedResolver packages.Load per tag group — the OOM-risking shape
+// this rule forbids. The AST scope ([AST]) is intentionally excluded: AST-only
+// dispatch is a cheap parser pass with no per-tag packages.Load amortization
+// concern.
+var taggroupTypedScopeCtors = map[string]struct{}{
+	"Typed":            {},
+	"Production":       {},
+	"Fixture":          {},
+	"StandaloneModule": {},
+}
 
 // CheckTagGroupLoopForbidsRunTyped runs TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
 // against tools/archtest/*_test.go (direct children only) and returns its
@@ -145,8 +158,7 @@ const (
 // BuildTags only; the scan scope is fixed to GoCell's own archtest package.
 func CheckTagGroupLoopForbidsRunTyped(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	return RunTyped(t, TypedOpts{Tests: true, Tags: cfg.BuildTags},
-		[]string{taggroupLoopPatternProd},
+	return Run(t, Typed(TypedOpts{Tests: true, Tags: cfg.BuildTags}, []string{taggroupLoopPatternProd}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -165,7 +177,8 @@ func CheckTagGroupLoopForbidsRunTyped(t *testing.T, cfg ConfigForExternalCell) [
 
 // scanFileForTaggroupViolations walks file looking for RangeStmt nodes whose
 // range expression calls KnownNonDefaultTags AND whose body subtree contains
-// a RunTyped call. Uses [EachInSubtree] (the only allowed walk path per
+// a Run call with a typed scope (Typed/Production/Fixture/StandaloneModule).
+// Uses [EachInSubtree] (the only allowed walk path per
 // SCANNER-FRAMEWORK-USAGE-01) for both the outer RangeStmt enumeration and
 // the inner CallExpr search.
 func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagnostic {
@@ -175,7 +188,7 @@ func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagno
 		if !rangeExprCallsKnownNonDefaultTags(p, rs.X, boundObjs) {
 			return
 		}
-		bodyHit, hitLine := bodyContainsRunTyped(p, rs.Body)
+		bodyHit, hitLine := bodyContainsTypedRun(p, rs.Body)
 		if !bodyHit {
 			return
 		}
@@ -183,12 +196,13 @@ func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagno
 			Rel:  rel,
 			Line: hitLine,
 			Message: fmt.Sprintf(
-				"for-range over %s with %s inside loop body — "+
-					"replace with single RunTyped(Tags: archtest.FlatNonDefaultTags()) "+
+				"for-range over %s with a typed-scope Run "+
+					"(Run(t, Typed/Production/Fixture/StandaloneModule(...), ...)) inside loop body — "+
+					"replace with single Run(t, Typed(TypedOpts{Tags: archtest.FlatNonDefaultTags()}, ...)) "+
 					"or two-load nil+FlatNonDefaultTags pattern "+
 					"(see ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md;"+
 					" FlatNonDefaultTags defined in tools/archtest/resolve.go)",
-				taggroupLoopKnownTagsName, taggroupLoopRunTypedName,
+				taggroupLoopKnownTagsName,
 			),
 		})
 	})
@@ -303,19 +317,40 @@ func taggroupObjectOf(info *types.Info, id *ast.Ident) types.Object {
 	return info.Uses[id]
 }
 
-// bodyContainsRunTyped walks body recursively and reports whether any
-// descendant CallExpr's Fun resolves to archtest.RunTyped. Returns the line
-// number of the first matching CallExpr (first in preorder). Walks the
-// entire subtree (no early-return) — RangeStmt body sizes in archtest tests
+// bodyContainsTypedRun walks body recursively and reports whether any
+// descendant CallExpr is archtest.Run whose RunScope argument (2nd positional)
+// is itself a CallExpr resolving to one of the typed-scope constructors in
+// taggroupTypedScopeCtors (Typed/Production/Fixture/StandaloneModule). Returns
+// the line number of the first matching Run CallExpr (first in preorder). Walks
+// the entire subtree (no early-return) — RangeStmt body sizes in archtest tests
 // are small, so the constant-factor cost is irrelevant; the API choice keeps
 // the rule honest about scanner usage.
-func bodyContainsRunTyped(p *Pass, body *ast.BlockStmt) (bool, int) {
+//
+// Both callee resolutions go through *types.Info (ResolvePackageRef), so the
+// qualified / dot-import / aliased forms of archtest.Run AND of the scope
+// constructor all lower to the same *types.Func identity — there is no
+// "looks-like-Typed but isn't" gray zone. The AST scope ([AST]) is excluded by
+// construction (it is absent from taggroupTypedScopeCtors): AST dispatch has no
+// per-tag packages.Load amortization concern.
+func bodyContainsTypedRun(p *Pass, body *ast.BlockStmt) (bool, int) {
 	call, ok := FindFirstInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) bool {
 		pkgPath, name, resolved := ResolvePackageRef(p.TypesInfo, call.Fun)
-		if !resolved {
+		if !resolved || name != taggroupLoopRunName || pkgPath != taggroupLoopArchtestPkg {
 			return false
 		}
-		return name == taggroupLoopRunTypedName && pkgPath == taggroupLoopArchtestPkg
+		if len(call.Args) < 2 {
+			return false
+		}
+		scopeCall, ok := call.Args[1].(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		scopePkg, scopeName, scopeResolved := ResolvePackageRef(p.TypesInfo, scopeCall.Fun)
+		if !scopeResolved || scopePkg != taggroupLoopArchtestPkg {
+			return false
+		}
+		_, isTypedScope := taggroupTypedScopeCtors[scopeName]
+		return isTypedScope
 	})
 	if !ok {
 		return false, 0

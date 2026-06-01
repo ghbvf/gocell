@@ -168,7 +168,8 @@ func runA1Check(t *testing.T, modRoot, sliceDir, buildTag string) []Diagnostic {
 			Message: fmt.Sprintf(
 				"REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go exists but service.go has "+
 					"no required fields; delete the gen file (%s)",
-				requiredDepNilGuardRule),
+				requiredDepNilGuardRule,
+			),
 		}}
 	case err != nil:
 		rel := requiredDepSlashRel(modRoot, svcFile)
@@ -178,7 +179,8 @@ func runA1Check(t *testing.T, modRoot, sliceDir, buildTag string) []Diagnostic {
 			Message: fmt.Sprintf(
 				"REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go missing; "+
 					"run gocell generate required-deps --all (%s)",
-				requiredDepNilGuardRule),
+				requiredDepNilGuardRule,
+			),
 		}}
 	}
 
@@ -190,7 +192,8 @@ func runA1Check(t *testing.T, modRoot, sliceDir, buildTag string) []Diagnostic {
 			Message: fmt.Sprintf(
 				"REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go drift from generator output; "+
 					"hand-edits forbidden, run gocell generate required-deps --all (%s)",
-				requiredDepNilGuardRule),
+				requiredDepNilGuardRule,
+			),
 		}}
 	}
 	return nil
@@ -240,7 +243,7 @@ func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 			fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
 				"required_dep_nil_guard_fixtures", fix)
 			pattern := "./tools/archtest/testdata/required_dep_nil_guard_fixtures/" + fix
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+			diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil {
 					return nil
 				}
@@ -250,13 +253,14 @@ func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 				}
 				return out
 			})
+
 			goldenPath := filepath.Join(fixtureDir, "diag.golden")
 			AssertGolden(t, goldenPath, diags)
 		})
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+		diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
 			}
@@ -270,6 +274,7 @@ func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 			}
 			return out
 		})
+
 		Report(t, requiredDepNilGuardRule+"-A2", diags)
 	})
 }
@@ -534,14 +539,14 @@ func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 			fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
 				"required_dep_nil_guard_fixtures", fix)
 			pattern := "./tools/archtest/testdata/required_dep_nil_guard_fixtures/" + fix
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+			diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil {
 					return nil
 				}
 				var out []Diagnostic
 				for _, file := range p.Files {
 					rel := p.Rel(file)
-					// Skip generated files — A3 only applies to hand-written service.go.
+
 					if strings.HasSuffix(rel, "_gen.go") {
 						continue
 					}
@@ -549,13 +554,14 @@ func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 				}
 				return out
 			})
+
 			goldenPath := filepath.Join(fixtureDir, "diag.golden")
 			AssertGolden(t, goldenPath, diags)
 		})
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+		diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
 			}
@@ -569,6 +575,7 @@ func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 			}
 			return out
 		})
+
 		Report(t, requiredDepNilGuardRule+"-A3", diags)
 	})
 }
@@ -599,7 +606,8 @@ func scanA3(p *Pass, file *ast.File) []Diagnostic {
 			Message: fmt.Sprintf(
 				"REQUIRED-DEP-NIL-GUARD-01-A3: hand-written validation.IsNilInterface call in service.go "+
 					"bypasses generated funnel; remove the call — required-dep nil checks are generated "+
-					"in service_required_gen.go via gocell:\"required\" tag (%s)", requiredDepNilGuardRule),
+					"in service_required_gen.go via gocell:\"required\" tag (%s)", requiredDepNilGuardRule,
+			),
 		})
 	})
 	return out
@@ -657,7 +665,7 @@ func isHandWrittenServiceFile(rel string) bool {
 func TestRequiredDepNilGuard_A4_TagValueWhitelist(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
@@ -670,6 +678,7 @@ func TestRequiredDepNilGuard_A4_TagValueWhitelist(t *testing.T) {
 		}
 		return out
 	})
+
 	Report(t, requiredDepNilGuardRule+"-A4", diags)
 }
 
@@ -691,7 +700,8 @@ func scanA4(p *Pass, file *ast.File) []Diagnostic {
 					Line: p.Fset.Position(field.Pos()).Line,
 					Message: fmt.Sprintf(
 						"REQUIRED-DEP-NIL-GUARD-01-A4: malformed struct tag %q (reflect.StructTag.Get would silently drop it) (%s)",
-						raw, requiredDepNilGuardRule),
+						raw, requiredDepNilGuardRule,
+					),
 				})
 				continue
 			}
@@ -704,7 +714,8 @@ func scanA4(p *Pass, file *ast.File) []Diagnostic {
 				Line: p.Fset.Position(field.Pos()).Line,
 				Message: fmt.Sprintf(
 					"REQUIRED-DEP-NIL-GUARD-01-A4: unknown gocell tag value %q (allowed: \"\", \"required\") (%s)",
-					val, requiredDepNilGuardRule),
+					val, requiredDepNilGuardRule,
+				),
 			})
 		}
 	})
@@ -719,7 +730,7 @@ func scanA4(p *Pass, file *ast.File) []Diagnostic {
 func TestRequiredDepNilGuard_BlindSpot_B1_NoReflectNilCheck(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
@@ -730,6 +741,7 @@ func TestRequiredDepNilGuard_BlindSpot_B1_NoReflectNilCheck(t *testing.T) {
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 blind-spot: reflect.ValueOf(s.X).IsNil() on Service fields bypasses A3; use generated validateRequired() instead")
 }
@@ -795,13 +807,11 @@ func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
 			fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
 				"required_dep_nil_guard_fixtures", fix)
 			pattern := "./tools/archtest/testdata/required_dep_nil_guard_fixtures/" + fix
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+			diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 				var out []Diagnostic
 				for _, file := range p.Files {
 					rel := p.Rel(file)
-					// Fixture test: skip generated files only (no path-prefix filter).
-					// isB2InScopeFile enforces /slices/ or /internal/ for production
-					// scope; fixtures live in testdata/ which lacks those segments.
+
 					if strings.HasSuffix(rel, "_gen.go") {
 						continue
 					}
@@ -809,6 +819,7 @@ func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
 				}
 				return out
 			})
+
 			goldenPath := filepath.Join(fixtureDir, "b2.golden")
 			AssertGolden(t, goldenPath, diags)
 		})
@@ -817,7 +828,7 @@ func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
 	t.Run("production_scan", func(t *testing.T) {
 		root := findModuleRoot(t)
 		scope := ModuleScope(root)
-		diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -828,6 +839,7 @@ func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
 			}
 			return out
 		})
+
 		assert.Empty(t, diags,
 			"B2 blind-spot: method body compares a gocell:\"required\" field to nil; "+
 				"these checks belong in generated validateRequired(), not hand-written method bodies")
@@ -875,7 +887,8 @@ func scanB2RequiredFieldNilCompare(p *Pass, file *ast.File) []Diagnostic {
 				Message: fmt.Sprintf(
 					"B2: comparison `%s` on required field bypasses generated validateRequired() funnel "+
 						"(field is tagged gocell:\"required\"; move guard into the generated method)",
-					formatNilCompare(be)),
+					formatNilCompare(be),
+				),
 			})
 		})
 	})
@@ -972,8 +985,8 @@ func TestRequiredDepNilGuard_BlindSpot_B3_NoIndirectIsNilInterfaceRef(t *testing
 		}
 		return nil
 	}
-	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{}, []string{"./..."}), scan)
+	_ = Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}), scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Rel != violations[j].Rel {
@@ -1066,8 +1079,8 @@ func TestRequiredDepNilGuard_BlindSpot_B5_NoValidateRequiredMethodValueLeak(t *t
 		}
 		return nil
 	}
-	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{}, []string{"./..."}), scan)
+	_ = Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}), scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Rel != violations[j].Rel {

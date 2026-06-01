@@ -87,7 +87,7 @@ func TestInventoryAnchorRequired(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := archtestScope(t, root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			if !isTopLevelArchtestTestFileByPath(p.Rel(file), p.Abs(file)) {
@@ -121,7 +121,7 @@ func TestInventoryAnchorValidID(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := archtestScope(t, root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			if !isTopLevelArchtestTestFileByPath(p.Rel(file), p.Abs(file)) {
@@ -146,6 +146,7 @@ func TestInventoryAnchorValidID(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, inventoryAnchorValidIDRule, diags)
 }
 
@@ -173,7 +174,8 @@ func isTopLevelArchtestTestFileByPath(rel, absPath string) bool {
 func archtestScope(t *testing.T, root string) Scope {
 	t.Helper()
 	tracked := loadGitTrackedSet(t, root)
-	return DirsScope(root, []string{"tools/archtest"},
+	return DirsScope(
+		root, []string{"tools/archtest"},
 		IncludeTests(),
 		MatchRels(func(rel string) bool {
 			return tracked[filepath.ToSlash(rel)]

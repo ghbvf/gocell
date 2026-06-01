@@ -13,8 +13,9 @@ import (
 // this alongside the bare and qualified shapes (no façade gap).
 func _(t *testing.T) {
 	for _, tagGroup := range kt.KnownNonDefaultTags() {
-		_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: tagGroup},
-			[]string{"./..."},
+		_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: tagGroup},
+			[]string{"./..."}),
+
 			func(p *archtest.Pass) []archtest.Diagnostic { return nil })
 	}
 }

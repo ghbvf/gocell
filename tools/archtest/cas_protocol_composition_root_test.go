@@ -81,11 +81,13 @@ var casProtocolForbidden = map[string]struct{}{
 //   - examples/* each carry their own composition root; allowing them mirrors
 //     the AUTH-PLAN-04 / LAYER-09 carve-out for example projects.
 func TestCASProtocol_CompositionRootOnly(t *testing.T) {
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false},
 		casProtocolProductionPatterns(),
-		scanCASProtocolViolations,
-	)
+	),
+
+		scanCASProtocolViolations)
+
 	Report(t, casProtocolRuleID, diags)
 }
 
@@ -138,7 +140,8 @@ func scanCASProtocolViolations(p *Pass) []Diagnostic {
 				Message: fmt.Sprintf(
 					"cas.%s must only be called from cmd/* (composition root) or runtime/state/cas/*; "+
 						"cells / runtime (non-cas) / adapters must consume an injected *cas.Protocol",
-					name),
+					name,
+				),
 			})
 		})
 	}

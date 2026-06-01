@@ -366,7 +366,8 @@ func scanMemTxLockWitness(p *Pass) []Diagnostic {
 				"txlock.Acquire in %s — the only sanctioned mint is the single "+
 					"`txlock.Acquire(&r.s.mu)` in (memTxRunner).runLocked's direct body "+
 					"(not a foreign mutex, not nested in a closure) (%s W1)",
-				enclosingFuncName(file, ce.Pos()), ruleMemTxLockOwnership01))
+				enclosingFuncName(file, ce.Pos()), ruleMemTxLockOwnership01,
+			))
 		})
 
 		// W2: (*Store).inLiveTx return form.
@@ -382,7 +383,8 @@ func scanMemTxLockWitness(p *Pass) []Diagnostic {
 					"weakened (*Store).inLiveTx in %s: %s — must be `return "+
 						"l.Live(&s.mu)` with l from ctx.Value(memTxKey{}).(txlock.Lease) "+
 						"(%s W2)",
-					enclosingFuncName(file, fd.Pos()), why, ruleMemTxLockOwnership01))
+					enclosingFuncName(file, fd.Pos()), why, ruleMemTxLockOwnership01,
+				))
 			}
 		})
 	}
@@ -402,7 +404,7 @@ func memProductionScan(t *testing.T) []Diagnostic {
 	// Load mem/... (not just mem) so the typed resolver has the txlock sub-package
 	// in the loaded set — isTxlockAcquireCall → ResolvePackageRef needs it. The
 	// p.Pkg.Path() filter then restricts the scan to the mem package itself.
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != memPkgPath {
 				return nil
@@ -410,6 +412,7 @@ func memProductionScan(t *testing.T) []Diagnostic {
 			diags = append(diags, scanMemTxLockWitness(p)...)
 			return nil
 		})
+
 	return diags
 }
 
@@ -442,7 +445,7 @@ func TestMemTxLockOwnership01_FindsSanctionedSites(t *testing.T) {
 
 	var acquireInRunLocked, inLiveTxAccessors int
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != memPkgPath {
 				return nil
@@ -571,7 +574,7 @@ func assertMemTreeDoesNotImport(t *testing.T, pkg string) {
 	// Bare Run (not RunTyped): a direct import-path string match suffices for
 	// stdlib "reflect"/"unsafe" — they have no alias form in ImportSpec.Path.Value
 	// and the threat is a direct import within mem/txlock, not a transitive one.
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			for _, imp := range file.Imports {
 				if imp.Path != nil && imp.Path.Value == `"`+pkg+`"` {
@@ -581,6 +584,7 @@ func assertMemTreeDoesNotImport(t *testing.T, pkg string) {
 		}
 		return nil
 	})
+
 	assert.Emptyf(t, offenders,
 		"%s blind-spot guard: mem tree must not import %q (would defeat the "+
 			"sealed-lease funnel by forging txlock.Lease fields); offenders: %v",

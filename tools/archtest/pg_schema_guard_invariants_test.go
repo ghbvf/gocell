@@ -142,7 +142,8 @@ func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 		// Check raw (un-stripped) Up section for the annotation.
 		matches := forwardRebuildAnnotationRE.FindAllStringSubmatch(rawUp, -1)
 		if len(matches) == 0 {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"forward (Up) section destroys a whole table but lacks the +gocell forward-rebuild annotation",
 				"file: %s\n"+
 					"  Up section contains TRUNCATE / DROP TABLE but no "+
@@ -157,7 +158,8 @@ func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 			return
 		}
 		if len(matches) > 1 {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"forward (Up) section has more than one +gocell forward-rebuild annotation",
 				"file: %s has %d annotations; expected exactly one per migration.\n"+
 					"Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01",
@@ -253,7 +255,8 @@ func TestArchtest_MigrationNoGUCResidue(t *testing.T) {
 	scanner.EachContentFile(t, scope, []string{".sql"}, func(t *testing.T, cc scanner.ContentContext) {
 		content := string(cc.Bytes)
 		if strings.Contains(strings.ToLower(content), "gocell.allow_") {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"migration SQL file contains residual GUC reference",
 				"file: %s\n"+
 					"  Contains 'gocell.allow_' which is a reference to the legacy GUC variables\n"+
@@ -363,7 +366,8 @@ func TestArchtest_SchemaGuardCoversEveryOwnedTable(t *testing.T) {
 			continue
 		}
 		if _, ok := guardedTables[tableName]; !ok {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"migration 017+ table missing from schema_guard expectedColumns",
 				"table %q (introduced in %s) has no entry in adapters/postgres/schema_guard.go expectedColumns.\n"+
 					"Either add the table's column shapes to expectedColumns, or add it to archtestExcludedTables "+

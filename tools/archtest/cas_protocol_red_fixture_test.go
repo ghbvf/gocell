@@ -43,11 +43,12 @@ import (
 // ("github.com/ghbvf/gocell/runtime/state/cas", "NewProtocol") — the type-aware
 // rule does not care about the source callee shape.
 func TestCASProtocol_RedFixtureDetected(t *testing.T) {
-	diags := RunTypedFixture(t,
+	diags := Run(t, Fixture(
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/casprotocolfixture/..."},
-		scanCASProtocolViolations,
-	)
+	),
+
+		scanCASProtocolViolations)
 
 	for _, d := range diags {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)

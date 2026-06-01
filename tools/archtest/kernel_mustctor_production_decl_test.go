@@ -201,13 +201,12 @@ func TestKernelMustCtorProductionDecl(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
 		relPkg := strings.TrimPrefix(p.Pkg.Path(), modPath+"/")
 		if relPkg == modPath {
-			// Top-level module (no sub-pkg prefix) — never a test fixture.
 			relPkg = ""
 		}
 		if isTestFixturePkg(relPkg) {

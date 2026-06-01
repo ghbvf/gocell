@@ -14,6 +14,6 @@ type controlPlaneClock struct{}
 // newTicker is the sanctioned method — but here it calls the WRONG callee.
 // The (method, callee) pair lock catches the mismatch.
 func (controlPlaneClock) newTicker(d time.Duration) *time.Ticker {
-	time.Sleep(d)             // RED: Sleep is not the sanctioned callee for newTicker
+	time.Sleep(d)            // RED: Sleep is not the sanctioned callee for newTicker
 	return time.NewTicker(d) // sanctioned callee — not flagged
 }

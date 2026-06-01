@@ -83,12 +83,13 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 
 	// Downstream Hard: scan pkg/errcode; every write to Error.transient must
 	// be lexically inside func WrapInfra.
-	downstream := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	downstream := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != errcodePkgPath {
 			return nil
 		}
 		return scanTransientMarkerWrites(p, errcodePkgPath, transientMarkerWriterFunc)
 	})
+
 	Report(t, "ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01", downstream)
 
 	// Upstream Hard: each in-scope adapter must route through errcode.WrapInfra.
@@ -98,7 +99,7 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 		modPath + "/adapters/s3":       false,
 		modPath + "/adapters/rabbitmq": false,
 	}
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
@@ -110,6 +111,7 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 		}
 		return nil
 	})
+
 	for pkg, present := range wantAdapters {
 		assert.Truef(t, present,
 			"adapter %s must declare a classify…Error function whose body routes "+
@@ -134,8 +136,9 @@ func TestAdapterErrorClassificationTransient01_FixturePattern(t *testing.T) {
 	fixturePkgPath := modPath + "/tools/archtest/internal/transientmarkerfixture"
 	fixturePattern := "./tools/archtest/internal/transientmarkerfixture/..."
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil

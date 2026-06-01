@@ -99,7 +99,7 @@ func TestOutboxPublisherConformanceEnrollment(t *testing.T) {
 	var pubIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -137,7 +137,7 @@ func TestOutboxPublisherConformanceEnrollment(t *testing.T) {
 	// ─── Step 3: scan test corpus for outboxtest conformance call sites ──────
 	enrolledPkgs := make(map[string]bool)
 	testPatterns := prodscan.Patterns(root)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -177,7 +177,8 @@ func TestOutboxPublisherConformanceEnrollment(t *testing.T) {
 					"outboxPublisherEnrollmentWaivers (OUTBOX-PUBLISHER-CONFORMANCE-ENROLLMENT-01). "+
 					"Add a _test.go in package %s that calls outboxtest.TestPubSub(t, features, ctor), "+
 					"or add a documented waiver entry.",
-				implKey, pkgPath),
+				implKey, pkgPath,
+			),
 		})
 	}
 
@@ -192,7 +193,8 @@ func TestOutboxPublisherConformanceEnrollment(t *testing.T) {
 				Message: fmt.Sprintf(
 					"archtest: package %s is in outboxPublisherEnrollmentWaivers but now HAS an "+
 						"outboxtest.TestPubSub call — remove the stale waiver entry "+
-						"(OUTBOX-PUBLISHER-CONFORMANCE-ENROLLMENT-01).", pkgPath),
+						"(OUTBOX-PUBLISHER-CONFORMANCE-ENROLLMENT-01).", pkgPath,
+				),
 			})
 		}
 	}
@@ -217,7 +219,7 @@ func TestOutboxPublisherEnrollment_REDFixture(t *testing.T) {
 
 	var pubIface *types.Interface
 	var implPkgs []*types.Package
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -234,6 +236,7 @@ func TestOutboxPublisherEnrollment_REDFixture(t *testing.T) {
 			implPkgs = append(implPkgs, p.Pkg)
 			return nil
 		})
+
 	require.NotNil(t, pubIface, "REDFixture: could not resolve outbox.Publisher interface")
 
 	implSet := make(map[string]bool)
@@ -286,7 +289,7 @@ func TestOutboxPublisherEnrollment_ReverseBlindSpot_NoReflectImpl(t *testing.T) 
 	}
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -309,6 +312,7 @@ func TestOutboxPublisherEnrollment_ReverseBlindSpot_NoReflectImpl(t *testing.T) 
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: no production non-test file should construct a Publisher via reflect.MethodByName")
 }

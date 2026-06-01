@@ -44,6 +44,11 @@ import (
 	// VIOLATION: PASS-FUNNEL-PACKAGES-IMPORT-01 (qualified import path scan).
 	"golang.org/x/tools/go/packages"
 
+	// VIOLATION sources for PASS-FUNNEL-FIXTURE-TAG-01 Form G — new typed-scope
+	// constructors (Typed / Production / StandaloneModule) added to fixtureTagLoaderSet
+	// by issue #1037 §1d after RunTyped/RunTypedProduction/RunTypedDir were deleted.
+	archtest "github.com/ghbvf/gocell/tools/archtest"
+
 	// VIOLATION sources for PASS-FUNNEL-EACHFILE-01 — qualified + alias + dot forms.
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	. "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
@@ -169,7 +174,7 @@ const localFixtureTag = "archtest_fixture"
 // fixtureTagBypassRedForms exercises the const-resolvable arg shapes a business
 // archtest could use to feed the archtest_fixture build tag to a loader from
 // LOADER_SET (typeseval.SharedResolver / LoadPackages / LoadProductionPackages
-// plus archtest.RunTyped / RunTypedProduction / RunTypedDir / runTypedWithRoot).
+// plus archtest.Typed / Production / StandaloneModule / runTypedWithRoot).
 // The detector must catch every form regardless of whether the literal is
 // direct, via local const, or via const concatenation.
 //
@@ -197,6 +202,8 @@ func fixtureTagBypassRedForms() {
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{localFixtureTag}, "x")
 	// Form C — BinaryExpr const concatenation.
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{"archtest" + "_fixture"}, "x")
+	// Form G — BasicLit "archtest_fixture" via archtest.Typed (new exported ctor callee).
+	_ = archtest.Typed(archtest.TypedOpts{Tags: []string{"archtest_fixture"}}, nil)
 }
 
 // fixtureTagSlice exercises Form F: a same-file var bound to a []string

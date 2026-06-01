@@ -11,7 +11,8 @@ import (
 // packages.Load covers all tag-gated production file sets via go/build
 // matchTag's "tag ∈ BuildTags" semantics. The rule must NOT catch this.
 func _(t *testing.T) {
-	_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: archtest.FlatNonDefaultTags()},
-		[]string{"./..."},
+	_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: archtest.FlatNonDefaultTags()},
+		[]string{"./..."}),
+
 		func(p *archtest.Pass) []archtest.Diagnostic { return nil })
 }

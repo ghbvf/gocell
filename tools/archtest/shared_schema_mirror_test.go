@@ -175,8 +175,7 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2(t *testing.T) {
 	writeOptsPkgPath := modPath + "/tools/codegen"
 	allowedPkg := modPath + "/tools/codegen/sharedschema"
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		// Exempt the sharedschema package itself — it is the sole sanctioned user.
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg != nil && p.Pkg.Path() == allowedPkg {
 			return nil
 		}

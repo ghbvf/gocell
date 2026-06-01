@@ -25,10 +25,10 @@ func runErrcodeMessageConstFixtureScan(t *testing.T, fixtureDir string) []Diagno
 	t.Helper()
 	scope := DirsScope(fixtureDir, []string{"."})
 	var out []Diagnostic
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			absPath := p.Abs(file)
-			// Skip the local stub errcode pkg; only scan the usage file in the parent.
+
 			if filepath.Base(filepath.Dir(absPath)) == "errcode" {
 				continue
 			}
@@ -36,6 +36,7 @@ func runErrcodeMessageConstFixtureScan(t *testing.T, fixtureDir string) []Diagno
 		}
 		return nil
 	})
+
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Rel != out[j].Rel {
 			return out[i].Rel < out[j].Rel

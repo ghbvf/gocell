@@ -128,7 +128,7 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 	var repoProberIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -143,7 +143,7 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 				}
 				return nil
 			}
-			// Only enrollable layers participate in the impl scan.
+
 			if inReadyzProbeScope(p.Pkg.Path(), modPath) {
 				implPkgs = append(implPkgs, p.Pkg)
 			}
@@ -176,7 +176,7 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 	// of the N — enrolling one does not cover its same-package siblings.
 	enrolledImpls := make(map[string]bool) // "pkg/path.TypeName" → true
 
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -263,7 +263,7 @@ func TestCellRepoReadyzProbe_ReverseBlindSpot_NoReflectImpl(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -286,6 +286,7 @@ func TestCellRepoReadyzProbe_ReverseBlindSpot_NoReflectImpl(t *testing.T) {
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: no production non-test file should contain the string literal %q as reflect bait",
 		repoProberIfaceName)
@@ -400,7 +401,8 @@ func unenrolledRepoProberImpls(implSet, enrolledImpls map[string]bool) []Diagnos
 					"concrete type as the healthy prober. If the impl gates readiness on a "+
 					"lifecycle state (e.g. *Coordinator), the healthy prober must already be "+
 					"in a running state.",
-				implKey, pkgPath),
+				implKey, pkgPath,
+			),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })

@@ -137,12 +137,11 @@ func TestAuthAuthenticateBearerCaller01(t *testing.T) {
 
 	observed := map[string]struct{}{}
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
-		// abs-filename → module-relative path for this Pass's files, so a Uses
-		// ident can be attributed to its owning source file.
+
 		relByAbs := make(map[string]string, len(p.Files))
 		for _, f := range p.Files {
 			relByAbs[p.Abs(f)] = p.Rel(f)
@@ -170,7 +169,8 @@ func TestAuthAuthenticateBearerCaller01(t *testing.T) {
 							"stand at that trust boundary. Producers and other sites MUST NOT authenticate "+
 							"requests directly. If this IS a new sanctioned transport bridge, add it to "+
 							"authenticateBearerCallerAllowlist with rationale.",
-						rel),
+						rel,
+					),
 				})
 			}
 		}
@@ -190,7 +190,8 @@ func TestAuthAuthenticateBearerCaller01(t *testing.T) {
 					"AUTH-AUTHENTICATE-BEARER-CALLER-01: allowlist entry %q is STALE — no live "+
 						"runtime/auth.AuthenticateBearer reference observed. Either the scanner regressed or the "+
 						"call was removed; drop the dead allowlist entry so it cannot become a silent bypass slot.",
-					f),
+					f,
+				),
 			})
 		}
 	}

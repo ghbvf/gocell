@@ -342,15 +342,15 @@ func TestSpanRecordErrorSeal(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"adapters/otel"}, IncludeGenerated())
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
-			// A: callsite locality — all files in the package.
+
 			ds = append(ds, sealAViolationsInFile(p.Fset, file, rel)...)
-			// A method-value: deferred-invocation form — all files.
+
 			ds = append(ds, sealAMethodValueViolationsInFile(p.Fset, file, rel)...)
-			// B: argument form — only the sink file.
+
 			if rel == recordErrorSinkFile {
 				redactionLocal := redactionLocalName(file)
 				ds = append(ds, sealBViolationsInFile(p.Fset, file, redactionLocal, rel)...)
@@ -358,6 +358,7 @@ func TestSpanRecordErrorSeal(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, "SPAN-RECORD-ERROR-SEAL-01", diags)
 }
 
@@ -379,7 +380,7 @@ func TestSpanRecordErrorSeal_NoBlindspotsInProduction(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"adapters/otel"}, IncludeGenerated())
 	var ds []Diagnostic
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			implRanges := collectOtelSpanRecordErrorBodyRanges(file)
 			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -390,7 +391,7 @@ func TestSpanRecordErrorSeal_NoBlindspotsInProduction(t *testing.T) {
 				if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
 					return
 				}
-				// Blind spot 1: Ident receiver — not detected by A.
+
 				if _, isIdent := sel.X.(*ast.Ident); isIdent {
 					pos := p.Fset.Position(call.Pos())
 					ds = append(ds, Diagnostic{
@@ -404,6 +405,7 @@ func TestSpanRecordErrorSeal_NoBlindspotsInProduction(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, "SPAN-RECORD-ERROR-SEAL-01-BLINDSPOT", ds)
 }
 

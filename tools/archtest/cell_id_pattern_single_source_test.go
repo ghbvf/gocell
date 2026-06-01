@@ -138,7 +138,7 @@ func TestCellIDPatternSingleSource(t *testing.T) {
 	banned := bannedPatterns()
 
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -297,7 +297,7 @@ func TestCellIDPatternSingleSourceLiterals(t *testing.T) {
 	banned := bannedPatterns()
 
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if _, ok := allowFiles[rel]; ok {

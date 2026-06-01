@@ -47,7 +47,8 @@ func TestMatchRels_FiltersFiles(t *testing.T) {
 	writeRel(t, tmp, "cells/b/cell.yaml", "b")
 	writeRel(t, tmp, "cells/a/extras.yaml", "skip")
 
-	scope := scanner.DirsScope(tmp, []string{"cells"},
+	scope := scanner.DirsScope(
+		tmp, []string{"cells"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "cell.yaml"
 		}),
@@ -66,7 +67,8 @@ func TestMatchRels_AndComposesWithExcludeRels(t *testing.T) {
 	writeRel(t, tmp, "a/excluded.yaml", "x")
 	writeRel(t, tmp, "a/no-match.json", "j")
 
-	scope := scanner.DirsScope(tmp, []string{"a"},
+	scope := scanner.DirsScope(
+		tmp, []string{"a"},
 		scanner.MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, ".yaml")
 		}),
@@ -86,7 +88,8 @@ func TestMatchRels_MultiplePredicatesChainedAnd(t *testing.T) {
 	writeRel(t, tmp, "cells/b/relay.yaml", "")
 	writeRel(t, tmp, "cells/c/relay.yaml", "")
 
-	scope := scanner.DirsScope(tmp, []string{"cells"},
+	scope := scanner.DirsScope(
+		tmp, []string{"cells"},
 		scanner.MatchRels(func(rel string) bool { return strings.HasPrefix(filepath.Base(rel), "relay") }),
 		scanner.MatchRels(func(rel string) bool { return strings.HasPrefix(filepath.ToSlash(rel), "cells/b/") }),
 	)
@@ -199,7 +202,8 @@ func TestIncludeGenerated_ComposesWithIncludeTestdata(t *testing.T) {
 	// IncludeTestdata + IncludeGenerated together: testdata segment + nested
 	// generated/ are both walked. ModuleScope+IncludeTestdata still errors
 	// because no root has testdata segment, so use DirsScope here.
-	scope := scanner.DirsScope(tmp, []string{"tools/archtest/testdata"},
+	scope := scanner.DirsScope(
+		tmp, []string{"tools/archtest/testdata"},
 		scanner.IncludeTestdata(),
 		scanner.IncludeGenerated(),
 	)

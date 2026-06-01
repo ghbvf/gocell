@@ -143,8 +143,9 @@ func TestReconstituteUserCallerAllowlist(t *testing.T) {
 	t.Parallel()
 
 	var allDiags []Diagnostic
-	RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/...", "./cmd/..."},
+	Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/...", "./cmd/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -190,17 +191,16 @@ func TestReconstituteUserCallerAllowlist_REDFixture(t *testing.T) {
 	t.Parallel()
 
 	var found int
-	RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red"},
+	Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
 			for _, file := range p.Files {
 				rel := p.Rel(file)
-				// The fixture path is not in the allowlist, so scanReconstituteViolationsPass
-				// should flag it. We do NOT call isReconstituteCallerAllowlisted here —
-				// the fixture is intentionally a non-allowlisted prod-shaped path.
+
 				found += len(scanReconstituteViolationsPass(p, file, rel))
 			}
 			return nil
@@ -237,8 +237,9 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 	t.Parallel()
 
 	var allDiags []Diagnostic
-	RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/...", "./cmd/..."},
+	Run(t, Typed(TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/...", "./cmd/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -250,11 +251,6 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 					continue
 				}
 
-				// Blind spot 1: SelectorExpr with Sel.Name == "ReconstituteUser" that is
-				// NOT in a CallExpr.Fun position. We collect all CallExpr.Fun selectors
-				// first, then flag any SelectorExpr with the target name that is absent
-				// from that set. Soft (name-only, not typed); typed-resolver upgrade
-				// tracked in #1118 (method-value name-only detection across sites).
 				callFunPositions := map[ast.Node]bool{}
 				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
@@ -266,7 +262,7 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 						return
 					}
 					if callFunPositions[sel] {
-						return // legitimate direct call — already checked by main rule
+						return
 					}
 					line := p.Fset.Position(sel.Pos()).Line
 					diags = append(diags, Diagnostic{
@@ -279,7 +275,6 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 					})
 				})
 
-				// Blind spot 2: reflect.MethodByName("ReconstituteUser")
 				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
 					func(n string) bool { return n == reconstituteUserName }) {
 					diags = append(diags, Diagnostic{

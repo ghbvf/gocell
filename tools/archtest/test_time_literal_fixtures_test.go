@@ -29,21 +29,20 @@ import (
 func runTestTimeFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
 	var violations []string
-	RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+	Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: true}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)
 				if !fileroles.IsTestCode(rel) {
 					continue
 				}
-				// Fixtures live in their own ad-hoc module rooted at fixtureDir;
-				// passing fixtureDir as modRoot to fileroles.Rel produces clean
-				// relative paths that exercise the *_test.go include rule.
+
 				violations = append(violations,
 					scanProdDurationAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
 			return nil
 		})
+
 	sort.Strings(violations)
 	return violations
 }

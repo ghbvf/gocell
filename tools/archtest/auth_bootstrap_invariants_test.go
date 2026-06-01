@@ -80,7 +80,7 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 	root := findModuleRoot(t)
 
 	scope := DirsScope(root, []string{"cells"})
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -89,7 +89,6 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 					return
 				}
 				for _, field := range st.Fields.List {
-					// Embedded field has no Names.
 					if len(field.Names) != 0 {
 						continue
 					}
@@ -107,6 +106,7 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, "CELLS-NO-ROUTEMUX-WRAPPER-01", diags)
 }
 
@@ -137,7 +137,8 @@ func TestAuthRouteBootstrapFlagRemoved(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	scope := DirsScope(root, []string{"runtime/auth"},
+	scope := DirsScope(
+		root, []string{"runtime/auth"},
 		MatchRels(func(rel string) bool {
 			return rel == "runtime/auth/route.go"
 		}),
@@ -148,7 +149,7 @@ func TestAuthRouteBootstrapFlagRemoved(t *testing.T) {
 		hasBootstrapAuth bool
 	)
 
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 				if ts.Name == nil || ts.Name.Name != "Route" {
@@ -199,7 +200,8 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 	root := findModuleRoot(t)
 
 	const genRel = "generated/contracts/http/auth/setup/admin/v1/handler_gen.go"
-	scope := DirsScope(root, []string{"generated"},
+	scope := DirsScope(
+		root, []string{"generated"},
 		IncludeGenerated(),
 		MatchRels(func(rel string) bool {
 			return rel == genRel
@@ -211,7 +213,7 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 		mountCallHasBootstrapAuthField  bool
 	)
 
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			EachInSubtree[ast.FuncDecl](f, func(node *ast.FuncDecl) {
 				if node.Name == nil || node.Name.Name != "NewHandler" || node.Recv != nil {
@@ -232,17 +234,13 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 				if !ok || sel.Sel == nil || sel.Sel.Name != "Route" {
 					return
 				}
-				// EachInChildren visits only direct KeyValueExpr children of node (not
-				// nested KeyValueExprs from inner composite literals), equivalent to the
-				// prior paired-index loop over node.Elts.
+
 				EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
 					keyIdent, ok := kv.Key.(*ast.Ident)
 					if !ok || keyIdent.Name != "BootstrapAuth" {
 						return
 					}
-					// Any non-nil expression as the value satisfies the wiring requirement;
-					// the codegen template cannot produce a literal nil because the param is
-					// a func value passed straight through.
+
 					if id, isIdent := kv.Value.(*ast.Ident); !isIdent || id.Name != "nil" {
 						mountCallHasBootstrapAuthField = true
 					}
@@ -312,14 +310,14 @@ func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 	// Phase 1: collect all ContractSpec vars across all production packages.
 	// The rule returns nil — output accumulates in the shared specVars map.
 	specVars := map[*types.Var]bool{}
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		collectContractSpecVars(p, specTypePath, specVars)
 		return nil
 	})
 
 	// Phase 2: scan for auth.Route composite literals that violate the mutex.
 	routeTypePath := modPath + "/runtime/auth"
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanRouteBootstrapClients(p, routeTypePath, specTypePath, specVars)
 	})
 
@@ -361,16 +359,18 @@ func TestAuthRouteBootstrapClientsMutex_FixturePattern(t *testing.T) {
 
 	// Phase 1: collect all ContractSpec vars from the fixture packages.
 	specVars := map[*types.Var]bool{}
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			collectContractSpecVars(p, specTypePath, specVars)
 			return nil
 		})
 
 	// Phase 2: scan fixture packages for mutex violations.
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			return scanRouteBootstrapClients(p, routeTypePath, specTypePath, specVars)
 		})
@@ -450,7 +450,8 @@ func scanRouteBootstrapClients(p *Pass, routeTypePath, specTypePath string, spec
 				Line: p.Fset.Position(cl.Pos()).Line,
 				Message: fmt.Sprintf(
 					"auth.Route{BootstrapAuth: <non-nil>, Contract: %s} binds non-empty Clients (mutex violation)",
-					desc),
+					desc,
+				),
 			})
 		})
 	}

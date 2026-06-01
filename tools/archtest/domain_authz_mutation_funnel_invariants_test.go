@@ -244,7 +244,7 @@ func TestDomainAuthzFieldPrivate_01(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{"./cells/accesscore/internal/domain"}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./cells/accesscore/internal/domain"}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != domainUserPkg {
 			return nil
 		}
@@ -336,13 +336,14 @@ func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, lab
 	t.Helper()
 	_ = root // root is the module root; RunTyped resolves it via findModuleRoot internally
 	var found int
-	_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
 		found += len(scanDomainUserViolations(p.Pkg))
 		return nil
 	})
+
 	assert.GreaterOrEqual(t, found, 1,
 		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
 			"Check that the fixture actually exports authz fields or unauthorized setters.",
@@ -367,25 +368,27 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
 			}
-			violations = append(violations,
-				scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
-			violations = append(violations,
-				scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
-		}
-		return nil
-	})
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				violations = append(violations,
+					scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
+				violations = append(violations,
+					scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -473,7 +476,7 @@ func verifySetMutatorRedFixtureDetected(
 ) {
 	t.Helper()
 	var found int
-	_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -482,6 +485,7 @@ func verifySetMutatorRedFixtureDetected(
 		}
 		return nil
 	})
+
 	assert.GreaterOrEqual(t, found, 1,
 		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
 			"Check that the fixture calls the banned method and is type-checkable.",
@@ -505,23 +509,25 @@ func TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive(t *testing.T) {
 	t.Parallel()
 
 	hits := map[string]int{}
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
 			}
-			countAllowlistHits(p, file, domainSetStatusMethod, hits)
-			countAllowlistHits(p, file, domainSetPasswordResetRequiredMethod, hits)
-		}
-		return nil
-	})
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				countAllowlistHits(p, file, domainSetStatusMethod, hits)
+				countAllowlistHits(p, file, domainSetPasswordResetRequiredMethod, hits)
+			}
+			return nil
+		})
 
 	var stale []string
 	for callerID := range setMutatorCallsiteAllowlist {
@@ -589,21 +595,23 @@ func TestDomainAuthzMutation_ValueCapture_Detected(t *testing.T) {
 	t.Parallel()
 
 	var found []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/domain/testdata/value_capture_setstatus_red",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				found = append(found,
+					scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
+				found = append(found,
+					scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			found = append(found,
-				scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
-			found = append(found,
-				scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
-		}
-		return nil
-	})
+		})
 
 	sort.Strings(found)
 	for _, v := range found {
@@ -633,28 +641,30 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+					func(n string) bool { return bannedNames[n] }) {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: DOMAIN-AUTHZ-FIELD-PRIVATE-01: reflect.MethodByName(%q) blind spot "+
+							"detected — archtest cannot see reflect-based invocations of authz setters",
+						rel, hit.Line, hit.Name,
+					))
+				}
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
-				func(n string) bool { return bannedNames[n] }) {
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: DOMAIN-AUTHZ-FIELD-PRIVATE-01: reflect.MethodByName(%q) blind spot "+
-						"detected — archtest cannot see reflect-based invocations of authz setters",
-					rel, hit.Line, hit.Name,
-				))
-			}
-		}
-		return nil
-	})
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -680,35 +690,37 @@ func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.Fset == nil {
+				return nil
 			}
-			for _, imp := range file.Imports {
-				if imp.Path == nil {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				impPath := strings.Trim(imp.Path.Value, `"`)
-				if impPath == "unsafe" {
-					line := p.Fset.Position(imp.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: imports \"unsafe\" — potential unsafe.Pointer write "+
-							"could bypass domain.User authz field privatization "+
-							"(blind spot for DOMAIN-AUTHZ-FIELD-PRIVATE-01)",
-						rel, line,
-					))
+				for _, imp := range file.Imports {
+					if imp.Path == nil {
+						continue
+					}
+					impPath := strings.Trim(imp.Path.Value, `"`)
+					if impPath == "unsafe" {
+						line := p.Fset.Position(imp.Pos()).Line
+						violations = append(violations, fmt.Sprintf(
+							"%s:%d: imports \"unsafe\" — potential unsafe.Pointer write "+
+								"could bypass domain.User authz field privatization "+
+								"(blind spot for DOMAIN-AUTHZ-FIELD-PRIVATE-01)",
+							rel, line,
+						))
+					}
 				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -737,28 +749,30 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
+					func(n string) bool { return bannedFieldNames[n] }) {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: DOMAIN-AUTHZ-FIELD-PRIVATE-01: reflect.FieldByName(%q) blind spot "+
+							"detected — archtest cannot see reflect-based writes to domain.User authz fields",
+						rel, hit.Line, hit.Name,
+					))
+				}
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
-				func(n string) bool { return bannedFieldNames[n] }) {
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: DOMAIN-AUTHZ-FIELD-PRIVATE-01: reflect.FieldByName(%q) blind spot "+
-						"detected — archtest cannot see reflect-based writes to domain.User authz fields",
-					rel, hit.Line, hit.Name,
-				))
-			}
-		}
-		return nil
-	})
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -783,19 +797,21 @@ func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
 	t.Parallel()
 
 	var found []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/domain/testdata/var_init_setstatus_red",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				found = append(found,
+					scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			found = append(found,
-				scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
-		}
-		return nil
-	})
+		})
 
 	var hasOutsideFuncDecl bool
 	for _, v := range found {

@@ -380,7 +380,7 @@ func TestCellRawInfraPublicOptionParam01_RealRepoClean(t *testing.T) {
 	t.Parallel()
 
 	var violations []rawPublicOptionViolation
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		violations = append(violations, scanPassForRawPublicOption(p, true)...)
 		return nil
 	})
@@ -407,8 +407,9 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	t.Parallel()
 
 	var violations []rawPublicOptionViolation
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/rawparamfixture"},
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/rawparamfixture"}),
+
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanPassForRawPublicOption(p, false)...)
 			return nil

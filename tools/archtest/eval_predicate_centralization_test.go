@@ -100,12 +100,11 @@ func TestEvalPredicateCentralization01(t *testing.T) {
 	// so this is the canonical narrow-scope archtest-self load shape, same
 	// as scanner_framework_usage_test.go.
 	var violations []evalPredicateViolation
-	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
-				// Scope: tools/archtest/*_test.go only (subpackages under
-				// tools/archtest/internal/ are out of scope — see header doc).
+
 				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
 					continue
 				}
@@ -378,7 +377,7 @@ func TestEvalPredicateCentralizationFixtures(t *testing.T) {
 
 			fixtureDir := filepath.Join(fixtureBase, dir)
 			var diags []Diagnostic
-			RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+			Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 				func(p *Pass) []Diagnostic {
 					for _, f := range p.Files {
 						rel := p.Rel(f)

@@ -70,7 +70,7 @@ func TestTestTimeLiteralConst(t *testing.T) {
 	patterns := prodscan.PatternsExtended(root)
 
 	var violations []string
-	RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+	Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)

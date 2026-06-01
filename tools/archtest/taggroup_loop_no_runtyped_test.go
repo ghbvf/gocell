@@ -36,7 +36,7 @@ func TestTagGroupLoopForbidsRunTyped(t *testing.T) {
 func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t, TypedOpts{}, []string{taggroupLoopPatternFixture},
+	diags := Run(t, Typed(TypedOpts{}, []string{taggroupLoopPatternFixture}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil

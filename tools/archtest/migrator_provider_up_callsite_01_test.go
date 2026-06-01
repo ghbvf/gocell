@@ -138,7 +138,8 @@ func TestArchtest_MigratorProviderUpCallsite(t *testing.T) {
 	for _, v := range violations {
 		t.Logf("MIGRATOR-PROVIDER-UP-CALLSITE-01: violation: %s", v)
 	}
-	assert.Empty(t, violations,
+	assert.Empty(
+		t, violations,
 		"MIGRATOR-PROVIDER-UP-CALLSITE-01: m.provider.Up / m.provider.Down in migrator.go "+
 			"must only be called from methods in allowlist %v. "+
 			"Any other caller bypasses the ForwardRebuildPermit phase0 gate (issue #1248). "+
@@ -229,7 +230,8 @@ func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoFuncValueAssignment(t *
 					pos := fset.Position(outer.Pos())
 					violations = append(violations, fmt.Sprintf(
 						"line %d: provider.%s used as function value (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
-						pos.Line, outer.Sel.Name))
+						pos.Line, outer.Sel.Name,
+					))
 				}
 			})
 		}
@@ -269,7 +271,8 @@ func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoProviderCopy(t *testing
 			pos := fset.Position(valSpec.Pos())
 			violations = append(violations, fmt.Sprintf(
 				"line %d: local goose.Provider var declared (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
-				pos.Line))
+				pos.Line,
+			))
 		}
 	})
 
@@ -334,7 +337,8 @@ func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoInterfaceAlias(t *testi
 			pos := fset.Position(e.Pos())
 			violations = append(violations, fmt.Sprintf(
 				"line %d: m.provider aliased as a whole expression (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
-				pos.Line))
+				pos.Line,
+			))
 		}
 	}
 	scanner.EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {

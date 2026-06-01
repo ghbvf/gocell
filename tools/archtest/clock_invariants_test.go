@@ -86,7 +86,7 @@ func TestKernelClockLeafFallback(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+	diags := Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -184,7 +184,7 @@ func matchedKernelClockReal(info *types.Info, ident *ast.Ident) bool {
 // returns the sorted slice of violation Diagnostics.
 func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	return Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -244,7 +244,7 @@ func TestKernelClockResetRelativeProd(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	diags := RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns,
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -419,7 +419,7 @@ func TestKernelClockResetRelativeFixtures(t *testing.T) {
 // the same scanner as TestKernelClockResetRelativeProd.
 func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	return Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -766,7 +766,7 @@ func TestProdClockInjection(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+	diags := Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -1063,7 +1063,7 @@ func TestClockPositionalInjection(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	diags := RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns,
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -1486,7 +1486,7 @@ func isUnderlyingFunc(t types.Type) bool {
 // as TestClockPositionalInjection.
 func runClockPositionalInjectionFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	return Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
