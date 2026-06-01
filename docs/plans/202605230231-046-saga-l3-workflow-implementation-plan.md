@@ -499,17 +499,17 @@ go run ./cmd/gocell validate  # 0 error
 ## 7. 进度跟踪表
 
 ```
-PR-00  AfterCommit hook          [x]  已 merge 入 develop
-PR-01  kernel/saga skeleton      [x]  已 merge 入 develop
-PR-02  kernel/saga/journal       [x]  已 merge 入 develop
-PR-03  runtime/saga Coordinator  [x]  已 merge 入 develop
-PR-04  adapters/postgres/saga    [x]  已 merge 入 develop
-PR-05  runtime/saga leader-elect [x]  已 merge 入 develop
-PR-06  runtime/saga/executor     [x]  已 merge 入 develop
-PR-07  contracts/saga + codegen  [x]  已 merge 入 develop
-PR-08  governance + archtest     [x]  #1316 (#956)
-PR-09  example orderfulfillment  [x]  #1374 (#967)
-PR-10  ADR + runbook + docs      [x]  worktrees/069-saga-docs  #1433
+PR-00  AfterCommit hook          [x]  #923
+PR-01  kernel/saga skeleton      [x]  #932
+PR-02  kernel/saga/journal       [x]  #952
+PR-03  runtime/saga Coordinator  [x]  #977
+PR-04  adapters/postgres/saga    [x]  #1004
+PR-05  runtime/saga leader-elect [x]  #1108
+PR-06  runtime/saga/executor     [x]  #1179
+PR-07  contracts/saga + codegen  [x]  #1283
+PR-08  governance + archtest     [x]  #1316
+PR-09  example orderfulfillment  [x]  #1374
+PR-10  ADR + runbook + docs      [x]  #1433
 ```
 
 合并后回此处把 `[ ]` 改 `[x]`，注明 PR 号 + merge SHA。
