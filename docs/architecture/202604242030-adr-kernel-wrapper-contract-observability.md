@@ -391,9 +391,14 @@ protect that code path.
 |-----------|-----------|-----------------|
 | A1 (downstream) — `slog.NewJSONHandler`/`NewTextHandler` banned outside `runtime/observability/logging` | go/types typed callee resolution (IsCallToPkgFunc); alias bypass ineffective | **Hard** |
 | A2 (downstream) — `contextHandler.Handle` and `WithAttrs` must call `RedactSlogAttr`; `Handle` must call `RedactString` on message | AST form-lock on method bodies; dropping the redaction call fails immediately | **Hard** |
-| A3 (upstream) — production entry points (`runCorebundle`, `runIotdevice`, `runTodoorder`, `main` in ssobff) must each contain `slog.SetDefault(slog.New(logging.NewHandler(...)))` | caller-allowlist (archtest asserts presence in each function body) | **Medium** |
+| A3 (upstream) — production entry points must each contain `slog.SetDefault(slog.New(logging.NewHandler(...)))` | caller-allowlist (archtest asserts presence in each function body) | **Medium** |
 
-A3 is Medium because Go provides no mechanism to enforce that `SetDefault` is
+> **Superseded by Amendment 2026-06-02 (#1401)** — A3 is now split into a Hard
+> generated segment (codegen-injected seal) + a Medium hand-written segment. The
+> entry-point list and uniform-Medium rating below describe the pre-#1401 state;
+> see the 2026-06-02 amendment for the current model.
+
+A3 was Medium because Go provides no mechanism to enforce that `SetDefault` is
 called before any `slog.Default()` usage during early process startup.
 There is a **timing gap** (package-level init logs that run before `main`
 reaches the `SetDefault` call). The accepted risk:
@@ -402,7 +407,8 @@ reaches the `SetDefault` call). The accepted risk:
   **Compensation**: call-site defence-in-depth (retained `redaction.RedactAny`/
   `RedactSlogAttr` calls at the specific critical paths) + `#1401` Hard-upgrade
   path (codegen injection of `SetDefault` as the first generated line in each
-  assembly entry point).
+  assembly entry point — **delivered** in Amendment 2026-06-02; the residual
+  package-`init()` window persists, tracked at #1424).
 
 **Orthogonal rule preserved**: `REPO-LOG-KEY-ID-REDACT-01`
 (`tools/archtest/repoerr_test.go`) is **not retired**. That rule is a
@@ -410,6 +416,50 @@ reaches the `SetDefault` call). The accepted risk:
 attr **key slots** in `cells/` code, because key IDs belong to metric label
 plane, not log plane. `IsSensitiveKey` does not contain `key_id`, so the sink
 redaction does not mask `key_id` values; the two rules address orthogonal concerns.
+
+#### Amendment 2026-06-02 (#1401) — A3 seal codegen-injected into assembly template; allowlist zeroed for generated entry points
+
+**Change**: the slog seal `slog.SetDefault(slog.New(logging.NewHandler(...)))` is
+now injected by the `gocell generate assembly` template
+(`kernel/assembly/gentpl/main.go.tpl`) as the first statement of the generated
+`run()` function. The seal was removed from the hand-written `runCorebundle` /
+`runIotdevice` / `runTodoorder` / `runOrderfulfillment` helpers (no dual-seal),
+and `examples/corebundlestarter` (a hand-written `main`) was migrated from a raw
+`slog.NewJSONHandler` to the redacting `logging.NewHandler` seal.
+
+**A3 split into two segments** (delivering the #1401 Hard-upgrade path named in
+the 2026-05-31 amendment):
+
+| Segment | Coverage | Mechanism | Rating |
+|---------|----------|-----------|--------|
+| Generated | every `gocell generate assembly` main (corebundle + all example assemblies + future) | template injection + regenerate byte-diff lock (cmd/gocell generated-verify) + marker-derived invariant scan (no hand-maintained list) | **Hard** |
+| Handwritten | `examples/ssobff`, `examples/corebundlestarter` | bounded `slogHandwrittenEntryPoints` allowlist; A1's Hard bare-handler ban is the backstop | **Medium** (won't-do #1424) |
+
+The C3 reverse-coverage check now exempts packages whose entry `main.go` carries
+the assembly marker (covered by the generated segment) and requires only
+hand-written bootstrap entry points to enroll in the allowlist — so adding a new
+generated assembly can never regress the seal (the failure mode that #1374 /
+#1385 hit between PR #1036 and this PR).
+
+**Threat-matrix re-evaluation** (per ai-robust §"ADR amendment 落地必查"), updating
+the 2026-05-31 row:
+
+- `⚠️ → ✅ (generated) / ⚠️ (handwritten)` — "did the author remember to seal" risk
+  is **eliminated for generated assemblies**: the seal is in the codegen template
+  and verified Hard, so it is structurally present and first-ordered in `run()`.
+  For the two hand-written mains the Medium allowlist guarantees presence +
+  first-ordering, but codegen cannot reach them.
+- `⚠️ (residual, both segments)` — the **package-`init()` startup window** (a
+  package-level `init()` emitting a log before `main`/`run` reaches the seal) is
+  **unchanged** by this amendment: `run()`/`main()` still execute after all
+  package init. Compensation remains the retained call-site defence-in-depth
+  scrubbers. This residual is the Go-language permanent ceiling tracked at #1424;
+  it is NOT closed by #1401 (which only closes the "seal absent/late within the
+  entry function" vector for generated mains).
+
+#1401 is **closed** by this amendment (codegen injection delivered for generated
+entry points); the hand-written residual is tracked as a deliberate won't-do at
+**#1424** (analogous to the #851 / #893 holder-seal ceilings).
 
 ### 9. Governance rules: FMT-18 + FMT-19 (round 4)
 

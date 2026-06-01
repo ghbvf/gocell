@@ -122,12 +122,13 @@ func redactedBytesValue(v []byte) string {
 }
 
 // RecordError adds an error event to the span. The error text is redacted via
-// pkg/redaction.RedactError before being forwarded to the OTel SDK, providing
-// defense-in-depth at the adapter boundary. Callers in kernel/wrapper and
-// runtime/http/middleware already redact before calling RecordError; this
-// additional layer ensures any future code path reaching otelSpan.RecordError
-// directly (workers, generated handlers, test spies) does not emit unredacted
-// error text to the collector.
+// pkg/redaction.RedactError before being forwarded to the OTel SDK. This sink is
+// the SOLE redaction point for span errors: callers (kernel/wrapper, saga,
+// runtime/http/middleware, runtime/grpc/interceptor) pass the RAW error and must
+// NOT pre-redact — the SPAN-RECORD-ERROR-SEAL-01 archtest locks every
+// oteltrace.Span.RecordError callsite into this body with the redaction.RedactError
+// argument form. There is no caller-side opt-out; dev/test surfaces that need raw
+// error text read it from slog structured fields instead.
 func (s *otelSpan) RecordError(err error) {
 	s.inner.RecordError(redaction.RedactError(err))
 }

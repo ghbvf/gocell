@@ -104,6 +104,29 @@ func NotifyContext(parent context.Context) (context.Context, context.CancelFunc)
 	return context.WithCancel(parent)
 }
 `))
+	// The assembly main.go template imports {{.Module}}/runtime/observability/logging
+	// for the sink-side redaction seal (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated
+	// segment). Provide a minimal stub so the generated main compiles in the
+	// synthetic fixture module.
+	writeAppFixtureFile(t, root, "runtime/observability/logging/logging.go", []byte(`package logging
+
+import (
+	"log/slog"
+	"os"
+)
+
+type Format int
+
+const FormatJSON Format = 0
+
+type Options struct {
+	Format Format
+}
+
+func NewHandler(opts Options) slog.Handler {
+	return slog.NewJSONHandler(os.Stdout, nil)
+}
+`))
 	writeAppFixtureFile(t, root, "cmd/fixture/run.go", []byte(`package main
 
 import "context"
