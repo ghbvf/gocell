@@ -156,7 +156,7 @@ entry-level `FailurePolicyFailClosed` 覆盖，不依赖此告警。
 
 ## MQTT Dead-Letter Sink 可观测性
 
-`mqtt_dlx_failed_total{cell, reason}` 是 MQTT adapter 死信路径的**唯一运维恢复钩子**。
+`mqtt_dlx_failed_total{cell, reason}` 是 MQTT adapter 死信路径**装配真实 collector 后**的唯一运维恢复钩子（未装配时不发射,见下方 ⚠ 前提）。
 当一条 reject/poison 消息路由到 `$dead/<topic>` 失败（topic unmintable / broker publish
 error / broker PUBACK reason ≥ 0x80）时，adapter 按 fail-closed 取舍 ack-as-poison 丢弃该
 消息（见 ADR-048 §3 line-193 + §Amendment 2026-06-02）。MQTT 传输层结构上无法保证
@@ -167,6 +167,13 @@ no-loss（leave-unacked 会复活 Option C 的 HoL stall，ADR-050 §1），因�
 > 该信号"每个 drop 路径必记"由 archtest `MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01` 机器守卫，
 > 不会被代码改动静默移除。真正的 no-loss 保证应由消费 cell 在本地事务捕获 poison 消息
 > 实现（重定位，deferred — 见 ADR-048 §Amendment 2026-06-02）。
+>
+> ⚠ **前提:信号仅在 wire 了 provider-backed `SubscriberCollector` 后才发射。**
+> `mqtt.NewSubscriber` 默认 `NoopSubscriberCollector{}`（不发射任何指标），且当前 develop
+> **无生产 MQTT subscriber 装配**（adapters/mqtt 仅由测试构造）。因此这两条告警在 develop
+> 上不会触发,直到第一个 MQTT-consuming cell 经 `WithSubscriberCollector(...)` 注入真实
+> collector 并部署——届时随该 cell 落 wiring guard,见 backlog #1435。在那之前,death-letter
+> 失败可观测性 = 0,本节是装配后的规则模板,不是 develop 现状的活跃保护。
 
 ### MQTTDeadLetterSinkUnhealthy
 
@@ -182,11 +189,12 @@ no-loss（leave-unacked 会复活 Option C 的 HoL stall，ADR-050 §1），因�
     summary: "MQTT dead-letter sink unhealthy ({{ $labels.cell }}/{{ $labels.reason }})"
     description: |
       Cell {{ $labels.cell }} failed to route reject/poison messages to $dead/<topic>
-      (reason {{ $labels.reason }}) for 10m — these messages are DROPPED (fail-closed,
+      (reason {{ $labels.reason }}) for 2m — these messages are DROPPED (fail-closed,
       ack-as-poison). MQTT transport cannot guarantee no-loss for the $dead path.
       Likely causes: broker unreachable, $dead topic ACL denial (PUBACK 0x87), or
       topic unmintable. Restore the dead-letter sink within RTO to stop message loss.
-      Check cell logs for "mqtt: dead-letter publish failed".
+      Check cell logs for "mqtt: dead-letter publish failed" (broker publish error)
+      and "mqtt: cannot mint $dead topic" (topic unmintable) — both increment this metric.
 ```
 
 ### MQTTDeadLetterSinkSpike

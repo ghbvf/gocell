@@ -33,12 +33,13 @@
 //
 // In (*Subscriber).routeDeadLetter every *ast.ReturnStmt must be preceded —
 // within the statement list of its directly-enclosing *ast.BlockStmt — by a call
-// resolving to SubscriberCollector.RecordDeadLetterFailure OR
-// SubscriberCollector.RecordDeadLetter. routeDeadLetter is a void method whose
-// success path falls through the end (no ReturnStmt), so every explicit return is
-// an early/drop exit; the success-metric alternative in the predicate only
-// future-proofs an explicit success `return`. A return with neither preceding
-// metric is a silent exit → diagnostic.
+// resolving to SubscriberCollector.RecordDeadLetterFailure (the alertable DROP
+// signal). routeDeadLetter is a void method whose success path falls through the
+// end (no ReturnStmt), so every explicit return IS a drop/failure exit and must
+// carry the failure signal. The success metric (RecordDeadLetter) deliberately
+// does NOT satisfy A1: crediting a drop return with the success signal would
+// record a dropped message as captured — silent message loss with a false
+// success count (review F1). A return with no preceding failure signal → diagnostic.
 //
 // Covered form: metric-call-then-return in the SAME block (the idiom in
 // deadletter.go). A refactor that hoists the metric to an ancestor block before
@@ -155,10 +156,14 @@ func findRouteDeadLetter(p *Pass, f *ast.File) *ast.FuncDecl {
 	return nil
 }
 
-// dlxStmtIsOutcomeMetric reports whether stmt is `<recv>.RecordDeadLetter(...)`
-// or `<recv>.RecordDeadLetterFailure(...)` resolving (via go/types) to the
-// SubscriberCollector method — i.e., a dead-letter outcome signal.
-func dlxStmtIsOutcomeMetric(info *types.Info, stmt ast.Stmt) bool {
+// dlxStmtIsFailureSignal reports whether stmt is `<recv>.RecordDeadLetterFailure(...)`
+// resolving (via go/types) to the SubscriberCollector method — i.e., the alertable
+// DROP signal. It deliberately does NOT accept RecordDeadLetter (the success
+// signal): in routeDeadLetter every explicit return is a drop/failure exit (the
+// success path falls through the end with no return), so a return credited by the
+// SUCCESS metric would record a dropped message as captured — the exact silent-loss
+// regression this invariant exists to forbid (review F1).
+func dlxStmtIsFailureSignal(info *types.Info, stmt ast.Stmt) bool {
 	es, ok := stmt.(*ast.ExprStmt)
 	if !ok {
 		return false
@@ -175,8 +180,7 @@ func dlxStmtIsOutcomeMetric(info *types.Info, stmt ast.Stmt) bool {
 	if !ok || fn == nil {
 		return false
 	}
-	full := fn.FullName()
-	return full == recordDLXFailureFullName || full == recordDLXSuccessFullName
+	return fn.FullName() == recordDLXFailureFullName
 }
 
 // scanRouteDeadLetterReturns walks every BlockStmt in routeDeadLetter and, for
@@ -198,7 +202,7 @@ func scanRouteDeadLetterReturns(p *Pass, f *ast.File, fd *ast.FuncDecl) ([]Diagn
 			returnCount++
 			signaled := false
 			for _, prev := range block.List[:i] {
-				if dlxStmtIsOutcomeMetric(p.TypesInfo, prev) {
+				if dlxStmtIsFailureSignal(p.TypesInfo, prev) {
 					signaled = true
 					break
 				}
@@ -213,8 +217,9 @@ func scanRouteDeadLetterReturns(p *Pass, f *ast.File, fd *ast.FuncDecl) ([]Diagn
 				Line: pos.Line,
 				Message: fmt.Sprintf(
 					"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01/A1: return in routeDeadLetter at %s:%d "+
-						"is not preceded (same block) by RecordDeadLetterFailure/RecordDeadLetter — "+
-						"a $dead drop path with no alertable recovery signal is a silent message loss",
+						"is not preceded (same block) by RecordDeadLetterFailure — a $dead drop path "+
+						"must record the alertable FAILURE signal (RecordDeadLetter success metric does "+
+						"NOT count: crediting a drop as captured is silent message loss)",
 					rel, pos.Line,
 				),
 			})
