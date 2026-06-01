@@ -17,7 +17,7 @@
 - `kernel/saga/` —— 状态机原语（`Step{Run, Compensate, Timeout, Retries}` + `SagaDefinition` + `SagaInstance` + `Journal` 接口）
 - `kernel/persistence` 新增 `RunTxWithBestEffortAfterCommit` —— 004 W1 缺口 5（**Saga 引擎依赖**）
 - `runtime/saga/` —— Coordinator（state journal + leader-elect 通过 `runtime/distlock` + 步骤 dispatch 通过 `kernel/outbox`）
-- `adapters/postgres/saga/` —— `saga_instances` / `saga_steps` 表 + 迁移 + lease_id CAS fencing
+- `adapters/postgres/saga/` —— `saga_instances` / `saga_events` 表 + 迁移 + lease_id CAS fencing（计划期暂记为 `saga_steps`，落地为 append-only `saga_events`）
 - `contracts/saga/` schema + `tools/codegen` `kind: saga` 派生 typed `SagaDefinition`/`Step` 接口
 - governance rules + archtest（FMT/REF/TOPO `kind:saga` ↔ `consistencyLevel:L3` 约束 + Coordinator funnel + Compensate 纯函数 archtest）
 - example：`examples/orderfulfillment` 全链 saga journey
@@ -499,17 +499,17 @@ go run ./cmd/gocell validate  # 0 error
 ## 7. 进度跟踪表
 
 ```
-PR-00  AfterCommit hook          [ ]  worktrees/200-aftercommit-hook
-PR-01  kernel/saga skeleton      [ ]  worktrees/060-saga-kernel-skeleton
-PR-02  kernel/saga/journal       [ ]  worktrees/061-saga-journal
-PR-03  runtime/saga Coordinator  [ ]  worktrees/062-saga-coordinator
-PR-04  adapters/postgres/saga    [ ]  worktrees/063-saga-pg-journal
-PR-05  runtime/saga leader-elect [ ]  worktrees/064-saga-leader
-PR-06  runtime/saga/executor     [ ]  worktrees/065-saga-executor
-PR-07  contracts/saga + codegen  [ ]  worktrees/066-saga-contractgen
-PR-08  governance + archtest     [ ]  worktrees/067-saga-archtest
-PR-09  example orderfulfillment  [ ]  worktrees/068-saga-example
-PR-10  ADR + runbook + docs      [x]  worktrees/069-saga-docs  (PR 待填)
+PR-00  AfterCommit hook          [x]  已 merge 入 develop
+PR-01  kernel/saga skeleton      [x]  已 merge 入 develop
+PR-02  kernel/saga/journal       [x]  已 merge 入 develop
+PR-03  runtime/saga Coordinator  [x]  已 merge 入 develop
+PR-04  adapters/postgres/saga    [x]  已 merge 入 develop
+PR-05  runtime/saga leader-elect [x]  已 merge 入 develop
+PR-06  runtime/saga/executor     [x]  已 merge 入 develop
+PR-07  contracts/saga + codegen  [x]  已 merge 入 develop
+PR-08  governance + archtest     [x]  #1316 (#956)
+PR-09  example orderfulfillment  [x]  #1374 (#967)
+PR-10  ADR + runbook + docs      [x]  worktrees/069-saga-docs  #1433
 ```
 
 合并后回此处把 `[ ]` 改 `[x]`，注明 PR 号 + merge SHA。

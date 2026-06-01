@@ -1,6 +1,6 @@
 # GoCell 完整能力清单
 
-> 更新日期: 2026-04-24 | A13 文档事实源收口后
+> 更新日期: 2026-06-02 | A13 文档事实源收口后（W6 saga 章节补入）
 
 ---
 
@@ -21,7 +21,7 @@
 
 ---
 
-## 2. Kernel 层（11 包）
+## 2. Kernel 层（12 包）
 
 ### 2.1 cell — Cell/Slice/Contract 核心模型
 - `Cell` interface — ID/Type/ConsistencyLevel/Init/Start/Stop/Health/Ready

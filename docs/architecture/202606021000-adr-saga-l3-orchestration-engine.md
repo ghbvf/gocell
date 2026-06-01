@@ -13,7 +13,7 @@
 
 `kernel/cellvocab.L3 = WorkflowEventual` 这个 enum 早已存在，但运行时长期"名实分离"——没有 `runtime/workflow`，所有跨 cell 编排场景靠业务手撕事件消费 + 手工补偿。004 capability-gap 缺口 2 与产品 roadmap V11-3 要求补齐一个**可复用的 L3 saga 编排引擎**：声明步骤序列、自动正向驱动、失败时反向补偿、跨进程单 leader 驱动、durable 状态可 replay。
 
-本 ADR 记录该引擎落地的 8 个关键决策（D1–D8）、拒绝的备选、终态模型、威胁矩阵与演进路径。每条决策附其 **enforcement 载体 + AI-robust 档位**，使决策可机器追溯到守卫，而非纯文字约定。
+本 ADR 记录该引擎落地的 10 个关键决策（D1–D8 核心 + D9/D10 为 046 §2 凝固后追加）、拒绝的备选、终态模型、威胁矩阵与演进路径。每条决策附其 **enforcement 载体 + AI-robust 档位**，使决策可机器追溯到守卫，而非纯文字约定。
 
 ---
 

@@ -66,28 +66,30 @@ ORDER BY version ASC;
 
 > `kind` 数值速查见 `docs/ops/alerting-rules.md` §Saga（`saga-event-kind-legend` 生成区，`kind=10` = `step_compensation_failed`，`kind=11` = `saga_compensation_failed`）。
 
+> **⚠️ 手工改库前提（所有分支通用）**：下列处置涉及直接写 `saga_instances` / `saga_events`，绕过 `MarkTerminal` 的 lease fencing CAS。执行前**必须**：(1) 确认无 Coordinator 仍在驱动该 instance——lease 已过期或经 `Orphan()` 主动释放（否则 `ClaimPending` 会与你的手工写产生竞争）；(2) 在维护窗口内操作；(3) **不要手工 INSERT 终态 kind**（`kind` ∈ {6,7,8,9,11}）——终态事件只能由 `MarkTerminal` 原子写入并翻转 status 投影，手插会使 event log 折叠结果与 `saga_instances.status` 不一致，破坏 append-only journal 不变式。处置决策优先写 audit log，而非改 `saga_events`。
+
 **决策树**：
 
 1. **失败步骤是幂等外部副作用**（如发 HTTP 请求、写远端系统）：
    - 验证外部系统当前状态，确认副作用是否已生效。
-   - 若已生效，视为幂等成功——在 `saga_events` 手动插入一条 `kind=4`
-     (step_compensated) 审计记录，并用运维工具将实例状态置为 `status=6`
-     (compensated)。所有操作需携带 operator、ticket、instance_id 字段写入
-     audit log（见下方审计要求）。
+   - 若已生效，视为幂等成功——处置决策（operator / ticket / instance_id）写
+     audit log（见下方审计要求）；`saga_events` 可补一条**非终态** `kind=4`
+     (step_compensated) 审计记录。status 由 8 改为 6 (compensated) 须经运维
+     工具走正常 journal 路径，不直接 UPDATE。
    - 若未生效，重新触发补偿动作后同上标记。
 
 2. **失败步骤是不可逆操作**（如已下发的物理动作、已消费的外部资源）：
    - 评估业务影响范围，判断是否需要人工补偿（线下流程）。
-   - 将实例标记为已接受失败（保留 `status=8` 作为运维 audit trail），在
-     `saga_events` 插入一条业务注释行（`kind=11` 的 payload 写 `{"operator_note":"...","ticket":"..."}`）。
+   - **保留 `status=8` 不动**（它已是合规终态，本身就是运维 audit trail）；
+     处置决策与 operator_note / ticket 写 audit log，**不**向 `saga_events`
+     插入终态 `kind=11`（见上方前提，终态 kind 仅 MarkTerminal 可写）。
    - 通知相关业务方走线下补偿流程。
 
 3. **失败步骤是基础设施故障**（DB 宕机、外部服务不可达）：
    - 等待基础设施自愈（监控 `saga_coordinator_ready` 探针）。
-   - 基础设施恢复后，该 saga 实例已是终态（`status=8`），**不会自动重试**——
-     需运维人员将 `status` 回拨到 `3` (compensating) 后由 Coordinator 重新
-     认领驱动。此操作需谨慎评估幂等性，建议开独立 PR 引入重试入口（当前
-     tracking #1210）。
+   - 基础设施恢复后，该 saga 实例已是终态（`status=8`），**不会自动重试**。
+     自动重试入口尚未实现（无专属 issue，需另开 backlog）；在它落地前，重新
+     驱动须经运维工具走正常 journal 路径，谨慎评估幂等性，不直接 UPDATE status。
 
 ---
 
