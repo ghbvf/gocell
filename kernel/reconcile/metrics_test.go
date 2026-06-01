@@ -150,6 +150,46 @@ func (p *recordingProvider) counterValue(l kernelmetrics.Labels) int64 {
 	return v.value(l)
 }
 
+// signalWhenCounterReaches returns a channel that is closed once the
+// reconcile_total counter for the given labels reaches or exceeds threshold.
+// The channel is closed at most once (sync.Once). Callers MUST register this
+// before starting the loop (or before sending requests) so no increment is
+// missed. The returned channel is safe to pass to testwait.Deterministic.
+//
+// Thread safety: the notify callback is installed under vec.mu and is read
+// under vec.mu in Inc/Add, so there is no data race between registration and
+// concurrent counter increments.
+func (p *recordingProvider) signalWhenCounterReaches(l kernelmetrics.Labels, threshold int64) <-chan struct{} {
+	ch := make(chan struct{})
+	var once sync.Once
+	fire := func() { once.Do(func() { close(ch) }) }
+
+	// Install the notify callback on the reconcile_total counter vec.
+	// RegisterMetrics must be called before signalWhenCounterReaches so the vec
+	// already exists; callers that violate this ordering will get a clear panic.
+	p.mu.Lock()
+	vec, ok := p.counters[metricReconcileTotal]
+	p.mu.Unlock()
+	if !ok {
+		panic("signalWhenCounterReaches: RegisterMetrics must be called before registering a signal")
+	}
+
+	labelKey := labelsKeyR(l)
+	vec.mu.Lock()
+	vec.notifiers = append(vec.notifiers, func(labels kernelmetrics.Labels, newVal int64) {
+		if labelsKeyR(labels) == labelKey && newVal >= threshold {
+			fire()
+		}
+	})
+	// Check if threshold is already reached (race-free: vec.mu held).
+	if cur, exists := vec.obs[labelKey]; exists && cur.Load() >= threshold {
+		fire()
+	}
+	vec.mu.Unlock()
+
+	return ch
+}
+
 func (p *recordingProvider) histogramCount(name string, l kernelmetrics.Labels) int64 {
 	p.mu.Lock()
 	v, ok := p.histograms[name]
@@ -174,11 +214,24 @@ type recordingCounterVec struct {
 	labels []string
 	mu     sync.Mutex
 	obs    map[string]*atomic.Int64
+	// notifiers is a list of per-increment callbacks set by tests. Each is called
+	// after every Inc/Add with the label set and the new counter value.
+	// Callbacks are invoked outside recordingCounterVec.mu to avoid inversion
+	// with any mutex the callbacks themselves may acquire.
+	// Using a slice (append) rather than a single field prevents a second
+	// signalWhenCounterReaches registration from silently overwriting the first.
+	notifiers []func(labels kernelmetrics.Labels, newVal int64)
 }
 
 func (v *recordingCounterVec) Registered() bool { return true }
 func (v *recordingCounterVec) With(l kernelmetrics.Labels) kernelmetrics.Counter {
 	kernelmetrics.MustValidateLabels(v.labels, l)
+	// Snapshot labels for the counter so the notify callback can reference them
+	// without holding v.mu.
+	labelsCopy := make(kernelmetrics.Labels, len(l))
+	for k, val := range l {
+		labelsCopy[k] = val
+	}
 	v.mu.Lock()
 	c, ok := v.obs[labelsKeyR(l)]
 	if !ok {
@@ -186,7 +239,9 @@ func (v *recordingCounterVec) With(l kernelmetrics.Labels) kernelmetrics.Counter
 		v.obs[labelsKeyR(l)] = c
 	}
 	v.mu.Unlock()
-	return &recordingCounter{n: c}
+	// Pass a pointer to the vec so Inc/Add always read the latest notify
+	// callback, even if it is installed after With is first called.
+	return &recordingCounter{n: c, labels: labelsCopy, vec: v}
 }
 
 func (v *recordingCounterVec) value(l kernelmetrics.Labels) int64 {
@@ -198,10 +253,35 @@ func (v *recordingCounterVec) value(l kernelmetrics.Labels) int64 {
 	return 0
 }
 
-type recordingCounter struct{ n *atomic.Int64 }
+type recordingCounter struct {
+	n      *atomic.Int64
+	labels kernelmetrics.Labels
+	// vec is a back-reference to the parent vec so Inc/Add always read the
+	// latest notify callback, even if it is installed after With is first called.
+	vec *recordingCounterVec
+}
 
-func (c *recordingCounter) Inc(context.Context)              { c.n.Add(1) }
-func (c *recordingCounter) Add(_ context.Context, d float64) { c.n.Add(int64(d)) }
+func (c *recordingCounter) Inc(_ context.Context) {
+	newVal := c.n.Add(1)
+	c.vec.mu.Lock()
+	fns := make([]func(kernelmetrics.Labels, int64), len(c.vec.notifiers))
+	copy(fns, c.vec.notifiers)
+	c.vec.mu.Unlock()
+	for _, fn := range fns {
+		fn(c.labels, newVal)
+	}
+}
+
+func (c *recordingCounter) Add(_ context.Context, d float64) {
+	newVal := c.n.Add(int64(d))
+	c.vec.mu.Lock()
+	fns := make([]func(kernelmetrics.Labels, int64), len(c.vec.notifiers))
+	copy(fns, c.vec.notifiers)
+	c.vec.mu.Unlock()
+	for _, fn := range fns {
+		fn(c.labels, newVal)
+	}
+}
 
 type recordingHistogramVec struct {
 	labels []string

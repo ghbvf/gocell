@@ -26,30 +26,47 @@ const rebuildTestHandlerTimeout = 2 * time.Second
 // helpers for rebuild tests
 // ---------------------------------------------------------------------------
 
+// coordinatorFullParams groups the non-testing parameters for newCoordinatorFull.
+// Introduced to reduce the argument count below the S107 limit of 7.
+type coordinatorFullParams struct {
+	clk          *clockmock.FakeClock
+	projectionID string // defaults to "p1" when empty
+	reg          *fakeRegistrar
+	txr          *fakeTxRunner
+	store        CheckpointStore
+	cursor       Cursor
+	replay       ReplaySource
+}
+
 // newCoordinatorFull creates a Coordinator with all dependencies including
-// clock and replay source. projectionID defaults to "p1".
-func newCoordinatorFull(
-	t *testing.T,
-	clk *clockmock.FakeClock,
-	projectionID string,
-	reg *fakeRegistrar,
-	txr *fakeTxRunner,
-	store CheckpointStore,
-	cursor Cursor,
-	replay ReplaySource,
-) *Coordinator {
+// clock and replay source. Nil fields default to safe in-memory fakes so callers
+// only need to set the fields they care about.
+func newCoordinatorFull(t *testing.T, p coordinatorFullParams) *Coordinator {
 	t.Helper()
-	if projectionID == "" {
-		projectionID = "p1"
+	projID := p.projectionID
+	if projID == "" {
+		projID = "p1"
 	}
-	c, err := NewCoordinator(clk, CoordinatorConfig{
+	if p.reg == nil {
+		p.reg = &fakeRegistrar{}
+	}
+	if p.txr == nil {
+		p.txr = &fakeTxRunner{}
+	}
+	if p.store == nil {
+		p.store = NewMemCheckpointStore()
+	}
+	if p.cursor == nil {
+		p.cursor = &fakeCursor{pos: 1}
+	}
+	c, err := NewCoordinator(p.clk, CoordinatorConfig{
 		CellID:       "testcell",
-		ProjectionID: projectionID,
-		Registrar:    reg,
-		TxRunner:     txr,
-		Store:        store,
-		Cursor:       cursor,
-		Replay:       replay,
+		ProjectionID: projID,
+		Registrar:    p.reg,
+		TxRunner:     p.txr,
+		Store:        p.store,
+		Cursor:       p.cursor,
+		Replay:       p.replay,
 		Tracer:       wrapper.NoopTracer{},
 		Metrics:      nil, // metrics optional
 	})
@@ -119,7 +136,7 @@ func TestRebuild_ColdFull(t *testing.T) {
 	reg := &fakeRegistrar{}
 	clk := clockmock.New(time.Now())
 
-	c := newCoordinatorFull(t, clk, "p1", reg, txr, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, reg: reg, txr: txr, store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	if err := c.Rebuild(context.Background()); err != nil {
@@ -152,7 +169,7 @@ func TestRebuild_OnResetCalledInTx(t *testing.T) {
 	reg := &fakeRegistrar{}
 	clk := clockmock.New(time.Now())
 
-	c := newCoordinatorFull(t, clk, "p1", reg, txr, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, reg: reg, txr: txr, store: store, cursor: cur, replay: src})
 
 	var resetCalls int32
 	onReset := func(ctx context.Context) error {
@@ -191,7 +208,7 @@ func TestRebuild_OnResetErrorRollback(t *testing.T) {
 	reg := &fakeRegistrar{}
 	clk := clockmock.New(time.Now())
 
-	c := newCoordinatorFull(t, clk, "p1", reg, txr, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, reg: reg, txr: txr, store: store, cursor: cur, replay: src})
 
 	errReset := errors.New("reset failed")
 	onReset := func(ctx context.Context) error {
@@ -239,7 +256,7 @@ func TestRebuild_ReplayErrorReturnLive(t *testing.T) {
 	reg := &fakeRegistrar{}
 	clk := clockmock.New(time.Now())
 
-	c := newCoordinatorFull(t, clk, "p1", reg, txr, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, reg: reg, txr: txr, store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, apply)
 
 	if err := c.Rebuild(context.Background()); err != nil {
@@ -312,7 +329,7 @@ func TestRebuild_BeforeSubscribe(t *testing.T) {
 	t.Parallel()
 	src := NewMemReplaySource()
 	clk := clockmock.New(time.Now())
-	c := newCoordinatorFull(t, clk, "p1", &fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{pos: 1}, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, cursor: &fakeCursor{pos: 1}, replay: src})
 
 	// Rebuild before Subscribe must return an error.
 	err := c.Rebuild(context.Background())
@@ -413,7 +430,7 @@ func TestSubscribe_SecondCallError(t *testing.T) {
 	t.Parallel()
 	src := NewMemReplaySource()
 	clk := clockmock.New(time.Now())
-	c := newCoordinatorFull(t, clk, "p1", &fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{pos: 1}, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, cursor: &fakeCursor{pos: 1}, replay: src})
 
 	spec := minimalSpec("projection.p1.v1")
 	// First Subscribe succeeds.
@@ -434,6 +451,27 @@ func TestSubscribe_SecondCallError(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestNewCoordinator_NilGuards_PR03 — new params: clk, projectionID, replay
 // ---------------------------------------------------------------------------
+
+// assertCoordinatorResult checks that (c, err) matches wantErr. Extracted to
+// reduce the cognitive complexity of the outer table-driven loop.
+func assertCoordinatorResult(t *testing.T, c *Coordinator, err error, wantErr bool) {
+	t.Helper()
+	if wantErr {
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if c != nil {
+			t.Error("expected nil Coordinator on error")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected non-nil Coordinator")
+	}
+}
 
 func TestNewCoordinator_NilGuards_PR03(t *testing.T) {
 	t.Parallel()
@@ -496,21 +534,7 @@ func TestNewCoordinator_NilGuards_PR03(t *testing.T) {
 				Replay:       tc.replay,
 				Tracer:       wrapper.NoopTracer{},
 			})
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if c != nil {
-					t.Error("expected nil Coordinator on error")
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if c == nil {
-					t.Fatal("expected non-nil Coordinator")
-				}
-			}
+			assertCoordinatorResult(t, c, err, tc.wantErr)
 		})
 	}
 }
@@ -720,7 +744,7 @@ func TestRebuild_OnResetError_GateReopened(t *testing.T) {
 	reg := &fakeRegistrar{}
 	clk := clockmock.New(time.Now())
 
-	c := newCoordinatorFull(t, clk, "p1", reg, txr, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, reg: reg, txr: txr, store: store, cursor: cur, replay: src})
 
 	errReset := errors.New("reset failed")
 	subscribeWithDefaults(t, c, applyNoop, WithOnReset(func(_ context.Context) error {
@@ -815,6 +839,101 @@ func TestRebuild_CatchupIsCaughtUpError(t *testing.T) {
 // on degraded catchup path, IS recorded on clean catchup path (Task 4)
 // ---------------------------------------------------------------------------
 
+// runDegradedCatchupSubtest is the degraded-path sub-case for
+// TestRebuild_DegradedCatchup_NoDurationObserved: Head fails on 2nd call (during
+// catchup) → rebuild_duration histogram receives ZERO observations.
+func runDegradedCatchupSubtest(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	p := newProjectionRecordingProvider()
+	m, err := RegisterMetrics(p)
+	if err != nil {
+		t.Fatalf("RegisterMetrics: %v", err)
+	}
+
+	// Head returns error on calls >= failAt (2 = first captureHead succeeds, catchup fails).
+	catchupSrc := &catchupErrReplaySource{failAt: 2, headErr: errors.New("catchup head error")}
+	clk := clockmock.New(time.Now())
+
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       &fakeCursor{pos: 1},
+		Replay:       catchupSrc,
+		Tracer:       wrapper.NoopTracer{},
+		Metrics:      m,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	subscribeWithDefaults(t, c, applyNoop)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitForPhase(t, c, PhaseLive)
+
+	count := p.histogramCount(
+		metricProjectionRebuildDuration,
+		kernelmetrics.Labels{"cell": "testcell", "projection": "p1"},
+	)
+	if count != 0 {
+		t.Errorf("degraded catchup: rebuild_duration observations = %d, want 0", count)
+	}
+	if c.Phase() != PhaseLive {
+		t.Errorf("Phase = %v after degraded catchup, want PhaseLive", c.Phase())
+	}
+}
+
+// runCleanCatchupSubtest is the clean-path sub-case for
+// TestRebuild_DegradedCatchup_NoDurationObserved: full replay, caughtUp=true →
+// rebuild_duration histogram receives ≥1 observation.
+func runCleanCatchupSubtest(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	p := newProjectionRecordingProvider()
+	m, err := RegisterMetrics(p)
+	if err != nil {
+		t.Fatalf("RegisterMetrics: %v", err)
+	}
+
+	const n = 3
+	src, cur := makeReplayWithEntries(t, n)
+	clk := clockmock.New(time.Now())
+
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       cur,
+		Replay:       src,
+		Tracer:       wrapper.NoopTracer{},
+		Metrics:      m,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	subscribeWithDefaults(t, c, applyNoop)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitForPhase(t, c, PhaseLive)
+
+	count := p.histogramCount(
+		metricProjectionRebuildDuration,
+		kernelmetrics.Labels{"cell": "testcell", "projection": "p1"},
+	)
+	if count < 1 {
+		t.Errorf("clean rebuild: rebuild_duration observations = %d, want ≥1", count)
+	}
+}
+
 // TestRebuild_DegradedCatchup_NoDurationObserved asserts that:
 //  1. Degraded path (catchupPhase returns caughtUp=false due to Head error) → the
 //     rebuild_duration histogram receives ZERO observations.
@@ -825,104 +944,8 @@ func TestRebuild_CatchupIsCaughtUpError(t *testing.T) {
 // ONLY when caughtUp==true; degraded logs Warn and skips the Observe call.
 func TestRebuild_DegradedCatchup_NoDurationObserved(t *testing.T) {
 	t.Parallel()
-
-	// --- Degraded path: Head fails on 2nd call (during catchup) ---
-	t.Run("degraded: Head error in catchup → duration NOT observed", func(t *testing.T) {
-		t.Parallel()
-		p := newProjectionRecordingProvider()
-		m, err := RegisterMetrics(p)
-		if err != nil {
-			t.Fatalf("RegisterMetrics: %v", err)
-		}
-
-		// catchupErrReplaySource defined earlier in this file:
-		// Head returns error on calls >= failAt (2 = first captureHead succeeds, catchup fails).
-		catchupSrc := &catchupErrReplaySource{failAt: 2, headErr: errors.New("catchup head error")}
-		store := NewMemCheckpointStore()
-		txr := &fakeTxRunner{}
-		reg := &fakeRegistrar{}
-		clk := clockmock.New(time.Now())
-		cur := &fakeCursor{pos: 1}
-
-		c, err := NewCoordinator(clk, CoordinatorConfig{
-			CellID:       "testcell",
-			ProjectionID: "p1",
-			Registrar:    reg,
-			TxRunner:     txr,
-			Store:        store,
-			Cursor:       cur,
-			Replay:       catchupSrc,
-			Tracer:       wrapper.NoopTracer{},
-			Metrics:      m,
-		})
-		if err != nil {
-			t.Fatalf("NewCoordinator: %v", err)
-		}
-		subscribeWithDefaults(t, c, applyNoop)
-
-		if err := c.Rebuild(context.Background()); err != nil {
-			t.Fatalf("Rebuild: %v", err)
-		}
-		waitForPhase(t, c, PhaseLive)
-
-		count := p.histogramCount(
-			metricProjectionRebuildDuration,
-			kernelmetrics.Labels{"cell": "testcell", "projection": "p1"},
-		)
-		if count != 0 {
-			t.Errorf("degraded catchup: rebuild_duration observations = %d, want 0", count)
-		}
-		// Phase must still return to Live (degraded is non-fatal).
-		if c.Phase() != PhaseLive {
-			t.Errorf("Phase = %v after degraded catchup, want PhaseLive", c.Phase())
-		}
-	})
-
-	// --- Clean path: all events replayed, caughtUp=true → duration IS observed ---
-	t.Run("clean: full catchup → duration observed ≥1", func(t *testing.T) {
-		t.Parallel()
-		p := newProjectionRecordingProvider()
-		m, err := RegisterMetrics(p)
-		if err != nil {
-			t.Fatalf("RegisterMetrics: %v", err)
-		}
-
-		const n = 3
-		src, cur := makeReplayWithEntries(t, n)
-		store := NewMemCheckpointStore()
-		txr := &fakeTxRunner{}
-		reg := &fakeRegistrar{}
-		clk := clockmock.New(time.Now())
-
-		c, err := NewCoordinator(clk, CoordinatorConfig{
-			CellID:       "testcell",
-			ProjectionID: "p1",
-			Registrar:    reg,
-			TxRunner:     txr,
-			Store:        store,
-			Cursor:       cur,
-			Replay:       src,
-			Tracer:       wrapper.NoopTracer{},
-			Metrics:      m,
-		})
-		if err != nil {
-			t.Fatalf("NewCoordinator: %v", err)
-		}
-		subscribeWithDefaults(t, c, applyNoop)
-
-		if err := c.Rebuild(context.Background()); err != nil {
-			t.Fatalf("Rebuild: %v", err)
-		}
-		waitForPhase(t, c, PhaseLive)
-
-		count := p.histogramCount(
-			metricProjectionRebuildDuration,
-			kernelmetrics.Labels{"cell": "testcell", "projection": "p1"},
-		)
-		if count < 1 {
-			t.Errorf("clean rebuild: rebuild_duration observations = %d, want ≥1", count)
-		}
-	})
+	t.Run("degraded: Head error in catchup → duration NOT observed", runDegradedCatchupSubtest)
+	t.Run("clean: full catchup → duration observed ≥1", runCleanCatchupSubtest)
 }
 
 // TestRebuild_CatchupCtxCancel asserts that a ctx cancel during catchup routes
@@ -1024,7 +1047,7 @@ func TestClose_Idempotent(t *testing.T) {
 	t.Parallel()
 	src := NewMemReplaySource()
 	clk := clockmock.New(time.Now())
-	c := newCoordinatorFull(t, clk, "p1", &fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{pos: 1}, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, cursor: &fakeCursor{pos: 1}, replay: src})
 
 	const n = 10
 	errs := make([]error, n)
@@ -1060,7 +1083,7 @@ func TestRebuild_PanicRecovered(t *testing.T) {
 	reg := &fakeRegistrar{}
 	clk := clockmock.New(time.Now())
 
-	c := newCoordinatorFull(t, clk, "p1", reg, txr, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, reg: reg, txr: txr, store: store, cursor: cur, replay: src})
 
 	// apply panics on the first entry.
 	panicApply := func(_ context.Context, _ outbox.Entry) error {
@@ -1134,7 +1157,7 @@ func (b *blockingReplaySource) Head(context.Context) (int64, error) {
 // loop. The wait observes real-clock goroutine progress, not simulated time.
 func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 	t.Helper()
-	testwait.External(t, "projection-rebuild-phase-transition",
+	testwait.External(t, "projection-rebuild-wait-for-phase",
 		func() bool { return c.Phase() == want },
 		testtime.EventuallyLong, testtime.FastPoll,
 		"phase != %v", want)
@@ -1146,7 +1169,7 @@ func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 //nolint:unparam // notWant=PhaseLive in current callers; param kept for future tests
 func waitUntilPhaseNot(t *testing.T, c *Coordinator, notWant Phase) {
 	t.Helper()
-	testwait.External(t, "projection-rebuild-phase-transition",
+	testwait.External(t, "projection-rebuild-wait-phase-changed",
 		func() bool { return c.Phase() != notWant },
 		testtime.EventuallyLong, testtime.FastPoll,
 		"phase still == %v", notWant)

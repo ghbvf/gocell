@@ -253,6 +253,15 @@ metrics:
       labels:
         - reason
       file: kernel/assembly/hook_dispatcher.go
+    - name: http_request_body_limit_rejections_total
+      fqName: gocell_http_request_body_limit_rejections_total
+      namespace: gocell
+      type: counter
+      help: Total number of HTTP requests rejected for exceeding the body size limit (Content-Length fast-path).
+      labels:
+        - cell
+        - route
+      file: runtime/bootstrap/phases_http.go
     - name: http_request_duration_seconds
       fqName: gocell_http_request_duration_seconds
       namespace: gocell

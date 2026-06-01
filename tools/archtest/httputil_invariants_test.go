@@ -2,15 +2,21 @@ package archtest
 
 // invariants:
 //   - INVARIANT: HTTPUTIL-5XX-KIND-NORMALIZE-01
-//   - INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
 //   - INVARIANT: HTTPUTIL-SURFACE-REGISTERED-01
 //
 // httputil_invariants_test.go — consolidated AST guards for pkg/httputil invariants.
 //
 // Invariants covered:
 //   HTTPUTIL-5XX-KIND-NORMALIZE-01   errcode.New() in 5xx path must use errcode.KindXxx constant, not .Kind field access
-//   HTTPUTIL-5XX-LOG-REDACT-01       log5xx must call redaction.RedactSlogAttr on ecErr.Details before appending to slog attrs
 //   HTTPUTIL-SURFACE-REGISTERED-01   every exported pkg/httputil function must appear in doc.go or governance maps
+//
+// Note: HTTPUTIL-5XX-LOG-REDACT-01 (log5xx must call redaction.RedactSlogAttr on
+// ecErr.Details) was retired in PR #1036 Batch 2. slog sink-side redaction
+// (SLOG-HANDLER-SEALED-FUNNEL-01, tools/archtest/slog_handler_sealed_funnel_test.go)
+// now provides fail-closed value redaction at the slog.Handler level for all log
+// output, superseding the call-site Soft archtest. The call-site
+// redaction.RedactSlogAttr calls in log5xx are preserved as defense-in-depth but
+// are no longer enforced by archtest.
 
 import (
 	"go/ast"
@@ -151,67 +157,6 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 		return ds
 	})
 	Report(t, "HTTPUTIL-5XX-KIND-NORMALIZE-01", diags)
-}
-
-// INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
-//
-// TestHTTPUtil5xxLogRedact enforces HTTPUTIL-5XX-LOG-REDACT-01.
-//
-// log5xx 必须经 redaction.RedactSlogAttr 处理 ecErr.Details 中的每个 slog.Attr
-// 后才追加到 logAttrs。透传 raw Details 会把 runtime 字段（potentially 含
-// dsn/token 等敏感）泄漏到 slog 输出。
-//
-// 检测方式（纯 AST）：扫描 pkg/httputil/response.go 中的 log5xx 函数体，
-// 断言函数体内存在至少一次 redaction.RedactSlogAttr 调用。
-func TestHTTPUtil5xxLogRedact(t *testing.T) {
-	t.Parallel()
-
-	diags := runHTTPUtilResponseRule(t, "HTTPUTIL-5XX-LOG-REDACT-01", func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
-		for _, f := range p.Files {
-			var log5xxFn *ast.FuncDecl
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-				if log5xxFn == nil && fn.Name.Name == "log5xx" {
-					log5xxFn = fn
-				}
-			})
-			if log5xxFn == nil {
-				ds = append(ds, Diagnostic{
-					Rel:     p.Rel(f),
-					Line:    0,
-					Message: "log5xx function not found in pkg/httputil/response.go",
-				})
-				continue
-			}
-
-			found := false
-			EachInSubtree[ast.CallExpr](log5xxFn.Body, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return
-				}
-				ident, ok := sel.X.(*ast.Ident)
-				if !ok {
-					return
-				}
-				if ident.Name == "redaction" && sel.Sel.Name == "RedactSlogAttr" {
-					found = true
-				}
-			})
-
-			if !found {
-				ds = append(ds, Diagnostic{
-					Rel:  p.Rel(f),
-					Line: 0,
-					Message: "log5xx must call redaction.RedactSlogAttr on ecErr.Details elements before " +
-						"appending to slog attrs. Transparent pass-through leaks " +
-						"runtime fields (dsn, token, etc.) to log backends.",
-				})
-			}
-		}
-		return ds
-	})
-	Report(t, "HTTPUTIL-5XX-LOG-REDACT-01", diags)
 }
 
 // INVARIANT: HTTPUTIL-SURFACE-REGISTERED-01

@@ -126,7 +126,7 @@
 
 **FR-004 (Loop 调度骨架)**: 框架 MUST 提供 `Loop` 类型（`NewLoop(opts)` + `Start(ctx) error` + Lifecycle 集成），复用 `runtime/command.SweeperLifecycle` 451 LoC 的 control-plane ticker / start / stop / awaitProbe 实现，仅改名 + 解耦命令实体。
 
-**FR-005 (Trigger 抽象)**: 框架 MUST 提供 `Trigger` 接口（替代 controller-runtime `Source`），最小实现 `TickerTrigger(interval time.Duration)`；选配 `ChannelTrigger(<-chan Request)` 用于 outbox 事件唤醒。
+**FR-005 (Trigger 抽象)**: 框架 MUST 提供 `Trigger` 接口（`Start(ctx, chan<- Request) error`，替代 controller-runtime `Source`），最小实现 `TickerTrigger(clk clock.Clock, interval time.Duration)`（发零值 `Request{}` resync 脉冲，节拍走注入 clock——clock 为强制位置参 per `CLOCK-POSITIONAL-INJECTION-01`，原草图 `TickerTrigger(interval)` 与 TDD「注入时钟、不依赖 wall-clock」冲突，A4 落地裁决为注入 clock，详见 ADR §3.2 F4 amendment）；选配 `ChannelTrigger(<-chan Request)` 用于 outbox 事件唤醒。
 
 **FR-006 (LeaderElector 接口)**: 框架 MUST 提供 `LeaderElector` 接口（`AcquireLease(ctx, reconcilerID) (LeaseToken, error)` + `ReleaseLease(ctx, LeaseToken) error` + `RenewLease(ctx, LeaseToken) error`）；adapters/ 层提供 Redis 与 PG advisory lock 两个实现。leader election **非 fencing 保证**（client-go 明示），故：`LeaseToken` MUST 携带**单调 fencing token** `Epoch uint64`（每次换持有者 +1，RenewLease 保持不变）；`Loop` MUST 从 lease 派生 lease-scoped ctx、在 lease 丢失瞬间 cancel 中断 in-flight Reconcile。
 

@@ -22,6 +22,11 @@ const (
 	labelProjection = "projection"
 )
 
+// errRegisterFmt is the format string used when a metric instrument registration
+// fails. Extracted to avoid duplicating the registration error format across the
+// three instrument registrations.
+const errRegisterFmt = "projection: register %s: %w"
+
 // projectionRebuildDurationBuckets covers sub-millisecond to multi-hour
 // rebuild durations. Smaller projections complete in ms; large historical
 // replays may take many minutes. Buckets extend to 1800s (30min) so that the
@@ -55,7 +60,7 @@ func RegisterMetrics(p kernelmetrics.Provider) (*Metrics, error) {
 		LabelNames: []string{labelCell, labelProjection},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("projection: register %s: %w", metricProjectionReplayLag, err)
+		return nil, fmt.Errorf(errRegisterFmt, metricProjectionReplayLag, err)
 	}
 	dur, err := p.HistogramVec(kernelmetrics.HistogramOpts{
 		Name:       metricProjectionRebuildDuration,
@@ -64,7 +69,7 @@ func RegisterMetrics(p kernelmetrics.Provider) (*Metrics, error) {
 		Buckets:    projectionRebuildDurationBuckets,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("projection: register %s: %w", metricProjectionRebuildDuration, err)
+		return nil, fmt.Errorf(errRegisterFmt, metricProjectionRebuildDuration, err)
 	}
 	pending, err := p.GaugeVec(kernelmetrics.GaugeOpts{
 		Name:       metricProjectionPendingEvents,
@@ -72,7 +77,7 @@ func RegisterMetrics(p kernelmetrics.Provider) (*Metrics, error) {
 		LabelNames: []string{labelCell, labelProjection},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("projection: register %s: %w", metricProjectionPendingEvents, err)
+		return nil, fmt.Errorf(errRegisterFmt, metricProjectionPendingEvents, err)
 	}
 	return &Metrics{ReplayLag: lag, RebuildDuration: dur, PendingEvents: pending}, nil
 }

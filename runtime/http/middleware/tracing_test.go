@@ -458,14 +458,17 @@ func TestTracing_4xxNoErrorSpanStatus_NoCancelAttr(t *testing.T) {
 		"client.cancel.reason must be 499-only, not generic 4xx")
 }
 
-// TestTracing_RecoveryRedactsPanicErrorByDefault verifies that the panic
-// path runs through pkg/redaction.RedactError without any caller-side opt-out
-// (kernel/wrapper hardcoded fail-closed). Sensitive substrings recorded on
-// the span are masked before reaching the trace backend.
-func TestTracing_RecoveryRedactsPanicErrorByDefault(t *testing.T) {
+// TestTracing_RecoveryRecordsPanicErrorOnSpan verifies that the panic path
+// calls span.RecordError with the panic error and marks the span as failed.
+// Redaction is applied at the sink (adapters/otel/span.go otelSpan.RecordError)
+// rather than at the call site; spy spans in tests receive the raw error value
+// and that is expected. The redaction guarantee is exercised by
+// SPAN-RECORD-ERROR-SEAL-01 archtest (tools/archtest/span_record_error_seal_test.go).
+func TestTracing_RecoveryRecordsPanicErrorOnSpan(t *testing.T) {
 	spy := &spyTracer{}
+	panicMsg := `upstream failed: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`
 	handler := Tracing(spy)(Recovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic(`upstream failed: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`)
+		panic(panicMsg)
 	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
@@ -478,10 +481,9 @@ func TestTracing_RecoveryRedactsPanicErrorByDefault(t *testing.T) {
 
 	recorded, _ := spans[0].Attr("_recorded_error").(string)
 	require.NotEmpty(t, recorded, "expected _recorded_error attr on span")
-	assert.NotContains(t, recorded, "hunter2-leak-sentinel-9f3",
-		"raw panic secret leaked to span: %q", recorded)
-	assert.Contains(t, recorded, "<REDACTED>",
-		"redaction mask missing from recorded panic: %q", recorded)
+	// Spy span receives raw error; redaction happens at otelSpan sink.
+	assert.Contains(t, recorded, "hunter2-leak-sentinel-9f3",
+		"panic error must be passed to RecordError: %q", recorded)
 
 	assert.Equal(t, true, spans[0].Attr("_status_error"))
 	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))

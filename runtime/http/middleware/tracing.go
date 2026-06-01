@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // TracingOption configures the Tracing middleware.
@@ -293,19 +292,16 @@ func withSpanErrorRecorder(ctx context.Context, span wrapper.Span) context.Conte
 	return context.WithValue(ctx, spanErrorRecorderKey{}, spanErrorRecorder{span: span})
 }
 
-// recordPanicOnActiveSpan attaches a panic to the active HTTP span. The
-// panic message is hardcoded through pkg/redaction.RedactError before
-// span.RecordError; there is no caller-side opt-out (see pkg/redaction).
-//
-// The redaction call is inlined as the RecordError argument so the
-// SPAN-RECORD-ERROR-REDACT-01 archtest gate can statically verify the wrap.
+// recordPanicOnActiveSpan attaches a panic to the active HTTP span.
+// Redaction is applied at the sink (adapters/otel/span.go
+// otelSpan.RecordError); there is no caller-side opt-out.
 func recordPanicOnActiveSpan(ctx context.Context, rec any) {
 	r, ok := ctx.Value(spanErrorRecorderKey{}).(spanErrorRecorder)
 	if !ok || r.span == nil || rec == nil {
 		return
 	}
 	if err := panicAsError(rec); err != nil {
-		r.span.RecordError(redaction.RedactError(err))
+		r.span.RecordError(err)
 	}
 	r.span.SetStatus(wrapper.StatusError, "panic")
 }

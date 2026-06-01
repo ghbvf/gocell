@@ -2,6 +2,7 @@ package projection
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -41,6 +42,38 @@ func TestRegisterProjectionMetrics_WiresThree(t *testing.T) {
 	}
 	if labels := p.gaugeLabels(metricProjectionPendingEvents); !labelsMatch(labels, []string{"cell", "projection"}) {
 		t.Errorf("PendingEvents labels = %v, want [cell projection]", labels)
+	}
+}
+
+// TestRegisterProjectionMetrics_RegistrationFailure covers the three error
+// branches in RegisterMetrics: a Provider that fails the Nth instrument
+// registration must return the wrapped error. RegisterMetrics registers in
+// order: ReplayLag (gauge) → RebuildDuration (histogram) → PendingEvents (gauge).
+func TestRegisterProjectionMetrics_RegistrationFailure(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		failGaugeN int // fail the Nth GaugeVec call (1=lag, 2=pending); 0=disabled
+		failHist   bool
+		wantSubstr string
+	}{
+		{"lag gauge fails", 1, false, metricProjectionReplayLag},
+		{"rebuild duration histogram fails", 0, true, metricProjectionRebuildDuration},
+		{"pending events gauge fails", 2, false, metricProjectionPendingEvents},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &projFailProvider{failGaugeN: tc.failGaugeN, failHist: tc.failHist}
+			_, err := RegisterMetrics(p)
+			if err == nil {
+				t.Fatal("RegisterMetrics: expected error, got nil")
+			}
+			if !containsStr(err.Error(), tc.wantSubstr) {
+				t.Errorf("error %q does not mention %q", err.Error(), tc.wantSubstr)
+			}
+		})
 	}
 }
 
@@ -130,6 +163,38 @@ func TestProjectionMetrics_RecordsPendingEvents(t *testing.T) {
 		t.Errorf("PendingEvents gauge = %f, want 7.0", v)
 	}
 }
+
+// projFailProvider fails a configured instrument registration so RegisterMetrics's
+// three error branches can be exercised. failGaugeN (1-based, 0=disabled) fails
+// the Nth GaugeVec call; failHist fails HistogramVec.
+type projFailProvider struct {
+	failGaugeN int
+	failHist   bool
+	gaugeCount int
+}
+
+func (p *projFailProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return kernelmetrics.NopProvider{}.CounterVec(opts)
+}
+
+func (p *projFailProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	if p.failHist {
+		return nil, errProjRegistration
+	}
+	return kernelmetrics.NopProvider{}.HistogramVec(opts)
+}
+
+func (p *projFailProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	p.gaugeCount++
+	if p.failGaugeN > 0 && p.gaugeCount == p.failGaugeN {
+		return nil, errProjRegistration
+	}
+	return kernelmetrics.NopProvider{}.GaugeVec(opts)
+}
+
+func (p *projFailProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
+
+var errProjRegistration = errors.New("duplicate instrument")
 
 // ---------------------------------------------------------------------------
 // recordingProvider — spy metrics.Provider for projection metrics tests.

@@ -115,10 +115,11 @@ func stopSharedInternalBroker() {
 func newInternalConfig(addr string) Config {
 	id, _ := ParseEphemeralClientID("testcell", "internal")
 	return Config{
-		ClientID:       id,
-		Brokers:        []string{fmt.Sprintf("tcp://%s", addr)},
-		ConnectTimeout: testtime.D5s,
-		KeepAlive:      testtime.D30s,
+		ClientID:        id,
+		Brokers:         []string{fmt.Sprintf("tcp://%s", addr)},
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D10s,
+		KeepAlive:       testtime.D30s,
 		Backoff: BackoffConfig{
 			BaseDelay: testtime.D100ms,
 			MaxDelay:  testtime.D2s,

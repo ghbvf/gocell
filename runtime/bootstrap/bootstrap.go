@@ -30,6 +30,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/projection"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -151,6 +153,22 @@ type Bootstrap struct {
 	// webhook receiver but these fields remain nil.
 	webhookSourceStore kwh.SourceStore
 	webhookClaimer     idempotency.Claimer
+
+	// --- projection: L3 CQRS projection harness dependencies ---
+	// Injected via WithProjectionCheckpointStore / WithProjectionTxRunner /
+	// WithProjectionReplaySource / WithProjectionCursor. nil means "not
+	// configured"; phase6 fail-fasts when any cell registers a projection but a
+	// required dep remains nil. These are framework-owned raw infrastructure —
+	// they live here, never in cell code, which is the whole point of the
+	// reg.RegisterProjection record-only seam.
+	projectionStore    projection.CheckpointStore
+	projectionTxRunner persistence.TxRunner
+	projectionReplay   projection.ReplaySource
+	projectionCursor   projection.Cursor
+	// projectionCoordinators maps "<cellID>/<projectionID>" → the constructed
+	// Coordinator, so the PR-04 HTTP rebuild endpoint can resolve and trigger
+	// Coordinator.Rebuild. Populated by phase6 projection drain.
+	projectionCoordinators map[string]*projection.Coordinator
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.
@@ -336,10 +354,14 @@ func New(clk clock.Clock, opts ...Option) *Bootstrap {
 		o(b)
 	}
 	clock.MustHaveClock(clk, "bootstrap.New")
+
 	// Create the Lifecycle after all options are applied so that
 	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
 	// DefaultStartTimeout / DefaultStopTimeout constants internally.
+	// slog.Default is already the sink-side redacting handler: production
+	// entrypoints (runCorebundle / example runXxx) seal it before bootstrap.New
+	// runs (see logging.NewHandler + SLOG-HANDLER-SEALED-FUNNEL-01).
 	logger := slog.Default()
 	b.lifecycle = NewLifecycle(b.clock, LifecycleConfig{
 		DefaultStartTimeout: b.defaultStartTimeout,

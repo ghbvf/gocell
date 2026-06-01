@@ -16,6 +16,15 @@ const (
 	PrincipalUser                    // JWT user
 	PrincipalService                 // service token / mTLS machine
 	PrincipalAnonymous               // public endpoint
+	// PrincipalDevice is a first-class device subject (e.g. an MDM-enrolled
+	// device), distinct from a human user — it feeds device-posture attributes
+	// to downstream ABAC / zero-trust evaluation. No device-token issuer exists
+	// on develop yet (the JWT authenticator still classifies every verified
+	// token as PrincipalUser); the kind is the type-foundation half of the
+	// multi-tenancy/ABAC epic. Adding it forces every PrincipalKind switch to
+	// gain an explicit branch — guarded by archtest
+	// PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01.
+	PrincipalDevice
 )
 
 func (k PrincipalKind) String() string {
@@ -28,6 +37,8 @@ func (k PrincipalKind) String() string {
 		return "service"
 	case PrincipalAnonymous:
 		return "anonymous"
+	case PrincipalDevice:
+		return "device"
 	default:
 		return "unknown"
 	}
@@ -61,6 +72,24 @@ type Principal struct {
 	// checked against ContractSpec.Clients by RequireCallerCell. Empty for
 	// user and anonymous principals.
 	CallerCellID string
+	// TenantID is the tenant isolation boundary the request belongs to, sourced
+	// from the JWT "tenant_id" claim. JWTVerifier.VerifyIntent (the single
+	// unbypassable chokepoint for JWT→Claims) has already validated and
+	// canonicalized it via pkg/tenant.ParseTenantID (a malformed claim is
+	// rejected before any Principal is built), so a non-empty value is a
+	// canonical lowercase UUID. Empty for service principals (a service token's
+	// callerCell is NOT a tenant), anonymous principals, and single-tenant
+	// deployments. injectPrincipalCtxKeys propagates a non-empty value to
+	// ctxkeys.TenantID for the outbox principal envelope.
+	//
+	// Deliberately typed string, not pkg/tenant.TenantID: the ctx/wire principal
+	// bridge is type-uniform string/SafeID (ctxkeys.With{Actor,Subject,Tenant,
+	// Session}ID all take string; outbox.PrincipalMetadata.TenantID is a frozen
+	// idutil.SafeID). tenant.TenantID is the REPO-layer typed parameter (PR-2's
+	// "漏传=compile error" Hard funnel); threading it through the wire path would
+	// only add string↔TenantID↔SafeID conversions. The repo layer re-types this
+	// string via tenant.ParseTenantID at its boundary.
+	TenantID string
 	// Claims is a read-only snapshot of supplementary JWT claims (e.g. "sid",
 	// "iss", "token_use"). Callers must treat Claims as a read-only snapshot;
 	// mutating it has no effect on authentication decisions and may corrupt

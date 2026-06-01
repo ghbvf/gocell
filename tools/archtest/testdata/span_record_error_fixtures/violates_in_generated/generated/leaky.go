@@ -1,4 +1,4 @@
-// Package generated is a fixture for SPAN-RECORD-ERROR-REDACT-01 placed
+// Package generated is a fixture for SPAN-RECORD-ERROR-SEAL-01 placed
 // underneath a "generated" directory to verify that
 // runSpanRecordErrorFixtureScan + IncludeGenerated() can reach it. If
 // IncludeGenerated() is removed from the fixture scope, the default skip

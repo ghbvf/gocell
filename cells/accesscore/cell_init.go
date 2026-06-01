@@ -259,11 +259,10 @@ func (c *AccessCore) initSlices() error {
 	identityOpts := []identitymanage.Option{
 		identitymanage.WithEmitter(c.emitter),
 		identitymanage.WithTxManager(c.txRunner),
-		identitymanage.WithLastAdminProtection(c.roleRepo),
 		identitymanage.WithPasswordHasher(c.passwordHasher),
 	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
-	identitySvc, err := identitymanage.NewService(c.clk, c.userRepo, c.invalidator, c.logger, identityOpts...)
+	identitySvc, err := identitymanage.NewService(c.clk, c.userRepo, c.invalidator, c.logger, c.roleRepo, identityOpts...)
 	if err != nil {
 		return err
 	}

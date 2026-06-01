@@ -214,6 +214,7 @@ linters:
             - go.opentelemetry.io/contrib
             - go.opentelemetry.io/otel
             - golang.org/x/sync
+            - google.golang.org/grpc  # runtime/grpc/interceptor: gRPC transport library (the grpc analogue of go-chi/chi for runtime/http; adapters/grpc owns the server, runtime/grpc owns the cross-cutting interceptors)
             - gopkg.in/yaml.v3
           deny:
             - pkg: github.com/ghbvf/gocell/pkg/pgquery

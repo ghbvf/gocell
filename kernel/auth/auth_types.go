@@ -53,6 +53,16 @@ type Claims struct {
 	TokenUse TokenIntent
 	// SessionID is the "sid" claim binding the token to a specific session.
 	SessionID string
+	// TenantID is the "tenant_id" claim identifying the tenant isolation
+	// boundary the subject belongs to. Empty in single-tenant deployments (no
+	// tenant claim issued). When non-empty it MUST be a valid UUID; the
+	// runtime/auth JWTVerifier.VerifyIntent validates and canonicalizes it via
+	// pkg/tenant.ParseTenantID before returning Claims (a malformed tenant claim
+	// fails closed), so consumers may treat a non-empty value as a canonical
+	// lowercase UUID. Typed string (not pkg/tenant.TenantID) to keep this kernel
+	// wire type free of the tenant package's UUID dependency; the runtime
+	// boundary owns validation.
+	TenantID string
 	// PasswordResetRequired indicates that the subject must change their password.
 	PasswordResetRequired bool
 	// JTI is the JWT ID claim ("jti"), a unique identifier for the token.

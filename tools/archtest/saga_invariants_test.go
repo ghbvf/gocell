@@ -332,13 +332,13 @@ func classifyExpr(expr ast.Expr) compensateFuncAssignment {
 	return compensateFuncAssignment{}
 }
 
-// sagaFuncDeclsByName collects all top-level FuncDecls in the Pass (across
+// sagaFuncDeclsByObject collects all top-level FuncDecls in the Pass (across
 // all files) keyed by the types.Func pointer (via info.ObjectOf). This is
 // used to resolve named CompensateFunc assignments to their declaration bodies.
 func sagaFuncDeclsByObject(p *Pass) map[*types.Func]*ast.FuncDecl {
 	out := make(map[*types.Func]*ast.FuncDecl)
 	for _, f := range p.Files {
-		scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 			if fd.Body == nil {
 				return
 			}
@@ -3150,7 +3150,7 @@ func sfcMarkerLine(content []byte, marker string) int {
 func sfcReadFile(t *testing.T, root, dir, rel, ext string) []byte {
 	t.Helper()
 	sc := DirsScope(root, []string{dir}, MatchRels(func(r string) bool { return r == rel }))
-	files, err := LoadContentFiles(sc, []string{ext})
+	files, err := loadContentFiles(sc, []string{ext})
 	require.NoError(t, err, "load %s", rel)
 	require.Len(t, files, 1, "expected exactly one file at %s", rel)
 	return files[0].Bytes
@@ -3161,7 +3161,7 @@ func sfcLoadDocs(t *testing.T, root string) map[string][]byte {
 	sc := DirsScope(root, []string{"docs/ops"}, MatchRels(func(rel string) bool {
 		return strings.HasSuffix(rel, "/readyz.md") || strings.HasSuffix(rel, "/alerting-rules.md")
 	}))
-	files, err := LoadContentFiles(sc, []string{".md"})
+	files, err := loadContentFiles(sc, []string{".md"})
 	require.NoError(t, err, "load saga fanout docs under docs/ops")
 	out := make(map[string][]byte, len(files))
 	for _, f := range files {
@@ -4003,16 +4003,15 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 			continue
 		}
 		rel := p.Rel(file)
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv != nil || fd.Body == nil {
-				continue
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			if fd.Recv != nil || fd.Body == nil {
+				return
 			}
 			if !strings.HasPrefix(fd.Name.Name, "New") {
-				continue
+				return
 			}
 			if fd.Type.Params == nil {
-				continue
+				return
 			}
 			// Collect interface parameters and their types.Object.
 			type ifaceParam struct {
@@ -4067,29 +4066,26 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 				}
 			}
 			if len(ifaces) == 0 {
-				continue
+				return
 			}
 			// For each interface param, check if a guard call referencing it exists
 			// in the body.
 			for _, ip := range ifaces {
-				guarded := false
-				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-					if guarded || !sagaIsGuardCall(p, call) {
-						return
+				_, guarded := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
+					if !sagaIsGuardCall(p, call) {
+						return false
 					}
 					// Check first argument is the parameter object. ast.Unparen
 					// strips redundant parens so IsNilInterface((dep)) is still
 					// recognized as a guard (closes the parenthesized-arg bypass).
 					if len(call.Args) == 0 {
-						return
+						return false
 					}
 					firstArg, ok2 := ast.Unparen(call.Args[0]).(*ast.Ident)
 					if !ok2 {
-						return
+						return false
 					}
-					if p.TypesInfo.ObjectOf(firstArg) == ip.obj {
-						guarded = true
-					}
+					return p.TypesInfo.ObjectOf(firstArg) == ip.obj
 				})
 				if !guarded {
 					out = append(out, sagaDiag(p, fd.Name, rel,
@@ -4099,7 +4095,7 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 							"add validation.IsNilInterface("+ip.name+") or clock.MustHaveClock("+ip.name+", ...)"))
 				}
 			}
-		}
+		})
 	}
 	return out
 }
@@ -4234,14 +4230,13 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 				continue
 			}
 			rel := p.Rel(file)
-			for _, decl := range file.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok || fd.Body == nil || fd.Recv != nil || !strings.HasPrefix(fd.Name.Name, "New") {
-					continue
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Body == nil || fd.Recv != nil || !strings.HasPrefix(fd.Name.Name, "New") {
+					return
 				}
 				paramObjs := sagaConstructorIfaceParamObjs(p, fd)
 				if len(paramObjs) == 0 {
-					continue
+					return
 				}
 				EachInSubtree[ast.AssignStmt](fd.Body, func(as *ast.AssignStmt) {
 					for _, rhs := range as.Rhs {
@@ -4257,7 +4252,7 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 						}
 					}
 				})
-			}
+			})
 		}
 		return out
 	})
@@ -4433,7 +4428,7 @@ func loadArchtestTestFiles(t *testing.T, root string) []ContentContext {
 	sc := DirsScope(root, []string{"tools/archtest"}, IncludeTests(), MatchRels(func(rel string) bool {
 		return filepath.ToSlash(filepath.Dir(rel)) == "tools/archtest" && strings.HasSuffix(rel, "_test.go")
 	}))
-	files, err := LoadContentFiles(sc, []string{".go"})
+	files, err := loadContentFiles(sc, []string{".go"})
 	require.NoError(t, err, "load tools/archtest *_test.go for saga consolidation scan")
 	return files
 }
@@ -4484,7 +4479,7 @@ func TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent(t *testing.T) {
 	sc := DirsScope(root, []string{"tools/archtest"}, IncludeTests(), MatchRels(func(rel string) bool {
 		return path.Base(rel) == sagaConsolidatedFile
 	}))
-	files, err := LoadContentFiles(sc, []string{".go"})
+	files, err := loadContentFiles(sc, []string{".go"})
 	require.NoError(t, err)
 	require.Len(t, files, 1, "expected exactly one %s", sagaConsolidatedFile)
 

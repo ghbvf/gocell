@@ -1174,31 +1174,52 @@ type subscribeCase struct {
 	wantCellID   string
 }
 
+// runSubscribeEmptyProjID handles the empty-projectionID edge case for runSubscribeCase.
+// In PR-03, projectionID moved to NewCoordinator; an empty projID is rejected there.
+func runSubscribeEmptyProjID(t *testing.T, wantErr bool) {
+	t.Helper()
+	clk := clockmock.New(time.Now())
+	_, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       &fakeCursor{},
+		Replay:       NewMemReplaySource(),
+		Tracer:       wrapper.NoopTracer{},
+	})
+	if wantErr && err == nil {
+		t.Fatal("expected error for empty projectionID from NewCoordinator, got nil")
+	}
+	if !wantErr && err != nil {
+		t.Fatalf("unexpected NewCoordinator error: %v", err)
+	}
+}
+
+// assertSubscribeRegistrar checks registrar-side outcomes after a Subscribe call.
+func assertSubscribeRegistrar(t *testing.T, reg *fakeRegistrar, tc subscribeCase) {
+	t.Helper()
+	if reg.subscribeCalls != tc.wantSubCalls {
+		t.Errorf("subscribeCalls = %d, want %d", reg.subscribeCalls, tc.wantSubCalls)
+	}
+	if !tc.wantErr && tc.wantCG != "" {
+		if reg.lastCG != tc.wantCG {
+			t.Errorf("consumerGroup = %q, want %q", reg.lastCG, tc.wantCG)
+		}
+		if reg.lastCell != tc.wantCellID {
+			t.Errorf("cellID = %q, want %q", reg.lastCell, tc.wantCellID)
+		}
+	}
+}
+
 func runSubscribeCase(t *testing.T, tc subscribeCase) {
 	t.Helper()
 	// In PR-03, projectionID is in NewCoordinator, not Subscribe. The "empty
 	// projectionID" case is now a NewCoordinator validation; we thread it through
 	// the constructor instead of Subscribe.
-	projID := tc.projectionID
-	if projID == "" {
-		// Test case wants an error from empty projectionID — NewCoordinator rejects.
-		clk := clockmock.New(time.Now())
-		_, err := NewCoordinator(clk, CoordinatorConfig{
-			CellID:       "testcell",
-			ProjectionID: "",
-			Registrar:    &fakeRegistrar{},
-			TxRunner:     &fakeTxRunner{},
-			Store:        NewMemCheckpointStore(),
-			Cursor:       &fakeCursor{},
-			Replay:       NewMemReplaySource(),
-			Tracer:       wrapper.NoopTracer{},
-		})
-		if tc.wantErr && err == nil {
-			t.Fatal("expected error for empty projectionID from NewCoordinator, got nil")
-		}
-		if !tc.wantErr && err != nil {
-			t.Fatalf("unexpected NewCoordinator error: %v", err)
-		}
+	if tc.projectionID == "" {
+		runSubscribeEmptyProjID(t, tc.wantErr)
 		return
 	}
 
@@ -1206,7 +1227,7 @@ func runSubscribeCase(t *testing.T, tc subscribeCase) {
 	clk := clockmock.New(time.Now())
 	c, err := NewCoordinator(clk, CoordinatorConfig{
 		CellID:       "testcell",
-		ProjectionID: projID,
+		ProjectionID: tc.projectionID,
 		Registrar:    reg,
 		TxRunner:     &fakeTxRunner{},
 		Store:        NewMemCheckpointStore(),
@@ -1228,17 +1249,7 @@ func runSubscribeCase(t *testing.T, tc subscribeCase) {
 		t.Fatalf("unexpected error: %v", subscribeErr)
 	}
 
-	if reg.subscribeCalls != tc.wantSubCalls {
-		t.Errorf("subscribeCalls = %d, want %d", reg.subscribeCalls, tc.wantSubCalls)
-	}
-	if !tc.wantErr && tc.wantCG != "" {
-		if reg.lastCG != tc.wantCG {
-			t.Errorf("consumerGroup = %q, want %q", reg.lastCG, tc.wantCG)
-		}
-		if reg.lastCell != tc.wantCellID {
-			t.Errorf("cellID = %q, want %q", reg.lastCell, tc.wantCellID)
-		}
-	}
+	assertSubscribeRegistrar(t, reg, tc)
 }
 
 // ---------------------------------------------------------------------------

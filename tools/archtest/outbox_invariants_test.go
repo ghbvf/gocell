@@ -1645,10 +1645,11 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 //
 // Test files (_test.go) are excluded by tests=false in
 // typeseval.SharedResolver; vendor/, testdata/ are skipped by go list
-// module-load defaults; generated/ is skipped via
-// typeseval.IsGeneratedRelPath (NOT by go list — `go list ./...` does
-// include generated/contracts/.../v1 packages, so the rule must apply
-// the path filter explicitly. Closes PR445-FU finding F4).
+// module-load defaults; generated/ is excluded at the package level by
+// RunTypedProduction (NOT by go list — `go list ./...` does include
+// generated/contracts/.../v1 packages; the production-package partition
+// drops them, so no per-file path filter is needed here. Closes PR445-FU
+// finding F4).
 //
 // Type-aware via go/types: the scanner detects two literal forms via
 // pkg.TypesInfo:
@@ -1704,19 +1705,18 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 // TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3 anchors
 // the load-vs-skip decision contract for the HandleResult factory rule.
 //
-// Anchor (informational, not a TDD RED): documents that
-// `typeseval.SharedResolver(root, false, nil, "./...")` DOES include
-// generated/ packages, contradicting the comment block above
-// TestOutboxHandleResultFactoryPreferred which claims `go list ./...`
-// default-skips generated/. Wave 3 introduces typeseval.IsGeneratedRelPath
-// + applies it before scanForHandleResultLiterals so the rule no longer
-// scans generated/ paths even though they ARE loaded. The Wave 3 commit
-// also adds a fixture-driven sub-test that exercises the skip with a
-// synthetic generated/-rel path containing a HandleResult literal.
+// Anchor (informational, not a TDD RED): documents that the default resolver
+// `typeseval.SharedResolver(root, false, nil, "./...")` — the one behind plain
+// RunTyped — DOES load generated/ packages. That is exactly why the production
+// rule above uses RunTypedProduction, whose package-level partition drops
+// generated/ so no per-file skip is needed there.
 //
-// This test pins the load behavior so a future packages.Load default
-// change (or a `cfg.BuildFlags=["-tags=nogen"]` style filter at the
-// loader layer) doesn't silently mask the need for IsGeneratedRelPath.
+// The anchor counts the generated/ files a plain RunTyped(./...) loads using
+// Pass.IsGenerated; a non-zero count confirms both that generated/ ARE loaded
+// and that Pass.IsGenerated still recognizes them. If it ever drops to zero, the
+// premise behind RunTypedProduction's generated/ exclusion is invalid and must
+// be re-examined (a packages.Load default change or a tags filter could silently
+// mask it).
 func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
 	t.Parallel()
 
@@ -1726,9 +1726,8 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 			return nil
 		}
 		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if IsGeneratedRelPath(rel) {
-				generatedFiles = append(generatedFiles, rel)
+			if p.IsGenerated(file) {
+				generatedFiles = append(generatedFiles, p.Rel(file))
 			}
 		}
 		return nil
@@ -1738,9 +1737,10 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 		t.Fatalf("anchor invalidated: RunTyped(./...) loaded 0 generated/ files; " +
 			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
 			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
-			"before removing the IsGeneratedRelPath skip")
+			"before changing generated-path handling in Pass.IsGenerated / RunTypedProduction")
 	}
-	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
+	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — RunTypedProduction excludes them; "+
+		"Pass.IsGenerated recognizes them", len(generatedFiles))
 }
 
 // ---------------------------------------------------------------------------

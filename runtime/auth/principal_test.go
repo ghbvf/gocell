@@ -14,6 +14,7 @@ func TestPrincipalKind_String(t *testing.T) {
 		{PrincipalUser, "user"},
 		{PrincipalService, "service"},
 		{PrincipalAnonymous, "anonymous"},
+		{PrincipalDevice, "device"},
 		{PrincipalKind(99), "unknown"},
 	}
 	for _, tc := range tests {

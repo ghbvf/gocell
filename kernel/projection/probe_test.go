@@ -132,7 +132,7 @@ func TestCoordinator_Probes_Names(t *testing.T) {
 	t.Parallel()
 	src := NewMemReplaySource()
 	clk := clockmock.New(time.Now())
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), newMemCursor(src), src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", cursor: newMemCursor(src), replay: src})
 
 	probes, err := c.Probes()
 	if err != nil {
@@ -164,7 +164,7 @@ func TestCoordinator_StoreReady_Healthy(t *testing.T) {
 	cur := newMemCursor(src)
 	store := NewMemCheckpointStore()
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	probes, err := c.Probes()
@@ -188,7 +188,7 @@ func TestCoordinator_StoreReady_HeadError(t *testing.T) {
 	store := NewMemCheckpointStore()
 	cur := &fakeCursor{pos: 1}
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, errSrc)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: errSrc})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	probes, err := c.Probes()
@@ -219,7 +219,7 @@ func TestCoordinator_Lag_Idle(t *testing.T) {
 	cur := newMemCursor(src)
 	store := NewMemCheckpointStore()
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	probes, err := c.Probes()
@@ -247,7 +247,7 @@ func TestCoordinator_Lag_ColdStartHealthy(t *testing.T) {
 	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	probes, err := c.Probes()
@@ -271,7 +271,7 @@ func TestCoordinator_Lag_NegativePending_Warn(t *testing.T) {
 	cur := newMemCursor(src)
 	store := NewMemCheckpointStore()
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	// Set checkpoint > head (anomaly: head=0, checkpoint=5).
@@ -305,7 +305,7 @@ func TestCoordinator_Lag_Unhealthy(t *testing.T) {
 	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	// pending=1, last=farPast → lag > threshold → unhealthy.
@@ -344,7 +344,7 @@ func TestCoordinator_Lag_BelowThreshold(t *testing.T) {
 	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: src})
 	subscribeWithDefaults(t, c, applyNoop)
 
 	c.lastAppliedUnixNano.Store(recentPast.UnixNano())

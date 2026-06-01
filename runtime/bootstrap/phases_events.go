@@ -3,9 +3,9 @@ package bootstrap
 // phases_events.go — event router startup and subscription validation (phase6).
 //
 // Covers:
-//   - phase6StartEventRouter: subscription registration + evtRouter.Run on runCtx
-//   - checkNoSubscriptionsWhenSubscriberNil: fail-fast when cells declared
-//     subscriptions but no subscriber is configured
+//   - phase6StartEventRouter: subscription + projection registration + evtRouter.Run on runCtx
+//   - checkNoEventConsumersWhenSubscriberNil: fail-fast when cells declared
+//     subscriptions or projections but no subscriber is configured
 //   - autoWireEventRouterCollector: creates EventRouterCollector when a real
 //     provider is configured and injects it into Router via WithEventRouterCollector
 //   - autoWireOutboxRejectCollector: creates OutboxRejectCollector and wires
@@ -53,11 +53,13 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 
 	sub := s.sub
 	if sub == nil {
-		return b.checkNoSubscriptionsWhenSubscriberNil(s)
+		// Both plain subscriptions and projections (which become event
+		// subscriptions once drained) need a Subscriber to consume.
+		return b.checkNoEventConsumersWhenSubscriberNil(s)
 	}
-	if !cellSnapshotsHaveSubscriptions(s) {
-		// No subscriptions to drain: skip router build entirely. Avoids
-		// invoking NewSubscriberWithMiddleware (which requires a non-nil
+	if !cellSnapshotsHaveSubscriptions(s) && !cellSnapshotsHaveProjections(s) {
+		// No subscriptions or projections to drain: skip router build entirely.
+		// Avoids invoking NewSubscriberWithMiddleware (which requires a non-nil
 		// ConsumerBase) when the deployment wires a Subscriber for future use
 		// but has no current handlers.
 		return nil
@@ -71,6 +73,9 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return err
 	}
 	if err := b.drainCellSubscriptions(s, evtRouter); err != nil {
+		return err
+	}
+	if err := b.drainCellProjections(runCtx, s, evtRouter); err != nil {
 		return err
 	}
 
@@ -225,10 +230,12 @@ func (b *Bootstrap) startAndRegisterEventRouter(runCtx context.Context, s *phase
 	return nil
 }
 
-// checkNoSubscriptionsWhenSubscriberNil fails fast when any cell registered
-// subscriptions (via reg.Subscribe in Init) but no subscriber is configured.
-// This prevents silently dropping all event handlers when WithSubscriber is omitted.
-func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
+// checkNoEventConsumersWhenSubscriberNil fails fast when any cell registered an
+// event consumer — a subscription (reg.Subscribe) or a projection
+// (reg.RegisterProjection, which becomes an event subscription once drained) —
+// but no subscriber is configured. This prevents silently dropping all event
+// handlers when WithSubscriber is omitted.
+func (b *Bootstrap) checkNoEventConsumersWhenSubscriberNil(s *phaseState) error {
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {
@@ -237,6 +244,11 @@ func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
 		if len(snap.Subscriptions) > 0 {
 			return fmt.Errorf(
 				"bootstrap: cell %s registered subscriptions but no subscriber is configured; "+
+					"add WithSubscriber to bootstrap options", id)
+		}
+		if len(snap.Projections) > 0 {
+			return fmt.Errorf(
+				"bootstrap: cell %s registered a projection but no subscriber is configured; "+
 					"add WithSubscriber to bootstrap options", id)
 		}
 	}
@@ -290,10 +302,16 @@ func (b *Bootstrap) autoWireOutboxRejectCollector() error {
 }
 
 // checkConsumerBaseConfiguredForSubscriptions fails fast when cells registered
-// subscriptions but the ConsumerBase wired via WithConsumerBase is missing or
-// is a zero-value `&ConsumerBase{}` literal. This keeps idempotency and retry
-// lifecycle wiring explicit instead of silently consuming with a misconfigured
-// ConsumerBase.
+// subscriptions or projections but the ConsumerBase wired via WithConsumerBase
+// is missing or is a zero-value `&ConsumerBase{}` literal. This keeps
+// idempotency and retry lifecycle wiring explicit instead of silently consuming
+// with a misconfigured ConsumerBase.
+//
+// Both subscriptions (reg.Subscribe) and projections (reg.RegisterProjection,
+// which become event subscriptions once drained by buildProjectionCoordinators)
+// walk the same ConsumerBase-backed consumption path. A projection-only
+// deployment must not bypass this guard — mirroring checkNoEventConsumersWhenSubscriberNil
+// which already checks both snap.Subscriptions and snap.Projections.
 //
 // N8 (b): the IsConstructed sentinel rejects literals even when they are
 // non-nil — a `&outbox.ConsumerBase{}` would previously slip past the bare
@@ -320,6 +338,19 @@ func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) e
 					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
 					"call outbox.NewConsumerBase to obtain a properly initialized value",
 				id, sub.Spec.Topic, b.consumerBase)
+		}
+		for _, proj := range snap.Projections {
+			if b.consumerBase == nil {
+				return fmt.Errorf(
+					"bootstrap: cell %s registered projection topic %q but no ConsumerBase is configured; "+
+						"projections consume via the same ConsumerBase path as subscriptions — "+
+						"add WithConsumerBase to bootstrap options", id, proj.Spec.Topic)
+			}
+			return fmt.Errorf(
+				"bootstrap: cell %s registered projection topic %q but ConsumerBase (%T) was not constructed via "+
+					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
+					"call outbox.NewConsumerBase to obtain a properly initialized value",
+				id, proj.Spec.Topic, b.consumerBase)
 		}
 	}
 	return nil

@@ -17,6 +17,9 @@ import (
 )
 
 // auditQueryPolicy permits the request when:
+//   - the caller is NOT tenant-bearing (p.TenantID == ""); a tenant-bearing
+//     caller is rejected 403 outright (#1339 F2) because this endpoint has no
+//     tenant isolation yet (epic #1337 PR-2), AND
 //   - actorId query param is empty. List scopes non-admin callers to self and
 //     treats admin callers as global queries.
 //   - OR actorId equals authenticated subject (self-access)
@@ -31,6 +34,17 @@ func auditQueryPolicy(r *http.Request) error {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+	}
+	// Tenant-bearing fail-closed (#1339 F2): this endpoint performs NO tenant
+	// isolation yet (no AuditFilters.TenantID, no tenant-scoped WHERE — landing
+	// in epic #1337 PR-2). Serving a tenant-bearing caller un-isolated results
+	// would leak cross-tenant audit rows, so deny outright until PR-2 adds real
+	// filtering. Denial is independent of admin role / actorId — fail-closed for
+	// every tenant-bearing request.
+	if p.TenantID != "" {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"tenant-scoped audit query is not yet supported",
+			errcode.WithInternal(errcode.InternalAttr("_", "tenant-bearing audit query rejected; tenant-scoped filtering lands in epic #1337 PR-2")))
 	}
 	actorID := r.URL.Query().Get("actorId")
 	if actorID == "" || actorID == p.Subject {
@@ -165,18 +179,16 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // generation time, so SessionID cannot re-enter ResponseDataItem via schema.
 //
 // TenantID is not exposed, and — critically — this is NOT a tenant-isolation
-// security guarantee (#1289, INV-SINGLE-TENANT-ONLY). develop is single-tenant:
-// no producer writes principal.TenantID (the auth middleware never calls
-// ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01 locks the only writer
-// to consumer-side RestoreToContext), so the column is always empty and there is
-// nothing to scope by. The earlier "type-system Hard isolation by absence"
-// framing was an over-claim and has been removed: "no tenantId query parameter"
-// is not the same as "queries are isolated by tenant". This endpoint performs NO
-// tenant scoping whatsoever. Real multi-tenant isolation — a JWT tenant claim
-// producer source, AuditFilters.TenantID, and a tenant-scoped WHERE — is tracked
-// by epic #1296; the appender carries an INV-SINGLE-TENANT-ONLY tripwire
-// (cells/auditcore/internal/appender) that fires loudly if a non-empty tenant
-// ever reaches audit persistence before #1296 wires that filtering.
+// security guarantee (#1289, INV-SINGLE-TENANT-ONLY). As of multi-tenancy PR-1
+// (#1339) the auth bridge DOES write principal.TenantID from the JWT tenant_id
+// claim, so the audit column is no longer guaranteed empty — but this endpoint
+// has no tenant-scoped READ path (no AuditFilters.TenantID, no tenant-scoped
+// WHERE), so auditQueryPolicy fails closed: a tenant-bearing caller is rejected
+// 403 rather than served un-isolated cross-tenant rows (#1339 F2). Real multi-tenant
+// isolation — AuditFilters.TenantID + a tenant-scoped WHERE + tenantId exposure —
+// lands in PR-2/PR-12 of epic #1337. Until then the appender carries the
+// INV-SINGLE-TENANT-ONLY tripwire (cells/auditcore/internal/appender) that fires
+// loudly when a non-empty tenant reaches audit persistence.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

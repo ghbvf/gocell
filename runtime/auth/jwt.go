@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -208,6 +209,11 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	if err := v.checkIssuer(claims); err != nil {
 		return Claims{}, err
 	}
+	// Tenant claim is validated + canonicalized inside parseAndVerify (the decode
+	// boundary where the raw claims map is available, so present-but-non-string
+	// and present-but-empty are distinguishable from absent). By the time
+	// VerifyIntent sees claims, claims.TenantID is either empty (single-tenant
+	// path) or a canonical lowercase UUID — never an unvalidated string.
 	return claims, nil
 }
 
@@ -253,8 +259,9 @@ func stringFromHeader(header map[string]any, key string) string {
 }
 
 // parseAndVerify decodes the token, validates its signature, and returns both
-// the Claims and the raw JOSE header. It is the shared path of Verify and
-// VerifyIntent.
+// the Claims and the raw JOSE header. It is the sole internal path of
+// VerifyIntent (the only public verifier entry point), so the tenant-claim
+// fail-closed gate it arms covers every JWT→Principal path.
 func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims, map[string]any, error) {
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
 		// Inner errors use bare fmt.Errorf because jwt.Parse wraps them
@@ -318,7 +325,46 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return Claims{}, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token claims")
 	}
 
-	return mapClaimsToClaims(mapClaims), token.Header, nil
+	claims := mapClaimsToClaims(mapClaims)
+	if err := validateAndCanonicalizeTenant(mapClaims, &claims); err != nil {
+		return Claims{}, nil, err
+	}
+	return claims, token.Header, nil
+}
+
+// validateAndCanonicalizeTenant fails closed on the tenant_id claim and, on
+// success, rewrites claims.TenantID to its canonical lowercase UUID form. It
+// reads the RAW claims map (not the lossy mapped string) so that the three
+// cases are distinguishable:
+//
+//   - absent           → single-tenant path, claims.TenantID stays empty.
+//   - present non-string → 401 (broken/forged or federated-IdP-misconfigured token).
+//   - present string     → tenant.ParseTenantID rejects empty / non-canonical /
+//     non-UUID values with 401; a valid value is canonicalized.
+//
+// All rejections use the generic unauthorized envelope (enumeration defense);
+// the specific reason lives only in the server-side internal detail.
+func validateAndCanonicalizeTenant(mc jwt.MapClaims, claims *Claims) error {
+	raw, present := mc["tenant_id"]
+	if !present {
+		return nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"invalid token",
+			errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a string")),
+			errcode.WithCategory(errcode.CategoryAuth))
+	}
+	tid, err := tenant.ParseTenantID(s)
+	if err != nil {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"invalid token",
+			errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a valid UUID")),
+			errcode.WithCategory(errcode.CategoryAuth))
+	}
+	claims.TenantID = tid.String()
+	return nil
 }
 
 // JWTIssuer signs JWT tokens with RS256 using the active key from a SigningKeyProvider.
@@ -472,6 +518,12 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	if sid, ok := mc["sid"].(string); ok {
 		c.SessionID = sid
 	}
+	// tenant_id is mapped verbatim here (pure decode, like sub/sid); the
+	// authenticator validates/canonicalizes it via pkg/tenant.ParseTenantID and
+	// fails closed on a malformed value. A non-string tenant_id leaves it empty.
+	if tid, ok := mc["tenant_id"].(string); ok {
+		c.TenantID = tid
+	}
 	// password_reset_required is only written when true; absence means false
 	// (backward compatible with tokens issued before Phase 3.5).
 	if v, ok := mc["password_reset_required"].(bool); ok && v {
@@ -527,6 +579,7 @@ var standardClaims = map[string]struct{}{
 	"exp": {}, "iat": {}, "nbf": {}, "roles": {},
 	tokenUseClaim:             {},
 	"sid":                     {},
+	"tenant_id":               {},
 	"password_reset_required": {},
 	"jti":                     {},
 	// S4d: authz_epoch removed from standardClaims so that any token still

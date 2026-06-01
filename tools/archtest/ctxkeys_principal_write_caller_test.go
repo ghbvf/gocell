@@ -89,17 +89,20 @@ import (
 const ctxkeysPkgPath = "github.com/ghbvf/gocell/pkg/ctxkeys"
 
 // principalSetterAllowlist maps each principal ctx-key setter to the
-// module-relative production files allowed to call it. WithTenantID has only the
-// consumer-restore writer because auth.Principal carries no tenant field on
-// develop (no producer source yet), so middleware.go never writes it.
+// module-relative production files allowed to call it. All four setters share
+// the same two writers: the auth request-boundary bridge (producer) and the
+// consumer-side RestoreToContext.
 //
-// This single-writer WithTenantID entry is the ctx-write half of
-// INV-SINGLE-TENANT-ONLY (#1289): it is intentional-but-latent — the absence of a
-// producer is the single-tenant invariant, not an oversight. It pairs with the
-// persistence-reach tripwire in cells/auditcore/internal/appender (a non-empty
-// principal.TenantID reaching audit persistence logs Error). When multi-tenancy
-// (epic #1296) lands, runtime/auth/middleware.go gains a WithTenantID call and
-// must be added to this allowlist. See ADR 202605281200-1042 §Amendment 2026-05-30.
+// WithTenantID gained its producer writer (runtime/auth/middleware.go) with the
+// multi-tenancy epic (#1337 PR-1): injectPrincipalCtxKeys now writes the JWT
+// "tenant_id" claim. This lifts the former ctx-write half of
+// INV-SINGLE-TENANT-ONLY (#1289) — the single-writer entry was a deliberate
+// placeholder for exactly this moment, not an oversight. The persistence-reach
+// tripwire in cells/auditcore/internal/appender (a non-empty principal.TenantID
+// reaching audit persistence logs Error) intentionally REMAINS until PR-2 wires
+// tenant-scoped audit query filtering; on develop the gocell issuer emits no
+// tenant_id claim, so ctx tenant stays empty and the tripwire is dead.
+// See ADR 202605281200-1042 §Amendment 2026-05-30.
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {
 		"runtime/auth/middleware.go": {}, // producer bridge (JWT + service-token)
@@ -114,7 +117,8 @@ var principalSetterAllowlist = map[string]map[string]struct{}{
 		"kernel/outbox/principal.go": {},
 	},
 	"WithTenantID": {
-		"kernel/outbox/principal.go": {}, // only RestoreToContext (no producer source on develop)
+		"runtime/auth/middleware.go": {}, // producer bridge — JWT tenant_id claim (#1337)
+		"kernel/outbox/principal.go": {}, // consumer-side RestoreToContext
 	},
 }
 

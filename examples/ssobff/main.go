@@ -14,14 +14,16 @@ import (
 	"os"
 
 	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	// Fail-closed sink-side redaction: seal the process-global slog default with
+	// the redacting handler before any work, so every slog.Default() call is
+	// scrubbed (SLOG-HANDLER-SEALED-FUNNEL-01). logger reuses the sealed default.
+	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
+	logger := slog.Default()
 
 	app, err := NewSSOBFFApp(WithSSOBFFLogger(logger))
 	if err != nil {
