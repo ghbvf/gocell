@@ -631,6 +631,10 @@ const (
 	// ErrIdempotencyNoClaimLease signals that Receipt methods were called for a
 	// Claim result that did not acquire a processing lease. Maps to HTTP 409.
 	ErrIdempotencyNoClaimLease Code = "ERR_IDEMPOTENCY_NO_CLAIM_LEASE"
+	// ErrIdempotencyInProgress signals that another request is currently
+	// processing the same idempotency key (ClaimBusy). The client should retry
+	// after the in-flight request completes. Maps to HTTP 409.
+	ErrIdempotencyInProgress Code = "ERR_IDEMPOTENCY_IN_PROGRESS"
 
 	// Metrics error codes (kernel/observability/metrics).
 	//
