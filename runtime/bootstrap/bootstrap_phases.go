@@ -81,6 +81,12 @@ type phaseState struct {
 	// nil when no listeners declared (phase7 noop) or in tests that skip phase7.
 	httpDrain func(context.Context) error
 
+	// set by phase7b; consumed by phase10 stage2 alongside httpDrain (BEFORE LIFO
+	// teardown) so in-flight RPCs drain while backends are still alive — symmetric
+	// with HTTP. Kept distinct from httpDrain for per-transport error attribution
+	// (teardown_grpc_drain). nil when no gRPC listeners declared.
+	grpcDrain func(context.Context) error
+
 	// registeredCheckers guards against duplicate health checker names across
 	// phases. Keyed by checker name; value is struct{}.
 	registeredCheckers map[healthz.ProbeName]struct{}
