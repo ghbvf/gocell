@@ -8,10 +8,11 @@
 //
 // The companion upstream guard is the archtest
 // SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 (tools/archtest/saga_invariants_test.go),
-// which bans hand-written slog.String("instance_id"|"lease_id", …) anywhere in
-// runtime/saga production code outside [InstanceFields] — forcing every
-// per-instance log site through this carrier so any future site is covered
-// automatically.
+// which bans any hand-written log/slog Attr constructor (slog.String / Any /
+// Int / Group / …) or slog.Attr literal carrying key "instance_id" | "lease_id"
+// anywhere in runtime/saga production code outside [InstanceFields] — forcing
+// every per-instance log site through this carrier so any future site is
+// covered automatically.
 package sagalog
 
 import (
