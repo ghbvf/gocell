@@ -66,7 +66,7 @@ func TestHTTPIdempotencyStore_Claim_Acquired(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, rec, receipt, err := store.Claim(ctx, "testns", "key:001", testtime.D5min)
+	state, rec, receipt, err := store.Claim(ctx, "testns", "key:001", "", testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 	assert.Nil(t, rec, "acquired should have nil RecordedResponse")
@@ -89,7 +89,7 @@ func TestHTTPIdempotencyStore_Record_ThenClaim_Done(t *testing.T) {
 	ctx := context.Background()
 
 	// First claim acquires the lease.
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:002", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, "testns", "key:002", "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -110,7 +110,7 @@ func TestHTTPIdempotencyStore_Record_ThenClaim_Done(t *testing.T) {
 	assert.True(t, hasResp, "resp key should exist after Record")
 
 	// Second claim returns Done with the replayed response.
-	state2, rec2, _, err2 := store.Claim(ctx, "testns", "key:002", testtime.D5min)
+	state2, rec2, _, err2 := store.Claim(ctx, "testns", "key:002", "", testtime.D5min)
 	require.NoError(t, err2)
 	assert.Equal(t, idempotency.ClaimDone, state2)
 	require.NotNil(t, rec2, "ClaimDone should return the recorded response")
@@ -135,7 +135,7 @@ func TestHTTPIdempotencyStore_Claim_Busy(t *testing.T) {
 	mock.mu.Unlock()
 
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
-	state, rec, _, err := store.Claim(ctx, "testns", "key:003", testtime.D5min)
+	state, rec, _, err := store.Claim(ctx, "testns", "key:003", "", testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimBusy, state)
 	assert.Nil(t, rec, "ClaimBusy should have nil RecordedResponse")
@@ -150,7 +150,7 @@ func TestHTTPIdempotencyStore_Release(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:004", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, "testns", "key:004", "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
@@ -174,7 +174,7 @@ func TestHTTPIdempotencyStore_Record_StaleToken(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:005", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, "testns", "key:005", "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
@@ -198,7 +198,7 @@ func TestHTTPIdempotencyStore_Release_StaleToken(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, _, receipt, err := store.Claim(ctx, "testns", "key:006", testtime.D5min)
+	state, _, receipt, err := store.Claim(ctx, "testns", "key:006", "", testtime.D5min)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
@@ -221,7 +221,7 @@ func TestHTTPIdempotencyStore_DoubleRecord_Idempotent(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	_, _, receipt, err := store.Claim(ctx, "testns", "key:007", testtime.D5min)
+	_, _, receipt, err := store.Claim(ctx, "testns", "key:007", "", testtime.D5min)
 	require.NoError(t, err)
 
 	resp := buildTestRecordedResponse(t)
@@ -234,7 +234,7 @@ func TestHTTPIdempotencyStore_DoubleRelease_Idempotent(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	_, _, receipt, err := store.Claim(ctx, "testns", "key:008", testtime.D5min)
+	_, _, receipt, err := store.Claim(ctx, "testns", "key:008", "", testtime.D5min)
 	require.NoError(t, err)
 
 	require.NoError(t, receipt.Release(ctx))
@@ -251,7 +251,7 @@ func TestHTTPIdempotencyStore_Claim_EvalError(t *testing.T) {
 	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 	ctx := context.Background()
 
-	state, rec, receipt, err := store.Claim(ctx, "testns", "key:009", testtime.D5min)
+	state, rec, receipt, err := store.Claim(ctx, "testns", "key:009", "", testtime.D5min)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
 	assert.Equal(t, idempotency.ClaimState(0), state)
@@ -270,7 +270,7 @@ func TestNewHTTPIdempotencyStore_ViaClientConstructor(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	state, _, _, err := store.Claim(ctx, "testns", "key:client:001", testtime.D5min)
+	state, _, _, err := store.Claim(ctx, "testns", "key:client:001", "", testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 }
@@ -303,12 +303,14 @@ func mustNewHTTPIdempotencyStoreFromCmdable(t *testing.T, rdb cmdable) *HTTPIdem
 // httpClaimerMockCmdable extends claimerMockCmdable with Eval behavior for
 // the HTTP idempotency Lua scripts (claimResp, record, release).
 //
-// Dispatch by KEYS ordering (suffix-matching convention, consistent with the
-// existing ":done" / ":lease" dispatch in claimerMockCmdable):
+// Dispatch by KEYS count + ordering (suffix-matching convention):
 //
-//   - claimRespScript:  KEYS=[resp_key, lease_key], 2 args → keys[0] ends in ":resp"
-//   - recordScript:     KEYS=[lease_key, resp_key], 3 args → keys[0] ends in ":lease"
-//   - releaseScript:    KEYS=[lease_key],            1 arg  → (inherited, single key)
+//   - claimRespScript: KEYS=[resp_key, lease_key, fp_key], 4 args → keys[0] ends in ":resp"
+//   - recordScript:    KEYS=[lease_key, resp_key, fp_key], 3 args → keys[0] ends in ":lease"
+//   - releaseScript:   KEYS=[lease_key, fp_key],            1 arg → keys[0] ends in ":lease"
+//
+// The mock mirrors real Redis []any shape exactly (NOT bare int64) so the
+// production decodeClaim path is exercised identically under mock and live Redis.
 type httpClaimerMockCmdable struct {
 	claimerMockCmdable
 }
@@ -324,19 +326,26 @@ func newHTTPClaimerMock() *httpClaimerMockCmdable {
 }
 
 // evalClaimResp simulates claimRespScript:
-// KEYS=[resp_key, lease_key], ARGV=[token, leaseMs].
-// The Lua script always returns a TABLE, which real go-redis surfaces as a
-// []any — even for the single-element {1}/{0} replies. The mock mirrors that
-// shape exactly (NOT a bare int64) so the production decodeClaim path is
-// exercised identically under mock and live Redis: []any{2, blob} for Done,
-// []any{1} for Acquired, []any{0} for Busy.
+// KEYS=[resp_key, lease_key, fp_key], ARGV=[token, leaseMs, fingerprint, fpMs].
+//
+// Returns {3} on fingerprint mismatch, {2,blob} for Done, {1} for Acquired, {0} for Busy.
 // Caller MUST hold m.mu.
 func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, args []any) {
-	respKey, leaseKey := keys[0], keys[1]
+	respKey, leaseKey, fpKey := keys[0], keys[1], keys[2]
 	token := toString(args[0])
 	leaseMs := toInt64(args[1])
+	fingerprint := toString(args[2])
+	fpMs := toInt64(args[3])
 
-	// Check resp key first (Done path).
+	// Check fingerprint mismatch first (mirrors Lua script order).
+	if fp, ok := m.store[fpKey]; ok && !fp.expiry.Before(time.Now()) {
+		if fingerprint != "" && fp.value != fingerprint {
+			cmd.SetVal([]any{int64(3)}) // FingerprintMismatch
+			return
+		}
+	}
+
+	// Check resp key (Done path).
 	if entry, ok := m.store[respKey]; ok {
 		if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
 			cmd.SetVal([]any{int64(2), entry.value})
@@ -348,26 +357,33 @@ func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, 
 	// Check lease key (Busy path).
 	if entry, ok := m.store[leaseKey]; ok {
 		if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
-			cmd.SetVal([]any{int64(0)}) // ClaimBusy — Lua {0} → []any
+			cmd.SetVal([]any{int64(0)}) // ClaimBusy
 			return
 		}
 		delete(m.store, leaseKey) // expired
 	}
 
-	// Acquire: SET lease NX.
+	// Acquire: SET lease NX + store fingerprint.
 	m.store[leaseKey] = mockEntry{
 		value:  token,
 		expiry: time.Now().Add(time.Duration(leaseMs) * time.Millisecond),
 	}
-	cmd.SetVal([]any{int64(1)}) // ClaimAcquired — Lua {1} → []any
+	if fingerprint != "" {
+		m.store[fpKey] = mockEntry{
+			value:  fingerprint,
+			expiry: time.Now().Add(time.Duration(fpMs) * time.Millisecond),
+		}
+	}
+	cmd.SetVal([]any{int64(1)}) // ClaimAcquired
 }
 
-// evalRecord simulates recordScript:
-// KEYS=[lease_key, resp_key], ARGV=[token, blob, doneTTLMs].
-// Returns 1 on success, 0 on token mismatch (stale lease).
+// evalRecord simulates httpRecordScript:
+// KEYS=[lease_key, resp_key, fp_key], ARGV=[token, blob, doneTTLMs].
+// On success, fp key TTL is extended to doneTTLMs if it exists.
+// Returns 1 on success, 0 on token mismatch.
 // Caller MUST hold m.mu.
 func (m *httpClaimerMockCmdable) evalRecord(cmd *goredis.Cmd, keys []string, args []any) {
-	leaseKey, respKey := keys[0], keys[1]
+	leaseKey, respKey, fpKey := keys[0], keys[1], keys[2]
 	token := toString(args[0])
 	blob := toString(args[1])
 	doneTTLMs := toInt64(args[2])
@@ -378,6 +394,28 @@ func (m *httpClaimerMockCmdable) evalRecord(cmd *goredis.Cmd, keys []string, arg
 			value:  blob,
 			expiry: time.Now().Add(time.Duration(doneTTLMs) * time.Millisecond),
 		}
+		// Extend fp key TTL if it exists.
+		if fp, ok := m.store[fpKey]; ok {
+			fp.expiry = time.Now().Add(time.Duration(doneTTLMs) * time.Millisecond)
+			m.store[fpKey] = fp
+		}
+		cmd.SetVal(int64(1))
+	} else {
+		cmd.SetVal(int64(0))
+	}
+}
+
+// evalRelease simulates httpReleaseScript:
+// KEYS=[lease_key, fp_key], ARGV=[token].
+// Deletes both lease and fp key on success.
+// Caller MUST hold m.mu.
+func (m *httpClaimerMockCmdable) evalHTTPRelease(cmd *goredis.Cmd, keys []string, args []any) {
+	leaseKey, fpKey := keys[0], keys[1]
+	token := toString(args[0])
+
+	if entry, ok := m.store[leaseKey]; ok && entry.value == token {
+		delete(m.store, leaseKey)
+		delete(m.store, fpKey)
 		cmd.SetVal(int64(1))
 	} else {
 		cmd.SetVal(int64(0))
@@ -387,9 +425,9 @@ func (m *httpClaimerMockCmdable) evalRecord(cmd *goredis.Cmd, keys []string, arg
 // Eval overrides the embedded claimerMockCmdable to handle the HTTP
 // idempotency Lua scripts. Dispatch is by KEYS count + suffix matching:
 //
-//   - 2 keys, 2 args, keys[0] ends in ":resp"   → claimRespScript
-//   - 2 keys, 3 args, keys[0] ends in ":lease"  → recordScript
-//   - 1 key,  1 arg                              → releaseScript
+//   - 3 keys, 4 args, keys[0] ends in ":resp"   → claimRespScript
+//   - 3 keys, 3 args, keys[0] ends in ":lease"  → recordScript
+//   - 2 keys, 1 arg,  keys[0] ends in ":lease"  → httpReleaseScript
 func (m *httpClaimerMockCmdable) Eval(_ context.Context, _ string, keys []string, args ...any) *goredis.Cmd {
 	cmd := goredis.NewCmd(context.Background())
 	if m.evalErr != nil {
@@ -400,15 +438,15 @@ func (m *httpClaimerMockCmdable) Eval(_ context.Context, _ string, keys []string
 	defer m.mu.Unlock()
 
 	switch {
-	// claimRespScript: 2 keys, 2 args, first key ends in ":resp"
-	case len(keys) == 2 && len(args) == 2 && strings.HasSuffix(keys[0], ":resp"):
+	// claimRespScript: 3 keys, 4 args, first key ends in ":resp"
+	case len(keys) == 3 && len(args) == 4 && strings.HasSuffix(keys[0], ":resp"):
 		m.evalClaimResp(cmd, keys, args)
-	// recordScript: 2 keys, 3 args, first key ends in ":lease"
-	case len(keys) == 2 && len(args) == 3 && strings.HasSuffix(keys[0], ":lease"):
+	// recordScript: 3 keys, 3 args, first key ends in ":lease"
+	case len(keys) == 3 && len(args) == 3 && strings.HasSuffix(keys[0], ":lease"):
 		m.evalRecord(cmd, keys, args)
-	// releaseScript: 1 key, 1 arg (inherited behavior)
-	case len(keys) == 1 && len(args) == 1:
-		m.evalRelease(cmd, keys, args)
+	// httpReleaseScript: 2 keys, 1 arg, first key ends in ":lease"
+	case len(keys) == 2 && len(args) == 1 && strings.HasSuffix(keys[0], ":lease"):
+		m.evalHTTPRelease(cmd, keys, args)
 	default:
 		cmd.SetVal(int64(0))
 	}

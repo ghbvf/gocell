@@ -36,6 +36,9 @@ type memEntry struct {
 	recorded *RecordedResponse
 	// doneExpiry is when the Done entry should be evicted.
 	doneExpiry time.Time
+	// fingerprint is the hex(sha256(body)) captured at acquire time.
+	// Used to detect key reuse with a different request body.
+	fingerprint string
 }
 
 // NewMemStore creates a new MemStore using the given clock.
@@ -50,7 +53,7 @@ func NewMemStore(clk clock.Clock) *MemStore {
 }
 
 // Claim implements Store.
-func (ms *MemStore) Claim(ctx context.Context, ns, key string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) { //nolint:lll // Store.Claim signature mirrors the interface; cannot shorten without breaking the interface contract
+func (ms *MemStore) Claim(ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) { //nolint:lll // Store.Claim signature mirrors the interface; cannot shorten without breaking the interface contract
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
@@ -58,14 +61,14 @@ func (ms *MemStore) Claim(ctx context.Context, ns, key string, leaseTTL time.Dur
 	now := ms.clk.Now()
 
 	if e, ok := ms.entries[composed]; ok {
-		// Done state: if not expired, replay.
+		if err := checkFingerprintEntry(e, fingerprint, now); err != nil {
+			return 0, nil, nil, err
+		}
 		if e.recorded != nil && now.Before(e.doneExpiry) {
 			return idempotency.ClaimDone, e.recorded, noopReceipt{}, nil
 		}
-		// In-flight lease: if not expired, busy.
-		// nil *RecordedResponse here is intentional per Store.Claim contract (ClaimBusy has no response).
 		if e.leaseToken != "" && now.Before(e.leaseExpiry) {
-			// nil *RecordedResponse per Store.Claim contract: ClaimBusy has no response to replay.
+			// nil *RecordedResponse per Store.Claim contract: ClaimBusy has no response.
 			return idempotency.ClaimBusy, nil, noopReceipt{}, nil //nolint:nilnil // by design
 		}
 		// Expired entry — evict and fall through to fresh acquisition.
@@ -76,18 +79,34 @@ func (ms *MemStore) Claim(ctx context.Context, ns, key string, leaseTTL time.Dur
 	if err != nil {
 		return idempotency.ClaimBusy, nil, noopReceipt{}, fmt.Errorf("idempotency.MemStore: generate token: %w", err)
 	}
-
 	ms.entries[composed] = &memEntry{
 		leaseToken:  token,
 		leaseExpiry: now.Add(leaseTTL),
+		fingerprint: fingerprint,
 	}
-	// nil *RecordedResponse is intentional per Store.Claim contract (ClaimAcquired has no prior response).
 	// nil *RecordedResponse per Store.Claim contract: ClaimAcquired has no prior response.
 	return idempotency.ClaimAcquired, nil, &memReceipt{ //nolint:nilnil // by design
 		store:    ms,
 		composed: composed,
 		token:    token,
 	}, nil
+}
+
+// checkFingerprintEntry returns ErrFingerprintMismatch if the existing entry has
+// a stored fingerprint that differs from the incoming one, and the entry is still
+// active (not expired). Returns nil if fingerprints match or either is empty.
+func checkFingerprintEntry(e *memEntry, fingerprint string, now time.Time) error {
+	active := (e.recorded != nil && now.Before(e.doneExpiry)) ||
+		(e.leaseToken != "" && now.Before(e.leaseExpiry))
+	if active && fpMismatch(e.fingerprint, fingerprint) {
+		return fmt.Errorf("idempotency.MemStore: %w", ErrFingerprintMismatch)
+	}
+	return nil
+}
+
+// fpMismatch reports whether two non-empty fingerprints differ.
+func fpMismatch(stored, incoming string) bool {
+	return stored != "" && incoming != "" && stored != incoming
 }
 
 func (ms *MemStore) generateToken() (string, error) {
@@ -112,6 +131,8 @@ type memReceipt struct {
 
 // Record persists resp and transitions the entry to Done state.
 // A stale receipt (token no longer matches, or already settled) returns ErrLeaseExpired.
+// The fingerprint from the lease entry is preserved in the Done entry so that
+// future Claim calls can still validate the fingerprint.
 func (r *memReceipt) Record(ctx context.Context, resp *RecordedResponse, doneTTL time.Duration) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -133,8 +154,9 @@ func (r *memReceipt) Record(ctx context.Context, resp *RecordedResponse, doneTTL
 	hdr := resp.Header()
 	stored := newRecordedResponse(r.store.clk, resp.Status(), body, hdr)
 	r.store.entries[r.composed] = &memEntry{
-		recorded:   &stored,
-		doneExpiry: now.Add(doneTTL),
+		recorded:    &stored,
+		doneExpiry:  now.Add(doneTTL),
+		fingerprint: e.fingerprint, // preserve fingerprint for future replay validation
 	}
 	return nil
 }

@@ -36,7 +36,7 @@ func TestMemStore_FirstClaim_Acquired(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	ms := NewMemStore(clk)
 
-	state, rec, receipt, err := ms.Claim(context.Background(), "tenant1", "user1:idem-key-1", idempotency.DefaultLeaseTTL)
+	state, rec, receipt, err := ms.Claim(context.Background(), "tenant1", "user1:idem-key-1", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestMemStore_RecordThenClaimDone(t *testing.T) {
 	ms := NewMemStore(clk)
 
 	ctx := context.Background()
-	state, _, receipt, err := ms.Claim(ctx, "tenant1", "user1:key2", idempotency.DefaultLeaseTTL)
+	state, _, receipt, err := ms.Claim(ctx, "tenant1", "user1:key2", "", idempotency.DefaultLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("first claim failed: state=%v err=%v", state, err)
 	}
@@ -67,7 +67,7 @@ func TestMemStore_RecordThenClaimDone(t *testing.T) {
 	}
 
 	// Second claim should return ClaimDone with the stored response.
-	state2, rec2, _, err2 := ms.Claim(ctx, "tenant1", "user1:key2", idempotency.DefaultLeaseTTL)
+	state2, rec2, _, err2 := ms.Claim(ctx, "tenant1", "user1:key2", "", idempotency.DefaultLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("second claim error: %v", err2)
 	}
@@ -88,13 +88,13 @@ func TestMemStore_ConcurrentLease_Busy(t *testing.T) {
 
 	ctx := context.Background()
 	// Acquire lease for the key.
-	state, _, _, err := ms.Claim(ctx, "tenant1", "user1:key3", idempotency.DefaultLeaseTTL)
+	state, _, _, err := ms.Claim(ctx, "tenant1", "user1:key3", "", idempotency.DefaultLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("first claim: %v %v", state, err)
 	}
 
 	// Another claim for the same key should be Busy.
-	state2, _, _, err2 := ms.Claim(ctx, "tenant1", "user1:key3", idempotency.DefaultLeaseTTL)
+	state2, _, _, err2 := ms.Claim(ctx, "tenant1", "user1:key3", "", idempotency.DefaultLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("second claim error: %v", err2)
 	}
@@ -108,7 +108,7 @@ func TestMemStore_Release_Reopens(t *testing.T) {
 	ms := NewMemStore(clk)
 
 	ctx := context.Background()
-	_, _, receipt, err := ms.Claim(ctx, "t1", "u1:key4", idempotency.DefaultLeaseTTL)
+	_, _, receipt, err := ms.Claim(ctx, "t1", "u1:key4", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestMemStore_Release_Reopens(t *testing.T) {
 	}
 
 	// After release, the key should be re-claimable.
-	state2, _, _, err2 := ms.Claim(ctx, "t1", "u1:key4", idempotency.DefaultLeaseTTL)
+	state2, _, _, err2 := ms.Claim(ctx, "t1", "u1:key4", "", idempotency.DefaultLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("re-claim error: %v", err2)
 	}
@@ -133,7 +133,7 @@ func TestMemStore_LeaseTTLExpiry(t *testing.T) {
 	ms := NewMemStore(clk)
 
 	ctx := context.Background()
-	_, _, _, err := ms.Claim(ctx, "t1", "u1:key5", idempotency.DefaultLeaseTTL)
+	_, _, _, err := ms.Claim(ctx, "t1", "u1:key5", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestMemStore_LeaseTTLExpiry(t *testing.T) {
 	clk.Advance(testPastLeaseTTL)
 
 	// Key should now be re-claimable.
-	state2, _, _, err2 := ms.Claim(ctx, "t1", "u1:key5", idempotency.DefaultLeaseTTL)
+	state2, _, _, err2 := ms.Claim(ctx, "t1", "u1:key5", "", idempotency.DefaultLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("re-claim after expiry: %v", err2)
 	}
@@ -157,7 +157,7 @@ func TestMemStore_DoneTTLExpiry(t *testing.T) {
 	ms := NewMemStore(clk)
 
 	ctx := context.Background()
-	_, _, receipt, err := ms.Claim(ctx, "t1", "u1:key6", idempotency.DefaultLeaseTTL)
+	_, _, receipt, err := ms.Claim(ctx, "t1", "u1:key6", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestMemStore_DoneTTLExpiry(t *testing.T) {
 	clk.Advance(testPastDoneTTL)
 
 	// Key should be re-claimable.
-	state2, rec2, _, err2 := ms.Claim(ctx, "t1", "u1:key6", idempotency.DefaultLeaseTTL)
+	state2, rec2, _, err2 := ms.Claim(ctx, "t1", "u1:key6", "", idempotency.DefaultLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("re-claim after done expiry: %v", err2)
 	}
@@ -188,7 +188,7 @@ func TestMemStore_StaleTokenRecordRejected(t *testing.T) {
 	ms := NewMemStore(clk)
 
 	ctx := context.Background()
-	_, _, receipt1, err := ms.Claim(ctx, "t1", "u1:key7", idempotency.DefaultLeaseTTL)
+	_, _, receipt1, err := ms.Claim(ctx, "t1", "u1:key7", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestMemStore_StaleTokenRecordRejected(t *testing.T) {
 	}
 
 	// Re-claim the key (new lease).
-	_, _, _, _ = ms.Claim(ctx, "t1", "u1:key7", idempotency.DefaultLeaseTTL)
+	_, _, _, _ = ms.Claim(ctx, "t1", "u1:key7", "", idempotency.DefaultLeaseTTL)
 
 	// Try to record using the stale receipt from the first claim.
 	resp := newTestRecordedResponse(t)
@@ -217,7 +217,7 @@ func TestMemStore_DoubleReleaseIsNoOp(t *testing.T) {
 	ms := NewMemStore(clk)
 
 	ctx := context.Background()
-	_, _, receipt1, err := ms.Claim(ctx, "t1", "u1:key8", idempotency.DefaultLeaseTTL)
+	_, _, receipt1, err := ms.Claim(ctx, "t1", "u1:key8", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
@@ -241,13 +241,13 @@ func TestMemStore_NamespaceIsolation(t *testing.T) {
 
 	ctx := context.Background()
 	// Claim in namespace "t1".
-	_, _, _, err := ms.Claim(ctx, "t1", "u1:key", idempotency.DefaultLeaseTTL)
+	_, _, _, err := ms.Claim(ctx, "t1", "u1:key", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("claim ns=t1: %v", err)
 	}
 
 	// Same key in a different namespace must be independent.
-	state2, _, _, err2 := ms.Claim(ctx, "t2", "u1:key", idempotency.DefaultLeaseTTL)
+	state2, _, _, err2 := ms.Claim(ctx, "t2", "u1:key", "", idempotency.DefaultLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("claim ns=t2: %v", err2)
 	}
@@ -268,7 +268,7 @@ func TestMemStore_ConcurrentClaims_OnlyOnceAcquired(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
-			state, _, _, _ := ms.Claim(ctx, "t1", "u1:concurrent-key", idempotency.DefaultLeaseTTL)
+			state, _, _, _ := ms.Claim(ctx, "t1", "u1:concurrent-key", "", idempotency.DefaultLeaseTTL)
 			results <- state
 		}()
 	}
@@ -294,10 +294,10 @@ func TestMemStore_NonAcquiredReceiptErrors(t *testing.T) {
 
 	ctx := context.Background()
 	// First claim acquires.
-	_, _, _, _ = ms.Claim(ctx, "t1", "u1:key9", idempotency.DefaultLeaseTTL)
+	_, _, _, _ = ms.Claim(ctx, "t1", "u1:key9", "", idempotency.DefaultLeaseTTL)
 
 	// Second claim is Busy — returns a noopReceipt.
-	_, _, busyReceipt, err := ms.Claim(ctx, "t1", "u1:key9", idempotency.DefaultLeaseTTL)
+	_, _, busyReceipt, err := ms.Claim(ctx, "t1", "u1:key9", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

@@ -200,8 +200,8 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 
 	ctx := context.Background()
 	// Pre-seed a lease directly via MemStore to simulate in-flight request.
-	// Key composed by Middleware: subject + "\x00" + idemKey = "user-b\x00in-flight".
-	_, _, _, err := ms.Claim(ctx, "tenant1", "user-b\x00in-flight", idempotency.DefaultLeaseTTL)
+	// Key composed by Middleware: subject + "\x00" + method + "\x00" + path + "\x00" + idemKey.
+	_, _, _, err := ms.Claim(ctx, "tenant1", "user-b\x00POST\x00/\x00in-flight", "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("pre-seed claim: %v", err)
 	}
@@ -222,10 +222,11 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 	if retryAfter == "" {
 		t.Error("Retry-After header must be set on 409")
 	}
-	// Default leaseTTL is idempotency.DefaultLeaseTTL (5min = 300s).
-	wantRetryAfter := "300"
+	// Retry-After is now a small fixed hint (retryAfterHintSeconds = 5s), not the
+	// full lease TTL. Clients should retry soon; the hint avoids a 5-min wait.
+	wantRetryAfter := "5"
 	if retryAfter != wantRetryAfter {
-		t.Errorf("Retry-After: got %q, want %q (lease TTL seconds)", retryAfter, wantRetryAfter)
+		t.Errorf("Retry-After: got %q, want %q (small fixed hint, not lease TTL)", retryAfter, wantRetryAfter)
 	}
 }
 
@@ -234,7 +235,7 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 // failingStore always returns an error from Claim.
 type failingStore struct{}
 
-func (failingStore) Claim(_ context.Context, _, _ string, _ time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
+func (failingStore) Claim(_ context.Context, _, _, _ string, _ time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
 	return idempotency.ClaimAcquired, nil, nil, errors.New("store unavailable")
 }
 
@@ -638,7 +639,8 @@ func TestMiddleware_RetryAfterReflectsLeaseTTL(t *testing.T) {
 
 	ctx := context.Background()
 	// Pre-seed a lease with the custom TTL to simulate in-flight request.
-	_, _, _, err := ms.Claim(ctx, "tenant1", "user-m\x00retry-after-key", testLeaseTTL2m)
+	// Key composed by Middleware: subject + "\x00" + method + "\x00" + path + "\x00" + idemKey.
+	_, _, _, err := ms.Claim(ctx, "tenant1", "user-m\x00POST\x00/\x00retry-after-key", "", testLeaseTTL2m)
 	if err != nil {
 		t.Fatalf("pre-seed claim: %v", err)
 	}
@@ -651,11 +653,12 @@ func TestMiddleware_RetryAfterReflectsLeaseTTL(t *testing.T) {
 	if rr.Code != 409 {
 		t.Errorf("code: got %d, want 409", rr.Code)
 	}
-	// Retry-After should be leaseTTL in seconds = 120s.
-	want := "120"
+	// Retry-After is now a small fixed hint (retryAfterHintSeconds = 5s) regardless
+	// of the configured lease TTL. This avoids long waits for clients.
+	want := "5"
 	got := rr.Header().Get("Retry-After")
 	if got != want {
-		t.Errorf("Retry-After: got %q, want %q (= leaseTTL seconds)", got, want)
+		t.Errorf("Retry-After: got %q, want %q (small fixed hint, not leaseTTL)", got, want)
 	}
 }
 

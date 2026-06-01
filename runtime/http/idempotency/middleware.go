@@ -1,11 +1,17 @@
 package idempotency
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
+	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -51,6 +57,29 @@ const (
 	// header value exceeds maxIdempotencyKeyLen bytes.
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgKeyTooLong = "Idempotency-Key header value exceeds maximum length"
+
+	// msgKeyInvalidChars is the client-visible message when the Idempotency-Key
+	// header value contains characters that are invalid (curly braces or
+	// non-printable ASCII). Rejected at middleware edge (before any store I/O)
+	// to prevent Redis hashtag confusion and avoid opaque store errors.
+	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
+	msgKeyInvalidChars = "Idempotency-Key header value contains invalid characters"
+
+	// msgKeyReused is the client-visible message when the same Idempotency-Key
+	// is presented with a different request body (fingerprint mismatch).
+	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
+	msgKeyReused = "idempotency key reused with a different request body"
+
+	// retryAfterHintSeconds is the Retry-After header value sent on 409
+	// ClaimBusy responses. A small hint (5 s) is better than the full lease
+	// TTL (300 s default) because clients should retry soon; the lease may
+	// expire or the in-flight request may complete well before TTL.
+	retryAfterHintSeconds = 5
+
+	// keyHashPrefixLen is the number of hex chars (bytes * 2) to include in
+	// the idempotency_key_hash log attribute. 12 hex chars = 48 bits of the
+	// SHA-256 digest, sufficient for correlation without exposing the raw key.
+	keyHashPrefixLen = 12
 )
 
 // sensitiveResponseHeaders is a case-insensitive set of response header names
@@ -160,11 +189,16 @@ func WithDoneTTL(d time.Duration) Option {
 // If either is absent, or if the Principal is not a user principal, the
 // request passes through without idempotency tracking.
 //
-// Namespace composition: ns = tenantID (or "_notenant" when empty),
-// key = subject + "\x00" + Idempotency-Key header value.
-// The NUL separator (\x00) prevents collision when one principal's Subject
-// is a prefix of another combined with the key (e.g. subject="alice",
-// key="x" vs subject="alic", key="e:x").
+// Key composition: ns = tenantID (or "_notenant" when empty),
+// key = method + "\x00" + path + "\x00" + subject + "\x00" + Idempotency-Key header value.
+// Including method+path in the key means the same client-supplied header value
+// is independent per endpoint — a key for POST /orders does NOT collide with
+// POST /payments. (Stripe / IETF idempotency-key draft §3 aligned.)
+//
+// Body fingerprinting: the request body is read, SHA-256 hashed (hex), and
+// passed as the Store fingerprint. BodyLimit middleware MUST run before this
+// middleware so r.Body is already size-bounded. Fingerprint mismatch (same key,
+// different body) returns 409 ErrIdempotencyKeyReused.
 //
 // clk must be non-nil; clock.MustHaveClock panics on nil.
 // store must be non-nil; a nil store causes a panic with panicregister.Approved
@@ -192,20 +226,56 @@ func Middleware(clk clock.Clock, store Store, opts ...Option) func(http.Handler)
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Validate Idempotency-Key length before doing any store I/O.
 			idemKey := r.Header.Get(headerIdempotencyKey)
-			if len(idemKey) > maxIdempotencyKeyLen {
-				httputil.WriteError(r.Context(), w, errcode.New(
-					errcode.KindInvalid,
-					errcode.ErrValidationFailed,
-					msgKeyTooLong,
-					errcode.WithDetails(errcode.PublicInt("maxLen", maxIdempotencyKeyLen)),
-				))
+			if !validateIdempotencyKey(r.Context(), w, idemKey) {
 				return
 			}
-			handleWithIdempotency(w, r, next, p, idemKey, clk, store, cfg)
+			fp, ok := readBodyFingerprint(r.Context(), w, r)
+			if !ok {
+				return
+			}
+			handleWithIdempotency(w, r, next, p, idemKey, fp, clk, store, cfg)
 		})
 	}
+}
+
+// validateIdempotencyKey validates the key length and character set, writing
+// the appropriate error response and returning false if invalid.
+func validateIdempotencyKey(ctx context.Context, w http.ResponseWriter, idemKey string) bool {
+	if len(idemKey) > maxIdempotencyKeyLen {
+		httputil.WriteError(ctx, w, errcode.New(
+			errcode.KindInvalid,
+			errcode.ErrValidationFailed,
+			msgKeyTooLong,
+			errcode.WithDetails(errcode.PublicInt("maxLen", maxIdempotencyKeyLen)),
+		))
+		return false
+	}
+	if !isValidIdempotencyKey(idemKey) {
+		httputil.WriteError(ctx, w, errcode.New(
+			errcode.KindInvalid,
+			errcode.ErrValidationFailed,
+			msgKeyInvalidChars,
+		))
+		return false
+	}
+	return true
+}
+
+// readBodyFingerprint reads the request body, restores it for the handler,
+// and returns the hex(sha256(body)) fingerprint. Returns ("", false) on error.
+func readBodyFingerprint(ctx context.Context, w http.ResponseWriter, r *http.Request) (string, bool) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		httputil.WriteError(ctx, w, errcode.New(
+			errcode.KindInternal,
+			errcode.ErrInternal,
+			msgStoreUnavailable,
+		))
+		return "", false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return computeFingerprint(body), true
 }
 
 // shouldIntercept returns true when the request method and Idempotency-Key
@@ -221,18 +291,33 @@ func handleWithIdempotency(
 	next http.Handler,
 	p *auth.Principal,
 	idemKey string,
+	fingerprint string,
 	clk clock.Clock,
 	store Store,
 	cfg middlewareConfig,
 ) {
-	ns, key := buildNamespaceKey(p, idemKey)
+	ns, key := buildNamespaceKey(p, r.Method, r.URL.Path, idemKey)
 	ctx := r.Context()
+	keyHash := keyShortHash(idemKey)
 
-	state, rec, receipt, err := store.Claim(ctx, ns, key, cfg.leaseTTL)
+	state, rec, receipt, err := store.Claim(ctx, ns, key, fingerprint, cfg.leaseTTL)
 	if err != nil {
+		if errors.Is(err, ErrFingerprintMismatch) {
+			slog.WarnContext(ctx, "idempotency: fingerprint mismatch — key reused with different body",
+				"idempotency_key_hash", keyHash,
+				"subject", p.Subject,
+				"tenant_id", ns,
+			)
+			httputil.WriteError(ctx, w, errcode.New(
+				errcode.KindConflict,
+				errcode.ErrIdempotencyKeyReused,
+				msgKeyReused,
+			))
+			return
+		}
 		slog.ErrorContext(ctx, "idempotency: store claim failed",
 			"err", err,
-			"idempotency_key", idemKey,
+			"idempotency_key_hash", keyHash,
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
@@ -247,7 +332,7 @@ func handleWithIdempotency(
 	switch state {
 	case idempotency.ClaimDone:
 		slog.DebugContext(ctx, "idempotency: replay hit",
-			"idempotency_key", idemKey,
+			"idempotency_key_hash", keyHash,
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
@@ -255,11 +340,13 @@ func handleWithIdempotency(
 
 	case idempotency.ClaimBusy:
 		slog.WarnContext(ctx, "idempotency: key in progress",
-			"idempotency_key", idemKey,
+			"idempotency_key_hash", keyHash,
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
-		w.Header().Set("Retry-After", strconv.Itoa(int(cfg.leaseTTL.Seconds())))
+		// Use a small fixed hint (retryAfterHintSeconds) rather than the full
+		// leaseTTL (300 s default) so clients retry soon without a long wait.
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterHintSeconds))
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindConflict,
 			errcode.ErrIdempotencyInProgress,
@@ -267,7 +354,7 @@ func handleWithIdempotency(
 		))
 
 	default: // ClaimAcquired
-		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, idemKey, ns)
+		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns)
 	}
 }
 
@@ -287,11 +374,16 @@ func extractIdentity(ctx context.Context) (*auth.Principal, bool) {
 	return p, true
 }
 
-// buildNamespaceKey encodes the isolation tuple (tenantID, userID, idemKey)
+// buildNamespaceKey encodes the isolation tuple (tenantID, method, path, subject, idemKey)
 // into the (ns, key) pair expected by Store.Claim.
 //
 // ns  = tenantID, or noTenantSentinel when empty.
-// key = subject + "\x00" + idemKey
+// key = subject + "\x00" + method + "\x00" + path + "\x00" + idemKey
+//
+// Including method+path in the key means the same Idempotency-Key header value
+// is independent per endpoint — e.g. POST /orders and POST /payments with the
+// same header value are stored as separate idempotency records. This is aligned
+// with Stripe's idempotency design and IETF idempotency-key draft §3.
 //
 // The NUL byte (\x00) separator prevents key-space collision: it cannot appear
 // in HTTP header values (RFC 7230 §3.2.6 limits field-value to VCHAR and obs-text,
@@ -299,15 +391,15 @@ func extractIdentity(ctx context.Context) (*auth.Principal, bool) {
 // from subject="alice",key="x". A colon separator (:) would collide on those inputs.
 //
 // Using tenantID as the namespace means the Redis key for a cluster-aware
-// adapter would be "{<tenantID>}:<subject>\x00<idemKey>", which colocates all
-// keys for the same tenant on the same hash slot — good for single-slot
-// transactions.
-func buildNamespaceKey(p *auth.Principal, idemKey string) (ns, key string) {
+// adapter would be "{<tenantID>}:<subject>\x00<method>\x00<path>\x00<idemKey>",
+// which colocates all keys for the same tenant on the same hash slot — good for
+// single-slot transactions.
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
 	ns = p.TenantID
 	if ns == "" {
 		ns = noTenantSentinel
 	}
-	key = p.Subject + "\x00" + idemKey
+	key = p.Subject + "\x00" + method + "\x00" + path + "\x00" + idemKey
 	return
 }
 
@@ -340,7 +432,7 @@ func recordOrRelease(
 	clk clock.Clock,
 	receipt Receipt,
 	cfg middlewareConfig,
-	idemKey string,
+	keyHash string,
 	ns string,
 ) {
 	bw := newBufferingWriter(w, cfg.maxBodyBytes)
@@ -350,7 +442,14 @@ func recordOrRelease(
 		if !recorded {
 			// Use context.WithoutCancel so the Release reaches the store even
 			// if the request context was canceled during handler execution.
-			_ = receipt.Release(context.WithoutCancel(ctx))
+			// The lease will expire via TTL regardless; log at Warn on error.
+			if err := receipt.Release(context.WithoutCancel(ctx)); err != nil {
+				slog.WarnContext(ctx, "idempotency: lease release failed (will expire via TTL)",
+					"err", err,
+					"idempotency_key_hash", keyHash,
+					"tenant_id", ns,
+				)
+			}
 		}
 	}()
 
@@ -364,7 +463,7 @@ func recordOrRelease(
 		if err := receipt.Record(context.WithoutCancel(ctx), &resp, cfg.doneTTL); err != nil {
 			slog.ErrorContext(ctx, "idempotency: receipt record failed",
 				"err", err,
-				"idempotency_key", idemKey,
+				"idempotency_key_hash", keyHash,
 				"tenant_id", ns,
 			)
 			// Fall through to Release via defer.
@@ -374,7 +473,7 @@ func recordOrRelease(
 	} else if bw.committed() && bw.isOversized() {
 		slog.WarnContext(ctx, "idempotency: response body oversized, not recorded",
 			"max_body_bytes", cfg.maxBodyBytes,
-			"idempotency_key", idemKey,
+			"idempotency_key_hash", keyHash,
 			"tenant_id", ns,
 		)
 	}
@@ -399,4 +498,34 @@ func filterSensitiveHeaders(h http.Header) http.Header {
 // can fix).
 func shouldRecord(status int) bool {
 	return status >= 200 && status < 400
+}
+
+// computeFingerprint returns hex(sha256(body)). An empty body produces the
+// sha256 of the empty byte slice (deterministic).
+func computeFingerprint(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// keyShortHash returns the first keyHashPrefixLen hex chars of sha256(key).
+// Used in structured log attributes instead of the raw key value to avoid
+// leaking client-supplied opaque tokens into logs.
+func keyShortHash(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:keyHashPrefixLen]
+}
+
+// isValidIdempotencyKey returns true if the key contains only printable ASCII
+// characters and does not contain '{' or '}' (Redis hashtag chars that would
+// confuse the cluster routing logic in the Redis adapter).
+func isValidIdempotencyKey(key string) bool {
+	for _, c := range key {
+		if c == '{' || c == '}' {
+			return false
+		}
+		if c > unicode.MaxASCII || !unicode.IsPrint(c) {
+			return false
+		}
+	}
+	return true
 }

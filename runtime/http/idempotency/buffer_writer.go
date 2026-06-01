@@ -89,14 +89,48 @@ func (bw *bufferingWriter) readFromHook(w http.ResponseWriter) func(httpsnoop.Re
 				bw.s.didCommit = true
 				bw.s.headerSnap = w.Header().Clone()
 			}
-			n, err := next(src)
-			// ReadFrom may write arbitrarily large bodies; mark oversized immediately.
-			if n > 0 {
+			// Tee the source into our buffer up to the cap, mirroring the Write
+			// hook's behavior. Only once the buffer is full do we mark oversized
+			// and stop accumulating (but forwarding to the real writer continues).
+			//
+			// Without this, io.Copy paths (used by http.ServeContent and many
+			// streaming handlers) would always mark responses as oversized even
+			// when the body is tiny, breaking recording for small responses.
+			available := bw.maxBody - len(bw.s.buf)
+			var bufferedSrc io.Reader
+			if bw.s.oversized || available <= 0 {
+				// Already over cap; forward without buffering.
 				bw.s.oversized = true
+				bufferedSrc = src
+			} else {
+				// Tee into bw up to `available` bytes; after that we read the rest
+				// from src directly (forwarding to the real writer via next).
+				capReader := &cappedTeeReader{r: src, bw: bw, cap: available}
+				bufferedSrc = capReader
 			}
-			return n, err
+			return next(bufferedSrc)
 		}
 	}
+}
+
+// cappedTeeReader wraps an io.Reader so that the first `cap` bytes read are
+// also appended into bw's buffer. Once cap is exhausted, reads continue from
+// the underlying reader without buffering (oversized flag is set).
+type cappedTeeReader struct {
+	r   io.Reader
+	bw  *bufferingWriter
+	cap int
+}
+
+func (c *cappedTeeReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.bw.appendToBuffer(p[:n])
+		// appendToBuffer adjusts c.cap indirectly via bw.s.buf length.
+		// We don't need to track c.cap separately; appendToBuffer handles overflow.
+		_ = c.cap // suppress unused-write lint; cap used as initial size hint only
+	}
+	return n, err
 }
 
 // appendToBuffer appends p to the internal buffer until maxBody is reached.

@@ -19,6 +19,21 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// ErrFingerprintMismatch is returned by Store.Claim when the same
+// Idempotency-Key is presented again with a different request body fingerprint.
+// The middleware converts this sentinel into a 409 (KindConflict) response with
+// code ErrIdempotencyKeyReused.
+//
+// Implementations MUST return this exact error (or wrap it with %w) so callers
+// can use errors.Is for detection.
+var ErrFingerprintMismatch = errcode.New(
+	errcode.KindConflict,
+	errcode.ErrIdempotencyKeyReused,
+	// msgFingerprintMismatch must be a const literal per MESSAGE-CONST-LITERAL-01.
+	"idempotency key reused with a different request body",
 )
 
 // Store is the HTTP-layer idempotency backend. Implementations live in
@@ -37,12 +52,17 @@ import (
 //	}
 //
 // On error (err != nil), fail closed: do not run the handler.
+// If err wraps ErrFingerprintMismatch (errors.Is), the same key was previously
+// claimed with a different fingerprint — the middleware returns 409 with
+// ErrIdempotencyKeyReused. Do NOT add a 4th ClaimState for this case; use the
+// sentinel error path instead.
 //
 // ns is the idempotency namespace that scopes keys to a part of the
 // application. In the standard Middleware, ns is the caller TenantID (or
-// "_notenant" when absent). key is subject+"\x00"+Idempotency-Key header value.
+// "_notenant" when absent). key is method+"\x00"+path+"\x00"+subject+"\x00"+
+// Idempotency-Key header value. fingerprint is hex(sha256(body)).
 type Store interface {
-	Claim(ctx context.Context, ns, key string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error)
+	Claim(ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error)
 }
 
 // Receipt is the HTTP-specific lifecycle handle for a single acquired
