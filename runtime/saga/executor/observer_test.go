@@ -602,10 +602,10 @@ func (panicObserver) ObserveHeartbeatFailure(_ context.Context, _, _ idutil.Safe
 }
 
 // TestObserverCall_Timeout_LogsCorrelation asserts the bounded-wait timeout log
-// (callObserverBounded) carries instance_id + lease_id + method so an operator
-// can correlate an observer-deadline breach back to the instance / ClaimPending
-// cycle it occurred under. F1: observer-boundary logs previously carried only
-// method, breaking the "all per-instance saga logs carry lease_id" invariant.
+// (callObserverBounded) carries instance_id and method so an operator can
+// correlate an observer-deadline breach back to the instance. lease_id presence
+// is now structurally enforced by the SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
+// funnel; this test keeps the instance_id+method correlation rationale.
 func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -645,19 +645,18 @@ func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 	if entry["instance_id"] != "test-instance-id" {
 		t.Errorf("timeout log instance_id = %v, want test-instance-id", entry["instance_id"])
 	}
-	if entry["lease_id"] != "lease-timeout-log" {
-		t.Errorf("timeout log lease_id = %v, want lease-timeout-log", entry["lease_id"])
-	}
 	if entry["method"] != "ObserveHeartbeatFailure" {
 		t.Errorf("timeout log method = %v, want ObserveHeartbeatFailure", entry["method"])
 	}
 }
 
 // TestObserverCall_Panic_LogsCorrelation asserts the recoverObserverPanic log
-// carries instance_id + lease_id + method (F1, panic branch). Uses a direct
-// safeObserveOutcome call with a panicking observer — recovery is synchronous,
-// so no clock dance is needed: callObserverBounded returns via <-done only
-// after recoverObserverPanic (deferred LIFO before close(done)) has logged.
+// carries instance_id + method (F1, panic branch). lease_id presence is now
+// structurally enforced by the SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 funnel.
+// Uses a direct safeObserveOutcome call with a panicking observer — recovery
+// is synchronous, so no clock dance is needed: callObserverBounded returns via
+// <-done only after recoverObserverPanic (deferred LIFO before close(done))
+// has logged.
 func TestObserverCall_Panic_LogsCorrelation(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -678,9 +677,6 @@ func TestObserverCall_Panic_LogsCorrelation(t *testing.T) {
 	}
 	if entry["instance_id"] != "test-instance-id" {
 		t.Errorf("panic log instance_id = %v, want test-instance-id", entry["instance_id"])
-	}
-	if entry["lease_id"] != "lease-panic-log" {
-		t.Errorf("panic log lease_id = %v, want lease-panic-log", entry["lease_id"])
 	}
 	if entry["method"] != "ObserveOutcome" {
 		t.Errorf("panic log method = %v, want ObserveOutcome", entry["method"])

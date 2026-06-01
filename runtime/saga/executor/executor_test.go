@@ -364,6 +364,7 @@ func TestExecute_RetryExhausted_WarnLogged(t *testing.T) {
 	if _, ok := entry["error"]; !ok {
 		t.Error("log entry missing structured error field")
 	}
+	// End-to-end proof: sagalog.InstanceFields is wired into this LogAttrs call at runtime (complements archtest B1).
 	if entry["lease_id"] != "lease-warn" {
 		t.Errorf("log lease_id = %v, want %q", entry["lease_id"], "lease-warn")
 	}
@@ -850,26 +851,24 @@ func TestCompensate_IgnoresStepTimeout(t *testing.T) {
 	}
 }
 
-// TestCompensate_LeaseIDLogged asserts both compensation log lines carry the
-// lease_id field (the coordinator's fencing token), so an operator can
-// correlate a compensation log entry back to the ClaimPending cycle that drove
-// it. Mirrors TestExecute_RetryExhausted_WarnLogged's slog-capture pattern.
-// Covers issue #1211 acceptance: Info "compensating step" + Warn "compensate
-// failed" must both include slog.String("lease_id", string(leaseID)).
-func TestCompensate_LeaseIDLogged(t *testing.T) {
+// TestCompensate_LogsLifecycle asserts both compensation log lines are emitted
+// (lease_id presence is now structurally enforced by the
+// SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 funnel). Covers Info "compensating step"
+// on success and Warn "compensate failed" on failure.
+func TestCompensate_LogsLifecycle(t *testing.T) {
 	t.Parallel()
 	const leaseID = idutil.SafeID("lease-comp-logged")
-	t.Run("success logs lease_id on Info", func(t *testing.T) {
+	t.Run("success logs compensating step on Info", func(t *testing.T) {
 		t.Parallel()
-		runCompensateLeaseIDSuccess(t, leaseID)
+		runCompensateLogsSuccess(t, leaseID)
 	})
-	t.Run("failure logs lease_id on Warn", func(t *testing.T) {
+	t.Run("failure logs compensate failed on Warn", func(t *testing.T) {
 		t.Parallel()
-		runCompensateLeaseIDFailure(t, leaseID)
+		runCompensateLogsFailure(t, leaseID)
 	})
 }
 
-func runCompensateLeaseIDSuccess(t *testing.T, leaseID idutil.SafeID) {
+func runCompensateLogsSuccess(t *testing.T, leaseID idutil.SafeID) {
 	t.Helper()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
@@ -891,12 +890,9 @@ func runCompensateLeaseIDSuccess(t *testing.T, leaseID idutil.SafeID) {
 	if entry == nil {
 		t.Fatal("expected an INFO log about compensating step")
 	}
-	if entry["lease_id"] != string(leaseID) {
-		t.Errorf("log lease_id = %v, want %q", entry["lease_id"], string(leaseID))
-	}
 }
 
-func runCompensateLeaseIDFailure(t *testing.T, leaseID idutil.SafeID) {
+func runCompensateLogsFailure(t *testing.T, leaseID idutil.SafeID) {
 	t.Helper()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
@@ -917,9 +913,6 @@ func runCompensateLeaseIDFailure(t *testing.T, leaseID idutil.SafeID) {
 	entry := sloghelper.FindLogEntry(buf.String(), "compensate failed")
 	if entry == nil {
 		t.Fatal("expected a WARN log about compensate failed")
-	}
-	if entry["lease_id"] != string(leaseID) {
-		t.Errorf("log lease_id = %v, want %q", entry["lease_id"], string(leaseID))
 	}
 }
 
