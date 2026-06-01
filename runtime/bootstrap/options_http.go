@@ -123,6 +123,10 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // rejected at phase0 with a fatal error so operators are not silently left
 // without idempotency protection.
 //
+// Concrete implementations:
+//   - production: adapters/redis.NewHTTPIdempotencyStore(client, ns)
+//   - tests: idempotency.NewMemStore(clk) from runtime/http/idempotency
+//
 // ref: runtime-api.md strong-dependency wiring option pattern.
 func WithIdempotencyStore(store idemhttp.Store) Option {
 	return func(b *Bootstrap) {

@@ -12,7 +12,8 @@ import (
 
 // redisExpiryMargin is a conservative buffer added to sleep durations so that
 // Redis server-side PX expiry fires before the next Claim call in conformance tests.
-const redisExpiryMargin = 100 * time.Millisecond
+// 300ms provides a more reliable margin on slow CI runners.
+const redisExpiryMargin = 300 * time.Millisecond
 
 // realSleepAdvancer implements [idempotencytest.TimeAdvancer] for Redis-backed
 // stores. Because the Redis store uses server-side PX expiry (not a Go clock),

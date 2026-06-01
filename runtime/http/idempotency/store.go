@@ -24,18 +24,23 @@ import (
 // Store is the HTTP-layer idempotency backend. Implementations live in
 // adapters/ (e.g., adapters/redis).
 //
-// Claim semantics:
-//   - (ClaimAcquired, nil, receipt, nil) — caller MUST run the HTTP handler,
-//     then call receipt.Record with the response, then receipt.Release on error.
-//   - (ClaimDone, rec, noopReceipt, nil) — a previous request already completed;
-//     caller MUST replay rec directly and MUST NOT run the handler again.
-//   - (ClaimBusy, nil, noopReceipt, nil) — another request is currently
-//     in-flight for the same key; caller SHOULD return 409 ErrIdempotencyInProgress.
-//   - (_, _, _, err) — infrastructure error; caller MUST fail closed (do not run handler).
+// Claim semantics — discriminate on the returned ClaimState:
 //
-// ns is a namespace prefix that scopes keys across different parts of the
-// application (e.g., cell ID or route group prefix). key is the idempotency
-// key from the request header.
+//	switch state {
+//	case idempotency.ClaimAcquired:
+//	    // rec is nil; receipt is the acquired lease.
+//	    // Run the handler, call receipt.Record on success, receipt.Release on error.
+//	case idempotency.ClaimDone:
+//	    // rec is non-nil; replay it. MUST NOT run the handler again.
+//	case idempotency.ClaimBusy:
+//	    // rec is nil; another request is in-flight. Return 409.
+//	}
+//
+// On error (err != nil), fail closed: do not run the handler.
+//
+// ns is the idempotency namespace that scopes keys to a part of the
+// application. In the standard Middleware, ns is the caller TenantID (or
+// "_notenant" when absent). key is subject+"\x00"+Idempotency-Key header value.
 type Store interface {
 	Claim(ctx context.Context, ns, key string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error)
 }
@@ -53,6 +58,13 @@ type Store interface {
 //
 // Record and Release are idempotent with respect to the lease state: calling
 // them on a non-acquired claim state returns kernel/idempotency.ErrNoClaimLease.
+//
+// Store implementors: both Record and Release are typically called from a
+// defer after the request context may already be canceled (timeout/client
+// disconnect). Use context.WithoutCancel(ctx) when issuing the underlying
+// store operations so the commit/release reaches the backend even when the
+// request context is canceled. See runtime/http/idempotency.Middleware for
+// the reference implementation.
 type Receipt interface {
 	// Record persists resp as the canonical response for this idempotency key
 	// and commits the lease, making the key's state ClaimDone for doneTTL.

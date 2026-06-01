@@ -209,7 +209,10 @@ func TestMemStore_StaleTokenRecordRejected(t *testing.T) {
 	}
 }
 
-func TestMemStore_StaleTokenReleaseRejected(t *testing.T) {
+// TestMemStore_DoubleReleaseIsNoOp verifies that a second Release on an already-
+// settled receipt is a safe no-op (returns nil). This is the most common Release
+// path in production: a defer that always fires, even after Record succeeds.
+func TestMemStore_DoubleReleaseIsNoOp(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	ms := NewMemStore(clk)
 
@@ -219,14 +222,17 @@ func TestMemStore_StaleTokenReleaseRejected(t *testing.T) {
 		t.Fatalf("first claim: %v", err)
 	}
 
-	// Release once.
+	// First Release must succeed.
 	if err := receipt1.Release(ctx); err != nil {
 		t.Fatalf("first release: %v", err)
 	}
 
-	// Second Release on same receipt must be idempotent or return an error (not panic).
-	// The underlying sync.Once makes second call a no-op.
-	_ = receipt1.Release(ctx)
+	// Second Release on an already-settled receipt must be a safe no-op (nil error).
+	// This matches the contract documented on memReceipt.Release: "A stale receipt
+	// (already settled) is a safe no-op that returns nil".
+	if err := receipt1.Release(ctx); err != nil {
+		t.Errorf("second release (already settled) must return nil, got: %v", err)
+	}
 }
 
 func TestMemStore_NamespaceIsolation(t *testing.T) {

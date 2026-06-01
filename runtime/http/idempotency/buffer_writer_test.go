@@ -146,17 +146,36 @@ func TestBufferingWriter_FlusherPreserved(t *testing.T) {
 	}
 }
 
-func TestBufferingWriter_NoFlusherWhenUnderlyingLacks(t *testing.T) {
-	// httptest.ResponseRecorder does NOT implement http.Flusher in plain stdlib.
-	// We want to make sure wrapping a non-Flusher doesn't accidentally expose Flusher.
-	// BUT: httptest.ResponseRecorder actually does implement Flusher in stdlib.
-	// Use a minimal ResponseWriter that definitely doesn't.
-	rr := httptest.NewRecorder()
-	bw := newBufferingWriter(rr, 1024)
+// minimalWriter is a ResponseWriter that deliberately does NOT implement
+// http.Flusher, allowing us to assert that bufferingWriter correctly propagates
+// the absence of the optional interface when the underlying writer lacks it.
+type minimalWriter struct {
+	header http.Header
+	body   strings.Builder
+	code   int
+}
 
-	// If httptest.ResponseRecorder is a Flusher (it is in stdlib), this just
-	// confirms the interface is preserved — no harm.
-	_ = bw
+func (m *minimalWriter) Header() http.Header {
+	if m.header == nil {
+		m.header = http.Header{}
+	}
+	return m.header
+}
+func (m *minimalWriter) Write(b []byte) (int, error) { return m.body.Write(b) }
+func (m *minimalWriter) WriteHeader(code int)        { m.code = code }
+
+func TestBufferingWriter_NoFlusherWhenUnderlyingLacks(t *testing.T) {
+	// minimalWriter does not implement http.Flusher.
+	// bufferingWriter wraps via httpsnoop, which only exposes optional interfaces
+	// that the underlying writer supports. So if the underlying writer is not a
+	// Flusher, the wrapped writer must also not be a Flusher.
+	mw := &minimalWriter{}
+	bw := newBufferingWriter(mw, 1024)
+
+	_, ok := bw.ResponseWriter.(http.Flusher)
+	if ok {
+		t.Error("bufferingWriter wrapping a non-Flusher must not expose http.Flusher")
+	}
 }
 
 func TestBufferingWriter_WriteHeaderBelowHTTP200NotCommitted(t *testing.T) {

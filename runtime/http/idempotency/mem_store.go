@@ -91,7 +91,7 @@ func (ms *MemStore) Claim(ctx context.Context, ns, key string, leaseTTL time.Dur
 }
 
 func (ms *MemStore) generateToken() (string, error) {
-	var b [8]byte
+	var b [16]byte // 128-bit fencing token; matches Redis adapter (idempotency.go claimToken)
 	if _, err := io.ReadFull(ms.rand, b[:]); err != nil {
 		return "", fmt.Errorf("rand read: %w", err)
 	}

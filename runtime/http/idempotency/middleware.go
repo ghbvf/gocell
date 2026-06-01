@@ -2,13 +2,17 @@ package idempotency
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -30,6 +34,11 @@ const (
 	// future replay. Responses larger than this are not stored.
 	defaultMaxBodyBytes = 256 * 1024
 
+	// maxIdempotencyKeyLen is the maximum permitted byte length of an
+	// Idempotency-Key header value. Values longer than this are rejected with
+	// 400 to prevent oversized Redis keys and memory-amplification DoS.
+	maxIdempotencyKeyLen = 256
+
 	// msgStoreUnavailable is the client-visible message for store errors.
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgStoreUnavailable = "idempotency store unavailable"
@@ -37,7 +46,33 @@ const (
 	// msgInProgress is the client-visible message for concurrent in-flight keys.
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgInProgress = "a request with this Idempotency-Key is already in progress"
+
+	// msgKeyTooLong is the client-visible message when the Idempotency-Key
+	// header value exceeds maxIdempotencyKeyLen bytes.
+	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
+	msgKeyTooLong = "Idempotency-Key header value exceeds maximum length"
 )
+
+// sensitiveResponseHeaders is a case-insensitive set of response header names
+// that MUST NOT be recorded in the idempotency store. Replaying these headers
+// to a different request context is dangerous:
+//
+//   - Set-Cookie / Set-Cookie2 — would replay a session cookie into a new
+//     browser session (session fixation / stale-cookie replay attack).
+//   - Authorization / WWW-Authenticate / Proxy-Authenticate — would expose
+//     credentials or challenge data to a different principal.
+//   - Clear-Site-Data — would incorrectly clear storage for a different session.
+//
+// The filter is applied at capture time (in capturedHeader / recordOrRelease),
+// so RecordedResponse is a faithful container of whatever the recorder receives.
+var sensitiveResponseHeaders = map[string]struct{}{
+	"set-cookie":         {},
+	"set-cookie2":        {},
+	"authorization":      {},
+	"www-authenticate":   {},
+	"proxy-authenticate": {},
+	"clear-site-data":    {},
+}
 
 // idempotentMethods lists the HTTP methods for which idempotency is enforced.
 // GET/HEAD are naturally idempotent (no side effects) so they are excluded.
@@ -70,9 +105,16 @@ func defaultConfig() middlewareConfig {
 // client normally but are not stored; a subsequent identical request will
 // re-invoke the handler.
 //
+// Non-positive values are clamped to the default (256 KiB) to prevent
+// accidentally disabling body buffering.
+//
 // Default: 256 KiB.
 func WithMaxBodyBytes(n int) Option {
 	return func(c *middlewareConfig) {
+		if n <= 0 {
+			c.maxBodyBytes = defaultMaxBodyBytes
+			return
+		}
 		c.maxBodyBytes = n
 	}
 }
@@ -81,9 +123,15 @@ func WithMaxBodyBytes(n int) Option {
 // If a handler does not respond before the TTL expires, the lease is released
 // and another request may re-claim the key.
 //
+// Non-positive values are clamped to the default (kernel/idempotency.DefaultLeaseTTL = 5 min).
+//
 // Default: kernel/idempotency.DefaultLeaseTTL (5 min).
 func WithLeaseTTL(d time.Duration) Option {
 	return func(c *middlewareConfig) {
+		if d <= 0 {
+			c.leaseTTL = idempotency.DefaultLeaseTTL
+			return
+		}
 		c.leaseTTL = d
 	}
 }
@@ -91,9 +139,15 @@ func WithLeaseTTL(d time.Duration) Option {
 // WithDoneTTL sets how long a successfully recorded response is retained for
 // future replay.
 //
+// Non-positive values are clamped to the default (kernel/idempotency.DefaultTTL = 24 h).
+//
 // Default: kernel/idempotency.DefaultTTL (24 h).
 func WithDoneTTL(d time.Duration) Option {
 	return func(c *middlewareConfig) {
+		if d <= 0 {
+			c.doneTTL = idempotency.DefaultTTL
+			return
+		}
 		c.doneTTL = d
 	}
 }
@@ -107,12 +161,20 @@ func WithDoneTTL(d time.Duration) Option {
 // request passes through without idempotency tracking.
 //
 // Namespace composition: ns = tenantID (or "_notenant" when empty),
-// key = subject + ":" + Idempotency-Key header value.
+// key = subject + "\x00" + Idempotency-Key header value.
+// The NUL separator (\x00) prevents collision when one principal's Subject
+// is a prefix of another combined with the key (e.g. subject="alice",
+// key="x" vs subject="alic", key="e:x").
 //
 // clk must be non-nil; clock.MustHaveClock panics on nil.
-// store must be non-nil; a nil store causes a panic with panicregister.Approved.
+// store must be non-nil; a nil store causes a panic with panicregister.Approved
+// (B-class programmer-error; callers must supply a valid store at wiring time).
 func Middleware(clk clock.Clock, store Store, opts ...Option) func(http.Handler) http.Handler {
 	clock.MustHaveClock(clk, "idempotency.Middleware")
+	if validation.IsNilInterface(store) {
+		panic(panicregister.Approved("idempotency-middleware-store-nil",
+			errcode.Assertion("Middleware: store is required; pass a non-nil Store implementation")))
+	}
 
 	cfg := defaultConfig()
 	for _, o := range opts {
@@ -130,7 +192,18 @@ func Middleware(clk clock.Clock, store Store, opts ...Option) func(http.Handler)
 				next.ServeHTTP(w, r)
 				return
 			}
-			handleWithIdempotency(w, r, next, p, clk, store, cfg)
+			// Validate Idempotency-Key length before doing any store I/O.
+			idemKey := r.Header.Get(headerIdempotencyKey)
+			if len(idemKey) > maxIdempotencyKeyLen {
+				httputil.WriteError(r.Context(), w, errcode.New(
+					errcode.KindInvalid,
+					errcode.ErrValidationFailed,
+					msgKeyTooLong,
+					errcode.WithDetails(errcode.PublicInt("maxLen", maxIdempotencyKeyLen)),
+				))
+				return
+			}
+			handleWithIdempotency(w, r, next, p, idemKey, clk, store, cfg)
 		})
 	}
 }
@@ -147,16 +220,22 @@ func handleWithIdempotency(
 	r *http.Request,
 	next http.Handler,
 	p *auth.Principal,
+	idemKey string,
 	clk clock.Clock,
 	store Store,
 	cfg middlewareConfig,
 ) {
-	idemKey := r.Header.Get(headerIdempotencyKey)
 	ns, key := buildNamespaceKey(p, idemKey)
 	ctx := r.Context()
 
 	state, rec, receipt, err := store.Claim(ctx, ns, key, cfg.leaseTTL)
 	if err != nil {
+		slog.ErrorContext(ctx, "idempotency: store claim failed",
+			"err", err,
+			"idempotency_key", idemKey,
+			"subject", p.Subject,
+			"tenant_id", ns,
+		)
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindInternal,
 			errcode.ErrInternal,
@@ -167,10 +246,20 @@ func handleWithIdempotency(
 
 	switch state {
 	case idempotency.ClaimDone:
+		slog.DebugContext(ctx, "idempotency: replay hit",
+			"idempotency_key", idemKey,
+			"subject", p.Subject,
+			"tenant_id", ns,
+		)
 		replayResponse(w, rec)
 
 	case idempotency.ClaimBusy:
-		w.Header().Set("Retry-After", "1")
+		slog.WarnContext(ctx, "idempotency: key in progress",
+			"idempotency_key", idemKey,
+			"subject", p.Subject,
+			"tenant_id", ns,
+		)
+		w.Header().Set("Retry-After", strconv.Itoa(int(cfg.leaseTTL.Seconds())))
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindConflict,
 			errcode.ErrIdempotencyInProgress,
@@ -178,7 +267,7 @@ func handleWithIdempotency(
 		))
 
 	default: // ClaimAcquired
-		recordOrRelease(ctx, w, r, next, clk, receipt, cfg)
+		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, idemKey, ns)
 	}
 }
 
@@ -202,10 +291,15 @@ func extractIdentity(ctx context.Context) (*auth.Principal, bool) {
 // into the (ns, key) pair expected by Store.Claim.
 //
 // ns  = tenantID, or noTenantSentinel when empty.
-// key = subject + ":" + idemKey
+// key = subject + "\x00" + idemKey
+//
+// The NUL byte (\x00) separator prevents key-space collision: it cannot appear
+// in HTTP header values (RFC 7230 §3.2.6 limits field-value to VCHAR and obs-text,
+// neither of which includes NUL), so subject="alic",key="e:x" is always distinct
+// from subject="alice",key="x". A colon separator (:) would collide on those inputs.
 //
 // Using tenantID as the namespace means the Redis key for a cluster-aware
-// adapter would be "{<tenantID>}:<subject>:<idemKey>", which colocates all
+// adapter would be "{<tenantID>}:<subject>\x00<idemKey>", which colocates all
 // keys for the same tenant on the same hash slot — good for single-slot
 // transactions.
 func buildNamespaceKey(p *auth.Principal, idemKey string) (ns, key string) {
@@ -213,7 +307,7 @@ func buildNamespaceKey(p *auth.Principal, idemKey string) (ns, key string) {
 	if ns == "" {
 		ns = noTenantSentinel
 	}
-	key = p.Subject + ":" + idemKey
+	key = p.Subject + "\x00" + idemKey
 	return
 }
 
@@ -246,6 +340,8 @@ func recordOrRelease(
 	clk clock.Clock,
 	receipt Receipt,
 	cfg middlewareConfig,
+	idemKey string,
+	ns string,
 ) {
 	bw := newBufferingWriter(w, cfg.maxBodyBytes)
 
@@ -263,12 +359,39 @@ func recordOrRelease(
 	// Only record if the handler committed a successful (2xx/3xx) response
 	// and the body did not overflow the capture limit.
 	if bw.committed() && shouldRecord(bw.status()) && !bw.isOversized() {
-		resp := newRecordedResponse(clk, bw.status(), bw.bufferedBody(), bw.capturedHeader())
-		if err := receipt.Record(context.WithoutCancel(ctx), &resp, cfg.doneTTL); err == nil {
+		filteredHeader := filterSensitiveHeaders(bw.capturedHeader())
+		resp := newRecordedResponse(clk, bw.status(), bw.bufferedBody(), filteredHeader)
+		if err := receipt.Record(context.WithoutCancel(ctx), &resp, cfg.doneTTL); err != nil {
+			slog.ErrorContext(ctx, "idempotency: receipt record failed",
+				"err", err,
+				"idempotency_key", idemKey,
+				"tenant_id", ns,
+			)
+			// Fall through to Release via defer.
+		} else {
 			recorded = true
 		}
-		// On Record error we fall through to Release via defer.
+	} else if bw.committed() && bw.isOversized() {
+		slog.WarnContext(ctx, "idempotency: response body oversized, not recorded",
+			"max_body_bytes", cfg.maxBodyBytes,
+			"idempotency_key", idemKey,
+			"tenant_id", ns,
+		)
 	}
+}
+
+// filterSensitiveHeaders returns a clone of h with sensitiveResponseHeaders
+// removed. The filter runs at capture/record time so RecordedResponse only
+// ever stores safe-to-replay headers.
+//
+// http.Header.Del uses net/textproto.CanonicalMIMEHeaderKey internally, so
+// passing lowercase names correctly deletes the canonically-cased entry.
+func filterSensitiveHeaders(h http.Header) http.Header {
+	filtered := h.Clone()
+	for name := range sensitiveResponseHeaders {
+		filtered.Del(name) // Del is case-insensitive via CanonicalMIMEHeaderKey
+	}
+	return filtered
 }
 
 // shouldRecord returns true for 2xx and 3xx status codes. 4xx/5xx responses

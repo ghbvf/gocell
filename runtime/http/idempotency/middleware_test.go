@@ -15,9 +15,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// testHandler returns a fixed status+body and sets a header.
+// testHandler returns a fixed status+body and sets Content-Type + X-Test headers.
 func testHandler(status int, body string) http.Handler { //nolint:unparam // parameter kept for test readability
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("X-Test", "yes")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
@@ -184,6 +185,10 @@ func TestMiddleware_FirstPOSTRecorded(t *testing.T) {
 	if rr2.Body.String() != `{"id":"1"}` {
 		t.Errorf("replayed body: got %q, want %q", rr2.Body.String(), `{"id":"1"}`)
 	}
+	// Non-sensitive headers must be replayed.
+	if rr2.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type not replayed; got %q", rr2.Header().Get("Content-Type"))
+	}
 }
 
 // — 409 when lease is in progress —
@@ -195,7 +200,8 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 
 	ctx := context.Background()
 	// Pre-seed a lease directly via MemStore to simulate in-flight request.
-	_, _, _, err := ms.Claim(ctx, "tenant1", "user-b:in-flight", idempotency.DefaultLeaseTTL)
+	// Key composed by Middleware: subject + "\x00" + idemKey = "user-b\x00in-flight".
+	_, _, _, err := ms.Claim(ctx, "tenant1", "user-b\x00in-flight", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("pre-seed claim: %v", err)
 	}
@@ -212,8 +218,14 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 	if !strings.Contains(body, "ERR_IDEMPOTENCY_IN_PROGRESS") {
 		t.Errorf("expected ERR_IDEMPOTENCY_IN_PROGRESS in body; got %q", body)
 	}
-	if rr.Header().Get("Retry-After") == "" {
+	retryAfter := rr.Header().Get("Retry-After")
+	if retryAfter == "" {
 		t.Error("Retry-After header must be set on 409")
+	}
+	// Default leaseTTL is idempotency.DefaultLeaseTTL (5min = 300s).
+	wantRetryAfter := "300"
+	if retryAfter != wantRetryAfter {
+		t.Errorf("Retry-After: got %q, want %q (lease TTL seconds)", retryAfter, wantRetryAfter)
 	}
 }
 
@@ -347,5 +359,344 @@ func TestMiddleware_EmptyTenantUsesNoTenantSentinel(t *testing.T) {
 	}
 	if rr2.Header().Get("Idempotency-Replayed") != "true" {
 		t.Error("Idempotency-Replayed not set")
+	}
+}
+
+// — 4xx response is NOT recorded (handler re-runs on retry) —
+
+func TestMiddleware_4xxResponseNotRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(422)
+		_, _ = io.WriteString(w, `{"error":"validation failed"}`)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/items", "key-4xx", "t1", "user-g")
+
+	// First call: handler returns 422, should NOT be recorded.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 422 {
+		t.Errorf("first call code: got %d, want 422", rr.Code)
+	}
+
+	// Second call: lease was released, handler must be called again.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if callCount != 2 {
+		t.Errorf("4xx response must not be recorded; callCount=%d, want 2", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") == "true" {
+		t.Error("Idempotency-Replayed must not be set for non-recorded 4xx response")
+	}
+}
+
+// — PATCH and DELETE are guarded (table-driven) —
+
+func TestMiddleware_PATCHAndDELETEAreGuarded(t *testing.T) {
+	cases := []struct {
+		method string
+	}{
+		{"PATCH"},
+		{"DELETE"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.method, func(t *testing.T) {
+			clk := clockmock.New(time.Now())
+			ms := NewMemStore(clk)
+			mw := Middleware(clk, ms)
+
+			callCount := 0
+			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				callCount++
+				w.WriteHeader(200)
+				_, _ = io.WriteString(w, "resp")
+			})
+
+			handler := mw(inner)
+			r := requestWithUserCtx(tc.method, "/resource/1", "key-"+tc.method, "t1", "user-h")
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, r)
+			if rr.Code != 200 || callCount != 1 {
+				t.Errorf("first %s: code=%d calls=%d", tc.method, rr.Code, callCount)
+			}
+
+			rr2 := httptest.NewRecorder()
+			handler.ServeHTTP(rr2, r)
+			if callCount != 1 {
+				t.Errorf("%s replay: handler called again (callCount=%d)", tc.method, callCount)
+			}
+			if rr2.Header().Get("Idempotency-Replayed") != "true" {
+				t.Errorf("%s replay: Idempotency-Replayed not set", tc.method)
+			}
+		})
+	}
+}
+
+// — PrincipalUser with empty Subject → passthrough (no idempotency) —
+
+func TestMiddleware_EmptySubjectPassthrough(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(200)
+	})
+
+	handler := mw(inner)
+	// PrincipalUser with empty Subject.
+	r := httptest.NewRequest("POST", "/", nil)
+	r.Header.Set("Idempotency-Key", "some-key")
+	ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+		Kind:     auth.PrincipalUser,
+		Subject:  "", // empty — must bypass idempotency
+		TenantID: "t1",
+	})
+	r = r.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+	// Second call must also hit handler (no replay).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if callCount != 2 {
+		t.Errorf("empty subject must bypass idempotency; callCount=%d, want 2", callCount)
+	}
+}
+
+// — sensitive headers (Set-Cookie) are NOT replayed —
+
+func TestMiddleware_SensitiveHeadersNotReplayed(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Set-Cookie", "session=abc123; Path=/; HttpOnly")
+		w.Header().Set("X-Test", "safe-header")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"2"}`)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/items", "key-cookie-test", "t1", "user-i")
+
+	// First call.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 201 {
+		t.Errorf("first call code: got %d, want 201", rr.Code)
+	}
+
+	// Second call — replay.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("expected replay on second call")
+	}
+	// Set-Cookie MUST NOT be replayed (security: avoid session fixation).
+	if rr2.Header().Get("Set-Cookie") != "" {
+		t.Errorf("Set-Cookie must not be replayed; got %q", rr2.Header().Get("Set-Cookie"))
+	}
+	// Non-sensitive headers MUST be replayed.
+	if rr2.Header().Get("X-Test") != "safe-header" {
+		t.Errorf("X-Test not replayed; got %q", rr2.Header().Get("X-Test"))
+	}
+	if rr2.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type not replayed; got %q", rr2.Header().Get("Content-Type"))
+	}
+}
+
+// — 3xx response IS recorded and replayed —
+
+func TestMiddleware_3xxRecordedAndReplayed(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Location", "/new-location")
+		w.WriteHeader(303)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/resource", "key-3xx", "t1", "user-j")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 303 {
+		t.Errorf("first call: got %d, want 303", rr.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Code != 303 {
+		t.Errorf("replayed code: got %d, want 303", rr2.Code)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("Idempotency-Replayed not set on 3xx replay")
+	}
+	if callCount != 1 {
+		t.Errorf("3xx must be replayed without re-running handler; callCount=%d", callCount)
+	}
+}
+
+// — over-cap Idempotency-Key → 400, handler not called —
+
+func TestMiddleware_OverCapKeyReturns400(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(200)
+	}))
+
+	// Key exceeding maxIdempotencyKeyLen (256 bytes).
+	overCapKey := strings.Repeat("x", maxIdempotencyKeyLen+1)
+	r := requestWithUserCtx("POST", "/", overCapKey, "t1", "user-k")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 400 {
+		t.Errorf("over-cap key: got %d, want 400", rr.Code)
+	}
+	if callCount != 0 {
+		t.Errorf("handler must not be called for over-cap key; got callCount=%d", callCount)
+	}
+	if !strings.Contains(rr.Body.String(), "ERR_VALIDATION_FAILED") {
+		t.Errorf("expected ERR_VALIDATION_FAILED in body; got %q", rr.Body.String())
+	}
+}
+
+// — WithMaxBodyBytes(0) clamped to default, recording still works —
+
+func TestMiddleware_WithMaxBodyBytes0ClampsToDefault(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	// WithMaxBodyBytes(0) must be clamped to defaultMaxBodyBytes, not disable recording.
+	mw := Middleware(clk, ms, WithMaxBodyBytes(0))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"clamped"}`)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/", "key-clamped", "t1", "user-l")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 201 {
+		t.Errorf("first call: %d", rr.Code)
+	}
+
+	// Second call must replay (recording was not disabled by MaxBodyBytes=0).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("WithMaxBodyBytes(0) must be clamped to default; recording disabled means replay never works")
+	}
+	if callCount != 1 {
+		t.Errorf("handler must not be called twice; callCount=%d", callCount)
+	}
+}
+
+// testLeaseTTL2m is the custom lease TTL used in TestMiddleware_RetryAfterReflectsLeaseTTL.
+// Extracted to a package-level const per TEST-TIME-LITERAL-01 archtest rule.
+const testLeaseTTL2m = 2 * time.Minute
+
+// — Retry-After reflects configured lease TTL —
+
+func TestMiddleware_RetryAfterReflectsLeaseTTL(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms, WithLeaseTTL(testLeaseTTL2m))
+
+	ctx := context.Background()
+	// Pre-seed a lease with the custom TTL to simulate in-flight request.
+	_, _, _, err := ms.Claim(ctx, "tenant1", "user-m\x00retry-after-key", testLeaseTTL2m)
+	if err != nil {
+		t.Fatalf("pre-seed claim: %v", err)
+	}
+
+	handler := mw(testHandler(200, "should-not-run"))
+	r := requestWithUserCtx("POST", "/", "retry-after-key", "tenant1", "user-m")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 409 {
+		t.Errorf("code: got %d, want 409", rr.Code)
+	}
+	// Retry-After should be leaseTTL in seconds = 120s.
+	want := "120"
+	got := rr.Header().Get("Retry-After")
+	if got != want {
+		t.Errorf("Retry-After: got %q, want %q (= leaseTTL seconds)", got, want)
+	}
+}
+
+// — handler panic releases lease —
+
+func TestMiddleware_HandlerPanicReleasesLease(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	firstCall := true
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if firstCall {
+			firstCall = false
+			panic("test panic from handler")
+		}
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "recovered")
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/", "key-panic", "t1", "user-n")
+
+	// First call: handler panics. The panic propagates; Recovery middleware
+	// is NOT installed here, so we catch it manually to keep the test self-contained.
+	func() {
+		defer func() { recover() }() //nolint:errcheck // intentional: we just need to absorb the panic
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, r)
+	}()
+
+	// After the panic, the lease must have been released by the defer in
+	// recordOrRelease, so the same key is re-claimable.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Code != 200 {
+		t.Errorf("post-panic re-claim: code=%d, want 200", rr2.Code)
+	}
+	if callCount != 2 {
+		t.Errorf("after panic, lease must be released so handler re-runs; callCount=%d, want 2", callCount)
 	}
 }

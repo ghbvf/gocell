@@ -45,6 +45,12 @@ type HTTPIdempotencyStore struct {
 // Client and KeyNamespace. ns is validated up front; nil client and invalid
 // namespace produce structured errors so misconfiguration fails-fast at
 // composition time.
+//
+// The construction-time KeyNamespace acts as a wiring-validation sentinel
+// (REDIS-KEY-NAMESPACE-01): it must be a valid non-empty, lowercase,
+// brace-free string ≤48 chars. It is NOT embedded in runtime Redis keys;
+// the actual key prefix is the ns argument passed to Claim at request time
+// (the caller TenantID or "_notenant" sentinel when using the standard Middleware).
 func NewHTTPIdempotencyStore(client *Client, ns KeyNamespace) (*HTTPIdempotencyStore, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
@@ -139,11 +145,14 @@ return 0
 //
 //	<ns>:{<key>}:lease  and  <ns>:{<key>}:resp
 //
-// where <ns> is the Claim ns parameter (the HTTP-layer idempotency namespace,
-// typically a cell ID or route group prefix) and <key> is the idempotency key
-// from the request header. The store's KeyNamespace is not embedded in the
-// Redis key — it is validated at construction time as a guard against
-// misconfiguration (REDIS-KEY-NAMESPACE-01).
+// where <ns> is the Claim ns parameter. In the standard Middleware, ns is the
+// caller TenantID (or "_notenant" when absent); the interface contract accepts
+// any non-empty, brace-free string. <key> is the idempotency key from the
+// request header (subject+"\x00"+Idempotency-Key value as composed by Middleware).
+//
+// The store's construction-time KeyNamespace is validated at construction time
+// as a misconfiguration sentinel (REDIS-KEY-NAMESPACE-01); it is NOT embedded
+// in the runtime Redis keys — the runtime ns arg is the actual key prefix.
 //
 // Both ns and key must be non-empty and free of '{'/'}' characters so the
 // Redis Cluster hashtag boundary is unambiguous.
