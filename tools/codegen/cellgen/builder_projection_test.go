@@ -303,6 +303,85 @@ func TestBuildProjections_InvalidHandler(t *testing.T) {
 	}
 }
 
+// TestBuildProjections_InvalidOnReset verifies that a projection CU with a
+// non-exported onReset identifier (lowercase first letter) is rejected.
+func TestBuildProjections_InvalidOnReset(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           metadatatest.CellIDDemo,
+		Dir:          "demo",
+		File:         "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "projsvc",
+		BelongsToCell: metadatatest.CellIDDemo,
+		Dir:           "projsvc",
+		File:          "cells/demo/slices/projsvc/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{
+				Contract:   "event.order-created.v1",
+				Role:       "subscribe",
+				Handler:    "HandleX",
+				Projection: "order_status",
+				OnReset:    "resetOrder", // lowercase first letter — invalid exported ident
+			},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{eventOrderCreatedContract()})
+	fieldIndex := idxOf(map[string]string{"projsvc": "projSvc"})
+
+	_, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for invalid onReset identifier, got nil")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "onreset") {
+		t.Errorf("error should mention onReset, got: %v", err)
+	}
+}
+
+// TestBuildProjections_FieldAmbiguity verifies that a projection CU whose
+// slice maps to an ambiguous field in the CellFieldIndex (multiple fields
+// whose pointer-type package name matches the sliceID) is rejected.
+func TestBuildProjections_FieldAmbiguity(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           metadatatest.CellIDDemo,
+		Dir:          "demo",
+		File:         "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "projsvc",
+		BelongsToCell: metadatatest.CellIDDemo,
+		Dir:           "projsvc",
+		File:          "cells/demo/slices/projsvc/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{
+				Contract:   "event.order-created.v1",
+				Role:       "subscribe",
+				Handler:    "HandleOrderCreated",
+				Projection: "order_status",
+				// No Field: set — ambiguity should fail
+			},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{eventOrderCreatedContract()})
+	// Ambiguous: two *projsvc.T fields in the cell struct.
+	fieldIndex := &CellFieldIndex{
+		byPkg:   map[string]string{"projsvc": ambiguousField},
+		byField: map[string]string{"projSvcA": "projsvc", "projSvcB": "projsvc"},
+	}
+
+	_, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected ambiguity error, got nil")
+	}
+	if !strings.Contains(err.Error(), "disambiguate") && !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("error should mention ambiguity/disambiguation, got: %v", err)
+	}
+}
+
 // TestBuildProjections_MissingContract verifies that a projection CU
 // referencing an unknown contract is rejected.
 func TestBuildProjections_MissingContract(t *testing.T) {

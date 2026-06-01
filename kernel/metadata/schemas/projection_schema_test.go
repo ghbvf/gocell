@@ -188,6 +188,35 @@ func TestProjectionSliceCU_BadOnResetLowercaseFails(t *testing.T) {
 		"onReset starting with lowercase must fail slice schema pattern constraint")
 }
 
+// TestProjectionSliceCU_OnResetWithoutProjectionFails verifies that a subscribe
+// CU with onReset but no projection is rejected by the schema (defense-in-depth
+// parity with the Go parser validateProjectionUniqueness check).
+func TestProjectionSliceCU_OnResetWithoutProjectionFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "orderquery",
+		"belongsToCell": "ordercell",
+		"consistencyLevel": "L3",
+		"contractUsages": [
+			{
+				"contract": "event.order.placed.v1",
+				"role": "subscribe",
+				"handler": "HandleOrderPlaced",
+				"onReset": "ResetOrderModel"
+			}
+		],
+		"verify": {
+			"unit": [],
+			"contract": []
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"subscribe CU with onReset but no projection must fail slice schema validation")
+}
+
 // TestProjectionSliceCU_WebhookReceiveWithProjectionFails verifies that a
 // webhook-receive CU carrying projection is rejected (webhook-receive is a
 // non-subscribe role for the purposes of the projection restriction).

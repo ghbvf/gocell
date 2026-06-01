@@ -86,6 +86,10 @@
             }
           },
           {
+            "if": { "required": ["onReset"] },
+            "then": { "required": ["projection"] }
+          },
+          {
             "if": {
               "properties": { "role": { "const": "webhook-receive" } },
               "required": ["role"]

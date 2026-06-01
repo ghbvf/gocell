@@ -1572,6 +1572,34 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 	}
 }
 
+// TestRenderProjection_ContractIDConsumedInGodoc asserts that the rendered
+// projection_gen.go for the event.order-created.v1 contract contains the
+// literal contract ID in the godoc comment. This proves the template consumes
+// spec.ContractID (e.g. "consumes event.order-created.v1") rather than a
+// hardcoded string, so a future contract rename will surface as a golden diff.
+func TestRenderProjection_ContractIDConsumedInGodoc(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["event.order-created.v1"].Codegen = true
+
+	spec, err := buildContractSpec(root, p, "event.order-created.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	content, err := renderProjection(spec)
+	if err != nil {
+		t.Fatalf("renderProjection: %v", err)
+	}
+	got := string(content)
+
+	const wantContractID = "event.order-created.v1"
+	if !strings.Contains(got, wantContractID) {
+		t.Errorf("projection_gen.go godoc must contain contract ID %q; rendered output:\n%s", wantContractID, got)
+	}
+}
+
 // --- funcMap unit tests (PR #403 review T1: needsStrconv / responseGoTypeName /
 // liftHTTPResponses were previously covered only via golden files; direct unit
 // cases isolate logic regressions before they propagate into rendered output).
