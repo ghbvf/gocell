@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
@@ -173,11 +174,15 @@ func (c *Coordinator) logLeaderSkip(
 	// lease_id is the journal fencing token (ci.LeaseID); lock_key is the
 	// distlock identity — distinct leases (see package doc / acquireLead). lease_id
 	// is logged for claim-cycle correlation, uniform with all per-instance logs.
+	// The backend_error path can carry a distlock backend error whose text
+	// embeds a Redis DSN/credentials; redact it (defense-in-depth alongside the
+	// slog sink, which also covers contexts where the process-global seal is not
+	// active — unit tests / embedded saga use). Same form as Coordinator.safeObserve.
 	c.logger.Log(ctx, leaderSkipLogLevel(reason), "saga: leader-elect skip (lock not acquired)",
 		slog.String("instance_id", string(ci.Instance.ID)),
 		slog.String("definition_id", string(ci.Instance.DefinitionID)),
 		slog.String("lock_key", key),
 		slog.String("lease_id", string(ci.LeaseID)),
 		slog.String("reason", string(reason)),
-		slog.Any("error", err))
+		slog.Any("error", redaction.RedactAny(err)))
 }
