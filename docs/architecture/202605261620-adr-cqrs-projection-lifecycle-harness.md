@@ -170,25 +170,64 @@ Key takeaways driving the decisions:
   not a silent patch.
 - **ref:** Marten async-daemon `IDocumentOperations`; eventhorizon `projector.Project` (rejected).
 
-### Q3 — kind:projection codegen funnel shape → **A** (single slice → single projection)
+### Q3 — kind:projection codegen funnel shape → **A** (single subscribe-CU → single projection; a slice may declare multiple projections)
 
-- **Options.** A: one slice declares one projection (its subscribe set is that
-  projection's input stream). B: multiple slices share one projection (needs a
-  new metadata node).
+- **Options.** A: one `role: subscribe` contractUsage declares one projection
+  (its event stream is that projection's input). B: multiple slices share one
+  projection (needs a new metadata node).
 - **Argument.** A covers both roadmap-committed scenarios (winmdm
   `unified_device_id`, zerotrust `trustscore`). B is a v1.1 extension point;
   building the multi-slice metadata node now is speculative generality.
-- **Decision.** A. cellgen derives the projection wiring from a single slice's
-  `contractUsages[role=subscribe]` (PR-04).
-- **Risk.** A projection that genuinely needs to fan in from multiple event
-  streams must, in v1, route them through one slice's subscribe set — a single
-  slice may list multiple `contractUsages[role=subscribe]` entries (the existing
-  cellgen Subscribe loop already handles N contracts per slice), so v1 fan-in is
-  expressible without the multi-slice node. **Rollback
-  condition:** v1.1 adds a multi-slice projection metadata node; no v1 data
-  migration needed (the checkpoint key is `(cell_id, projection_id)`, agnostic
-  to slice count).
+- **Decision.** A. cellgen derives the projection wiring from each individual
+  `contractUsages[role=subscribe]` entry that carries a `projection:` field
+  (PR-04b). Each such CU produces one `reg.RegisterProjection` call (one
+  projectionID + one checkpoint). A single slice may declare multiple projections
+  by listing multiple `projection:`-bearing CUs; projectionID must be unique
+  within a cell (`validateProjectionUniqueness` fail-closed).
+- **Risk.** A logical read-model that needs to fan-in from multiple independent
+  event streams corresponds to multiple projectionIDs (multiple checkpoints)
+  writing to the same business read-model store — fan-in at the store level, not
+  at the checkpoint level. **Rollback condition:** v1.1 adds a multi-slice
+  projection metadata node; no v1 data migration needed (the checkpoint key is
+  `(cell_id, projection_id)`, agnostic to slice count).
 - **ref:** Axon processor-to-event-handler grouping.
+
+#### Amendment 2026-06-02 — cardinality 更正为 per-subscribe-CU
+
+**矛盾。** Q3 原文措辞「单 slice 单 projection，其 subscribe **集合**是输入流」暗示一个
+projection 可 fan-in 多个事件流并共享一个 checkpoint。但 PR-04a 合并的实现是结构性单流：
+`cell.ProjectionRequest` 携带**单个** `Spec`（`Spec.Kind=="event"`），
+`projection.Coordinator.Subscribe` 是 once-only，`CheckpointStore.LoadOffset(cellID, projectionID)`
+是**单 offset**。因此一个 projection ≡ 一个事件流 ≡ 一个 checkpoint。
+
+**更正。** v1 派生单位是 **subscribe-CU**，不是 slice。每个带 `projection:` 的
+`role: subscribe` contractUsage 派生出**一个** `reg.RegisterProjection`（一个 projectionID
++ 一个 checkpoint）。一个 slice **可以**声明多个 projection（每个带 `projection:` 的 CU
+一个，projectionID 在 cell 内唯一，由 parser `validateProjectionUniqueness` fail-closed
+守卫）。一个需要 fan-in 多个事件流的逻辑读模型，在 v1 表现为多个 projectionID（多
+checkpoint）写同一个业务读模型 store。
+
+**不变项。**「多 slice 共享一个 projection」仍是 Q3 的 v1.1 rollback condition（需要新的
+multi-slice metadata node），本次 amendment 不改变它。checkpoint 键仍是
+`(cell_id, projection_id)`，与本更正一致。
+
+**威胁矩阵逐行重评。** 本更正的影响范围限于 cardinality 措辞（一个 projection 对应几个
+事件流）；机制本身（checkpoint 提交、rebuild 状态机、exactly-once 路径）不受影响：
+
+- **Row 1**（exactly-once）：per-CU 模型下每个 projectionID 仍是独立单流，apply +
+  SaveOffset 在同一 CellTx 内提交的前提不变。✅ 不降级。
+- **Row 2**（crash recovery）：checkpoint 持久化语义与 cardinality 无关。✅ 不降级。
+- **Row 3**（rebuild-period read consistency）：`Phase()` 是 per-Coordinator 的，每个
+  projectionID 有独立 Coordinator，语义不变。✅ 不降级。
+- **Row 4**（out-of-order / serial-delivery）：**单流 checkpoint 前提在 per-CU 模型下不变**。
+  每个 projectionID 仍是独立单流，serial-delivery 前提逐 projection 成立。
+  per-CU 模型不引入新的并发向量（不同 projectionID 的 Coordinator 相互独立）。✅ 不降级。
+- **Row 5**（fail-closed）：SaveOffset 失败回滚整个 CellTx，per-CU 无影响。✅ 不降级。
+- **Row 6**（GAP-8 boundary）：per-CU 派生不增加框架对读模型 schema 的约束。✅ 不降级。
+- **Row 7**（multi-pod concurrency）：owner 列 write-guard 作用于 projection_checkpoints 表，
+  与 CU 数量无关。✅ 不降级。
+
+所有行均无格子从 ✅ 降级为 ⚠️/❌。
 
 ### Q4 — snapshot / partial replay in v1 → **A** (not in v1; full rebuild)
 
@@ -473,6 +512,7 @@ that lands each moves from "PR-04" to a named sub-PR:
   silently deferred. PR-04c (#1368, corebundle wiring) must likewise not wire a
   concurrent subscriber to a projection before #1369 lands; #1368 reviewers enforce this.
 
-§3 Q3 (single slice → single projection) is unchanged: a slice may declare
-multiple `role=subscribe` CUs feeding one projection; PR-04b derives one
-`RegisterProjection` per projection from them.
+§3 Q3 (single subscribe-CU → single projection; a slice may declare multiple
+projections) is unchanged: PR-04b derives one `RegisterProjection` per
+`projection:`-bearing CU; a slice that lists multiple such CUs produces multiple
+projections, each with its own checkpoint.
