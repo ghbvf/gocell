@@ -32,9 +32,11 @@ import (
 //     deadlock is a known library bug, not a real-test-assertion failure, so
 //     failing here would trade a rare hang for a rare flaky FAIL.
 //
-// t may be nil when called from TestMain after m.Run() (e.g. the shared
-// broker stop path). In that case drain is skipped and slog.Warn is used
-// instead of t.Logf so the goroutine does not reference a finished test.
+// t may be nil: the shared-broker stop closure (initSharedInternalBroker)
+// captures CloseBrokerSafely(nil, srv) and is invoked from TestMain via
+// stopSharedInternalBroker after m.Run(). In that case drain is skipped and
+// slog.Warn is used instead of t.Logf so the goroutine does not reference a
+// finished test.
 func CloseBrokerSafely(t testing.TB, srv *mqttserver.Server) {
 	if t != nil {
 		t.Helper()
@@ -53,6 +55,7 @@ func CloseBrokerSafely(t testing.TB, srv *mqttserver.Server) {
 			case <-drainTimer.C:
 				break drainLoop
 			case <-drainTick.C:
+				// tick: re-check srv.Clients.Len() on the next iteration.
 			}
 		}
 		drainTimer.Stop()

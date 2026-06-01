@@ -352,8 +352,9 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer closeCancel()
 		require.NoError(t, conn.Close(closeCtx), "connection cleanup")
-		// mqtt.CloseBrokerSafely drains then guards srv.Close; the explicit
-		// testwait drain above is now subsumed by the helper's own drain.
+		// mqtt.CloseBrokerSafely's Defense 1 drains in-flight client
+		// disconnects before guarding srv.Close, so no separate pre-close
+		// drain is needed here.
 		mqtt.CloseBrokerSafely(t, srv)
 	}()
 
