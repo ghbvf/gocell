@@ -168,6 +168,11 @@ var slogHandwrittenEntryPoints = []struct {
 }{
 	{"./examples/ssobff", "main", "examples/ssobff/main.go"},
 	{"./examples/corebundlestarter", "main", "examples/corebundlestarter/main.go"},
+	// cmd/gocell is the governance/codegen CLI: it does NOT import runtime/bootstrap
+	// (so C3 reverse-coverage does not require it) but it emits production
+	// slog.Warn/Error, so it seals (FormatText, human-readable) and is enrolled here
+	// for A3 handwritten seal verification.
+	{"./cmd/gocell", "main", "cmd/gocell/main.go"},
 }
 
 // isGocellAssemblyGenerated reports whether f carries the `gocell generate
@@ -207,16 +212,20 @@ func fileDeclaresFunc(f *ast.File, name string) bool {
 
 // sealStatusInFunc locates the FuncDecl named funcName in f and reports whether
 // its body (a) contains a slog.SetDefault(slog.New(logging.NewHandler(...))) call
-// and (b) has that call as the first call-bearing statement. Shared by the A3
-// generated segment (funcName="run") and handwritten segment (funcName="main").
-func sealStatusInFunc(info *types.Info, f *ast.File, funcName, loggingPkgPath string) (found, sealFirst bool) {
+// and (b) has that call as the first call-bearing statement, plus the FuncDecl's
+// position (token.NoPos if the func is absent) so callers can emit a line-anchored
+// diagnostic. Shared by the A3 generated segment (funcName="run") and handwritten
+// segment (funcName="main").
+func sealStatusInFunc(info *types.Info, f *ast.File, funcName, loggingPkgPath string) (found, sealFirst bool, funcPos token.Pos) {
 	if info == nil {
-		return false, false
+		return false, false, token.NoPos
 	}
+	funcPos = token.NoPos
 	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Body == nil || fn.Name.Name != funcName {
 			return
 		}
+		funcPos = fn.Pos()
 		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			if slogSetDefaultShape(info, call, loggingPkgPath) {
 				found = true
@@ -226,7 +235,7 @@ func sealStatusInFunc(info *types.Info, f *ast.File, funcName, loggingPkgPath st
 			return slogSetDefaultShape(info, call, loggingPkgPath)
 		})
 	})
-	return found, sealFirst
+	return found, sealFirst, funcPos
 }
 
 // ---------------------------------------------------------------------------
@@ -253,32 +262,43 @@ func TestSlogHandlerSealedFunnel_A1_NoBareConstruction(t *testing.T) {
 			if strings.HasPrefix(rel, slogFunnelLoggingPkgRelDir+"/") || rel == slogFunnelLoggingPkgRelDir {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-				if p.TypesInfo == nil {
-					return
-				}
-				isJSON := IsCallToPkgFunc(p.TypesInfo, call, slogFunnelStdlibPkgPath, slogFunnelNewJSONHandlerFunc)
-				isText := IsCallToPkgFunc(p.TypesInfo, call, slogFunnelStdlibPkgPath, slogFunnelNewTextHandlerFunc)
-				if !isJSON && !isText {
-					return
-				}
-				funcName := slogFunnelNewJSONHandlerFunc
-				if isText {
-					funcName = slogFunnelNewTextHandlerFunc
-				}
-				pos := p.Fset.Position(call.Pos())
-				ds = append(ds, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: "slog." + funcName + "(...) called outside runtime/observability/logging" +
-						" — non-redacting handler bypasses SLOG-HANDLER-SEALED-FUNNEL-01 A1;" +
-						" use logging.NewHandler instead",
-				})
-			})
+			ds = append(ds, slogBareHandlerViolations(p, f, rel)...)
 		}
 		return ds
 	})
 	Report(t, "SLOG-HANDLER-SEALED-FUNNEL-01", diags)
+}
+
+// slogBareHandlerViolations is the A1 per-file detector: it reports every
+// slog.NewJSONHandler / slog.NewTextHandler call in f, resolved via go/types
+// (IsCallToPkgFunc, so import aliases do not bypass it). Shared by the production
+// A1 scan (which skips the logging package) and the A1 reverse self-check, which
+// runs it on an external fixture package to prove the detector is non-vacuous.
+func slogBareHandlerViolations(p *Pass, f *ast.File, rel string) []Diagnostic {
+	if p.TypesInfo == nil {
+		return nil
+	}
+	var ds []Diagnostic
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		isJSON := IsCallToPkgFunc(p.TypesInfo, call, slogFunnelStdlibPkgPath, slogFunnelNewJSONHandlerFunc)
+		isText := IsCallToPkgFunc(p.TypesInfo, call, slogFunnelStdlibPkgPath, slogFunnelNewTextHandlerFunc)
+		if !isJSON && !isText {
+			return
+		}
+		funcName := slogFunnelNewJSONHandlerFunc
+		if isText {
+			funcName = slogFunnelNewTextHandlerFunc
+		}
+		pos := p.Fset.Position(call.Pos())
+		ds = append(ds, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: "slog." + funcName + "(...) called outside runtime/observability/logging" +
+				" — non-redacting handler bypasses SLOG-HANDLER-SEALED-FUNNEL-01 A1;" +
+				" use logging.NewHandler instead",
+		})
+	})
+	return ds
 }
 
 // ---------------------------------------------------------------------------
@@ -298,23 +318,36 @@ func contextHandlerHandleRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []D
 	redactionLocal := redactionLocalName(f)
 	var ds []Diagnostic
 
-	// Check 1: Message must pass through redaction.RedactString.
-	foundRedactString := false
+	// Check 1 (form-lock, #1432): the redacted record must be built via
+	// slog.NewRecord(..., redaction.RedactString(<recordParam>.Message), ...).
+	// The message argument (3rd positional) is bound to RedactString applied to
+	// the record formal parameter's .Message — a bare <r>.Message, or RedactString
+	// of some other expression, is rejected. Upgraded from a presence check
+	// ("RedactString appears somewhere"), which would pass even if the message
+	// itself was forwarded raw and RedactString was only applied elsewhere.
+	recordParam := recordParamName(fn)
+	var newRecordCall *ast.CallExpr
 	EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		if redactionLocal == "" {
-			return
-		}
-		if callMatches(call, redactionLocal, slogFunnelRedactStringFunc) {
-			foundRedactString = true
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == "NewRecord" {
+			newRecordCall = call
 		}
 	})
-	if !foundRedactString {
+	msgOK := false
+	if newRecordCall != nil && len(newRecordCall.Args) >= 3 && redactionLocal != "" && recordParam != "" {
+		if msgArg, ok := newRecordCall.Args[2].(*ast.CallExpr); ok &&
+			callMatches(msgArg, redactionLocal, slogFunnelRedactStringFunc) &&
+			len(msgArg.Args) == 1 && isSelectorOf(msgArg.Args[0], recordParam, "Message") {
+			msgOK = true
+		}
+	}
+	if !msgOK {
 		pos := p.Fset.Position(fn.Pos())
 		ds = append(ds, Diagnostic{
 			Rel:  filepath.ToSlash(p.Rel(f)),
 			Line: pos.Line,
-			Message: "contextHandler.Handle must pass the log message through" +
-				" redaction.RedactString — SLOG-HANDLER-SEALED-FUNNEL-01 A2",
+			Message: "contextHandler.Handle must build the record message via" +
+				" slog.NewRecord(..., redaction.RedactString(<record>.Message), ...)" +
+				" — SLOG-HANDLER-SEALED-FUNNEL-01 A2 message form-lock",
 		})
 	}
 
@@ -380,6 +413,39 @@ func contextHandlerHandleRedactCheck(p *Pass, f *ast.File, fn *ast.FuncDecl) []D
 		})
 	}
 	return ds
+}
+
+// recordParamName returns the name of the slog.Record formal parameter of fn
+// (the parameter whose type is a selector expression ending in "Record"), or ""
+// if not found. Used to bind the A2 message form-lock to the actual record param.
+func recordParamName(fn *ast.FuncDecl) string {
+	if fn.Type == nil || fn.Type.Params == nil {
+		return ""
+	}
+	for _, field := range fn.Type.Params.List {
+		sel, ok := field.Type.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "Record" {
+			continue
+		}
+		if len(field.Names) > 0 {
+			return field.Names[0].Name
+		}
+	}
+	return ""
+}
+
+// isSelectorOf reports whether expr is the selector `<xName>.<selName>` with a
+// plain identifier receiver named xName (xName must be non-empty).
+func isSelectorOf(expr ast.Expr, xName, selName string) bool {
+	if xName == "" {
+		return false
+	}
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != selName {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == xName
 }
 
 // contextHandlerWithAttrsRedactCheck form-locks contextHandler.WithAttrs
@@ -617,12 +683,16 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 			}
 			generatedCount++
 			rel := filepath.ToSlash(p.Rel(f))
-			found, sealFirst := sealStatusInFunc(p.TypesInfo, f, slogFunnelGeneratedRunFunc, loggingPkgPath)
+			found, sealFirst, funcPos := sealStatusInFunc(p.TypesInfo, f, slogFunnelGeneratedRunFunc, loggingPkgPath)
+			line := 0
+			if funcPos != token.NoPos {
+				line = p.Fset.Position(funcPos).Line
+			}
 			switch {
 			case !found:
 				all = append(all, Diagnostic{
 					Rel:  rel,
-					Line: 0,
+					Line: line,
 					Message: "generated assembly entry point (" + slogFunnelGeneratedRunFunc +
 						") must call slog.SetDefault(slog.New(logging.NewHandler(...))) —" +
 						" the seal is injected by kernel/assembly/gentpl/main.go.tpl;" +
@@ -632,7 +702,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 			case !sealFirst:
 				all = append(all, Diagnostic{
 					Rel:  rel,
-					Line: 0,
+					Line: line,
 					Message: "generated assembly entry point (" + slogFunnelGeneratedRunFunc +
 						") must call slog.SetDefault(...) as the FIRST call-bearing statement" +
 						" (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated segment)",
@@ -652,6 +722,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 	for _, ep := range slogHandwrittenEntryPoints {
 		found := false
 		sealIsFirstCall := false
+		funcLine := 0
 		RunTyped(t, TypedOpts{Tests: false}, []string{ep.pkgPattern},
 			func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil {
@@ -665,12 +736,15 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 					if isGocellAssemblyGenerated(f) {
 						continue
 					}
-					fFound, fFirst := sealStatusInFunc(p.TypesInfo, f, ep.funcName, loggingPkgPath)
+					fFound, fFirst, fPos := sealStatusInFunc(p.TypesInfo, f, ep.funcName, loggingPkgPath)
 					if fFound {
 						found = true
 					}
 					if fFirst {
 						sealIsFirstCall = true
+					}
+					if fPos != token.NoPos {
+						funcLine = p.Fset.Position(fPos).Line
 					}
 				}
 				return nil
@@ -680,7 +754,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 		case !found:
 			all = append(all, Diagnostic{
 				Rel:  ep.relPath,
-				Line: 0,
+				Line: funcLine,
 				Message: "hand-written entry point function " + ep.funcName +
 					" must call slog.SetDefault(slog.New(logging.NewHandler(...)))" +
 					" — SLOG-HANDLER-SEALED-FUNNEL-01 A3 handwritten segment; gh #1424",
@@ -688,7 +762,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 		case !sealIsFirstCall:
 			all = append(all, Diagnostic{
 				Rel:  ep.relPath,
-				Line: 0,
+				Line: funcLine,
 				Message: "hand-written entry point function " + ep.funcName +
 					" must call slog.SetDefault(...) as the FIRST call-bearing" +
 					" statement (no fallible or logging call before the seal) —" +
@@ -705,52 +779,44 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestSlogHandlerSealedFunnel_A1_DetectsViolation is the reverse self-check for
-// A1: confirms that a slog.NewJSONHandler call outside the logging package would
-// be detected. Uses go/types synthesis to construct a minimal CallExpr scenario.
-// Since we cannot easily inject a fake package via RunTypedDir for this check,
-// we verify the detection logic operates correctly by confirming A1 passes on
-// the production tree (no false positives) AND by asserting the callsite check
-// logic fires when applied to a mock types.Info+AST scenario.
+// A1. It runs the production A1 detector (slogBareHandlerViolations) against a
+// real external fixture package (testdata/slog_bare_handler_fixtures/external_violation,
+// loaded type-checked via RunTypedFixture) that calls slog.NewJSONHandler /
+// NewTextHandler outside runtime/observability/logging — and asserts BOTH call
+// sites are flagged. This is a true external-violation RED proof (replacing the
+// earlier "production tree self-proof", which only showed the logging package
+// uses the constructors, not that an external violation is detected).
+//
+// The fixture imports log/slog under a non-default alias (slogsink), so a passing
+// result also proves the detector resolves the callee by go/types package path,
+// not by a textual "slog." prefix.
 func TestSlogHandlerSealedFunnel_A1_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	// Verify production tree passes A1 (no bare slog.NewJSONHandler outside logging/).
-	// If A1 is vacuous, it would pass even with violations — but the production tree
-	// itself is the canonical non-vacuity proof (confirmed in PR #1036 Batch 2
-	// red→green cycle).
-	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{slogFunnelLoggingPkgRelDir})
+	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"
 
-	// The logging pkg itself should use slog.NewJSONHandler/NewTextHandler.
-	var foundInLogging bool
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, f := range p.Files {
-			// Scan the logging package for the raw constructor calls.
-			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil {
-					return
-				}
-				ident, ok := sel.X.(*ast.Ident)
-				if !ok {
-					return
-				}
-				// AST-level check: look for slog.NewJSONHandler or slog.NewTextHandler
-				// in the logging package itself (where it is allowed).
-				if ident.Name == "slog" &&
-					(sel.Sel.Name == slogFunnelNewJSONHandlerFunc || sel.Sel.Name == slogFunnelNewTextHandlerFunc) {
-					foundInLogging = true
-				}
-			})
-		}
-		return nil
-	})
-	if !foundInLogging {
-		t.Errorf("SLOG-HANDLER-SEALED-FUNNEL-01 A1 non-vacuity: expected to find"+
-			" slog.NewJSONHandler or slog.NewTextHandler in %s (the sanctioned location),"+
-			" but found none — if the logging implementation changed, update this check",
-			slogFunnelLoggingPkgRelDir)
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
+				return nil
+			}
+			var ds []Diagnostic
+			for _, f := range p.Files {
+				ds = append(ds, slogBareHandlerViolations(p, f, filepath.ToSlash(p.Rel(f)))...)
+			}
+			return ds
+		})
+
+	require.Len(t, diags, 2,
+		"A1 detector must flag exactly 2 external violations (NewJSONHandler +"+
+			" NewTextHandler) in the fixture; got: %v", diags)
+	joined := ""
+	for _, d := range diags {
+		joined += d.Message + "\n"
 	}
+	assert.Contains(t, joined, slogFunnelNewJSONHandlerFunc)
+	assert.Contains(t, joined, slogFunnelNewTextHandlerFunc)
 }
 
 // TestSlogHandlerSealedFunnel_A2_DetectsViolation is the reverse self-check for
@@ -819,6 +885,51 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 `,
 			wantVio: false,
 			desc:    "Handle calls RedactString + RedactSlogAttr — compliant",
+		},
+		{
+			name: "bare_message_no_redact",
+			src: `package logging
+import (
+	"context"
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
+	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)  // VIOLATION: raw r.Message
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(redaction.RedactSlogAttr(a))
+		return true
+	})
+	return h.inner.Handle(ctx, nr)
+}
+`,
+			wantVio: true,
+			desc:    "message form-lock: bare r.Message (not RedactString-wrapped) must be flagged",
+		},
+		{
+			name: "redact_wrong_expr",
+			src: `package logging
+import (
+	"context"
+	"log/slog"
+	` + redactionImport + `
+)
+type contextHandler struct{ inner slog.Handler }
+func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
+	var other string
+	// VIOLATION: RedactString applied to some other value, not r.Message — the
+	// presence-check predecessor would pass this since RedactString "appears".
+	nr := slog.NewRecord(r.Time, r.Level, redaction.RedactString(other), r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(redaction.RedactSlogAttr(a))
+		return true
+	})
+	return h.inner.Handle(ctx, nr)
+}
+`,
+			wantVio: true,
+			desc:    "message form-lock: RedactString of a non-Message expression must be flagged",
 		},
 	}
 
@@ -1093,7 +1204,7 @@ func TestSlogHandlerSealedFunnel_A3_DetectsViolation(t *testing.T) {
 					continue
 				}
 				sawGeneratedMain = true
-				if found, sealFirst := sealStatusInFunc(p.TypesInfo, f, slogFunnelGeneratedRunFunc, loggingPkgPath); found && sealFirst {
+				if found, sealFirst, _ := sealStatusInFunc(p.TypesInfo, f, slogFunnelGeneratedRunFunc, loggingPkgPath); found && sealFirst {
 					generatedSealed = true
 				}
 			}
