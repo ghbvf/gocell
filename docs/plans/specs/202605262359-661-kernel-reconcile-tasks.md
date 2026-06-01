@@ -188,11 +188,11 @@
 
 #### Tests for PR-A5 (TDD)
 
-- [ ] **T17** [P] [PR-A5] `kernel/reconcile/backoff_test.go`：
+- [x] **T17** [P] [PR-A5] `kernel/reconcile/backoff_test.go`：
   - `TestBackoff_ExponentialBounded`：第 N 次延迟 = min(baseDelay * 2^N, maxDelay)
   - `TestBackoff_ResetOnSuccess`：success 后下次退避归零
   - 估算：200 LoC
-- [ ] **T18** [P] [PR-A5] `kernel/reconcile/recovery_test.go`：
+- [x] **T18** [P] [PR-A5] `kernel/reconcile/recovery_test.go`：
   - `TestRecovery_PanicConvertsToError`：reconciler panic 被 catch + 转 error
   - `TestRecovery_PanicMetricRecorded`：recovered panic 计入 reconcile_total{result="transient"}（对齐 FR-009「panic → transient error」+ FR-010 四标签集 success/transient/permanent/skipped；**不**新增 result="panic" 第 5 标签）
   - `TestRecovery_OtherEntityNotAffected`：单 entity panic 不影响其他 entity 串行处理
@@ -200,16 +200,17 @@
 
 #### Implementation for PR-A5
 
-- [ ] **T19** [PR-A5] `kernel/reconcile/backoff.go`：
+- [x] **T19** [PR-A5] `kernel/reconcile/backoff.go`：
   - 指数退避实现（与 controller-runtime client-go workqueue 形态对齐）
   - 注入式 baseDelay/maxDelay（默认 5ms / 1000s）
   - 估算：150 LoC
-- [ ] **T20** [PR-A5] `kernel/reconcile/recovery.go`：
+- [x] **T20** [PR-A5] `kernel/reconcile/recovery.go`：
   - panic recover wrapper（与 `kernel/wrapper.WrapConsumer` 形态对齐）
   - 错误分类 dispatcher：err == nil → success / errors.Is(err, PermanentError) → permanent / else → transient
   - 估算：200 LoC
 
-**Checkpoint A5**: 退避收敛 + panic 隔离验证通过
+**Checkpoint A5**: ✅ 退避收敛 + panic 隔离验证通过（PR-A5 #1166，merged）。
+PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight entity marks dirty; on completion re-runs once, coalesced）+ F6（shared heap-based delaying queue — one waitingLoop goroutine + container/heap; transient errors requeue with per-entity exponential backoff 5ms..1000s no-jitter via entityBackoff; success forgets backoff; permanent dead-letters）均在本 PR 交付（不在 T17–T20 原列表，补充于此）。
 
 ---
 

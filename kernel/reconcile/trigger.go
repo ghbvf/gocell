@@ -18,8 +18,8 @@ import (
 //
 // Contract:
 //   - Start MUST be non-blocking: spawn the producer goroutine and return. It
-//     is invoked once by the Loop (later: the Builder) with the Loop's internal
-//     queue. (Mirrors source.Source's "Start must be non-blocking".)
+//     is invoked once by the Loop (or the Builder, PR-A7) with the Loop's
+//     internal queue. (Mirrors source.Source's "Start must be non-blocking".)
 //   - The producer MUST honor ctx: exit promptly on ctx.Done(), and never block
 //     a queue send past cancellation (no goroutine leak on shutdown).
 //   - The producer forwards with backpressure — it blocks on a full queue rather
@@ -99,7 +99,7 @@ type channelTrigger struct {
 // a programmer error: it panics at construction. When in is closed, the
 // forwarding goroutine exits cleanly — the Loop keeps running but receives no
 // further Requests from this Trigger (the source is responsible for its own
-// lifecycle, mirroring Loop.pump over a closed Source).
+// lifecycle, mirroring Loop.feedFromSource over a closed Source).
 func ChannelTrigger(in <-chan Request) Trigger {
 	if in == nil {
 		panic(panicregister.Approved("reconcile-channel-trigger-nil-source",

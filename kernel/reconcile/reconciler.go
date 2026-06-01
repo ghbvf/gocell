@@ -11,12 +11,18 @@ import "context"
 //     tick interval.
 //   - Return (Result{}, err) with a transient err to have the Loop back off and
 //     retry (Result is ignored when err != nil).
-//   - Return (Result{}, PermanentError(err)) when retrying cannot help; once the
-//     Loop lands (PR-A3) it records a dead-letter metric and stops scheduling
-//     this entity until a fresh trigger re-observes it.
+//   - Return (Result{}, PermanentError(err)) when retrying cannot help; the
+//     Loop records a dead-letter metric and stops scheduling this entity until
+//     a fresh trigger re-observes it.
 //
-// Reconcile MUST be idempotent (level-triggered: it may be called again before
-// any state changed) and MUST honor ctx cancellation (the Loop cancels ctx on
+// Idempotency contract (P1): Reconcile MUST be idempotent. The framework may
+// invoke it multiple times for the same entity without an intervening state
+// change: on periodic resync (Interval tick), on F5 dirty re-run after coalesced
+// duplicate triggers, and on transient-error retry. This is the level-triggered
+// convergence contract — the reconciler observes current state and drives toward
+// desired state, regardless of how many times it is called.
+//
+// Reconcile MUST honor ctx cancellation (the Loop cancels ctx on
 // shutdown / StopTimeout).
 //
 // INVARIANT: RECONCILE-INTERFACE-FROZEN-01 — the method set is frozen to exactly
@@ -46,5 +52,15 @@ type Request struct {
 	// (a context-free interval ticker has no entity to name): a Reconciler wired
 	// to a TickerTrigger MUST treat req.EntityID == "" as a "re-observe every
 	// entity you own" sweep, fanning out to its own entity set.
+	//
+	// Bounded-set contract (S1): EntityID MUST come from a bounded set (e.g.
+	// primary keys of a cell-local table). The Loop retains a small per-entity
+	// backoff counter in memory for every entity that has experienced at least one
+	// transient error; the counter is released on success, permanent failure, or
+	// Loop restart (mirroring controller-runtime workqueue). An unbounded or
+	// high-cardinality EntityID space (e.g. user input strings) would grow this
+	// in-memory map without bound. The dirty/processing maps obey the same
+	// constraint: they hold at most one entry per in-flight entity and are cleared
+	// on completion or Loop restart.
 	EntityID string
 }

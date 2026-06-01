@@ -255,6 +255,25 @@ readyz 各字段归属：
 
 audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extractActor`），非 `entry.Principal().ActorID`——actor 是被审计动作的执行者（login 期 `session.created` 无 auth principal 时仍可用），Principal 族是正交的 request-context。详见 ADR §Amendment 2026-05-29 "actor 来源决议"。
 
+## Reconcile Metrics `result` Label
+
+`reconcile_total{result=...}` 的 `result` label 值集冻结为 `{success, transient, permanent, skipped}`（FR-010）。关键约束：
+
+- **recovered panic → `transient`**（不引入第 5 个 `panic` label；panic 是可重试的瞬态失败）
+- **`skipped` = trigger 合并到脏重跑，非丢弃**：`skipped` 表示 trigger 到达时实体正在处理中（processing=true），trigger 被 coalesced 进 dirty map；当前飞行 reconcile 完成后 **保证立即（delay=0）触发一次 re-run**（F5 dirty re-run）。收敛性不受影响——没有 trigger 被静默丢弃。（此语义由 PR-A5 取代 A3 的 skip-if-drop 实现；A3 阶段 skipped = 丢弃，A5 阶段 skipped = coalesced 待 re-run。）
+- 值集唯一来源：`kernel/reconcile/metrics.go` 的 `result*` 常量，类型为 sealed `resultLabel`；`recovery.go::classify()` 是唯一分类函数。`recordResult` 形参类型为 `resultLabel`，且 archtest callsite guard 禁止任何内联常量实参（字符串字面量 / `resultLabel(...)` 转换），故能到达指标的只有声明的 4 个 const 或 `classify()` 产出的 typed 值。
+- **单 requeue 路径**：所有向工作队列或延迟队列的 channel send 必须经由受认可函数之一（`drainReadyItems` / `(*Loop).feedFromSource` / `(*Loop).enqueueDelayed` / `tickerTrigger.Start` / `channelTrigger.Start`）；archtest **下降进 FuncLit** 并把 send 归属最近 enclosing FuncDecl，故 `go func(){ queue <- req }()` / `go func(){ addCh <- item }()` per-entity goroutine 在未授权函数内会被拦截（Trigger 的闭包 send 是合法外部 producer，已显式列入 allowlist）。
+- **延迟队列按实体合并**：`waitingLoop` 持 `pending map[EntityID]*waitingItem`，同实体重复入队只保留更早 readyAt（`heap.Fix`），堆中每实体至多一项；dirty re-run（delay=0）因此 supersede 更晚的 interval/backoff 项而非留双项（对齐 client-go delaying_queue `waitingForMap`）。
+- **permanent 取消旧 pending**：`resultPermanent` 分支经 `enqueueCancel` → `cancelCh` → `cancelPending` 从堆中删除该实体任何 pending 项（防止此前 success/transient 排下的长 requeue 到点又 reconcile 一个已 dead-letter 的实体）；同时 `process()` 对 permanent 抑制 dirty re-run（`wasDirty && label != resultPermanent`），避免 cancel 与 re-run 跨 `cancelCh`/`addCh` 双通道竞态。permanent 实体仅靠 fresh Source trigger 重新观察。`enqueueCancel` 是 `cancelCh` 的唯一受认可 send funnel（纳入 `RECONCILE-REQUEUE-ENQUEUE-CALLER-01` sanctioned set）。
+- **backoff 失败计数有界**：`entityBackoff` 以 LRU（cap `maxBackoffEntries`）持有 per-entity 失败计数，满则淘汰最久未用项，封住高基数/不可信 `EntityID` 的内存放大面（`Request.EntityID` 有界集契约的 enforcement 补强）。
+
+| Archtest ID | 摘要 | 评级 |
+|---|---|---|
+| `RECONCILE-RESULT-LABEL-VALUES-FROZEN-01` | `result` label 值集冻结（按 sealed `resultLabel` 类型枚举 vs. hardcoded golden）+ 下游 `recordResult` callsite guard（禁内联常量实参） | Medium（archtest；Hard 升级路径 = metricschema golden 字节锁，追踪 gh #1416） |
+| `RECONCILE-REQUEUE-ENQUEUE-CALLER-01` | kernel/reconcile 内所有 `SendStmt`（含 FuncLit 闭包内）必须在受认可函数范围内（enclosing FuncDecl allowlist） | Medium（archtest；Hard 升级路径 = channel send-end 接口封装 + 构造 seal，追踪 gh #1418） |
+
+完整盲区清单 + 反向自检活在各 archtest 的 package godoc；本节只做导航。
+
 ## Audit Payload Redaction
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
