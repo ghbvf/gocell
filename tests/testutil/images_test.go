@@ -1,10 +1,16 @@
 package testutil
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // imagePinnedByDigest enforces "digest mandatory" — the @sha256:<64-hex> suffix
@@ -15,23 +21,71 @@ import (
 // the tag — equivalent to k8s ImagePullPolicy + digest pin best practice.
 var imagePinnedByDigest = regexp.MustCompile(`^[a-z0-9./-]+:[A-Za-z0-9._\-]+@sha256:[a-f0-9]{64}$`)
 
-// TestContainerImagesPinned verifies that all testcontainer image constants
-// use tag+digest pinning, not floating tags like "postgres:15-alpine".
+// TestContainerImagesPinned verifies that every testcontainer image constant
+// uses tag+digest pinning, not floating tags like "postgres:15-alpine".
+//
+// Coverage is AST-derived (not a hand-maintained map): the test parses
+// images.go, collects every package-level const whose name ends with "Image"
+// and whose value is a string literal, and asserts each matches
+// imagePinnedByDigest. A new image constant (e.g. K3sImage) is therefore
+// auto-enrolled — adding a string-literal const without a digest fails this
+// test without any edit here. (Coverage is scoped to string-literal consts; a
+// const defined indirectly, e.g. K3sImage = otherpkg.Const, would not be a
+// BasicLit and is intentionally out of scope — image pins are always literals.)
+//
+// AI-robust grade: Medium (AST-derived coverage of the declaration set). A Hard
+// form is unreachable: Go cannot force a string const literal to carry a digest
+// at its declaration site, so the value check stays an archtest assertion. This
+// upgrade replaces the prior hand-maintained `images` map, which was Soft (a new
+// const silently escaped coverage — e.g. MosquittoImage was absent from it).
 func TestContainerImagesPinned(t *testing.T) {
-	images := map[string]string{
-		"PostgresImage":      PostgresImage,
-		"RedisImage":         RedisImage,
-		"RabbitMQImage":      RabbitMQImage,
-		"VaultImage":         VaultImage,
-		"OTelCollectorImage": OTelCollectorImage,
-		"MinIOImage":         MinIOImage,
-	}
+	images := imageConstsFromSource(t)
+	require.NotEmpty(t, images, "no *Image string consts discovered in images.go")
 	for name, image := range images {
 		t.Run(name, func(t *testing.T) {
 			assert.Regexp(t, imagePinnedByDigest, image,
 				"%s = %q must be tag+digest pinned (name:tag@sha256:digest)", name, image)
 		})
 	}
+}
+
+// imageConstsFromSource parses images.go and returns every package-level string
+// const whose name ends with "Image", mapped to its unquoted literal value.
+// `go test` runs with the working directory set to the package dir, so the
+// relative path resolves without runtime.Caller (which would break under
+// -trimpath).
+func imageConstsFromSource(t *testing.T) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "images.go", nil, 0)
+	require.NoError(t, err, "parse images.go")
+
+	out := make(map[string]string)
+	for _, decl := range file.Decls {
+		gd, isGen := decl.(*ast.GenDecl)
+		if !isGen || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, isVal := spec.(*ast.ValueSpec)
+			if !isVal {
+				continue
+			}
+			for i, ident := range vs.Names {
+				if !strings.HasSuffix(ident.Name, "Image") || i >= len(vs.Values) {
+					continue
+				}
+				lit, isLit := vs.Values[i].(*ast.BasicLit)
+				if !isLit || lit.Kind != token.STRING {
+					continue
+				}
+				val, uerr := strconv.Unquote(lit.Value)
+				require.NoError(t, uerr, "unquote %s", ident.Name)
+				out[ident.Name] = val
+			}
+		}
+	}
+	return out
 }
 
 // TestContainerImagesPinned_RejectsFloating verifies that floating tags (no

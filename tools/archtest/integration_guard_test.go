@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,30 +17,66 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-func TestVaultIntegrationContainerFailuresFailFast(t *testing.T) {
+// TestVaultContainerStartersFailFast asserts every function in adapters/vault
+// that starts a testcontainer fails fast on container errors — it must not call
+// t.Skip/Skipf/SkipNow. The sole sanctioned skip is testutil.RequireDocker (a
+// missing Docker daemon); its before-Run ordering is enforced module-wide by
+// TestTestcontainerHelpersRequireDockerBeforeRun, so this test only adds the
+// no-skip half.
+//
+// Coverage is derived (PR for #636): it enumerates vault *_test.go funcs that
+// invoke a testcontainer constructor (module .Run / core GenericContainer) via
+// the shared alias/run detection, rather than hardcoding startVaultContainer.
+// A new container helper (e.g. the k3s+Vault Kubernetes-auth e2e in
+// k8s_auth_e2e_integration_test.go) is therefore auto-covered.
+//
+// Scope note: detection keys on container constructors (module .Run /
+// GenericContainer). network.New is intentionally NOT treated as a container
+// start — a docker network is not a container with a fail-fast cost — so a
+// hypothetical network-only helper would not be flagged; that is by design.
+//
+// AI-robust grade: Medium (AST/selector-derived container-starter set; no name
+// allowlist). Hard ceiling = a single sanctioned testutil funnel that bakes in
+// RequireDocker + no-skip for every container start (cf.
+// PG-TESTCONTAINER-FUNNEL-01 / tcpostgres.Run single-funnel); tracked at
+// gh #1466. This replaced the prior hardcoded-name
+// TestVaultIntegrationContainerFailuresFailFast (Soft: a new vault container
+// helper escaped the no-skip check).
+func TestVaultContainerStartersFailFast(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "adapters", "vault", "integration_test.go")
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, 0)
+	dir := filepath.Join(root, "adapters", "vault")
+	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 
-	fn := findFuncDecl(file, "startVaultContainer")
-	require.NotNil(t, fn, "startVaultContainer helper must exist")
-
-	var hasDockerPrecheck bool
+	fset := token.NewFileSet()
+	var starters int
 	var skipCalls []string
-	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		if selectorName(call.Fun) == "RequireDocker" {
-			hasDockerPrecheck = true
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
 		}
-		switch selectorName(call.Fun) {
-		case "Skip", "Skipf", "SkipNow":
-			skipCalls = append(skipCalls, fset.Position(call.Pos()).String())
+		file, perr := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, 0)
+		require.NoError(t, perr)
+		aliases := testcontainerAliasesFor(file)
+		if len(aliases.core)+len(aliases.modules) == 0 {
+			continue
 		}
-	})
+		scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			if fn.Body == nil || !firstTestcontainerRunPos(fn.Body, aliases).IsValid() {
+				return
+			}
+			starters++
+			scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+				switch selectorName(call.Fun) {
+				case "Skip", "Skipf", "SkipNow":
+					skipCalls = append(skipCalls, fset.Position(call.Pos()).String())
+				}
+			})
+		})
+	}
 
-	assert.True(t, hasDockerPrecheck, "startVaultContainer must explicitly skip only when Docker is unavailable")
-	assert.Empty(t, skipCalls, "Vault container startup/address failures must fail-fast, not skip")
+	require.Positive(t, starters, "expected at least one vault container-starting func (startVaultContainer)")
+	assert.Empty(t, skipCalls, "vault container starters must fail-fast on container errors, not skip")
 }
 
 func TestPostgresUnreachableHostIsNotEnvGated(t *testing.T) {
