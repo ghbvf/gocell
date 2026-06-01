@@ -8,6 +8,7 @@ package placeorder_test
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
@@ -152,6 +153,42 @@ func waitTerminal(t *testing.T, ctx context.Context, j *journal.MemJournal, id i
 	return found
 }
 
+// stepNamesOfKind returns the StepName of every event matching kind, in order.
+func stepNamesOfKind(events []journal.Event, kind journal.EventKind) []string {
+	var names []string
+	for _, ev := range events {
+		if ev.Kind == kind {
+			names = append(names, string(ev.StepName))
+		}
+	}
+	return names
+}
+
+// containsKind reports whether any event has the given kind.
+func containsKind(events []journal.Event, kind journal.EventKind) bool {
+	for _, ev := range events {
+		if ev.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// requireStepSequence asserts got equals want (order-sensitive), labeling
+// failures with label.
+func requireStepSequence(t *testing.T, label string, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Errorf("%s = %v (len %d), want %v (len %d)", label, got, len(got), want, len(want))
+		return
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%s[%d] = %q, want %q", label, i, got[i], want[i])
+		}
+	}
+}
+
 // TestPlaceOrder_HappyPath verifies a successful saga run:
 // - terminal state is KindSagaSucceeded
 // - inventory is decremented (reservation held)
@@ -235,31 +272,13 @@ func TestPlaceOrder_HappyPath_EventSequence(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Extract the step names from KindStepCompleted events in order.
-	var completedSteps []string
-	for _, ev := range events {
-		if ev.Kind == journal.KindStepCompleted {
-			completedSteps = append(completedSteps, string(ev.StepName))
-		}
-	}
-
-	wantSteps := []string{"reserveInventory", "chargePayment", "ship", "notifyUser"}
-	if len(completedSteps) != len(wantSteps) {
-		t.Errorf("completed steps = %v (len %d), want %v (len %d)",
-			completedSteps, len(completedSteps), wantSteps, len(wantSteps))
-	} else {
-		for i, want := range wantSteps {
-			if completedSteps[i] != want {
-				t.Errorf("step[%d] = %q, want %q", i, completedSteps[i], want)
-			}
-		}
-	}
+	requireStepSequence(t, "completed steps",
+		stepNamesOfKind(events, journal.KindStepCompleted),
+		[]string{"reserveInventory", "chargePayment", "ship", "notifyUser"})
 
 	// No compensation events on the happy path.
-	for _, ev := range events {
-		if ev.Kind == journal.KindStepCompensated || ev.Kind == journal.KindCompensationStarted {
-			t.Errorf("unexpected compensation event kind=%s step=%s on happy path", ev.Kind, ev.StepName)
-		}
+	if containsKind(events, journal.KindStepCompensated) || containsKind(events, journal.KindCompensationStarted) {
+		t.Error("unexpected compensation event on happy path")
 	}
 }
 
@@ -286,43 +305,25 @@ func TestPlaceOrder_CompensateOnChargeFail_EventSequence(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// When shouldCompensate=true, coordinator does NOT write KindStepFailed for
-	// chargePayment. Instead it writes KindCompensationStarted and begins rollback.
-	// Verify chargePayment was never completed.
-	for _, ev := range events {
-		if string(ev.StepName) == "chargePayment" && ev.Kind == journal.KindStepCompleted {
-			t.Error("chargePayment should not have a KindStepCompleted event when paymentShouldFail=true")
-		}
+	// When shouldCompensate=true, the coordinator does NOT write KindStepFailed
+	// for chargePayment; it writes KindCompensationStarted and begins rollback.
+	completed := stepNamesOfKind(events, journal.KindStepCompleted)
+	compensated := stepNamesOfKind(events, journal.KindStepCompensated)
+
+	if slices.Contains(completed, "chargePayment") {
+		t.Error("chargePayment must not complete when paymentShouldFail=true")
+	}
+	if !containsKind(events, journal.KindCompensationStarted) {
+		t.Error("expected KindCompensationStarted event for chargePayment failure")
 	}
 
-	// KindCompensationStarted must appear (coordinator signals rollback entry).
-	var sawCompensationStarted bool
-	for _, ev := range events {
-		if ev.Kind == journal.KindCompensationStarted {
-			sawCompensationStarted = true
-		}
-	}
-	if !sawCompensationStarted {
-		t.Error("expected KindCompensationStarted event in journal for chargePayment failure")
-	}
+	// Only reserveInventory is compensated.
+	requireStepSequence(t, "compensated steps", compensated, []string{"reserveInventory"})
 
-	// Verify compensate sequence: only reserveInventory was compensated.
-	var compensatedSteps []string
-	for _, ev := range events {
-		if ev.Kind == journal.KindStepCompensated {
-			compensatedSteps = append(compensatedSteps, string(ev.StepName))
-		}
-	}
-	if len(compensatedSteps) != 1 || compensatedSteps[0] != "reserveInventory" {
-		t.Errorf("compensated steps = %v, want [reserveInventory]", compensatedSteps)
-	}
-
-	// ship and notifyUser must have no completed or compensated events.
-	for _, ev := range events {
-		name := string(ev.StepName)
-		if (name == "ship" || name == "notifyUser") &&
-			(ev.Kind == journal.KindStepCompleted || ev.Kind == journal.KindStepCompensated) {
-			t.Errorf("unexpected event kind=%s for step=%s after chargePayment failure", ev.Kind, name)
+	// ship and notifyUser are never completed or compensated.
+	for _, name := range []string{"ship", "notifyUser"} {
+		if slices.Contains(completed, name) || slices.Contains(compensated, name) {
+			t.Errorf("unexpected completed/compensated event for step %q after chargePayment failure", name)
 		}
 	}
 }
@@ -371,40 +372,14 @@ func TestPlaceOrder_CompensateOnShipFail_EventSequence(t *testing.T) {
 	}
 
 	// reserveInventory and chargePayment must have completed before ship failed.
-	var completedSteps []string
-	for _, ev := range events {
-		if ev.Kind == journal.KindStepCompleted {
-			completedSteps = append(completedSteps, string(ev.StepName))
-		}
-	}
-	wantCompleted := []string{"reserveInventory", "chargePayment"}
-	if len(completedSteps) != len(wantCompleted) {
-		t.Errorf("completed steps = %v, want %v", completedSteps, wantCompleted)
-	} else {
-		for i, want := range wantCompleted {
-			if completedSteps[i] != want {
-				t.Errorf("completed step[%d] = %q, want %q", i, completedSteps[i], want)
-			}
-		}
-	}
+	requireStepSequence(t, "completed steps",
+		stepNamesOfKind(events, journal.KindStepCompleted),
+		[]string{"reserveInventory", "chargePayment"})
 
 	// Compensation must run BOTH completed steps in reverse order.
-	var compensatedSteps []string
-	for _, ev := range events {
-		if ev.Kind == journal.KindStepCompensated {
-			compensatedSteps = append(compensatedSteps, string(ev.StepName))
-		}
-	}
-	wantCompensated := []string{"chargePayment", "reserveInventory"}
-	if len(compensatedSteps) != len(wantCompensated) {
-		t.Errorf("compensated steps = %v, want %v (reverse order)", compensatedSteps, wantCompensated)
-	} else {
-		for i, want := range wantCompensated {
-			if compensatedSteps[i] != want {
-				t.Errorf("compensated step[%d] = %q, want %q", i, compensatedSteps[i], want)
-			}
-		}
-	}
+	requireStepSequence(t, "compensated steps",
+		stepNamesOfKind(events, journal.KindStepCompensated),
+		[]string{"chargePayment", "reserveInventory"})
 
 	// Side effects fully rolled back: inventory restored, payment refunded,
 	// no shipment recorded.

@@ -85,6 +85,27 @@ func claimLease(t *testing.T, jrnl *journal.MemJournal) idutil.SafeID {
 	return leaseID
 }
 
+// mustAppend appends ev to the instance log under leaseID, failing on error.
+func mustAppend(t *testing.T, jrnl *journal.MemJournal, orderID string, leaseID idutil.SafeID, ev journal.Event) {
+	t.Helper()
+	if _, err := jrnl.Append(context.Background(), idutil.SafeID(orderID), leaseID, ev); err != nil {
+		t.Fatalf("Append %s: %v", ev.Kind, err)
+	}
+}
+
+// mustMarkTerminal marks the instance terminal with status, failing on error or
+// ok=false.
+func mustMarkTerminal(t *testing.T, jrnl *journal.MemJournal, orderID string, leaseID idutil.SafeID, status saga.Status) {
+	t.Helper()
+	ok, err := jrnl.MarkTerminal(context.Background(), idutil.SafeID(orderID), leaseID, status)
+	if err != nil {
+		t.Fatalf("MarkTerminal %s: %v", status, err)
+	}
+	if !ok {
+		t.Fatalf("MarkTerminal %s: returned ok=false", status)
+	}
+}
+
 func TestGetOrderStatus_NotFound(t *testing.T) {
 	t.Parallel()
 	b := newBundle(t)
@@ -167,15 +188,8 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 			name: "running_after_step_completed",
 			setup: func(t *testing.T, b testBundle, orderID string) {
 				t.Helper()
-				ctx := context.Background()
 				leaseID := claimLease(t, b.jrnl)
-				_, err := b.jrnl.Append(ctx, idutil.SafeID(orderID), leaseID, journal.Event{
-					Kind:     journal.KindStepCompleted,
-					StepName: "reserve",
-				})
-				if err != nil {
-					t.Fatalf("Append KindStepCompleted: %v", err)
-				}
+				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepCompleted, StepName: "reserve"})
 			},
 			wantStatus: orderstatus.StatusRunning,
 		},
@@ -183,24 +197,10 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 			name: "succeeded",
 			setup: func(t *testing.T, b testBundle, orderID string) {
 				t.Helper()
-				ctx := context.Background()
 				leaseID := claimLease(t, b.jrnl)
-				// Advance to Running first (Pending → Running via step event),
-				// then mark terminal Succeeded.
-				_, err := b.jrnl.Append(ctx, idutil.SafeID(orderID), leaseID, journal.Event{
-					Kind:     journal.KindStepStarted,
-					StepName: "reserve",
-				})
-				if err != nil {
-					t.Fatalf("Append KindStepStarted: %v", err)
-				}
-				ok, err := b.jrnl.MarkTerminal(ctx, idutil.SafeID(orderID), leaseID, saga.StatusSucceeded)
-				if err != nil {
-					t.Fatalf("MarkTerminal Succeeded: %v", err)
-				}
-				if !ok {
-					t.Fatal("MarkTerminal Succeeded: returned ok=false")
-				}
+				// Pending → Running (step event), then mark terminal Succeeded.
+				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepStarted, StepName: "reserve"})
+				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusSucceeded)
 			},
 			wantStatus: orderstatus.StatusSucceeded,
 		},
@@ -208,30 +208,11 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 			name: "compensated",
 			setup: func(t *testing.T, b testBundle, orderID string) {
 				t.Helper()
-				ctx := context.Background()
 				leaseID := claimLease(t, b.jrnl)
-				// Pending → Running (step event), then Running → Compensating,
-				// then Compensating → Compensated (terminal).
-				_, err := b.jrnl.Append(ctx, idutil.SafeID(orderID), leaseID, journal.Event{
-					Kind:     journal.KindStepStarted,
-					StepName: "reserve",
-				})
-				if err != nil {
-					t.Fatalf("Append KindStepStarted: %v", err)
-				}
-				_, err = b.jrnl.Append(ctx, idutil.SafeID(orderID), leaseID, journal.Event{
-					Kind: journal.KindCompensationStarted,
-				})
-				if err != nil {
-					t.Fatalf("Append KindCompensationStarted: %v", err)
-				}
-				ok, err := b.jrnl.MarkTerminal(ctx, idutil.SafeID(orderID), leaseID, saga.StatusCompensated)
-				if err != nil {
-					t.Fatalf("MarkTerminal Compensated: %v", err)
-				}
-				if !ok {
-					t.Fatal("MarkTerminal Compensated: returned ok=false")
-				}
+				// Pending → Running → Compensating → Compensated (terminal).
+				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepStarted, StepName: "reserve"})
+				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindCompensationStarted})
+				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusCompensated)
 			},
 			wantStatus: orderstatus.StatusCompensated,
 		},
@@ -239,16 +220,9 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 			name: "failed_via_saga_failed",
 			setup: func(t *testing.T, b testBundle, orderID string) {
 				t.Helper()
-				ctx := context.Background()
 				leaseID := claimLease(t, b.jrnl)
 				// Pending → Failed directly (no steps committed, no compensation).
-				ok, err := b.jrnl.MarkTerminal(ctx, idutil.SafeID(orderID), leaseID, saga.StatusFailed)
-				if err != nil {
-					t.Fatalf("MarkTerminal Failed: %v", err)
-				}
-				if !ok {
-					t.Fatal("MarkTerminal Failed: returned ok=false")
-				}
+				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusFailed)
 			},
 			wantStatus: orderstatus.StatusFailed,
 		},
@@ -256,15 +230,8 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 			name: "failed_via_saga_expired",
 			setup: func(t *testing.T, b testBundle, orderID string) {
 				t.Helper()
-				ctx := context.Background()
 				leaseID := claimLease(t, b.jrnl)
-				ok, err := b.jrnl.MarkTerminal(ctx, idutil.SafeID(orderID), leaseID, saga.StatusExpired)
-				if err != nil {
-					t.Fatalf("MarkTerminal Expired: %v", err)
-				}
-				if !ok {
-					t.Fatal("MarkTerminal Expired: returned ok=false")
-				}
+				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusExpired)
 			},
 			wantStatus: orderstatus.StatusFailed,
 		},
@@ -272,29 +239,11 @@ func TestGetOrderStatus_StatusTable(t *testing.T) {
 			name: "failed_via_saga_compensation_failed",
 			setup: func(t *testing.T, b testBundle, orderID string) {
 				t.Helper()
-				ctx := context.Background()
 				leaseID := claimLease(t, b.jrnl)
 				// Pending → Running → Compensating → CompensationFailed.
-				_, err := b.jrnl.Append(ctx, idutil.SafeID(orderID), leaseID, journal.Event{
-					Kind:     journal.KindStepStarted,
-					StepName: "reserve",
-				})
-				if err != nil {
-					t.Fatalf("Append KindStepStarted: %v", err)
-				}
-				_, err = b.jrnl.Append(ctx, idutil.SafeID(orderID), leaseID, journal.Event{
-					Kind: journal.KindCompensationStarted,
-				})
-				if err != nil {
-					t.Fatalf("Append KindCompensationStarted: %v", err)
-				}
-				ok, err := b.jrnl.MarkTerminal(ctx, idutil.SafeID(orderID), leaseID, saga.StatusCompensationFailed)
-				if err != nil {
-					t.Fatalf("MarkTerminal CompensationFailed: %v", err)
-				}
-				if !ok {
-					t.Fatal("MarkTerminal CompensationFailed: returned ok=false")
-				}
+				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindStepStarted, StepName: "reserve"})
+				mustAppend(t, b.jrnl, orderID, leaseID, journal.Event{Kind: journal.KindCompensationStarted})
+				mustMarkTerminal(t, b.jrnl, orderID, leaseID, saga.StatusCompensationFailed)
 			},
 			wantStatus: orderstatus.StatusFailed,
 		},

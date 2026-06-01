@@ -15,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/sagaimpl"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
@@ -35,42 +38,20 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 	ship := mem.NewShipmentStore()
 
 	impl, err := sagaimpl.NewImpl(orders, inv, pay, ship)
-	if err != nil {
-		t.Fatalf("NewImpl: %v", err)
-	}
+	require.NoError(t, err, "NewImpl")
 
 	reg, err := of.Register(impl)
-	if err != nil {
-		t.Fatalf("of.Register: %v", err)
-	}
+	require.NoError(t, err, "of.Register")
 
 	defn, ok := reg.Lookup(of.DefinitionID)
-	if !ok {
-		t.Fatalf("Lookup(%q): not found in registry", of.DefinitionID)
-	}
+	require.Truef(t, ok, "Lookup(%q): not found in registry", of.DefinitionID)
 
 	// --- definition-level assertions ---
 
-	if defn.ID != of.DefinitionID {
-		t.Errorf("Definition.ID = %q, want %q", defn.ID, of.DefinitionID)
-	}
-
-	wantTimeout := testtime.D30s
-	if defn.Timeout != wantTimeout {
-		t.Errorf("Definition.Timeout = %v, want %v", defn.Timeout, wantTimeout)
-	}
-
-	wantRetryMaxAttempts := 3
-	if defn.RetryPolicy.MaxAttempts != wantRetryMaxAttempts {
-		t.Errorf("Definition.RetryPolicy.MaxAttempts = %d, want %d",
-			defn.RetryPolicy.MaxAttempts, wantRetryMaxAttempts)
-	}
-
-	wantBaseInterval := testtime.D100ms
-	if defn.RetryPolicy.BaseInterval != wantBaseInterval {
-		t.Errorf("Definition.RetryPolicy.BaseInterval = %v, want %v",
-			defn.RetryPolicy.BaseInterval, wantBaseInterval)
-	}
+	assert.Equal(t, of.DefinitionID, defn.ID, "Definition.ID")
+	assert.Equal(t, testtime.D30s, defn.Timeout, "Definition.Timeout")
+	assert.Equal(t, 3, defn.RetryPolicy.MaxAttempts, "Definition.RetryPolicy.MaxAttempts")
+	assert.Equal(t, testtime.D100ms, defn.RetryPolicy.BaseInterval, "Definition.RetryPolicy.BaseInterval")
 
 	// --- step assertions ---
 
@@ -89,27 +70,17 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 		{name: "notifyUser", compensable: false, timeout: 0, stepMaxAttempts: 0},
 	}
 
-	if len(defn.Steps) != len(wantSteps) {
-		t.Fatalf("len(Steps) = %d, want %d", len(defn.Steps), len(wantSteps))
-	}
+	require.Len(t, defn.Steps, len(wantSteps), "len(Steps)")
 
 	for i, want := range wantSteps {
 		step := defn.Steps[i]
-		if string(step.Name) != want.name {
-			t.Errorf("Steps[%d].Name = %q, want %q", i, step.Name, want.name)
+		assert.Equalf(t, want.name, string(step.Name), "Steps[%d].Name", i)
+		if want.compensable {
+			assert.NotNilf(t, step.Compensate, "Steps[%d] (%s) Compensate should be non-nil", i, want.name)
+		} else {
+			assert.Nilf(t, step.Compensate, "Steps[%d] (%s) Compensate should be nil (not compensable per contract)", i, want.name)
 		}
-		if want.compensable && step.Compensate == nil {
-			t.Errorf("Steps[%d] (%s) Compensate should be non-nil", i, want.name)
-		}
-		if !want.compensable && step.Compensate != nil {
-			t.Errorf("Steps[%d] (%s) Compensate should be nil (not compensable per contract)", i, want.name)
-		}
-		if step.Timeout != want.timeout {
-			t.Errorf("Steps[%d] (%s) Timeout = %v, want %v", i, want.name, step.Timeout, want.timeout)
-		}
-		if step.RetryPolicy.MaxAttempts != want.stepMaxAttempts {
-			t.Errorf("Steps[%d] (%s) RetryPolicy.MaxAttempts = %d, want %d",
-				i, want.name, step.RetryPolicy.MaxAttempts, want.stepMaxAttempts)
-		}
+		assert.Equalf(t, want.timeout, step.Timeout, "Steps[%d] (%s) Timeout", i, want.name)
+		assert.Equalf(t, want.stepMaxAttempts, step.RetryPolicy.MaxAttempts, "Steps[%d] (%s) RetryPolicy.MaxAttempts", i, want.name)
 	}
 }

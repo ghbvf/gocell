@@ -2,10 +2,12 @@ package mem_test
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
@@ -18,64 +20,44 @@ func TestOrderRepository(t *testing.T) {
 	t.Run("create_and_get", func(t *testing.T) {
 		t.Parallel()
 		r := mem.NewOrderRepository()
-		order := &domain.Order{
-			ID:          "ord-1",
-			Item:        "widget",
-			AmountCents: 1000,
-			CreatedAt:   time.Now(),
-		}
-		if err := r.Create(context.Background(), order); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		order := &domain.Order{ID: "ord-1", Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
+		require.NoError(t, r.Create(context.Background(), order), "Create")
+
 		got, err := r.GetByID(context.Background(), "ord-1")
-		if err != nil {
-			t.Fatalf("GetByID: %v", err)
-		}
-		if got.ID != order.ID || got.Item != order.Item || got.AmountCents != order.AmountCents {
-			t.Errorf("got %+v, want %+v", got, order)
-		}
+		require.NoError(t, err, "GetByID")
+		assert.Equal(t, order.ID, got.ID)
+		assert.Equal(t, order.Item, got.Item)
+		assert.Equal(t, order.AmountCents, got.AmountCents)
 	})
 
 	t.Run("get_not_found", func(t *testing.T) {
 		t.Parallel()
 		r := mem.NewOrderRepository()
 		_, err := r.GetByID(context.Background(), "missing")
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
 		var ec *errcode.Error
-		if !errors.As(err, &ec) || ec.Kind != errcode.KindNotFound {
-			t.Errorf("expected KindNotFound, got %v", err)
-		}
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.KindNotFound, ec.Kind)
 	})
 
 	t.Run("create_returns_copy", func(t *testing.T) {
 		t.Parallel()
 		r := mem.NewOrderRepository()
 		order := &domain.Order{ID: "ord-2", Item: "gadget", AmountCents: 500, CreatedAt: time.Now()}
-		if err := r.Create(context.Background(), order); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-		// mutate original; stored copy must be unaffected
+		require.NoError(t, r.Create(context.Background(), order), "Create")
+		// Mutate the original; the stored copy must be unaffected.
 		order.AmountCents = 99999
-		got, _ := r.GetByID(context.Background(), "ord-2")
-		if got.AmountCents == 99999 {
-			t.Error("Create stored a reference, not a copy")
-		}
+		got, err := r.GetByID(context.Background(), "ord-2")
+		require.NoError(t, err, "GetByID")
+		assert.EqualValues(t, 500, got.AmountCents, "Create must store a copy, not a reference")
 	})
 
 	t.Run("create_empty_id_returns_error", func(t *testing.T) {
 		t.Parallel()
 		r := mem.NewOrderRepository()
 		order := &domain.Order{ID: "", Item: "widget", AmountCents: 100, CreatedAt: time.Now()}
-		err := r.Create(context.Background(), order)
-		if err == nil {
-			t.Fatal("expected error for empty ID, got nil")
-		}
 		var ec *errcode.Error
-		if !errors.As(err, &ec) || ec.Kind != errcode.KindInvalid {
-			t.Errorf("expected KindInvalid, got %v", err)
-		}
+		require.ErrorAs(t, r.Create(context.Background(), order), &ec)
+		assert.Equal(t, errcode.KindInvalid, ec.Kind)
 	})
 }
 
@@ -87,59 +69,37 @@ func TestInventoryStore(t *testing.T) {
 		s := mem.NewInventoryStore(map[string]int{"widget": 2})
 
 		resID, err := s.Reserve(context.Background(), "ord-1", "widget")
-		if err != nil {
-			t.Fatalf("Reserve: %v", err)
-		}
-		if resID != "res-ord-1" {
-			t.Errorf("reservationID = %q, want %q", resID, "res-ord-1")
-		}
-		if s.Available("widget") != 1 {
-			t.Errorf("available after reserve = %d, want 1", s.Available("widget"))
-		}
+		require.NoError(t, err, "Reserve")
+		assert.Equal(t, "res-ord-1", resID)
+		assert.Equal(t, 1, s.Available("widget"), "available after reserve")
 
-		if err := s.Release(context.Background(), "ord-1"); err != nil {
-			t.Fatalf("Release: %v", err)
-		}
-		if s.Available("widget") != 2 {
-			t.Errorf("available after release = %d, want 2", s.Available("widget"))
-		}
+		require.NoError(t, s.Release(context.Background(), "ord-1"), "Release")
+		assert.Equal(t, 2, s.Available("widget"), "available after release")
 	})
 
 	t.Run("release_idempotent", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewInventoryStore(map[string]int{"widget": 1})
-		// release unknown order: must return nil
-		if err := s.Release(context.Background(), "unknown"); err != nil {
-			t.Fatalf("Release unknown: %v", err)
-		}
-		// double release: must return nil
-		if _, err := s.Reserve(context.Background(), "ord-1", "widget"); err != nil {
-			t.Fatalf("Reserve setup: %v", err)
-		}
-		if err := s.Release(context.Background(), "ord-1"); err != nil {
-			t.Fatalf("Release setup: %v", err)
-		}
-		if err := s.Release(context.Background(), "ord-1"); err != nil {
-			t.Fatalf("double Release: %v", err)
-		}
+		require.NoError(t, s.Release(context.Background(), "unknown"), "Release unknown must be nil")
+
+		_, err := s.Reserve(context.Background(), "ord-1", "widget")
+		require.NoError(t, err, "Reserve setup")
+		require.NoError(t, s.Release(context.Background(), "ord-1"), "Release setup")
+		require.NoError(t, s.Release(context.Background(), "ord-1"), "double Release must be nil")
 	})
 
 	t.Run("reserve_out_of_stock", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewInventoryStore(map[string]int{"widget": 0})
 		_, err := s.Reserve(context.Background(), "ord-1", "widget")
-		if err == nil {
-			t.Fatal("expected error for out-of-stock, got nil")
-		}
+		require.Error(t, err, "expected out-of-stock error")
 	})
 
 	t.Run("reserve_unknown_item", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewInventoryStore(map[string]int{})
 		_, err := s.Reserve(context.Background(), "ord-1", "nonexistent")
-		if err == nil {
-			t.Fatal("expected error for unknown item, got nil")
-		}
+		require.Error(t, err, "expected unknown-item error")
 	})
 }
 
@@ -150,50 +110,34 @@ func TestPaymentStore(t *testing.T) {
 		t.Parallel()
 		s := mem.NewPaymentStore()
 		payID, err := s.Charge(context.Background(), "ord-1", 1500)
-		if err != nil {
-			t.Fatalf("Charge: %v", err)
-		}
-		if payID != "pay-ord-1" {
-			t.Errorf("paymentID = %q, want %q", payID, "pay-ord-1")
-		}
+		require.NoError(t, err, "Charge")
+		assert.Equal(t, "pay-ord-1", payID)
+
 		got, ok := s.Get("ord-1")
-		if !ok || got != "pay-ord-1" {
-			t.Errorf("Get = %q %v, want pay-ord-1 true", got, ok)
-		}
+		assert.True(t, ok)
+		assert.Equal(t, "pay-ord-1", got)
 	})
 
 	t.Run("refund_removes_payment", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewPaymentStore()
-		if _, err := s.Charge(context.Background(), "ord-1", 1000); err != nil {
-			t.Fatalf("Charge setup: %v", err)
-		}
-		if err := s.Refund(context.Background(), "ord-1"); err != nil {
-			t.Fatalf("Refund: %v", err)
-		}
+		_, err := s.Charge(context.Background(), "ord-1", 1000)
+		require.NoError(t, err, "Charge setup")
+		require.NoError(t, s.Refund(context.Background(), "ord-1"), "Refund")
+
 		_, ok := s.Get("ord-1")
-		if ok {
-			t.Error("payment still present after refund")
-		}
+		assert.False(t, ok, "payment still present after refund")
 	})
 
 	t.Run("refund_idempotent", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewPaymentStore()
-		// refund unknown: must return nil
-		if err := s.Refund(context.Background(), "unknown"); err != nil {
-			t.Fatalf("Refund unknown: %v", err)
-		}
-		// double refund
-		if _, err := s.Charge(context.Background(), "ord-2", 200); err != nil {
-			t.Fatalf("Charge setup: %v", err)
-		}
-		if err := s.Refund(context.Background(), "ord-2"); err != nil {
-			t.Fatalf("Refund setup: %v", err)
-		}
-		if err := s.Refund(context.Background(), "ord-2"); err != nil {
-			t.Fatalf("double Refund: %v", err)
-		}
+		require.NoError(t, s.Refund(context.Background(), "unknown"), "Refund unknown must be nil")
+
+		_, err := s.Charge(context.Background(), "ord-2", 200)
+		require.NoError(t, err, "Charge setup")
+		require.NoError(t, s.Refund(context.Background(), "ord-2"), "Refund setup")
+		require.NoError(t, s.Refund(context.Background(), "ord-2"), "double Refund must be nil")
 	})
 }
 
@@ -204,128 +148,135 @@ func TestShipmentStore(t *testing.T) {
 		t.Parallel()
 		s := mem.NewShipmentStore()
 		shipID, err := s.CreateShipment(context.Background(), "ord-1")
-		if err != nil {
-			t.Fatalf("CreateShipment: %v", err)
-		}
-		if shipID != "ship-ord-1" {
-			t.Errorf("shipmentID = %q, want %q", shipID, "ship-ord-1")
-		}
+		require.NoError(t, err, "CreateShipment")
+		assert.Equal(t, "ship-ord-1", shipID)
+
 		got, ok := s.Get("ord-1")
-		if !ok || got != "ship-ord-1" {
-			t.Errorf("Get = %q %v, want ship-ord-1 true", got, ok)
-		}
+		assert.True(t, ok)
+		assert.Equal(t, "ship-ord-1", got)
 	})
 
 	t.Run("cancel_removes_shipment", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewShipmentStore()
-		if _, err := s.CreateShipment(context.Background(), "ord-1"); err != nil {
-			t.Fatalf("CreateShipment setup: %v", err)
-		}
-		if err := s.CancelShipment(context.Background(), "ord-1"); err != nil {
-			t.Fatalf("CancelShipment: %v", err)
-		}
+		_, err := s.CreateShipment(context.Background(), "ord-1")
+		require.NoError(t, err, "CreateShipment setup")
+		require.NoError(t, s.CancelShipment(context.Background(), "ord-1"), "CancelShipment")
+
 		_, ok := s.Get("ord-1")
-		if ok {
-			t.Error("shipment still present after cancel")
-		}
+		assert.False(t, ok, "shipment still present after cancel")
 	})
 
 	t.Run("cancel_idempotent", func(t *testing.T) {
 		t.Parallel()
 		s := mem.NewShipmentStore()
-		// cancel unknown: must return nil
-		if err := s.CancelShipment(context.Background(), "unknown"); err != nil {
-			t.Fatalf("CancelShipment unknown: %v", err)
-		}
-		// double cancel
-		if _, err := s.CreateShipment(context.Background(), "ord-2"); err != nil {
-			t.Fatalf("CreateShipment setup: %v", err)
-		}
-		if err := s.CancelShipment(context.Background(), "ord-2"); err != nil {
-			t.Fatalf("CancelShipment setup: %v", err)
-		}
-		if err := s.CancelShipment(context.Background(), "ord-2"); err != nil {
-			t.Fatalf("double CancelShipment: %v", err)
-		}
+		require.NoError(t, s.CancelShipment(context.Background(), "unknown"), "CancelShipment unknown must be nil")
+
+		_, err := s.CreateShipment(context.Background(), "ord-2")
+		require.NoError(t, err, "CreateShipment setup")
+		require.NoError(t, s.CancelShipment(context.Background(), "ord-2"), "CancelShipment setup")
+		require.NoError(t, s.CancelShipment(context.Background(), "ord-2"), "double CancelShipment must be nil")
 	})
 }
 
 // TestInventoryStore_ConcurrentReserveRelease verifies that concurrent
-// Reserve/Release operations on InventoryStore are data-race-free.
-// Run with -race to detect any missing mutex guards.
+// Reserve/Release operations on InventoryStore are data-race-free (run with
+// -race). With one widget per order, every reserve succeeds and every release is
+// idempotent, so no operation may error — each goroutine records its result in a
+// distinct slot (no shared write) and the test goroutine asserts after Wait.
 func TestInventoryStore_ConcurrentReserveRelease(t *testing.T) {
 	t.Parallel()
 	const goroutines = 20
 	s := mem.NewInventoryStore(map[string]int{"widget": goroutines})
 
+	reserveErrs := make([]error, goroutines)
+	releaseErrs := make([]error, goroutines)
 	var wg sync.WaitGroup
 	wg.Add(goroutines * 2)
-
 	for i := range goroutines {
 		orderID := "ord-" + string(rune('A'+i))
-		go func(id string) {
+		go func(idx int, id string) {
 			defer wg.Done()
-			_, _ = s.Reserve(context.Background(), id, "widget")
-		}(orderID)
-		go func(id string) {
+			_, reserveErrs[idx] = s.Reserve(context.Background(), id, "widget")
+		}(i, orderID)
+		go func(idx int, id string) {
 			defer wg.Done()
-			_ = s.Release(context.Background(), id)
-		}(orderID)
+			releaseErrs[idx] = s.Release(context.Background(), id)
+		}(i, orderID)
 	}
 	wg.Wait()
-	// Available() must also be race-free.
-	_ = s.Available("widget")
+
+	for i := range goroutines {
+		require.NoErrorf(t, reserveErrs[i], "Reserve[%d]", i)
+		require.NoErrorf(t, releaseErrs[i], "Release[%d]", i)
+	}
+	// Inventory invariant after the concurrent phase: available stays within
+	// [0, initial stock]. This also exercises Available concurrently with no
+	// in-flight writers remaining.
+	avail := s.Available("widget")
+	assert.GreaterOrEqual(t, avail, 0)
+	assert.LessOrEqual(t, avail, goroutines)
 }
 
-// TestPaymentStore_ConcurrentChargeRefund verifies that concurrent
-// Charge/Refund operations on PaymentStore are data-race-free.
+// TestPaymentStore_ConcurrentChargeRefund verifies that concurrent Charge/Refund
+// operations on PaymentStore are data-race-free. Charge always records and
+// Refund is idempotent, so neither may error.
 func TestPaymentStore_ConcurrentChargeRefund(t *testing.T) {
 	t.Parallel()
 	const goroutines = 20
 	s := mem.NewPaymentStore()
 
+	chargeErrs := make([]error, goroutines)
+	refundErrs := make([]error, goroutines)
 	var wg sync.WaitGroup
 	wg.Add(goroutines * 2)
-
 	for i := range goroutines {
 		orderID := "ord-" + string(rune('A'+i))
-		go func(id string) {
+		go func(idx int, id string) {
 			defer wg.Done()
-			_, _ = s.Charge(context.Background(), id, 100)
-		}(orderID)
-		go func(id string) {
+			_, chargeErrs[idx] = s.Charge(context.Background(), id, 100)
+		}(i, orderID)
+		go func(idx int, id string) {
 			defer wg.Done()
-			_ = s.Refund(context.Background(), id)
-		}(orderID)
+			refundErrs[idx] = s.Refund(context.Background(), id)
+		}(i, orderID)
 	}
 	wg.Wait()
-	// Get must also be race-free.
-	_, _ = s.Get("ord-A")
+
+	for i := range goroutines {
+		require.NoErrorf(t, chargeErrs[i], "Charge[%d]", i)
+		require.NoErrorf(t, refundErrs[i], "Refund[%d]", i)
+	}
 }
 
 // TestShipmentStore_ConcurrentCreateCancel verifies that concurrent
 // CreateShipment/CancelShipment operations on ShipmentStore are data-race-free.
+// CreateShipment always records and CancelShipment is idempotent, so neither may
+// error.
 func TestShipmentStore_ConcurrentCreateCancel(t *testing.T) {
 	t.Parallel()
 	const goroutines = 20
 	s := mem.NewShipmentStore()
 
+	createErrs := make([]error, goroutines)
+	cancelErrs := make([]error, goroutines)
 	var wg sync.WaitGroup
 	wg.Add(goroutines * 2)
-
 	for i := range goroutines {
 		orderID := "ord-" + string(rune('A'+i))
-		go func(id string) {
+		go func(idx int, id string) {
 			defer wg.Done()
-			_, _ = s.CreateShipment(context.Background(), id)
-		}(orderID)
-		go func(id string) {
+			_, createErrs[idx] = s.CreateShipment(context.Background(), id)
+		}(i, orderID)
+		go func(idx int, id string) {
 			defer wg.Done()
-			_ = s.CancelShipment(context.Background(), id)
-		}(orderID)
+			cancelErrs[idx] = s.CancelShipment(context.Background(), id)
+		}(i, orderID)
 	}
 	wg.Wait()
-	// Get must also be race-free.
-	_, _ = s.Get("ord-A")
+
+	for i := range goroutines {
+		require.NoErrorf(t, createErrs[i], "CreateShipment[%d]", i)
+		require.NoErrorf(t, cancelErrs[i], "CancelShipment[%d]", i)
+	}
 }
