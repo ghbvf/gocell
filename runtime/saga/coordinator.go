@@ -444,16 +444,19 @@ drain:
 	c.cancel = nil
 	c.mu.Unlock()
 
+	// Orphan any in-flight distlocks BEFORE canceling so the shutdown I/O-free
+	// guarantee holds: cancel() would wake a cooperative-but-unfinished step,
+	// whose tickOnce could then race a release() (Driver.Release RPC) ahead of
+	// orphan() — exactly the blocking/hangable I/O Stop is designed to avoid.
+	// Orphaning first consumes the lock's shared sync.Once, so the later
+	// tickOnce release() is a harmless no-op. Orphan stops renewal without I/O
+	// so it cannot hang on an unreachable backend; future renewals stop and the
+	// key expires by TTL expiry (see orphanInflightLocks for the bound). The
+	// journal lease_id CAS fences the orphaned step at commit.
+	c.orphanInflightLocks()
 	if cancel != nil {
 		cancel()
 	}
-	// Orphan any in-flight distlocks so a wedged (non-cooperative) step cannot
-	// hold its lock until process death. Orphan stops renewal without I/O so it
-	// cannot hang on an unreachable backend; the key expires within ≤1×TTL.
-	// Cooperative steps already released via tickOnce; this idempotently covers
-	// the drain-budget-exhausted case. The journal lease_id CAS fences the
-	// orphaned step at commit.
-	c.orphanInflightLocks()
 	if done == nil {
 		return nil
 	}
@@ -477,11 +480,17 @@ drain:
 // (a no-op in single-process mode as well). Entries are left for the owning
 // goroutine to delete from the map.
 //
-// After Stop, per-instance distlock keys linger in the backend for up to
-// Config.LeaseDuration before expiring (vs the previous immediate-release
-// behavior); a coordinator restarting within that window will skip those
-// instances until the lease lapses. This is the deliberate cost of I/O-free
-// shutdown (resilient even when the backend is unreachable at shutdown).
+// After Stop, per-instance distlock keys linger in the backend until their
+// lease expires (vs the previous immediate-release behavior); a coordinator
+// restarting within that window will skip those instances until the lease
+// lapses. orphan() stops scheduling future renewals immediately and cancels
+// any in-flight renewal best-effort, but cancellation is not atomic with the
+// backend: a renewal whose write already reached the backend at orphan time
+// may extend the lease one more TTL window from its commit. The takeover bound
+// is therefore ~Config.LeaseDuration from the last successful renewal (≈one TTL
+// window from Stop), not a hard cap measured from the Stop call. This is the
+// deliberate cost of I/O-free shutdown (resilient even when the backend is
+// unreachable at shutdown).
 func (c *Coordinator) orphanInflightLocks() {
 	var n int
 	c.inflightLocks.Range(func(key, val any) bool {

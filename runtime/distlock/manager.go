@@ -133,12 +133,13 @@ type Manager struct {
 	snapshotLocks int           // protected by mu; written by manager-goroutine handlers, read by Snapshot()
 
 	nextID atomic.Uint64
-	// pendingReleases counts how many locks have been added but whose
-	// corresponding remove() call has not yet been processed.  The manager
-	// drains only when this reaches zero via an eventRemove or eventOrphan event.
-	// Protected by mu (written by add/run; read by run).
-	pendingReleases int
-	events          chan managerEvent
+	// pendingDispositions counts how many locks have been added but have not yet
+	// reached a terminal disposition. Each add() increments it; it is decremented
+	// by either an eventRemove (release) or an eventOrphan — both terminal — so
+	// the name covers both paths, not release alone. The manager drains only when
+	// this reaches zero. Protected by mu (written by add/run; read by run).
+	pendingDispositions int
+	events              chan managerEvent
 
 	// renewNotify receives a signal after each successful Driver.Renew call.
 	// Buffered (cap 16) to avoid blocking the manager on slow consumers.
@@ -197,7 +198,7 @@ func (m *Manager) RenewNotify() <-chan struct{} {
 // add sends a new lock to the manager goroutine and lazily starts it.
 func (m *Manager) add(state *lockState) {
 	m.mu.Lock()
-	m.pendingReleases++
+	m.pendingDispositions++
 	if !m.running {
 		m.running = true
 		// Fresh channels for this manager lifecycle.
@@ -332,7 +333,7 @@ func (m *Manager) dispatchEvent(
 	case eventRemove:
 		m.handleRemove(ev, locks, items, h, inflightRenew)
 		// Both eventRemove and eventOrphan account for one pending-release slot
-		// (each add() increments pendingReleases once).
+		// (each add() increments pendingDispositions once).
 		return m.decPendingAndMaybeDrain()
 	case eventOrphan:
 		m.handleOrphan(ev, locks, items, h, inflightRenew)
@@ -340,20 +341,20 @@ func (m *Manager) dispatchEvent(
 	case eventRenewResult:
 		m.handleRenewResult(ev, locks, items, h, inflightRenew)
 		// eventRenewResult is NOT a terminal disposition — it does not account
-		// for a pendingReleases slot.
+		// for a pendingDispositions slot.
 	}
 	return false
 }
 
-// decPendingAndMaybeDrain decrements pendingReleases. If it reaches zero it
+// decPendingAndMaybeDrain decrements pendingDispositions. If it reaches zero it
 // closes the drained channel, marks the manager stopped, and returns true
 // (signals runOnce to exit). The manager exits when all pending-release slots
 // have been accounted for (via either eventRemove or eventOrphan), regardless
 // of whether Driver.Release I/O goroutines from eventRemove are still in-flight.
 func (m *Manager) decPendingAndMaybeDrain() bool {
 	m.mu.Lock()
-	m.pendingReleases--
-	pending := m.pendingReleases
+	m.pendingDispositions--
+	pending := m.pendingDispositions
 	m.mu.Unlock()
 	if pending == 0 {
 		m.mu.Lock()
@@ -588,9 +589,12 @@ func (m *Manager) handleRenewResult(
 // detached lockState (and ok=true) if the lock was found, or (nil, false) if it
 // was already absent (lost via renewal failure before the terminal event arrived).
 //
-// If a Renew is in-flight for this lock, its context is canceled so the backend
-// key's expiry is bounded at ≤1×TTL (a Renew that succeeded after orphan would
-// extend the key one more cycle → ≤2×TTL, violating the ADR contract).
+// If a Renew is in-flight for this lock, its context is canceled (best-effort)
+// to keep the orphaned key's expiry close to one TTL window from the last
+// successful renewal. The cancel is not atomic with the backend: a Renew whose
+// write already landed extends the key one more cycle from its commit, so the
+// bound is "~1×TTL from the last successful renewal", not a hard cap from the
+// detach call (see Lock.Orphan godoc).
 //
 // Called by handleRemove and handleOrphan to share the heap-detach path.
 //
@@ -616,9 +620,10 @@ func (m *Manager) detachLock(
 		heap.Remove(h, item.index)
 		delete(items, id)
 	}
-	// Cancel any in-flight Renew so an orphaned/removed key's expiry stays
-	// bounded at ≤1×TTL (a Renew that succeeded after orphan would extend the
-	// key one more cycle → ≤2×TTL, violating the ADR contract).
+	// Cancel any in-flight Renew (best-effort) so an orphaned/removed key's
+	// expiry stays close to one TTL window from the last successful renewal. The
+	// cancel is racy against a Renew that already wrote to the backend; that case
+	// extends the key one more cycle from its commit (see Lock.Orphan godoc).
 	if cancel, ok := inflightRenew[id]; ok {
 		cancel()
 		delete(inflightRenew, id)

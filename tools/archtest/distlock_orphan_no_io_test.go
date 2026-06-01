@@ -3,19 +3,26 @@
 //
 // # DISTLOCK-ORPHAN-NO-DRIVER-IO-01
 //
-// Within runtime/distlock, the function handleOrphan MUST NOT call any
-// method of the distlock.Driver interface (SetNX / Renew / Release).
+// Within runtime/distlock, the function handleOrphan — AND every same-package
+// helper it calls directly (1-hop, currently just detachLock) — MUST NOT call
+// any method of the distlock.Driver interface (SetNX / Renew / Release).
 //
 // Rationale: Lock.Orphan() is designed to stop lease renewal WITHOUT any
 // backend I/O so that callers can hand off the lock during graceful shutdown
-// even when the backend (Redis) is unreachable. If handleOrphan were to call
-// Driver.SetNX / Driver.Renew / Driver.Release, the no-IO contract would be
-// silently violated: shutdown could block or fail exactly when it must not.
+// even when the backend (Redis) is unreachable. If handleOrphan — or its shared
+// detachLock helper — were to call Driver.SetNX / Driver.Renew / Driver.Release,
+// the no-IO contract would be silently violated: shutdown could block or fail
+// exactly when it must not. detachLock is shared with handleRemove, so a Driver
+// call added there (even one offloaded to a goroutine) would leak I/O onto the
+// orphan path — hence the 1-hop scan flags ANY Driver call in helper bodies,
+// regardless of go-statement nesting.
 //
 // Detection: type-aware callee resolution via TypesInfo.Selections — each
 // *ast.SelectorExpr call-target is resolved to its *types.Func, then its
 // receiver interface type is compared against distlock.Driver to identify
-// method calls on that interface. Scoped to the handleOrphan function body.
+// method calls on that interface. The scan set is handleOrphan plus its
+// type-resolved same-package 1-hop callees, derived generically so it tracks
+// the helper set automatically.
 //
 // AI-robust evaluation:
 //
@@ -32,9 +39,13 @@
 //     exceeds the benefit given the single-function scope.
 //
 // Blind spots (stated per ai-robust.md §"工具选定后强制盲区自检"):
-//   - Indirect dispatch: if handleOrphan called a helper (e.g. callDriver())
-//     that in turn calls Driver methods, this archtest would NOT detect it
-//     (we only scan the handleOrphan function body, not its callees).
+//   - Deep (>1-hop) indirect dispatch: 1-hop helpers of handleOrphan (e.g.
+//     detachLock) ARE now scanned (F3). A helper-of-a-helper (handleOrphan →
+//     detachLock → deeperHelper → Driver) is still NOT detected — full
+//     transitive callee analysis is too costly for a single archtest pass.
+//     Residual gap; acknowledged. DISTLOCK-MANAGER-DRIVER-IO-OFFLOADED-01
+//     provides a partial backstop (every Driver call package-wide must sit in a
+//     goroutine), but it does not assert *absence* on the orphan path.
 //   - Local-variable method-value invocation: `rel := m.driver.Release;
 //     rel(ctx, key, tok)` — the SelectorExpr `m.driver.Release` on the
 //     right-hand side is resolved by TypesInfo.Selections (detected), but
@@ -108,11 +119,18 @@ const (
 	// place and ARCHTEST-MODULE-PATH-FUNNEL-01 stays green (no bare literal).
 	distlockMgrPkgPath   = PlatformModulePath + "/runtime/distlock"
 	handleOrphanFuncName = "handleOrphan"
+	detachLockFuncName   = "detachLock"
 	driverIfaceName      = "Driver"
 )
 
 // TestDistlockOrphanNoDriverIO01 asserts that handleOrphan in runtime/distlock
-// does not call any method of the distlock.Driver interface.
+// — AND every same-package helper it calls directly (1-hop) — does not call any
+// method of the distlock.Driver interface. The 1-hop extension (F3) closes the
+// indirect-dispatch blind spot for handleOrphan's sole helper, detachLock:
+// without it, a Driver call added to the shared detachLock helper (even one
+// offloaded to a goroutine) would silently give the orphan path backend I/O.
+// The helper set is derived generically (any same-package callee of
+// handleOrphan), so it auto-extends if handleOrphan gains another helper.
 func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -122,6 +140,7 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 	var (
 		foundHandleOrphan bool
 		foundDriverIface  bool
+		scannedDetachLock bool
 		violations        []Diagnostic
 	)
 
@@ -149,43 +168,79 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 			}
 			foundDriverIface = true
 
-			// Find handleOrphan across all files in the package and scan its body.
+			// Index every FuncDecl in the package by name + remember its file.
+			type funcEntry struct {
+				fd   *ast.FuncDecl
+				file *ast.File
+			}
+			funcByName := map[string]funcEntry{}
 			for _, file := range p.Files {
 				for _, decl := range file.Decls {
-					fd, ok := decl.(*ast.FuncDecl)
-					if !ok || fd.Name == nil || fd.Name.Name != handleOrphanFuncName {
-						continue
+					if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name != nil {
+						funcByName[fd.Name.Name] = funcEntry{fd: fd, file: file}
 					}
-					foundHandleOrphan = true
-					if fd.Body == nil {
-						continue
-					}
-					// Walk all call expressions in handleOrphan's body.
-					EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-						sel, ok := call.Fun.(*ast.SelectorExpr)
-						if !ok {
-							return
-						}
-						fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-						if !ok || fn == nil {
-							return
-						}
-						// Check if the method receiver's type satisfies Driver.
-						sig, ok := fn.Type().(*types.Signature)
-						if !ok || sig.Recv() == nil {
-							return
-						}
-						recvType := sig.Recv().Type()
-						if isTypeOrPtrImplementsIface(recvType, driverIface) {
-							pos := p.Fset.Position(call.Pos())
-							violations = append(violations, Diagnostic{
-								Rel:     p.Rel(file),
-								Line:    pos.Line,
-								Message: "handleOrphan must not call Driver." + fn.Name() + "; Orphan is a no-I/O operation",
-							})
-						}
-					})
 				}
+			}
+
+			orphan, ok := funcByName[handleOrphanFuncName]
+			if !ok || orphan.fd.Body == nil {
+				return nil
+			}
+			foundHandleOrphan = true
+
+			// scanBody flags every Driver method call inside fn's body. For the
+			// orphan path, ANY Driver call is a violation — including ones nested
+			// in a go statement (orphan must perform zero backend I/O, not merely
+			// offload it).
+			scanBody := func(name string, fe funcEntry) {
+				EachInSubtree[ast.CallExpr](fe.fd.Body, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+					if !ok || fn == nil {
+						return
+					}
+					sig, ok := fn.Type().(*types.Signature)
+					if !ok || sig.Recv() == nil {
+						return
+					}
+					if isTypeOrPtrImplementsIface(sig.Recv().Type(), driverIface) {
+						pos := p.Fset.Position(call.Pos())
+						violations = append(violations, Diagnostic{
+							Rel:  p.Rel(fe.file),
+							Line: pos.Line,
+							Message: name + " must not call Driver." + fn.Name() +
+								"; the orphan path (handleOrphan + its 1-hop helpers) is a no-I/O operation",
+						})
+					}
+				})
+			}
+
+			// Scan set = handleOrphan + every same-package function it calls
+			// directly (1-hop). Derived from type-resolved callees so it tracks
+			// handleOrphan's helper set automatically.
+			scanSet := map[string]funcEntry{handleOrphanFuncName: orphan}
+			EachInSubtree[ast.CallExpr](orphan.fd.Body, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+				if !ok || fn == nil || fn.Pkg() == nil || fn.Pkg() != p.Pkg {
+					return
+				}
+				if helper, ok := funcByName[fn.Name()]; ok && helper.fd.Body != nil {
+					scanSet[fn.Name()] = helper
+				}
+			})
+
+			for name, fe := range scanSet {
+				if name == detachLockFuncName {
+					scannedDetachLock = true
+				}
+				scanBody(name, fe)
 			}
 			return nil
 		})
@@ -196,6 +251,12 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 	assert.True(t, foundDriverIface,
 		"%s: Driver interface not found in runtime/distlock scope; rule cannot enforce",
 		ruleDistlockOrphanNoDriverIO01)
+	// detachLock is handleOrphan's known helper; if the 1-hop derivation stops
+	// reaching it, the indirect-dispatch coverage silently regressed.
+	assert.True(t, scannedDetachLock,
+		"%s: expected the 1-hop helper scan to include %q (handleOrphan's heap-detach helper); "+
+			"if handleOrphan no longer calls it, update this guard",
+		ruleDistlockOrphanNoDriverIO01, detachLockFuncName)
 	Report(t, ruleDistlockOrphanNoDriverIO01, violations)
 }
 

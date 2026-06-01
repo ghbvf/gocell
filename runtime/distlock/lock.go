@@ -125,7 +125,7 @@ func (l *Lock) Done() <-chan struct{} { return l.done }
 //   - ErrLockLost:     renewal failed or backend reports ownership taken by
 //     another holder.
 //   - ErrLockOrphaned: Orphan() was called by the application (renewal stopped;
-//     backend key expires naturally after ≤1×TTL).
+//     backend key expires naturally on its lease TTL — see Orphan for the bound).
 //
 // Cause never returns context.Cause(callerCtx) — caller-ctx cancellation
 // does not end the lock under the Lock-as-Resource contract.
@@ -152,10 +152,18 @@ func (l *Lock) Value(key any) any { return l.valueLookup(key) }
 func (l *Lock) Release() error { return l.release() }
 
 // Orphan stops this lock's lease renewal WITHOUT deleting the backend key.
-// The key expires naturally after at most one TTL window, handing the lock to
-// a competitor within ≤1×TTL — no Release I/O is performed, so Orphan never
-// blocks on or fails due to backend reachability. After Orphan, Done() is
-// closed and Cause() reports ErrLockOrphaned.
+// No Release I/O is performed, so Orphan never blocks on or fails due to
+// backend reachability. After Orphan, Done() is closed and Cause() reports
+// ErrLockOrphaned.
+//
+// Takeover bound (best-effort, not a hard cap from the Orphan call): Orphan
+// stops scheduling future renewals immediately and cancels any in-flight
+// renewal, but the cancel is not atomic with the backend — a renewal whose
+// write already reached the backend at Orphan time may extend the lease one
+// more TTL window from its commit. The competitor can therefore acquire after
+// ~1×TTL measured from the last successful renewal (≈one TTL window from the
+// Orphan call, plus a renewal RPC latency in the worst case). This mirrors
+// etcd Session.Orphan: keepalive stops, the lease lapses on its own TTL.
 //
 // Orphan and Release are mutually exclusive and idempotent: the first call of
 // either wins; later calls of either are no-ops. Use Orphan for graceful

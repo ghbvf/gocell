@@ -28,7 +28,7 @@ Industry survey (recorded in this ADR §"Industry survey") showed five out of fi
 
 ## Decision
 
-`Locker.Acquire` returns a sealed `*Lock` value, intentionally NOT a `context.Context`. The caller-supplied ctx is consumed only for the acquire RPC (SetNX). Once held, the lock lifecycle is decoupled — only `Release()` or renewal failure (`ErrLockLost`) ends it. Forced manager shutdown is deferred to a follow-up — see §"Out of scope".
+`Locker.Acquire` returns a sealed `*Lock` value, intentionally NOT a `context.Context`. The caller-supplied ctx is consumed only for the acquire RPC (SetNX). Once held, the lock lifecycle is decoupled — only `Release()`, `Orphan()` (added in §Amendment 2026-05-31), or renewal failure (`ErrLockLost`) ends it. Forced *locker-level* shutdown is deferred to a follow-up — see §"Out of scope".
 
 ```go
 type Locker interface {
@@ -39,9 +39,10 @@ type Locker interface {
 type Lock struct { /* unexported */ }
 
 func (l *Lock) Done() <-chan struct{}    // closes on lock-end
-func (l *Lock) Cause() error              // ErrLockReleased / ErrLockLost
+func (l *Lock) Cause() error              // ErrLockReleased / ErrLockOrphaned / ErrLockLost
 func (l *Lock) Value(key any) any         // caller-ctx values (no cancellation)
 func (l *Lock) Release() error            // idempotent
+func (l *Lock) Orphan()                   // idempotent; see §Amendment 2026-05-31
 ```
 
 Caller MUST `defer lock.Release()`. Process crash falls back to Redis TTL. Living caller that forgets `Release` leaks the lock until process exit (mirroring bsm/redislock and redsync behavior).
@@ -177,14 +178,18 @@ the same family etcd `client/v3/concurrency` exposes:
 | GoCell | etcd equivalent | Semantics | Backend key |
 |--------|-----------------|-----------|-------------|
 | `Lock.Release()` | `Session.Close()` | end critical section now | deleted immediately (Driver.Release I/O) |
-| `Lock.Orphan()` (new) | `Session.Orphan()` | stop renewal, hand off | left to expire after ≤1×TTL (no I/O) |
+| `Lock.Orphan()` (new) | `Session.Orphan()` | stop renewal, hand off | left to expire on its lease TTL — ~1×TTL from the last successful renewal (no I/O) |
 
 Decision:
 
 - Add `func (l *Lock) Orphan()` — stops lease renewal, sets
   `Cause() == ErrLockOrphaned`, closes `Done()`, performs **no** `Driver`
-  call. The backend key expires naturally within one TTL window, handing the
-  lock to a competitor.
+  call. The backend key expires on its lease TTL, handing the lock to a
+  competitor. The bound is best-effort: Orphan stops *future* renewals
+  immediately and cancels any in-flight renewal, but a renewal whose write
+  already reached the backend may extend the lease one more TTL window from its
+  commit. The takeover bound is therefore ~1×TTL from the last successful
+  renewal (not a hard cap measured from the Orphan call).
 - `Orphan()` and `Release()` are **mutually exclusive and idempotent**: both
   closures in `Acquire` share one `sync.Once`, so the first call of either
   wins and any later call of either is a no-op. "Double disposition" /

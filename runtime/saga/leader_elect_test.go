@@ -779,10 +779,35 @@ func TestStop_OrphansInflightLockOnShutdown(t *testing.T) {
 		t.Errorf("Stop called Driver.Release %d time(s); want 0 — Stop must orphan (no I/O), not release", got)
 	}
 	// The backend key is intentionally left in the FakeDriver after Orphan:
-	// renewal was stopped but the key expires via TTL (≤1×LeaseDuration).
-	// A competitor coordinator can acquire it once TTL expires.
-	if len(fd.Snapshot()) != 1 {
-		t.Errorf("expected FakeDriver to still hold the key after Orphan (backend key left for TTL expiry); snapshot=%v", fd.Snapshot())
+	// renewal was stopped but the key expires via TTL. A competitor coordinator
+	// can acquire it once the lease lapses.
+	snap := fd.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected FakeDriver to still hold the key after Orphan (backend key left for TTL expiry); snapshot=%v", snap)
+	}
+	var orphanedKey string
+	for k := range snap {
+		orphanedKey = k
+	}
+
+	// F5: prove the orphan actually STOPPED renewal — advancing the clock past a
+	// full lease window must trigger no further Driver.Renew. A live renewal loop
+	// would have renewed at renewFraction×TTL (< TTL) within this window.
+	renewAfterStop := fd.Calls("Renew")
+	clk.Advance(leaderElectCfg().LeaseDuration)
+	if got := fd.Calls("Renew"); got != renewAfterStop {
+		t.Errorf("Driver.Renew called %d time(s) after Stop orphan; want %d — renewal must stop on orphan", got, renewAfterStop)
+	}
+
+	// F5: prove TTL-expiry takeover — once the orphaned lease lapses (clock now
+	// past expiresAt), a competitor wins SetNX on the same key, with no Release
+	// ever having occurred (asserted above). This is the bounded-TTL handoff.
+	acquired, err := fd.SetNX(context.Background(), orphanedKey, "competitor-token", leaderElectCfg().LeaseDuration)
+	if err != nil {
+		t.Fatalf("competitor SetNX after TTL expiry: %v", err)
+	}
+	if !acquired {
+		t.Errorf("competitor could not acquire orphaned key %q after TTL expiry; orphan handoff broken", orphanedKey)
 	}
 
 	// Cleanup: unblock the step + cancel so goroutines drain (goleak TestMain).
@@ -792,6 +817,104 @@ func TestStop_OrphansInflightLockOnShutdown(t *testing.T) {
 	case <-startDone:
 	case <-time.After(testtime.D3s):
 		t.Error("coordinator goroutine did not exit after unblocking step")
+	}
+}
+
+// TestStop_OrphansBeforeCancel_CooperativeStepNoRelease asserts the F2 ordering
+// guarantee: Stop orphans in-flight distlocks BEFORE canceling the drive ctx, so
+// a cooperative step woken by cancel cannot race a release() (Driver.Release RPC)
+// ahead of orphan(). The step here selects on ctx.Done() and would normally
+// release on cancel; because orphan() consumes the lock's shared sync.Once first,
+// that later release() is a no-op and Driver.Release is never called.
+//
+// Without the orphan-before-cancel ordering this assertion is racy: cancel()
+// would wake the step, whose tickOnce could win the sync.Once with release() and
+// drive a Driver.Release RPC — defeating the I/O-free-shutdown guarantee. With
+// the ordering, orphan() completes synchronously before cancel(), so Release==0
+// is deterministic.
+func TestStop_OrphansBeforeCancel_CooperativeStepNoRelease(t *testing.T) {
+	t.Parallel()
+	const defID idutil.SafeID = "coopstopdef"
+
+	stepEntered := make(chan struct{})
+	stepBlockCh := make(chan struct{})
+	var enterOnce sync.Once
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{{
+			Name: "coopstep",
+			// Cooperative: returns on ctx.Done(). It does NOT finish during the
+			// drain window (ctx not yet canceled, stepBlockCh not closed), so it is
+			// still in-flight when Stop reaches the orphan/cancel point — then
+			// cancel() wakes it and it would call release() the normal way.
+			Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+				enterOnce.Do(func() { close(stepEntered) })
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-stepBlockCh:
+					return []byte(`{}`), nil
+				}
+			},
+		}},
+	}
+
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	fd := locktest.NewFakeDriverWithClock(clk.Now)
+	locker, _ := distlock.New(fd, clk)
+	j, _ := journal.NewMemJournal(clk)
+	reg, _ := ksaga.NewInMemoryRegistry(def)
+	c, _ := newLeaderElectCoordinator(t, j, clk, reg, locker)
+
+	inst := ksaga.NewInstance("coopstopinst", defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		t.Fatal("coordinator not ready")
+	}
+
+	testwait.External(t, "tickers-registered",
+		func() bool { return clk.PendingTickers() >= 1 },
+		testtime.D2s, testtime.D1ms)
+	clk.Advance(leaderElectCfg().PollInterval) // fire a tick → claim + drive
+
+	select {
+	case <-stepEntered:
+	case <-time.After(testtime.D2s):
+		t.Fatal("cooperative step did not start")
+	}
+	if len(fd.Snapshot()) != 1 {
+		t.Fatalf("distlock not held while drive in-flight; snapshot=%v", fd.Snapshot())
+	}
+	// Reset Release counter so only Stop-path calls are counted.
+	fd.ResetCalls()
+
+	// Short Stop budget: the cooperative step outlives drain (it only returns on
+	// cancel, which Stop issues AFTER orphan). Stop returns a drain-timeout error.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D200ms)
+	defer stopCancel()
+	_ = c.Stop(stopCtx)
+
+	// Orphan ran before cancel woke the step → its release() is a no-op → no I/O.
+	if got := fd.Calls("Release"); got != 0 {
+		t.Errorf("Stop called Driver.Release %d time(s) for a cooperative step; want 0 — "+
+			"orphan must run before cancel so release() races are no-ops", got)
+	}
+
+	// Cleanup: cancel so the (already-canceled) coordinator goroutines drain.
+	cancel()
+	select {
+	case <-startDone:
+	case <-time.After(testtime.D3s):
+		t.Error("coordinator goroutine did not exit after cancel")
 	}
 }
 

@@ -238,7 +238,7 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	//
 	// The Once MUST remain shared across both closures — splitting it into two
 	// Onces would let orphan-then-release (or the renewal-lost-then-orphan path)
-	// double-send manager events and corrupt pendingReleases drain accounting.
+	// double-send manager events and corrupt pendingDispositions drain accounting.
 	var once sync.Once
 	var releaseErr error
 	release := func() error {

@@ -20,7 +20,9 @@
 // Three per-lock terminal signals (Lock.Cause()):
 //   - ErrLockReleased — Release() was called: renewal stopped, backend key deleted.
 //   - ErrLockOrphaned — Orphan() was called: renewal stopped, backend key NOT
-//     deleted (expires naturally after ≤1×TTL). Use for graceful shutdown/handoff.
+//     deleted (expires on its lease TTL — ~1×TTL from the last successful
+//     renewal; see Lock.Orphan godoc for the best-effort bound). Use for
+//     graceful shutdown/handoff.
 //     ref: etcd-io/etcd client/v3/concurrency/session.go Session.Orphan
 //   - ErrLockLost     — renewal failed or ownership taken by another holder.
 //
@@ -28,11 +30,17 @@
 //
 // Each call to New() creates one Manager. The Manager's resource footprint per
 // active lock set is:
-//   - 1 manager goroutine: owns the renewal min-heap and all Driver I/O calls
-//   - 0 per-lock goroutines: *Lock is a value handle; lock-end is delivered
-//     by the manager via markCause (closes Done() channel, sets Cause()).
+//   - 1 manager goroutine: owns the renewal min-heap and dispatches every
+//     Driver I/O call (Renew, Release) to a short-lived background goroutine so
+//     the loop never blocks on a slow or unreachable backend — Orphan() / Stop()
+//     stay responsive even while a Renew/Release RPC is in flight.
+//   - 0 persistent per-lock goroutines: *Lock is a value handle; lock-end is
+//     delivered by the manager via markCause (closes Done() channel, sets
+//     Cause()). Transient goroutines exist only for the duration of an
+//     individual Renew/Release RPC.
 //
-// N active locks = 1 manager goroutine + O(N) heap. One goroutine for N locks.
+// N active locks = 1 manager goroutine + O(N) heap + transient per-RPC
+// goroutines. One persistent goroutine for N locks.
 //
 // # Non-goals
 //

@@ -70,7 +70,7 @@ func TestLock_Orphan_StopsRenewalNoRelease(t *testing.T) {
 		t.Errorf("Orphan: Driver.Release should NOT be called after Orphan; got %d", got)
 	}
 
-	// Manager must drain (orphan hands off the pendingReleases slot).
+	// Manager must drain (orphan hands off the pendingDispositions slot).
 	select {
 	case <-m.Drained():
 	case <-time.After(testTimeout):
@@ -192,7 +192,7 @@ func TestLock_Orphan_Idempotent(t *testing.T) {
 // causeOnce and removes the lock from the manager before the caller reaches
 // Orphan(). The Acquire-level sync.Once for orphan was NOT consumed by the
 // lost path, so Orphan() fires mgr.orphan(id) — but detachLock finds the lock
-// already absent (ok=false) and is a safe no-op. pendingReleases still
+// already absent (ok=false) and is a safe no-op. pendingDispositions still
 // reaches 0 because the renewal-lost path calls decPendingAndMaybeDrain
 // before the Orphan() event arrives.
 //
@@ -245,7 +245,7 @@ func TestLock_RenewalLost_ThenOrphanNoop(t *testing.T) {
 		t.Errorf("RenewalLost_ThenOrphanNoop: Driver.Release must not be called; got %d", got)
 	}
 
-	// Manager must drain — pendingReleases accounting must stay correct.
+	// Manager must drain — pendingDispositions accounting must stay correct.
 	select {
 	case <-m.Drained():
 	case <-time.After(testTimeout):
@@ -395,7 +395,7 @@ func TestLock_Orphan_SiblingStillRenewed(t *testing.T) {
 // TestLock_Orphan_ManagerSelfDrainsNoGoroutineLeak proves the load-bearing
 // claim behind deferring locker-level Close() (ADR §"Out of scope"): the
 // Manager goroutine self-drains after every lock reaches a terminal disposition
-// via Orphan. Once pendingReleases hits zero, Drained() closes and the manager
+// via Orphan. Once pendingDispositions hits zero, Drained() closes and the manager
 // goroutine exits, returning NumGoroutine to baseline — so there is no leaked
 // goroutine for a process-wide Close()/Shutdown() to reclaim, which is why
 // shipping Close() today would be unreachable dead code.
@@ -605,6 +605,21 @@ func TestLock_Orphan_NotBlockedByInFlightRenew(t *testing.T) {
 	case <-m.Drained():
 	case <-time.After(testTimeout):
 		t.Fatal("NotBlockedByInFlightRenew: manager did not drain after Orphan + unblock")
+	}
+
+	// F1 best-effort bound: the Renew that was in-flight at Orphan time still ran
+	// to completion after UnblockRenew and extended the FakeDriver key — the
+	// backend write is NOT gated by Orphan (FakeDriver.Renew ignores ctx, modeling
+	// a real PEXPIRE that already committed before the cancel landed). The manager
+	// discards the late result (lock already detached), but the backend key now
+	// lives one renew window longer. This is precisely why the takeover bound is
+	// documented as "~1×TTL from the last successful renewal", not a hard cap
+	// measured from the Orphan call (see Lock.Orphan godoc).
+	if got := fd.Calls("Renew"); got != 1 {
+		t.Errorf("expected the in-flight Renew to complete after unblock; Renew calls=%d, want 1", got)
+	}
+	if _, held := fd.Snapshot()["inflight-renew-orphan"]; !held {
+		t.Error("expected the orphaned key to remain (in-flight renew extended it); snapshot missing key")
 	}
 
 	// Allow goroutines to settle before the test exits.
