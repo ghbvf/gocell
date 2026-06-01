@@ -30,13 +30,12 @@
 //     Go compiler refuse imports from outside the runtime/ subtree, so business
 //     code (cells/, examples/, cmd/, adapters/) cannot call it.
 //  3. runtime/internal/contractbuild.NewEventDerivation — tracing/observability
-//     projections of already-validated event metadata; returns
-//     (ContractSpec, error) with Validate() embedded inside the funnel (content
-//     invariant: Hard). Upstream Hard via the same runtime/internal/ placement.
-//     The former single-caller path-string allowlist is retired (see
-//     contractbuild/doc.go grading — once non-runtime callers are
-//     compiler-sealed and content is Validate()-closed, it guarded only a
-//     non-security tracing projection).
+//     projection of a validated outbox.Subscription; returns (ContractSpec,
+//     error) with sub.Validate() + ContractSpec.Validate() embedded inside the
+//     funnel (content + provenance: Hard). Upstream Hard via the same
+//     runtime/internal/ placement; provenance is type-enforced (the typed
+//     Subscription parameter replaced the retired single-caller allowlist). See
+//     contractbuild/doc.go grading.
 //
 // Three archtest gates enforce this invariant:
 //

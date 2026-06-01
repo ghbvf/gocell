@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
@@ -53,28 +54,34 @@ func NewFrameworkHTTP(id, method, path string) contractspec.ContractSpec {
 	}
 }
 
-// NewEventDerivation projects already-validated event metadata into a
-// ContractSpec shape for tracing / observability consumers. It is a
-// derivation funnel, NOT a declaration funnel — callers MUST NOT fabricate
-// new specs through this path; the source metadata must already pass
-// upstream validation (typically outbox.Subscription.Validate()).
+// NewEventDerivation projects a validated outbox.Subscription into a
+// ContractSpec shape for tracing / observability consumers. It is a derivation
+// funnel, NOT a declaration funnel — the spec is derived from the subscription's
+// already-bound contract identity, never fabricated.
 //
-// Validation is enforced at construction time: the funnel runs
-// ContractSpec.Validate() before returning and wraps any failure as a
-// derivation error. Callers MUST handle the returned error — content
+// Provenance is type- AND content-enforced: the parameter is a typed
+// outbox.Subscription (not loose primitives), and the funnel runs
+// sub.Validate() before deriving — so a caller cannot mint an event spec from
+// arbitrary strings, it must supply a fully-populated, valid subscription
+// (Topic / ConsumerGroup / CellID / ContractID / ContractKind / ContractTransport
+// all required). This closes the provenance gap left when the single-file caller
+// allowlist was retired (#1038); the typed parameter is now natural because this
+// package lives in runtime/ and may import kernel/outbox (the former primitive
+// signature was a vestige of the old kernel/contractspec placement).
+//
+// The derived spec is additionally run through ContractSpec.Validate() (defense
+// in depth: e.g. ContractID need not be a valid contract ID just because the
+// subscription validated). Callers MUST handle the returned error — content
 // invariants are funnel-owned, not caller discipline.
-//
-// Inputs are primitives (not outbox.Subscription) so this package stays
-// independent of kernel/outbox; the eventrouter tracing decorator is the
-// canonical caller. The runtime/internal/ placement makes the upstream gate
-// compiler-Hard (non-runtime packages cannot import this funnel), so no
-// caller-allowlist archtest is needed (see doc.go).
-func NewEventDerivation(id string, kind cellvocab.ContractKind, transport, topic string) (contractspec.ContractSpec, error) {
+func NewEventDerivation(sub outbox.Subscription) (contractspec.ContractSpec, error) {
+	if err := sub.Validate(); err != nil {
+		return contractspec.ContractSpec{}, fmt.Errorf("contractbuild: NewEventDerivation: subscription invalid: %w", err)
+	}
 	spec := contractspec.ContractSpec{
-		ID:        id,
-		Kind:      kind,
-		Transport: transport,
-		Topic:     topic,
+		ID:        sub.ContractID,
+		Kind:      cellvocab.ContractKind(sub.ContractKind),
+		Transport: sub.ContractTransport,
+		Topic:     sub.Topic,
 	}
 	if err := spec.Validate(); err != nil {
 		return contractspec.ContractSpec{}, fmt.Errorf("contractbuild: NewEventDerivation: %w", err)

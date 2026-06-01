@@ -44,13 +44,14 @@
 //     (archtest fails CI), the typed funnels are the only surviving form.
 //   - NewFrameworkHTTP upstream: Hard — runtime/internal/ placement; non-runtime
 //     callers are a compile error. Content Hard via frameworkHTTPIDPrefix panic.
-//   - NewEventDerivation upstream: Hard — same runtime/internal/ placement.
-//     Content Hard via embedded Validate(). The former single-file caller
-//     allowlist (eventDerivationAllowedCaller) + its drift guard are RETIRED
-//     (#1038): once the compiler seals non-runtime callers and Validate() seals
-//     content, the "only eventrouter" rule guarded only a non-security tracing
-//     projection whose output must still pass Validate() — pure ceremony. See
-//     runtime/internal/contractbuild/doc.go for the single-source grading.
+//   - NewEventDerivation upstream + provenance: Hard — same runtime/internal/
+//     placement, plus the parameter is a typed outbox.Subscription validated
+//     inside the funnel (a runtime/ caller cannot mint a spec from loose
+//     primitives; it must supply a valid subscription). The former single-file
+//     caller allowlist (eventDerivationAllowedCaller) + drift guard are RETIRED
+//     (#1038): the typed-parameter provenance gate replaced them (#1445 closed
+//     by that signature). See runtime/internal/contractbuild/doc.go for the
+//     single-source grading.
 //
 // Aligns with the "typed function call as Hard funnel for unbounded
 // operations" charter pattern (PANIC-REGISTERED-01 same path).

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
 
@@ -158,25 +159,33 @@ func TestNewFrameworkHTTP_BadPrefixPanics(t *testing.T) {
 	}
 }
 
-// TestNewEventDerivation covers the funnel's success path: a valid event /
-// projection spec should be returned with no error and match the expected
-// shape. The bad-input path is covered by TestNewEventDerivation_Invalid.
+// validEventSub returns a fully-populated, Validate-passing outbox.Subscription
+// for the success-path table; individual cases mutate one field to exercise a
+// distinct branch.
+func validEventSub() outbox.Subscription {
+	return outbox.Subscription{
+		Topic:             "session.created.v1",
+		ConsumerGroup:     "accesscore",
+		CellID:            "accesscore",
+		ContractID:        "event.session.created.v1",
+		ContractKind:      string(cellvocab.ContractEvent),
+		ContractTransport: "amqp",
+	}
+}
+
+// TestNewEventDerivation covers the funnel's success path: a valid Subscription
+// is projected into the expected ContractSpec. The bad-input path is covered by
+// TestNewEventDerivation_Invalid.
 func TestNewEventDerivation(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		id        string
-		kind      cellvocab.ContractKind
-		transport string
-		topic     string
-		want      contractspec.ContractSpec
+		name string
+		sub  outbox.Subscription
+		want contractspec.ContractSpec
 	}{
 		{
-			name:      "valid amqp event",
-			id:        "event.session.created.v1",
-			kind:      cellvocab.ContractEvent,
-			transport: "amqp",
-			topic:     "session.created.v1",
+			name: "valid amqp event",
+			sub:  validEventSub(),
 			want: contractspec.ContractSpec{
 				ID:        "event.session.created.v1",
 				Kind:      cellvocab.ContractEvent,
@@ -185,11 +194,15 @@ func TestNewEventDerivation(t *testing.T) {
 			},
 		},
 		{
-			name:      "valid internal event",
-			id:        "event.config.entry-upserted.v1",
-			kind:      cellvocab.ContractEvent,
-			transport: "internal",
-			topic:     "config.entry-upserted.v1",
+			name: "valid internal event",
+			sub: outbox.Subscription{
+				Topic:             "config.entry-upserted.v1",
+				ConsumerGroup:     "configcore",
+				CellID:            "configcore",
+				ContractID:        "event.config.entry-upserted.v1",
+				ContractKind:      string(cellvocab.ContractEvent),
+				ContractTransport: "internal",
+			},
 			want: contractspec.ContractSpec{
 				ID:        "event.config.entry-upserted.v1",
 				Kind:      cellvocab.ContractEvent,
@@ -197,25 +210,12 @@ func TestNewEventDerivation(t *testing.T) {
 				Topic:     "config.entry-upserted.v1",
 			},
 		},
-		{
-			name:      "valid projection — no topic required by validator",
-			id:        "projection.session.view.v1",
-			kind:      cellvocab.ContractProjection,
-			transport: "internal",
-			topic:     "",
-			want: contractspec.ContractSpec{
-				ID:        "projection.session.view.v1",
-				Kind:      cellvocab.ContractProjection,
-				Transport: "internal",
-				Topic:     "",
-			},
-		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := contractbuild.NewEventDerivation(tc.id, tc.kind, tc.transport, tc.topic)
+			got, err := contractbuild.NewEventDerivation(tc.sub)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -224,50 +224,52 @@ func TestNewEventDerivation(t *testing.T) {
 	}
 }
 
-// TestNewEventDerivation_Invalid verifies the funnel rejects malformed
-// inputs by returning a wrapped error (NOT panic — content invariant lives
-// in spec.Validate(), not in a panic guard). Each case targets a distinct
-// validation path.
+// TestNewEventDerivation_Invalid verifies the funnel rejects malformed input by
+// returning a wrapped error (NOT panic). Two validation layers are exercised:
+// (a) sub.Validate() — the provenance gate, rejecting a non-validated
+// Subscription; (b) the derived ContractSpec.Validate() — defense in depth when
+// a Subscription validates but its contract identity is not a valid spec.
 func TestNewEventDerivation_Invalid(t *testing.T) {
 	t.Parallel()
+	missingTopic := validEventSub()
+	missingTopic.Topic = ""
+	missingContractID := validEventSub()
+	missingContractID.ContractID = ""
+	badKind := validEventSub() // valid Subscription, but kind is not a real ContractKind
+	badKind.ContractKind = "garbage"
+
 	cases := []struct {
-		name      string
-		id        string
-		kind      cellvocab.ContractKind
-		transport string
-		topic     string
-		wantMsg   string
+		name    string
+		sub     outbox.Subscription
+		wantMsg string
+		// subLayer asserts the error came from sub.Validate (provenance gate)
+		// rather than the derived spec.Validate (defense in depth).
+		subLayer bool
 	}{
 		{
-			name:      "empty id",
-			id:        "",
-			kind:      cellvocab.ContractEvent,
-			transport: "amqp",
-			topic:     "session.created.v1",
-			wantMsg:   "ID must not be empty",
+			name:     "subscription missing topic — provenance gate",
+			sub:      missingTopic,
+			wantMsg:  "Topic must not be empty",
+			subLayer: true,
 		},
 		{
-			name:      "event kind missing topic",
-			id:        "event.session.created.v1",
-			kind:      cellvocab.ContractEvent,
-			transport: "amqp",
-			topic:     "",
-			wantMsg:   "event kind requires Topic",
+			name:     "subscription missing contractID — provenance gate",
+			sub:      missingContractID,
+			wantMsg:  "ContractID must not be empty",
+			subLayer: true,
 		},
 		{
-			name:      "unrecognized kind",
-			id:        "garbage.kind.v1",
-			kind:      cellvocab.ContractKind("garbage"),
-			transport: "amqp",
-			topic:     "garbage.topic",
-			wantMsg:   "not recognized",
+			name:     "valid subscription, unrecognized kind — spec defense in depth",
+			sub:      badKind,
+			wantMsg:  "not recognized",
+			subLayer: false,
 		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := contractbuild.NewEventDerivation(tc.id, tc.kind, tc.transport, tc.topic)
+			got, err := contractbuild.NewEventDerivation(tc.sub)
 			if err == nil {
 				t.Fatalf("expected error, got nil (spec=%+v)", got)
 			}
@@ -276,6 +278,9 @@ func TestNewEventDerivation_Invalid(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "NewEventDerivation") {
 				t.Errorf("error message = %q, want funnel context %q", err.Error(), "NewEventDerivation")
+			}
+			if gotSubLayer := strings.Contains(err.Error(), "subscription invalid"); gotSubLayer != tc.subLayer {
+				t.Errorf("validation layer mismatch: err=%q subLayer=%v want=%v", err.Error(), gotSubLayer, tc.subLayer)
 			}
 			// Returned spec must be zero on error (fail-closed contract).
 			assertSpecEqual(t, got, contractspec.ContractSpec{})

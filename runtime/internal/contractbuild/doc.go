@@ -8,9 +8,9 @@
 //	spec := contractbuild.NewFrameworkHTTP("http.framework.<subsystem>.<endpoint>.v1", "GET", "/path")
 //
 // (the ID MUST start with "http.framework." — a missing prefix panics at
-// startup.) Event-tracing projection of already-validated event metadata:
+// startup.) Event-tracing projection of a validated outbox.Subscription:
 //
-//	spec, err := contractbuild.NewEventDerivation(id, kind, transport, topic)
+//	spec, err := contractbuild.NewEventDerivation(sub) // sub passes sub.Validate()
 //
 // # Why this package exists (compiler-Hard upstream)
 //
@@ -81,16 +81,17 @@
 //     package-level var assignments with static-literal IDs), so it is not
 //     recoverable by the HTTP middleware layer — a malformed prefix fails the
 //     process at startup with a Go stack trace, by design.
-//   - NewEventDerivation content: Hard via the embedded ContractSpec.Validate().
-//     The former single-file ("only eventrouter") within-runtime allowlist + its
-//     drift guard are RETIRED: once the compiler seals non-runtime callers and
-//     Validate() seals content, the single-caller rule guarded only a
-//     non-security tracing projection whose output must still pass Validate() —
-//     pure ceremony. The residual gap (any runtime/ pkg may build an event spec
-//     from primitives without Subscription provenance) is tracked at gh #1445;
-//     the preferred fix is a typed outbox.Subscription parameter (provenance via
-//     type, no new exclusion), with the eventrouter-unexported move as the
-//     fallback (cost: one NO-MANUAL exclusion).
+//   - NewEventDerivation content + provenance: Hard. The parameter is a typed
+//     outbox.Subscription (not loose primitives), and the funnel runs
+//     sub.Validate() before deriving — so a runtime/ caller cannot mint an event
+//     spec from arbitrary strings; it must supply a fully-populated, valid
+//     subscription. The derived spec additionally passes ContractSpec.Validate()
+//     (defense in depth). The former single-file ("only eventrouter") allowlist +
+//     drift guard are RETIRED (the typed-parameter provenance gate replaced
+//     them — #1038 / #1445, the latter closed by this signature). The primitive
+//     signature was a vestige of the old kernel/contractspec placement (which
+//     could not import kernel/outbox); runtime/ placement makes the typed param
+//     natural.
 //   - ContractSpec{…} literal ban: downstream Hard (unchanged,
 //     NO-MANUAL-CONTRACTSPEC-LITERAL-01). runtime/internal/contractbuild is the
 //     sanctioned funnel home and is excluded from that scan, analogous to the
