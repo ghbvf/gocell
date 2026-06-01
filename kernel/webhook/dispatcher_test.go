@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,8 +21,12 @@ import (
 const dispatchTestTS = 1700000000
 
 // shortDeliveryTimeout is the per-attempt delivery timeout for the timeout-path
-// test (TEST-TIME-LITERAL-01: named package-level const, not an inline literal).
-const shortDeliveryTimeout = 20 * time.Millisecond
+// test; negativeTimeout exercises the WithDeliveryTimeout non-positive guard
+// (TEST-TIME-LITERAL-01: named package-level consts, not inline literals).
+const (
+	shortDeliveryTimeout = 20 * time.Millisecond
+	negativeTimeout      = -1 * time.Second
+)
 
 func dispatchTestSource(t *testing.T) Source {
 	t.Helper()
@@ -202,4 +207,121 @@ func TestDispatcher_Handle_Timeout_Requeue(t *testing.T) {
 
 	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+}
+
+// T-02: 408 Request Timeout must map to Requeue (covers the statusReason 408
+// branch end-to-end, which is the same as 429 but from the opposite side of
+// the switch: both are explicit cases, so dropping either case fails here).
+func TestDispatcher_Handle_StatusMapping_408Requeue(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestTimeout)
+	}))
+	defer srv.Close()
+
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL))
+	require.NoError(t, err)
+
+	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
+		"408 Request Timeout must be transient (Requeue)")
+}
+
+// errSigner is a white-box test stub Signer whose Sign always fails.
+// It implements sealed() because this file is package webhook (white-box).
+type errSigner struct{}
+
+func (errSigner) Sign(_ []byte, _ time.Time, _ DeliveryID) (Headers, error) {
+	return Headers{}, errors.New("inject signer error")
+}
+func (errSigner) sealed() {}
+
+// T-03: a Signer that always errors must produce DispositionReject (permanent
+// failure; signing errors are not transient).
+func TestDispatcher_Handle_SignerError_Reject(t *testing.T) {
+	t.Parallel()
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		errSigner{}, NewSafePolicy(WithAllowLoopback()), staticSelector("http://127.0.0.1/"))
+	require.NoError(t, err)
+
+	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
+	assert.Equal(t, outbox.DispositionReject, res.Disposition,
+		"signer error must produce Reject (permanent)")
+}
+
+// T-04 SKIPPED — infeasible to isolate the request-build branch deterministically.
+//
+// The request-build branch in prepare() is reached only when
+// http.NewRequestWithContext rejects the URL. URLs with control characters
+// (\x00, \x01, \x7f, etc.) are rejected by url.Parse inside ValidateTargetURL
+// before ever reaching http.NewRequestWithContext — so those cannot isolate
+// the request-build path without also triggering the SSRF pre-flight. URLs with
+// spaces are accepted by url.Parse AND by http.NewRequestWithContext (the stdlib
+// percent-encodes them), so they bypass both checks and reach the dial phase.
+// There is no URL form that passes ValidateTargetURL but fails
+// http.NewRequestWithContext without producing a flaky (network-dependent) test.
+// The branch remains covered by integration if a caller selects a malformed URL
+// at runtime. Tracking: no backlog entry needed (infeasible, not a gap in
+// coverage intent).
+
+// T-05: SSRF blocked at DIAL TIME (DNS-resolved private IP).
+//
+// The existing TestDispatcher_Handle_SSRFBlocked_Reject covers the
+// ValidateTargetURL pre-flight path (IP literal rejected before any dial).
+// This test covers the DIAL-TIME path: a public-looking hostname that passes
+// ValidateTargetURL, but whose DNS lookup (via the fake resolver injected
+// through withResolver) returns a private IP so the SafePolicy.DialContext
+// vet fires and rejects the connection. The transport error wraps the SSRF
+// errcode, which Classify maps to DispositionReject.
+func TestDispatcher_Handle_SSRFBlocked_ViaDialContext_Reject(t *testing.T) {
+	t.Parallel()
+	// Build a SafePolicy with a fake resolver that always returns a private IP.
+	// withResolver is the unexported test seam used by ssrf_test.go.
+	privateResolver := fakeResolver{addrs: []net.IPAddr{{IP: net.ParseIP("10.0.0.5")}}}
+	policy := NewSafePolicy(withResolver(privateResolver))
+
+	// The selector returns a public-looking hostname; ValidateTargetURL passes
+	// (no IP literal, scheme is http, host is non-empty). The dial-time vet
+	// then resolves the name and blocks the private IP.
+	sel := staticSelector("http://blocked.example.test/")
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		dispatchTestSigner(t), policy, sel)
+	require.NoError(t, err)
+
+	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
+	require.Equal(t, outbox.DispositionReject, res.Disposition,
+		"dial-time SSRF block must produce Reject")
+
+	var ee *errcode.Error
+	require.True(t, errors.As(res.Err, &ee),
+		"res.Err must be *errcode.Error, got %T: %v", res.Err, res.Err)
+	assert.Equal(t, errcode.ErrWebhookSSRFBlocked, ee.Code,
+		"dial-time SSRF error must carry ErrWebhookSSRFBlocked code")
+}
+
+// T-06: WithDeliveryTimeout ignores non-positive durations; the effective
+// timeout stays defaultDeliveryTimeout.
+//
+// White-box test: reads the unexported timeout field directly.
+func TestWithDeliveryTimeout_NonPositiveIgnored(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		d    time.Duration
+	}{
+		{"zero", 0},
+		{"negative", negativeTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+				dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector("http://127.0.0.1/"),
+				WithDeliveryTimeout(tc.d))
+			require.NoError(t, err)
+			assert.Equal(t, defaultDeliveryTimeout, d.timeout,
+				"non-positive duration %v must leave timeout at defaultDeliveryTimeout", tc.d)
+		})
+	}
 }

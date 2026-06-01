@@ -1,18 +1,25 @@
 // INVARIANT: WEBHOOK-SSRF-GUARD-01
 //
-// WEBHOOK-SSRF-GUARD-01 — kernel/webhook outbound network funnel (KERNEL-WEBHOOK-01).
+// WEBHOOK-SSRF-GUARD-01 — outbound network funnel for kernel/webhook and
+// runtime/webhook/dispatch (KERNEL-WEBHOOK-01).
 //
 // PR-4 shipped the pure SSRF building block: SafePolicy, the single-source
 // policy whose DialContext / ValidateTargetURL / DenyRedirect methods share one
-// config. PR-5 delivers the Dispatcher, which HOLDS a *SafePolicy and wires its
-// methods into an *http.Client. A4 locks the Transport composite-literal form in
-// the dispatcher — the dispatcher-specific single-sanctioned-holder Hard that
-// complements the package-level bans.
+// config. PR-5 delivers the Dispatcher (kernel/webhook) and the dispatch
+// consumer wiring (runtime/webhook/dispatch). A4 locks the Transport
+// composite-literal form in the dispatcher — the dispatcher-specific
+// single-sanctioned-holder Hard that complements the package-level bans.
+//
+// Scan scope (PR-5 extension): both kernel/webhook and runtime/webhook/dispatch
+// production files are scanned. runtime/webhook/dispatch only wires kernel types
+// (no raw dials, no global clients, no Transport literals) so A1–A4 are
+// vacuously satisfied there today; the scan extension ensures that future
+// additions to the package cannot silently bypass the SSRF funnel.
 //
 //   - A1 (downstream Hard): the net package dial-family FUNCTIONS
 //     (net.Dial / DialTCP / DialUDP / DialIP / DialUnix / DialTimeout) are
-//     banned anywhere in kernel/webhook production code. Detection:
-//     ResolvePackageRef(callee) == ("net", <dial-func>).
+//     banned in kernel/webhook and runtime/webhook/dispatch production code.
+//     Detection: ResolvePackageRef(callee) == ("net", <dial-func>).
 //   - A2 (downstream Hard): the net.Dialer.DialContext METHOD may be called
 //     ONLY from inside (*SafePolicy).DialContext — the sanctioned vetted dialer
 //     (which legitimately has two callsites: the IP-literal and the
@@ -25,15 +32,16 @@
 //   - A3 (downstream Hard): the global HTTP client/transport in net/http —
 //     http.DefaultClient / http.DefaultTransport (package vars) and the
 //     convenience callees http.Get / Post / PostForm / Head — are banned in
-//     kernel/webhook; they bypass the SSRF-wrapped transport. Detection:
-//     ResolvePackageRef → ("net/http", <global|callee>).
+//     kernel/webhook and runtime/webhook/dispatch; they bypass the SSRF-wrapped
+//     transport. Detection: ResolvePackageRef → ("net/http", <global|callee>).
 //   - A4 (downstream Hard): any &http.Transport{} composite literal in
-//     kernel/webhook production code MUST set a DialContext field (non-absent).
-//     A Transport without DialContext silently falls back to the net default
-//     dialer, bypassing SafePolicy. Detection: EachInSubtree[CompositeLit],
-//     resolve lit type via TypesInfo.Types[cl.Type], check for "DialContext"
-//     key in the literal's Elts. Only fires on named literals whose resolved
-//     type is net/http.Transport (not on un-typed / other-package literals).
+//     kernel/webhook or runtime/webhook/dispatch production code MUST set a
+//     DialContext field (non-absent). A Transport without DialContext silently
+//     falls back to the net default dialer, bypassing SafePolicy. Detection:
+//     EachInSubtree[CompositeLit], resolve lit type via TypesInfo.Types[cl.Type],
+//     check for "DialContext" key in the literal's Elts. Only fires on named
+//     literals whose resolved type is net/http.Transport (not on un-typed /
+//     other-package literals).
 //
 // AI-robust rating (Funnel 双向锁评级, per .claude/rules/gocell/ai-robust.md):
 //
@@ -273,6 +281,26 @@ func scanSSRFTransportDialContext(fset *token.FileSet, file *ast.File, rel strin
 	return out
 }
 
+// ssrfScannedPkgPaths is the set of production package paths covered by the
+// WEBHOOK-SSRF-GUARD-01 scan. Using a set (not a string prefix) keeps the scope
+// explicit: only packages that actually handle outbound webhook egress or directly
+// wrap kernel/webhook types are included.
+//
+//   - kernel/webhook: SafePolicy + Dispatcher (all four sub-rules apply)
+//   - runtime/webhook/dispatch: wires kernel types only (no raw dials today;
+//     extended so future additions cannot silently bypass the funnel)
+var ssrfScannedPkgPaths = map[string]bool{
+	PlatformModulePath + "/kernel/webhook":           true,
+	PlatformModulePath + "/runtime/webhook/dispatch": true,
+}
+
+// ssrfPkgPatterns is the packages.Load pattern list for TestWebhookSSRFGuard.
+// It covers kernel/webhook and runtime/webhook/dispatch (PR-5 extension).
+var ssrfPkgPatterns = []string{
+	"./kernel/webhook/...",
+	"./runtime/webhook/dispatch",
+}
+
 func TestWebhookSSRFGuard(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -280,9 +308,9 @@ func TestWebhookSSRFGuard(t *testing.T) {
 	}
 
 	var a1, a2, a3, a4 []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{webhookPkgPattern},
+	_ = RunTyped(t, TypedOpts{Tests: false}, ssrfPkgPatterns,
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.Pkg.Path() != PlatformModulePath+"/kernel/webhook" {
+			if p.Pkg == nil || !ssrfScannedPkgPaths[p.Pkg.Path()] {
 				return nil
 			}
 			for _, f := range p.Files {

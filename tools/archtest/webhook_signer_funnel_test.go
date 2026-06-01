@@ -255,11 +255,15 @@ func TestWebhookSignerFunnel_ReverseFixture(t *testing.T) {
 			return nil
 		})
 
-	// Expect at least one diagnostic per header name (3 headers × raw-literal + const forms).
-	// The fixture has 4 violations (1 raw literal + 3 const refs covering each header),
-	// asserting ≥3 ensures all three header-name entries in webhookSignatureHeaders are
-	// exercised — a regression removing any one header from the set fails here.
-	assert.GreaterOrEqual(t, len(a1), len(webhookSignatureHeaders),
-		"A1 reverse fixture: expected ≥1 diagnostic per signature header name "+
-			"(webhook-id / webhook-timestamp / webhook-signature)")
+	// The fixture has exactly 4 violations:
+	//   - 1 raw string literal key "webhook-signature"
+	//   - 3 const-keyed calls, one per header name (webhook-id / webhook-timestamp
+	//     / webhook-signature)
+	// Asserting ≥4 ensures that dropping ANY single fixture violation (e.g. removing
+	// one const form or one header name from webhookSignatureHeaders) causes this
+	// self-test to fail immediately, rather than passing on the remaining 3.
+	const webhookSignerFixtureMinViolations = 4
+	assert.GreaterOrEqual(t, len(a1), webhookSignerFixtureMinViolations,
+		"A1 reverse fixture: expected ≥4 diagnostics (1 raw literal + 3 const refs, "+
+			"one per header name webhook-id / webhook-timestamp / webhook-signature)")
 }
