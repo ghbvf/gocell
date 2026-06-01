@@ -28,8 +28,9 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 		const rid = "conf-exclusive"
 		a, b := newElector("holder-A"), newElector("holder-B")
 
-		_, err := a.AcquireLease(ctx, rid)
+		tokA, err := a.AcquireLease(ctx, rid)
 		require.NoError(t, err, "first holder must acquire")
+		defer func() { _ = a.ReleaseLease(ctx, tokA) }() // release held resources (PG session conn)
 
 		_, err = b.AcquireLease(ctx, rid)
 		require.Error(t, err, "second holder must be denied a live lease")
@@ -45,8 +46,9 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 		require.NoError(t, err)
 		require.NoError(t, a.ReleaseLease(ctx, tokA))
 
-		_, err = b.AcquireLease(ctx, rid)
+		tokB, err := b.AcquireLease(ctx, rid)
 		require.NoError(t, err, "follower must acquire after the leader releases")
+		_ = b.ReleaseLease(ctx, tokB)
 	})
 
 	t.Run("RenewKeepsLeaseAndEpoch", func(t *testing.T) {
@@ -56,6 +58,7 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 
 		tokA, err := a.AcquireLease(ctx, rid)
 		require.NoError(t, err)
+		defer func() { _ = a.ReleaseLease(ctx, tokA) }()
 		require.NoError(t, a.RenewLease(ctx, tokA), "renew must succeed while held")
 
 		_, err = b.AcquireLease(ctx, rid)
@@ -78,6 +81,7 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 
 		tokB, err := b.AcquireLease(ctx, rid)
 		require.NoError(t, err)
+		defer func() { _ = b.ReleaseLease(ctx, tokB) }()
 		require.Greater(t, tokB.Epoch, tokA.Epoch, "a holder change must bump the monotonic epoch")
 	})
 
@@ -89,8 +93,9 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 		tokA, err := a.AcquireLease(ctx, rid)
 		require.NoError(t, err)
 		require.NoError(t, a.ReleaseLease(ctx, tokA))
-		_, err = b.AcquireLease(ctx, rid)
+		tokB, err := b.AcquireLease(ctx, rid)
 		require.NoError(t, err)
+		defer func() { _ = b.ReleaseLease(ctx, tokB) }()
 
 		// A's renew must now report the lease lost (B owns it).
 		err = a.RenewLease(ctx, tokA)
@@ -122,6 +127,7 @@ func RunFencingConformance(t *testing.T, newElector ElectorFactory) {
 	b := newElector("holder-B")
 	tokB, err := b.AcquireLease(ctx, rid)
 	require.NoError(t, err)
+	defer func() { _ = b.ReleaseLease(ctx, tokB) }()
 	require.Greater(t, tokB.Epoch, tokA.Epoch, "takeover must bump the fencing epoch")
 
 	repo := NewFakeFencedRepository()
