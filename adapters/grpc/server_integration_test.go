@@ -42,7 +42,7 @@ func startServing(t *testing.T, srv *grpcadapter.Server, lis net.Listener) (stop
 	ctx, cancel := context.WithTimeout(context.Background(), integServeTimeout)
 	done := make(chan error, 1)
 	go func() {
-		done <- srv.ServeListenerForTest(ctx, lis)
+		done <- srv.Serve(ctx, lis)
 	}()
 	return func() {
 		cancel()
@@ -354,7 +354,7 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 	serveCtx, serveCancel := context.WithTimeout(context.Background(), integServeTimeout)
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- srv.ServeListenerForTest(serveCtx, lis)
+		serveDone <- srv.Serve(serveCtx, lis)
 	}()
 	defer serveCancel()
 
@@ -436,7 +436,7 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 	defer serveCancel()
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- srv.ServeListenerForTest(serveCtx, lis)
+		serveDone <- srv.Serve(serveCtx, lis)
 	}()
 
 	waitForServing(t, srv)
@@ -467,7 +467,7 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 
 // TestIntegration_ServeContextCancel_GracefulDrain verifies the serve() ctx.Done
 // branch performs a real GRACEFUL drain — not a hard stop — when the context
-// passed to ServeListenerForTest is canceled (simulating a WorkerGroup / bootstrap
+// passed to Serve is canceled (simulating a WorkerGroup / bootstrap
 // external cancel: sibling worker crash, SIGTERM, etc.).
 //
 // To prove gracefulness (rather than merely that the branch returns
@@ -511,7 +511,7 @@ func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- srv.ServeListenerForTest(cancelableCtx, lis)
+		serveDone <- srv.Serve(cancelableCtx, lis)
 	}()
 
 	waitForServing(t, srv)

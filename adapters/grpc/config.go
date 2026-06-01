@@ -4,6 +4,8 @@ import (
 	"net"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -61,6 +63,13 @@ type Config struct {
 
 	// TLS configures transport security. See TLSConfig for the three supported modes.
 	TLS TLSConfig
+
+	// ServerOptions are extra grpc.ServerOptions appended after the TLS
+	// credentials option. The composition root (runtime/bootstrap) uses this to
+	// inject the unary interceptor chain (runtime/grpc/interceptor.NewUnaryChain).
+	// It is not a business-bypass seam: cells/ cannot import adapters/ (layering
+	// rule), so only composition roots ever construct a Config.
+	ServerOptions []grpc.ServerOption
 }
 
 // applyDefaults fills zero-value fields with their defaults.

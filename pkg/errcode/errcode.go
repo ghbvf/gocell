@@ -599,6 +599,18 @@ const (
 	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
 	ErrListenerAuthChainMissing Code = "ERR_LISTENER_AUTH_CHAIN_MISSING"
 
+	// ErrGRPCVerifierMissing signals that a bootstrap gRPC listener was declared
+	// via WithGRPCListener with a nil (bare or typed) IntentTokenVerifier.
+	// Bootstrap phase0 fail-fasts with this code so a gRPC listener cannot boot
+	// and then reject every RPC (indistinguishable from an outage). The gRPC
+	// analog of ErrListenerAuthChainMissing — gRPC auth is a single bearer-token
+	// verifier (runtime/grpc/interceptor.UnaryAuth) rather than an
+	// auth.ListenerAuth chain, so the fail-closed gate guards the verifier
+	// directly.
+	//
+	// ref: docs/plans/specs/202605262300-048-grpc-adapter/plan.md PR 5 (RL-14)
+	ErrGRPCVerifierMissing Code = "ERR_GRPC_VERIFIER_MISSING"
+
 	// ErrReadyzVerboseUnconfigured signals that /readyz?verbose was requested
 	// but neither a verbose token nor the explicit disabled flag has been
 	// configured. This fail-closed default forces operators to make an explicit

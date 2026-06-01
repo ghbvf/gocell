@@ -83,6 +83,9 @@ func New(cfg Config) (*Server, error) {
 	if creds != nil {
 		opts = append(opts, grpc.Creds(creds))
 	}
+	// Composition-root-supplied options (e.g. the unary interceptor chain) are
+	// appended after the TLS credentials so credentials always win.
+	opts = append(opts, cfg.ServerOptions...)
 
 	return &Server{
 		cfg:        cfg,
@@ -124,6 +127,18 @@ func (s *Server) Probes() []healthz.Probe {
 // drain bounded by cfg.ShutdownTimeout.
 func (s *Server) Worker() worker.Worker {
 	return &serverWorker{s: s}
+}
+
+// Serve serves RPCs on the caller-supplied, already-bound listener until ctx is
+// canceled or the server stops. It is the listener-injection counterpart of
+// Worker().Start (which binds cfg.Addr internally): the composition root
+// (runtime/bootstrap) pre-binds the socket synchronously — so port conflicts
+// surface before any goroutine starts — and serves it here, exactly as the HTTP
+// path calls http.Server.Serve(ln). Tests inject a bufconn listener the same
+// way. Drain is driven by Close (graceful, bounded by cfg.ShutdownTimeout);
+// ctx cancellation triggers the same drain as a fallback.
+func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
+	return s.serve(ctx, lis)
 }
 
 // Close implements lifecycle.ManagedResource. It is equivalent to Worker().Stop()
