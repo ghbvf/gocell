@@ -421,21 +421,36 @@ contractUsages:
   `reg.RegisterProjection`（一个 projectionID + 一个 checkpoint）；projectionID 在同
   一 cell 内须唯一（parser `validateProjectionUniqueness` fail-closed 守卫）。
 - **`cell.yaml` 须声明 `consistencyLevel: L3`**（单向蕴含：使用投影 ⟹ L3；见
-  `.claude/rules/gocell/saga.md` §"L3 与 Saga 的关键澄清"）。
+  `.claude/rules/gocell/saga.md` §"L3 与 Saga 的关键澄清"）。当前此为约定 +
+  `validateProjectionUniqueness` 守卫，cell 级别的 parse-time Hard enforcement
+  （`PROJECTION-CONSISTENCY-PARSE-TIME-01`）在后续 PR-05 落地。
 
 #### cellgen 派生行为
 
 运行 `gocell generate cell` 后，`cell_gen.go`（DO-NOT-EDIT）中自动生成：
 
 ```go
-// 由 cellgen 从 slice.yaml contractUsages[projection=order_status] 派生，禁止手写
-reg.RegisterProjection(cell.ProjectionRequest{
-    Spec:      contractspec.ContractSpec{ID: "event.order-created.v1", ...},
-    Apply:     c.orderReadSvc.HandleOrderCreated,
-    ResetHook: c.orderReadSvc.ResetOrderStatus, // onReset 声明时才生成
-    ProjectionID: "order_status",
-    CellID:    c.ID(),
-})
+// cell_gen.go (DO NOT EDIT) — cellgen 从 slice.yaml contractUsages[projection=order_status] 派生
+import ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
+// ...
+if err := reg.RegisterProjection(ordercreated.NewProjectionRequest(
+    c.orderProj.HandleOrderCreated, "order_status", "ordercell", "orderprojection",
+    c.orderProj.ResetOrderStatus, // onReset；未声明时此参为 nil
+)); err != nil {
+    return fmt.Errorf("ordercell: projection order_status: %w", err)
+}
+```
+
+`NewProjectionRequest` 签名为 `(apply cell.ProjectionApply, projectionID, cellID, sliceID string, onReset cell.ProjectionResetHook)`，由 contractgen 从 `event.order-created.v1` 的 contract.yaml 派生进 `generated/contracts/event/order-created/v1/projection_gen.go`。
+
+handler 实现示例（注意返回 `error`，不是 `outbox.HandleResult`）：
+
+```go
+// <slice>/service.go — ProjectionApply 签名
+func (s *Service) HandleOrderCreated(ctx context.Context, event outbox.Entry) error {
+    // tx 经 ctx 传递（ambient-tx，见 ADR Q1/Q2）；apply 与 checkpoint SaveOffset 在同一 CellTx 内提交
+    return s.store.Apply(ctx, event)
+}
 ```
 
 bootstrap 将 `RegistrySnapshot.Projections` drain 为每个 projection 对应一个

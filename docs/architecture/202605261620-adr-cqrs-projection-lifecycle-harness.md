@@ -222,6 +222,8 @@ multi-slice metadata node），本次 amendment 不改变它。checkpoint 键仍
 - **Row 4**（out-of-order / serial-delivery）：**单流 checkpoint 前提在 per-CU 模型下不变**。
   每个 projectionID 仍是独立单流，serial-delivery 前提逐 projection 成立。
   per-CU 模型不引入新的并发向量（不同 projectionID 的 Coordinator 相互独立）。✅ 不降级。
+  注：serial-delivery 的 enforcement 机制本身尚未落地——仍由 Amendment 2026-05-31 Row 4
+  补偿（`cmd/*` 仅连线串行内存总线）追踪，完整 enforcement 在 PR-04d (#1369)。
 - **Row 5**（fail-closed）：SaveOffset 失败回滚整个 CellTx，per-CU 无影响。✅ 不降级。
 - **Row 6**（GAP-8 boundary）：per-CU 派生不增加框架对读模型 schema 的约束。✅ 不降级。
 - **Row 7**（multi-pod concurrency）：owner 列 write-guard 作用于 projection_checkpoints 表，
