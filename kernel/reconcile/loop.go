@@ -240,6 +240,16 @@ type Loop struct {
 //
 // All stdlib time.* calls are funneled through the sealed controlPlaneClock.
 func (l *Loop) Start(ownerCtx context.Context) error {
+	if err := l.preStartValidate(); err != nil {
+		return err
+	}
+	return l.start(ownerCtx)
+}
+
+// preStartValidate runs the fail-fast checks that must pass before Start creates
+// any per-run state or spawns a goroutine. Safe on a nil receiver (the nil check
+// is first). Kept separate from start() so Start stays within the funlen budget.
+func (l *Loop) preStartValidate() error {
 	if l == nil || validation.IsNilInterface(l.Reconciler) {
 		return fmt.Errorf("reconcile: Loop requires non-nil Reconciler")
 	}
@@ -259,10 +269,12 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	if l.BaseDelay > 0 && l.MaxDelay > 0 && l.BaseDelay > l.MaxDelay {
 		return fmt.Errorf("reconcile: BaseDelay (%s) must not exceed MaxDelay (%s)", l.BaseDelay, l.MaxDelay)
 	}
-	if err := l.Metrics.preflight(l.reconcilerID()); err != nil {
-		return err
-	}
+	return l.Metrics.preflight(l.reconcilerID())
+}
 
+// start performs the run setup (per-run state, worker pool, delaying queue,
+// startup probe) after preStartValidate has passed.
+func (l *Loop) start(ownerCtx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.cancel != nil {
@@ -280,6 +292,9 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	runCtx, cancel := context.WithCancel(ownerCtx)
 	queue := make(chan Request, queueBuffer)
 	addCh := make(chan waitingItem, addChBuffer)
+	// cancelCh carries EntityIDs whose pending requeue must be removed from the
+	// delaying queue (permanent dead-letter). Same buffer/lifecycle as addCh.
+	cancelCh := make(chan string, addChBuffer)
 	ready := make(chan struct{})
 	var readyOnce sync.Once
 	var wg sync.WaitGroup
@@ -293,7 +308,7 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 		go func() {
 			defer wg.Done()
 			readyOnce.Do(func() { close(ready) }) // first worker confirms the pool is live
-			l.runWorker(runCtx, queue, addCh, backoff)
+			l.runWorker(runCtx, queue, addCh, cancelCh, backoff)
 		}()
 	}
 	if l.Source != nil {
@@ -304,7 +319,7 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	// F6: single shared delaying queue — ONE goroutine, ONE timer.
 	// ref: kubernetes/client-go util/workqueue/delaying_queue.go
 	wg.Add(1)
-	go l.waitingLoop(runCtx, addCh, queue, &wg)
+	go l.waitingLoop(runCtx, addCh, cancelCh, queue, &wg)
 
 	done := make(chan struct{})
 	//nolint:gosec // G118: watchDrain resets the leader gauge after the run has
@@ -375,6 +390,18 @@ func addOrMergeWaiting(h *waitingHeap, pending map[string]*waitingItem, item wai
 	pending[item.req.EntityID] = &it
 }
 
+// cancelPending removes any pending requeue for entityID from the delaying-queue
+// heap (permanent dead-letter: the entity must not be re-reconciled by a stale
+// pre-existing requeue). No-op when the entity has no pending item.
+func cancelPending(h *waitingHeap, pending map[string]*waitingItem, entityID string) {
+	existing, ok := pending[entityID]
+	if !ok {
+		return
+	}
+	heap.Remove(h, existing.index)
+	delete(pending, entityID)
+}
+
 // nextWaitingDelay returns how long to sleep until the earliest item in h is
 // ready. Returns the idle sentinel (waitingQueueIdleDelay) when h is empty.
 //
@@ -410,7 +437,13 @@ func resetTimer(t *time.Timer, d time.Duration) {
 // abandoned (the run is shutting down).
 //
 // ref: kubernetes/client-go util/workqueue/delaying_queue.go waitingLoop
-func (l *Loop) waitingLoop(runCtx context.Context, addCh <-chan waitingItem, queue chan<- Request, wg *sync.WaitGroup) {
+func (l *Loop) waitingLoop(
+	runCtx context.Context,
+	addCh <-chan waitingItem,
+	cancelCh <-chan string,
+	queue chan<- Request,
+	wg *sync.WaitGroup,
+) {
 	defer wg.Done()
 
 	var h waitingHeap
@@ -442,6 +475,8 @@ func (l *Loop) waitingLoop(runCtx context.Context, addCh <-chan waitingItem, que
 			return
 		case item := <-addCh:
 			addOrMergeWaiting(&h, pending, item)
+		case id := <-cancelCh:
+			cancelPending(&h, pending, id)
 		case <-timer.C:
 			// Timer fired — loop back to drain ready items.
 		}
@@ -500,13 +535,19 @@ func (l *Loop) feedFromSource(runCtx context.Context, queue chan<- Request, wg *
 }
 
 // runWorker pulls Requests from the queue and dispatches each until canceled.
-func (l *Loop) runWorker(runCtx context.Context, queue chan Request, addCh chan<- waitingItem, backoff *entityBackoff) {
+func (l *Loop) runWorker(
+	runCtx context.Context,
+	queue chan Request,
+	addCh chan<- waitingItem,
+	cancelCh chan<- string,
+	backoff *entityBackoff,
+) {
 	for {
 		select {
 		case <-runCtx.Done():
 			return
 		case req := <-queue:
-			l.process(runCtx, req, addCh, backoff)
+			l.process(runCtx, req, addCh, cancelCh, backoff)
 		}
 	}
 }
@@ -530,7 +571,7 @@ func (l *Loop) runWorker(runCtx context.Context, queue chan Request, addCh chan<
 //
 // Scope note (ADR §2.2): F5+F6 are the PR-A5 features that complete the
 // controller-runtime dirty/processing + rate-limited delaying queue equivalence.
-func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waitingItem, backoff *entityBackoff) {
+func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waitingItem, cancelCh chan<- string, backoff *entityBackoff) {
 	// F5: check/set processing under entityMu.
 	l.entityMu.Lock()
 	if l.processing[req.EntityID] {
@@ -553,7 +594,7 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	label := classify(err)
 	l.Metrics.recordResult(runCtx, l.reconcilerID(), label)
 
-	l.dispatchResult(runCtx, req, res, err, label, addCh, backoff)
+	l.dispatchResult(runCtx, req, res, err, label, addCh, cancelCh, backoff)
 
 	// F5: clear processing and check dirty under entityMu.
 	l.entityMu.Lock()
@@ -562,7 +603,7 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	delete(l.processing, req.EntityID)
 	l.entityMu.Unlock()
 
-	if wasDirty {
+	if wasDirty && label != resultPermanent {
 		// Re-enqueue the coalesced dirty trigger immediately (delay=0).
 		// This is a fresh convergence run, not a backoff retry.
 		//
@@ -572,6 +613,12 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 		// readyAt wins), so the entity ends up with ONE heap entry that fires
 		// immediately as the convergence run — not two. Convergence is preserved
 		// without leaving a duplicate pending item.
+		//
+		// Suppressed on resultPermanent: a permanent dead-letter must NOT be
+		// re-reconciled. The dispatchResult permanent branch already canceled the
+		// entity's pending item (cancelCh); re-running the in-flight dirty trigger
+		// here would resurrect it and race the cancel across two channels. A fresh
+		// Source trigger re-observes the entity if the consumer resets its state.
 		l.enqueueDelayed(runCtx, dirtyReq, 0, addCh)
 	}
 }
@@ -584,6 +631,7 @@ func (l *Loop) dispatchResult(
 	err error,
 	label resultLabel,
 	addCh chan<- waitingItem,
+	cancelCh chan<- string,
 	backoff *entityBackoff,
 ) {
 	switch label {
@@ -596,13 +644,16 @@ func (l *Loop) dispatchResult(
 		l.enqueueDelayed(runCtx, req, delay, addCh)
 	case resultPermanent:
 		backoff.Forget(req.EntityID)
+		// Cancel any pending requeue for this entity: an earlier success/transient
+		// may have enqueued a (possibly long) Interval/backoff item that, left in
+		// place, would re-reconcile a now-dead-lettered entity once it fires. A
+		// fresh Source trigger re-observes it if the consumer resets its state.
+		l.enqueueCancel(runCtx, req.EntityID, cancelCh)
 		l.logger().Error("reconcile: permanent error (dead-letter; not requeued)",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()),
 			slog.String("entity", req.EntityID),
 			slog.Any("error", redaction.RedactError(err)))
-		// Permanent: do NOT requeue. A fresh Source trigger re-observes it if the
-		// consumer resets the entity's state.
 	default: // resultTransient (including recovered panics)
 		delay := backoff.When(req.EntityID)
 		l.logger().Warn("reconcile: transient error (requeued with backoff)",
@@ -629,6 +680,17 @@ func (l *Loop) enqueueDelayed(runCtx context.Context, req Request, delay time.Du
 	item := waitingItem{req: req, readyAt: readyAt}
 	select {
 	case addCh <- item:
+	case <-runCtx.Done():
+	}
+}
+
+// enqueueCancel asks waitingLoop to remove entityID's pending requeue (permanent
+// dead-letter). Sole funnel from the worker path into cancelCh; respects runCtx
+// cancellation. Paired with cancelPending, which performs the heap removal inside
+// waitingLoop.
+func (l *Loop) enqueueCancel(runCtx context.Context, entityID string, cancelCh chan<- string) {
+	select {
+	case cancelCh <- entityID:
 	case <-runCtx.Done():
 	}
 }

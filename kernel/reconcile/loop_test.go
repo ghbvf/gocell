@@ -722,14 +722,16 @@ func TestLoop_F5_LostWakeupStress(t *testing.T) {
 	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
 	runCtx := context.Background()
 
-	// Discard requeue / dirty re-run items so enqueueDelayed never blocks; the
-	// invariant under test is the dirty map state, not re-run execution.
+	// Discard requeue / dirty re-run / cancel items so the send funnels never
+	// block; the invariant under test is the dirty map state, not re-run execution.
 	addCh := make(chan waitingItem, triggers*4)
+	cancelCh := make(chan string, triggers*4)
 	drainDone := make(chan struct{})
 	go func() {
 		for {
 			select {
 			case <-addCh:
+			case <-cancelCh:
 			case <-drainDone:
 				return
 			}
@@ -742,7 +744,7 @@ func TestLoop_F5_LostWakeupStress(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			runtime.Gosched()
-			l.process(runCtx, Request{EntityID: entity}, addCh, backoff)
+			l.process(runCtx, Request{EntityID: entity}, addCh, cancelCh, backoff)
 		}()
 	}
 	wg.Wait()
@@ -820,6 +822,71 @@ func TestDrainReadyItems_PopsOnlyReadyAndClearsPending(t *testing.T) {
 	assert.False(t, hasReady, "drained entity must be removed from pending")
 	assert.True(t, hasFuture, "not-yet-ready entity must stay in pending")
 	assert.Equal(t, 1, h.Len(), "the future item remains on the heap")
+}
+
+// TestCancelPending_RemovesFromHeapAndPending proves the cancel primitive: it
+// removes exactly the named entity from both the heap and the pending index,
+// leaves other entities untouched, and is a no-op for an unknown entity.
+func TestCancelPending_RemovesFromHeapAndPending(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(0, 0)
+	var h waitingHeap
+	heap.Init(&h)
+	pending := map[string]*waitingItem{}
+	addOrMergeWaiting(&h, pending, waitingItem{req: Request{EntityID: "x"}, readyAt: base.Add(testtime.D1h)})
+	addOrMergeWaiting(&h, pending, waitingItem{req: Request{EntityID: "y"}, readyAt: base.Add(testtime.D1h)})
+
+	cancelPending(&h, pending, "x")
+	require.Equal(t, 1, h.Len(), "canceled entity must be removed from the heap")
+	_, hasX := pending["x"]
+	_, hasY := pending["y"]
+	assert.False(t, hasX, "canceled entity must be removed from pending")
+	assert.True(t, hasY, "other entities must be untouched")
+	assert.Equal(t, "y", h[0].req.EntityID)
+
+	cancelPending(&h, pending, "unknown") // no-op
+	assert.Equal(t, 1, h.Len(), "canceling an unknown entity must be a no-op")
+}
+
+// TestDispatchResult_PermanentCancelsPendingNotRequeue proves F1-(c): on a
+// permanent result, dispatchResult sends the entity on cancelCh (to evict any
+// stale pre-existing requeue) and does NOT enqueue a new requeue. This is the
+// "stale pending then permanent" path the prior code left uncovered: an earlier
+// success/transient could have enqueued a long requeue that, without this
+// cancel, would re-reconcile a dead-lettered entity when it fired.
+func TestDispatchResult_PermanentCancelsPendingNotRequeue(t *testing.T) {
+	t.Parallel()
+	l := &Loop{ReconcilerID: "rc"}
+	addCh := make(chan waitingItem, 1)
+	cancelCh := make(chan string, 1)
+	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
+
+	l.dispatchResult(context.Background(), Request{EntityID: "dead"}, Result{},
+		PermanentError(errors.New("boom")), resultPermanent, addCh, cancelCh, backoff)
+
+	select {
+	case id := <-cancelCh:
+		assert.Equal(t, "dead", id, "permanent must cancel the entity's pending requeue")
+	default:
+		t.Fatal("permanent result must send the entity on cancelCh")
+	}
+	assert.Empty(t, addCh, "permanent must NOT enqueue a new requeue")
+}
+
+// TestDispatchResult_SuccessEnqueuesNotCancel is the over-fire guard: a success
+// result enqueues a requeue (addCh) and does NOT cancel.
+func TestDispatchResult_SuccessEnqueuesNotCancel(t *testing.T) {
+	t.Parallel()
+	l := &Loop{ReconcilerID: "rc", Interval: testtime.D1h}
+	addCh := make(chan waitingItem, 1)
+	cancelCh := make(chan string, 1)
+	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
+
+	l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{RequeueAfter: testtime.D1h},
+		nil, resultSuccess, addCh, cancelCh, backoff)
+
+	assert.Len(t, addCh, 1, "success must enqueue a requeue")
+	assert.Empty(t, cancelCh, "success must NOT cancel")
 }
 
 // TestLoop_BaseDelayExceedsMaxDelayFailsStart proves F6: an inverted backoff

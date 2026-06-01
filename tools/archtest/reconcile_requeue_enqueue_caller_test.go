@@ -105,12 +105,14 @@ import (
 //   - ("", "drainReadyItems"):          package-level helper — drains heap into queue.
 //   - ("Loop", "feedFromSource"):       goroutine body — copies Source into queue.
 //   - ("Loop", "enqueueDelayed"):       sole send funnel into addCh.
+//   - ("Loop", "enqueueCancel"):        sole send funnel into cancelCh (permanent dead-letter).
 //   - ("tickerTrigger", "Start"):       external producer — ticks resync into queue.
 //   - ("channelTrigger", "Start"):      external producer — forwards a chan into queue.
 var reconcileRequeueSanctionedSet = map[reconcileSendSite]bool{
 	{recv: "", name: "drainReadyItems"}:     true,
 	{recv: "Loop", name: "feedFromSource"}:  true,
 	{recv: "Loop", name: "enqueueDelayed"}:  true,
+	{recv: "Loop", name: "enqueueCancel"}:   true,
 	{recv: "tickerTrigger", name: "Start"}:  true,
 	{recv: "channelTrigger", name: "Start"}: true,
 }
@@ -261,10 +263,11 @@ func TestReconcileRequeueEnqueueCaller01_NonVacuousProof(t *testing.T) {
 		return nil
 	})
 
-	// One send each in the five sanctioned functions: drainReadyItems,
-	// feedFromSource, enqueueDelayed, tickerTrigger.Start, channelTrigger.Start
-	// (the latter two are FuncLit-closure sends now credited via the descend scan).
-	const wantMinSends = 5
+	// One send each in the six sanctioned functions: drainReadyItems,
+	// feedFromSource, enqueueDelayed, enqueueCancel, tickerTrigger.Start,
+	// channelTrigger.Start (the last two are FuncLit-closure sends now credited
+	// via the descend scan).
+	const wantMinSends = 6
 	if foundInSanctioned < wantMinSends {
 		t.Errorf("RECONCILE-REQUEUE-ENQUEUE-CALLER-01 non-vacuous proof: "+
 			"found %d SendStmt(s) in sanctioned functions, want ≥ %d. "+
