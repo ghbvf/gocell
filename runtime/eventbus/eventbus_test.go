@@ -1829,4 +1829,5 @@ var (
 	_ outbox.Publisher               = (*InMemoryEventBus)(nil)
 	_ outbox.Subscriber              = (*InMemoryEventBus)(nil)
 	_ outbox.SubscriberIntakeStopper = (*InMemoryEventBus)(nil)
+	_ outbox.SerialInOrderGuarantor  = (*InMemoryEventBus)(nil)
 )

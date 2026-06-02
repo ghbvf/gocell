@@ -106,6 +106,36 @@ func TestRegisterProjection_Validation(t *testing.T) {
 	}
 }
 
+// TestRegisterProjection_DuplicateProjectionID_Rejected locks the
+// single-projection-single-subscriber premise (#1369 F1). A projection's
+// consumer group is derived as "<cellID>-<projectionID>" and its checkpoint key
+// is (cellID, projectionID); registering the same projectionID twice would wire
+// two competing subscribers onto one consumer group, which voids the serial
+// in-order delivery that the projection checkpoint requires (the transport-level
+// SerialInOrderGuarantor guard is scoped to a SINGLE subscriber per group — see
+// runtime/eventbus.InMemoryEventBus.GuaranteesSerialInOrderDelivery godoc). The
+// recorder is per-cell, so duplicate ProjectionID == duplicate within the cell.
+func TestRegisterProjection_DuplicateProjectionID_Rejected(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+
+	require.NoError(t, rec.RegisterProjection(validProjectionRequest()),
+		"first projection must record")
+
+	// Second registration with the same ProjectionID (even a different Spec/Topic)
+	// must fail fast — the derived consumer group / checkpoint key would collide.
+	dup := validProjectionRequest()
+	dup.Spec = testRegistrySpec("order-updated") // different topic, same projectionID
+	err := rec.RegisterProjection(dup)
+	require.Error(t, err, "duplicate ProjectionID must be rejected")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr, "must be *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "duplicate", "message must name the duplicate condition")
+
+	require.Len(t, rec.Snapshot().Projections, 1,
+		"the rejected duplicate must not be recorded; only the first projection survives")
+}
+
 func TestRegisterProjection_SnapshotCopyIsIndependent(t *testing.T) {
 	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
 	require.NoError(t, rec.RegisterProjection(validProjectionRequest()))
