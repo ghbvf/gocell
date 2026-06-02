@@ -195,7 +195,7 @@ HTTP/gRPC **request-metrics** `cell` label 的 `_runtime` 哨兵单源 = `runtim
 
 `RouteGroup.Prefix` 非空时按 path segment 前缀归属；`Prefix == ""` 不表示拥有整个 listener，而是从该 RouteGroup 内实际注册的 `Route` / `Handle` / `Mount` / `auth.Mount` 合同路径派生归属。重叠 namespace 按最长前缀/最长模板胜出；同一 listener 内跨 cell 声明完全相同的 owner path/template 必须 fail-fast，不能靠注册顺序抢占。
 
-`metrics` 中间件只读取 `ctxkeys.CellIDFrom`，缺失时使用 `_runtime`。route label 对前置拒绝使用 router 的 route-template fallback resolver，避免业务路径拒绝被记为 `route="unmatched"`。回退由 `tools/archtest/http_metrics_label_test.go` 守护：CTXSOURCE / ROUTER-ATTRIBUTION / NO-ASSEMBLY-DERIVE / NO-CONFIG-CELLID / RUNTIME-SENTINEL。
+`metrics` 中间件经 sealed `metrics.ResolveCellLabel(ctx, validCellIDs)` 漏斗解析 cell label（内部读 `ctxkeys.CellIDFrom` + 校验 closed set，详见下方 M12b），缺失/越界时返回零值 `CellLabel{}`（`String()` 渲染为 `_runtime`）。route label 对前置拒绝使用 router 的 route-template fallback resolver，避免业务路径拒绝被记为 `route="unmatched"`。漏斗路由由 `tools/archtest/http_metrics_label_test.go` 守护：CTXSOURCE / BODYLIMIT-CTXSOURCE（断言两写入点过 `ResolveCellLabel`、不再内联 `ctxkeys.CellIDFrom`）/ ROUTER-ATTRIBUTION / NO-ASSEMBLY-DERIVE / NO-CONFIG-CELLID；漏斗体 + sentinel + 闭集成员校验由 `tools/archtest/cell_id_closed_set_test.go`（`CELL-ID-CLOSED-SET-01`，亦 subsume 旧 RUNTIME-SENTINEL-01）守护。
 
 迁移 / 运维约束：
 
@@ -209,11 +209,15 @@ HTTP/gRPC **request-metrics** `cell` label 的 `_runtime` 哨兵单源 = `runtim
 
 **覆盖范围**：该 funnel 覆盖**走 `composition.Builder` 的 compositionAPI assembly**——当前 `cmd/corebundle` + `examples/corebundlestarter`，`cmd/corebundle` 原手写 `assertModuleIDsMatch` 已删。**legacy-form 示例 assembly**（`examples/todoorder` / `iotdevice` / `orderfulfillment`，用 `generatedCellModules() []CellModule` 本地类型形态，不经 `composition.Builder`）仍保留各自的手写 `assertModuleIDsMatch`；它们迁移到 `composition.New` closed set 是后续工作（待这些示例采用 compositionAPI/cellmodules 形态时）。详见 ADR `docs/architecture/202606030230-adr-assembly-cross-module-composition.md` §D4。
 
-> **M12b（label 写入点 defense-in-depth）未并入本 PR**：`http_requests_total{cell}` 的 label value 在 registration-time enumerated set + `MustValidateLabels` 拒分隔符 + cardinality 上限 2000 + overflow bucket 已覆盖大部分；缺的「外部 cellID 是否 ∈ closed set」这层留在 #1093 M12b。
+**M12b（label 写入点 defense-in-depth，#1093 已交付）**：`http_requests_total{cell}` / `http_request_duration_seconds{cell}` / body-limit 拒绝计数器的 cell label 在**写入点**经 sealed `metrics.CellLabel` 类型 + 唯一构造器 `metrics.ResolveCellLabel(ctx, valid)` 校验 closed set——越界或缺失 cellID 降级 `RuntimeCellSentinel`，绝不污染平台 SLO 序列。closed set 由 bootstrap `buildListenerRouterOpts` 经 `router.WithCellIDClosedSet(s.asm.CellIDs())` 注入每个 listener router，再由 `buildMux` 传给 Metrics / BodyLimit 中间件（与 M12a 同源 `s.asm.CellIDs()`）。
+
+**M12a build-reject vs M12b runtime-degrade（互补分层，非矛盾）**：M12a 在 **build 期**对越界 cellID **硬拒、不降级**（配置 bug 必须 serving 前 fail-fast）；M12b 在 **runtime metric 写入点**对漏过的越界 cellID **降级 `_runtime`**（活请求不该为一个 metric label panic / 污染序列）。「不降级」治 build 路径，「→ sentinel」治 runtime label 路径——两条规则正交。
+
+**下游 type-system Hard**：`Collector.RecordRequest` / `RecordBodyLimitRejection` / `GRPCCollector.RecordRPC` 的 cell 参为 sealed `CellLabel`（unexported 字段，唯一导出构造器 = `ResolveCellLabel`），裸 string 当 label 编译不可表达（同 `outbox.Entry` sealed-construction 范式）。上游 Medium：`CELL-ID-CLOSED-SET-01` 锁漏斗体（必读 `ctxkeys.CellIDFrom` + `valid[v]` 成员校验 + miss 返回 `CellLabel{}`）+ 包内 `CellLabel{}` 字面量仅限 `ResolveCellLabel`（防包内后门）+ bootstrap 恒传 `s.asm.CellIDs()`。注意与 `HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01` 正交：后者禁 assembly **名**（单数）当 label **值**；M12b 用 assembly **cell-id 集**（复数）当成员**过滤器**——value-source vs membership-filter，互不冲突。
 
 ## gRPC Metrics `cell` Label（当前恒为 `_runtime`）
 
-`grpc_server_requests_total` / `grpc_server_request_duration_seconds` 复用与 HTTP 同一 `cell` label 语义与同一 `_runtime` 哨兵单源（`runtime/observability/metrics.RuntimeCellSentinel`）。但 gRPC cell attribution 接线尚未落地——HTTP 侧 router-root `CellAttribution` 从 `RouteGroup.CellID` 归属 cell，gRPC 对应的 `FullMethod → cellID` 归属（生成式 registrar 派生）随 epic PR-7/8 落地（tracking #1383）。**在此之前所有 gRPC 流量的 `cell` 恒为 `_runtime`，运维侧不要对 gRPC 指标用 `cell!="_runtime"` 过滤**（详见 `docs/ops/alerting-rules.md`）。reader 侧契约（cell label 取自 `ctxkeys.CellID`，缺失回退 `RuntimeCellSentinel`，禁硬编码）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01` 守卫，故 attribution 一旦接线，`cell` 自动反映归属 cell 而无需改 interceptor。
+`grpc_server_requests_total` / `grpc_server_request_duration_seconds` 复用与 HTTP 同一 `cell` label 语义与同一 `_runtime` 哨兵单源（`runtime/observability/metrics.RuntimeCellSentinel`）。但 gRPC cell attribution 接线尚未落地——HTTP 侧 router-root `CellAttribution` 从 `RouteGroup.CellID` 归属 cell，gRPC 对应的 `FullMethod → cellID` 归属（生成式 registrar 派生）随 epic PR-7/8 落地（tracking #1383）。**在此之前所有 gRPC 流量的 `cell` 恒为 `_runtime`，运维侧不要对 gRPC 指标用 `cell!="_runtime"` 过滤**（详见 `docs/ops/alerting-rules.md`）。reader 侧契约（cell label 经 sealed `metrics.ResolveCellLabel(ctx, nil)` 漏斗解析——nil closed set 暂使任何 ctx cell 降级 sentinel；#1383 接线 attribution 时把 nil 换成真 closed set，`cell` 自动反映归属 cell 而无需改 interceptor 形态）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01` 守卫。`RecordRPC` 的 cell 参与 HTTP 同走 sealed `CellLabel`，裸 string label 编译不可表达。
 
 ## Redis Key Namespace（owner 维度的 keyspace 等价物）
 

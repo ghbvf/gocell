@@ -20,8 +20,24 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
+
+// Label builds a [metrics.CellLabel] for conformance assertions by routing a
+// cell id through the sole [metrics.ResolveCellLabel] funnel (ctx-injected cell
+// + singleton allow-set). The suite therefore constructs no CellLabel out of
+// band, so the sealed-construction guarantee stays intact even in test code. An
+// empty id resolves to the RuntimeCellSentinel label.
+func Label(id string) metrics.CellLabel {
+	if id == "" {
+		return metrics.ResolveCellLabel(context.Background(), nil)
+	}
+	return metrics.ResolveCellLabel(
+		ctxkeys.WithCellID(context.Background(), id),
+		map[string]struct{}{id: {}},
+	)
+}
 
 // RequestKey mirrors metrics.RequestKey for harness observation without
 // requiring the test-side to import the internal key type directly.
@@ -107,8 +123,8 @@ func conformRecordRequestCount(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
-	col.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.02)
+	col.RecordRequest(ctx, Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
+	col.RecordRequest(ctx, Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.02)
 
 	key := RequestKey{Cell: "accesscore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
 	got := obs.RequestCount(key)
@@ -125,8 +141,8 @@ func conformRecordRequestLabelIsolation(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
-	col.RecordRequest(ctx, "auditcore", "GET", "/api/v1/sessions", 200, 0.01)
+	col.RecordRequest(ctx, Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
+	col.RecordRequest(ctx, Label("auditcore"), "GET", "/api/v1/sessions", 200, 0.01)
 
 	key1 := RequestKey{Cell: "accesscore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
 	key2 := RequestKey{Cell: "auditcore", Method: "GET", Route: "/api/v1/sessions", Status: 200}
@@ -145,8 +161,8 @@ func conformBodyLimitRejectionCount(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
-	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
 
 	key := BodyLimitRejectionKey{Cell: "accesscore", Route: "/api/v1/upload"}
 	if got := obs.BodyLimitRejectionCount(key); got != 2 {
@@ -164,7 +180,7 @@ func conformBodyLimitRejectionCtxForwarded(t *testing.T, h CollectorHarness) {
 	type sentinelKey struct{}
 	want := "sentinel-ctx-value"
 	ctx := context.WithValue(context.Background(), sentinelKey{}, want)
-	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
 
 	lastCtx := obs.LastCtxForBodyLimitRejection()
 	if lastCtx == nil {
@@ -183,7 +199,7 @@ func conformBodyLimitRejectionNoSideEffect(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordBodyLimitRejection(ctx, "_runtime", "unmatched")
+	col.RecordBodyLimitRejection(ctx, Label("_runtime"), "unmatched")
 
 	// The request counter for the same (cell, route) tuple must remain zero.
 	// RequestKey has Method and Status in addition; check that no request was
@@ -205,8 +221,8 @@ func conformBodyLimitRejectionKeyIsolation(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
-	col.RecordBodyLimitRejection(ctx, "configcore", "/api/v1/config")
+	col.RecordBodyLimitRejection(ctx, Label("accesscore"), "/api/v1/upload")
+	col.RecordBodyLimitRejection(ctx, Label("configcore"), "/api/v1/config")
 
 	key1 := BodyLimitRejectionKey{Cell: "accesscore", Route: "/api/v1/upload"}
 	key2 := BodyLimitRejectionKey{Cell: "configcore", Route: "/api/v1/config"}

@@ -18,6 +18,7 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/metrics/metricstest"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
@@ -223,8 +224,8 @@ func TestAutoWire_CellLabel_FromCtxArg(t *testing.T) {
 
 	// Driving distinct cellIDs proves the collector does not cache one;
 	// each call emits the cellID it was given.
-	b.httpCollector.RecordRequest(context.Background(), "accesscore", "GET", "/api/v1/users", 200, 0.05)
-	b.httpCollector.RecordRequest(context.Background(), "_runtime", "GET", "/healthz", 200, 0.001)
+	b.httpCollector.RecordRequest(context.Background(), metricstest.Label("accesscore"), "GET", "/api/v1/users", 200, 0.05)
+	b.httpCollector.RecordRequest(context.Background(), metricstest.Label("_runtime"), "GET", "/healthz", 200, 0.001)
 
 	reqs := p.counter("http_requests_total")
 	require.NotNil(t, reqs, "http_requests_total must be registered")

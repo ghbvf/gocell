@@ -8,7 +8,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/panicregister"
@@ -19,10 +18,13 @@ import (
 // UnaryMetrics returns an interceptor that records grpc_server_requests_total
 // and grpc_server_request_duration_seconds via the given collector. The metric
 // labels are: method (info.FullMethod), code (the gRPC status code name derived
-// from the handler's returned error), and cell. The cell label reads
-// kernel/ctxkeys.CellID and falls back to metrics.RuntimeCellSentinel
-// ("_runtime"); gRPC cell attribution is not wired until a later PR, so cell is
-// "_runtime" for now. This mirrors runtime/http/middleware.Metrics.
+// from the handler's returned error), and cell. The cell label is resolved
+// through the sealed metrics.ResolveCellLabel funnel — passed a nil closed set
+// because gRPC cell attribution is not yet wired (#1383), so the funnel always
+// degrades to metrics.RuntimeCellSentinel ("_runtime") for now. When attribution
+// lands, the nil is replaced by the assembly closed set and the cell label
+// reflects the owning cell with no other change. This mirrors
+// runtime/http/middleware.Metrics.
 //
 // collector and clk are required: a nil collector or clock is a wiring bug that
 // fails fast at construction (programmer-error panic, like MustHaveClock) rather
@@ -39,11 +41,8 @@ func UnaryMetrics(collector metrics.GRPCCollector, clk clock.Clock) grpc.UnarySe
 		resp, err := handler(ctx, req)
 		observability.SafeObserve(slog.Default(), func() {
 			code := status.Code(err).String()
-			cellID := metrics.RuntimeCellSentinel
-			if v, ok := kernelctxkeys.CellIDFrom(ctx); ok && v != "" {
-				cellID = v
-			}
-			collector.RecordRPC(ctx, cellID, info.FullMethod, code, clk.Since(start).Seconds())
+			cell := metrics.ResolveCellLabel(ctx, nil)
+			collector.RecordRPC(ctx, cell, info.FullMethod, code, clk.Since(start).Seconds())
 		})
 		return resp, err
 	}

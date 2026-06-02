@@ -29,11 +29,12 @@ const RuntimeCellSentinel = "_runtime"
 // code name) replaces the HTTP status int + route; the two interfaces are not
 // unified.
 //
-// cellID is supplied by the caller; the collector never infers it. Use the
-// owning cell ID once gRPC cell attribution lands, or RuntimeCellSentinel
-// ("_runtime") for framework / unattributed traffic.
+// cell is the sealed [CellLabel] from [ResolveCellLabel]; the collector never
+// infers it. gRPC cell attribution is not yet wired, so the interceptor passes
+// ResolveCellLabel(ctx, nil), which resolves to RuntimeCellSentinel ("_runtime")
+// until #1383 threads a real closed set.
 type GRPCCollector interface {
-	RecordRPC(ctx context.Context, cellID, method, code string, durationSeconds float64)
+	RecordRPC(ctx context.Context, cell CellLabel, method, code string, durationSeconds float64)
 }
 
 // grpcProviderCollector implements GRPCCollector on top of a provider-neutral
@@ -85,11 +86,11 @@ func NewGRPCProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorCon
 
 // RecordRPC emits an increment on grpc_server_requests_total and a sample on
 // grpc_server_request_duration_seconds, labeled identically.
-func (c *grpcProviderCollector) RecordRPC(ctx context.Context, cellID, method, code string, durationSeconds float64) {
+func (c *grpcProviderCollector) RecordRPC(ctx context.Context, cell CellLabel, method, code string, durationSeconds float64) {
 	labels := kernelmetrics.Labels{
 		"method": method,
 		"code":   code,
-		"cell":   cellID,
+		"cell":   cell.String(),
 	}
 	c.requests.With(labels).Inc(ctx)
 	c.duration.With(labels).Observe(ctx, durationSeconds)
@@ -123,8 +124,8 @@ func NewInMemoryGRPCCollector() *InMemoryGRPCCollector {
 }
 
 // RecordRPC records a completed gRPC unary request.
-func (c *InMemoryGRPCCollector) RecordRPC(_ context.Context, cellID, method, code string, durationSeconds float64) {
-	key := GRPCRequestKey{Cell: cellID, Method: method, Code: code}
+func (c *InMemoryGRPCCollector) RecordRPC(_ context.Context, cell CellLabel, method, code string, durationSeconds float64) {
+	key := GRPCRequestKey{Cell: cell.String(), Method: method, Code: code}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.counts[key]++

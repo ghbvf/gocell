@@ -21,16 +21,14 @@ type Collector interface {
 	// route is the route pattern (e.g. "/api/v1/users/{id}"), not the actual
 	// request path. Using route patterns prevents metric cardinality explosion.
 	//
-	// cellID is the coarse owner dimension for the request. It is supplied by
-	// the caller, normally runtime/http/router's root CellAttribution
-	// middleware, from RouteGroup ownership before protection middleware can
-	// short-circuit. It is not inferred by the collector from assembly,
-	// config, route path, tenant, slice, or contract metadata.
-	//
-	// Use the owning cell ID for cell-owned RouteGroups, or "_runtime" for
-	// framework-owned paths (healthz/readyz/metrics, unmatched 404s, listeners
-	// with no business RouteGroup attached).
-	RecordRequest(ctx context.Context, cellID, method, route string, status int, durationSeconds float64)
+	// cell is the coarse owner dimension for the request, carried as the sealed
+	// [CellLabel] whose only constructor is [ResolveCellLabel]. The collector
+	// never infers it from assembly, config, route path, tenant, slice, or
+	// contract metadata — ResolveCellLabel resolves it from request context and
+	// the assembly closed set, degrading framework-owned paths
+	// (healthz/readyz/metrics, unmatched 404s, listeners with no business
+	// RouteGroup, out-of-set cells) to RuntimeCellSentinel ("_runtime").
+	RecordRequest(ctx context.Context, cell CellLabel, method, route string, status int, durationSeconds float64)
 
 	// RecordBodyLimitRejection increments the body-limit rejection counter for
 	// the given cell and route. It is called only on the Content-Length
@@ -45,10 +43,10 @@ type Collector interface {
 	// Framework-generated handlers follow this path; custom handlers that do not
 	// call httputil.WriteError will not produce a 413 in http_requests_total.
 	//
-	// cellID follows the same semantics as RecordRequest: use the owning cell
-	// ID or RuntimeCellSentinel ("_runtime") for framework paths.
+	// cell follows the same semantics as RecordRequest: the sealed [CellLabel]
+	// from [ResolveCellLabel] (validated cell id or RuntimeCellSentinel).
 	// route is the low-cardinality route pattern from RouteFor.
-	RecordBodyLimitRejection(ctx context.Context, cellID, route string)
+	RecordBodyLimitRejection(ctx context.Context, cell CellLabel, route string)
 }
 
 // RequestKey identifies one low-cardinality HTTP request metric series.
@@ -99,8 +97,8 @@ func metricKey(cellID, method, route string, status int) RequestKey {
 }
 
 // RecordRequest records a completed HTTP request.
-func (c *InMemoryCollector) RecordRequest(_ context.Context, cellID, method, route string, status int, durationSeconds float64) {
-	key := metricKey(cellID, method, route, status)
+func (c *InMemoryCollector) RecordRequest(_ context.Context, cell CellLabel, method, route string, status int, durationSeconds float64) {
+	key := metricKey(cell.String(), method, route, status)
 
 	c.mu.RLock()
 	cnt, cntOK := c.counts[key]
@@ -127,8 +125,8 @@ func (c *InMemoryCollector) RecordRequest(_ context.Context, cellID, method, rou
 // RecordBodyLimitRejection increments the body-limit rejection counter for the
 // given cell and route. Mirrors the RLock fast-path + Lock lazy-init pattern
 // of RecordRequest.
-func (c *InMemoryCollector) RecordBodyLimitRejection(_ context.Context, cellID, route string) {
-	key := BodyLimitRejectionKey{Cell: cellID, Route: route}
+func (c *InMemoryCollector) RecordBodyLimitRejection(_ context.Context, cell CellLabel, route string) {
+	key := BodyLimitRejectionKey{Cell: cell.String(), Route: route}
 
 	c.mu.RLock()
 	ctr, ok := c.bodyLimitRejections[key]

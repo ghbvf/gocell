@@ -102,6 +102,7 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 	rtr, err := router.NewForListener(
 		clock.Real(), cell.PrimaryListener,
 		router.WithMetricsCollector(mc),
+		router.WithCellIDClosedSet([]string{"accesscore", "auditcore"}),
 	)
 	require.NoError(t, err)
 

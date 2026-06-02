@@ -12,28 +12,24 @@ import (
 	"context"
 	"time"
 
-	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // UnaryMetrics deliberately mimics the shape of
-// runtime/grpc/interceptor.UnaryMetrics — it reads kernel/ctxkeys.CellIDFrom and
-// metrics.RuntimeCellSentinel and calls GRPCCollector.RecordRPC — but feeds an
-// UNRELATED identifier (bogus) as the cell label instead of the ctx-derived
-// cellID. This is exactly the blind spot B2 that the pre-provenance rule
-// accepted: every structural assertion (reads ctx, uses sentinel, calls
-// RecordRPC, arg is an ident and not a literal, ctx before record, sentinel
-// before record) passes, so the scan must fire ONLY the two cellIDProvenance
-// diagnostics — the bogus var is the object referenced by neither the sentinel
-// init nor the CellIDFrom branch assignment.
+// runtime/grpc/interceptor.UnaryMetrics — it resolves the cell label through
+// metrics.ResolveCellLabel and calls GRPCCollector.RecordRPC — but feeds an
+// UNRELATED CellLabel identifier (bogus zero value) as the cell label instead of
+// the funnel-resolved cell. This is exactly the blind spot B2 that a
+// non-provenance rule would accept: every structural assertion (calls
+// ResolveCellLabel, calls RecordRPC, arg is an ident and not a literal, no inline
+// CellIDFrom, resolve before record) passes, so the scan must fire ONLY the one
+// cellLabelFromResolve diagnostic — the bogus var is the object referenced by no
+// metrics.ResolveCellLabel assignment.
 func UnaryMetrics(collector metrics.GRPCCollector) func(context.Context, string) {
 	return func(ctx context.Context, method string) {
-		cellID := metrics.RuntimeCellSentinel
-		if v, ok := kernelctxkeys.CellIDFrom(ctx); ok && v != "" {
-			cellID = v
-		}
-		_ = cellID                   // correctly-attributed value, intentionally unused
-		bogus := "constructor-value" // unrelated ident — NOT the ctx-derived cellID
+		cell := metrics.ResolveCellLabel(ctx, nil)
+		_ = cell                    // correctly-resolved label, intentionally unused
+		var bogus metrics.CellLabel // zero value, NOT from the funnel for this call
 		collector.RecordRPC(ctx, bogus, method, "OK", time.Second.Seconds())
 	}
 }
