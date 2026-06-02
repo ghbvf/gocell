@@ -46,15 +46,15 @@ GoCell 是一个 Cell-native 框架，设计上允许外部 Cell 以独立 Go mo
 ```go
 // 注册
 errcode.RegisterPrefix(prefix, owner string)
-// 查询（最长前缀匹配）
+// 查询（最长匹配键：namespace 前缀 / whole-code 精确）
 errcode.OwnerOfCode(code errcode.Code) (string, bool)
 // 快照（sorted，供 golden 生成 / 调试）
 errcode.RegisteredPrefixes() []PrefixOwner
 ```
 
-- `RegisterPrefix` 对同一 `(prefix, owner)` 对幂等；同 prefix 不同 owner 触发 `errcode.Assertion` + `panicregister.Approved` fail-fast，符合 `PANIC-REGISTERED-01`。
+- `RegisterPrefix` 对同一 `(prefix, owner)` 对幂等；同 prefix 不同 owner、或不同 prefix 但**跨 owner 重叠**（一个 prefix 是另一个的前缀，claimed code-set 相交），均触发 `errcode.Assertion` + `panicregister.Approved` fail-fast，符合 `PANIC-REGISTERED-01`。
 - 空 prefix / 空 owner / 非 `ERR_` 前缀同样 panic fail-fast（programmer error）。
-- `OwnerOfCode` 使用**最长前缀匹配**：若同时注册 `ERR_AUTH_` 和 `ERR_AUTH_FORBIDDEN`（不同 owner），后者优先——允许精细化所有权，不破坏 namespace 注册的 module 整体覆盖。
+- `OwnerOfCode` 使用**最长匹配键**：namespace entry（尾随 `_`）按前缀匹配，whole-code entry（无尾随 `_`）按**精确相等**匹配，命中的最长 key 胜出。whole-code 精确匹配是关键——`ERR_INTERNAL` 不会误吞 `ERR_INTERNAL_DETAIL`，否则闭集守卫（复用 `OwnerOfCode`）会 false-green。**同一 owner** 可同时注册 `ERR_AUTH_` 和 `ERR_AUTH_FORBIDDEN` 精细化所有权（后者更长，优先）；**跨 owner 重叠**在注册期被上一条规则拒绝——cross-module namespace claims 必须互不相交。
 - 并发安全：`sync.RWMutex`，`RegisterPrefix` 写锁，`OwnerOfCode` / `RegisteredPrefixes` 读锁。预期使用模式是 `init()` 期写入（无竞争），mutex 仅为正确性保证。
 - 平台 65 个 prefix 条目（52 namespace + 13 whole-code）在 `pkg/errcode/prefix_registry.go` 的 `init()` 中自注册。
 
@@ -68,10 +68,10 @@ errcode.RegisteredPrefixes() []PrefixOwner
 
 | 检查形态 | 评级 | 说明 |
 |---------|------|------|
-| `errcode.New`/`Wrap` 第 1 个位置参 — 字符串字面量 (`BasicLit`) | **下游 Hard** | EvaluateConstString 类型感知，别名无效 |
-| `errcode.New`/`Wrap` 第 1 个位置参 — const selector（`errcode.ErrAuthForbidden` 等）| **下游 Hard** | EvaluateConstString 跨包 const 求值 |
-| 导出 package-scope `Code` sentinel 声明（Target B） | **下游 Hard** | reflect + string BasicLit 识别 |
-| `errcode.New`/`Wrap` 第 1 个位置参 — 直接 runtime 组装（`errcode.Code(non-const)` / `"ERR_"+x`）| **下游 Hard（hard fail）** | 直接拒绝，要求使用命名 sentinel |
+| code-bearing helper（New/Wrap/WrapInfra/WritePublic/WrapOrInfra）的 code 参数 — 字符串字面量 (`BasicLit`) | **下游 Hard** | EvaluateConstString 类型感知，别名无效；codeArgIndex 按 helper 取（0/1/3） |
+| 同上 code 参数 — const selector（`errcode.ErrAuthForbidden` 等）| **下游 Hard** | EvaluateConstString 跨包 const 求值 |
+| 导出 package-scope `Code` sentinel 声明（Target B，含 `pkg/errcode` 自身） | **下游 Hard** | reflect + string BasicLit 识别；`pkg/errcode` 只跑 Target B |
+| 同上 code 参数 — 直接 runtime 组装（`errcode.Code(non-const)` / `"ERR_"+x`）| **下游 Hard（hard fail）** | 直接拒绝，要求使用命名 sentinel |
 | 通过 forwarding helper 传递的非 const `Code` 参数/变量 | **Medium residual（已知盲区）** | 变量/参数引用在 mint site 被跳过；蓄意构造一个转发 helper 可绕过，但不是意外漂移路径；data-flow tracing 可关闭但会对 parse/compare-side 产生 false positive；已在 PR-body backlog 中追踪 |
 | 上游 golden byte-lock | **Hard（review-gated `-update` 天花板）** | 与仓库所有 golden 一致；adversarial 绕过需要同 PR 改 golden 并通过 code review |
 
@@ -81,9 +81,9 @@ errcode.RegisteredPrefixes() []PrefixOwner
 
 | 威胁 | 形态 | 覆盖状态 |
 |------|------|---------|
-| 平台 cell 使用未注册前缀 | 字面量 / const selector mint | ✅ Hard（A 路径：literal + const-eval） |
-| 平台 cell 使用未注册前缀 | 导出 Code sentinel | ✅ Hard（B 路径：sentinel scan） |
-| 外部 cell 与平台前缀碰撞 | `RegisterPrefix` 不同 owner | ✅ 运行时 panic fail-fast（init 期） |
+| 平台 cell 使用未注册前缀 | 字面量 / const selector mint（New/Wrap/WrapInfra/WritePublic/WrapOrInfra 全部 code-bearing 入口） | ✅ Hard（A 路径：literal + const-eval；codeGatedCallees 覆盖每个收 `errcode.Code` 的 helper） |
+| 平台 cell 使用未注册前缀 | 导出 Code sentinel（含 `pkg/errcode` 自身声明的 175 个 sentinel） | ✅ Hard（B 路径：sentinel scan；`pkg/errcode` 自身只跑 Target B，不再整包 skip） |
+| 外部 cell 与平台前缀碰撞 | `RegisterPrefix` 同前缀异 owner，或不同前缀但跨 owner 重叠（claimed code-set 相交） | ✅ 运行时 panic fail-fast（init 期） |
 | 蓄意通过 forwarding helper 绕过 | non-const Code var 传入 mint | ⚠️ Medium residual（已知；需 data-flow tracing 关闭） |
 | 恶意修改 golden | golden byte-lock + review | ✅ review-gated；PR 内单侧漂移 CI 红 |
 | 平台 golden 漂移（增删 prefix） | golden diff 输出 CI 红 | ✅ Hard（`ERRCODE_PREFIX_GOLDEN_UPDATE=1` review gate） |

@@ -13,9 +13,11 @@ package errcode
 //  2. Whole-code entries (no trailing underscore, e.g. "ERR_INTERNAL") claim
 //     exactly one code by exact match.
 //
-// OwnerOfCode uses longest-prefix matching, so "ERR_AUTH_" and "ERR_AUTH_FORBIDDEN"
-// can both be registered by different owners if needed (though GoCell currently
-// uses a single owner for all platform codes).
+// OwnerOfCode resolves a code to its owner: namespace entries match by prefix,
+// whole-code entries match exactly, and the longest matching key wins. A single
+// owner may register overlapping entries (e.g. "ERR_AUTH_" and
+// "ERR_AUTH_FORBIDDEN") to refine ownership; cross-owner overlap is rejected at
+// registration time (see RegisterPrefix).
 //
 // # Invariant
 //
@@ -67,7 +69,10 @@ type PrefixOwner struct {
 //
 // Registering the same (prefix, owner) pair more than once is idempotent.
 // Registering the same prefix with a different owner panics with an *Error
-// whose message names both owners and the conflicting prefix.
+// whose message names both owners and the conflicting prefix. Registering a
+// DIFFERENT prefix whose claimed code-set overlaps an existing entry owned by a
+// different owner (one prefix contains the other) also panics — cross-module
+// namespace claims must be disjoint. Overlap within a single owner is allowed.
 //
 // The panic format args intentionally carry runtime strings (prefix + module
 // path). This is an init-stage programmer-error panic (see panic taxonomy in
@@ -104,6 +109,26 @@ func RegisterPrefix(prefix, owner string) {
 			Assertion("errcode.RegisterPrefix: prefix %q already owned by %q, cannot reassign to %q", prefix, existing, owner),
 		))
 	}
+	// Reject cross-owner namespace overlap. The registry's purpose is to keep
+	// each owner's claimed code-set disjoint from other modules'; an exact-string
+	// re-registration is caught above, but a NEW prefix whose claimed code-set
+	// intersects a different owner's entry (one is a prefix of the other) is the
+	// same collision and must fail-fast at startup, not coexist silently.
+	// Same-owner overlap is intentional (e.g. gocell owns both "ERR_AUTH_" and
+	// "ERR_AUTH_FORBIDDEN"; longest-key wins in OwnerOfCode).
+	for existing, existingOwner := range prefixRegistry {
+		if existingOwner == owner || !entriesOverlap(prefix, existing) {
+			continue
+		}
+		panic(panicregister.Approved(
+			"errcode-prefix-cross-owner-overlap",
+			Assertion(
+				"errcode.RegisterPrefix: prefix %q (owner %q) overlaps existing "+
+					"prefix %q (owner %q); cross-module namespace claims must be disjoint",
+				prefix, owner, existing, existingOwner,
+			),
+		))
+	}
 	prefixRegistry[prefix] = owner
 }
 
@@ -123,14 +148,15 @@ func RegisteredPrefixes() []PrefixOwner {
 	return out
 }
 
-// OwnerOfCode returns the owner of code by longest-prefix matching.
+// OwnerOfCode returns the owner of code by longest-matching-key.
 //
-// A registered key k matches iff strings.HasPrefix(string(code), k). Among
-// all matching keys the longest one wins (so "ERR_AUTH_FORBIDDEN" matches
-// "ERR_AUTH_" when both "ERR_AUTH_" and "ERR_" are registered, preferring
-// the more specific entry).
+// A registered key matches per entryClaimsCode: a namespace entry (trailing
+// "_") matches by prefix, a whole-code entry (no trailing "_") matches only by
+// exact equality. Among all matching keys the longest one wins (so
+// "ERR_AUTH_FORBIDDEN" matches "ERR_AUTH_" when both "ERR_AUTH_" and "ERR_" are
+// registered, preferring the more specific entry).
 //
-// Returns ("", false) when no registered prefix covers code.
+// Returns ("", false) when no registered entry covers code.
 func OwnerOfCode(code Code) (string, bool) {
 	prefixMu.RLock()
 	defer prefixMu.RUnlock()
@@ -140,7 +166,7 @@ func OwnerOfCode(code Code) (string, bool) {
 	bestOwner := ""
 
 	for k, owner := range prefixRegistry {
-		if strings.HasPrefix(codeStr, k) && len(k) > bestLen {
+		if entryClaimsCode(k, codeStr) && len(k) > bestLen {
 			bestLen = len(k)
 			bestOwner = owner
 		}
@@ -149,6 +175,43 @@ func OwnerOfCode(code Code) (string, bool) {
 		return "", false
 	}
 	return bestOwner, true
+}
+
+// entryClaimsCode reports whether a registered registry key claims code.
+//
+// A namespace entry (trailing "_", e.g. "ERR_AUTH_") claims every code whose
+// string starts with the prefix. A whole-code entry (no trailing "_", e.g.
+// "ERR_INTERNAL") claims exactly one code by EXACT match — it must NOT be
+// treated as a prefix, otherwise "ERR_INTERNAL" would falsely claim an
+// unrelated "ERR_INTERNAL_DETAIL" and let an unregistered code slip past the
+// closed-set guard (ERRCODE-PREFIX-OWNERSHIP-01 reuses OwnerOfCode).
+func entryClaimsCode(entry, code string) bool {
+	if strings.HasSuffix(entry, "_") {
+		return strings.HasPrefix(code, entry)
+	}
+	return code == entry
+}
+
+// entriesOverlap reports whether two registry keys claim any code in common.
+// Used by RegisterPrefix to reject cross-owner collisions.
+//
+//   - namespace × namespace: one prefix contains the other
+//   - namespace × whole-code: the whole-code lies under the namespace prefix
+//   - whole-code × whole-code: identical (the exact-string case is handled by
+//     RegisterPrefix's same-key check before this is reached)
+func entriesOverlap(a, b string) bool {
+	aNS := strings.HasSuffix(a, "_")
+	bNS := strings.HasSuffix(b, "_")
+	switch {
+	case aNS && bNS:
+		return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+	case aNS: // a namespace, b whole-code
+		return strings.HasPrefix(b, a)
+	case bNS: // a whole-code, b namespace
+		return strings.HasPrefix(a, b)
+	default: // both whole-code
+		return a == b
+	}
 }
 
 // gocellModuleOwner is the canonical module path for all GoCell platform codes.

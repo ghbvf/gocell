@@ -2088,11 +2088,22 @@ type codeGatedCallee struct {
 	displayName  string
 }
 
-// codeGatedCallees lists production mint callsites whose code argument
-// (arg index 1 = second positional arg) is scanned by ERRCODE-PREFIX-OWNERSHIP-01.
+// codeGatedCallees lists production mint callsites whose code argument is
+// scanned by ERRCODE-PREFIX-OWNERSHIP-01. This MUST cover every helper that
+// accepts a caller-supplied errcode.Code (parity with messageGatedCallees,
+// which gates the message arg of the same set). The codeArgIndex differs per
+// helper:
+//   - errcode.New(kind, code, message, opts...)               → 1
+//   - errcode.Wrap(kind, code, message, cause, opts...)       → 1
+//   - errcode.WrapInfra(code, message, cause, opts...)        → 0
+//   - httputil.WritePublic(ctx, w, kind, code, message)       → 3
+//   - ctxcancel.WrapOrInfra(err, op, id, code, fallbackMsg)   → 3
 var codeGatedCallees = []codeGatedCallee{
 	{pkgPath: errcodePackagePath, name: "New", codeArgIndex: 1, displayName: "errcode.New"},
 	{pkgPath: errcodePackagePath, name: "Wrap", codeArgIndex: 1, displayName: "errcode.Wrap"},
+	{pkgPath: errcodePackagePath, name: "WrapInfra", codeArgIndex: 0, displayName: "errcode.WrapInfra"},
+	{pkgPath: httputilPackagePath, name: "WritePublic", codeArgIndex: 3, displayName: "httputil.WritePublic"},
+	{pkgPath: ctxcancelPackagePath, name: "WrapOrInfra", codeArgIndex: 3, displayName: "ctxcancel.WrapOrInfra"},
 }
 
 // resolveCodeGatedCallee is parallel to resolveGatedCallee but matches
@@ -2148,8 +2159,10 @@ func resolveCodeGatedCallee(call *ast.CallExpr, info *types.Info) (codeGatedCall
 //
 // Two scan targets:
 //
-//	A. Mint callsites: errcode.New / errcode.Wrap — extract Args[1] (the code
-//	   arg). EvaluateConstString is used for typed resolution.
+//	A. Mint callsites: every code-bearing helper in codeGatedCallees
+//	   (errcode.New/Wrap/WrapInfra, httputil.WritePublic, ctxcancel.WrapOrInfra)
+//	   — extract the code arg at the helper's codeArgIndex. EvaluateConstString
+//	   is used for typed resolution.
 //	   Non-const code args (e.g. errcode.Code("ERR_"+x)) are a HARD FAIL: this
 //	   closes the closed-set escape hatch. Parse/compare-side errcode.Code(x)
 //	   conversions are NOT mint sites and are untouched.
@@ -2246,18 +2259,19 @@ func TestErrcodePrefixOwnership01(t *testing.T) {
 				if !fileroles.IsProductionCode(rel) {
 					continue
 				}
-				// pkg/errcode/ itself defines the sentinels and the registry;
-				// scanning it would report every platform code as violating (they
-				// are not passed to errcode.New from within the package). Exclude it.
-				if strings.HasPrefix(rel, errcodeMessageAllowlist) {
-					continue
-				}
-				// Skip archtest testdata fixtures.
+				// Skip archtest testdata fixtures (intentional violations).
 				if strings.HasPrefix(rel, errcodeMessageTestdataAllowlist) {
 					continue
 				}
+				// pkg/errcode itself declares all platform sentinels. Scan it for
+				// Target B (sentinel decls) — this closes the F3 gap where a new
+				// unregistered sentinel added directly to errcode.go escaped the
+				// closed set entirely. Disable Target A there: same-package New/Wrap
+				// calls are bare idents, not qualified selectors, so they never
+				// match the code gate.
+				scanTargetA := !strings.HasPrefix(rel, errcodeMessageAllowlist)
 
-				fileDiags, seen := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, p.TypesInfo)
+				fileDiags, seen := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, p.TypesInfo, scanTargetA)
 				out = append(out, fileDiags...)
 				for _, c := range seen {
 					canaryObserved[c] = true
@@ -2327,9 +2341,16 @@ func scanErrcodePrefixOwnershipDiags(
 	file *ast.File,
 	rel string,
 	info *types.Info,
+	scanTargetA bool,
 ) (diags []Diagnostic, seen []string) {
-	// Target A: mint callsites.
+	// Target A: mint callsites. Disabled (scanTargetA=false) when scanning
+	// pkg/errcode itself — same-package bare New/Wrap calls are not qualified
+	// selectors (so would not match the code gate), while the package's own
+	// sentinels are still verified via Target B below.
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !scanTargetA {
+			return
+		}
 		callee, ok := resolveCodeGatedCallee(call, info)
 		if !ok {
 			return
@@ -2482,8 +2503,8 @@ func TestErrcodePrefixOwnership01_ScannerFires(t *testing.T) {
 	Run(t, AST(DirsScope(fixtureDir, []string{"."})), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			// nil TypesInfo = AST-only mode (fixture scan).
-			diags, _ := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, nil)
+			// nil TypesInfo = AST-only mode (fixture scan); scan both targets.
+			diags, _ := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, nil, true)
 			allDiags = append(allDiags, diags...)
 		}
 		return nil
@@ -2513,5 +2534,22 @@ func TestErrcodePrefixOwnership01_ScannerFires(t *testing.T) {
 	}
 	if !foundUnregistered {
 		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_ScannerFires: no unregistered-prefix diagnostic found in: %v", allDiags)
+	}
+
+	// Each non-New/Wrap code-bearing helper must be exercised by the scan
+	// (regression guard for F4: WrapInfra/WritePublic/WrapOrInfra were missing
+	// from codeGatedCallees). The unregistered-prefix diagnostic names the
+	// helper's displayName, so assert each appears.
+	for _, want := range []string{"errcode.WrapInfra", "httputil.WritePublic", "ctxcancel.WrapOrInfra"} {
+		hit := false
+		for _, d := range allDiags {
+			if strings.Contains(d.Message, want) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_ScannerFires: helper %q not exercised by code gate; got: %v", want, allDiags)
+		}
 	}
 }

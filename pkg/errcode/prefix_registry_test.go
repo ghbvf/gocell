@@ -118,10 +118,79 @@ func TestOwnerOfCode_LongestMatch(t *testing.T) {
 		assert.Equal(t, owner, got)
 	})
 
+	t.Run("whole-code is NOT a prefix match (F1 false-green closed)", func(t *testing.T) {
+		// A whole-code entry must claim ONLY its exact string. An extended code
+		// that merely starts with the whole-code string must NOT resolve — else
+		// the closed-set guard (which reuses OwnerOfCode) is false-green.
+		_, ok := OwnerOfCode("ERR_LMTESTINTERNAL_DETAIL")
+		assert.False(t, ok,
+			"whole-code entry ERR_LMTESTINTERNAL must not claim the extended code "+
+				"ERR_LMTESTINTERNAL_DETAIL by prefix")
+	})
+
 	t.Run("no match", func(t *testing.T) {
 		_, ok := OwnerOfCode("ERR_UNKNOWN_ZZZZZ")
 		assert.False(t, ok, "unregistered code must return !ok")
 	})
+}
+
+// TestRegisterPrefix_CrossOwnerOverlapPanics proves F2: a new prefix whose
+// claimed code-set overlaps a DIFFERENT owner's existing entry fail-fast panics,
+// even though the prefix strings are not identical.
+//
+// NOTE: registry-mutating tests must NOT call t.Parallel() — the global registry
+// is shared across all tests in the process.
+func TestRegisterPrefix_CrossOwnerOverlapPanics(t *testing.T) {
+	// Use test-only owners (never the platform owner) so successful
+	// registrations here do not leak into the platform-filtered golden set.
+	const seedOwner = "github.com/seedtest/mod"
+	const otherOwner = "github.com/other/mod"
+
+	// Seed a namespace owned by one module.
+	RegisterPrefix("ERR_OVERLAPCONTAINER_", seedOwner)
+
+	mustPanic := func(t *testing.T, prefix, owner, wantExisting string) {
+		t.Helper()
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			RegisterPrefix(prefix, owner)
+		}()
+		require.NotNil(t, recovered, "expected cross-owner overlap panic for %q", prefix)
+		err, ok := recovered.(*Error)
+		require.True(t, ok, "recovered value must be *Error, got %T", recovered)
+		assert.Contains(t, err.Message, prefix, "panic message must name the new prefix")
+		assert.Contains(t, err.Message, wantExisting, "panic message must name the existing overlapping prefix")
+	}
+
+	t.Run("namespace under namespace", func(t *testing.T) {
+		mustPanic(t, "ERR_OVERLAPCONTAINER_SUB_", otherOwner, "ERR_OVERLAPCONTAINER_")
+	})
+	t.Run("whole-code under namespace", func(t *testing.T) {
+		mustPanic(t, "ERR_OVERLAPCONTAINER_LEAF", otherOwner, "ERR_OVERLAPCONTAINER_")
+	})
+	t.Run("namespace containing existing namespace (reverse direction)", func(t *testing.T) {
+		// Seed a narrow namespace owned by other, then a broader one owned by
+		// platform must panic (existing is under the new prefix).
+		RegisterPrefix("ERR_REVERSEOVERLAP_INNER_", otherOwner)
+		mustPanic(t, "ERR_REVERSEOVERLAP_", seedOwner, "ERR_REVERSEOVERLAP_INNER_")
+	})
+}
+
+// TestRegisterPrefix_SameOwnerOverlapAllowed proves overlap WITHIN one owner is
+// intentional (e.g. gocell owns both "ERR_AUTH_" and "ERR_AUTH_FORBIDDEN") and
+// must NOT panic.
+func TestRegisterPrefix_SameOwnerOverlapAllowed(t *testing.T) {
+	// Test-only owner (not the platform owner) — what matters is that both
+	// registrations share the SAME owner, not which owner it is. Keeps the
+	// platform-filtered golden set clean.
+	const owner = "github.com/sameowner/mod"
+
+	RegisterPrefix("ERR_SAMEOWNEROVERLAP_", owner)
+	// Same owner: a whole-code under the namespace and a sub-namespace are both
+	// legal refinements and must not panic.
+	assert.NotPanics(t, func() { RegisterPrefix("ERR_SAMEOWNEROVERLAP_LEAF", owner) })
+	assert.NotPanics(t, func() { RegisterPrefix("ERR_SAMEOWNEROVERLAP_SUB_", owner) })
 }
 
 func TestRegisteredPrefixes_SortedSnapshot(t *testing.T) {

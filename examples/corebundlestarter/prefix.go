@@ -14,7 +14,8 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 //  1. RegisterPrefix in init() — done here.
 //  2. Declare error codes: const ErrStarterXxx errcode.Code = "ERR_STARTER_XXX"
 //     in your errors.go (or equivalent) for every code your cell mints.
-//  3. Use the codes: errcode.New(ErrStarterXxx, "description", ...)
+//  3. Use the codes: errcode.New(errcode.KindInvalid, ErrStarterXxx, "description", ...)
+//     (errcode.New signature is New(kind Kind, code Code, message string, ...)).
 //
 // The registration call is the teaching artifact here; corebundlestarter does
 // not currently declare any ERR_STARTER_* constants — see #1091.
