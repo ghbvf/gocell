@@ -393,7 +393,9 @@ func argIsTypedScope(p *Pass, arg ast.Expr, scopeBoundObjs map[types.Object]stru
 // scope-var-indirection bypass (F2): `scope := Typed(...); for _, g := range
 // KnownNonDefaultTags() { Run(t, scope, ...) }`, where at the Run call site the
 // 2nd arg is a plain *ast.Ident (the scope var) rather than a direct constructor
-// CallExpr. Scope (file-level) and single-binding constraints mirror
+// CallExpr. Scope is file-level — EachInSubtree walks the WHOLE file AST
+// (including function bodies, which is where the realistic copy-template binding
+// lives), bounded to this one file — and single-binding; both constraints mirror
 // collectKnownTagsBoundObjects (BS-4) exactly — same narrow accepted sub-gap for
 // multi-RHS positional binding and cross-file/cross-func escape.
 func collectTypedScopeBoundObjects(p *Pass, file *ast.File) map[types.Object]struct{} {

@@ -59,6 +59,12 @@
 //     NOT carried to a new named type, so x does not implement isRunScope() and
 //     cannot reach Run. (A type ALIAS `type x = typedRunScope` IS detected:
 //     TypeOf(x{}) resolves to the identical named typedRunScope.)
+//   - Pointer-elided literal `&typedRunScope{}`: IS detected — the inner
+//     CompositeLit node is typed `typedRunScope` (not `*typedRunScope`), so
+//     TypeOf(comp) resolves it. Even were it missed, isRunScope() has a VALUE
+//     receiver, so `*typedRunScope` does not implement RunScope and
+//     `Run(t, &typedRunScope{}, rule)` is a compile error — a type-system
+//     backstop. Not a bypass.
 //   - Reflect / runtime construction: outside Go static AST + types.Info scope,
 //     same accepted boundary as the entire archtest framework.
 //   - A scope struct returned from a non-constructor helper that is itself
@@ -128,6 +134,9 @@ func scanRunScopeConstructorViolations(p *Pass, file *ast.File, rel string) []Di
 			return
 		}
 		fn, found := ResolveEnclosingFunc(p.TypesInfo, file, comp)
+		// archtestPkgPath ("github.com/ghbvf/gocell/tools/archtest") is the
+		// shared meta-archtest const declared in pass_funnel_test.go (same
+		// package archtest test binary).
 		if found && fn.Pkg() != nil && fn.Pkg().Path() == archtestPkgPath {
 			if _, sanctioned := runScopeSanctionedCtors[fn.Name()]; sanctioned {
 				return
@@ -189,10 +198,21 @@ func TestRunScopeConstructorFunnel01(t *testing.T) {
 // self-check: it loads package archtest WITH the archtest_fixture tag (so
 // runscope_ctor_redfixture.go becomes visible) via the sanctioned Fixture
 // loader, and asserts the detector flags each of the five sealed RunScope
-// structs exactly once. Tests:false keeps the load to non-test .go, so the only
-// scope-struct literals seen are the five sanctioned constructors (NOT flagged)
-// plus the five RED fixture constructions (flagged) — the exact-count lock makes
-// the constructors' exemption load-bearing.
+// structs exactly once.
+//
+// Tests:false keeps the load to non-test .go (NOT a test-exclusion claim — it
+// just means business *_test.go rules are out of this coverage load; the five
+// sanctioned constructors live in pass.go/fixture.go, which are non-test, so
+// they are present and must NOT be flagged). With Tests:true the same property
+// holds — business *_test.go would add only ctor-mediated Run calls, never bare
+// scope-struct literals — but Tests:false keeps this coverage load minimal.
+//
+// The scope-struct literals seen are: the five sanctioned constructors (NOT
+// flagged) + the five RED fixture constructions (flagged). The GREEN-negative
+// fixture (runScopeConstructorGreenNegatives: TypedOpts{}/FixtureOpts{}/
+// Diagnostic{} outside any ctor) MUST add zero — so the exact-count==5 lock is
+// also a false-positive guard: a non-scope name mistakenly added to
+// runScopeStructNames would trip a GREEN line and push the count past five.
 func TestRunScopeConstructorFunnel01_FixtureCoverage(t *testing.T) {
 	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{"./tools/archtest"}),
 		func(p *Pass) []Diagnostic {
@@ -219,20 +239,23 @@ func TestRunScopeConstructorFunnel01_FixtureCoverage(t *testing.T) {
 	}
 	sort.Strings(missing)
 	for _, name := range missing {
-		t.Errorf("RUNSCOPE-CONSTRUCTOR-FUNNEL-01 FixtureCoverage: struct %q produced 0 "+
+		t.Errorf("%s FixtureCoverage: struct %q produced 0 "+
 			"diagnostics on the in-package RED fixture; either runscope_ctor_redfixture.go "+
 			"dropped this struct's construction or the detector regressed for it "+
-			"(per-member regression lock)", name)
+			"(per-member regression lock)", runScopeConstructorFunnelRuleID, name)
 	}
 	// Exact-count lock: exactly five RED constructions, and the five sanctioned
-	// constructors must add zero. Drift (a constructor wrongly flagged, or a new
-	// RED construction without updating this count) fails here.
+	// constructors + the three GREEN-negative non-scope literals must add zero.
+	// Drift (a constructor wrongly flagged, a non-scope name wrongly added to
+	// runScopeStructNames, or a new RED construction without updating this count)
+	// fails here.
 	const wantViolations = 5
 	if got := len(diags); got != wantViolations {
-		t.Errorf("RUNSCOPE-CONSTRUCTOR-FUNNEL-01 FixtureCoverage: %d violations, want %d "+
+		t.Errorf("%s FixtureCoverage: %d violations, want %d "+
 			"(five RED fixture constructions trip once each; the five sanctioned "+
-			"constructors must add 0) — over-detection regression or fixture set changed",
-			got, wantViolations)
+			"constructors and the GREEN-negative non-scope literals must add 0) — "+
+			"over-detection regression or fixture set changed",
+			runScopeConstructorFunnelRuleID, got, wantViolations)
 	}
 }
 

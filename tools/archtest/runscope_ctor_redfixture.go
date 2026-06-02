@@ -33,3 +33,15 @@ func runScopeConstructorBypassFixture() {
 	_ = dirRunScope{}        // bypass: dirRunScope outside StandaloneModule
 	_ = fixtureRunScope{}    // bypass: fixtureRunScope outside Fixture
 }
+
+// runScopeConstructorGreenNegatives constructs NON-scope structs of package
+// archtest outside any constructor — these MUST NOT be flagged. They are the
+// GREEN false-positive control: the FixtureCoverage exact-count lock (== 5,
+// the RED lines above) makes them load-bearing — if a non-scope name were
+// mistakenly added to runScopeStructNames, one of these would trip and the
+// count would exceed 5.
+func runScopeConstructorGreenNegatives() {
+	_ = TypedOpts{}   // not a RunScope struct → must NOT be flagged
+	_ = FixtureOpts{} // not a RunScope struct → must NOT be flagged
+	_ = Diagnostic{}  // not a RunScope struct → must NOT be flagged
+}
