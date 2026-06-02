@@ -253,6 +253,13 @@ func (r *RoleRepository) ListByUserID(
 }
 
 func (r *RoleRepository) rolesByUserSnapshot(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+	// Validate here (not only in GetByUserID) so ListByUserID — which calls this
+	// directly — rejects an invalid/empty tenant rather than reading the tenant
+	// map with a bad key. Closes the mem/PG drift the PG path already guards via
+	// its GetByUserID delegation (review F4).
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()

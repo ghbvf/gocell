@@ -7,6 +7,25 @@
 --   application-layer invariants and trigger semantics are preserved and
 --   ported to be per-tenant-scoped.
 --
+-- Up deployment runbook (README §规则6 — destructive forward-rebuild):
+--   This is a destructive forward-rebuild (DROP+CREATE; the old single-tenant
+--   binary cannot write the new composite-keyed schema). The forward-only
+--   deployment order is:
+--     1. Drain traffic (stop the old binary / take the listener out of rotation).
+--     2. goose up (this migration — rebuilds users/roles/role_assignments).
+--     3. Deploy the new tenant-aware binary.
+--     4. Restore traffic.
+--   No mixed-version window is safe: step 2 invalidates the old binary's writes,
+--   so the old binary MUST be fully drained before step 2 (no rolling overlap).
+--   GoCell has no production deployment today (pre-v1.0, no external consumers),
+--   so in practice a dev reset = drop the DB and re-run from migration 001 up;
+--   the sequence above is documented for the eventual GA deployment.
+-- Down authorization + rollback order: forward-only, NO goose Down rollback.
+--   The destructive-down gate is a Go-side typed permit (Migrator.Down +
+--   DestructiveDownPermit, issue #1248), NOT a SQL GUC. Rollback in a
+--   hypothetical prod = restore from backup; in dev = drop + migrate up from 001.
+--   See the goose Down section at the bottom for the irreversibility warning.
+--
 -- Schema changes (users):
 --   - Add tenant_id TEXT NOT NULL (no DEFAULT — tables start empty after rebuild).
 --   - PK stays (id UUID) — users are globally unique by UUID.

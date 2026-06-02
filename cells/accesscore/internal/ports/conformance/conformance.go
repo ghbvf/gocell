@@ -1454,6 +1454,40 @@ func RunRoleRepoConformance(t *testing.T, factory RoleRepoFactory) {
 	t.Run("EffectiveAdmin_CrossTenant_PerTenant", func(t *testing.T) {
 		conformEffectiveAdminCrossTenant(t, factory)
 	})
+	t.Run("InvalidTenant_Rejected", func(t *testing.T) {
+		conformRoleInvalidTenantRejected(t, factory)
+	})
+}
+
+// conformRoleInvalidTenantRejected (F4): every tenant-scoped read method must
+// reject an invalid (empty/zero) tenant via tenant.Validate rather than silently
+// reading with a bad key — closes the mem/PG drift where one backend validated
+// and the other did not (mem ListByUserID previously bypassed the guard).
+func conformRoleInvalidTenantRejected(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, _, _, cleanup := factory(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+	var invalid tenant.TenantID // zero value — empty, rejected by Validate
+	sort := []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}
+	if _, err := roleRepo.GetByID(ctx, invalid, "any"); err == nil {
+		t.Error("GetByID(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.GetByUserID(ctx, invalid, "any"); err == nil {
+		t.Error("GetByUserID(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.ListByUserID(ctx, invalid, "any", query.ListParams{Limit: 10, Sort: sort}); err == nil {
+		t.Error("ListByUserID(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.CountByRole(ctx, invalid, auth.RoleAdmin); err == nil {
+		t.Error("CountByRole(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.EffectiveAdminExists(ctx, invalid); err == nil {
+		t.Error("EffectiveAdminExists(invalidTenant): want error, got nil")
+	}
 }
 
 // seedRoleAssignment creates role roleID in tenant tid and assigns it to an
