@@ -370,6 +370,40 @@ func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
 		"details must contain column=authz_epoch; got %v", ec.Details)
 }
 
+// TestVerifyExpectedShape_SeqIdentityDropped verifies the F5 (#1368) guard:
+// weakening outbox_entries.seq from GENERATED ALWAYS AS IDENTITY to a plain
+// bigint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape. SET NOT
+// NULL after DROP IDENTITY so the type + nullability checks still pass and the
+// identity check is the one that fires (proving the new dimension, not the
+// existing nullability dimension).
+func TestVerifyExpectedShape_SeqIdentityDropped(t *testing.T) {
+	pool := emptyPool(t)
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_seq_identity")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE outbox_entries ALTER COLUMN seq DROP IDENTITY`)
+	require.NoError(t, execErr, "DROP IDENTITY must succeed (superuser in testcontainer)")
+	_, execErr = pool.DB().Exec(ctx, `ALTER TABLE outbox_entries ALTER COLUMN seq SET NOT NULL`)
+	require.NoError(t, execErr, "SET NOT NULL so type/nullability pass and identity is the sole fault")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must reject a non-IDENTITY seq column")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Contains(t, ec.Message, "GENERATED ALWAYS AS IDENTITY",
+		"message must describe the identity fault")
+	assert.True(t, detailsContainKV(ec.Details, "table", "outbox_entries"),
+		"details must contain table=outbox_entries; got %v", ec.Details)
+	assert.True(t, detailsContainKV(ec.Details, "column", "seq"),
+		"details must contain column=seq; got %v", ec.Details)
+}
+
 // TestVerifyExpectedShape_ForbiddenColumnPresent verifies that adding a
 // forbidden legacy column causes VerifyExpectedShape to return
 // ErrAdapterPGSchemaShape with details naming the offending table and column.

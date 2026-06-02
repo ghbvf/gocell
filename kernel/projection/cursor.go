@@ -7,10 +7,15 @@ import "github.com/ghbvf/gocell/kernel/outbox"
 //
 // # Position invariants (required of every implementation)
 //
-//  1. Monotonic (non-decreasing): within the same (cellID, projectionID) stream,
-//     Position must be non-decreasing across events delivered in order. If an event
-//     has already been applied, Position may return the same value again; the
-//     Coordinator's pos <= checkpoint guard handles idempotent re-delivery.
+//  1. Monotonic: within the same (cellID, projectionID) stream, Position is
+//     non-decreasing across events delivered in order. DISTINCT events MUST get
+//     STRICTLY INCREASING positions — if two distinct events shared a position,
+//     the Coordinator's pos <= checkpoint guard would silently skip the second
+//     after the first commits the checkpoint (a projection gap), so a coarser
+//     cursor is unsound. The ONLY valid equality is RE-DELIVERY of an
+//     already-applied event, which returns its same previously-assigned position;
+//     that guard handles idempotent re-delivery. (RunCursorConformance asserts
+//     strict increase across distinct seeded entries accordingly.)
 //
 //  2. 1-based: every valid event position is ≥ 1. The value 0 is reserved to mean
 //     "no checkpoint / cold start" (the default returned by CheckpointStore on first
@@ -27,9 +32,11 @@ import "github.com/ghbvf/gocell/kernel/outbox"
 //     error in outbox.NewPermanentError to signal that the event is unrecoverable
 //     and should be routed to the dead-letter exchange.
 //
-// PR-01 ships this interface and a test fake only; the production
-// journal/metadata-backed cursor implementation lands in PR-04 (#1176), where
-// cellgen-derived wiring first needs a concrete Cursor to pass to Subscribe.
+// PR-01 shipped this interface and the MemCursor test fake; the production
+// outbox-journal-backed cursor (adapters/postgres.PGProjectionCursor, reading
+// outbox_entries.seq) landed in PR-04c (#1368). Note the v1 limitation: positions
+// come from the transient outbox relay, so the cursor/replay are gated to
+// dev/preview until a durable projection journal lands (#1504).
 //
 // ref: Axon TrackingToken (position is a property of the token store / stream).
 type Cursor interface {

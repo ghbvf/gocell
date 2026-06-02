@@ -396,7 +396,7 @@ verified by the listed PR).
 
 | # | Threat | v1 mechanism | Discharged by |
 |---|---|---|---|
-| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` lands in **PR-04c (#1368)** (a #1176 follow-up — see §Amendment 2026-05-31; until then projection cells run on the mem cursor/replay fakes, sufficient for the serial in-memory bus); PR-06 real-PG integration |
+| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` + `ReplaySource` are **DELIVERED in PR-04c (#1368)** — outbox-journal-backed (`outbox_entries.seq`), enrolled in the shared Cursor/ReplaySource conformance suites; corebundle wires them in PG mode (mem cursor/replay fakes remain for the serial in-memory bus / demos). See §Amendment 2026-06-03. PR-06 real-PG e2e (cold-start/crash/rebuild) remains a follow-up |
 | 2 | **crash recovery** (no replay window after restart) | checkpoint persisted in the apply tx; restart loads checkpoint, resumes at offset+1 | PR-01 crash-recovery unit test; PR-06 real-PG integration (kill → restart) |
 | 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. The HTTP trigger moved to **PR-04e (#1370)** (a #1176 follow-up — §Amendment 2026-05-31); the Phase()/readyz discharge mechanism landed in PR-03 as planned (the HTTP trigger is a convenience surface, not a threat-discharge mechanism). |
 | 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement DISCHARGED by PR-04d (#1369)** — the `outbox.SerialInOrderGuarantor` capability marker + the fail-closed-by-absence guard `checkSubscriberGuaranteesSerialDelivery` in `runtime/bootstrap/phases_projection.go` (rejects wiring a projection onto any subscriber that does not guarantee serial in-order delivery), locked by archtest `PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01`. A concurrent transport (AMQP prefetch>1 / MQTT worker pool) now fails fast at bootstrap instead of silently dropping positions. See §Amendment 2026-06-02 |
@@ -634,6 +634,100 @@ contracts declare `triggers:`. This is harmless today because the parser does
 not run `jsonschema.Validate`. If a broad parse-time schema validator is ever
 introduced (an independent **Medium** DX improvement, orthogonal to this Hard
 gate), `triggers` must be added to the schema first. Tracked at gh #1486.
+
+## Amendment 2026-06-03 (PR-04c #1368 — production journal-backed Cursor + ReplaySource + corebundle wiring)
+
+Row 1's "production journal-backed `Cursor` lands in PR-04c" is now delivered.
+
+**Position source decision.** The harness Cursor/ReplaySource require a 1-based,
+monotonic, gap-allowed stream position (cursor.go invariants). `outbox_entries`
+had only a UUID `id` (not insertion-ordered) and `created_at` (TIMESTAMPTZ,
+collides under concurrent INSERT) — neither is a sound position. Migration 049
+adds `seq BIGINT GENERATED ALWAYS AS IDENTITY` + a unique `idx_outbox_seq`,
+mirroring `saga_events.version`. A *derived* position (`ROW_NUMBER() OVER (ORDER
+BY created_at, id)`) was **rejected**: it is not stable across deletions — when
+CleanupPublished/CleanupDead remove earlier rows, every surviving row's number
+shifts down, violating the monotonic/stable contract. The IDENTITY column is
+assigned at INSERT and never reused; deletions create gaps, which the Cursor
+explicitly tolerates (invariant #3). The column is additive/non-destructive (no
+TRUNCATE; IDENTITY back-fills existing rows) and the outbox writer is unchanged
+(its INSERT omits `seq`; GENERATED ALWAYS auto-assigns).
+
+**Mechanism.**
+
+- `adapters/postgres.PGProjectionReplaySource` (`Replay`/`Head`, read-only) +
+  `PGProjectionCursor` (`Position`, holds the replay source and delegates). The
+  seq-by-id query lives in exactly one place (the replay source); the cursor
+  declares no SQL of its own, so cursor and replay can never disagree about a
+  row's position — the exactly-once foundation expressed structurally (single
+  sanctioned seq-SQL holder), stronger than a "both read the same column"
+  convention.
+- Both reconstruct sealed `outbox.Entry` via `EntryScan.ToEntry`
+  (`OUTBOX-RECONSTRUCTION-CALLER-01` allowlist extended to the new file) and share
+  the relay's JSONB oversize guards via the extracted `applyEntryJSONB`.
+- `cmd/corebundle` wires the four `WithProjection*` options from the shared PG
+  capability in PG mode only; memory mode leaves them unwired so a projection
+  declared without a durable checkpoint store fails fast in the phase6 drain.
+- New `PROJECTION-CURSOR-CONFORMANCE-ENROLL-01` archtest (Medium, symmetric with
+  the ReplaySource/CheckpointStore enroll siblings) + `RunCursorConformance`
+  suite verifying the four cursor.go invariants. `RunReplaySourceConformance` was
+  refactored to a seed-persists contract so a read-only production ReplaySource
+  needs no test-only Append method.
+
+**Retention boundary — escalated to a HARD GATE (PR #1509 review C1).** The
+outbox is a transient relay: CleanupPublished/CleanupDead delete published/dead
+rows after retention, but the journal-backed `Cursor`/`ReplaySource` source the
+stream position from those same rows. The review correctly sharpened the original
+"rebuild-only" framing: it is **not** limited to full rebuild-from-0 — even the
+**live** path resolves `Cursor.Position(entry)` by `SELECT seq WHERE id=…`, so any
+event whose row was cleaned before the projection consumes it (consume-lag >
+cleanup-retention: projection downtime, backlog, or replaying old history)
+resolves to a permanent error → the live event is dead-lettered (dropped), and a
+rebuild aborts. Reusing a transient relay as a *durable* projection journal is the
+wrong foundation; this is the "transient outbox vs retained event store" gap that
+§1's "reuse the existing outbox journal" glossed (open-source corroboration: Axon
+tracking tokens / Marten high-water marks sit on a retained event store, not on a
+publish-transit outbox).
+
+**Compensation (no un-mitigated ⚠️).** Rather than a doc note, the production
+wiring now **fails closed**: `cmd/corebundle` does **not** wire the PG
+journal-backed reader by default — a projection declared in PG mode then fails
+fast in the phase6 drain (`checkProjectionDeps`). The reader is only wired under
+an explicit `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW=true` opt-in (dev/preview only,
+with a NOT-production-safe startup WARN). So no production projection can silently
+run on the unsound foundation. The durable append-only projection journal that
+removes the limitation is tracked at **gh #1504 (P1)** as the C1 design item; the
+real PG e2e rebuild test T-06-2 and per-spec replay filtering (#1482) remain
+follow-ups blocked on it. The review also hardened the adapter: a schema_guard
+IDENTITY guard on `seq` (F5), a bounded-ctx position lookup (F6), rebuild ctx
+identity restore (F4), and a no-duplicate conformance assertion (F7).
+
+### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement — 逐行重评)
+
+- **Row 1** (exactly-once / production Cursor): ✅ → **✅ (delivered, gated)**. The
+  compare/skip mechanism is unchanged; PR-04c supplies the production position
+  source, and the cursor↔replay single-holder structure makes position agreement
+  structural rather than conventional. The transient-journal risk (cleaned row →
+  live event dropped / rebuild abort) is **not** an un-mitigated regression: the
+  corebundle hard gate keeps the PG reader off by default (fail-fast if a
+  projection is declared), so no production projection runs on it until the
+  durable journal (#1504 P1) lands. See the Retention-boundary compensation above.
+- **Row 2** (crash recovery): unchanged. Checkpoint persistence semantics are
+  independent of the position source; resume-at-offset+1 now runs over a durable
+  `seq` (within the retention window).
+- **Row 3** (rebuild read consistency): unchanged (Phase()/readyz, PR-03).
+- **Row 4** (out-of-order / concurrent delivery): unchanged — the serial-delivery
+  guard (PR-04d) still gates which transport may carry a projection; PR-04c adds
+  no concurrency vector (Replay reads outside any tx; Position is an immutable
+  indexed lookup).
+- **Row 5** (fail-closed): unchanged.
+- **Row 6** (GAP-8 boundary): unchanged — `seq` is added to the framework-owned
+  outbox table, not to any business read-model schema.
+- **Row 7** (multi-pod boundary): unchanged (v1 single-pod; owner column still
+  reserved/unwritten).
+
+No row flips to ⚠️/❌. The retention boundary is recorded as a new known v1
+limitation above, with a backlog follow-up, per the no-silent-deferral rule.
 
 ## Amendment 2026-06-03 (PR-04e #1370 — HTTP rebuild endpoint landed; framework-mount, not cellgen)
 

@@ -20,11 +20,14 @@ import (
 // Append here when a new table is introduced by a migration file so that
 // schema_guard documentation stays in sync with the embedded SQL.
 //
-//   - outbox_entries     (001/044)  transactional outbox for event relay
+//   - outbox_entries     (001/044/049)  transactional outbox for event relay
 //                                 + 044_outbox_entries_principal.sql TRUNCATE+rebuild
 //                                   adding principal (jsonb) + occurred_at (timestamptz)
 //                                   NOT NULL columns for the sealed-construction
 //                                   principal-injection wire envelope (#1229).
+//                                 + 049_outbox_entries_seq.sql adding seq BIGINT
+//                                   GENERATED ALWAYS AS IDENTITY + idx_outbox_seq
+//                                   (projection ReplaySource/Cursor position, #1368).
 //   - config_entries     (004)  cell configuration key-value store
 //   - config_versions    (004)  immutable configuration version history
 //   - refresh_tokens     (007)  append-only refresh token lineage
@@ -267,6 +270,13 @@ type expectedColumn struct {
 	Column  string
 	Type    string
 	NotNull bool
+	// Identity, when true, requires the column to be GENERATED ALWAYS AS IDENTITY
+	// (pg_attribute.attidentity = 'a'). This is a load-bearing write contract for
+	// outbox_entries.seq: the outbox writer omits seq and relies on auto-assign, and
+	// ALWAYS (not BY DEFAULT) forbids a producer supplying its own position. A future
+	// migration weakening it to a plain/BY-DEFAULT column would pass the type+nullability
+	// checks but silently break the writer / open position injection (#1368 review F5).
+	Identity bool
 }
 
 // expectedPK describes a table's primary key column set.
@@ -342,7 +352,7 @@ const queryErrFmt = "query: %v"
 // expectedColumns is the authoritative column-type-nullability registry for
 // the S3F-owned tables (users/sessions/roles/role_assignments), the
 // auditcore-owned audit_entries table (020_audit_ledger.sql), and the
-// outbox_entries relay table (001_create_outbox_entries.sql + 044).
+// outbox_entries relay table (001_create_outbox_entries.sql + 044 + 049).
 var expectedColumns = []expectedColumn{
 	// outbox_entries (001 + subsequent migrations + 044_outbox_entries_principal.sql)
 	// Only the writer-supplied columns are registered; relay-internal columns
@@ -364,6 +374,10 @@ var expectedColumns = []expectedColumn{
 	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
 	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
 	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
+	// seq is GENERATED ALWAYS AS IDENTITY (implicitly NOT NULL) — the monotonic
+	// stream position consumed by the projection ReplaySource/Cursor (049 / #1368).
+	// Identity:true guards the GENERATED ALWAYS write contract (F5).
+	{Table: "outbox_entries", Column: "seq", Type: "bigint", NotNull: true, Identity: true}, // 049 NEW
 	// users (017_users.sql + 022_users_password_version.sql)
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "users", Column: "username", Type: "text", NotNull: true},
@@ -539,6 +553,12 @@ var expectedDefaults = []expectedDefault{
 // are not key columns). Expression indexes use "(expr)" as a sentinel for any
 // expression-valued key position.
 var expectedIndexes = []expectedIndex{
+	// outbox_entries — projection stream position (049_outbox_entries_seq.sql / #1368).
+	// The relay claim index (idx_outbox_pending*) is intentionally not registered
+	// here (it evolves with the relay state machine, independent of this guard);
+	// idx_outbox_seq is tracked because the projection ReplaySource/Cursor depend
+	// on it for ordered range scans, so a partial migration must fail fast.
+	{Table: "outbox_entries", Name: "idx_outbox_seq", Unique: true, Columns: []string{"seq"}},
 	// users (017_users.sql)
 	{Table: "users", Name: "idx_users_username", Unique: true, Columns: []string{"username"}},
 	{Table: "users", Name: "idx_users_email", Unique: true, Columns: []string{"email"}},
@@ -697,7 +717,7 @@ var expectedChecks = []expectedCheck{
 // verifyColumns checks each entry in expectedColumns against pg_attribute.
 func verifyColumns(ctx context.Context, pool *Pool) error {
 	const q = `
-	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull
+	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity::text
 	  FROM pg_attribute a
 	  JOIN pg_class c ON c.oid = a.attrelid
 	  JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -710,7 +730,8 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 	for _, ec := range expectedColumns {
 		var gotType string
 		var gotNotNull bool
-		err := pool.inner.QueryRow(ctx, q, ec.Table, ec.Column).Scan(&gotType, &gotNotNull)
+		var gotIdentity string // pg_attribute.attidentity: '' none, 'a' ALWAYS, 'd' BY DEFAULT
+		err := pool.inner.QueryRow(ctx, q, ec.Table, ec.Column).Scan(&gotType, &gotNotNull, &gotIdentity)
 		if err != nil {
 			// No row means column is missing.
 			return errcode.New(
@@ -746,6 +767,18 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("column", ec.Column),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got not_null=%v want %v", gotNotNull, ec.NotNull))),
+			)
+		}
+		if ec.Identity && gotIdentity != "a" {
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: column must be GENERATED ALWAYS AS IDENTITY",
+				errcode.WithDetails(
+					errcode.PublicString("dimension", "column_identity"),
+					errcode.PublicString("table", ec.Table),
+					errcode.PublicString("column", ec.Column),
+				),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got attidentity=%q want \"a\" (ALWAYS)", gotIdentity))),
 			)
 		}
 	}
