@@ -19,9 +19,14 @@ type MemCursor struct {
 	src *MemReplaySource
 }
 
-// NewMemCursor returns a MemCursor backed by src.
-func NewMemCursor(src *MemReplaySource) *MemCursor {
-	return &MemCursor{src: src}
+// NewMemCursor returns a MemCursor backed by src. src is required: a nil source
+// is rejected here (fail-fast) rather than deferred to the first Position call.
+func NewMemCursor(src *MemReplaySource) (*MemCursor, error) {
+	if src == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.NewMemCursor: src MemReplaySource is required")
+	}
+	return &MemCursor{src: src}, nil
 }
 
 // Position returns the 1-based insertion index of entry in the paired

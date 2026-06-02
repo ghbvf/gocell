@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/projection"
@@ -120,7 +121,21 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// PG-backed replay is tracked in backlog.
 	projCheckpoint := projection.NewMemCheckpointStore()
 	projReplay := projection.NewMemReplaySource()
-	projCursor := projection.NewMemCursor(projReplay)
+	projCursor, err := projection.NewMemCursor(projReplay)
+	if err != nil {
+		return fmt.Errorf("projection cursor: %w", err)
+	}
+
+	// Projections consume via the same ConsumerBase path as subscriptions, so
+	// the projection coordinator (phase6) requires a ConsumerBase to be wired —
+	// without it bootstrap fails fast at startup. Demo uses an in-memory
+	// idempotency claimer (single-process only); production would inject a
+	// distributed claimer (e.g. Redis).
+	claimer := idempotency.NewInMemClaimer(clock.Real())
+	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clock.Real())
+	if err != nil {
+		return fmt.Errorf("consumer base: %w", err)
+	}
 
 	// No WithMetricsProvider in demo → projection metric instruments are no-ops.
 	app := bootstrap.New(
@@ -134,6 +149,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9092", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
+		bootstrap.WithConsumerBase(consumerBase),
 		bootstrap.WithProjectionCheckpointStore(projCheckpoint),
 		bootstrap.WithProjectionTxRunner(demoTxRunner{}),
 		bootstrap.WithProjectionReplaySource(projReplay),

@@ -126,6 +126,19 @@ func (v *Validator) validateProjectionConsistency() []ValidationResult {
 // per-CU granularity of SAGA-CELL-LEVEL-L3-DECLARE-01 and pinpoints exactly which
 // contractUsage is unmatched, aiding remediation.
 //
+// Known limitation (coarse, existence-only — NOT projection-identity-bound):
+// the rule only checks that the cell owns AT LEAST ONE projection write CU; it
+// does NOT verify that the write CU's Projection identity corresponds to the
+// specific projection contract being provided. A cell that provides projection
+// contract A (read side) while only declaring a subscribe+projection write CU
+// for projection B would pass — a false negative that surfaces only when a
+// single cell hosts multiple distinct projections. Binding the two requires a
+// metadata-model link between a provide projection contract and a projection
+// identity (the provide references a contract ID like
+// "projection.order.status-summary.v1" while the write CU's Projection field is
+// an identity like "order_status" — different namespaces with no current key to
+// match). Tightening this is tracked in gh #1443.
+//
 // AI-robust evaluation (Medium — governance rule, same permanent ceiling as
 // PROJECTION-CONSISTENCY-01 and SAGA-CELL-LEVEL-L3-DECLARE-01):
 //

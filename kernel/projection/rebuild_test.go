@@ -82,7 +82,10 @@ func makeReplayWithEntries(t *testing.T, n int) (*MemReplaySource, *MemCursor) {
 	t.Helper()
 	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
-	cur := NewMemCursor(src)
+	cur, err := NewMemCursor(src)
+	if err != nil {
+		t.Fatalf("NewMemCursor() error = %v", err)
+	}
 	for i := 0; i < n; i++ {
 		entry := mustNewTestEntry(t, clk, "topic.v1")
 		src.Append(entry)
@@ -92,8 +95,13 @@ func makeReplayWithEntries(t *testing.T, n int) (*MemReplaySource, *MemCursor) {
 
 // newMemCursor is a package-test alias for NewMemCursor, kept for callers in
 // replay_test.go and probe_test.go that predate the public MemCursor export.
+// src is always non-nil in these callers, so the error path panics.
 func newMemCursor(src *MemReplaySource) *MemCursor {
-	return NewMemCursor(src)
+	cur, err := NewMemCursor(src)
+	if err != nil {
+		panic(err)
+	}
+	return cur
 }
 
 // subscribeWithDefaults calls Subscribe on c with a minimal spec and apply fn.

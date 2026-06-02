@@ -20,12 +20,16 @@ import (
 // is added to sliceB (the write side). When empty, no write-side CU exists.
 // missingContract: when true, the contract is omitted from the Contracts map.
 // missingCell: when true, the cell is omitted from the Cells map.
+// missingProvide: when true, the provide slice (sliceA) is omitted entirely, so
+// the cell has no read side — used to test the one-way implication (a write CU
+// without a provide must NOT fire).
 func buildProjectionProvideProject(
 	projectionID string,
 	contractKind string,
 	subscribeProjection string,
 	missingContract bool,
 	missingCell bool,
+	missingProvide bool,
 ) *metadata.ProjectMeta {
 	// cellID is used only for map keys below; struct cell-id *field* positions
 	// must reference metadatatest.CellIDTestCell directly (FIXTURE-CELLID-TYPED-BUILDER-01).
@@ -66,21 +70,21 @@ func buildProjectionProvideProject(
 		}
 	}
 
-	// Slice A: the "read side" — has the provide CU.
-	sliceA := &metadata.SliceMeta{
-		ID:            sliceAID,
-		BelongsToCell: metadatatest.CellIDTestCell,
-		ContractUsages: []metadata.ContractUsage{
-			{
-				Contract: projectionID,
-				Role:     "provide",
-			},
-		},
-		File: "cells/testcell/slices/projprovide/slice.yaml",
-	}
+	slices := map[string]*metadata.SliceMeta{}
 
-	slices := map[string]*metadata.SliceMeta{
-		sliceAID: sliceA,
+	// Slice A: the "read side" — has the provide CU. Omitted when missingProvide.
+	if !missingProvide {
+		slices[sliceAID] = &metadata.SliceMeta{
+			ID:            sliceAID,
+			BelongsToCell: metadatatest.CellIDTestCell,
+			ContractUsages: []metadata.ContractUsage{
+				{
+					Contract: projectionID,
+					Role:     "provide",
+				},
+			},
+			File: "cells/testcell/slices/projprovide/slice.yaml",
+		}
 	}
 
 	// Slice B: the optional "write side" — has the subscribe+projection CU.
@@ -125,6 +129,7 @@ func TestProjectionProvideNeedsWriteCU01(t *testing.T) {
 		subProjection   string
 		missingContract bool
 		missingCell     bool
+		missingProvide  bool
 		wantErrCount    int
 		wantFieldPrefix string
 	}{
@@ -167,13 +172,12 @@ func TestProjectionProvideNeedsWriteCU01(t *testing.T) {
 			wantErrCount:  0,
 		},
 		{
-			name:          "write CU present but no provide → no error (inverse not enforced)",
-			projectionID:  "projection.order.status.v1",
-			contractKind:  "projection",
-			subProjection: "order_status",
-			// The provide slice still exists (built by builder), so this case
-			// passes because the write CU is present.
-			wantErrCount: 0,
+			name:           "write CU present but no provide → no error (inverse not enforced)",
+			projectionID:   "projection.order.status.v1",
+			contractKind:   "projection",
+			subProjection:  "order_status",
+			missingProvide: true, // genuinely no read side: only the write CU exists
+			wantErrCount:   0,
 		},
 	}
 
@@ -188,6 +192,7 @@ func TestProjectionProvideNeedsWriteCU01(t *testing.T) {
 				tc.subProjection,
 				tc.missingContract,
 				tc.missingCell,
+				tc.missingProvide,
 			)
 
 			v := NewValidator(project, "", clock.Real())

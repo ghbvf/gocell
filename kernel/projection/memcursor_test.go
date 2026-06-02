@@ -29,7 +29,10 @@ func TestMemCursor(t *testing.T) {
 	// Absent entry — created but never appended.
 	eAbsent := mustNewTestEntry(t, clk, "topic.v1")
 
-	cur := NewMemCursor(src)
+	cur, err := NewMemCursor(src)
+	if err != nil {
+		t.Fatalf("NewMemCursor() error = %v, want nil", err)
+	}
 
 	tests := []struct {
 		name       string
@@ -96,7 +99,10 @@ func TestMemCursor_EmptySource(t *testing.T) {
 
 	clk := clockmock.New(time.Now())
 	emptySrc := NewMemReplaySource()
-	cur := NewMemCursor(emptySrc)
+	cur, err := NewMemCursor(emptySrc)
+	if err != nil {
+		t.Fatalf("NewMemCursor() error = %v, want nil", err)
+	}
 	e := mustNewTestEntry(t, clk, "topic.v1")
 
 	pos, err := cur.Position(e)
@@ -109,6 +115,20 @@ func TestMemCursor_EmptySource(t *testing.T) {
 	var pe *outbox.PermanentError
 	if !errors.As(err, &pe) {
 		t.Errorf("Position() error %v is not a *outbox.PermanentError", err)
+	}
+}
+
+// TestMemCursor_NilSource verifies NewMemCursor fails fast on a nil source
+// rather than deferring a nil dereference to the first Position call.
+func TestMemCursor_NilSource(t *testing.T) {
+	t.Parallel()
+
+	cur, err := NewMemCursor(nil)
+	if err == nil {
+		t.Fatal("NewMemCursor(nil) error = nil, want non-nil")
+	}
+	if cur != nil {
+		t.Errorf("NewMemCursor(nil) cursor = %v, want nil", cur)
 	}
 }
 

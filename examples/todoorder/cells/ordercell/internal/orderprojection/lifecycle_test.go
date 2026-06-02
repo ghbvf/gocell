@@ -90,7 +90,8 @@ func TestOrderProjection_HarnessLifecycle(t *testing.T) {
 
 	checkpointStore := projection.NewMemCheckpointStore()
 	replaySource := projection.NewMemReplaySource()
-	cursor := projection.NewMemCursor(replaySource)
+	cursor, err := projection.NewMemCursor(replaySource)
+	require.NoError(t, err)
 
 	svc, err := orderprojection.NewService()
 	require.NoError(t, err)
