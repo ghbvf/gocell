@@ -266,6 +266,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_TenantIsolation", func(t *testing.T) { runQueryTenantIsolation(t, factory) })
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
 	t.Run("PrincipalFields_RoundTrip", func(t *testing.T) { RunPrincipalFieldsRoundTrip(t, factory, protocol) })
+	t.Run("Query_ByTraceID", func(t *testing.T) { runQueryByTraceID(t, factory) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -1000,6 +1001,84 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 	}
 }
 
+// runQueryByTraceID verifies that Store.Query correctly filters entries by
+// TraceID (contract-fanout: all Store implementations must satisfy this filter
+// so conformance is hoisted into Run, not left as a standalone integration test).
+//
+// Three entries are appended: two share trace T1, one has trace T2. The case
+// asserts:
+//   - AuditFilters{TraceID:"T1"} returns exactly the two T1 entries.
+//   - AuditFilters{TraceID:""}   returns all three (no filter applied).
+//   - AuditFilters{TraceID:"no-match"} returns empty.
+func runQueryByTraceID(t *testing.T, factory Factory) {
+	const (
+		traceT1 = "4bf92f3577b34da6a3ce929d0e0e4736"
+		traceT2 = "00f067aa0ba902b7000000000000000a"
+	)
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	entries := []struct {
+		eventID string
+		traceID string
+	}{
+		{"traceid-evt-1", traceT1},
+		{"traceid-evt-2", traceT1},
+		{"traceid-evt-3", traceT2},
+	}
+	for _, en := range entries {
+		e := &ledger.Entry{
+			EventID:   en.eventID,
+			EventType: "traceid.conformance",
+			ActorID:   "actor",
+			TraceID:   en.traceID,
+			Timestamp: fc.Now(),
+			Payload:   []byte(`{}`),
+		}
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append %s: %v", en.eventID, err)
+		}
+	}
+
+	// Filter by T1: must return exactly 2 entries.
+	byT1, err := store.Query(context.Background(),
+		ledger.AuditFilters{TraceID: traceT1},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(TraceID=T1): %v", err)
+	}
+	if len(byT1) != 2 {
+		t.Errorf("Query(TraceID=T1): got %d results, want 2", len(byT1))
+	}
+	for _, r := range byT1 {
+		if r.TraceID != traceT1 {
+			t.Errorf("Query(TraceID=T1): got TraceID=%q, want %q", r.TraceID, traceT1)
+		}
+	}
+
+	// Empty TraceID filter: must return all 3 entries.
+	all, err := store.Query(context.Background(),
+		ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(empty): %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("Query(empty TraceID): got %d results, want 3", len(all))
+	}
+
+	// Non-matching trace: must return empty.
+	noMatch, err := store.Query(context.Background(),
+		ledger.AuditFilters{TraceID: "no-match-trace"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(TraceID=no-match): %v", err)
+	}
+	if len(noMatch) != 0 {
+		t.Errorf("Query(TraceID=no-match): got %d results, want 0", len(noMatch))
+	}
+}
+
 // principalOccurredAtSkew is the producer-clock skew used by
 // RunPrincipalFieldsRoundTrip to set Entry.OccurredAt distinct from
 // Entry.Timestamp. The value is a fixture offset only — extracted to a
@@ -1103,6 +1182,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		TenantID:      "tenant-alpha",
 		SessionID:     "sess-42",
 		CorrelationID: "corr-xyz-001",
+		TraceID:       "4bf92f3577b34da6a3ce929d0e0e4736",
 		OccurredAt:    occurredAt,
 		Timestamp:     fc.Now(),
 		Payload:       []byte(`{"action":"login"}`),

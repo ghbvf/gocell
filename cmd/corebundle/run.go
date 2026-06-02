@@ -68,10 +68,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return err
 	}
 
-	mods, err := corebundleModules(assemblyID, assemblyCellIDs)
-	if err != nil {
-		return err
-	}
+	mods := generatedCellModules()
 
 	adapterInfo := adapterInfoForSharedDeps(compShared, locals)
 	slog.Info("corebundle: startup configuration",
@@ -107,7 +104,10 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return opts, nil
 	}
 
-	app, err := composition.New().With(mods...).Build(ctx, compShared, runtimeOptsFunc)
+	// composition.New(assemblyCellIDs...) seals the assembly's cell-id closed set
+	// (M12a #1093): Build fail-fasts if generatedCellModules drifts from the
+	// assembly.yaml cell list (replaces the former hand-written assertModuleIDsMatch).
+	app, err := composition.New(assemblyCellIDs...).With(mods...).Build(ctx, compShared, runtimeOptsFunc)
 	if err != nil {
 		return err
 	}
@@ -131,14 +131,6 @@ func releaseUnhandedResources(ctx context.Context, locals *cmdLocals, handedToBo
 		_ = locals.poolMR.Close(ctx)
 	}
 	closeRedisClientAfterFailedLoad(ctx, locals.redisClient)
-}
-
-func corebundleModules(assemblyID string, cellIDs []string) ([]composition.CellModule, error) {
-	mods := generatedCellModules()
-	if err := assertModuleIDsMatch(assemblyID, cellIDs, mods); err != nil {
-		return nil, err
-	}
-	return mods, nil
 }
 
 // logAssemblyMaturity emits a startup Info log of the running assembly's
@@ -184,26 +176,6 @@ func logAssemblyMaturity(cells []cell.Cell) {
 		slog.Int("total_cells", len(cells)),
 		slog.Group("lifecycle", lcAttrs...),
 	)
-}
-
-// assertModuleIDsMatch fails-fast when assembly.yaml.cells (cellIDs) drifts from
-// the generated module list. The two should be 1:1 in declaration order; any
-// mismatch indicates a missing `gocell generate assembly` run.
-func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []composition.CellModule) error {
-	hint := fmt.Sprintf("run `gocell generate assembly --id=%s`", assemblyID)
-	if len(cellIDs) != len(mods) {
-		return fmt.Errorf(
-			"%s: assembly.yaml cells (%d) ↔ modules_gen.go (%d) length mismatch; %s",
-			assemblyID, len(cellIDs), len(mods), hint)
-	}
-	for i, want := range cellIDs {
-		if got := mods[i].ID(); got != want {
-			return fmt.Errorf(
-				"%s: assembly.yaml cells[%d]=%q ↔ modules_gen.go=%q drift; %s",
-				assemblyID, i, want, got, hint)
-		}
-	}
-	return nil
 }
 
 // logSinglePodNonceStoreAcknowledgement emits a positive-path Info log when

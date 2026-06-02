@@ -121,10 +121,12 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 
 	// Always render templates to catch template/input errors early (even on dry-run).
 	// cellTemplateData embeds spec and adds ListenerMarker so the template can
-	// reference {{.ListenerMarker}} (SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01).
+	// reference {{.ListenerMarker}} (SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01), and
+	// ErrPrefix so the template can emit errcode.RegisterPrefix in init() (#1091).
 	cellGoContent, err := renderTemplate(spec.ModulePath, cellGoTemplate, cellTemplateData{
 		ScaffoldSpec:   spec,
 		ListenerMarker: ListenerMarker,
+		ErrPrefix:      cellErrPrefix(spec),
 	}, true)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)

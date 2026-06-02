@@ -154,6 +154,12 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithProjectionTxRunner(demoTxRunner{}),
 		bootstrap.WithProjectionReplaySource(projReplay),
 		bootstrap.WithProjectionCursor(projCursor),
+		// Framework projection rebuild control-plane endpoint
+		// (POST /internal/v1/{cell}/projection/{name}/rebuild) on the internal
+		// listener. "controlplane" is the demo caller-cell allowlist; an ops tool
+		// presents a service token with callerCell=controlplane to trigger a
+		// rebuild of ordercell's order_status projection.
+		bootstrap.WithProjectionRebuildEndpoint("controlplane"),
 	)
 
 	logger.Info("todoorder: starting on :8082; protected routes require an RS256 bearer token")

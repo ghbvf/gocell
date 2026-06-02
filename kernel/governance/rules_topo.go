@@ -411,8 +411,8 @@ func (v *Validator) validateTOPO09() []ValidationResult {
 // unparseable level.
 func computeExpectedMax(pm *metadata.ProjectMeta, asm *metadata.AssemblyMeta) (cellvocab.Level, bool) {
 	var maxLvl cellvocab.Level
-	for i, cellID := range asm.Cells {
-		c, found := pm.Cells[cellID]
+	for i, ref := range asm.Cells {
+		c, found := pm.Cells[ref.ID]
 		if !found {
 			return 0, false
 		}
@@ -441,20 +441,20 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 
 	for _, key := range assemblyKeys {
 		a := v.project.Assemblies[key]
-		for i, cellRef := range a.Cells {
-			if existing, ok := cellAssembly[cellRef]; ok {
+		for i, ref := range a.Cells {
+			if existing, ok := cellAssembly[ref.ID]; ok {
 				results = append(results, v.newError(
 					codeTOPO06, IssueDuplicate,
 					assemblyFile(a),
 					fmt.Sprintf("cells[%d]", i),
 					fmt.Sprintf(
 						"cell %q is already assigned to assembly %q, cannot also be in %q",
-						cellRef, existing, a.ID,
+						ref.ID, existing, a.ID,
 					),
 					"remove this cell from one of the two assemblies",
 				))
 			} else {
-				cellAssembly[cellRef] = a.ID
+				cellAssembly[ref.ID] = a.ID
 			}
 		}
 	}

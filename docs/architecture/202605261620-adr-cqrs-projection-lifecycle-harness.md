@@ -348,11 +348,14 @@ when the budget is exceeded, rather than silently dropping the probe.
 
 ### Rebuild control-plane endpoint (forward contract)
 
-The rebuild trigger is a per-cell HTTP endpoint. Its `contract.yaml` + handler
-land in **PR-04** (cellgen `kind: projection` derivation, #1176); PR-03 ships
-only the kernel/runtime harness — there is **no host cell or internal listener**
-to mount it on until cellgen wiring lands. A platform-level `active` contract
-with no cell impl would trip `DEAD-CONTRACT-01`.
+The rebuild trigger is a framework control-plane HTTP endpoint. PR-03 freezes its
+forward contract (below) and ships only the kernel/runtime harness with no HTTP
+surface. **The original framing of this endpoint as a per-cell `contract.yaml` +
+cellgen handler (with a host cell to satisfy `DEAD-CONTRACT-01`) was superseded by
+PR-04e (#1370)**: it is mounted by bootstrap itself as a framework-owned
+RouteGroup — the same pattern as `/healthz`·`/readyz`·`/metrics` — so it has **no
+`contract.yaml`, no host cell, and never reaches `DEAD-CONTRACT-01`**. See
+§Amendment 2026-06-03.
 
 **PR-03 freezes the programmatic trigger surface** and forward contract for PR-04:
 
@@ -372,10 +375,12 @@ with no cell impl would trip `DEAD-CONTRACT-01`.
   CAS `PhaseLive→PhaseStopped`) + `Coordinator.Close(ctx)` for graceful drain.
   The snapshot is computed by the readyz probe / metrics path delivered in PR-03.
 
-**PR-04 authors the HTTP wrapper**: the `POST /internal/v1/<cell>/projection/
-<name>/rebuild` contract.yaml + per-cell handler (cellgen output) calling
-`Coordinator.Rebuild`, with the **unchanged** auth model / network boundary /
-202·409·404 status semantics frozen above.
+**PR-04e (#1370) authors the HTTP endpoint** as a framework-owned RouteGroup
+(bootstrap-mounted via `WithProjectionRebuildEndpoint`, **not** cellgen output)
+calling `Coordinator.Rebuild`, with the **unchanged** auth model / network
+boundary / 202·409·404 status semantics frozen above. Mechanism detail
+(framework-mount, the `Coordinator.Snapshot` accessor, and the deferred
+operator-credential admin surface) in §Amendment 2026-06-03.
 
 **Threat-matrix re-evaluation.** No cell flips: row 3 (rebuild-period read
 consistency) is discharged by `Phase()` + readyz, **both delivered in PR-03** as
@@ -629,3 +634,76 @@ contracts declare `triggers:`. This is harmless today because the parser does
 not run `jsonschema.Validate`. If a broad parse-time schema validator is ever
 introduced (an independent **Medium** DX improvement, orthogonal to this Hard
 gate), `triggers` must be added to the schema first. Tracked at gh #1486.
+
+## Amendment 2026-06-03 (PR-04e #1370 — HTTP rebuild endpoint landed; framework-mount, not cellgen)
+
+The rebuild control-plane endpoint frozen in §5 landed. Its **mechanism** changed
+from the original "per-cell `contract.yaml` + cellgen handler + host cell to
+satisfy `DEAD-CONTRACT-01`" framing to a **framework-owned RouteGroup mounted by
+bootstrap** (the §5 forward-contract text is rewritten in place to match). The
+**auth model, network boundary, path, and 202·409·404 status semantics are
+unchanged** — only the carrier moved.
+
+### Why framework-mount (open-source benchmark + GoCell consistency)
+
+Across mature CQRS/event-sourcing systems the dominant pattern is a **generic
+framework/server-provided control plane keyed by projection name**, not a
+per-application endpoint: EventStoreDB `POST /projection/{name}/command/reset`
+(server-mounted admin HTTP, name is a path param), Axon Server's generic
+processor-reset primitives, Marten's `projections rebuild` CLI by name. GoCell's
+own health endpoints (`/healthz`·`/readyz`·`/metrics`) already use exactly this
+shape: `contractbuild.NewFrameworkHTTP` builds an `http.framework.*` ContractSpec
+and bootstrap mounts a framework-owned RouteGroup (`runtime/bootstrap/health.go`),
+with **no `contract.yaml`, no codegen, no host cell, and no `DEAD-CONTRACT-01`
+participation** (that invariant scans `contracts/*.yaml`, of which there is none
+here). The rebuild endpoint is the same kind of framework control-plane surface,
+so it reuses that pattern rather than inventing a per-cell contract — eliminating
+the host-cell/`DEAD-CONTRACT-01` complication the original framing introduced.
+
+### What landed
+
+- **Endpoint**: `POST /internal/v1/{cell}/projection/{name}/rebuild`, mounted on
+  the `cell.InternalListener` by `phase5CollectRouteGroups`, opt-in via
+  `bootstrap.WithProjectionRebuildEndpoint(allowedCallers...)`. phase0
+  (`validateProjectionRebuildEndpoint`) fails fast when opted in without an
+  InternalListener. The handler dispatches by `{cell}/{name}` to
+  `b.projectionCoordinators` (the phase6 drain registry, read lazily at request
+  time — phase6 runs after phase5 mount but before serving).
+- **Auth** (unchanged from §5): `/internal/` + service-token listener chain +
+  caller-cell allowlist. The allowlist rides on `ContractSpec.Clients` via the
+  extended `contractbuild.NewFrameworkHTTP(id, method, path, clients...)`; an
+  `/internal/` path REQUIRES non-empty `Clients` (`ContractSpec.validateHTTP`
+  fail-closed — every internal API names its callers), so `auth.Mount`
+  auto-injects `RequireCallerCell`. 404 uses the new `errcode.ErrProjectionNotFound`.
+- **Kernel surface**: `Coordinator.Snapshot(ctx) (Snapshot, error)` returns the
+  `{phase, pendingEvents, replayLagSeconds}` 202 body. Phase is always populated
+  (in-memory); pending/lag go through the shared **pure** `computeLagPending`
+  helper that the lag readyz probe (`checkLag`) also calls — so the wire snapshot
+  can never diverge from the probe (single-source, type-system Hard). A degraded
+  snapshot read after admission is logged but never downgrades the 202 (the
+  rebuild was already admitted). The bootstrap handler consumes the Coordinator
+  through a narrow consumer-local interface (`runtime/bootstrap.rebuildController`
+  = `Rebuild` + `Snapshot`; `*Coordinator` satisfies it) — declared at the
+  consumer per Go idiom, keeping kernel/projection's exported surface free of a
+  bootstrap-only seam.
+
+### Deferred (scope carve-out)
+
+A purer **operator-credential admin surface** (EventStoreDB-style: a dedicated
+network-isolated `cell.AdminListener` + an operator-credential `ListenerAuth`,
+off `/internal/`) is a cross-cutting auth foundation beyond this endpoint — it
+needs a new sealed listener class + a new `ListenerAuth` implementer (operator
+basic-auth exists only as the per-cell setup/admin middleware today, FMT-28
+restricted). Tracked at **gh #1505**; rebuild migrates to it if/when it lands.
+Until then `/internal/` + caller-cell allowlist (GoCell's existing structural
+invariant for internal endpoints) is the correct, no-new-foundation carrier.
+
+### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement)
+
+No row flips to ⚠️/❌. Row 3 (rebuild-period read consistency) was already
+discharged by `Phase()` + readyz in PR-03; the HTTP trigger is a convenience
+surface, not a threat-discharge mechanism (a rebuild is equally triggerable via
+`Coordinator.Rebuild`). The discharge mechanism is unchanged by moving the trigger
+from a hypothetical cellgen handler to a framework-mounted RouteGroup. Auth is
+unchanged (service-token + caller-cell allowlist), so the endpoint's exposure
+surface is identical to the §5 freeze. No new threat row is introduced.

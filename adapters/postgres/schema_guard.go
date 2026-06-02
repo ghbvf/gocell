@@ -32,19 +32,19 @@ import (
 //   - users              (017)  accesscore user identities
 //                                 + users_status_chk, users_creation_source_chk (023 CHECK)
 //                                 + effective_admin_invariant_on_users trigger (024)
-//                                 + tenant_id TEXT NOT NULL (047 DROP+CREATE rebuild)
+//                                 + tenant_id TEXT NOT NULL (049 DROP+CREATE rebuild)
 //                                   UNIQUE(tenant_id,username) / UNIQUE(tenant_id,email)
 //                                   replacing global idx_users_username / idx_users_email;
 //                                   support index UNIQUE(tenant_id,id) for role FK.
 //   - sessions           (018)  accesscore session / JTI store
 //                                 + authz_epoch_at_issue restored (026; ADR §A8 — row is SoR, claim was retracted)
 //   - roles              (019)  accesscore role definitions
-//                                 + tenant_id TEXT NOT NULL, PK becomes (tenant_id, id) (047)
+//                                 + tenant_id TEXT NOT NULL, PK becomes (tenant_id, id) (049)
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //                                 + tenant_id TEXT NOT NULL, PK (tenant_id,user_id,role_id),
-//                                   role FK references roles(tenant_id,id) composite (047)
-//   - audit_entries      (020/043)  tamper-evident audit ledger (per-namespace hash chain)
+//                                   role FK references roles(tenant_id,id) composite (049)
+//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index))  tamper-evident audit ledger (per-namespace hash chain)
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
 //                                   session_id / correlation_id / occurred_at) for
@@ -312,15 +312,15 @@ type expectedFK struct {
 	OnDelete   string   // e.g. "a" = CASCADE, "r" = RESTRICT
 }
 
-// expectedIndex describes a named index (unique or non-unique) with its
-// ordered column set. Columns must match the actual indexed columns in
-// declaration order; drift (e.g., a composite index silently collapsing to
-// single-column) is detected at startup via verifyIndexes.
+// expectedIndex describes a named index (unique or non-unique).
+// Columns lists the key column names in index key order (DDL order).
+// For expression columns (e.g. functional indexes) use the sentinel "(expr)".
+// INCLUDE columns are not listed here — only key columns.
 type expectedIndex struct {
 	Table   string
 	Name    string
 	Unique  bool
-	Columns []string // ordered indexed columns (from CREATE INDEX)
+	Columns []string
 }
 
 // expectedTrigger describes a trigger with its enabled state and function.
@@ -379,10 +379,10 @@ var expectedColumns = []expectedColumn{
 	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
 	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
 	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
-	// users (017_users.sql + 022_users_password_version.sql + 047_accesscore_tenant_id.sql)
-	// 047 drops+recreates the table adding tenant_id TEXT NOT NULL as the second column.
+	// users (017_users.sql + 022_users_password_version.sql + 049_accesscore_tenant_id.sql)
+	// 049 drops+recreates the table adding tenant_id TEXT NOT NULL as the second column.
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
-	{Table: "users", Column: "tenant_id", Type: "text", NotNull: true}, // 047 NEW
+	{Table: "users", Column: "tenant_id", Type: "text", NotNull: true}, // 049 NEW
 	{Table: "users", Column: "username", Type: "text", NotNull: true},
 	{Table: "users", Column: "email", Type: "text", NotNull: true},
 	{Table: "users", Column: "password_hash", Type: "text", NotNull: true},
@@ -421,23 +421,25 @@ var expectedColumns = []expectedColumn{
 	// Only the S4d-introduced column is registered here; the rest of the
 	// refresh_tokens schema predates schema_guard's requiredColumns coverage.
 	{Table: "refresh_tokens", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
-	// roles (019_roles.sql + 047_accesscore_tenant_id.sql)
-	// 047 drops+recreates the table; PK is now composite (tenant_id, id).
-	{Table: "roles", Column: "tenant_id", Type: "text", NotNull: true}, // 047 NEW
+	// roles (019_roles.sql + 049_accesscore_tenant_id.sql)
+	// 049 drops+recreates the table; PK is now composite (tenant_id, id).
+	{Table: "roles", Column: "tenant_id", Type: "text", NotNull: true}, // 049 NEW
 	{Table: "roles", Column: "id", Type: "text", NotNull: true},
 	{Table: "roles", Column: "name", Type: "text", NotNull: true},
 	{Table: "roles", Column: "permissions", Type: "jsonb", NotNull: true},
 	{Table: "roles", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
-	// role_assignments (019_roles.sql + 047_accesscore_tenant_id.sql)
-	// 047 drops+recreates the table; PK is (tenant_id, user_id, role_id).
-	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 047 NEW
+	// role_assignments (019_roles.sql + 049_accesscore_tenant_id.sql)
+	// 049 drops+recreates the table; PK is (tenant_id, user_id, role_id).
+	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 049 NEW
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
-	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql)
+	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql + 047_audit_entries_trace_id.sql)
 	// 043 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
 	// the 12-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
 	// must supply values.
+	// 049 adds trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
+	// NOT part of the HMAC chain (observability only).
 	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "seq_no", Type: "bigint", NotNull: true},
@@ -448,6 +450,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "audit_entries", Column: "tenant_id", Type: "text", NotNull: true},       // 043 NEW
 	{Table: "audit_entries", Column: "session_id", Type: "text", NotNull: true},      // 043 NEW
 	{Table: "audit_entries", Column: "correlation_id", Type: "text", NotNull: true},  // 043 NEW
+	{Table: "audit_entries", Column: "trace_id", Type: "text", NotNull: true},        // 049 NEW
 	{Table: "audit_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 043 NEW
 	{Table: "audit_entries", Column: "timestamp", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
@@ -522,9 +525,9 @@ var forbiddenColumns = []requiredColumn{
 var expectedPKs = []expectedPK{
 	{Table: "users", Columns: []string{"id"}},
 	{Table: "sessions", Columns: []string{"id"}},
-	// 047: roles PK is now composite (tenant_id, id) — roles are per-tenant scoped.
+	// 049: roles PK is now composite (tenant_id, id) — roles are per-tenant scoped.
 	{Table: "roles", Columns: []string{"tenant_id", "id"}},
-	// 047: role_assignments PK is now (tenant_id, user_id, role_id).
+	// 049: role_assignments PK is now (tenant_id, user_id, role_id).
 	{Table: "role_assignments", Columns: []string{"tenant_id", "user_id", "role_id"}},
 	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql rebuild)
 	{Table: "audit_entries", Columns: []string{"id"}},
@@ -550,7 +553,7 @@ var expectedDefaults = []expectedDefault{
 	// would make the first SaveOffset fail at write time; asserting it here surfaces
 	// the drift at startup (readyz) instead.
 	{Table: "projection_checkpoints", Column: "owner", Default: "''::text"},
-	// users.password_version (022 → 047 rebuild) — insertUserSQL omits this column
+	// users.password_version (022 → 049 rebuild) — insertUserSQL omits this column
 	// and relies on DEFAULT 0 to satisfy the NOT NULL constraint (migration 033
 	// adds users_password_version_non_negative CHECK >= 0). A dropped default would
 	// cause every new-user Create to fail at write time.
@@ -558,48 +561,51 @@ var expectedDefaults = []expectedDefault{
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
-// Columns lists the indexed columns in declaration order (from CREATE INDEX).
-// An empty Columns slice means column-set verification is skipped for that
-// entry (used for expression indexes where pg_attribute has no matching row,
-// e.g. idx_commands_idempotency_key on (metadata->>'_idempotency_key')).
+// Columns is the DDL key-column order sourced from the migration SQL file
+// (not from DB catalog output — that would be tautological).
+// Partial index WHERE predicates are NOT listed in Columns (predicate columns
+// are not key columns). Expression indexes use "(expr)" as a sentinel for any
+// expression-valued key position.
 var expectedIndexes = []expectedIndex{
-	// users
-	// 047: idx_users_username and idx_users_email are now composite
+	// users (017_users.sql)
+	// 049: idx_users_username and idx_users_email are now composite
 	// UNIQUE(tenant_id, username) / UNIQUE(tenant_id, email) — same names, still unique.
 	{Table: "users", Name: "idx_users_username", Unique: true, Columns: []string{"tenant_id", "username"}},
 	{Table: "users", Name: "idx_users_email", Unique: true, Columns: []string{"tenant_id", "email"}},
 	{Table: "users", Name: "idx_users_status", Unique: false, Columns: []string{"status"}},
-	// 047: support index for role_assignments FK (tenant_id, user_id) reference.
+	// 049: support index for role_assignments FK (tenant_id, user_id) reference.
 	{Table: "users", Name: "idx_users_tenant_id_id", Unique: true, Columns: []string{"tenant_id", "id"}},
 	// sessions (018_sessions.sql)
 	{Table: "sessions", Name: "idx_sessions_jti", Unique: true, Columns: []string{"jti"}},
-	// idx_sessions_subject_active is a partial index ON (subject_id) WHERE revoked_at IS NULL.
+	// partial index: WHERE revoked_at IS NULL — key column only
 	{Table: "sessions", Name: "idx_sessions_subject_active", Unique: false, Columns: []string{"subject_id"}},
 	{Table: "sessions", Name: "idx_sessions_expires", Unique: false, Columns: []string{"expires_at"}},
 	// roles: no additional non-PK indexes in migration 019
-	// role_assignments (047_accesscore_tenant_id.sql)
+	// role_assignments (049_accesscore_tenant_id.sql) — composite (tenant_id, role_id)
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false, Columns: []string{"tenant_id", "role_id"}},
 	// audit_entries (020_audit_ledger.sql + 021 event_id unique;
-	// 043_audit_entries_v2.sql rebuilds the table preserving index names)
-	// uq_audit_namespace_seq is a UNIQUE constraint (not a standalone CREATE INDEX);
-	// pg_index still exposes it, columns = (namespace, seq_no).
+	// 043_audit_entries_v2.sql rebuilds the table preserving index names;
+	// 048 adds idx_audit_namespace_trace_id CONCURRENTLY for TraceID filter)
+	// uq_audit_namespace_seq is a UNIQUE constraint (inline DDL) — PG creates
+	// an index for it; key columns mirror CONSTRAINT ... UNIQUE (namespace, seq_no).
 	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true, Columns: []string{"namespace", "seq_no"}},
+	// idx_audit_namespace_ts_id: (namespace, timestamp DESC, id ASC)
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false, Columns: []string{"namespace", "timestamp", "id"}},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false, Columns: []string{"namespace", "event_type"}},
 	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true, Columns: []string{"namespace", "event_id"}},
+	// 048_audit_entries_trace_id_index.sql: (namespace, trace_id) — leading column matters for filter pushdown
+	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false, Columns: []string{"namespace", "trace_id"}},
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false, Columns: []string{"status"}},
-	// idx_commands_pending_fifo is partial ON (device_id, created_at) WHERE status=1.
+	// 030_commands.sql partial indexes — Columns lists only key columns, not WHERE predicate columns
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false, Columns: []string{"device_id", "created_at"}},
-	// idx_commands_active_lease is partial ON (lease_expiry) WHERE status IN (2,3).
 	{Table: "commands", Name: "idx_commands_active_lease", Unique: false, Columns: []string{"lease_expiry"}},
-	// idx_commands_device_active is partial ON (device_id, status, created_at) WHERE status IN (1,2,3).
 	{Table: "commands", Name: "idx_commands_device_active", Unique: false, Columns: []string{"device_id", "status", "created_at"}},
-	// idx_commands_idempotency_key is an expression index ON ((metadata->>'_idempotency_key'));
-	// expression indexes have no pg_attribute row — Columns left empty to skip column verification.
-	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: nil},
+	// 031_commands_idempotency_unique.sql: expression index on (metadata->>'_idempotency_key')
+	// The key position is an expression; pg_index.indkey = 0 for expression columns,
+	// pg_attribute.attname is NULL. The sentinel "(expr)" marks this position.
+	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: []string{"(expr)"}},
 	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
-	// Columns are (started_at, id) WHERE status IN (1,2,3).
 	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false, Columns: []string{"started_at", "id"}},
 }
 
@@ -623,7 +629,7 @@ var expectedFKs = []expectedFK{
 		OnDelete:   "c", // CASCADE — migrations/018_sessions.sql
 	},
 	{
-		// 047: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
+		// 049: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
 		// support index. This enforces same-tenant user membership at the DB layer,
 		// preventing cross-tenant authorization grants. The (tenant_id, user_id)
 		// local column ORDER is the isolation pair — a swap must be rejected (F6).
@@ -633,17 +639,17 @@ var expectedFKs = []expectedFK{
 		Columns:    []string{"tenant_id", "user_id"},
 		RefTable:   "users",
 		RefColumns: []string{"tenant_id", "id"},
-		OnDelete:   "c", // CASCADE — migrations/047_accesscore_tenant_id.sql
+		OnDelete:   "c", // CASCADE — migrations/049_accesscore_tenant_id.sql
 	},
 	{
-		// 047: (tenant_id, role_id) references roles composite PK (tenant_id, id).
+		// 049: (tenant_id, role_id) references roles composite PK (tenant_id, id).
 		// ON DELETE RESTRICT: cannot delete a role that has active assignments.
 		Table:      "role_assignments",
 		Constraint: "role_assignments_role_id_fkey",
 		Columns:    []string{"tenant_id", "role_id"},
 		RefTable:   "roles",
 		RefColumns: []string{"tenant_id", "id"},
-		OnDelete:   "r", // RESTRICT — migrations/047_accesscore_tenant_id.sql
+		OnDelete:   "r", // RESTRICT — migrations/049_accesscore_tenant_id.sql
 	},
 	{
 		Table:      "commands",
@@ -926,19 +932,35 @@ func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 // Dimension helper: indexes (unique + non-unique)
 // ---------------------------------------------------------------------------
 
-// verifyIndexes checks both unique and non-unique index presence and, when
-// Columns is non-empty, verifies the ordered column set matches the registry.
+// verifyIndexes checks unique/non-unique index presence, uniqueness flag, and
+// key-column order for every entry in expectedIndexes.
 func verifyIndexes(ctx context.Context, pool *Pool) error {
+	// Query returns indisunique and the ordered key-column names.
+	// unnest(i.indkey) WITH ORDINALITY expands the key-column attnum array;
+	// LEFT JOIN pg_attribute maps attnum → attname (NULL for expression columns).
+	// Only key columns are returned: ord <= i.indnkeyatts excludes any INCLUDE
+	// columns that may appear at the end of indkey.
+	// Expression columns have indkey[n] = 0 and attname IS NULL; COALESCE maps
+	// them to the sentinel "(expr)".
 	const q = `
-	SELECT i.indisunique, i.indexrelid
+	SELECT i.indisunique,
+	       array_agg(
+	           COALESCE(a.attname, '(expr)')
+	           ORDER BY ord
+	       ) AS key_columns
 	  FROM pg_index i
 	  JOIN pg_class ci ON ci.oid = i.indexrelid
 	  JOIN pg_class ct ON ct.oid = i.indrelid
 	  JOIN pg_namespace n ON n.oid = ct.relnamespace
+	  JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS u(attnum, ord)
+	            ON u.ord <= i.indnkeyatts
+	  LEFT JOIN pg_attribute a
+	            ON a.attrelid = i.indrelid AND a.attnum = u.attnum AND a.attnum > 0
 	 WHERE n.nspname = current_schema()
 	   AND ct.relname = $1
 	   AND ci.relname = $2
-	   AND NOT i.indisprimary`
+	   AND NOT i.indisprimary
+	 GROUP BY i.indisunique, i.indnkeyatts`
 
 	for _, idx := range expectedIndexes {
 		if err := verifyOneIndex(ctx, pool, idx, q); err != nil {
@@ -948,13 +970,12 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 	return nil
 }
 
-// verifyOneIndex checks presence, uniqueness, and (when Columns is non-empty)
-// the ordered column set for a single expectedIndex entry.
+// verifyOneIndex verifies a single expectedIndex entry against the pg catalog.
 // Extracted to keep verifyIndexes below the cognitive complexity limit.
 func verifyOneIndex(ctx context.Context, pool *Pool, idx expectedIndex, q string) error {
 	var gotUnique bool
-	var indexrelid uint32
-	err := pool.inner.QueryRow(ctx, q, idx.Table, idx.Name).Scan(&gotUnique, &indexrelid)
+	var gotColumns []string
+	err := pool.inner.QueryRow(ctx, q, idx.Table, idx.Name).Scan(&gotUnique, &gotColumns)
 	if err != nil {
 		return errcode.New(
 			errcode.KindInternal, ErrAdapterPGSchemaShape,
@@ -979,61 +1000,19 @@ func verifyOneIndex(ctx context.Context, pool *Pool, idx expectedIndex, q string
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got unique=%v want %v", gotUnique, idx.Unique))),
 		)
 	}
-	if len(idx.Columns) == 0 {
-		// No column expectation registered (e.g. expression indexes). Skip.
-		return nil
-	}
-	return verifyIndexColumns(ctx, pool, idx, indexrelid)
-}
-
-// verifyIndexColumns queries the actual indexed columns in order and compares
-// them against the expected column list. Expression-index columns (attnum=0)
-// are skipped by the attnum > 0 filter; callers must leave Columns nil for
-// pure expression indexes.
-func verifyIndexColumns(ctx context.Context, pool *Pool, idx expectedIndex, indexrelid uint32) error {
-	// Query indexed columns in declaration order via array_position on indkey.
-	// Columns with attnum <= 0 are expressions (not regular columns) and are
-	// excluded by the attnum = ANY(i.indkey) join (they appear as attnum 0 in
-	// indkey and have no pg_attribute row with attnum > 0).
-	const colQ = `
-	SELECT a.attname
-	  FROM pg_index i
-	  JOIN pg_attribute a ON a.attrelid = i.indrelid
-	   AND a.attnum = ANY(i.indkey)
-	   AND a.attnum > 0
-	 WHERE i.indexrelid = $1
-	 ORDER BY array_position(i.indkey, a.attnum)`
-
-	rows, err := pool.inner.Query(ctx, colQ, indexrelid)
-	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-			"schema_guard: query index columns", err)
-	}
-	var gotCols []string
-	for rows.Next() {
-		var col string
-		if scanErr := rows.Scan(&col); scanErr != nil {
-			rows.Close()
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-				"schema_guard: scan index column", scanErr)
-		}
-		gotCols = append(gotCols, col)
-	}
-	rows.Close()
-	if rows.Err() != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-			"schema_guard: iterate index columns", rows.Err())
-	}
-	if !slices.Equal(gotCols, idx.Columns) {
+	if !slices.Equal(gotColumns, idx.Columns) {
 		return errcode.New(
 			errcode.KindInternal, ErrAdapterPGSchemaShape,
-			"schema_guard: index column set mismatch",
+			"schema_guard: index columns mismatch",
 			errcode.WithDetails(
 				errcode.PublicString("dimension", "index_columns"),
 				errcode.PublicString("table", idx.Table),
 				errcode.PublicString("index", idx.Name),
 			),
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %v want %v", gotCols, idx.Columns))),
+			errcode.WithInternal(
+				errcode.InternalAttr("got", strings.Join(gotColumns, ",")),
+				errcode.InternalAttr("want", strings.Join(idx.Columns, ",")),
+			),
 		)
 	}
 	return nil

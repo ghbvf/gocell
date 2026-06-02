@@ -183,8 +183,8 @@ func (v *Validator) checkDEP03() []ValidationResult {
 
 	cellToAssembly := make(map[string]string)
 	for _, a := range v.project.Assemblies {
-		for _, cellRef := range a.Cells {
-			cellToAssembly[cellRef] = a.ID
+		for _, ref := range a.Cells {
+			cellToAssembly[ref.ID] = a.ID
 		}
 	}
 

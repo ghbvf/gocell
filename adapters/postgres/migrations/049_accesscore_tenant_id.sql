@@ -1,4 +1,4 @@
--- Migration 047: rebuild accesscore tables (users / roles / role_assignments)
+-- Migration 049: rebuild accesscore tables (users / roles / role_assignments)
 -- with tenant_id for Model-A multi-tenancy isolation (EPIC #1337 PR-2a).
 --
 -- Rationale (per CLAUDE.md "Review 和重构时不考虑向后兼容——当前只有 gocell 自身"):
@@ -275,11 +275,11 @@ ALTER TABLE sessions
 -- +goose Down
 -- FORWARD-ONLY MIGRATION — NO ROLLBACK SUPPORTED.
 --
--- This migration is irreversible / destructive. Rolling back to the pre-047
+-- This migration is irreversible / destructive. Rolling back to the pre-049
 -- single-tenant schema is NOT supported via goose Down:
 --   - The down section drops all v2 tables (users / roles / role_assignments)
 --     and ALL multi-tenant accesscore data is permanently deleted.
---   - Restoring the pre-047 schema in production requires a backup restore.
+--   - Restoring the pre-049 schema in production requires a backup restore.
 --   - Dev environments must re-run from migration 001 forward (drop + migrate up).
 --
 -- Per CLAUDE.md "不考虑向后兼容": GoCell is pre-v1.0 with no external consumers;

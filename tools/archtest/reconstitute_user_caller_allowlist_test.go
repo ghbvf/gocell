@@ -145,7 +145,6 @@ func TestReconstituteUserCallerAllowlist(t *testing.T) {
 	var allDiags []Diagnostic
 	Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/...", "./cmd/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -193,7 +192,6 @@ func TestReconstituteUserCallerAllowlist_REDFixture(t *testing.T) {
 	var found int
 	Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/internal/domain/testdata/reconstitute_user_caller_red"}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -239,7 +237,6 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 	var allDiags []Diagnostic
 	Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/...", "./cmd/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Fset == nil {
 				return nil

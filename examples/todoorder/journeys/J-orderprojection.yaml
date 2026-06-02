@@ -20,5 +20,5 @@ passCriteria:
     mode: manual
   - text: "GET /api/v1/orders/projection/summary reflects the created order in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort via the framework projection.Coordinator)"
     mode: manual
-  - text: "Framework-owned rebuild (Coordinator.Rebuild, programmatic — no HTTP endpoint in v1) calls ResetOrderStatus then replays event.order-created.v1 from MemReplaySource to reconstruct a byte-identical projection snapshot (rebuild idempotence)"
+  - text: "Framework-owned rebuild (Coordinator.Rebuild, triggerable via the internal control-plane endpoint POST /internal/v1/ordercell/projection/order_status/rebuild — caller cell controlplane) calls ResetOrderStatus then replays event.order-created.v1 from MemReplaySource to reconstruct a byte-identical projection snapshot (rebuild idempotence)"
     mode: manual

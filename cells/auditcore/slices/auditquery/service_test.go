@@ -306,6 +306,45 @@ func TestService_Query_CursorContextMismatch_SubjectID(t *testing.T) {
 	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
 }
 
+// TestService_Query_CursorContextMismatch_TraceID is the traceId sibling of
+// TestService_Query_CursorContextMismatch_SubjectID: it locks that traceId
+// participates in the cursor-scope fingerprint (#1048, service.go QueryContext
+// attrs). A cursor minted under TraceID="X" must be rejected when replayed under
+// TraceID="Y" (cross-context replay), exactly as subjectId and eventType already
+// are. Without traceId in the fingerprint both queries would share a QueryContext
+// and the replay would silently succeed — this test would then fail.
+func TestService_Query_CursorContextMismatch_TraceID(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+			ID:        fmt.Sprintf("ae-%02d", i),
+			EventID:   fmt.Sprintf("evt-%02d", i),
+			EventType: "event.test.v1",
+			ActorID:   "actor-x",
+			TraceID:   "trace-X",
+			Timestamp: base.Add(time.Duration(i) * time.Hour),
+			Payload:   []byte("{}"),
+		}))
+	}
+
+	traceX := ledger.AuditFilters{TraceID: "trace-X"}
+	page1, err := svc.Query(context.Background(), traceX, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	traceY := ledger.AuditFilters{TraceID: "trace-Y"}
+	_, err = svc.Query(context.Background(), traceY, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	reasonAttr, ok := ecErr.FindAttr("reason")
+	require.True(t, ok)
+	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+}
+
 func newTestServiceWithLogBuf() (*Service, *ledger.MemStore, *bytes.Buffer) {
 	p, _ := ledger.NewProtocol(
 		ledger.NamespaceID("auditcore"),

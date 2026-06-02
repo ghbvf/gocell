@@ -53,6 +53,18 @@ const (
 	// kernel/governance SAGA-CONTRACT-STEP-NAME-VALID-01 compiles it (replacing
 	// the prior hand-duplicated literal).
 	SagaStepNamePattern = `^[a-zA-Z][a-zA-Z0-9]*$`
+	// AssemblyModulePathPattern is the single source for assembly.yaml cell
+	// `module` hygiene (the cross-module Go module path, #1086): a non-empty
+	// string carrying no rune that could break out of the generated
+	// "<module>/cellmodules/<id>" import string literal. The negated character
+	// class is exactly the blocklist enforced by metadata.MatchAssemblyModulePath
+	// (and consumed by AssemblyCellRef.decodeMapping): the control+space range
+	// \x00-\x20, DEL \x7f, double-quote, backtick (\x60), and backslash (\\).
+	// Mirrors schemas/assembly.schema.json
+	// cells.items.oneOf[1].properties.module.pattern, byte-locked by
+	// TestAssemblyCellRefSchemaPatternsMatchConstants. Defense-in-depth on top of
+	// the %q-quoting + Go-compiler import-resolvability gate (ADR §D3).
+	AssemblyModulePathPattern = "^[^\\x00-\\x20\\x7f\"\\x60\\\\]+$"
 )
 
 // DeployTemplateEnum lists the canonical values accepted for
@@ -71,6 +83,8 @@ var CapabilityEnum = []string{"postgres", "redis", "rabbitmq"}
 
 var goStructNameRe = regexp.MustCompile(GoStructNamePattern)
 
+var assemblyModulePathRe = regexp.MustCompile(AssemblyModulePathPattern)
+
 // MatchAssemblyID reports whether s satisfies AssemblyIDPattern. Forwards
 // to pkg/scaffoldid.Match so the regex is compiled exactly once across the
 // codebase (CELL-ID-PATTERN-SINGLE-SOURCE-01).
@@ -82,6 +96,11 @@ func MatchCellID(s string) bool { return scaffoldid.Match(s) }
 
 // MatchGoStructName reports whether s satisfies GoStructNamePattern.
 func MatchGoStructName(s string) bool { return goStructNameRe.MatchString(s) }
+
+// MatchAssemblyModulePath reports whether s satisfies AssemblyModulePathPattern:
+// a non-empty assembly cell `module` path free of runes that could break out of
+// the generated cellmodules import string literal.
+func MatchAssemblyModulePath(s string) bool { return assemblyModulePathRe.MatchString(s) }
 
 // IsValidMetadataText reports whether value is free of the control characters
 // (\n, \r, \x00, \t) that would break inline YAML scalar emission or fabricate

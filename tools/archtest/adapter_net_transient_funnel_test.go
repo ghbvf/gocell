@@ -210,7 +210,6 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// types.Unalias resolution path; without Unalias it slips past).
 	allowlistDiags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -244,7 +243,6 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// allowedSite (no narrow form) and forbiddenSite (no narrow form).
 	narrowFormDiags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -277,7 +275,6 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 		regressed := regressed
 		emptyDiags := Run(t, Fixture(FixtureOpts{Tests: false},
 			[]string{fixturePattern}),
-
 			func(p *Pass) []Diagnostic {
 				if p.Pkg == nil || p.TypesInfo == nil {
 					return nil
@@ -300,7 +297,6 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// function name; expect 1 RED diag (Timeout SelectorExpr present).
 	helperDiags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -324,7 +320,6 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// (asserts the detector catches both regressed forms, each verified independently).
 	narrowDiags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -345,7 +340,6 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// Also confirm the clean shape (allowedSite) is NOT flagged when targeted.
 	cleanDiags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

@@ -159,7 +159,6 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 	diags := Run(t, Typed(TypedOpts{}, []string{
 		"./runtime/...", "./cells/...", "./adapters/...", "./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

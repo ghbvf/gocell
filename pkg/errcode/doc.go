@@ -36,4 +36,35 @@
 // middleware can surface a stable 500 + ErrInternal + CategoryInfra response.
 // See .claude/rules/gocell/error-handling.md §5 for the A/B/C panic
 // classification and the C-class re-throw exemption list.
+//
+// # Prefix ownership registry
+//
+// Every production errcode.Code must belong to a registered prefix namespace.
+// The registry maps ERR_ prefix strings to owning Go module paths and enforces
+// that no two modules claim the same prefix (fail-fast panic on conflict).
+//
+// Two entry shapes are supported:
+//   - Namespace entry ("ERR_AUTH_", trailing underscore): claims all codes
+//     whose string starts with the prefix.
+//   - Whole-code entry ("ERR_INTERNAL", no trailing underscore): claims
+//     exactly that one code string, used for single-concept generic codes
+//     where a namespace prefix would over-reach (e.g. ERR_NOT_FOUND must
+//     not imply ownership of a hypothetical ERR_NOTICE_ namespace).
+//
+// GoCell platform prefixes (65 entries: 52 namespace + 13 whole-code) are
+// self-registered in init() under owner "github.com/ghbvf/gocell". External
+// cell modules register their own prefixes from their own init() by calling
+// errcode.RegisterPrefix(prefix, owner). OwnerOfCode uses longest-prefix
+// matching so finer-grained entries take precedence over broader namespaces.
+//
+// The closed-set invariant is enforced at CI time by archtest
+// ERRCODE-PREFIX-OWNERSHIP-01: every errcode.New / errcode.Wrap callsite
+// and every exported Code sentinel in production code must have a registered
+// prefix entry. Adding a new prefix requires regenerating
+// pkg/errcode/testdata/prefix_set.golden (ERRCODE_PREFIX_GOLDEN_UPDATE=1).
+//
+// See also:
+//   - Issue #1091
+//   - ADR: docs/architecture/202606031200-1091-adr-errcode-prefix-ownership-registry.md
+//   - Rules: .claude/rules/gocell/error-handling.md §"错误码前缀所有权 (#1091)"
 package errcode

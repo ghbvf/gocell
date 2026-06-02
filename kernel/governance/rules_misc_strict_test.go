@@ -719,7 +719,7 @@ func TestValidator_FMTA1_AssemblyIDPattern(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"baz-qux": {
 				ID:    "baz-qux",
-				Cells: []string{},
+				Cells: []metadata.AssemblyCellRef{},
 				Build: metadata.BuildMeta{Entrypoint: "cmd/bazqux/main.go", Binary: "bazqux"},
 				Dir:   "bazqux",
 			},
@@ -787,7 +787,7 @@ func TestStrictValidator_FMT16_KebabAssemblyDir(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"bazqux": {
 				ID:    "bazqux",
-				Cells: []string{},
+				Cells: []metadata.AssemblyCellRef{},
 				Build: metadata.BuildMeta{Entrypoint: "cmd/bazqux/main.go", Binary: "bazqux"},
 				Dir:   "baz-qux", // id clean but dir kebab
 			},
@@ -831,7 +831,7 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:    "corebundle",
-				Cells: []string{metadatatest.CellIDAccessCore},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}},
 				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
 				Dir:   "corebundle",
 			},

@@ -355,8 +355,12 @@ func loadJourneySchema(t *testing.T) *jsonschema.Schema {
 
 func TestAssemblyMetaRoundTrip(t *testing.T) {
 	orig := metadata.AssemblyMeta{
-		ID:    "corebundle",
-		Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore, metadatatest.CellIDConfigCore},
+		ID: "corebundle",
+		Cells: []metadata.AssemblyCellRef{
+			{ID: metadatatest.CellIDAccessCore},
+			{ID: metadatatest.CellIDAuditCore},
+			{ID: metadatatest.CellIDConfigCore},
+		},
 		Build: metadata.BuildMeta{
 			Entrypoint:     "cmd/corebundle/main.go",
 			Binary:         "corebundle",

@@ -97,7 +97,7 @@ func targetsProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:    "corebundle",
-				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}, {ID: metadatatest.CellIDAuditCore}},
 				Build: metadata.BuildMeta{
 					Entrypoint: "cmd/corebundle/main.go",
 					Binary:     "corebundle",
@@ -634,7 +634,7 @@ func TestSelectFromFiles_ExampleAssemblyPath(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"todoorder": {
 				ID:    "todoorder",
-				Cells: []string{metadatatest.CellIDOrderCell, metadatatest.NewCellID("auditcell")},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDOrderCell}, {ID: metadatatest.NewCellID("auditcell")}},
 				File:  "examples/todoorder/assembly.yaml",
 			},
 		},

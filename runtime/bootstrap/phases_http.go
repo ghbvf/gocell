@@ -138,6 +138,12 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 	if s.devtoolsHandler != nil {
 		groups = append(groups, devtools.RouteGroup(s.devtoolsHandler))
 	}
+	// Framework projection rebuild control-plane endpoint (opt-in via
+	// WithProjectionRebuildEndpoint). phase0 (validateProjectionRebuildEndpoint)
+	// guaranteed the InternalListener exists when callers are set.
+	if len(b.projectionRebuildCallers) > 0 {
+		groups = append(groups, b.projectionRebuildRouteGroup())
+	}
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {

@@ -668,7 +668,7 @@ func buildFMT29Project(team, role string) *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": {
 				ID:    "testasm",
-				Cells: []string{},
+				Cells: []metadata.AssemblyCellRef{},
 				Owner: metadata.OwnerMeta{Team: team, Role: role},
 				Dir:   "testasm",
 				File:  "assemblies/testasm/assembly.yaml",

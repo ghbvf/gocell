@@ -63,6 +63,38 @@ func (r *Resolver) Packages() []*packages.Package {
 	return r.pkgs
 }
 
+// loadMode is the go/packages load mode for every archtest typed scope
+// (Typed / Production / Fixture / StandaloneModule all route through here via
+// SharedResolver).
+//
+// NeedDeps is deliberately OMITTED (#1499). It would keep full Syntax(AST) +
+// TypesInfo resident for every transitive dependency package (~1135 of them) —
+// the dominant RSS increment of a single packages.Load (measured HeapAlloc
+// 954MB→149MB tests=F, 1337MB→509MB tests=T). Without NeedDeps, go/packages
+// builds dependency *types.Package values from export data (gcexportdata,
+// lightweight Types only) via its usesExportData fast path (NeedTypes &&
+// !NeedDeps); this is exactly go/analysis' LoadSyntax preset. The root package's
+// Types / TypesInfo / Syntax are unaffected, and cross-package symbol resolution
+// (info.Uses, types.Implements, Scope().Lookup) is identical to NeedDeps.
+//
+// Do NOT re-add NeedDeps "to be safe". Its ONLY behavioral effect here is to
+// prune the transitive (*types.Package).Imports() closure to type-referenced
+// packages. The archtest transitive-walk rules are sound under that pruning
+// because producing a finding via a NAMED-TYPE reference requires the root to
+// type-reference the target package (so the target stays a direct import and
+// survives pruning). The cell raw-option rule's types.Implements structural-match
+// (an anonymous interface matching a forbidden method set need not name the
+// forbidden package) is the one path not covered by that argument; it is verified
+// by the funnel smokes in ../../loadmode_nodeps_invariants_test.go plus the
+// one-time full NoDeps-vs-WithDeps comparison performed when #1499 landed (see that
+// file's package doc for why a permanent differential is intentionally not added).
+// Guarded by TestLoadMode_NoNeedDeps.
+//
+// ref: golang/tools go/packages/packages.go usesExportData + NeedDeps doc
+// ref: golang/tools go/analysis LoadSyntax (no NeedDeps) — root-only analysis
+const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+	packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports
+
 // LoadPackages loads patterns from modRoot with full type info.
 //
 // Parameters:
@@ -75,9 +107,7 @@ func (r *Resolver) Packages() []*packages.Package {
 // re-walking.
 func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports |
-			packages.NeedDeps,
+		Mode:  loadMode,
 		Dir:   modRoot,
 		Tests: tests,
 	}

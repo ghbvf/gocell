@@ -158,10 +158,14 @@ The loop has four parts, all inside `ordercell`:
    natural next step tracked in #1482, out of scope for this single-stream
    harness reference.
 3. **Query** — `GET /api/v1/orders/projection/summary` reads the projection.
-4. **Rebuild** — rebuild is framework-owned (`projection.Coordinator.Rebuild`,
-   programmatic); no HTTP endpoint is exposed in v1. The Coordinator drives
-   `onReset + replay` automatically. A future framework HTTP endpoint is tracked
-   in #1370.
+4. **Rebuild** — rebuild is framework-owned (`projection.Coordinator.Rebuild`),
+   exposed as the internal control-plane endpoint `POST
+   /internal/v1/ordercell/projection/order_status/rebuild` (mounted by bootstrap
+   on the internal listener via `WithProjectionRebuildEndpoint("controlplane")`).
+   It admits a background rebuild that drives `onReset + replay` automatically:
+   `202` admitted (body carries `{phase, pendingEvents, replayLagSeconds}`), `409`
+   if a rebuild is already running, `404` for an unknown projection, `403` for a
+   caller cell outside the allowlist.
 
 > **Security note (demo simplification)**: this demo's `Order` has no
 > `ownerID`; `projection/summary` exposes all `orderIds` and `orderconfirm`
@@ -188,9 +192,13 @@ curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
   http://localhost:8082/api/v1/orders/projection/summary
 # {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1}}
 
-# Rebuild is now framework-owned (projection.Coordinator.Rebuild, programmatic).
-# No HTTP rebuild endpoint is exposed in v1; the harness drives onReset+replay
-# automatically. A backlog item tracks a future /internal/v1/.../rebuild endpoint.
+# Rebuild the projection read model via the internal control-plane endpoint
+# (internal listener :9082, framework-owned). The Coordinator drives onReset+replay.
+#   POST /internal/v1/ordercell/projection/order_status/rebuild
+#   → 202 admitted {phase,pendingEvents,replayLagSeconds} / 409 already running /
+#     404 unknown projection / 403 caller cell not in allowlist.
+# Auth: HMAC service token (ts:nonce:controlplane:mac over GOCELL_TODOORDER_SERVICE_SECRET),
+# callerCell=controlplane — not the JWT above; the demo ships no service-token generator.
 ```
 
 > **Demo note**: the orderprojection slice is the canonical L3 CQRS harness reference:

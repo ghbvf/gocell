@@ -152,13 +152,13 @@ func (v *Validator) validateREF07() []ValidationResult {
 func (v *Validator) validateREF08() []ValidationResult {
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
-		for i, cellRef := range a.Cells {
-			if _, ok := v.project.Cells[cellRef]; !ok {
+		for i, ref := range a.Cells {
+			if _, ok := v.project.Cells[ref.ID]; !ok {
 				results = append(results, v.newError(
 					codeREF08, IssueRefNotFound,
 					assemblyFile(a),
 					fmt.Sprintf("cells[%d]", i),
-					fmt.Sprintf("assembly %q references non-existent cell %q", a.ID, cellRef),
+					fmt.Sprintf("assembly %q references non-existent cell %q", a.ID, ref.ID),
 					"remove the cell reference or create the cell",
 				))
 			}

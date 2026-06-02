@@ -7,6 +7,7 @@ package archtest
 //   - INVARIANT: ASSEMBLY-CELLMODULE-TYPE-04
 //   - INVARIANT: ASSEMBLY-SNAPSHOTS-LOCKED-01
 //   - INVARIANT: ASSEMBLYREF-METHOD-SET-01
+//   - INVARIANT: ASSEMBLY-CROSS-MODULE-IMPORT-01
 //
 // assembly_invariants_test.go — consolidated AST guards for assembly-related invariants.
 //
@@ -24,6 +25,19 @@ package archtest
 //                                       cmd/<id>/ and examples/<id>/ path forms).
 //   ASSEMBLY-SNAPSHOTS-LOCKED-01        writes to *.snapshots in kernel/assembly/ must be inside mu.Lock()
 //   ASSEMBLYREF-METHOD-SET-01           auth.AssemblyRef interface must have exactly 3 methods
+//   ASSEMBLY-CROSS-MODULE-IMPORT-01     the cellmodules import-path interpolation ("/cellmodules/" string
+//                                       literal) in kernel/assembly production code must appear at exactly
+//                                       one site: the body of generator.go's cellModuleImportPath funnel.
+//                                       That funnel resolves the per-cell module prefix from
+//                                       AssemblyCellRef.Module (#1086), so a cross-module assembly's
+//                                       generated modules_gen.go imports are provably ⊆ the assembly.yaml
+//                                       declared module set. Downstream callsite-uniqueness (this archtest)
+//                                       + upstream codegen funnel (modules_gen.go DO NOT EDIT +
+//                                       `gocell verify codegen` regenerate-diff byte-lock) = closed Hard
+//                                       funnel. AI-robust: Hard ("codegen funnel + golden" +
+//                                       "single sanctioned holder" templates). A second inline
+//                                       module+"/cellmodules/"+id construction anywhere in kernel/assembly
+//                                       fails this archtest immediately.
 
 import (
 	"bufio"
@@ -1544,4 +1558,93 @@ func formatExpr(e ast.Expr) string {
 	// signature that uses an expression shape this helper does not yet
 	// handle, prompting a same-PR extension rather than silent acceptance.
 	panic("assemblyref_method_set_test: unsupported ast.Expr shape; extend formatExpr when AssemblyRef gains a new signature kind")
+}
+
+// ---- ASSEMBLY-CROSS-MODULE-IMPORT-01 ----
+
+const ruleAssemblyCrossModuleImport01 = "ASSEMBLY-CROSS-MODULE-IMPORT-01"
+
+// cellModulesPathSeg is the import-path segment that every cellmodules import
+// must contain. It is the funnel anchor: the only sanctioned site that
+// interpolates it is generator.go's cellModuleImportPath.
+const cellModulesPathSeg = "/cellmodules/"
+
+// TestAssemblyCrossModuleImportFunnel enforces ASSEMBLY-CROSS-MODULE-IMPORT-01:
+// within kernel/assembly production code, the "/cellmodules/" import-path
+// string literal must appear at exactly one site — the body of the
+// cellModuleImportPath funnel function. The funnel resolves the per-cell module
+// prefix from AssemblyCellRef.Module (#1086); locking it as the sole
+// construction site means no second code path can fabricate a cellmodules
+// import that bypasses the per-cell module funnel. Combined with the upstream
+// codegen golden (modules_gen.go DO NOT EDIT + regenerate-diff), generated
+// cross-module imports are provably bounded by the assembly.yaml declared set.
+//
+// AI-robust: Hard downstream (callsite/form uniqueness of the "/cellmodules/"
+// BasicLit) + Hard upstream (codegen regenerate-diff golden).
+//
+// Known blind spot (ai-robust.md §载体决策原则 强制盲区自检): the scan keys on the
+// exact `"/cellmodules/"` STRING BasicLit. A construction that assembles the
+// segment without that literal — e.g. strings.Join([]string{mod, "cellmodules",
+// id}, "/") or a split fmt.Sprintf format — is not detected. This is acceptable:
+// the upstream regenerate-diff golden byte-locks the generated output regardless
+// of how the funnel builds the string, so a divergent construction cannot reach
+// a committed modules_gen.go undetected. No fixture is added (the upstream lock
+// is the real guard); documented so a contributor does not mistake the literal
+// scan for total coverage.
+func TestAssemblyCrossModuleImportFunnel(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	scope := DirsScope(root, []string{"kernel/assembly"}, MatchRels(func(rel string) bool {
+		return strings.HasPrefix(filepath.ToSlash(rel), "kernel/assembly/") &&
+			strings.HasSuffix(rel, ".go") && !strings.HasSuffix(rel, "_test.go")
+	}))
+
+	var funnelStart, funnelEnd token.Pos
+	type litSite struct {
+		rel  string
+		line int
+		pos  token.Pos
+	}
+	var sites []litSite
+
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			// Record the cellModuleImportPath funnel range.
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				if fn.Name != nil && fn.Name.Name == "cellModuleImportPath" {
+					funnelStart, funnelEnd = fn.Pos(), fn.End()
+				}
+			})
+			// Record every "/cellmodules/" string literal.
+			EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
+				if lit.Kind != token.STRING {
+					return
+				}
+				unq, err := strconv.Unquote(lit.Value)
+				if err != nil || unq != cellModulesPathSeg {
+					return
+				}
+				sites = append(sites, litSite{rel: rel, line: p.Fset.Position(lit.Pos()).Line, pos: lit.Pos()})
+			})
+		}
+		return nil
+	})
+
+	require.NotZero(t, funnelStart,
+		"%s: cellModuleImportPath funnel not found in kernel/assembly — the single sanctioned "+
+			"cellmodules import-path construction site must exist", ruleAssemblyCrossModuleImport01)
+	require.NotEmpty(t, sites,
+		"%s: no %q literal found — the funnel must actually construct the import path "+
+			"(guards against a vacuous pass)", ruleAssemblyCrossModuleImport01, cellModulesPathSeg)
+
+	for _, s := range sites {
+		if s.pos < funnelStart || s.pos >= funnelEnd {
+			t.Errorf("%s: %s:%d constructs a cellmodules import path (%q) outside the "+
+				"cellModuleImportPath funnel — route per-cell module resolution through that "+
+				"single site so cross-module imports stay bounded by assembly.yaml",
+				ruleAssemblyCrossModuleImport01, s.rel, s.line, cellModulesPathSeg)
+		}
+	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/observability/correlation"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -139,6 +140,8 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 
 	principal := entry.Principal()
 
+	obs := entry.Observability()
+	corr := correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))
 	e := &ledger.Entry{
 		ID:            auditEntryIDPrefix + uuid.NewString(),
 		EventID:       entry.ID(),
@@ -147,7 +150,8 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		SubjectID:     string(principal.SubjectID),
 		TenantID:      string(principal.TenantID),
 		SessionID:     string(principal.SessionID),
-		CorrelationID: string(entry.Observability().CorrelationID),
+		CorrelationID: corr.CorrelationID(),
+		TraceID:       corr.TraceID(),
 		OccurredAt:    entry.OccurredAt(),
 		Timestamp:     tsForLedger(entry, s.clk, s.logger, s.spec.name),
 		Payload:       entry.Payload(),

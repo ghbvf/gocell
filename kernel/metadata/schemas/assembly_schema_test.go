@@ -99,6 +99,47 @@ func TestAssemblySchema_NoCapabilitiesProperty(t *testing.T) {
 		"assembly capabilities property was removed; it must be rejected by additionalProperties:false")
 }
 
+// TestAssemblySchema_CellRefUnion verifies the cells[] scalar-or-object union
+// (#1086) accepts valid forms and rejects the same shapes the Go parser
+// (AssemblyCellRef.UnmarshalYAML) rejects — closing the schema↔parser drift
+// (F3/cluster C3): empty/non-canonical cell id (both forms), empty module, and
+// module paths carrying runes that could break the generated cellmodules import.
+func TestAssemblySchema_CellRefUnion(t *testing.T) {
+	schema := compileAssemblySchema(t)
+	const before = `{"id": "corebundle", "owner": {"team": "platform", "role": "cell-owner"}, "cells": `
+	const after = `}`
+
+	accepted := map[string]string{
+		"scalar shorthand":      `["configcore"]`,
+		"object same-module":    `[{"id": "configcore"}]`,
+		"object cross-module":   `[{"id": "payment", "module": "github.com/acme/payment-cell"}]`,
+		"mixed scalar + object": `["accesscore", {"id": "payment", "module": "github.com/acme/pay"}]`,
+	}
+	for name, cells := range accepted {
+		t.Run("accept/"+name, func(t *testing.T) {
+			doc := parseAssemblyDoc(t, before+cells+after)
+			assert.NoError(t, schema.Validate(doc), "%s must pass schema validation", name)
+		})
+	}
+
+	rejected := map[string]string{
+		"empty scalar id":       `[""]`,
+		"non-canonical scalar":  `["NotACell"]`,
+		"empty object id":       `[{"id": ""}]`,
+		"empty module":          `[{"id": "payment", "module": ""}]`,
+		"module with space":     `[{"id": "payment", "module": "github.com/a b/c"}]`,
+		"module with quote":     `[{"id": "payment", "module": "a\"b"}]`,
+		"module with backslash": `[{"id": "payment", "module": "a\\b"}]`,
+	}
+	for name, cells := range rejected {
+		t.Run("reject/"+name, func(t *testing.T) {
+			doc := parseAssemblyDoc(t, before+cells+after)
+			assert.Error(t, schema.Validate(doc),
+				"%s must fail schema validation (parser rejects it too)", name)
+		})
+	}
+}
+
 // formatf is a helper that avoids importing fmt in a test-only file.
 func formatf(format, arg string) string {
 	out := make([]byte, 0, len(format)+len(arg))

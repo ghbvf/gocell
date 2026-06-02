@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 41 migrations: 001-033 contiguous, plus 040-047 (intentional gap
+	// Currently 43 migrations: 001-033 contiguous, plus 040-049 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -73,10 +73,13 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// (#1174 / W10 PR-02 — owner column reserved, v1 unread/unwritten);
 	// 046 creates reconcile_leases for the kernel/reconcile LeaderElector PG backend
 	// (#661 / PR-A6 — holder + monotonic fencing epoch + lease window);
-	// 047 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
-	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered from 046 on merge).
-	assert.Equal(t, int64(47), v,
-		"expected version should be exactly 47 (current migration max — 047 accesscore_tenant_id)")
+	// 047 adds audit_entries.trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
+	// 048 creates idx_audit_namespace_trace_id CONCURRENTLY (split from 047 per
+	// migrations/README.md rule 1 — large-table indexes must use CONCURRENTLY);
+	// 049 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
+	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered from 047 on merge with #1048).
+	assert.Equal(t, int64(49), v,
+		"expected version should be exactly 49 (current migration max — 049 accesscore_tenant_id)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -287,6 +290,15 @@ func TestVerifyExpectedShape_RequiresConfigEntriesVersion(t *testing.T) {
 func TestVerifyExpectedShape_RequiresFeatureFlagsVersion(t *testing.T) {
 	assert.True(t, containsColumn("feature_flags", "version"),
 		"expectedColumns must include feature_flags.version (migration 008 carry-over)")
+}
+
+// TestVerifyExpectedShape_RequiresAuditEntriesTraceID verifies that the
+// migration 047 trace_id column is declared in the required-column list.
+// trace_id carries the OpenTelemetry trace id for OTel correlation (#1048 Batch C);
+// it is NOT part of the HMAC chain (observability only).
+func TestVerifyExpectedShape_RequiresAuditEntriesTraceID(t *testing.T) {
+	assert.True(t, containsColumn("audit_entries", "trace_id"),
+		"expectedColumns must include audit_entries.trace_id (migration 047 OTel correlation)")
 }
 
 // ---------------------------------------------------------------------------
