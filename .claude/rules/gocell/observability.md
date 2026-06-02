@@ -293,3 +293,11 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 - 内部 store 落盘 `audit_entries.payload`（JSONB）保留原始数据用于合规审计；redaction 仅在出站 HTTP 路径生效
 
 ref: `cells/auditcore/slices/auditquery/handler.go` 出口；`pkg/redaction/redaction.go` 单源治理。
+
+## Audit trace_id 反查（trace → audit）
+
+`audit_entries` 带 `trace_id` 列（observability，**非** HMAC 链字段——`Protocol.ComputeHash` 12-field 输入冻结，`audit_hash_input_frozen_test.go` 守）。注入唯一路径 = `cells/auditcore/internal/appender`，经 `kernel/observability/correlation.FromObservability(entry.Observability())` 从 W0 outbox observability envelope 同时派生 `trace_id` + `correlation_id`（`correlation.Correlation` 是 sealed read-model，全字段 unexported，上游 Hard 单源派生）。
+
+反查入口复用 auditquery：`GET /api/v1/audit/entries?traceId=<tid>`（admin 全局；非 admin 经既有 `auditQueryPolicy` AND `actor_id=self`，无后门），复用标准 `nextCursor`/`hasMore` 游标分页。**不新增端点**（端点收敛决策见 ADR）。
+
+`AUDIT-TRACE-ID-WRITE-CALLER-01`（`tools/archtest/audit_trace_id_write_caller_test.go`）锁 `ledger.Entry.{TraceID, CorrelationID}` 写侧 = appender(injection) + storetest(conformance)；PG `rows.Scan(&e.Field)` 重建为 scan-address 自然逃逸。评级 **Medium**（下游 archtest caller-allowlist）+ 上游 Hard（继承 sealed `outbox.Entry` + `correlation.Correlation`）；`ledger.Entry` 导出字段（PG reflect/scan 必需）使下游 type-system Hard 不可达，同 #851/#893 永久天花板；全 seal Hard 化路径 won't-do-now 跟踪 #1501（godoc 点名）。设计真值源：ADR `docs/architecture/202606021400-1048-adr-observability-correlate-reverse-lookup.md`。
