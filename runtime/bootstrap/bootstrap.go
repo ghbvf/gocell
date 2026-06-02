@@ -153,6 +153,16 @@ type Bootstrap struct {
 	// multi-listener model arrives) share the same collector.
 	eventRouterCollector *metricsmiddleware.EventRouterCollector
 
+	// projectionMetrics is the single shared *projection.Metrics registered once
+	// (cached here) so every projection Coordinator reuses it via
+	// .With({cell, projection}) labels instead of re-registering the fixed-name
+	// metric family (projection_event_replay_lag_seconds /
+	// projection_rebuild_duration_seconds / projection_pending_events) — the 2nd
+	// projection would otherwise hit a duplicate-name conflict. Wired by
+	// autoWireProjectionMetrics, mirroring httpCollector / eventRouterCollector /
+	// outboxRejectCollector.
+	projectionMetrics *projection.Metrics
+
 	// --- webhook: inbound-webhook receiver dependencies ---
 	// Both are injected via WithWebhookSourceStore / WithWebhookClaimer.
 	// nil means "not configured"; phase5 fail-fasts when any cell registers a

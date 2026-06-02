@@ -30,6 +30,7 @@ type registrationSpy struct {
 	mu             sync.Mutex
 	counterNames   []string
 	histogramNames []string
+	gaugeNames     []string
 	nop            kernelmetrics.NopProvider
 }
 
@@ -48,6 +49,9 @@ func (s *registrationSpy) HistogramVec(opts kernelmetrics.HistogramOpts) (kernel
 }
 
 func (s *registrationSpy) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	s.mu.Lock()
+	s.gaugeNames = append(s.gaugeNames, opts.Name)
+	s.mu.Unlock()
 	return s.nop.GaugeVec(opts)
 }
 

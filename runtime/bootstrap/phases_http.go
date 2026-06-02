@@ -349,11 +349,12 @@ func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef,
 // b.metricsProvider is a real (non-Nop) provider. When no provider is set, the
 // opts slice is returned unchanged.
 //
-// The collector is created ONCE and cached in b.httpCollector so that subsequent
-// calls (one per declared listener) reuse the same instrumented collector rather
-// than re-registering http_requests_total and http_request_duration_seconds
-// against the same Prometheus registry — which would cause a duplicate-registration
-// error on the second listener.
+// The collector is created ONCE and cached in b.httpCollector (via the shared
+// autoWireCachedCollector funnel) so that subsequent calls (one per declared
+// listener) reuse the same instrumented collector rather than re-registering
+// http_requests_total and http_request_duration_seconds against the same
+// Prometheus registry — which would cause a duplicate-registration error on the
+// second listener.
 //
 // R2 wiring rule: if callers already passed router.WithMetricsCollector via
 // WithRouterOptions AND also called WithMetricsProvider, the auto-wired
@@ -367,30 +368,19 @@ func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef,
 // ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
 // HTTP collector that records http_requests_total + http_request_duration_seconds.
 func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router.Option, error) {
-	if b.metricsProvider == nil {
+	collector, wired, err := autoWireCachedCollector(b, &b.httpCollector,
+		func(p kernelmetrics.Provider) (metricsmiddleware.Collector, error) {
+			return metricsmiddleware.NewProviderCollector(p, metricsmiddleware.ProviderCollectorConfig{})
+		},
+		"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+
+			"do not also pass router.WithMetricsCollector via WithRouterOptions. Remove one side")
+	if err != nil {
+		return nil, err
+	}
+	if !wired {
 		return opts, nil
 	}
-	// NopProvider is the default when no provider is injected; skip auto-wire
-	// to avoid allocating a no-op collector on every bootstrap startup.
-	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
-		return opts, nil
-	}
-	// Create the collector only once (cached in b.httpCollector) so that
-	// multiple calls to buildListenerRouterOpts (one per declared listener)
-	// share the same collector and do not attempt to re-register Prometheus
-	// counters/histograms with the same names.
-	if b.httpCollector == nil {
-		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{})
-		if err != nil {
-			return nil, fmt.Errorf(
-				"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+
-					"do not also pass router.WithMetricsCollector via WithRouterOptions. "+
-					"Remove one side: %w", err,
-			)
-		}
-		b.httpCollector = collector
-	}
-	return append(opts, router.WithMetricsCollector(b.httpCollector)), nil
+	return append(opts, router.WithMetricsCollector(collector)), nil
 }
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics

@@ -24,7 +24,6 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -182,23 +181,17 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 // ref: runtime/bootstrap/phases_http.go autoWireHTTPMetricsCollector — same
 // skip-on-nil/skip-on-Nop pattern and cached-field approach.
 func (b *Bootstrap) autoWireEventRouterCollector() ([]eventrouter.Option, error) {
-	if b.metricsProvider == nil {
+	collector, wired, err := autoWireCachedCollector(b, &b.eventRouterCollector,
+		metricsmiddleware.NewEventRouterCollector,
+		"bootstrap: event router metrics auto-wire conflict: WithMetricsProvider constructs the event router collector; "+
+			"do not also register event_router_subscriptions_active manually on the same provider. Remove one side")
+	if err != nil {
+		return nil, err
+	}
+	if !wired {
 		return nil, nil
 	}
-	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
-		return nil, nil
-	}
-	if b.eventRouterCollector == nil {
-		collector, err := metricsmiddleware.NewEventRouterCollector(b.metricsProvider)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"bootstrap: event router metrics auto-wire conflict: WithMetricsProvider constructs the event router collector; "+
-					"do not also register event_router_subscriptions_active manually on the same provider. "+
-					"Remove one side: %w", err)
-		}
-		b.eventRouterCollector = collector
-	}
-	return []eventrouter.Option{eventrouter.WithEventRouterCollector(b.eventRouterCollector)}, nil
+	return []eventrouter.Option{eventrouter.WithEventRouterCollector(collector)}, nil
 }
 
 // buildEventRouter creates the event router with middleware and validators.
@@ -351,26 +344,20 @@ func (b *Bootstrap) checkNoEventConsumersWhenSubscriberNil(s *phaseState) error 
 // ref: runtime/bootstrap/phases_http.go autoWireHTTPMetricsCollector — same
 // skip-on-nil/skip-on-Nop pattern, same cached-field approach.
 func (b *Bootstrap) autoWireOutboxRejectCollector() error {
-	if b.metricsProvider == nil {
-		return nil
+	// No cellID: reject collector is multi-cell-shared; per-cell label flows from
+	// ObserveReject's call-site argument.
+	collector, wired, err := autoWireCachedCollector(b, &b.outboxRejectCollector,
+		metricsmiddleware.NewOutboxRejectCollector,
+		"bootstrap: outbox metrics auto-wire conflict: WithMetricsProvider constructs the outbox reject collector; "+
+			"do not also register outbox_consumer_rejected_total manually on the same provider. Remove one side")
+	if err != nil {
+		return err
 	}
-	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
+	if !wired {
 		return nil
-	}
-	if b.outboxRejectCollector == nil {
-		// No cellID: reject collector is multi-cell-shared; per-cell label flows
-		// from ObserveReject's call-site argument.
-		collector, err := metricsmiddleware.NewOutboxRejectCollector(b.metricsProvider)
-		if err != nil {
-			return fmt.Errorf(
-				"bootstrap: outbox metrics auto-wire conflict: WithMetricsProvider constructs the outbox reject collector; "+
-					"do not also register outbox_consumer_rejected_total manually on the same provider. "+
-					"Remove one side: %w", err)
-		}
-		b.outboxRejectCollector = collector
 	}
 	if b.consumerBase != nil {
-		if err := b.consumerBase.AttachObserver(b.outboxRejectCollector); err != nil {
+		if err := b.consumerBase.AttachObserver(collector); err != nil {
 			if !errors.Is(err, outbox.ErrObserverAlreadyAttached) {
 				return fmt.Errorf("bootstrap: attach outbox consumer observer: %w", err)
 			}
