@@ -8,6 +8,7 @@ package archtest
 //   - INVARIANT: ERROR-FIRST-TYPED-NIL-01
 //   - INVARIANT: EXPORTED-ERROR-NEW-01
 //   - INVARIANT: DETAILS-SEALED-FIELD-FROZEN-01
+//   - INVARIANT: ERRCODE-PREFIX-OWNERSHIP-01
 //
 // DETAILS-SLOG-ATTR-01 retired by PR #1035: sealed PublicDetail newtype
 // (pkg/errcode/details.go) makes wire-unsafe construction inexpressible
@@ -46,6 +47,13 @@ import (
 // errcodeImportPath is the canonical import path of the errcode package
 // (used by errcodeImportNames for unquoted import-path comparison).
 const errcodeImportPath = "github.com/ghbvf/gocell/pkg/errcode"
+
+// errcodeRegisterPrefixHint is the fix hint appended to unregistered-prefix
+// diagnostics. It names both the source edit and the golden regeneration
+// command so a developer does not need to discover the second step after the
+// first CI failure.
+const errcodeRegisterPrefixHint = "(add a RegisterPrefix entry in pkg/errcode/prefix_registry.go, " +
+	"then regenerate: ERRCODE_PREFIX_GOLDEN_UPDATE=1 go test ./pkg/errcode/...)"
 
 // ─── errcode_message_const constants ─────────────────────────────────────────
 
@@ -2067,4 +2075,483 @@ func TestDetailsSealedFieldFrozen01_ScannerFires(t *testing.T) {
 
 	// Keep the time import live for parity with details.go imports.
 	_ = time.Second
+}
+
+// ─── errcode_prefix_ownership ────────────────────────────────────────────────
+
+// codeGatedCallee mirrors gatedCallee for code-arg scanning (arg index 1).
+// Parallel structure to messageGatedCallees with codeArgIndex = 1.
+type codeGatedCallee struct {
+	pkgPath      string
+	name         string
+	codeArgIndex int
+	displayName  string
+}
+
+// codeGatedCallees lists production mint callsites whose code argument is
+// scanned by ERRCODE-PREFIX-OWNERSHIP-01. This MUST cover every helper that
+// accepts a caller-supplied errcode.Code (parity with messageGatedCallees,
+// which gates the message arg of the same set). The codeArgIndex differs per
+// helper:
+//   - errcode.New(kind, code, message, opts...)               → 1
+//   - errcode.Wrap(kind, code, message, cause, opts...)       → 1
+//   - errcode.WrapInfra(code, message, cause, opts...)        → 0
+//   - httputil.WritePublic(ctx, w, kind, code, message)       → 3
+//   - ctxcancel.WrapOrInfra(err, op, id, code, fallbackMsg)   → 3
+var codeGatedCallees = []codeGatedCallee{
+	{pkgPath: errcodePackagePath, name: "New", codeArgIndex: 1, displayName: "errcode.New"},
+	{pkgPath: errcodePackagePath, name: "Wrap", codeArgIndex: 1, displayName: "errcode.Wrap"},
+	{pkgPath: errcodePackagePath, name: "WrapInfra", codeArgIndex: 0, displayName: "errcode.WrapInfra"},
+	{pkgPath: httputilPackagePath, name: "WritePublic", codeArgIndex: 3, displayName: "httputil.WritePublic"},
+	{pkgPath: ctxcancelPackagePath, name: "WrapOrInfra", codeArgIndex: 3, displayName: "ctxcancel.WrapOrInfra"},
+}
+
+// resolveCodeGatedCallee is parallel to resolveGatedCallee but matches
+// codeGatedCallees (code at arg index 1) instead of message callees.
+func resolveCodeGatedCallee(call *ast.CallExpr, info *types.Info) (codeGatedCallee, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil {
+		return codeGatedCallee{}, false
+	}
+	if info != nil {
+		obj := info.Uses[sel.Sel]
+		if obj == nil {
+			return codeGatedCallee{}, false
+		}
+		fn, ok := obj.(*types.Func)
+		if !ok || fn.Pkg() == nil {
+			return codeGatedCallee{}, false
+		}
+		pkgPath := fn.Pkg().Path()
+		name := fn.Name()
+		for _, c := range codeGatedCallees {
+			if c.pkgPath == pkgPath && c.name == name {
+				return c, true
+			}
+		}
+		return codeGatedCallee{}, false
+	}
+	// AST-only fallback: check selector.X.Name in fixtureASTPackageNames.
+	xIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return codeGatedCallee{}, false
+	}
+	if _, registered := fixtureASTPackageNames[xIdent.Name]; !registered {
+		return codeGatedCallee{}, false
+	}
+	for _, c := range codeGatedCallees {
+		shortName := lastPathSegment(c.pkgPath)
+		if shortName == xIdent.Name && sel.Sel.Name == c.name {
+			return c, true
+		}
+	}
+	return codeGatedCallee{}, false
+}
+
+// INVARIANT: ERRCODE-PREFIX-OWNERSHIP-01
+//
+// TestErrcodePrefixOwnership01 enforces ERRCODE-PREFIX-OWNERSHIP-01.
+//
+// ERRCODE-PREFIX-OWNERSHIP-01 — the errcode prefix registry is closed:
+// every production Code minted by errcode.New / errcode.Wrap and every
+// exported package-scope Code sentinel must have a registered prefix entry
+// in pkg/errcode.RegisteredPrefixes().
+//
+// Two scan targets:
+//
+//	A. Mint callsites: every code-bearing helper in codeGatedCallees
+//	   (errcode.New/Wrap/WrapInfra, httputil.WritePublic, ctxcancel.WrapOrInfra)
+//	   — extract the code arg at the helper's codeArgIndex. EvaluateConstString
+//	   is used for typed resolution.
+//	   Non-const code args (e.g. errcode.Code("ERR_"+x)) are a HARD FAIL: this
+//	   closes the closed-set escape hatch. Parse/compare-side errcode.Code(x)
+//	   conversions are NOT mint sites and are untouched.
+//	B. Sentinel decls: var ErrFoo errcode.Code = "ERR_..." string BasicLit
+//	   at package scope.
+//
+// After scanning, a canary coverage anchor asserts that ERR_AUTH_FORBIDDEN and
+// ERR_INTERNAL were actually observed; if absent the scan loaded nothing and
+// a false-green from an empty scope is rejected.
+//
+// AI-robust rating (honest, per-form — NOT unqualified Hard):
+//   - Downstream Hard for the drift-relevant forms: literal code args
+//     (BasicLit) at New/Wrap arg-1, const-resolvable selector codes (e.g.
+//     errcode.ErrAuthForbidden, via EvaluateConstString + typed callee
+//     resolution), exported Code sentinel decls (Target B), and directly
+//     runtime-assembled args (errcode.Code(non-const) / "ERR_"+x at the mint
+//     site) which are rejected outright. Accidental prefix drift travels these
+//     forms and is fully caught.
+//   - Medium residual: a bare non-const Ident/SelectorExpr code arg (a Code
+//     value forwarded through a parameter/variable) is SKIPPED at the mint site
+//     (see scanErrcodePrefixOwnershipDiags: "Variable/parameter reference:
+//     skip"). Laundering an unregistered code through a forwarding helper
+//     (assemble → store in a Code var → pass the var to errcode.New) therefore
+//     escapes — but only via DELIBERATE construction; it is not an accidental
+//     drift path. Data-flow tracing would be needed to close it, and tightening
+//     to "ban every errcode.Code(non-const) conversion" would false-positive on
+//     legitimate parse/compare-side conversions. Accepted residual gap (tracked
+//     for PR-body backlog per .claude/rules/gocell/ai-robust.md Funnel rating).
+//     Tracked as a won't-do / future-Hard ceiling at gh #1508 (data-flow tracing
+//     needed; same family as #851/#893/#1282).
+//   - In-repo cells (module = github.com/ghbvf/gocell) that mint ERR_<CELLID>_
+//     codes must register that prefix in pkg/errcode.gocellPlatformPrefixes — a
+//     cell's OWN init() RegisterPrefix call is NOT visible to this archtest, which
+//     reads only pkg/errcode's init-time registry in the test binary. The
+//     scaffold-generated per-cell init() registration covers EXTERNAL modules
+//     (cross-module runtime collision detection) but does NOT satisfy the in-repo
+//     closed-set; in-repo prefixes go in gocellPlatformPrefixes.
+//   - Upstream: pkg/errcode.RegisteredPrefixes() is the runtime SSOT; the golden
+//     byte-lock (pkg/errcode/testdata/prefix_set.golden) is regenerated/verified
+//     by the errcode package tests. Hard byte-lock with a review-gated
+//     ERRCODE_PREFIX_GOLDEN_UPDATE=1 ceiling — the same adversarial-`-update`
+//     ceiling shared by every golden in the repo, not a rule-specific weakness.
+//
+// Blind spots:
+//  1. Dot-import of errcode: `import . "…/pkg/errcode"` + bare `New(...)`.
+//     info.Uses resolves the bare Ident "New" to the errcode.New *types.Func,
+//     so dot-import callsites ARE detected. No blind spot here.
+//  2. Forwarded non-const Code args (bare Ident/SelectorExpr param/var) are
+//     skipped at the mint site — see the Medium residual above. The definition
+//     site of a literal/sentinel Code is covered by Target A/B; a value
+//     assembled at runtime and laundered through a helper is the residual gap.
+//  3. ALL CallExpr code args are treated as runtime-assembled (hard fail),
+//     including a hypothetical safe function return (e.g. a status→Code mapper).
+//     Zero such New/Wrap callsites exist today, so no false-positive; if one is
+//     introduced it must use a named sentinel or an explicit known-safe-callee
+//     allowlist must be added here (do not silently broaden the skip set).
+//  4. Canary anchor: ERR_AUTH_FORBIDDEN / ERR_INTERNAL are declared as
+//     sentinels in pkg/errcode/errcode.go. pkg/errcode is no longer skipped
+//     wholesale — it is scanned for Target B (Target A disabled there) — so the
+//     canary observes them directly from those sentinel declarations, plus any
+//     other-file Target A callsites. If both the declarations and all
+//     referencing callsites disappear, the canary fires, prompting a review of
+//     the anchor selection.
+//
+// ref: docs/architecture/202606031200-1091-adr-errcode-prefix-ownership-registry.md
+// Issue #1091.
+func TestErrcodePrefixOwnership01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode " +
+			"(loads production packages module-wide, ~5-10s)")
+	}
+
+	root := findModuleRoot(t)
+	patterns := prodscan.PatternsExtended(root)
+
+	visited := map[string]bool{}
+	canaryObserved := map[string]bool{}
+	const canaryA = "ERR_AUTH_FORBIDDEN"
+	const canaryB = "ERR_INTERNAL"
+
+	diags := Run(t, Typed(
+		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
+		patterns,
+	),
+		func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				abs := p.Abs(file)
+				if visited[abs] {
+					continue
+				}
+				visited[abs] = true
+
+				rel := p.Rel(file)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				// Skip archtest testdata fixtures (intentional violations).
+				if strings.HasPrefix(rel, errcodeMessageTestdataAllowlist) {
+					continue
+				}
+				// pkg/errcode itself declares all platform sentinels. Scan it for
+				// Target B (sentinel decls) — this closes the F3 gap where a new
+				// unregistered sentinel added directly to errcode.go escaped the
+				// closed set entirely. Disable Target A there: same-package New/Wrap
+				// calls are bare idents, not qualified selectors, so they never
+				// match the code gate.
+				scanTargetA := !strings.HasPrefix(rel, errcodeMessageAllowlist)
+
+				fileDiags, seen := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, p.TypesInfo, scanTargetA)
+				out = append(out, fileDiags...)
+				for _, c := range seen {
+					canaryObserved[c] = true
+				}
+			}
+			return out
+		})
+
+	// Canary coverage anchor: if neither canary code was observed, the scan
+	// loaded nothing (scope regression) and we must reject the false-green.
+	if !canaryObserved[canaryA] || !canaryObserved[canaryB] {
+		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01: canary anchor failed — "+
+			"production scan did not observe codes %q (seen=%v) and %q (seen=%v). "+
+			"This means the scan loaded nothing or the scope regressed; "+
+			"check prodscan.PatternsExtended and fileroles.IsProductionCode.",
+			canaryA, canaryObserved[canaryA], canaryB, canaryObserved[canaryB])
+	}
+
+	Report(t, "ERRCODE-PREFIX-OWNERSHIP-01", diags)
+}
+
+// isRuntimeAssembledCodeArg reports whether a code argument to errcode.New/Wrap
+// is a runtime-assembled code value (bad) vs. a reference to a pre-defined
+// Code variable/parameter (acceptable).
+//
+// "Runtime-assembled" means the AST contains a CallExpr (type conversion like
+// errcode.Code("ERR_"+x)) or a BinaryExpr (string concatenation) anywhere in
+// the expression tree. Bare Ident / SelectorExpr references to pre-defined
+// Code variables are acceptable — the definition site is already checked by
+// Target B or pre-existed before this rule.
+func isRuntimeAssembledCodeArg(expr ast.Expr) bool {
+	var found bool
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch n.(type) {
+		case *ast.CallExpr: // type conversion errcode.Code(...) or func call
+			found = true
+			return false
+		case *ast.BinaryExpr: // string concatenation "ERR_" + x
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// scanErrcodePrefixOwnershipDiags is the unit-testable core of the
+// ERRCODE-PREFIX-OWNERSHIP-01 scanner. It returns diagnostics for:
+//
+//   - Target A: errcode.New / errcode.Wrap callsites with a runtime-assembled code
+//     arg (hard fail: CallExpr or BinaryExpr in the code position) or a resolved
+//     const code whose prefix is not owned (miss).
+//   - Target B: package-scope exported Code sentinel decls whose BasicLit value
+//     has no registered prefix owner.
+//
+// Variable/parameter references of type errcode.Code are NOT flagged as hard
+// failures: they represent pre-defined codes passed through from a call site
+// that is itself responsible for validation. Only expressions that construct a
+// new code value at runtime (type conversions, string concatenation) are rejected.
+//
+// It also returns the set of const code strings it evaluated (for canary anchoring).
+func scanErrcodePrefixOwnershipDiags(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+	scanTargetA bool,
+) (diags []Diagnostic, seen []string) {
+	// Target A: mint callsites. Disabled (scanTargetA=false) when scanning
+	// pkg/errcode itself — same-package bare New/Wrap calls are not qualified
+	// selectors (so would not match the code gate), while the package's own
+	// sentinels are still verified via Target B below.
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !scanTargetA {
+			return
+		}
+		callee, ok := resolveCodeGatedCallee(call, info)
+		if !ok {
+			return
+		}
+		if len(call.Args) <= callee.codeArgIndex {
+			return
+		}
+		codeArg := call.Args[callee.codeArgIndex]
+
+		if info != nil {
+			codeStr, constOK := EvaluateConstString(info, codeArg)
+			if !constOK {
+				// Non-const: hard fail ONLY if the expression is runtime-assembled
+				// (contains a CallExpr type-conversion or BinaryExpr concatenation).
+				// Bare variable/parameter references are acceptable.
+				if isRuntimeAssembledCodeArg(codeArg) {
+					line := fset.Position(call.Pos()).Line
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: line,
+						Message: fmt.Sprintf(
+							"%s code arg is a runtime-assembled Code value — "+
+								"constructing Code via type-conversion or string concatenation "+
+								"breaks the closed-set invariant "+
+								"(ERRCODE-PREFIX-OWNERSHIP-01); use a named sentinel from pkg/errcode",
+							callee.displayName,
+						),
+					})
+				}
+				// Variable/parameter reference: skip (pre-defined code, checked at definition).
+				return
+			}
+			seen = append(seen, codeStr)
+			if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
+				line := fset.Position(call.Pos()).Line
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: fmt.Sprintf(
+						"%s code %q prefix not registered "+
+							errcodeRegisterPrefixHint,
+						callee.displayName, codeStr,
+					),
+				})
+			}
+			return
+		}
+
+		// AST-only mode (fixture scan): check for runtime assembly first.
+		if isRuntimeAssembledCodeArg(codeArg) {
+			line := fset.Position(call.Pos()).Line
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"%s code arg is a runtime-assembled Code value — "+
+						"constructing Code via type-conversion or string concatenation "+
+						"breaks the closed-set invariant "+
+						"(ERRCODE-PREFIX-OWNERSHIP-01); use a named sentinel from pkg/errcode",
+					callee.displayName,
+				),
+			})
+			return
+		}
+		// AST-only mode: accept only BasicLit strings for prefix checking.
+		lit, ok := codeArg.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			// Ident / SelectorExpr: pre-defined code reference, skip.
+			return
+		}
+		codeStr := strings.Trim(lit.Value, `"`)
+		seen = append(seen, codeStr)
+		if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
+			line := fset.Position(call.Pos()).Line
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"%s code %q prefix not registered "+
+						errcodeRegisterPrefixHint,
+					callee.displayName, codeStr,
+				),
+			})
+		}
+	})
+
+	// Target B: exported package-scope Code sentinel decls.
+	EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
+		if gen.Tok != token.CONST && gen.Tok != token.VAR {
+			return
+		}
+		EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
+			for i, name := range vs.Names {
+				if !isExportedErrSentinelName(name.Name) {
+					continue
+				}
+				if i >= len(vs.Values) {
+					continue
+				}
+				// Only scan BasicLit string values (the most common sentinel form).
+				// Non-literal sentinels are an accepted blind spot; they would be
+				// caught by Target A if they flow into errcode.New.
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				codeStr := strings.Trim(lit.Value, `"`)
+				if !strings.HasPrefix(codeStr, "ERR_") {
+					continue
+				}
+				seen = append(seen, codeStr)
+				if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
+					pos := fset.Position(name.Pos())
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"%s = %q prefix not registered "+
+								errcodeRegisterPrefixHint,
+							name.Name, codeStr,
+						),
+					})
+				}
+			}
+		})
+	})
+	return diags, seen
+}
+
+// TestErrcodePrefixOwnership01_ScannerFires proves the ERRCODE-PREFIX-OWNERSHIP-01
+// scanner has teeth (reverse self-check): a fixture file with both a non-const
+// mint and an unregistered prefix literal must produce diagnostics for both.
+//
+// The fixture is loaded in AST-only mode (no packages.Load, no module resolution),
+// mirroring the pattern of TestDetailsSealedFieldFrozen01_ScannerFires.
+//
+// Fixture file:
+//
+//	tools/archtest/testdata/errcode_prefix_ownership_fixtures/fixture.go
+//
+// Expected diagnostics: one for the non-const mint (hard fail) and one for
+// the unregistered-prefix string literal mint.
+func TestErrcodePrefixOwnership01_ScannerFires(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "errcode_prefix_ownership_fixtures")
+
+	var allDiags []Diagnostic
+	Run(t, AST(DirsScope(fixtureDir, []string{"."})), func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			// nil TypesInfo = AST-only mode (fixture scan); scan both targets.
+			diags, _ := scanErrcodePrefixOwnershipDiags(p.Fset, file, rel, nil, true)
+			allDiags = append(allDiags, diags...)
+		}
+		return nil
+	})
+
+	// Must have reported at least 2 diagnostics:
+	// 1. Non-const mint hard fail.
+	// 2. Unregistered prefix literal.
+	if len(allDiags) < 2 {
+		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_ScannerFires: expected ≥2 diagnostics from fixture, got %d: %v",
+			len(allDiags), allDiags)
+		return
+	}
+
+	foundNonConst := false
+	foundUnregistered := false
+	for _, d := range allDiags {
+		if strings.Contains(d.Message, "runtime-assembled Code value") {
+			foundNonConst = true
+		}
+		if strings.Contains(d.Message, "prefix not registered") {
+			foundUnregistered = true
+		}
+	}
+	if !foundNonConst {
+		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_ScannerFires: no runtime-assembled-mint diagnostic found in: %v", allDiags)
+	}
+	if !foundUnregistered {
+		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_ScannerFires: no unregistered-prefix diagnostic found in: %v", allDiags)
+	}
+
+	// Each non-New/Wrap code-bearing helper must be exercised by the scan
+	// (regression guard for F4: WrapInfra/WritePublic/WrapOrInfra were missing
+	// from codeGatedCallees). The unregistered-prefix diagnostic names the
+	// helper's displayName, so assert each appears.
+	for _, want := range []string{"errcode.WrapInfra", "httputil.WritePublic", "ctxcancel.WrapOrInfra"} {
+		hit := false
+		for _, d := range allDiags {
+			if strings.Contains(d.Message, want) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01_ScannerFires: helper %q not exercised by code gate; got: %v", want, allDiags)
+		}
+	}
 }

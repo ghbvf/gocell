@@ -117,6 +117,26 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 		t.Errorf("scaffold contract.yaml must not declare codegen field (parser defaults to true); got:\n%s",
 			string(contractYAML))
 	}
+
+	// Verify cell.go emits an errcode.RegisterPrefix init() that owns the cell's
+	// ERR_<UPPERCELLID>_ namespace by construction (issue #1091, M11 pattern).
+	cellGoPath := filepath.Join(dir, "cells", "myhttpcell", "cell.go")
+	cellGo, err := os.ReadFile(cellGoPath) //nolint:gosec // tempdir test fixture
+	if err != nil {
+		t.Fatalf("read cell.go: %v", err)
+	}
+	if !strings.Contains(string(cellGo), `errcode.RegisterPrefix(`) {
+		t.Errorf("cell.go must call errcode.RegisterPrefix in init(); got:\n%s", cellGo)
+	}
+	if !strings.Contains(string(cellGo), `"ERR_MYHTTPCELL_"`) {
+		t.Errorf("cell.go init() must register uppercased prefix ERR_MYHTTPCELL_; got:\n%s", cellGo)
+	}
+	// Assert the owner arg (module path) is also present, ensuring the full
+	// RegisterPrefix("ERR_MYHTTPCELL_", "<modulepath>") form is emitted.
+	if !strings.Contains(string(cellGo), `"`+spec.ModulePath+`"`) {
+		t.Errorf("cell.go init() must pass module path %q as owner arg to errcode.RegisterPrefix; got:\n%s",
+			spec.ModulePath, cellGo)
+	}
 }
 
 // TestScaffoldCellBundle_Events is a RED test for the --with-events variant:
