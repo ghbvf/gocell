@@ -421,9 +421,11 @@ contractUsages:
   `reg.RegisterProjection`（一个 projectionID + 一个 checkpoint）；projectionID 在同
   一 cell 内须唯一（parser `validateProjectionUniqueness` fail-closed 守卫）。
 - **`cell.yaml` 须声明 `consistencyLevel: L3`**（单向蕴含：使用投影 ⟹ L3；见
-  `.claude/rules/gocell/saga.md` §"L3 与 Saga 的关键澄清"）。当前此为约定 +
-  `validateProjectionUniqueness` 守卫，cell 级别的 parse-time Hard enforcement
-  （`PROJECTION-CONSISTENCY-PARSE-TIME-01`）在后续 PR-05 落地。
+  `.claude/rules/gocell/saga.md` §"L3 与 Saga 的关键澄清"）。cell 级别仍为约定 +
+  `validateProjectionUniqueness` 守卫。注：`kind: projection` **契约**自身的
+  `consistencyLevel ≥ L3` 由 contractgen codegen funnel 编译期强制（gh #960：
+  生成的 `types_gen.go` 携带 `const _ = uint(cellvocab.<level> - cellvocab.L3)`，
+  低于 L3 编译溢出）；这是契约级 Hard，与此处的 cell 级约定正交。
 
 #### cellgen 派生行为
 

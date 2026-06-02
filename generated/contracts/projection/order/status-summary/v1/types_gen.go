@@ -2,3 +2,17 @@
 // source: examples/todoorder/contracts/projection/order/status-summary/v1/contract.yaml
 
 package statussummary
+
+import "github.com/ghbvf/gocell/kernel/cellvocab"
+
+// PROJECTION-CONSISTENCY-01 (gh #960) — compile-time Hard gate. Projection
+// contracts must declare consistencyLevel L3 (WorkflowEventual) or L4
+// (DeviceLatent): they depend on cross-cell eventual consistency by definition.
+// A lower level makes (level - L3) negative, which overflows uint at compile
+// time, so an invalid projection contract cannot produce a buildable tree.
+// codegen:false contracts and in-memory ProjectMeta fixtures are backstopped
+// (Medium) by the PROJECTION-CONSISTENCY-01 governance rule.
+//
+// If `go build` reports "constant overflows uint" on the line below, raise
+// consistencyLevel to L3 or L4 in examples/todoorder/contracts/projection/order/status-summary/v1/contract.yaml.
+const _ = uint(cellvocab.L3 - cellvocab.L3)

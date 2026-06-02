@@ -31,14 +31,14 @@
 
 | Code | 摘要 | 评级 |
 |------|------|------|
-| SAGA-CONTRACT-BLOCK-PRESENT-01 | `kind: saga` 的 contract 必须有非空 `saga:` 块；缺少 saga block 的 saga contract 无法派生任何步骤定义，contractgen 无法生成类型化胶水代码 | Medium（governance rule；Hard 路径 = parser load 时运行 jsonschema.Validate，追踪于 gh #960） |
+| SAGA-CONTRACT-BLOCK-PRESENT-01 | `kind: saga` 的 contract 必须有非空 `saga:` 块；缺少 saga block 的 saga contract 无法派生任何步骤定义，contractgen 无法生成类型化胶水代码 | Medium（governance rule；Hard 主门控 = contractgen builder delegation。注：gh #960 已评估 parser load-time jsonschema.Validate 并**否决**——parse-time 校验是 Medium runtime guard，真 Hard 是 codegen funnel） |
 | SAGA-CONTRACT-STEPS-NONEMPTY-01 | `saga.steps[]` 必须至少包含一个步骤；空步骤列表的 saga 会静默成功但不执行任何前向工作 | Medium（同上） |
 | SAGA-CONTRACT-STEP-NAME-VALID-01 | 每个步骤名必须匹配 `^[a-zA-Z][a-zA-Z0-9]*$`（`SagaStepNamePattern`）；contractgen 将步骤名转换为 Go 标识符（`Run<Name>` / `Compensate<Name>` / `<Name>Output`），含 `.`、`:`、`/` 的名称会生成不可编译的 Go 代码 | Medium（同上） |
 | SAGA-CONTRACT-STEP-NAME-UNIQUE-01 | 同一 saga contract 内步骤名必须唯一；重复步骤名导致补偿日志、指标和运行时状态机无法无歧义引用步骤 | Medium（同上） |
 | SAGA-CONTRACT-STEP-SCHEMA-REF-01 | 每个步骤必须声明非空的 `output` schema `$ref`；output schema 是步骤间的类型契约（下一步的 `prevState` 参数），缺失使 codegen 和工具无法验证步骤输出 | Medium（同上） |
 | SAGA-CONTRACT-COMPENSATION-ORDER-01 | `compensationOrder` 若设置必须为 `"reverse"`（唯一支持值）；空值等同 `"reverse"`；其他非空值是误配置，未来运行时新增第二种策略时会导致静默误解释 | Medium（同上） |
 | SAGA-CONTRACT-CONSISTENCY-L3-01 | saga contract 必须声明 `consistencyLevel: L3`（WorkflowEventual）；saga 编排本质上是跨 cell 最终一致，声明 L0/L1/L2 暗示 saga 无法提供的保证（本地或单 cell 事务语义），L4 也不允许 | Medium（同上） |
-| SAGA-CONTRACT-RETRY-TIMEOUT-01 | `saga.retries`、各步骤 `retries`、`saga.timeout`、步骤 `timeout` 必须是合法的 Go duration 字符串且非负；`RetryPolicy` 约束：`MaxAttempts >= 0`、各 interval >= 0、`MaxInterval >= BaseInterval`（当两者均非零时）；此规则是 in-memory fixture 和 `codegen: false` contract 的 Medium 兜底，contractgen builder delegation 是 Hard 主门控 | Medium（委托 `kernel/saga.RetryPolicy.Validate`；Hard 路径 = parser Load 时 jsonschema.Validate，追踪于 gh #960） |
+| SAGA-CONTRACT-RETRY-TIMEOUT-01 | `saga.retries`、各步骤 `retries`、`saga.timeout`、步骤 `timeout` 必须是合法的 Go duration 字符串且非负；`RetryPolicy` 约束：`MaxAttempts >= 0`、各 interval >= 0、`MaxInterval >= BaseInterval`（当两者均非零时）；此规则是 in-memory fixture 和 `codegen: false` contract 的 Medium 兜底，contractgen builder delegation 是 Hard 主门控 | Medium（委托 `kernel/saga.RetryPolicy.Validate`；Hard 主门控 = contractgen builder delegation。gh #960 已否决 parser load-time jsonschema.Validate 路径，见上行） |
 | SAGA-CELL-LEVEL-L3-DECLARE-01 | 某 slice 的 contractUsage `role: orchestrate` ⟹ 其 `belongsToCell` 对应的 `cell.yaml` 必须声明 `consistencyLevel: L3`（**单向**：orchestrate ⟹ L3；不是双向，详见下方澄清章节）。slice 的 belongsToCell 不在 project 时跳过（REF 覆盖） | Medium（governance rule；`gocell validate` PhaseBase CI gate） |
 
 ---

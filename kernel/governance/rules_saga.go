@@ -43,12 +43,14 @@ package governance
 //
 //   - SAGA-CONTRACT-RETRY-TIMEOUT-01 is the MEDIUM backstop covering
 //     in-memory ProjectMeta fixtures and codegen:false contracts. The
-//     contractgen builder delegation is the Hard PRIMARY gate. The
-//     schema-at-parser-Load Hard path is tracked in gh #960.
-//
-//   - Hard 化路径：在 metadata parser Load 时运行 jsonschema.Validate 可将
-//     schema enum gate 升级为 parse-time 强制（基础设施已有，参照
-//     PROJECTION-CONSISTENCY-01 的相同升级路径，见 gh #960）。
+//     contractgen builder delegation is the Hard PRIMARY gate — the same
+//     codegen-funnel archetype that PROJECTION-CONSISTENCY-01 adopted in
+//     gh #960. NB: gh #960 evaluated "parser load-time jsonschema.Validate" as
+//     the proposed Hard path and REJECTED it — a parse-time validator is a
+//     runtime guard (Medium) that does not cover the in-memory vector. The Hard
+//     gate for contract-shape constraints is the contractgen codegen funnel,
+//     not the schema. There is no remaining parse-time-jsonschema upgrade to
+//     track for saga.
 
 import (
 	"fmt"
@@ -308,7 +310,8 @@ func (v *Validator) validateSAGACONTRACTBLOCKPRESENT01() []ValidationResult {
 //
 // This is the MEDIUM backstop covering in-memory ProjectMeta fixtures and
 // codegen:false contracts. The contractgen builder delegation is the Hard
-// PRIMARY gate. The schema-at-parser-Load Hard path is tracked in gh #960.
+// PRIMARY gate (the codegen-funnel archetype; gh #960 rejected parse-time
+// jsonschema.Validate as a Medium runtime guard — see the file godoc above).
 //
 // Delegation: numeric checks are delegated to kernel/saga.RetryPolicy.Validate
 // (MaxAttempts>=0, intervals>=0, MaxInterval>=BaseInterval when both non-zero).
