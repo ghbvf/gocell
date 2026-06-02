@@ -42,10 +42,10 @@ func TestModule_Provide_MemMode(t *testing.T) {
 	ctx := context.Background()
 	shared := buildMemSharedDeps(t)
 
-	c, _, _, err := auditcore.Module().Provide(ctx, shared)
+	res, err := auditcore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
-	require.NotNil(t, c)
-	assert.Equal(t, "auditcore", c.ID())
+	require.NotNil(t, res.Cell)
+	assert.Equal(t, "auditcore", res.Cell.ID())
 }
 
 // buildMemSharedDeps constructs a memory-mode *composition.SharedDeps for tests.

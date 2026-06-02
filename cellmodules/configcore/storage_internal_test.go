@@ -54,37 +54,38 @@ var (
 	_ kernellifecycle.ManagedResource = fakeManagedKeyProvider{}
 )
 
-// TestBuildConfigCoreResult_ManagedKeyProvider_DualWrite is the F4 regression:
-// when the configcore KeyProvider implements ManagedResource it MUST be written
-// to BOTH channels — the provisional slice (pre-Run rollback) and a
-// bootstrap.Option (WithManagedResource → bootstrap registers its Probes() as
-// /readyz health probes and a LIFO teardown). Dropping either half silently
-// regresses: missing provisional leaks the provider on sibling-module failure;
-// missing the opt drops its readiness probe from /readyz and skips shutdown
-// Close. The opt→probe expansion itself is covered by bootstrap's
-// managed_resource_test.go; this test locks configcore's dual-write decision.
-func TestBuildConfigCoreResult_ManagedKeyProvider_DualWrite(t *testing.T) {
+// TestBuildConfigCoreResult_ManagedKeyProvider_SingleSourceResource locks the
+// single-source contract (PR #591 / #1420): when the configcore KeyProvider
+// implements ManagedResource it is returned ONLY in the Resources channel (3rd
+// return). buildConfigCoreResult no longer calls bootstrap.WithManagedResource
+// (banned in cellmodules/ by WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01) — the
+// Builder derives BOTH the steady-state WithManagedResource registration (its
+// Probes() become /readyz checks + a LIFO teardown) AND the pre-Run rollback
+// from this one Resources entry. Before #1420 the provider was written to two
+// channels and forgetting either half silently regressed (leak / dropped probe);
+// now both halves come from one source so they cannot diverge.
+func TestBuildConfigCoreResult_ManagedKeyProvider_SingleSourceResource(t *testing.T) {
 	kp := fakeManagedKeyProvider{}
 
-	_, opts, provisional := buildConfigCoreResult(nil, kp, configCoreModuleResult{})
+	_, opts, resources := buildConfigCoreResult(nil, kp, configCoreModuleResult{})
 
-	// Rollback channel: directly inspectable.
-	require.Len(t, provisional, 1, "managed KeyProvider must be returned as a provisional resource for rollback")
-	assert.Equal(t, kernellifecycle.ManagedResource(kp), provisional[0], "the provisional resource must be the KeyProvider itself")
+	// Single source: the managed KeyProvider is the one Resources entry.
+	require.Len(t, resources, 1, "managed KeyProvider must be returned as a Resources entry (single source)")
+	assert.Equal(t, kernellifecycle.ManagedResource(kp), resources[0], "the resource must be the KeyProvider itself")
 
-	// Happy-path channel: WithManagedResource is opaque, so assert exactly one
-	// bootstrap.Option was appended on top of the (empty) modResult opts.
-	require.Len(t, opts, 1, "managed KeyProvider must add exactly one WithManagedResource bootstrap.Option")
+	// No WithManagedResource is added here — the Builder derives it from
+	// Resources. With an empty configCoreModuleResult (no relay opt), opts is empty.
+	assert.Empty(t, opts, "buildConfigCoreResult must not call WithManagedResource; Builder funnels Resources")
 }
 
-// TestBuildConfigCoreResult_PlainKeyProvider_NoManagedWrite verifies the inverse:
-// a KeyProvider that is NOT a ManagedResource must not be registered in either
-// channel (no spurious probe, no rollback entry).
-func TestBuildConfigCoreResult_PlainKeyProvider_NoManagedWrite(t *testing.T) {
+// TestBuildConfigCoreResult_PlainKeyProvider_NoResource verifies the inverse:
+// a KeyProvider that is NOT a ManagedResource must not appear in the Resources
+// channel (no spurious probe, no rollback entry) and adds no option.
+func TestBuildConfigCoreResult_PlainKeyProvider_NoResource(t *testing.T) {
 	kp := fakePlainKeyProvider{}
 
-	_, opts, provisional := buildConfigCoreResult(nil, kp, configCoreModuleResult{})
+	_, opts, resources := buildConfigCoreResult(nil, kp, configCoreModuleResult{})
 
-	assert.Empty(t, provisional, "non-managed KeyProvider must not appear in the rollback channel")
-	assert.Empty(t, opts, "non-managed KeyProvider must not add a WithManagedResource option")
+	assert.Empty(t, resources, "non-managed KeyProvider must not appear in the Resources channel")
+	assert.Empty(t, opts, "non-managed KeyProvider must not add any option")
 }

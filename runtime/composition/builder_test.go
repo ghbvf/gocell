@@ -36,12 +36,12 @@ type fakeCellModule struct {
 func (f *fakeCellModule) ID() string { return f.id }
 func (f *fakeCellModule) Provide(
 	_ context.Context, _ *SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+) (ModuleResult, error) {
 	f.called = true
 	if f.provideErr != nil {
-		return nil, nil, nil, f.provideErr
+		return ModuleResult{}, f.provideErr
 	}
-	return f.cell, f.opts, f.mres, nil
+	return ModuleResult{Cell: f.cell, Opts: f.opts, Resources: f.mres}, nil
 }
 
 // closedOrder captures the sequence of Close calls for LIFO verification.
@@ -94,18 +94,20 @@ func TestBuilder_HappyPath(t *testing.T) {
 	assert.True(t, m2.called)
 }
 
-// TestBuilder_HappyPath_TwoChannelResourceContract verifies the two-channel
-// resource ownership contract (pg-cell-template Chapter 4):
-//   - A module's bootstrap.Option (3rd return, e.g. bootstrap.WithManagedResource)
-//     flows into App.opts so bootstrap.Run owns the steady-state lifecycle.
-//   - A module's []ManagedResource (4th return) is rollback-only: Build must NOT
-//     additionally convert it into bootstrap opts on the success path, or the
-//     resource would be registered twice (the module already registered it via
-//     its own opts) and double-closed at shutdown.
+// TestBuilder_HappyPath_SingleSourceResourceContract verifies the single-source
+// resource ownership contract (PR #591 / #1420):
+//   - A module returns its ManagedResources ONLY in ModuleResult.Resources. It
+//     does NOT call bootstrap.WithManagedResource itself.
+//   - Build derives BOTH channels from that one source: it appends one
+//     bootstrap.WithManagedResource(r) per resource to cellOpts (steady-state
+//     lifecycle, owned by bootstrap.Run) AND appends r to the provisional
+//     rollback stack. The two can never diverge — the former double-write bug
+//     where a module forgot one half is now structurally impossible.
 //
-// Mirrors cellmodules/accesscore: WithManagedResource(limiter) in opts +
-// the same limiter in the 4th channel for pre-Run rollback.
-func TestBuilder_HappyPath_TwoChannelResourceContract(t *testing.T) {
+// Mirrors cellmodules/accesscore: the rate limiter is returned only in
+// Resources; the Builder, not the module, registers it for steady-state and
+// for pre-Run rollback.
+func TestBuilder_HappyPath_SingleSourceResourceContract(t *testing.T) {
 	ctx := context.Background()
 
 	order := &closedOrder{}
@@ -115,7 +117,9 @@ func TestBuilder_HappyPath_TwoChannelResourceContract(t *testing.T) {
 	m1 := &fakeCellModule{
 		id:   "mod1",
 		cell: c1,
-		opts: []bootstrap.Option{bootstrap.WithManagedResource(r1)},
+		// Single source: resource declared ONLY in Resources; no opts. The
+		// module does NOT call bootstrap.WithManagedResource (banned in
+		// cellmodules/ by WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
 		mres: []kernellifecycle.ManagedResource{r1},
 	}
 
@@ -124,13 +128,35 @@ func TestBuilder_HappyPath_TwoChannelResourceContract(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
-	// Exactly the module's own opt is present — the 4th-channel resource is NOT
-	// additionally threaded (that would double-register against the module's
-	// own WithManagedResource).
+	// Build derived exactly one WithManagedResource opt from the single
+	// Resources entry — the module supplied no opts of its own.
 	assert.Len(t, app.opts, 1,
-		"module opts flow through; Builder must not also convert mres into opts")
+		"Builder derives one WithManagedResource opt from ModuleResult.Resources (single source)")
 	// Success path never rolls back.
 	assert.Empty(t, order.calls, "no resource may be Closed on the success path")
+}
+
+// TestBuilder_SingleSourceResource_RollsBack verifies the rollback half of the
+// single-source contract: a resource returned only in ModuleResult.Resources is
+// closed (LIFO) when a later module fails — without the module ever calling
+// WithManagedResource. This pairs with the happy-path test above to prove BOTH
+// channels are derived from the one Resources source.
+func TestBuilder_SingleSourceResource_RollsBack(t *testing.T) {
+	ctx := context.Background()
+
+	order := &closedOrder{}
+	r1 := &orderedMR{id: "r1", order: order}
+
+	c1 := stubCell("cell-1")
+	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
+	m2 := &fakeCellModule{id: "mod2", provideErr: errors.New("provide failed")}
+
+	_, err := New().With(m1, m2).Build(ctx, minimalSharedDeps(t),
+		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+	require.Error(t, err)
+
+	require.Len(t, order.calls, 1, "the single-source resource must be rolled back on failure")
+	assert.Equal(t, "r1", order.calls[0])
 }
 
 // TestBuilder_NilModule_RollsBack verifies LIFO rollback when a nil module is encountered.

@@ -48,10 +48,10 @@ func TestModule_Provide_MemMode(t *testing.T) {
 	ctx := context.Background()
 	shared := buildMemSharedDeps(t)
 
-	c, _, _, err := configcore.Module().Provide(ctx, shared)
+	res, err := configcore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
-	require.NotNil(t, c)
-	assert.Equal(t, "configcore", c.ID())
+	require.NotNil(t, res.Cell)
+	assert.Equal(t, "configcore", res.Cell.ID())
 }
 
 // buildMemSharedDeps constructs a memory-mode *composition.SharedDeps for tests.
