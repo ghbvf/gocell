@@ -27,6 +27,8 @@ func buildProjectionProvideProject(
 	missingContract bool,
 	missingCell bool,
 ) *metadata.ProjectMeta {
+	// cellID is used only for map keys below; struct cell-id *field* positions
+	// must reference metadatatest.CellIDTestCell directly (FIXTURE-CELLID-TYPED-BUILDER-01).
 	cellID := metadatatest.CellIDTestCell
 	const (
 		sliceAID = "testcell/projprovide"
@@ -38,11 +40,11 @@ func buildProjectionProvideProject(
 		contracts[projectionID] = &metadata.ContractMeta{
 			ID:               projectionID,
 			Kind:             contractKind,
-			OwnerCell:        cellID,
+			OwnerCell:        metadatatest.CellIDTestCell,
 			ConsistencyLevel: "L3",
 			Lifecycle:        "active",
 			Endpoints: metadata.EndpointsMeta{
-				Provider: cellID,
+				Provider: metadatatest.CellIDTestCell,
 			},
 			Dir:  "contracts/projection/test/v1",
 			File: "contracts/projection/test/v1/contract.yaml",
@@ -52,7 +54,7 @@ func buildProjectionProvideProject(
 	cells := map[string]*metadata.CellMeta{}
 	if !missingCell {
 		cells[cellID] = &metadata.CellMeta{
-			ID:               cellID,
+			ID:               metadatatest.CellIDTestCell,
 			Type:             "core",
 			ConsistencyLevel: "L3",
 			DurabilityMode:   "durable",
@@ -67,7 +69,7 @@ func buildProjectionProvideProject(
 	// Slice A: the "read side" — has the provide CU.
 	sliceA := &metadata.SliceMeta{
 		ID:            sliceAID,
-		BelongsToCell: cellID,
+		BelongsToCell: metadatatest.CellIDTestCell,
 		ContractUsages: []metadata.ContractUsage{
 			{
 				Contract: projectionID,
@@ -85,7 +87,7 @@ func buildProjectionProvideProject(
 	if subscribeProjection != "" {
 		slices[sliceBID] = &metadata.SliceMeta{
 			ID:            sliceBID,
-			BelongsToCell: cellID,
+			BelongsToCell: metadatatest.CellIDTestCell,
 			ContractUsages: []metadata.ContractUsage{
 				{
 					Contract:   "event.order.created.v1",
