@@ -47,6 +47,60 @@ func TestProjectionTypesEmitsConsistencyGuard(t *testing.T) {
 	}
 }
 
+// TestProjectionTypesEmitsGuardForLowLevels locks that the template emits the
+// overflow form for EVERY sub-L3 level (not just the L2 the compile-proof below
+// exercises). L0/L1/L2 all render `uint(cellvocab.L<n> - cellvocab.L3)` whose
+// constant operand is negative — the form that fails to compile.
+func TestProjectionTypesEmitsGuardForLowLevels(t *testing.T) {
+	t.Parallel()
+	for _, level := range []string{"L0", "L1", "L2"} {
+		spec := &ContractGenSpec{
+			PackageName:      "statussummary",
+			ContractID:       "projection.order.status-summary.v1",
+			Kind:             "projection",
+			ConsistencyLevel: level,
+			SourceFile:       "examples/todoorder/contracts/projection/order/status-summary/v1/contract.yaml",
+		}
+		out, err := renderTypes(spec)
+		if err != nil {
+			t.Fatalf("renderTypes(%s): %v", level, err)
+		}
+		wantGuard := "const _ = uint(cellvocab." + level + " - cellvocab.L3)"
+		if !strings.Contains(string(out), wantGuard) {
+			t.Errorf("level %s: generated types missing overflow guard %q:\n%s", level, wantGuard, out)
+		}
+	}
+}
+
+// TestBuildContractSpecProjectionLowLevelAccepted locks a deliberate design
+// choice: buildContractSpec does NOT reject L0/L1/L2 for projection contracts —
+// those levels parse, so the builder lets them through and the compile-time
+// guard in types_gen.go (uint overflow) is the sole enforcement point. If a
+// future change adds a `>= L3` floor check here, this test fails on purpose:
+// a builder-time check is a Medium guard (ContractMeta is an open struct, and
+// the in-memory/codegen=false vectors bypass it), which would silently degrade
+// the Hard compile-time gate. Move the floor check, don't duplicate it.
+func TestBuildContractSpecProjectionLowLevelAccepted(t *testing.T) {
+	t.Parallel()
+	for _, level := range []string{"L0", "L1", "L2"} {
+		root, p := setupHTTPMinimalRoot(t)
+		id := "projection.order.status-summary.v1"
+		p.Contracts[id] = &metadata.ContractMeta{
+			ID:               id,
+			Kind:             "projection",
+			ConsistencyLevel: level,
+			Lifecycle:        "active",
+			Codegen:          true,
+			Endpoints:        metadata.EndpointsMeta{Provider: "ordercell", Readers: []string{"edge-bff"}},
+			File:             "examples/todoorder/contracts/projection/order/status-summary/v1/contract.yaml",
+		}
+		if _, err := buildContractSpec(root, p, id); err != nil {
+			t.Errorf("level %q: buildContractSpec must accept parseable level "+
+				"(floor is the compile-time guard, not the builder); got error: %v", level, err)
+		}
+	}
+}
+
 // TestProjectionLowLevelGuardFailsCompile is the Hard proof: a kind=projection
 // spec at L2 renders a types_gen.go that fails to compile. This makes an
 // invalid projection contract unrepresentable in a buildable tree.
