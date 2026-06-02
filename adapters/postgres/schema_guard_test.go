@@ -75,9 +75,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// (#661 / PR-A6 — holder + monotonic fencing epoch + lease window);
 	// 047 adds audit_entries.trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
 	// 048 creates idx_audit_namespace_trace_id CONCURRENTLY (split from 047 per
-	// migrations/README.md rule 1 — large-table indexes must use CONCURRENTLY).
-	assert.Equal(t, int64(48), v,
-		"expected version should be exactly 48 (current migration max — 048 audit_entries trace_id index)")
+	// migrations/README.md rule 1 — large-table indexes must use CONCURRENTLY);
+	// 049 adds outbox_entries.seq (BIGINT GENERATED ALWAYS AS IDENTITY) + idx_outbox_seq:
+	// the monotonic stream position for the projection journal ReplaySource/Cursor
+	// (#1368 / W10 PR-04c).
+	assert.Equal(t, int64(49), v,
+		"expected version should be exactly 49 (current migration max — 049 outbox_entries_seq)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
