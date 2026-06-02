@@ -24,14 +24,23 @@ var _ idemhttp.Store = (*HTTPIdempotencyStore)(nil)
 //
 // Consistency: L1 (LocalTx) — each Lua script executes atomically within Redis.
 //
-//   - <ns>:{key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
-//   - <ns>:{key}:resp  — SET with doneTTL, value = MarshalRecordedResponse blob. Indicates "completed".
+//   - <store-ns>:<req-ns>:{key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
+//   - <store-ns>:<req-ns>:{key}:resp  — SET with doneTTL, value = MarshalRecordedResponse blob. Indicates "completed".
+//
+// The key prefix has two segments, both OUTSIDE the hashtag:
+//
+//   - <store-ns> = the construction-time KeyNamespace (s.ns), the owner
+//     dimension — e.g. "_runtime" for the shared corebundle store — following
+//     the same owner-prefix convention as the other adapters/redis primitives
+//     (see KeyNamespace doc).
+//   - <req-ns>   = the request-time ns passed to Claim (caller TenantID or the
+//     "_notenant" sentinel), the tenant sub-partition.
 //
 // Cluster: keys are wrapped in a Redis Cluster hashtag so CRC16 hashes only
 // the business-key portion; lease and resp keys colocate on the same slot,
-// keeping multi-KEY EVAL safe under Cluster mode.
-// The KeyNamespace prefix sits outside the hashtag so slot colocality is
-// preserved regardless of namespace value.
+// keeping multi-KEY EVAL safe under Cluster mode. Both prefix segments sit
+// outside the hashtag, so slot colocality is preserved regardless of either
+// namespace value.
 //
 // Claim checks resp first (ClaimDone+replay), then attempts lease
 // (ClaimAcquired or ClaimBusy). Record sets resp + deletes lease.
@@ -46,11 +55,13 @@ type HTTPIdempotencyStore struct {
 // namespace produce structured errors so misconfiguration fails-fast at
 // composition time.
 //
-// The construction-time KeyNamespace acts as a wiring-validation sentinel
-// (REDIS-KEY-NAMESPACE-01): it must be a valid non-empty, lowercase,
-// brace-free string ≤48 chars. It is NOT embedded in runtime Redis keys;
-// the actual key prefix is the ns argument passed to Claim at request time
-// (the caller TenantID or "_notenant" sentinel when using the standard Middleware).
+// The construction-time KeyNamespace (REDIS-KEY-NAMESPACE-01) must be a valid
+// non-empty, lowercase, brace-free string ≤48 chars. It is the OWNER segment
+// of every runtime Redis key: keys are derived as
+// <store-ns>:<request-ns>:{<key>}:<role>, where <store-ns> = this namespace
+// (owner dimension, e.g. "_runtime" for the shared corebundle store) and
+// <request-ns> = the ns passed to Claim (caller TenantID or "_notenant"
+// sentinel when using the standard Middleware).
 func NewHTTPIdempotencyStore(client *Client, ns KeyNamespace) (*HTTPIdempotencyStore, error) {
 	if err := ns.Validate(); err != nil {
 		return nil, err
@@ -162,15 +173,14 @@ return 0
 //
 // The Redis keys are derived as:
 //
-//	<ns>:{<key>}:lease  and  <ns>:{<key>}:resp  and  <ns>:{<key>}:fp
+//	<store-ns>:<ns>:{<key>}:lease  and  …:resp  and  …:fp
 //
-// where <ns> is the Claim ns parameter. In the standard Middleware, ns is the
-// caller TenantID (or "_notenant" when absent); the interface contract accepts
-// any non-empty, brace-free string. <key> is the composed idempotency key.
-//
-// The store's construction-time KeyNamespace is validated at construction time
-// as a misconfiguration sentinel (REDIS-KEY-NAMESPACE-01); it is NOT embedded
-// in the runtime Redis keys — the runtime ns arg is the actual key prefix.
+// where <store-ns> is the construction-time KeyNamespace (s.ns, owner
+// dimension) and <ns> is the Claim ns parameter. In the standard Middleware,
+// ns is the caller TenantID (or "_notenant" when absent); the interface
+// contract accepts any non-empty, brace-free string. <key> is the composed
+// idempotency key. Both prefix segments sit outside the hashtag so Redis
+// Cluster CRC16 only hashes {<key>}.
 //
 // Both ns and key must be non-empty and free of '{'/'}' characters so the
 // Redis Cluster hashtag boundary is unambiguous.
@@ -200,12 +210,15 @@ func (s *HTTPIdempotencyStore) Claim(
 			"redis: http idempotency claim token generation failed", err)
 	}
 
-	// Derive Redis keys: <ns>:{<key>}:<role>
-	// Uses KeyNamespace(ns).applyHashtag so the business key sits inside the
-	// hashtag for Redis Cluster slot colocation (lease + resp + fp on same slot).
-	respKey := KeyNamespace(ns).applyHashtag(key, "resp")
-	leaseKey := KeyNamespace(ns).applyHashtag(key, "lease")
-	fpKey := KeyNamespace(ns).applyHashtag(key, "fp")
+	// Derive Redis keys: <store-ns>:<req-ns>:{<key>}:<role>
+	// scopedNS folds the construction-time owner namespace (s.ns) and the
+	// request-time tenant ns into a single "<owner>:<tenant>" prefix; both sit
+	// outside the hashtag so the business key alone drives Redis Cluster slot
+	// colocation (lease + resp + fp on same slot).
+	scopedNS := s.ns.apply(ns)
+	respKey := KeyNamespace(scopedNS).applyHashtag(key, "resp")
+	leaseKey := KeyNamespace(scopedNS).applyHashtag(key, "lease")
+	fpKey := KeyNamespace(scopedNS).applyHashtag(key, "fp")
 	leaseMs := max(leaseTTL.Milliseconds(), 1)
 	// fpTTL = max(leaseTTL, doneTTL) so the fp key outlasts the lease but
 	// expires alongside the response key. Use doneTTL (24h default) as an upper

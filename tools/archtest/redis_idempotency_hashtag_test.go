@@ -26,8 +26,14 @@ package archtest
 //     <receiver>.ns.applyHashtag(key, "done") (struct-field chain form).
 //
 //  2. adapters/redis/http_idempotency.go (HTTP HTTPIdempotencyStore): leaseKey
-//     / respKey are derived via KeyNamespace(ns).applyHashtag(key, "lease") /
-//     KeyNamespace(ns).applyHashtag(key, "resp") (type-conversion chain form).
+//     / respKey are derived via KeyNamespace(scopedNS).applyHashtag(key, "lease")
+//     / KeyNamespace(scopedNS).applyHashtag(key, "resp") (type-conversion chain
+//     form). scopedNS folds the construction-time owner namespace and the
+//     request-time tenant ns into "<owner>:<tenant>", so the HTTP store's full
+//     key is <owner>:<tenant>:{<key>}:<role> — both prefix segments sit outside
+//     the hashtag, leaving CRC16 slot colocation intact. The gate only requires
+//     the receiver be a KeyNamespace(<ident>) conversion, so the scopedNS ident
+//     still matches.
 //
 // A regression to manual concatenation (or to a different role literal) in
 // either file fails this test.

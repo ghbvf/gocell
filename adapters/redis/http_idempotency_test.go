@@ -74,7 +74,7 @@ func TestHTTPIdempotencyStore_Claim_Acquired(t *testing.T) {
 
 	// Verify lease key is present.
 	mock.mu.Lock()
-	_, hasLease := mock.store["testns:{key:001}:lease"]
+	_, hasLease := mock.store["ownerns:testns:{key:001}:lease"]
 	mock.mu.Unlock()
 	assert.True(t, hasLease, "lease key should exist after Claim Acquired")
 }
@@ -103,8 +103,8 @@ func TestHTTPIdempotencyStore_Record_ThenClaim_Done(t *testing.T) {
 
 	// Verify resp key is now present, lease key is gone.
 	mock.mu.Lock()
-	_, hasLease := mock.store["testns:{key:002}:lease"]
-	_, hasResp := mock.store["testns:{key:002}:resp"]
+	_, hasLease := mock.store["ownerns:testns:{key:002}:lease"]
+	_, hasResp := mock.store["ownerns:testns:{key:002}:resp"]
 	mock.mu.Unlock()
 	assert.False(t, hasLease, "lease key should be deleted after Record")
 	assert.True(t, hasResp, "resp key should exist after Record")
@@ -128,7 +128,7 @@ func TestHTTPIdempotencyStore_Claim_Busy(t *testing.T) {
 
 	// Pre-set the lease to simulate another consumer.
 	mock.mu.Lock()
-	mock.store["testns:{key:003}:lease"] = mockEntry{
+	mock.store["ownerns:testns:{key:003}:lease"] = mockEntry{
 		value:  "other-token",
 		expiry: time.Now().Add(testtime.D5min),
 	}
@@ -158,8 +158,8 @@ func TestHTTPIdempotencyStore_Release(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.mu.Lock()
-	_, hasLease := mock.store["testns:{key:004}:lease"]
-	_, hasResp := mock.store["testns:{key:004}:resp"]
+	_, hasLease := mock.store["ownerns:testns:{key:004}:lease"]
+	_, hasResp := mock.store["ownerns:testns:{key:004}:resp"]
 	mock.mu.Unlock()
 	assert.False(t, hasLease, "lease key should be deleted after Release")
 	assert.False(t, hasResp, "resp key should NOT exist after Release")
@@ -180,7 +180,7 @@ func TestHTTPIdempotencyStore_Record_StaleToken(t *testing.T) {
 
 	// Simulate lease expiry by deleting the lease key.
 	mock.mu.Lock()
-	delete(mock.store, "testns:{key:005}:lease")
+	delete(mock.store, "ownerns:testns:{key:005}:lease")
 	mock.mu.Unlock()
 
 	resp := buildTestRecordedResponse(t)
@@ -204,7 +204,7 @@ func TestHTTPIdempotencyStore_Release_StaleToken(t *testing.T) {
 
 	// Simulate lease expiry.
 	mock.mu.Lock()
-	delete(mock.store, "testns:{key:006}:lease")
+	delete(mock.store, "ownerns:testns:{key:006}:lease")
 	mock.mu.Unlock()
 
 	err = receipt.Release(ctx)
@@ -289,11 +289,17 @@ func buildTestRecordedResponse(t *testing.T) *idemhttp.RecordedResponse {
 	return &r
 }
 
+// httpOwnerNamespace is the construction-time owner namespace used by the HTTP
+// idempotency store tests. It is deliberately distinct from the request-time ns
+// ("testns") passed to Claim, so derived keys read as
+// "<owner>:<request>:{<key>}:<role>" and exercise both prefix segments.
+const httpOwnerNamespace KeyNamespace = "ownerns"
+
 // mustNewHTTPIdempotencyStoreFromCmdable creates an HTTPIdempotencyStore via
 // the internal test seam.
 func mustNewHTTPIdempotencyStoreFromCmdable(t *testing.T, rdb cmdable) *HTTPIdempotencyStore {
 	t.Helper()
-	s, err := newHTTPIdempotencyStoreFromCmdable(rdb, testNamespace)
+	s, err := newHTTPIdempotencyStoreFromCmdable(rdb, httpOwnerNamespace)
 	if err != nil {
 		t.Fatalf("newHTTPIdempotencyStoreFromCmdable: %v", err)
 	}

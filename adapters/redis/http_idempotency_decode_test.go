@@ -228,7 +228,7 @@ func TestNoopHTTPReceipt_RecordReturnsErrNoClaimLease(t *testing.T) {
 
 	// Pre-set the lease to simulate another consumer holding it.
 	mock.mu.Lock()
-	mock.store["testns:{key:noop:001}:lease"] = mockEntry{
+	mock.store["ownerns:testns:{key:noop:001}:lease"] = mockEntry{
 		value: "other-token",
 	}
 	mock.mu.Unlock()
@@ -259,7 +259,7 @@ func TestNoopHTTPReceipt_ReleaseReturnsErrNoClaimLease(t *testing.T) {
 
 	// Pre-set the lease to simulate another consumer.
 	mock.mu.Lock()
-	mock.store["testns:{key:noop:002}:lease"] = mockEntry{
+	mock.store["ownerns:testns:{key:noop:002}:lease"] = mockEntry{
 		value: "other-token",
 	}
 	mock.mu.Unlock()
