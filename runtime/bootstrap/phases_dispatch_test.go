@@ -6,6 +6,9 @@ package bootstrap
 //   - empty dispatchers → no-op (no error, router not required)
 //   - dispatchers present + nil webhookSourceStore → fail-fast ErrWebhookConfigInvalid
 //   - dispatchers present + nil Subscriber → phase6 fail-fast (no silent drop)
+//   - dispatchers present + Subscriber but nil / zero-value ConsumerBase →
+//     phase6 fail-fast (dispatcher is an event consumer; needs a constructed
+//     ConsumerBase)
 //   - CellID drift (req.Spec.CellID != snapshot owner) → drift error
 //   - happy path: a snapshot with one WebhookDispatchRequest + a seeded SourceStore
 //     + a non-nil Subscriber + a ConsumerBase → drainWebhookDispatchers registers
@@ -24,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -55,20 +59,23 @@ func (c *webhookDispatchTestCell) Init(ctx context.Context, reg cell.Registrar) 
 	return reg.RegisterWebhookDispatch(spec, c.selector)
 }
 
-// newWebhookDispatchCell creates a webhookDispatchTestCell whose spec.CellID
-// equals the BaseCell ID (matching the snapshot key produced by assembly.Snapshots).
-func newWebhookDispatchCell(cellID, contractID, sourceID string) *webhookDispatchTestCell {
+// newWebhookDispatchCell creates a webhookDispatchTestCell with the standard
+// test identifiers (whTestCellID / dispatchTestContractID / whTestSourceID),
+// whose spec.CellID equals the BaseCell ID (matching the snapshot key produced
+// by assembly.Snapshots). Tests that need a drifted CellID build the cell inline
+// (see TestDrainWebhookDispatchers_FailsOnCellIDDrift).
+func newWebhookDispatchCell() *webhookDispatchTestCell {
 	spec := kwh.DispatchSpec{
-		ContractID: contractID,
-		SourceID:   sourceID,
-		CellID:     cellID,
+		ContractID: dispatchTestContractID,
+		SourceID:   whTestSourceID,
+		CellID:     whTestCellID,
 	}
 	sel := func(_ context.Context, _ []byte) (string, error) {
 		return "http://example.test/hook", nil
 	}
 	return &webhookDispatchTestCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:   cellID,
+			ID:   whTestCellID,
 			Type: "core",
 		}),
 		spec:     spec,
@@ -122,7 +129,7 @@ func TestDrainWebhookDispatchers_EmptyNoOp(t *testing.T) {
 // to return ErrWebhookConfigInvalid.
 func TestDrainWebhookDispatchers_FailsWithoutSourceStore(t *testing.T) {
 	t.Parallel()
-	dc := newWebhookDispatchCell(whTestCellID, dispatchTestContractID, whTestSourceID)
+	dc := newWebhookDispatchCell()
 	s := buildPhaseStateWithWebhookCells(t, dc)
 
 	b := New(clockmock.New(whFixedNow))
@@ -146,7 +153,7 @@ func TestDrainWebhookDispatchers_FailsWithoutSourceStore(t *testing.T) {
 // nil (buildPhaseStateWithWebhookCells leaves it unset).
 func TestDrainWebhookDispatchers_FailsWhenSubscriberNil(t *testing.T) {
 	t.Parallel()
-	dc := newWebhookDispatchCell(whTestCellID, dispatchTestContractID, whTestSourceID)
+	dc := newWebhookDispatchCell()
 	s := buildPhaseStateWithWebhookCells(t, dc)
 
 	b := New(clockmock.New(whFixedNow)) // no WithSubscriber → s.sub stays nil
@@ -158,6 +165,52 @@ func TestDrainWebhookDispatchers_FailsWhenSubscriberNil(t *testing.T) {
 		"error must identify the webhook dispatcher as the unconsumed event consumer")
 	assert.Contains(t, err.Error(), "no subscriber is configured",
 		"error must tell the operator to add WithSubscriber")
+}
+
+// TestDrainWebhookDispatchers_FailsWhenConsumerBaseMissing (F13, review #1455
+// round-2) covers the phase6 checkConsumerBaseConfiguredForSubscriptions guard
+// for the webhook-dispatcher branch of firstConsumerInSnapshot. A dispatcher is
+// an event consumer, so a Subscriber that is present but backed by a nil or
+// zero-value ConsumerBase (the latter passes the bare nil check but
+// IsConstructed()==false) must fail fast, naming the dispatcher — not silently
+// dispatch through an uninitialized ConsumerBase. Mirrors
+// TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast for the dispatcher
+// consumer kind.
+func TestDrainWebhookDispatchers_FailsWhenConsumerBaseMissing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_consumer_base", func(t *testing.T) {
+		t.Parallel()
+		dc := newWebhookDispatchCell()
+		s := buildPhaseStateWithWebhookCells(t, dc)
+		s.sub = eventbus.New(clockmock.New(whFixedNow)) // non-nil subscriber → reach the ConsumerBase guard
+
+		b := New(clockmock.New(whFixedNow)) // no WithConsumerBase → consumerBase nil
+
+		err := b.phase6StartEventRouter(context.Background(), s)
+		require.Error(t, err, "a dispatcher with a Subscriber but no ConsumerBase must fail fast")
+		assert.Contains(t, err.Error(), "no ConsumerBase is configured",
+			"nil ConsumerBase must produce the missing-ConsumerBase error")
+		assert.Contains(t, err.Error(), "webhook dispatcher",
+			"error must identify the webhook dispatcher as the offending consumer")
+	})
+
+	t.Run("zero_value_consumer_base", func(t *testing.T) {
+		t.Parallel()
+		dc := newWebhookDispatchCell()
+		s := buildPhaseStateWithWebhookCells(t, dc)
+		s.sub = eventbus.New(clockmock.New(whFixedNow))
+
+		// zero-value literal passes the bare nil check but IsConstructed()==false.
+		b := New(clockmock.New(whFixedNow), WithConsumerBase(&outbox.ConsumerBase{}))
+
+		err := b.phase6StartEventRouter(context.Background(), s)
+		require.Error(t, err, "a zero-value ConsumerBase must fail fast")
+		assert.Contains(t, err.Error(), "not constructed via outbox.NewConsumerBase",
+			"zero-value ConsumerBase must produce the not-constructed error")
+		assert.Contains(t, err.Error(), "webhook dispatcher",
+			"error must identify the webhook dispatcher as the offending consumer")
+	})
 }
 
 // TestDrainWebhookDispatchers_FailsOnCellIDDrift verifies that a dispatcher
@@ -193,7 +246,7 @@ func TestDrainWebhookDispatchers_FailsOnCellIDDrift(t *testing.T) {
 // successfully registers one handler on the event router (HandlerCount == 1).
 func TestDrainWebhookDispatchers_HappyPath_RegistersHandler(t *testing.T) {
 	t.Parallel()
-	dc := newWebhookDispatchCell(whTestCellID, dispatchTestContractID, whTestSourceID)
+	dc := newWebhookDispatchCell()
 	s := buildPhaseStateWithWebhookCells(t, dc)
 
 	clk := clockmock.New(whFixedNow)
