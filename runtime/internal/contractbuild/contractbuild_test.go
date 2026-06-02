@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
 
@@ -239,6 +240,83 @@ func TestNewEventDerivation(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			assertSpecEqual(t, got, tc.want)
+		})
+	}
+}
+
+// TestNewWebhookDispatch verifies that NewWebhookDispatch produces the expected
+// ContractSpec from a valid DispatchSpec and rejects invalid input.
+func TestNewWebhookDispatch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		spec    webhook.DispatchSpec
+		wantErr bool
+		want    contractspec.ContractSpec
+	}{
+		{
+			name: "valid dispatch spec",
+			spec: webhook.DispatchSpec{
+				ContractID: "event.webhook.foo.v1",
+				SourceID:   "src",
+				CellID:     "mycell",
+			},
+			wantErr: false,
+			want: contractspec.ContractSpec{
+				ID:        "event.webhook.foo.v1",
+				Kind:      cellvocab.ContractEvent,
+				Transport: "amqp",
+				Topic:     "event.webhook.foo.v1",
+			},
+		},
+		{
+			name: "invalid dispatch spec — empty ContractID",
+			spec: webhook.DispatchSpec{
+				ContractID: "",
+				SourceID:   "src",
+				CellID:     "mycell",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid dispatch spec — empty SourceID",
+			spec: webhook.DispatchSpec{
+				ContractID: "event.webhook.foo.v1",
+				SourceID:   "",
+				CellID:     "mycell",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid dispatch spec — empty CellID",
+			spec: webhook.DispatchSpec{
+				ContractID: "event.webhook.foo.v1",
+				SourceID:   "src",
+				CellID:     "",
+			},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := contractbuild.NewWebhookDispatch(tc.spec)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (spec=%+v)", got)
+				}
+				// On error the returned spec must be zero (fail-closed contract).
+				assertSpecEqual(t, got, contractspec.ContractSpec{})
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertSpecEqual(t, got, tc.want)
+			if err := got.Validate(); err != nil {
+				t.Errorf("Validate() unexpected error: %v", err)
+			}
 		})
 	}
 }

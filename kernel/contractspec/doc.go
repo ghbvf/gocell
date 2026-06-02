@@ -36,6 +36,13 @@
 //     runtime/internal/ placement; provenance is type-enforced (the typed
 //     Subscription parameter replaced the retired single-caller allowlist). See
 //     contractbuild/doc.go grading.
+//  4. runtime/internal/contractbuild.NewWebhookDispatch — derivation of the
+//     event-kind subscription spec from a validated webhook.DispatchSpec; returns
+//     (ContractSpec, error) with spec.Validate() + ContractSpec.Validate()
+//     embedded inside the funnel. Upstream Hard via runtime/internal/ placement
+//     (compiler refuses imports from outside runtime/); provenance type-enforced
+//     (typed webhook.DispatchSpec parameter, not loose primitives). See
+//     contractbuild/doc.go grading.
 //
 // Three archtest gates enforce this invariant:
 //

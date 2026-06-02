@@ -72,9 +72,13 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // ctx-racing logic needs clock.Clock for the late-outcome watcher; clock is
 // a leaf so no cycle.
 //
-// KERNEL-WEBHOOK-01 PR-2 (#1265) registers `webhook`: the kernel/webhook pure
-// HMAC signer/verifier kernel (PR-1 #1251) imports only clock (replay-window
-// timing); clock is a leaf so no cycle. cell→webhook is the registration edge.
+// KERNEL-WEBHOOK-01 PR-2 (#1265) registers `webhook`: the kernel/webhook kernel
+// imports clock (replay-window timing; PR-1 #1251) and outbox (PR #1455 added the
+// dispatcher, which implements outbox.EntryHandler — consuming outbox.Entry and
+// returning outbox.HandleResult Ack/Requeue/Reject; webhook dispatch IS an outbox
+// consumer, so the dependency is intrinsic). clock is a leaf and outbox does not
+// import webhook, so neither edge introduces a cycle. cell→webhook is the
+// registration edge.
 // kernel/projection and kernel/reconcile (W10 / #661) are registered as
 // consumer-layer kernels: they depend on cell/outbox/wrapper/observability etc.
 // but nothing imports them back, so no cycle is introduced. governance→saga
@@ -107,7 +111,7 @@ var allowedKernelEdges = map[string][]string{
 	"registry":      {"metadata"},
 	"saga":          {"clock", "fsm", "healthz"},
 	"verify":        {"metadata"},
-	"webhook":       {"clock"},
+	"webhook":       {"clock", "outbox"},
 	"worker":        nil,
 	"wrapper":       {"contractspec", "ctxkeys", "outbox"},
 }

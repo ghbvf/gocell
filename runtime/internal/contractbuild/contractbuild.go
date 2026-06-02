@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
@@ -61,6 +62,37 @@ func NewFrameworkHTTP(id, method, path string, clients ...string) contractspec.C
 		Path:      path,
 		Clients:   clients,
 	}
+}
+
+// webhookDispatchTransport is the broker transport for webhook-dispatch
+// subscriptions (the dispatcher consumes outbound-intent entries from the
+// outbox broker, same as any event subscription).
+const webhookDispatchTransport = "amqp"
+
+// NewWebhookDispatch projects a validated webhook.DispatchSpec into the
+// event-kind ContractSpec the event router subscribes on for an outbound
+// webhook dispatcher. Like NewEventDerivation it is a derivation funnel, not a
+// declaration funnel: Topic == spec.ContractID (the producing cell emits to
+// that topic; the dispatcher signs and POSTs each delivered entry).
+//
+// Provenance is type- AND content-enforced: the parameter is a typed
+// webhook.DispatchSpec (not loose primitives), validated inside the funnel
+// before deriving, and the derived spec is run through ContractSpec.Validate()
+// (defense in depth). Callers MUST handle the returned error.
+func NewWebhookDispatch(spec webhook.DispatchSpec) (contractspec.ContractSpec, error) {
+	if err := spec.Validate(); err != nil {
+		return contractspec.ContractSpec{}, fmt.Errorf("contractbuild: NewWebhookDispatch: dispatch spec invalid: %w", err)
+	}
+	cs := contractspec.ContractSpec{
+		ID:        spec.ContractID,
+		Kind:      cellvocab.ContractEvent,
+		Transport: webhookDispatchTransport,
+		Topic:     spec.ContractID,
+	}
+	if err := cs.Validate(); err != nil {
+		return contractspec.ContractSpec{}, fmt.Errorf("contractbuild: NewWebhookDispatch: %w", err)
+	}
+	return cs, nil
 }
 
 // NewEventDerivation projects a validated outbox.Subscription into a

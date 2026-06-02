@@ -12,6 +12,10 @@
 //
 //	spec, err := contractbuild.NewEventDerivation(sub) // sub passes sub.Validate()
 //
+// Outbound webhook dispatcher subscription spec from a validated DispatchSpec:
+//
+//	spec, err := contractbuild.NewWebhookDispatch(dispatchSpec) // dispatchSpec passes dispatchSpec.Validate()
+//
 // # Why this package exists (compiler-Hard upstream)
 //
 // ContractSpec values come from exactly two homes:
@@ -92,6 +96,16 @@
 //     signature was a vestige of the old kernel/contractspec placement (which
 //     could not import kernel/outbox); runtime/ placement makes the typed param
 //     natural.
+//   - NewWebhookDispatch content + provenance: Hard/Hard. The parameter is a typed
+//     webhook.DispatchSpec (not loose primitives), and the funnel runs
+//     spec.Validate() before deriving — so a runtime/ caller cannot mint a webhook
+//     dispatch subscription spec from arbitrary strings; it must supply a
+//     fully-populated, valid dispatch spec (ContractID/SourceID/CellID all
+//     required). The derived spec additionally passes ContractSpec.Validate()
+//     (defense in depth). Upstream Hard via runtime/internal/ placement (same
+//     guarantee as NewEventDerivation); downstream Hard via
+//     NO-MANUAL-CONTRACTSPEC-LITERAL-01. Grading: Hard/Hard, same form as
+//     NewEventDerivation.
 //   - ContractSpec{…} literal ban: downstream Hard (unchanged,
 //     NO-MANUAL-CONTRACTSPEC-LITERAL-01). runtime/internal/contractbuild is the
 //     sanctioned funnel home and is excluded from that scan, analogous to the
