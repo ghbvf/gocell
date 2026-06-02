@@ -1,5 +1,5 @@
 name: Backlog item
-description: 新增 backlog 条目 — 落入 Project v2 "GoCell Backlog"
+description: 新增 backlog 条目 — 落入 Project v2 "GoCell Backlog" #3
 title: "[<ID>] <简短标题>"
 labels: ["backlog"]
 body:
@@ -7,19 +7,21 @@ body:
     attributes:
       value: |
         建后请追加 labels（除 `backlog` 与下方 Priority 自动贴外）：
-        - **cap-XX**（1 个）：cap-01..cap-14 或 cap-x-cross
-        - **flag-XX**（1 个）：flag-hard / flag-cond / flag-soft / flag-planned
+        - **area-XX**（1 个）：area-kernel / area-auth / area-http / area-eventing / area-data / area-observability / area-tooling / area-cross
         - **type-XX**（1 个）：type-feat / type-bug / type-refactor / type-arch-opt / type-doc / type-test / type-debt / type-fu
+        - **flag-cond**（可选）：条件延后型条目加此 label，并填下方 Trigger 段
+
+        CLI 追加示例：`gh issue edit <N> --add-label area-eventing --add-label type-bug`
 
         Priority 由下方 dropdown + `.github/workflows/auto-label-priority.yml` 自动贴 `pri-pX` label。
-        Project v2 字段（Status / Estimate）建后在 Project UI table view 设。
-        Schema 详见 [`docs/backlog.md`](../blob/develop/docs/backlog.md)。
+        Status / Estimate（Cx1-4）/ Wave 建后在 Project v2 UI 设。
+        真源 = GitHub Issues + Project v2 #3；label 体系 / 字段 / 评级 rubric 见 [`.github/PROJECT.md`](../blob/develop/.github/PROJECT.md)。
 
   - type: dropdown
     id: priority
     attributes:
       label: Priority
-      description: 选一档；workflow 会贴对应 `pri-pX` label。P0 红线见 `docs/backlog/20260520/RERATING-RUBRIC.md` §"P0 红线"，仅 incident-driven。
+      description: 选一档；workflow 会贴对应 `pri-pX` label。P0 红线仅 incident-driven（线上故障 / 数据完整性破坏 / 安全 CVE），见 `.github/PROJECT.md` §评级 rubric。
       options:
         - P0
         - P1
@@ -61,24 +63,8 @@ body:
     id: trigger
     attributes:
       label: Trigger
-      description: 仅 Project Flag=cond 时必填 — 触发条件文本
+      description: 仅条件延后型条目必填 — 触发条件文本（什么事件 / PR 发生后才动手）
       placeholder: "触发条件"
-    validations:
-      required: false
-
-  - type: textarea
-    id: affected-paths
-    attributes:
-      label: Affected paths
-      description: >
-        gocell 路径前缀 list（每行一个）。供 daily-planner 在 brief 里派生 conflict_group
-        **advisory 显示列**：路径前缀有重合的 issue 归同一组（共享文件），无重合的归不同组
-        （文件独立）——仅供人工参考"哪些 issue 碰同一批文件"，无机器消费者、不驱动任何串/并行
-        调度（ship --from-plan 撤回后；见 ADR docs/architecture/202605250010-...）。
-        留空 = footprint 未知，brief 按 wildcard 与全 wave 同组显示。
-      placeholder: |
-        .claude/skills/daily-planner/
-        .github/workflows/
     validations:
       required: false
 
