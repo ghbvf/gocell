@@ -166,16 +166,22 @@ func TestArchtestSingleRunEntry_BlindSpotProbe(t *testing.T) {
 					if !hasFuncLit {
 						return
 					}
-					EachInChildren[ast.Ident](vs, func(id *ast.Ident) {
-						if !id.IsExported() || !strings.HasPrefix(id.Name, "Run") ||
-							runEntryAllowlist[id.Name] {
-							return
+					// Match only the declared names (vs.Names). EachInChildren is
+					// depth-1 so it never descends into the FuncLit body, but a
+					// bare-ident var Type (`var x RunType = func(){}`) would be a
+					// direct-child Ident too — ranging vs.Names is exact and avoids
+					// that spurious match. (`range vs.Names` over []*ast.Ident is
+					// SCANNER-FRAMEWORK-USAGE-01-safe: no AST-list type assertion.)
+					for _, name := range vs.Names {
+						if !name.IsExported() || !strings.HasPrefix(name.Name, "Run") ||
+							runEntryAllowlist[name.Name] {
+							continue
 						}
 						hits = append(hits, hit{
-							rel, id.Name, "var-closure",
-							p.Fset.Position(id.Pos()).Line,
+							rel, name.Name, "var-closure",
+							p.Fset.Position(name.Pos()).Line,
 						})
-					})
+					}
 				})
 			})
 		}

@@ -1302,6 +1302,12 @@ func TestRun_rejectsNilScope(t *testing.T) {
 	if !strings.Contains(spy.lastMsg, "nil scope") {
 		t.Errorf("Run(t, nil, rule) fatal message %q does not mention \"nil scope\"", spy.lastMsg)
 	}
+	// The nil-scope guard must be distinct from the unknown-type default branch
+	// (which prints %T): both name the five constructors, so assert the guidance
+	// list is present to prove the dedicated nil path fired.
+	if !strings.Contains(spy.lastMsg, "StandaloneModule") {
+		t.Errorf("Run(t, nil, rule) fatal message %q does not list the scope constructors", spy.lastMsg)
+	}
 }
 
 // TestRun_Fixture_delegatesToRunTypedWithRoot verifies the regression contract
