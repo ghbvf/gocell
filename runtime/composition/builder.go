@@ -184,6 +184,11 @@ func (b *Builder) Build(
 // rollback stack, so both lifecycle channels come from the one Resources slice
 // and cannot diverge. Extracted from Build so the per-module loop body stays
 // within the cognitive-complexity budget.
+//
+// Nil entries: ModuleResult.Resources MUST NOT contain nil (see its godoc).
+// bootstrap.WithManagedResource itself fail-fasts on a nil/typed-nil resource at
+// phase0, so a stray nil reaching the steady-state path is caught at startup; the
+// rollback path (Build's provisional Close) relies on the same non-nil contract.
 func managedResourceOpts(resources []kernellifecycle.ManagedResource) []bootstrap.Option {
 	opts := make([]bootstrap.Option, 0, len(resources))
 	for _, r := range resources {

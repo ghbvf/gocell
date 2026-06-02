@@ -116,10 +116,9 @@ func (m *module) Provide(
 		metricsProvider:  shared.MetricsProvider,
 		valueTransformer: vt,
 		onStaleCipher: func(_, _, _ string) {
-			// The onStaleCipher callback is ctx-less (it fires deep in the PG
-			// repo read path). Use a background ctx for the counter Inc — matching
-			// the prior raw-prometheus behavior, an unlabeled global counter with
-			// no trace correlation.
+			// onStaleCipher fires deep in the PG repo read path with no request
+			// context, so a background ctx is intentional here: this is an
+			// unlabeled global counter with no per-request trace correlation.
 			staleCipherCollector.RecordStaleCipher(context.Background())
 		},
 	})
