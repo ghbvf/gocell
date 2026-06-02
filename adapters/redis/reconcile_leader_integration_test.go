@@ -5,7 +5,6 @@ package redis
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -24,7 +23,7 @@ func TestIntegration_ReconcileElectorConformance(t *testing.T) {
 	defer cleanup()
 
 	factory := func(string) reconcile.LeaderElector {
-		e, err := NewRedisReconcileElector(client, "reconcile", 30*time.Second, clock.Real())
+		e, err := NewRedisReconcileElector(client, "reconcile", reconcileTestLeaseTTL, clock.Real())
 		require.NoError(t, err)
 		return e
 	}
@@ -46,7 +45,7 @@ func TestIntegration_ReconcileElector_EpochKeyMissing_FailClosed(t *testing.T) {
 	ctx := context.Background()
 
 	newElector := func() *RedisReconcileElector {
-		e, err := NewRedisReconcileElector(client, "reconcile", 30*time.Second, clock.Real())
+		e, err := NewRedisReconcileElector(client, "reconcile", reconcileTestLeaseTTL, clock.Real())
 		require.NoError(t, err)
 		return e
 	}

@@ -16,6 +16,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
 )
 
+// Site-specific test durations (TEST-TIME-LITERAL-01: literals must live in a
+// package-level const initializer, call sites reference the const).
+const (
+	leaderTestWaitShort   = 2 * time.Second        // generous deadline for a channel signal
+	leaderTestWaitMedium  = 6 * time.Second        // takeover headroom past lease expiry
+	leaderTestWaitLong    = 10 * time.Second       // I/O-retry backoff headroom (~2×leaderRetryPeriod)
+	leaderTestFastRenew   = 20 * time.Millisecond  // fast renew so a lost lease is detected quickly
+	leaderTestSettleSleep = 50 * time.Millisecond  // sub-ms in-memory settle; no signal exposed
+	leaderTestShortTTL    = 100 * time.Millisecond // short lease TTL so takeover is quick
+)
+
 // TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch verifies that a Loop in
 // leader-elect mode acquires the lease, dispatches Reconcile, and injects an
 // epoch-bound FencedWriter (carrying the live lease's Epoch) as the reconciler's
@@ -53,7 +64,7 @@ func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
 	select {
 	case epoch := <-got:
 		require.Equal(t, uint64(1), epoch, "first lease term binds Epoch 1")
-	case <-time.After(2 * time.Second):
+	case <-time.After(leaderTestWaitShort):
 		t.Fatal("Reconcile did not run under leadership")
 	}
 	require.Equal(t, uint64(1), repo.LastEpoch("dev-1"), "fenced write recorded at the lease epoch")
@@ -87,7 +98,7 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 		Reconciler:    rec,
 		Source:        src,
 		Leader:        backend.Elector("A"),
-		RenewInterval: 20 * time.Millisecond, // fast renew so the lost lease is detected quickly
+		RenewInterval: leaderTestFastRenew, // fast renew so the lost lease is detected quickly
 	}
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,7 +107,7 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(leaderTestWaitShort):
 		t.Fatal("Reconcile never started")
 	}
 
@@ -105,7 +116,7 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 	select {
 	case err := <-ctxErr:
 		require.Error(t, err, "in-flight Reconcile ctx must be canceled the instant the lease is lost")
-	case <-time.After(2 * time.Second):
+	case <-time.After(leaderTestWaitShort):
 		t.Fatal("lost lease did not interrupt the in-flight Reconcile")
 	}
 
@@ -143,7 +154,7 @@ func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, la.Start(ctx)) // A contends first → becomes leader
-	time.Sleep(50 * time.Millisecond) // let A's manager acquire (in-memory, sub-ms)
+	time.Sleep(leaderTestSettleSleep) //archtest:allow:test-sleep no signal exposed for "A's manager acquired the in-memory lease"; sub-ms settle
 	require.NoError(t, lb.Start(ctx)) // B is the follower
 
 	srcA <- reconcile.Request{EntityID: "x"}
@@ -152,7 +163,7 @@ func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 	// Wait for the leader to dispatch (channel-driven), then assert follower idle.
 	select {
 	case <-leaderDispatched:
-	case <-time.After(2 * time.Second):
+	case <-time.After(leaderTestWaitShort):
 		t.Fatal("leader did not dispatch within 2s")
 	}
 	require.Equal(t, int64(0), bCount.Load(), "the follower must not dispatch")
@@ -190,13 +201,13 @@ func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
 		ReconcilerID: "takeover",
 		Reconciler:   mkRec(aDispatched),
 		Source:       srcA,
-		Leader:       backend.ElectorWithTTL("A", 100*time.Millisecond),
+		Leader:       backend.ElectorWithTTL("A", leaderTestShortTTL),
 	}
 	lb := &reconcile.Loop{
 		ReconcilerID: "takeover",
 		Reconciler:   mkRec(bDispatched),
 		Source:       srcB,
-		Leader:       backend.ElectorWithTTL("B", 100*time.Millisecond),
+		Leader:       backend.ElectorWithTTL("B", leaderTestShortTTL),
 	}
 
 	// Use separate contexts: cancelA stops A from re-contending after its lease
@@ -210,7 +221,7 @@ func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
 	// Wait for A to dispatch (channel-driven: ensures A holds the lease).
 	select {
 	case <-aDispatched:
-	case <-time.After(2 * time.Second):
+	case <-time.After(leaderTestWaitShort):
 		t.Fatal("leader A did not dispatch within 2s")
 	}
 
@@ -219,7 +230,7 @@ func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
 	srcB <- reconcile.Request{EntityID: "e2"}
 	// Give B a moment to attempt its first AcquireLease (gets ErrLeaseHeld)
 	// and enter its 2s sleep cycle.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(leaderTestSettleSleep) //archtest:allow:test-sleep no signal for "B entered leaderRetryPeriod sleep after first ErrLeaseHeld"
 
 	// Stop A (cancel its ctx) so it will not re-contend after lease expiry.
 	// Then expire the lease so B sees it as available on its next retry.
@@ -231,7 +242,7 @@ func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
 	// sleep, acquires the now-vacant lease, and dispatches. Give 6s headroom.
 	select {
 	case <-bDispatched:
-	case <-time.After(6 * time.Second):
+	case <-time.After(leaderTestWaitMedium):
 		t.Fatal("follower B did not take over within 6s after lease expiry")
 	}
 
@@ -305,7 +316,7 @@ func TestLoop_LeaderManageIOErrorRetry(t *testing.T) {
 	// After ~2×leaderRetryPeriod (~4s) the loop retries and acquires; wait up to 10s.
 	select {
 	case <-dispatched:
-	case <-time.After(10 * time.Second):
+	case <-time.After(leaderTestWaitLong):
 		t.Fatal("Loop did not dispatch after I/O error retries")
 	}
 

@@ -12,6 +12,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
 )
 
+// reconcilePGTestLeaseTTL is the lease duration for the PG reconcile elector
+// integration tests (TEST-TIME-LITERAL-01: literal lives in a package-level const).
+const reconcilePGTestLeaseTTL = 30 * time.Second
+
 // TestIntegration_ReconcileElectorConformance runs the cross-implementation
 // LeaderElector + fencing conformance suites against a real PostgreSQL
 // (testcontainers via migratedPool), validating the session-scoped
@@ -22,7 +26,7 @@ func TestIntegration_ReconcileElectorConformance(t *testing.T) {
 	pool := migratedPool(t)
 
 	factory := func(string) reconcile.LeaderElector {
-		e, err := NewReconcileElector(pool, 30*time.Second)
+		e, err := NewReconcileElector(pool, reconcilePGTestLeaseTTL)
 		require.NoError(t, err)
 		return e
 	}

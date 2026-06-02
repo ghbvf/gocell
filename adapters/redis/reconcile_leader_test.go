@@ -123,12 +123,18 @@ func (m *reconcileMockCmdable) readEpoch(epochKey string) int64 {
 	return 0
 }
 
+// reconcileTestLeaseTTL is the lease duration used across the reconcile elector
+// unit + integration tests (TEST-TIME-LITERAL-01: literal lives in a package-level
+// const, call sites reference it). Declared in this untagged file so the
+// integration-tagged file can share it without a duplicate declaration.
+const reconcileTestLeaseTTL = 30 * time.Second
+
 // mustElector builds a mock-backed elector. holderID is minted internally (each
 // call → a distinct UUID), so two electors over the same mock contend as distinct
 // holders without a caller-supplied label.
 func mustElector(t *testing.T, rdb cmdable) *RedisReconcileElector {
 	t.Helper()
-	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", 30*time.Second, clock.Real())
+	e, err := newReconcileElectorFromCmdable(rdb, "reconcile", reconcileTestLeaseTTL, clock.Real())
 	require.NoError(t, err)
 	return e
 }

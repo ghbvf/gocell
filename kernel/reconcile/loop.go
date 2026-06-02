@@ -60,6 +60,10 @@ const (
 	// leaseReleaseTimeout bounds the best-effort ReleaseLease attempt on shutdown
 	// so a hung backend cannot stall Stop; the lease then expires on its TTL.
 	leaseReleaseTimeout = 5 * time.Second
+	// renewIntervalDivisor derives the default renew cadence as TTL/3 (mirrors the
+	// client-go 15s/5s ratio). Named so the literal never appears inside a
+	// Duration-typed expression (PROD-DURATION-CONST-01).
+	renewIntervalDivisor = 3
 )
 
 // controlPlaneClock is the sealed, real-only clock for control-plane scheduling
@@ -567,7 +571,7 @@ func (l *Loop) renewIntervalFor(token LeaseToken) time.Duration {
 	if l.RenewInterval > 0 {
 		return l.RenewInterval
 	}
-	if d := token.ExpiresAt.Sub(token.AcquiredAt) / 3; d > 0 {
+	if d := token.ExpiresAt.Sub(token.AcquiredAt) / renewIntervalDivisor; d > 0 {
 		return d
 	}
 	return defaultRenewInterval
