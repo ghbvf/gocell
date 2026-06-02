@@ -108,10 +108,10 @@ func TestBodyLimit_RecordsRejectionMetric(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 
 	snap := mc.Snapshot()
-	// No ctxkeys.CellID in ctx → falls back to RuntimeCellIDSentinel.
+	// No ctxkeys.CellID in ctx → falls back to metrics.RuntimeCellSentinel.
 	// No RouteResolver in ctx → RouteFor falls back to UnmatchedRoute.
 	key := metrics.BodyLimitRejectionKey{
-		Cell:  RuntimeCellIDSentinel,
+		Cell:  metrics.RuntimeCellSentinel,
 		Route: UnmatchedRoute,
 	}
 	assert.Equal(t, int64(1), snap.BodyLimitRejections[key],
@@ -180,7 +180,7 @@ func TestBodyLimit_UnmatchedRoutesDoNotExpandCardinality(t *testing.T) {
 	require.Len(t, snap.BodyLimitRejections, 1,
 		"distinct arbitrary paths must not expand body-limit rejection label cardinality")
 	key := metrics.BodyLimitRejectionKey{
-		Cell:  RuntimeCellIDSentinel,
+		Cell:  metrics.RuntimeCellSentinel,
 		Route: UnmatchedRoute,
 	}
 	assert.Equal(t, int64(len(paths)), snap.BodyLimitRejections[key],

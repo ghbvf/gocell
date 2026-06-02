@@ -92,8 +92,8 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 			}
 		}
 	})
-	scanner.EachInSubtree[ast.Ident](metricsPath.Body, func(v *ast.Ident) {
-		if v.Name == "RuntimeCellIDSentinel" {
+	scanner.EachInSubtree[ast.SelectorExpr](metricsPath.Body, func(v *ast.SelectorExpr) {
+		if isRuntimeCellSentinelRef(v) {
 			usesRuntimeSentinel = true
 			rememberFirstPos(&runtimeSentinelPos, v.Pos())
 		}
@@ -103,7 +103,7 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		"%s: %s — middleware.Metrics must read cell labels from kernel/ctxkeys.CellIDFrom",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 	assert.Truef(t, usesRuntimeSentinel,
-		"%s: %s — middleware.Metrics must default missing cell context to RuntimeCellIDSentinel in the RecordRequest path",
+		"%s: %s — middleware.Metrics must default missing cell context to metrics.RuntimeCellSentinel in the RecordRequest path",
 		rel, ruleHTTPMetricsLabelRuntimeSentinel)
 	assert.Truef(t, recordUsesCellIDArg,
 		"%s: %s — collector.RecordRequest must receive the ctx-derived cellID variable, not a constructor/config value",
@@ -116,7 +116,7 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		"%s: %s — ctxkeys.CellIDFrom must feed the metrics path before collector.RecordRequest",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 	assert.Truef(t, runtimeSentinelPos.IsValid() && recordRequestPos.IsValid() && runtimeSentinelPos < recordRequestPos,
-		"%s: %s — RuntimeCellIDSentinel must be the fallback before collector.RecordRequest",
+		"%s: %s — metrics.RuntimeCellSentinel must be the fallback before collector.RecordRequest",
 		rel, ruleHTTPMetricsLabelRuntimeSentinel)
 	assert.Falsef(t, callsOldState,
 		"%s: %s — old mutable cell helper is deleted; cell attribution must happen at router root",
@@ -409,7 +409,7 @@ func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
 // rejection recording helper (recordBodyLimitRejection in body_limit.go):
 //
 //  1. Reads the cell label from ctxkeys.CellIDFrom.
-//  2. Falls back to RuntimeCellIDSentinel when the ctx key is absent.
+//  2. Falls back to metrics.RuntimeCellSentinel when the ctx key is absent.
 //  3. Calls collector.RecordBodyLimitRejection AFTER the CellIDFrom read.
 //  4. Derives the route label via RouteFor (not a bare string literal or URL path).
 //  5. Passes ctx (derived from r.Context()) as the first argument to
@@ -424,7 +424,7 @@ func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
 // # Covered forms (reverse self-tests assert these are the only forms present)
 //
 //   - ctxkeys.CellIDFrom appears in the helper body before RecordBodyLimitRejection.
-//   - RuntimeCellIDSentinel appears in the helper body before RecordBodyLimitRejection.
+//   - metrics.RuntimeCellSentinel appears in the helper body before RecordBodyLimitRejection.
 //   - RouteFor is called in the helper body (route is not a bare literal or URL path).
 //   - RecordBodyLimitRejection arg[0] is an *ast.Ident (ctx variable, not a call expr
 //     such as context.Background() or r.Context() directly).
@@ -500,8 +500,8 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 			}
 		}
 	})
-	scanner.EachInSubtree[ast.Ident](helperFn.Body, func(v *ast.Ident) {
-		if v.Name == "RuntimeCellIDSentinel" {
+	scanner.EachInSubtree[ast.SelectorExpr](helperFn.Body, func(v *ast.SelectorExpr) {
+		if isRuntimeCellSentinelRef(v) {
 			usesRuntimeSentinel = true
 			rememberFirstPos(&runtimeSentinelPos, v.Pos())
 		}
@@ -511,7 +511,7 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 		"%s: %s — recordBodyLimitRejection must read cell label from ctxkeys.CellIDFrom",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, usesRuntimeSentinel,
-		"%s: %s — recordBodyLimitRejection must fall back to RuntimeCellIDSentinel when ctx key is absent",
+		"%s: %s — recordBodyLimitRejection must fall back to metrics.RuntimeCellSentinel when ctx key is absent",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, callsRecordBLR,
 		"%s: %s — recordBodyLimitRejection must call collector.RecordBodyLimitRejection",
@@ -533,7 +533,7 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 		"%s: %s — ctxkeys.CellIDFrom must be called before collector.RecordBodyLimitRejection",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, runtimeSentinelPos.IsValid() && recordBLRPos.IsValid() && runtimeSentinelPos < recordBLRPos,
-		"%s: %s — RuntimeCellIDSentinel fallback must appear before collector.RecordBodyLimitRejection",
+		"%s: %s — metrics.RuntimeCellSentinel fallback must appear before collector.RecordBodyLimitRejection",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 
 	// Reverse self-check: the BodyLimit outer function must NOT contain a
@@ -554,4 +554,14 @@ func rememberFirstPos(dst *token.Pos, pos token.Pos) {
 	if !dst.IsValid() || pos < *dst {
 		*dst = pos
 	}
+}
+
+// isRuntimeCellSentinelRef reports whether sel is a reference to the
+// single-source sentinel metrics.RuntimeCellSentinel ("_runtime"). The HTTP
+// middleware used to declare a local sentinel constant of its own; that was
+// deleted in favor of reading the transport-neutral
+// runtime/observability/metrics.RuntimeCellSentinel, so the fallback now appears
+// as a qualified selector rather than a bare ident.
+func isRuntimeCellSentinelRef(sel *ast.SelectorExpr) bool {
+	return selectorQualifier(sel.X) == "metrics" && sel.Sel != nil && sel.Sel.Name == "RuntimeCellSentinel"
 }

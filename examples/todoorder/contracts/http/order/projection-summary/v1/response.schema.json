@@ -8,6 +8,7 @@
       "properties": {
         "statuses": {
           "type": "array",
+          "maxItems": 500,
           "items": {
             "type": "object",
             "properties": {
@@ -19,6 +20,7 @@
               },
               "orderIds": {
                 "type": "array",
+                "maxItems": 500,
                 "items": {
                   "type": "string"
                 }
@@ -28,15 +30,11 @@
         },
         "totalOrders": {
           "type": "integer"
-        },
-        "lastAppliedSeq": {
-          "type": "integer"
         }
       },
       "required": [
         "statuses",
-        "totalOrders",
-        "lastAppliedSeq"
+        "totalOrders"
       ]
     }
   },

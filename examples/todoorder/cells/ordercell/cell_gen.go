@@ -7,8 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	sub0 "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
-	sub1 "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
+	proj0 "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -66,29 +65,10 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registrar) error {
 		},
 	})
 
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.InternalListener,
-		Prefix:   "/internal/v1",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			captureErr := func(err error) {
-				if err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			mux.Route("/orders", func(s cell.RouteMux) {
-				captureErr(c.projectionRebuildHandler.RegisterRoutes(s))
-			})
-			return firstErr
-		},
-	})
-
-	if err := sub0.NewSubscription(c.projectionSvc.HandleOrderCreated, "ordercell", "ordercell", "orderprojection").Mount(reg); err != nil {
-		return fmt.Errorf("ordercell: subscribe event.order-created.v1: %w", err)
-	}
-
-	if err := sub1.NewSubscription(c.projectionSvc.HandleOrderStatusChanged, "ordercell", "ordercell", "orderprojection").Mount(reg); err != nil {
-		return fmt.Errorf("ordercell: subscribe event.order-status-changed.v1: %w", err)
+	if err := reg.RegisterProjection(proj0.NewProjectionRequest(
+		c.projectionSvc.HandleOrderCreated, "order_status", "ordercell", "orderprojection", c.projectionSvc.ResetOrderStatus,
+	)); err != nil {
+		return fmt.Errorf("ordercell: projection order_status: %w", err)
 	}
 
 	return nil

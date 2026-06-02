@@ -3,10 +3,12 @@
 // WEBHOOK-SIGNER-FUNNEL-01 — kernel/webhook signature-header write funnel.
 //
 // The three outbound webhook signature headers (webhook-id / webhook-timestamp
-// / webhook-signature) define GoCell's outbound identity protocol: only a value
-// produced by a sealed [Signer.Sign] (which returns a [Headers]) may reach the
-// wire. That guarantee is worthless if any code can bypass it by calling
-// http.Header.Set with one of the three header-name strings directly.
+// / webhook-signature) define GoCell's outbound identity protocol. This rule
+// makes [(Headers).Apply] the SOLE write site for these header names, so no code
+// can emit a signature header by calling http.Header.Set with one of the three
+// strings directly. (Provenance — guaranteeing the written value actually came
+// from a sealed [Signer.Sign] rather than a hand-built Headers literal — is a
+// separate, NOT-yet-closed axis; see the rating below and gh #1492.)
 //
 // This rule locks every http.Header.Set call whose key argument evaluates to
 // one of the three header-name constant values to the sole sanctioned body:
@@ -31,22 +33,30 @@
 //	  is ineffective. EvaluateConstString folds across const definitions.
 //	  ResolveEnclosingFunc binds the allowance to a go/types FullName — a
 //	  stray func that merely shares the name "Apply" cannot inherit it.
-//	上游 Hard (external) — [Headers] is produced only by a sealed
-//	  [Signer.Sign]: Signer carries an unexported sealed() marker method
-//	  (WEBHOOK-HMAC-FUNNEL-01/A3) so package-external Signer implementations
-//	  are a compile error; Sign() is the only path to a Headers value; and
-//	  Headers has no exported constructor outside of Sign. Thus an
-//	  externally-created Headers value (and hence a call to Apply) is
-//	  inexpressible at the type-system level.
-//	上游 Medium (package-internal) — Go package visibility cannot express
-//	  "only one struct within the same package may declare a Headers field".
-//	  A new package-internal struct that holds a Headers value and calls
-//	  Apply is syntactically expressible; it is caught by the downstream A1
-//	  scan at CI time, not at compile time. This is the same permanent ceiling
-//	  as SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893) /
-//	  WEBHOOK-SSRF-GUARD-01 (#1375). Explicit Hard-ization of the
-//	  package-internal axis is tracked in gh #1243 (inherited from the Signer
-//	  sealing issue, which already covers this axis).
+//	上游 (provenance) — NOT closed (low-severity provenance gap; risk analysis
+//	  below). This is a Hard-downstream + open-upstream funnel, NOT a closed
+//	  double-lock. [Headers] is a PUBLIC struct with
+//	  EXPORTED fields and is ALSO the inbound DTO consumed by [Verifier.Verify]
+//	  (the receiver constructs a Headers from request headers), so a caller CAN
+//	  build a `webhook.Headers{Signature: …}` literal and call Apply with a value
+//	  that never came from a sealed [Signer.Sign]. The sealed Signer interface
+//	  (unexported sealed() marker, WEBHOOK-HMAC-FUNNEL-01/A3) prevents external
+//	  *Signer implementations*, but it does NOT prevent external *Headers
+//	  construction* — a struct literal needs no constructor. So this funnel
+//	  guarantees only uniform *where* the signature headers are written (A1
+//	  downstream Hard), NOT the *provenance* of the written value. A forged
+//	  Headers carries an invalid HMAC the receiver rejects, so the gap is
+//	  low-severity, not an exploitable forgery.
+//	  Closing it requires splitting Headers into a sealed outbound type (only
+//	  [Signer.Sign] produces it, only Apply consumes it) separate from the
+//	  inbound parse DTO — a real type change tracked at gh #1492. Per
+//	  .claude/rules/gocell/ai-robust.md Funnel 双向锁评级, a Hard-downstream +
+//	  open-upstream funnel must track the upstream Hard-化 in an issue and name
+//	  it here (#1492). The package-internal holder axis (a same-package struct
+//	  that holds a Headers field, caught by the A1 scan at CI not compile time)
+//	  is the same permanent ceiling as SPAN-SETATTR-HOLDER-SEAL (#851) /
+//	  HEALTHZ-HOLDER-SEAL (#893) / WEBHOOK-SSRF-GUARD-01 (#1375); #1492 subsumes
+//	  it for this funnel.
 //
 // Note: WEBHOOK-SIGNED-STRING-FORM-01 (signed-string "{deliveryID}.{timestamp}
 // .{body}" form) is NOT a new archtest here. It is already locked by:

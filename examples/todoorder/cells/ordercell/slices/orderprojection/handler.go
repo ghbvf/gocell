@@ -1,9 +1,9 @@
 // Package orderprojection implements the public-facing order-projection slice
-// (L3): subscribes to order-created and order-status-changed events, maintains
-// an in-memory "by-status" read model, and serves the summary query endpoint on
-// the PrimaryListener (/api/v1). The internal control-plane rebuild endpoint is
-// kept in a separate slice (orderprojectionrebuild) per governance rule
-// SLICE-HTTP-VISIBILITY-SEGREGATION-01 (FMT-33).
+// (L3 CQRS harness reference): reg.RegisterProjection drives HandleOrderCreated
+// (apply) and ResetOrderStatus (onReset) via the framework projection.Coordinator.
+// This slice serves the summary query endpoint on the PrimaryListener (/api/v1).
+// Rebuild is now framework-owned (Coordinator.Rebuild, programmatic — no HTTP
+// rebuild endpoint); the separate orderprojectionrebuild slice has been removed.
 package orderprojection
 
 import (
@@ -44,9 +44,8 @@ func (a *SummaryAdapter) ProjectionSummary(
 
 	return projectionsummary.ProjectionSummary200JSONResponse(projectionsummary.Response{
 		Data: &projectionsummary.ResponseData{
-			Statuses:       statuses,
-			TotalOrders:    summary.TotalOrders,
-			LastAppliedSeq: summary.LastAppliedSeq,
+			Statuses:    statuses,
+			TotalOrders: summary.TotalOrders,
 		},
 	}), nil
 }

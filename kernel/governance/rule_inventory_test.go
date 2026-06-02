@@ -118,9 +118,11 @@ func goldenRuleIDs() []string {
 		// OUTGUARD — outbox durability (rules_misc_advisory.go)
 		"OUTGUARD-01",
 
-		// PROJECTION-CONSISTENCY — projection contract must be >= L3
+		// PROJECTION-CONSISTENCY — projection contract must be >= L3;
+		// PROJECTION-PROVIDE-NEEDS-WRITE-CU-01 — provide→projection requires write CU
 		// (rules_projection_consistency.go)
 		"PROJECTION-CONSISTENCY-01",
+		"PROJECTION-PROVIDE-NEEDS-WRITE-CU-01",
 
 		// SAGA — saga contract format (rules_saga.go)
 		"SAGA-CONTRACT-BLOCK-PRESENT-01",
