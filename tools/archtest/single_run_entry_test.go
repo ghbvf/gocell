@@ -25,12 +25,14 @@
 //
 // # Blind spots (per ai-robust.md Medium evidence requirement)
 //
-//   - A new Run* entry point declared under a different func type (method,
-//     closure assigned to a var) is not detected by the MAIN scan, which only
-//     visits top-level receiver-less FuncDecls. This blind spot has its own
-//     reverse self-check: TestArchtestSingleRunEntry_BlindSpotProbe asserts
-//     neither form occurs in the façade (currently vacuous), so introducing one
-//     fires the probe.
+//   - A new Run* entry point declared under a different func type — a method
+//     (`func (x X) RunFoo()`) or a package-level func-typed var, whether a
+//     closure (`var RunFoo = func(){}`) or a function-value alias
+//     (`var RunFoo = Run`) — is not detected by the MAIN scan, which only visits
+//     top-level receiver-less FuncDecls. This blind spot has its own reverse
+//     self-check: TestArchtestSingleRunEntry_BlindSpotProbe (types-bound, so it
+//     catches the alias too) asserts none of these forms occur in the façade
+//     (currently vacuous), so introducing one fires the probe.
 //   - This scan covers only direct-child non-test .go files of
 //     tools/archtest/ (the façade boundary). Sub-packages are not scanned
 //     (they are inaccessible to business archtest authors who import only
@@ -39,12 +41,13 @@
 // Reverse self-check: the test verifies that [Run] and [RunStandardCellRules]
 // ARE present (non-empty allowlist) so a future removal of the main entry
 // point also fails CI; TestArchtestSingleRunEntry_BlindSpotProbe covers the
-// method / var-closure blind-spot forms.
+// method / var-func (closure + function-value alias) blind-spot forms.
 package archtest
 
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
 	"strings"
 	"testing"
 )
@@ -121,23 +124,31 @@ func TestArchtestSingleRunEntry(t *testing.T) {
 // TestArchtestSingleRunEntry_BlindSpotProbe is the reverse self-check for the
 // first documented blind spot of ARCHTEST-SINGLE-RUN-ENTRY-01: a Run* entry
 // declared under a func type the main scan does not cover — a method
-// (`func (x X) RunFoo()`) or a package-level var bound to a func literal
-// (`var RunFoo = func(){...}`). The main test only scans top-level FuncDecls
-// with no receiver, so these two forms slip past it.
+// (`func (x X) RunFoo()`) or a package-level var of FUNCTION type, whether a
+// closure (`var RunFoo = func(){...}`) or a function-value ALIAS
+// (`var RunFoo = Run`). The main test only scans top-level receiver-less
+// FuncDecls, so all of these slip past it.
+//
+// The var leg is types-bound, not "value is a func literal": a Run* alias
+// `var RunFoo = Run` binds the existing Run function value and has no FuncLit
+// node, so an AST-only literal check would miss it. Resolving each declared name
+// through *types.Info and keeping only those whose type underlying is
+// *types.Signature catches both the closure and the alias while excluding a
+// non-callable `var RunCount int`. The probe therefore loads the façade typed
+// (Typed over ./tools/archtest, non-test = the facadeScopeForArchtest file set).
 //
 // Per ai-robust.md (each blind spot needs a reverse self-check asserting it does
-// NOT occur in production AST), this probe scans the façade for both forms and
-// asserts zero. It is currently vacuous (no such forms exist), which is exactly
-// the point: if a future change introduces a method or var-closure Run* entry,
-// this probe — not the main rule — fires, keeping the blind spot from going
-// silently live.
+// NOT occur in production), this probe asserts zero. It is currently vacuous (no
+// such forms exist), which is exactly the point: a future method or var-func
+// Run* entry fires this probe — not the main rule — keeping the blind spot from
+// going silently live.
 func TestArchtestSingleRunEntry_BlindSpotProbe(t *testing.T) {
 	type hit struct {
 		rel, name, form string
 		line            int
 	}
 	var hits []hit
-	Run(t, AST(facadeScopeForArchtest(t)), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./tools/archtest"}), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			// Method-receiver form: exported Run* method.
@@ -153,32 +164,33 @@ func TestArchtestSingleRunEntry_BlindSpotProbe(t *testing.T) {
 					p.Fset.Position(fn.Name.Pos()).Line,
 				})
 			})
-			// Var-closure form: package-level exported Run* var bound to a func
-			// literal. EachInChildren[ast.ValueSpec] is the sanctioned depth-1
-			// walk over GenDecl.Specs (SCANNER-FRAMEWORK-USAGE-01 funnel).
+			// Var-func form: package-level exported Run* var whose type is a
+			// function signature — a closure OR a function-value alias. go/types
+			// (not an AST FuncLit check) is required to catch `var RunFoo = Run`.
+			// EachInChildren[ast.ValueSpec] is the sanctioned depth-1 walk over
+			// GenDecl.Specs (SCANNER-FRAMEWORK-USAGE-01 funnel).
 			EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
 				if gd.Tok != token.VAR {
 					return
 				}
 				EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
-					hasFuncLit := false
-					EachInChildren[ast.FuncLit](vs, func(*ast.FuncLit) { hasFuncLit = true })
-					if !hasFuncLit {
-						return
-					}
-					// Match only the declared names (vs.Names). EachInChildren is
-					// depth-1 so it never descends into the FuncLit body, but a
-					// bare-ident var Type (`var x RunType = func(){}`) would be a
-					// direct-child Ident too — ranging vs.Names is exact and avoids
-					// that spurious match. (`range vs.Names` over []*ast.Ident is
-					// SCANNER-FRAMEWORK-USAGE-01-safe: no AST-list type assertion.)
+					// Match only the declared names (vs.Names), resolved via
+					// *types.Info — ranging vs.Names over []*ast.Ident is
+					// SCANNER-FRAMEWORK-USAGE-01-safe (no AST-list type assertion).
 					for _, name := range vs.Names {
 						if !name.IsExported() || !strings.HasPrefix(name.Name, "Run") ||
 							runEntryAllowlist[name.Name] {
 							continue
 						}
+						obj := p.TypesInfo.Defs[name]
+						if obj == nil {
+							continue
+						}
+						if _, isFunc := obj.Type().Underlying().(*types.Signature); !isFunc {
+							continue
+						}
 						hits = append(hits, hit{
-							rel, name.Name, "var-closure",
+							rel, name.Name, "var-func",
 							p.Fset.Position(name.Pos()).Line,
 						})
 					}

@@ -79,13 +79,17 @@ ref: `golang.org/x/tools go/analysis/analysistest/analysistest.go` (`dir` positi
 
 Four independent failure modes: type system, lint, archtest (symbol-level), archtest ((callee, arg) form-uniqueness). Bypassing all four requires editing four independent locations in a single PR — reviewer-detectable by construction.
 
-**`RunTypedDir` AI-robust grade: Hard — three defenses hold unchanged.**
+**`StandaloneModule` AI-robust grade: Hard — three defenses hold unchanged.**
+(The scope was introduced at Stage 1.6 as `RunTypedDir` and renamed to the
+`Run(t, StandaloneModule(dir, …), rule)` form by #1037 §1d — see the amendment
+subsection; the grade below describes the current scope, whose construction
+mechanism is unchanged.)
 
-| # | Defense | Status after RunTypedDir |
+| # | Defense | Status under StandaloneModule |
 |---|---------|--------------------------|
-| 1 | `Pass.Pkg` is `*types.Package`, no `.Syntax` | **Unchanged** — `RunTypedDir` produces the same `*Pass` shape via `runTypedWithRoot`; authors still cannot reach `.Syntax`. |
-| 2 | depguard bans direct `packages` import in `*_test.go` | **Unchanged** — `RunTypedDir` is a façade in `tools/archtest/pass.go`; business `*_test.go` files call the façade, not `packages.Load` directly. |
-| 3 | `PASS-FUNNEL-LOADPACKAGES-01` funnel | **Widened (not weakened)** — `RunTypedDir` is the now-unique legitimate entry for fixture-module scanning. The banned set (`typeseval.LoadPackages` / `typeseval.SharedResolver`) is unchanged; `RunTypedDir` adds no new bypass surface because the fixture-module form previously had no approved entry point at all. Introducing `RunTypedDir` closes the gap rather than opening one. |
+| 1 | `Pass.Pkg` is `*types.Package`, no `.Syntax` | **Unchanged** — `StandaloneModule` produces the same `*Pass` shape via `runTypedWithRoot`; authors still cannot reach `.Syntax`. |
+| 2 | depguard bans direct `packages` import in `*_test.go` | **Unchanged** — `StandaloneModule` is a sealed scope dispatched in `tools/archtest/pass.go`; business `*_test.go` files call `Run` with it, not `packages.Load` directly. |
+| 3 | `PASS-FUNNEL-LOADPACKAGES-01` funnel | **Widened (not weakened)** — `StandaloneModule` is the now-unique legitimate entry for fixture-module scanning. The banned set (`typeseval.LoadPackages` / `typeseval.SharedResolver`) is unchanged; `StandaloneModule` adds no new bypass surface because the fixture-module form previously had no approved entry point at all. Introducing it closes the gap rather than opening one. |
 
 **Design decision D1 (Stage 1.6) — dual entry RunTyped / RunTypedDir, not a single merged function.**
 
