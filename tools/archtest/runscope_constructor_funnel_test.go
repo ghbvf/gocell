@@ -36,13 +36,17 @@
 //
 // In-package is Medium: Go package visibility cannot express "no code INSIDE
 // package archtest may construct typedRunScope". This archtest is the
-// type-aware CI backstop — it resolves each composite literal's type via
-// *types.Info (p.TypesInfo.TypeOf) to a *types.Named whose object is one of the
-// five scope structs in package archtest, then asserts the enclosing top-level
-// FuncDecl (via ResolveEnclosingFunc) is one of the five sanctioned
-// constructors. Name matching alone is insufficient (same-package construction
-// is a bare Ident, not a qualified selector), so the rule is types-bound, not
-// string-bound — an import alias / rename cannot bypass it.
+// type-aware CI backstop. It flags two construction forms — composite literals
+// (`typedRunScope{…}`, including `&…` and type-alias literals) and zero-value
+// var declarations (`var s typedRunScope`, whose fields are then
+// same-package-assignable) — resolving each via *types.Info (TypeOf +
+// types.Unalias) to a *types.Named whose object is one of the five scope structs
+// in package archtest, then asserts the enclosing top-level FuncDecl (via
+// ResolveEnclosingFunc) is that struct's OWN sanctioned constructor (exact
+// pairing — a typedRunScope built inside Fixture is still a violation). Name
+// matching alone is insufficient (same-package construction is a bare Ident, not
+// a qualified selector), so the rule is types-bound, not string-bound — an
+// import alias / rename / type alias cannot bypass it.
 //
 // The permanent Go-language ceiling (a same-package *_test.go CAN construct the
 // unexported struct, Go cannot forbid it at compile time) is the same shape
@@ -54,35 +58,46 @@
 //
 // # Blind spots (per ai-robust.md Medium evidence requirement)
 //
-//   - New named type derived from a scope struct (`type x typedRunScope;
-//     x{}`): NOT detected — but harmless, because the method set of a struct is
-//     NOT carried to a new named type, so x does not implement isRunScope() and
-//     cannot reach Run. (A type ALIAS `type x = typedRunScope` IS detected:
-//     TypeOf(x{}) resolves to the identical named typedRunScope.)
-//   - Pointer-elided literal `&typedRunScope{}`: IS detected — the inner
-//     CompositeLit node is typed `typedRunScope` (not `*typedRunScope`), so
-//     TypeOf(comp) resolves it. Even were it missed, isRunScope() has a VALUE
-//     receiver, so `*typedRunScope` does not implement RunScope and
-//     `Run(t, &typedRunScope{}, rule)` is a compile error — a type-system
-//     backstop. Not a bypass.
+//   - New named type DERIVED from a scope struct (`type x typedRunScope; x{}`):
+//     NOT detected — but harmless, because a defined type does NOT inherit the
+//     method set of its underlying struct, so x does not implement isRunScope()
+//     and cannot reach Run. (A type ALIAS `type x = typedRunScope` IS detected:
+//     under gotypesalias=1 TypeOf(x{}) is a *types.Alias, and types.Unalias in
+//     runScopeNamedType resolves it to the identical named typedRunScope.)
+//   - Pointer literal `&typedRunScope{}`: IS detected — the inner CompositeLit
+//     node is typed `typedRunScope`, so TypeOf(comp) resolves it. (Note: a
+//     VALUE-receiver isRunScope() IS promoted to the `*typedRunScope` method
+//     set, so `*typedRunScope` DOES implement RunScope and
+//     `Run(t, &typedRunScope{}, rule)` compiles — it is NOT a compile error; it
+//     fails at runtime in Run's default branch because the dispatch switch has no
+//     `case *typedRunScope`. Either way the inner literal is flagged, so this is
+//     not a bypass.)
 //   - Reflect / runtime construction: outside Go static AST + types.Info scope,
 //     same accepted boundary as the entire archtest framework.
 //   - A scope struct returned from a non-constructor helper that is itself
 //     wrapped by a constructor: not applicable — the five structs have no
 //     factory other than their five constructors, and adding one is exactly the
-//     change this rule's per-member fixture lock would force into the allowlist.
+//     change this rule's per-member fixture lock would force into the pairing.
 //
 // # Reverse self-check
 //
 //   - TestRunScopeConstructorFunnel01_FixtureCoverage loads the archtest_fixture
 //     in-package RED fixture (runscope_ctor_redfixture.go) and asserts each of
 //     the five struct names is flagged (per-member trip-wire) AND that the total
-//     count equals exactly five — so the five sanctioned constructors NOT being
-//     flagged is load-bearing (a constructor wrongly flagged would push the
-//     count above five).
+//     count equals exactly SEVEN — five direct composite literals + one
+//     type-alias literal (locks types.Unalias) + one zero-value var declaration
+//     (locks the Form-2 var-decl scan). Both new precision legs are thus
+//     load-bearing: dropping Unalias or the var-decl scan drops the count below
+//     seven, and a constructor wrongly flagged would push it above seven.
 //   - TestRunScopeConstructorFunnel01 (the live gate) asserts production package
-//     archtest (no fixture tag) has ZERO violations — every scope-struct literal
-//     in pass.go / fixture.go is inside its constructor.
+//     archtest (no fixture tag) has ZERO violations — every scope-struct
+//     construction in pass.go / fixture.go is inside its own constructor. This
+//     is also the only reverse-check for the exact-pairing leg (F3): a mispaired
+//     construction can structurally only live inside a sanctioned-named ctor
+//     (anywhere else is already flagged by the not-in-a-ctor check), and a
+//     fixture cannot redefine AST/Typed/Production/StandaloneModule/Fixture
+//     without a name collision — so a mispairing surfaces as a live-gate red on
+//     pass.go / fixture.go, not as an isolated fixture trip-wire.
 package archtest
 
 import (
@@ -95,74 +110,96 @@ import (
 
 const runScopeConstructorFunnelRuleID = "RUNSCOPE-CONSTRUCTOR-FUNNEL-01"
 
-// runScopeStructNames is the set of sealed RunScope struct names whose
-// composite-literal construction is funneled to the sanctioned constructors.
-// Adding a sixth RunScope struct MUST add it here (and a sanctioned constructor
-// to runScopeSanctionedCtors) or the new struct is constructible anywhere
-// in-package — the red fixture's per-member trip-wire forces this maintenance.
-var runScopeStructNames = map[string]struct{}{
-	"astRunScope":        {},
-	"typedRunScope":      {},
-	"productionRunScope": {},
-	"dirRunScope":        {},
-	"fixtureRunScope":    {},
+// runScopeStructToCtor is the single source pairing each sealed RunScope struct
+// with the ONE sanctioned constructor allowed to build it. It is both the
+// membership set (a name absent from the map is not a tracked scope struct) and
+// the struct→constructor pairing (F3: a scope-struct construction inside a
+// DIFFERENT scope constructor is a mispairing, still a violation). Adding a
+// sixth RunScope struct MUST add it here (with its constructor) or the new
+// struct is constructible anywhere in-package — the red fixture's per-member
+// trip-wire forces this maintenance.
+var runScopeStructToCtor = map[string]string{
+	"astRunScope":        "AST",
+	"typedRunScope":      "Typed",
+	"productionRunScope": "Production",
+	"dirRunScope":        "StandaloneModule",
+	"fixtureRunScope":    "Fixture",
 }
 
-// runScopeSanctionedCtors is the set of top-level constructor func names allowed
-// to construct a RunScope struct literal. These are the five typed RunScope
-// constructors (pass.go: AST / Typed / Production / StandaloneModule; fixture.go:
-// Fixture).
-var runScopeSanctionedCtors = map[string]struct{}{
-	"AST":              {},
-	"Typed":            {},
-	"Production":       {},
-	"StandaloneModule": {},
-	"Fixture":          {},
-}
-
-// scanRunScopeConstructorViolations walks file for composite literals of the
-// five sealed RunScope structs and reports each one not lexically inside a
-// sanctioned constructor body.
+// scanRunScopeConstructorViolations walks file for constructions of the five
+// sealed RunScope structs and reports each one not lexically inside its OWN
+// sanctioned constructor body. Two construction forms are covered:
+//
+//	Form 1 — composite literal `typedRunScope{…}` (incl. `&typedRunScope{}` and
+//	         type-alias `aliasOfTyped{…}`, both resolved via types.Unalias).
+//	Form 2 — zero-value var declaration `var s typedRunScope` (no composite
+//	         literal node, so Form 1's CompositeLit scan cannot see it; the
+//	         fields are then same-package-assignable: `s.opts = …`).
 func scanRunScopeConstructorViolations(p *Pass, file *ast.File, rel string) []Diagnostic {
 	if p.TypesInfo == nil {
 		return nil
 	}
 	var out []Diagnostic
-	EachInSubtree[ast.CompositeLit](file, func(comp *ast.CompositeLit) {
-		name, ok := runScopeStructLiteralName(p, comp)
-		if !ok {
+	flag := func(name string, node ast.Node) {
+		if scopeConstructionSanctioned(p, file, node, name) {
 			return
-		}
-		fn, found := ResolveEnclosingFunc(p.TypesInfo, file, comp)
-		// archtestPkgPath ("github.com/ghbvf/gocell/tools/archtest") is the
-		// shared meta-archtest const declared in pass_funnel_test.go (same
-		// package archtest test binary).
-		if found && fn.Pkg() != nil && fn.Pkg().Path() == archtestPkgPath {
-			if _, sanctioned := runScopeSanctionedCtors[fn.Name()]; sanctioned {
-				return
-			}
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
-			Line: p.Fset.Position(comp.Pos()).Line,
-			Message: "composite literal " + name + "{…} constructs a sealed RunScope " +
-				"outside its sanctioned constructor; build the scope via " +
+			Line: p.Fset.Position(node.Pos()).Line,
+			Message: "construction of sealed RunScope " + name + " outside its " +
+				"sanctioned constructor; build the scope via " +
 				"archtest.{AST,Typed,Production,StandaloneModule,Fixture} and pass it " +
 				"to Run(t, <RunScope>, rule) — RUNSCOPE-CONSTRUCTOR-FUNNEL-01",
 		})
+	}
+	// Form 1: composite literals (alias + &-elided resolve via types.Unalias).
+	EachInSubtree[ast.CompositeLit](file, func(comp *ast.CompositeLit) {
+		if name, ok := runScopeNamedType(p.TypesInfo.TypeOf(comp)); ok {
+			flag(name, comp)
+		}
+	})
+	// Form 2: zero-value var declarations `var s typedRunScope`. A spec with no
+	// explicit Type (`var s = typedRunScope{}`) carries its construction in a
+	// composite literal already covered by Form 1, so only typed specs are
+	// scanned here (no double counting).
+	EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
+		if vs.Type == nil {
+			return
+		}
+		if name, ok := runScopeNamedType(p.TypesInfo.TypeOf(vs.Type)); ok {
+			flag(name, vs.Type)
+		}
 	})
 	return out
 }
 
-// runScopeStructLiteralName resolves comp's type via *types.Info to a named
-// struct in package archtest and returns its name when it is one of the five
-// sealed RunScope structs.
-func runScopeStructLiteralName(p *Pass, comp *ast.CompositeLit) (string, bool) {
-	t := p.TypesInfo.TypeOf(comp)
+// scopeConstructionSanctioned reports whether a construction of the scope struct
+// structName at node sits inside that struct's OWN sanctioned constructor in
+// package archtest. Pairing is exact (F3): a typedRunScope built inside
+// Fixture's body is NOT sanctioned. archtestPkgPath
+// ("github.com/ghbvf/gocell/tools/archtest") is the shared meta-archtest const
+// declared in pass_funnel_test.go (same package archtest test binary).
+func scopeConstructionSanctioned(p *Pass, file *ast.File, node ast.Node, structName string) bool {
+	fn, found := ResolveEnclosingFunc(p.TypesInfo, file, node)
+	if !found || fn.Pkg() == nil || fn.Pkg().Path() != archtestPkgPath {
+		return false
+	}
+	wantCtor, ok := runScopeStructToCtor[structName]
+	return ok && fn.Name() == wantCtor
+}
+
+// runScopeNamedType resolves t via *types.Info to a named struct in package
+// archtest and returns its name when it is one of the five sealed RunScope
+// structs. types.Unalias is mandatory: under gotypesalias=1 (the default since
+// Go 1.23) the type of a type-alias literal `aliasOfTyped{}` is a *types.Alias,
+// which a bare `.(*types.Named)` assertion would miss — letting an in-package
+// alias literal bypass the funnel (F2).
+func runScopeNamedType(t types.Type) (string, bool) {
 	if t == nil {
 		return "", false
 	}
-	named, ok := t.(*types.Named)
+	named, ok := types.Unalias(t).(*types.Named)
 	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
 		return "", false
 	}
@@ -170,7 +207,7 @@ func runScopeStructLiteralName(p *Pass, comp *ast.CompositeLit) (string, bool) {
 		return "", false
 	}
 	name := named.Obj().Name()
-	if _, ok := runScopeStructNames[name]; ok {
+	if _, ok := runScopeStructToCtor[name]; ok {
 		return name, true
 	}
 	return "", false
@@ -207,12 +244,15 @@ func TestRunScopeConstructorFunnel01(t *testing.T) {
 // holds — business *_test.go would add only ctor-mediated Run calls, never bare
 // scope-struct literals — but Tests:false keeps this coverage load minimal.
 //
-// The scope-struct literals seen are: the five sanctioned constructors (NOT
-// flagged) + the five RED fixture constructions (flagged). The GREEN-negative
-// fixture (runScopeConstructorGreenNegatives: TypedOpts{}/FixtureOpts{}/
-// Diagnostic{} outside any ctor) MUST add zero — so the exact-count==5 lock is
-// also a false-positive guard: a non-scope name mistakenly added to
-// runScopeStructNames would trip a GREEN line and push the count past five.
+// The constructions seen are: the five sanctioned constructors (NOT flagged) +
+// the RED fixture constructions (flagged): five direct composite literals + one
+// type-alias literal (Form 1, F2 — proves types.Unalias) + one zero-value var
+// declaration (Form 2, F1 — proves the var-decl scan) = seven. The
+// GREEN-negative fixture (runScopeConstructorGreenNegatives: TypedOpts /
+// FixtureOpts / Diagnostic literals AND a non-scope var-decl, outside any ctor)
+// MUST add zero — so the exact-count==7 lock is also a false-positive guard: a
+// non-scope name mistakenly tracked, or a Form-2 scan that over-flags non-scope
+// vars, would trip a GREEN line and push the count past seven.
 func TestRunScopeConstructorFunnel01_FixtureCoverage(t *testing.T) {
 	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{"./tools/archtest"}),
 		func(p *Pass) []Diagnostic {
@@ -223,16 +263,16 @@ func TestRunScopeConstructorFunnel01_FixtureCoverage(t *testing.T) {
 			return out
 		})
 
-	perStruct := make(map[string]int, len(runScopeStructNames))
+	perStruct := make(map[string]int, len(runScopeStructToCtor))
 	for _, d := range diags {
-		for name := range runScopeStructNames {
+		for name := range runScopeStructToCtor {
 			if containsStructName(d.Message, name) {
 				perStruct[name]++
 			}
 		}
 	}
 	missing := make([]string, 0)
-	for name := range runScopeStructNames {
+	for name := range runScopeStructToCtor {
 		if perStruct[name] == 0 {
 			missing = append(missing, name)
 		}
@@ -244,24 +284,26 @@ func TestRunScopeConstructorFunnel01_FixtureCoverage(t *testing.T) {
 			"dropped this struct's construction or the detector regressed for it "+
 			"(per-member regression lock)", runScopeConstructorFunnelRuleID, name)
 	}
-	// Exact-count lock: exactly five RED constructions, and the five sanctioned
-	// constructors + the three GREEN-negative non-scope literals must add zero.
-	// Drift (a constructor wrongly flagged, a non-scope name wrongly added to
-	// runScopeStructNames, or a new RED construction without updating this count)
-	// fails here.
-	const wantViolations = 5
+	// Exact-count lock: seven RED constructions (5 direct literals + 1 alias
+	// literal + 1 var-decl), and the five sanctioned constructors + the
+	// GREEN-negative non-scope constructions must add zero. Drift (a constructor
+	// wrongly flagged, a non-scope name wrongly tracked, types.Unalias or the
+	// Form-2 var-decl scan dropped, or a new RED construction without updating
+	// this count) fails here.
+	const wantViolations = 7
 	if got := len(diags); got != wantViolations {
 		t.Errorf("%s FixtureCoverage: %d violations, want %d "+
-			"(five RED fixture constructions trip once each; the five sanctioned "+
-			"constructors and the GREEN-negative non-scope literals must add 0) — "+
-			"over-detection regression or fixture set changed",
-			runScopeConstructorFunnelRuleID, got, wantViolations)
+			"(5 direct + 1 alias + 1 var-decl RED constructions trip once each; the "+
+			"five sanctioned constructors and the GREEN-negative non-scope "+
+			"constructions must add 0) — over/under-detection regression or fixture "+
+			"set changed", runScopeConstructorFunnelRuleID, got, wantViolations)
 	}
 }
 
-// containsStructName reports whether msg embeds the struct name as the
-// "<name>{…}" token the diagnostic uses. The "{" suffix avoids a substring
+// containsStructName reports whether msg attributes the diagnostic to the scope
+// struct name. The diagnostic embeds the name as "RunScope <name> outside", so
+// the " outside" suffix anchors an exact-token match — avoiding a substring
 // collision between "typedRunScope" and a hypothetical longer name.
 func containsStructName(msg, name string) bool {
-	return strings.Contains(msg, name+"{")
+	return strings.Contains(msg, name+" outside")
 }
