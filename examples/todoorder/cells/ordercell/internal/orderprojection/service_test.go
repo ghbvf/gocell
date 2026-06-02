@@ -49,6 +49,26 @@ func TestHandleOrderCreated_ApplySuccess(t *testing.T) {
 	assert.Equal(t, []string{"order-1"}, summary.Statuses[0].OrderIDs)
 }
 
+// TestQuery_OrderIDsBounded verifies the summary caps OrderIDs per status at
+// maxOrderIDsPerStatus while Count keeps the true (unbounded) total, so a
+// truncated bucket is observable rather than silent.
+func TestQuery_OrderIDsBounded(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	const total = maxOrderIDsPerStatus + 25
+	for i := 0; i < total; i++ {
+		err := svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-"+strconv.Itoa(i), "pending"))
+		require.NoError(t, err)
+	}
+
+	summary := svc.Query(ctx)
+	require.Len(t, summary.Statuses, 1)
+	assert.Equal(t, int64(total), summary.Statuses[0].Count, "Count must be the true total")
+	assert.Len(t, summary.Statuses[0].OrderIDs, maxOrderIDsPerStatus, "OrderIDs must be capped")
+	assert.Equal(t, int64(total), summary.TotalOrders)
+}
+
 // TestHandleOrderCreated_DecodeError_PermanentError verifies that an
 // undecodable payload returns a permanent error (not nil).
 func TestHandleOrderCreated_DecodeError_PermanentError(t *testing.T) {

@@ -30,7 +30,14 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// StatusBucket groups the order IDs for one status value.
+// maxOrderIDsPerStatus bounds the per-status orderIds slice returned by Query
+// so the summary stays within the project list-response cap (limit ≤ 500,
+// .claude/rules/gocell/go-standards.md). Count carries the true total, so a
+// truncated bucket is observable (Count > len(OrderIDs)) rather than silent.
+const maxOrderIDsPerStatus = 500
+
+// StatusBucket groups the order IDs for one status value. OrderIDs is a bounded
+// sample (≤ maxOrderIDsPerStatus); Count is the unbounded true total.
 type StatusBucket struct {
 	Status   string
 	Count    int64
@@ -177,6 +184,11 @@ func (s *Service) Query(_ context.Context) Summary {
 		copy(cp, ids)
 		// Sort order IDs within each bucket for byte-identical rebuild guarantee.
 		sort.Strings(cp)
+		// Bound the returned slice (Count keeps the true total). The full list
+		// of orders is available via the orderquery endpoint, not this summary.
+		if len(cp) > maxOrderIDsPerStatus {
+			cp = cp[:maxOrderIDsPerStatus]
+		}
 		statuses = append(statuses, StatusBucket{
 			Status:   name,
 			Count:    int64(len(ids)),
