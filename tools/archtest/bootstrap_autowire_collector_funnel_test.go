@@ -116,7 +116,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const autoWireBootstrapPkgPath = "github.com/ghbvf/gocell/runtime/bootstrap"
+const autoWireBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
 
 // autoWireHelperName is the single-source generic helper every bootstrap metric
 // auto-wire must route through. It is an unexported package-local func in
@@ -124,14 +124,19 @@ const autoWireBootstrapPkgPath = "github.com/ghbvf/gocell/runtime/bootstrap"
 // unambiguous (no cross-package homonym is reachable as a bare ident here).
 const autoWireHelperName = "autoWireCachedCollector"
 
+const (
+	autoWireRuntimeMetricsPkgPath = PlatformModulePath + "/runtime/observability/metrics"
+	autoWireProjectionPkgPath     = PlatformModulePath + "/kernel/projection"
+)
+
 // autoWireCtorSymbols maps each {pkgPath, funcName} metric-collector constructor
 // to a stable display symbol. These are the only collector constructors the
 // bootstrap auto-wire funnel may invoke, and only from inside autoWireCachedCollector.
 var autoWireCtorSymbols = map[[2]string]string{
-	{"github.com/ghbvf/gocell/runtime/observability/metrics", "NewProviderCollector"}:     "metricsmiddleware.NewProviderCollector",
-	{"github.com/ghbvf/gocell/runtime/observability/metrics", "NewEventRouterCollector"}:  "metricsmiddleware.NewEventRouterCollector",
-	{"github.com/ghbvf/gocell/runtime/observability/metrics", "NewOutboxRejectCollector"}: "metricsmiddleware.NewOutboxRejectCollector",
-	{"github.com/ghbvf/gocell/kernel/projection", "RegisterMetrics"}:                      "projection.RegisterMetrics",
+	{autoWireRuntimeMetricsPkgPath, "NewProviderCollector"}:     "metricsmiddleware.NewProviderCollector",
+	{autoWireRuntimeMetricsPkgPath, "NewEventRouterCollector"}:  "metricsmiddleware.NewEventRouterCollector",
+	{autoWireRuntimeMetricsPkgPath, "NewOutboxRejectCollector"}: "metricsmiddleware.NewOutboxRejectCollector",
+	{autoWireProjectionPkgPath, "RegisterMetrics"}:              "projection.RegisterMetrics",
 }
 
 // autoWireFunneledPkgs is the set of packages whose collector constructors the
@@ -139,8 +144,8 @@ var autoWireCtorSymbols = map[[2]string]string{
 // constructors as bare identifiers and bypass the SelectorExpr scan, so the
 // reverse self-check forbids it.
 var autoWireFunneledPkgs = map[string]struct{}{
-	"github.com/ghbvf/gocell/runtime/observability/metrics": {},
-	"github.com/ghbvf/gocell/kernel/projection":             {},
+	autoWireRuntimeMetricsPkgPath: {},
+	autoWireProjectionPkgPath:     {},
 }
 
 // autoWireConstructArgIndex is the positional index of the construct argument in
