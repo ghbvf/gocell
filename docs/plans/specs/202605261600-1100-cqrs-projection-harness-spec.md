@@ -121,11 +121,11 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 2. 若同一事件因 broker redelivery 出现 offset ≤ checkpoint，harness 视为已处理，**不调用 apply**（exactly-once delivery to apply）
 3. 业务无需自己实现"已应用过"判断
 
-### Scenario E — Schema enum violation (PROJECTION-CONSISTENCY-01 Hard upgrade)
+### Scenario E — Projection consistency violation (PROJECTION-CONSISTENCY-01 Hard upgrade)
 
 1. 开发者写 `contract.yaml: kind: projection, consistencyLevel: L2`
-2. `gocell validate` 当前（Medium）：governance rule 报 error 阻断 CI
-3. v1（Hard 升级后）：`kernel/metadata.LoadContract` parse 阶段 jsonschema.Validate 直接 reject YAML——错误更早 + 不可表达（schema enum gate）
+2. `gocell validate`（Medium 兜底，覆盖 `codegen: false` + in-memory fixture）：governance rule 报 error 阻断 CI
+3. Hard 主门控（gh #960 已交付）：contractgen codegen funnel——`kind: projection` 契约生成的 `types_gen.go` 携带 `const _ = uint(cellvocab.<level> - cellvocab.L3)`，L0/L1/L2 编译期 uint 溢出 → `codegen: true` 的非法 projection 契约**无法构建**（违反不可表达，compile-error 下游）。parser-jsonschema 方案被否决，见 ADR §Amendment 2026-06-02 #960
 
 ### Scenario F — Replay lag alerting
 
@@ -157,7 +157,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 
 ### 5.3 Governance / archtest
 
-- [ ] `PROJECTION-CONSISTENCY-01` 升 Hard 的 archtest 守卫（schema enum 在 parse 路径强制）
+- [x] `PROJECTION-CONSISTENCY-01` 升 Hard（gh #960 已交付）：contractgen codegen funnel（生成 `types_gen.go` 编译期 uint overflow），**非 archtest**；governance rule 留 Medium 兜底。parser-jsonschema / schema-enum-parse 方案被否决，见 ADR §Amendment 2026-06-02
 - [ ] **新增 archtest funnel（≥ Medium，AI-robust 章程要求）**：
   - **PROJECTION-APPLY-HOOK-FUNNEL-01**：cellgen 派生的 harness wiring 是 business apply 函数唯一注册路径；手写 `Coordinator.Subscribe(..., apply, ...)` callsite 仅允许在 generated 文件
   - **PROJECTION-CHECKPOINT-TX-BOUND-01**：`SaveOffset` 实现必须经 `persistence.TxFromContext(ctx)` 取 ambient tx；裸 `*sql.Tx` 参数 / `db.Exec` 形态 fail（与 outbox.Writer 同范式）

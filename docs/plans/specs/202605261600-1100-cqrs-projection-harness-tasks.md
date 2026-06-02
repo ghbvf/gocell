@@ -293,7 +293,7 @@
 | **M2 kernel 核心** | PR-01 + PR-02 merged，Coordinator + mem store + PG store + conformance test |
 | **M3 codegen 派生** | PR-04 merged，cellgen `kind: projection` 派生通路打通 |
 | **M4 生命周期完整** | PR-03 merged，rebuild + metrics + readyz 三件套 |
-| **M5 governance Hard** | PR-05 merged，parser load-time validate |
+| **M5 consistency Hard** | PR-05 merged，PROJECTION-CONSISTENCY-01 升 Hard：contractgen codegen funnel（生成 `types_gen.go` 编译期 uint overflow），governance rule 留 Medium 兜底（parser-jsonschema 方案被否决，见 ADR §Amendment 2026-06-02 #960） |
 | **M6 reference** | PR-06 merged，orderprojection 改造为 L3 官方 reference，所有 sub-issues 关闭 |
 
 ### ship 调度落点
