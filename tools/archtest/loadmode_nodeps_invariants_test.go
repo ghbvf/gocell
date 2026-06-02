@@ -13,20 +13,36 @@ package archtest
 //
 // Soundness: for the NAMED-TYPE detection paths a finding requires the scanned
 // root to type-reference the target's symbol, keeping the target a DIRECT import
-// that survives pruning. The one path that does NOT follow from that argument is
-// loadForbiddenIfacesFromPkg's types.Implements structural-match — an anonymous/
-// local interface matching a forbidden method set need NOT name the forbidden
-// package, so its resolution depends on the cell's import closure reaching the
-// package. The per-PACKAGE proof that NoDeps pruning drops no such resolution is a
-// WithDeps-vs-NoDeps DIFFERENTIAL — but it requires a second packages.Load, which
-// the ARCHTEST-PASS-FUNNEL Hard-line depguard (ADR 202605141519, defense #2) bans
-// in archtest *_test.go. So that differential lives one layer down, in the loader
-// package that owns load-mode behavior:
-// typeseval.TestLoadMode_NoDepsPreservesTransitiveIfaceResolution. The smokes here
-// are funnel-compatible and assert the REAL rule helpers stay non-vacuous under the
-// production NoDeps mode; the typeseval differential proves nothing is dropped per
-// package. Together they replace the issue's one-shot manual NoDeps-vs-WithDeps
-// comparison with durable regression checks.
+// that survives pruning — so those paths are sound under pruning by construction.
+//
+// The one path not covered by that argument is loadForbiddenIfacesFromPkg's
+// types.Implements structural-match (an anonymous/local interface matching a
+// forbidden method set need NOT name the forbidden package). Its per-Pass coverage
+// is left as a DOCUMENTED BOUNDARY rather than a permanent machine guard, for two
+// reasons established while #1499 landed:
+//
+//   1. A permanent per-Pass proof is a WithDeps-vs-NoDeps differential, i.e. a
+//      second whole-module-ish packages.Load — exactly the cost #1499 removes. The
+//      codebase rejects that three independent ways: the ARCHTEST-PASS-FUNNEL
+//      Hard-line depguard (ADR 202605141519 defense #2) bans a second packages.Load
+//      in archtest *_test.go; the 20s slowgate rejects the load's cold-CI latency;
+//      and typeseval's TestKnownNonDefaultTagsCoverage rejects a `//go:build !race`
+//      escape hatch. The architecture deliberately forbids expensive whole-module
+//      loads in the suite.
+//   2. The differential is also semantically corpus-contingent, not an invariant:
+//      WithDeps resolves by import-reachability, NoDeps by type-reference; the
+//      former is a superset, so "NoDeps ⊇ WithDeps" holds only because every
+//      current cell that import-reaches a forbidden package also type-references it.
+//      A legitimate import-only dependency chain would make such a differential
+//      FALSE-fail on correct code.
+//
+// Coverage actually in force: (a) the named-type soundness theorem above; (b) the
+// funnel smokes below, asserting the REAL rule helpers stay non-vacuous under the
+// production NoDeps mode; (c) the one-time full NoDeps-vs-WithDeps comparison run
+// when #1499 landed (the whole archtest suite's failure set was byte-identical
+// across both modes). The residual structural-match anonymous-interface case is
+// empty on the real corpus and fundamentally differential — a deliberately accepted
+// boundary, not a defect.
 //
 // Covered walks:
 //   - loadForbiddenIfacesFromPkg              (cell_public_option_param_test.go, BFS)
@@ -55,15 +71,10 @@ import (
 // TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces is the funnel-compatible
 // non-vacuity smoke for the cell raw-option rule: under the production NoDeps mode,
 // the ACTUAL loadForbiddenIfacesFromPkg (not a reimplementation) resolves every
-// forbidden canonical somewhere across the cell+example corpus the rule scans.
-//
-// The authoritative PER-PACKAGE differential proof (every package's NoDeps
-// resolution superset its WithDeps resolution) lives in
-// typeseval.TestLoadMode_NoDepsPreservesTransitiveIfaceResolution — it cannot live
-// here: the ARCHTEST-PASS-FUNNEL Hard-line depguard (ADR 202605141519, defense #2)
-// bans a second packages.Load in archtest *_test.go, which a WithDeps differential
-// requires. This smoke verifies the real production helper stays non-vacuous; the
-// typeseval differential verifies pruning drops nothing per package.
+// forbidden canonical somewhere across the cell+example corpus the rule scans. This
+// is the permanent guard the architecture permits cheaply; the per-Pass
+// structural-match boundary (why a permanent WithDeps differential is intentionally
+// not added) is documented in this file's package doc above.
 func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
 	resolved := map[string]bool{}
 	var cellPasses int

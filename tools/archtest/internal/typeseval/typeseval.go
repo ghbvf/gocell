@@ -84,9 +84,10 @@ func (r *Resolver) Packages() []*packages.Package {
 // type-reference the target package (so the target stays a direct import and
 // survives pruning). The cell raw-option rule's types.Implements structural-match
 // (an anonymous interface matching a forbidden method set need not name the
-// forbidden package) does not follow from that argument; it is guarded directly by
-// the per-package WithDeps-vs-NoDeps differential TestLoadMode_NoDepsPreservesTransitiveIfaceResolution
-// (every package must resolve under this mode at least what it resolves WithDeps).
+// forbidden package) is the one path not covered by that argument; it is verified
+// by the funnel smokes in ../../loadmode_nodeps_invariants_test.go plus the
+// one-time full NoDeps-vs-WithDeps comparison performed when #1499 landed (see that
+// file's package doc for why a permanent differential is intentionally not added).
 // Guarded by TestLoadMode_NoNeedDeps.
 //
 // ref: golang/tools go/packages/packages.go usesExportData + NeedDeps doc
