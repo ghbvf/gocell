@@ -50,7 +50,7 @@ const (
 	msgEmptyConsumerGroup       = "mqtt subscribe consumer group must not be empty (shared subscription requires a group)"
 	msgInvalidConsumerGroup     = "mqtt subscribe consumer group must match ^[a-z0-9_-]+$ " +
 		"(no /, +, #, $, or whitespace — they would inject extra levels or wildcards into the $share wire filter)"
-	msgZeroNamespaceReceiver = "mqtt topic namespace receiver is zero-value; construct via Parse"
+	msgZeroNamespaceReceiver = "mqtt topic namespace receiver is zero-value; construct via ParseTopicNamespace"
 
 	// detailKeyConsumerGroup is the public-detail key for an invalid consumer
 	// group surfaced in errcode.PublicDetail.

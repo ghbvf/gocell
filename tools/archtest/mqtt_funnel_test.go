@@ -51,13 +51,14 @@
 //     adapters/mqtt from adding a second ClientID composite literal site. A2 closes
 //     this gap via AST scan of production files only. Permanent Go-language ceiling.
 //
-// Downstream callsite funnel (DEFERRED):
+// Downstream callsite funnel (DELIVERED — gh issue #1225 closed):
 //
-//	The downstream enforcement — asserting that publish/subscribe topic args
-//	flow through PublishOK/SubscribeOK — requires Publisher and Subscriber
-//	callsites that do NOT yet exist in PR-1. Writing it now would be a
-//	vacuous-pass archtest. Tracked by gh issue #1225 for implementation in
-//	PR-2 (Publisher) / PR-3 (Subscriber).
+//	Publisher.Publish calls ns.Mint(topic) (which calls PublishOK internally)
+//	to obtain a sealed PublishableTopic; Connection.Publish only CONSUMES that
+//	token. MintFilter calls SubscribeOK internally. MQTT-PUBLISH-CALLSITE-FUNNEL-01
+//	(A1–A4) and MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01 (S1–S6) in
+//	mqtt_callsite_funnel_test.go lock all cm.Publish / cm.Subscribe /
+//	cm.Unsubscribe callsites to their respective sanctioned funnel functions.
 //
 // # Blind-spot inventory
 //
@@ -111,6 +112,27 @@ import (
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
+
+// ─── Typed-identity enclosing-func allowlist ─────────────────────────────────
+
+// mqttEnclosingFuncAllowed reports whether the enclosing *types.Func of node
+// has a FullName() in allowedFullNames (set semantics). This is the typed
+// equivalent of the name-only gate that mqttEnclosingFuncName provides: it
+// prevents a function named "Mint" on a different receiver/type from falsely
+// passing the allowlist. When ResolveEnclosingFunc cannot resolve (e.g. no
+// types.Info, node outside any FuncDecl), the function returns false (closed).
+func mqttEnclosingFuncAllowed(info *types.Info, file *ast.File, node ast.Node, allowedFullNames []string) bool {
+	fn, ok := ResolveEnclosingFunc(info, file, node)
+	if !ok || fn == nil {
+		return false
+	}
+	for _, key := range allowedFullNames {
+		if fn.FullName() == key {
+			return true
+		}
+	}
+	return false
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -215,7 +237,11 @@ func scanMQTTCompositeLitConstruction(
 // scanSealedCompositeLitConstruction is the generalized A2 scanner. It
 // reports a diagnostic for every composite literal in file whose type
 // resolves (via go/types) to (targetPkgPath, targetTypeName) AND is NOT
-// enclosed in any function listed in allowedFuncs (set semantics).
+// enclosed in any function whose FullName() is in allowedFullNames (set
+// semantics). The gate uses typed identity via ResolveEnclosingFunc so that
+// a function with the same bare name but a different receiver/package cannot
+// falsely pass the allowlist.
+//
 // Zero-value literals (no Elts) are accepted anywhere (used in error paths
 // like `return ClientID{}, err`).
 func scanSealedCompositeLitConstruction(
@@ -225,7 +251,7 @@ func scanSealedCompositeLitConstruction(
 	info *types.Info,
 	targetPkgPath string,
 	targetTypeName string,
-	allowedFuncs []string,
+	allowedFullNames []string,
 	ruleID string,
 ) []Diagnostic {
 	if info == nil {
@@ -262,12 +288,10 @@ func scanSealedCompositeLitConstruction(
 			return
 		}
 
-		// Non-zero literal: must be enclosed in one of the allowedFuncs.
-		fn := mqttEnclosingFuncName(file, lit.Pos())
-		for _, name := range allowedFuncs {
-			if fn == name {
-				return
-			}
+		// Non-zero literal: must be enclosed in one of the allowed functions
+		// (matched by typed FullName() identity, not bare name).
+		if mqttEnclosingFuncAllowed(info, file, lit, allowedFullNames) {
+			return
 		}
 		pos := fset.Position(lit.Pos())
 		out = append(out, Diagnostic{
@@ -276,7 +300,7 @@ func scanSealedCompositeLitConstruction(
 			Message: fmt.Sprintf(
 				"%s/A2: %s composite literal at %s:%d is not enclosed in any of %v — "+
 					"non-zero %s construction must go through the Parse factory",
-				ruleID, targetTypeName, rel, pos.Line, allowedFuncs, targetTypeName,
+				ruleID, targetTypeName, rel, pos.Line, allowedFullNames, targetTypeName,
 			),
 		})
 	})
@@ -294,11 +318,14 @@ func scanSealedCompositeLitConstruction(
 //
 // sanctionedAliasName, if non-empty, names one alias that IS permitted — the
 // canonical re-export alias (e.g. adapters/mqtt namespace.go declares
-// `type TopicNamespace = topicns.Namespace`). Only that one alias is skipped;
-// all other aliases of the target type trigger a diagnostic.
+// `type TopicNamespace = topicns.Namespace`). The skip is bound to BOTH the
+// alias name AND the declaring package (currentPkgPath == mqttPkgPath), so a
+// type alias with the same name in any other package is still reported.
 //
 // For TopicNamespace the type moved to internal/topicns as Namespace (#1247);
-// the sanctioned alias is namespace.go's `TopicNamespace = topicns.Namespace`.
+// the sanctioned alias is namespace.go's `TopicNamespace = topicns.Namespace`,
+// which lives in adapters/mqtt (mqttPkgPath). Only that specific (name, pkg)
+// pair is skipped; all other aliases of the target type trigger a diagnostic.
 // For ClientID the type remains in adapters/mqtt; there is no sanctioned alias
 // (sanctionedAliasName = "").
 func scanMQTTTypeAliases(
@@ -307,6 +334,7 @@ func scanMQTTTypeAliases(
 	rel string,
 	info *types.Info,
 	targetPkgPath, targetTypeName, sanctionedAliasName string,
+	currentPkgPath string,
 	ruleID string,
 ) []Diagnostic {
 	if info == nil {
@@ -320,9 +348,12 @@ func scanMQTTTypeAliases(
 			return
 		}
 		// Skip the one sanctioned re-export alias (e.g. adapters/mqtt's
-		// `type TopicNamespace = topicns.Namespace`). It is the clarity-preserving
-		// re-export; only OTHER aliases of the sealed type are banned.
-		if sanctionedAliasName != "" && ts.Name.Name == sanctionedAliasName {
+		// `type TopicNamespace = topicns.Namespace`), but only if it lives in
+		// the expected declaring package. A same-named alias in another package
+		// is not the sanctioned re-export and must still be reported.
+		if sanctionedAliasName != "" &&
+			ts.Name.Name == sanctionedAliasName &&
+			currentPkgPath == mqttPkgPath {
 			return
 		}
 		// It's an alias (and not the sanctioned one). Check if the RHS resolves to
@@ -410,14 +441,17 @@ func TestMQTTClientIDNamespace01(t *testing.T) {
 					a2Diags = append(a2Diags, scanMQTTCompositeLitConstruction(
 						p.Fset, f, rel, p.TypesInfo,
 						"ClientID",
-						[]string{"assembleClientID"},
+						// Typed FullName() key: assembleClientID is a package-level func
+						// in adapters/mqtt (no receiver), so FullName = "<pkg>.<func>".
+						[]string{mqttPkgPath + ".assembleClientID"},
 						ruleID,
 					)...)
 				}
 
 				a3Diags = append(a3Diags, scanMQTTTypeAliases(
 					p.Fset, f, rel, p.TypesInfo,
-					mqttPkgPath, "ClientID", "", ruleID,
+					mqttPkgPath, "ClientID", "",
+					p.Pkg.Path(), ruleID,
 				)...)
 			}
 			return nil
@@ -439,16 +473,15 @@ func TestMQTTClientIDNamespace01(t *testing.T) {
 // TestMQTTTopicNamespace01 enforces the TopicNamespace sealed-struct construction
 // funnel.
 //
-// # Downstream callsite funnel — DEFERRED to PR-2/3 (#1225)
+// # Downstream callsite funnel — DELIVERED in PR-2/3 (#1225 closed)
 //
-// The downstream enforcement — asserting that all publish/subscribe topic
-// arguments in adapters/mqtt flow through TopicNamespace.PublishOK /
-// TopicNamespace.SubscribeOK — requires Publisher (PR-2) and Subscriber (PR-3)
-// callsites that do not yet exist. Writing that check now would be a
-// vacuous-pass archtest with zero protection value. It is explicitly deferred
-// and tracked by gh issue #1225. When PR-2 lands, add sub-rule A4 here that
-// asserts every `conn.Publish(ctx, topic, ...)` call inside adapters/mqtt
-// is preceded by a `ns.PublishOK(topic)` in the same enclosing function.
+// The downstream enforcement is implemented in mqtt_callsite_funnel_test.go:
+//   - Publisher.Publish calls ns.Mint(topic) (which internally calls PublishOK)
+//     to obtain a sealed PublishableTopic token; Connection.Publish only CONSUMES
+//     the token and never re-validates. MQTT-PUBLISH-CALLSITE-FUNNEL-01 A1–A4
+//     locks all cm.Publish callsites to (*Connection).Publish.
+//   - MintFilter calls SubscribeOK internally; MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01
+//     S1–S6 locks all cm.Subscribe/Unsubscribe callsites.
 //
 // # Blind-spot self-check (same as ClientID)
 //
@@ -495,13 +528,15 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 					a2Diags = append(a2Diags, scanSealedCompositeLitConstruction(
 						p.Fset, f, rel, p.TypesInfo,
 						topicnsPkgPath, "Namespace",
-						[]string{"Parse"},
+						// Typed FullName() key: Parse is a package-level func in topicns.
+						[]string{topicnsPkgPath + ".Parse"},
 						ruleID,
 					)...)
 				}
 				a3Diags = append(a3Diags, scanMQTTTypeAliases(
 					p.Fset, f, rel, p.TypesInfo,
-					topicnsPkgPath, "Namespace", "TopicNamespace", ruleID,
+					topicnsPkgPath, "Namespace", "TopicNamespace",
+					p.Pkg.Path(), ruleID,
 				)...)
 			}
 			return nil
@@ -757,13 +792,13 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 // # Blind-spot of this self-check
 //
 // This test uses reflect-built synthetic types, not real go/types.Info. It
-// verifies the enclosing-function gate (mqttEnclosingFuncName + allowedFunc
-// comparison) and the zero-element skip, but does NOT exercise the actual
-// go/types type-resolution path (tobj.Pkg().Path() + tobj.Name() checks).
-// That path is exercised implicitly by the production tests
-// TestMQTTClientIDNamespace01/A2 and TestMQTTTopicNamespace01/A2 which load
-// real packages via Run(t, Typed(...)). A refactor that breaks the Pkg().Path() check
-// would be caught by those tests finding zero violations where violations exist.
+// verifies the enclosing-function gate (typed FullName() identity via
+// ResolveEnclosingFunc) and the zero-element skip, and also exercises the
+// go/types type-resolution path implicitly (a scanner that cannot see
+// ClientID{...} literals would produce zero outsideCount AND zero insideCount,
+// failing the second assertion). A refactor that breaks the Pkg().Path() check
+// would be caught by both production tests (A2 would vacuously pass, but also
+// no "inside" literals found).
 func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -772,10 +807,14 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 
 	root := findModuleRoot(t)
 
+	// assembleClientIDFullName is the typed FullName() of the sole allowed
+	// ClientID constructor: a package-level func in adapters/mqtt.
+	const assembleClientIDFullName = mqttPkgPath + ".assembleClientID"
+
 	// We exercise the scanner directly on a synthetic scenario: load the real
 	// adapters/mqtt package and look for any ClientID composite literals. The
-	// production package has exactly one (inside ParseClientID). Any violation
-	// found outside ParseClientID would be a real invariant break and the test
+	// production package has exactly one (inside assembleClientID). Any violation
+	// found outside assembleClientID would be a real invariant break and the test
 	// would fail — which is what we want to confirm fires correctly.
 	var outsideCount, insideCount int
 
@@ -792,7 +831,7 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 				}
 				diags := scanMQTTCompositeLitConstruction(
 					p.Fset, f, rel, p.TypesInfo,
-					"ClientID", []string{"assembleClientID"}, "MQTT-CLIENT-ID-NAMESPACE-01",
+					"ClientID", []string{assembleClientIDFullName}, "MQTT-CLIENT-ID-NAMESPACE-01",
 				)
 
 				outsideCount += len(diags)
@@ -815,8 +854,9 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 					if named.Obj().Name() != "ClientID" {
 						return
 					}
-					fn := mqttEnclosingFuncName(f, lit.Pos())
-					if fn == "assembleClientID" {
+					// Use typed identity: the inside-count check must use the same
+					// typed-gate as the production scanner.
+					if mqttEnclosingFuncAllowed(p.TypesInfo, f, lit, []string{assembleClientIDFullName}) {
 						insideCount++
 					}
 				})
@@ -865,7 +905,8 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 	}
 
 	const ruleID = "MQTT-CLIENT-ID-NAMESPACE-01"
-	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/mqttredfixture"
+	// Anchor to PlatformModulePath so a module rename updates exactly one place.
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/internal/mqttredfixture"
 
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePkgPath}),
@@ -879,10 +920,12 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
+				// Use typed FullName() key: ParseFixtureClientID is a package-level
+				// func in the fixture package.
 				out = append(out, scanSealedCompositeLitConstruction(
 					p.Fset, f, rel, p.TypesInfo,
 					fixturePkgPath, "FixtureClientID",
-					[]string{"ParseFixtureClientID"}, ruleID,
+					[]string{fixturePkgPath + ".ParseFixtureClientID"}, ruleID,
 				)...)
 			}
 			return out
