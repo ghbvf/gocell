@@ -7,26 +7,34 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 # 问题诊断与修复
 
-> `gh` 命令均 `dangerouslyDisableSandbox: true`；创建/查询前 `gh auth status`；issue 写入幂等（先 search 再 create）。Backlog 真值源见 `docs/backlog.md`。
+> `gh` 命令均 `dangerouslyDisableSandbox: true`；创建/查询前 `gh auth status`；issue 写入幂等（先 search 再 create）。真源 = GitHub Issues + Project v2 #3；label / 评级 rubric 见 `.github/PROJECT.md`；issue/PR/label/评论原子操作规范见 `pm-issue`。
 
 ---
 
 ## 输入解析
 
-支持单条（自然语言 / `文件:行号` / `#NNN` 或裸数字 issue 号）或批量（review 文档路径 / `--from-review <stage>`）。
+支持单条（自然语言 / `文件:行号` / `#NNN` 或裸数字 issue 号）或批量（`--from-pr <N>` 读 codex PR 二轮 review 评论；或 ship round-1 传入的 inline findings）。
+
+> review 输入只此两路（**不向后兼容，无本地 review 文档 / `--from-review <stage>` 双路径**）：codex 把二轮
+> findings 写进 PR，fix 用 `gh` 读回；ship round-1 findings 由 ship 直接 inline 传入。
 
 解析规则：
 1. 如果包含 `文件路径:行号` → 直接定位到代码
 2. 如果包含 GitHub backlog issue 编号（如 `#720` 或裸数字 `720`）→ `gh issue view <num>` 解析条目（取 title / body / labels）
    - issue 不存在（404）→ 报错 `指定 issue #<num> 不存在` 并停止
    - issue 存在但缺 `backlog` label → 警告后继续，将其视为外部上下文（非 backlog 工作流）
-3. 如果指向 review 文档（.md 文件含多条 findings）→ 进入**批量模式**
+3. 如果是 `--from-pr <N>`（读 codex PR 二轮评论）或一次传入多条 inline findings → 进入**批量模式**
 4. 如果是自然语言 → 用 Grep/Glob 在代码库中定位相关代码
-### 批量模式（多方审查报告）
+### 批量模式（codex 二轮评论 / 多条 findings）
 
-当输入是 review 文档时：
+当输入是 `--from-pr <N>`（codex 二轮）或多条 findings 时：
 
-1. 解析文档中的所有 findings（按 ID、文件、描述提取）
+1. **读 codex PR 评论**（仅 `--from-pr <N>`）：
+   ```bash
+   gh pr view <N> --json reviews,comments
+   gh api repos/ghbvf/gocell/pulls/<N>/comments --jq '.[] | {path,line,body}'
+   ```
+   解析 review 概要 + inline 行评论里的所有 findings（按 file/line/描述提取）。ship round-1 inline findings 直接进步骤 2。
 2. **按 Cell 包聚类**（`cells/<cellid>/*`、`kernel/*`、`runtime/*`、`adapters/*`、`pkg/*` 各为一组）
 3. **决定并发度**（subagent 数量上限 1-3）：
 
@@ -322,16 +330,29 @@ go test ./kernel/...                            # 改了 kernel 时
 - review finding 已含 `[P0]/[P1]/[P2]/[P3]` 评级 → 直接采用
 - /fix 派生的新 finding：默认 **`pri-p2`**（常规债务）
 - `pri-p0` 红线：仅 incident-driven（线上故障 / 数据完整性破坏 / 安全 CVE），`/fix` 即便建议也**不得**默认 P0；如确属红线，停下来用 AskUserQuestion 让用户确认升级
-- 评级规则真值源 `docs/backlog/20260520/RERATING-RUBRIC.md`
+- 评级规则真值源 `.github/PROJECT.md` §3（评级 rubric）
 
 | Finding 状态 | /fix 行为 | 命令模板（user 确认后执行） | body / comment |
 |------------|---------|---------------------------|----------------|
 | IN_SCOPE 已修 + 对应已有 issue | **自动执行** | `gh issue close <num> --reason completed --comment "Fixed in PR #<NNN>"` | — |
 | IN_SCOPE 已修 + 无对应 issue（未登记被修复） | **输出建议命令** + AskUserQuestion 确认 | `gh issue create --label backlog --label pri-pX --title "..." --body-file <tmp>` → 立即 `gh issue close <new> --comment "..."` | body 含 `Found and fixed in PR #<NNN>` |
-| OUT_OF_SCOPE finding | **输出建议命令**，不自动创建 | `gh issue create --label backlog --label pri-pX --title "..." --body-file <tmp>` → `gh issue edit <new> --add-label cap-XX,flag-XX,type-XX` | 按 `.github/ISSUE_TEMPLATE/backlog.yml` 填 现状/修复方向/Files/Trigger/Source |
+| OUT_OF_SCOPE finding | **输出建议命令**，不自动创建 | `gh issue create --label backlog --label pri-pX --label area-XX --label type-XX --title "..." --body-file <tmp>` | 按 `.github/ISSUE_TEMPLATE/backlog.yml` 填 现状/修复方向/Files/Trigger/Source（条件延后型再加 `flag-cond`） |
 | /fix 中发现的新问题 | **输出建议命令**，不自动创建 | 同 OUT_OF_SCOPE 流程 | body 含 `Discovered via /fix #<original>` 关联来源 |
 
 完成后 **TaskUpdate → completed**（"issue 闭合/创建" 任务）。
+
+**步骤 3: round-2 收尾（仅 `--from-pr <N>` codex 二轮路径）**
+
+按 `pm-issue` §4 评论格式收尾该 PR：
+
+```bash
+gh pr comment <N> --body "$(...含 <!-- pm:round-2 --> 标记：codex findings triage + 修复结果 + 遗留...)"
+# 全清 → ready；仍有 Cx3/Cx4 或 OUT_OF_SCOPE 遗留 → changes-requested
+gh pr edit <N> --add-label pr-status/ready --remove-label pr-status/needs-codex
+# 或：gh pr edit <N> --add-label pr-review/changes-requested
+```
+
+> 非 `--from-pr` 的单条 / issue / 自然语言修复**不涉及** PR 状态 label 与 round-2 评论。
 
 ---
 
@@ -343,7 +364,7 @@ go test ./kernel/...                            # 改了 kernel 时
 
 **Backlog 验证**（4.8 已执行，此处 `gh` 复核）：
 - FIXED finding 对应 issue 已 closed + comment 引用了 PR 编号（`gh issue view <num>`）
-- OUT_OF_SCOPE finding：按 §沟通规则闸门输出建议命令，必须含 `pri-pX` + `cap-XX` / `flag-XX` / `type-XX` 四 label，避免被 workflow 贴 `pri-missing` 哨兵
+- OUT_OF_SCOPE finding：按 §沟通规则闸门输出建议命令，必须含 `pri-pX` + `area-XX` + `type-XX` 三 label（条件延后型再加 `flag-cond`），避免被 workflow 贴 `pri-missing` 哨兵
 - /fix 派生的新问题：同 OUT_OF_SCOPE 处理；body 草稿含 `Discovered via /fix #<original>`
 
 ---
