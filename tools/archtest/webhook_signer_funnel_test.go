@@ -198,10 +198,19 @@ func TestWebhookSignerFunnel(t *testing.T) {
 			if p.Pkg == nil {
 				return nil
 			}
-			// Scope: kernel/webhook and runtime/webhook production only.
+			// Scope: the kernel/webhook and runtime/webhook production trees,
+			// INCLUDING subpackages. Exact-match previously excluded
+			// runtime/webhook/dispatch — the ./runtime/webhook/... pattern loads
+			// it, but the filter dropped it — so a bare Header.Set of a signature
+			// header in the dispatcher consumer layer (where Headers.Apply is
+			// actually called) would have slipped past the funnel. Subtree-match
+			// (exact base or base+"/") also auto-covers any future subpackage.
 			pkgPath := p.Pkg.Path()
-			if pkgPath != PlatformModulePath+"/kernel/webhook" &&
-				pkgPath != PlatformModulePath+"/runtime/webhook" {
+			inTree := func(base string) bool {
+				return pkgPath == base || strings.HasPrefix(pkgPath, base+"/")
+			}
+			if !inTree(PlatformModulePath+"/kernel/webhook") &&
+				!inTree(PlatformModulePath+"/runtime/webhook") {
 				return nil
 			}
 			for _, f := range p.Files {

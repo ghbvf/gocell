@@ -59,26 +59,33 @@ backoff, capped 30 s). `RetrySchedule.DelayFor` is the seam the follow-up
 
 ### D2 — HTTP status code → `outbox.HandleResult` mapping (standard-webhooks aligned)
 
+> **Amendment 2026-06-02 (review #1455, finding F3).** D2 originally rejected 3xx
+> and all 4xx (except 408/429) as **permanent**. That contradicted this ADR's own
+> "standard-webhooks / Svix aligned" claim: Svix, Standard Webhooks, and Convoy
+> all treat **every non-2xx as a delivery failure the sender retries** — the
+> sender cannot tell a permanent 4xx (e.g. a receiver bug) from a transient one
+> (secret rotation → 401, deploy gap → 404, throttle). The mapping below is the
+> amended, aligned truth; the pre-amendment "Reject 4xx/3xx" rows are removed (no
+> dual truth source, per `.claude/rules/gocell/ai-robust.md` "ADR amendment 落地必查").
+
 The single classification function is `kernel/webhook/retry.go::Classify(statusCode
-int, transportErr error) outbox.Disposition`.
+int, transportErr error) outbox.Disposition`. The rule is now simply: **2xx → Ack;
+every other status → Requeue; an SSRF-blocked transport error → Reject**.
 
 | Outcome | Disposition | Rationale |
 |---------|-------------|-----------|
-| 2xx | `DispositionAck` (Ack) | Delivery succeeded. |
-| 5xx | `DispositionRequeue` (transient) | Server-side fault; the request itself is well-formed, a retry after back-off is appropriate. Aligned with Svix, Convoy, and the standard-webhooks guidance that senders should retry on server errors. |
-| 408 Request Timeout | `DispositionRequeue` (transient) | The server timed out processing the request; back off and retry is the spec-recommended sender behaviour. |
-| 429 Too Many Requests | `DispositionRequeue` (transient) | Throttled; the standard-webhooks spec asks senders to respect rate limits and retry. |
-| 3xx | `DispositionReject` (permanent → DLX) | Redirects are denied at the transport layer by `SafePolicy.DenyRedirect` and surface as an SSRF transport error (see below); they never reach status classification in practice. If one did reach this branch, a redirect indicates the target endpoint has moved and won't become valid on retry without operator intervention. |
-| Other 4xx (400, 401, 403, 404, 410, …) | `DispositionReject` (permanent → DLX) | The request itself is malformed, unauthorized, forbidden, or targeting a non-existent resource. Retrying an identical request against the same endpoint will not produce a different result. Svix and Convoy treat the 4xx set (excluding 408/429) as permanent. |
-| SSRF-blocked (`ErrWebhookSSRFBlocked`) | `DispositionReject` (permanent → DLX) | A misconfigured or hostile target URL (bad scheme, blocked dial, denied redirect). The target will not become safe on retry; operator intervention is required to correct the webhook endpoint registration. |
-| Transport timeout / connection refused / network error (non-SSRF) | `DispositionRequeue` (transient) | Transient connectivity fault; retry after back-off. |
+| 2xx | `DispositionAck` (Ack) | Delivery succeeded — the only acknowledgement. |
+| Every non-2xx status (3xx, 4xx, 5xx) | `DispositionRequeue` (transient) | standard-webhooks / Svix: the receiver MUST return 2xx to acknowledge; any other status is a delivery failure. A receiver's 4xx/3xx is usually transient on its side (deploy gap → 404, secret rotation → 401, throttle → 429, server fault → 5xx), and the sender cannot distinguish permanent from transient — so it retries until the budget is exhausted, at which point `ConsumerBase` escalates to Reject → DLX. |
+| SSRF-blocked (`ErrWebhookSSRFBlocked`) | `DispositionReject` (permanent → DLX) | A misconfigured or hostile target URL (bad scheme, embedded userinfo, blocked dial, denied redirect). The target will not become safe on retry; operator intervention is required to correct the webhook endpoint registration. This is the **only** permanent classification outcome. |
+| DNS resolution failure / connection refused / timeout / network error (non-SSRF) | `DispositionRequeue` (transient) | Transient connectivity fault; retry after back-off. A DNS failure is fail-closed at the dial layer (no connection is made) but is **not** an SSRF block — conflating "could not resolve" with "resolved to a blocked address" would permanently dead-letter deliveries on a DNS hiccup (review #1455 F1). |
 
-**Note on 3xx**: in normal operation 3xx responses never reach the `Classify`
-switch because `SafePolicy.DenyRedirect` (wired as the `*http.Client`
+**Note on 3xx and redirects**: a 3xx status almost never reaches the `Classify`
+status branch, because `SafePolicy.DenyRedirect` (wired as the `*http.Client`
 `CheckRedirect`) returns an error on the first redirect, which surfaces as a
-transport error carrying `ErrWebhookSSRFBlocked` → `DispositionReject`.
-The 3xx row in the table describes the fallback behaviour if that layer were
-absent or bypassed; it is included for completeness and auditability.
+transport error carrying `ErrWebhookSSRFBlocked` → `DispositionReject`. So a
+redirect attempt is **permanent** (an SSRF safety stance: one-shot delivery
+never follows a redirect to a potentially-unvetted Location). A bare 3xx that
+somehow reached the status branch is treated like any other non-2xx → Requeue.
 
 ### D3 — Delivery timeout default 30 s
 
@@ -127,6 +134,19 @@ The sole writer of these headers in the codebase is `(webhook.Headers).Apply`
 `WEBHOOK-SIGNER-FUNNEL-01`. No callsite may call `Header.Set` on these header
 name constants directly.
 
+> **Amendment 2026-06-02 (review #1455).** F9: the `WEBHOOK-SIGNER-FUNNEL-01`
+> scan scope used exact package-path matching, which silently excluded the
+> `runtime/webhook/dispatch` subpackage (the consumer layer that actually calls
+> `Headers.Apply`). The scope is now subtree-matched (`base` or `base+"/"`), so
+> the dispatch subpackage and any future subpackage are covered. F5 (open
+> hardening): `webhook.Headers` is still a public struct with exported fields, so
+> a caller could construct `Headers{Signature: …}.Apply(h)` outside `Signer.Sign`
+> — the funnel locks the *header write site*, not *Headers provenance*. Severity
+> is low (a forged `Headers` carries an invalid HMAC the receiver rejects; no
+> secret is exposed). Closing the gap via sealed construction (unexported fields,
+> only `Signer.Sign` produces `Headers`) is tracked as a backlog item, not done
+> in PR-5.
+
 ### D5 — Schedule is the canonical default seam; per-attempt wall-clock delays and RetryCount are NOT yet wired (explicit boundary + tracked follow-up)
 
 This is the most important honesty section of this ADR.
@@ -167,13 +187,19 @@ explicitly.
   retry interval). PR-5 does NOT set a per-dispatcher `ConsumerBaseConfig.RetryCount`
   from the schedule — `DefaultSvixSchedule` is the canonical default and the
   seam for the broker-delay follow-up (gh #1458), not yet runtime-honored.
-- **Permanent failures** (SSRF-blocked, non-2xx 4xx excluding 408/429, selector
-  error, signing failure, URL validation failure) route to DLX via
-  `outbox.Reject`; operators must inspect the DLX queue and fix the registration
-  before re-enqueuing.
-- **Transient failures** (5xx, 408, 429, transport errors) trigger
-  `ConsumerBase` retry with default backoff; on budget exhaustion they are
-  escalated to Reject → DLX.
+- **Permanent failures** (amended 2026-06-02) are now only: SSRF-blocked target,
+  a selector that signals `ErrWebhookPermanentFailure` (no subscription
+  configured), signing failure, delivery-id derivation failure, and URL
+  validation failure (including embedded userinfo). These route to DLX via
+  `outbox.Reject` at preflight/transport; operators must inspect the DLX queue
+  and fix the registration before re-enqueuing. **Non-2xx delivery responses are
+  no longer permanent** — they are retried (review #1455 F3).
+- **Transient failures** — every non-2xx delivery response (3xx/4xx/5xx) and all
+  non-SSRF transport errors (DNS resolution failure, timeout, connection
+  refused) — trigger `ConsumerBase` retry with default backoff; on budget
+  exhaustion they are escalated to Reject → DLX. A generic target-selector error
+  is also transient (review #1455 F2): a store/config hiccup retries rather than
+  dead-lettering.
 - **Wire protocol**: receivers that verify GoCell outbound webhooks must use the
   `webhook-id` / `webhook-timestamp` / `webhook-signature` header names, not
   `svix-*`. GoCell's example receiver (`kernel/webhook.Verifier`) already uses

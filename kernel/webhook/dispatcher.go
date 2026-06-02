@@ -109,12 +109,12 @@ func NewDispatcher(
 //
 // Consumer: cg-webhook-dispatch (per-cell consumer group)
 // Idempotency: outbox lease_id CAS (producer side); handler is stateless
-// Disposition: Ack on 2xx / Requeue on 5xx·408·429·transport / Reject on other 4xx·3xx·SSRF
+// Disposition: Ack on 2xx / Requeue on every non-2xx + transient transport / Reject on SSRF-blocked + permanent prepare failure
 // DLX: broker-native via DispositionReject -> Nack(requeue=false)
 //
-//	2xx                              → Ack
-//	5xx / 408 / 429 / timeout / conn → Requeue (transient)
-//	other 4xx / 3xx / SSRF-blocked   → Reject  (permanent → DLX)
+//	2xx                                    → Ack
+//	non-2xx (3xx/4xx/5xx) / timeout / conn  → Requeue (transient; standard-webhooks aligned)
+//	SSRF-blocked transport / bad config     → Reject  (permanent → DLX)
 func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	req, fail := d.prepare(ctx, entry)
 	if req == nil {
@@ -128,11 +128,15 @@ func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.Hand
 		logDelivery(ctx, deliveryID, result.Disposition, reason)
 		return result
 	}
-	defer drainAndClose(resp)
-	reason := statusReason(resp.StatusCode)
-	result := mapDisposition(Classify(resp.StatusCode, nil), reason)
-	logDelivery(ctx, deliveryID, result.Disposition, reason)
-	return result
+	defer func() { _ = resp.Body.Close() }()
+	summary := drainBodySummary(resp.Body)
+	disp := Classify(resp.StatusCode, nil)
+	if disp == outbox.DispositionAck {
+		return outbox.Ack()
+	}
+	reason := statusReason(resp.StatusCode, summary)
+	logDelivery(ctx, deliveryID, disp, reason)
+	return mapDisposition(disp, reason)
 }
 
 // logDelivery emits a structured slog record for non-Ack delivery outcomes.
@@ -160,8 +164,7 @@ func (d *Dispatcher) prepare(ctx context.Context, entry outbox.Entry) (*http.Req
 
 	target, err := d.selector(ctx, payload)
 	if err != nil {
-		return nil, outbox.Reject(errcode.Wrap(errcode.KindInvalid, errcode.ErrWebhookPermanentFailure,
-			"webhook dispatcher: target selector failed", err))
+		return nil, selectorReason(err)
 	}
 	if err := d.policy.ValidateTargetURL(target); err != nil {
 		return nil, outbox.Reject(err) // already ErrWebhookSSRFBlocked
@@ -215,27 +218,43 @@ func transportReason(err error) error {
 		"webhook dispatcher: delivery transport error", err)
 }
 
-// statusReason builds the diagnostic error for a non-2xx response. The status
-// code is server-side only (Internal) — it is not wire-relevant for a dispatch
-// consumer. Transient vs permanent mirrors Classify.
-func statusReason(status int) error {
-	transient := status == http.StatusRequestTimeout ||
-		status == http.StatusTooManyRequests || status >= 500
-	if transient {
-		return errcode.New(errcode.KindUnavailable, errcode.ErrWebhookDeliveryFailed,
-			"webhook dispatcher: transient non-success delivery response",
-			errcode.WithInternal(errcode.InternalAttr("status_code", status)))
+// selectorReason maps a target-selector error to a disposition result. A
+// selector that signals ErrWebhookPermanentFailure (e.g. no subscription is
+// configured for the event) is permanent → Reject; any other error (a store /
+// config lookup hiccup) is transient → Requeue, so an infrastructure blip does
+// not dead-letter the delivery. Mirrors the SSRF-tag inspection in
+// transportReason: the disposition is driven by the error's errcode, not by a
+// blanket assumption that all selector failures are permanent.
+func selectorReason(err error) outbox.HandleResult {
+	var ee *errcode.Error
+	if errors.As(err, &ee) && ee.Code == errcode.ErrWebhookPermanentFailure {
+		return outbox.Reject(ee)
 	}
-	return errcode.New(errcode.KindInvalid, errcode.ErrWebhookPermanentFailure,
-		"webhook dispatcher: permanent non-success delivery response",
-		errcode.WithInternal(errcode.InternalAttr("status_code", status)))
+	return outbox.Requeue(errcode.Wrap(errcode.KindUnavailable, errcode.ErrWebhookDeliveryFailed,
+		"webhook dispatcher: target selector failed", err))
 }
 
-// drainAndClose drains a bounded prefix of the response body (for keep-alive
-// reuse) and closes it.
-func drainAndClose(resp *http.Response) {
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, dispatchBodyDrainLimit))
-	_ = resp.Body.Close()
+// statusReason builds the transient diagnostic error for a non-2xx response. Per
+// Classify (standard-webhooks aligned) every non-2xx status is a transient
+// delivery failure, so there is a single outcome here. The status code and the
+// bounded response-body summary are server-side only (Internal) — never
+// wire-relevant for a dispatch consumer — and are sink-redacted in slog; they
+// aid debugging which receiver rejected and why.
+func statusReason(status int, bodySummary string) error {
+	return errcode.New(errcode.KindUnavailable, errcode.ErrWebhookDeliveryFailed,
+		"webhook dispatcher: non-success delivery response",
+		errcode.WithInternal(
+			errcode.InternalAttr("status_code", status),
+			errcode.InternalAttr("response_body", bodySummary)))
+}
+
+// drainBodySummary reads a bounded prefix of the response body
+// (≤ dispatchBodyDrainLimit) so the connection can be reused for keep-alive and
+// returns it as a diagnostic summary. The summary is attached to the non-2xx
+// Internal diagnostic (server-side slog only, sink-redacted, never on the wire).
+func drainBodySummary(body io.Reader) string {
+	b, _ := io.ReadAll(io.LimitReader(body, dispatchBodyDrainLimit))
+	return string(b)
 }
 
 // Compile-time assertion: Dispatcher.Handle satisfies outbox.EntryHandler.

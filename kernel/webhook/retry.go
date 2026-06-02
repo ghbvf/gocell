@@ -2,7 +2,6 @@ package webhook
 
 import (
 	"errors"
-	"net/http"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -77,20 +76,22 @@ func (s RetrySchedule) DelayFor(n int) (delay time.Duration, ok bool) {
 // response was received. When transportErr is non-nil the statusCode is
 // ignored; pass 0 by convention.
 //
-// Mapping:
+// Mapping (standard-webhooks / Svix: the receiver MUST return 2xx to acknowledge;
+// every other outcome is a delivery failure the sender retries):
 //   - transportErr != nil:
 //   - SSRF-blocked (ErrWebhookSSRFBlocked — bad target URL, blocked dial,
 //     or denied redirect) → Reject (permanent: a misconfigured/hostile
 //     target never succeeds on retry).
-//   - otherwise (timeout, connection refused, …) → Requeue (transient).
+//   - otherwise (DNS resolution failure, timeout, connection refused, …) →
+//     Requeue (transient).
 //   - 2xx → Ack.
-//   - 408 Request Timeout / 429 Too Many Requests → Requeue (throttle/timeout
-//     are transient; the spec asks senders to back off and retry).
-//   - 5xx → Requeue (transient server fault).
-//   - 3xx and every other 4xx (400/401/403/404/410 …) → Reject (the request
-//     itself is faulty; retrying will not help). 3xx normally never reaches
-//     this branch because redirects are denied at the transport layer and
-//     surface as an SSRF transport error.
+//   - every non-2xx status (3xx / 4xx / 5xx) → Requeue. A receiver's non-2xx
+//     usually reflects a transient condition on its side (deploy gap → 404,
+//     secret rotation → 401, throttle → 429, server fault → 5xx); the sender
+//     cannot distinguish a "permanent" 4xx from a transient one, so it retries
+//     until the budget is exhausted (then ConsumerBase dead-letters). 3xx
+//     normally never reaches this branch because redirects are denied at the
+//     transport layer and surface as an SSRF transport error (→ Reject above).
 func Classify(statusCode int, transportErr error) outbox.Disposition {
 	if transportErr != nil {
 		var ee *errcode.Error
@@ -99,14 +100,8 @@ func Classify(statusCode int, transportErr error) outbox.Disposition {
 		}
 		return outbox.DispositionRequeue
 	}
-	switch {
-	case statusCode >= 200 && statusCode < 300:
+	if statusCode >= 200 && statusCode < 300 {
 		return outbox.DispositionAck
-	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests:
-		return outbox.DispositionRequeue
-	case statusCode >= 500:
-		return outbox.DispositionRequeue
-	default:
-		return outbox.DispositionReject
 	}
+	return outbox.DispositionRequeue
 }

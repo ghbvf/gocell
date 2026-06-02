@@ -49,13 +49,12 @@ func TestWebhookSentinelCodes(t *testing.T) {
 		{ErrWebhookSourceNotFound, "ERR_WEBHOOK_SOURCE_NOT_FOUND"},
 		{ErrWebhookSSRFBlocked, "ERR_WEBHOOK_SSRF_BLOCKED"},
 		{ErrWebhookDeliveryFailed, "ERR_WEBHOOK_DELIVERY_FAILED"},
-		{ErrWebhookDeliveryTimeout, "ERR_WEBHOOK_DELIVERY_TIMEOUT"},
 		{ErrWebhookPermanentFailure, "ERR_WEBHOOK_PERMANENT_FAILURE"},
 		{ErrWebhookBodyTooLarge, "ERR_WEBHOOK_BODY_TOO_LARGE"},
 		{ErrWebhookConfigInvalid, "ERR_WEBHOOK_CONFIG_INVALID"},
 	}
-	if len(cases) != 12 {
-		t.Fatalf("expected 12 webhook sentinels, got %d", len(cases))
+	if len(cases) != 11 {
+		t.Fatalf("expected 11 webhook sentinels, got %d", len(cases))
 	}
 	for _, tc := range cases {
 		tc := tc

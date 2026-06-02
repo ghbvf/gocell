@@ -6,8 +6,8 @@
 // subscription's handler. Each consumed [outbox.Entry] is signed (HMAC-SHA256,
 // vendor-neutral webhook-* headers) and POSTed to the selector-resolved target
 // through an SSRF-guarded *http.Client. Delivery outcomes map to outbox
-// dispositions via [kwh.Classify] (2xx Ack / 5xx·408·429·timeout Requeue /
-// other 4xx·3xx·SSRF Reject).
+// dispositions via [kwh.Classify] (standard-webhooks aligned: 2xx Ack / every
+// non-2xx + transient transport Requeue / SSRF-blocked Reject).
 //
 // This mirrors the inbound receiver pattern (runtime/webhook/registry.go
 // BuildRouteGroups) but the dispatch side consumes from the broker rather than

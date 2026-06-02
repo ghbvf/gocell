@@ -5,6 +5,7 @@ package bootstrap
 // Coverage:
 //   - empty dispatchers → no-op (no error, router not required)
 //   - dispatchers present + nil webhookSourceStore → fail-fast ErrWebhookConfigInvalid
+//   - dispatchers present + nil Subscriber → phase6 fail-fast (no silent drop)
 //   - CellID drift (req.Spec.CellID != snapshot owner) → drift error
 //   - happy path: a snapshot with one WebhookDispatchRequest + a seeded SourceStore
 //     + a non-nil Subscriber + a ConsumerBase → drainWebhookDispatchers registers
@@ -136,6 +137,27 @@ func TestDrainWebhookDispatchers_FailsWithoutSourceStore(t *testing.T) {
 		"missing source store must yield ErrWebhookConfigInvalid")
 	assert.Contains(t, ecErr.Message, "WithWebhookSourceStore",
 		"error message must name the missing option")
+}
+
+// TestDrainWebhookDispatchers_FailsWhenSubscriberNil (F13) covers the phase6
+// guard at phases_events.go checkNoEventConsumersWhenSubscriberNil: a cell that
+// registers a webhook dispatcher but no Subscriber is configured must fail fast,
+// not silently drop the dispatcher. Drives phase6StartEventRouter with s.sub ==
+// nil (buildPhaseStateWithWebhookCells leaves it unset).
+func TestDrainWebhookDispatchers_FailsWhenSubscriberNil(t *testing.T) {
+	t.Parallel()
+	dc := newWebhookDispatchCell(whTestCellID, dispatchTestContractID, whTestSourceID)
+	s := buildPhaseStateWithWebhookCells(t, dc)
+
+	b := New(clockmock.New(whFixedNow)) // no WithSubscriber → s.sub stays nil
+
+	err := b.phase6StartEventRouter(context.Background(), s)
+
+	require.Error(t, err, "a webhook dispatcher with no subscriber must fail fast")
+	assert.Contains(t, err.Error(), "webhook dispatcher",
+		"error must identify the webhook dispatcher as the unconsumed event consumer")
+	assert.Contains(t, err.Error(), "no subscriber is configured",
+		"error must tell the operator to add WithSubscriber")
 }
 
 // TestDrainWebhookDispatchers_FailsOnCellIDDrift verifies that a dispatcher

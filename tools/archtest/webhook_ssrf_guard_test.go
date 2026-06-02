@@ -146,6 +146,17 @@ var ssrfBannedHTTPCallees = map[string]bool{
 	"Head":     true,
 }
 
+// wantSSRF*Violations are INDEPENDENT expected floors for the reverse fixture
+// (F12). Deriving the expected count from len(ssrfBanned*) was vacuous: removing
+// a banned entry (weakening the rule) also shrank the expected count, so the
+// self-test still passed. These hardcoded floors make a dropped banned form fail
+// the GreaterOrEqual assertions; a paired Equal golden-lock (in the reverse-
+// fixture test) forces a conscious bump here whenever the banned set changes.
+const (
+	wantSSRFNetDialViolations = 6 // Dial/DialTCP/DialUDP/DialIP/DialUnix/DialTimeout
+	wantSSRFHTTPGlobalCallees = 6 // DefaultClient/DefaultTransport + Get/Post/PostForm/Head
+)
+
 // scanSSRFNetDial implements A1: net.Dial* package functions are banned.
 func scanSSRFNetDial(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
@@ -363,13 +374,22 @@ func TestWebhookSSRFGuard_ReverseFixture(t *testing.T) {
 			return nil
 		})
 
-	assert.GreaterOrEqual(t, len(a1), len(ssrfBannedNetDialFuncs),
+	// Golden-lock: the fixture-violation floors are independent consts (F12), not
+	// len(ssrfBanned*). These equalities force a conscious const bump (and a paired
+	// fixture update) whenever the banned set changes; the GreaterOrEqual checks
+	// below then fail if the rule stops catching a banned form on the fixture.
+	assert.Equal(t, wantSSRFNetDialViolations, len(ssrfBannedNetDialFuncs),
+		"banned net.Dial* set changed — bump wantSSRFNetDialViolations and the reverse fixture")
+	assert.Equal(t, wantSSRFHTTPGlobalCallees, len(ssrfBannedHTTPGlobals)+len(ssrfBannedHTTPCallees),
+		"banned http global/callee set changed — bump wantSSRFHTTPGlobalCallees and the reverse fixture")
+
+	assert.GreaterOrEqual(t, len(a1), wantSSRFNetDialViolations,
 		"A1 reverse fixture: expected one diagnostic per banned net.Dial* func (Dial/DialTCP/DialUDP/DialIP/DialUnix/DialTimeout)")
 	assert.GreaterOrEqual(t, len(a2), 1, "A2 reverse fixture: expected ≥1 raw net.Dialer.DialContext diagnostic")
 	// Cover the FULL A3 banned set — both globals (DefaultClient/DefaultTransport)
 	// AND every convenience callee (Get/Post/PostForm/Head) — so dropping any one
 	// banned entry fails this self-test instead of passing on the others.
-	assert.GreaterOrEqual(t, len(a3), len(ssrfBannedHTTPGlobals)+len(ssrfBannedHTTPCallees),
+	assert.GreaterOrEqual(t, len(a3), wantSSRFHTTPGlobalCallees,
 		"A3 reverse fixture: expected one diagnostic per banned http global + convenience func")
 	assert.GreaterOrEqual(t, len(a4), 1,
 		"A4 reverse fixture: expected ≥1 diagnostic for &http.Transport{} with no DialContext field")

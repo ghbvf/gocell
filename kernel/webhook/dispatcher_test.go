@@ -94,8 +94,9 @@ func TestDispatcher_Handle_StatusMapping(t *testing.T) {
 		{"202_ack", http.StatusAccepted, outbox.DispositionAck},
 		{"500_requeue", http.StatusInternalServerError, outbox.DispositionRequeue},
 		{"429_requeue", http.StatusTooManyRequests, outbox.DispositionRequeue},
-		{"404_reject", http.StatusNotFound, outbox.DispositionReject},
-		{"410_reject", http.StatusGone, outbox.DispositionReject},
+		// standard-webhooks aligned: non-2xx (incl. 4xx) is a retryable failure.
+		{"404_requeue", http.StatusNotFound, outbox.DispositionRequeue},
+		{"410_requeue", http.StatusGone, outbox.DispositionRequeue},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -155,17 +156,41 @@ func TestDispatcher_Handle_SignsRequest(t *testing.T) {
 	assert.NoError(t, verifyErr, "server-side verify of dispatcher signature")
 }
 
-func TestDispatcher_Handle_SelectorError_Reject(t *testing.T) {
+// TestDispatcher_Handle_SelectorError covers F2: a generic selector error is
+// transient (Requeue) so a store/config hiccup does not dead-letter the
+// delivery; only a selector that signals ErrWebhookPermanentFailure (e.g. no
+// subscription configured) is permanent (Reject).
+func TestDispatcher_Handle_SelectorError(t *testing.T) {
 	t.Parallel()
-	sel := func(_ context.Context, _ []byte) (string, error) {
-		return "", errors.New("no target configured")
-	}
-	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
-		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), sel)
-	require.NoError(t, err)
 
-	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	t.Run("generic_error_requeue", func(t *testing.T) {
+		t.Parallel()
+		sel := func(_ context.Context, _ []byte) (string, error) {
+			return "", errors.New("config store temporarily unavailable")
+		}
+		d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+			dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), sel)
+		require.NoError(t, err)
+
+		res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
+		assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
+			"a generic selector error is transient (Requeue), not permanent")
+	})
+
+	t.Run("permanent_error_reject", func(t *testing.T) {
+		t.Parallel()
+		sel := func(_ context.Context, _ []byte) (string, error) {
+			return "", errcode.New(errcode.KindInvalid, errcode.ErrWebhookPermanentFailure,
+				"no webhook subscription configured for event")
+		}
+		d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+			dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), sel)
+		require.NoError(t, err)
+
+		res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
+		assert.Equal(t, outbox.DispositionReject, res.Disposition,
+			"a selector signaling ErrWebhookPermanentFailure is permanent (Reject)")
+	})
 }
 
 // TestDispatcher_Handle_SSRFBlocked_Reject uses a policy WITHOUT loopback and a
@@ -298,6 +323,65 @@ func TestDispatcher_Handle_SSRFBlocked_ViaDialContext_Reject(t *testing.T) {
 		"res.Err must be *errcode.Error, got %T: %v", res.Err, res.Err)
 	assert.Equal(t, errcode.ErrWebhookSSRFBlocked, ee.Code,
 		"dial-time SSRF error must carry ErrWebhookSSRFBlocked code")
+}
+
+// F1: a DNS resolution FAILURE at dial time is transient (Requeue), not a
+// permanent SSRF block. The fail-closed refusal to dial is preserved (no
+// connection is made to an un-vettable target); only the disposition changes so
+// a DNS hiccup does not dead-letter the delivery.
+func TestDispatcher_Handle_DNSResolutionFailure_Requeue(t *testing.T) {
+	t.Parallel()
+	failingResolver := fakeResolver{err: errors.New("dns timeout")}
+	policy := NewSafePolicy(withResolver(failingResolver))
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		dispatchTestSigner(t), policy, staticSelector("http://unresolvable.example.test/"))
+	require.NoError(t, err)
+
+	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
+		"DNS resolution failure must be transient (Requeue), not Reject")
+
+	var ee *errcode.Error
+	require.True(t, errors.As(res.Err, &ee))
+	assert.Equal(t, errcode.ErrWebhookDeliveryFailed, ee.Code,
+		"DNS failure must carry the transient delivery-failed code, not SSRF-blocked")
+}
+
+// F8: a non-2xx response body is captured (bounded) into the server-side
+// Internal diagnostic so ops can see WHY a receiver rejected — without the body
+// ever reaching the wire.
+func TestDispatcher_Handle_NonSuccessBodyDiagnostic(t *testing.T) {
+	t.Parallel()
+	const bodyText = "upstream says: tenant quota exceeded"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, bodyText)
+	}))
+	defer srv.Close()
+
+	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
+		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL))
+	require.NoError(t, err)
+
+	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
+	require.Equal(t, outbox.DispositionRequeue, res.Disposition)
+
+	var ee *errcode.Error
+	require.True(t, errors.As(res.Err, &ee))
+	assert.Contains(t, internalAttrValue(t, ee, "response_body"), "tenant quota exceeded",
+		"non-2xx response body must be captured in the server-side diagnostic")
+}
+
+// internalAttrValue extracts a named InternalDetail value from an errcode.Error
+// as a string (server-only observability; never on the wire). Returns "" absent.
+func internalAttrValue(t *testing.T, ee *errcode.Error, key string) string {
+	t.Helper()
+	for _, d := range ee.InternalDetails {
+		if a := d.AsSlogAttr(); a.Key == key {
+			return a.Value.String()
+		}
+	}
+	return ""
 }
 
 // T-06: WithDeliveryTimeout ignores non-positive durations; the effective
