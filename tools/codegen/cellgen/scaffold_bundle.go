@@ -214,10 +214,14 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 
 // cellTemplateData wraps ScaffoldSpec with extra template-only fields so that
 // scaffold-cell.tmpl can reference {{.ListenerMarker}} (SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01)
-// without embedding the marker literal directly in the template.
+// and {{.ErrPrefix}} (issue #1091 errcode prefix ownership) without embedding
+// derived literals directly in the template.
 type cellTemplateData struct {
 	ScaffoldSpec
 	ListenerMarker string
+	// ErrPrefix is the ERR_<CELLID>_ namespace prefix registered in init() so
+	// the new cell owns its error-code namespace by construction (issue #1091).
+	ErrPrefix string
 }
 
 // planCell renders cell.go + cell.yaml and returns them as PlannedFiles.
@@ -225,6 +229,7 @@ func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error
 	cellData := cellTemplateData{
 		ScaffoldSpec:   spec,
 		ListenerMarker: ListenerMarker,
+		ErrPrefix:      "ERR_" + strings.ToUpper(spec.CellID.String()) + "_",
 	}
 	cellGoContent, err := renderTemplate(spec.ModulePath, cellGoTemplate, cellData, true)
 	if err != nil {
