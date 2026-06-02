@@ -66,7 +66,6 @@ func TestMQTTReasonNameRedaction_FunnelOnly(t *testing.T) {
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -113,7 +112,6 @@ func TestMQTTReasonNameRedaction_ScannerNonVacuous(t *testing.T) {
 	var inside int
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil

@@ -314,7 +314,6 @@ func TestContractPathQueryParamNameLiteral01_RedComputedParamName(t *testing.T) 
 			FixtureOpts{Tests: true},
 			[]string{fixturePattern},
 		),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

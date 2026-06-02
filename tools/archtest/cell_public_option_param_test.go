@@ -409,7 +409,6 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	var violations []rawPublicOptionViolation
 	_ = Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/rawparamfixture"}),
-
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanPassForRawPublicOption(p, false)...)
 			return nil

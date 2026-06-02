@@ -31,7 +31,7 @@
 // constants from runtime/audit (authoritative source) and compares them against
 // string literals extracted via AST scan from runtime/auth/bootstrap.go and
 // the const-eval'd map keys in cells/accesscore/slices/setup. Typed loading
-// (RunTypedProduction) prevents const-value indirection from bypassing the check.
+// (Run with a Production scope) prevents const-value indirection from bypassing the check.
 //
 // Hard upgrade path: generate a shared compile-time constant set from the three
 // sites via a codegen funnel so the compiler enforces equivalence. Tracked as
@@ -146,13 +146,13 @@ func TestBootstrapReasonSetEquivalence01(t *testing.T) {
 	})
 
 	require.True(t, auditVisited,
-		"%s: RunTypedProduction did not visit %q — scope gap, rule would pass vacuously",
+		"%s: Production scope did not visit %q — scope gap, rule would pass vacuously",
 		ruleBootstrapReasonSetEquivalence01, auditPkg)
 	require.NotEmpty(t, auditReasons,
 		"%s: no Reason* consts found in %q — authoritative set is empty (bug)",
 		ruleBootstrapReasonSetEquivalence01, auditPkg)
 	require.True(t, setupVisited,
-		"%s: RunTypedProduction did not visit %q — scope gap, rule would pass vacuously",
+		"%s: Production scope did not visit %q — scope gap, rule would pass vacuously",
 		ruleBootstrapReasonSetEquivalence01, setupPkg)
 	require.NotEmpty(t, setupReasons,
 		"%s: no %s map keys resolved in %q — whitelist set is empty (bug)",

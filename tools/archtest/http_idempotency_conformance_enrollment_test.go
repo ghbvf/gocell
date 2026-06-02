@@ -20,8 +20,8 @@
 //     path note below).
 //
 //   - Medium (downstream): the callsite scan proves a _test.go file CALLS
-//     RunConformanceSuite. The scan uses RunTyped(Tests: true,
-//     Tags: FlatNonDefaultTags()) which includes the "integration" build tag in
+//     RunConformanceSuite. The scan uses Run(t, Typed(TypedOpts{Tests: true,
+//     Tags: FlatNonDefaultTags()}, ...)) which includes the "integration" build tag in
 //     the union load — so integration-gated enrollment files such as
 //     adapters/redis/http_idempotency_conformance_test.go (//go:build
 //     integration) are always visible to the callsite scan without raw-AST
@@ -36,7 +36,7 @@
 //
 // The Redis Store enrollment (adapters/redis.HTTPIdempotencyStore) lives in
 // adapters/redis/http_idempotency_conformance_test.go, which is gated by
-// //go:build integration. The callsite scan runs via RunTyped with
+// //go:build integration. The callsite scan runs via Run(t, Typed(...)) with
 // Tags: FlatNonDefaultTags(), which is the flat union of all known non-default
 // build tags in the repo including "integration". This means packages.Load
 // evaluates the integration build constraint as satisfied, loading the
@@ -165,7 +165,7 @@ func TestHTTPIdempotencyConformanceEnrollment(t *testing.T) {
 
 	// ─── Step 3: typed callsite scan for RunConformanceSuite ─────────────────
 	//
-	// We use RunTyped(Tests: true, Tags: FlatNonDefaultTags()) so that ALL
+	// We use Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, ...)) so that ALL
 	// _test.go files are visible including integration-tagged files such as
 	// adapters/redis/http_idempotency_conformance_test.go. FlatNonDefaultTags()
 	// includes "integration" in its flat union, causing packages.Load to
@@ -313,7 +313,7 @@ func TestHTTPIdempotencyConformanceEnrollment_REDFixture(t *testing.T) {
 }
 
 // TestHTTPIdempotencyConformanceEnrollment_BuildTagBlindspot_RedisAlwaysVisible
-// (integration-tag handling) confirms that RunTyped with FlatNonDefaultTags()
+// (integration-tag handling) confirms that Run(t, Typed(...)) with FlatNonDefaultTags()
 // sees the Redis enrollment package (adapters/redis) because "integration" is
 // included in the flat tag union. This means that
 // adapters/redis/http_idempotency_conformance_test.go (//go:build integration)

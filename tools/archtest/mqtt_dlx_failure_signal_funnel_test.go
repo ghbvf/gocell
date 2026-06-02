@@ -263,7 +263,6 @@ func withRouteDeadLetter(t *testing.T, fn func(p *Pass, f *ast.File, fd *ast.Fun
 	// the found==false assertion below fails loudly (rule cannot go vacuous).
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil

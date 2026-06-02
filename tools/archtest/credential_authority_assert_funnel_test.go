@@ -215,7 +215,6 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 		"./cells/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -305,7 +304,6 @@ func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 		"./cells/accesscore/slices/sessionrefresh/...",
 		"./cells/accesscore/slices/sessionvalidate/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -461,7 +459,6 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_MethodValueAssignment(t *test
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -509,7 +506,6 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -553,7 +549,6 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -597,7 +592,6 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead(t *testing.
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Fset == nil {
 				return nil
@@ -664,7 +658,6 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/credentialauthority/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -789,7 +782,6 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 		"./cmd/...",
 		"./runtime/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

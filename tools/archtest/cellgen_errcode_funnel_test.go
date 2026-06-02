@@ -212,7 +212,6 @@ func TestCellgenErrcodeFunnel(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{},
 		[]string{"./tools/codegen/cellgen/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -364,7 +363,6 @@ func TestCellgenErrcodeFunnelBlindSpotsAbsent(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{},
 		[]string{"./tools/codegen/cellgen/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

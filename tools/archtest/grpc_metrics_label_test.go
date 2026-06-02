@@ -140,7 +140,7 @@ func TestGRPCMetricsLabelCellIDCtxSource01(t *testing.T) {
 // package (TestGRPCMetricsLabelCellIDCtxSource01) or the RED fixture
 // (TestGRPCMetricsLabelCellIDCtxSource01_RedFixtureDetected). The package-path
 // filter and the production `visited` tracking stay in the callers so the same
-// scan serves both RunTypedProduction and RunTypedFixture.
+// scan serves both Run(t, Production(...)) and Run(t, Fixture(...)).
 func scanGRPCMetricsLabelPkg(p *Pass) []Diagnostic {
 	fn := findUnaryMetricsFuncDecl(p.Files)
 	if fn == nil {

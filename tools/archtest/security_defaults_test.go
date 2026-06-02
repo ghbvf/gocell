@@ -1311,7 +1311,6 @@ func testSEC10FixtureCatchesPrimaryWithoutHealth(t *testing.T) {
 	var violations []string
 	_ = Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/healthlistenerfixture"}),
-
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, sec10Violations(p)...)
 			return nil

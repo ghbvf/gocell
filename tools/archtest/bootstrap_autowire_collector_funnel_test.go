@@ -167,7 +167,10 @@ func TestBootstrapAutoWireCollectorFunnel01(t *testing.T) {
 
 	observed := map[string]bool{}
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	// Migrated from RunTypedProduction (#1500 / #1037 §1d). Production() routes
+	// through the same runProduction → LoadProductionPackages path with the
+	// identical generated/ filter — semantically equivalent to the old entry.
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg.Path() != autoWireBootstrapPkgPath {
 			return nil
 		}
@@ -226,8 +229,11 @@ func TestBootstrapAutoWireCollectorFunnel01_PlantedBypass(t *testing.T) {
 		{collectorsPkgPath, "NewBeta"}:  "collectors.NewBeta",
 	}
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	// Migrated from RunTypedFixture (#1500 / #1037 §1d). Fixture() injects the
+	// same archtest_fixture build tag inside the Run dispatch — semantically
+	// equivalent to the old entry (FixtureOpts has no Tags field, so the tag
+	// stays framework-owned).
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePattern}),
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() || p.Pkg.Path() != fixturePkgPath {
 				return nil
