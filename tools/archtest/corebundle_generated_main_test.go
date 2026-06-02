@@ -1,12 +1,17 @@
-// invariants:
-//   - INVARIANT: MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01
+// INVARIANT: COREBUNDLE-GENERATED-MAIN-NO-INLINE-01
 //
-// MODULE-ORDER-CONFIGCORE-FIRST-01 was removed when the postgres pool moved out
-// of ConfigCoreModule.Provide into the assembly-level provisionCapabilities
-// (cap_wiring.go): the pool is provisioned before composition.Build and registered as the
-// first ManagedResource by runtimeBaseOptions, so cell module order no longer
-// carries the pool happens-before contract. See ADR
-// docs/architecture/202605251500-adr-capability-provider-interface.md §Decision.
+// corebundle_generated_main_test.go — the generated cmd/corebundle/main.go must
+// delegate to the handwritten runCorebundle(ctx, assemblyID, cells) helper and
+// must NOT inline BuildApp module literals; the assembly id + cell list passed to
+// runCorebundle must match assemblies/corebundle/assembly.yaml.
+//
+// Formerly module_order_test.go. The MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01
+// and MODULE-ORDER-CONFIGCORE-FIRST-01 invariants were retired — Wave-1 #1423
+// deleted the ModuleExports cross-module value handoff (auditcore now wires the
+// bootstrap store internally via WithBootstrapStore; accesscore publishes
+// event.auth.bootstrap-failed.v1 and auditcore subscribes), and configcore's
+// postgres pool moved to assembly-level provisionCapabilities — so only this
+// generated-main check remains.
 
 package archtest
 
@@ -26,51 +31,9 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-const (
-	ruleModuleOrderAuditcoreBeforeAccesscore01 = "MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01"
-)
-
 type assemblyOrderFixture struct {
 	ID    string   `yaml:"id"`
 	Cells []string `yaml:"cells"`
-}
-
-// TestModuleOrderAuditcoreBeforeAccesscore01 enforces that auditcore's
-// CellModule.Provide runs before accesscore's so that auditcore's typed
-// ModuleExports.BootstrapLedgerStore export is available by the time
-// AccessCoreModule builds the bootstrap auth-fail observer via
-// audit.NewBootstrapAuthFailObserver (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039
-// W1-2). accesscore.Provide fails fast if the export is absent.
-//
-// This is now the only cell-module-order invariant: the postgres pool no longer
-// rides on slot-zero (configcore) — it is provisioned assembly-level before
-// composition.Build (provisionCapabilities), so the former
-// MODULE-ORDER-CONFIGCORE-FIRST-01 was removed.
-func TestModuleOrderAuditcoreBeforeAccesscore01(t *testing.T) {
-	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml")))
-	require.NoError(t, err)
-
-	var asm assemblyOrderFixture
-	require.NoError(t, yaml.Unmarshal(body, &asm))
-
-	auditIdx, accessIdx := -1, -1
-	for i, c := range asm.Cells {
-		switch c {
-		case "auditcore":
-			auditIdx = i
-		case "accesscore":
-			accessIdx = i
-		}
-	}
-	require.NotEqual(t, -1, auditIdx,
-		"%s: corebundle assembly must include auditcore", ruleModuleOrderAuditcoreBeforeAccesscore01)
-	require.NotEqual(t, -1, accessIdx,
-		"%s: corebundle assembly must include accesscore", ruleModuleOrderAuditcoreBeforeAccesscore01)
-	assert.Less(t, auditIdx, accessIdx,
-		"%s: auditcore must Provide before accesscore so its ModuleExports.BootstrapLedgerStore "+
-			"export is available before AccessCoreModule reads it (audit.NewBootstrapAuthFailObserver)",
-		ruleModuleOrderAuditcoreBeforeAccesscore01)
 }
 
 func TestCorebundleGeneratedMainDoesNotInlineModules(t *testing.T) {

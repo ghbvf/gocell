@@ -433,6 +433,16 @@ metrics:
         - "900"
         - "1800"
       file: kernel/projection/metrics.go
+    - name: saga_drive_total
+      fqName: gocell_saga_drive_total
+      namespace: gocell
+      type: counter
+      help: Total Coordinator driveOne completions, labeled by result (ok = advanced cleanly; error = stale lease / instance gone / step failure). Per-instance forward-progress throughput.
+      labels:
+        - cell
+        - definition_id
+        - result
+      file: runtime/observability/metrics/saga.go
     - name: saga_heartbeat_failed_total
       fqName: gocell_saga_heartbeat_failed_total
       namespace: gocell
@@ -440,6 +450,16 @@ metrics:
       help: Total heartbeat tick failures observed by the saga executor, labeled by reason (infra_error = transient err; stale_lease = ok=false / another coordinator took over). Excludes definition_id and step_name — heartbeat is an infra signal, not per-step.
       labels:
         - cell
+        - reason
+      file: runtime/observability/metrics/saga.go
+    - name: saga_leader_elect_skip_total
+      fqName: gocell_saga_leader_elect_skip_total
+      namespace: gocell
+      type: counter
+      help: Total leader-elect skips (acquireLead could not confirm leadership), labeled by reason (contended = another coordinator holds the distlock; ctx_canceled = shutdown; backend_error = distlock I/O fault / lock-acquire failure rate). Sustained contended with drive{result=ok}≈0 means an instance is stuck skipping.
+      labels:
+        - cell
+        - definition_id
         - reason
       file: runtime/observability/metrics/saga.go
     - name: saga_step_outcome_total
@@ -461,6 +481,15 @@ metrics:
         - cell
         - definition_id
         - step_name
+      file: runtime/observability/metrics/saga.go
+    - name: saga_tick_total
+      fqName: gocell_saga_tick_total
+      namespace: gocell
+      type: counter
+      help: Total Coordinator ClaimPending cycles, labeled by result (claimed = ≥1 instance; empty = idle tick; error = ClaimPending failed). Loop liveness; definition_id is not available pre-claim.
+      labels:
+        - cell
+        - result
       file: runtime/observability/metrics/saga.go
     - name: stale_cipher_total
       fqName: gocell_config_stale_cipher_total

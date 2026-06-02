@@ -102,7 +102,9 @@ pg := capability.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutbox
 - pool 的 `ManagedResource`（`SharedDeps.poolMR`）由 `runtimeBaseOptions`（`defaultRuntimeOptions` 的一部分，先于 cellOpts append）注册 → LIFO 下 pool 最后 close（晚于所有 consumer）。`provisionCapabilities` 与 `bootstrap.Run` 之间的失败窗口由 `runCorebundle` 的 `handedToBootstrap` defer 守卫关池。
 - **删** `MODULE-ORDER-CONFIGCORE-FIRST-01`（`tools/archtest/module_order_test.go`）+ `main_test.go:65` 断言：前提（configcore 创建 pool）消失。
 
-留在 SharedDeps（composition-state，非外部系统 capability）：`BootstrapLedgerStore`（audit→access cell-domain store publish-back，`MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` 不变）、`Clock`、`JWTDeps`、`PromStack`、`EventBus`、`InternalGuard`、listener addrs、`vaultTransitMetricsOnce`。
+留在 SharedDeps（composition-state，非外部系统 capability）：`Clock`、`JWTDeps`、`PromStack`、`EventBus`、`InternalGuard`、listener addrs、`vaultTransitMetricsOnce`。
+
+**Amendment 2026-06-02 #1423**：原先提到的 `BootstrapLedgerStore`（audit→access cell-domain store publish-back）和 `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` 均已在 Wave-1 #1423 中删除。`BootstrapLedgerStore` 现由 `cellmodules/auditcore.Provide` 内部构造和持有，并通过 `auditcell.WithBootstrapStore` 注入 auditcore cell；`composition.ModuleExports` 跨 module 值传递通道已完全删除；`SharedDeps` 不再携带任何 bootstrap 链相关字段。详见 ADR-1085 §Amendment 2026-06-02 与 ADR-1121 §Amendment 2026-06-02。
 
 ### 4. 不变的归属
 

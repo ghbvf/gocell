@@ -131,6 +131,7 @@ type Bootstrap struct {
 	managedResourceNil       bool
 	closerNil                bool  // WithManagedCloser(nil) sentinel — phase0 fail-fast
 	rateLimiterNil           bool  // WithRateLimiter(nil) sentinel — phase0 fail-fast
+	idempotencyStoreNil      bool  // WithIdempotencyStore(nil) sentinel — phase0 fail-fast
 	closers                  []any // ContextCloser/io.Closer from any option (e.g. WithRateLimiter); LIFO teardown
 	shutdownTimeout          time.Duration
 	preShutdownDelay         time.Duration
@@ -158,6 +159,13 @@ type Bootstrap struct {
 	// webhook receiver but these fields remain nil.
 	webhookSourceStore kwh.SourceStore
 	webhookClaimer     idempotency.Claimer
+
+	// --- webhook: outbound-webhook dispatcher dependency ---
+	// Injected via WithWebhookSSRFPolicy. nil means "use the default
+	// production policy" (kwh.NewSafePolicy(): block all private/reserved
+	// ranges, no loopback) — phase6 builds it when any cell registers a webhook
+	// dispatcher. The dispatcher reuses webhookSourceStore for signing secrets.
+	webhookSSRFPolicy *kwh.SafePolicy
 
 	// --- projection: L3 CQRS projection harness dependencies ---
 	// Injected via WithProjectionCheckpointStore / WithProjectionTxRunner /

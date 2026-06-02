@@ -37,7 +37,7 @@ Hard funnel; hand-writing it N times is what the AI-robust charter forbids.
 | **checkpoint / offset** | **new** — framework-owned offset table, committed in the same `CellTx` as business apply (exactly-once; does not touch business schema) |
 | **rebuild orchestration** | **new** — harness shell (Stop → Reset → Replay → Catch-up state machine) + business hook |
 | **observability metrics** | **new** — `projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_pending_events` (covers #961) |
-| **PROJECTION-CONSISTENCY-01 → Hard** | **new** — parser load-time `jsonschema.Validate` (covers #960) |
+| **PROJECTION-CONSISTENCY-01 → Hard** | **new** — contractgen codegen funnel: `types_gen.go` compile-time guard (covers #960; the original parser-jsonschema framing was rejected — see §Amendment 2026-06-02 #960) |
 | **examples L3 reference** | orderprojection rewritten onto the harness (covers #834) |
 
 ### Out of scope (GAP-8 sealed — see §4)
@@ -412,7 +412,7 @@ package godoc (not duplicated here).
 | **PROJECTION-REGISTER-FUNNEL-01** | **PR-04a active (genuinely-green, vacuous)** → PR-04b cellgen callsite | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `cell.Registrar.RegisterProjection` callers to {`_test.go`, cellgen `cell_gen.go` + DO-NOT-EDIT banner}. The upstream complement of APPLY-HOOK-FUNNEL: cellgen's record-only single source is `reg.RegisterProjection` (guarded here); the `Coordinator.Subscribe` terminal that consumes it is in the bootstrap drain (guarded by APPLY-HOOK-FUNNEL). Same permanent Go-language ceiling (Medium); Hard-ization (sealed-token) is the same #1176 follow-up. The raw-infra-stays-in-bootstrap property is the **Hard** complement (type system): cells hold sealed markers, never the raw `CheckpointStore`/`TxRunner` the drain constructs. | single sanctioned holder / caller-identity allowlist |
 | **PROJECTION-CHECKPOINT-TX-BOUND-01** | PR-01 stub → PR-02 green | **Medium** (`SaveOffset` impl must obtain tx via `persistence.TxFromContext`; raw `db.Exec` / `*sql.Tx` form fails). Rides the existing `PG-REPO-AMBIENT-TX-01` Hard funnel for the PG adapter. | typed-param / ambient-tx form |
 | **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | PR-02 | **Medium** (SQL-literal scan rejects `owner` in INSERT/UPDATE write paths; v1 scope — removed in the same PR that enables v1.1 claim). | input-struct field exclusion (SQL-write variant) |
-| **PROJECTION-CONSISTENCY-PARSE-TIME-01** | PR-05 | 下游 **Hard** (parser load path must call `jsonschema.Validate`; callsite identity locked) — upgrades #960 from Medium governance rule to Hard parse-time gate. | codegen/parse funnel + callsite identity |
+| **PROJECTION-CONSISTENCY-01** (codegen funnel) | gh #960 (delivered) | 下游 **Hard** — contractgen emits `const _ = uint(cellvocab.<level> - cellvocab.L3)` into the projection `types_gen.go`; a level below L3 overflows uint at compile time, so an invalid `codegen=true` projection cannot exist in a buildable tree. 上游 **Hard** (structural, not caller-allowlist) — `generateOneContract` renders `types.tmpl` unconditionally for every `kind:projection` contract and the guard sits in an unconditional `{{if eq .Kind "projection"}}` block, so a generated projection `types_gen.go` cannot exist without the guard; the byte-lock is the committed `generated/.../types_gen.go` + `hack/verify-codegen-contract.sh` regenerate-and-diff CI. The governance rule `PROJECTION-CONSISTENCY-01` is the **Medium** backstop for the two vectors the codegen funnel cannot reach (`codegen=false` contracts + in-memory fixtures). The original "parser load-time `jsonschema.Validate`" framing was **rejected** (a parse-time validator is a Medium runtime guard and does not cover the in-memory vector — see §Amendment 2026-06-02 #960). | codegen funnel + compile-error downstream |
 
 Sealed-marker note: `CellCheckpointStore` (PR-00 `cell_marker.go`) is the
 sealed-marker Hard at the field/assignment layer (external code cannot express
@@ -518,3 +518,62 @@ that lands each moves from "PR-04" to a named sub-PR:
 projections) is unchanged: PR-04b derives one `RegisterProjection` per
 `projection:`-bearing CU; a slice that lists multiple such CUs produces multiple
 projections, each with its own checkpoint.
+
+## Amendment 2026-06-02 (#960 — PROJECTION-CONSISTENCY-01 → Hard via contractgen codegen funnel, NOT parser jsonschema)
+
+The original plan (§1 scope table + §7 row `PROJECTION-CONSISTENCY-PARSE-TIME-01`)
+proposed upgrading PROJECTION-CONSISTENCY-01 to Hard by calling
+`jsonschema.Validate` in the `kernel/metadata` parser's contract load path. On
+implementation that framing was **rejected** and the rows above are rewritten
+(not annotated) to the delivered mechanism — keeping a single truth source per
+the ai-robust "amendment 与原文矛盾的段落同 PR 内重写" requirement.
+
+**Why parser-jsonschema is not Hard.** By the AI-robust charter's own tier
+table, a parse-time `jsonschema.Validate` is a *runtime guard executed at parse*
+= **Medium**: the offending YAML (`consistencyLevel: L2` on a projection) is
+fully representable — it is *rejected by a validator*, not made *unrepresentable*.
+It also leaves the in-memory vector uncovered: `metadata.ContractMeta` is an open
+exported struct, so `ContractMeta{Kind:"projection", ConsistencyLevel:"L2"}` is
+constructible in Go without ever touching the parser. A true Hard must close the
+authoring vector by impossibility, which a parse-time validator does not.
+
+**Delivered mechanism (Hard).** contractgen emits, into the projection
+`types_gen.go` (shared `types.tmpl`, `{{if eq .Kind "projection"}}` block), a
+compile-time guard:
+
+```go
+import "github.com/ghbvf/gocell/kernel/cellvocab"
+
+const _ = uint(cellvocab.<level> - cellvocab.L3)
+```
+
+For L3/L4 the subtraction is ≥ 0; for L0/L1/L2 it is negative and Go rejects the
+`uint(...)` conversion at compile time ("constant -1 overflows uint"). A
+`codegen=true` projection contract below L3 therefore cannot produce a buildable
+tree — the charter's "codegen funnel + compile-error downstream" Hard archetype,
+the same shape saga uses ("contractgen builder delegation = Hard 主门控"). The
+`buildContractSpec` projection case validates the level *parses* (`cellvocab.ParseLevel`)
+so the template never emits a garbage identifier; the `≥ L3` floor is deliberately
+left to the compile-time guard (not the builder) to keep the Hard form downstream.
+The governance rule `PROJECTION-CONSISTENCY-01` is **retained** as the **Medium**
+backstop for `codegen=false` contracts and in-memory ProjectMeta fixtures.
+
+**Scope.** Contracts only (the one place #960 scopes). No parser change, no
+kernel-isolation relaxation, no `pkg/jsonschema` wrapper, no `contract.schema.json`
+change. The schema's projection if/then enum stays a documentation/IDE layer
+(`TestProjectionConsistencyLevelSchemaEnum`); the Hard gate is the codegen funnel.
+
+### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement)
+
+§6 threat matrix is about projection runtime correctness (exactly-once, ordering,
+rebuild) and is unaffected by this grading change. The §7 row is rewritten in
+place: the rating *improves* (the delivered Hard codegen funnel is strictly
+stronger than the rejected Medium parse-time validator); no row flips to ⚠️/❌.
+
+### Optional follow-up (out of scope, not blocking)
+
+`contract.schema.json` lacks a top-level `triggers` property although 17 real
+contracts declare `triggers:`. This is harmless today because the parser does
+not run `jsonschema.Validate`. If a broad parse-time schema validator is ever
+introduced (an independent **Medium** DX improvement, orthogonal to this Hard
+gate), `triggers` must be added to the schema first. Tracked at gh #1486.

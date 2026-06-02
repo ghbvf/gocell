@@ -71,3 +71,10 @@ func fetchViaHead() (*http.Response, error) {
 func transportRef() http.RoundTripper {
 	return http.DefaultTransport // VIOLATION A3 (http.DefaultTransport)
 }
+
+// ── A4 violation: &http.Transport{} composite literal with no DialContext ──
+// The absence of DialContext lets the transport fall back to the net default
+// dialer, which bypasses SSRF vetting.
+func buildUnsafeTransport() *http.Transport {
+	return &http.Transport{} // VIOLATION A4 (no DialContext field)
+}

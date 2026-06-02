@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/contractpath"
@@ -51,6 +52,7 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		PackagePath:                             pkgPath,
 		ContractID:                              contractID,
 		Kind:                                    contract.Kind,
+		ConsistencyLevel:                        contract.ConsistencyLevel,
 		SourceFile:                              contract.File,
 		PanicReasonPolicyNil:                    kebab + "-policy-nil",
 		PanicReasonBootstrapAuthNil:             kebab + "-bootstrap-auth-nil",
@@ -63,26 +65,30 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 
 	contractDir := filepath.Dir(contract.File)
 
+	if err := buildKindSpec(spec, rootDir, contract, contractDir); err != nil {
+		return nil, err
+	}
+
+	return spec, nil
+}
+
+// buildKindSpec dispatches per-kind spec population onto spec. Extracted from
+// buildContractSpec to keep that function's cyclomatic complexity bounded.
+func buildKindSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {
 	switch contract.Kind {
 	case "http":
-		if err := buildHTTPSpec(spec, rootDir, contract, contractDir); err != nil {
-			return nil, err
-		}
+		return buildHTTPSpec(spec, rootDir, contract, contractDir)
 	case "event":
-		if err := buildEventSpec(spec, rootDir, contract, contractDir); err != nil {
-			return nil, err
-		}
+		return buildEventSpec(spec, rootDir, contract, contractDir)
 	case "saga":
-		if err := buildSagaSpec(spec, rootDir, contract, contractDir); err != nil {
-			return nil, err
-		}
+		return buildSagaSpec(spec, rootDir, contract, contractDir)
 	case "grpc":
-		if err := buildGRPCSpec(spec, contract); err != nil {
-			return nil, err
-		}
-	case "command", "projection":
-		// These kinds are in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but do
-		// not yet have dedicated generators. buildContractSpec accepts them so that
+		return buildGRPCSpec(spec, contract)
+	case "projection":
+		return validateProjectionLevel(contract.ID, contract.ConsistencyLevel)
+	case "command":
+		// command is in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but does not
+		// yet have a dedicated generator. buildContractSpec accepts it so that
 		// generateOneContract can emit types_gen.go + iface_gen.go (shared scaffolding)
 		// without hard-failing. No spec/handler/subscription file is emitted.
 		// When a full generator is added, add the corresponding case here.
@@ -93,12 +99,29 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		// for this kind; the early-return branches in those functions are the
 		// enforcement point.
 	default:
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection|webhook|grpc|saga)",
-			contractID, contract.Kind)
+			contract.ID, contract.Kind)
 	}
 
-	return spec, nil
+	return nil
+}
+
+// validateProjectionLevel enforces the contractgen half of PROJECTION-CONSISTENCY-01
+// (gh #960): the generated types_gen.go carries a compile-time guard
+// `const _ = uint(cellvocab.<level> - cellvocab.L3)`. The level must parse to a
+// known cellvocab.Level so the template emits a valid cellvocab identifier; an
+// empty/garbage level would render uncompilable Go for the wrong reason, so it is
+// rejected here with a clean build error. The floor check (>= L3) is deliberately
+// NOT done here — that is the compile-time guard's job (Hard downstream); doing it
+// here would degrade it to a builder-time guard.
+func validateProjectionLevel(contractID, level string) error {
+	if _, err := cellvocab.ParseLevel(level); err != nil {
+		return fmt.Errorf(
+			"contractgen build: projection contract %q has invalid consistencyLevel %q (must be L0..L4): %w",
+			contractID, level, err)
+	}
+	return nil
 }
 
 func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {

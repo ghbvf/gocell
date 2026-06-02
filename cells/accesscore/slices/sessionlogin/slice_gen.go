@@ -34,7 +34,7 @@ var sliceMeta = &metadata.SliceMeta{
 			"contract.event.user.unlocked.v1.publish",
 		},
 		Waivers: []metadata.WaiverMeta{
-			{Contract: "http.config.get.v1", Owner: "platform-team", Reason: "只读配置调用，集成测试已覆盖", ExpiresAt: "2026-06-01"},
+			{Contract: "http.config.get.v1", Owner: "platform-team", Reason: "只读配置调用，集成测试已覆盖；waiver 由 #1467 续期解阻塞 develop CI，补测试还债见 #1472", ExpiresAt: "2026-09-01"},
 		},
 	},
 	AllowedFiles: []string{

@@ -26,8 +26,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	kwh "github.com/ghbvf/gocell/kernel/webhook"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
+	webhookdispatch "github.com/ghbvf/gocell/runtime/webhook/dispatch"
 )
 
 // Compile-time check: EventRouterCollector satisfies eventrouter.EventCollector.
@@ -57,11 +60,11 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		// subscriptions once drained) need a Subscriber to consume.
 		return b.checkNoEventConsumersWhenSubscriberNil(s)
 	}
-	if !cellSnapshotsHaveSubscriptions(s) && !cellSnapshotsHaveProjections(s) {
-		// No subscriptions or projections to drain: skip router build entirely.
-		// Avoids invoking NewSubscriberWithMiddleware (which requires a non-nil
-		// ConsumerBase) when the deployment wires a Subscriber for future use
-		// but has no current handlers.
+	if !cellSnapshotsHaveSubscriptions(s) && !cellSnapshotsHaveProjections(s) && !cellSnapshotsHaveDispatchers(s) {
+		// No subscriptions, projections, or webhook dispatchers to drain: skip
+		// router build entirely. Avoids invoking NewSubscriberWithMiddleware
+		// (which requires a non-nil ConsumerBase) when the deployment wires a
+		// Subscriber for future use but has no current handlers.
 		return nil
 	}
 	if err := b.checkConsumerBaseConfiguredForSubscriptions(s); err != nil {
@@ -76,6 +79,9 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return err
 	}
 	if err := b.drainCellProjections(runCtx, s, evtRouter); err != nil {
+		return err
+	}
+	if err := b.drainWebhookDispatchers(s, evtRouter); err != nil {
 		return err
 	}
 
@@ -96,6 +102,73 @@ func cellSnapshotsHaveSubscriptions(s *phaseState) bool {
 		}
 	}
 	return false
+}
+
+// cellSnapshotsHaveDispatchers reports whether any cell snapshot declared at
+// least one outbound webhook dispatcher (reg.RegisterWebhookDispatch). Used
+// alongside cellSnapshotsHaveSubscriptions/Projections to decide whether the
+// event router must be built — dispatchers consume from the broker like
+// subscriptions.
+func cellSnapshotsHaveDispatchers(s *phaseState) bool {
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		if len(snap.WebhookDispatchers) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// drainWebhookDispatchers collects all WebhookDispatchRequest entries from cell
+// snapshots, builds an SSRF-guarded HMAC dispatcher for each, and registers it
+// on the event router as an event-kind subscription (Topic == contract ID).
+//
+// CellID drift check mirrors drainCellSubscriptions. Empty collection is a
+// no-op. A non-empty collection requires webhookSourceStore (for signing
+// secrets); the SSRF policy defaults to kwh.NewSafePolicy when unset.
+func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventrouter.Router) error {
+	var reqs []cell.WebhookDispatchRequest
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		for _, req := range snap.WebhookDispatchers {
+			if req.Spec.CellID != id {
+				return fmt.Errorf(
+					"bootstrap: cell %s webhook dispatcher drift: declared CellID=%q but snapshot owner=%q"+
+						" (codegen should inject cellID from cell metadata; check cellgen + contractgen templates)",
+					id, req.Spec.CellID, id)
+			}
+			reqs = append(reqs, req)
+		}
+	}
+	if len(reqs) == 0 {
+		return nil
+	}
+	if b.webhookSourceStore == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"bootstrap: webhook dispatchers declared but no source store configured; "+
+				"add WithWebhookSourceStore to bootstrap options")
+	}
+	policy := b.webhookSSRFPolicy
+	if policy == nil {
+		// Default production policy: block all private/reserved ranges, no loopback.
+		policy = kwh.NewSafePolicy()
+	}
+	consumers, err := webhookdispatch.BuildConsumers(b.clock, reqs, b.webhookSourceStore, policy)
+	if err != nil {
+		return fmt.Errorf("bootstrap: build webhook dispatch consumers: %w", err)
+	}
+	for _, c := range consumers {
+		if err := evtRouter.AddContractHandler(c.Spec, c.Handler, c.ConsumerGroup, c.CellID); err != nil {
+			return fmt.Errorf("bootstrap: webhook dispatch setup failed for contract %q: %w", c.Spec.ID, err)
+		}
+	}
+	return nil
 }
 
 // autoWireEventRouterCollector creates an EventRouterCollector (once, cached in
@@ -251,6 +324,11 @@ func (b *Bootstrap) checkNoEventConsumersWhenSubscriberNil(s *phaseState) error 
 				"bootstrap: cell %s registered a projection but no subscriber is configured; "+
 					"add WithSubscriber to bootstrap options", id)
 		}
+		if len(snap.WebhookDispatchers) > 0 {
+			return fmt.Errorf(
+				"bootstrap: cell %s registered a webhook dispatcher but no subscriber is configured; "+
+					"add WithSubscriber to bootstrap options", id)
+		}
 	}
 	return nil
 }
@@ -327,31 +405,43 @@ func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) e
 		if !ok {
 			continue
 		}
-		for _, sub := range snap.Subscriptions {
-			if b.consumerBase == nil {
-				return fmt.Errorf(
-					"bootstrap: cell %s registered subscription topic %q but no ConsumerBase is configured; "+
-						"add WithConsumerBase to bootstrap options", id, sub.Spec.Topic)
-			}
-			return fmt.Errorf(
-				"bootstrap: cell %s registered subscription topic %q but ConsumerBase (%T) was not constructed via "+
-					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
-					"call outbox.NewConsumerBase to obtain a properly initialized value",
-				id, sub.Spec.Topic, b.consumerBase)
-		}
-		for _, proj := range snap.Projections {
-			if b.consumerBase == nil {
-				return fmt.Errorf(
-					"bootstrap: cell %s registered projection topic %q but no ConsumerBase is configured; "+
-						"projections consume via the same ConsumerBase path as subscriptions — "+
-						"add WithConsumerBase to bootstrap options", id, proj.Spec.Topic)
-			}
-			return fmt.Errorf(
-				"bootstrap: cell %s registered projection topic %q but ConsumerBase (%T) was not constructed via "+
-					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
-					"call outbox.NewConsumerBase to obtain a properly initialized value",
-				id, proj.Spec.Topic, b.consumerBase)
+		if kind, topic, found := firstConsumerInSnapshot(snap); found {
+			return b.consumerBaseMisconfigError(id, kind, topic)
 		}
 	}
 	return nil
+}
+
+// firstConsumerInSnapshot returns the kind ("subscription" / "projection" /
+// "webhook dispatcher") and topic of the first ConsumerBase-backed consumer
+// declared in snap, or found=false when there are none. All three consume via
+// the same ConsumerBase path, so any one of them makes a configured
+// ConsumerBase mandatory.
+func firstConsumerInSnapshot(snap cell.RegistrySnapshot) (kind, topic string, found bool) {
+	if len(snap.Subscriptions) > 0 {
+		return "subscription topic", snap.Subscriptions[0].Spec.Topic, true
+	}
+	if len(snap.Projections) > 0 {
+		return "projection topic", snap.Projections[0].Spec.Topic, true
+	}
+	if len(snap.WebhookDispatchers) > 0 {
+		return "webhook dispatcher", snap.WebhookDispatchers[0].Spec.ContractID, true
+	}
+	return "", "", false
+}
+
+// consumerBaseMisconfigError formats the fail-fast error for a cell that
+// declared a ConsumerBase-backed consumer while no constructed ConsumerBase is
+// wired — distinguishing "missing" from "zero-value literal" (N8 (b)).
+func (b *Bootstrap) consumerBaseMisconfigError(cellID, kind, topic string) error {
+	if b.consumerBase == nil {
+		return fmt.Errorf(
+			"bootstrap: cell %s registered %s %q but no ConsumerBase is configured; "+
+				"add WithConsumerBase to bootstrap options", cellID, kind, topic)
+	}
+	return fmt.Errorf(
+		"bootstrap: cell %s registered %s %q but ConsumerBase (%T) was not constructed via "+
+			"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
+			"call outbox.NewConsumerBase to obtain a properly initialized value",
+		cellID, kind, topic, b.consumerBase)
 }

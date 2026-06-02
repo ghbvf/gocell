@@ -11,10 +11,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
-// SagaStepCollector registers three saga step metrics scoped to the owner
-// cell supplied at construction. One collector per Coordinator (= per-cell).
+// SagaCollector registers the six saga metrics scoped to the owner cell
+// supplied at construction. One collector per Coordinator (= per-cell). It
+// satisfies executor.Observer, the saga-wide observability sink, so the same
+// collector receives both Executor-emitted (step-level) and Coordinator-emitted
+// (tick / drive / leader-skip) events.
 //
-// Metrics registered:
+// Step-level metrics (Executor-emitted):
 //   - saga_step_outcome_total{cell,definition_id,outcome}: total Execute calls
 //     terminated, labeled by the 5 Outcome variants
 //     (succeeded / failed / expired / canceled / lease_lost). step_name is
@@ -28,26 +31,63 @@ import (
 //     step_name are excluded — heartbeat failure is an infra-level signal,
 //     not a per-step business metric.
 //
-// Cardinality discipline: definition_id × step_name is the worst case; both
-// are static enumeration sets (registered at compile time). Expected upper
-// bound: ≤ 200 active series per cell (≈ 20 definitions × 10 steps); metrics
-// provider cap=2000 is the runtime tripwire.
+// Coordinator-level metrics (Coordinator-emitted):
+//   - saga_tick_total{cell,result}: total ClaimPending cycles, labeled by
+//     result (claimed / empty / error). Loop liveness + claim activity;
+//     definition_id is not available pre-claim.
+//   - saga_drive_total{cell,definition_id,result}: total driveOne completions,
+//     labeled by result (ok / error). Per-instance forward-progress throughput.
+//   - saga_leader_elect_skip_total{cell,definition_id,reason}: total
+//     leader-elect skips, labeled by reason (contended / ctx_canceled /
+//     backend_error). reason="contended" sustained with drive{result="ok"}≈0
+//     signals an instance stuck skipping; reason="backend_error" is the
+//     distlock lock-acquire failure rate. Replaces log-scraping the Debug-level
+//     skip path (#1109).
+//
+// Cardinality discipline: definition_id × step_name is the worst case; all
+// label dimensions are static enumeration sets (registered at compile time).
+// result/reason add ≤3 values each over a bounded definition_id set. Expected
+// upper bound: ≤ 300 active series per cell; metrics provider cap=2000 is the
+// runtime tripwire.
 //
 // ref: temporalio/sdk-go internal_task_handlers.go — server-emitted
 // activity outcome / heartbeat-failure metric envelope.
 // ref: itimofeev/go-saga (no native metrics — pattern adapted from outbox).
-type SagaStepCollector struct {
+type SagaCollector struct {
 	cellID string
 
-	outcome kernelmetrics.CounterVec // saga_step_outcome_total{cell,definition_id,outcome}
-	retry   kernelmetrics.CounterVec // saga_step_retry_total{cell,definition_id,step_name}
-	hbFail  kernelmetrics.CounterVec // saga_heartbeat_failed_total{cell,reason}
+	outcome    kernelmetrics.CounterVec // saga_step_outcome_total{cell,definition_id,outcome}
+	retry      kernelmetrics.CounterVec // saga_step_retry_total{cell,definition_id,step_name}
+	hbFail     kernelmetrics.CounterVec // saga_heartbeat_failed_total{cell,reason}
+	tick       kernelmetrics.CounterVec // saga_tick_total{cell,result}
+	drive      kernelmetrics.CounterVec // saga_drive_total{cell,definition_id,result}
+	leaderSkip kernelmetrics.CounterVec // saga_leader_elect_skip_total{cell,definition_id,reason}
 }
 
 // compile-time interface check.
-var _ executor.Observer = (*SagaStepCollector)(nil)
+var _ executor.Observer = (*SagaCollector)(nil)
 
-// NewSagaStepCollector registers the three saga counters on the given provider.
+// registerSagaCounter registers one counter and appends it to *registered on
+// success. On failure it tears down every previously-registered counter LIFO
+// (#1181 F11 atomic registration: the provider registry must not retain orphans
+// so a retry can re-register under the same names — mirrors
+// prometheus/client_golang Registry.Unregister) and wraps the error with the
+// metric name.
+func registerSagaCounter(
+	p kernelmetrics.Provider, opts kernelmetrics.CounterOpts, registered *[]kernelmetrics.Collector,
+) (kernelmetrics.CounterVec, error) {
+	cv, err := p.CounterVec(opts)
+	if err != nil {
+		for i := len(*registered) - 1; i >= 0; i-- {
+			_ = p.Unregister((*registered)[i])
+		}
+		return nil, fmt.Errorf("runtime/observability/metrics: register %s: %w", opts.Name, err)
+	}
+	*registered = append(*registered, cv)
+	return cv, nil
+}
+
+// NewSagaCollector registers the six saga counters on the given provider.
 // cellID is the owner cell of the Coordinator wiring this collector; empty is
 // an error (no fallback to _runtime sentinel — the saga Coordinator is always
 // owned by exactly one cell).
@@ -55,78 +95,78 @@ var _ executor.Observer = (*SagaStepCollector)(nil)
 // Failure modes:
 //   - p == nil → errcode.KindInvalid + ErrObservabilityConfigInvalid
 //   - cellID == "" → errcode.KindInvalid + ErrObservabilityConfigInvalid
-//   - any CounterVec registration error is wrapped with the metric name
+//   - any CounterVec registration error is wrapped with the metric name and
+//     rolls back the counters registered earlier in the sequence (atomic).
 //
-// Caller contract: never pass a nil *SagaStepCollector — use NopObserver via
+// Caller contract: never pass a nil *SagaCollector — use NopObserver via
 // WithObserver(nil) for explicit disable.
-func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCollector, error) {
+func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
-			"runtime/observability/metrics: SagaStepCollector Provider is required")
+			"runtime/observability/metrics: SagaCollector Provider is required")
 	}
 	if cellID == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
-			"runtime/observability/metrics: SagaStepCollector cellID is required")
+			"runtime/observability/metrics: SagaCollector cellID is required")
 	}
 
-	// #1181 F11: atomic registration. If any CounterVec call fails mid-way,
-	// the successfully-registered counters from earlier in the sequence are
-	// torn down LIFO so the provider's registry does not retain orphans (a
-	// subsequent retry must be free to re-register under the same names).
-	// prometheus/client_golang Registry.Unregister provides the equivalent
-	// rollback primitive that this mirrors.
 	var registered []kernelmetrics.Collector
-	rollbackOnErr := func() {
-		for i := len(registered) - 1; i >= 0; i-- {
-			_ = p.Unregister(registered[i])
-		}
-	}
-
-	outcome, err := p.CounterVec(kernelmetrics.CounterOpts{
+	c := &SagaCollector{cellID: cellID}
+	var err error
+	if c.outcome, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
 		Name: "saga_step_outcome_total",
 		Help: "Total saga step Execute outcomes (succeeded/failed/expired/canceled/lease_lost). " +
 			"step_name is intentionally excluded to bound the step×outcome cardinality; " +
 			"per-step drill-down uses saga_step_retry_total.",
 		LabelNames: []string{"cell", "definition_id", "outcome"},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("runtime/observability/metrics: register saga_step_outcome_total: %w", err)
+	}, &registered); err != nil {
+		return nil, err
 	}
-	registered = append(registered, outcome)
-
-	retry, err := p.CounterVec(kernelmetrics.CounterOpts{
+	if c.retry, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
 		Name:       "saga_step_retry_total",
 		Help:       "Total retry attempts emitted by the saga executor (attempt N>1 fired) per definition+step.",
 		LabelNames: []string{"cell", "definition_id", "step_name"},
-	})
-	if err != nil {
-		rollbackOnErr()
-		return nil, fmt.Errorf("runtime/observability/metrics: register saga_step_retry_total: %w", err)
+	}, &registered); err != nil {
+		return nil, err
 	}
-	registered = append(registered, retry)
-
-	hbFail, err := p.CounterVec(kernelmetrics.CounterOpts{
+	if c.hbFail, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
 		Name: "saga_heartbeat_failed_total",
 		Help: "Total heartbeat tick failures observed by the saga executor, labeled by reason " +
 			"(infra_error = transient err; stale_lease = ok=false / another coordinator took over). " +
 			"Excludes definition_id and step_name — heartbeat is an infra signal, not per-step.",
 		LabelNames: []string{"cell", "reason"},
-	})
-	if err != nil {
-		rollbackOnErr()
-		return nil, fmt.Errorf("runtime/observability/metrics: register saga_heartbeat_failed_total: %w", err)
+	}, &registered); err != nil {
+		return nil, err
 	}
-
-	// hbFail intentionally not appended to registered — it is the last
-	// registration; no subsequent rollback needed. IMPORTANT: if a 4th counter
-	// is added after hbFail, append it to `registered` BEFORE this return AND
-	// update this comment, or partial-registration failures will leak counters.
-	return &SagaStepCollector{
-		cellID:  cellID,
-		outcome: outcome,
-		retry:   retry,
-		hbFail:  hbFail,
-	}, nil
+	if c.tick, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+		Name: "saga_tick_total",
+		Help: "Total Coordinator ClaimPending cycles, labeled by result " +
+			"(claimed = ≥1 instance; empty = idle tick; error = ClaimPending failed). " +
+			"Loop liveness; definition_id is not available pre-claim.",
+		LabelNames: []string{"cell", "result"},
+	}, &registered); err != nil {
+		return nil, err
+	}
+	if c.drive, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+		Name: "saga_drive_total",
+		Help: "Total Coordinator driveOne completions, labeled by result " +
+			"(ok = advanced cleanly; error = stale lease / instance gone / step failure). " +
+			"Per-instance forward-progress throughput.",
+		LabelNames: []string{"cell", "definition_id", "result"},
+	}, &registered); err != nil {
+		return nil, err
+	}
+	if c.leaderSkip, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+		Name: "saga_leader_elect_skip_total",
+		Help: "Total leader-elect skips (acquireLead could not confirm leadership), labeled by reason " +
+			"(contended = another coordinator holds the distlock; ctx_canceled = shutdown; " +
+			"backend_error = distlock I/O fault / lock-acquire failure rate). " +
+			"Sustained contended with drive{result=ok}≈0 means an instance is stuck skipping.",
+		LabelNames: []string{"cell", "definition_id", "reason"},
+	}, &registered); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 // ObserveOutcome implements executor.Observer.
@@ -136,7 +176,7 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 // explosion (per-instance high-cardinality values — see Observer godoc).
 // attempts is also not labeled; it is carried into trace spans and slog by
 // the executor itself.
-func (c *SagaStepCollector) ObserveOutcome(
+func (c *SagaCollector) ObserveOutcome(
 	ctx context.Context,
 	_ /* instanceID */ idutil.SafeID,
 	_ /* leaseID */ idutil.SafeID,
@@ -155,7 +195,7 @@ func (c *SagaStepCollector) ObserveOutcome(
 // Records one increment on saga_step_retry_total{cell,definition_id,step_name}.
 // instanceID and leaseID are carried for future audit/tracing use; they are
 // intentionally NOT used as metric label dimensions (see ObserveOutcome).
-func (c *SagaStepCollector) ObserveRetry(
+func (c *SagaCollector) ObserveRetry(
 	ctx context.Context,
 	_ /* instanceID */ idutil.SafeID,
 	_ /* leaseID */ idutil.SafeID,
@@ -172,7 +212,7 @@ func (c *SagaStepCollector) ObserveRetry(
 // Records one increment on saga_heartbeat_failed_total{cell,reason}.
 // instanceID and leaseID are carried for future audit/tracing use; they are
 // intentionally NOT used as metric label dimensions (see ObserveOutcome).
-func (c *SagaStepCollector) ObserveHeartbeatFailure(
+func (c *SagaCollector) ObserveHeartbeatFailure(
 	ctx context.Context,
 	_ /* instanceID */ idutil.SafeID,
 	_ /* leaseID */ idutil.SafeID,
@@ -181,6 +221,35 @@ func (c *SagaStepCollector) ObserveHeartbeatFailure(
 	c.hbFail.With(kernelmetrics.Labels{
 		"cell":   c.cellID,
 		"reason": string(reason),
+	}).Inc(ctx)
+}
+
+// ObserveTick implements executor.Observer (Coordinator-emitted).
+// Records one increment on saga_tick_total{cell,result}.
+func (c *SagaCollector) ObserveTick(ctx context.Context, result executor.TickResult) {
+	c.tick.With(kernelmetrics.Labels{
+		"cell":   c.cellID,
+		"result": string(result),
+	}).Inc(ctx)
+}
+
+// ObserveDrive implements executor.Observer (Coordinator-emitted).
+// Records one increment on saga_drive_total{cell,definition_id,result}.
+func (c *SagaCollector) ObserveDrive(ctx context.Context, definitionID string, result executor.DriveResult) {
+	c.drive.With(kernelmetrics.Labels{
+		"cell":          c.cellID,
+		"definition_id": definitionID,
+		"result":        string(result),
+	}).Inc(ctx)
+}
+
+// ObserveLeaderSkip implements executor.Observer (Coordinator-emitted).
+// Records one increment on saga_leader_elect_skip_total{cell,definition_id,reason}.
+func (c *SagaCollector) ObserveLeaderSkip(ctx context.Context, definitionID string, reason executor.LeaderSkipReason) {
+	c.leaderSkip.With(kernelmetrics.Labels{
+		"cell":          c.cellID,
+		"definition_id": definitionID,
+		"reason":        string(reason),
 	}).Inc(ctx)
 }
 
@@ -193,6 +262,12 @@ func (c *SagaStepCollector) ObserveHeartbeatFailure(
 // is an enumeration whose members are all handled above. Silently returning
 // "unknown" would pollute metric series with invalid labels that mask genuine
 // bugs; fail-closed is the correct behavior here.
+//
+// The result/reason labels (TickResult / DriveResult / LeaderSkipReason) are
+// already string-typed enums produced exclusively by the Coordinator's
+// classification helpers, so they cast directly via string(); their value sets
+// are frozen by archtest SAGA-METRIC-LABEL-VALUES-FROZEN-01 instead of a panic
+// switch. Outcome is an int enum, hence this explicit mapping.
 func outcomeLabel(o executor.Outcome) string {
 	switch o {
 	case executor.OutcomeSucceeded:
