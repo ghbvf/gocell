@@ -106,6 +106,10 @@ type Registrar interface {
 	// ref: ThreeDotsLabs/watermill message/router.go AddHandler (handler
 	// registration decoupled from goroutine start).
 	// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
+	//
+	// Hand-written external cells should prefer the fluent [Registrar.Subscription]
+	// builder, which makes the cellID red line a compile error rather than relying
+	// on getting the positional argument order right.
 	Subscribe(
 		spec contractspec.ContractSpec,
 		handler outbox.EntryHandler,
@@ -113,6 +117,33 @@ type Registrar interface {
 		cellID string,
 		opts ...SubscriptionOption,
 	) error
+
+	// Subscription begins a fluent, compile-checked subscription registration —
+	// the hand-written counterpart to the positional Subscribe (which codegen
+	// emits as NewSubscription(...).Mount(reg)). It exists so an external Cell
+	// that does NOT run the monorepo codegen can register subscriptions without
+	// hand-writing the easy-to-transpose positional Subscribe call.
+	//
+	// The returned [*SubscriptionDraft] exposes only CellID; the terminal
+	// Register lives on the [*SubscriptionBuilder] that CellID returns, so the
+	// owning cell id is a COMPILE-TIME red line — omitting it leaves no path to
+	// Register (the same compile-HARD guarantee codegen gets from the positional
+	// cellID parameter, not a runtime fallback):
+	//
+	//	reg.Subscription(spec).
+	//	    CellID(c.ID()).
+	//	    ConsumerGroup("payment-charge"). // optional; defaults to CellID
+	//	    Handler(c.svc.HandleCharge).
+	//	    Register()
+	//
+	// Register routes through the same RegistryRecorder.Subscribe validation
+	// funnel as the positional form (nil handler / empty consumerGroup→defaulted
+	// to cellID / empty cellID / non-event spec / empty topic), so the two
+	// registration forms are two producers of one validated path, not a
+	// backward-compat dual path.
+	//
+	// ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
+	Subscription(spec contractspec.ContractSpec) *SubscriptionDraft
 
 	// RegisterWebhookReceiver records an inbound-webhook receiver declaration.
 	// Returns a non-nil error when handler is nil or spec.Validate() fails.
@@ -693,6 +724,14 @@ func (r *RegistryRecorder) Subscribe(
 
 	r.subscriptions = append(r.subscriptions, req)
 	return nil
+}
+
+// Subscription begins a fluent subscription registration (see
+// Registrar.Subscription). It is a pure allocator: the mustNotBeFinalized guard
+// and all validation are applied by the terminal Register, which routes through
+// Subscribe.
+func (r *RegistryRecorder) Subscription(spec contractspec.ContractSpec) *SubscriptionDraft {
+	return &SubscriptionDraft{reg: r, spec: spec}
 }
 
 // RegisterWebhookReceiver validates and appends a WebhookReceiverRequest

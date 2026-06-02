@@ -90,6 +90,35 @@ a compile failure at the call site — the AI-robust HARD pattern from
 templates inject the value from `metadata.CellMeta.ID` at compile time, so
 business callers never have to reason about it.
 
+### D2b — Fluent `Registry.Subscription` builder for hand-written cells (#1087, amendment 2026-06-03)
+
+The positional `Subscribe` is ergonomic for codegen (which injects all four
+arguments from cell metadata) but error-prone for an **external** cell that does
+not run the monorepo codegen and must hand-write the two trailing `string`
+arguments (easy to transpose `consumerGroup` ↔ `cellID`). The fluent builder is
+the hand-written counterpart that keeps the cellID red line **compile-enforced**:
+
+```go
+reg.Subscription(spec).
+    CellID(c.ID()).
+    ConsumerGroup("payment-charge"). // optional; defaults to CellID
+    Handler(c.svc.HandleCharge).
+    Register()
+```
+
+`Subscription(spec)` returns a `*SubscriptionDraft` whose ONLY method is
+`CellID(id) *SubscriptionBuilder`; the terminal `Register() error` lives only on
+`*SubscriptionBuilder`. There is therefore **no path to `Register` that skips
+`CellID`** — omitting it is a compile error, the same HARD guarantee the
+positional 4th parameter gives codegen. Both builder struct's fields are
+unexported, so an external package cannot fabricate a `*SubscriptionBuilder`
+without going through `CellID`. `Register` defaults `consumerGroup` to `cellID`
+when unset (the common `consumerGroup == cellID` case, cellgen-consistent) and
+delegates to the **same** `RegistryRecorder.Subscribe` validation funnel — the
+builder adds no validation of its own, so the positional and fluent forms are two
+producers of one validated path, **not** a backward-compat dual path. The
+codegen positional form is retained unchanged.
+
 ### D3 — `SubscriptionRequest.OwnerCellID` renamed to `CellID`
 
 Single name across `outbox.Subscription.CellID` and
@@ -126,17 +155,24 @@ appears as a string literal in the generated `cell_gen.go`.
 
 ### D7 — Medium-档 archtest safety net
 
-Three invariants in `tools/archtest/subscription_invariants_test.go`:
+Invariants in `tools/archtest/subscription_invariants_test.go`:
 
 | Invariant | Subject | Failure mode prevented |
 |---|---|---|
 | `SUBSCRIPTION-FIELDS-FROZEN-01` | `outbox.Subscription` field set | Adding/renaming fields without reviewing this ADR + codegen templates |
 | `SUBSCRIPTION-OBSERVABILITY-NO-FALLBACK-01` | `ObservabilityID()` body shape | Re-introducing `if CellID == "" { return ConsumerGroup }` |
-| `REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01` | `Registry.Subscribe` method signature | Demoting cellID from positional to a SubscriptionOption (Soft) |
+| `REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01` (prong 1: positional signature) | `Registry.Subscribe` signature + `Registrar.Subscription` return type | Demoting cellID from positional to a SubscriptionOption (Soft) |
+| `REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01` (prong 2: builder shape, #1087) | `SubscriptionDraft` / `SubscriptionBuilder` method-set + return types | Collapsing the two-type builder into one type with an optional CellID (demotes the compile-time red line to runtime fail-fast) |
 
-They are Medium-档 (type-aware AST scan over kernel/* source), complementary
-to the HARD compile-time gate — if an AI session circumvents the Hard gate
-(e.g. by rewriting the templates) the archtest catches the demotion.
+They are Medium-档 (AST scan over kernel/cell source), complementary to the HARD
+compile-time gate — if an AI session circumvents the Hard gate (e.g. by rewriting
+the templates or collapsing the builder) the archtest catches the demotion. Prong
+2's load-bearing assertion: `SubscriptionDraft` exposes exactly `{CellID}` (no
+`Register`) and `CellID` returns `*SubscriptionBuilder`, so the only door to the
+terminal `Register` is through `CellID` — freezing this shape keeps "missing
+CellID is unreachable" a frozen invariant. (Note: the invariant was renamed from
+`REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01` when prong 2 was added — the positional
+signature is now one prong of the broader mandatory-CellID rule.)
 
 ## Consequences
 
@@ -151,8 +187,6 @@ to the HARD compile-time gate — if an AI session circumvents the Hard gate
 - Adding `WithSubscriptionCellID` as a future "convenience option" is now
   a deliberate decision blocked by an archtest, not an accidental Soft drift.
 
-### Negative
-
 - Breaking change for every Subscription literal in tests + every direct
   `reg.Subscribe` caller. K#07 absorbed the full migration (≈ 100 literal
   fixes across kernel/outbox/outboxtest, runtime/{eventbus,eventrouter,
@@ -161,6 +195,10 @@ to the HARD compile-time gate — if an AI session circumvents the Hard gate
 - Tests that intentionally fed empty CellID (e.g. fallback-behavior tests)
   are deleted; new negative test asserts ObservabilityID returns "" on
   empty CellID rather than substituting.
+- Positional `Subscribe` is ergonomically awkward for hand-written external
+  cells (transposing the two trailing `string` args). **Resolved by D2b**: the
+  fluent `Registry.Subscription` builder gives hand-writers the same
+  compile-enforced cellID red line without the positional foot-gun.
 
 ### Neutral
 
@@ -179,6 +217,12 @@ A "nice" builder API where cells call
 because omission is silent — produces `CellID == ""` and defers failure to
 runtime (or to a stricter Validate which the code didn't have at the time
 of K#04). AI-robust: Soft. Per `ai-robust.md` Soft is severely discouraged.
+
+> Not contradicted by D2b: the D2b fluent builder is **not** this rejected
+> option form. The rejected A1 is a single-call `Subscribe(... WithCellID(...))`
+> where CellID is an *optional* SubscriptionOption (omission compiles). D2b is a
+> two-type **type-state** chain where `Register` is unreachable without `CellID`
+> (omission does NOT compile) — Hard, not Soft.
 
 ### A2 — Newtype `type CellID string` with mandatory constructor (rejected)
 

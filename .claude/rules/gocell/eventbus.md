@@ -112,7 +112,17 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 两者常同值（`c.ID()` 用作 consumerGroup 和 cellID），需要 sub-group 的场景（fanout 消费 / 角色分支 like `accesscore-rbac-session-sync`）可显式分离 consumerGroup，但 cellID 始终 = `c.ID()`。
 
-> **不要**新增 `WithSubscriptionCellID(string)` option — 这会把 HARD 位置必填降级为 Soft 可选，由 `REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01` archtest 拒绝。详见 ADR `docs/architecture/202605111000-adr-subscription-cellid-mandatory.md`。
+**手写订阅用链式 builder（外部 cell，#1087）**：不跑 monorepo codegen 的外部 cell 用 `reg.Subscription(spec)` 链式 builder 而非裸写 positional `reg.Subscribe`——`.CellID()` 是**编译期红线**：终结方法 `.Register()` 只挂在 `*SubscriptionBuilder` 上，而 `*SubscriptionBuilder` 只能由 `*SubscriptionDraft.CellID(id)` 产出，所以漏调 `.CellID()` 无路径到达 `.Register()`（编译失败，等价于 positional 第 4 参的 HARD 保证）。`.ConsumerGroup()` 可选，缺省 = cellID；`.Register()` 路由进同一个 `RegistryRecorder.Subscribe` 校验漏斗——两种形态是「一个校验漏斗的两个生产者（机器 codegen / 人手写）」，不是向后兼容双路径。
+
+```go
+reg.Subscription(spec).
+    CellID(c.ID()).
+    ConsumerGroup("payment-charge"). // 可选；缺省 = CellID
+    Handler(c.svc.HandleCharge).
+    Register()
+```
+
+> **不要**新增 `WithSubscriptionCellID(string)` option，也**不要**把 builder 塌成单一类型让 CellID 变成可选链式方法 — 都会把 HARD 编译期红线降级为 Soft/Medium runtime fail-fast，由 `REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01` archtest（prong 1 positional 签名 + prong 2 两型 builder 方法集/返回类型冻结）拒绝。详见 ADR `docs/architecture/202605111000-adr-subscription-cellid-mandatory.md`。
 
 **单源派生**：订阅的唯一权威源是 slice.yaml `contractUsages[role=subscribe]`，每条携带 `handler`（消费 handler 方法名，必填）+ `group`（消费组，可选，缺省 = 本 cell ID）：
 
