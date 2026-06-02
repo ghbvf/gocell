@@ -170,6 +170,20 @@ func ResolveCellLabel(ctx context.Context, valid map[string]struct{}) CellLabel 
 }`,
 			wantViolations: true,
 		},
+		{
+			// Keeps the membership check and ctx read — isolates the returnsEmptyLit
+			// branch: the sentinel return is replaced with a non-zero literal, so
+			// the membership-miss path does not degrade to the zero CellLabel.
+			name: "red_only_sentinel_drop",
+			src: `package fixture
+func ResolveCellLabel(ctx context.Context, valid map[string]struct{}) CellLabel {
+	v, ok := ctxkeys.CellIDFrom(ctx)
+	if !ok || v == "" { return CellLabel{v: "fallback"} }
+	if _, member := valid[v]; !member { return CellLabel{v: "fallback"} }
+	return CellLabel{v: v}
+}`,
+			wantViolations: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,6 +279,9 @@ func TestCellIDClosedSet01_StringSentinel(t *testing.T) {
 // assembly closed set (s.asm.CellIDs(), not a literal / singular id) into every
 // router via WithCellIDClosedSet, and buildMux passes r.cellIDClosedSet to both
 // the Metrics and BodyLimit middleware.
+//
+// NOTE: gRPC has no closed-set wiring yet (ResolveCellLabel(ctx, nil) in UnaryMetrics);
+// when gRPC attribution lands (#1383) this test must gain a gRPC interceptor wiring assertion.
 func TestCellIDClosedSet01_UpstreamSource(t *testing.T) {
 	root := findModuleRoot(t)
 

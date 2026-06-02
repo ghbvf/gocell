@@ -44,6 +44,10 @@ type CellLabel struct {
 // WithCellIDClosedSet. An absent cell id, an empty one, or one not in valid
 // (including an empty/nil valid set, which is never a member) yields the zero
 // CellLabel, whose String() renders as RuntimeCellSentinel.
+//
+// Test code that needs a CellLabel without a real request context should use
+// metricstest.Label(id) (runtime/observability/metrics/metricstest), which
+// routes through this funnel.
 func ResolveCellLabel(ctx context.Context, valid map[string]struct{}) CellLabel {
 	v, ok := ctxkeys.CellIDFrom(ctx)
 	if !ok || v == "" {

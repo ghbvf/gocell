@@ -55,6 +55,7 @@ func TestSubscriptionBuilder_ConsumerGroupDefaultsToCellID(t *testing.T) {
 	assert.Equal(t, "ordercell", snap.Subscriptions[0].ConsumerGroup,
 		"ConsumerGroup defaults to CellID when .ConsumerGroup() is omitted")
 	assert.Equal(t, "ordercell", snap.Subscriptions[0].CellID)
+	assert.Empty(t, snap.Subscriptions[0].SliceID, "SliceID must be empty when .SliceID() is omitted")
 }
 
 // TestSubscriptionBuilder_Register_RoutesThroughValidationFunnel verifies that
@@ -82,6 +83,15 @@ func TestSubscriptionBuilder_Register_RoutesThroughValidationFunnel(t *testing.T
 				return r.Subscription(spec).CellID("c").ConsumerGroup("g").Handler(noopHandler).Register()
 			},
 			wantWord: "kind",
+		},
+		{
+			name: "empty cellID rejected",
+			build: func(r *RegistryRecorder) error {
+				return r.Subscription(testRegistrySpec("o")).CellID("").Handler(noopHandler).Register()
+			},
+			// CellID("") causes consumerGroup to also default to "", so the
+			// consumerGroup check fires first in Subscribe (before cellID check).
+			wantWord: "consumergroup",
 		},
 	}
 	for _, tt := range tests {

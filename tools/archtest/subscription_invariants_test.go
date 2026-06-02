@@ -676,7 +676,7 @@ func subscribeFuncTypeFromSrc(t *testing.T, src string) (*ast.FuncType, *token.F
 }
 
 // TestRegistrySubscribeCellIDPositional_DetectorFixtures is the RED-fixture
-// self-check for REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01. It drives
+// self-check for REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01. It drives
 // collectSubscribeSignatureViolations against synthetic interface declarations
 // so a regression that stops detecting a demoted cellID positional fails here.
 func TestRegistrySubscribeCellIDPositional_DetectorFixtures(t *testing.T) {

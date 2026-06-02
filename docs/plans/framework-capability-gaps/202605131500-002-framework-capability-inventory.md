@@ -208,7 +208,7 @@ adapters/postgres   ← 仅 cell 自有 repo 实现，且仅引用 driver / Tx �
 - **`errcode.New` message 必须 const literal**（`MESSAGE-CONST-LITERAL-01`）
 - **`WithDetails` 只接 `slog.Attr`**（`DETAILS-SLOG-ATTR-01`）
 - **service nil TxRunner fail-fast**（`OUTBOX-SERVICE-01`）
-- **`reg.Subscribe` 第 4 参数 cellID 位置必填**（`REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01`）
+- **`reg.Subscribe` 第 4 参数 cellID 位置必填**（`REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01`）
 - **HandleResult 字面量构造**仅限 kernel allowlist，业务路径用 `Ack/Requeue/Reject` factory（`OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01`）
 - **L2 consumer 必须配 DLX exchange**
 - **export 包级 `var Err* = errors.New(...)` 禁用**，必须 `errcode.New`（`EXPORTED-ERROR-NEW-01`）

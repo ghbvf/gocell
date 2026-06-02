@@ -17,6 +17,8 @@ import (
 // spec; both fields are unexported so a non-CellID construction path is not
 // expressible outside this package.
 //
+// Skipping CellID() yields the compile error: "*SubscriptionDraft has no field or method Register".
+//
 // ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
 type SubscriptionDraft struct {
 	reg  *RegistryRecorder
@@ -56,14 +58,19 @@ func (b *SubscriptionBuilder) ConsumerGroup(consumerGroup string) *SubscriptionB
 	return b
 }
 
-// Handler sets the event handler. Required — Register rejects a nil handler via
-// the Subscribe validation funnel.
+// Handler sets the event handler.
+// Handler is the only required field validated at runtime (Register returns an
+// error whose message contains "handler"); CellID is compile-enforced and
+// ConsumerGroup defaults to CellID.
 func (b *SubscriptionBuilder) Handler(handler outbox.EntryHandler) *SubscriptionBuilder {
 	b.handler = handler
 	return b
 }
 
 // SliceID declares the owning slice for subscription observability (optional).
+// Codegen-generated cells inject SliceID from slice metadata; hand-written
+// external cells may omit it (the event router then uses CellID as the
+// observability owner at cell granularity).
 func (b *SubscriptionBuilder) SliceID(sliceID string) *SubscriptionBuilder {
 	b.sliceID = sliceID
 	return b

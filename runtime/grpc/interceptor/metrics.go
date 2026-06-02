@@ -41,6 +41,7 @@ func UnaryMetrics(collector metrics.GRPCCollector, clk clock.Clock) grpc.UnarySe
 		resp, err := handler(ctx, req)
 		observability.SafeObserve(slog.Default(), func() {
 			code := status.Code(err).String()
+			// TODO(#1383): replace nil with the assembly closed set when gRPC cell attribution lands (until then every cell degrades to _runtime).
 			cell := metrics.ResolveCellLabel(ctx, nil)
 			collector.RecordRPC(ctx, cell, info.FullMethod, code, clk.Since(start).Seconds())
 		})

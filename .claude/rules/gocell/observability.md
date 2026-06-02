@@ -189,7 +189,7 @@ emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：c
 `http_requests_total` 与 `http_request_duration_seconds` 的 `cell` label 表示请求落入的 cell：
 
 - **业务请求**：`cell=<cellID>` — 由 `runtime/http/router.Router.MountRouteGroup` 记录 `RouteGroup.CellID` 与 HTTP namespace 的 ownership，listener-root `CellAttribution` middleware 在 tracing/access-log/metrics/protection 之前写入 `kernel/ctxkeys.CellID`。成功 handler、auth/rate-limit/circuit-breaker/body-limit 前置拒绝、chi 405 都必须使用同一 cell。
-- **框架/未匹配请求**：`cell="_runtime"` 哨兵 — `runtime/http/middleware.Metrics` 在 `ctxkeys.CellID` 缺失时使用 `metrics.RuntimeCellSentinel`，覆盖 `/healthz`、`/readyz`、`/metrics` 自身、listener 外 404 等所有未落入业务 RouteGroup 的请求。
+- **框架/未匹配请求**：`cell="_runtime"` 哨兵 — cell label 经 sealed `metrics.ResolveCellLabel(ctx, validCellIDs)` 漏斗解析，`ctxkeys.CellID` **缺失或不在 assembly closed set** 时降级为 `metrics.RuntimeCellSentinel`，覆盖 `/healthz`、`/readyz`、`/metrics` 自身、listener 外 404 等所有未落入业务 RouteGroup 的请求。
 
 HTTP/gRPC **request-metrics** `cell` label 的 `_runtime` 哨兵单源 = `runtime/observability/metrics.RuntimeCellSentinel`（HTTP middleware 与 gRPC metrics interceptor 共读同一常量，metrics 维度仅此一处声明）。注意这不是「全仓唯一 `"_runtime"` 字面量」：`_runtime` 作为「框架 / 无 owner」字符串约定在仓内更广泛复用——`kernel/reconcile.reconcilerIDSentinel`（reconcile owner label）、Redis `KeyNamespace` 的 idempotency-claimer 哨兵（`cmd/corebundle`）、`runtime/command/lifecycle` 的 cell 默认值等都各自声明同值字面量。它们**不能**共享 `RuntimeCellSentinel`：`kernel/` 不可 import `runtime/observability/metrics`（分层依赖规则），故按层独立声明是刻意为之，`RuntimeCellSentinel` 只能是 metrics 维度的单源。
 
