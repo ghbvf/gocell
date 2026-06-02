@@ -1,5 +1,5 @@
 # Request headers (documentation; contractgen does not yet emit header params —
-# tracked in backlog issue "contractgen: support header parameters"):
+# tracked in backlog issue #1494 "contractgen: support header parameters"):
 #
 #   X-Tenant-ID  (required)
 #     Type:    string (canonical UUID)

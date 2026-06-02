@@ -71,7 +71,7 @@ at repo boundary).
 
 ## Deferred backlog
 
-Issue: "contractgen: support header parameters (X-Tenant-ID single-source)"
+Issue: #1494 — "contractgen: support header parameters (X-Tenant-ID single-source)"
 Labels: `backlog`, `pri-p2`
 Scope: add `headers:` to `EndpointsMeta` (or a new sub-struct) with
 `yaml:"headers,omitempty"`, wire through `parser_strict_test.go` KnownFields
