@@ -122,3 +122,13 @@ errcode.WithInternal(
 archtest `DETAILS-SLOG-ATTR-01` 已退役（type system 已表达 invariant）；新加 `DETAILS-SEALED-FIELD-FROZEN-01`（reflect + AST lock）反向守卫 PublicDetail/InternalDetail 字段集 + 可见性 + publicValue 类型身份 + publicValue 实现集合 + PublicDetail constructor 集合，防止包内漂移（如 value 字段被改回 `any`、字段大写化、重命名、悄悄新增 `PublicFloat`）。`MustValidateDetailsKinds` 同样退役（typed value 已使非 scalar 在 type system 不可表达）。`PublicAttr(any)` 删除：调用方按 value 类型选 typed scalar 构造器（不再有 `any` 入口）；为强制 caller 自行 format 浮点数（NaN/Inf 风险），**故意不提供** `PublicFloat`。
 
 详见 ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` §Amendment 2026-05-27。
+
+## 错误码前缀所有权 (#1091)
+
+`pkg/errcode` 维护一个 **closed-set 前缀所有权注册表**，防止跨 module 前缀碰撞。
+
+- **平台自注册**：`pkg/errcode/prefix_registry.go` 的 `init()` 将全部 65 个平台前缀（52 个 namespace entry `ERR_<SEG>_` + 13 个 whole-code entry）注册为 owner `github.com/ghbvf/gocell`。
+- **外部 cell 注册**：外部 cell module 在自己的 `init()` 中调用 `errcode.RegisterPrefix(prefix, owner)` 声明自己的命名空间；同 prefix 不同 owner 触发 panic fail-fast（启动期暴露碰撞，不静默继续）。
+- **新增 namespace prefix**：新增 `ERR_<SEG>_` 前缀需在同一 PR 内：(1) 追加到 `gocellPlatformPrefixes`（或外部 module `init()`）；(2) 以 `ERRCODE_PREFIX_GOLDEN_UPDATE=1` 重新生成 `pkg/errcode/testdata/prefix_set.golden`；(3) 通过 `ERRCODE-PREFIX-OWNERSHIP-01` archtest——三步缺一 CI 红。
+- **新增 whole-code entry**：适用于单概念泛型 code（`ERR_NOT_FOUND` / `ERR_INTERNAL` 等）——这类 code 不构成 namespace，用 whole-code entry 避免 `ERR_NOT_` 等前缀误覆盖无关外部命名空间。步骤同上。
+- **ERRCODE-PREFIX-OWNERSHIP-01**：archtest 扫描所有生产 `errcode.New`/`Wrap` callsite（字面量 + const selector）及导出 Code sentinel，断言每个 code 的前缀 ∈ 注册集合；直接 runtime 组装（`errcode.Code(non-const)` / `"ERR_"+x` at mint site）hard-fail。评级见 ADR `docs/architecture/202606031200-1091-adr-errcode-prefix-ownership-registry.md` §AI-robust 评级。
