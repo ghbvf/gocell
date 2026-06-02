@@ -120,6 +120,14 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 	sort.Strings(ids)
 	for _, id := range ids {
 		g := p.Contracts[id].Endpoints.GRPC
+		// This pre-pass runs before generateOneContract → buildGRPCSpec, so it
+		// applies the proto-path guards itself (it cannot rely on buildGRPCSpec
+		// having validated yet). The proto is read here and again in buildGRPCSpec;
+		// codegen is not a hot path and threading a shared registry through
+		// buildContractSpec's signature would be more invasive than the re-read.
+		if err := validateGRPCProtoPath(id, g.Proto); err != nil {
+			return err
+		}
 		info, err := readProtoTypeInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Method)
 		if err != nil {
 			return fmt.Errorf("contract %q: %w", id, err)

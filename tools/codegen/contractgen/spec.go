@@ -42,9 +42,10 @@ type ContractGenSpec struct {
 	// Impl interface + BuildDefinition/Register); the step output DTOs it
 	// references are emitted into DTOs (rendered by types.tmpl) like any kind.
 	Saga *SagaSpec
-	// GRPC is non-nil when Kind == "grpc". It drives the placeholder server
-	// interface emitted into iface_gen.go. Request/response are []byte until
-	// PR 6 wires the proto-generated message types.
+	// GRPC is non-nil when Kind == "grpc". It drives the server interface emitted
+	// into iface_gen.go; the proto-generated message types + import path are
+	// resolved from the .proto go_package option + rpc declaration
+	// (readProtoTypeInfo).
 	GRPC *GRPCEndpointSpec
 	// RequestSchemaJSON is the raw JSON content of the request schema file,
 	// compacted to a single line (no extra whitespace).
@@ -353,7 +354,7 @@ type RetryPolicySpec struct {
 	MaxIntervalExpr  string
 }
 
-// GRPCEndpointSpec holds gRPC-specific endpoint information for the placeholder
+// GRPCEndpointSpec holds gRPC-specific endpoint information for the
 // server-interface generator. It mirrors EventEndpointSpec's role: the builder
 // projects metadata.GRPCTransportMeta into this codegen-local value type, and
 // iface.tmpl reads it to emit the server interface.

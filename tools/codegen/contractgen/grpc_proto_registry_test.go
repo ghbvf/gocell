@@ -1,5 +1,11 @@
 // INVARIANT: GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01
 //
+// Package-internal archtest: it lives in tools/codegen/contractgen (not
+// tools/archtest) because the truth source — buildContractSpec + renderFile +
+// readProtoTypeInfo — is reachable only from inside this package (same reason
+// the deleted GRPC-CODEGEN-NO-PROTO-DEP-01 was co-located here). It is therefore
+// NOT in scope for ARCHTEST-VERIFY-COVERAGE-01, which scans tools/archtest only.
+//
 // The proto import path + request/response message type names emitted into a
 // grpc stub's iface_gen.go MUST come from the .proto file (resolved by the
 // ProtoRegistry / readProtoTypeInfo), never from a hand-written literal in

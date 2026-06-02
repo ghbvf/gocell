@@ -625,6 +625,38 @@ func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	}
 }
 
+// TestValidateGRPCProtoPath covers the shared proto-path guard, including the
+// filepath.IsLocal traversal check that HasPrefix alone does not catch.
+func TestValidateGRPCProtoPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		proto   string
+		wantErr string // substring; "" means expect success
+	}{
+		{"ok", "contracts/grpc/device/command/v1/device_command.proto", ""},
+		{"empty", "", "requires proto"},
+		{"wrong prefix", "contracts/http/x.proto", "must be rooted under"},
+		{"control char", "contracts/grpc/x\n.proto", "control character"},
+		{"traversal escape above root", "contracts/grpc/../../../etc/passwd", "local path"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateGRPCProtoPath("grpc.test.v1", tc.proto)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 // TestBuildContractSpec_GRPCKind_MissingEndpoint verifies the fail-closed guard:
 // kind=grpc with no endpoints.grpc block is an error, not a silent empty stub.
 func TestBuildContractSpec_GRPCKind_MissingEndpoint(t *testing.T) {

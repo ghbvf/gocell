@@ -2,6 +2,7 @@ package contractgen
 
 import (
 	"fmt"
+	"go/token"
 	"os"
 	"regexp"
 	"strings"
@@ -35,6 +36,9 @@ var (
 	// rpcLineRE matches `rpc Name(Req) returns (Resp)`, tolerating arbitrary
 	// whitespace, the optional `stream` keyword, and package-qualified message
 	// names. Groups: 1=method, 2=req stream?, 3=req type, 4=resp stream?, 5=resp type.
+	// No `^` anchor (unlike the package/go_package REs): rpc declarations are
+	// always nested+indented inside a service block, and block comments are
+	// stripped before matching, so a line anchor would only reject valid input.
 	rpcLineRE = regexp.MustCompile(
 		`rpc\s+([A-Za-z_]\w*)\s*\(\s*(stream\s+)?([.A-Za-z_][.\w]*)\s*\)\s*returns\s*\(\s*(stream\s+)?([.A-Za-z_][.\w]*)\s*\)`)
 	// blockCommentRE matches /* ... */ comments across lines (s flag), non-greedy.
@@ -83,7 +87,12 @@ func parseProtoPackage(text string) (string, error) {
 
 // parseGoPackage extracts the import path + alias from `option go_package`. The
 // alias (after ';') is required — protoc-gen-go uses it as the generated Go
-// package name, which the stub imports under.
+// package name, which the stub imports under. Both halves are validated because
+// both are injected verbatim into generated Go (the import line + the
+// *alias.Type signature): the import path must carry no whitespace (goimports
+// would reject it downstream, but with an opaque parse error rather than a
+// proto-pointing one), and the alias must be a Go identifier — same guard the
+// rpc method already gets in buildGRPCSpec.
 func parseGoPackage(text string) (importPath, alias string, err error) {
 	m := goPackageRE.FindStringSubmatch(text)
 	if m == nil {
@@ -92,6 +101,12 @@ func parseGoPackage(text string) (importPath, alias string, err error) {
 	path, alias, ok := strings.Cut(m[1], ";")
 	if !ok || path == "" || alias == "" {
 		return "", "", fmt.Errorf(`proto: option go_package %q must be "<import-path>;<alias>"`, m[1])
+	}
+	if strings.ContainsAny(path, " \t\r\n") {
+		return "", "", fmt.Errorf("proto: go_package import path %q must not contain whitespace", path)
+	}
+	if !token.IsIdentifier(alias) {
+		return "", "", fmt.Errorf("proto: go_package alias %q must be a valid Go identifier", alias)
 	}
 	return path, alias, nil
 }
@@ -118,9 +133,11 @@ func parseRPCMethod(text, method string) (req, resp string, err error) {
 // pass operates on block-comment-free text.
 //
 // Blind spot (accepted): a "/*" or "//" embedded inside a proto string literal
-// would be mis-stripped. Proto option strings (go_package, etc.) do not contain
-// these sequences, and the fixture controls the grammar; readProtoTypeInfo only
-// reads contracts-relative proto files authored in-repo.
+// would be mis-stripped; likewise an escaped quote (\") inside a string toggles
+// indexLineComment's inStr state and may misclassify a following "//". Proto
+// option strings (go_package, etc.) do not contain these sequences, and the
+// fixture controls the grammar; readProtoTypeInfo only reads contracts-relative
+// proto files authored in-repo.
 func stripProtoComments(src string) string {
 	src = blockCommentRE.ReplaceAllString(src, " ")
 	var b strings.Builder

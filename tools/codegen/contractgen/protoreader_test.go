@@ -71,8 +71,41 @@ service DeviceCommandService {
 `
 	path := writeTempProto(t, src)
 	_, err := readProtoTypeInfo(path, "IssueCommand")
-	if err == nil || !strings.Contains(err.Error(), "go_package") {
-		t.Fatalf("expected go_package alias error, got %v", err)
+	// Distinct from the missing-go_package path: this is the no-";alias" branch.
+	if err == nil || !strings.Contains(err.Error(), "must be") {
+		t.Fatalf("expected go_package missing-alias (`must be`) error, got %v", err)
+	}
+}
+
+func TestReadProtoTypeInfo_GoPackageAliasNotIdentifier(t *testing.T) {
+	t.Parallel()
+	src := `syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;my-alias";
+service S {
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+}
+`
+	path := writeTempProto(t, src)
+	_, err := readProtoTypeInfo(path, "IssueCommand")
+	if err == nil || !strings.Contains(err.Error(), "identifier") {
+		t.Fatalf("expected alias-not-identifier error, got %v", err)
+	}
+}
+
+func TestReadProtoTypeInfo_GoPackagePathWhitespace(t *testing.T) {
+	t.Parallel()
+	src := `syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/ grpc;commandv1";
+service S {
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+}
+`
+	path := writeTempProto(t, src)
+	_, err := readProtoTypeInfo(path, "IssueCommand")
+	if err == nil || !strings.Contains(err.Error(), "whitespace") {
+		t.Fatalf("expected import-path whitespace error, got %v", err)
 	}
 }
 
@@ -167,4 +200,42 @@ func writeTempProto(t *testing.T, src string) string {
 		t.Fatalf("write temp proto: %v", err)
 	}
 	return path
+}
+
+func TestIndexLineComment(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"plain comment", "  rpc X() // tail", 10},
+		{"no comment", "  rpc X()", -1},
+		{"slashes inside string not a comment", `opt = "a//b";`, -1},
+		{"comment after string", `opt = "a"; // c`, 11},
+		{"leading comment", "// whole line", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := indexLineComment(tc.in); got != tc.want {
+				t.Errorf("indexLineComment(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLastDotSegment(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ in, want string }{
+		{"Msg", "Msg"},
+		{"pkg.Msg", "Msg"},
+		{".device.command.v1.Msg", "Msg"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := lastDotSegment(tc.in); got != tc.want {
+			t.Errorf("lastDotSegment(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
 }

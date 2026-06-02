@@ -23,7 +23,10 @@ type protoServiceKey struct {
 
 type protoServiceEntry struct {
 	importPath string
-	methods    map[string]struct{}
+	// methods is the set of rpc method names already seen for this service;
+	// values are always the empty struct (membership/existence check only, never
+	// read back out — it drives the duplicate-method collision branch).
+	methods map[string]struct{}
 }
 
 func newProtoRegistry() *protoRegistry {
