@@ -52,6 +52,7 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		PackagePath:                             pkgPath,
 		ContractID:                              contractID,
 		Kind:                                    contract.Kind,
+		Transports:                              contract.Transports,
 		ConsistencyLevel:                        contract.ConsistencyLevel,
 		SourceFile:                              contract.File,
 		PanicReasonPolicyNil:                    kebab + "-policy-nil",

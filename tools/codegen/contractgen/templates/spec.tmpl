@@ -12,6 +12,15 @@ import (
 var spec = contractspec.ContractSpec{
 	ID:        {{printf "%q" .ContractID}},
 	Kind:      cellvocab.ContractEvent,
-	Transport: "amqp",
+	Transport: {{printf "%q" (index .Transports 0)}},
 	Topic:     {{printf "%q" .Event.Topic}},
 }
+{{- if gt (len .Transports) 1}}
+
+// Transports is the full set of wire transports this contract is sanctioned to
+// bind to (contract.yaml transports:). The primary (Transports[0]) is the spec's
+// Transport above; additional members are alternate sanctioned bindings. Exposed
+// so out-of-band subscribers reference the contract truth source instead of
+// hand-writing a transport string. Emitted only for multi-transport contracts.
+var Transports = []string{ {{- range $i, $t := .Transports}}{{if $i}}, {{end}}{{printf "%q" $t}}{{end}} }
+{{- end}}

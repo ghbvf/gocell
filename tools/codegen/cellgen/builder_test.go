@@ -413,43 +413,6 @@ func TestBuildCellSpec_ListenerRefRejectsTypo(t *testing.T) {
 	}
 }
 
-// TestBuildCellSpec_TransportAlwaysAMQP verifies that the transport field in
-// SubscriptionGenSpec is always "amqp" (slice CU-derived subscribes do not carry
-// a transport field; AMQP is the only supported transport in GoCell for now).
-func TestBuildCellSpec_TransportAlwaysAMQP(t *testing.T) {
-	t.Parallel()
-	cell := &metadata.CellMeta{
-		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
-		GoStructName: metadata.MustNewGoIdentifier("Demo"),
-	}
-	slc := &metadata.SliceMeta{
-		ID: "subs", BelongsToCell: metadatatest.CellIDDemo, Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
-		ContractUsages: []metadata.ContractUsage{
-			{Contract: "event.foo.created.v1", Role: "subscribe", Handler: "HandleFooCreated"},
-			{Contract: "event.bar.updated.v1", Role: "subscribe", Handler: "HandleBarUpdated"},
-		},
-	}
-	contracts := []*metadata.ContractMeta{
-		{ID: "event.foo.created.v1", Kind: "event"},
-		{ID: "event.bar.updated.v1", Kind: "event"},
-	}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, contracts)
-	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
-
-	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, fieldIndex)
-	if err != nil {
-		t.Fatalf("BuildCellSpec: %v", err)
-	}
-	if len(spec.Subscriptions) != 2 {
-		t.Fatalf("expected 2 subscriptions, got %d", len(spec.Subscriptions))
-	}
-	for _, sub := range spec.Subscriptions {
-		if sub.Transport != "amqp" {
-			t.Errorf("transport = %q, want amqp", sub.Transport)
-		}
-	}
-}
-
 // TestBuildCellSpec_RouteMethodInvalidIdentRejected verifies K05-02: a
 // non-empty Method that is not a valid exported Go identifier is rejected at
 // BuildCellSpec time so the rendered `c.<HandlerField>.<Method>(s)` always
