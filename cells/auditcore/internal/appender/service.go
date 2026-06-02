@@ -141,7 +141,8 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	principal := entry.Principal()
 	s.tripSingleTenantInvariant(logPrefix, entry, principal)
 
-	corr := correlation.FromObservability(entry.Observability())
+	obs := entry.Observability()
+	corr := correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))
 	e := &ledger.Entry{
 		ID:            auditEntryIDPrefix + uuid.NewString(),
 		EventID:       entry.ID(),

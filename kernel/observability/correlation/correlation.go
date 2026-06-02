@@ -1,44 +1,50 @@
-// Package correlation provides a sealed read-model view of the W0 outbox
-// observability envelope for use in issue #1048 (correlate trace audit).
+// Package correlation provides a sealed read-model carrying the three
+// cross-cutting observability IDs (trace, request, correlation) for use in
+// issue #1048 (trace → audit reverse lookup).
 //
-// Correlation is a sealed read-model view derived solely from the W0 outbox
-// observability envelope (kernel/outbox.ObservabilityMetadata). Unexported
-// fields make package-external fabrication impossible — upstream single-source
-// (Hard) for issue #1048.
+// Correlation is a sealed value type: its fields are unexported, so the only
+// way to obtain a non-zero Correlation outside this package is via New.
+// Package-external struct literals cannot set the unexported fields, making
+// fabrication structurally impossible (Hard sealed construction, upstream
+// single-source for #1048).
 //
-// Import cycle note: kernel/outbox imports kernel/observability/metrics but
-// NOT kernel/observability/correlation; the two subpackages are independent
-// Go packages, so importing kernel/outbox here is cycle-free. This was
-// verified with `go build ./kernel/observability/correlation/` after adding a
-// trivial import of kernel/outbox (build succeeded, no cycle).
+// Layering note (KERNEL-INTERNAL-DAG-01): kernel/observability is a leaf in
+// the kernel-internal DAG — kernel/outbox imports kernel/observability/metrics
+// for its metrics provider, so the reverse edge (observability → outbox) is a
+// forbidden cycle. This package therefore does NOT import kernel/outbox; it
+// takes the three IDs as plain strings. The bridge from the W0 outbox
+// observability envelope (kernel/outbox.ObservabilityMetadata) lives at the
+// sole consumer — the audit appender (cells/auditcore/internal/appender) —
+// which holds both the outbox.Entry and this read-model. The seal (unexported
+// fields + single constructor) is preserved regardless of where the bridge
+// lives; trust in the IDs is positional (the appender feeds
+// entry.Observability() values, which originate from the sealed outbox.Entry).
 package correlation
 
-import (
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
 // Correlation is a sealed read-model carrying the three cross-cutting
-// observability IDs extracted from the W0 outbox observability envelope.
+// observability IDs.
 //
 // All fields are unexported. The only way to obtain a non-zero Correlation
-// outside this package is via FromObservability. Package-external struct
-// literals cannot set the unexported fields, making fabrication structurally
-// impossible (Hard sealed construction).
+// outside this package is via New. Package-external struct literals cannot set
+// the unexported fields, making fabrication structurally impossible (Hard
+// sealed construction).
 type Correlation struct {
 	traceID       string
 	requestID     string
 	correlationID string
 }
 
-// FromObservability constructs a Correlation from the W0 outbox observability
-// envelope. It is the single derivation path — there is no other constructor.
+// New constructs a Correlation from the three cross-cutting observability IDs.
+// It is the single construction path — there is no other constructor.
 // TraceParent is intentionally not carried: Correlation represents the three
-// cross-cutting opaque IDs, not the full W3C propagation context.
-func FromObservability(meta outbox.ObservabilityMetadata) Correlation {
+// opaque IDs, not the full W3C propagation context. Callers bridging from the
+// W0 outbox observability envelope pass string(meta.TraceID), string(meta.RequestID)
+// and string(meta.CorrelationID).
+func New(traceID, requestID, correlationID string) Correlation {
 	return Correlation{
-		traceID:       string(meta.TraceID),
-		requestID:     string(meta.RequestID),
-		correlationID: string(meta.CorrelationID),
+		traceID:       traceID,
+		requestID:     requestID,
+		correlationID: correlationID,
 	}
 }
 
