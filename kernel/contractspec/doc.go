@@ -22,17 +22,20 @@
 //  1. generated/contracts/**/spec_gen.go (private `var spec`) — business
 //     contracts produced by contractgen codegen; subscription/route mounting
 //     goes through the generated NewSubscription / NewHandler adapters.
-//  2. kernel/contractspec.NewFrameworkHTTP — runtime-owned HTTP infrastructure
-//     endpoints (health probes, devtools catalog, etc.); the only legitimate
-//     construction path for ContractSpec values in runtime/ HTTP infra code.
-//  3. kernel/contractspec.NewEventDerivation — tracing/observability projections
-//     of already-validated event metadata; returns (ContractSpec, error) with
-//     Validate() embedded inside the funnel (content invariant: Hard). Closed
-//     to a single caller (runtime/eventrouter/contract_tracing_subscriber.go)
-//     via path-string allowlist in archtest NO-MANUAL-CONTRACTSPEC-LITERAL-01
-//     plus a drift-guard test verifying the allowlisted file still exists
-//     (caller invariant: Medium per ai-robust.md taxonomy). No other production
-//     file may invoke this funnel.
+//  2. runtime/internal/contractbuild.NewFrameworkHTTP — runtime-owned HTTP
+//     infrastructure endpoints (health probes, devtools catalog, etc.); the
+//     only legitimate construction path for framework ContractSpec values in
+//     runtime/ HTTP infra code. Content invariant Hard (frameworkHTTPIDPrefix
+//     A-class panic); upstream Hard — the runtime/internal/ placement makes the
+//     Go compiler refuse imports from outside the runtime/ subtree, so business
+//     code (cells/, examples/, cmd/, adapters/) cannot call it.
+//  3. runtime/internal/contractbuild.NewEventDerivation — tracing/observability
+//     projection of a validated outbox.Subscription; returns (ContractSpec,
+//     error) with sub.Validate() + ContractSpec.Validate() embedded inside the
+//     funnel (content + provenance: Hard). Upstream Hard via the same
+//     runtime/internal/ placement; provenance is type-enforced (the typed
+//     Subscription parameter replaced the retired single-caller allowlist). See
+//     contractbuild/doc.go grading.
 //
 // Three archtest gates enforce this invariant:
 //

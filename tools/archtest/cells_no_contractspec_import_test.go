@@ -142,14 +142,15 @@ func scanForContractspecUsage(fset *token.FileSet, path, rel string) []string {
 		return nil // file does not import kernel/contractspec
 	}
 
-	// blockedNames covers the ContractSpec type itself and the typed funnels
-	// (NewFrameworkHTTP / NewEventDerivation). The funnels are for runtime/
-	// framework infra only — cells/ must use generated NewSubscription /
-	// NewHandler adapters from generated/contracts/**.
+	// blockedNames covers the ContractSpec type itself — the only symbol
+	// kernel/contractspec still exports that a cells/ file could reference.
+	// The typed funnels (NewFrameworkHTTP / NewEventDerivation) moved to
+	// runtime/internal/contractbuild (#1038), which cells/ cannot import at
+	// all (Go internal/ rule), so they are no longer reachable selectors here.
+	// cells/ must use generated NewSubscription / NewHandler adapters from
+	// generated/contracts/**.
 	blockedNames := map[string]bool{
-		"ContractSpec":       true,
-		"NewFrameworkHTTP":   true,
-		"NewEventDerivation": true,
+		"ContractSpec": true,
 	}
 
 	var violations []string
@@ -223,49 +224,14 @@ func TestCELLS_NO_CONTRACTSPEC_IMPORT_01_NegativeFixture(t *testing.T) {
 	}
 }
 
-// TestCELLS_NO_CONTRACTSPEC_IMPORT_01_FunnelBlocked verifies that a cells/ file
-// calling contractspec.NewFrameworkHTTP produces a violation. The typed funnels
-// are for runtime/ framework infra only; cells/ must use generated adapters.
-func TestCELLS_NO_CONTRACTSPEC_IMPORT_01_FunnelBlocked(t *testing.T) {
-	t.Parallel()
-	src := `package p
-import "github.com/ghbvf/gocell/kernel/contractspec"
-func init() {
-	_ = contractspec.NewFrameworkHTTP("http.fake.v1", "GET", "/api/v1/fake")
-}
-`
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "handler.go", src, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	tmp, err := os.CreateTemp(t.TempDir(), "funnel_test_*.go")
-	if err != nil {
-		t.Fatalf("create temp: %v", err)
-	}
-	if _, err := tmp.WriteString(src); err != nil {
-		t.Fatalf("write temp: %v", err)
-	}
-	if err := tmp.Close(); err != nil {
-		t.Fatalf("close temp: %v", err)
-	}
-
-	alias := contractspecLocalAlias(f)
-	if alias != "contractspec" {
-		t.Fatalf("expected alias %q, got %q", "contractspec", alias)
-	}
-
-	violations := scanForContractspecUsage(token.NewFileSet(), tmp.Name(), "cells/fake/handler.go")
-	if len(violations) == 0 {
-		t.Errorf("expected at least 1 violation for cells/ file calling contractspec.NewFrameworkHTTP, got 0")
-	}
-	for _, v := range violations {
-		if !strings.Contains(v, "NewFrameworkHTTP") {
-			t.Errorf("violation message should mention NewFrameworkHTTP: %q", v)
-		}
-	}
-}
+// TestCELLS_NO_CONTRACTSPEC_IMPORT_01_FunnelBlocked retired (#1038): the
+// NewFrameworkHTTP / NewEventDerivation funnels moved out of kernel/contractspec
+// into runtime/internal/contractbuild, so "a cells/ file calling the contractspec
+// funnel" is no longer a representable scenario (contractspec exports no
+// constructor functions now). The import-ban is still covered by
+// TestCELLS_NO_CONTRACTSPEC_IMPORT_01_NegativeFixture above (any cells/ reference
+// to the contractspec package is flagged); cells/ additionally cannot import
+// runtime/internal/contractbuild at all (Go internal/ rule — compiler-Hard).
 
 // TestBlankImportNoViolation explicitly locks the contract that a blank import
 // of kernel/contractspec never triggers CELLS-NO-CONTRACTSPEC-IMPORT-01.
