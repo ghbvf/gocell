@@ -42,6 +42,12 @@ type Dispatcher struct {
 	selector WebhookDispatchSelector
 	client   *http.Client
 	timeout  time.Duration
+	// recorder + source are the optional observability dependency (PR-6). The
+	// zero Metrics value disables every record (no-op); source is the {source}
+	// label, set together via WithMetrics. Each Dispatcher is bound to one source
+	// (buildConsumer constructs one per webhook-dispatch contract).
+	recorder Metrics
+	source   string
 }
 
 // DispatcherOption customizes a Dispatcher at construction time.
@@ -54,6 +60,16 @@ func WithDeliveryTimeout(d time.Duration) DispatcherOption {
 		if d > 0 {
 			dp.timeout = d
 		}
+	}
+}
+
+// WithMetrics injects the optional delivery observability recorder and the
+// {source} label this dispatcher records under. Omitting it leaves the zero
+// Metrics value, which records as a no-op (the disabled / NopProvider case).
+func WithMetrics(rec Metrics, source string) DispatcherOption {
+	return func(dp *Dispatcher) {
+		dp.recorder = rec
+		dp.source = source
 	}
 }
 
@@ -118,25 +134,60 @@ func NewDispatcher(
 func (d *Dispatcher) Handle(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	req, fail := d.prepare(ctx, entry)
 	if req == nil {
+		// Prepare failed before any HTTP attempt (SSRF pre-flight reject /
+		// permanent or transient prepare failure): record the outcome but no
+		// duration sample (no delivery was attempted).
+		d.recorder.recordDelivery(ctx, d.source, dispositionResult(fail.Disposition))
 		return fail
 	}
 	deliveryID := entry.ID()
+	start := d.clk.Now()
 	resp, err := d.client.Do(req)
+	d.recorder.observeDeliveryDuration(ctx, d.source, d.clk.Now().Sub(start).Seconds())
 	if err != nil {
+		disp := Classify(0, err)
 		reason := transportReason(err)
-		result := mapDisposition(Classify(0, err), reason)
-		logDelivery(ctx, deliveryID, result.Disposition, reason)
-		return result
+		d.recorder.recordDelivery(ctx, d.source, dispositionResult(disp))
+		logDelivery(ctx, deliveryID, disp, reason)
+		return mapDisposition(disp, reason)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	summary := drainBodySummary(resp.Body)
 	disp := Classify(resp.StatusCode, nil)
+	d.recorder.recordDelivery(ctx, d.source, statusResult(resp.StatusCode))
 	if disp == outbox.DispositionAck {
 		return outbox.Ack()
 	}
 	reason := statusReason(resp.StatusCode, summary)
 	logDelivery(ctx, deliveryID, disp, reason)
 	return mapDisposition(disp, reason)
+}
+
+// dispositionResult maps a non-HTTP-response outcome (a prepare failure or a
+// transport fault) to the metric result label. A Reject disposition is the SSRF
+// pre-flight block / permanent prepare failure (deliveryBlocked); any other
+// disposition is a transient failure with no HTTP response (deliveryTransportError).
+func dispositionResult(disp outbox.Disposition) webhookDeliveryResult {
+	if disp == outbox.DispositionReject {
+		return deliveryBlocked
+	}
+	return deliveryTransportError
+}
+
+// statusResult maps a received HTTP status code to the metric result label. 2xx
+// is success; 5xx is a downstream-transient server_error; every other response
+// (4xx, and the rare 1xx/3xx that reaches here) is a client_error. 3xx is
+// normally intercepted by the SSRF redirect-deny and surfaces as a transport
+// fault instead, so it seldom lands in this branch.
+func statusResult(code int) webhookDeliveryResult {
+	switch {
+	case code >= 200 && code < 300:
+		return deliverySuccess
+	case code >= 500:
+		return deliveryServerError
+	default:
+		return deliveryClientError
+	}
 }
 
 // logDelivery emits a structured slog record for non-Ack delivery outcomes.
