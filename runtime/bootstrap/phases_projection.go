@@ -198,6 +198,49 @@ func (b *Bootstrap) checkProjectionDeps() error {
 	return nil
 }
 
+// Const literals (MESSAGE-CONST-LITERAL-01); the offending transport type is
+// attached as an internal detail (server-side slog only, never on the wire).
+const (
+	errMsgProjectionSubscriberNotSerial = "bootstrap: projection declared but the configured subscriber does not " +
+		"guarantee serial in-order delivery; projection subscriptions require prefetch=1 / single-goroutine dispatch " +
+		"(the in-memory event bus is the only qualifying transport today). See ADR " +
+		"docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §6 threat row 4"
+	errMsgProjectionSubscriberNil = "bootstrap: projection declared but no subscriber is configured for the " +
+		"serial-delivery guard (upstream invariant: checkNoEventConsumersWhenSubscriberNil rejects a nil subscriber first)"
+)
+
+// checkSubscriberGuaranteesSerialDelivery fail-closes the projection drain when
+// the wired raw transport does not GUARANTEE strictly serial, in-order delivery.
+// Projection exactly-once rests on a monotonic checkpoint that silently skips any
+// position ≤ the stored checkpoint; under concurrent delivery a higher position
+// can commit before a lower one is applied, dropping the lower event's apply (a
+// projection gap). A transport opts in by implementing outbox.SerialInOrderGuarantor
+// and returning true; absence or false is rejected (fail-closed-by-absence), so a
+// concurrent transport (AMQP/MQTT) — or any future transport that forgets the
+// method — cannot carry a projection. See ADR §6 threat row 4 + §Amendment 2026-06-02.
+//
+// This is the single sanctioned type assertion to the marker
+// (PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 sub-rule C). It is invoked from
+// drainCellProjections — the transport-meets-projection boundary — only when a
+// projection exists. The nil branch is an upstream-invariant backstop:
+// phase6StartEventRouter routes nil subscribers to checkNoEventConsumersWhenSubscriberNil
+// before the projection drain, so a nil sub never reaches here on the live path.
+func checkSubscriberGuaranteesSerialDelivery(sub outbox.Subscriber) error {
+	if validation.IsNilInterface(sub) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, errMsgProjectionSubscriberNil)
+	}
+	g, ok := sub.(outbox.SerialInOrderGuarantor)
+	if !ok || !g.GuaranteesSerialInOrderDelivery() {
+		// Append the wired transport type as diagnostic context (a type name, not
+		// PII). errcode.Error.Error() replaces Message with internal details when
+		// any are attached, so the type goes via fmt.Errorf wrapping to keep the
+		// const Message visible rather than via WithInternal.
+		return fmt.Errorf("%w (configured subscriber type: %T)",
+			errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, errMsgProjectionSubscriberNotSerial), sub)
+	}
+	return nil
+}
+
 // buildOneProjection constructs the Coordinator for one ProjectionRequest and
 // drives Coordinator.Subscribe through a captureRegistrar to obtain the wrapped
 // subscription. The cell-local ProjectionApply / ProjectionResetHook are
@@ -287,6 +330,15 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 // Runs inside phase6 after drainCellSubscriptions and before the router starts,
 // so projection handlers are registered before consumption begins.
 func (b *Bootstrap) drainCellProjections(ctx context.Context, s *phaseState, evtRouter *eventrouter.Router) error {
+	// Serial-delivery enforcement (#1369, ADR §6 row 4): a projection may only be
+	// carried by a transport that guarantees serial in-order delivery. Checked
+	// once here — the transport-meets-projection boundary — before any wiring, so
+	// a concurrent transport fails fast instead of silently dropping events.
+	if cellSnapshotsHaveProjections(s) {
+		if err := checkSubscriberGuaranteesSerialDelivery(s.sub); err != nil {
+			return err
+		}
+	}
 	wirings, err := b.buildProjectionCoordinators(ctx, s)
 	if err != nil {
 		return err

@@ -44,8 +44,8 @@
 //   - Medium. The guarded property is the runtime concurrent-delivery behavior of
 //     an injected Subscriber (wired at the composition root as outbox.Subscriber).
 //     Go cannot express "this injected interface value guarantees serial delivery"
-//     at compile time; the marker is self-attestation. A runtime drain fail-fast
-//     + fail-closed-by-absence + this archtest (marker freeze / exact implementer
+//     at compile time; the marker is self-attestation. A runtime drain fail-fast,
+//     fail-closed-by-absence, plus this archtest (marker freeze / exact implementer
 //     set / single guard callsite) is the strongest achievable form — the same
 //     permanent ceiling as SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL
 //     (#893). Hard-ification (a sealed framework-owned projection-transport token
@@ -94,12 +94,11 @@ const (
 	serialGuardCallsiteRel = "runtime/bootstrap/phases_projection.go"
 
 	// serialGuarantorSoleImpl is the ONLY production type permitted to implement
-	// the marker — the serial in-memory bus. AMQP/MQTT stay absent (fail-closed).
+	// the marker — the serial in-memory bus. AMQP/MQTT and the
+	// contractTracingSubscriber decorator stay absent (fail-closed); sub-rule D
+	// (decorator must not shadow the marker) is subsumed by the exact-set check
+	// in TestProjectionSerialDeliveryEnforcement01_ImplementerSet.
 	serialGuarantorSoleImpl = PlatformModulePath + "/runtime/eventbus.InMemoryEventBus"
-
-	// contractTracingSubscriberType is the wrapping decorator that must NOT shadow
-	// the marker (sub-rule D / H2).
-	contractTracingSubscriberType = PlatformModulePath + "/runtime/eventrouter.contractTracingSubscriber"
 )
 
 // TestProjectionSerialDeliveryEnforcement01_MarkerFrozen (sub-rule A): the marker
