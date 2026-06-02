@@ -409,7 +409,7 @@ func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 		},
 		{
 			ID: "ts-a2", EventID: "evt-ts-a2", EventType: "event.test.v1",
-			ActorID: "usr-2", TenantID: tenantA, Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+			ActorID: "usr-2", TenantID: tenantA, Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
 		},
 	} {
 		require.NoError(t, store.Append(context.Background(), e))
