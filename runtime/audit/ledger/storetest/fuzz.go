@@ -194,9 +194,9 @@ func seedEntryRoundTripCorpus(f *testing.F) {
 	add("seed-empty-object", "", `{}`)
 	add("seed-null", "4bf92f3577b34da6a3ce929d0e0e4736", `null`)
 	add("seed-empty-bytes", "", ``)
-	add("seed-pipe-byte", "", `{"k":"a|b|c"}`)        // pipe byte (legacy HMAC delimiter)
-	add("seed-unicode", "", `{"k":"日本語"}`)            // multi-byte UTF-8 boundary
-	add("seed-emoji", "", `{"k":"😀🔒"}`)               // surrogate-range / 4-byte runes
+	add("seed-pipe-byte", "", `{"k":"a|b|c"}`) // pipe byte (legacy HMAC delimiter)
+	add("seed-unicode", "", `{"k":"日本語"}`)     // multi-byte UTF-8 boundary
+	add("seed-emoji", "", `{"k":"😀🔒"}`)        // surrogate-range / 4-byte runes
 	// JSON unicode-escape for NUL (6 ASCII chars in JSON payload, valid JSON);
 	// uses a regular string literal so the source file contains no raw NUL byte.
 	add("seed-escaped-nul", "", "{\"k\":\"a\\u0000b\"}")
