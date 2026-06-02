@@ -178,7 +178,7 @@ func (e journeyEnv) getStatus(t *testing.T, orderID string) (int, string) {
 func (e journeyEnv) waitStatus(t *testing.T, orderID, want string) {
 	t.Helper()
 	var last string
-	testwait.External(t, "orderstatus-"+want, func() bool {
+	testwait.External(t, "orderstatus-poll", func() bool {
 		if e.ctx.Err() != nil {
 			return true // abort on context cancellation
 		}
