@@ -17,8 +17,6 @@ import (
 //   - implements CheckpointStore with a fake (proves the interface is
 //     implementable against the ambient-tx signature),
 //   - binds a function to Apply (proves the hook shape is usable),
-//   - wraps the fake through WrapCheckpointStoreForCell and asserts the sealed
-//     marker behaves (non-nil + typed-nil rejection + Noop pass-through),
 //   - exercises Phase.String()/Valid() across the full enum.
 
 // fakeCheckpointStore proves CheckpointStore is implementable with the
@@ -77,68 +75,6 @@ func TestCheckpointStoreImplementable(t *testing.T) {
 		t.Errorf("LoadOffset = %d, want 7", got)
 	}
 }
-
-func TestWrapCheckpointStoreForCell_Seals(t *testing.T) {
-	t.Parallel()
-	inner := newFakeCheckpointStore()
-	wrapped := WrapCheckpointStoreForCell(inner)
-	if wrapped == nil {
-		t.Fatal("WrapCheckpointStoreForCell returned nil for a real store")
-	}
-	// The sealed marker still satisfies the base interface transparently.
-	var _ CheckpointStore = wrapped
-	if err := wrapped.SaveOffset(context.Background(), "c", "p", 1); err != nil {
-		t.Fatalf("wrapped SaveOffset: %v", err)
-	}
-}
-
-func TestWrapCheckpointStoreForCell_NilInputs(t *testing.T) {
-	t.Parallel()
-	// bare-nil interface
-	if got := WrapCheckpointStoreForCell(nil); got != nil {
-		t.Errorf("WrapCheckpointStoreForCell(nil) = %v, want nil", got)
-	}
-	// typed-nil interface (e.g. var s *fakeCheckpointStore) must also map to nil
-	var typedNil *fakeCheckpointStore
-	if got := WrapCheckpointStoreForCell(typedNil); got != nil {
-		t.Errorf("WrapCheckpointStoreForCell(typed-nil) = %v, want nil "+
-			"(typed-nil detection keeps Init() fail-fast guards working)", got)
-	}
-}
-
-func TestWrapCheckpointStoreForCell_NoopPassThrough(t *testing.T) {
-	t.Parallel()
-	// Inner reports noop=true → wrapper must forward it (durable-mode rejection
-	// depends on this; mirror of kernel/outbox cell_marker_test).
-	nooper := &fakeCheckpointStore{offsets: map[string]int64{}, noop: true}
-	wrapped := WrapCheckpointStoreForCell(nooper)
-	n, ok := wrapped.(interface{ Noop() bool })
-	if !ok {
-		t.Fatal("sealed CellCheckpointStore does not expose Noop() bool")
-	}
-	if !n.Noop() {
-		t.Error("Noop() = false, want true (pass-through from inner)")
-	}
-}
-
-func TestWrapCheckpointStoreForCell_NonNooperReturnsFalse(t *testing.T) {
-	t.Parallel()
-	// A store that does not implement Nooper → wrapper reports false.
-	wrapped := WrapCheckpointStoreForCell(nonNooperStore{})
-	n, ok := wrapped.(interface{ Noop() bool })
-	if !ok {
-		t.Fatal("sealed CellCheckpointStore does not expose Noop() bool")
-	}
-	if n.Noop() {
-		t.Error("Noop() = true, want false (inner is not a Nooper)")
-	}
-}
-
-// nonNooperStore implements CheckpointStore but NOT Nooper.
-type nonNooperStore struct{}
-
-func (nonNooperStore) LoadOffset(context.Context, string, string) (int64, error) { return 0, nil }
-func (nonNooperStore) SaveOffset(context.Context, string, string, int64) error   { return nil }
 
 func TestPhaseStringAndValid(t *testing.T) {
 	t.Parallel()

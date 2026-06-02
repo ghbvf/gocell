@@ -23,10 +23,10 @@ package bootstrap
 // These deps are framework-owned raw infrastructure (a CheckpointStore over the
 // framework offset table, the cell tx runner, the journal replay source, the
 // stream cursor). They are injected into bootstrap by the composition root and
-// are NEVER reachable by cell code — a cell holds only the sealed
-// projection.CellCheckpointStore marker, never the raw store. This is what makes
-// the reg.RegisterProjection record-only seam safe: a cell could not call
-// projection.NewCoordinator even if it tried, because it has no store/tx runner.
+// are NEVER reachable by cell code — cells never hold a checkpoint store.
+// This is what makes the reg.RegisterProjection record-only seam safe: a cell
+// could not call projection.NewCoordinator even if it tried, because it has no
+// store/tx runner.
 
 import (
 	"github.com/ghbvf/gocell/kernel/persistence"

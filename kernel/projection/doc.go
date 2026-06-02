@@ -1,7 +1,7 @@
 // Package projection declares the kernel-level contracts for the CQRS
 // projection lifecycle harness: the business event→state Apply hook, the
-// CheckpointStore offset abstraction, the CellCheckpointStore sealed marker,
-// the functional Option seam, and the rebuild-lifecycle Phase enum.
+// CheckpointStore offset abstraction, the MemCursor / MemReplaySource demo
+// helpers, the functional Option seam, and the rebuild-lifecycle Phase enum.
 //
 // # Scope
 //
