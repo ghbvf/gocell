@@ -63,16 +63,6 @@ func (r *Resolver) Packages() []*packages.Package {
 	return r.pkgs
 }
 
-// LoadPackages loads patterns from modRoot with full type info.
-//
-// Parameters:
-//   - tests: when true, load the test variant of each package (includes
-//     *_test.go and adds a synthetic xtest package for `package x_test`).
-//   - tags: joined as `-tags=a,b,c` in BuildFlags; pass nil/empty to omit.
-//
-// Returns the flat slice of packages.Errors collected from every package as
-// the second value so callers can fail fast on type-check errors without
-// re-walking.
 // loadMode is the go/packages load mode for every archtest typed scope
 // (Typed / Production / Fixture / StandaloneModule all route through here via
 // SharedResolver).
@@ -104,6 +94,16 @@ func (r *Resolver) Packages() []*packages.Package {
 const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 	packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports
 
+// LoadPackages loads patterns from modRoot with full type info.
+//
+// Parameters:
+//   - tests: when true, load the test variant of each package (includes
+//     *_test.go and adds a synthetic xtest package for `package x_test`).
+//   - tags: joined as `-tags=a,b,c` in BuildFlags; pass nil/empty to omit.
+//
+// Returns the flat slice of packages.Errors collected from every package as
+// the second value so callers can fail fast on type-check errors without
+// re-walking.
 func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
 	cfg := &packages.Config{
 		Mode:  loadMode,

@@ -41,38 +41,67 @@ package archtest
 // type-system-sealable. Companion mode guard: typeseval.TestLoadMode_NoNeedDeps.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 // TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces asserts loadForbiddenIfacesFromPkg
-// still resolves every rawPublicOptionForbidden canonical (kernel/persistence +
-// kernel/outbox interfaces) across the cell subtrees under the NoDeps load mode.
-// This guards the method-set (types.Implements) deep-detection path, which depends
-// on the resolved *types.Interface values rather than the canonical-name
-// fall-through — and is the exact corpus-level property the soundness note relies
-// on (every platform cell's import closure reaches the forbidden packages). Scope
-// is ./cells/... (all platform cells), not a single cell, so the guard covers the
-// whole real corpus the rule scans.
+// resolves each rawPublicOptionForbidden canonical (kernel/persistence + kernel/outbox
+// interfaces) under the NoDeps load mode at the SAME granularity the real rule
+// (scanPassForRawPublicOption) runs — per cell-subtree Pass, not one corpus-wide union.
+// A union dominated by a single cell (e.g. accesscore) could pass even if NoDeps pruning
+// dropped a forbidden package from another cell's Pass closure; requiring each iface to
+// resolve in >=2 INDEPENDENT cells (across ./cells/... + ./examples/...) closes that gap.
+// This guards the types.Implements structural-match deep-detection path, which depends on
+// the resolved *types.Interface values (not the canonical-name fall-through) and is the
+// corpus property the loadMode soundness note relies on.
 func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
-	resolved := map[string]bool{}
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/..."}), func(p *Pass) []Diagnostic {
+	// resolvers[canonical] = set of distinct cell IDs whose Pass resolved it.
+	resolvers := make(map[string]map[string]bool, len(rawPublicOptionForbidden))
+	for c := range rawPublicOptionForbidden {
+		resolvers[c] = map[string]bool{}
+	}
+	var cellPasses int
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/...", "./examples/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
+		cellID, ok := cellIDFromPkgPath(p.Pkg.Path())
+		if !ok {
+			return nil // not a cell-subtree package — outside the rule's scan scope
+		}
+		cellPasses++
 		for canonical := range loadForbiddenIfacesFromPkg(p.Pkg) {
-			resolved[canonical] = true
+			resolvers[canonical][cellID] = true
 		}
 		return nil
 	})
 
+	require.Positive(t, cellPasses, "must scan >=1 cell-subtree Pass under ./cells/... + ./examples/...")
 	for canonical := range rawPublicOptionForbidden {
-		require.Contains(t, resolved, canonical,
-			"forbidden iface %q must resolve under the NoDeps load mode (deep-detection would otherwise go vacuous)", canonical)
+		require.GreaterOrEqualf(t, len(resolvers[canonical]), 2,
+			"forbidden iface %q resolved in only %d cell(s) %v under NoDeps; require >=2 independent cells "+
+				"(per-Pass non-vacuity — a corpus union could pass on one cell alone while pruning dropped "+
+				"the package from another cell's Pass closure)", canonical, len(resolvers[canonical]), resolvers[canonical])
 	}
-	require.Len(t, resolved, len(rawPublicOptionForbidden),
-		"every rawPublicOptionForbidden canonical must resolve to a *types.Interface under NoDeps")
+}
+
+// cellIDFromPkgPath extracts the cell ID from an import path containing a
+// ".../cells/<cellID>" segment — both platform cells/<id>/… and example
+// examples/<demo>/cells/<id>/… — matching the rule's cell-subtree scan scope.
+func cellIDFromPkgPath(pkgPath string) (string, bool) {
+	const marker = "/cells/"
+	i := strings.Index(pkgPath, marker)
+	if i < 0 {
+		return "", false
+	}
+	rest := pkgPath[i+len(marker):]
+	if j := strings.IndexByte(rest, '/'); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest, rest != ""
 }
 
 // TestLoadModeNoDeps_NonVacuity_SagaStepFunc asserts resolveSagaStepFuncType still

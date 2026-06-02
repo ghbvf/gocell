@@ -418,6 +418,9 @@ per-rule opt-in 名单。
 
 ### 解锁但本 amendment 不做（范围外）
 
+两条路径**抢同一份 freed RSS 余量、需取舍**，合并跟踪于 gh issue **#1518**（决策点 = 拿到 GHA Linux
+per-shard RSS 实测后再定，不凭 macOS 数字硬拍）：
+
 - **warmup 多 cacheKey 扩展**：去 NeedDeps 把单 cacheKey 常驻从 ~954MB 降到 ~149MB（tests=F）
   后，多 key warmup（之前 N=2 即在 `packages.Load` 期撞 6-9GB OOM，closed PR #865）才真正可行。
   **顺序**：先去 NeedDeps 解锁，再独立评估扩 warmup——不在本 PR。
@@ -433,9 +436,10 @@ per-rule opt-in 名单。
 
 ### 关联（不在本 amendment 范围）
 
-本 PR 的 typeseval 改动需先让 `tools/archtest` 测试包可编译——develop HEAD（PR #1477）遗留
-2 处 `RunTypedProduction`/`RunTypedFixture` 调用（PR #1470 collapse Run* 时已删该 API），本 PR
-含一处 2 行机械 compile-fix（`RunTyped* → Run(t, Production/Fixture(...), rule)`）。编译恢复后
-浮现的 7 个 **pre-existing** 规则违规（webhook DAG / contractspec 字面量 / scanner-framework /
-require.Eventually 等，与 load mode 正交，WithDeps 与 NoDeps 失败集 byte-identical）由 gh issue
-**#1506** 跟踪，不在本 amendment 范围。
+本 amendment 落地前，`tools/archtest` 测试包一度因 PR #1477 遗留的 2 处 `RunTypedProduction`/
+`RunTypedFixture`（PR #1470 collapse Run* 时已删该 API）而**非编译**；该 compile break 已由
+**PR #1502（closes #1500）独立修复并合并入 develop**，本 PR 不再含 compile-fix。编译恢复后浮现的
+**pre-existing** 规则违规（webhook DAG / contractspec 字面量 / scanner-framework / require.Eventually
+/ managed-resource 等，与 load mode 正交——WithDeps 与 NoDeps 失败集 byte-identical）中 orderfulfillment
+TEST-POLLING 一项亦由 #1502 修复，**剩余 6 项由 gh issue #1506 跟踪**，均为 nightly-only archtest、
+不在本 amendment 范围。
