@@ -58,30 +58,32 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 //  1. Guard that shared was produced by [NewSharedDeps] (sealed-construction
 //     marker check) and that runtimeOptsFn is non-nil — startup invariants.
 //  2. For each module: nil-guard, call [CellModule.Provide], accumulate cells +
-//     cellOpts + provisional ManagedResources, with LIFO Close(ctx) rollback on
-//     any failure; nil-cell guard.
+//     cellOpts (module opts + one bootstrap.WithManagedResource derived per
+//     ModuleResult.Resources entry) + a provisional ManagedResource stack, with
+//     LIFO Close(ctx) rollback on any failure; nil-cell guard.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
 //  4. allOpts := runtimeOpts ++ cellOpts.
 //  5. Return &App{clk: shared.Clock, opts: allOpts}.
 //
-// Resource ownership (two channels, distinct phases — see pg-cell-template
-// Chapter 4):
-//   - Steady-state lifecycle: a module registers a resource by returning
-//     bootstrap.WithManagedResource(res) in its opts (2nd return value). Those
-//     opts flow into allOpts, so bootstrap.Run manages health/worker/LIFO-Close
+// Resource ownership (single source — PR #591 / #1420): a module lists every
+// ManagedResource it opened in ModuleResult.Resources and does NOT call
+// bootstrap.WithManagedResource itself. Build derives BOTH channels from that
+// one slice:
+//   - Steady-state lifecycle: Build appends one bootstrap.WithManagedResource(r)
+//     per resource to cellOpts, so bootstrap.Run manages health/worker/LIFO-Close
 //     for the resource during the normal run (phase10 shutdown closes it).
-//   - Pre-Run rollback: the module ALSO returns the same resource in its 3rd
-//     return value ([]ManagedResource). Build accumulates these into a
-//     provisional stack and, if any later step fails before returning the App,
-//     calls Close(ctx) in reverse order (LIFO) so resources opened so far are
-//     released even though bootstrap.Run never starts.
+//   - Pre-Run rollback: Build also appends r to a provisional stack and, if any
+//     later step fails before returning the App, calls Close(ctx) in reverse
+//     order (LIFO) so resources opened so far are released even though
+//     bootstrap.Run never starts.
 //
 // The two channels never double-close: the rollback path fires only on failure
 // (bootstrap.Run does not run), and the WithManagedResource path fires only on
-// success. Build does not itself convert provisional resources into bootstrap
-// options — steady-state registration is the module's responsibility via its
-// opts, so a resource appears at most once in the bootstrap managed set.
+// success. Deriving both from the single Resources slice makes the former
+// double-write divergence (resource in opts but not provisional, or vice versa)
+// structurally impossible — guarded by WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01,
+// which bans WithManagedResource calls inside cellmodules/.
 //
 // Cross-module value handoff (formerly via ModuleExports) has been removed.
 // Cell modules are now fully self-contained; cross-cell communication happens
@@ -145,19 +147,26 @@ func (b *Builder) Build(
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module list contains nil")
 		}
-		c, mOpts, mRes, err := m.Provide(ctx, shared)
+		res, err := m.Provide(ctx, shared)
 		if err != nil {
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module %q Provide: %w", m.ID(), err)
 		}
-		if c == nil {
+		if res.Cell == nil {
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module %q returned nil Cell "+
 				"(use explicit Optional semantics if cell is optional)", m.ID())
 		}
-		cells = append(cells, c)
-		cellOpts = append(cellOpts, mOpts...)
-		provisional = append(provisional, mRes...)
+		cells = append(cells, res.Cell)
+		cellOpts = append(cellOpts, res.Opts...)
+		// Single source: derive BOTH the steady-state WithManagedResource
+		// registration and the pre-Run rollback stack from res.Resources, so the
+		// two can never diverge (the former double-write bug). Modules do not call
+		// WithManagedResource themselves (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
+		for _, r := range res.Resources {
+			cellOpts = append(cellOpts, bootstrap.WithManagedResource(r))
+			provisional = append(provisional, r)
+		}
 	}
 
 	runtimeOpts, err := runtimeOptsFn(cells)

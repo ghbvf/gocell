@@ -66,11 +66,12 @@ import (
 
 const (
 	ruleWithManagedResourceCellmoduleFunnel01 = "WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01"
-	// bootstrapPkgPath derived from PlatformModulePath per ARCHTEST-MODULE-PATH-FUNNEL-01.
-	bootstrapPkgPath        = PlatformModulePath + "/runtime/bootstrap"
-	withManagedResourceFunc = "WithManagedResource"
-	cellmodulesScopePrefix  = "cellmodules/"
+	withManagedResourceFunc                   = "WithManagedResource"
+	cellmodulesScopePrefix                    = "cellmodules/"
 )
+
+// bootstrapPkgPath ("github.com/ghbvf/gocell/runtime/bootstrap") is declared in
+// probename_sealed_funnel_test.go and reused here (same package).
 
 // TestWithManagedResourceCellmoduleFunnel01 enforces that no production file
 // under cellmodules/ calls bootstrap.WithManagedResource — modules must return

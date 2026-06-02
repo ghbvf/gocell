@@ -24,11 +24,8 @@ import (
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	configcell "github.com/ghbvf/gocell/cells/configcore"
-	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/state/cas"
@@ -66,10 +63,11 @@ func Module(opts ...ModuleOption) composition.CellModule {
 func (*module) ID() string { return "configcore" }
 
 // Provide resolves all configcore-specific dependencies and returns the
-// constructed cell, bootstrap options, and provisional resources.
+// constructed cell, non-resource bootstrap options, and the single-source
+// ManagedResource list (Builder derives WithManagedResource + rollback from it).
 func (m *module) Provide(
 	_ context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+) (composition.ModuleResult, error) {
 	// 1. Cursor codec.
 	cfgPrimary, cfgPrevious := cellsecrets.LoadCursorKeys("CONFIGCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
@@ -82,14 +80,14 @@ func (m *module) Provide(
 		Label:       "config",
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
+		return composition.ModuleResult{}, fmt.Errorf("configcore cursor codec: %w", err)
 	}
 
 	// 2. KeyProvider (test override OR cmd-supplied via SharedDeps).
 	kp := m.resolveKeyProvider(shared)
 	vt, err := resolveValueTransformer(kp, shared.Topology.StorageBackend() == "postgres")
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	// 3. Stale-cipher increment callback (supplied by cmd via SharedDeps).
@@ -110,13 +108,13 @@ func (m *module) Provide(
 		},
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	// 5. CAS protocol (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest).
 	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	baseOpts := []configcell.Option{
@@ -130,7 +128,7 @@ func (m *module) Provide(
 	c := configcell.NewConfigCore(shared.Clock, baseOpts...)
 
 	builtCell, opts, res := buildConfigCoreResult(c, kp, modResult)
-	return builtCell, opts, res, nil
+	return composition.ModuleResult{Cell: builtCell, Opts: opts, Resources: res}, nil
 }
 
 // resolveKeyProvider returns the test override when set, otherwise uses the
