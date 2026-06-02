@@ -98,6 +98,10 @@ const (
 	// contractTracingSubscriber decorator stay absent (fail-closed); sub-rule D
 	// (decorator must not shadow the marker) is subsumed by the exact-set check
 	// in TestProjectionSerialDeliveryEnforcement01_ImplementerSet.
+	//
+	// Adding a second legitimate serial transport (e.g. an ordered NATS consumer)
+	// is a DELIBERATE update: add it here AND it begins to qualify for projections.
+	// The exact-set assertion fails CI until this golden is updated — intended.
 	serialGuarantorSoleImpl = PlatformModulePath + "/runtime/eventbus.InMemoryEventBus"
 )
 

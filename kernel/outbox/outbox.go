@@ -938,7 +938,11 @@ type SubscriberIntakeStopper interface {
 // not implementing the method — and any future transport that forgets to
 // implement it is auto-rejected for projections rather than silently unsafe.
 //
-// Guarded by archtest PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01.
+// Guarded by archtest PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01, which freezes
+// this method set and pins the implementer set to exactly the qualifying
+// transports. A new transport that implements this marker MUST also be added to
+// that archtest's implementer golden (serialGuarantorSoleImpl), or sub-rule B
+// fails CI — by design, so adding a serial transport is a deliberate update.
 type SerialInOrderGuarantor interface {
 	GuaranteesSerialInOrderDelivery() bool
 }

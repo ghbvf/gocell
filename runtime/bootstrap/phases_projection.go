@@ -198,16 +198,15 @@ func (b *Bootstrap) checkProjectionDeps() error {
 	return nil
 }
 
-// Const literals (MESSAGE-CONST-LITERAL-01); the offending transport type is
-// attached as an internal detail (server-side slog only, never on the wire).
-const (
-	errMsgProjectionSubscriberNotSerial = "bootstrap: projection declared but the configured subscriber does not " +
-		"guarantee serial in-order delivery; projection subscriptions require prefetch=1 / single-goroutine dispatch " +
-		"(the in-memory event bus is the only qualifying transport today). See ADR " +
-		"docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §6 threat row 4"
-	errMsgProjectionSubscriberNil = "bootstrap: projection declared but no subscriber is configured for the " +
-		"serial-delivery guard (upstream invariant: checkNoEventConsumersWhenSubscriberNil rejects a nil subscriber first)"
-)
+// Const literal (MESSAGE-CONST-LITERAL-01); the offending transport type is
+// appended as diagnostic context via fmt.Errorf at the callsite. The message
+// states the failure + the actionable fix (implement the marker), deliberately
+// not the current implementer list — that list lives in the ADR / archtest and
+// would drift here.
+const errMsgProjectionSubscriberNotSerial = "bootstrap: projection declared but the configured subscriber does not " +
+	"guarantee serial in-order delivery; projection subscriptions require prefetch=1 / single-goroutine dispatch — " +
+	"implement outbox.SerialInOrderGuarantor returning true to opt in. See ADR " +
+	"docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §6 threat row 4 + §Amendment 2026-06-02"
 
 // checkSubscriberGuaranteesSerialDelivery fail-closes the projection drain when
 // the wired raw transport does not GUARANTEE strictly serial, in-order delivery.
@@ -221,20 +220,22 @@ const (
 //
 // This is the single sanctioned type assertion to the marker
 // (PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 sub-rule C). It is invoked from
-// drainCellProjections — the transport-meets-projection boundary — only when a
-// projection exists. The nil branch is an upstream-invariant backstop:
-// phase6StartEventRouter routes nil subscribers to checkNoEventConsumersWhenSubscriberNil
-// before the projection drain, so a nil sub never reaches here on the live path.
+// drainCellProjections — the transport-meets-projection boundary — and asserts
+// the RAW s.sub, before buildEventRouter wraps it in contractTracingSubscriber
+// (that decorator wraps rather than embeds and does not forward the marker, so
+// asserting the wrapped value would be wrong; sub-rule D locks the decorator out
+// of the implementer set as defense-in-depth). A nil subscriber needs no special
+// branch: the assertion below returns ok == false and is rejected fail-closed —
+// and phase6StartEventRouter routes nil subscribers to
+// checkNoEventConsumersWhenSubscriberNil before the projection drain anyway.
 func checkSubscriberGuaranteesSerialDelivery(sub outbox.Subscriber) error {
-	if validation.IsNilInterface(sub) {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, errMsgProjectionSubscriberNil)
-	}
 	g, ok := sub.(outbox.SerialInOrderGuarantor)
 	if !ok || !g.GuaranteesSerialInOrderDelivery() {
 		// Append the wired transport type as diagnostic context (a type name, not
-		// PII). errcode.Error.Error() replaces Message with internal details when
-		// any are attached, so the type goes via fmt.Errorf wrapping to keep the
-		// const Message visible rather than via WithInternal.
+		// PII). errcode.Error.Error() collapses Message into the internal-details
+		// string when any WithInternal attrs are present (errcode.go), which would
+		// HIDE the const Message from operator logs; fmt.Errorf wrapping keeps both
+		// the Message and the transport type visible.
 		return fmt.Errorf("%w (configured subscriber type: %T)",
 			errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, errMsgProjectionSubscriberNotSerial), sub)
 	}

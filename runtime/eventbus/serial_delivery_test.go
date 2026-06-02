@@ -18,6 +18,11 @@ import (
 // The runtime type assertion (rather than a compile-time var _) is intentional:
 // it lets this test express the behavioral RED precisely — before the method
 // exists, ok is false and the assertion fails, rather than failing to build.
+//
+// This unit test verifies the behavioral contract for one transport. The frozen
+// method set and the exact implementer set {InMemoryEventBus} are locked by
+// archtest PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 (sub-rules A + B): any
+// additional implementer fails that archtest in CI.
 func TestInMemoryEventBus_GuaranteesSerialInOrderDelivery(t *testing.T) {
 	t.Parallel()
 	bus := New(clock.Real())
