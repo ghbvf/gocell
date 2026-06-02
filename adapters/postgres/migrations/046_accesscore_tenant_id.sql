@@ -55,7 +55,10 @@
 
 -- +goose Up
 -- Forward-rebuild gate is enforced in Go (Migrator.ForwardRebuild + ForwardRebuildPermit); see issue #1248.
--- +gocell forward-rebuild target=users,roles,role_assignments
+-- One annotation line per rebuilt table (multi-target forward-rebuild, see ADR-1122 amendment).
+-- +gocell forward-rebuild target=users
+-- +gocell forward-rebuild target=roles
+-- +gocell forward-rebuild target=role_assignments
 
 -- -----------------------------------------------------------------------
 -- 1. Drop dependent objects in reverse dependency order
