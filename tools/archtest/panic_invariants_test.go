@@ -131,7 +131,6 @@ func TestPanicLogRedact_DetectsViolation(t *testing.T) {
 
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/testdata/panic_log_redact_fixtures/violation"}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil

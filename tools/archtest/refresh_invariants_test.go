@@ -190,7 +190,6 @@ func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T)
 		TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/slices/sessionrefresh/..."},
 	),
-
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {

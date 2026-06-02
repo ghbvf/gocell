@@ -372,7 +372,6 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -513,7 +512,6 @@ func TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive(t *testing.T) {
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -598,7 +596,6 @@ func TestDomainAuthzMutation_ValueCapture_Detected(t *testing.T) {
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/domain/testdata/value_capture_setstatus_red",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -644,7 +641,6 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -693,7 +689,6 @@ func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Fset == nil {
 				return nil
@@ -752,7 +747,6 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -800,7 +794,6 @@ func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/domain/testdata/var_init_setstatus_red",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil

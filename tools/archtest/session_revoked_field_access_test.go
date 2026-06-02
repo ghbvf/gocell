@@ -110,7 +110,6 @@ func TestSessionRevokedFieldAccess_Upstream_01(t *testing.T) {
 		"./runtime/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -219,7 +218,6 @@ func TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName(t *testing.T) {
 		"./runtime/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -265,7 +263,6 @@ func TestSessionRevokedFieldAccess_BlindSpot_UnsafePointerImport(t *testing.T) {
 		"./cells/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Fset == nil {
 				return nil

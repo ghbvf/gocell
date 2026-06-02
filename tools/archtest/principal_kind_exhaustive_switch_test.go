@@ -97,7 +97,6 @@ func TestPrincipalKindExhaustiveSwitch01_ReverseFixture(t *testing.T) {
 	}
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/principalkindfixture/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() {
 				return nil
@@ -128,7 +127,6 @@ func TestPrincipalKindExhaustiveSwitch01_IfChainNotScanned(t *testing.T) {
 	}
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/principalkindifchainfixture/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() {
 				return nil

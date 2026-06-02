@@ -172,7 +172,6 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 		"./kernel/assembly/...",
 		"./cmd/gocell/app/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

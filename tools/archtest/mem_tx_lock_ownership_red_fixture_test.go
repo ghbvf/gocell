@@ -34,7 +34,6 @@ func TestMemTxLockOwnership01_FixturePattern(t *testing.T) {
 
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil

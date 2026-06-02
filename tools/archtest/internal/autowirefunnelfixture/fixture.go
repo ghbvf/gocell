@@ -14,7 +14,7 @@
 //   - bypassSwallowClosure — FIRE (multi-statement degrade-swallowing FuncLit)
 //
 // Nothing here is wired into production; it exists only to be type-checked and
-// scanned by RunTypedFixture.
+// scanned by Run(t, Fixture(...), rule).
 package autowirefunnelfixture
 
 import (
