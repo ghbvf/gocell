@@ -47,6 +47,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/contractspec"
@@ -120,16 +121,29 @@ func (c *captureRegistrar) Subscribe(
 // least one projection. Used alongside cellSnapshotsHaveSubscriptions to decide
 // whether phase6 must build the event router.
 func cellSnapshotsHaveProjections(s *phaseState) bool {
+	return len(collectProjectionKeys(s)) > 0
+}
+
+// collectProjectionKeys returns the "<cellID>/<projectionID>" identifier of every
+// projection declared across the cell snapshots, in assembly cell order. It is the
+// single source for both the phase6 "is there work?" predicate
+// (cellSnapshotsHaveProjections) and the diagnostic that names the affected
+// projections when the serial-delivery guard rejects the wired transport (#1369 F3
+// — without it the failure only carries the subscriber type, not which projections
+// triggered the check). cellID / projectionID are framework snake_case identifiers,
+// not PII.
+func collectProjectionKeys(s *phaseState) []string {
+	var keys []string
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {
 			continue
 		}
-		if len(snap.Projections) > 0 {
-			return true
+		for _, req := range snap.Projections {
+			keys = append(keys, req.CellID+"/"+req.ProjectionID)
 		}
 	}
-	return false
+	return keys
 }
 
 // buildProjectionCoordinators constructs one projection.Coordinator per
@@ -335,9 +349,11 @@ func (b *Bootstrap) drainCellProjections(ctx context.Context, s *phaseState, evt
 	// carried by a transport that guarantees serial in-order delivery. Checked
 	// once here — the transport-meets-projection boundary — before any wiring, so
 	// a concurrent transport fails fast instead of silently dropping events.
-	if cellSnapshotsHaveProjections(s) {
+	if keys := collectProjectionKeys(s); len(keys) > 0 {
 		if err := checkSubscriberGuaranteesSerialDelivery(s.sub); err != nil {
-			return err
+			// Name the projections that triggered the guard so ops sees which
+			// declarations are blocked, not just the offending transport type.
+			return fmt.Errorf("%w (declared projections: %s)", err, strings.Join(keys, ", "))
 		}
 	}
 	wirings, err := b.buildProjectionCoordinators(ctx, s)

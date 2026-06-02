@@ -552,6 +552,10 @@ func TestPhase6_Projection_RejectsConcurrentSubscriber(t *testing.T) {
 	require.Error(t, err, "projection on a concurrent (non-serial) subscriber must fail fast")
 	assert.Contains(t, err.Error(), "serial in-order delivery",
 		"error must name the violated precondition")
+	// F3 (#1369): the failure must name the affected projection(s), not just the
+	// offending transport type, so ops can see which declarations are blocked.
+	assert.Contains(t, err.Error(), projTestCellID+"/"+projTestProjID,
+		"error must name the projection that triggered the serial-delivery guard")
 	assert.Empty(t, b.projectionCoordinators,
 		"no projection coordinator must be wired when the guard rejects the transport")
 }

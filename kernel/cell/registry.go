@@ -597,6 +597,7 @@ type RegistryRecorder struct {
 	webhookReceivers   []WebhookReceiverRequest
 	webhookDispatchers []WebhookDispatchRequest
 	projections        []ProjectionRequest
+	projectionIDs      map[string]struct{}
 
 	finalized bool
 }
@@ -618,10 +619,11 @@ func NewRegistryRecorder(cfg map[string]any, mode outbox.DurabilityMode) *Regist
 // logger. Provided for testing so log output can be captured.
 func NewRegistryRecorderWithLogger(cfg map[string]any, mode outbox.DurabilityMode, log *slog.Logger) *RegistryRecorder {
 	return &RegistryRecorder{
-		cfg:        cfg,
-		mode:       mode,
-		log:        log,
-		probeNames: make(map[healthz.ProbeName]struct{}),
+		cfg:           cfg,
+		mode:          mode,
+		log:           log,
+		probeNames:    make(map[healthz.ProbeName]struct{}),
+		projectionIDs: make(map[string]struct{}),
 	}
 }
 
@@ -766,7 +768,25 @@ func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
 	if err := req.Spec.Validate(); err != nil {
 		return err
 	}
+	// Single-projection-single-subscriber premise (#1369): the consumer group is
+	// derived as "<cellID>-<projectionID>" and the checkpoint key is (cellID,
+	// projectionID). A duplicate ProjectionID would register two competing
+	// subscribers on one consumer group — voiding the strictly-serial in-order
+	// delivery the projection checkpoint requires (the transport-level
+	// SerialInOrderGuarantor guard is scoped to a SINGLE subscriber per group).
+	// The recorder is per-cell, so ProjectionID uniqueness == per-cell uniqueness.
+	if _, dup := r.projectionIDs[req.ProjectionID]; dup {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterProjection: duplicate ProjectionID; each projection must have a "+
+				"unique ID within its cell (the consumer group and checkpoint key are derived from "+
+				"cellID+projectionID — a duplicate registers two competing subscribers on one consumer "+
+				"group, voiding the serial in-order delivery the projection checkpoint requires)",
+			errcode.WithInternal(
+				errcode.InternalAttr("projectionID", req.ProjectionID),
+				errcode.InternalAttr("cellID", req.CellID)))
+	}
 
+	r.projectionIDs[req.ProjectionID] = struct{}{}
 	r.projections = append(r.projections, req)
 	return nil
 }

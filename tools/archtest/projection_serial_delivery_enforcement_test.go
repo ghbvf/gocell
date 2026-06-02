@@ -30,9 +30,13 @@
 //     is EXACTLY {runtime/eventbus.InMemoryEventBus}. A concurrent transport
 //     (AMQP/MQTT) or the contractTracingSubscriber decorator must NOT implement
 //     it — that is what makes fail-closed-by-absence load-bearing.
-//   - C (guard callsite): the only production type assertion to the marker lives
-//     in runtime/bootstrap/phases_projection.go. The guard cannot drift to a
-//     place that would not run on the projection wiring path.
+//   - C (guard callsite + drain-path binding): the only production type assertion
+//     to the marker lives in runtime/bootstrap/phases_projection.go (locked by
+//     …_GuardCallsite), AND drainCellProjections — the drain entrypoint — must
+//     actually call the guard (locked by …_GuardOnDrainPath, #1369 F3 hardening).
+//     The two together stop the guard from drifting off the projection wiring path
+//     OR being left defined-but-uncalled (dead code that passes a file-presence
+//     check yet wires projections onto a concurrent transport).
 //   - D (decorator does not shadow): contractTracingSubscriber must NOT implement
 //     the marker — it wraps (does not embed) the raw subscriber, so asserting the
 //     raw s.sub bypasses it; an accidental decorator implementation would mask
@@ -92,6 +96,17 @@ const (
 	// serialGuardCallsiteRel is the ONLY production file allowed to type-assert a
 	// subscriber against outbox.SerialInOrderGuarantor (the projection drain guard).
 	serialGuardCallsiteRel = "runtime/bootstrap/phases_projection.go"
+
+	// serialGuardDrainFunc is the drain entrypoint that MUST call the guard;
+	// serialGuardCheckFunc is the guard function holding the marker type assertion.
+	// Sub-rule C's drain-path binding asserts the former calls the latter so the
+	// guard cannot be left defined-but-uncalled (#1369 F3 hardening).
+	serialGuardDrainFunc = "drainCellProjections"
+	serialGuardCheckFunc = "checkSubscriberGuaranteesSerialDelivery"
+
+	// serialGuardBootstrapPkgPath is the import path of the package owning the
+	// drain entrypoint, used to scope the drain-path binding scan.
+	serialGuardBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
 
 	// serialGuarantorSoleImpl is the ONLY production type permitted to implement
 	// the marker — the serial in-memory bus. AMQP/MQTT and the
@@ -254,6 +269,70 @@ func TestProjectionSerialDeliveryEnforcement01_GuardCallsite(t *testing.T) {
 		"PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01: the projection drain guard "+
 			"(type assertion to outbox.%s in %s) is missing — the serial-delivery enforcement is not wired",
 		serialGuarantorTypeName, serialGuardCallsiteRel)
+}
+
+// TestProjectionSerialDeliveryEnforcement01_GuardOnDrainPath (sub-rule C,
+// #1369 F3 hardening): the drain entrypoint drainCellProjections MUST call the
+// guard checkSubscriberGuaranteesSerialDelivery. Sub-rule C's GuardCallsite test
+// only proves the marker type assertion EXISTS in the drain file — a regression
+// that left the guard defined but un-called (dead code) would pass GuardCallsite
+// yet wire projections onto a concurrent transport. This binds the guard to the
+// drain path: callee resolved via go/types (not a name-only match), so a
+// shadowing local would not satisfy it.
+func TestProjectionSerialDeliveryEnforcement01_GuardOnDrainPath(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	prodPatterns := prodscan.Patterns(root)
+
+	var pkgSeen, drainSeen, guardCalled bool
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != serialGuardBootstrapPkgPath {
+				return nil
+			}
+			pkgSeen = true
+			for _, f := range p.Files {
+				if p.Rel(f) != serialGuardCallsiteRel {
+					continue
+				}
+				for _, decl := range f.Decls {
+					fn, ok := decl.(*ast.FuncDecl)
+					if !ok || fn.Name == nil || fn.Name.Name != serialGuardDrainFunc || fn.Body == nil {
+						continue
+					}
+					drainSeen = true
+					EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+						id, ok := call.Fun.(*ast.Ident)
+						if !ok {
+							return
+						}
+						fnObj, ok := p.TypesInfo.ObjectOf(id).(*types.Func)
+						if !ok || fnObj.Name() != serialGuardCheckFunc {
+							return
+						}
+						if fnObj.Pkg() != nil && fnObj.Pkg().Path() == serialGuardBootstrapPkgPath {
+							guardCalled = true
+						}
+					})
+				}
+			}
+			return nil
+		})
+
+	require.True(t, pkgSeen,
+		"PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01: package %s not loaded", serialGuardBootstrapPkgPath)
+	require.True(t, drainSeen,
+		"PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01: func %s not found in %s — the drain entrypoint "+
+			"was renamed; update serialGuardDrainFunc", serialGuardDrainFunc, serialGuardCallsiteRel)
+	assert.True(t, guardCalled,
+		"PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 (sub-rule C / #1369 F3): %s must call %s so the "+
+			"serial-delivery guard runs on the projection wiring path. GuardCallsite only checks the marker "+
+			"type assertion EXISTS in %s; this binds it to the drain entrypoint so a defined-but-uncalled "+
+			"guard cannot pass.", serialGuardDrainFunc, serialGuardCheckFunc, serialGuardCallsiteRel)
 }
 
 // TestProjectionSerialDeliveryEnforcement01_ReverseBlindSpot_NoTypeSwitch (B1):
