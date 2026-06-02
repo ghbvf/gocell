@@ -440,11 +440,7 @@ func TestStartStop_Idempotency(t *testing.T) {
 	go func() { startErr <- c.Start(ctx) }()
 
 	// Wait for ready.
-	select {
-	case <-c.Ready():
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for Ready()")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	// Second Start should return KindConflict immediately.
 	err := c.Start(ctx)
@@ -487,11 +483,7 @@ func TestStartStop_LifecycleCAS(t *testing.T) {
 	startErr := make(chan error, 1)
 	go func() { startErr <- c.Start(run1Ctx) }()
 
-	select {
-	case <-c.Ready():
-	case <-run1Ctx.Done():
-		t.Fatal("timed out waiting for Ready() on first run")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready-run1")
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D500ms)
 	defer stopCancel()
@@ -507,11 +499,7 @@ func TestStartStop_LifecycleCAS(t *testing.T) {
 	startErr2 := make(chan error, 1)
 	go func() { startErr2 <- c.Start(run2Ctx) }()
 
-	select {
-	case <-c.Ready():
-	case <-run2Ctx.Done():
-		t.Fatal("timed out waiting for Ready() on second run")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready-run2")
 
 	stopCtx2, stopCancel2 := context.WithTimeout(context.Background(), testtime.D500ms)
 	defer stopCancel2()
@@ -534,14 +522,10 @@ func TestStart_Ready_Channel_Closes_After_State_Running(t *testing.T) {
 
 	go func() { _ = c.Start(ctx) }()
 
-	select {
-	case <-c.Ready():
-		// Good — Ready channel closed once coordinator is running.
-		if coordState(c.state.Load()) != coordRunning {
-			t.Errorf("state after Ready() = %v, want coordRunning", c.state.Load())
-		}
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for Ready()")
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
+	// Good — Ready channel closed once coordinator is running.
+	if coordState(c.state.Load()) != coordRunning {
+		t.Errorf("state after Ready() = %v, want coordRunning", c.state.Load())
 	}
 }
 
@@ -598,7 +582,7 @@ func TestRepoReady_Running_DelegatesToJournal(t *testing.T) {
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer stopCancel()
 	_ = c.Stop(stopCtx)
-	<-startDone
+	_ = testwait.Deterministic(t, startDone, "start-goroutine-exit")
 }
 
 func ecErrKind(e *errcode.Error) any {
@@ -668,7 +652,7 @@ func startRunningCoordinator(t *testing.T, j journal.Journal, clk clock.Clock) *
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer stopCancel()
 		_ = c.Stop(stopCtx)
-		<-startDone
+		_ = testwait.Deterministic(t, startDone, "start-goroutine-exit")
 	})
 	return c
 }
