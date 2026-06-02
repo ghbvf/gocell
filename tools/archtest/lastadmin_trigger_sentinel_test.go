@@ -226,7 +226,7 @@ const (
 //     two-RAISE migration where one copy drifted is NOT accepted as two passing
 //     matches — a drifted copy falls outside the prefix filter and is invisible
 //     to the collection, leaving the correctly-prefixed copy as the sole match.
-//     This is correct behaviour: the drifted copy is effectively an unknown RAISE
+//     This is correct behavior: the drifted copy is effectively an unknown RAISE
 //     that does not affect `isLastAdminProtected`'s classification (it would
 //     surface as a generic PG error, not a sentinel hit). The invariant's contract
 //     is "every copy we can see via the prefix agrees with the const", which holds.
@@ -281,7 +281,7 @@ func TestLastadminTriggerSentinelConstSQLMatch01(t *testing.T) {
 	// raiseExceptionMessagesWithPrefix already filters by prefix, so any entry in
 	// matchLocs already satisfies the prefix condition by construction.  The loop
 	// below is an explicit in-test assertion that makes the contract visible and
-	// provides a per-match failure message should the helper's behaviour change.
+	// provides a per-match failure message should the helper's behavior change.
 	for _, loc := range matchLocs {
 		// loc is "<rel>: <message>"; extract the message part (after the first ": ").
 		// The message itself was already verified to start with prefix by the helper;
