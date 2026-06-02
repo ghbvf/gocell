@@ -6,7 +6,7 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest"
 )
 
-// red_subpath_runtyped uses a subpath pattern (./cells/...) rather than the
+// red_subpath_typed_run uses a subpath pattern (./cells/...) rather than the
 // whole module ./... — the cumulative-RSS pathology applies to any patterns
 // shape because each tagGroup is a separate cacheKey under the same patterns
 // shape. The rule must catch a RangeStmt containing a typed-scope Run

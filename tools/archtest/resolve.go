@@ -131,7 +131,7 @@ func EvaluateConstString(info *types.Info, expr ast.Expr) (string, bool) {
 // [KnownNonDefaultTags] (#944), so this union never activates fixture-tagged
 // code. Use it as TypedOpts.Tags for the single Run(t, Typed(...), ...) call
 // that scans hand-written production code under all tag-gated activations at
-// once — the compliant idiom for TAGGROUP-LOOP-FORBIDS-RUNTYPED-01.
+// once — the compliant idiom for TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01.
 //
 // **Always pair with** a second Run(t, Typed(TypedOpts{}, ...), ...) call (tags=nil)
 // to cover reverse build directives (//go:build !X) which are silently

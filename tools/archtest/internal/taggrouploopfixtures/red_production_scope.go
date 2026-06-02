@@ -10,7 +10,7 @@ import (
 // scope: a for-range over archtest.KnownNonDefaultTags() with
 // archtest.Run(t, Production(...), ...) inside the loop body. Production does a
 // per-tag packages.Load just like Typed, so the cumulative-RSS pathology
-// TAGGROUP-LOOP-FORBIDS-RUNTYPED-01 forbids applies. If "Production" were dropped
+// TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01 forbids applies. If "Production" were dropped
 // from taggroupTypedScopeCtors this fixture would stop tripping — the precision
 // gate's expectedRed entry locks that membership.
 func _(t *testing.T) {

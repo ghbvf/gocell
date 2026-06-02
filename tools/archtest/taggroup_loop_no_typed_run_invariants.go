@@ -1,9 +1,9 @@
 package archtest
 
-// taggroup_loop_no_runtyped_invariants.go — importable TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
+// taggroup_loop_no_typed_run_invariants.go — importable TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01
 // rule logic.
 //
-// TAGGROUP-LOOP-FORBIDS-RUNTYPED-01 — backstory and form-uniqueness
+// TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01 — backstory and form-uniqueness
 //
 // Backstory: panic_invariants_test.go::TestPanicRegistered once wrote the
 // pattern (shown in its pre-#1037-§1d RunTyped form; RunTyped was deleted when
@@ -56,7 +56,7 @@ package archtest
 // Scope: tools/archtest/*_test.go (direct children only — fixtures under
 // tools/archtest/internal/taggrouploopfixtures/ are excluded from the live
 // scan and exercised by Test_TaggroupLoopFixturePrecisionGate in
-// taggroup_loop_no_runtyped_test.go).
+// taggroup_loop_no_typed_run_test.go).
 //
 // Blind-spot self-checks (ai-robust.md §"工具选定后强制盲区自检").
 //
@@ -78,7 +78,7 @@ package archtest
 //	BS-3 Patterns variance (CLOSED): the loop-amortization invariant is
 //	   independent of the patterns arg shape; subpath patterns like
 //	   ./cells/... must also be caught when wrapped in a tagGroup loop.
-//	   Covered by red_subpath_runtyped.go.
+//	   Covered by red_subpath_typed_run.go.
 //	BS-4 RangeStmt.X var-indirection (CLOSED): `tags := KnownNonDefaultTags();
 //	   for _, g := range tags { Run(t, Typed(...), ...) }`. condition (i) now
 //	   also matches an *ast.Ident bound from KnownNonDefaultTags() within the
@@ -120,7 +120,7 @@ package archtest
 //	   single-element-binding accept.
 //
 // Reverse fixture-precision self-check (Test_TaggroupLoopFixturePrecisionGate in
-// taggroup_loop_no_runtyped_test.go) enforces that GREEN fixtures (single
+// taggroup_loop_no_typed_run_test.go) enforces that GREEN fixtures (single
 // Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, ...), ...), two-load
 // nil+FlatNonDefaultTags, and the BS-4 parity binding) do NOT trip the rule.
 
@@ -133,7 +133,7 @@ import (
 )
 
 const (
-	taggroupLoopRuleID         = "TAGGROUP-LOOP-FORBIDS-RUNTYPED-01"
+	taggroupLoopRuleID         = "TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01"
 	taggroupLoopKnownTagsName  = "KnownNonDefaultTags"
 	taggroupLoopRunName        = "Run"
 	taggroupLoopArchtestPkg    = PlatformModulePath + "/tools/archtest"
@@ -156,9 +156,9 @@ var taggroupTypedScopeCtors = map[string]struct{}{
 	"StandaloneModule": {},
 }
 
-// CheckTagGroupLoopForbidsRunTyped runs TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
+// CheckTagGroupLoopForbidsTypedRun runs TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01
 // against tools/archtest/*_test.go (direct children only) and returns its
-// diagnostics. GoCell's TestTagGroupLoopForbidsRunTyped calls this directly —
+// diagnostics. GoCell's TestTagGroupLoopForbidsTypedRun calls this directly —
 // single source, no parallel rule body. cfg.BuildTags is threaded into the scan's
 // TypedOpts.Tags so files behind build directives are not missed.
 //
@@ -171,7 +171,7 @@ var taggroupTypedScopeCtors = map[string]struct{}{
 // repo that calls it directly is likewise vacuously green, since the scan target
 // ./tools/archtest/... does not exist outside GoCell. cfg is consumed for
 // BuildTags only; the scan scope is fixed to GoCell's own archtest package.
-func CheckTagGroupLoopForbidsRunTyped(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+func CheckTagGroupLoopForbidsTypedRun(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return Run(t, Typed(TypedOpts{Tests: true, Tags: cfg.BuildTags}, []string{taggroupLoopPatternProd}),
 		func(p *Pass) []Diagnostic {

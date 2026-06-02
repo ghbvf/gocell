@@ -1,14 +1,14 @@
 package archtest
 
-// INVARIANT: TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
+// INVARIANT: TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01
 
 import (
 	"testing"
 )
 
-// TestTagGroupLoopForbidsRunTyped enforces TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
+// TestTagGroupLoopForbidsTypedRun enforces TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01
 // against production archtest *_test.go files. Rule logic lives in
-// taggroup_loop_no_runtyped_invariants.go; this file dogfoods it — single
+// taggroup_loop_no_typed_run_invariants.go; this file dogfoods it — single
 // source, no parallel rule body.
 //
 // F3 cacheKey note: this scan's cacheKey is (modRoot, Tests=true, nil,
@@ -19,10 +19,10 @@ import (
 // borderline on the 20s slowgate post-merge, that is expected behavior, not
 // a regression — it is tracked under the slowgate cleanup
 // (ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01, subprocess/cache-miss triage).
-func TestTagGroupLoopForbidsRunTyped(t *testing.T) {
+func TestTagGroupLoopForbidsTypedRun(t *testing.T) {
 	t.Parallel()
 	Report(t, taggroupLoopRuleID,
-		CheckTagGroupLoopForbidsRunTyped(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+		CheckTagGroupLoopForbidsTypedRun(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // Test_TaggroupLoopFixturePrecisionGate verifies the rule's accuracy against
@@ -59,7 +59,7 @@ func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 		"red_aliased_import",
 		"red_nested_closure",
 		"red_panic_invariants_style",
-		"red_subpath_runtyped",
+		"red_subpath_typed_run",
 		"red_typeseval_qualified",
 		"red_var_bound_range",
 		// Per-member typed-scope trip-wires (F3): each locks one entry of

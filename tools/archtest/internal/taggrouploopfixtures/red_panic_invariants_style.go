@@ -10,7 +10,7 @@ import (
 // panic_invariants_test.go::TestPanicRegistered pattern: a for-range over
 // archtest.KnownNonDefaultTags() with a typed-scope Run (Run(t, Typed(...), ...)) in the
 // loop body. Each tagGroup causes a separate packages.Load — the cumulative
-// RSS pattern banned by TAGGROUP-LOOP-FORBIDS-RUNTYPED-01.
+// RSS pattern banned by TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01.
 func _(t *testing.T) {
 	for _, tagGroup := range archtest.KnownNonDefaultTags() {
 		_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: tagGroup},
