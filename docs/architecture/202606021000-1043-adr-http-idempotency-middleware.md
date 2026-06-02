@@ -213,6 +213,26 @@ exempt 路由的请求直接 passthrough，response **永不写入 store**，无
 exempt 路由的 passthrough 在 method-gate 之前、body read 之前执行（`cfg.exemptMatcher`
 检查是 Middleware 最早的 guard），exempt 路由零 body-buffering 开销。
 
+#### 敏感 body route 豁免（⚠️ 收口前置）
+
+本 PR 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` 字段 → `AuthRouteMeta`
+→ `mergeIdempotencyExemptMatcher` → `WithExemptMatcher`，端到端有测试）。但有两处 **本 PR 不覆盖**
+的缺口，使「敏感 body 路由不会被录制」这一保证目前 **未** 真正成立：
+
+1. **codegen 入口缺失**：`contractgen`（`spec.go` / `builder.go` / handler 模板）**没有**
+   `endpoints.http.auth.idempotencyExempt` 字段。contract.yaml 无法声明豁免，生成的
+   `handler_gen.go` 无法 emit `auth.Route{IdempotencyExempt: true}`。
+2. **未应用到任何敏感路由**：`change-password` 等在 **body** 返回 `accessToken` /
+   `refreshToken` 的路由仍只有 `PasswordResetExempt: true`，没有 `IdempotencyExempt: true`。
+   而 `filterSensitiveHeaders` **只过滤 header**——body 中的 credential 会被原样 Record。
+
+**收口归属**：上述两项与 **production wiring（gh #1469）原子绑定**，作为 #1469 的
+**HARD 前置**——`cmd/corebundle` 接通 `WithIdempotencyStore(store)` 的同一 PR **必须**
+同时落地 (a) `idempotencyExempt` codegen 入口 + (b) 把所有「在 body 返回 credential / 会话凭据」
+的变更类 contract 声明 `idempotencyExempt: true` 并 regenerate。**禁止** store-active 而
+exempt 未应用的中间状态落地（否则首次生产部署即把 token 明文写入 Redis）。理由：豁免的
+端到端验证需要 store active 才可测，机制与接线天然属同一交付单元。
+
 ---
 
 ## AI-robust 评级
@@ -252,7 +272,7 @@ exempt 路由的 passthrough 在 method-gate 之前、body read 之前执行（`
 | **4xx 响应被缓存为永久回放**（参数错误的 response 被 Record）| `shouldRecord` 仅对 2xx/3xx 记录；4xx/5xx 走 Release 路径，客户端可修正参数后重试 | ✅ |
 | **同一 key + 不同 endpoint mis-replay**（相同 header 值跨端点错误 replay）| method + path 包含在 key 组成中（`subject + "\x00" + method + "\x00" + path + "\x00" + header`）；不同 endpoint 的 Claim 使用不同 key，结构上无法碰撞 | ✅ |
 | **同一 key + 不同 body mis-replay**（相同 key + 不同请求体绕过指纹检测）| `Store.Claim` 接受 `fingerprint = hex(sha256(body))`；后续不匹配指纹的 Claim 返回 `ErrFingerprintMismatch` → 409 `ErrIdempotencyKeyReused`；攻击者无法用不同 body 劫持已有 replay | ✅ |
-| **敏感响应体持久化到 replay store**（session cookie / credential 被 store）| 敏感响应头过滤（`sensitiveResponseHeaders`：Set-Cookie、Authorization 等）在 `filterSensitiveHeaders` 中剔除，RecordedResponse 只存储安全可重放的 header；此外 `auth.Route.IdempotencyExempt = true` 提供显式 route 级豁免——exempt 路由请求直接 passthrough，response 永不写入 store | ✅ |
+| **敏感响应体持久化到 replay store**（session cookie / credential 被 store）| **header 维度 ✅**：`sensitiveResponseHeaders`（Set-Cookie、Authorization 等）在 `filterSensitiveHeaders` 中剔除，RecordedResponse 只存安全可重放的 header。**body 维度 ⚠️**：`filterSensitiveHeaders` **只过滤 header，不过滤 body**——返回敏感数据于 **body** 的路由（如 `change-password` 的 200 响应含 `accessToken` / `refreshToken`）唯一防护是 `auth.Route.IdempotencyExempt = true` route 级豁免，而该豁免 **目前既无 contractgen codegen 入口（`endpoints.http.auth.idempotencyExempt` 未实现）也未应用到任何生产路由**。补偿措施 + 该 ⚠️ 收口为 ✅ 的前置条件见下方 §"敏感 body route 豁免（⚠️ 收口前置）" + gh #1469。当前为 **潜伏风险**：中间件在 corebundle 接通 store（gh #1469）前 inactive，本 ⚠️ 不在 develop 触发，但 #1469 接通即从潜伏转为 token 明文落 Redis（TTL 24h）。 | ⚠️ |
 
 ---
 
@@ -265,9 +285,11 @@ exempt 路由的 passthrough 在 method-gate 之前、body read 之前执行（`
 - Redis 双键 Lua 原子模型与 `kernel/idempotency.Claimer` 的 PG outbox fencing（`OUTBOX-LEASE-ID-CAS-01`）同一 token-guard 语义，一致性模型可预测。
 - `REDIS-KEY-NAMESPACE-01` 已有 archtest 自动覆盖新增的 `HTTPIdempotencyStore` 构造器，无需新 archtest 守卫 namespace 约束。
 - request body fingerprint 已实现：同一 key + 不同 body → 409 即时拒绝，防止 mis-replay。
-- route opt-out（`auth.Route.IdempotencyExempt`）允许敏感路由显式豁免 recording。
+- route opt-out **运行时机制**（`auth.Route.IdempotencyExempt` → matcher → `WithExemptMatcher`）已落地并有测试，允许敏感路由显式豁免 recording。
 
 **Negative / 已知限制**:
+
+- **敏感 body 豁免尚未生效**（⚠️，与 gh #1469 原子收口）：route opt-out 仅是运行时机制；contractgen 无 `idempotencyExempt` codegen 入口，且无任何生产路由（含 `change-password`）声明豁免。`filterSensitiveHeaders` 只过滤 header 不过滤 body，故 store 接通后返回 credential 于 body 的路由会被录制。HARD 前置收口见 §10「敏感 body route 豁免」+ 威胁矩阵末行 ⚠️。
 
 - **回放 best-effort**：256 KiB cap 意味着大响应不可回放。客户端应对"无回放"设计防御（幂等键的第二次请求可能重新执行，而非 replay）。
 - **Service token 主体不追踪**：`PrincipalService` passthrough，service-to-service 调用的幂等需调用方自行保证。此为有意选择（§决策 2 解释）。
@@ -329,6 +351,6 @@ Dependent contracts (governance scan): none — middleware 是 framework 横切�
 
 - **cross-cell / full-assembly 幂等命名空间**（gh #1449）：多 listener 共享 Store + namespace 约定，需设计 Store 共享策略（wiring）和 namespace collision 防御。
 - **request-payload fingerprinting** — ✅ **已实现**（本 PR）：`Store.Claim` 现接收 `fingerprint = hex(sha256(body))`；同一 key + 不同 body → 409 `ERR_IDEMPOTENCY_KEY_REUSED`。原 gh #1450 中「422 + per-field request-param diff」的完整 Stripe 对标（精确差异报告、422 状态码支持）仍未实现；如需完整实现请重开或新建 backlog 条目。gh #1450 的基础 fingerprint check 部分已关闭。
-- **production wiring** — `cmd/corebundle` 接入 `WithIdempotency(store)` + Redis store 构造（gh #1469）：middleware 已实现但 corebundle assembly 尚未注入 store；生产部署需同步此 wiring step。
+- **production wiring** — `cmd/corebundle` 接入 `WithIdempotency(store)` + Redis store 构造（gh #1469）：middleware 已实现但 corebundle assembly 尚未注入 store；生产部署需同步此 wiring step。**HARD 前置（同 PR 必须落地，见 §10「敏感 body route 豁免」）**：(a) `contractgen` 加 `endpoints.http.auth.idempotencyExempt` codegen 入口；(b) 把所有在 body 返回 credential/会话凭据的变更类 contract（首当其冲 `change-password`）声明 `idempotencyExempt: true` 并 regenerate。否则 store-active 即把 token 明文录入 Redis（TTL 24h）——此约束已回灌 gh #1469 描述。
 - **Block-and-wait 并发**（gh #1451，可选增强）：如果 409 + Retry-After 被产品侧确认为可接受，此项关闭；否则可作为 opt-in `WithWaitOnBusy(timeout)` 选项。
 - **`HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01` Hard 化**：当前上游和下游均为 Medium（`types.Implements` 穷举 + `_test.go` 调用点解析），升 Hard 路径 = codegen golden 枚举 Store 实现（对标 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 Hard 路径 gh #1003）。尚无独立 gh issue，标为 future work。
