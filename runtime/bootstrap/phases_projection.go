@@ -50,7 +50,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/contractspec"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -144,31 +143,51 @@ func (b *Bootstrap) buildProjectionCoordinators(ctx context.Context, s *phaseSta
 	var out []projectionWiring
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
-		if !ok {
+		if !ok || len(snap.Projections) == 0 {
 			continue
 		}
-		if len(snap.Projections) == 0 {
-			continue
+		wirings, err := b.buildCellProjections(ctx, id, snap.Projections)
+		if err != nil {
+			return nil, err
 		}
-		// Required-dep check runs once per cell that declares any projection
-		// (not per request); wrap with the cell context so ops sees which cell
-		// triggered the missing-option error.
-		if err := b.checkProjectionDeps(); err != nil {
-			return nil, fmt.Errorf("bootstrap: cell %s: %w", id, err)
+		out = append(out, wirings...)
+	}
+	return out, nil
+}
+
+// buildCellProjections constructs the coordinators for one cell's projection
+// set: it checks the required framework deps and registers the shared metric
+// family once (both per-cell, before any coordinator), then builds one
+// coordinator per request with a CellID-drift fail-fast.
+func (b *Bootstrap) buildCellProjections(
+	ctx context.Context, id string, reqs []cell.ProjectionRequest,
+) ([]projectionWiring, error) {
+	// Required-dep check runs once per cell that declares any projection (not per
+	// request); wrap with the cell context so ops sees which cell triggered the
+	// missing-option error.
+	if err := b.checkProjectionDeps(); err != nil {
+		return nil, fmt.Errorf("bootstrap: cell %s: %w", id, err)
+	}
+	// Register the shared projection metric family ONCE (cached in
+	// b.projectionMetrics) before building any coordinator. The funnel is
+	// cache-guarded, so this is idempotent across cells; a real provider conflict
+	// is startup-fatal (never warn-degraded — #1399).
+	if err := b.autoWireProjectionMetrics(); err != nil {
+		return nil, err
+	}
+	out := make([]projectionWiring, 0, len(reqs))
+	for _, req := range reqs {
+		if req.CellID != id {
+			return nil, fmt.Errorf(
+				"bootstrap: cell %s projection drift: declared CellID=%q but snapshot owner=%q"+
+					" (codegen should inject cellID from cell metadata; check cellgen templates)",
+				id, req.CellID, id)
 		}
-		for _, req := range snap.Projections {
-			if req.CellID != id {
-				return nil, fmt.Errorf(
-					"bootstrap: cell %s projection drift: declared CellID=%q but snapshot owner=%q"+
-						" (codegen should inject cellID from cell metadata; check cellgen templates)",
-					id, req.CellID, id)
-			}
-			w, err := b.buildOneProjection(ctx, req)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, w)
+		w, err := b.buildOneProjection(ctx, req)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, w)
 	}
 	return out, nil
 }
@@ -198,6 +217,25 @@ func (b *Bootstrap) checkProjectionDeps() error {
 	return nil
 }
 
+// autoWireProjectionMetrics registers the shared projection metric family ONCE
+// (cached in b.projectionMetrics) so every Coordinator reuses it via
+// .With({cell, projection}) labels. Skips on nil/Nop provider; a registration
+// conflict is startup-fatal with an actionable message — never silently
+// degraded (the #1399 regression). The metric names are fixed-name with
+// {cell, projection} labels, so per-projection registration would collide on the
+// second projection; a single shared registration is the only correct shape.
+//
+// ref: runtime/bootstrap/phases_events.go autoWireEventRouterCollector — same
+// skip-on-nil/skip-on-Nop + cached-field + fail-fast-on-conflict funnel.
+func (b *Bootstrap) autoWireProjectionMetrics() error {
+	_, _, err := autoWireCachedCollector(b, &b.projectionMetrics,
+		projection.RegisterMetrics,
+		"bootstrap: projection metrics auto-wire conflict: WithMetricsProvider constructs the projection metric family; "+
+			"do not also register projection_event_replay_lag_seconds / projection_rebuild_duration_seconds / "+
+			"projection_pending_events manually on the same provider. Remove one side")
+	return err
+}
+
 // buildOneProjection constructs the Coordinator for one ProjectionRequest and
 // drives Coordinator.Subscribe through a captureRegistrar to obtain the wrapped
 // subscription. The cell-local ProjectionApply / ProjectionResetHook are
@@ -213,24 +251,6 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 		tracer = wrapper.NoopTracer{}
 	}
 
-	// Wire metrics when a real (non-Nop) provider is configured; leave cfg.Metrics
-	// nil when no provider is set so the Coordinator silently disables instruments.
-	// Mirrors the autoWireHTTPMetricsCollector / autoWireEventRouterCollector pattern.
-	var projMetrics *projection.Metrics
-	if p := b.metricsProvider; p != nil {
-		if _, isNop := p.(kernelmetrics.NopProvider); !isNop {
-			var regErr error
-			projMetrics, regErr = projection.RegisterMetrics(p)
-			if regErr != nil {
-				slog.Warn("bootstrap: projection metrics registration failed; running without metrics",
-					slog.String("cell", req.CellID),
-					slog.String("projection", req.ProjectionID),
-					slog.String("error", regErr.Error()))
-				projMetrics = nil // defensive: treat registration error as no-metrics
-			}
-		}
-	}
-
 	capReg := &captureRegistrar{}
 	coord, err := projection.NewCoordinator(b.clock, projection.CoordinatorConfig{
 		Registrar:    capReg,
@@ -241,7 +261,10 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 		Cursor:       b.projectionCursor,
 		Replay:       b.projectionReplay,
 		Tracer:       tracer,
-		Metrics:      projMetrics,
+		// Shared metrics registered once by autoWireProjectionMetrics (cached in
+		// b.projectionMetrics); nil when no real provider is configured, which the
+		// Coordinator treats as instruments-disabled.
+		Metrics: b.projectionMetrics,
 	})
 	if err != nil {
 		return projectionWiring{}, fmt.Errorf(
