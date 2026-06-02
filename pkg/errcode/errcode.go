@@ -800,13 +800,12 @@ const (
 	// refused, 5xx from target). Constructed with KindUnavailable → HTTP 503.
 	// First constructed in PR-5 (dispatcher).
 	ErrWebhookDeliveryFailed Code = "ERR_WEBHOOK_DELIVERY_FAILED"
-	// ErrWebhookDeliveryTimeout signals delivery exceeded its deadline.
-	// Constructed with KindDeadlineExceeded → HTTP 504. First constructed in
-	// PR-5 (dispatcher).
-	ErrWebhookDeliveryTimeout Code = "ERR_WEBHOOK_DELIVERY_TIMEOUT"
 	// ErrWebhookPermanentFailure signals a non-retryable delivery failure
-	// (retry budget exhausted, endpoint disabled). Constructed with KindInternal
-	// → HTTP 500. First constructed in PR-5 (dispatcher).
+	// (bad delivery id / signing failure / a selector that signals no
+	// subscription is configured). Constructed with the Kind appropriate to the
+	// failure — e.g. KindInvalid (HTTP 400). Non-2xx delivery RESPONSES are not
+	// permanent (standard-webhooks aligned: every non-2xx is retried). First
+	// constructed in PR-5 (dispatcher).
 	ErrWebhookPermanentFailure Code = "ERR_WEBHOOK_PERMANENT_FAILURE"
 	// ErrWebhookBodyTooLarge signals the inbound webhook body exceeded the size
 	// limit. Constructed with KindPayloadTooLarge → HTTP 413. First constructed
