@@ -154,7 +154,7 @@ func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, la.Start(ctx)) // A contends first → becomes leader
-	time.Sleep(leaderTestSettleSleep) //archtest:allow:test-sleep no signal exposed for "A's manager acquired the in-memory lease"; sub-ms settle
+	time.Sleep(leaderTestSettleSleep) //archtest:allow:test-sleep no signal for in-memory lease acquire (sub-ms)
 	require.NoError(t, lb.Start(ctx)) // B is the follower
 
 	srcA <- reconcile.Request{EntityID: "x"}
