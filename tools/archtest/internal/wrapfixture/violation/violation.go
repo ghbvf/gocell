@@ -47,4 +47,3 @@ func CallWrapWriterForCell(w outbox.Writer) outbox.CellWriter {
 func CallWrapEmitterForCell(e outbox.Emitter) outbox.CellEmitter {
 	return outbox.WrapEmitterForCell(e)
 }
-

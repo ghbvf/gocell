@@ -8,10 +8,14 @@ cells:
   - ordercell
 contracts:
   - http.order.create.v1
+  - http.order.confirm.v1
   - event.order-created.v1
   - projection.order.status-summary.v1
   - http.order.projection-summary.v1
 passCriteria:
+  - text: "PATCH /api/v1/orders/{id}/status confirms a pending order over HTTP (auto smoke of the order lifecycle surface; order-status-changed.v1 is draft and not consumed by the single-stream projection)"
+    mode: auto
+    checkRef: journey.J-orderprojection.http-confirm
   - text: "POST /api/v1/orders creates an order and publishes event.order-created.v1 via the L2 outbox path"
     mode: manual
   - text: "GET /api/v1/orders/projection/summary reflects the created order in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort via the framework projection.Coordinator)"
