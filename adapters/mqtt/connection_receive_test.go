@@ -42,10 +42,10 @@ func TestConnection_RouteRegistry(t *testing.T) {
 	c.subMu.RUnlock()
 
 	// Deregister f1 by wire form; f2 must remain.
-	c.deregisterRoute(f1.wireFilter)
+	c.deregisterRoute(f1.String())
 	c.subMu.RLock()
 	require.Len(t, c.routes, 1)
-	assert.Equal(t, f2.wireFilter, c.routes[0].filter.wireFilter)
+	assert.Equal(t, f2.String(), c.routes[0].filter.String())
 	c.subMu.RUnlock()
 
 	// Deregistering an unknown filter is a no-op.
@@ -55,7 +55,7 @@ func TestConnection_RouteRegistry(t *testing.T) {
 	c.subMu.RUnlock()
 
 	// Deregister the last one.
-	c.deregisterRoute(f2.wireFilter)
+	c.deregisterRoute(f2.String())
 	c.subMu.RLock()
 	require.Empty(t, c.routes)
 	c.subMu.RUnlock()

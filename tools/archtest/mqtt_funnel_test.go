@@ -466,11 +466,18 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				if p.Pkg.Path() == mqttPkgPath {
-					a2Diags = append(a2Diags, scanMQTTCompositeLitConstruction(
+				// The TopicNamespace seal moved to adapters/mqtt/internal/topicns as
+				// Namespace (#1247): adapters/mqtt now holds only a `type
+				// TopicNamespace = topicns.Namespace` alias and cannot construct the
+				// type at all (unexported field, cross-package compile error). The
+				// residual construction-allowlist axis (Namespace{...} outside Parse)
+				// is therefore scanned in the internal package, where Parse co-locates
+				// with the type.
+				if p.Pkg.Path() == topicnsPkgPath {
+					a2Diags = append(a2Diags, scanSealedCompositeLitConstruction(
 						p.Fset, f, rel, p.TypesInfo,
-						"TopicNamespace",
-						[]string{"ParseTopicNamespace"},
+						topicnsPkgPath, "Namespace",
+						[]string{"Parse"},
 						ruleID,
 					)...)
 				}
@@ -617,10 +624,15 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 						return
 					}
 					tobj := named.Obj()
-					if tobj.Pkg() == nil || tobj.Pkg().Path() != mqttPkgPath {
+					if tobj.Pkg() == nil {
 						return
 					}
-					if tobj.Name() != "ClientID" && tobj.Name() != "TopicNamespace" {
+					// ClientID remains in adapters/mqtt; the TopicNamespace seal moved
+					// to adapters/mqtt/internal/topicns as Namespace (#1247), so cover
+					// both packages or this reflect.New blind-spot goes silently vacuous.
+					sealed := (tobj.Pkg().Path() == mqttPkgPath && tobj.Name() == "ClientID") ||
+						(tobj.Pkg().Path() == topicnsPkgPath && tobj.Name() == "Namespace")
+					if !sealed {
 						return
 					}
 					pos := p.Fset.Position(call.Pos())

@@ -40,18 +40,25 @@
 //	// construction allowlist inside adapters/mqtt (A2), and the absence of
 //	// type aliases (A3).
 //
-// TopicNamespace is a sealed struct with a single unexported field `value string`.
-// The only way to obtain a non-zero TopicNamespace is ParseTopicNamespace, which
-// validates the topic prefix format before constructing. Methods PublishOK and
-// SubscribeOK gate publish/subscribe operations to the declared prefix.
+// TopicNamespace is a type alias for the sealed internal type
+// adapters/mqtt/internal/topicns.Namespace (a struct with a single unexported
+// field `value string`). The namespace, the publish/subscribe token types
+// (PublishableTopic / SubscribableFilter) and their validated constructors
+// (Mint / MintFilter / MintDeadLetter) all live in that internal package. Because
+// the token fields are unexported there, a token carrying an arbitrary topic
+// cannot be constructed in adapters/mqtt at all — it is a compile error, not just
+// an archtest finding (#1247, sealed construction upstream Hard). The only way to
+// obtain a non-zero namespace is ParseTopicNamespace (→ topicns.Parse), which
+// validates the prefix; methods PublishOK and SubscribeOK gate publish/subscribe
+// operations to the declared prefix.
 //
 //	// INVARIANT: MQTT-TOPIC-NAMESPACE-01
-//	// tools/archtest/mqtt_funnel_test.go locks the field shape (A1), the
-//	// construction allowlist inside adapters/mqtt (A2), and the absence of
-//	// type aliases (A3). Downstream callsite enforcement (all cm.Publish calls
-//	// must route through (*Connection).Publish, which gates on PublishOK) is
-//	// implemented in PR-2 and locked by MQTT-PUBLISH-CALLSITE-FUNNEL-01
-//	// (tools/archtest/mqtt_callsite_funnel_test.go).
+//	// tools/archtest/mqtt_funnel_test.go locks the field shape (A1, via the
+//	// alias), the Namespace construction allowlist inside internal/topicns (A2),
+//	// and the absence of further type aliases / reshapes (A3). Downstream
+//	// callsite enforcement (all cm.Publish calls must route through
+//	// (*Connection).Publish, which gates on PublishOK) is locked by
+//	// MQTT-PUBLISH-CALLSITE-FUNNEL-01 (tools/archtest/mqtt_callsite_funnel_test.go).
 //
 // # Readiness probe
 //
@@ -63,14 +70,21 @@
 // # AI-robust grading summary (per .claude/rules/gocell/ai-robust.md)
 //
 //   - ClientID upstream Hard (package-external): Go compile error.
-//   - ClientID upstream Medium (package-internal): archtest A2 AST scan.
-//   - TopicNamespace: same grading as ClientID.
-//   - Downstream callsite funnels: MQTT-PUBLISH-CALLSITE-FUNNEL-01 (PR-2; gh #1225
-//     closed), MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01 + MQTT-ACK-CALLSITE-FUNNEL-01
-//     (PR-3). PR-4 extended the PUBLISH funnel's A2 construction allowlist to
-//     {Mint, MintDeadLetter} for the $dead sink. The authoritative sub-rule
-//     inventory + Hard/Medium grading lives in the package godoc of
-//     tools/archtest/mqtt_callsite_funnel_test.go (single source, not duplicated here).
+//   - ClientID upstream Medium (package-internal): archtest A2 AST scan. ClientID
+//     stays in adapters/mqtt, so its construction is in-package and the
+//     package-internal axis is the permanent Go ceiling (same family as #851 / #893).
+//   - TopicNamespace + tokens (PublishableTopic / SubscribableFilter): the seal
+//     moved to adapters/mqtt/internal/topicns (#1247), so the construction axis is
+//     upstream Hard for ALL of adapters/mqtt — a cross-package unexported field is
+//     a compile error. The irreducible residual (Mint must co-locate with the type
+//     it constructs) is a Medium archtest confined to the ~1-file internal package,
+//     the maximal Hard reachable in Go.
+//   - Downstream callsite funnels: MQTT-PUBLISH-CALLSITE-FUNNEL-01 (gh #1225
+//     closed), MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01 + MQTT-ACK-CALLSITE-FUNNEL-01.
+//     The PUBLISH funnel's A2 construction allowlist is {Mint, MintDeadLetter} for
+//     the $dead sink. The authoritative sub-rule inventory + Hard/Medium grading
+//     lives in the package godoc of tools/archtest/mqtt_callsite_funnel_test.go
+//     (single source, not duplicated here).
 //
 // # Reference
 //

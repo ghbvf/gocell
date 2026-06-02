@@ -10,9 +10,10 @@
 //     → MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01
 //   - (adapters/mqtt.mqttAcker).Ack          → MQTT-ACK-CALLSITE-FUNNEL-01
 //
-// plus the upstream package-internal backstops for the sealed token types
-// (publishableTopic / subscribableFilter) that gate the publish / subscribe
-// paths through the namespace check.
+// plus the upstream sealed-construction backstops for the token types
+// (topicns.PublishableTopic / topicns.SubscribableFilter, in
+// adapters/mqtt/internal/topicns) that gate the publish / subscribe paths through
+// the namespace check.
 //
 // The PUBLISH funnel closes the gh #1225 deferred enforcement from PR-1; the
 // SUBSCRIBE + ACK funnels extend the same architecture to the PR-3 receive path.
@@ -22,17 +23,18 @@
 // Each funnel is a "single sanctioned holder" + (for publish/subscribe) a
 // "sealed construction" composite:
 //
-//   - publishableTopic / subscribableFilter: package-unexported structs. Their
-//     ONLY constructors are TopicNamespace.Mint / TopicNamespace.MintDeadLetter
-//     (publishableTopic) and TopicNamespace.MintFilter (subscribableFilter), each
-//     of which internally calls PublishOK / SubscribeOK. So any code holding one is
-//     guaranteed (at compile time, package-external) that the topic/filter was
-//     validated against the namespace.
+//   - topicns.PublishableTopic / topicns.SubscribableFilter (adapters/mqtt/internal/
+//     topicns): exported structs with UNEXPORTED fields. Their ONLY constructors are
+//     Namespace.Mint / Namespace.MintDeadLetter (PublishableTopic) and
+//     Namespace.MintFilter (SubscribableFilter), each of which internally calls
+//     PublishOK / SubscribeOK. Because the fields are unexported in topicns, NO code
+//     outside that package — including all of adapters/mqtt — can construct a
+//     populated token, so any code holding one is guaranteed (at compile time) that
+//     the topic/filter was validated against the namespace.
 //   - (*Connection).Publish / (*Connection).Subscribe: the ONLY methods in
 //     adapters/mqtt that call cm.Publish / cm.Subscribe. Their first non-receiver
-//     parameter after ctx is publishableTopic / subscribableFilter — so the type
-//     system gates any external publish/subscribe path through the namespace
-//     check.
+//     parameter after ctx is topicns.PublishableTopic / topicns.SubscribableFilter —
+//     so the type system gates any publish/subscribe path through the namespace check.
 //   - (*Connection).ack: the ONLY method that drives manual acknowledgement.
 //     autopaho v0.23.0's ConnectionManager has no Ack method (verified); manual
 //     QoS1 ack routes through the package-unexported interface mqttAcker, whose
@@ -59,28 +61,37 @@
 //     Connection.ackClient (mqttAcker) is an unexported field, and *paho.Publish
 //     is broker-supplied — external packages cannot reach the ack path. Type-system
 //     gate, no archtest needed for the cross-package side.
-//   - Upstream package-internal Medium (A2/A2b/A3 + S3 archtest backstops):
-//     publishableTopic{} / subscribableFilter{} composite-literal construction
-//     inside adapters/mqtt is restricted to the Mint / MintDeadLetter / MintFilter
-//     body + zero-value error return; the token field-shape is reflect/go-types-frozen. Permanent
-//     Go-language ceiling (same as SPAN-SETATTR-REDACT-01 /
-//     PROBENAME-SEALED-FUNNEL-01 package-internal side). Tracked for potential
-//     Hard upgrade — gh #1247 per ai-robust.md §Funnel 双向锁评级 ("必须同步开 gh
-//     issue 跟踪显式 Hard 化任务"). Sibling: SPAN-SETATTR-REDACT-01 tracks gh #851
-//     for the same package-internal seal-upgrade question.
+//   - Upstream Hard for adapters/mqtt — #1247 DELIVERED. The token types moved to
+//     adapters/mqtt/internal/topicns (PublishableTopic / SubscribableFilter), whose
+//     fields are unexported there, so constructing a token carrying an arbitrary
+//     topic anywhere in adapters/mqtt is a COMPILE ERROR (cross-package unexported
+//     field), not an archtest finding. Unlike SPAN-SETATTR-REDACT-01 (#851) /
+//     PROBENAME-SEALED-FUNNEL-01 — whose HOLDER axis is a genuine Go ceiling —
+//     #1247's CONSTRUCTION axis WAS closeable, via internal/ sealed construction
+//     (the marker-interface mechanism the issue originally proposed would NOT have
+//     closed it; it does not gate in-package composite-literal construction).
+//   - Residual Medium confined to internal/topicns (A2/A2b/A3 + S3 backstops below):
+//     the only irreducible residual is that Mint / MintDeadLetter / MintFilter must
+//     co-locate with the token they construct, so inside that ~1-file internal
+//     package a `PublishableTopic{topic: …}` literal outside Mint is reachable; the
+//     A2/A2b/A3 + S3 archtests scan THAT package (topicnsPkgPath) and lock the
+//     construction allowlist + field shape — the maximal Hard reachable in Go.
+//     (adapters/mqtt CAN still build the empty zero-value PublishableTopic{}: benign —
+//     it carries no attacker-chosen topic and an empty topic is rejected by the
+//     broker, MQTT v5 §4.7.3 — so it is not worth a separate archtest.)
 //
 // # Sub-rules — MQTT-PUBLISH-CALLSITE-FUNNEL-01
 //
 //   - A1 downstream callsite (Hard): typed CallExpr scan; `(*autopaho.ConnectionManager).Publish`
 //     callees in adapters/mqtt production files ⊆ {(*Connection).Publish body}.
-//   - A2 Mint construction allowlist (Medium): `publishableTopic{...}` composite
-//     literal in adapters/mqtt production files ⊆ {TopicNamespace.Mint body,
-//     TopicNamespace.MintDeadLetter body} (PR-4 added MintDeadLetter for the
-//     $dead/<topic> DLT sink).
-//   - A2b field-assignment blind-spot (Medium): no assignment to a
-//     publishableTopic `topic` field (`t.topic = …`) outside the Mint body.
-//   - A3 publishableTopic field freeze (Medium): reflect lock asserting
-//     NumField()==1, field name "topic", type string, unexported.
+//   - A2 Mint construction allowlist (Medium, scoped to internal/topicns):
+//     `PublishableTopic{...}` composite literal in topicnsPkgPath production files
+//     ⊆ {Namespace.Mint body, Namespace.MintDeadLetter body} (MintDeadLetter for the
+//     $dead/<topic> DLT sink). adapters/mqtt cannot construct the type at all (#1247).
+//   - A2b field-assignment blind-spot (Medium, internal/topicns): no assignment to a
+//     PublishableTopic `topic` field (`t.topic = …`) outside the Mint body.
+//   - A3 PublishableTopic field freeze (Medium, internal/topicns): go/types scope
+//     lock asserting NumField()==1, field name "topic", type string, unexported.
 //   - A4 method-value blind-spot (Hard reverse self-check): no `cm.Publish` as
 //     non-call SelectorExpr in production AST.
 //   - A5 method-expression blind-spot (Hard reverse self-check): no
@@ -102,10 +113,11 @@
 //     callees ⊆ {(*Connection).Subscribe, (*Connection).unsubscribeAll}. The
 //     cancel-closure callsite is a FuncLit returned by Subscribe; ResolveEnclosingFunc
 //     attributes it to the Subscribe FuncDecl.
-//   - S3 MintFilter construction allowlist (Medium): `subscribableFilter{...}`
-//     composite literal in adapters/mqtt production files ⊆ {TopicNamespace.MintFilter
-//     body} + field-assignment blind-spot (no `x.wireFilter = …` outside MintFilter)
-//   - reflect field-freeze (NumField()==1, field "wireFilter", string, unexported).
+//   - S3 MintFilter construction allowlist (Medium, scoped to internal/topicns):
+//     `SubscribableFilter{...}` composite literal in topicnsPkgPath production files
+//     ⊆ {Namespace.MintFilter body} + field-assignment blind-spot (no
+//     `x.wireFilter = …` outside MintFilter) + field-freeze (NumField()==1, field
+//     "wireFilter", string, unexported). adapters/mqtt cannot construct it (#1247).
 //   - S4 method-value blind-spot (Hard reverse self-check): no `cm.Subscribe` /
 //     `cm.Unsubscribe` as non-call SelectorExpr in production AST.
 //   - S5 method-expression blind-spot (Hard reverse self-check): no
@@ -146,7 +158,7 @@
 // ref: ADR docs/architecture/202605281200-048-adr-mqtt-adapter.md
 // ref: ai-robust.md §Hard 范本目录 "single sanctioned holder" + "string-typed concept funnel"
 // ref: ai-robust.md §Funnel 双向锁评级
-// ref: gh #1247 — package-internal Hard-upgrade tracking (A2/A2b/A3/S3)
+// ref: gh #1247 — package-internal Medium→Hard via internal/topicns sealed construction (A2/A2b/A3/S3 now scope topicnsPkgPath)
 // ref: SPAN-SETATTR-REDACT-01 (sibling Hard funnel pattern; gh #851)
 package archtest
 
@@ -211,6 +223,15 @@ const (
 	connectionUnsubscribeAllEnclosingFuncKey = "(*github.com/ghbvf/gocell/adapters/mqtt.Connection).unsubscribeAll"
 	connectionAckEnclosingFuncKey            = "(*github.com/ghbvf/gocell/adapters/mqtt.Connection).ack"
 )
+
+// topicnsPkgPath is the internal sub-package that now owns the sealed token
+// types (PublishableTopic / SubscribableFilter) and their validated
+// constructors. Since #1247 the composite-literal axis is compile-Hard for
+// adapters/mqtt (cross-package unexported fields); the A2 / A2b / A3 (and S3)
+// token-construction archtests below therefore scan THIS package — the residual
+// (Mint must co-locate with the token it constructs) is an irreducible Medium
+// confined to this ~1-file package, the maximal Hard reachable in Go.
+const topicnsPkgPath = mqttPkgPath + "/internal/topicns"
 
 // ─── Shared callsite-funnel scanner ──────────────────────────────────────────
 
@@ -463,7 +484,7 @@ func TestMQTTPublishCallsiteFunnel_A2_PublishableTopicConstructionAllowlist(t *t
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := scanMQTTTokenConstruction(t, "publishableTopic", []string{"Mint", "MintDeadLetter"},
+	diags := scanMQTTTokenConstruction(t, "PublishableTopic", []string{"Mint", "MintDeadLetter"},
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2")
 	assert.Empty(t, diags,
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2: publishableTopic composite literals outside Mint/MintDeadLetter body detected")
@@ -474,7 +495,7 @@ func TestMQTTPublishCallsiteFunnel_A2_ScannerNonVacuous(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	inside := countMQTTTokenLiteralsInsideFunc(t, "publishableTopic", "Mint")
+	inside := countMQTTTokenLiteralsInsideFunc(t, "PublishableTopic", "Mint")
 	assert.GreaterOrEqual(t, inside, 1,
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2: scanner found 0 publishableTopic literals inside Mint — "+
 			"the go/types resolution path may be silently broken")
@@ -491,7 +512,7 @@ func TestMQTTPublishCallsiteFunnel_A2_ScannerNonVacuous_MintDeadLetter(t *testin
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	inside := countMQTTTokenLiteralsInsideFunc(t, "publishableTopic", "MintDeadLetter")
+	inside := countMQTTTokenLiteralsInsideFunc(t, "PublishableTopic", "MintDeadLetter")
 	assert.GreaterOrEqual(t, inside, 1,
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2: scanner found 0 publishableTopic literals inside MintDeadLetter — "+
 			"MintDeadLetter must mint through the sealed publishableTopic type; the allowlist entry is stale or the resolution path is broken")
@@ -505,7 +526,7 @@ func TestMQTTSubscribeCallsiteFunnel_S3_SubscribableFilterConstructionAllowlist(
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := scanMQTTTokenConstruction(t, "subscribableFilter", []string{"MintFilter"},
+	diags := scanMQTTTokenConstruction(t, "SubscribableFilter", []string{"MintFilter"},
 		"MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3")
 	assert.Empty(t, diags,
 		"MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3: subscribableFilter composite literals outside MintFilter body detected")
@@ -516,7 +537,7 @@ func TestMQTTSubscribeCallsiteFunnel_S3_ScannerNonVacuous(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	inside := countMQTTTokenLiteralsInsideFunc(t, "subscribableFilter", "MintFilter")
+	inside := countMQTTTokenLiteralsInsideFunc(t, "SubscribableFilter", "MintFilter")
 	assert.GreaterOrEqual(t, inside, 1,
 		"MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3: scanner found 0 subscribableFilter literals inside MintFilter — "+
 			"the go/types resolution path may be silently broken")
@@ -528,9 +549,9 @@ func scanMQTTTokenConstruction(t *testing.T, typeName string, allowedFuncs []str
 	t.Helper()
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath}),
+		[]string{topicnsPkgPath}),
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != topicnsPkgPath {
 				return nil
 			}
 			for _, f := range p.Files {
@@ -538,8 +559,8 @@ func scanMQTTTokenConstruction(t *testing.T, typeName string, allowedFuncs []str
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				diags = append(diags, scanMQTTCompositeLitConstruction(
-					p.Fset, f, rel, p.TypesInfo, typeName, allowedFuncs, ruleID,
+				diags = append(diags, scanSealedCompositeLitConstruction(
+					p.Fset, f, rel, p.TypesInfo, topicnsPkgPath, typeName, allowedFuncs, ruleID,
 				)...)
 			}
 			return nil
@@ -554,9 +575,9 @@ func countMQTTTokenLiteralsInsideFunc(t *testing.T, typeName, funcName string) i
 	t.Helper()
 	var inside int
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath}),
+		[]string{topicnsPkgPath}),
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != topicnsPkgPath {
 				return nil
 			}
 			for _, f := range p.Files {
@@ -592,7 +613,7 @@ func mqttCompositeLitIsType(info *types.Info, lit *ast.CompositeLit, typeName st
 		return false
 	}
 	tobj := named.Obj()
-	return tobj.Pkg() != nil && tobj.Pkg().Path() == mqttPkgPath && tobj.Name() == typeName
+	return tobj.Pkg() != nil && tobj.Pkg().Path() == topicnsPkgPath && tobj.Name() == typeName
 }
 
 // ─── A2b / S3-fieldassign: field-assignment blind-spots (Medium) ─────────────
@@ -604,7 +625,7 @@ func TestMQTTPublishCallsiteFunnel_A2b_NoFieldAssignmentBypass(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := scanMQTTTokenFieldAssignment(t, "publishableTopic",
+	diags := scanMQTTTokenFieldAssignment(t, "PublishableTopic",
 		[]string{"topic"}, "Mint", "MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2b")
 	assert.Empty(t, diags,
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2b: publishableTopic.topic field assignment outside Mint detected")
@@ -617,7 +638,7 @@ func TestMQTTSubscribeCallsiteFunnel_S3_NoFieldAssignmentBypass(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := scanMQTTTokenFieldAssignment(t, "subscribableFilter",
+	diags := scanMQTTTokenFieldAssignment(t, "SubscribableFilter",
 		[]string{"wireFilter"}, "MintFilter", "MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3")
 	assert.Empty(t, diags,
 		"MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3: subscribableFilter field assignment outside MintFilter detected")
@@ -629,9 +650,9 @@ func scanMQTTTokenFieldAssignment(t *testing.T, typeName string, fieldNames []st
 	t.Helper()
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath}),
+		[]string{topicnsPkgPath}),
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != topicnsPkgPath {
 				return nil
 			}
 			for _, f := range p.Files {
@@ -711,7 +732,7 @@ func mqttIsTokenTyped(info *types.Info, expr ast.Expr, typeName string) bool {
 		return false
 	}
 	tobj := named.Obj()
-	return tobj.Pkg() != nil && tobj.Pkg().Path() == mqttPkgPath && tobj.Name() == typeName
+	return tobj.Pkg() != nil && tobj.Pkg().Path() == topicnsPkgPath && tobj.Name() == typeName
 }
 
 func TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous(t *testing.T) {
@@ -758,7 +779,7 @@ func TestMQTTPublishCallsiteFunnel_A3_PublishableTopicFieldFreeze(t *testing.T) 
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	mqttAssertTokenFieldFreeze(t, "publishableTopic",
+	mqttAssertTokenFieldFreeze(t, "PublishableTopic",
 		[]mqttFieldSpec{{name: "topic"}}, "MQTT-PUBLISH-CALLSITE-FUNNEL-01/A3")
 }
 
@@ -772,7 +793,7 @@ func TestMQTTSubscribeCallsiteFunnel_S3_SubscribableFilterFieldFreeze(t *testing
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	mqttAssertTokenFieldFreeze(t, "subscribableFilter",
+	mqttAssertTokenFieldFreeze(t, "SubscribableFilter",
 		[]mqttFieldSpec{{name: "wireFilter"}},
 		"MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3")
 }
@@ -786,9 +807,9 @@ func mqttAssertTokenFieldFreeze(t *testing.T, typeName string, wantFields []mqtt
 	t.Helper()
 	var checked bool
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath}),
+		[]string{topicnsPkgPath}),
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.Pkg.Path() != mqttPkgPath {
+			if p.Pkg == nil || p.Pkg.Path() != topicnsPkgPath {
 				return nil
 			}
 			obj := p.Pkg.Scope().Lookup(typeName)
