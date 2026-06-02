@@ -115,9 +115,10 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | 字段 | 说明 |
 |------|------|
 | `JWTDeps` | issuer + verifier（JWT 签发/验证） |
-| `InternalGuard` | HMAC ring + NonceStore（/internal/v1/* 防护） |
+| `InternalHMACRing` | /internal/v1/* service-token HMAC ring（#1410 起独立字段，原 `internalGuard` 已 dissolve） |
+| `NonceStore` | /internal/v1/* 服务令牌防重放 store；control-plane 校验经 `Kind()` 拒 noop / 多 pod in-memory（#1410） |
 | `SharedPGPool` | postgres 连接池（跨 Cell 共享） |
-| `ConsumerClaimer` | outbox 消费幂等键声明者 |
+| `ConsumerClaimer` | outbox 消费幂等键声明者；`Kind()` 自报 in_memory/distributed（#1410，CP8 fail-closed） |
 | `PrimaryHTTPAddr` / `InternalHTTPAddr` / `HealthHTTPAddr` | 三 listener 绑定地址 |
 
 ## 环境变量（关键）

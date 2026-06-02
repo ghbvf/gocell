@@ -95,6 +95,23 @@ const (
 	ClaimBusy
 )
 
+// ClaimerKind classifies a Claimer implementation for startup validation.
+// It mirrors kernel/auth.NonceStoreKind: the implementation self-reports its
+// kind so composition-root control-plane validation can reject a single-process
+// claimer in a multi-pod deployment without trusting a caller-supplied label
+// (a SharedDeps field the consumer fills in could lie; a method on the claimer
+// itself cannot).
+type ClaimerKind string
+
+const (
+	// ClaimerKindInMemory is the single-process map-backed implementation.
+	// It does NOT coordinate idempotency across replicas.
+	ClaimerKindInMemory ClaimerKind = "in_memory"
+	// ClaimerKindDistributed is a shared backend (Redis, etc.) safe for
+	// multi-pod deployments.
+	ClaimerKindDistributed ClaimerKind = "distributed"
+)
+
 // Claimer provides two-phase idempotency for event consumers (Solution B).
 //
 // Flow:
@@ -118,4 +135,8 @@ type Claimer interface {
 	//   - (ClaimBusy, NonAcquiredReceipt(), nil) — another consumer is processing; caller should Requeue.
 	//   - (_, nil, err) — infrastructure error.
 	Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (ClaimState, Receipt, error)
+
+	// Kind reports the implementation classification (in-memory vs distributed)
+	// for composition-root control-plane validation.
+	Kind() ClaimerKind
 }

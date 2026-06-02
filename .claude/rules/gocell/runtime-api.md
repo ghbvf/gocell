@@ -227,7 +227,7 @@ Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含�
 
 ### `/internal/v1/*` 服务令牌防重放（PR-A25）
 
-internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth.NonceStore`。`cmd/corebundle.internalGuardFromEnv` 默认构造 `auth.InMemoryNonceStore(ttl = ServiceTokenMaxAge + 30s)`。real 模式启动时 `SharedDeps.Validate` 会拒绝 `NonceStoreKindNoop`（返回 `ERR_CONTROLPLANE_NONCE_STORE_MISSING`）。多 pod 部署须注入分布式实现（例如 Redis）；in-memory 仅保证单 pod 防重放。
+internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth.NonceStore`。`cmd/corebundle.buildServiceNonceStore` 默认构造 `auth.InMemoryNonceStore(ttl = ServiceTokenMaxAge + 30s)`（多 pod real 模式改构造 Redis-backed store），喂进 `composition.SharedDeps.NonceStore`。real 模式启动时 `composition.SharedDeps.validate`（经 `NewSharedDeps`）会拒绝 `NonceStoreKindNoop`（返回 `ERR_CONTROLPLANE_NONCE_STORE_MISSING`）+ 拒绝多 pod 下的 in-memory store；外部 composition 消费者同样 fail-closed（#1410——原 cmd 私有 `internalGuardFromEnv` 已 dissolve 为 `buildInternalHMACRing`，control-plane 校验前移进 composition）。多 pod 部署须注入分布式实现（例如 Redis）；in-memory 仅保证单 pod 防重放。
 
 ### FinalizeAuth 生命周期
 

@@ -97,7 +97,7 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 			[]auth.ListenerAuth{auth.AuthNone{}},
 		),
 		func() bootstrap.Option {
-			chain, err := buildInternalAuthChain(locals.internalGuard)
+			chain, err := buildInternalAuthChain(shared)
 			require.NoError(t, err)
 			return bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, chain)
 		}(),

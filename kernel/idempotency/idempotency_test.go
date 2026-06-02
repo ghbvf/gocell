@@ -41,6 +41,8 @@ func (m *mockClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (Cl
 	return m.state, m.receipt, m.err
 }
 
+func (m *mockClaimer) Kind() ClaimerKind { return ClaimerKindInMemory }
+
 var _ Claimer = (*mockClaimer)(nil)
 
 func TestClaimerInterface(t *testing.T) {

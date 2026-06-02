@@ -60,14 +60,6 @@ var (
 	}
 )
 
-type consumerClaimerKind string
-
-const (
-	consumerClaimerKindUnknown     consumerClaimerKind = ""
-	consumerClaimerKindInMemory    consumerClaimerKind = "in_memory"
-	consumerClaimerKindDistributed consumerClaimerKind = "distributed"
-)
-
 func requiresDistributedReplay(topo bootstrap.Topology) bool {
 	return topo.RequireProductionControlPlane() && !topo.SinglePodReplayProtection()
 }
@@ -187,17 +179,17 @@ func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client
 
 func buildConsumerClaimer(
 	topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock,
-) (idempotency.Claimer, consumerClaimerKind, error) {
+) (idempotency.Claimer, error) {
 	if requiresDistributedReplay(topo) {
 		if client == nil {
-			return nil, consumerClaimerKindUnknown, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
 				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set for distributed outbox idempotency in real multi-pod deployments")
 		}
 		claimer, err := newRedisIdempotencyClaimer(client)
 		if err != nil {
-			return nil, consumerClaimerKindUnknown, fmt.Errorf("build Redis idempotency claimer: %w", err)
+			return nil, fmt.Errorf("build Redis idempotency claimer: %w", err)
 		}
-		return claimer, consumerClaimerKindDistributed, nil
+		return claimer, nil
 	}
-	return idempotency.NewInMemClaimer(clk), consumerClaimerKindInMemory, nil
+	return idempotency.NewInMemClaimer(clk), nil
 }

@@ -10,12 +10,14 @@ import (
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 
 	"github.com/stretchr/testify/require"
 
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
@@ -103,10 +105,18 @@ func corebundleCellIDs() []string {
 
 // withCorebundleTestInternalListener returns a bootstrap.Option that registers
 // an InternalListener backed by the provided net.Listener, wired with the
-// cmd-test internal auth chain (buildInternalAuthChain + a fresh internalGuard).
+// cmd-test internal auth chain (buildInternalAuthChain from SharedDeps).
 func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {
 	t.Helper()
-	chain, err := buildInternalAuthChain(newTestInternalGuard(t))
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	require.NoError(t, err)
+	shared := &composition.SharedDeps{
+		InternalHMACRing: ring,
+		NonceStore:       nonceStore,
+	}
+	chain, err := buildInternalAuthChain(shared)
 	require.NoError(t, err)
 	return bootstrap.WithListener(
 		cell.InternalListener,

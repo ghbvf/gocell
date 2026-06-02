@@ -112,7 +112,7 @@ composition.New().
 **无安全回归**：
 
 - auth plan（`NewAuthJWTFromAssembly`、`NewAuthServiceToken`）的构造仍在 composition root（`cmd/corebundle/bundle_options.go`、`examples/corebundlestarter/run.go`），严格符合 AUTH-PLAN-04。
-- `SharedDeps.InternalHMACRing` 字段由 cmd/ 在 env 解析阶段构造（`internalGuardFromEnv`），cellmodules/ 消费该接口字段但不构造 HMAC key，符合单源原则。
+- `SharedDeps.InternalHMACRing` / `SharedDeps.NonceStore` 字段由 cmd/ 在 env 解析阶段构造（`buildInternalHMACRing` + `buildServiceNonceStore`，Amendment 2026-06-03 #1410 起；原 `internalGuardFromEnv` 已 dissolve），cellmodules/ 消费这两个接口字段但不构造 HMAC key / 防重放 store，符合单源原则。
 - `SharedDeps` 仅携带接口字段，不暴露 adapter 实现细节，secrets 不在 wire layer 泄漏。
 
 ---
@@ -211,3 +211,55 @@ Enforcement 演进：
 - 单源生命周期对标：uber-go/fx `fx.Lifecycle.Append(Hook{OnStart,OnStop})`——一次注册派生 start/stop 双向，对应 `ModuleResult.Resources → {WithManagedResource, rollback}`。
 - Archtest：`WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01`（`tools/archtest/withmanagedresource_cellmodule_funnel_test.go`）；`MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（已扩展 ModuleResult 字段冻结）。
 - gh #885（vault metrics → kernel Provider，解锁 ConfigKeyProvider 收口）；gh #1413（剩余范围跟踪）。
+
+---
+
+## Amendment 2026-06-03 #1410 — control-plane 校验前移 + internalGuard dissolve
+
+#1085 review（PR #1385）seal 公开 composition 面后保留的 **F4**：health 可达性 +
+nonce/claimer-kind 等 control-plane 生产安全校验仍只活在 cmd 私有层
+`cmd/corebundle/shared_deps_validate.go`（依赖 cmd 私有类型 `internalGuard` /
+`consumerClaimerKind`），外部 composition 消费者（非 `cmd/corebundle`）构造 `SharedDeps`
+时这些校验被绕过。本 amendment 把它们前移进 `runtime/composition.SharedDeps.validate`。
+
+**改动**：
+
+1. **新增 `SharedDeps.NonceStore kauth.NonceStore` 字段**（紧邻 `InternalHMACRing`）——
+   从 cmd 私有 `internalGuard.nonceStore` 提升。`runtime/composition` import `kernel/auth`
+   （runtime → kernel 允许，`runtime-isolation` depguard allow `kernel/...`），**不碰 adapters/prometheus 不变式**。
+2. **新增 `kernel/idempotency.ClaimerKind` + `Claimer.Kind()` 方法**（镜像 `kauth.NonceStore.Kind()`）——
+   claimer 自报类型（`in_memory` / `distributed`），control-plane 校验经
+   `shared.ConsumerClaimer.Kind()` 读取。**这是 CP8（real 多 pod 要求 distributed claimer）
+   fail-closed 的关键**：消费者无法构造「redis claimer 自报 in_memory」的类型（type-system Hard），
+   而 SharedDeps 上加一个消费者自填的 kind 字段是可撒谎的 Soft。删除 cmd 私有 `consumerClaimerKind` 枚举。
+   contract-fanout 事件（interface 方法签名变化）：2 生产实现 + ~13 测试 fake 加 `Kind()`，无 Claimer conformance suite。
+3. **control-plane 校验移入 `SharedDeps.validate`**（`validateControlPlane` →
+   always-on `validateInternalListenerGuard` + `validateVerboseEndpoint` / real-mode
+   `validateProductionControlPlane`）：verbose 网关、metrics token、internal-listener guard、
+   nonce-store noop 拒绝、in-memory-nonce 多 pod 拒绝、claimer-distributed 要求。每个
+   `NewSharedDeps` 消费者自动 fail-closed。health 可达性（HR1）已在更早的 #1085 follow-up 移入。
+4. **`internalGuard` 全部 dissolve**（delete-dead）：nonceStore + ring 提升后，`internalGuard`
+   的 `mw`/`Middleware()`（仅测试引用，生产 listener 走 `NewAuthServiceToken` 现造）+
+   `if store == nil` 兜底（`replay.NonceStore` 恒非 nil）均为死代码。删除 `internalGuard` 结构体 +
+   `Middleware()` + `mw`；`internalGuardFromEnv` 收缩为 `buildInternalHMACRing(adapterMode)`
+   （只 build ring）。replay/no-header/nonce-kind 行为覆盖全部活在 `runtime/auth`。
+5. **cmd 决策点答案**：`SampleVerbosePlaceholder`（CP2）检查留 cmd 作「部署合约」——它引用
+   cmd `.env.example` 制品，非可移植 composition 合约；`validateCorebundleDeps(shared)` 收缩为只此一检。
+
+**威胁/正确性再评（无安全回归，净 enforcement 升级）**：
+
+| 关注点 | 迁移前 | 迁移后 |
+|--------|--------|--------|
+| 外部消费者跑 control-plane 校验 | ❌ cmd 私有，够不到（实质 Soft：cmd 手动调，重构可静默丢） | ✅ Hard sealed-marker 门控的 `NewSharedDeps→validate` 路径 |
+| claimer-distributed 真实性（CP8） | ⚠️ cmd 私有 `consumerClaimerKind`（topology 派生，自身不可绕但外部够不到） | ✅ `Claimer.Kind()` 实现自报，type-system Hard（不可伪造） |
+| nonce-store noop / in-mem-multipod（CP6/CP7） | ⚠️ cmd 私有 introspect `internalGuard.NonceStore()` | ✅ `shared.NonceStore.Kind()` 实现自报，type-system Hard |
+| composition 不 import adapters/prometheus | ✅ | ✅（仅新增 `kernel/auth` import，kernel 层允许） |
+| AUTH-PLAN-04（auth plan 构造留 cmd） | ✅ | ✅（`buildInternalAuthChain` 仍在 cmd，读 SharedDeps 字段） |
+
+残留 Medium（非本 amendment 引入的新 funnel）：「`validate()` 体内必须调 `validateControlPlane`」
+无 archtest 强制（只能 Soft archtest，charter 禁；unit test backstop）——与既有 required-field /
+HR1 检查同档同 ceiling，是 `validate()` 类 runtime guard 的固有天花板。
+
+**参考**：archtest 全绿（`MODULE-PROVIDE-NO-VALUE-HANDOFF-01` 只冻结 `ModuleResult` 字段，
+不冻结 `SharedDeps` 字段，加 `NonceStore` 不触发）；`runtime/composition/shared_deps_test.go`
+`TestSharedDeps_Validate_ControlPlane` table-driven 覆盖 V1/V2/CP1/CP3/CP5/CP6/CP7/CP8/IL1/IL2。

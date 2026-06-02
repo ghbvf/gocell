@@ -156,6 +156,8 @@ func (f *fakeClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (id
 	}
 }
 
+func (f *fakeClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
+
 type nopReceipt struct{}
 
 func (nopReceipt) Commit(_ context.Context) error                  { return nil }
@@ -184,6 +186,8 @@ type countingClaimer struct {
 func (c *countingClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	return idempotency.ClaimAcquired, c.rcpt, nil
 }
+
+func (c *countingClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
 
 // ---- NewReceiver construction tests ----
 
