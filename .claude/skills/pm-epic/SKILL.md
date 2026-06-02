@@ -1,6 +1,6 @@
 ---
 name: pm-epic
-description: "Epic 拆解 + wave 实施顺序调度。读 epic（epic label）→ 找子任务 → 建 blocked-by DAG → wave 拓扑排序 → 写 Project v2 Wave 字段 + 回填 epic body 实施顺序段 + 回评。当用户要整理一个 epic 的子任务、排实施顺序、更新 wave 时使用。"
+description: "Epic 拆解 + wave 实施顺序调度。读 epic → 关键字查找相关 issues 并关联为 sub-issue → 建 blocked-by DAG → wave 拓扑排序 → 写 Project v2 Wave 字段 + 回填 epic body 实施顺序段 + 回评。当用户要整理一个 epic 的子任务、排实施顺序、更新 wave 时使用。"
 argument-hint: "<#epic-number>"
 allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 ---
@@ -13,24 +13,18 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 
 ---
 
-## 阶段 1：读 epic + 找子任务
+## 阶段 1：读 epic → 关键字查找相关 issues → 关联 → 汇总子 issues
 
-```bash
-gh issue view <epic#> --json number,title,body,labels    # 确认 epic label
-```
+1. **读 epic**：`gh issue view <epic#> --json number,title,body,labels`（确认 epic label；从 title + 目标/范围提取关键字）。
+2. **关键字查找相关 issues**：`gh issue list --search "<关键字>" --state open --json number,title,labels`，挑出属于本 epic 的候选；用 AskUserQuestion 确认候选集（不擅自全关联）。
+3. **关联到 epic**（建 sub-issue 关系，已是 sub-issue 的跳过）：
+   ```bash
+   id=$(gh api repos/ghbvf/gocell/issues/<child#> --jq .id)   # 取整数 id（非 number）
+   gh api --method POST repos/ghbvf/gocell/issues/<epic#>/sub_issues -F sub_issue_id=$id
+   ```
+4. **汇总子 issues**：`gh api repos/ghbvf/gocell/issues/<epic#>/sub_issues --jq '.[]|{number,title,state}'`（含新关联）；对每个 OPEN 子任务读 label（area/type/pri）+ body 的 `Blocked-by: #NNN`（多行/逗号分隔，无声明=无前置）。
 
-子任务来源（GitHub 原生 **sub-issue**）：
-
-```bash
-# REST sub-issues（优先）
-gh api repos/ghbvf/gocell/issues/<epic#>/sub_issues --jq '.[] | {number,title,state}'
-# 或 GraphQL：issue.subIssues
-```
-
-对每个 OPEN 子任务，读其 label（area/type/pri）+ body 拿 **blocked-by**：约定 body 写 `Blocked-by: #NNN`
-（可多行 / 逗号分隔）声明前置依赖。无声明 = 无前置。
-
-> 子任务跨 3+ 包或描述模糊时，用 `Agent(Explore)` 并行核实归属 / 依赖，再汇总。
+> 子任务跨 3+ 包或描述模糊时，用 `Agent(Explore)` 并行核实归属/依赖再汇总。
 
 ## 阶段 2：建 blocked-by DAG + wave 拓扑排序
 

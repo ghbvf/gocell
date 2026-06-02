@@ -3,8 +3,7 @@
 > **唯一真源 = GitHub Issues + [Project v2 #3](https://github.com/users/ghbvf/projects/3)**。
 > 不再有 `docs/backlog/` markdown 副本。所有 backlog 条目、epic、状态、优先级、评级活在 GitHub。
 >
-> 本文件是 label 体系 / Project v2 字段 / 评级 rubric 的单源参考，由 issue 模版、`/pm-issue`、`/pm-epic`、
-> `/pm-flow`、`/fix` 引用。
+> 本文件是 label 体系 / Project v2 字段 / 评级 rubric 的单源参考，由 issue 模版、`/pm-issue`、`/pm-epic`、`/fix` 引用。
 
 ---
 
@@ -62,19 +61,19 @@
 
 | 轴 | Label | 含义 |
 |----|-------|------|
-| **pr-status**（流转） | `pr-status/in-progress` | ship 实施 + round-1 内置 review/fix 中 |
-| | `pr-status/needs-codex` | round-1 完成，待外部 codex 二轮 review |
-| | `pr-status/ready` | 二轮 fix 完成，可合并 |
-| **pr-review**（codex 结论） | `pr-review/approved` | codex 二轮无需改 |
-| | `pr-review/changes-requested` | codex 二轮提出需改项 |
+| **pr-status**（流转） | `pr-status/in-progress` | ship 实施 + 内置 review/fix 中 |
+| | `pr-status/needs-codex` | ship 内置 review/fix 完成，待外部 codex review |
+| | `pr-status/ready` | fix 续修完成，可合并 |
+| **pr-review**（codex 结论） | `pr-review/approved` | codex review 无需改 |
+| | `pr-review/changes-requested` | codex review 提出需改项 |
 
 流转见 §5。
 
 ---
 
-## 3. 评级 rubric（P + Cx，单源）
+## 3. 评级 rubric（P + Cx，**单源在此**）
 
-> 取代被删的 `docs/backlog/20260520/RERATING-RUBRIC.md`。`/fix` 与 `/pm-*` 评级以本节为准。
+> `/fix` 与 `/pm-*` 评级**引用本节**，不在技能内复制 rubric。
 
 ### 3.1 P 严重程度
 
@@ -121,25 +120,25 @@
 
 ---
 
-## 5. PR 双轮流程（ship → codex → fix）
+## 5. PR 流程（ship → codex → fix）
 
 ```
-/ship (或 /pm-flow)
+/ship <issue>
   实施 → PR 创建 → 贴 pr-status/in-progress
-  → round-1：内置 6 维 reviewer + /fix Cx1/Cx2
-  → gh pr comment 贴 round-1 评论（<!-- pm:round-1 -->）
+  → ship：内置 6 维 reviewer + /fix Cx1/Cx2
+  → gh pr comment 贴 ship 评论（<!-- pm:ship -->）
   → 切 pr-status/needs-codex → 停下交接
 
-[外部] 你跑 codex 二轮 review → codex 把评论写进 PR
+[外部] 你跑 codex review → codex 把评论写进 PR
 
-/fix --from-pr <N> (或 /pm-flow 续)
+/fix <PR#>（codex 有新评论可多次跑）
   → gh pr view --json reviews,comments + gh api .../pulls/{N}/comments 读 codex 评论
-  → triage + round-2 修复
-  → gh pr comment 贴 round-2 评论（<!-- pm:round-2 -->）
+  → triage + 修复
+  → gh pr comment 贴 fix 评论（<!-- pm:fix -->，每次都贴）
   → 切 pr-status/ready（全清）或 pr-review/changes-requested（仍有遗留）
 ```
 
-> PR 状态流转 / 每轮评论是 SKILL.md 约定（无 CI 机器门），由 `/ship` `/fix` `/pm-flow` 自律执行。
+> pr-status 流转 + **每次 ship/fix 都贴评论留痕**是 SKILL.md 约定（无 CI 机器门），由 `/ship` `/fix` 自律执行。
 
 ---
 

@@ -11,7 +11,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 > **多沟通原则（默认多问、有歧义即停）**：L2/L3 在创建 worktree（阶段 3）**之前**必须完整呈现「方案方向
 > （阶段 1）+ 改动计划（阶段 2）」并经 AskUserQuestion 确认——不在未对齐时就开工。实施中（阶段 5）surface
-> 阶段性进度与 blocker；阶段 7→8 之间呈现 round-1 findings 表再决定修哪些。任何方案歧义 / 范围不清 / 取舍
+> 阶段性进度与 blocker；阶段 7→8 之间呈现内置 review findings 表再决定修哪些。任何方案歧义 / 范围不清 / 取舍
 > 没把握 → 停下问，不默默假设。
 
 剥离 `--level=` flag 后，剩余参数匹配 `^#?[0-9]+$` 时视为 issue 号，先 `gh issue view <N> --json title,body,labels,state`（`dangerouslyDisableSandbox: true`）拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。`state != "OPEN"`（CLOSED / MERGED 等）或 `gh issue view` 失败均用 AskUserQuestion 让用户裁定是否继续。
@@ -75,16 +75,16 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 ```bash
 git fetch origin
-git worktree add worktrees/<NNN-short-name> -b <branch-name> origin/develop
+git worktree add worktrees/<Type>/<issue#-short-name> -b <Type>/<issue#-short-name> origin/develop
 ```
 
-编号：Fix 200-299 / Feature 001-199 / Refactor 500-599，扫描 `worktrees/` + `git branch -a` 取最大 +1。
+命名依 `git-worktree` skill：**编号 = 关联 issue#**（无 issue 不编号），path 与分支首段含 **Type**（Feature/Fix/Refactor/Docs/Experiment）。下文 `worktrees/<wt>` 简写指该 worktree 目录。
 
 ---
 
 ## 阶段 4：TDD — 先写测试
 
-在 worktree 中先写 `*_test.go`，覆盖正常/边界/错误路径（kernel/ ≥ 90%，其余 ≥ 80%）。运行 `go -C worktrees/<NNN> test ./...` 确认测试先 **FAIL**，再进入实施。
+在 worktree 中先写 `*_test.go`，覆盖正常/边界/错误路径（kernel/ ≥ 90%，其余 ≥ 80%）。运行 `go -C worktrees/<wt> test ./...` 确认测试先 **FAIL**，再进入实施。
 
 ---
 
@@ -104,9 +104,9 @@ git worktree add worktrees/<NNN-short-name> -b <branch-name> origin/develop
 ### 5.1 Sub-agent prompt 自包含要求
 
 每个 developer sub-agent prompt 必须包含：
-- worktree 路径（`worktrees/<NNN>`）
+- worktree 路径（`worktrees/<wt>`）
 - 分配的任务列表（文件路径 + 改动描述）
-- go 命令格式：`go -C worktrees/<NNN> test ./...`
+- go 命令格式：`go -C worktrees/<wt> test ./...`
 - CLAUDE.md 关键约束（分层规则、覆盖率要求）
 - commit 格式：`<type>(<scope>): <描述>`
 
@@ -115,8 +115,8 @@ git worktree add worktrees/<NNN-short-name> -b <branch-name> origin/develop
 ### 5.2 主 agent 汇总（所有并行 agent 完成后）
 
 ```bash
-go -C worktrees/<NNN> build ./...
-go -C worktrees/<NNN> test ./...
+go -C worktrees/<wt> build ./...
+go -C worktrees/<wt> test ./...
 golangci-lint run ./...   # 0 issues 才进阶段 6
 ```
 
@@ -125,26 +125,26 @@ golangci-lint run ./...   # 0 issues 才进阶段 6
 ## 阶段 6：PR
 
 ```bash
-git -C worktrees/<NNN> push -u origin <branch>   # dangerouslyDisableSandbox: true
+git -C worktrees/<wt> push -u origin <branch>   # dangerouslyDisableSandbox: true
 gh pr create --title "..." --body "..."
-gh pr edit <PR#> --add-label pr-status/in-progress   # 进入双轮流程（见 .github/PROJECT.md §5）
+gh pr edit <PR#> --add-label pr-status/in-progress   # 进入 ship→codex→fix 流程（见 .github/PROJECT.md §5）
 ```
 
 PR body 包含：Summary、`Refs: <ID>`、`ref: framework file`、Test plan checklist。
 
 ---
 
-## 阶段 7：Review（round-1，内置 reviewer）
+## 阶段 7：Review（内置 reviewer）
 
-> ship 的 review 是**双轮流程的 round-1**（内置 6 维 reviewer）；codex 二轮（round-2）由你在外部跑、
-> 经 `/pm-flow` 编排（见 `.github/PROJECT.md` §5）。ship 单独使用时只跑 round-1。
+> ship 的 review 是 ship→codex→fix 流程里的**内置首审**（6 维 reviewer）；codex 外部 review 由你在外部跑，
+> 续修走 `/fix <PR#>`（见 `.github/PROJECT.md` §5）。ship 单独使用只做内置审。
 
 **L1/L2**：1 个 `reviewer` agent（GoCell 六维度）。
 
 **L3**：按 PR diff 净增删行数确定 `reviewer` agent 数量。用 `--shortstat` 直接读增删行（避开 `--stat` 末行格式坑，也无需 awk 求和）：
 
 ```bash
-git -C worktrees/<NNN> diff --shortstat origin/develop
+git -C worktrees/<wt> diff --shortstat origin/develop
 ```
 
 输出形如 `N files changed, X insertions(+), Y deletions(-)`；diff 行数 = X + Y（某项为 0 时该子句省略，按 0 计）。
@@ -164,19 +164,19 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 
 ---
 
-## 阶段 8：Fix（round-1）+ round-1 收尾
+## 阶段 8：Fix（内置审 findings）+ 收尾
 
-1. **呈现 round-1 findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。L3 用 AskUserQuestion 与用户确认
+1. **呈现内置 review findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。L3 用 AskUserQuestion 与用户确认
    修哪些（默认修 Cx1/Cx2 IN_SCOPE）。
 2. 对 Cx1/Cx2 IN_SCOPE findings 派发 `developer` agent 执行 `/fix <finding>`；Cx3/Cx4 和 OUT_OF_SCOPE 收集到阶段 9。
-3. **round-1 收尾**（按 `pm-issue` §4 评论格式）：
+3. **收尾**（按 `pm-issue` §4 评论格式，**评论必留**）：
 
    ```bash
-   gh pr comment <PR#> --body "$(...含 <!-- pm:round-1 --> 标记：reviewer 数 / findings 表 / 已修 Cx1-Cx2 / 遗留 Cx3-Cx4 / OUT_OF_SCOPE / 下一步=待 codex...)"
+   gh pr comment <PR#> --body "$(...含 <!-- pm:ship --> 标记：reviewer 数 / findings 表 / 已修 Cx1-Cx2 / 遗留 Cx3-Cx4 / OUT_OF_SCOPE / 下一步=待 codex...)"
    gh pr edit <PR#> --add-label pr-status/needs-codex --remove-label pr-status/in-progress
    ```
 
-> ship 到此结束 round-1。codex 二轮 + round-2 续修走 `/pm-flow resume <PR#>` 或 `/fix --from-pr <PR#>`。
+> ship 到此结束（内置审 + 修）。codex 外部 review 后，续修走 `/fix <PR#>`。
 
 ---
 
