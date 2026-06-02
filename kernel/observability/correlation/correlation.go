@@ -22,12 +22,7 @@
 package correlation
 
 // Correlation is a sealed read-model carrying the three cross-cutting
-// observability IDs.
-//
-// All fields are unexported. The only way to obtain a non-zero Correlation
-// outside this package is via New. Package-external struct literals cannot set
-// the unexported fields, making fabrication structurally impossible (Hard
-// sealed construction).
+// observability IDs; see the package doc for the provenance/layering rationale.
 type Correlation struct {
 	traceID       string
 	requestID     string

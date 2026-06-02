@@ -296,7 +296,7 @@ ref: `cells/auditcore/slices/auditquery/handler.go` 出口；`pkg/redaction/reda
 
 ## Audit trace_id 反查（trace → audit）
 
-`audit_entries` 带 `trace_id` 列（observability，**非** HMAC 链字段——`Protocol.ComputeHash` 12-field 输入冻结，`audit_hash_input_frozen_test.go` 守）。注入唯一路径 = `cells/auditcore/internal/appender`，经 `kernel/observability/correlation.FromObservability(entry.Observability())` 从 W0 outbox observability envelope 同时派生 `trace_id` + `correlation_id`（`correlation.Correlation` 是 sealed read-model，全字段 unexported，上游 Hard 单源派生）。
+`audit_entries` 带 `trace_id` 列（observability，**非** HMAC 链字段——`Protocol.ComputeHash` 12-field 输入冻结，`audit_hash_input_frozen_test.go` 守）。注入唯一路径 = `cells/auditcore/internal/appender`，经 `correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))`（`obs = entry.Observability()`）从 W0 outbox observability envelope 同时派生 `trace_id` + `correlation_id`（`correlation.Correlation` 是 sealed read-model，全字段 unexported，包外 struct literal 编译不可表达；但 `New` 是公开通用构造器，provenance 可信性来自上游 sealed `outbox.Entry` Hard 继承 + 下游 `AUDIT-TRACE-ID-WRITE-CALLER-01` caller-allowlist Medium）。
 
 反查入口复用 auditquery：`GET /api/v1/audit/entries?traceId=<tid>`（admin 全局；非 admin 经既有 `auditQueryPolicy` AND `actor_id=self`，无后门），复用标准 `nextCursor`/`hasMore` 游标分页。**不新增端点**（端点收敛决策见 ADR）。
 

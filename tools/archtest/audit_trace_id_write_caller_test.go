@@ -14,7 +14,9 @@
 //
 //   - cells/auditcore/internal/appender/service.go — HandleEvent
 //     composite literal: TraceID: corr.TraceID() and
-//     CorrelationID: corr.CorrelationID() (via correlation.New(string(obs.TraceID), ...))
+//     CorrelationID: corr.CorrelationID(), where corr =
+//     correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))
+//     and obs = entry.Observability()
 //
 // This is the sole sanctioned injection path (issue #1048 Batch F).
 // The outbox.Entry seal (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01) and the
@@ -193,7 +195,8 @@ var ledgerObservabilityFields = []string{"TraceID", "CorrelationID"}
 var observabilityIDInjectionAllowlist = map[string]string{
 	// INJECTION — sole sanctioned source of TraceID and CorrelationID values.
 	// Writes TraceID: corr.TraceID() and CorrelationID: corr.CorrelationID()
-	// in HandleEvent (via correlation.FromObservability(entry.Observability())).
+	// in HandleEvent (via correlation.New(string(obs.TraceID), string(obs.RequestID),
+	// string(obs.CorrelationID)), where obs = entry.Observability()).
 	"cells/auditcore/internal/appender/service.go": "injection: sole sanctioned appender",
 
 	// TEST CONFORMANCE — ledger/storetest package provides contract tests for
@@ -492,11 +495,13 @@ func isLedgerEntryNamedType(t types.Type) bool {
 //  1. badCompositeLit — composite literal write of ledger.Entry.TraceID.
 //  2. badAssignment   — direct assignment write of ledger.Entry.TraceID.
 //
-// The scanner must report ≥ 2 violations (one per write shape). This
+// The scanner must report exactly 2 violations (one per write shape). This
 // also validates the F6 granularity requirement: a value-assignment inside
 // a file that would otherwise only contain &e.TraceID scan-address takes
 // IS caught — confirming that the tightened reconstruction-file handling
-// works correctly.
+// works correctly. The count is exact (not ≥ 2) so that a regression that
+// wrongly flags addressTake (blind-spot #1) would produce found==3 and fail
+// the assertion, catching over-detection as well as under-detection.
 func TestAuditTraceIDWriteCaller01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -517,12 +522,14 @@ func TestAuditTraceIDWriteCaller01_RedFixture(t *testing.T) {
 			}
 			return nil
 		})
-	assert.GreaterOrEqual(t, found, 2,
+	assert.Equal(t, 2, found,
 		"AUDIT-TRACE-ID-WRITE-CALLER-01 RED fixture self-check FAILED: "+
-			"expected ≥ 2 violations from audittraceididfixture "+
-			"(badCompositeLit + badAssignment), got %d. "+
-			"The scanner is not detecting one or both violation shapes — check "+
-			"isLedgerEntryType / scanObsIDCompositeLitWrites / scanObsIDAssignWrites.",
+			"expected exactly 2 violations from audittraceididfixture "+
+			"(badCompositeLit + badAssignment); addressTake (blind-spot #1) must "+
+			"produce 0. Got %d — if found==1 the scanner missed a violation shape; "+
+			"if found==3 the scanner wrongly flagged addressTake (regression in "+
+			"blind-spot #1 handling). Check isLedgerEntryType / "+
+			"scanObsIDCompositeLitWrites / scanObsIDAssignWrites.",
 		found)
 }
 
