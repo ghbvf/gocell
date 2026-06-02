@@ -226,6 +226,21 @@ func WithIdempotency(store idemhttp.Store) Option {
 	}
 }
 
+// WithIdempotencyMetrics installs an optional MetricsObserver that the
+// idempotency middleware calls once per terminal decision to record
+// idempotency_requests_total{cell,state}. This is an OPTIONAL setter (not a
+// fail-fast wiring option): a nil observer simply disables metric emission —
+// idempotency correctness never depends on it. Bootstrap auto-wires the
+// concrete runtime/observability/metrics.IdempotencyCollector here when a real
+// metrics Provider is configured; without a Provider the option is never
+// applied and the middleware runs unmetered. The observer is only consumed when
+// WithIdempotency is also wired (buildMux constructs the middleware only then).
+func WithIdempotencyMetrics(obs idemhttp.MetricsObserver) Option {
+	return func(r *Router) {
+		r.idempotencyMetrics = obs
+	}
+}
+
 // WithAuthMiddleware enables authentication middleware with an explicitly
 // injected verifier. The middleware is placed in the mux chain after any
 // rate-limiter/circuit-breaker and before BodyLimit. Public endpoints declared
@@ -406,6 +421,7 @@ type Router struct {
 	circuitBreakerNil           bool
 	idempotencyStore            idemhttp.Store
 	idempotencyStoreNil         bool
+	idempotencyMetrics          idemhttp.MetricsObserver
 	authVerifier                kauth.IntentTokenVerifier
 	authVerifierNil             bool
 	authMetrics                 *auth.AuthMetrics
@@ -724,7 +740,8 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 			return r.idempotencyExemptMatcher(req)
 		}
 		r.use(idemhttp.Middleware(r.clock, r.idempotencyStore,
-			idemhttp.WithExemptMatcher(lazyIdempotencyExempt)))
+			idemhttp.WithExemptMatcher(lazyIdempotencyExempt),
+			idemhttp.WithMetrics(r.idempotencyMetrics)))
 	}
 	r.composeHandler()
 	return nil

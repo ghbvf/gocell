@@ -5,9 +5,9 @@
 //
 // # What this guards
 //
-// runtime/bootstrap auto-wires four metric collector families at startup
+// runtime/bootstrap auto-wires five metric collector families at startup
 // (HTTP requests, event-router subscriptions, outbox rejects, projection
-// metrics). Each share the SAME discipline: skip on nil/Nop provider →
+// metrics, HTTP idempotency decisions). Each share the SAME discipline: skip on nil/Nop provider →
 // construct ONCE → cache → and — critically — return a startup-fatal error on a
 // registration conflict, NEVER a slog.Warn-then-degrade that silently drops the
 // metric family. That discipline used to live as four hand-copied control-flow
@@ -17,16 +17,16 @@
 // silently lost its metrics — and NOTHING mechanical caught it.
 //
 // The fix collapses the four blocks into one generic single source,
-// runtime/bootstrap.autoWireCachedCollector[T], which all four callers route
+// runtime/bootstrap.autoWireCachedCollector[T], which all five callers route
 // through. This archtest is the machine backstop that keeps it single-source.
 // It enforces TWO bound checks, not a loose "ancestor exists" check:
 //
-//  1. CONSTRUCT-ARG POSITION BIND. Each of the four metric-collector
+//  1. CONSTRUCT-ARG POSITION BIND. Each of the five metric-collector
 //     CONSTRUCTORS may only be referenced (called, or passed as a function
 //     value) from WITHIN the construct ARGUMENT (the 3rd positional arg) of a
 //     call to autoWireCachedCollector — either AS that argument (the direct
-//     function value form: event/outbox/projection) or nested inside it (the
-//     FuncLit form: HTTP, which needs an extra config arg). A reference in any
+//     function value form: event/outbox/projection/idempotency) or nested inside
+//     it (the FuncLit form: HTTP, which needs an extra config arg). A reference in any
 //     OTHER argument slot (e.g. buried in the conflictMsg string expression) is
 //     NOT routed through the helper's skip/cache/fail-fast and is reported. The
 //     earlier "any autoWireCachedCollector ancestor" check let such other-arg
@@ -54,7 +54,7 @@
 //     info.Uses (not a name-string anchor). It is archtest-bound, not a type
 //     system gate, hence Medium not Hard.
 //   - Upstream: MEDIUM, and this is a GO-LANGUAGE CEILING, not a deferred TODO.
-//     Hard upstream would require the four constructors to be uncallable except
+//     Hard upstream would require the five constructors to be uncallable except
 //     from autoWireCachedCollector. They cannot be: the constructors are
 //     EXPORTED across package boundaries (runtime/observability/metrics and
 //     kernel/projection are distinct packages from runtime/bootstrap), so Go
@@ -88,17 +88,17 @@
 //     is CLOSED by a reverse self-check below: bootstrap is forbidden from
 //     dot-importing either funneled package (autoWireFunneledPkgs), keeping the
 //     bare-ident form unrepresentable.
-//   - Raw ad-hoc collector construction that bypasses the four named constructors
+//   - Raw ad-hoc collector construction that bypasses the five named constructors
 //     entirely (e.g. calling b.metricsProvider.GaugeVec/CounterVec/HistogramVec
 //     directly in bootstrap to assemble a private collector) is OUT of this
-//     funnel's scope — it is the four constructors' own concern. Documented as a
+//     funnel's scope — it is the five constructors' own concern. Documented as a
 //     known gap; bootstrap does not do this today.
 //   - Scope is the runtime/bootstrap package only (where the single-source funnel
 //     lives). The same constructors called from other production packages are not
 //     this rule's concern (today there are none outside bootstrap).
 //   - The anti-vacuity guard below (every constructor symbol must be referenced
 //     ≥1× inside bootstrap) is the reverse self-check: it proves the scanner
-//     actually resolves the real references (not a vacuous pass) AND that the four
+//     actually resolves the real references (not a vacuous pass) AND that the five
 //     callers still route a live reference — a constructor that stops being
 //     referenced means a caller was deleted or stopped using the funnel.
 package archtest
@@ -136,6 +136,7 @@ var autoWireCtorSymbols = map[[2]string]string{
 	{autoWireRuntimeMetricsPkgPath, "NewProviderCollector"}:     "metricsmiddleware.NewProviderCollector",
 	{autoWireRuntimeMetricsPkgPath, "NewEventRouterCollector"}:  "metricsmiddleware.NewEventRouterCollector",
 	{autoWireRuntimeMetricsPkgPath, "NewOutboxRejectCollector"}: "metricsmiddleware.NewOutboxRejectCollector",
+	{autoWireRuntimeMetricsPkgPath, "NewIdempotencyCollector"}:  "metricsmiddleware.NewIdempotencyCollector",
 	{autoWireProjectionPkgPath, "RegisterMetrics"}:              "projection.RegisterMetrics",
 }
 
