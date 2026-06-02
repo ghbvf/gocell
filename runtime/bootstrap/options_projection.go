@@ -99,3 +99,37 @@ func WithProjectionCursor(cursor projection.Cursor) Option {
 		b.projectionCursor = cursor
 	}
 }
+
+// WithProjectionRebuildEndpoint opts the assembly into the framework projection
+// rebuild control-plane endpoint:
+//
+//	POST /internal/v1/{cell}/projection/{name}/rebuild
+//
+// mounted by bootstrap on the InternalListener (the framework-owned-RouteGroup
+// pattern, like /healthz·/readyz·/metrics — no contract.yaml, no host cell). The
+// handler dispatches by {cell}/{name} to the Coordinator wired in the phase6
+// drain and returns 202 (rebuild admitted, body carries the {phase,
+// pendingEvents, replayLagSeconds} snapshot) / 409 (already running) / 404
+// (unknown cell/projection).
+//
+// allowedCallers is the caller-cell allowlist (service-token callerCell segment).
+// A non-listed caller is rejected 403 via RequireCallerCell. At least one caller
+// is REQUIRED: an /internal/ endpoint must name its callers
+// (ContractSpec.validateHTTP fails closed on empty Clients), and the
+// InternalListener MUST be declared via WithListener — phase0
+// (validateProjectionRebuildEndpoint) fails fast otherwise.
+//
+// Opt-in is determined solely by len(allowedCallers) > 0. Not calling this
+// option — OR calling it with zero callers, WithProjectionRebuildEndpoint() —
+// leaves the endpoint unmounted with NO error: projection rebuilds remain
+// triggerable only programmatically via Coordinator.Rebuild. (A zero-caller call
+// is therefore a no-op, not a misconfiguration; an /internal/ endpoint with a
+// non-empty caller list is the only mounted form.)
+//
+// This is a wiring option — a later call REPLACES the allowlist set by an
+// earlier one (including clearing it back to unmounted with a zero-caller call).
+func WithProjectionRebuildEndpoint(allowedCallers ...string) Option {
+	return func(b *Bootstrap) {
+		b.projectionRebuildCallers = allowedCallers
+	}
+}

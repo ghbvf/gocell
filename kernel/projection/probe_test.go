@@ -9,8 +9,53 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/healthz"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// TestCoordinator_Lag_StartupGrace_DoesNotWriteLagGauge guards the invariant
+// preserved by computeLagPending's lagApplicable flag: when there are pending
+// events but nothing has been applied yet (cold start / fresh rebuild), the lag
+// probe is healthy AND must NOT write the replay-lag gauge. Writing 0 there would
+// report a false-healthy "no lag" for a stuck cold-start projection. A future
+// refactor that drops the flag and writes lag=0 would fail this test.
+func TestCoordinator_Lag_StartupGrace_DoesNotWriteLagGauge(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	provider := newProjectionRecordingProvider()
+	m, err := RegisterMetrics(provider)
+	if err != nil {
+		t.Fatalf("RegisterMetrics: %v", err)
+	}
+	src := NewMemReplaySource()
+	src.Append(mustNewTestEntry(t, clockmock.New(time.Now()), "topic.v1"))
+	src.Append(mustNewTestEntry(t, clockmock.New(time.Now()), "topic.v1")) // head=2
+	store := NewMemCheckpointStore()                                       // checkpoint=0 → pending=2
+	cur := newMemCursor(src)
+
+	// lastApplied defaults to 0 (nothing applied) → startup grace.
+	c := newCoordinatorFull(t, coordinatorFullParams{
+		clk: clk, projectionID: "myproj", store: store, cursor: cur, replay: src, metrics: m,
+	})
+	subscribeWithDefaults(t, c, applyNoop)
+
+	probes, err := c.Probes()
+	if err != nil {
+		t.Fatalf("Probes: %v", err)
+	}
+	if err := probes[1].Check(context.Background()); err != nil {
+		t.Errorf("lag probe should be healthy during startup grace, got %v", err)
+	}
+
+	labels := kernelmetrics.Labels{labelCell: "testcell", labelProjection: "myproj"}
+	if !provider.gaugeWasSet(metricProjectionPendingEvents, labels) {
+		t.Error("pending_events gauge must be set (pending=2)")
+	}
+	if provider.gaugeWasSet(metricProjectionReplayLag, labels) {
+		t.Error("replay_lag gauge must NOT be written during startup grace " +
+			"(writing 0 would mask a stuck cold-start as healthy)")
+	}
+}
 
 // probeTestRecentLagOffset is a site-specific deadline offset for the
 // "lag below threshold" probe test: an event applied this far in the past is
