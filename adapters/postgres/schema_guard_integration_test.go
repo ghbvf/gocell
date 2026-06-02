@@ -1005,3 +1005,36 @@ func TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded(t *testi
 	assert.True(t, found,
 		"DetectInvalidIndexes must still report orphan invalid indexes; got %v", indexes)
 }
+
+// TestVerifyExpectedShape_DetectsWrongFKLocalColumns verifies that the guard
+// validates the FK's LOCAL constrained columns (conkey), not just the referenced
+// columns (review F6). It degrades the composite tenant FK
+// role_assignments(tenant_id, user_id) → users(tenant_id, id) to a single-column
+// user_id → users(id), dropping tenant_id from the local set — the exact drift
+// that would silently remove the DB-layer cross-tenant isolation. The guard must
+// surface a foreign_key mismatch tagged as a local-column drift.
+func TestVerifyExpectedShape_DetectsWrongFKLocalColumns(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fk_localcols")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	_, err = pool.DB().Exec(ctx, `ALTER TABLE role_assignments DROP CONSTRAINT role_assignments_user_id_fkey`)
+	require.NoError(t, err)
+	// Re-add WITHOUT tenant_id in the local column set (references users(id) PK).
+	_, err = pool.DB().Exec(ctx,
+		`ALTER TABLE role_assignments ADD CONSTRAINT role_assignments_user_id_fkey `+
+			`FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`)
+	require.NoError(t, err, "recreate FK without tenant_id local column must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect the dropped tenant_id local column")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code)
+	assert.Equal(t, "foreign_key", extractDimensionDetail(ec))
+	assert.Contains(t, ec.Error(), "local columns",
+		"must surface the local-column drift specifically (not just a ref-column mismatch)")
+}

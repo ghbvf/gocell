@@ -296,12 +296,20 @@ type expectedDefault struct {
 }
 
 // expectedFK describes a foreign key constraint.
+//
+// Both column sets are validated IN ORDER (slices.Equal, not set-equality):
+// Columns is the local constrained set (pg_constraint.conkey) and RefColumns is
+// the referenced set (confkey). Order matters for composite tenant FKs — e.g.
+// role_assignments(tenant_id, user_id) → users(tenant_id, id) is a different
+// (and security-meaningful) constraint than a column-swapped variant, so a drift
+// that reorders the pair must be rejected (review F6).
 type expectedFK struct {
 	Table      string
 	Constraint string
+	Columns    []string // local constrained columns (conkey), in declaration order
 	RefTable   string
-	RefColumns []string
-	OnDelete   string // e.g. "a" = CASCADE, "r" = RESTRICT
+	RefColumns []string // referenced columns (confkey), in declaration order
+	OnDelete   string   // e.g. "a" = CASCADE, "r" = RESTRICT
 }
 
 // expectedIndex describes a named index (unique or non-unique) with its
@@ -609,6 +617,7 @@ var expectedFKs = []expectedFK{
 	{
 		Table:      "sessions",
 		Constraint: "sessions_subject_id_fkey",
+		Columns:    []string{"subject_id"},
 		RefTable:   "users",
 		RefColumns: []string{"id"},
 		OnDelete:   "c", // CASCADE — migrations/018_sessions.sql
@@ -616,10 +625,12 @@ var expectedFKs = []expectedFK{
 	{
 		// 047: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
 		// support index. This enforces same-tenant user membership at the DB layer,
-		// preventing cross-tenant authorization grants.
+		// preventing cross-tenant authorization grants. The (tenant_id, user_id)
+		// local column ORDER is the isolation pair — a swap must be rejected (F6).
 		// ON DELETE CASCADE: removing a user removes all their role_assignments.
 		Table:      "role_assignments",
 		Constraint: "role_assignments_user_id_fkey",
+		Columns:    []string{"tenant_id", "user_id"},
 		RefTable:   "users",
 		RefColumns: []string{"tenant_id", "id"},
 		OnDelete:   "c", // CASCADE — migrations/047_accesscore_tenant_id.sql
@@ -629,6 +640,7 @@ var expectedFKs = []expectedFK{
 		// ON DELETE RESTRICT: cannot delete a role that has active assignments.
 		Table:      "role_assignments",
 		Constraint: "role_assignments_role_id_fkey",
+		Columns:    []string{"tenant_id", "role_id"},
 		RefTable:   "roles",
 		RefColumns: []string{"tenant_id", "id"},
 		OnDelete:   "r", // RESTRICT — migrations/047_accesscore_tenant_id.sql
@@ -636,6 +648,7 @@ var expectedFKs = []expectedFK{
 	{
 		Table:      "commands",
 		Constraint: "commands_device_id_fkey",
+		Columns:    []string{"device_id"},
 		RefTable:   "devices",
 		RefColumns: []string{"id"},
 		OnDelete:   "r", // RESTRICT — migrations/030_commands.sql (B2.B)
@@ -644,6 +657,7 @@ var expectedFKs = []expectedFK{
 	{
 		Table:      "saga_events",
 		Constraint: "saga_events_instance_id_fkey",
+		Columns:    []string{"instance_id"},
 		RefTable:   "saga_instances",
 		RefColumns: []string{"id"},
 		OnDelete:   "c", // CASCADE — migration 040
@@ -1104,41 +1118,61 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got on_delete=%q want %q", gotOnDelete, fk.OnDelete))),
 		)
 	}
-	return verifyFKRefColumns(ctx, pool, fk, refColsQ, oid)
+	// localColsQ resolves the FK's LOCAL constrained columns (conkey) on the
+	// constrained table; refColsQ (above) resolves the REFERENCED columns
+	// (confkey). Both ORDER BY array_position so the scan order is canonical and
+	// slices.Equal enforces order (F6: a composite tenant FK that swaps the
+	// (tenant_id, col) pair is a distinct, security-relevant drift).
+	const localColsQ = `
+	SELECT a.attname
+	  FROM pg_constraint co
+	  JOIN pg_attribute a ON a.attrelid = co.conrelid
+	   AND a.attnum = ANY(co.conkey)
+	 WHERE co.oid = $1
+	 ORDER BY array_position(co.conkey, a.attnum)`
+
+	if err := verifyFKColumns(ctx, pool, fk, localColsQ, oid, fk.Columns, "local"); err != nil {
+		return err
+	}
+	return verifyFKColumns(ctx, pool, fk, refColsQ, oid, fk.RefColumns, "referenced")
 }
 
-// verifyFKRefColumns checks that the FK's referenced columns match expectations.
-func verifyFKRefColumns(ctx context.Context, pool *Pool, fk expectedFK, refColsQ string, oid uint32) error {
-	rows, err := pool.inner.Query(ctx, refColsQ, oid)
+// verifyFKColumns checks that the FK's columns (local conkey or referenced
+// confkey, selected by colsQ) match want IN ORDER. colsQ MUST ORDER BY
+// array_position so the scan order is canonical; slices.Equal then validates
+// both membership and order. side ("local"/"referenced") tags the error.
+func verifyFKColumns(ctx context.Context, pool *Pool, fk expectedFK, colsQ string, oid uint32, want []string, side string) error {
+	rows, err := pool.inner.Query(ctx, colsQ, oid)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-			"schema_guard: query FK ref columns", err)
+			"schema_guard: query FK columns", err)
 	}
-	var gotRefCols []string
+	var got []string
 	for rows.Next() {
 		var col string
 		if scanErr := rows.Scan(&col); scanErr != nil {
 			rows.Close()
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-				"schema_guard: scan FK ref column", scanErr)
+				"schema_guard: scan FK column", scanErr)
 		}
-		gotRefCols = append(gotRefCols, col)
+		got = append(got, col)
 	}
 	rows.Close()
 	if rows.Err() != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-			"schema_guard: iterate FK ref columns", rows.Err())
+			"schema_guard: iterate FK columns", rows.Err())
 	}
-	if !stringSliceEqualUnordered(gotRefCols, fk.RefColumns) {
+	if !slices.Equal(got, want) {
 		return errcode.New(
 			errcode.KindInternal, ErrAdapterPGSchemaShape,
-			"schema_guard: foreign key ref columns mismatch",
+			"schema_guard: foreign key columns mismatch",
 			errcode.WithDetails(
 				errcode.PublicString("dimension", "foreign_key"),
 				errcode.PublicString("table", fk.Table),
 				errcode.PublicString("constraint", fk.Constraint),
+				errcode.PublicString("side", side),
 			),
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %v want %v", gotRefCols, fk.RefColumns))),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s columns: got %v want %v", side, got, want))),
 		)
 	}
 	return nil
@@ -1308,25 +1342,6 @@ func columnExists(ctx context.Context, pool *Pool, table, column string) (bool, 
 			"schema_guard: probe column", err)
 	}
 	return exists, nil
-}
-
-// stringSliceEqualUnordered reports whether two string slices contain the same
-// elements regardless of order.
-func stringSliceEqualUnordered(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	counts := make(map[string]int, len(a))
-	for _, s := range a {
-		counts[s]++
-	}
-	for _, s := range b {
-		counts[s]--
-		if counts[s] < 0 {
-			return false
-		}
-	}
-	return true
 }
 
 // VerifyNoInvalidIndexes is the fail-fast counterpart of DetectInvalidIndexes
