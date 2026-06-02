@@ -230,6 +230,51 @@ func TestBuilder_NilCell_RollsBack(t *testing.T) {
 	assert.Equal(t, "r1", order.calls[0])
 }
 
+// TestBuilder_NilResource_FailFast verifies that a module returning a
+// nil/typed-nil ManagedResource is rejected at Build time (fail-fast) instead of
+// panicking on the rollback path. Before this guard, the steady-state path
+// (managedResourceOpts → WithManagedResource) caught nil at phase0, but the
+// pre-Run rollback called Close() directly on the provisional stack and would
+// panic on a nil interface (bare nil) or nil receiver (typed nil). The validation
+// keeps the resource out of the provisional stack entirely, so a prior module's
+// valid resource still rolls back cleanly and Build returns a descriptive error.
+func TestBuilder_NilResource_FailFast(t *testing.T) {
+	ctx := context.Background()
+
+	var typedNil *orderedMR // typed-nil: non-nil interface wrapping a nil *orderedMR
+
+	tests := []struct {
+		name string
+		bad  kernellifecycle.ManagedResource
+	}{
+		{name: "bare nil", bad: nil},
+		{name: "typed nil", bad: typedNil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			order := &closedOrder{}
+			r1 := &orderedMR{id: "r1", order: order}
+
+			c1 := stubCell("cell-1")
+			m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
+			c2 := stubCell("cell-2")
+			m2 := &fakeCellModule{id: "mod2", cell: c2, mres: []kernellifecycle.ManagedResource{tc.bad}}
+
+			// Must NOT panic; must return a fail-fast error naming the module.
+			_, err := New().With(m1, m2).Build(ctx, minimalSharedDeps(t),
+				func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "mod2")
+			assert.Contains(t, err.Error(), "nil ManagedResource")
+
+			// The prior module's valid resource rolled back without panic; the
+			// nil resource never entered the provisional stack.
+			require.Len(t, order.calls, 1, "prior valid resource must roll back")
+			assert.Equal(t, "r1", order.calls[0])
+		})
+	}
+}
+
 // TestBuilder_RuntimeFnError_RollsBack verifies rollback when the RuntimeOptionsFunc errors.
 func TestBuilder_RuntimeFnError_RollsBack(t *testing.T) {
 	ctx := context.Background()

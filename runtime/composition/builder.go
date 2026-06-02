@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -130,7 +131,9 @@ func (b *Builder) Build(
 	var cells []cell.Cell
 	var cellOpts []bootstrap.Option
 	// provisional holds resources opened so far; closed in reverse order if
-	// any subsequent step fails.
+	// any subsequent step fails. INVARIANT: every entry is non-nil — the loop
+	// below rejects nil/typed-nil resources via validateModuleResources before
+	// appending, so Close() below can never panic on a nil interface.
 	var provisional []kernellifecycle.ManagedResource
 
 	rollback := func() {
@@ -143,19 +146,10 @@ func (b *Builder) Build(
 	}
 
 	for _, m := range b.modules {
-		if m == nil {
-			rollback()
-			return nil, fmt.Errorf("composition.Builder.Build: module list contains nil")
-		}
-		res, err := m.Provide(ctx, shared)
+		res, err := resolveModuleResult(ctx, m, shared)
 		if err != nil {
 			rollback()
-			return nil, fmt.Errorf("composition.Builder.Build: module %q Provide: %w", m.ID(), err)
-		}
-		if res.Cell == nil {
-			rollback()
-			return nil, fmt.Errorf("composition.Builder.Build: module %q returned nil Cell "+
-				"(use explicit Optional semantics if cell is optional)", m.ID())
+			return nil, err
 		}
 		cells = append(cells, res.Cell)
 		// Single source: derive BOTH the steady-state WithManagedResource
@@ -178,6 +172,58 @@ func (b *Builder) Build(
 	return &App{clk: shared.Clock, opts: allOpts}, nil
 }
 
+// resolveModuleResult calls one module's Provide and validates the result before
+// it enters either lifecycle channel: the module must be non-nil, must return a
+// non-nil Cell, and must not return any nil/typed-nil ManagedResource. Extracted
+// from [Builder.Build] so the per-module loop body stays within the
+// cognitive-complexity budget (same rationale as [managedResourceOpts]); the
+// single returned error lets Build run rollback + return once.
+func resolveModuleResult(ctx context.Context, m CellModule, shared *SharedDeps) (ModuleResult, error) {
+	if m == nil {
+		return ModuleResult{}, fmt.Errorf("composition.Builder.Build: module list contains nil")
+	}
+	res, err := m.Provide(ctx, shared)
+	if err != nil {
+		return ModuleResult{}, fmt.Errorf("composition.Builder.Build: module %q Provide: %w", m.ID(), err)
+	}
+	if res.Cell == nil {
+		return ModuleResult{}, fmt.Errorf("composition.Builder.Build: module %q returned nil Cell "+
+			"(use explicit Optional semantics if cell is optional)", m.ID())
+	}
+	// Reject nil resources BEFORE they enter the provisional rollback stack, so
+	// rollback's Close() can never panic on a nil interface. The steady-state path
+	// (managedResourceOpts → bootstrap.WithManagedResource) fail-fasts a nil
+	// resource only at phase0; doing it here keeps both lifecycle channels
+	// symmetric and fails fast at Build time instead.
+	if err := validateModuleResources(m.ID(), res.Resources); err != nil {
+		return ModuleResult{}, err
+	}
+	return res, nil
+}
+
+// validateModuleResources rejects nil/typed-nil entries in a module's Resources
+// slice. [Builder.Build] calls it on each module's result before the resources
+// enter either lifecycle channel (steady-state opts + provisional rollback
+// stack), guaranteeing the provisional stack holds only non-nil resources so its
+// Close() can never panic. A nil resource is a module wiring bug; surfacing it as
+// a Build-time error keeps the rollback path symmetric with the steady-state path
+// (where bootstrap.WithManagedResource fail-fasts a nil resource at phase0).
+//
+// Extracted from Build so the per-module loop body stays within the
+// cognitive-complexity budget.
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go — Stop runs only hooks that
+// were successfully appended; bad inputs surface before any component starts.
+func validateModuleResources(moduleID string, resources []kernellifecycle.ManagedResource) error {
+	for i, r := range resources {
+		if validation.IsNilInterface(r) {
+			return fmt.Errorf("composition.Builder.Build: module %q returned nil "+
+				"ManagedResource at Resources[%d] (resources must be non-nil)", moduleID, i)
+		}
+	}
+	return nil
+}
+
 // managedResourceOpts derives one bootstrap.WithManagedResource option per
 // resource — the steady-state half of the single-source resource contract. The
 // caller ([Builder.Build]) appends the same resources to its provisional
@@ -186,9 +232,10 @@ func (b *Builder) Build(
 // within the cognitive-complexity budget.
 //
 // Nil entries: ModuleResult.Resources MUST NOT contain nil (see its godoc).
-// bootstrap.WithManagedResource itself fail-fasts on a nil/typed-nil resource at
-// phase0, so a stray nil reaching the steady-state path is caught at startup; the
-// rollback path (Build's provisional Close) relies on the same non-nil contract.
+// [validateModuleResources] rejects any nil/typed-nil resource at Build time
+// before it reaches this function or the rollback stack, so both channels only
+// ever see non-nil resources. bootstrap.WithManagedResource additionally
+// fail-fasts a stray nil at phase0 as defense in depth.
 func managedResourceOpts(resources []kernellifecycle.ManagedResource) []bootstrap.Option {
 	opts := make([]bootstrap.Option, 0, len(resources))
 	for _, r := range resources {

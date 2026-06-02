@@ -198,7 +198,10 @@ Enforcement 演进：
 **#1413（configcore 字段收口）**：`SharedDeps` 移除 `EventbusCacheCollector`（required）+ `ConfigStaleCipherInc`（optional）两个 configcore 专属字段——configcore 经 kernel `MetricsProvider` 用 `obmetrics.NewProviderEventbusCacheCollector` / `NewProviderConfigStaleCipherCollector` 自建（这两个 collector 走 kernel Provider，非 raw `client_golang`，不违反「cellmodules 不 import client_golang」治理姿态）。
 
 威胁/正确性再评：
-- **metric 契约不变**：`gocell_config_stale_cipher_total` / `gocell_eventbus_cache_tombstone_evicted_total` 的 fqName/label 与迁移前字节一致（仅 metricschema 的构造点 `file` 字段从 cmd/ 移到 `runtime/observability/metrics/`，且因移入 shared 包，现与 sibling `eventbus_cache` 一样出现在全部 assembly 的 metrics-schema，非仅 corebundle）。无 wire 改名分支。
+- **Prometheus wire 不变，但 generated metrics-schema 是可见 contract 载体且本 PR 改了它**（F5 披露补全——原表述只说「wire 名不变」不完整）：`gocell_config_stale_cipher_total` / `gocell_eventbus_cache_tombstone_evicted_total` 的 **fqName（Prometheus series 名）+ label 与迁移前字节一致**——运维侧按 series 名 key 的 dashboard/alert 不受影响。但 `gocell generate metrics-schema` 派生的 golden（contract-fanout 5 载体之一、消费方可读的 inventory）有两类**可感知**变化：
+  1. **corebundle**：schema `name` 字段由 `stale_cipher_total` **rename** 为 `config_stale_cipher_total`（新 Provider collector `Name="config_stale_cipher_total"`，旧 raw-prom 为 `Subsystem="config" Name="stale_cipher_total"`；二者 fqName 同为 `gocell_config_stale_cipher_total`），外加 `file` 字段从 `cmd/` 移到 `runtime/observability/metrics/`。
+  2. **examples/iotdevice / orderfulfillment / todoorder**：collector 移入 shared `runtime/observability/metrics` 包后，`config_stale_cipher_total` 成为这三个 assembly schema 的**净新增条目**（迁移前不在其 inventory），与 sibling `eventbus_cache_tombstone_evicted_total` 同行为。
+  4 份 golden 已 `gocell generate metrics-schema --all` regen + `go test ./tools/metricschema/...` 绿；无 wire 改名分支。
 - **无双注册**：两 collector 各仅 configcore 消费；configcore 自建一次 + corebundle 停建 = 恰一次。
 - **`ConfigEventCollector` 前提纠正**：原表述「configcore 专属」有误——它由 accesscore + configcore + corebundle config-event middleware 共同消费且 `Validate` required，是真·跨 cell 字段，**保留**在 `SharedDeps`。
 - **`ConfigKeyProvider` 残留（唯一未收口字段）**：vault-transit 路径经 `adapters/vault.TransitMetrics`（raw prometheus registry），受 `adapterPromCallerAllowlist` 姿态阻挡，configcore 自建被 **#885**（vault TransitMetrics → kernel Provider）gate；#885 落地后该字段随之移入 configcore，`SharedDeps` 即完全 cell-agnostic。`#1413` 保持 open 跟踪此残留。
