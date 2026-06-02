@@ -20,11 +20,14 @@ import (
 // Append here when a new table is introduced by a migration file so that
 // schema_guard documentation stays in sync with the embedded SQL.
 //
-//   - outbox_entries     (001/044)  transactional outbox for event relay
+//   - outbox_entries     (001/044/047)  transactional outbox for event relay
 //                                 + 044_outbox_entries_principal.sql TRUNCATE+rebuild
 //                                   adding principal (jsonb) + occurred_at (timestamptz)
 //                                   NOT NULL columns for the sealed-construction
 //                                   principal-injection wire envelope (#1229).
+//                                 + 047_outbox_entries_seq.sql adding seq BIGINT
+//                                   GENERATED ALWAYS AS IDENTITY + idx_outbox_seq
+//                                   (projection ReplaySource/Cursor position, #1368).
 //   - config_entries     (004)  cell configuration key-value store
 //   - config_versions    (004)  immutable configuration version history
 //   - refresh_tokens     (007)  append-only refresh token lineage
@@ -338,7 +341,7 @@ const queryErrFmt = "query: %v"
 // expectedColumns is the authoritative column-type-nullability registry for
 // the S3F-owned tables (users/sessions/roles/role_assignments), the
 // auditcore-owned audit_entries table (020_audit_ledger.sql), and the
-// outbox_entries relay table (001_create_outbox_entries.sql + 044).
+// outbox_entries relay table (001_create_outbox_entries.sql + 044 + 047).
 var expectedColumns = []expectedColumn{
 	// outbox_entries (001 + subsequent migrations + 044_outbox_entries_principal.sql)
 	// Only the writer-supplied columns are registered; relay-internal columns

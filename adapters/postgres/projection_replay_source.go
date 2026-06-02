@@ -88,6 +88,17 @@ func (s *PGProjectionReplaySource) Head(ctx context.Context) (int64, error) {
 // history. If fn returns an error, Replay stops immediately and returns it;
 // entries already passed to fn are NOT retried. ctx cancellation is honored
 // between rows (pgx aborts the streaming query when ctx is done).
+//
+// # Whole-journal delivery — no per-spec topic filter (v1)
+//
+// Replay delivers the ENTIRE outbox journal regardless of topic/event type; it
+// is not filtered to a single projection's subscribed stream. This matches the
+// kernel contract (one shared ReplaySource serves every projection Coordinator)
+// and MemReplaySource. The rebuild path (Coordinator.replayPhase) therefore hands
+// every journal entry to the business Apply, so a projection whose journal mixes
+// heterogeneous streams must tolerate (ignore) events it did not subscribe to
+// during a rebuild — live delivery is already topic-filtered by the EventRouter.
+// Per-spec replay filtering is the deferred #1482 follow-up.
 func (s *PGProjectionReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(kout.Entry) error) error {
 	rows, err := s.db.Query(ctx, replayScanSQL, fromOffset)
 	if err != nil {
@@ -162,10 +173,11 @@ func scanReplayEntry(rows RowScanner) (kout.Entry, error) {
 // PGProjectionCursor is the production projection.Cursor backed by the outbox
 // journal. It holds the paired PGProjectionReplaySource and delegates position
 // resolution to it — the cursor declares NO SQL of its own, so the cursor and the
-// replay source read the identical seq column and can never drift. This is the
-// exactly-once foundation expressed structurally (single sanctioned seq-SQL
-// holder), stronger than a "both read the same column" convention. Mirrors
-// MemCursor wrapping MemReplaySource.
+// replay source read the identical seq column and can never drift. That position
+// agreement is the basis on which the Coordinator's exactly-once checkpoint
+// compare (pos <= checkpoint) is sound; expressing it structurally (single
+// sanctioned seq-SQL holder) is stronger than a "both read the same column"
+// convention. Mirrors MemCursor wrapping MemReplaySource.
 type PGProjectionCursor struct {
 	src *PGProjectionReplaySource
 }
@@ -189,6 +201,9 @@ func NewProjectionCursor(src *PGProjectionReplaySource) (*PGProjectionCursor, er
 // carries no ctx (frozen since PR-01), so a background context is used for the
 // single indexed lookup; it runs against the pool (no ambient tx), which is sound
 // because the entry's row was committed by its producer in a prior transaction.
+// Because the call cannot be canceled by the caller's ctx, operators should
+// bound it with a PG-side `statement_timeout`; the lookup is an indexed
+// primary-key read, so this is a backstop, not a hot path.
 func (c *PGProjectionCursor) Position(entry kout.Entry) (int64, error) {
 	return c.src.position(context.Background(), entry.ID())
 }

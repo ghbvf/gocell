@@ -7,10 +7,15 @@ import "github.com/ghbvf/gocell/kernel/outbox"
 //
 // # Position invariants (required of every implementation)
 //
-//  1. Monotonic (non-decreasing): within the same (cellID, projectionID) stream,
-//     Position must be non-decreasing across events delivered in order. If an event
-//     has already been applied, Position may return the same value again; the
-//     Coordinator's pos <= checkpoint guard handles idempotent re-delivery.
+//  1. Monotonic: within the same (cellID, projectionID) stream, Position is
+//     non-decreasing across events delivered in order. DISTINCT events MUST get
+//     STRICTLY INCREASING positions — if two distinct events shared a position,
+//     the Coordinator's pos <= checkpoint guard would silently skip the second
+//     after the first commits the checkpoint (a projection gap), so a coarser
+//     cursor is unsound. The ONLY valid equality is RE-DELIVERY of an
+//     already-applied event, which returns its same previously-assigned position;
+//     that guard handles idempotent re-delivery. (RunCursorConformance asserts
+//     strict increase across distinct seeded entries accordingly.)
 //
 //  2. 1-based: every valid event position is ≥ 1. The value 0 is reserved to mean
 //     "no checkpoint / cold start" (the default returned by CheckpointStore on first
