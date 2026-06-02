@@ -152,6 +152,61 @@ func TestReconcileElector_Conformance(t *testing.T) {
 	t.Run("Fencing", func(t *testing.T) { reconciletest.RunFencingConformance(t, factory2) })
 }
 
+// TestReconcileElector_ConstructorValidation covers the constructor guard
+// branches: nil client, nil cmdable, invalid namespace, and non-positive lease
+// duration each fail-fast before an elector is built.
+func TestReconcileElector_ConstructorValidation(t *testing.T) {
+	t.Run("nil_client", func(t *testing.T) {
+		_, err := NewRedisReconcileElector(nil, "reconcile", reconcileTestLeaseTTL, clock.Real())
+		require.Error(t, err)
+	})
+	t.Run("nil_cmdable", func(t *testing.T) {
+		_, err := newReconcileElectorFromCmdable(nil, "reconcile", reconcileTestLeaseTTL, clock.Real())
+		require.Error(t, err)
+	})
+	t.Run("invalid_namespace", func(t *testing.T) {
+		// uppercase is rejected by KeyNamespace.Validate
+		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "BadNS", reconcileTestLeaseTTL, clock.Real())
+		require.Error(t, err)
+	})
+	t.Run("nonpositive_lease", func(t *testing.T) {
+		_, err := newReconcileElectorFromCmdable(newReconcileMock(), "reconcile", 0, clock.Real())
+		require.Error(t, err)
+	})
+}
+
+// TestReconcileElector_EvalErrorPaths covers the I/O-error branches of
+// AcquireLease / RenewLease / ReleaseLease: a backend Eval failure surfaces as a
+// wrapped (non-sentinel) error from each method.
+func TestReconcileElector_EvalErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("redis down")
+
+	t.Run("acquire", func(t *testing.T) {
+		mock := newReconcileMock()
+		mock.evalErr = boom
+		e := mustElector(t, mock)
+		_, err := e.AcquireLease(ctx, "rid")
+		require.Error(t, err)
+		require.NotErrorIs(t, err, reconcile.ErrLeaseHeld, "I/O fault is not contention")
+	})
+	t.Run("renew", func(t *testing.T) {
+		mock := newReconcileMock()
+		mock.evalErr = boom
+		e := mustElector(t, mock)
+		err := e.RenewLease(ctx, reconcile.LeaseToken{ReconcilerID: "rid", HolderID: e.holderID})
+		require.Error(t, err)
+		require.NotErrorIs(t, err, reconcile.ErrReconcileLeaseLost, "I/O fault is not a clean lease-lost")
+	})
+	t.Run("release", func(t *testing.T) {
+		mock := newReconcileMock()
+		mock.evalErr = boom
+		e := mustElector(t, mock)
+		err := e.ReleaseLease(ctx, reconcile.LeaseToken{ReconcilerID: "rid", HolderID: e.holderID})
+		require.Error(t, err)
+	})
+}
+
 // TestReconcileElector_ContentionReportsLeaseHeld verifies a denied acquire maps
 // to reconcile.ErrLeaseHeld (logged at Debug by the Loop).
 func TestReconcileElector_ContentionReportsLeaseHeld(t *testing.T) {
