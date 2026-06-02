@@ -409,6 +409,14 @@ func (s *LedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, pa
        subject_id, tenant_id, session_id, correlation_id, occurred_at,
        timestamp, payload, prev_hash, hash
 FROM audit_entries WHERE namespace = `, ns)
+	// tenant_id is the isolation filter. The store treats it like the other
+	// predicates (empty = no filter); the security boundary lives in the
+	// auditquery HANDLER, which always sets filters.TenantID from the
+	// authenticated principal so a tenant-bearing caller only ever reads its own
+	// tenant's rows (epic #1337 PR-2a, replacing the PR-1 #1339 403 gate). The
+	// residual tenant-less case (no JWT tenant claim — a non-case post-PR-2a) is
+	// backstopped by DB-layer RLS (PR-3). See ledger.AuditFilters.TenantID.
+	b.AppendIf(filters.TenantID != "", `AND tenant_id = `, filters.TenantID)
 	b.AppendIf(filters.EventType != "", `AND event_type = `, filters.EventType)
 	b.AppendIf(filters.ActorID != "", `AND actor_id = `, filters.ActorID)
 	b.AppendIf(filters.SubjectID != "", `AND subject_id = `, filters.SubjectID)

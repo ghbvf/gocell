@@ -138,7 +138,6 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	}
 
 	principal := entry.Principal()
-	s.tripSingleTenantInvariant(logPrefix, entry, principal)
 
 	e := &ledger.Entry{
 		ID:            auditEntryIDPrefix + uuid.NewString(),
@@ -202,41 +201,6 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		slog.String("event_type", entry.EventType()),
 		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
-}
-
-// tripSingleTenantInvariant is the INV-SINGLE-TENANT-ONLY regression tripwire
-// (#1289, epic #1296).
-//
-// This is an OPERATIONAL tripwire, NOT a tenant-isolation security boundary.
-// As of the multi-tenancy epic PR-1 (#1339), the auth bridge DOES write
-// principal.TenantID from the JWT "tenant_id" claim (CTXKEYS-PRINCIPAL-WRITE-CALLER-01
-// now allowlists runtime/auth/middleware.go as a WithTenantID producer), so this
-// branch is no longer structurally dead: any audit-producing request carrying a
-// valid tenant claim reaches here with a non-empty TenantID. That is the intended
-// alarm for the PR-1→PR-2 window — multi-tenant identity now flows, but
-// tenant-scoped audit query filtering has NOT yet landed (PR-2), which is a
-// security-relevant gap. Trip loudly (Error, alertable) but DO NOT drop the
-// audit record: compliance evidence is never discarded (the caller continues to
-// Append). PR-2 removes this tripwire and replaces it with tenant-scoped query
-// filtering. It guards the persistence-reach path; CTXKEYS-PRINCIPAL-WRITE-CALLER-01
-// orthogonally guards the ctx-write path.
-//
-// Firing cadence: logs once PER event with a non-empty tenant. That is
-// intentional for the PR-1→PR-2 window — on a default deployment the gocell
-// issuer emits no tenant_id claim, so the branch stays cold; any firing means a
-// tenant-bearing token is in use before tenant-scoped audit filtering exists, a
-// real gap worth a per-event alert. tenant_id is an opaque, non-credential
-// identifier (observability.md), so logging its value server-side is safe and
-// aids #1296 debugging.
-func (s *Service) tripSingleTenantInvariant(logPrefix string, entry outbox.Entry, principal outbox.PrincipalMetadata) {
-	if principal.TenantID == "" {
-		return
-	}
-	s.logger.Error(logPrefix+": INV-SINGLE-TENANT-ONLY violated — non-empty principal.TenantID "+
-		"with no tenant-scoped audit query enforcement (epic #1296)",
-		slog.String("event_id", entry.ID()),
-		slog.String("event_type", entry.EventType()),
-		slog.String("tenant_id", string(principal.TenantID)))
 }
 
 // tsForLedger picks the audit entry Timestamp (ledger persistence / HMAC time)

@@ -23,8 +23,16 @@ type TailSnapshot struct {
 	EntryCount int64
 }
 
-// AuditFilters holds optional filter predicates for Store.Query.
-// Zero-value fields are treated as "no filter" (match all).
+// AuditFilters holds optional filter predicates for Store.Query. Zero-value
+// fields are treated as "no filter" (match all), including TenantID.
+//
+// Tenant isolation is NOT enforced at this generic store layer (so non-HTTP
+// callers — conformance suites, namespace-isolation tests, ops tooling — can
+// query tenant-agnostically). The isolation boundary lives in the auditquery
+// HTTP HANDLER, which always sets TenantID from the authenticated principal so a
+// tenant-bearing caller only ever reads its own tenant's rows (epic #1337 PR-2a,
+// replacing the PR-1 #1339 403 gate). DB-layer RLS (PR-3) is the backstop for
+// the residual tenant-less case.
 type AuditFilters struct {
 	// EventType filters by exact event type label. Empty means no filter.
 	EventType string
@@ -39,6 +47,14 @@ type AuditFilters struct {
 	// scoping the auditquery policy enforces, so it only ever narrows within the
 	// caller's own actions.
 	SubjectID string
+
+	// TenantID scopes the query to a single tenant boundary. Empty means no
+	// filter (like the other predicates). The auditquery handler always sets this
+	// from principal.TenantID so a tenant-bearing caller can only ever read its
+	// own tenant's audit trail (epic #1337 PR-2a) — that handler is the isolation
+	// boundary, not this generic store filter. DB-layer RLS (PR-3) is the
+	// defense-in-depth backstop for the residual tenant-less case.
+	TenantID string
 
 	// From filters entries with Timestamp >= From. Zero means no lower bound.
 	From time.Time

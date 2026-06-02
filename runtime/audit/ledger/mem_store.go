@@ -319,7 +319,14 @@ func contentFingerprint(e *Entry) string {
 }
 
 // matchesFilters reports whether e matches all non-zero filter predicates.
+// TenantID is matched like the others (empty = no filter), mirroring the PG
+// store's AppendIf predicate; the auditquery handler always sets it from the
+// authenticated principal, which is the actual isolation boundary. See
+// AuditFilters.TenantID.
 func matchesFilters(e *Entry, f AuditFilters) bool {
+	if f.TenantID != "" && e.TenantID != f.TenantID {
+		return false
+	}
 	if f.EventType != "" && e.EventType != f.EventType {
 		return false
 	}

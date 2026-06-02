@@ -119,11 +119,16 @@ func TestHttpAuditListV1Serve(t *testing.T) {
 //     safe to project (issue #1219).
 //   - ABSENT: sessionId and tenantId never appear on the wire, by VALUE or by
 //     KEY, even when the underlying ledger.Entry carries them. sessionId is a
-//     credential-adjacent token (pkg/redaction sensitive-key set); tenantId has
-//     no producer source on develop (multi-tenancy epic #1296). Asserting on the
-//     raw JSON (not the typed DTO) is deliberate: a future PR that adds the
-//     fields to ResponseDataItem would compile-pass but fail here. The audit-domain
-//     codegen funnel (contractgen) is the upstream Hard backstop: it rejects any
+//     credential-adjacent token (pkg/redaction sensitive-key set); tenantId now
+//     HAS a producer source (epic #1337 PR-2a) and the read path IS tenant-scoped
+//     (AuditFilters.TenantID), but a per-row tenantId is redundant — every
+//     returned row already belongs to the caller's own tenant — so it is
+//     deliberately not projected. The caller below carries the same tenant as the
+//     seeded row so the row survives the mandatory tenant scope and the
+//     value-leak assertion stays meaningful. Asserting on the raw JSON (not the
+//     typed DTO) is deliberate: a future PR that adds the fields to
+//     ResponseDataItem would compile-pass but fail here. The audit-domain codegen
+//     funnel (contractgen) is the upstream Hard backstop: it rejects any
 //     sensitive-key field name in an audit wire-out schema at generation time.
 func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
@@ -145,7 +150,15 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
-	req = req.WithContext(auth.TestContext("usr-actor", nil))
+	// Caller carries the same tenant as the seeded row so it survives the
+	// mandatory tenant scope (epic #1337 PR-2a) and the value-leak assertion below
+	// operates on a populated response.
+	req = req.WithContext(auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    "usr-actor",
+		TenantID:   "tenant-must-not-leak",
+		AuthMethod: "test",
+	}))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 

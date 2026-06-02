@@ -263,6 +263,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_Keyset_Pagination", func(t *testing.T) { runQueryKeysetPagination(t, factory) })
 	t.Run("Query_EmptySort_Rejected", func(t *testing.T) { runQueryEmptySortRejected(t, factory) })
 	t.Run("Query_InvalidCursor_Rejected", func(t *testing.T) { runQueryInvalidCursorRejected(t, factory) })
+	t.Run("Query_TenantIsolation", func(t *testing.T) { runQueryTenantIsolation(t, factory) })
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
 	t.Run("PrincipalFields_RoundTrip", func(t *testing.T) { RunPrincipalFieldsRoundTrip(t, factory, protocol) })
 }
@@ -872,6 +873,86 @@ func runQueryInvalidCursorRejected(t *testing.T, factory Factory) {
 	_, err := store.Query(context.Background(), ledger.AuditFilters{},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort(), CursorValues: []any{"not-a-timestamp", "some-id"}})
 	assertErrCode(t, err, errcode.ErrCursorInvalid)
+}
+
+// runQueryTenantIsolation locks the AuditFilters.TenantID predicate across both
+// backends (epic #1337 PR-2a): a non-empty TenantID returns ONLY that tenant's
+// rows (never another tenant's), proving cross-tenant isolation. An empty
+// TenantID is "no filter" (sees all) — at this generic store layer tenant is an
+// optional predicate; the actual isolation boundary is the auditquery handler,
+// which always sets TenantID from the authenticated principal (this subtest
+// asserts the store half of that contract). See AuditFilters.TenantID.
+func runQueryTenantIsolation(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	// Seed: 2 rows in tenant-a, 1 in tenant-b, 1 tenant-less. Same event type so
+	// only the tenant predicate distinguishes them.
+	seed := []struct {
+		eventID string
+		tenant  string
+	}{
+		{"ti-a1", "tenant-a"},
+		{"ti-a2", "tenant-a"},
+		{"ti-b1", "tenant-b"},
+		{"ti-none", ""},
+	}
+	for _, s := range seed {
+		e := &ledger.Entry{
+			EventID:   s.eventID,
+			EventType: "tenant.iso.test",
+			ActorID:   "actor",
+			TenantID:  s.tenant,
+			Timestamp: fc.Now(),
+			Payload:   []byte(`{}`),
+		}
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append %s: %v", s.eventID, err)
+		}
+	}
+
+	cases := []struct {
+		name    string
+		tenant  string
+		wantIDs []string
+	}{
+		{"tenant-a sees only its 2 rows", "tenant-a", []string{"ti-a1", "ti-a2"}},
+		{"tenant-b sees only its 1 row", "tenant-b", []string{"ti-b1"}},
+		// Empty TenantID is "no filter" at the store layer (sees all 4) — tenant
+		// isolation is the handler's job, not this generic predicate's.
+		{"empty tenant is no filter (sees all)", "", []string{"ti-a1", "ti-a2", "ti-b1", "ti-none"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertTenantScopedQuery(t, store, tc.tenant, tc.wantIDs)
+		})
+	}
+}
+
+// assertTenantScopedQuery runs a TenantID-filtered Query and asserts the result
+// set is exactly wantIDs (by EventID), so any cross-tenant row surfaces as a
+// failure. Extracted from runQueryTenantIsolation to keep that function's
+// cognitive complexity within budget.
+func assertTenantScopedQuery(t *testing.T, store ledger.Store, tenant string, wantIDs []string) {
+	t.Helper()
+	want := make(map[string]bool, len(wantIDs))
+	for _, id := range wantIDs {
+		want[id] = true
+	}
+	rows, err := store.Query(context.Background(),
+		ledger.AuditFilters{TenantID: tenant}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(tenant=%q): %v", tenant, err)
+	}
+	if len(rows) != len(wantIDs) {
+		t.Fatalf("Query(tenant=%q): got %d rows, want %d", tenant, len(rows), len(wantIDs))
+	}
+	for _, r := range rows {
+		if !want[r.EventID] {
+			t.Errorf("Query(tenant=%q): leaked cross-tenant row %q (tenant_id=%q)",
+				tenant, r.EventID, r.TenantID)
+		}
+	}
 }
 
 // runProtocolHashParity verifies that a Store's persisted entry.Hash matches
