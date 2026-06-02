@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -126,8 +127,12 @@ func NewService(
 // emitFn carries the per-caller emit logic with a const topic; pushing the
 // topic out of this function lets EMIT-DECL-COVER-01's literal-site scan see
 // each caller's const, rather than an opaque `topic string` parameter.
+//
+// tid scopes the credential invalidation to the correct tenant. Callers derive
+// it from the target user (GetByID by-PK carve-out) before calling persistChange.
 func (s *Service) persistChange(
 	ctx context.Context,
+	tid tenant.TenantID,
 	writeFn func(ctx context.Context) (changed bool, err error),
 	evt dto.RoleChangedEvent,
 	emitFn func(ctx context.Context, evt dto.RoleChangedEvent) error,
@@ -143,7 +148,7 @@ func (s *Service) persistChange(
 			return nil
 		}
 		if callFunnel {
-			if err := s.invalidator.Apply(txCtx, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
+			if err := s.invalidator.Apply(txCtx, tid, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
 				return fmt.Errorf("rbac-assign: invalidate credentials: %w", err)
 			}
 		}
@@ -188,7 +193,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	emitFn := func(txCtx context.Context, evt dto.RoleChangedEvent) error {
 		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicRoleAssigned, evt)
 	}
-	changed, err := s.persistChange(ctx, writeFn, evt, emitFn, false)
+	changed, err := s.persistChange(ctx, tid, writeFn, evt, emitFn, false)
 	if err != nil {
 		return err
 	}
@@ -235,7 +240,7 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	emitFn := func(txCtx context.Context, evt dto.RoleChangedEvent) error {
 		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicRoleRevoked, evt)
 	}
-	changed, err := s.persistChange(ctx, writeFn, evt, emitFn, true)
+	changed, err := s.persistChange(ctx, tid, writeFn, evt, emitFn, true)
 	if err != nil {
 		return err
 	}

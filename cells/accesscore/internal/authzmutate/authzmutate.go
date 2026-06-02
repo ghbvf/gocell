@@ -84,7 +84,7 @@ func (a *Mutator) ApplyInTx(
 		return fmt.Errorf("authzmutate.ApplyInTx: persist: %w", err)
 	}
 	if m.Invalidates() {
-		if err := a.inv.Apply(txCtx, userID, m.Event()); err != nil {
+		if err := a.inv.Apply(txCtx, tid, userID, m.Event()); err != nil {
 			return fmt.Errorf("authzmutate.ApplyInTx: invalidate credentials: %w", err)
 		}
 	}

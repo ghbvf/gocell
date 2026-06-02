@@ -214,7 +214,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 		}
 		go func(newPw string) {
 			defer wg.Done()
-			_, cerr := svc.ChangePassword(context.Background(), ChangePasswordInput{
+			_, cerr := svc.ChangePassword(withTenant(context.Background()), ChangePasswordInput{
 				UserID:      user.ID,
 				OldPassword: oldPassword,
 				NewPassword: newPw,

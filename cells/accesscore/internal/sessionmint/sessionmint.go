@@ -104,6 +104,7 @@ func MintAccess(ctx context.Context, clk clock.Clock, deps Deps, req Request) (R
 		SessionID:             req.SessionID,
 		PasswordResetRequired: req.PasswordResetRequired,
 		JTI:                   jti,
+		TenantID:              string(req.TenantID),
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("sessionmint: issue access token: %w", err)

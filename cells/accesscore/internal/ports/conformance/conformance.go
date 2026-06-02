@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
@@ -71,7 +72,8 @@ const exampleEmailDomain = "@example.com"
 var testTenantID = func() tenant.TenantID {
 	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
 	if err != nil {
-		panic("conformance: invalid testTenantID: " + err.Error())
+		panic(panicregister.Approved("conformance-test-tenant-id",
+			errcode.Assertion("conformance: invalid testTenantID: %v", err)))
 	}
 	return t
 }()
@@ -82,7 +84,8 @@ var testTenantID = func() tenant.TenantID {
 var testTenantIDOther = func() tenant.TenantID {
 	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000002")
 	if err != nil {
-		panic("conformance: invalid testTenantIDOther: " + err.Error())
+		panic(panicregister.Approved("conformance-test-tenant-id-other",
+			errcode.Assertion("conformance: invalid testTenantIDOther: %v", err)))
 	}
 	return t
 }()

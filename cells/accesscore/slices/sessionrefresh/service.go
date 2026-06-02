@@ -387,10 +387,27 @@ func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessi
 		panic(panicregister.Approved("sessionrefresh-reuse-empty-subject",
 			errcode.Assertion("sessionrefresh.handleReuseDetected: refresh.Store violated contract — returned ErrReused with empty SubjectID")))
 	}
+	// Derive the tenant from the user row. The refresh endpoint is Public (no
+	// JWT), so there is no pre-auth ctx tenant. GetByID is the by-PK
+	// tenant-deriving carve-out (#1337 PR-2a); it returns the row regardless of
+	// tenant and the TenantID stamped at Create time is the authoritative source.
+	// On any error (user not found, infra outage) fail-closed to 401: the reuse
+	// attack is confirmed regardless, and surfacing a different status code would
+	// leak side-channel information.
+	userForTenant, err := s.userRepo.GetByID(outerCtx, subjectID)
+	if err != nil {
+		s.logger.Error("session-refresh: reuse cascade: failed to fetch user for tenant derivation (fail-closed to 401)",
+			slog.Any("error", err),
+			slog.String("stage", stage),
+			slog.String("subject_id", subjectID),
+			slog.String("session_id", sessionID))
+		return authRefreshRejected()
+	}
+	reuseTenantID := userForTenant.TenantID
 	detachedCtx, cancel := ctxutil.WithDetachedTimeout(outerCtx, reuseCascadeTimeout)
 	defer cancel()
 	if applyErr := s.txRunner.RunInTx(detachedCtx, func(txCtx context.Context) error {
-		return s.invalidator.Apply(txCtx, subjectID, session.CredentialEventRefreshReuse)
+		return s.invalidator.Apply(txCtx, reuseTenantID, subjectID, session.CredentialEventRefreshReuse)
 	}); applyErr != nil {
 		// Reuse has already been identified as an attack — the wire response
 		// must be uniform 401 regardless of whether the cascade infrastructure

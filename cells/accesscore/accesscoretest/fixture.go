@@ -9,6 +9,8 @@ import (
 	accesscoremem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -77,7 +79,8 @@ type SeededRoleView struct {
 var DefaultFixtureTenantID = func() tenant.TenantID {
 	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
 	if err != nil {
-		panic("accesscoretest: invalid DefaultFixtureTenantID: " + err.Error())
+		panic(panicregister.Approved("accesscoretest-fixture-tenant",
+			errcode.Assertion("accesscoretest: invalid DefaultFixtureTenantID: %v", err)))
 	}
 	return t
 }()

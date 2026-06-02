@@ -583,6 +583,7 @@ func postSetupAdmin(base string, body *bytes.Reader) (*http.Response, error) {
 	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/setup/admin", body)
 	req.SetBasicAuth(bootstrapUsername, bootstrapPassword)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", l2TestTenantID)
 	return httpClient.Do(req)
 }
 

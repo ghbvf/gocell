@@ -1856,17 +1856,19 @@ func TestRefresh_StaleEpoch_CascadeRevokesSessionOnly(t *testing.T) {
 // Apply was triggered with the correct arguments.
 type spyInvalidator struct {
 	calls []struct {
+		tenantID  tenant.TenantID
 		subjectID string
 		event     session.CredentialEvent
 	}
 	err error
 }
 
-func (s *spyInvalidator) Apply(_ context.Context, subjectID string, event session.CredentialEvent) error {
+func (s *spyInvalidator) Apply(_ context.Context, tid tenant.TenantID, subjectID string, event session.CredentialEvent) error {
 	s.calls = append(s.calls, struct {
+		tenantID  tenant.TenantID
 		subjectID string
 		event     session.CredentialEvent
-	}{subjectID, event})
+	}{tid, subjectID, event})
 	return s.err
 }
 
@@ -2068,7 +2070,7 @@ type contextCapturingInvalidator struct {
 	err         error
 }
 
-func (s *contextCapturingInvalidator) Apply(ctx context.Context, _ string, _ session.CredentialEvent) error {
+func (s *contextCapturingInvalidator) Apply(ctx context.Context, _ tenant.TenantID, _ string, _ session.CredentialEvent) error {
 	s.capturedCtx = ctx
 	return s.err
 }

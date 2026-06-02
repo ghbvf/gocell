@@ -11,7 +11,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
@@ -19,8 +18,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
-// testCtx is a context carrying a valid tenant so Apply's tenant.FromContext succeeds.
-var testCtx = ctxkeys.WithTenantID(context.Background(), "00000000-0000-0000-0000-000000000001")
+var (
+	// testCtx is a plain background context; tenant is now passed as an explicit param.
+	testCtx = context.Background()
+	// testTenantID is the tenant used in all Apply tests.
+	testTenantID, _ = tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+)
 
 // ---------------------------------------------------------------------------
 // Type-safe stubs (follow fake-repo pattern from sessionmint_test.go)
@@ -171,7 +174,7 @@ func TestApply_HappyPath(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(testCtx, "subj-1", session.CredentialEventPasswordReset)
+	err = inv.Apply(testCtx, testTenantID, "subj-1", session.CredentialEventPasswordReset)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"subj-1"}, users.bumpCallsFor, "BumpAuthzEpoch must be called once")
@@ -188,7 +191,7 @@ func TestApply_UserRepoError_ShortCircuits(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(testCtx, "subj-1", session.CredentialEventLock)
+	err = inv.Apply(testCtx, testTenantID, "subj-1", session.CredentialEventLock)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bump authz_epoch", "error must mention bump authz_epoch")
 	assert.ErrorIs(t, err, bumpErr, "original error must be in chain")
@@ -205,7 +208,7 @@ func TestApply_SessionStoreError(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(testCtx, "subj-2", session.CredentialEventDelete)
+	err = inv.Apply(testCtx, testTenantID, "subj-2", session.CredentialEventDelete)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "revoke sessions", "error must mention revoke sessions")
 	assert.ErrorIs(t, err, sessErr)
@@ -223,7 +226,7 @@ func TestApply_RefreshStoreError(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(testCtx, "subj-3", session.CredentialEventRoleRevoke)
+	err = inv.Apply(testCtx, testTenantID, "subj-3", session.CredentialEventRoleRevoke)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "revoke refresh chain", "error must mention revoke refresh chain")
 	assert.ErrorIs(t, err, refErr)

@@ -463,9 +463,9 @@ func TestUserRepo_Create_RejectsInvalidStatus_DBCheck(t *testing.T) {
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err := pool.DB().Exec(ctx, `
-		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		INSERT INTO users (id, tenant_id, username, email, password_hash, password_reset_required,
 		                   status, creation_source, authz_epoch, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, false, 'bogus', 'identity', 1, $5, $5)`,
+		VALUES ($1, '00000000-0000-0000-0000-000000000001', $2, $3, $4, false, 'bogus', 'identity', 1, $5, $5)`,
 		id, "check_status_user", "check_status@example.com", "$2a$12$fakehash", now)
 
 	require.Error(t, err, "INSERT with invalid status must be rejected by DB CHECK constraint")
@@ -488,9 +488,9 @@ func TestUserRepo_Create_RejectsInvalidCreationSource_DBCheck(t *testing.T) {
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err := pool.DB().Exec(ctx, `
-		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		INSERT INTO users (id, tenant_id, username, email, password_hash, password_reset_required,
 		                   status, creation_source, authz_epoch, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, false, 'active', 'bogus', 1, $5, $5)`,
+		VALUES ($1, '00000000-0000-0000-0000-000000000001', $2, $3, $4, false, 'active', 'bogus', 1, $5, $5)`,
 		id, "check_source_user", "check_source@example.com", "$2a$12$fakehash", now)
 
 	require.Error(t, err, "INSERT with invalid creation_source must be rejected by DB CHECK constraint")
@@ -525,9 +525,9 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err = pool.DB().Exec(ctx, `
-		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		INSERT INTO users (id, tenant_id, username, email, password_hash, password_reset_required,
 		                   status, creation_source, authz_epoch, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, false, 'invalid_status', 'identity', 0, $5, $5)`,
+		VALUES ($1, '00000000-0000-0000-0000-000000000001', $2, $3, $4, false, 'invalid_status', 'identity', 0, $5, $5)`,
 		id, "scan_invalid_status_user", "scan_invalid@example.com", "$2a$12$fakehash", now)
 	require.NoError(t, err, "INSERT with constraints dropped must succeed")
 
@@ -563,9 +563,9 @@ func TestUserRepo_Scan_RejectsInvalidCreationSource(t *testing.T) {
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err = pool.DB().Exec(ctx, `
-		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		INSERT INTO users (id, tenant_id, username, email, password_hash, password_reset_required,
 		                   status, creation_source, authz_epoch, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, false, 'active', 'bogus_source', 0, $5, $5)`,
+		VALUES ($1, '00000000-0000-0000-0000-000000000001', $2, $3, $4, false, 'active', 'bogus_source', 0, $5, $5)`,
 		id, "scan_invalid_source_user", "scan_invalid_source@example.com", "$2a$12$fakehash", now)
 	require.NoError(t, err)
 
@@ -594,9 +594,9 @@ func TestUserRepo_GetByUsername_RejectsInvalidStatus(t *testing.T) {
 	username := "scan_invalid_byname"
 	now := time.Now().UTC()
 	_, err = pool.DB().Exec(ctx, `
-		INSERT INTO users (id, username, email, password_hash, password_reset_required,
+		INSERT INTO users (id, tenant_id, username, email, password_hash, password_reset_required,
 		                   status, creation_source, authz_epoch, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, false, 'bogus_status', 'identity', 0, $5, $5)`,
+		VALUES ($1, '00000000-0000-0000-0000-000000000001', $2, $3, $4, false, 'bogus_status', 'identity', 0, $5, $5)`,
 		id, username, "scan_invalid_byname@example.com", "$2a$12$fakehash", now)
 	require.NoError(t, err)
 

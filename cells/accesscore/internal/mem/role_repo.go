@@ -143,7 +143,7 @@ func (r *RoleRepository) AssignToUser(ctx context.Context, t tenant.TenantID, us
 	}
 
 	// F4: verify user belongs to this tenant before assigning. Mem has no FK —
-	// must check explicitly to match PG behaviour. Returns not-found (not
+	// must check explicitly to match PG behavior. Returns not-found (not
 	// forbidden) to avoid leaking cross-tenant user existence.
 	if _, ok := r.store.userByIDInTenant(userID, string(t)); !ok {
 		return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",

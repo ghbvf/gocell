@@ -750,9 +750,13 @@ func (r *PGUserRepo) UpdatePassword(
 		if errors.Is(err, pgx.ErrNoRows) {
 			// 0 rows: re-read to disambiguate absent / inactive / version mismatch
 			// (the WHERE clause guards tenant_id, id, status='active', and password_version).
-			cur, gerr := r.GetByID(ctx, userID)
+			// Tenant-scoped re-read: a cross-tenant id must collapse to
+			// ErrAuthUserNotFound (IDOR-safe), not leak a version conflict — the
+			// tenant-less GetByID would find the foreign-tenant row and misreport
+			// a CAS conflict.
+			cur, gerr := r.GetByIDInTenant(ctx, t, userID)
 			if gerr != nil {
-				return 0, gerr // user does not exist
+				return 0, gerr // user absent in this tenant (or infra error)
 			}
 			// Inactive before version (#1017 F1): a concurrent freeze is a 403,
 			// even if the version also advanced.

@@ -205,6 +205,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", body)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", string(testTenantID))
 	r.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusCreated, rec.Code,
@@ -340,7 +341,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 // and runtime/eventbus packages. Here we test the application-layer contract: that
 // rbacassign produces the right outbox entry and the consumer handles it correctly.
 func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
-	ctx := context.Background()
+	ctx := withTenant(context.Background())
 
 	// Shared repos (simulates cell's single repo wiring).
 	store := mem.NewStore(clock.Real())
@@ -470,10 +471,12 @@ func (w *rbacStubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
 }
 
 // rbacStubTxRunner executes fn directly (no real transaction), simulating in-memory behaviour.
+// The parent context must be forwarded so that tenant and other ctx-values
+// (including ctxkeys.TenantID written by withTenant) are visible inside fn.
 type rbacStubTxRunner struct{}
 
-func (rbacStubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
+func (rbacStubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
 // Compile-time proof these tests hit the real slices (not stubs).

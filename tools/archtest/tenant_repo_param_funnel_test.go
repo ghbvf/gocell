@@ -118,8 +118,12 @@ import (
 )
 
 const (
-	tenantPkgPath         = "github.com/ghbvf/gocell/pkg/tenant"
-	accesscorePortsPkg    = "github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01) so a
+	// module rename updates exactly one place — never a bare literal.
+	tenantPkgPath      = PlatformModulePath + "/pkg/tenant"
+	accesscorePortsPkg = PlatformModulePath + "/cells/accesscore/internal/ports"
+	// tenantRepoParamFixPkg is a relative load path for go/packages — NOT a
+	// platform import path — so it is intentionally not derived from PlatformModulePath.
 	tenantRepoParamFixPkg = "./tools/archtest/internal/tenantrepoparamfixture"
 )
 

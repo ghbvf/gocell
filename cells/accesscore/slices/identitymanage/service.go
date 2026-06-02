@@ -627,7 +627,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		}
 		// Bump authz_epoch + revoke sessions + revoke refresh chains atomically.
 		// Routed through funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
-		if err := s.invalidator.Apply(txCtx, id, session.CredentialEventDelete); err != nil {
+		if err := s.invalidator.Apply(txCtx, tid, id, session.CredentialEventDelete); err != nil {
 			return fmt.Errorf("identity-manage: delete invalidate credentials: %w", err)
 		}
 		if err := s.repo.Delete(txCtx, tid, id); err != nil {
@@ -971,7 +971,7 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	// Bump authz_epoch + cascade revocations inside the same tx so that no
 	// old session survives the password change. Routed through funnel
 	// (CREDENTIAL-INVALIDATE-FUNNEL-01).
-	if err := s.invalidator.Apply(txCtx, user.ID, session.CredentialEventPasswordReset); err != nil {
+	if err := s.invalidator.Apply(txCtx, tid, user.ID, session.CredentialEventPasswordReset); err != nil {
 		return "", fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
 	}
 

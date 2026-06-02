@@ -851,7 +851,7 @@ func (r *freezeAfterReadRepo) GetByID(ctx context.Context, id string) (*domain.U
 	return u, err // stale active snapshot
 }
 
-// GetByIDInTenant mirrors the GetByID spy behaviour for the changePasswordInTx
+// GetByIDInTenant mirrors the GetByID spy behavior for the changePasswordInTx
 // path which now uses GetByIDInTenant (F2). Freeze-after-read semantics are
 // identical: the caller gets a stale active snapshot and the write guard rejects.
 func (r *freezeAfterReadRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {

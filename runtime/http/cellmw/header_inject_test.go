@@ -10,9 +10,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
 
-// contextKey is a package-local context key for testing header injection.
-type contextKey struct{}
-
 // --- stub mux implementations ---
 
 // stubRouteHandler is a minimal kcell.RouteHandler — only Handle.
@@ -173,9 +170,9 @@ func TestHeaderInjectMux_DeclareHTTPContract_noop(t *testing.T) {
 // *HeaderInjectMux satisfies RouteHandler + Prefixer + AuthRouteDeclarer +
 // HTTPContractDeclarer.
 var (
-	_ kcell.RouteHandler      = (*cellmw.HeaderInjectMux)(nil)
-	_ kcell.Prefixer          = (*cellmw.HeaderInjectMux)(nil)
-	_ kcell.AuthRouteDeclarer = (*cellmw.HeaderInjectMux)(nil)
+	_ kcell.RouteHandler         = (*cellmw.HeaderInjectMux)(nil)
+	_ kcell.Prefixer             = (*cellmw.HeaderInjectMux)(nil)
+	_ kcell.AuthRouteDeclarer    = (*cellmw.HeaderInjectMux)(nil)
 	_ kcell.HTTPContractDeclarer = (*cellmw.HeaderInjectMux)(nil)
 )
 
