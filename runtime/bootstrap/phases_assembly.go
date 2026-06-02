@@ -99,6 +99,9 @@ func (b *Bootstrap) validateNilDependencySentinels() error {
 	if b.rateLimiterNil {
 		return fmt.Errorf("bootstrap: rate limiter must not be nil in WithRateLimiter")
 	}
+	if b.idempotencyStoreNil {
+		return fmt.Errorf("bootstrap: idempotency store must not be nil in WithIdempotencyStore")
+	}
 	if b.grpcServerNil {
 		return errcode.New(errcode.KindInternal, errcode.ErrGRPCServerMissing,
 			"bootstrap: gRPC server must not be nil in WithGRPCListener; "+

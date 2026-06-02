@@ -68,8 +68,8 @@ func (*module) ID() string { return "configcore" }
 // Provide resolves all configcore-specific dependencies and returns the
 // constructed cell, bootstrap options, and provisional resources.
 func (m *module) Provide(
-	_ context.Context, shared *composition.SharedDeps, _ composition.ModuleExports,
-) (cell.Cell, composition.ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	_ context.Context, shared *composition.SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// 1. Cursor codec.
 	cfgPrimary, cfgPrevious := cellsecrets.LoadCursorKeys("CONFIGCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
@@ -82,14 +82,14 @@ func (m *module) Provide(
 		Label:       "config",
 	})
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
+		return nil, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
 	}
 
 	// 2. KeyProvider (test override OR cmd-supplied via SharedDeps).
 	kp := m.resolveKeyProvider(shared)
 	vt, err := resolveValueTransformer(kp, shared.Topology.StorageBackend() == "postgres")
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// 3. Stale-cipher increment callback (supplied by cmd via SharedDeps).
@@ -110,13 +110,13 @@ func (m *module) Provide(
 		},
 	})
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// 5. CAS protocol (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest).
 	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	baseOpts := []configcell.Option{
@@ -130,7 +130,7 @@ func (m *module) Provide(
 	c := configcell.NewConfigCore(shared.Clock, baseOpts...)
 
 	builtCell, opts, res := buildConfigCoreResult(c, kp, modResult)
-	return builtCell, composition.ModuleExports{}, opts, res, nil
+	return builtCell, opts, res, nil
 }
 
 // resolveKeyProvider returns the test override when set, otherwise uses the

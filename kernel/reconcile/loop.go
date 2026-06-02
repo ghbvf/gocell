@@ -3,9 +3,11 @@ package reconcile
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/redaction"
@@ -42,14 +44,35 @@ const (
 	// requeue call is sufficient since senders block on the channel write; a
 	// small buffer reduces lock contention under bursts.
 	addChBuffer = 256
+	// defaultRenewInterval is the renew-cadence floor used when neither an
+	// explicit RenewInterval nor a positive token TTL is available. 5s ≈ 15s/3
+	// mirrors client-go leaderelection (LeaseDuration 15s, RenewDeadline 10s).
+	// ref: kubernetes/client-go tools/leaderelection/leaderelection.go
+	defaultRenewInterval = 5 * time.Second
+	// leaderRetryPeriod is how long leaderManage waits after a failed/contended
+	// AcquireLease before retrying (follower poll). It bounds the graceful-handoff
+	// RTO: after a leader's ReleaseLease frees the lease, a follower acquires on its
+	// next poll, so this is the SC-004 "graceful shutdown → follower P99 ≤ 1s" knob
+	// (PR-A6 review C5/F8). 1s (shorter than client-go's 2s RetryPeriod) honors that
+	// ≤1s promise; crash failover is separately bounded by LeaseDuration + this poll.
+	// ref: kubernetes/client-go tools/leaderelection/leaderelection.go (RetryPeriod)
+	leaderRetryPeriod = 1 * time.Second
+	// leaseReleaseTimeout bounds the best-effort ReleaseLease attempt on shutdown
+	// so a hung backend cannot stall Stop; the lease then expires on its TTL.
+	leaseReleaseTimeout = 5 * time.Second
+	// renewIntervalDivisor derives the default renew cadence as TTL/3 (mirrors the
+	// client-go 15s/5s ratio). Named so the literal never appears inside a
+	// Duration-typed expression (PROD-DURATION-CONST-01).
+	renewIntervalDivisor = 3
 )
 
 // controlPlaneClock is the sealed, real-only clock for control-plane scheduling
 // in kernel/reconcile. It is an empty package-private struct: no package outside
 // kernel/reconcile can name, construct, or substitute it, so "drive the Loop's
 // probe / requeue timers, or its duration measurement, with a non-real (e.g.
-// fake) clock" is unrepresentable. Its three methods are the sole sanctioned
-// sites for stdlib time.NewTimer / time.Now in this package.
+// fake) clock" is unrepresentable. Its four methods are the sole sanctioned
+// sites for stdlib time.NewTimer / time.NewTicker / time.Now in this package;
+// newRenewTicker handles the lease renew cadence ticker.
 //
 // kernel/reconcile is a sanctioned control-plane host alongside runtime/command:
 // PROD-CLOCK-INJECTION-01's path gate accepts both, and the (method, callee)
@@ -85,6 +108,16 @@ func (controlPlaneClock) newRequeueTimer(d time.Duration) *time.Timer {
 // time — Reconcilers source their own business clock).
 func (controlPlaneClock) now() time.Time {
 	return time.Now()
+}
+
+// newRenewTicker creates a real-time ticker for the leader lease renew cadence.
+// Lease renewal is control-plane scheduling: a frozen fake clock with no Advance
+// would freeze renewal and let the lease lapse, so it must use real wall time
+// (distinct from TickerTrigger's injected business clock). The (newRenewTicker,
+// time.NewTicker) pair is registered in PROD-CLOCK-INJECTION-01's
+// exactSanctionedTimeCalls map (RECONCILE-LOOP-CLOCK-CARVEOUT-01).
+func (controlPlaneClock) newRenewTicker(d time.Duration) *time.Ticker {
+	return time.NewTicker(d)
 }
 
 // reconcilerReadinessChecker is the optional no-side-effect readiness contract a
@@ -201,9 +234,36 @@ type Loop struct {
 	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
 	MaxDelay time.Duration
 
+	// Leader, when non-nil, gates the WHOLE loop: only the lease holder dispatches
+	// Reconcile; a follower holds the worker pool idle and reconcile_leader at 0
+	// until it wins the lease. nil = single-process mode (always leader, Epoch 0,
+	// no fencing). See leader.go — leader election is NOT fencing; cross-replica
+	// correctness comes from FencedRepo + LeaseToken.Epoch, not the lease.
+	Leader LeaderElector
+	// FencedRepo, when non-nil, is the consumer's epoch-aware write seam. The Loop
+	// injects a per-Reconcile epoch-bound FencedWriter (bound to the live lease's
+	// Epoch) into each Reconcile's ctx; the reconciler reads it via
+	// FencedWriterFrom. nil = no fenced write surface (single-process / no consumer
+	// repo). See fenced.go.
+	FencedRepo FencedRepository
+	// RenewInterval optionally overrides the lease renew cadence (Leader != nil).
+	// Zero → the Loop derives it from the acquired token as
+	// (ExpiresAt-AcquiredAt)/3 (clamped to a sane floor), so it adapts to whatever
+	// TTL the elector adapter is configured with. The LeaseToken TTL itself is
+	// owned by the elector (AcquireLease takes no duration — ADR §3.4), not the
+	// Loop. An explicit value MUST be shorter than the elector's TTL.
+	// Setting RenewInterval >= the elector's lease TTL causes spurious
+	// ErrReconcileLeaseLost; prefer the default (derived as TTL/3).
+	RenewInterval time.Duration
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+	// currentLease holds the live LeaseToken while this replica is the leader
+	// (nil otherwise). process() reads its Epoch via currentEpoch() to mint the
+	// per-Reconcile FencedWriter. Atomic so the worker pool reads it without
+	// taking l.mu; the leaderManage goroutine is the sole writer.
+	currentLease atomic.Pointer[LeaseToken]
 	// gen is the run generation, bumped under mu on each Start. Each run's
 	// done-watcher captures its generation and only writes the leader gauge /
 	// clears state if it is still the active generation — so a slow watcher from
@@ -269,6 +329,16 @@ func (l *Loop) preStartValidate() error {
 	if l.BaseDelay > 0 && l.MaxDelay > 0 && l.BaseDelay > l.MaxDelay {
 		return fmt.Errorf("reconcile: BaseDelay (%s) must not exceed MaxDelay (%s)", l.BaseDelay, l.MaxDelay)
 	}
+	// Typed-nil fail-fast (PR-A6 review C5/F11): a typed-nil interface stored in
+	// Leader/FencedRepo is != nil, so it would slip past the leader==nil mode gate
+	// and panic inside leaderManage / process (a goroutine) rather than at Start.
+	// Surface it here so a misconstructed Loop fails at OnStart (bootstrap rolls back).
+	if l.Leader != nil && validation.IsNilInterface(l.Leader) {
+		return fmt.Errorf("reconcile: Loop.Leader is a typed-nil LeaderElector; leave it nil for single-process mode")
+	}
+	if l.FencedRepo != nil && validation.IsNilInterface(l.FencedRepo) {
+		return fmt.Errorf("reconcile: Loop.FencedRepo is a typed-nil FencedRepository; leave it nil when no fenced write surface is wired")
+	}
 	return l.Metrics.preflight(l.reconcilerID())
 }
 
@@ -283,43 +353,21 @@ func (l *Loop) start(ownerCtx context.Context) error {
 	l.gen++
 	gen := l.gen
 
-	// Initialize per-run entity state.
-	l.entityMu.Lock()
-	l.processing = make(map[string]bool)
-	l.dirty = make(map[string]Request)
-	l.entityMu.Unlock()
-
 	runCtx, cancel := context.WithCancel(ownerCtx)
-	queue := make(chan Request, queueBuffer)
-	addCh := make(chan waitingItem, addChBuffer)
-	// cancelCh carries EntityIDs whose pending requeue must be removed from the
-	// delaying queue (permanent dead-letter). Same buffer/lifecycle as addCh.
-	cancelCh := make(chan string, addChBuffer)
 	ready := make(chan struct{})
 	var readyOnce sync.Once
 	var wg sync.WaitGroup
 
-	// Backoff state for this run.
-	backoff := newEntityBackoff(l.BaseDelay, l.MaxDelay)
-
-	workers := l.maxConcurrent()
-	for i := 0; i < workers; i++ {
+	if l.Leader == nil {
+		// Single-process mode: spawn the active work directly under runCtx (the A3
+		// behavior, preserved verbatim — always leader, Epoch 0, no fencing).
+		l.spawnActive(runCtx, &wg, &readyOnce, ready)
+	} else {
+		// Leader-elect mode: one manager goroutine acquires/renews the lease and
+		// runs the active work under a per-term lease-scoped ctx.
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			readyOnce.Do(func() { close(ready) }) // first worker confirms the pool is live
-			l.runWorker(runCtx, queue, addCh, cancelCh, backoff)
-		}()
+		go l.leaderManage(runCtx, gen, &wg, &readyOnce, ready)
 	}
-	if l.Source != nil {
-		wg.Add(1)
-		go l.feedFromSource(runCtx, queue, &wg)
-	}
-
-	// F6: single shared delaying queue — ONE goroutine, ONE timer.
-	// ref: kubernetes/client-go util/workqueue/delaying_queue.go
-	wg.Add(1)
-	go l.waitingLoop(runCtx, addCh, cancelCh, queue, &wg)
 
 	done := make(chan struct{})
 	//nolint:gosec // G118: watchDrain resets the leader gauge after the run has
@@ -338,14 +386,256 @@ func (l *Loop) start(ownerCtx context.Context) error {
 	// hold it at 0). This write is under l.mu (held for the whole Start body), so
 	// it strictly precedes this run's watchDrain reset to 0, which can only
 	// acquire l.mu after Start returns — closing the #1292 r2 ordering race.
+	//
+	// In leader-elect mode the gauge is owned by leaderManage (set 1 on acquire,
+	// 0 on loss/drain), so Start does NOT raise it here — this replica may be a
+	// follower (gauge stays 0 until it wins the lease).
 	if l.cancel != nil {
-		l.Metrics.setLeader(runCtx, l.reconcilerID(), 1)
+		if l.Leader == nil {
+			l.Metrics.setLeader(runCtx, l.reconcilerID(), 1)
+		}
 		l.logger().Info("reconcile: loop started",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()),
-			slog.Int("workers", workers))
+			slog.Bool("leader_elect", l.Leader != nil))
 	}
 	return nil
+}
+
+// spawnActive creates this term's work channels + per-term entity state and
+// launches the worker pool, the optional Source feeder, and the shared delaying
+// queue under ctx, all tracked by wg. It (re)initializes processing/dirty and a
+// fresh backoff so each leadership term starts clean. In single-process mode it
+// runs once under runCtx; in leader-elect mode runLeaseTerm calls it once per
+// acquired lease term under a lease-scoped ctx (the previous term's goroutines
+// are fully drained via leaseWG.Wait before re-init, so the map reset is race-free).
+//
+// readyOnce/readyCh signal "first worker live". In single-process mode this is
+// Start's probe; in leader-elect mode leaderManage fires Start's probe itself and
+// passes a throwaway per-term ready here.
+func (l *Loop) spawnActive(ctx context.Context, wg *sync.WaitGroup, readyOnce *sync.Once, readyCh chan struct{}) {
+	l.entityMu.Lock()
+	l.processing = make(map[string]bool)
+	l.dirty = make(map[string]Request)
+	l.entityMu.Unlock()
+
+	queue := make(chan Request, queueBuffer)
+	addCh := make(chan waitingItem, addChBuffer)
+	// cancelCh carries EntityIDs whose pending requeue must be removed from the
+	// delaying queue (permanent dead-letter). Same buffer/lifecycle as addCh.
+	cancelCh := make(chan string, addChBuffer)
+	backoff := newEntityBackoff(l.BaseDelay, l.MaxDelay)
+
+	workers := l.maxConcurrent()
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			readyOnce.Do(func() { close(readyCh) }) // first worker confirms the pool is live
+			l.runWorker(ctx, queue, addCh, cancelCh, backoff)
+		}()
+	}
+	if l.Source != nil {
+		wg.Add(1)
+		go l.feedFromSource(ctx, queue, wg)
+	}
+
+	// F6: single shared delaying queue — ONE goroutine, ONE timer.
+	// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+	wg.Add(1)
+	go l.waitingLoop(ctx, addCh, cancelCh, queue, wg)
+}
+
+// leaderManage is the whole-loop leader-election driver (Leader != nil). It fires
+// Start's readiness probe immediately — a follower has no workers, so Start must
+// not block on one — then loops: acquire lease → run one lease term → repeat,
+// until runCtx is canceled. Fail-closed: any AcquireLease error means "not the
+// leader", so it does NOT dispatch and retries after leaderRetryPeriod.
+//
+// ref: kubernetes/client-go tools/leaderelection/leaderelection.go (acquire/renew
+// loop). Deliberate divergence: client-go's manager log.Fatal()s the process on
+// lost lease; a GoCell Loop is a cell lifecycle hook, not a standalone process,
+// so on lost lease it cancels the lease-scoped ctx, drains the term, and
+// re-contends as a follower without exiting.
+func (l *Loop) leaderManage(runCtx context.Context, gen uint64, wg *sync.WaitGroup, readyOnce *sync.Once, readyCh chan struct{}) {
+	defer wg.Done()
+	readyOnce.Do(func() { close(readyCh) }) // Start's probe: confirmed once we begin contending
+
+	for runCtx.Err() == nil {
+		token, err := l.Leader.AcquireLease(runCtx, l.reconcilerID())
+		if err != nil {
+			l.logLeaderAcquireSkip(runCtx, err)
+			if !sleepCtx(runCtx, leaderRetryPeriod) {
+				return
+			}
+			continue
+		}
+		l.runLeaseTerm(runCtx, gen, token)
+	}
+}
+
+// runLeaseTerm holds leadership for one lease: it raises the leader gauge, runs
+// the active work under a lease-scoped ctx, renews until the lease is lost or the
+// loop shuts down, then drains the term and best-effort relinquishes. The term's
+// goroutines are fully drained (leaseWG.Wait) before currentLease is cleared and
+// before leaderManage can re-acquire, so the next term's spawnActive re-init is
+// race-free. Generation-guarded so a superseded run's term cannot touch a newer
+// run's gauge.
+func (l *Loop) runLeaseTerm(runCtx context.Context, gen uint64, token LeaseToken) {
+	l.currentLease.Store(&token)
+	l.setLeaderGauge(gen, 1)
+
+	leaseCtx, leaseCancel := context.WithCancel(runCtx)
+	defer leaseCancel()
+
+	var leaseWG sync.WaitGroup
+	var termReadyOnce sync.Once
+	termReady := make(chan struct{})
+	// termReady is a throwaway per-term probe; Start's probe was already fired by leaderManage.
+	l.spawnActive(leaseCtx, &leaseWG, &termReadyOnce, termReady)
+
+	l.renewLoop(leaseCtx, leaseCancel, token)
+
+	leaseCancel()  // interrupt in-flight Reconcile the instant the lease is gone
+	leaseWG.Wait() // drain this term's workers / feeder / delaying queue
+	l.currentLease.Store(nil)
+	l.setLeaderGauge(gen, 0)
+	l.releaseLease(runCtx, token)
+}
+
+// renewLoop renews the lease at the renew cadence until the lease is lost (it
+// cancels the lease ctx the instant RenewLease fails, interrupting in-flight
+// Reconcile per ADR §4.2) or leaseCtx is canceled (shutdown / outer cancel).
+// Renewal keeps the LeaseToken.Epoch unchanged.
+func (l *Loop) renewLoop(leaseCtx context.Context, leaseCancel context.CancelFunc, token LeaseToken) {
+	ticker := controlPlaneClock{}.newRenewTicker(l.renewIntervalFor(token))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-leaseCtx.Done():
+			return
+		case <-ticker.C:
+			if err := l.Leader.RenewLease(leaseCtx, token); err != nil {
+				l.logLeaseLost(leaseCtx, token, err)
+				leaseCancel()
+				return
+			}
+		}
+	}
+}
+
+// releaseLease best-effort relinquishes the lease so a follower takes over within
+// ~1s instead of waiting for the elector's TTL. It uses a detached, bounded ctx
+// (context.WithoutCancel + leaseReleaseTimeout) so that even on shutdown (runCtx
+// already canceled) the release is attempted but a hung backend cannot stall
+// Stop; on failure the lease simply expires on its own TTL (the fail-safe).
+func (l *Loop) releaseLease(runCtx context.Context, token LeaseToken) {
+	relCtx, cancel := context.WithTimeout(context.WithoutCancel(runCtx), leaseReleaseTimeout)
+	defer cancel()
+	if err := l.Leader.ReleaseLease(relCtx, token); err != nil {
+		l.logger().Warn("reconcile: lease release failed (will expire on TTL)",
+			slog.String("loop", l.name()),
+			slog.String("reconciler", l.reconcilerID()),
+			slog.Uint64("epoch", token.Epoch),
+			slog.Any("error", redaction.RedactError(err)))
+	}
+}
+
+// setLeaderGauge writes reconcile_leader for this run, guarded by the generation
+// check (a superseded leaderManage cannot clobber a newer run's gauge) — the same
+// discipline as watchDrain. Uses context.Background() because the gauge is a
+// point-in-time value and a 0-write may run after the run ctx is canceled.
+func (l *Loop) setLeaderGauge(gen uint64, val float64) {
+	l.mu.Lock()
+	if l.gen == gen {
+		l.Metrics.setLeader(context.Background(), l.reconcilerID(), val)
+	}
+	l.mu.Unlock()
+}
+
+// currentEpoch returns the live lease's monotonic fencing Epoch, or 0 when this
+// replica holds no lease (single-process mode, or a follower between terms). The
+// worker pool reads it to mint the per-Reconcile FencedWriter.
+func (l *Loop) currentEpoch() uint64 {
+	if t := l.currentLease.Load(); t != nil {
+		return t.Epoch
+	}
+	return 0
+}
+
+// renewIntervalFor returns the lease renew cadence: the explicit RenewInterval
+// override when set, else one-third of the token's TTL (ExpiresAt-AcquiredAt) so
+// it adapts to the elector adapter's configured TTL, clamped to defaultRenewInterval
+// when the token carries no usable TTL.
+func (l *Loop) renewIntervalFor(token LeaseToken) time.Duration {
+	if l.RenewInterval > 0 {
+		return l.RenewInterval
+	}
+	if d := token.ExpiresAt.Sub(token.AcquiredAt) / renewIntervalDivisor; d > 0 {
+		return d
+	}
+	return defaultRenewInterval
+}
+
+// sleepCtx sleeps for d or until ctx is canceled, returning false on cancel
+// (caller should exit). Uses the sealed control-plane clock's real timer.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := controlPlaneClock{}.newRequeueTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// logLeaderAcquireSkip logs a failed/contended AcquireLease at Debug when it is a
+// normal contention/shutdown signal (another holder owns the lease, or the loop's
+// own ctx is canceled/deadline-exceeded) and Warn otherwise (backend I/O fault
+// that an operator should see).
+//
+// ctx.Err() != nil is used instead of errors.Is(err, context.Canceled/DeadlineExceeded)
+// so that only the Loop's OWN ctx cancellation is downgraded to Debug. A
+// DeadlineExceeded that originates from an adapter-internal deadline while the
+// loop ctx is still alive is a real I/O fault and should stay Warn.
+func (l *Loop) logLeaderAcquireSkip(ctx context.Context, err error) {
+	level := slog.LevelWarn
+	if errors.Is(err, ErrLeaseHeld) || ctx.Err() != nil {
+		// Contention (another holder owns the lease) or loop-shutdown (ctx canceled
+		// or loop-owned deadline exceeded) are expected steady-state signals, not faults.
+		level = slog.LevelDebug
+	}
+	l.logger().Log(ctx, level, "reconcile: leader-elect skip (lease not acquired)",
+		slog.String("loop", l.name()),
+		slog.String("reconciler", l.reconcilerID()),
+		slog.Any("error", redaction.RedactError(err)))
+}
+
+// logLeaseLost logs a renewal failure at Warn. Two distinct cases:
+//   - ErrReconcileLeaseLost: normal expected handoff (another holder took the
+//     lease after our TTL expired); logs "lease lost; relinquishing leadership"
+//     with the epoch so ops can correlate with the fencing audit trail.
+//   - any other error: I/O fault (backend error, network issue); logs a distinct
+//     message with io_fault=true so dashboards / alerts can route separately.
+//
+// Both paths cancel the lease ctx (via the caller), interrupting in-flight
+// Reconcile per ADR §4.2.
+func (l *Loop) logLeaseLost(ctx context.Context, token LeaseToken, err error) {
+	if errors.Is(err, ErrReconcileLeaseLost) {
+		l.logger().WarnContext(ctx, "reconcile: lease lost; relinquishing leadership",
+			slog.String("loop", l.name()),
+			slog.String("reconciler", l.reconcilerID()),
+			slog.Uint64("epoch", token.Epoch),
+			slog.Any("error", redaction.RedactError(err)))
+	} else {
+		l.logger().WarnContext(ctx, "reconcile: renew I/O error; abandoning lease term",
+			slog.String("loop", l.name()),
+			slog.String("reconciler", l.reconcilerID()),
+			slog.Uint64("epoch", token.Epoch),
+			slog.Bool("io_fault", true),
+			slog.Any("error", redaction.RedactError(err)))
+	}
 }
 
 // drainReadyItems pops all items from h whose readyAt is not after now and
@@ -587,8 +877,23 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	l.Metrics.inFlightDelta(runCtx, l.reconcilerID(), 1)
 	defer l.Metrics.inFlightDelta(runCtx, l.reconcilerID(), -1)
 
+	// Inject the epoch-bound FencedWriter when a FencedRepository is wired: it is
+	// the reconciler's only write surface (FencedWriterFrom). The epoch comes from
+	// the live lease (currentEpoch()); single-process mode binds Epoch 0 (no
+	// fencing). runCtx is the lease-scoped ctx in leader-elect mode, so a lost
+	// lease cancels this Reconcile's ctx mid-write.
+	//
+	// Note: single-process mode binds Epoch 0 (always-accept, no fencing). A store
+	// seeded from a prior leader-elect run (lastEpoch≥1) would reject epoch-0
+	// writes. Do NOT point a single-process Loop at a store shared with a
+	// leader-elect deployment — use distinct stores or a fresh store.
+	reconcileCtx := runCtx
+	if l.FencedRepo != nil {
+		reconcileCtx = withFencedWriter(runCtx, newFencedWriter(l.FencedRepo, l.currentEpoch()))
+	}
+
 	start := controlPlaneClock{}.now()
-	res, err := recoverReconcile(runCtx, l.Reconciler, req, l.logger(), l.reconcilerID())
+	res, err := recoverReconcile(reconcileCtx, l.Reconciler, req, l.logger(), l.reconcilerID())
 	l.Metrics.observeDuration(runCtx, l.reconcilerID(), controlPlaneClock{}.now().Sub(start).Seconds())
 
 	label := classify(err)
@@ -649,11 +954,21 @@ func (l *Loop) dispatchResult(
 		// place, would re-reconcile a now-dead-lettered entity once it fires. A
 		// fresh Source trigger re-observes it if the consumer resets its state.
 		l.enqueueCancel(runCtx, req.EntityID, cancelCh)
-		l.logger().Error("reconcile: permanent error (dead-letter; not requeued)",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()),
-			slog.String("entity", req.EntityID),
-			slog.Any("error", redaction.RedactError(err)))
+		// ErrFencedWriteStale is an expected fencing race (this replica is no longer
+		// the epoch owner); log at Warn, not Error, to avoid false-alarm alerting.
+		// All other permanent errors are real dead-letters and warrant Error level.
+		if errors.Is(err, ErrFencedWriteStale) {
+			l.logger().Warn("reconcile: stale-epoch write rejected (fencing race); awaiting fresh trigger",
+				slog.String("loop", l.name()),
+				slog.String("reconciler", l.reconcilerID()),
+				slog.String("entity", req.EntityID))
+		} else {
+			l.logger().Error("reconcile: permanent error (dead-letter; not requeued)",
+				slog.String("loop", l.name()),
+				slog.String("reconciler", l.reconcilerID()),
+				slog.String("entity", req.EntityID),
+				slog.Any("error", redaction.RedactError(err)))
+		}
 	default: // resultTransient (including recovered panics)
 		delay := backoff.When(req.EntityID)
 		l.logger().Warn("reconcile: transient error (requeued with backoff)",

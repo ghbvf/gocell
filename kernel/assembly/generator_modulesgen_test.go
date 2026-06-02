@@ -257,8 +257,9 @@ func TestGenerateModulesGen_PreservesCellsOrder(t *testing.T) {
 // imports into cellmodules/<cellID> and Module() call expressions through
 // runtime/composition.CellModule. The import alias and path both carry the
 // cellmodules/ segment (the composition-root layer), and module calls preserve
-// assembly cell order (runtime-significant: auditcore before accesscore for the
-// BootstrapLedgerStore handoff).
+// assembly cell order for deterministic output (the order is NOT
+// runtime-significant — the former auditcore→accesscore BootstrapLedgerStore
+// handoff was removed in #1423; cross-cell wiring is now event-driven).
 func TestGenerateModulesGen_CompositionForm(t *testing.T) {
 	project := buildModulesTestProject()
 	asm := project.Assemblies["corebundle"]

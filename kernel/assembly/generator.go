@@ -364,8 +364,10 @@ func (g *Generator) generateModulesGenComposition(
 	// block is gofmt-clean regardless of cell declaration order. The alias is
 	// "platform"+cellID and the path ends in /cellmodules/cellID, so string-sorting
 	// the import lines matches gofmt's path-based ordering. moduleCalls stay in
-	// cell (assembly.yaml) order — that order is runtime-significant (e.g.
-	// auditcore before accesscore for the BootstrapLedgerStore handoff).
+	// cell (assembly.yaml) order for deterministic, predictable output — that
+	// order is NOT runtime-significant: the former auditcore→accesscore
+	// BootstrapLedgerStore handoff was removed in #1423 (cross-cell wiring is now
+	// event-driven), so module Provide order carries no runtime dependency.
 	sort.Strings(importLines)
 	ctx := modulesCompositionContext{
 		AssemblyID:    assemblyID,

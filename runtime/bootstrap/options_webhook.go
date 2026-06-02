@@ -1,8 +1,9 @@
 package bootstrap
 
-// options_webhook.go — With* option functions for inbound-webhook receiver wiring.
+// options_webhook.go — With* option functions for webhook wiring.
 //
-// Covers: WithWebhookSourceStore, WithWebhookClaimer.
+// Covers: WithWebhookSourceStore, WithWebhookClaimer (inbound receiver),
+// WithWebhookSSRFPolicy (outbound dispatcher).
 //
 // Both are "cumulative builder" options (see runtime-api.md §Option 范式分层):
 // nil inputs are silently ignored; the final nil check happens inside
@@ -54,5 +55,24 @@ func WithWebhookClaimer(claimer idempotency.Claimer) Option {
 			return
 		}
 		b.webhookClaimer = claimer
+	}
+}
+
+// WithWebhookSSRFPolicy injects the [kwh.SafePolicy] wired into every outbound
+// webhook dispatcher's *http.Client. A nil value is silently ignored; when any
+// cell registers a webhook dispatcher and no policy was set, phase6 builds the
+// default production policy [kwh.NewSafePolicy] (block all private/reserved
+// ranges, no loopback). Override only for dev / CI — e.g.
+// kwh.NewSafePolicy(kwh.WithAllowLoopback()) to deliver to a local test server.
+//
+// Cumulative builder option (see runtime-api.md §Option 范式分层): the final
+// decision happens at phase6 drain, not at option-apply time, because a
+// deployment with zero dispatchers needs no policy.
+func WithWebhookSSRFPolicy(policy *kwh.SafePolicy) Option {
+	return func(b *Bootstrap) {
+		if policy == nil {
+			return
+		}
+		b.webhookSSRFPolicy = policy
 	}
 }

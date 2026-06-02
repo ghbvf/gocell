@@ -20,6 +20,7 @@ var sliceMeta = &metadata.SliceMeta{
 		{Contract: "http.auth.setup.status.v1", Role: "serve"},
 		{Contract: "http.auth.setup.admin.v1", Role: "serve"},
 		{Contract: "event.user.created.v1", Role: "publish"},
+		{Contract: "event.auth.bootstrap-failed.v1", Role: "publish"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{
@@ -29,6 +30,7 @@ var sliceMeta = &metadata.SliceMeta{
 			"contract.http.auth.setup.status.v1.serve",
 			"contract.http.auth.setup.admin.v1.serve",
 			"contract.event.user.created.v1.publish",
+			"contract.event.auth.bootstrap-failed.v1.publish",
 		},
 	},
 	AllowedFiles: []string{

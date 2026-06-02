@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -70,6 +71,25 @@ func newTestMemStore(t testing.TB, p *ledger.Protocol) *ledger.MemStore {
 	return store
 }
 
+// newTestBootstrapStore constructs a mem-backed *audit.BootstrapLedgerStore on
+// the bootstrap namespace, for durable-mode Init tests that must satisfy the
+// ErrCellMissingBootstrapStore fail-fast guard (C2/F3).
+func newTestBootstrapStore(t testing.TB) *audit.BootstrapLedgerStore {
+	t.Helper()
+	p, err := ledger.NewProtocol(
+		audit.BootstrapNamespace(),
+		testHMACKey,
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	mem, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	bs, err := audit.NewBootstrapLedgerStore(mem)
+	require.NoError(t, err)
+	return bs
+}
+
 func newTestCell(t testing.TB) *AuditCore {
 	t.Helper()
 	p := newTestProtocol(t)
@@ -111,8 +131,8 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 	// Init
 	require.NoError(t, c.Init(ctx, recorder))
 	// auditappendsession, auditappenduser, auditappendconfig, auditappendrole,
-	// auditquery = 5 slices (auditverify removed; cell.go GREEN since Wave 2 Batch D).
-	assert.Equal(t, 5, len(c.OwnedSlices()), "should have 5 slices after auditverify removal")
+	// auditquery, auditappendbootstrap = 6 slices (auditverify removed; auditappendbootstrap added Wave-1 #1423).
+	assert.Equal(t, 6, len(c.OwnedSlices()), "should have 6 slices after auditappendbootstrap addition")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -381,8 +401,10 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	// All 13 topics registered across 4 sub-slices.
+	// All 14 topics registered across 5 sub-slices (Wave-1 #1423: +auditappendbootstrap).
 	expectedTopics := []string{
+		// 1 bootstrap auth-fail event
+		"event.auth.bootstrap-failed.v1",
 		// 4 config events
 		"event.config.entry-deleted.v1",
 		"event.config.entry-upserted.v1",
@@ -462,6 +484,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingWriter{})), // non-Nooper; durable-gated CheckNotNoop passes
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),         // non-Nooper; durable-gated CheckNotNoop passes
+		WithBootstrapStore(newTestBootstrapStore(t)),                      // satisfy the bootstrap guard so cursor-codec guard is reached
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
@@ -470,6 +493,49 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 	assert.Contains(t, err.Error(), "cursor codec")
+}
+
+// TestInit_DurableMode_RejectsMissingBootstrapStore locks the C2/F3 fail-fast:
+// a durable assembly that forgets WithBootstrapStore must fail at Init() rather
+// than deferring the failure to the first consumed bootstrap-failed event
+// (which the slice would permanently Reject → DLX).
+func TestInit_DurableMode_RejectsMissingBootstrapStore(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
+	c := NewAuditCore(
+		clock.Real(),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingWriter{})), // non-Nooper
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),         // non-Nooper
+		WithCursorCodec(mustNewCodec(t, []byte("audit-bootstrap-guard-test-key!!"))),
+		// No WithBootstrapStore — durable mode must refuse.
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingBootstrapStore, ecErr.Code)
+	assert.Contains(t, err.Error(), "bootstrap ledger store")
+}
+
+// TestInit_DurableMode_WithBootstrapStore_Succeeds is the positive counterpart:
+// a fully-wired durable assembly (incl. bootstrap store) initializes cleanly.
+func TestInit_DurableMode_WithBootstrapStore_Succeeds(t *testing.T) {
+	p := newTestProtocol(t)
+	store := newTestMemStore(t, p)
+	c := NewAuditCore(
+		clock.Real(),
+		WithLedgerProtocol(p),
+		WithLedgerStore(store),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		WithCursorCodec(mustNewCodec(t, []byte("audit-bootstrap-ok---test-key-32!"))),
+		WithBootstrapStore(newTestBootstrapStore(t)),
+		WithMetricsProvider(metrics.NopProvider{}),
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
+	require.NoError(t, err, "durable mode with bootstrap store must succeed")
 }
 
 // TestAuditCore_Wiring_StaleCursor_DemoVsDurable exercises DurabilityMode →
@@ -514,6 +580,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 				WithOutboxDeps(nil, outbox.WrapWriterForCell(tc.outbox)),
 				WithTxManager(persistence.WrapForCell(tc.tx)),
 				WithCursorCodec(mustNewCodec(t, productionKey)),
+				WithBootstrapStore(newTestBootstrapStore(t)),
 				WithMetricsProvider(metrics.NopProvider{}),
 			)
 			recorder := cell.NewRegistryRecorder(map[string]any{}, tc.mode)

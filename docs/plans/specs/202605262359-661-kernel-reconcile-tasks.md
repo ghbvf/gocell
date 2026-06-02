@@ -224,44 +224,44 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 
 #### Tests for PR-A6 (TDD)
 
-- [ ] **T21** [P] [PR-A6] `kernel/reconcile/leader_test.go`：
+- [x] **T21** [P] [PR-A6] `kernel/reconcile/leader_test.go`：
   - `TestLeaderElector_AcquireExclusive`：两个 fake 实例只一个获得 lease
   - `TestLeaderElector_ReleaseUnblocksFollower`：leader release → follower acquire
   - `TestLeaderElector_RenewKeepsLease`：renew 周期 < LeaseDuration 不丢 lease
   - `TestLeaderElector_StaleFollowerAcquiresOnExpiry`：leader 不 renew → follower 超时接管
   - 估算：400 LoC
-- [ ] **T22** [P] [PR-A6] `adapters/redis/reconcile_leader_test.go`：
+- [x] **T22** [P] [PR-A6] `adapters/redis/reconcile_leader_test.go`：
   - 用 miniredis 跑 SETNX 实现的 leader 接口契约（同 conformance test 集）
   - 估算：150 LoC
-- [ ] **T23** [P] [PR-A6] `adapters/postgres/reconcile_leader_test.go`：
+- [x] **T23** [P] [PR-A6] `adapters/postgres/reconcile_leader_test.go`：
   - 用真 PG（integration tag）跑 advisory lock 实现的 leader 接口契约
   - 估算：150 LoC
 
 #### Implementation for PR-A6
 
-- [ ] **T24** [PR-A6] `kernel/reconcile/leader.go`：
+- [x] **T24** [PR-A6] `kernel/reconcile/leader.go`：
   - `type LeaderElector interface { AcquireLease / ReleaseLease / RenewLease }`
   - `type LeaseToken struct { ReconcilerID string; HolderID string; Epoch uint64; AcquiredAt time.Time; ExpiresAt time.Time }`（`Epoch` = 单调 fencing token，每次换持有者 +1）
   - `Loop` 从 lease 派生 lease-scoped ctx + lease 丢失瞬间 cancel（中断 in-flight Reconcile，best-effort 收窄窗口）
   - 估算：180 LoC（接口 + 类型 + lost-lease ctx 接缝 + 文档）
-- [ ] **T24b** [PR-A6] `kernel/reconcile/fenced.go`：`FencedRepository` / `FencedWriter` seam
+- [x] **T24b** [PR-A6] `kernel/reconcile/fenced.go`：`FencedRepository` / `FencedWriter` seam
   - `Loop` 给每次 `Reconcile` 注入 epoch-bound `FencedWriter`（reconciler 唯一写面，sealed 构造）
   - 写路径 CAS：拒 `incoming_epoch < 资源已见最高 epoch`（Kleppmann monotonic fencing，**非** outbox UUID identity-fencing）
   - 估算：220 LoC
-- [ ] **T25** [PR-A6] `adapters/redis/reconcile_leader.go`：
+- [x] **T25** [PR-A6] `adapters/redis/reconcile_leader.go`：
   - SETNX + EXPIRE 实现 + 续约 goroutine
   - 复用 adapters/redis Cache 命名空间约定（cell-namespaced key）
   - 估算：250 LoC
-- [ ] **T26** [PR-A6] `adapters/postgres/reconcile_leader.go`：
+- [x] **T26** [PR-A6] `adapters/postgres/reconcile_leader.go`：
   - pg_try_advisory_lock 实现
   - 续约通过 transaction-scoped lock + heartbeat goroutine
   - 估算：250 LoC
-- [ ] **T27** [PR-A6] `tools/archtest/reconcile_leader_interface_frozen_test.go`：
+- [x] **T27** [PR-A6] `tools/archtest/reconcile_leader_interface_frozen_test.go`：
   - `RECONCILE-LEADER-INTERFACE-FROZEN-01`：reflect 锁 LeaderElector 三方法 + `LeaseToken.Epoch` 字段
   - `RECONCILE-LEADER-IMPL-FUNNEL-01`：消费方使用 LeaderElector 必经 Builder（不可裸构造 Loop）
   - `RECONCILE-FENCED-WRITE-FUNNEL-01`：L4 reconciler 写必经 epoch-bound `FencedWriter`（上游 Hard = 唯一写面 + sealed 构造；下游 Hard = callsite allowlist），绕过 fencing CAS 在 type system 不可表达
   - 估算：160 LoC
-- [ ] **T27b** [PR-A6] `kernel/reconcile/reconciletest/conformance.go` 扩 fencing：
+- [x] **T27b** [PR-A6] `kernel/reconcile/reconciletest/conformance.go` 扩 fencing：
   - `RunFencingConformance`：real-failure-injection——epoch=N 写在 epoch=N+1 接管后重放，断言 CAS 拒绝 + 无重复命令（对齐 `outboxtest` / `celltest.RunRepoReadinessConformance` 形态）
   - 估算：120 LoC
 

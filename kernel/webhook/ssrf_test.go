@@ -14,6 +14,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// userinfoTestURL embeds userinfo (user:pass@) to prove ValidateTargetURL
+// rejects it (F10). Declared as a const so the gosec G101 suppression stays on a
+// short line instead of bloating the table row past the lll limit.
+const userinfoTestURL = "https://user:pass@hooks.example.com/v1" //nolint:gosec // G101: deliberate test fixture, not a real credential
+
 // fakeResolver returns a fixed set of addresses regardless of host. It drives
 // the DNS-rebinding tests: a public-looking hostname can be made to "resolve"
 // to a private IP, which the dial-time vet must reject before connecting.
@@ -146,16 +151,10 @@ func TestSafeDialer_DNSRebinding(t *testing.T) {
 			resolver:    fakeResolver{addrs: ipAddrs("93.184.216.34")},
 			wantBlocked: false,
 		},
-		{
-			name:        "resolver_error_fail_closed",
-			resolver:    fakeResolver{err: errors.New("dns boom")},
-			wantBlocked: true,
-		},
-		{
-			name:        "resolver_empty_fail_closed",
-			resolver:    fakeResolver{addrs: nil},
-			wantBlocked: true,
-		},
+		// Note: resolver-error / empty-answer cases moved to
+		// TestSafeDialer_ResolutionFailure_Transient — those are fail-closed at
+		// the dial layer but TRANSIENT (ErrWebhookDeliveryFailed → Requeue), not
+		// SSRF blocks, so they no longer belong in this isSSRFBlocked table.
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,6 +172,38 @@ func TestSafeDialer_DNSRebinding(t *testing.T) {
 				assert.Falsef(t, isSSRFBlocked(t, err), "expected to pass vet, got SSRF block: %v", err)
 				assert.ErrorIsf(t, err, context.Canceled, "expected canceled-ctx dial error after vet, got %v", err)
 			}
+		})
+	}
+}
+
+// TestSafeDialer_ResolutionFailure_Transient (F1): a resolver FAILURE or empty
+// answer set is fail-closed at the dial layer (still an error — no connection is
+// made), but it carries the TRANSIENT ErrWebhookDeliveryFailed code, NOT
+// ErrWebhookSSRFBlocked. Classify therefore maps it to Requeue, not a permanent
+// Reject/DLX — a DNS hiccup must not dead-letter the delivery.
+func TestSafeDialer_ResolutionFailure_Transient(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		resolver fakeResolver
+		reason   string
+	}{
+		{name: "resolver_error", resolver: fakeResolver{err: errors.New("dns boom")}, reason: "resolution_failed"},
+		{name: "resolver_empty", resolver: fakeResolver{addrs: nil}, reason: "no_addresses"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := NewSafePolicy(withResolver(tc.resolver))
+			_, err := p.DialContext(context.Background(), "tcp", "evil.example.com:443")
+			require.Error(t, err)
+			assert.Falsef(t, isSSRFBlocked(t, err),
+				"DNS failure must be transient, not an SSRF block, got %v", err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrWebhookDeliveryFailed, ec.Code,
+				"DNS failure must carry the transient ErrWebhookDeliveryFailed code")
+			assert.Equal(t, tc.reason, internalReason(t, err))
 		})
 	}
 }
@@ -237,6 +268,10 @@ func TestValidateTargetURL(t *testing.T) {
 		{name: "metadata_ip_literal_blocked", rawURL: "http://169.254.169.254/latest/meta-data/", wantErr: true, wantReason: "ssrf_blocked"},
 		{name: "mapped_private_literal_blocked", rawURL: "http://[::ffff:10.0.0.1]/x", wantErr: true, wantReason: "ssrf_blocked"},
 		{name: "unparseable_blocked", rawURL: "ht!tp://\x7f", wantErr: true, wantReason: "unparseable"},
+		// F10: embedded userinfo is rejected (it would otherwise become a Basic-Auth
+		// header and leak into redirect/error logs).
+		{name: "userinfo_user_pass_blocked", rawURL: userinfoTestURL, wantErr: true, wantReason: "userinfo_not_allowed"},
+		{name: "userinfo_user_only_blocked", rawURL: "https://user@hooks.example.com/v1", wantErr: true, wantReason: "userinfo_not_allowed"},
 		// F1: an empty host (http:///x) is un-vettable → fail closed, not silently OK.
 		{name: "empty_host_blocked", rawURL: "http:///x", wantErr: true, wantReason: "empty_host"},
 		// F2: loopback exemption is policy-coherent — the pre-flight honors
@@ -299,6 +334,24 @@ func TestDenyRedirect(t *testing.T) {
 			assert.Equal(t, http.StatusForbidden, ec.Status())
 		})
 	}
+}
+
+// TestDenyRedirect_RedactsUserinfo (F10): DenyRedirect records the source URL in
+// the server-side diagnostic; any userinfo password must be masked (url.Redacted)
+// so it cannot leak into slog.
+func TestDenyRedirect_RedactsUserinfo(t *testing.T) {
+	t.Parallel()
+	src, err := http.NewRequest(http.MethodGet, "https://user:supersecret@x.example.com/hook", nil)
+	require.NoError(t, err)
+
+	rerr := NewSafePolicy().DenyRedirect(src, []*http.Request{src})
+	require.Error(t, rerr)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, rerr, &ec)
+	from := internalAttrValue(t, ec, "from_url")
+	assert.NotContains(t, from, "supersecret", "userinfo password must be redacted from the diagnostic")
+	assert.Contains(t, from, "xxxxx", "url.Redacted masks the password as xxxxx")
 }
 
 // TestNormalizeIP locks the IPv4-mapped dewrap behavior in isolation.

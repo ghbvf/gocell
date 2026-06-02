@@ -4,6 +4,8 @@
 package accesscore
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -384,6 +386,12 @@ type AccessCore struct {
 
 	// +slice:route:slice=setup,subPath=/setup
 	setupHandler *setup.Handler
+	// setupSvc is stored so RecordBootstrapAuthFail can be called from the
+	// bootstrap auth-fail observer closure (Wave-1 #1423 event-based decoupling).
+	// Set by initSetup(); nil until Init completes, so the observer must only be
+	// invoked after startup (bootstrap middleware fires after HTTP servers start,
+	// i.e. after Init has completed).
+	setupSvc *setup.Service
 
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
 	validateSvc *sessionvalidate.Service
@@ -414,4 +422,26 @@ func NewAccessCore(clk clock.Clock, opts ...Option) *AccessCore {
 		o(c)
 	}
 	return c
+}
+
+// RecordBootstrapAuthFail records a bootstrap authentication failure by emitting
+// event.auth.bootstrap-failed.v1 via the setup slice's outbox.
+//
+// Intended caller: the composition-root bootstrap-auth observer closure in
+// cellmodules/accesscore (Wave-1 #1423). The observer is invoked by
+// runtime/auth.NewBootstrapMiddleware after a 401/429 is written. Do not call
+// this method from cells/ or runtime/ code.
+//
+// The setup service is only available after Init completes; the observer runs
+// after HTTP servers start, so this is always safe.
+//
+// Returns an error if the setup service has not been initialized yet (Init not
+// called) or if emitting the event fails. Callers (the observer closure) log
+// the error and continue — the compliance chain is best-effort for the observer
+// path, durable via outbox row persistence.
+func (c *AccessCore) RecordBootstrapAuthFail(ctx context.Context, reason, clientIP string) error {
+	if c.setupSvc == nil {
+		return fmt.Errorf("accesscore: RecordBootstrapAuthFail called before Init")
+	}
+	return c.setupSvc.RecordBootstrapAuthFail(ctx, reason, clientIP)
 }

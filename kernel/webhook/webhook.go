@@ -3,6 +3,7 @@ package webhook
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"regexp"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -204,4 +205,34 @@ type Headers struct {
 	DeliveryID DeliveryID
 	Timestamp  string
 	Signature  string
+}
+
+// Outbound signature header names. GoCell signs outbound webhooks under the
+// vendor-neutral standard-webhooks header names (webhook-id / webhook-timestamp
+// / webhook-signature) rather than the Svix-branded svix-* names: the dispatcher
+// is the sender, so these headers define GoCell's own outbound protocol and must
+// not embed a third-party vendor name. The signed content, HMAC-SHA256, and
+// "v1,<base64>" token format are Svix / standard-webhooks aligned (see signer.go
+// and ADR webhook-signing-algorithm); only the header names differ.
+//
+// ref: standard-webhooks/standard-webhooks spec/standard-webhooks.md (webhook-id
+// / webhook-timestamp / webhook-signature header names).
+const (
+	HeaderID        = "webhook-id"
+	HeaderTimestamp = "webhook-timestamp"
+	HeaderSignature = "webhook-signature"
+)
+
+// Apply writes the three signature headers (HeaderID, HeaderTimestamp,
+// HeaderSignature) onto an outbound request's http.Header.
+//
+// It is the SOLE sanctioned writer of these headers (WEBHOOK-SIGNER-FUNNEL-01
+// downstream funnel): the dispatcher MUST call headers.Apply(req.Header) rather
+// than Header.Set the signature header from an arbitrary value, so the only
+// value that can reach the wire is one produced by a sealed [Signer.Sign]. The
+// archtest locks Header.Set of these header-name constants to this method body.
+func (h Headers) Apply(header http.Header) {
+	header.Set(HeaderID, string(h.DeliveryID))
+	header.Set(HeaderTimestamp, h.Timestamp)
+	header.Set(HeaderSignature, h.Signature)
 }

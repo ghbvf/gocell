@@ -803,11 +803,17 @@ lazy-unlock 频率持续偏高，可能意味着攻击者在利用 TTL 边界周
 
 ---
 
-## Saga (PR-1210)
+## Saga (PR-1210 / #1109)
 
-Saga step metrics are registered per-cell when a `SagaStepCollector` is wired via
-`obmetrics.NewSagaStepCollector(provider, cellID)`. The three counters share the
-`gocell_` namespace prefix.
+Saga metrics are registered per-cell when a `SagaCollector` is wired via
+`obmetrics.NewSagaCollector(provider, cellID)`. The six counters share the
+`gocell_` namespace prefix. Three are step-level (Executor-emitted); three are
+coordinator-level (Coordinator-emitted, added in #1109). They are only emitted
+when a real metrics `Provider` is wired — saga is not yet in a production cell
+(examples/orderfulfillment uses `NopProvider`), so production wiring lands with
+the saga-as-cell migration.
+
+Step-level:
 
 - `gocell_saga_step_outcome_total{cell,definition_id,outcome}`: total Execute calls
   terminated, labeled by outcome variant (`succeeded` / `failed` / `expired` /
@@ -822,6 +828,78 @@ Saga step metrics are registered per-cell when a `SagaStepCollector` is wired vi
   labeled by reason (`infra_error` = transient backend error; `stale_lease` = another
   coordinator owns the lease). Sustained `stale_lease` rate indicates leader-elect
   instability.
+
+Coordinator-level:
+
+- `gocell_saga_tick_total{cell,result}`: total Coordinator ClaimPending cycles,
+  labeled by `result` (`claimed` = ≥1 instance claimed; `empty` = idle tick;
+  `error` = ClaimPending failed). Loop liveness — a flat tick rate means the
+  coordinator goroutine stalled.
+
+- `gocell_saga_drive_total{cell,definition_id,result}`: total driveOne completions,
+  labeled by `result` (`ok` / `error`). Per-instance forward-progress throughput.
+
+- `gocell_saga_leader_elect_skip_total{cell,definition_id,reason}`: total
+  leader-elect skips, labeled by `reason` (`contended` = another coordinator holds
+  the per-instance distlock — normal in multi-process; `ctx_canceled` = shutdown;
+  `backend_error` = distlock backend I/O fault). `reason="backend_error"` is the
+  **lock-acquire failure rate**. Replaces log-scraping the Debug-level skip path.
+
+### GoCellSagaInstanceStuckSkipping
+
+An instance is being claimed and leader-elect-skipped every tick (high `contended`)
+but never advances (`drive{result="ok"}` ≈ 0) — a coordinator that holds neither
+the distlock nor makes progress, e.g. a wedged peer holding a stale distlock.
+
+```yaml
+# Fires when leader-elect contended skips are sustained while successful drives
+# are absent for the same (cell, definition_id) pair — the "stuck skipping, not
+# advancing" signal #1109 was created to surface without log scraping.
+#
+# Grouped by (cell, definition_id): if cell X has definition A stuck-skipping
+# (contended) but definition B advancing (ok-drives), collapsing to `by (cell)`
+# would mask A's stuck-skip via the `unless` set-difference. Per-definition
+# grouping surfaces the correct signal without cardinality explosion (definition_id
+# is bounded to the registered set in the producer).
+#
+# `unless on(cell, definition_id)` (set difference) — NOT `and ... == 0`: the
+# worst case this alert targets is a coordinator that NEVER drives, in which case
+# the gocell_saga_drive_total{result="ok"} series does not exist at all. With
+# `and ... == 0` the right side is an empty vector and the alert silently never
+# fires. `unless <right> > 0` keeps every contended-heavy (cell, definition_id)
+# that has no matching pair with a positive ok-drive rate — including absent series.
+- alert: GoCellSagaInstanceStuckSkipping
+  expr: |
+    sum(rate(gocell_saga_leader_elect_skip_total{reason="contended"}[5m])) by (cell, definition_id) > 0.1
+    unless on(cell, definition_id)
+    sum(rate(gocell_saga_drive_total{result="ok"}[5m])) by (cell, definition_id) > 0
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga instances skipping (contended) but not advancing"
+    description: "Cell {{ $labels.cell }} definition {{ $labels.definition_id }} has sustained leader-elect contended skips with zero successful drives over 10min. A peer may hold a stale distlock. Runbook: docs/ops/saga-runbook.md"
+```
+
+### GoCellSagaLockAcquireFailures
+
+distlock backend I/O faults are preventing leader election — the coordinator
+cannot confirm leadership and skips every instance fail-closed.
+
+```yaml
+# rate() = events/sec; `> 0.05` fires at >0.05 backend-error skips/sec (≈ 3/min)
+# over the 5m window. backend_error is distlock backend I/O (Redis) faults only
+# (contended / ctx_canceled are classified separately), so any sustained rate is
+# a real fault — tune by your distlock backend's acceptable transient-error floor.
+- alert: GoCellSagaLockAcquireFailures
+  expr: sum(rate(gocell_saga_leader_elect_skip_total{reason="backend_error"}[5m])) by (cell) > 0.05
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga distlock lock-acquire failures"
+    description: "Cell {{ $labels.cell }} leader-elect is failing on distlock backend I/O (>0.05/sec over 5min). Check the distlock backend (Redis) health. Runbook: docs/ops/saga-runbook.md"
+```
 
 **StatusCompensationFailed terminal state**: when a saga instance reaches
 `status=compensation_failed` (status=8 in PG), the compensation phase itself failed.
@@ -843,6 +921,73 @@ increase(gocell_saga_heartbeat_failed_total{reason="stale_lease"}[5m])
 <!-- /gocell:generated:saga-event-kind-legend -->
 
 **诊断与处置 runbook**：补偿失败（CompensationFailed）/ lease 卡死 / journal 增长的完整诊断 SQL、决策树（幂等外部副作用 / 不可逆操作 / 基础设施故障三分支）与审计要求见 **`docs/ops/saga-runbook.md`**。本节只保留指标告警职责；上面的 `kind` 速查生成区供 runbook 诊断 SQL 交叉引用。
+
+---
+
+## Reconcile Leader 可观测性
+
+`gocell_reconcile_leader{reconciler}` 是一个 Gauge，值为 1 当该实例持有对应 reconcilerID
+的 lease，否则为 0（由 kernel/reconcile/metrics.go 的 `metricReconcileLeader` 注册）。
+在 leader-elect 模式下，任意时刻健康集群中**每个 reconcilerID 恰好应有 1 个实例持有 lease**；
+0 代表 leader 空缺，>1 代表脑裂异常（应由 fencing 机制阻止写放大，但 gauge 层面不应出现）。
+
+### ReconcileLeaderVacancy
+
+leader 空缺持续超过 LeaseDuration + 1s：无实例持有 lease，reconcile 工作停摆。
+
+`sum by (reconciler)` keeps the per-reconciler dimension (so each reconcilerID
+alerts independently and `{{ $labels.reconciler }}` is populated — a bare `sum`
+would collapse all reconcilers and drop the label). The vacancy rule has TWO arms:
+the `== 0` arm catches "exporting but no holder"; the `absent(...)` arm catches
+"the whole series vanished" (every replica down / scrape lost), which `== 0` alone
+would miss (a comparison on an empty vector yields no samples → no alert). Replace
+`<id>` in the `absent()` arm with each reconcilerID you run (absent() needs a fully
+specified series).
+
+```yaml
+- alert: GoCellReconcileLeaderVacancy
+  expr: |
+    sum by (reconciler) (gocell_reconcile_leader) == 0
+    or absent(gocell_reconcile_leader{reconciler="<id>"})
+  for: 16s
+  labels:
+    severity: critical
+  annotations:
+    summary: "Reconcile leader vacant ({{ $labels.reconciler }})"
+    description: |
+      No instance holds the reconcile lease for reconciler={{ $labels.reconciler }}
+      (or the metric series is entirely absent — total scrape loss / all replicas down).
+      All reconcile work is paused until a follower acquires the lease.
+      Typical causes: all replicas crashed, Redis/PG backend unreachable, or
+      lease TTL misconfiguration (RenewInterval >= TTL causes spurious lease loss).
+      Triage: check logs for "lease lost; relinquishing leadership" /
+      "renew I/O error; abandoning lease term" and verify elector backend health.
+      Note: for=16s assumes a default lease TTL of ~15s (LeaseDuration+1s headroom);
+      adjust to match your configured leaseDuration + 1s.
+```
+
+### ReconcileLeaderSplitBrain
+
+多个实例同时持有 gauge=1：脑裂异常信号。正常 handoff 期间可能出现短暂双重 gauge=1，
+但持续 > 2s 表示 fencing 层以上的 gauge 未及时更新（或 lease backend 状态异常）。
+
+```yaml
+- alert: GoCellReconcileLeaderSplitBrain
+  expr: |
+    sum by (reconciler) (gocell_reconcile_leader) > 1
+  for: 2s
+  labels:
+    severity: critical
+  annotations:
+    summary: "Reconcile leader split-brain anomaly ({{ $labels.reconciler }})"
+    description: |
+      More than one instance reports reconcile_leader=1 for
+      reconciler={{ $labels.reconciler }}. Cross-replica correctness is guarded
+      by the epoch-fencing CAS (ErrFencedWriteStale will dead-letter stale writes),
+      but the gauge anomaly indicates the lease backend or gauge update path is
+      inconsistent. Investigate elector backend state and lease TTL configuration.
+      Short transient doubles during handoff are expected; sustained > 2s is not.
+```
 
 ---
 
