@@ -317,7 +317,7 @@ func buildJourneyEntity(j *metadata.JourneyMeta, inc IncludeOptions) Entity {
 // buildAssemblyEntity converts AssemblyMeta to an Entity.
 func buildAssemblyEntity(a *metadata.AssemblyMeta, inc IncludeOptions) Entity {
 	spec := AssemblySpec{
-		Cells:               a.Cells,
+		Cells:               metadata.CellIDs(a.Cells),
 		Owner:               CellSpecOwner{Team: a.Owner.Team, Role: a.Owner.Role},
 		MaxConsistencyLevel: a.MaxConsistencyLevel,
 		Build: AssemblySpecBuild{
@@ -329,8 +329,8 @@ func buildAssemblyEntity(a *metadata.AssemblyMeta, inc IncludeOptions) Entity {
 
 	var rels []Relation
 	if inc.Relations {
-		for _, cellID := range a.Cells {
-			rels = append(rels, Relation{Type: "contains", TargetRef: "cell/" + cellID})
+		for _, ref := range a.Cells {
+			rels = append(rels, Relation{Type: "contains", TargetRef: "cell/" + ref.ID})
 		}
 		sortRelations(rels)
 	}

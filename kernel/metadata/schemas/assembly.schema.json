@@ -14,9 +14,30 @@
     },
     "cells": {
       "type": "array",
-      "description": "List of cell ids included in this assembly.",
+      "description": "Cells included in this assembly. Each entry is either a bare cell id string (same-module shorthand) or an object {id, module} where module names the external Go module the cell is developed in (cell development in an independent repository, #1086). module omitted = the assembly's own module.",
       "items": {
-        "type": "string"
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Same-module cell id shorthand."
+          },
+          {
+            "type": "object",
+            "description": "Cross-module cell reference.",
+            "required": ["id"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Cell id."
+              },
+              "module": {
+                "type": "string",
+                "description": "Go module path the cell's cellmodules/ package lives in (e.g. github.com/acme/payment-cell). Omit for the assembly's own module. Must be a declared go.mod/go.work dependency; the Go compiler enforces resolvability at build time."
+              }
+            }
+          }
+        ]
       },
       "minItems": 1
     },

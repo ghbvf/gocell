@@ -481,13 +481,111 @@ type PassCriterion struct {
 	CheckRef string `yaml:"checkRef,omitempty"`
 }
 
+// AssemblyCellRef is one entry in assembly.yaml `cells:`. It accepts two YAML
+// forms (see UnmarshalYAML):
+//
+//   - scalar shorthand       `- configcore`                          → {ID: "configcore"}
+//   - object (cross-module)  `- {id: payment, module: github.com/acme/pay}`
+//
+// Module empty = the cell's cellmodules/ package lives in the assembly's own Go
+// module (the common same-module case). A non-empty Module references a cell
+// developed in an independent Go module (#1086); codegen renders the import as
+// "<Module>/cellmodules/<ID>" instead of "<current module>/cellmodules/<ID>".
+// The module must be a declared dependency (go.mod require / go.work use) — that
+// is enforced by the Go compiler when the generated modules_gen.go is built, not
+// by a metadata governance rule (a declared-but-unresolvable module fails
+// `go build`).
+type AssemblyCellRef struct {
+	ID     string
+	Module string
+}
+
+// UnmarshalYAML decodes the scalar-or-object union form of an assembly cell
+// entry. The decoder's KnownFields(true) strictness does not propagate into a
+// custom Unmarshaler, so the mapping branch enforces the {id, module} key set
+// itself to preserve strict-decode parity with the rest of the schema.
+func (r *AssemblyCellRef) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		r.ID, r.Module = node.Value, ""
+		return nil
+	case yaml.MappingNode:
+		return r.decodeMapping(node)
+	default:
+		return fmt.Errorf("line %d: assembly cell entry must be a string or {id, module} mapping", node.Line)
+	}
+}
+
+// decodeMapping handles the object form `{id, module}` of an assembly cell
+// entry, enforcing the known-field set (id, module) and the required id.
+func (r *AssemblyCellRef) decodeMapping(node *yaml.Node) error {
+	var id, module string
+	var sawID bool
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keyNode, valNode := node.Content[i], node.Content[i+1]
+		switch keyNode.Value {
+		case "id":
+			if err := valNode.Decode(&id); err != nil {
+				return err
+			}
+			sawID = true
+		case "module":
+			if err := valNode.Decode(&module); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("line %d: unknown field %q in assembly cell entry (allowed: id, module)",
+				keyNode.Line, keyNode.Value)
+		}
+	}
+	if !sawID || id == "" {
+		return fmt.Errorf("line %d: assembly cell entry missing required field \"id\"", node.Line)
+	}
+	r.ID, r.Module = id, module
+	return nil
+}
+
+// CellRefs builds a same-module []AssemblyCellRef from bare cell ids. It is the
+// ergonomic constructor for the common case (every cell in the assembly's own
+// module); cross-module entries are constructed as AssemblyCellRef{ID, Module}
+// literals.
+//
+// This function body is the single sanctioned site that embeds an
+// AssemblyCellRef{ID: <runtime value>} composite literal; it is allowlisted by
+// FIXTURE-CELLID-TYPED-BUILDER-01/A1 (this file). A1 does not scan CellRefs
+// call arguments. Usage guidance by A1 scope (kernel/):
+//   - external kernel/ test packages with static ids → prefer explicit
+//     []AssemblyCellRef{{ID: metadatatest.CellID*}} literals (A1-checked);
+//   - internal `package metadata` tests (cannot import metadatatest — import
+//     cycle) and dynamic-id helpers (ids are runtime params, not literals) →
+//     use CellRefs (the only A1-compatible path);
+//   - non-kernel ergonomics + production synthesis from validated runtime ids.
+func CellRefs(ids ...string) []AssemblyCellRef {
+	refs := make([]AssemblyCellRef, len(ids))
+	for i, id := range ids {
+		refs[i] = AssemblyCellRef{ID: id}
+	}
+	return refs
+}
+
+// CellIDs projects an []AssemblyCellRef to the bare cell-id slice, dropping
+// module attribution. Used where only identity matters (entrypoint cell-id
+// list, boundary cell set, devtools catalog wire shape).
+func CellIDs(refs []AssemblyCellRef) []string {
+	ids := make([]string, len(refs))
+	for i, r := range refs {
+		ids[i] = r.ID
+	}
+	return ids
+}
+
 // AssemblyMeta maps to assemblies/{id}/assembly.yaml (platform assemblies)
 // or examples/{id}/assembly.yaml (example assemblies).
 // See parser.matchAssemblyYAML for the recognized path forms.
 type AssemblyMeta struct {
-	ID    string    `yaml:"id"`
-	Cells []string  `yaml:"cells"`
-	Owner OwnerMeta `yaml:"owner"`
+	ID    string            `yaml:"id"`
+	Cells []AssemblyCellRef `yaml:"cells"`
+	Owner OwnerMeta         `yaml:"owner"`
 	// The assembly's provisioned capability set is NOT declared here — it is the
 	// derived union of its cells' CellMeta.Requires (Design Y, #855). There is no
 	// hand-authored assembly-level `capabilities` field; the single source is

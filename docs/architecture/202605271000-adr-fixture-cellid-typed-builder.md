@@ -49,7 +49,7 @@ Source: `kernel/metadata/types.go` + `kernel/metadata/derived.go`. The enumerati
 | `EndpointsMeta`               | `Provider`      | `string`                      | direct (projection provider cell) |
 | `EndpointsMeta`               | `Readers`       | `[]string`                    | slice element                     |
 | `JourneyMeta`                 | `Cells`         | `[]string`                    | slice element                     |
-| `AssemblyMeta`                | `Cells`         | `[]string`                    | slice element                     |
+| `AssemblyCellRef`             | `ID`            | `string`                      | direct (was `AssemblyMeta.Cells` slice element; the cell-id moved into the new `AssemblyCellRef.ID` struct field in #1086) |
 | `CellWireSummary` (derived.go)| `CellID`        | `string`                      | direct                            |
 
 Note: `CellWireSummary.CellID` fixtures live in `runtime/` (outside A1's current `kernel/` scope); this entry is forward-compatible and will be enforced once issue #1201 expands scope to non-kernel packages.

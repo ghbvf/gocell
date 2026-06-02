@@ -114,7 +114,7 @@ func TestCorebundlePG_UsesConfigCoreDatabaseURL(t *testing.T) {
 	// auth, consumer base, etc.) are not under test here.
 	_ = locals // locals used only for shared deps construction, not module wiring
 	mods := generatedCellModules()
-	app, err := composition.New().With(mods...).Build(ctx, shared,
+	app, err := composition.New(corebundleCellIDs()...).With(mods...).Build(ctx, shared,
 		func(_ []cell.Cell) ([]bootstrap.Option, error) {
 			return nil, nil
 		})

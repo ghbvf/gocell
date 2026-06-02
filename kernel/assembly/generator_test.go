@@ -102,7 +102,7 @@ func buildTestProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"ssobff": {
 				ID:    "ssobff",
-				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}, {ID: metadatatest.CellIDAuditCore}},
 				Build: metadata.BuildMeta{
 					Entrypoint:     "cmd/ssobff/main.go",
 					Binary:         "ssobff",
@@ -384,7 +384,7 @@ func TestSourceFingerprint_MissingCellInAssembly(t *testing.T) {
 	// Add an assembly that references a cell not in project.Cells.
 	project.Assemblies["ghost-bundle"] = &metadata.AssemblyMeta{
 		ID:    "ghost-bundle",
-		Cells: []string{metadatatest.NewCellID("ghostcell")},
+		Cells: []metadata.AssemblyCellRef{{ID: metadatatest.NewCellID("ghostcell")}},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 	fp, err := gen.sourceFingerprint("ghost-bundle", nil, nil)
@@ -401,7 +401,7 @@ func TestGenerateBoundary_EmptyAssembly(t *testing.T) {
 	project := buildTestProject()
 	project.Assemblies["empty"] = &metadata.AssemblyMeta{
 		ID:    "empty",
-		Cells: []string{},
+		Cells: []metadata.AssemblyCellRef{},
 		Build: metadata.BuildMeta{},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
@@ -448,7 +448,7 @@ func TestGenerateEntrypoint_EmptyAssembly(t *testing.T) {
 	project := buildTestProject()
 	project.Assemblies["empty"] = &metadata.AssemblyMeta{
 		ID:    "empty",
-		Cells: []string{},
+		Cells: []metadata.AssemblyCellRef{},
 		Build: metadata.BuildMeta{},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
@@ -493,7 +493,7 @@ func TestSourceFingerprint_CellOrderIsStructural(t *testing.T) {
 	baseline, err := gen.sourceFingerprint("ssobff", exported, imported)
 	require.NoError(t, err)
 
-	project.Assemblies["ssobff"].Cells = []string{metadatatest.CellIDAuditCore, metadatatest.CellIDAccessCore}
+	project.Assemblies["ssobff"].Cells = []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAuditCore}, {ID: metadatatest.CellIDAccessCore}}
 	got, err := gen.sourceFingerprint("ssobff", exported, imported)
 	require.NoError(t, err)
 	assert.NotEqual(t, baseline, got, "assembly cells order is runtime order and must change fingerprint")

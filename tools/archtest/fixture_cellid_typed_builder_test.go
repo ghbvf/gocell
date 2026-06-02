@@ -181,7 +181,10 @@ var cellIDFieldPositions = []cellIDFieldPosition{
 	{"EndpointsMeta", "Provider", false},
 	{"EndpointsMeta", "Readers", true},
 	{"JourneyMeta", "Cells", true},
-	{"AssemblyMeta", "Cells", true},
+	// AssemblyMeta.Cells is []AssemblyCellRef (#1086): the cell-id moved from
+	// the slice element to AssemblyCellRef.ID, so the enforced position is the
+	// ID field of each AssemblyCellRef struct literal (not the slice element).
+	{"AssemblyCellRef", "ID", false},
 	// CellWireSummary.CellID: the derived wire-catalog struct in derived.go whose
 	// CellID field carries cell-id semantics. Fixtures constructing CellWireSummary
 	// live in runtime/ (outside A1's current kernel/ scope) and will be enforced
@@ -220,6 +223,11 @@ func TestFixtureCellIDTypedBuilder(t *testing.T) {
 		// cellIDFieldPositions for forward-compatible enforcement in runtime/ test
 		// fixtures (tracked by #1201), not to gate this production constructor.
 		"kernel/metadata/derived.go": {},
+		// types.go holds metadata.CellRefs — the single sanctioned constructor that
+		// embeds AssemblyCellRef{ID: <runtime param>} (cell development in an
+		// independent repository, #1086). Same rationale as derived.go: production
+		// construction from a runtime value, not a fixture literal.
+		"kernel/metadata/types.go": {},
 	}
 
 	violations := scanCellIDFixtureViolations(t, allowSelfFile, fixtureCellIDCarveOuts)

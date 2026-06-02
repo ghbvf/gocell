@@ -12,7 +12,9 @@ import (
 // buildAssemblyProject constructs a minimal *metadata.ProjectMeta with the given cells
 // and one assembly referencing them. Used to drive ExportedApplyAssemblyDerivations
 // without touching the filesystem.
-func buildAssemblyProject(cellLevels map[string]string, asmCells []string, asm *metadata.AssemblyMeta) *metadata.ProjectMeta {
+func buildAssemblyProject(
+	cellLevels map[string]string, asmCells []metadata.AssemblyCellRef, asm *metadata.AssemblyMeta,
+) *metadata.ProjectMeta {
 	pm := &metadata.ProjectMeta{
 		Cells:      make(map[string]*metadata.CellMeta),
 		Slices:     make(map[string]*metadata.SliceMeta),
@@ -39,7 +41,7 @@ func TestApplyAssemblyDerivations_BuildAllOmitted(t *testing.T) {
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
 	mycelll1 := metadatatest.NewCellID("mycelll1")
-	pm := buildAssemblyProject(map[string]string{mycelll1: "L1"}, []string{mycelll1}, asm)
+	pm := buildAssemblyProject(map[string]string{mycelll1: "L1"}, metadata.CellRefs(mycelll1), asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -56,7 +58,7 @@ func TestApplyAssemblyDerivations_PartialBuildOverride(t *testing.T) {
 		Build: metadata.BuildMeta{Binary: "custom-bin"},
 	}
 	somecell := metadatatest.NewCellID("somecell")
-	pm := buildAssemblyProject(map[string]string{somecell: "L2"}, []string{somecell}, asm)
+	pm := buildAssemblyProject(map[string]string{somecell: "L2"}, metadata.CellRefs(somecell), asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -79,7 +81,7 @@ func TestApplyAssemblyDerivations_MaxConsistencyMultipleCells(t *testing.T) {
 			metadatatest.CellIDCellB: "L2",
 			metadatatest.CellIDCellC: "L4",
 		},
-		[]string{metadatatest.CellIDCellA, metadatatest.CellIDCellB, metadatatest.CellIDCellC},
+		[]metadata.AssemblyCellRef{{ID: metadatatest.CellIDCellA}, {ID: metadatatest.CellIDCellB}, {ID: metadatatest.CellIDCellC}},
 		asm,
 	)
 
@@ -94,7 +96,7 @@ func TestApplyAssemblyDerivations_MaxConsistencyAllL0(t *testing.T) {
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
 	purecalc := metadatatest.NewCellID("purecalc")
-	pm := buildAssemblyProject(map[string]string{purecalc: "L0"}, []string{purecalc}, asm)
+	pm := buildAssemblyProject(map[string]string{purecalc: "L0"}, metadata.CellRefs(purecalc), asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -111,7 +113,7 @@ func TestApplyAssemblyDerivations_MissingCellRefSkipsMaxLevel(t *testing.T) {
 		ID:    "badbundle",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{}, []string{metadatatest.NewCellID("nonexistent")}, asm)
+	pm := buildAssemblyProject(map[string]string{}, []metadata.AssemblyCellRef{{ID: metadatatest.NewCellID("nonexistent")}}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -133,7 +135,9 @@ func TestApplyAssemblyDerivations_ExamplesEntrypoint(t *testing.T) {
 		File:  "examples/todoorder/assembly.yaml",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{metadatatest.CellIDOrderCell: "L2"}, []string{metadatatest.CellIDOrderCell}, asm)
+	pm := buildAssemblyProject(
+		map[string]string{metadatatest.CellIDOrderCell: "L2"},
+		[]metadata.AssemblyCellRef{{ID: metadatatest.CellIDOrderCell}}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -204,7 +208,7 @@ func TestApplyAssemblyDerivations_ConventionalAssemblyEntrypoint(t *testing.T) {
 		File:  "assemblies/corebundle/assembly.yaml",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{}, []string{}, asm)
+	pm := buildAssemblyProject(map[string]string{}, []metadata.AssemblyCellRef{}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -223,7 +227,7 @@ func TestApplyAssemblyDerivations_ManifestCustomEntrypoint(t *testing.T) {
 		File:  "services/payment/assembly.yaml",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{}, []string{}, asm)
+	pm := buildAssemblyProject(map[string]string{}, []metadata.AssemblyCellRef{}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -262,7 +266,7 @@ func TestApplyAssemblyDerivations_InvalidLevelSkipsMaxLevel(t *testing.T) {
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
 	badlevelcell := metadatatest.NewCellID("badlevelcell")
-	pm := buildAssemblyProject(map[string]string{badlevelcell: "L9"}, []string{badlevelcell}, asm)
+	pm := buildAssemblyProject(map[string]string{badlevelcell: "L9"}, metadata.CellRefs(badlevelcell), asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 

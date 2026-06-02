@@ -45,7 +45,7 @@ func TestStarterBuildSucceeds(t *testing.T) {
 	require.NoError(t, err, "buildStarterMemSharedDeps must succeed in memory mode")
 	require.NotNil(t, shared, "shared deps must be non-nil")
 
-	app, err := composition.New().
+	app, err := composition.New("auditcore", "accesscore", "configcore").
 		With(
 			cellmodulesauditcore.Module(),
 			cellmodulesaccesscore.Module(),
@@ -79,7 +79,7 @@ func TestStarterBootsAndRespondsHealthz(t *testing.T) {
 	shared.InternalHTTPAddr = "127.0.0.1:0"
 	shared.HealthHTTPAddr = "127.0.0.1:0"
 
-	app, err := composition.New().
+	app, err := composition.New("auditcore", "accesscore", "configcore").
 		With(
 			cellmodulesauditcore.Module(),
 			cellmodulesaccesscore.Module(),
@@ -140,7 +140,7 @@ func TestStarterHealthzHTTP(t *testing.T) {
 	shared.InternalHTTPAddr = "127.0.0.1:18089"
 	shared.HealthHTTPAddr = healthAddr
 
-	app, err := composition.New().
+	app, err := composition.New("auditcore", "accesscore", "configcore").
 		With(
 			cellmodulesauditcore.Module(),
 			cellmodulesaccesscore.Module(),

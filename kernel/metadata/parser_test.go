@@ -294,7 +294,11 @@ func TestParseFS_FullProject(t *testing.T) {
 	assert.Len(t, pm.Assemblies, 1)
 	assert.Contains(t, pm.Assemblies, "corebundle")
 	a := pm.Assemblies["corebundle"]
-	assert.Equal(t, []string{"accesscore", "auditcore"}, a.Cells)
+	// CellRefs (a call, not a composite literal) is the sanctioned same-module
+	// constructor here: parser_test.go is package metadata (internal), so it
+	// cannot import metadatatest (import cycle), and A1 does not scan CellRefs
+	// call args.
+	assert.Equal(t, CellRefs("accesscore", "auditcore"), a.Cells)
 	assert.Equal(t, "k8s", a.Build.DeployTemplate)
 
 	// Status Board
