@@ -99,6 +99,32 @@ func validProject() *metadata.ProjectMeta {
 				CellDir: "accesscore",
 				File:    "cells/accesscore/slices/session-login/slice.yaml",
 			},
+			// accesscore/session-projection provides the projection write side for
+			// projection.session.active.v1. Required by PROJECTION-PROVIDE-NEEDS-WRITE-CU-01:
+			// a cell with role=provide on a projection contract must also have ≥1 subscribe
+			// CU with a non-empty Projection field.
+			"accesscore/session-projection": {
+				ID:            "session-projection",
+				BelongsToCell: metadatatest.CellIDAccessCore,
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract:   "event.session.created.v1",
+						Role:       "subscribe",
+						Handler:    "HandleSessionCreated",
+						Projection: "session_active",
+					},
+				},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.session-projection.service"},
+					Contract: []string{"contract.event.session.created.v1.subscribe"},
+				},
+				AllowedFiles: []string{
+					"cells/accesscore/slices/session-projection/**",
+				},
+				Dir:     "session-projection",
+				CellDir: "accesscore",
+				File:    "cells/accesscore/slices/session-projection/slice.yaml",
+			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
 				BelongsToCell: metadatatest.CellIDAuditCore,
@@ -148,8 +174,10 @@ func validProject() *metadata.ProjectMeta {
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   metadatatest.CellIDAccessCore,
-					Subscribers: []string{metadatatest.CellIDAuditCore},
+					Publisher: metadatatest.CellIDAccessCore,
+					// accesscore/session-projection subscribes with a projection CU
+					// (the projection write side for PROJECTION-PROVIDE-NEEDS-WRITE-CU-01).
+					Subscribers: []string{metadatatest.CellIDAuditCore, metadatatest.CellIDAccessCore},
 				},
 				Replayable:        &replayable,
 				IdempotencyKey:    "session-id",
@@ -675,12 +703,12 @@ func TestTOPO03(t *testing.T) {
 		{
 			name: "consumer not in consumers list",
 			setup: func(pm *metadata.ProjectMeta) {
-				// accesscore is not in the subscribers list for event.session.created.v1
-				pm.Slices["accesscore/wrong-consumer"] = &metadata.SliceMeta{
+				// configcore is not in the subscribers list for event.session.created.v1
+				pm.Slices["configcore/wrong-consumer"] = &metadata.SliceMeta{
 					ID:            "wrong-consumer",
-					BelongsToCell: metadatatest.CellIDAccessCore,
+					BelongsToCell: metadatatest.CellIDConfigCore,
 					ContractUsages: []metadata.ContractUsage{
-						{Contract: "event.session.created.v1", Role: "subscribe"}, // accesscore is publisher, not subscriber
+						{Contract: "event.session.created.v1", Role: "subscribe"},
 					},
 				}
 			},
@@ -4261,7 +4289,8 @@ func TestTOPO08(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.session.created.v1"].Lifecycle = "deprecated"
 			},
-			wantCount: 2, // session-login publishes + audit-write subscribes
+			// session-login publishes + session-projection subscribes + audit-write subscribes
+			wantCount: 3,
 		},
 		{
 			name: "draft contract not flagged",
@@ -4442,7 +4471,8 @@ func TestFMT14(t *testing.T) {
 					s.AllowedFiles = nil
 				}
 			},
-			wantCount: 2,
+			// validProject() now has 3 slices (session-login, session-projection, audit-write).
+			wantCount: 3,
 		},
 		{
 			name: "only one slice missing",

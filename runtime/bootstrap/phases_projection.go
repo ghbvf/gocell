@@ -47,6 +47,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/contractspec"
@@ -119,16 +120,29 @@ func (c *captureRegistrar) Subscribe(
 // least one projection. Used alongside cellSnapshotsHaveSubscriptions to decide
 // whether phase6 must build the event router.
 func cellSnapshotsHaveProjections(s *phaseState) bool {
+	return len(collectProjectionKeys(s)) > 0
+}
+
+// collectProjectionKeys returns the "<cellID>/<projectionID>" identifier of every
+// projection declared across the cell snapshots, in assembly cell order. It is the
+// single source for both the phase6 "is there work?" predicate
+// (cellSnapshotsHaveProjections) and the diagnostic that names the affected
+// projections when the serial-delivery guard rejects the wired transport (#1369 F3
+// — without it the failure only carries the subscriber type, not which projections
+// triggered the check). cellID / projectionID are framework snake_case identifiers,
+// not PII.
+func collectProjectionKeys(s *phaseState) []string {
+	var keys []string
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {
 			continue
 		}
-		if len(snap.Projections) > 0 {
-			return true
+		for _, req := range snap.Projections {
+			keys = append(keys, req.CellID+"/"+req.ProjectionID)
 		}
 	}
-	return false
+	return keys
 }
 
 // buildProjectionCoordinators constructs one projection.Coordinator per
@@ -214,6 +228,50 @@ func (b *Bootstrap) checkProjectionDeps() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: projection declared but no cursor configured; "+
 				"add WithProjectionCursor to bootstrap options")
+	}
+	return nil
+}
+
+// Const literal (MESSAGE-CONST-LITERAL-01); the offending transport type is
+// appended as diagnostic context via fmt.Errorf at the callsite. The message
+// states the failure + the actionable fix (implement the marker), deliberately
+// not the current implementer list — that list lives in the ADR / archtest and
+// would drift here.
+const errMsgProjectionSubscriberNotSerial = "bootstrap: projection declared but the configured subscriber does not " +
+	"guarantee serial in-order delivery; projection subscriptions require prefetch=1 / single-goroutine dispatch — " +
+	"implement outbox.SerialInOrderGuarantor returning true to opt in. See ADR " +
+	"docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §6 threat row 4 + §Amendment 2026-06-02"
+
+// checkSubscriberGuaranteesSerialDelivery fail-closes the projection drain when
+// the wired raw transport does not GUARANTEE strictly serial, in-order delivery.
+// Projection exactly-once rests on a monotonic checkpoint that silently skips any
+// position ≤ the stored checkpoint; under concurrent delivery a higher position
+// can commit before a lower one is applied, dropping the lower event's apply (a
+// projection gap). A transport opts in by implementing outbox.SerialInOrderGuarantor
+// and returning true; absence or false is rejected (fail-closed-by-absence), so a
+// concurrent transport (AMQP/MQTT) — or any future transport that forgets the
+// method — cannot carry a projection. See ADR §6 threat row 4 + §Amendment 2026-06-02.
+//
+// This is the single sanctioned type assertion to the marker
+// (PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 sub-rule C). It is invoked from
+// drainCellProjections — the transport-meets-projection boundary — and asserts
+// the RAW s.sub, before buildEventRouter wraps it in contractTracingSubscriber
+// (that decorator wraps rather than embeds and does not forward the marker, so
+// asserting the wrapped value would be wrong; sub-rule D locks the decorator out
+// of the implementer set as defense-in-depth). A nil subscriber needs no special
+// branch: the assertion below returns ok == false and is rejected fail-closed —
+// and phase6StartEventRouter routes nil subscribers to
+// checkNoEventConsumersWhenSubscriberNil before the projection drain anyway.
+func checkSubscriberGuaranteesSerialDelivery(sub outbox.Subscriber) error {
+	g, ok := sub.(outbox.SerialInOrderGuarantor)
+	if !ok || !g.GuaranteesSerialInOrderDelivery() {
+		// Append the wired transport type as diagnostic context (a type name, not
+		// PII). errcode.Error.Error() collapses Message into the internal-details
+		// string when any WithInternal attrs are present (errcode.go), which would
+		// HIDE the const Message from operator logs; fmt.Errorf wrapping keeps both
+		// the Message and the transport type visible.
+		return fmt.Errorf("%w (configured subscriber type: %T)",
+			errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, errMsgProjectionSubscriberNotSerial), sub)
 	}
 	return nil
 }
@@ -311,6 +369,17 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 // Runs inside phase6 after drainCellSubscriptions and before the router starts,
 // so projection handlers are registered before consumption begins.
 func (b *Bootstrap) drainCellProjections(ctx context.Context, s *phaseState, evtRouter *eventrouter.Router) error {
+	// Serial-delivery enforcement (#1369, ADR §6 row 4): a projection may only be
+	// carried by a transport that guarantees serial in-order delivery. Checked
+	// once here — the transport-meets-projection boundary — before any wiring, so
+	// a concurrent transport fails fast instead of silently dropping events.
+	if keys := collectProjectionKeys(s); len(keys) > 0 {
+		if err := checkSubscriberGuaranteesSerialDelivery(s.sub); err != nil {
+			// Name the projections that triggered the guard so ops sees which
+			// declarations are blocked, not just the offending transport type.
+			return fmt.Errorf("%w (declared projections: %s)", err, strings.Join(keys, ", "))
+		}
+	}
 	wirings, err := b.buildProjectionCoordinators(ctx, s)
 	if err != nil {
 		return err

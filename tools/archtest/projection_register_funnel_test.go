@@ -16,10 +16,11 @@
 //     pins it as generated — defense in depth, same shape as the former
 //     apply-hook F6 distinction which now lives here).
 //
-// PR-04a status: genuinely-green, vacuous. Zero production callsites exist
-// (cellgen derivation of reg.RegisterProjection lands in PR-04b). The rule fires
-// immediately if a hand-written callsite appears before then. It becomes
-// load-bearing in PR-04b.
+// Status: load-bearing. The first production callsite now exists —
+// examples/todoorder/cells/ordercell/cell_gen.go emits the cellgen-derived
+// reg.RegisterProjection for the orderprojection harness (#834). The allowlist
+// confines that (and every future) RegisterProjection call to cell_gen.go; a
+// hand-written call elsewhere in business code fails the rule.
 //
 // # AI-robust grading (Funnel 双向锁评级)
 //

@@ -1,7 +1,7 @@
 // Package projection declares the kernel-level contracts for the CQRS
 // projection lifecycle harness: the business event→state Apply hook, the
-// CheckpointStore offset abstraction, the CellCheckpointStore sealed marker,
-// the functional Option seam, and the rebuild-lifecycle Phase enum.
+// CheckpointStore offset abstraction, the MemCursor / MemReplaySource demo
+// helpers, the functional Option seam, and the rebuild-lifecycle Phase enum.
 //
 // # Scope
 //
@@ -64,13 +64,14 @@
 // leaving a projection gap. A single consumer GROUP does NOT by itself provide
 // this ordering — it only prevents cross-cell fanout.
 //
-// v1 ships safe because the only wired event bus (cmd/* → in-memory) consumes
-// serially in one goroutine. Enforcing serial in-order delivery on the production
-// transport (prefetch=1 / single-goroutine dispatch for projection subscriptions)
-// is a HARD prerequisite of the cellgen projection wiring in PR-04 (#1176): no
-// concurrent transport may carry a projection subscription until that enforcement
-// lands. This intra-consumer-group ordering precondition is distinct from the
-// multi-pod boundary below. See ADR §6 threat row 4.
+// This serial in-order delivery is now ENFORCED at the bootstrap projection
+// drain (PR-04d, #1369): a transport opts in by implementing
+// outbox.SerialInOrderGuarantor and returning true; the drain rejects wiring a
+// projection onto any subscriber that does not (fail-closed-by-absence). Only
+// runtime/eventbus.InMemoryEventBus qualifies today (single-goroutine consume);
+// AMQP/MQTT (concurrent dispatch) fail fast rather than silently dropping
+// positions. This intra-consumer-group ordering precondition is distinct from
+// the multi-pod boundary below. See ADR §6 threat row 4 + §Amendment 2026-06-02.
 //
 // # v1 operational boundaries
 //
@@ -98,6 +99,12 @@
 //     must enroll in projectiontest.RunCheckpointConformance.
 //     Archtest: tools/archtest/projection_checkpoint_conformance_enroll_test.go.
 //     Green from PR-01 (MemCheckpointStore enrolled).
+//   - PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 — a projection may only be
+//     carried by a transport implementing outbox.SerialInOrderGuarantor (true);
+//     the bootstrap drain fail-fasts otherwise. Marker freeze + exact implementer
+//     set {InMemoryEventBus} + single guard callsite.
+//     Archtest: tools/archtest/projection_serial_delivery_enforcement_test.go.
+//     Green from PR-04d (#1369).
 //
 // ref: docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md
 // ref: AxonFramework TokenStore / @ResetHandler — checkpoint-in-tx + 4-phase rebuild.

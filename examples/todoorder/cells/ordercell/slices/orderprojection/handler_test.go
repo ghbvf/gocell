@@ -25,10 +25,10 @@ func newSummaryHandler(t *testing.T) (*Service, *projectionsummary.Handler) {
 func TestSummaryGet_Returns200_WithBodyShape(t *testing.T) {
 	svc, summaryH := newSummaryHandler(t)
 
-	// seed two orders so seq > 0 and all fields appear in body (omitempty skips 0-value ints)
+	// seed two orders to ensure non-empty response
 	ctx := context.Background()
-	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-test-1", "pending"))
-	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-test-1"))
+	require.NoError(t, svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-test-1", "pending")))
+	require.NoError(t, svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-test-2", "confirmed")))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/v1/orders/projection/summary", nil)
@@ -38,5 +38,6 @@ func TestSummaryGet_Returns200_WithBodyShape(t *testing.T) {
 	body := rec.Body.String()
 	assert.Contains(t, body, "totalOrders")
 	assert.Contains(t, body, "statuses")
-	assert.Contains(t, body, "lastAppliedSeq")
+	// lastAppliedSeq is no longer in the response — the harness owns the offset
+	assert.NotContains(t, body, "lastAppliedSeq")
 }

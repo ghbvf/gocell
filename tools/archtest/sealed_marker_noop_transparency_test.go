@@ -95,13 +95,15 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 	// Floor guard against a silent discovery break (RunTyped scope resolving
 	// nothing, prefix typo, etc.): the known sealed markers are
 	// internalCellTxManager (kernel/persistence) + internalCellPublisher /
-	// internalCellWriter / internalCellEmitter (kernel/outbox) +
-	// internalCellCheckpointStore (kernel/projection) = 5. Assert we found at
-	// least those so a load regression cannot make this archtest vacuously
-	// pass. Bump this floor whenever a sealed marker is added.
-	if found < 5 {
+	// internalCellWriter / internalCellEmitter (kernel/outbox) = 4.
+	// internalCellCheckpointStore (kernel/projection) was removed with
+	// WrapCheckpointStoreForCell when the bootstrap-owned projection harness
+	// made the cell-level sealed marker dead code (#1285 / #834). Assert we
+	// found at least those so a load regression cannot make this archtest
+	// vacuously pass. Bump this floor whenever a sealed marker is added.
+	if found < 4 {
 		t.Fatalf("SEALED-MARKER-NOOP-TRANSPARENCY-01: discovered only %d internalCell* struct types under "+
-			"kernel/...; expected ≥5 (auto-discovery likely broken)", found)
+			"kernel/...; expected ≥4 (auto-discovery likely broken)", found)
 	}
 }
 

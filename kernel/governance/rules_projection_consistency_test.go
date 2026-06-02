@@ -143,6 +143,11 @@ func TestProjectionConsistency01(t *testing.T) {
 			project:      buildNonProjectionProject("event", "L0"),
 			wantErrCount: 0,
 		},
+		{
+			name:         "invalid level string → skip (SLICE-CONSISTENCY-01 owns)",
+			project:      buildNonProjectionProject("http", "L99"),
+			wantErrCount: 0,
+		},
 	}
 
 	for _, tc := range tests {
