@@ -556,6 +556,97 @@ func TestBuildProjectionCoordinators_WithRealProvider_RegistersMetrics(t *testin
 		"projection_rebuild_duration_seconds (histogram) must be registered on the real provider; got %v", histograms)
 }
 
+// recordingLabelProvider wraps NopProvider but returns Gauge/Histogram vecs that
+// record every .With(labels) call. projection.NewCoordinator runs
+// Metrics.preflight — which calls .With({cell, projection}) on each registered
+// vec — at CONSTRUCTION time, and ONLY when CoordinatorConfig.Metrics is non-nil.
+// A recorded .With therefore proves the shared b.projectionMetrics was actually
+// threaded into NewCoordinator (not merely registered + cached on the Bootstrap).
+type recordingLabelProvider struct {
+	nop       kernelmetrics.NopProvider
+	withCalls *[]kernelmetrics.Labels
+}
+
+func (p recordingLabelProvider) GaugeVec(o kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	g, err := p.nop.GaugeVec(o)
+	if err != nil {
+		return nil, err
+	}
+	return recordingGaugeVec{GaugeVec: g, withCalls: p.withCalls}, nil
+}
+
+func (p recordingLabelProvider) HistogramVec(o kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	h, err := p.nop.HistogramVec(o)
+	if err != nil {
+		return nil, err
+	}
+	return recordingHistogramVec{HistogramVec: h, withCalls: p.withCalls}, nil
+}
+
+func (p recordingLabelProvider) CounterVec(o kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return p.nop.CounterVec(o)
+}
+
+func (p recordingLabelProvider) Unregister(kernelmetrics.Collector) error { return nil }
+
+type recordingGaugeVec struct {
+	kernelmetrics.GaugeVec
+	withCalls *[]kernelmetrics.Labels
+}
+
+func (v recordingGaugeVec) With(l kernelmetrics.Labels) kernelmetrics.Gauge {
+	*v.withCalls = append(*v.withCalls, l)
+	return v.GaugeVec.With(l)
+}
+
+type recordingHistogramVec struct {
+	kernelmetrics.HistogramVec
+	withCalls *[]kernelmetrics.Labels
+}
+
+func (v recordingHistogramVec) With(l kernelmetrics.Labels) kernelmetrics.Histogram {
+	*v.withCalls = append(*v.withCalls, l)
+	return v.HistogramVec.With(l)
+}
+
+// TestBuildProjectionCoordinators_SharedMetricsReachCoordinator is the F2 wiring
+// guard: it proves the cached shared b.projectionMetrics is actually passed into
+// projection.NewCoordinator (phases_projection.go CoordinatorConfig.Metrics:
+// b.projectionMetrics), not merely registered and cached on the Bootstrap. The
+// older RegistersMetrics test only asserts the metric NAMES register on the
+// provider and that b.projectionMetrics is non-nil — both stay true even if the
+// CoordinatorConfig.Metrics wiring regressed to nil. This test goes RED on that
+// regression: with Metrics: nil the Coordinator skips preflight, so no .With is
+// recorded.
+func TestBuildProjectionCoordinators_SharedMetricsReachCoordinator(t *testing.T) {
+	t.Parallel()
+	var withCalls []kernelmetrics.Labels
+	prov := recordingLabelProvider{withCalls: &withCalls}
+	s := buildProjectionPhaseState(t, newProjectionCellNamed("ordercell", "summary"))
+
+	b := newProjectionBootstrap(t, WithMetricsProvider(prov))
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 1)
+	require.NotNil(t, b.projectionMetrics,
+		"shared projection metrics must be registered once and cached")
+
+	// preflight runs at NewCoordinator construction only when Metrics is non-nil;
+	// a recorded .With proves b.projectionMetrics was threaded into NewCoordinator.
+	require.NotEmpty(t, withCalls,
+		"Coordinator must run Metrics.preflight (.With on the shared vecs) at construction — "+
+			"proves b.projectionMetrics reached NewCoordinator; empty means CoordinatorConfig.Metrics regressed to nil")
+	found := false
+	for _, l := range withCalls {
+		if l["cell"] == "ordercell" && l["projection"] == "summary" {
+			found = true
+			break
+		}
+	}
+	assert.Truef(t, found,
+		"preflight must bind the projection's own {cell, projection} labels; got %v", withCalls)
+}
+
 // TestBuildProjectionCoordinators_NopProvider_SkipsMetrics verifies that when no
 // provider is configured (NopProvider default), autoWireProjectionMetrics does NOT
 // call projection.RegisterMetrics — matching the pattern used by autoWireHTTPMetricsCollector.
@@ -761,4 +852,5 @@ var (
 	_ projection.Cursor      = fakeProjectionCursor{}
 	_ kernelmetrics.Provider = (*projMetricRegProvider)(nil)
 	_ kernelmetrics.Provider = failGaugeProvider{}
+	_ kernelmetrics.Provider = recordingLabelProvider{}
 )
