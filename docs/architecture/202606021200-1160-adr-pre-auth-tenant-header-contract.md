@@ -59,6 +59,23 @@ All three paths invoke `tenant.ParseTenantID` which rejects empty strings and
 non-canonical UUIDs (Medium runtime guard; Hard gate = PR-2 typed position param
 at repo boundary).
 
+### setup/status fail-soft DELIBERATELY supersedes the fail-closed expectation (F3)
+
+A review finding (F3) read the original requirement as **fail-closed**: a
+missing/invalid `X-Tenant-ID` on `setup/status` should surface an error so a
+caller cannot silently get a misleading `hasAdmin:false`. This ADR **consciously
+overrides that** to fail-soft `200 {hasAdmin:false}`, and this supersession is
+explicit (not implicit): `setup/status` is a **public, pre-auth probe**, so a
+uniform `200 {hasAdmin:false}` for "no admin yet" / "tenant unknown" / "bad
+tenant" is the anti-enumeration posture — it denies an unauthenticated attacker a
+tenant-existence oracle, the same reason `login` returns a uniform 401. The
+accepted cost: a caller that simply forgot the header gets `hasAdmin:false`
+instead of a 4xx (a DX papercut on a bootstrap-only endpoint), which is the
+deliberate trade for non-enumerability. Decision owner sign-off: keep fail-soft
+(PR-2a review round-2). If the DX cost is later judged to outweigh the
+enumeration risk, the bounded alternative is "missing header → 400, present-but-
+invalid tenant → 200" (split), not a blanket fail-closed.
+
 ## Consequences
 
 - Contract files are now the source of documentation truth for the header, even

@@ -33,6 +33,8 @@ func (a StatusAdapter) Status(ctx context.Context, _ *statusGen.Request) (status
 		// Missing or malformed tenant → report HasAdmin:false rather than surfacing
 		// the parse error. This pre-auth bootstrap probe must stay non-enumerable:
 		// an invalid/absent X-Tenant-ID must not let a caller distinguish tenants.
+		// This fail-soft DELIBERATELY supersedes the fail-closed reading of review
+		// F3 — see ADR 1160 §"setup/status fail-soft ... supersedes ... (F3)".
 		//nolint:nilerr // intentional fail-soft: invalid tenant ⇒ non-enumerable false
 		return statusGen.Status200JSONResponse{
 			Data: &statusGen.ResponseData{HasAdmin: false},
