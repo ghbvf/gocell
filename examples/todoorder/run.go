@@ -23,8 +23,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -113,6 +115,29 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("invalid JWT auth plan: %w", err)
 	}
 
+	// Demo wires in-memory projection infra; events are discarded by NoopWriter
+	// so live consumption is best-effort (same as every todoorder demo) — the
+	// harness still cold-starts and registers its readyz probe; faithful
+	// PG-backed replay is tracked in backlog.
+	projCheckpoint := projection.NewMemCheckpointStore()
+	projReplay := projection.NewMemReplaySource()
+	projCursor, err := projection.NewMemCursor(projReplay)
+	if err != nil {
+		return fmt.Errorf("projection cursor: %w", err)
+	}
+
+	// Projections consume via the same ConsumerBase path as subscriptions, so
+	// the projection coordinator (phase6) requires a ConsumerBase to be wired —
+	// without it bootstrap fails fast at startup. Demo uses an in-memory
+	// idempotency claimer (single-process only); production would inject a
+	// distributed claimer (e.g. Redis).
+	claimer := idempotency.NewInMemClaimer(clock.Real())
+	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clock.Real())
+	if err != nil {
+		return fmt.Errorf("consumer base: %w", err)
+	}
+
+	// No WithMetricsProvider in demo → projection metric instruments are no-ops.
 	app := bootstrap.New(
 		clock.Real(),
 		bootstrap.WithAssembly(asm),
@@ -124,6 +149,11 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9092", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
+		bootstrap.WithConsumerBase(consumerBase),
+		bootstrap.WithProjectionCheckpointStore(projCheckpoint),
+		bootstrap.WithProjectionTxRunner(demoTxRunner{}),
+		bootstrap.WithProjectionReplaySource(projReplay),
+		bootstrap.WithProjectionCursor(projCursor),
 	)
 
 	logger.Info("todoorder: starting on :8082; protected routes require an RS256 bearer token")

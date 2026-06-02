@@ -4,11 +4,7 @@
 package orderprojection
 
 import (
-	"context"
-
 	"github.com/ghbvf/gocell/kernel/metadata"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // sliceMeta is the canonical metadata literal projected from slice.yaml.
@@ -21,8 +17,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ConsistencyLevel: "L3",
 	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
-		{Contract: "event.order-created.v1", Role: "subscribe", Handler: "HandleOrderCreated"},
-		{Contract: "event.order-status-changed.v1", Role: "subscribe", Handler: "HandleOrderStatusChanged"},
+		{Contract: "event.order-created.v1", Role: "subscribe", Handler: "HandleOrderCreated", Projection: "order_status", OnReset: "ResetOrderStatus"},
 		{Contract: "projection.order.status-summary.v1", Role: "provide"},
 		{Contract: "http.order.projection-summary.v1", Role: "serve"},
 	},
@@ -32,7 +27,6 @@ var sliceMeta = &metadata.SliceMeta{
 		},
 		Contract: []string{
 			"contract.event.order-created.v1.subscribe",
-			"contract.event.order-status-changed.v1.subscribe",
 			"contract.projection.order.status-summary.v1.provide",
 			"contract.http.order.projection-summary.v1.serve",
 		},
@@ -48,15 +42,3 @@ var sliceMeta = &metadata.SliceMeta{
 // funnel that replaces the legacy `cell.NewBaseSlice(id, cellID, level)`
 // literal pattern.
 func SliceMetadata() *metadata.SliceMeta { return sliceMeta.Clone() }
-
-// eventHandlerService documents the handler methods orderprojection's service
-// must provide so that cell_gen.go's reg.Subscribe call is typed. The interface
-// is intentionally unexported to avoid colliding with a concrete Service struct.
-// Build-time safety comes from the c.<field>.<method>(...) invocations in
-// cell_gen.go — Go rejects compilation if the method is missing or renamed.
-type eventHandlerService interface {
-	// HandleOrderCreated handles event.order-created.v1.
-	HandleOrderCreated(ctx context.Context, e outbox.Entry) outbox.HandleResult
-	// HandleOrderStatusChanged handles event.order-status-changed.v1.
-	HandleOrderStatusChanged(ctx context.Context, e outbox.Entry) outbox.HandleResult
-}
