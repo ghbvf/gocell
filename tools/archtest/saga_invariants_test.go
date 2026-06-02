@@ -4662,18 +4662,19 @@ func sagaSlogAttrLiteralGuardedKey(info *types.Info, cl *ast.CompositeLit) (stri
 	}
 	// Keyed form: a field is given as `Key: <expr>`.
 	if _, isKV := cl.Elts[0].(*ast.KeyValueExpr); isKV {
-		for _, elt := range cl.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
+		var foundKey string
+		var foundOk bool
+		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+			if foundOk {
+				return
 			}
 			ident, ok := kv.Key.(*ast.Ident)
 			if !ok || ident.Name != "Key" {
-				continue
+				return
 			}
-			return sagaGuardedKeyFromExpr(info, kv.Value)
-		}
-		return "", false
+			foundKey, foundOk = sagaGuardedKeyFromExpr(info, kv.Value)
+		})
+		return foundKey, foundOk
 	}
 	// Unkeyed (positional) form: slog.Attr's first field is Key (string).
 	return sagaGuardedKeyFromExpr(info, cl.Elts[0])
@@ -5348,11 +5349,7 @@ func scanSagaEnumLabelAssignments(p *Pass) []Diagnostic {
 			if gd.Tok != token.VAR {
 				return
 			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 				for i, val := range vs.Values {
 					// Determine the type of the LHS.  For `var x EnumType = expr`,
 					// the type is recorded on the Ident in vs.Names[i].
@@ -5386,7 +5383,7 @@ func scanSagaEnumLabelAssignments(p *Pass) []Diagnostic {
 							"an arbitrary value into the frozen set (SAGA-METRIC-LABEL-VALUES-FROZEN-01 assignment guard)",
 					})
 				}
-			}
+			})
 		})
 		// Walk AssignStmt nodes (x = expr or x := expr).
 		EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {

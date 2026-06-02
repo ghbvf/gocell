@@ -102,6 +102,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // routeDeadLetterFuncName is the method whose exit paths must each record a
@@ -134,26 +136,29 @@ var dlxSignalMethodNames = map[string]bool{
 // resolved object's FullName must be the routeDeadLetter method on *Subscriber,
 // so a same-named free function elsewhere does not match.
 func findRouteDeadLetter(p *Pass, f *ast.File) *ast.FuncDecl {
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Name == nil || fd.Name.Name != routeDeadLetterFuncName || fd.Body == nil {
-			continue
+	var result *ast.FuncDecl
+	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if result != nil {
+			return
+		}
+		if fd.Name == nil || fd.Name.Name != routeDeadLetterFuncName || fd.Body == nil {
+			return
 		}
 		if fd.Recv == nil || len(fd.Recv.List) == 0 {
-			continue
+			return
 		}
 		obj := p.TypesInfo.Defs[fd.Name]
 		fn, ok := obj.(*types.Func)
 		if !ok {
-			continue
+			return
 		}
 		// Exact FullName match (not HasSuffix): a same-named routeDeadLetter on a
 		// Subscriber type in any OTHER package would otherwise satisfy a suffix.
 		if fn.FullName() == routeDeadLetterFullName {
-			return fd
+			result = fd
 		}
-	}
-	return nil
+	})
+	return result
 }
 
 // dlxStmtIsFailureSignal reports whether stmt is `<recv>.RecordDeadLetterFailure(...)`
@@ -187,30 +192,38 @@ func dlxStmtIsFailureSignal(info *types.Info, stmt ast.Stmt) bool {
 // each ReturnStmt, checks that some earlier statement in the SAME block is a
 // dead-letter outcome metric. Returns diagnostics for silent returns plus the
 // total ReturnStmt count (for the non-vacuous companion).
+// blockReturnPrecededByFailureSignal reports whether some statement preceding
+// ret in the SAME block (by source position) is a dead-letter FAILURE signal.
+// Extracted from the EachInChildren callback so the callback carries no
+// found/done sentinel flag (SCANNER-FRAMEWORK-USAGE-02). The scan is a raw
+// position-bounded range over block.List (no type assertion), not an Each*
+// walker, so it is outside both SCANNER-FRAMEWORK-USAGE sub-rules.
+func blockReturnPrecededByFailureSignal(info *types.Info, block *ast.BlockStmt, ret *ast.ReturnStmt) bool {
+	for _, prev := range block.List {
+		if prev.Pos() >= ret.Pos() {
+			break
+		}
+		if dlxStmtIsFailureSignal(info, prev) {
+			return true
+		}
+	}
+	return false
+}
+
 func scanRouteDeadLetterReturns(p *Pass, f *ast.File, fd *ast.FuncDecl) ([]Diagnostic, int) {
 	var diags []Diagnostic
 	var returnCount int
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		block, ok := n.(*ast.BlockStmt)
-		if !ok {
-			return true
-		}
-		for i, stmt := range block.List {
-			if _, ok := stmt.(*ast.ReturnStmt); !ok {
-				continue
-			}
+	scanner.EachInSubtree[ast.BlockStmt](fd.Body, func(block *ast.BlockStmt) {
+		scanner.EachInChildren[ast.ReturnStmt](block, func(ret *ast.ReturnStmt) {
 			returnCount++
-			signaled := false
-			for _, prev := range block.List[:i] {
-				if dlxStmtIsFailureSignal(p.TypesInfo, prev) {
-					signaled = true
-					break
-				}
+			// A return preceded (same block) by a failure-signal statement is
+			// compliant; skip it. The preceding-statement scan lives in a helper
+			// so this callback holds no found/done sentinel flag
+			// (SCANNER-FRAMEWORK-USAGE-02).
+			if blockReturnPrecededByFailureSignal(p.TypesInfo, block, ret) {
+				return
 			}
-			if signaled {
-				continue
-			}
-			pos := p.Fset.Position(stmt.Pos())
+			pos := p.Fset.Position(ret.Pos())
 			rel := p.Rel(f)
 			diags = append(diags, Diagnostic{
 				Rel:  rel,
@@ -223,8 +236,7 @@ func scanRouteDeadLetterReturns(p *Pass, f *ast.File, fd *ast.FuncDecl) ([]Diagn
 					rel, pos.Line,
 				),
 			})
-		}
-		return true
+		})
 	})
 	return diags, returnCount
 }

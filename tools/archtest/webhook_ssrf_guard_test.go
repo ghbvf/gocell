@@ -94,6 +94,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -271,15 +273,14 @@ func scanSSRFTransportDialContext(fset *token.FileSet, file *ast.File, rel strin
 			return
 		}
 		// Confirmed: literal is net/http.Transport. Check for DialContext key.
-		for _, elt := range cl.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
+		// Find-first via the typed funnel (SCANNER-FRAMEWORK-USAGE-02): the
+		// `func(N) bool` predicate carries the early-return, no caller-held flag.
+		_, hasDialContext := scanner.FindFirstChild[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) bool {
 			key, ok := kv.Key.(*ast.Ident)
-			if ok && key.Name == dialContextFieldName {
-				return // DialContext is set — compliant
-			}
+			return ok && key.Name == dialContextFieldName
+		})
+		if hasDialContext {
+			return // DialContext is set — compliant
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
