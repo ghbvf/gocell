@@ -15,6 +15,14 @@ const (
 	VaultImage         = "hashicorp/vault:1.17@sha256:74a4ab138ab5d64725e89cd9a9c73f7040c7fe49e98b71697b275ca9a69919df"
 	OTelCollectorImage = "otel/opentelemetry-collector:0.123.0@sha256:e5e4a13f0ea98e7ca1d1d809be040180540146888d0d764abd4e1277cba87350"
 
+	// K3sImage pins the rancher/k3s single-node Kubernetes image used by the
+	// Vault Kubernetes-auth e2e (adapters/vault/k8s_auth_e2e_integration_test.go).
+	// Version v1.27.1-k3s1 matches the default of testcontainers-go
+	// modules/k3s v0.42.0 (k3s.RunContainer); the @sha256 digest is the
+	// authoritative pin (manifest-list digest from
+	// `docker buildx imagetools inspect rancher/k3s:v1.27.1-k3s1`).
+	K3sImage = "rancher/k3s:v1.27.1-k3s1@sha256:b1b1e98ea5776124d74d8a68151b1eeb3a6f15d8bd596a88ac0d5c36d78b3ede"
+
 	// MinIOImage pins the MinIO server image by content digest. MinIO upstream
 	// uses ISO timestamp release tags (RELEASE.YYYY-MM-DDTHH-MM-SSZ) that don't
 	// fit SemVer patterns; the tag segment matches the upstream release cadence
