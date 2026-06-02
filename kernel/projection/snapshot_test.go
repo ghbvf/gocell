@@ -102,6 +102,32 @@ func TestCoordinator_Snapshot_Degraded(t *testing.T) {
 	}
 }
 
+// TestCoordinator_Snapshot_DegradedLoadOffset covers the second computeLagPending
+// error edge — replay.Head succeeds but the checkpoint store's LoadOffset fails.
+// Snapshot must still return a valid Phase with zeroed pending/lag + the error.
+func TestCoordinator_Snapshot_DegradedLoadOffset(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	src := NewMemReplaySource()
+	src.Append(mustNewTestEntry(t, clockmock.New(time.Now()), "topic.v1")) // Head succeeds (=1)
+	store := &seededStore{offsets: make(map[string]int64), loadErr: errors.New("checkpoint load failed")}
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, store: store, replay: src})
+
+	snap, err := c.Snapshot(context.Background())
+	if err == nil {
+		t.Fatal("Snapshot: expected non-nil error on LoadOffset failure, got nil")
+	}
+	if !errors.Is(err, store.loadErr) {
+		t.Errorf("error does not wrap loadErr: %v", err)
+	}
+	if snap.Phase != PhaseLive {
+		t.Errorf("Phase = %v, want PhaseLive", snap.Phase)
+	}
+	if snap.PendingEvents != 0 || snap.ReplayLagSeconds != 0 {
+		t.Errorf("degraded snapshot must zero pending/lag, got pending=%d lag=%v", snap.PendingEvents, snap.ReplayLagSeconds)
+	}
+}
+
 // TestCoordinator_Snapshot_PhaseReflectsCoordinator asserts Snapshot.Phase mirrors
 // Coordinator.Phase() (in-memory read, never errors).
 func TestCoordinator_Snapshot_PhaseReflectsCoordinator(t *testing.T) {

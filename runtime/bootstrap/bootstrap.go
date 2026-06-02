@@ -191,9 +191,19 @@ type Bootstrap struct {
 	// projectionCoordinators maps "<cellID>/<projectionID>" → the constructed
 	// projection.RebuildController (a *projection.Coordinator), so the framework
 	// rebuild control-plane endpoint can resolve a {cell}/{name} path and trigger
-	// Rebuild + read a Snapshot. Populated by the phase6 projection drain; read by
-	// the rebuild handler at request time (phase6 runs after phase5 mounts the
-	// route but before any request is served, so the lazy read sees a full map).
+	// Rebuild + read a Snapshot.
+	//
+	// Concurrency: this is a plain map with no lock, and that is safe by
+	// construction — it is written ONLY by the phase6 projection drain
+	// (phase6StartEventRouter, Run() line ~104) and read ONLY by the rebuild
+	// handler. HTTP serving goroutines are launched in phase7
+	// (phase7StartHTTPServer, Run() line ~107) via `go server.Serve(...)`, which
+	// is sequenced AFTER phase6. The Go memory model's goroutine-start
+	// happens-before (the `go` statement happens-before the goroutine body) gives
+	// phase6 writes → phase7 serve-goroutine launch → handler reads. The map is
+	// therefore fully populated and frozen before any request can observe it; no
+	// mutex/sync.Map is needed (same pattern as the phase5-built health/router
+	// state). Do NOT add concurrent writers after phase6.
 	projectionCoordinators map[string]projection.RebuildController
 
 	// projectionRebuildCallers is the caller-cell allowlist for the framework

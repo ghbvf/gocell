@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -144,8 +145,10 @@ func TestProjectionRebuild_404(t *testing.T) {
 // after admission does not downgrade the already-admitted rebuild to a 5xx.
 func TestProjectionRebuild_DegradedSnapshotStill202(t *testing.T) {
 	t.Parallel()
+	// Distinctive non-default Phase so the assertion proves the handler passed the
+	// (degraded) snapshot's valid Phase through, not a zeroed/default Snapshot.
 	fake := &fakeRebuildController{
-		snap:    projection.Snapshot{Phase: projection.PhaseStopped},
+		snap:    projection.Snapshot{Phase: projection.PhaseLive},
 		snapErr: errors.New("checkpoint store unreachable"),
 	}
 	b := rebuildBootstrap(map[string]projection.RebuildController{"ordercell/order_status": fake})
@@ -156,8 +159,39 @@ func TestProjectionRebuild_DegradedSnapshotStill202(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	var got projectionRebuildResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	assert.Equal(t, "stopped", got.Data.Phase) // Phase still valid; pending/lag zeroed
+	assert.Equal(t, "live", got.Data.Phase) // Phase still valid; pending/lag zeroed
 	assert.Equal(t, int64(0), got.Data.PendingEvents)
+}
+
+// TestProjectionRebuild_UnexpectedRebuildError500 asserts that a Rebuild error
+// other than ErrRebuildInProgress (unreachable for a registered coordinator) maps
+// to a framework 500, not a client 400 — keeping the wire status set to the
+// ADR-frozen 202/409/404 plus the implicit framework 5xx.
+func TestProjectionRebuild_UnexpectedRebuildError500(t *testing.T) {
+	t.Parallel()
+	fake := &fakeRebuildController{rebuildErr: errors.New("coordinator not subscribed")}
+	b := rebuildBootstrap(map[string]projection.RebuildController{"ordercell/order_status": fake})
+	mux := mountRebuildEndpoint(t, b)
+
+	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+// TestProjectionRebuild_LongPathParamClamped asserts an oversized path param is
+// truncated in the 404 body (bounds the response/log against an oversized path).
+func TestProjectionRebuild_LongPathParamClamped(t *testing.T) {
+	t.Parallel()
+	b := rebuildBootstrap(map[string]projection.RebuildController{})
+	mux := mountRebuildEndpoint(t, b)
+
+	longName := strings.Repeat("a", 200)
+	rec := doRebuild(mux, "controlplane", "ordercell", longName)
+
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	// The full 200-char value must NOT appear verbatim — it is clamped to 64.
+	assert.NotContains(t, rec.Body.String(), longName)
+	assert.Contains(t, rec.Body.String(), strings.Repeat("a", maxPathParamReport))
 }
 
 // TestProjectionRebuild_CallerCellAllowlist asserts the auto-injected

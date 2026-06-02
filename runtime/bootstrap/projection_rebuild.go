@@ -27,10 +27,12 @@ package bootstrap
 // ref: runtime/bootstrap/health.go — framework-owned RouteGroup mount pattern.
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -40,7 +42,22 @@ import (
 const (
 	projectionRebuildContractID = "http.framework.projection.rebuild.v1"
 	projectionRebuildPath       = "/internal/v1/{cell}/projection/{name}/rebuild"
+	// maxPathParamReport bounds the cell/projection path-param length echoed in
+	// the 404 body / logs. Path params reach the handler unvalidated; registered
+	// projection keys are far shorter (cell ≤32, projection snake_case), so a
+	// value beyond this is necessarily a miss — truncating bounds the response
+	// body and log line against an oversized (authorized-caller) path.
+	maxPathParamReport = 64
 )
+
+// clampReport truncates an unvalidated path-param value to maxPathParamReport
+// runes for safe echoing in the 404 body / logs.
+func clampReport(s string) string {
+	if len(s) <= maxPathParamReport {
+		return s
+	}
+	return s[:maxPathParamReport]
+}
 
 // projectionRebuildResponseData is the data object of the 202 response body.
 // JSON field names are camelCase per the API convention.
@@ -78,6 +95,11 @@ func (b *Bootstrap) validateProjectionRebuildEndpoint() error {
 // and phase0 verified an InternalListener exists. The caller-cell allowlist rides
 // on ContractSpec.Clients (NewFrameworkHTTP variadic), so auth.Mount auto-injects
 // RequireCallerCell — no explicit Route.Policy needed.
+//
+// The RouteGroup carries no CellID (like the health groups), so HTTP metrics
+// attribute it to cell="_runtime" (RuntimeCellSentinel) — correct for a
+// framework control-plane endpoint that is not owned by a business cell. Filter
+// rebuild traffic by route template, not by the cell label.
 func (b *Bootstrap) projectionRebuildRouteGroup() cell.RouteGroup {
 	spec := contractbuild.NewFrameworkHTTP(
 		projectionRebuildContractID, http.MethodPost, projectionRebuildPath,
@@ -105,22 +127,44 @@ func (b *Bootstrap) newProjectionRebuildHandler() http.Handler {
 			httputil.WriteError(ctx, w, errcode.New(errcode.KindNotFound, errcode.ErrProjectionNotFound,
 				"projection not found",
 				errcode.WithDetails(
-					errcode.PublicString("cell", cellID),
-					errcode.PublicString("projection", projID),
+					errcode.PublicString("cell", clampReport(cellID)),
+					errcode.PublicString("projection", clampReport(projID)),
 				)))
 			return
 		}
 
 		if err := ctrl.Rebuild(ctx); err != nil {
-			// ErrRebuildInProgress is KindConflict → 409. Any other error (e.g. the
-			// unreachable Subscribe-not-called invariant) maps via its own Kind.
-			httputil.WriteError(ctx, w, err)
+			if errors.Is(err, projection.ErrRebuildInProgress) {
+				httputil.WriteError(ctx, w, err) // KindConflict → 409
+				return
+			}
+			// Any other Rebuild error is unreachable for a registered Coordinator
+			// (the phase6 drain always Subscribes before registering, so the
+			// Subscribe-not-called invariant cannot fire here). Treat it as a
+			// framework fault (500), not a client 400 — the caller did nothing
+			// wrong. Keeps the wire status set to the ADR-frozen 202/409/404 plus
+			// the implicit framework 5xx.
+			httputil.WriteError(ctx, w, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+				"projection rebuild: unexpected coordinator state",
+				errcode.WithInternal(errcode.InternalAttr("error", err.Error()))))
 			return
 		}
 
-		// Rebuild admitted (202). Read a best-effort snapshot for the body; a
-		// degraded read (store/replay error) is logged but never downgrades an
-		// already-admitted rebuild to a 5xx — Phase is always valid.
+		// Rebuild admitted (202). Audit-log the control-plane action with the
+		// caller cell (the access log correlates the rest via request_id, but a
+		// rebuild is an operator action worth an explicit Info record).
+		admitAttrs := httputil.AppendCorrelationAttrs(ctx, []any{
+			slog.String("cell", cellID),
+			slog.String("projection", projID),
+		})
+		if p, ok := auth.FromContext(ctx); ok && p.CallerCellID != "" {
+			admitAttrs = append(admitAttrs, slog.String("caller_cell", p.CallerCellID))
+		}
+		slog.InfoContext(ctx, "projection rebuild admitted", admitAttrs...)
+
+		// Read a best-effort snapshot for the body; a degraded read (store/replay
+		// error) is logged but never downgrades an already-admitted rebuild to a
+		// 5xx — Phase is always valid.
 		snap, snapErr := ctrl.Snapshot(ctx)
 		if snapErr != nil {
 			attrs := httputil.AppendCorrelationAttrs(ctx, []any{

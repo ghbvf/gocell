@@ -36,6 +36,7 @@ type coordinatorFullParams struct {
 	store        CheckpointStore
 	cursor       Cursor
 	replay       ReplaySource
+	metrics      *Metrics // optional; nil leaves instruments disabled
 }
 
 // newCoordinatorFull creates a Coordinator with all dependencies including
@@ -68,7 +69,7 @@ func newCoordinatorFull(t *testing.T, p coordinatorFullParams) *Coordinator {
 		Cursor:       p.cursor,
 		Replay:       p.replay,
 		Tracer:       wrapper.NoopTracer{},
-		Metrics:      nil, // metrics optional
+		Metrics:      p.metrics, // nil leaves instruments disabled
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)

@@ -15,7 +15,10 @@ type RebuildController interface {
 	// Rebuild triggers a background full rebuild; nil = admitted (caller → 202),
 	// ErrRebuildInProgress = already running (caller → 409).
 	Rebuild(ctx context.Context) error
-	// Snapshot returns the current phase plus best-effort pending/lag.
+	// Snapshot returns the current phase plus best-effort pending/lag. On a
+	// store/replay read error the returned Snapshot still carries a valid Phase
+	// (in-memory, never fails); only PendingEvents and ReplayLagSeconds are
+	// zeroed, and the error is returned for the caller to log.
 	Snapshot(ctx context.Context) (Snapshot, error)
 }
 
@@ -32,6 +35,13 @@ var _ RebuildController = (*Coordinator)(nil)
 // non-nil error. Callers (the rebuild handler) log the error but MUST NOT fail
 // an already-admitted rebuild over a degraded snapshot read — the rebuild has
 // been accepted regardless of whether its current lag could be read.
+//
+// ReplayLagSeconds == 0 is ambiguous by design and must be read together with
+// PendingEvents: it means either "caught up" (PendingEvents == 0) OR "lag
+// unknown" (PendingEvents > 0 but nothing applied yet — cold start / fresh
+// rebuild, so there is no last-applied time to measure from). The lag readyz
+// probe distinguishes these (it leaves the lag gauge unwritten during the
+// startup-grace case rather than reporting a false-healthy zero).
 type Snapshot struct {
 	Phase            Phase
 	PendingEvents    int64

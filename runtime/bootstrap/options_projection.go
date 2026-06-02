@@ -119,10 +119,15 @@ func WithProjectionCursor(cursor projection.Cursor) Option {
 // InternalListener MUST be declared via WithListener — phase0
 // (validateProjectionRebuildEndpoint) fails fast otherwise.
 //
-// Not calling this option (or calling it with no callers) leaves the endpoint
-// unmounted: projection rebuilds remain triggerable only programmatically via
-// Coordinator.Rebuild. This is a wiring option — a later call replaces the
-// allowlist set by an earlier one.
+// Opt-in is determined solely by len(allowedCallers) > 0. Not calling this
+// option — OR calling it with zero callers, WithProjectionRebuildEndpoint() —
+// leaves the endpoint unmounted with NO error: projection rebuilds remain
+// triggerable only programmatically via Coordinator.Rebuild. (A zero-caller call
+// is therefore a no-op, not a misconfiguration; an /internal/ endpoint with a
+// non-empty caller list is the only mounted form.)
+//
+// This is a wiring option — a later call REPLACES the allowlist set by an
+// earlier one (including clearing it back to unmounted with a zero-caller call).
 func WithProjectionRebuildEndpoint(allowedCallers ...string) Option {
 	return func(b *Bootstrap) {
 		b.projectionRebuildCallers = allowedCallers
