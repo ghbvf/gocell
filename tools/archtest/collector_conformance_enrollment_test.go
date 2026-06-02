@@ -252,7 +252,6 @@ func TestCollectorConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *testin
 	// Scan production non-test files for MethodByName("Collector") calls.
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.Patterns(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

@@ -116,7 +116,6 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 	diags := Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/slices/identitymanage/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() || p.Fset == nil {
 				return nil

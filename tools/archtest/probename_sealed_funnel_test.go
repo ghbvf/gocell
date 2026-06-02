@@ -907,7 +907,6 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -1228,7 +1227,6 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoReflectBypass(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1286,7 +1284,6 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoStringCastBypass(t *testing.T)
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1358,7 +1355,6 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoHelperWrapper(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1418,7 +1414,6 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoNewProbeImpl(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"github.com/ghbvf/gocell/kernel/healthz/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != "github.com/ghbvf/gocell/kernel/healthz" {
 				return nil

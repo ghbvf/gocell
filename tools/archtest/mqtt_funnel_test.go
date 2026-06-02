@@ -377,7 +377,6 @@ func TestMQTTClientIDNamespace01(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -458,7 +457,6 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -592,7 +590,6 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -668,7 +665,6 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -755,7 +751,6 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(root)),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -844,7 +839,6 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil

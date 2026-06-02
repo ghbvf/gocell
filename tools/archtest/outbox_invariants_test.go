@@ -1852,7 +1852,6 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: true},
 		[]string{outboxtestPattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -1913,7 +1912,6 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: true},
 		[]string{outboxtestPattern}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

@@ -35,15 +35,15 @@ Accepted (2026-05-19)
 
 ### 改造 2 — tagGroup 循环范本拆除（B 轴：两次 Load + 共享 seen dedup）
 
-把 `for tagGroup := range KnownNonDefaultTags() { RunTyped(...) }` 替换为两次 RunTyped：
-1. `RunTyped(t, TypedOpts{}, patterns, scan)` — tags=nil 覆盖默认 build + 反向 directive 文件
-2. `RunTyped(t, TypedOpts{Tags: archtest.FlatNonDefaultTags()}, patterns, scan)` — 覆盖所有正向 tag 激活文件 union（#944 起 `FlatNonDefaultTags()` 已不含 fixture tag，原 `ProductionFlatTags()` band-aid 已删，二者合一）
+把 `for tagGroup := range KnownNonDefaultTags() { Run(t, Typed(...), scan) }` 替换为两次 `Run(t, Typed(...), scan)`：
+1. `Run(t, Typed(TypedOpts{}, patterns), scan)` — tags=nil 覆盖默认 build + 反向 directive 文件
+2. `Run(t, Typed(TypedOpts{Tags: archtest.FlatNonDefaultTags()}, patterns), scan)` — 覆盖所有正向 tag 激活文件 union（#944 起 `FlatNonDefaultTags()` 已不含 fixture tag，原 `ProductionFlatTags()` band-aid 已删，二者合一）
 
 共享 seen map dedup（文件集有重合，dedup 保证 violations 唯一）。N=7 → 2，RSS 峰值从 N×全模块 → 单次峰值（GC 可在两次 Load 间释放中间体）。
 
 ### 改造 3 — AI Hard archtest 防复抄
 
-新建 `tools/archtest/taggroup_loop_no_typed_run_test.go`，`TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01` 用 (callee, body) 双因子 form-uniqueness 锁 RangeStmt+RunTyped 范本。fresh Claude 复抄 = CI 红。
+新建 `tools/archtest/taggroup_loop_no_typed_run_test.go`，`TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01` 用 (callee, body) 双因子 form-uniqueness 锁 RangeStmt+`Run(t, Typed(...))` 范本。fresh Claude 复抄 = CI 红。
 
 ## 开源对标参考
 
@@ -78,7 +78,7 @@ Accepted (2026-05-19)
 | 反向 build directive 监控 | 不感知 | 未来加 `//go:build !X` (X ∈ KnownNonDefaultTags) 需 review 两次 Load 设计完整性 | 新增隐含约束 |
 | 复抄范本 | 已 2 处实证 + fresh Claude 必复发 | archtest 静态拦截 | 改造 3 解 |
 | `warm.go` 直调 typeseval | 不存在 | 不受 PASS-FUNNEL-LOADPACKAGES-01 保护（该规则仅扫 `_test.go`） | 已接受：warm.go 是 archtest 包内 unexported helper，仅 TestMain 调用，无外部 _test.go 滥用风险；future-proof 升级路径见 backlog `PASS-FUNNEL-NONTESTGO-EXEMPT-UPGRADE-01` |
-| TAGGROUP-LOOP scope gap | 不存在 | `tools/archtest/internal/<subpkg>/*_test.go` (e.g. internal/scanner/, internal/typeseval/) 不被 TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01 扫描 | 已接受：internal 子包测试内部符号，不调 archtest.RunTyped；若未来某 internal _test.go 加直调 RunTyped 形态需扩 scope |
+| TAGGROUP-LOOP scope gap | 不存在 | `tools/archtest/internal/<subpkg>/*_test.go` (e.g. internal/scanner/, internal/typeseval/) 不被 TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01 扫描 | 已接受：internal 子包测试内部符号，不调 `archtest.Run(t, Typed(...))`；若未来某 internal _test.go 加直调 `Run(t, Typed(...))` 形态需扩 scope |
 | CI log path exposure | 不存在 | TestMain fail-fast 时 slog.Error 输出含完整 modRoot/cwd 路径，会出现在 GHA artifact 中 | 已接受：路径非凭据，且 testmain 是 perf/bootstrap 路径，无 PII；如未来仓库公开化需重评 |
 | Total CI wall (16 shard) | 受 borderline test 跨 budget 影响 + B 轴 OOM SIGTERM 重跑 | 预期：单 shard wall ≤ 5s (warm) + 0-3 个 borderline ≤ 10s (warm 后)；16 shard parallel wall ~30-40s + 启动开销 | warmup 在轻 shard (e.g. shard 0 = 33 tests / 4.78s) 上付 +15-25s 启动成本是 wash 或微亏；在重 shard / borderline shard 上净赚；实测需 CI 矩阵观察 2-3 次 |
 

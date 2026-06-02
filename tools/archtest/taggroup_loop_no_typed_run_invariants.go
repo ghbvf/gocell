@@ -339,11 +339,12 @@ func taggroupObjectOf(info *types.Info, id *ast.Ident) types.Object {
 // the typed-scope constructors in taggroupTypedScopeCtors
 // (Typed/Production/Fixture/StandaloneModule), or (b) an *ast.Ident bound
 // (file-level) to such a call — the scope-var-indirection form
-// `scope := Typed(...); Run(t, scope, ...)` (F2). Returns the line number of the
-// first matching Run CallExpr (first in preorder). Walks the entire subtree (no
-// early-return) — RangeStmt body sizes in archtest tests are small, so the
-// constant-factor cost is irrelevant; the API choice keeps the rule honest
-// about scanner usage.
+// `scope := Typed(...); Run(t, scope, ...)` (F2). Uses FindFirstInSubtree, so it
+// stops at the FIRST matching Run CallExpr (preorder) and returns its line
+// number — one offending Run is enough to flag the enclosing loop body. The
+// find-first scanner walker keeps the rule honest about scanner usage
+// (SCANNER-FRAMEWORK-USAGE-02 sanctions FindFirstInSubtree for this early-return
+// shape rather than an EachInSubtree + done-sentinel hand-roll).
 //
 // Both callee resolutions go through *types.Info (ResolvePackageRef), so the
 // qualified / dot-import / aliased forms of archtest.Run AND of the scope

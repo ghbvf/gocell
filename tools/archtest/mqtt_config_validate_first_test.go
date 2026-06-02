@@ -75,7 +75,6 @@ func TestMQTTConfigValidateFirst01(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil

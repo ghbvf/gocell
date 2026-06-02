@@ -219,7 +219,7 @@ ExecDirect(f("x"), …)`）由 gate #2 callee 解析失败兜住（main rule 即
 | 拷贝 `pgrepoapproved` 包到其他位置绕过 funnel | callee 解析锁 `Pkg().Path()` 到精确字符串 `"github.com/ghbvf/gocell/pkg/pgrepoapproved"`，重定向 import 不改 package path ✓ |
 | import 别名绕过 `Approve` callee 识别 | callee 解析锁 `fn.Pkg().Path()`（via *types.Info.Uses），import alias 不改 package path ✓ |
 | `Approve` 当函数值间接调用（`f := Approve; ExecDirect(f("x"), …)`） | R3 gate #2：`Approve` callsite 的 callee `f` 解析到 `*types.Var` 而非 `*types.Func` → `resolveCalleeFunc` 返回 nil → flag；main rule 即捕获（盲区 BS-7，见 archtest godoc）✓ |
-| build-tag 隔离的条件性 ExecDirect 调用 | RunTyped 用 default build context；如需覆盖须扩展 TypedOpts；当前 production 代码库无 build-tag 隔离 ExecDirect 先例；以 code review 兜底（accepted threat） |
+| build-tag 隔离的条件性 ExecDirect 调用 | `Run(t, Typed(...))` 用 default build context；如需覆盖须扩展 TypedOpts；当前 production 代码库无 build-tag 隔离 ExecDirect 先例；以 code review 兜底（accepted threat） |
 | ExecDirect 仅 adapters/postgres 当前持有 | accesscore 的 pgexec.PGExecutor 暴露 ExecDirect（仅集成测试用，无 production callsite）；devicecell / saga 不暴露（saga 用 AcquireTx 进行 tx ownership） ✓ |
 
 ## Implementation matrix

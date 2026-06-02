@@ -243,7 +243,6 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	var violations []wrapperViolation
 	Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/wrapfixture/violation"}),
-
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil
@@ -304,7 +303,6 @@ func TestCellRawInfraWrapperLocation01_RejectsKernelCellSibling(t *testing.T) {
 	var violations []wrapperViolation
 	Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/wrapfixture/kernelcellsibling"}),
-
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil
