@@ -68,7 +68,7 @@ func mountRebuildEndpoint(t *testing.T, b *Bootstrap) *http.ServeMux {
 // caller "controlplane" and the given registry contents.
 func rebuildBootstrap(reg map[string]projection.RebuildController) *Bootstrap {
 	b := New(clock.Real(), WithProjectionRebuildEndpoint("controlplane"))
-	b.projectionCoordinators = reg
+	b.projectionRebuilds = reg
 	return b
 }
 

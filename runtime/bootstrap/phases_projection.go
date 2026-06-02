@@ -432,10 +432,10 @@ func (b *Bootstrap) wireOneProjection(s *phaseState, evtRouter *eventrouter.Rout
 	s.addNamedTeardown("projection:"+w.cellID+"/"+w.projectionID,
 		func(c context.Context) error { return coord.Close(c) })
 
-	if b.projectionCoordinators == nil {
-		b.projectionCoordinators = make(map[string]projection.RebuildController)
+	if b.projectionRebuilds == nil {
+		b.projectionRebuilds = make(map[string]projection.RebuildController)
 	}
 	// coord (*projection.Coordinator) satisfies projection.RebuildController.
-	b.projectionCoordinators[w.cellID+"/"+w.projectionID] = coord
+	b.projectionRebuilds[w.cellID+"/"+w.projectionID] = coord
 	return nil
 }

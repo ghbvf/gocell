@@ -188,7 +188,7 @@ type Bootstrap struct {
 	projectionTxRunner persistence.TxRunner
 	projectionReplay   projection.ReplaySource
 	projectionCursor   projection.Cursor
-	// projectionCoordinators maps "<cellID>/<projectionID>" → the constructed
+	// projectionRebuilds maps "<cellID>/<projectionID>" → the constructed
 	// projection.RebuildController (a *projection.Coordinator), so the framework
 	// rebuild control-plane endpoint can resolve a {cell}/{name} path and trigger
 	// Rebuild + read a Snapshot.
@@ -204,7 +204,7 @@ type Bootstrap struct {
 	// therefore fully populated and frozen before any request can observe it; no
 	// mutex/sync.Map is needed (same pattern as the phase5-built health/router
 	// state). Do NOT add concurrent writers after phase6.
-	projectionCoordinators map[string]projection.RebuildController
+	projectionRebuilds map[string]projection.RebuildController
 
 	// projectionRebuildCallers is the caller-cell allowlist for the framework
 	// projection rebuild endpoint, set by WithProjectionRebuildEndpoint. Non-empty

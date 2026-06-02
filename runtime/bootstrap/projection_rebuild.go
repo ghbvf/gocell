@@ -13,7 +13,7 @@ package bootstrap
 // declared.
 //
 // The endpoint dispatches by {cell}/{name} path params to the projection
-// Coordinator registered in the phase6 drain (b.projectionCoordinators, read
+// Coordinator registered in the phase6 drain (b.projectionRebuilds, read
 // lazily at request time — phase6 runs after phase5 mounts the route but before
 // any request is served). It honors the ADR-frozen status semantics: 202
 // Accepted (rebuild admitted; body carries the {phase, pendingEvents,
@@ -114,7 +114,7 @@ func (b *Bootstrap) projectionRebuildRouteGroup() cell.RouteGroup {
 }
 
 // newProjectionRebuildHandler returns the http.Handler for the rebuild endpoint.
-// It reads b.projectionCoordinators lazily (populated by the phase6 drain), so it
+// It reads b.projectionRebuilds lazily (populated by the phase6 drain), so it
 // captures the receiver, not a snapshot of the map.
 func (b *Bootstrap) newProjectionRebuildHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +122,7 @@ func (b *Bootstrap) newProjectionRebuildHandler() http.Handler {
 		cellID := r.PathValue("cell")
 		projID := r.PathValue("name")
 
-		ctrl, ok := b.projectionCoordinators[cellID+"/"+projID]
+		ctrl, ok := b.projectionRebuilds[cellID+"/"+projID]
 		if !ok {
 			httputil.WriteError(ctx, w, errcode.New(errcode.KindNotFound, errcode.ErrProjectionNotFound,
 				"projection not found",

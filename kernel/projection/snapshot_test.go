@@ -9,14 +9,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 )
 
+// snapshotTestLagOffset is the fixed last-applied age for the "recent apply"
+// snapshot case (lag ≈ this value). Extracted to a package-level const per
+// TEST-TIME-LITERAL-01.
+const snapshotTestLagOffset = 10 * time.Second
+
 // TestCoordinator_Snapshot_Values exercises the value cases of Coordinator.Snapshot:
 // the Phase is always reported, and PendingEvents / ReplayLagSeconds are derived
 // from the replay head, checkpoint, and last-applied domain time via the shared
 // computeLagPending helper (same source as the lag probe).
 func TestCoordinator_Snapshot_Values(t *testing.T) {
 	t.Parallel()
-
-	const lagOffset = 10 * time.Second
 
 	cases := []struct {
 		name         string
@@ -27,7 +30,10 @@ func TestCoordinator_Snapshot_Values(t *testing.T) {
 		wantLagSecs  float64
 	}{
 		{name: "live empty", headEntries: 0, checkpoint: 0, lastAppliedT: false, wantPending: 0, wantLagSecs: 0},
-		{name: "pending with recent apply", headEntries: 2, checkpoint: 0, lastAppliedT: true, wantPending: 2, wantLagSecs: lagOffset.Seconds()},
+		{
+			name: "pending with recent apply", headEntries: 2, checkpoint: 0,
+			lastAppliedT: true, wantPending: 2, wantLagSecs: snapshotTestLagOffset.Seconds(),
+		},
 		{name: "pending startup grace", headEntries: 2, checkpoint: 0, lastAppliedT: false, wantPending: 2, wantLagSecs: 0},
 		{name: "negative pending clamped", headEntries: 0, checkpoint: 5, lastAppliedT: true, wantPending: 0, wantLagSecs: 0},
 		{name: "caught up", headEntries: 2, checkpoint: 2, lastAppliedT: true, wantPending: 0, wantLagSecs: 0},
@@ -52,7 +58,7 @@ func TestCoordinator_Snapshot_Values(t *testing.T) {
 			}
 			c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, store: store, replay: src})
 			if tc.lastAppliedT {
-				c.lastAppliedUnixNano.Store(now.Add(-lagOffset).UnixNano())
+				c.lastAppliedUnixNano.Store(now.Add(-snapshotTestLagOffset).UnixNano())
 			}
 
 			snap, err := c.Snapshot(context.Background())
