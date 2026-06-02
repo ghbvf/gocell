@@ -49,7 +49,7 @@ import (
 //     no pre-auth tenant source — the refresh token / session row do not carry
 //     tenant until PR-3) must remain callable. Tenant isolation for this path is
 //     enforced at the DB layer by PR-3 RLS once the refresh tenant carrier lands.
-//     archtest TENANT-REPO-PARAM-FUNNEL-01 allowlists GetByID (+ RepoReady).
+//     archtest TENANT-REPO-PARAM-FUNNEL-01 allowlists GetByID.
 type UserRepository interface {
 	Create(ctx context.Context, t tenant.TenantID, user *domain.User) error
 	// GetByID is the by-PK tenant-deriving carve-out — see the interface godoc.

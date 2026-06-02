@@ -96,7 +96,8 @@ CREATE TABLE users (
     -- credential-provenance source of truth. Migration 028 enforces > 0.
     authz_epoch              BIGINT      NOT NULL,
     -- Migration 022: narrow-scope CAS for password updates (S6).
-    password_version         BIGINT      NOT NULL,
+    -- DEFAULT 0 mirrors migration 022 and matches insertUserSQL (no explicit column).
+    password_version         BIGINT      NOT NULL DEFAULT 0,
     created_at               TIMESTAMPTZ NOT NULL,
     updated_at               TIMESTAMPTZ NOT NULL,
     -- Migration 032: auto-lockout bookkeeping (ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01).

@@ -178,6 +178,21 @@ func TestHandleLogin(t *testing.T) {
 	}
 }
 
+// TestHandler_Login_MissingTenantHeader verifies that a request without the
+// X-Tenant-ID header returns 400 (the service treats an empty tenantId as
+// ErrAuthLoginInvalidInput via RequireNotEmpty).
+func TestHandler_Login_MissingTenantHeader(t *testing.T) {
+	h := setup(t)
+	body := `{"username":"alice","password":"correct-pass"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// Intentionally do NOT set X-Tenant-ID.
+	h.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assertValidationError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT")
+}
+
 // assertValidationError is a helper that asserts the error response has the
 // expected error code (from the generated handler's schema validation).
 func assertValidationError(t *testing.T, body []byte, wantCode string) {

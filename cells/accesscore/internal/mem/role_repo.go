@@ -186,8 +186,10 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(ctx context.Context, t tenant.T
 	if roleID == auth.RoleAdmin {
 		// Short-circuit 1: target non-active → removal cannot reduce the
 		// effective-admin count. Aligns with migration-046 trigger.
+		// Use userByIDInTenant (not the global usersByID map) so that a user from
+		// another tenant cannot satisfy the active-check for this tenant's guard.
 		targetIsActive := false
-		if u, ok := r.store.usersByID[userID]; ok {
+		if u, ok := r.store.userByIDInTenant(userID, string(t)); ok {
 			targetIsActive = u.Status() == domain.StatusActive
 		}
 		if targetIsActive {

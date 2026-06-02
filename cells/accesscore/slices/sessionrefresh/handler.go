@@ -7,17 +7,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	refreshgen "github.com/ghbvf/gocell/generated/contracts/http/auth/refresh/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
-
-// headerTenantID is the HTTP header name carrying the tenant identifier.
-// The refresh endpoint is Public (no JWT), so the tenant must be supplied
-// via this header for role lookup in MintAccess (#1337 PR-2).
-const headerTenantID = "X-Tenant-ID"
-
-// refreshTenantCtxKey is the unexported context key used by the tenant
-// injection mux to ferry the X-Tenant-ID header value into the service ctx.
-type refreshTenantCtxKey struct{}
 
 // RefreshAdapter implements refreshgen.Service for http.auth.refresh.v1.
 // It adapts the slice-internal Service (Refresh takes a raw token string)
@@ -43,13 +33,6 @@ type RefreshAdapter struct{ S *Service }
 // (Pre-existing convention; the 403 typed branch removed in #940 was the lone
 // exception and is now gone.)
 func (a RefreshAdapter) Refresh(ctx context.Context, req *refreshgen.Request) (refreshgen.RefreshResponseObject, error) {
-	// Inject tenant from ctx key set by the tenantInjectMux middleware.
-	// tenantInjectMux extracts X-Tenant-ID from the HTTP request header and
-	// stores it in ctx. If present, inject into ctxkeys so tenant.FromContext
-	// works in the service's MintAccess role lookup (#1337 PR-2).
-	if tid, _ := ctx.Value(refreshTenantCtxKey{}).(string); tid != "" {
-		ctx = ctxkeys.WithTenantID(ctx, tid)
-	}
 	pair, err := a.S.Refresh(ctx, req.RefreshToken)
 	if err != nil {
 		return nil, err
@@ -86,37 +69,14 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // ServeHTTP allows Handler to be used directly as an http.Handler in tests.
-// It injects the X-Tenant-ID header value into the ctx before delegating.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if tid := r.Header.Get(headerTenantID); tid != "" {
-		r = r.WithContext(ctxkeys.WithTenantID(r.Context(), tid))
-	}
 	h.refreshH.ServeHTTP(w, r)
 }
 
-// tenantInjectMiddleware is a middleware that injects the X-Tenant-ID HTTP
-// header value into ctxkeys.TenantID before passing the request downstream.
-// Required because the refresh endpoint is Public (no JWT), so the listener
-// auth middleware does not populate ctxkeys.TenantID from a claim; the role
-// lookup in MintAccess reads the tenant via tenant.FromContext (#1337 PR-2).
-func tenantInjectMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if tid := r.Header.Get(headerTenantID); tid != "" {
-			r = r.WithContext(ctxkeys.WithTenantID(r.Context(), tid))
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// RegisterRoutes mounts the refresh contract handler on mux, wrapping it
-// with the tenant injection middleware so X-Tenant-ID is available in ctx.
-// When mux implements cell.RouteMux (the production chi-backed router),
-// With(middleware) is used to inject the tenant before the handler. Non-RouteMux
-// values (e.g. test stubs implementing only RouteHandler) register without the
-// middleware wrapper.
+// RegisterRoutes mounts the refresh contract handler on mux.
+// The refresh endpoint is Public (no JWT required). Tenant is derived from the
+// refreshed user's TenantID field (#1337 PR-2 stopgap; PR-3 will carry tenant
+// in the session/refresh row for true RLS isolation).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
-	if rm, ok := mux.(kcell.RouteMux); ok {
-		return h.refreshH.RegisterRoutes(rm.With(tenantInjectMiddleware))
-	}
 	return h.refreshH.RegisterRoutes(mux)
 }

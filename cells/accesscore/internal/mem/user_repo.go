@@ -524,8 +524,8 @@ func (r *UserRepository) UpdatePassword(
 
 // BumpAuthzEpoch atomically increments the AuthzEpoch counter for the given
 // user and returns the new value. Safe to call both inside and outside a
-// RunInTx closure. t is accepted for interface compliance; BumpAuthzEpoch
-// operates on the global PK (usersByID), so no tenant predicate is applied.
+// RunInTx closure. The lookup is tenant-scoped via userByIDInTenant to prevent
+// a cross-tenant epoch bump, mirroring the PG bumpAuthzEpochSQL tenant predicate.
 func (r *UserRepository) BumpAuthzEpoch(
 	ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken,
 ) (int64, error) {

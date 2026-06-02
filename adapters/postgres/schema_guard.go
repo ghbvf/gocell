@@ -528,6 +528,11 @@ var expectedDefaults = []expectedDefault{
 	// would make the first SaveOffset fail at write time; asserting it here surfaces
 	// the drift at startup (readyz) instead.
 	{Table: "projection_checkpoints", Column: "owner", Default: "''::text"},
+	// users.password_version (022 → 046 rebuild) — insertUserSQL omits this column
+	// and relies on DEFAULT 0 to satisfy the NOT NULL constraint (migration 033
+	// adds users_password_version_non_negative CHECK >= 0). A dropped default would
+	// cause every new-user Create to fail at write time.
+	{Table: "users", Column: "password_version", Default: "0"},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -1090,7 +1095,8 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
 					"tgenabled=%q (enabled=%v) want enabled=%v",
-					gotEnabled, isEnabled, tr.Enabled))),
+					gotEnabled, isEnabled, tr.Enabled,
+				))),
 			)
 		}
 		if gotFn != tr.Function {

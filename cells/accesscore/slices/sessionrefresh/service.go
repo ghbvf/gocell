@@ -19,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
-	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -293,12 +292,13 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	// re-evaluated per refresh via the user lookup above; the session row
 	// itself is not rotated.
 	//
-	// Tenant derivation (#1337 PR-2): the refresh endpoint is Public (no JWT),
-	// so ctxkeys.TenantID may or may not be set. Try FromContext first; if
-	// absent (pre-auth path without ctx tenant), use zero — GetByUserID will
-	// validate it and surface the error as ErrAuthRoleFetchFailed. PR-3 will
-	// carry tenant in the session row and resolve this cleanly.
-	refreshTenantID, _ := tenant.FromContext(ctx)
+	// Tenant derivation (#1337 PR-2 stopgap): the refresh endpoint is Public
+	// (no JWT), so there is no pre-auth ctx tenant. Derive the tenant from the
+	// user row returned by fetchUserForRefresh (GetByID by-PK carve-out).
+	// user.TenantID was stamped at Create time and is the authoritative source.
+	// PR-3 will carry tenant in the refresh token / session row for true RLS
+	// isolation; at that point this derivation moves to the store layer.
+	refreshTenantID := user.TenantID
 	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,

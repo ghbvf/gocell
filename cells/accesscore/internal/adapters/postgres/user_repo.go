@@ -180,9 +180,10 @@ WHERE tenant_id = $4 AND id = $1`
 	// this constant.
 	maxFailedLoginCount = 1 << 30
 
-	// bumpAuthzEpochSQL: $1=id (global PK, no tenant predicate needed — row is
-	// already tenant-scoped and id is globally unique).
-	bumpAuthzEpochSQL = `UPDATE users SET authz_epoch = authz_epoch + 1 WHERE id = $1 RETURNING authz_epoch`
+	// bumpAuthzEpochSQL: $1=id, $2=tenant_id — tenant-scoped to prevent a
+	// cross-tenant authz_epoch bump if an attacker presents a valid UUID from
+	// another tenant. mem applies the same tenant predicate via userByIDInTenant.
+	bumpAuthzEpochSQL = `UPDATE users SET authz_epoch = authz_epoch + 1 WHERE id = $1 AND tenant_id = $2 RETURNING authz_epoch`
 
 	// updateLockoutFieldsSQL: $1=id, $2=count, $3=last_failed_at, $4=locked_until, $5=updated_at, $6=tenant_id.
 	updateLockoutFieldsSQL = `
@@ -385,8 +386,8 @@ func (r *PGUserRepo) getForUpdateBy(
 }
 
 // GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row
-// lock via SELECT ... FOR UPDATE. t is accepted for interface compliance;
-// the lookup is by global UUID PK (tenant-deriving) so no tenant predicate.
+// lock via SELECT ... FOR UPDATE. The lookup is tenant-scoped (WHERE tenant_id=$1
+// AND id=$2) to prevent a cross-tenant read leak on the FOR UPDATE path.
 func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
@@ -553,8 +554,8 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, t tenant.TenantID, user
 		return 0, err
 	}
 	var newEpoch int64
-	// bumpAuthzEpochSQL: $1=id (global PK; row is tenant-scoped via existing data)
-	err := r.db.QueryRow(ctx, bumpAuthzEpochSQL, userID).Scan(&newEpoch)
+	// bumpAuthzEpochSQL: $1=id, $2=tenant_id — tenant-scoped; see SQL constant.
+	err := r.db.QueryRow(ctx, bumpAuthzEpochSQL, userID, string(t)).Scan(&newEpoch)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,

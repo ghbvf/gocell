@@ -166,12 +166,13 @@ func assertRoleAssigned(t *testing.T, store *mem.Store, userID, roleID string) {
 
 func TestService_Assign(t *testing.T) {
 	tests := []struct {
-		name     string
-		setup    func(*testing.T, *mem.Store)
-		userID   string
-		roleID   string
-		wantErr  bool
-		wantCode errcode.Code
+		name         string
+		setup        func(*testing.T, *mem.Store)
+		userID       string
+		roleID       string
+		skipUserSeed bool // skips automatic seedActiveUser; user will be absent
+		wantErr      bool
+		wantCode     errcode.Code
 	}{
 		{
 			name:    "assign role to user",
@@ -204,11 +205,22 @@ func TestService_Assign(t *testing.T) {
 			wantCode: errcode.ErrAuthRBACInvalidInput,
 		},
 		{
-			name:     "role not found returns error",
-			userID:   "usr-1",
+			name:   "role not found returns error",
+			userID: "usr-1",
+			setup: func(t *testing.T, s *mem.Store) {
+				seedActiveUser(t, s, "usr-1")
+			},
 			roleID:   "nonexistent",
 			wantErr:  true,
 			wantCode: errcode.ErrAuthRoleNotFound,
+		},
+		{
+			name:         "user not in roster returns ErrAuthUserNotFound",
+			userID:       "ghost-not-in-roster",
+			roleID:       "admin",
+			skipUserSeed: true,
+			wantErr:      true,
+			wantCode:     errcode.ErrAuthUserNotFound,
 		},
 	}
 
@@ -218,7 +230,8 @@ func TestService_Assign(t *testing.T) {
 			// Option B: Assign derives the tenant from the target user, so the
 			// user must exist. Seed it for non-validation cases (empty userID
 			// cases fail at input validation before the GetByID lookup).
-			if tc.userID != "" {
+			// skipUserSeed=true tests the absent-user path explicitly.
+			if tc.userID != "" && !tc.skipUserSeed {
 				seedActiveUser(t, store, tc.userID)
 			}
 			if tc.setup != nil {

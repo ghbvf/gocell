@@ -657,21 +657,21 @@ func conformCrossTenantIsolation(t *testing.T, factory UserRepoFactory, features
 	if _, err := repo.GetByUsername(ctx, testTenantIDOther, username); !isErrAuthUserNotFound(err) {
 		t.Fatalf("GetByUsername cross-tenant: want ErrAuthUserNotFound, got %v", err)
 	}
-	// tenant-scoped writes under tenant B → not found (predicate rejects the row).
-	if _, err := repo.UpdateProfile(ctx, testTenantIDOther, id, nePtr("hijack"), nil, time.Now().UTC()); !isErrAuthUserNotFound(err) {
-		t.Fatalf("UpdateProfile cross-tenant: want ErrAuthUserNotFound, got %v", err)
-	}
-	if err := repo.UpdateLockState(ctx, testTenantIDOther, id, domain.StatusLocked, time.Now().UTC()); !isErrAuthUserNotFound(err) {
-		t.Fatalf("UpdateLockState cross-tenant: want ErrAuthUserNotFound, got %v", err)
-	}
 
-	// for-update reads under tenant B → not found. Gate on ambient tx (PG).
+	// narrow-write methods under tenant B → not found (predicate rejects the row).
+	conformCrossTenantWriteProbes(t, repo, id, username)
+
+	// for-update reads + BumpAuthzEpoch under tenant B → not found. Gate on ambient tx (PG).
 	probeForUpdate := func(ctx context.Context) error {
 		if _, err := repo.GetByIDForUpdate(ctx, testTenantIDOther, id); !isErrAuthUserNotFound(err) {
 			return fmt.Errorf("GetByIDForUpdate cross-tenant: want ErrAuthUserNotFound, got %w", err)
 		}
 		if _, err := repo.GetByUsernameForUpdate(ctx, testTenantIDOther, username); !isErrAuthUserNotFound(err) {
 			return fmt.Errorf("GetByUsernameForUpdate cross-tenant: want ErrAuthUserNotFound, got %w", err)
+		}
+		// BumpAuthzEpoch cross-tenant: tenant predicate must prevent the bump.
+		if _, err := repo.BumpAuthzEpoch(ctx, testTenantIDOther, id, credentialfence.Mint()); !isErrAuthUserNotFound(err) {
+			return fmt.Errorf("BumpAuthzEpoch cross-tenant: want ErrAuthUserNotFound, got %w", err)
 		}
 		return nil
 	}
@@ -687,6 +687,52 @@ func conformCrossTenantIsolation(t *testing.T, factory UserRepoFactory, features
 	// are genuinely tenant-scoped and not a seeding artifact.
 	if _, err := repo.GetByUsername(ctx, testTenantID, username); err != nil {
 		t.Fatalf("GetByUsername same-tenant: want success, got %v", err)
+	}
+}
+
+// conformCrossTenantWriteProbes asserts that the non-tx-gated narrow-write
+// methods (UpdateProfile / UpdateLockState / UpdatePassword / UpdatePasswordResetFlag /
+// UpdateLockoutFields) return ErrAuthUserNotFound when called under the wrong
+// tenant. Extracted from conformCrossTenantIsolation to keep that function
+// within the cognitive-complexity budget (≤15).
+func conformCrossTenantWriteProbes(t *testing.T, repo ports.UserRepository, id, username string) {
+	t.Helper()
+	ctx := context.Background()
+	// UpdateProfile cross-tenant.
+	if _, err := repo.UpdateProfile(ctx, testTenantIDOther, id, nePtr("hijack"), nil, time.Now().UTC()); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdateProfile cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdateLockState cross-tenant.
+	if err := repo.UpdateLockState(ctx, testTenantIDOther, id, domain.StatusLocked, time.Now().UTC()); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdateLockState cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdatePassword cross-tenant: stale version (0) is fine — tenant predicate fires first.
+	if _, err := repo.UpdatePassword(ctx, testTenantIDOther, id, "$2a$12$xthash", false, 0); !isErrAuthUserNotFound(err) { //nolint:lll // line length
+		t.Fatalf("UpdatePassword cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdatePasswordResetFlag cross-tenant.
+	if err := repo.UpdatePasswordResetFlag(ctx, testTenantIDOther, id, true, time.Now().UTC()); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdatePasswordResetFlag cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdateLockoutFields cross-tenant: build a minimal domain.User with the seeded id.
+	crossTenantUser, reconErr := domain.ReconstituteUser(
+		domain.ReconstituteUserParams{ //nolint:gosec // G101: test constant, not real credentials
+			ID:           id,
+			Username:     username,
+			Email:        username + exampleEmailDomain,
+			PasswordHash: "$2a$12$conformancefakehash",
+			Status:       domain.StatusActive,
+			Source:       domain.UserSourceIdentity,
+			AuthzEpoch:   1,
+			CreatedAt:    time.Now().UTC(),
+			UpdatedAt:    time.Now().UTC(),
+		},
+	)
+	if reconErr != nil {
+		t.Fatalf("conformCrossTenantWriteProbes: ReconstituteUser: %v", reconErr)
+	}
+	if err := repo.UpdateLockoutFields(ctx, testTenantIDOther, crossTenantUser); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdateLockoutFields cross-tenant: want ErrAuthUserNotFound, got %v", err)
 	}
 }
 

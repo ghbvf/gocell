@@ -72,7 +72,7 @@ func setup(t testing.TB) (http.Handler, string) {
 	if err := h.RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
-	// Return h directly so Handler.ServeHTTP (which injects X-Tenant-ID) is used.
+	// Return h directly so Handler.ServeHTTP is used.
 	return h, wireToken
 }
 
