@@ -39,6 +39,15 @@ import (
 // sub-struct layout would make cross-cutting consumptions look like boundary
 // violations when in fact they are the natural shape of a composition root.
 //
+// Fields are genuinely cross-cutting (consumed by multiple cells or the runtime
+// itself), with one transitional exception — ConfigKeyProvider, the last
+// configcore-specific field, whose removal is gated on #885 (see its godoc). The
+// former configcore-specific metric fields (EventbusCacheCollector,
+// ConfigStaleCipherInc) were removed in #1413: configcore now self-builds those
+// collectors from MetricsProvider via runtime/observability/metrics, since they
+// route through the kernel Provider (not raw prometheus) and so do not trip the
+// "no client_golang in cellmodules" posture.
+//
 // ref: uber-go/fx fx.Supply — shared values provided once to all modules.
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
 // all required fields validated in one place before startup.
@@ -77,14 +86,12 @@ type SharedDeps struct {
 	// EventBus is the in-process event bus for publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
 
-	// ConfigEventCollector records config consumer process and settlement metrics.
-	// Registered once against MetricsProvider and injected into accesscore and
-	// configcore.
+	// ConfigEventCollector records config consumer process and settlement
+	// metrics. It is genuinely cross-cell — consumed by accesscore, configcore,
+	// AND the corebundle config-event consumer middleware — so it stays on the
+	// shared bag (registered once against MetricsProvider, injected into all
+	// consumers). It is NOT a configcore-specific field.
 	ConfigEventCollector obmetrics.ConfigEventCollector
-
-	// EventbusCacheCollector records configsubscribe subscriber-cache tombstone
-	// GC evictions.
-	EventbusCacheCollector obmetrics.EventbusCacheCollector
 
 	// ConsumerClaimer coordinates outbox consumer idempotency.
 	ConsumerClaimer idempotency.Claimer
@@ -133,18 +140,24 @@ type SharedDeps struct {
 	ProjectRoot string
 
 	// ConfigKeyProvider is the configcore value-encryption key provider.
-	// Built in cmd/corebundle (which may import adapters/vault + prometheus),
-	// passed to cellmodules/configcore.Module so that the composition module
-	// layer never imports adapter-specific packages. Nil means no key provider;
-	// in real adapter mode configcore rejects nil (NoopTransformer is dev-only).
+	//
+	// This is the LAST configcore-specific field on the shared bag. It remains
+	// here (rather than being self-built inside cellmodules/configcore like the
+	// stale-cipher and eventbus-cache collectors) because the vault-transit
+	// provider needs adapters/vault.TransitMetrics, which is built from a raw
+	// github.com/prometheus/client_golang registry — and the
+	// adapterPromCallerAllowlist governance posture (archtest
+	// observability_metrics_test.go, #1085 Batch 4 Part A) keeps raw-prometheus
+	// construction in cmd/ so cellmodules/configcore never imports client_golang.
+	// configcore self-building the key provider is gated on #885 (migrating vault
+	// TransitMetrics to the kernel MetricsProvider); once #885 lands this field
+	// moves into configcore too and SharedDeps becomes fully cell-agnostic.
+	// Refs #1413 / #885.
+	//
+	// Built in cmd/corebundle, passed to cellmodules/configcore.Module. Nil means
+	// no key provider; in real adapter mode configcore rejects nil (NoopTransformer
+	// is dev-only).
 	ConfigKeyProvider kcrypto.KeyProvider
-
-	// ConfigStaleCipherInc is a zero-arg callback that increments the
-	// stale-cipher counter once per config value read that is encrypted with a
-	// non-current key version. Built in cmd/corebundle from a prometheus counter
-	// so that runtime/composition never imports github.com/prometheus/client_golang.
-	// Nil means no-op (acceptable in tests that do not exercise PG + encryption).
-	ConfigStaleCipherInc func()
 }
 
 // NewSharedDeps validates a populated SharedDeps and returns a sealed copy. The
@@ -210,9 +223,6 @@ func (d *SharedDeps) validate() error {
 	}
 	if validation.IsNilInterface(d.ConfigEventCollector) {
 		missing("ConfigEventCollector")
-	}
-	if validation.IsNilInterface(d.EventbusCacheCollector) {
-		missing("EventbusCacheCollector")
 	}
 	if validation.IsNilInterface(d.ConsumerClaimer) {
 		missing("ConsumerClaimer")

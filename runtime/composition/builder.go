@@ -158,15 +158,14 @@ func (b *Builder) Build(
 				"(use explicit Optional semantics if cell is optional)", m.ID())
 		}
 		cells = append(cells, res.Cell)
-		cellOpts = append(cellOpts, res.Opts...)
 		// Single source: derive BOTH the steady-state WithManagedResource
-		// registration and the pre-Run rollback stack from res.Resources, so the
-		// two can never diverge (the former double-write bug). Modules do not call
-		// WithManagedResource themselves (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
-		for _, r := range res.Resources {
-			cellOpts = append(cellOpts, bootstrap.WithManagedResource(r))
-			provisional = append(provisional, r)
-		}
+		// registration (via managedResourceOpts) AND the pre-Run rollback stack
+		// (provisional) from res.Resources, so the two can never diverge (the
+		// former double-write bug). Modules do not call WithManagedResource
+		// themselves (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
+		cellOpts = append(cellOpts, res.Opts...)
+		cellOpts = append(cellOpts, managedResourceOpts(res.Resources)...)
+		provisional = append(provisional, res.Resources...)
 	}
 
 	runtimeOpts, err := runtimeOptsFn(cells)
@@ -177,4 +176,18 @@ func (b *Builder) Build(
 
 	allOpts := append(runtimeOpts, cellOpts...) //nolint:gocritic // intentional: runtime opts first, then cell opts
 	return &App{clk: shared.Clock, opts: allOpts}, nil
+}
+
+// managedResourceOpts derives one bootstrap.WithManagedResource option per
+// resource — the steady-state half of the single-source resource contract. The
+// caller ([Builder.Build]) appends the same resources to its provisional
+// rollback stack, so both lifecycle channels come from the one Resources slice
+// and cannot diverge. Extracted from Build so the per-module loop body stays
+// within the cognitive-complexity budget.
+func managedResourceOpts(resources []kernellifecycle.ManagedResource) []bootstrap.Option {
+	opts := make([]bootstrap.Option, 0, len(resources))
+	for _, r := range resources {
+		opts = append(opts, bootstrap.WithManagedResource(r))
+	}
+	return opts
 }

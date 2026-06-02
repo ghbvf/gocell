@@ -86,24 +86,21 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 	require.NoError(t, err)
 	configEventCollector, err := obmetrics.NewProviderConfigEventCollector(ps.metricProvider)
 	require.NoError(t, err)
-	eventbusCacheCollector, err := obmetrics.NewProviderEventbusCacheCollector(ps.metricProvider)
-	require.NoError(t, err)
 
 	guard := newTestInternalGuard(t)
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                  clock.Real(),
-		Topology:               mkTopo("", "memory", false),
-		JWTIssuer:              issuer,
-		JWTVerifier:            verifier,
-		MetricsProvider:        ps.metricProvider,
-		EventBus:               eb,
-		ConfigEventCollector:   configEventCollector,
-		EventbusCacheCollector: eventbusCacheCollector,
-		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
-		InternalHMACRing:       guard.ring,
-		InternalHTTPAddr:       "127.0.0.1:9090",
-		HealthHTTPAddr:         "127.0.0.1:9091",
+		Clock:                clock.Real(),
+		Topology:             mkTopo("", "memory", false),
+		JWTIssuer:            issuer,
+		JWTVerifier:          verifier,
+		MetricsProvider:      ps.metricProvider,
+		EventBus:             eb,
+		ConfigEventCollector: configEventCollector,
+		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
+		InternalHMACRing:     guard.ring,
+		InternalHTTPAddr:     "127.0.0.1:9090",
+		HealthHTTPAddr:       "127.0.0.1:9091",
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
@@ -143,24 +140,21 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 	require.NoError(t, err)
 	configEventCollector, err := obmetrics.NewProviderConfigEventCollector(ps.metricProvider)
 	require.NoError(t, err)
-	eventbusCacheCollector, err := obmetrics.NewProviderEventbusCacheCollector(ps.metricProvider)
-	require.NoError(t, err)
 
 	guard := newTestInternalGuard(t)
 
 	shared := &composition.SharedDeps{
-		Clock:                  clock.Real(),
-		Topology:               topo,
-		JWTIssuer:              issuer,
-		JWTVerifier:            verifier,
-		MetricsProvider:        ps.metricProvider,
-		EventBus:               eventbus.New(clock.Real()),
-		ConfigEventCollector:   configEventCollector,
-		EventbusCacheCollector: eventbusCacheCollector,
-		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
-		InternalHMACRing:       guard.ring,
-		InternalHTTPAddr:       "127.0.0.1:9090",
-		HealthHTTPAddr:         ":9091",
+		Clock:                clock.Real(),
+		Topology:             topo,
+		JWTIssuer:            issuer,
+		JWTVerifier:          verifier,
+		MetricsProvider:      ps.metricProvider,
+		EventBus:             eventbus.New(clock.Real()),
+		ConfigEventCollector: configEventCollector,
+		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
+		InternalHMACRing:     guard.ring,
+		InternalHTTPAddr:     "127.0.0.1:9090",
+		HealthHTTPAddr:       ":9091",
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
 		// token keeps the dev baseline valid; prod tests override via the
 		// mutate callback when they want to exercise the missing-token path.

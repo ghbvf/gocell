@@ -80,22 +80,22 @@ func buildMemSharedDeps(t *testing.T) *composition.SharedDeps {
 	require.NoError(t, err)
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                  clk,
-		Topology:               topo,
-		JWTIssuer:              issuer,
-		JWTVerifier:            verifier,
-		MetricsProvider:        kernelmetrics.NopProvider{},
-		EventBus:               eb,
-		ConfigEventCollector:   obmetrics.NoopConfigEventCollector{},
-		EventbusCacheCollector: obmetrics.NoopEventbusCacheCollector{},
-		ConsumerClaimer:        claimer,
-		InternalHMACRing:       ring,
-		PrimaryHTTPAddr:        ":8080",
-		InternalHTTPAddr:       "127.0.0.1:9090",
-		HealthHTTPAddr:         "127.0.0.1:9091",
-		VerboseDisabled:        true,
+		Clock:                clk,
+		Topology:             topo,
+		JWTIssuer:            issuer,
+		JWTVerifier:          verifier,
+		MetricsProvider:      kernelmetrics.NopProvider{},
+		EventBus:             eb,
+		ConfigEventCollector: obmetrics.NoopConfigEventCollector{},
+		ConsumerClaimer:      claimer,
+		InternalHMACRing:     ring,
+		PrimaryHTTPAddr:      ":8080",
+		InternalHTTPAddr:     "127.0.0.1:9090",
+		HealthHTTPAddr:       "127.0.0.1:9091",
+		VerboseDisabled:      true,
 		// ConfigKeyProvider: nil — dev mode uses an explicit NoopTransformer.
-		ConfigStaleCipherInc: func() {},
+		// EventbusCacheCollector / ConfigStaleCipherInc removed (#1413): configcore
+		// self-builds them from MetricsProvider (NopProvider here).
 	})
 	require.NoError(t, err)
 	return shared

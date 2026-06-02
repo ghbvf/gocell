@@ -118,9 +118,8 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 	// MetricsProvider: kernel NopProvider — avoids prometheus import.
 	mp := kernelmetrics.NopProvider{}
 
-	// Noop collectors satisfy SharedDeps.Validate without prometheus.
+	// Noop collector satisfies SharedDeps.Validate without prometheus.
 	cfgEventCollector := obmetrics.NoopConfigEventCollector{}
-	ebCacheCollector := obmetrics.NoopEventbusCacheCollector{}
 
 	// ConsumerClaimer: in-memory idempotency claimer (single-process only).
 	claimer := idempotency.NewInMemClaimer(clk)
@@ -132,21 +131,21 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 	}
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                  clk,
-		Topology:               topo,
-		JWTIssuer:              jwtIssuer,
-		JWTVerifier:            jwtVerifier,
-		MetricsProvider:        mp,
-		EventBus:               eb,
-		ConfigEventCollector:   cfgEventCollector,
-		EventbusCacheCollector: ebCacheCollector,
-		ConsumerClaimer:        claimer,
-		InternalHMACRing:       ring,
-		PrimaryHTTPAddr:        starterPrimaryAddr,
-		InternalHTTPAddr:       starterInternalAddr,
-		HealthHTTPAddr:         starterHealthAddr,
-		VerboseDisabled:        true,
-		ConfigStaleCipherInc:   func() {}, // no-op in this example
+		Clock:                clk,
+		Topology:             topo,
+		JWTIssuer:            jwtIssuer,
+		JWTVerifier:          jwtVerifier,
+		MetricsProvider:      mp,
+		EventBus:             eb,
+		ConfigEventCollector: cfgEventCollector,
+		ConsumerClaimer:      claimer,
+		InternalHMACRing:     ring,
+		PrimaryHTTPAddr:      starterPrimaryAddr,
+		InternalHTTPAddr:     starterInternalAddr,
+		HealthHTTPAddr:       starterHealthAddr,
+		VerboseDisabled:      true,
+		// EventbusCacheCollector / ConfigStaleCipherInc removed (#1413): configcore
+		// self-builds them from MetricsProvider (NopProvider here).
 		// PG / Redis are nil → all platform modules take the in-memory path.
 	})
 	if err != nil {
