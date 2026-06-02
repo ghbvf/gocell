@@ -77,6 +77,7 @@ func testProtocol() *ledger.Protocol {
 //   - eventType (string maxLength: 256)
 //   - from (string format: date-time, maxLength: 64)
 //   - to (string format: date-time, maxLength: 64)
+//   - traceId (string maxLength: 256)
 func TestHttpAuditListV1_QueryParamConstraints(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
@@ -87,6 +88,7 @@ func TestHttpAuditListV1_QueryParamConstraints(t *testing.T) {
 	c.MustRejectQueryParam(t, "actorId", string(make([]byte, 257)))   // violates maxLength: 256
 	c.MustRejectQueryParam(t, "subjectId", string(make([]byte, 257))) // violates maxLength: 256
 	c.MustRejectQueryParam(t, "eventType", string(make([]byte, 257))) // violates maxLength: 256
+	c.MustRejectQueryParam(t, "traceId", string(make([]byte, 257)))   // violates maxLength: 256
 	c.MustRejectQueryParam(t, "from", "not-a-date-time")              // violates format: date-time
 	c.MustRejectQueryParam(t, "to", "2026-01-01T00:00:00Z-garbage")   // violates format: date-time
 }
@@ -222,6 +224,7 @@ func TestHttpAuditListV1_QueryParamsMetadata(t *testing.T) {
 		"limit":     "integer",
 		"subjectId": "string",
 		"to":        "string",
+		"traceId":   "string",
 	}
 	if len(c.HTTP.QueryParams) != len(want) {
 		t.Fatalf("queryParams count = %d, want %d (%v)", len(c.HTTP.QueryParams), len(want), want)
