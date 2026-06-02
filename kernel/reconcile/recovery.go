@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -13,12 +14,23 @@ import (
 // recoverReconcile then classify.
 //
 // Mapping:
-//   - nil   → resultSuccess
-//   - IsPermanent(err) → resultPermanent
-//   - otherwise        → resultTransient
+//   - nil                    → resultSuccess
+//   - ErrFencedWriteStale    → resultPermanent (stale-epoch write rejected by the
+//     fencing CAS; this replica lost the fencing race — NOT a transient retry.
+//     The entity will re-observe under the new leader's fresh trigger)
+//   - IsPermanent(err)       → resultPermanent
+//   - otherwise              → resultTransient
 func classify(err error) resultLabel {
 	if err == nil {
 		return resultSuccess
+	}
+	// ErrFencedWriteStale is structurally permanent on this replica: the fencing
+	// CAS rejected the write because a higher-epoch leader already wrote. Retrying
+	// with the same epoch will always fail; only a fresh lease acquisition under
+	// the new leader produces a valid epoch. Dead-letter here; a fresh Source
+	// trigger re-observes the entity when the new leader is ready.
+	if errors.Is(err, ErrFencedWriteStale) {
+		return resultPermanent
 	}
 	if IsPermanent(err) {
 		return resultPermanent

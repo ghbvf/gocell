@@ -494,9 +494,10 @@ var controlPlaneClockCarveOut = map[string]map[string]string{
 		"newProbeTimer": "NewTimer",  // startup probe
 	},
 	"kernel/reconcile/": {
-		"newProbeTimer":   "NewTimer", // startup probe
-		"newRequeueTimer": "NewTimer", // delayed requeue (RECONCILE-LOOP-CLOCK-CARVEOUT-01)
-		"now":             "Now",      // reconcile-duration measurement
+		"newProbeTimer":   "NewTimer",  // startup probe
+		"newRequeueTimer": "NewTimer",  // delayed requeue (RECONCILE-LOOP-CLOCK-CARVEOUT-01)
+		"newRenewTicker":  "NewTicker", // leader lease renew cadence (PR-A6 RECONCILE-LEADER)
+		"now":             "Now",       // reconcile-duration measurement
 	},
 }
 
