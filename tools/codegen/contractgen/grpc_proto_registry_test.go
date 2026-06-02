@@ -6,40 +6,40 @@
 // iface.tmpl or a divergent field write. Carriers (downstream Hard + supporting
 // Medium + a tracked Go ceiling):
 //
-//   C2 (Hard, regenerate-and-diff byte-lock) — TestRender_Golden_Synth_GRPC
-//      (render_test.go) byte-locks the rendered stub through the production
-//      render funnel; `-update` regenerates through the same funnel. This is the
-//      "codegen funnel + golden" Hard form (.claude/rules/gocell/ai-robust.md).
+//	C2 (Hard, regenerate-and-diff byte-lock) — TestRender_Golden_Synth_GRPC
+//	   (render_test.go) byte-locks the rendered stub through the production
+//	   render funnel; `-update` regenerates through the same funnel. This is the
+//	   "codegen funnel + golden" Hard form (.claude/rules/gocell/ai-robust.md).
 //
-//   C3 (Hard, render-compare to an INDEPENDENT proto oracle) —
-//      TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle renders
-//      the stub fresh, AST-walks its imports, and asserts the single non-context
-//      import byte-equals readProtoTypeInfo(proto).ImportPath, and that the
-//      method signature references the oracle's alias.RequestType / .ResponseType.
-//      The oracle is computed straight from the .proto, NOT from spec.GRPC, so a
-//      template that hard-codes a divergent import OR a builder that fills the
-//      field from the wrong source both fail here. Non-vacuous every run;
-//      survives `go test -update` (regenerating a corrupted template still diffs
-//      the emitted import against the proto-derived oracle). Same robustness
-//      shape as the deleted GRPC-CODEGEN-NO-PROTO-DEP-01.
+//	C3 (Hard, render-compare to an INDEPENDENT proto oracle) —
+//	   TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle renders
+//	   the stub fresh, AST-walks its imports, and asserts the single non-context
+//	   import byte-equals readProtoTypeInfo(proto).ImportPath, and that the
+//	   method signature references the oracle's alias.RequestType / .ResponseType.
+//	   The oracle is computed straight from the .proto, NOT from spec.GRPC, so a
+//	   template that hard-codes a divergent import OR a builder that fills the
+//	   field from the wrong source both fail here. Non-vacuous every run;
+//	   survives `go test -update` (regenerating a corrupted template still diffs
+//	   the emitted import against the proto-derived oracle). Same robustness
+//	   shape as the deleted GRPC-CODEGEN-NO-PROTO-DEP-01.
 //
-//   C1 (Medium, single sanctioned constructor — AST) —
-//      TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_SpecConstructedOnlyInBuilder
-//      asserts every GRPCEndpointSpec composite literal in production code is
-//      lexically inside buildGRPCSpec, so the proto-derived fields have exactly
-//      one write site to review. AST name-anchored (not go/types); the package
-//      has a single GRPCEndpointSpec type so the Ident match is unambiguous.
+//	C1 (Medium, single sanctioned constructor — AST) —
+//	   TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_SpecConstructedOnlyInBuilder
+//	   asserts every GRPCEndpointSpec composite literal in production code is
+//	   lexically inside buildGRPCSpec, so the proto-derived fields have exactly
+//	   one write site to review. AST name-anchored (not go/types); the package
+//	   has a single GRPCEndpointSpec type so the Ident match is unambiguous.
 //
-//   C4 (Medium, collision uniqueness) —
-//      TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_Collision* feed two synthesized
-//      specs and assert protoRegistry.register rejects a duplicate
-//      (proto-package, service, method) and a divergent import for the same
-//      service. Non-vacuous despite the single synth fixture (which alone never
-//      collides).
+//	C4 (Medium, collision uniqueness) —
+//	   TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_Collision* feed two synthesized
+//	   specs and assert protoRegistry.register rejects a duplicate
+//	   (proto-package, service, method) and a divergent import for the same
+//	   service. Non-vacuous despite the single synth fixture (which alone never
+//	   collides).
 //
 // Funnel two-way rating: downstream Hard (C2 + C3) + supporting Medium (C1, C4).
 //
-// Go ceiling (won't-do, tracked at gh #1518): in the SINGLE-grpc-contract window
+// Go ceiling (won't-do, tracked at gh #1525): in the SINGLE-grpc-contract window
 // (PR 6 ships exactly one synth fixture; first real contract is PR 8), a literal
 // in iface.tmpl that EXACTLY equals the registry's current value would pass C2
 // and C3 because there is no second contract to diverge from. Go cannot

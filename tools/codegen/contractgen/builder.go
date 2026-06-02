@@ -83,7 +83,7 @@ func buildKindSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	case "saga":
 		return buildSagaSpec(spec, rootDir, contract, contractDir)
 	case "grpc":
-		return buildGRPCSpec(spec, contract)
+		return buildGRPCSpec(spec, rootDir, contract)
 	case "projection":
 		return validateProjectionLevel(contract.ID, contract.ConsistencyLevel)
 	case "command":
@@ -917,8 +917,10 @@ func retryNeedsTime(r *RetryPolicySpec) bool {
 
 // buildGRPCSpec projects metadata.GRPCTransportMeta into spec.GRPC for the
 // placeholder server-interface generator. No schema or proto file is read: the
-// PR-2 stub uses []byte for request/response, so the proto path is metadata
-// only (rendered into a doc comment).
+// The proto file is read (readProtoTypeInfo) to resolve the request/response
+// proto-generated message types + the go_package import path emitted into the
+// stub; the proto is the single source of that identity
+// (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
 //
 // All guards are fail-closed at codegen time (the golden test path does not run
 // governance FMT-37, so this is the funnel's own defense against malformed
@@ -941,9 +943,10 @@ func retryNeedsTime(r *RetryPolicySpec) bool {
 //     arbitrary text into the generated source that goimports/gofumpt accept
 //     silently. Reject control runes so the comment stays a comment.
 //   - A non-unary streamingType is rejected rather than emitting a misleading
-//     unary []byte placeholder. PR 10 adds streaming codegen and lifts this;
-//     empty streamingType is the unary default.
-func buildGRPCSpec(spec *ContractGenSpec, contract *metadata.ContractMeta) error {
+//     unary signature. PR 10 adds streaming codegen and lifts this; empty
+//     streamingType is the unary default. (readProtoTypeInfo also rejects a
+//     streaming rpc as a second line of defense.)
+func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta) error {
 	g := contract.Endpoints.GRPC
 	if g == nil {
 		return fmt.Errorf("contractgen build: contract %q is kind=grpc but has no endpoints.grpc block", contract.ID)
@@ -973,16 +976,25 @@ func buildGRPCSpec(spec *ContractGenSpec, contract *metadata.ContractMeta) error
 	}
 	if g.StreamingType != "" && g.StreamingType != "unary" {
 		return fmt.Errorf(
-			"contractgen build: contract %q grpc streamingType %q codegen deferred to PR 10 (only unary supported in the placeholder stub)",
+			"contractgen build: contract %q grpc streamingType %q codegen deferred to PR 10 (only unary supported)",
 			contract.ID, g.StreamingType)
 	}
 
+	info, err := readProtoTypeInfo(filepath.Join(rootDir, filepath.FromSlash(g.Proto)), g.Method)
+	if err != nil {
+		return fmt.Errorf("contractgen build: contract %q grpc proto: %w", contract.ID, err)
+	}
+
 	spec.GRPC = &GRPCEndpointSpec{
-		InterfaceName: "Server",
-		MethodName:    g.Method,
-		ServiceFQN:    g.Service,
-		StreamingType: g.StreamingType,
-		ProtoPath:     g.Proto,
+		InterfaceName:   "Server",
+		MethodName:      g.Method,
+		ServiceFQN:      g.Service,
+		StreamingType:   g.StreamingType,
+		ProtoPath:       g.Proto,
+		ProtoImportPath: info.ImportPath,
+		ProtoAlias:      info.Alias,
+		RequestType:     info.RequestType,
+		ResponseType:    info.ResponseType,
 	}
 	return nil
 }
