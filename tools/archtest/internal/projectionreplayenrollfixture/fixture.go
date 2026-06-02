@@ -39,17 +39,6 @@ func (s *enrolledReplaySource) Append(e outbox.Entry) {
 	s.entries = append(s.entries, e)
 }
 
-func (s *enrolledReplaySource) Position(e outbox.Entry) int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for i, stored := range s.entries {
-		if stored.ID() == e.ID() {
-			return int64(i + 1)
-		}
-	}
-	return 0
-}
-
 func (s *enrolledReplaySource) Head(_ context.Context) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -81,23 +70,6 @@ func (s *enrolledReplaySource) Replay(ctx context.Context, fromOffset int64, fn 
 type unenrolledReplaySource struct {
 	mu      sync.RWMutex
 	entries []outbox.Entry
-}
-
-func (s *unenrolledReplaySource) Append(e outbox.Entry) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.entries = append(s.entries, e)
-}
-
-func (s *unenrolledReplaySource) Position(e outbox.Entry) int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for i, stored := range s.entries {
-		if stored.ID() == e.ID() {
-			return int64(i + 1)
-		}
-	}
-	return 0
 }
 
 func (s *unenrolledReplaySource) Head(_ context.Context) (int64, error) {
