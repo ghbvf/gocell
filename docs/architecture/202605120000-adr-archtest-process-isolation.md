@@ -308,7 +308,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 #### D1. K=16 → K=24
 
 - 保持 §Phase 0 "K 是 OOM 阈值的设计 knob" 论点；K=24 是 K=16 → 更细方向延伸（per-shard tests 数从 ~47 降到 ~32，shard 内同时 hold 的 `*types.Info` 子集减少，per-shard RSS 必然 ≤ K=16）。
-- `SharedResolver` baseline cache（~3-4 GB macOS，packages.Load 全模块常驻部分）与 K 无关，是 RSS 主导项；K=16→24 增量降低集中在 t.Run subtests 持有的 typed objects 上（增量约 20-30%），并非根治 RSS（runner tier 升级才是激进降 RSS 路径，本 amendment 不采纳）。
+- `SharedResolver` baseline cache 与 K 无关，是 RSS 主导项；K=16→24 增量降低集中在 t.Run subtests 持有的 typed objects 上（增量约 20-30%），并非根治 RSS（runner tier 升级才是激进降 RSS 路径，本 amendment 不采纳）。**归因修正（§Amendment 2026-06-03）**：该 baseline cache 的主导子项是 `packages.NeedDeps` 驱动的「依赖包 Syntax+TypesInfo 常驻」——**可摘**，非不可约的「全模块常驻」。原文「~3-4 GB macOS，packages.Load 全模块常驻部分」把可摘的 NeedDeps 增量误并入不可约项。实测单 `packages.Load` tests=F 954MB→149MB（↓84%）、tests=T 1338MB→508MB（↓62%）；剩余不可约下限 = 根包自身的 Types/TypesInfo/Syntax（archtest 本就需要）。详见末尾 §Amendment 2026-06-03。
 - GHA Linux baseline 缺失（§Phase 0 是 macOS 测量），K=24 baseline 待 amendment 2026-06-?? Phase A 诊断收据后回填实测值。
 
 #### D2. SLOWGATE_THRESHOLD 20s → 25s
@@ -356,3 +356,81 @@ K=16 ADR-mandated invariant 锚定 3 处，**必须同 PR 内一致更新**：
 - **runner tier 升级 `ubuntu-latest` → `ubuntu-latest-4-cores`**：16GB runner 是激进降 RSS 路径（vs K 增量调整），但引入 GHA plan/cost 维度 + 不确定 large runner 可用性。Phase A 诊断后若证明 K=24 不足，再评估单独 amendment。
 - **143 step retry 机制**：第三方 action 引入，独立 ADR 权衡（retry 缓解 vs 显式失败信号）。
 - **`TestSagaJournalConformanceEnrollment` / `TestPGRepoAmbientTx_SelfCheck` 测试优化**：均为 type-aware whole-module `packages.Load`，设计本身无低成本优化；Hard 升级路径 = codegen funnel + golden（gh issue #1003 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01）。
+
+## Amendment 2026-06-03: typeseval 去 NeedDeps — RSS 主导项归因修正（#1499）
+
+### 根因 / 归因修正
+
+§Amendment 2026-05-28 §D1 把 RSS 主导项归因为「`SharedResolver` baseline cache（~3-4 GB
+macOS，packages.Load **全模块常驻部分**）」，措辞暗示该 baseline 是**不可约**的全模块 type
+graph 常驻。**修正**：baseline cache 的主导子项是唯一 typed loader（`tools/archtest/internal/
+typeseval.LoadPackages`）的 load mode 携带的 `packages.NeedDeps`——它让 go/packages 为全部
+~1135 个传递依赖包**常驻完整 Syntax(AST) + TypesInfo**。这部分**可摘**：去掉 NeedDeps 后
+go/packages 经 `usesExportData` 快路径（`NeedTypes && !NeedDeps`）改由 export data
+（gcexportdata）派生依赖的轻量 `Types`，根包的 Types/TypesInfo/Syntax 不受影响。不可约下限
+只剩根包自身那部分，远小于原「全模块常驻」措辞所指。
+
+### 决策
+
+`typeseval` 默认 load mode 去掉 `packages.NeedDeps`（保留 `NeedImports`），一处改动
+（`typeseval.go` 的 `loadMode` 常量）；所有 typed scope（`Typed` / `Production` / `Fixture` /
+`StandaloneModule`）经 `SharedResolver` → `LoadPackages` 共享此 mode，无浅 typed 模式、无
+per-rule opt-in 名单。
+
+### 实测（本 PR 本地独立复现，go1.25 + 当前 x/tools，与 #1499 issue 表一致）
+
+| 配置 | HeapAlloc WithDeps → NoDeps | 降幅 | pkgs |
+|------|------|------|------|
+| `./...` tests=F | 954 MB → **149 MB** | **↓84.4%（6.4×）** | 365（不变） |
+| `./...` tests=T | 1338 MB → **508 MB** | **↓62.0%（2.6×）** | 923（不变） |
+
+`loadErrs=0` 两种 mode 一致；pkgs 计数不变（同一 import 图，仅依赖包字段填充程度不同）。
+未把内存问题转成编译时间（NoDeps 仍走 export data，build cache 命中时已在）。
+
+### 正确性
+
+- 根包 Types/TypesInfo/Syntax 完全不受影响；依赖包符号经 `info.Uses` / `types.Implements` /
+  `Scope().Lookup` 解析与带 NeedDeps **完全一致**。
+- 唯一行为变化 = 依赖包的传递 `(*types.Package).Imports()` 闭包裁剪到 type-referenced 包
+  （export-data importer 只物化实际被引用的依赖）。全仓 4 个做类型层传递 `.Imports()` BFS/DFS
+  的 archtest 规则（`loadForbiddenIfacesFromPkg` / `resolveSagaStepFuncType` / `lookupInterface`
+  / `findTypesPackageByPath`）在该裁剪下 **sound**：产生 finding 必然要求根包 type-reference
+  target 包，故 target 仍是直接 import、必在裁剪后闭包内；裁剪只丢对该根无关的包。
+- 全仓 **0 处** 访问依赖包的 `.Syntax` / `.TypesInfo`（NeedDeps 专属字段）。
+- 守卫：`typeseval.TestLoadMode_NoNeedDeps`（Medium，type-aware 值断言；Hard 不可达——
+  `packages.LoadMode` 是 public int-flag，「任何地方不得带 NeedDeps」类型系统不可表达，同
+  #851/#893/#1282 永久天花板）+ `tools/archtest/loadmode_nodeps_invariants_test.go`
+  （Medium，4 walk 非空性回归，governance walk 由既有 `TestFindTypesPackageByPath` 覆盖）。
+
+### 开源对标
+
+- go/packages `usesExportData(cfg)`：`NeedTypes != 0 && NeedDeps == 0` 时**显式**走 export
+  data——本改动命中的设计分支，非 hack。`NeedImports` doc：无 NeedDeps 时 `Imports` map 仅含
+  ID placeholder（`tools/depgraph` 只读 import-path key，安全）。
+- go/analysis 官方 checker：根包-only 分析默认 `LoadSyntax`（= `LoadTypes|NeedSyntax|
+  NeedTypesInfo`，**不含 NeedDeps**）；`LoadAllSyntax`（+NeedDeps）仅用于遍历所有依赖 AST。
+  GoCell 新 mode ≈ `LoadSyntax + NeedName + NeedFiles`，正落根包-only 档。
+
+### 解锁但本 amendment 不做（范围外）
+
+- **warmup 多 cacheKey 扩展**：去 NeedDeps 把单 cacheKey 常驻从 ~954MB 降到 ~149MB（tests=F）
+  后，多 key warmup（之前 N=2 即在 `packages.Load` 期撞 6-9GB OOM，closed PR #865）才真正可行。
+  **顺序**：先去 NeedDeps 解锁，再独立评估扩 warmup——不在本 PR。
+- **shard 数 K=24→? 下调评估**：新 baseline 下重测 per-shard RSS 后独立 amendment。
+
+### 逐行重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）
+
+| 载体 | 状态 | 处理 |
+|---|---|---|
+| §Amendment 2026-05-28 §D1 「baseline ~3-4GB / 全模块常驻 / RSS 主导项」 | 直接矛盾 | **已同 PR 内就地重写**（指向本 §Amendment）；不保留原文作历史脉络 |
+| §Amendment 2026-05-28 §Phase 0 覆盖表（per-shard macOS RSS 行） | ⚠️ 下限降低 | per-shard RSS 的 baseline 子项现降低（lower floor），sharding "K 是 OOM knob" 论点不变；GHA Linux Phase A 实测时反映新 baseline，不在本 PR 回填 |
+| §范围外「slow-test 设计本身无低成本优化」（line 358） | ✅ 不受影响 | 该条是 **wall-time**（slowgate）轴；NeedDeps 是**内存**轴，load wall-time 1.3→1.6s 未恶化，两轴正交 |
+
+### 关联（不在本 amendment 范围）
+
+本 PR 的 typeseval 改动需先让 `tools/archtest` 测试包可编译——develop HEAD（PR #1477）遗留
+2 处 `RunTypedProduction`/`RunTypedFixture` 调用（PR #1470 collapse Run* 时已删该 API），本 PR
+含一处 2 行机械 compile-fix（`RunTyped* → Run(t, Production/Fixture(...), rule)`）。编译恢复后
+浮现的 7 个 **pre-existing** 规则违规（webhook DAG / contractspec 字面量 / scanner-framework /
+require.Eventually 等，与 load mode 正交，WithDeps 与 NoDeps 失败集 byte-identical）由 gh issue
+**#1506** 跟踪，不在本 amendment 范围。
