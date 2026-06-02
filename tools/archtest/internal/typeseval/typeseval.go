@@ -82,12 +82,12 @@ func (r *Resolver) Packages() []*packages.Package {
 // packages. The archtest transitive-walk rules are sound under that pruning
 // because producing a finding via a NAMED-TYPE reference requires the root to
 // type-reference the target package (so the target stays a direct import and
-// survives pruning). The one corpus-dependent path is the cell raw-option rule's
-// types.Implements structural-match (an anonymous interface matching a forbidden
-// method set need not name the forbidden package); it holds today because every
-// platform cell directly imports kernel/persistence + kernel/outbox, machine-
-// asserted in ../../loadmode_nodeps_invariants_test.go. Guarded by
-// TestLoadMode_NoNeedDeps.
+// survives pruning). The cell raw-option rule's types.Implements structural-match
+// (an anonymous interface matching a forbidden method set need not name the
+// forbidden package) does not follow from that argument; it is guarded directly by
+// the per-package WithDeps-vs-NoDeps differential TestLoadMode_NoDepsPreservesTransitiveIfaceResolution
+// (every package must resolve under this mode at least what it resolves WithDeps).
+// Guarded by TestLoadMode_NoNeedDeps.
 //
 // ref: golang/tools go/packages/packages.go usesExportData + NeedDeps doc
 // ref: golang/tools go/analysis LoadSyntax (no NeedDeps) — root-only analysis

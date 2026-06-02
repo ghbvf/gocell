@@ -13,15 +13,20 @@ package archtest
 //
 // Soundness: for the NAMED-TYPE detection paths a finding requires the scanned
 // root to type-reference the target's symbol, keeping the target a DIRECT import
-// that survives pruning. The one exception is loadForbiddenIfacesFromPkg's
-// types.Implements structural-match path — an anonymous/local interface whose
-// method set matches a forbidden interface need NOT name the forbidden package,
-// so the resolved forbidden-interface set depends on the cell's import closure
-// reaching that package. That holds for every current platform cell (all directly
-// import kernel/persistence + kernel/outbox), which the CellForbiddenIfaces guard
-// below machine-asserts across ./cells/... (len == len(rawPublicOptionForbidden)).
-// These guards lock that property machine-side, replacing the issue's one-shot
-// "NoDeps vs WithDeps" manual comparison with a durable regression check.
+// that survives pruning. The one path that does NOT follow from that argument is
+// loadForbiddenIfacesFromPkg's types.Implements structural-match — an anonymous/
+// local interface matching a forbidden method set need NOT name the forbidden
+// package, so its resolution depends on the cell's import closure reaching the
+// package. The per-PACKAGE proof that NoDeps pruning drops no such resolution is a
+// WithDeps-vs-NoDeps DIFFERENTIAL — but it requires a second packages.Load, which
+// the ARCHTEST-PASS-FUNNEL Hard-line depguard (ADR 202605141519, defense #2) bans
+// in archtest *_test.go. So that differential lives one layer down, in the loader
+// package that owns load-mode behavior:
+// typeseval.TestLoadMode_NoDepsPreservesTransitiveIfaceResolution. The smokes here
+// are funnel-compatible and assert the REAL rule helpers stay non-vacuous under the
+// production NoDeps mode; the typeseval differential proves nothing is dropped per
+// package. Together they replace the issue's one-shot manual NoDeps-vs-WithDeps
+// comparison with durable regression checks.
 //
 // Covered walks:
 //   - loadForbiddenIfacesFromPkg              (cell_public_option_param_test.go, BFS)
@@ -47,61 +52,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces asserts loadForbiddenIfacesFromPkg
-// resolves each rawPublicOptionForbidden canonical (kernel/persistence + kernel/outbox
-// interfaces) under the NoDeps load mode at the SAME granularity the real rule
-// (scanPassForRawPublicOption) runs — per cell-subtree Pass, not one corpus-wide union.
-// A union dominated by a single cell (e.g. accesscore) could pass even if NoDeps pruning
-// dropped a forbidden package from another cell's Pass closure; requiring each iface to
-// resolve in >=2 INDEPENDENT cells (across ./cells/... + ./examples/...) closes that gap.
-// This guards the types.Implements structural-match deep-detection path, which depends on
-// the resolved *types.Interface values (not the canonical-name fall-through) and is the
-// corpus property the loadMode soundness note relies on.
+// TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces is the funnel-compatible
+// non-vacuity smoke for the cell raw-option rule: under the production NoDeps mode,
+// the ACTUAL loadForbiddenIfacesFromPkg (not a reimplementation) resolves every
+// forbidden canonical somewhere across the cell+example corpus the rule scans.
+//
+// The authoritative PER-PACKAGE differential proof (every package's NoDeps
+// resolution superset its WithDeps resolution) lives in
+// typeseval.TestLoadMode_NoDepsPreservesTransitiveIfaceResolution — it cannot live
+// here: the ARCHTEST-PASS-FUNNEL Hard-line depguard (ADR 202605141519, defense #2)
+// bans a second packages.Load in archtest *_test.go, which a WithDeps differential
+// requires. This smoke verifies the real production helper stays non-vacuous; the
+// typeseval differential verifies pruning drops nothing per package.
 func TestLoadModeNoDeps_NonVacuity_CellForbiddenIfaces(t *testing.T) {
-	// resolvers[canonical] = set of distinct cell IDs whose Pass resolved it.
-	resolvers := make(map[string]map[string]bool, len(rawPublicOptionForbidden))
-	for c := range rawPublicOptionForbidden {
-		resolvers[c] = map[string]bool{}
-	}
+	resolved := map[string]bool{}
 	var cellPasses int
 	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/...", "./examples/..."}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
+		if p.Pkg == nil || !isCellSubtreePkgPath(p.Pkg.Path()) {
 			return nil
-		}
-		cellID, ok := cellIDFromPkgPath(p.Pkg.Path())
-		if !ok {
-			return nil // not a cell-subtree package — outside the rule's scan scope
 		}
 		cellPasses++
 		for canonical := range loadForbiddenIfacesFromPkg(p.Pkg) {
-			resolvers[canonical][cellID] = true
+			resolved[canonical] = true
 		}
 		return nil
 	})
 
 	require.Positive(t, cellPasses, "must scan >=1 cell-subtree Pass under ./cells/... + ./examples/...")
 	for canonical := range rawPublicOptionForbidden {
-		require.GreaterOrEqualf(t, len(resolvers[canonical]), 2,
-			"forbidden iface %q resolved in only %d cell(s) %v under NoDeps; require >=2 independent cells "+
-				"(per-Pass non-vacuity — a corpus union could pass on one cell alone while pruning dropped "+
-				"the package from another cell's Pass closure)", canonical, len(resolvers[canonical]), resolvers[canonical])
+		require.Containsf(t, resolved, canonical,
+			"forbidden iface %q resolved in NO cell-subtree Pass under NoDeps via the real "+
+				"loadForbiddenIfacesFromPkg — deep-detection globally vacuous", canonical)
 	}
 }
 
-// cellIDFromPkgPath extracts the cell ID from an import path containing a
-// ".../cells/<cellID>" segment — both platform cells/<id>/… and example
-// examples/<demo>/cells/<id>/… — matching the rule's cell-subtree scan scope.
-func cellIDFromPkgPath(pkgPath string) (string, bool) {
-	const marker = "/cells/"
-	i := strings.Index(pkgPath, marker)
-	if i < 0 {
-		return "", false
-	}
-	rest := pkgPath[i+len(marker):]
-	if j := strings.IndexByte(rest, '/'); j >= 0 {
-		rest = rest[:j]
-	}
-	return rest, rest != ""
+// isCellSubtreePkgPath reports whether an import path lies in a ".../cells/<id>/…"
+// segment — both platform cells/<id>/… and example examples/<demo>/cells/<id>/… —
+// matching the rule's cell-subtree scan scope.
+func isCellSubtreePkgPath(pkgPath string) bool {
+	return strings.Contains(pkgPath, "/cells/")
 }
 
 // TestLoadModeNoDeps_NonVacuity_SagaStepFunc asserts resolveSagaStepFuncType still
