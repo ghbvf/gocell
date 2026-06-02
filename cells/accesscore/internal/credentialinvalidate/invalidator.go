@@ -35,6 +35,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -100,6 +101,14 @@ func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event sessi
 	slog.DebugContext(txCtx, "credentialinvalidate: apply",
 		slog.String("subject_id", subjectID),
 		slog.String("event", event.String()))
+	// Derive tenant from context (post-auth path; auth bridge writes TenantID
+	// into ctxkeys). If unavailable (unit tests, sessionrefresh reuse-attack path
+	// which has no pre-auth tenant), fail-closed: BumpAuthzEpoch must know the
+	// tenant to scope the write correctly.
+	tid, err := tenant.FromContext(txCtx)
+	if err != nil {
+		return fmt.Errorf("credentialinvalidate: tenant from context: %w", err)
+	}
 	// Mint the FenceToken once and pass the same value through all three
 	// mutations. The token is identity-less (any non-nil FenceToken is
 	// equally valid), so sharing it across the three calls is
@@ -109,7 +118,7 @@ func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event sessi
 	// New epoch value is intentionally discarded: sessionvalidate re-reads
 	// authz_epoch from the DB on every request, so the caller does not need
 	// the bumped value here. The DB row is the single source of truth.
-	if _, err := i.users.BumpAuthzEpoch(txCtx, subjectID, tok); err != nil {
+	if _, err := i.users.BumpAuthzEpoch(txCtx, tid, subjectID, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: bump authz_epoch: %w", err)
 	}
 	if err := i.sessions.RevokeForSubject(txCtx, subjectID, event, tok); err != nil {

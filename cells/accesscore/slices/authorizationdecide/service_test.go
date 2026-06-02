@@ -12,8 +12,24 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// tenantCtx returns context.Background() with the canonical test tenant injected.
+func tenantCtx() context.Context {
+	return ctxkeys.WithTenantID(context.Background(), "00000000-0000-0000-0000-000000000001")
+}
+
+// testTenantID is the canonical test tenant UUID used in authorizationdecide tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("authorizationdecide_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 // TestNewService_NilRoleRepo verifies that NewService rejects a nil roleRepo
 // with a non-nil errcode.Error of KindInternal (wiring failure → 5xx).
@@ -60,11 +76,11 @@ func TestService_Authorize(t *testing.T) {
 		{
 			name: "authorized via role permission",
 			setup: func(r *mem.RoleRepository) {
-				r.SeedRole(&domain.Role{
+				r.SeedRole(testTenantID, &domain.Role{
 					ID: "admin", Name: "admin",
 					Permissions: []domain.Permission{{Resource: "/api/v1/config", Action: "write"}},
 				})
-				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				_, _ = r.AssignToUser(context.Background(), testTenantID, "usr-1", "admin")
 			},
 			subject: "usr-1", resource: "/api/v1/config", action: "write",
 			want: true,
@@ -72,11 +88,11 @@ func TestService_Authorize(t *testing.T) {
 		{
 			name: "unauthorized - no matching permission",
 			setup: func(r *mem.RoleRepository) {
-				r.SeedRole(&domain.Role{
+				r.SeedRole(testTenantID, &domain.Role{
 					ID: "viewer", Name: "viewer",
 					Permissions: []domain.Permission{{Resource: "/api/v1/config", Action: "read"}},
 				})
-				_, _ = r.AssignToUser(context.Background(), "usr-2", "viewer")
+				_, _ = r.AssignToUser(context.Background(), testTenantID, "usr-2", "viewer")
 			},
 			subject: "usr-2", resource: "/api/v1/config", action: "write",
 			want: false,
@@ -94,7 +110,7 @@ func TestService_Authorize(t *testing.T) {
 			svc, repo := newTestService()
 			tt.setup(repo)
 
-			allowed, err := svc.Authorize(context.Background(), tt.subject, tt.resource, tt.action)
+			allowed, err := svc.Authorize(tenantCtx(), tt.subject, tt.resource, tt.action)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, allowed)
 		})

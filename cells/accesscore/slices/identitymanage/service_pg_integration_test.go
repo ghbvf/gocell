@@ -47,12 +47,23 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	globaltestutil "github.com/ghbvf/gocell/tests/testutil"
 )
+
+// pgIntegTenantID is the canonical test tenant UUID for this PG integration
+// test. Seed and query must use the same value.
+var pgIntegTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("service_pg_integration_test: invalid pgIntegTenantID: " + err.Error())
+	}
+	return t
+}()
 
 // pgIntegMigrationsFS returns the shared adapters/postgres migration FS.
 // Duplicate of adapters/postgres test helper — needed because _test.go files
@@ -72,7 +83,8 @@ func setupIdentityManagePG(t *testing.T) (*accesspgrepo.PGUserRepo, *adapterpg.T
 
 	ctx := context.Background()
 
-	container, err := tcpostgres.Run(ctx, globaltestutil.PostgresImage,
+	container, err := tcpostgres.Run(
+		ctx, globaltestutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
@@ -172,14 +184,15 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 		UpdatedAt:    nowTS,
 	})
 	require.NoError(t, err)
-	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, repo.Create(ctx, pgIntegTenantID, user))
 
 	stub := &pgStubTokenIssuer{pair: dto.TokenPair{AccessToken: "at-pg", RefreshToken: "rt-pg"}}
 	pgSessionStore := testutil.RealSessionRepo(t)
 	pgRefreshStore := newPGIntegRefreshStore()
 	inv, err := credentialinvalidate.New(repo, pgSessionStore, pgRefreshStore)
 	require.NoError(t, err)
-	svc, err := NewService(clock.Real(),
+	svc, err := NewService(
+		clock.Real(),
 		repo,
 		inv,
 		slog.Default(),

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -52,7 +53,9 @@ func TestExampleBuildIdentityManageService(t *testing.T) {
 		t.Fatalf("SeedAssignment: %v", err)
 	}
 
-	adminCtx := auth.TestContext("usr-admin", []string{"admin"})
+	// Inject DefaultFixtureTenantID so tenant-scoped repo operations succeed.
+	adminCtx := ctxkeys.WithTenantID(auth.TestContext("usr-admin", []string{"admin"}),
+		accesscoretest.DefaultFixtureTenantID.String())
 	created, err := svc.Create(adminCtx, identitymanage.CreateInput{
 		Username: "alice",
 		Email:    "alice@example.com",

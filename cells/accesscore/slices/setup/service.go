@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -149,9 +150,9 @@ type StatusOutput struct {
 	HasAdmin bool `json:"hasAdmin"`
 }
 
-// Status returns whether the system already has at least one admin.
-func (s *Service) Status(ctx context.Context) (StatusOutput, error) {
-	has, err := s.provisioner.Status(ctx)
+// Status returns whether the given tenant already has at least one admin.
+func (s *Service) Status(ctx context.Context, t tenant.TenantID) (StatusOutput, error) {
+	has, err := s.provisioner.Status(ctx, t)
 	if err != nil {
 		return StatusOutput{}, fmt.Errorf("setup: status: %w", err)
 	}
@@ -159,7 +160,10 @@ func (s *Service) Status(ctx context.Context) (StatusOutput, error) {
 }
 
 // CreateAdminInput holds the operator-supplied first-admin fields.
+// TenantID is the tenant for which the admin is being provisioned; it must be
+// a canonical UUID and is required (bootstrap must designate a specific tenant).
 type CreateAdminInput struct {
+	TenantID string
 	Username string
 	Email    string
 	Password string
@@ -202,9 +206,17 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		return nil, err
 	}
 
-	// Fast-path: if admin already exists, return 410 without touching bcrypt.
-	// This keeps anonymous floods on the retired endpoint in O(1) roundtrip.
-	hasAdmin, err := s.provisioner.Status(ctx)
+	// Parse the tenant ID before any expensive operations.
+	tid, err := tenant.ParseTenantID(in.TenantID)
+	if err != nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			"tenantId is required and must be a valid UUID",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", err))))
+	}
+
+	// Fast-path: if admin already exists for this tenant, return 410 without
+	// touching bcrypt. This keeps anonymous floods in O(1) roundtrip.
+	hasAdmin, err := s.provisioner.Status(ctx, tid)
 	if err != nil {
 		return nil, fmt.Errorf("setup: status: %w", err)
 	}
@@ -228,7 +240,7 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		if err := s.setupLock.Acquire(txCtx); err != nil {
 			return fmt.Errorf("setup: acquire setup lock: %w", err)
 		}
-		user, err := s.provisionAndMaybeEmit(txCtx, in, []byte(hash))
+		user, err := s.provisionAndMaybeEmit(txCtx, tid, in, []byte(hash))
 		if err != nil {
 			return err
 		}
@@ -250,7 +262,9 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 // persistence or CPU-expensive work happens. Pulled out of CreateAdmin to keep
 // its cognitive complexity within 15 (gocognit CLAUDE.md limit).
 func validateCreateAdminInput(in CreateAdminInput) error {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthIdentityInvalidInput,
+		validation.F("tenantId", in.TenantID),
 		validation.F("username", in.Username),
 		validation.F("email", in.Email),
 		validation.F("password", in.Password),
@@ -297,8 +311,9 @@ func isPrintableASCII(s string) bool {
 // tx and emits user.created on freshly created or recovered pending setup rows.
 // Extracted from CreateAdmin to keep CreateAdmin under the cognitive-complexity
 // ceiling after adding the pre-bcrypt Status fast-path.
-func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput, hash []byte) (*domain.User, error) {
+func (s *Service) provisionAndMaybeEmit(ctx context.Context, tid tenant.TenantID, in CreateAdminInput, hash []byte) (*domain.User, error) {
 	result, err := s.provisioner.Ensure(ctx, adminprovision.ProvisionInput{
+		TenantID:     tid,
 		Username:     in.Username,
 		Email:        in.Email,
 		PasswordHash: hash,

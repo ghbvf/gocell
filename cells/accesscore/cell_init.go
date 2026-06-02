@@ -388,7 +388,7 @@ func (c *AccessCore) initSlices() error {
 //     test/demo fidelity only, not L2 atomicity.
 func (c *AccessCore) initRbacAssign() error {
 	rbacAssignSvc, err := rbacassign.NewService(
-		c.clk, c.roleRepo, c.invalidator, c.logger,
+		c.clk, c.roleRepo, c.userRepo, c.invalidator, c.logger,
 		rbacassign.WithEmitter(c.emitter),
 		rbacassign.WithTxManager(c.txRunner),
 	)

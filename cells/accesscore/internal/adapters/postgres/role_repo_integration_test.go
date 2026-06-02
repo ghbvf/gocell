@@ -21,8 +21,20 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// testTenantID is the canonical test tenant UUID for role_repo integration
+// tests. Seed and query must use the same value so tenant-scoped repo reads
+// return the seeded rows.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("role_repo_integration_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 // setupRoleRepoPG clones the package-shared pre-migrated template database
 // into a fresh per-test DB and returns a PGRoleRepo + PGUserRepo + TxManager.
@@ -69,7 +81,7 @@ func createTestUserInDB(t *testing.T, userRepo *PGUserRepo, suffix string) *doma
 		UpdatedAt:    now,
 	})
 	require.NoError(t, err)
-	require.NoError(t, userRepo.Create(ctx, u))
+	require.NoError(t, userRepo.Create(ctx, testTenantID, u))
 	return u
 }
 
@@ -82,13 +94,14 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Create_GetByID_roundtrip_with_permissions_JSONB", func(t *testing.T) {
-		role := newTestRole("admin", "Administrator",
+		role := newTestRole(
+			"admin", "Administrator",
 			domain.Permission{Resource: "users", Action: "read"},
 			domain.Permission{Resource: "users", Action: "write"},
 		)
-		require.NoError(t, roleRepo.Create(ctx, role))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, role))
 
-		got, err := roleRepo.GetByID(ctx, "admin")
+		got, err := roleRepo.GetByID(ctx, testTenantID, "admin")
 		require.NoError(t, err)
 		assert.Equal(t, "admin", got.ID)
 		assert.Equal(t, "Administrator", got.Name)
@@ -98,20 +111,20 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 
 	t.Run("Create_upsert_overwrites_existing", func(t *testing.T) {
 		role := newTestRole("viewer_"+uuid.NewString()[:8], "Viewer v1")
-		require.NoError(t, roleRepo.Create(ctx, role))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, role))
 
 		role.Name = "Viewer v2"
 		role.Permissions = []domain.Permission{{Resource: "reports", Action: "read"}}
-		require.NoError(t, roleRepo.Create(ctx, role)) // upsert
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, role)) // upsert
 
-		got, err := roleRepo.GetByID(ctx, role.ID)
+		got, err := roleRepo.GetByID(ctx, testTenantID, role.ID)
 		require.NoError(t, err)
 		assert.Equal(t, "Viewer v2", got.Name)
 		require.Len(t, got.Permissions, 1)
 	})
 
 	t.Run("GetByID_missing_returns_ErrAuthRoleNotFound", func(t *testing.T) {
-		_, err := roleRepo.GetByID(ctx, "nonexistent_"+uuid.NewString())
+		_, err := roleRepo.GetByID(ctx, testTenantID, "nonexistent_"+uuid.NewString())
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
@@ -121,22 +134,22 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 
 	t.Run("AssignToUser_idempotent_changed_true_first_false_second", func(t *testing.T) {
 		roleID := "rwa_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "RWA")))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(roleID, "RWA")))
 
 		user := createTestUserInDB(t, userRepo, "rwa")
 
-		changed1, err := roleRepo.AssignToUser(ctx, user.ID, roleID)
+		changed1, err := roleRepo.AssignToUser(ctx, testTenantID, user.ID, roleID)
 		require.NoError(t, err)
 		assert.True(t, changed1, "first assignment must be changed=true")
 
-		changed2, err := roleRepo.AssignToUser(ctx, user.ID, roleID)
+		changed2, err := roleRepo.AssignToUser(ctx, testTenantID, user.ID, roleID)
 		require.NoError(t, err)
 		assert.False(t, changed2, "second assignment (idempotent) must be changed=false")
 	})
 
 	t.Run("AssignToUser_missing_role_returns_ErrAuthRoleNotFound", func(t *testing.T) {
 		user := createTestUserInDB(t, userRepo, "missingrole")
-		_, err := roleRepo.AssignToUser(ctx, user.ID, "no_such_role_"+uuid.NewString())
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, user.ID, "no_such_role_"+uuid.NewString())
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
@@ -145,55 +158,55 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 
 	t.Run("RemoveFromUser_idempotent", func(t *testing.T) {
 		roleID := "rmv_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "RMV")))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(roleID, "RMV")))
 
 		user := createTestUserInDB(t, userRepo, "rmv")
 
-		_, err := roleRepo.AssignToUser(ctx, user.ID, roleID)
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, user.ID, roleID)
 		require.NoError(t, err)
 
 		// First remove — should succeed.
-		require.NoError(t, roleRepo.RemoveFromUser(ctx, user.ID, roleID))
+		require.NoError(t, roleRepo.RemoveFromUser(ctx, testTenantID, user.ID, roleID))
 
 		// Second remove — idempotent, no error.
-		require.NoError(t, roleRepo.RemoveFromUser(ctx, user.ID, roleID))
+		require.NoError(t, roleRepo.RemoveFromUser(ctx, testTenantID, user.ID, roleID))
 
 		// GetByUserID should show no roles.
-		roles, err := roleRepo.GetByUserID(ctx, user.ID)
+		roles, err := roleRepo.GetByUserID(ctx, testTenantID, user.ID)
 		require.NoError(t, err)
 		assert.Empty(t, roles)
 	})
 
 	t.Run("RemoveFromUserIfNotLast_user_does_not_hold_role_noop", func(t *testing.T) {
 		roleID := "nilr_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "NILR")))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(roleID, "NILR")))
 
 		user := createTestUserInDB(t, userRepo, "nilr")
 
 		// User never assigned this role.
-		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, user.ID, roleID)
+		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, testTenantID, user.ID, roleID)
 		require.NoError(t, err)
 		assert.False(t, changed, "user did not hold role → changed=false, no error")
 	})
 
 	t.Run("RemoveFromUserIfNotLast_two_holders_removes_one", func(t *testing.T) {
 		roleID := "twohold_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "TWOHOLD")))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(roleID, "TWOHOLD")))
 
 		u1 := createTestUserInDB(t, userRepo, "th1")
 		u2 := createTestUserInDB(t, userRepo, "th2")
 
-		_, err := roleRepo.AssignToUser(ctx, u1.ID, roleID)
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, u1.ID, roleID)
 		require.NoError(t, err)
-		_, err = roleRepo.AssignToUser(ctx, u2.ID, roleID)
+		_, err = roleRepo.AssignToUser(ctx, testTenantID, u2.ID, roleID)
 		require.NoError(t, err)
 
 		// Remove u1 — u2 still holds the role.
-		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, u1.ID, roleID)
+		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, testTenantID, u1.ID, roleID)
 		require.NoError(t, err)
 		assert.True(t, changed, "role had 2 holders → removal succeeded, changed=true")
 
-		count, err := roleRepo.CountByRole(ctx, roleID)
+		count, err := roleRepo.CountByRole(ctx, testTenantID, roleID)
 		require.NoError(t, err)
 		assert.Equal(t, 1, count)
 	})
@@ -204,10 +217,10 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		// exercise the CTE/trigger guard. Admin-path RemoveFromUserIfNotLast
 		// requires an ambient tx so the CTE's pg_advisory_xact_lock scopes to
 		// the caller's tx, matching production rbacassign.Revoke wiring.
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 
 		user := createTestUserInDB(t, userRepo, "soleAdmin")
-		_, err := roleRepo.AssignToUser(ctx, user.ID, auth.RoleAdmin)
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, user.ID, auth.RoleAdmin)
 		require.NoError(t, err)
 
 		var (
@@ -215,7 +228,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 			revokeErr error
 		)
 		txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, user.ID, auth.RoleAdmin)
+			changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, testTenantID, user.ID, auth.RoleAdmin)
 			// Bubble revokeErr so the tx rolls back; otherwise txMgr commits
 			// despite the protection error and the assignment row would be
 			// left removed.
@@ -236,51 +249,51 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		// can be revoked down to zero holders. This exercises the plain
 		// DELETE path that bypasses the CTE serialization.
 		roleID := "editor_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "EDITOR")))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(roleID, "EDITOR")))
 
 		user := createTestUserInDB(t, userRepo, "editorSole")
-		_, err := roleRepo.AssignToUser(ctx, user.ID, roleID)
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, user.ID, roleID)
 		require.NoError(t, err)
 
-		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, user.ID, roleID)
+		changed, err := roleRepo.RemoveFromUserIfNotLast(ctx, testTenantID, user.ID, roleID)
 		require.NoError(t, err, "non-admin sole holder must be removable")
 		assert.True(t, changed)
 
-		count, err := roleRepo.CountByRole(ctx, roleID)
+		count, err := roleRepo.CountByRole(ctx, testTenantID, roleID)
 		require.NoError(t, err)
 		assert.Equal(t, 0, count, "non-admin role allowed to drop to zero holders")
 	})
 
 	t.Run("CountByRole_returns_correct_count", func(t *testing.T) {
 		roleID := "cnt_" + uuid.NewString()[:8]
-		require.NoError(t, roleRepo.Create(ctx, newTestRole(roleID, "CNT")))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(roleID, "CNT")))
 
-		count0, err := roleRepo.CountByRole(ctx, roleID)
+		count0, err := roleRepo.CountByRole(ctx, testTenantID, roleID)
 		require.NoError(t, err)
 		assert.Equal(t, 0, count0)
 
 		u1 := createTestUserInDB(t, userRepo, "cnt1")
 		u2 := createTestUserInDB(t, userRepo, "cnt2")
 
-		_, err = roleRepo.AssignToUser(ctx, u1.ID, roleID)
+		_, err = roleRepo.AssignToUser(ctx, testTenantID, u1.ID, roleID)
 		require.NoError(t, err)
-		_, err = roleRepo.AssignToUser(ctx, u2.ID, roleID)
+		_, err = roleRepo.AssignToUser(ctx, testTenantID, u2.ID, roleID)
 		require.NoError(t, err)
 
-		count2, err := roleRepo.CountByRole(ctx, roleID)
+		count2, err := roleRepo.CountByRole(ctx, testTenantID, roleID)
 		require.NoError(t, err)
 		assert.Equal(t, 2, count2)
 
-		require.NoError(t, roleRepo.RemoveFromUser(ctx, u1.ID, roleID))
+		require.NoError(t, roleRepo.RemoveFromUser(ctx, testTenantID, u1.ID, roleID))
 
-		count1, err := roleRepo.CountByRole(ctx, roleID)
+		count1, err := roleRepo.CountByRole(ctx, testTenantID, roleID)
 		require.NoError(t, err)
 		assert.Equal(t, 1, count1)
 	})
 
 	t.Run("GetByUserID_empty_returns_empty_slice", func(t *testing.T) {
 		user := createTestUserInDB(t, userRepo, "noroles")
-		roles, err := roleRepo.GetByUserID(ctx, user.ID)
+		roles, err := roleRepo.GetByUserID(ctx, testTenantID, user.ID)
 		require.NoError(t, err)
 		assert.NotNil(t, roles, "empty result must be non-nil slice")
 		assert.Empty(t, roles)
@@ -290,19 +303,19 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		user := createTestUserInDB(t, userRepo, "listby")
 		r1 := newTestRole("listby_z_"+uuid.NewString()[:6], "Zebra")
 		r2 := newTestRole("listby_a_"+uuid.NewString()[:6], "Apple")
-		require.NoError(t, roleRepo.Create(ctx, r1))
-		require.NoError(t, roleRepo.Create(ctx, r2))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, r1))
+		require.NoError(t, roleRepo.Create(ctx, testTenantID, r2))
 
-		_, err := roleRepo.AssignToUser(ctx, user.ID, r1.ID)
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, user.ID, r1.ID)
 		require.NoError(t, err)
-		_, err = roleRepo.AssignToUser(ctx, user.ID, r2.ID)
+		_, err = roleRepo.AssignToUser(ctx, testTenantID, user.ID, r2.ID)
 		require.NoError(t, err)
 
 		params := query.ListParams{
 			Limit: 10,
 			Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
 		}
-		roles, err := roleRepo.ListByUserID(ctx, user.ID, params)
+		roles, err := roleRepo.ListByUserID(ctx, testTenantID, user.ID, params)
 		require.NoError(t, err)
 		require.Len(t, roles, 2)
 		assert.Equal(t, "Apple", roles[0].Name)
@@ -325,13 +338,13 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 
 	u1 := createTestUserInDB(t, userRepo, "race1")
 	u2 := createTestUserInDB(t, userRepo, "race2")
-	_, err := roleRepo.AssignToUser(ctx, u1.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, u1.ID, auth.RoleAdmin)
 	require.NoError(t, err)
-	_, err = roleRepo.AssignToUser(ctx, u2.ID, auth.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, u2.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Both goroutines attempt to remove u1 concurrently. Each runs inside its
@@ -352,7 +365,7 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 			var changed bool
 			var revokeErr error
 			txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-				changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, u1.ID, auth.RoleAdmin)
+				changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, testTenantID, u1.ID, auth.RoleAdmin)
 				return revokeErr // surface to tx so rollback on protection error
 			})
 			// txErr surfaces revokeErr; record the underlying revoke result.
@@ -412,13 +425,13 @@ func TestRemoveFromUserIfNotLast_ConcurrentRevoke_DifferentAdmins_ExactlyOneSucc
 	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 
 	u1 := createTestUserInDB(t, userRepo, "diffrev1")
 	u2 := createTestUserInDB(t, userRepo, "diffrev2")
-	_, err := roleRepo.AssignToUser(ctx, u1.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, u1.ID, auth.RoleAdmin)
 	require.NoError(t, err)
-	_, err = roleRepo.AssignToUser(ctx, u2.ID, auth.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, u2.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	type result struct {
@@ -437,7 +450,7 @@ func TestRemoveFromUserIfNotLast_ConcurrentRevoke_DifferentAdmins_ExactlyOneSucc
 			var changed bool
 			var revokeErr error
 			txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-				changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, userID, auth.RoleAdmin)
+				changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, testTenantID, userID, auth.RoleAdmin)
 				return revokeErr
 			})
 			if revokeErr != nil {
@@ -469,7 +482,7 @@ func TestRemoveFromUserIfNotLast_ConcurrentRevoke_DifferentAdmins_ExactlyOneSucc
 		"the loser must observe peer count = 1 and refuse with ErrAuthLastAdminProtected")
 
 	// Sanity: exactly one effective admin remains.
-	count, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	count, err := roleRepo.CountByRole(ctx, testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "after concurrent revokes, exactly one admin must remain")
 }
@@ -485,23 +498,24 @@ func TestLastAdminTrigger_RawDelete(t *testing.T) {
 	ctx := context.Background()
 
 	// Create the 'admin' role.
-	require.NoError(t, roleRepo.Create(ctx, newTestRole("admin", "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole("admin", "Administrator")))
 
 	// Insert a single user and assign them to 'admin'. This user will be the
 	// sole holder.
 	soloUser := createTestUserInDB(t, userRepo, "trigger_"+uuid.NewString()[:6])
-	_, err := roleRepo.AssignToUser(ctx, soloUser.ID, "admin")
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, soloUser.ID, "admin")
 	require.NoError(t, err)
 
 	// Verify we have exactly one admin so the trigger condition is met.
-	count, err := roleRepo.CountByRole(ctx, "admin")
+	count, err := roleRepo.CountByRole(ctx, testTenantID, "admin")
 	require.NoError(t, err)
 	require.Equal(t, 1, count, "test setup: exactly one admin required before raw DELETE")
 
 	// Issue a raw DELETE directly through the explicit bypass executor —
 	// bypasses the application-level last-admin guard. The DB trigger must
 	// intercept this and raise P0001.
-	_, rawErr := pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.IntegrationTestDeleteRoleAssignment), roleRepo.db, ctx,
+	_, rawErr := pgexec.ExecDirect(
+		pgrepoapproved.Approve(pgrepoapproved.IntegrationTestDeleteRoleAssignment), roleRepo.db, ctx,
 		"DELETE FROM role_assignments WHERE user_id = $1 AND role_id = 'admin'",
 		soloUser.ID,
 	)
@@ -526,13 +540,13 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
 	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 	soloAdmin := createTestUserInDB(t, userRepo, "users_trigger_update_"+uuid.NewString()[:6])
-	_, err := roleRepo.AssignToUser(ctx, soloAdmin.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, soloAdmin.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Sanity: sole effective admin pre-condition met.
-	count, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	count, err := roleRepo.CountByRole(ctx, testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	require.Equal(t, 1, count, "test setup: exactly one admin assignment required")
 
@@ -559,12 +573,12 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t
 	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 	target := createTestUserInDB(t, userRepo, "users_trigger_target_"+uuid.NewString()[:6])
 	peer := createTestUserInDB(t, userRepo, "users_trigger_peer_"+uuid.NewString()[:6])
-	_, err := roleRepo.AssignToUser(ctx, target.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, target.ID, auth.RoleAdmin)
 	require.NoError(t, err)
-	_, err = roleRepo.AssignToUser(ctx, peer.ID, auth.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, peer.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	_, rawErr := pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.IntegrationTestLockUser), roleRepo.db, ctx,
@@ -587,12 +601,12 @@ func TestCountEffectiveAdmins_LockedAdminExcluded_PG(t *testing.T) {
 	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 	activeAdmin := createTestUserInDB(t, userRepo, "count_active_"+uuid.NewString()[:6])
 	lockedAdmin := createTestUserInDB(t, userRepo, "count_locked_"+uuid.NewString()[:6])
-	_, err := roleRepo.AssignToUser(ctx, activeAdmin.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, activeAdmin.ID, auth.RoleAdmin)
 	require.NoError(t, err)
-	_, err = roleRepo.AssignToUser(ctx, lockedAdmin.ID, auth.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, lockedAdmin.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Demote the second admin to locked via a peer-allowed update.
@@ -602,14 +616,14 @@ func TestCountEffectiveAdmins_LockedAdminExcluded_PG(t *testing.T) {
 	}))
 
 	// CountByRole counts both (status-agnostic) — invariant under S4.0.
-	rawCount, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	rawCount, err := roleRepo.CountByRole(ctx, testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 2, rawCount, "CountByRole must count all admin role holders regardless of status")
 
 	// CountEffectiveAdmins requires tx + lock; only the active admin must count.
 	var effective int
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		n, err := roleRepo.CountEffectiveAdmins(txCtx)
+		n, err := roleRepo.CountEffectiveAdmins(txCtx, testTenantID)
 		if err != nil {
 			return err
 		}
@@ -631,12 +645,12 @@ func TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG(t *testing.T) {
 	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 	activeAdmin := createTestUserInDB(t, userRepo, "peerlocked_active_"+uuid.NewString()[:6])
 	lockedPeer := createTestUserInDB(t, userRepo, "peerlocked_locked_"+uuid.NewString()[:6])
-	_, err := roleRepo.AssignToUser(ctx, activeAdmin.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, activeAdmin.ID, auth.RoleAdmin)
 	require.NoError(t, err)
-	_, err = roleRepo.AssignToUser(ctx, lockedPeer.ID, auth.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, lockedPeer.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Demote the peer to locked via a peer-allowed update.
@@ -652,7 +666,7 @@ func TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG(t *testing.T) {
 		revokeErr error
 	)
 	txErr := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, activeAdmin.ID, auth.RoleAdmin)
+		changed, revokeErr = roleRepo.RemoveFromUserIfNotLast(txCtx, testTenantID, activeAdmin.ID, auth.RoleAdmin)
 		return revokeErr
 	})
 	require.Error(t, txErr, "revoke must fail when only peer is locked")
@@ -674,19 +688,19 @@ func TestPGRoleRepo_EffectiveAdminExists_PG(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("empty_returns_false", func(t *testing.T) {
-		exists, err := roleRepo.EffectiveAdminExists(ctx)
+		exists, err := roleRepo.EffectiveAdminExists(ctx, testTenantID)
 		require.NoError(t, err)
 		assert.False(t, exists, "fresh DB has no effective admin")
 	})
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 
 	t.Run("active_admin_returns_true", func(t *testing.T) {
 		u := createTestUserInDB(t, userRepo, "exists_active_"+uuid.NewString()[:6])
-		_, err := roleRepo.AssignToUser(ctx, u.ID, auth.RoleAdmin)
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, u.ID, auth.RoleAdmin)
 		require.NoError(t, err)
 
-		exists, err := roleRepo.EffectiveAdminExists(ctx)
+		exists, err := roleRepo.EffectiveAdminExists(ctx, testTenantID)
 		require.NoError(t, err)
 		assert.True(t, exists, "active admin must satisfy the predicate")
 	})
@@ -697,7 +711,7 @@ func TestPGRoleRepo_EffectiveAdminExists_PG(t *testing.T) {
 		// then verify EffectiveAdminExists still true (first admin still
 		// active).
 		extra := createTestUserInDB(t, userRepo, "exists_locked_"+uuid.NewString()[:6])
-		_, err := roleRepo.AssignToUser(ctx, extra.ID, auth.RoleAdmin)
+		_, err := roleRepo.AssignToUser(ctx, testTenantID, extra.ID, auth.RoleAdmin)
 		require.NoError(t, err)
 		// Demote the new admin via tx (allowed since the original peer
 		// stays active).
@@ -707,7 +721,7 @@ func TestPGRoleRepo_EffectiveAdminExists_PG(t *testing.T) {
 			return err
 		}))
 
-		exists, err := roleRepo.EffectiveAdminExists(ctx)
+		exists, err := roleRepo.EffectiveAdminExists(ctx, testTenantID)
 		require.NoError(t, err)
 		assert.True(t, exists, "at least one active admin remains across the set")
 	})
@@ -722,13 +736,13 @@ func TestPGUserRepo_Update_LastAdminProtected_Mapping_PG(t *testing.T) {
 	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 	sole := createTestUserInDB(t, userRepo, "update_mapping_"+uuid.NewString()[:6])
-	_, err := roleRepo.AssignToUser(ctx, sole.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, sole.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Demote status to locked via the narrow UpdateLockState path. Trigger must block.
-	err = userRepo.UpdateLockState(ctx, sole.ID, domain.StatusLocked, time.Now().UTC())
+	err = userRepo.UpdateLockState(ctx, testTenantID, sole.ID, domain.StatusLocked, time.Now().UTC())
 	require.Error(t, err, "UpdateLockState on sole effective admin status demotion must surface a typed error")
 
 	var ec *errcode.Error
@@ -748,12 +762,12 @@ func TestPGUserRepo_Delete_LastAdminProtected_MessageConsistency_PG(t *testing.T
 	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 	sole := createTestUserInDB(t, userRepo, "delete_msg_"+uuid.NewString()[:6])
-	_, err := roleRepo.AssignToUser(ctx, sole.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, sole.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
-	err = userRepo.Delete(ctx, sole.ID)
+	err = userRepo.Delete(ctx, testTenantID, sole.ID)
 	require.Error(t, err, "Delete on sole effective admin must be rejected by trigger")
 
 	var ec *errcode.Error
@@ -768,12 +782,12 @@ func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
 	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
-	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, newTestRole(auth.RoleAdmin, "Administrator")))
 	u1 := createTestUserInDB(t, userRepo, "cascade1")
 	u2 := createTestUserInDB(t, userRepo, "cascade2")
-	_, err := roleRepo.AssignToUser(ctx, u1.ID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(ctx, testTenantID, u1.ID, auth.RoleAdmin)
 	require.NoError(t, err)
-	_, err = roleRepo.AssignToUser(ctx, u2.ID, auth.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, u2.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	results := make(chan error, 2)
@@ -800,7 +814,7 @@ func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
 	assert.Equal(t, 1, successCount, "exactly one concurrent cascade delete may remove an admin")
 	assert.Equal(t, 1, protectedCount, "exactly one concurrent cascade delete must be rejected as last admin")
 
-	count, err := roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	count, err := roleRepo.CountByRole(ctx, testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "advisory lock must leave exactly one admin after concurrent raw deletes")
 }

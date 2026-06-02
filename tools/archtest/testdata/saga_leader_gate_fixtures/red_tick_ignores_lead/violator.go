@@ -8,7 +8,7 @@ type claimed struct{}
 
 type coord struct{}
 
-func (c *coord) driveOne(context.Context, claimed) error                         { return nil }
+func (c *coord) driveOne(context.Context, claimed) error { return nil }
 func (c *coord) acquireLead(context.Context, claimed) (func(), func(), bool) {
 	return func() {}, func() {}, true
 }

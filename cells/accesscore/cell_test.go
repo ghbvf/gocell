@@ -29,8 +29,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -40,6 +42,20 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
+
+// testTenantID is the canonical test tenant UUID used in cell_test.go.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("cell_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// withTenant injects the canonical test tenant into a context.
+func withTenant(ctx context.Context) context.Context {
+	return ctxkeys.WithTenantID(ctx, "00000000-0000-0000-0000-000000000001")
+}
 
 // durableTxRunner is a test-only TxRunner that simulates a non-noop (real) tx
 // context. It does NOT hold mem.Store.mu, so it injects no lease: repo methods
@@ -525,7 +541,7 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/usr-1?cursor=not-a-valid-cursor", nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -635,6 +651,7 @@ func TestAccessCore_RouteSessionLogin(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
 	r.ServeHTTP(rec, req)
 
 	// We expect a non-404 status. The exact status depends on business logic
@@ -650,6 +667,7 @@ func TestAccessCore_RouteSessionRefresh(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/refresh", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
 	r.ServeHTTP(rec, req)
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
@@ -664,7 +682,7 @@ func TestAccessCore_RouteUserCreate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusCreated, rec.Code,
 		"POST /api/v1/access/users/ with admin should return 201 (got %d)", rec.Code)
@@ -690,7 +708,7 @@ func TestAccessCore_RouteUserCreate_NonAdmin_Returns403(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/",
 		strings.NewReader(`{"username":"x","email":"x@y.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	req = req.WithContext(withTenant(auth.TestContext("user-1", []string{"viewer"})))
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
@@ -707,7 +725,7 @@ func TestAccessCore_RouteSessionLogout(t *testing.T) {
 	const nonexistentSessionID = "00000000-0000-4000-8000-000000000099"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/"+nonexistentSessionID, nil)
-	req = req.WithContext(auth.TestContext(nonexistentSessionID, nil))
+	req = req.WithContext(withTenant(auth.TestContext(nonexistentSessionID, nil)))
 	r.ServeHTTP(rec, req)
 
 	// 404 means handler was reached and session not found (correct routing).
@@ -724,7 +742,7 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 	const nonexistentUserID = "00000000-0000-4000-8000-000000000098"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+nonexistentUserID, nil)
-	req = req.WithContext(auth.TestContext(nonexistentUserID, nil)) // self-access
+	req = req.WithContext(withTenant(auth.TestContext(nonexistentUserID, nil))) // self-access
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code,
@@ -736,19 +754,24 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// Role "admin" is not seeded in newTestCell(t) → domain-level 404 (role not found).
+	// #1337 PR-2a Option B: this InternalListener / service-token endpoint derives
+	// the assignment tenant from the TARGET user (GetByID), which runs BEFORE the
+	// role lookup. usr-1 is not seeded in newTestCell(t), so the user lookup fails
+	// first → domain-level 404 (user not found). The role-not-found path is covered
+	// at the rbacassign slice level (TestService_Assign, with a seeded user).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	// Spec: use TestServiceContext("accesscore") — caller-cell identity propagation.
+	// Service principals carry no tenant; Option B derives it from the user, so no
+	// ctx tenant is injected here (reflects the real tenant-less service caller).
 	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 		"response should be JSON (handler reached, not router 404)")
-	assert.Contains(t, rec.Body.String(), "ERR_AUTH_ROLE_NOT_FOUND")
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_USER_NOT_FOUND")
 }
 
 func TestAccessCore_RouteRoleAssign_NoAuth_Returns401(t *testing.T) {
@@ -771,7 +794,7 @@ func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	req = req.WithContext(withTenant(auth.TestContext("user-1", []string{"viewer"})))
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
@@ -780,18 +803,23 @@ func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
 func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// Revoking a role that the user does not hold is an idempotent no-op → 200.
+	// #1337 PR-2a Option B: Revoke derives the tenant from the TARGET user
+	// (GetByID), which runs before the role lookup. usr-1 is not seeded in
+	// newTestCell(t), so revoking from a non-existent user is user-not-found 404.
+	// The idempotent no-op-revoke → 200 path is covered at the rbacassign slice
+	// level (TestService_Revoke / handler tests, with a seeded user).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	// Spec: use TestServiceContext("accesscore") — caller-cell identity propagation.
+	// Service principals carry no tenant; Option B derives it from the user.
 	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 		"response should be JSON (handler reached, not router 404)")
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_USER_NOT_FOUND")
 }
 
 func TestAccessCore_RouteRoleRevoke_NoAuth_Returns401(t *testing.T) {
@@ -813,7 +841,7 @@ func TestAccessCore_RouteRoleRevoke_NonAdmin_Returns403(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	req = req.WithContext(withTenant(auth.TestContext("user-1", []string{"viewer"})))
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
@@ -825,7 +853,7 @@ func TestAccessCore_RouteRolesList(t *testing.T) {
 	const userID = "00000000-0000-4000-8000-000000000097"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+userID, nil)
-	req = req.WithContext(auth.TestContext(userID, nil)) // self-access
+	req = req.WithContext(withTenant(auth.TestContext(userID, nil))) // self-access
 	r.ServeHTTP(rec, req)
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
@@ -868,7 +896,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-e2e"
-	require.NoError(t, userRepo.Create(ctx, user))
+	require.NoError(t, userRepo.Create(ctx, testTenantID, user))
 
 	// Login via HTTP handler to simulate real flow.
 	snap := reg.Snapshot()
@@ -890,6 +918,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code, "login should succeed: %s", rec.Body.String())
 
@@ -956,7 +985,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-refresh"
-	require.NoError(t, userRepo.Create(ctx, user))
+	require.NoError(t, userRepo.Create(ctx, testTenantID, user))
 
 	// Login via HTTP.
 	snap := reg.Snapshot()
@@ -978,6 +1007,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(loginBody))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
@@ -994,6 +1024,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/refresh", strings.NewReader(refreshBody))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code, "refresh should succeed: %s", rec.Body.String())
 
@@ -1044,15 +1075,15 @@ func seedAdminUser(
 	require.NoError(t, err)
 	user.ID = "usr-admin-prefill"
 
-	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, &domain.Role{
 		ID:   auth.RoleAdmin,
 		Name: auth.RoleAdmin,
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
 	}))
-	require.NoError(t, userRepo.Create(ctx, user))
-	_, err = roleRepo.AssignToUser(ctx, user.ID, auth.RoleAdmin)
+	require.NoError(t, userRepo.Create(ctx, testTenantID, user))
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, user.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 	return user
 }
@@ -1086,12 +1117,12 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
 
 	// Admin role exists.
-	role, err := roleRepo.GetByID(ctx, "admin")
+	role, err := roleRepo.GetByID(ctx, testTenantID, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, "admin", role.Name)
 
 	// Admin user exists.
-	user, err := userRepo.GetByUsername(ctx, "admin")
+	user, err := userRepo.GetByUsername(ctx, testTenantID, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, "usr-admin-prefill", user.ID)
 
@@ -1101,7 +1132,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	assert.Equal(t, bcrypt.MinCost, hashCost)
 
 	// Role assigned.
-	roles, err := roleRepo.GetByUserID(ctx, user.ID)
+	roles, err := roleRepo.GetByUserID(ctx, testTenantID, user.ID)
 	require.NoError(t, err)
 	require.Len(t, roles, 1)
 	assert.Equal(t, "admin", roles[0].Name)

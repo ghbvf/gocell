@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -176,7 +177,8 @@ func NewService(
 // which intentionally bypasses the outer transaction (PR#395 detached-context
 // invariant).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthRefreshInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
 	); err != nil {
 		return dto.TokenPair{}, err
@@ -290,6 +292,13 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	// sid claim as the original login. AuthzEpoch / password-reset state is
 	// re-evaluated per refresh via the user lookup above; the session row
 	// itself is not rotated.
+	//
+	// Tenant derivation (#1337 PR-2): the refresh endpoint is Public (no JWT),
+	// so ctxkeys.TenantID may or may not be set. Try FromContext first; if
+	// absent (pre-auth path without ctx tenant), use zero — GetByUserID will
+	// validate it and surface the error as ErrAuthRoleFetchFailed. PR-3 will
+	// carry tenant in the session row and resolve this cleanly.
+	refreshTenantID, _ := tenant.FromContext(ctx)
 	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
@@ -297,6 +306,7 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 		UserID:                sess.SubjectID,
 		SessionID:             sess.ID,
 		PasswordResetRequired: passwordResetRequired,
+		TenantID:              refreshTenantID,
 	})
 	if err != nil {
 		s.logger.Error("session-refresh: token issuance failed",

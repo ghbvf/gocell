@@ -26,7 +26,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -35,6 +37,23 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	session "github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// testTenantID is the canonical test tenant UUID for sessionlogin tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("sessionlogin_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// testTenantIDStr is the string form of testTenantID for use in LoginInput.TenantID.
+const testTenantIDStr = "00000000-0000-0000-0000-000000000001"
+
+// tenantCtx returns context.Background() with the canonical test tenant injected.
+func tenantCtx() context.Context {
+	return ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+}
 
 func newTestRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
@@ -106,7 +125,7 @@ func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "aud-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "aud-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	// The access token must carry the audience from the issuer's configured default.
@@ -172,7 +191,8 @@ func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	return mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+	return mustNewService(
+		userRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour),
@@ -278,7 +298,7 @@ func seedUser(repo *mem.UserRepository, username, password string) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	user, _ := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 	user.ID = "usr-" + username
-	_ = repo.Create(context.Background(), user)
+	_ = repo.Create(context.Background(), testTenantID, user)
 }
 
 func TestService_Login(t *testing.T) {
@@ -291,19 +311,19 @@ func TestService_Login(t *testing.T) {
 		{
 			name:    "valid login",
 			setup:   func(r *mem.UserRepository) { seedUser(r, "alice", "pass123") },
-			input:   LoginInput{Username: "alice", Password: "pass123"},
+			input:   LoginInput{TenantID: testTenantIDStr, Username: "alice", Password: "pass123"},
 			wantErr: false,
 		},
 		{
 			name:    "wrong password",
 			setup:   func(r *mem.UserRepository) { seedUser(r, "bob", "correct") },
-			input:   LoginInput{Username: "bob", Password: "wrong"},
+			input:   LoginInput{TenantID: testTenantIDStr, Username: "bob", Password: "wrong"},
 			wantErr: true,
 		},
 		{
 			name:    "non-existent user",
 			setup:   func(_ *mem.UserRepository) {},
-			input:   LoginInput{Username: "ghost", Password: "pass"},
+			input:   LoginInput{TenantID: testTenantIDStr, Username: "ghost", Password: "pass"},
 			wantErr: true,
 		},
 		{
@@ -316,10 +336,10 @@ func TestService_Login(t *testing.T) {
 			name: "locked user",
 			setup: func(r *mem.UserRepository) {
 				seedUser(r, "locked", "pass")
-				u, _ := r.GetByUsername(context.Background(), "locked")
-				_ = r.UpdateLockState(context.Background(), u.ID, domain.StatusLocked, time.Now())
+				u, _ := r.GetByUsername(context.Background(), testTenantID, "locked")
+				_ = r.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusLocked, time.Now())
 			},
-			input:   LoginInput{Username: "locked", Password: "pass"},
+			input:   LoginInput{TenantID: testTenantIDStr, Username: "locked", Password: "pass"},
 			wantErr: true,
 		},
 	}
@@ -340,7 +360,7 @@ func TestService_Login(t *testing.T) {
 				// TDD: Login must populate UserID from the authenticated user.
 				assert.NotEmpty(t, pair.UserID, "Login must return a non-empty UserID")
 				// Verify UserID matches the seeded user ID.
-				u, err := userRepo.GetByUsername(context.Background(), tt.input.Username)
+				u, err := userRepo.GetByUsername(context.Background(), testTenantID, tt.input.Username)
 				require.NoError(t, err)
 				assert.Equal(t, u.ID, pair.UserID, "Login UserID must match the authenticated user's ID")
 			}
@@ -359,7 +379,7 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "refresh-down", "pass123")
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "refresh-down", Password: "pass123"})
 	require.Error(t, err)
 	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
@@ -382,7 +402,7 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "sid-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "sid-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	// Access token must contain sid.
@@ -412,9 +432,9 @@ func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 	user, _ := domain.NewUser("reset-user", "reset@test.com", string(hash), time.Now())
 	user.ID = "usr-reset"
 	user.SetPasswordResetRequired(true, time.Now())
-	_ = userRepo.Create(context.Background(), user)
+	_ = userRepo.Create(context.Background(), testTenantID, user)
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "reset-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "reset-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	// TokenPair flag must be true.
@@ -432,7 +452,7 @@ func TestLogin_NoResetWhenFlagFalse(t *testing.T) {
 	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "normal-user", "pass123")
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "normal-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "normal-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	assert.False(t, pair.PasswordResetRequired, "TokenPair.PasswordResetRequired must be false for normal user")
@@ -449,10 +469,10 @@ func TestService_IssueForUser(t *testing.T) {
 	seedUser(userRepo, "issue-user", "pass123")
 
 	// Fetch the user ID.
-	u, err := userRepo.GetByUsername(context.Background(), "issue-user")
+	u, err := userRepo.GetByUsername(context.Background(), testTenantID, "issue-user")
 	require.NoError(t, err)
 
-	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	pair, err := svc.IssueForUser(tenantCtx(), u.ID)
 	require.NoError(t, err)
 	assert.NotEmpty(t, pair.AccessToken)
 	assert.NotEmpty(t, pair.RefreshToken)
@@ -473,10 +493,10 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "issue-persist", "pass123")
 
-	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
+	u, err := userRepo.GetByUsername(context.Background(), testTenantID, "issue-persist")
 	require.NoError(t, err)
 
-	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	pair, err := svc.IssueForUser(tenantCtx(), u.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, pair.SessionID)
 
@@ -500,10 +520,10 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		WithSessionTTL(time.Hour))
 	seedUser(userRepo, "issue-refresh-down", "pass123")
-	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
+	u, err := userRepo.GetByUsername(context.Background(), testTenantID, "issue-refresh-down")
 	require.NoError(t, err)
 
-	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	pair, err := svc.IssueForUser(tenantCtx(), u.ID)
 	require.Error(t, err)
 	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
@@ -526,12 +546,12 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 	}{
 		{
 			name:        "blank username rejected",
-			input:       LoginInput{Username: "", Password: "p"},
+			input:       LoginInput{TenantID: testTenantIDStr, Username: "", Password: "p"},
 			wantMessage: "username",
 		},
 		{
 			name:        "blank password rejected",
-			input:       LoginInput{Username: "u", Password: ""},
+			input:       LoginInput{TenantID: testTenantIDStr, Username: "u", Password: ""},
 			wantMessage: "password",
 		},
 	}
@@ -568,7 +588,7 @@ type brokenRoleRepo struct {
 	err error
 }
 
-func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Role, error) {
+func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
 	return nil, b.err
 }
 
@@ -612,7 +632,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 		testIssuer, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
 	assert.Empty(t, pair.AccessToken, "no token on failure")
 
@@ -632,14 +652,14 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	sessionStore := &countingSessionStore{Store: testutil.RealSessionRepo(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	seedUser(userRepo, "issue-outage", "pass123")
-	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
+	u, err := userRepo.GetByUsername(context.Background(), testTenantID, "issue-outage")
 	require.NoError(t, err)
 
 	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
 
-	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	pair, err := svc.IssueForUser(tenantCtx(), u.ID)
 	require.Error(t, err, "IssueForUser must fail when role fetch fails")
 	assert.Empty(t, pair.AccessToken)
 
@@ -657,7 +677,7 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 func TestService_IssueForUser_GetByIDError(t *testing.T) {
 	svc, _ := newTestService(t) // userRepo is empty — GetByID will return not-found
 
-	pair, err := svc.IssueForUser(context.Background(), "nonexistent-user-id")
+	pair, err := svc.IssueForUser(tenantCtx(), "nonexistent-user-id")
 	require.Error(t, err, "IssueForUser must fail when user does not exist")
 	assert.Empty(t, pair.AccessToken, "no token on GetByID failure")
 	assert.Contains(t, err.Error(), "IssueForUser get user",
@@ -680,7 +700,7 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 		slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")
 	assert.NotEmpty(t, pair.AccessToken)
 }
@@ -693,7 +713,7 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	seedUser(userRepo, "emit-user", "pass123")
-	u, err := userRepo.GetByUsername(context.Background(), "emit-user")
+	u, err := userRepo.GetByUsername(context.Background(), testTenantID, "emit-user")
 	require.NoError(t, err)
 
 	emitter := &countingEmitter{}
@@ -701,7 +721,7 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 		testIssuer, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
 
-	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	pair, err := svc.IssueForUser(tenantCtx(), u.ID)
 	require.NoError(t, err)
 	assert.NotEmpty(t, pair.AccessToken)
 	assert.Equal(t, 1, emitter.count,
@@ -725,7 +745,7 @@ func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup
 		WithTxManager(persistence.WrapForCell(tx)), WithSessionTTL(time.Hour))
 	seedUser(userRepo, "durable-refresh-fail", "pass123")
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "durable-refresh-fail", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "durable-refresh-fail", Password: "pass123"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -760,7 +780,7 @@ func TestCleanupIssuedSession_Revoke_IdempotentOnAbsent(t *testing.T) {
 	seedUser(userRepo, "cleanup-not-found", "pass123")
 
 	// Should not panic or return an unexpected error — the original refresh issue error propagates.
-	_, err := svc.Login(context.Background(), LoginInput{Username: "cleanup-not-found", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "cleanup-not-found", Password: "pass123"})
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -780,8 +800,8 @@ func TestLogin_EmptyCredentials_AuthErrorCode(t *testing.T) {
 		name  string
 		input LoginInput
 	}{
-		{"empty_password", LoginInput{Username: "user@example.com", Password: ""}},
-		{"empty_email", LoginInput{Username: "", Password: "secret"}},
+		{"empty_password", LoginInput{TenantID: testTenantIDStr, Username: "user@example.com", Password: ""}},
+		{"empty_email", LoginInput{TenantID: testTenantIDStr, Username: "", Password: "secret"}},
 	}
 
 	for _, tc := range cases {
@@ -812,12 +832,12 @@ func TestLogin_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	// set it to 7 via a field. Instead, create the user with epoch=1 and bump it
 	// 6 times (via BumpAuthzEpoch on the repo) or just create with epoch=1
 	// (epoch value does not affect the "no claim in JWT" assertion we're testing).
-	require.NoError(t, userRepo.Create(context.Background(), user))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, user))
 
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	pair, err := svc.Login(context.Background(), LoginInput{Username: "epoch-user", Password: "pass123"})
+	pair, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "epoch-user", Password: "pass123"})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
@@ -838,8 +858,8 @@ func TestLogin_NoLengthOracle(t *testing.T) {
 		name  string
 		input LoginInput
 	}{
-		{"empty_password", LoginInput{Username: "user@example.com", Password: ""}},
-		{"empty_email", LoginInput{Username: "", Password: "secret"}},
+		{"empty_password", LoginInput{TenantID: testTenantIDStr, Username: "user@example.com", Password: ""}},
+		{"empty_email", LoginInput{TenantID: testTenantIDStr, Username: "", Password: "secret"}},
 	}
 
 	for _, tc := range cases {
@@ -869,11 +889,11 @@ type versionRacingUserRepo struct {
 	lockedUser *domain.User // returned by GetByUsernameForUpdate (current row)
 }
 
-func (r *versionRacingUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+func (r *versionRacingUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	return r.preUser, nil
 }
 
-func (r *versionRacingUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *versionRacingUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	return r.lockedUser, nil
 }
 
@@ -969,6 +989,7 @@ func TestLogin_PasswordVersionRace_OldPasswordRejected(t *testing.T) {
 			)
 
 			pair, loginErr := svc.Login(context.Background(), LoginInput{
+				TenantID: testTenantIDStr,
 				Username: "race-user",
 				Password: "old-pass",
 			})
@@ -1005,7 +1026,7 @@ type infraErrUserRepo struct {
 	forUpdateErr error // error to return from GetByUsernameForUpdate
 }
 
-func (r *infraErrUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *infraErrUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	return nil, r.forUpdateErr
 }
 
@@ -1039,7 +1060,7 @@ func TestLoginInTx_InfraError_NotCollapsedTo401(t *testing.T) {
 		WithSessionTTL(time.Hour),
 	)
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "r3-user", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "r3-user", Password: "pass123"})
 	require.Error(t, err, "infra error must propagate, not silently succeed")
 
 	var ec *errcode.Error
@@ -1078,7 +1099,7 @@ func TestLoginInTx_NotFound_CollapsedTo401(t *testing.T) {
 		WithSessionTTL(time.Hour),
 	)
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "r3-notfound", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "r3-notfound", Password: "pass123"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -1116,7 +1137,7 @@ func TestLoginInTx_UnavailableError_NotCollapsedTo401(t *testing.T) {
 		WithSessionTTL(time.Hour),
 	)
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "r3-unavail", Password: "pass123"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "r3-unavail", Password: "pass123"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -1146,7 +1167,7 @@ func TestService_Login_ConsecutiveFailures_TriggersAutoLock(t *testing.T) {
 
 	// 5 consecutive wrong-password logins. Each must return ErrAuthLoginFailed.
 	for i := range failuresNeeded {
-		_, err := svc.Login(context.Background(), LoginInput{Username: username, Password: wrongPass})
+		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: username, Password: wrongPass})
 		require.Error(t, err, "attempt %d: expected error", i+1)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec, "attempt %d: expected errcode.Error", i+1)
@@ -1155,14 +1176,14 @@ func TestService_Login_ConsecutiveFailures_TriggersAutoLock(t *testing.T) {
 	}
 
 	// After threshold failures, the user must be in StatusLocked.
-	u, err := userRepo.GetByUsername(context.Background(), username)
+	u, err := userRepo.GetByUsername(context.Background(), testTenantID, username)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusLocked, u.Status(),
 		"user must be StatusLocked after %d consecutive failures", failuresNeeded)
 
 	// A 6th attempt with the CORRECT password must still return ErrAuthLoginFailed
 	// because the lockout TTL has not elapsed.
-	_, err = svc.Login(context.Background(), LoginInput{Username: username, Password: correctPass})
+	_, err = svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: username, Password: correctPass})
 	require.Error(t, err, "locked user must be rejected even with correct password")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -1220,7 +1241,7 @@ func TestIssueForUser_NonActiveUser_Rejected(t *testing.T) {
 				UpdatedAt:       time.Now(),
 			})
 			require.NoError(t, err)
-			require.NoError(t, userRepo.Create(context.Background(), u))
+			require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
 
 			svc := mustNewService(
 				userRepo,
@@ -1233,7 +1254,7 @@ func TestIssueForUser_NonActiveUser_Rejected(t *testing.T) {
 				WithSessionTTL(time.Hour),
 			)
 
-			pair, issueErr := svc.IssueForUser(context.Background(), u.ID)
+			pair, issueErr := svc.IssueForUser(tenantCtx(), u.ID)
 
 			if tt.wantErr {
 				require.Error(t, issueErr)
@@ -1277,7 +1298,8 @@ func loginWithThresholdLockoutSetup(
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	refreshStore := newTestRefreshStore()
 	tx := &stubTxRunner{}
-	svc := mustNewService(userRepo, sessionStore, roleRepo, refreshStore,
+	svc := mustNewService(
+		userRepo, sessionStore, roleRepo, refreshStore,
 		testIssuer, slog.Default(),
 		WithTxManager(persistence.WrapForCell(tx)),
 		WithSessionTTL(time.Hour),
@@ -1288,7 +1310,7 @@ func loginWithThresholdLockoutSetup(
 	if status == domain.StatusActive {
 		u, _ := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 		u.ID = uid
-		require.NoError(t, userRepo.Create(context.Background(), u))
+		require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
 	} else {
 		// Suspended / locked test users go through ReconstituteUser (the only
 		// path that yields a non-active aggregate without funneling through
@@ -1307,7 +1329,7 @@ func loginWithThresholdLockoutSetup(
 			UpdatedAt:       time.Now(),
 		})
 		require.NoError(t, err)
-		require.NoError(t, userRepo.Create(context.Background(), u))
+		require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
 	}
 	return svc, userRepo, tx, uid
 }
@@ -1324,7 +1346,7 @@ func loginWithThresholdLockoutSetup(
 func TestLogin_WrongPassword_CounterPersistsAcrossTx(t *testing.T) {
 	svc, userRepo, tx, uid := loginWithThresholdLockoutSetup(t, "rollback-bob", "correct", domain.StatusActive)
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "rollback-bob", Password: "wrong"})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "rollback-bob", Password: "wrong"})
 	require.Error(t, err, "wrong-password must return error to caller")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -1350,7 +1372,7 @@ func TestLogin_ThresholdReached_AccountLocks(t *testing.T) {
 	svc, userRepo, tx, uid := loginWithThresholdLockoutSetup(t, "lockchain-eve", password, domain.StatusActive)
 
 	for i := 0; i < accountlockout.Threshold; i++ {
-		_, err := svc.Login(context.Background(), LoginInput{Username: "lockchain-eve", Password: "wrong"})
+		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "lockchain-eve", Password: "wrong"})
 		require.Error(t, err, "attempt %d: wrong password rejected", i+1)
 	}
 
@@ -1384,7 +1406,7 @@ func TestLogin_SuspendedUser_DoesNotIncrementCounter(t *testing.T) {
 	// suspended user. None of them should advance the counter or change
 	// the status: a suspended user is not a candidate for auto-lock.
 	for i := 0; i < accountlockout.Threshold+2; i++ {
-		_, err := svc.Login(context.Background(), LoginInput{Username: "suspended-alice", Password: "wrong"})
+		_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "suspended-alice", Password: "wrong"})
 		require.Error(t, err, "attempt %d: suspended user rejected", i+1)
 	}
 
@@ -1432,13 +1454,13 @@ func TestService_IssueForUser_InactiveUser_ReturnsCleanUserNotActiveError(t *tes
 			svc, userRepo := newTestService(t)
 			seedUser(userRepo, "inactive-user", "pass123")
 
-			u, err := userRepo.GetByUsername(context.Background(), "inactive-user")
+			u, err := userRepo.GetByUsername(context.Background(), testTenantID, "inactive-user")
 			require.NoError(t, err)
 
 			// Put the user into the target inactive state.
-			require.NoError(t, userRepo.UpdateLockState(context.Background(), u.ID, tt.status, time.Now()))
+			require.NoError(t, userRepo.UpdateLockState(context.Background(), testTenantID, u.ID, tt.status, time.Now()))
 
-			_, err = svc.IssueForUser(context.Background(), u.ID)
+			_, err = svc.IssueForUser(tenantCtx(), u.ID)
 			require.Error(t, err)
 
 			var ce *errcode.Error

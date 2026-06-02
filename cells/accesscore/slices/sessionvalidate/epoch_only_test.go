@@ -60,7 +60,7 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 	user := mustBuildUser(t, userID, 1)
 	user.Username = "epoch-only-user"
 	user.Email = "epoch@only.test"
-	require.NoError(t, userRepo.Create(context.Background(), user))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, user))
 
 	// Seed an active session — AuthzEpochAtIssue=1 matches user.epoch=1.
 	// RevokedAt deliberately stays nil so the epoch branch is the ONLY
@@ -85,7 +85,7 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 
 	// Bump epoch via the repo directly — funnel intentionally bypassed so the
 	// session row remains active and only the epoch predicate can reject.
-	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID, credentialfence.Mint())
+	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), testTenantID, userID, credentialfence.Mint())
 	require.NoError(t, err)
 	require.Equal(t, int64(2), newEpoch, "first bump must advance epoch from 1 to 2")
 
@@ -118,7 +118,7 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 	for _, id := range []string{ownerID, imposterID} {
 		u := mustBuildUser(t, id, 1)
 		u.Email = id + "@test"
-		require.NoError(t, userRepo.Create(context.Background(), u))
+		require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
 	}
 
 	// Seed an active session owned by ownerID. AuthzEpochAtIssue=1 matches ownerID.epoch=1.

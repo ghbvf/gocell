@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
@@ -33,10 +34,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
-// adminCtxForService returns a context with an admin principal for service-layer tests.
-// All write paths (Lock, Unlock, Update, Delete) require a non-empty subject.
+// adminCtxForService returns a context with an admin principal and canonical test
+// tenant for service-layer tests. All write paths (Lock, Unlock, Update, Delete)
+// require a non-empty subject and a valid tenant (#1337 PR-2).
 func adminCtxForService() context.Context {
-	return auth.TestContext("test-admin", []string{"admin"})
+	return withTenant(auth.TestContext("test-admin", []string{"admin"}))
 }
 
 // inertRoleRepo returns a fresh, empty RoleRepository from a SEPARATE mem.Store
@@ -255,7 +257,7 @@ func newLastAdminProtectedService(t testing.TB) (*Service, *mem.UserRepository, 
 	store := mem.NewStore(clock.Real())
 	userRepo := store.UserRepository()
 	roleRepo := store.RoleRepository()
-	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{
+	require.NoError(t, roleRepo.Create(context.Background(), testTenantID, &domain.Role{
 		ID:   auth.RoleAdmin,
 		Name: auth.RoleAdmin,
 	}))
@@ -273,7 +275,7 @@ func newLastAdminProtectedService(t testing.TB) (*Service, *mem.UserRepository, 
 
 func assignAdminForIdentityManageTest(t testing.TB, roleRepo *mem.RoleRepository, userID string) {
 	t.Helper()
-	_, err := roleRepo.AssignToUser(context.Background(), userID, auth.RoleAdmin)
+	_, err := roleRepo.AssignToUser(context.Background(), testTenantID, userID, auth.RoleAdmin)
 	require.NoError(t, err)
 }
 
@@ -400,7 +402,7 @@ func TestService_Update_StatusRequiresAdminRole(t *testing.T) {
 	require.NoError(t, err)
 
 	// Self-PATCH with non-admin roles: changing status must fail with 403.
-	nonAdminCtx := auth.TestContext(user.ID, []string{"user"})
+	nonAdminCtx := withTenant(auth.TestContext(user.ID, []string{"user"}))
 	active := "active"
 	_, err = svc.Update(nonAdminCtx, UpdateInput{ID: user.ID, Status: &active})
 	require.Error(t, err, "non-admin must not be able to mutate status")
@@ -527,7 +529,7 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 	if markReset {
 		user.SetPasswordResetRequired(true, time.Now())
 	}
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 	return user
 }
 
@@ -542,7 +544,7 @@ func seedInactiveUserWithHash(t *testing.T, repo *mem.UserRepository, username, 
 	require.NoError(t, err)
 	user.ID = "usr-" + username
 	user.SetStatus(status, time.Now())
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 	return user
 }
 
@@ -740,7 +742,7 @@ func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
 	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-ok", "oldpass", false)
 
-	pair, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	pair, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-ok",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -759,7 +761,7 @@ func TestService_ChangePassword_VerifyOldPasswordFail(t *testing.T) {
 	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-bad", "correctpass", false)
 
-	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-bad",
 		OldPassword: "wrongpass",
 		NewPassword: "newpass",
@@ -794,7 +796,7 @@ func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
 			beforeHash := user.PasswordHash
 			beforePV := user.PasswordVersion
 
-			_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+			_, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 				UserID:      user.ID,
 				OldPassword: "oldpass",
 				NewPassword: "newpass",
@@ -812,7 +814,8 @@ func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
 			assert.Equal(t, beforeHash, after.PasswordHash,
 				"inactive account password hash must be unchanged")
 			assert.NoError(t, bcrypt.CompareHashAndPassword(
-				[]byte(after.PasswordHash), []byte("oldpass")),
+				[]byte(after.PasswordHash), []byte("oldpass"),
+			),
 				"stored hash must still match the old password")
 			assert.Equal(t, beforePV, after.PasswordVersion,
 				"passwordVersion must not advance when gate rejects")
@@ -843,7 +846,7 @@ func (r *freezeAfterReadRepo) GetByID(ctx context.Context, id string) (*domain.U
 		// the store row is now frozen while the caller holds a stale active view.
 		// UpdateLockState is not overridden, so the promoted method writes the
 		// underlying store directly.
-		_ = r.UpdateLockState(ctx, id, domain.StatusLocked, time.Now())
+		_ = r.UpdateLockState(ctx, testTenantID, id, domain.StatusLocked, time.Now())
 	}
 	return u, err // stale active snapshot
 }
@@ -869,7 +872,7 @@ func TestService_ChangePassword_ConcurrentFreeze_RejectedAtWriteGuard(t *testing
 	beforeHash := user.PasswordHash
 	beforePV := user.PasswordVersion
 
-	_, cpErr := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, cpErr := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      user.ID,
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -896,7 +899,7 @@ func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
 	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-same", "samepass", false)
 
-	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-same",
 		OldPassword: "samepass",
 		NewPassword: "samepass",
@@ -920,7 +923,7 @@ func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
 	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-issuer-required", "oldpass", false)
 
-	pair, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	pair, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-issuer-required",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -935,7 +938,7 @@ func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
 	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-reset", "oldpass", true)
 
-	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-reset",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -952,7 +955,7 @@ func TestService_ChangePassword_IssuerError(t *testing.T) {
 	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-issuer-err", "oldpass", false)
 
-	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-issuer-err",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -990,7 +993,7 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 		require.NoError(t, sessionRepo.Create(context.Background(), sess))
 	}
 
-	_, err = svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err = svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-revoke",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -1037,7 +1040,7 @@ func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Cont
 		// Restore the password snapshot — equivalent to PG ROLLBACK on the user row.
 		// UpdatePassword uses CAS on version; after fn ran UpdatePassword, the version
 		// advanced to pre.PasswordVersion+1, so the restore call uses that as expectedPV.
-		_, _ = s.repo.UpdatePassword(ctx, pre.ID, pre.PasswordHash, pre.PasswordResetRequired(), pre.PasswordVersion+1)
+		_, _ = s.repo.UpdatePassword(ctx, testTenantID, pre.ID, pre.PasswordHash, pre.PasswordResetRequired(), pre.PasswordVersion+1)
 		return err
 	}
 	return nil
@@ -1074,7 +1077,7 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 
 	seedUserWithHash(t, userRepo, "cp-tx-fail", "oldpass", false)
 
-	pair, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	pair, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cp-tx-fail",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -1120,7 +1123,7 @@ func TestChangePassword_OldPasswordCorrect_BumpsVersion(t *testing.T) {
 	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cas-bump", "oldpass", false)
 
-	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cas-bump",
 		OldPassword: "oldpass",
 		NewPassword: "newpass1",
@@ -1147,7 +1150,7 @@ func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-cas-stale"
 	user.PasswordVersion = 0
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
@@ -1157,7 +1160,7 @@ func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	// First change: succeeds and bumps version to 1.
-	_, err = svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err = svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 		UserID:      "usr-cas-stale",
 		OldPassword: "oldpass",
 		NewPassword: "newpass1",
@@ -1168,7 +1171,7 @@ func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 	// will reject because version is now 1.
 	// We need a stub that returns the old user with version=0 to simulate the
 	// stale-read scenario. We test the repo directly here.
-	_, err = repo.UpdatePassword(context.Background(), "usr-cas-stale", "$2a$12$stub", false, 0)
+	_, err = repo.UpdatePassword(context.Background(), testTenantID, "usr-cas-stale", "$2a$12$stub", false, 0)
 	require.Error(t, err, "stale version must yield an error")
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
@@ -1226,7 +1229,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-cas-race"
 	user.PasswordVersion = 0
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
 	sessionStore := testutil.RealSessionRepo(t)
@@ -1242,7 +1245,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		newPw := fmt.Sprintf("newpass%d", i+1)
 		go func(newPw string) {
-			_, cerr := svc.ChangePassword(context.Background(), ChangePasswordInput{
+			_, cerr := svc.ChangePassword(withTenant(auth.TestContext("test-self", nil)), ChangePasswordInput{
 				UserID:      "usr-cas-race",
 				OldPassword: "oldpass",
 				NewPassword: newPw,
@@ -1516,9 +1519,9 @@ type observingUserRepo struct {
 	createCalls int
 }
 
-func (r *observingUserRepo) Create(ctx context.Context, user *domain.User) error {
+func (r *observingUserRepo) Create(ctx context.Context, t tenant.TenantID, user *domain.User) error {
 	r.createCalls++
-	return r.UserRepository.Create(ctx, user)
+	return r.UserRepository.Create(ctx, t, user)
 }
 
 func (r *observingUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
@@ -1526,27 +1529,31 @@ func (r *observingUserRepo) GetByID(ctx context.Context, id string) (*domain.Use
 	return r.UserRepository.GetByID(ctx, id)
 }
 
-func (r *observingUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+func (r *observingUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
 	r.getInTx = r.runner.inTx
-	return r.UserRepository.GetByIDForUpdate(ctx, id)
+	return r.UserRepository.GetByIDForUpdate(ctx, t, id)
 }
 
-func (r *observingUserRepo) UpdateLockState(ctx context.Context, userID string, status domain.UserStatus, now time.Time) error {
+func (r *observingUserRepo) UpdateLockState(
+	ctx context.Context, t tenant.TenantID, userID string, status domain.UserStatus, now time.Time,
+) error {
 	r.updInTx = r.runner.inTx
-	return r.UserRepository.UpdateLockState(ctx, userID, status, now)
+	return r.UserRepository.UpdateLockState(ctx, t, userID, status, now)
 }
 
 func (r *observingUserRepo) UpdateProfile(
-	ctx context.Context, userID string,
+	ctx context.Context, t tenant.TenantID, userID string,
 	name, email *domain.NonEmpty, now time.Time,
 ) (*domain.User, error) {
 	r.updInTx = r.runner.inTx
-	return r.UserRepository.UpdateProfile(ctx, userID, name, email, now)
+	return r.UserRepository.UpdateProfile(ctx, t, userID, name, email, now)
 }
 
-func (r *observingUserRepo) UpdatePasswordResetFlag(ctx context.Context, userID string, required bool, now time.Time) error {
+func (r *observingUserRepo) UpdatePasswordResetFlag(
+	ctx context.Context, t tenant.TenantID, userID string, required bool, now time.Time,
+) error {
 	r.updInTx = r.runner.inTx
-	return r.UserRepository.UpdatePasswordResetFlag(ctx, userID, required, now)
+	return r.UserRepository.UpdatePasswordResetFlag(ctx, t, userID, required, now)
 }
 
 // failingUpdateRepo wraps a real repo but always fails UpdateLockState — used
@@ -1558,7 +1565,7 @@ type failingUpdateRepo struct {
 	updates   int
 }
 
-func (r *failingUpdateRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+func (r *failingUpdateRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
 	r.updates++
 	return r.updateErr
 }
@@ -1673,7 +1680,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-rb"
 	user.SetStatus(domain.StatusLocked, time.Now())
-	require.NoError(t, innerRepo.Create(context.Background(), user))
+	require.NoError(t, innerRepo.Create(context.Background(), testTenantID, user))
 
 	failRepo := &failingUpdateRepo{UserRepository: innerRepo, updateErr: errors.New("disk full")}
 	runner := &recordingTxRunner{}
@@ -1880,7 +1887,7 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 	domainUser, err := domain.NewUser("rf-fail", "rf@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	domainUser.ID = "usr-rf-fail"
-	require.NoError(t, userRepo.Create(context.Background(), domainUser))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, domainUser))
 
 	failRefresh := &failingRefreshStore{
 		Store:         newIdentityRefreshStore(),
@@ -2170,7 +2177,7 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 	domainUser, err := domain.NewUser("pub-fail", "pub@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	domainUser.ID = "usr-pub-fail"
-	require.NoError(t, userRepo.Create(context.Background(), domainUser))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, domainUser))
 
 	emitter := &spyEmitter{err: errors.New("broker unavailable")}
 	var buf bytes.Buffer

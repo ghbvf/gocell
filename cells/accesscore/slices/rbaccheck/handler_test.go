@@ -19,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const invalidUUID = "not-a-uuid-string"
@@ -62,14 +61,14 @@ func TestRoleResponse_EmptyPermissions(t *testing.T) {
 func setup(t *testing.T, runMode query.RunMode) http.Handler {
 	t.Helper()
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	roleRepo.SeedRole(&domain.Role{
+	roleRepo.SeedRole(testTenantID, &domain.Role{
 		ID: "r1", Name: "admin",
 		Permissions: []domain.Permission{
 			{Resource: "users", Action: "read"},
 			{Resource: "users", Action: "write"},
 		},
 	})
-	_, _ = roleRepo.AssignToUser(context.Background(), testutil.TestID("user-1"), "r1")
+	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "r1")
 
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
 	if err != nil {
@@ -218,7 +217,7 @@ func TestHandler(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+				req = req.WithContext(testAuthContext(tc.subject, tc.roles))
 			}
 			r.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -236,7 +235,7 @@ func TestHandleList_ExceedsMaxLimit(t *testing.T) {
 	// (F4 absorb: generated handler routes cursor/limit through ParsePageParams,
 	// which returns ERR_PAGE_SIZE_EXCEEDED for limit > 500).
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1")+"?limit=501", nil)
-	req = req.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+	req = req.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
 
 	r.ServeHTTP(w, req)
 
@@ -248,7 +247,7 @@ func TestHandler_ListRoles_ProdMode_InvalidCursor_Returns400(t *testing.T) {
 	r := setup(t, query.RunModeProd)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1")+"?cursor=not-a-valid-cursor", nil)
-	req = req.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+	req = req.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
 
 	r.ServeHTTP(w, req)
 

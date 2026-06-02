@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -65,31 +66,31 @@ const fmtRoleIDUserID = "role_id=%q user_id=%q"
 
 const (
 	upsertRoleSQL = `
-INSERT INTO roles (id, name, permissions, created_at)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (id) DO UPDATE
+INSERT INTO roles (tenant_id, id, name, permissions, created_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (tenant_id, id) DO UPDATE
   SET name        = EXCLUDED.name,
       permissions = EXCLUDED.permissions`
 
 	selectRoleByIDSQL = `
 SELECT id, name, permissions, created_at
 FROM roles
-WHERE id = $1`
+WHERE tenant_id = $1 AND id = $2`
 
 	selectRolesByUserIDSQL = `
 SELECT r.id, r.name, r.permissions, r.created_at
 FROM roles r
-JOIN role_assignments ra ON ra.role_id = r.id
-WHERE ra.user_id = $1`
+JOIN role_assignments ra ON ra.role_id = r.id AND ra.tenant_id = r.tenant_id
+WHERE ra.tenant_id = $1 AND ra.user_id = $2`
 
 	insertAssignmentSQL = `
-INSERT INTO role_assignments (user_id, role_id, granted_at)
-VALUES ($1, $2, $3)
-ON CONFLICT (user_id, role_id) DO NOTHING`
+INSERT INTO role_assignments (tenant_id, user_id, role_id, granted_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (tenant_id, user_id, role_id) DO NOTHING`
 
 	deleteAssignmentSQL = `
 DELETE FROM role_assignments
-WHERE user_id = $1 AND role_id = $2`
+WHERE tenant_id = $1 AND user_id = $2 AND role_id = $3`
 
 	// removeIfNotLastSQL atomically removes the admin role assignment from $1
 	// only if either (a) the target user is not currently active (locked /
@@ -118,22 +119,26 @@ WHERE user_id = $1 AND role_id = $2`
 	//
 	// The migration-024 effective_admin_invariant_on_role_assignments trigger
 	// remains the safety net for any direct DELETE that bypasses this CTE path.
+	// removeIfNotLastSQL is a per-tenant CTE. $1=tenant_id, $2=user_id, $3=role_id.
+	// The advisory lock key includes hashtext(tenant_id) so concurrent guards
+	// in different tenants do NOT serialize against each other (migration 046
+	// per-tenant effective-admin invariant).
 	removeIfNotLastSQL = `
 WITH lock_acquired AS MATERIALIZED (
-    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0)) AS locked
+    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', hashtext($1))) AS locked
 ),
 target_status AS (
-    SELECT status FROM users WHERE id = $1
+    SELECT status FROM users WHERE tenant_id = $1 AND id = $2
 ),
 others AS (
     SELECT u.id FROM users u
-    JOIN role_assignments ra ON ra.user_id = u.id
-    WHERE ra.role_id = 'admin' AND u.status = 'active' AND u.id <> $1
+    JOIN role_assignments ra ON ra.user_id = u.id AND ra.tenant_id = u.tenant_id
+    WHERE ra.tenant_id = $1 AND ra.role_id = 'admin' AND u.status = 'active' AND u.id <> $2
     FOR UPDATE OF u
 ),
 deleted AS (
     DELETE FROM role_assignments
-    WHERE user_id = $1 AND role_id = $2
+    WHERE tenant_id = $1 AND user_id = $2 AND role_id = $3
       AND EXISTS (SELECT 1 FROM lock_acquired)
       AND (
           (SELECT status FROM target_status) IS DISTINCT FROM 'active'
@@ -142,53 +147,40 @@ deleted AS (
     RETURNING user_id
 )
 SELECT
-    EXISTS(SELECT 1 FROM role_assignments WHERE user_id = $1 AND role_id = $2) AS user_held_role,
-    EXISTS(SELECT 1 FROM deleted)                                              AS was_deleted`
+    EXISTS(SELECT 1 FROM role_assignments WHERE tenant_id = $1 AND user_id = $2 AND role_id = $3) AS user_held_role,
+    EXISTS(SELECT 1 FROM deleted)                                                                   AS was_deleted`
 
 	countByRoleSQL = `
-SELECT COUNT(*)::INT FROM role_assignments WHERE role_id = $1`
+SELECT COUNT(*)::INT FROM role_assignments WHERE tenant_id = $1 AND role_id = $2`
 
-	// countEffectiveAdminsSQL counts users that are simultaneously
-	// status='active' AND hold the admin role. This is the canonical
-	// last-admin invariant counter consumed via the EffectiveAdminCounter
-	// sealed interface (S4.0). Advisory lock is taken inside the CTE so the
-	// read serializes with concurrent mutation guards (CTE prelude in
-	// removeIfNotLastSQL + migration-024 triggers all share the same key).
-	//
-	// IMPORTANT: This query MUST only be executed within an open write
-	// transaction. The advisory lock (pg_advisory_xact_lock) is transaction-
-	// scoped: it is automatically released when the enclosing transaction
-	// commits or rolls back. Calling this outside a transaction defeats the
-	// serialization guarantee — the lock acquires and immediately releases,
-	// leaving a window for concurrent mutations. If a lock-free diagnostic
-	// variant is needed (e.g. for observability reads), add a separate query
-	// without the advisory-lock CTE rather than lifting the constraint here.
-	// MATERIALIZED + CROSS JOIN ensures the volatile pg_advisory_xact_lock
-	// actually runs: PG 12+ inlines unreferenced CTEs by default and would
-	// otherwise drop the lock entirely. lock_acquired references in the FROM
-	// clause via CROSS JOIN, so removing it would change query results — the
-	// planner cannot prune it.
+	// countEffectiveAdminsSQL is per-tenant. $1=tenant_id. Advisory lock key
+	// includes hashtext(tenant_id) so per-tenant serialization is independent.
 	countEffectiveAdminsSQL = `
 WITH lock_acquired AS MATERIALIZED (
-    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', 0)) AS locked
+    SELECT pg_advisory_xact_lock(hashtextextended('gocell.accesscore.last_admin', hashtext($1))) AS locked
 )
 SELECT COUNT(*)::INT
 FROM role_assignments ra
-JOIN users u ON u.id = ra.user_id
+JOIN users u ON u.id = ra.user_id AND u.tenant_id = ra.tenant_id
 CROSS JOIN lock_acquired
-WHERE ra.role_id = 'admin' AND u.status = 'active'`
+WHERE ra.tenant_id = $1 AND ra.role_id = 'admin' AND u.status = 'active'`
 )
 
 // Create upserts a role (seed/bootstrap semantics: existing role is overwritten).
-// The SQL uses ON CONFLICT (id) DO UPDATE — the only unique index on `roles` is
-// the PK. A unique-violation (SQLSTATE 23505) is therefore structurally impossible
+// The SQL uses ON CONFLICT (tenant_id, id) DO UPDATE — the composite PK on `roles`.
+// A unique-violation (SQLSTATE 23505) is therefore structurally impossible
 // here; any error is a genuine infra failure, classified as ErrInternal.
-func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
+func (r *PGRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
 	permJSON, err := json.Marshal(role.Permissions)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: marshal permissions", err)
 	}
-	_, err = r.db.Exec(ctx, upsertRoleSQL,
+	_, err = r.db.Exec(
+		ctx, upsertRoleSQL,
+		string(t),
 		role.ID,
 		role.Name,
 		permJSON,
@@ -200,9 +192,12 @@ func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 	return nil
 }
 
-// GetByID fetches a role by primary key. Returns ErrAuthRoleNotFound when absent.
-func (r *PGRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
-	row := r.db.QueryRow(ctx, selectRoleByIDSQL, id)
+// GetByID fetches a role by composite (tenant_id, id) key. Returns ErrAuthRoleNotFound when absent.
+func (r *PGRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
+	row := r.db.QueryRow(ctx, selectRoleByIDSQL, string(t), id)
 	role, err := scanRole(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -215,10 +210,13 @@ func (r *PGRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, erro
 	return role, nil
 }
 
-// GetByUserID returns all roles assigned to the user. Returns an empty slice
-// when the user has no roles (mirrors mem behavior).
-func (r *PGRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
-	rows, err := r.db.Query(ctx, selectRolesByUserIDSQL, userID)
+// GetByUserID returns all roles assigned to the user in the given tenant.
+// Returns an empty slice when the user has no roles (mirrors mem behavior).
+func (r *PGRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
+	rows, err := r.db.Query(ctx, selectRolesByUserIDSQL, string(t), userID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: get-by-user-id", err)
 	}
@@ -247,12 +245,17 @@ func fkConstraintName(err error) string {
 	return ""
 }
 
-// AssignToUser assigns a role to a user. Idempotent: returns changed=false when
+// AssignToUser assigns a role to a user within a tenant. Idempotent: returns changed=false when
 // the assignment already existed. Returns ErrAuthRoleNotFound when the role does
 // not exist (FK on role_id). Returns ErrAuthUserNotFound when the user does not
 // exist (FK on user_id). Fallback for unknown FK violations returns ErrAuthRoleNotFound.
-func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
-	tag, err := r.db.Exec(ctx, insertAssignmentSQL,
+func (r *PGRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	if err := t.Validate(); err != nil {
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
+	tag, err := r.db.Exec(
+		ctx, insertAssignmentSQL,
+		string(t),
 		userID,
 		roleID,
 		r.clock.Now(),
@@ -291,8 +294,11 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 // runs after a setup failure: if the just-provisioned admin is the only
 // effective admin, the trigger correctly blocks the cleanup and leaves
 // the operator with a usable account rather than an unusable system.
-func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
-	_, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
+func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
+	_, err := r.db.Exec(ctx, deleteAssignmentSQL, string(t), userID, roleID)
 	if err != nil {
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
@@ -328,11 +334,14 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 //     leave zero effective admins. Both the app-level CTE detect path and
 //     the DB trigger safety-net path return the same errcode so client
 //     handlers match a single business invariant.
-func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
+func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	if err := t.Validate(); err != nil {
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
 	if roleID != auth.RoleAdmin {
 		// Non-admin role: plain DELETE, no last-holder check. Trigger
-		// (migration 024) also short-circuits on `role_id <> 'admin'`.
-		tag, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
+		// (migration 046) also short-circuits on `role_id <> 'admin'`.
+		tag, err := r.db.Exec(ctx, deleteAssignmentSQL, string(t), userID, roleID)
 		if err != nil {
 			return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"role_repo: remove-if-not-last (non-admin)", err)
@@ -347,7 +356,8 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 	}
 
 	var userHeldRole, wasDeleted bool
-	row := tx.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
+	// removeIfNotLastSQL: $1=tenant_id, $2=user_id, $3=role_id
+	row := tx.QueryRow(ctx, removeIfNotLastSQL, string(t), userID, roleID)
 	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
 		if isLastAdminProtected(err) {
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
@@ -380,9 +390,12 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 // regardless of user status. Used for bootstrap idempotency
 // (adminprovision); MUST NOT be used as the last-admin invariant counter —
 // see CountEffectiveAdmins.
-func (r *PGRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
+func (r *PGRoleRepo) CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error) {
+	if err := t.Validate(); err != nil {
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
 	var count int
-	row := r.db.QueryRow(ctx, countByRoleSQL, roleID)
+	row := r.db.QueryRow(ctx, countByRoleSQL, string(t), roleID)
 	if err := row.Scan(&count); err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: count-by-role", err)
 	}
@@ -406,14 +419,18 @@ func (r *PGRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error
 // PGSetupLock.Acquire / OutboxWriter.Write. If a lock-free read is ever
 // needed for diagnostics or observability, add a dedicated variant without
 // the advisory-lock CTE rather than relaxing this contract.
-func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context) (int, error) {
+func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
+	if err := t.Validate(); err != nil {
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
 	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
 	if !ok || tx == nil {
 		return 0, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"role_repo: count-effective-admins must be called inside a transaction (no pgx.Tx in ctx)")
 	}
 	var count int
-	row := tx.QueryRow(ctx, countEffectiveAdminsSQL)
+	// countEffectiveAdminsSQL: $1=tenant_id
+	row := tx.QueryRow(ctx, countEffectiveAdminsSQL, string(t))
 	if err := row.Scan(&count); err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: count-effective-admins", err)
 	}
@@ -425,18 +442,22 @@ func (r *PGRoleRepo) CountEffectiveAdmins(ctx context.Context) (int, error) {
 // designed for fast-path checks (setup retirement, provisioner.Status)
 // where eventual consistency is acceptable and the result does not feed
 // into the at-least-one invariant decision.
+// effectiveAdminExistsSQL is per-tenant. $1=tenant_id.
 const effectiveAdminExistsSQL = `
 SELECT EXISTS (
     SELECT 1 FROM role_assignments ra
-    JOIN users u ON u.id = ra.user_id
-    WHERE ra.role_id = 'admin' AND u.status = 'active'
+    JOIN users u ON u.id = ra.user_id AND u.tenant_id = ra.tenant_id
+    WHERE ra.tenant_id = $1 AND ra.role_id = 'admin' AND u.status = 'active'
 )`
 
 // EffectiveAdminExists implements ports.RoleRepository — see the port godoc
 // for fast-path semantics. Pool-driven (no tx required, no advisory lock).
-func (r *PGRoleRepo) EffectiveAdminExists(ctx context.Context) (bool, error) {
+func (r *PGRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
+	if err := t.Validate(); err != nil {
+		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
+	}
 	var exists bool
-	row := r.db.QueryRow(ctx, effectiveAdminExistsSQL)
+	row := r.db.QueryRow(ctx, effectiveAdminExistsSQL, string(t))
 	if err := row.Scan(&exists); err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: effective-admin-exists", err)
 	}
@@ -446,8 +467,8 @@ func (r *PGRoleRepo) EffectiveAdminExists(ctx context.Context) (bool, error) {
 // ListByUserID returns a paginated, sorted list of roles assigned to userID.
 // Mirrors the mem implementation: loads all roles for the user, then applies
 // query.Sort and query.ApplyCursor in Go.
-func (r *PGRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
-	roles, err := r.GetByUserID(ctx, userID)
+func (r *PGRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) {
+	roles, err := r.GetByUserID(ctx, t, userID)
 	if err != nil {
 		return nil, fmt.Errorf("role_repo: list-by-user: %w", err)
 	}

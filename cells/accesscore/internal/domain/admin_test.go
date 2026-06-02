@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // stubEffectiveAdminCounterImpl is a test-only EffectiveAdminCounterImpl
@@ -19,7 +20,7 @@ type stubEffectiveAdminCounterImpl struct {
 	called bool
 }
 
-func (s *stubEffectiveAdminCounterImpl) CountEffectiveAdmins(_ context.Context) (int, error) {
+func (s *stubEffectiveAdminCounterImpl) CountEffectiveAdmins(_ context.Context, _ tenant.TenantID) (int, error) {
 	s.called = true
 	return s.count, s.err
 }
@@ -137,7 +138,8 @@ func runGuardCheckRemoveCase(t *testing.T, tc guardCheckRemoveCase) {
 		t.Fatalf("NewLastAdminGuard: %v", err)
 	}
 
-	err = guard.CheckRemove(context.Background(), "user-123", tc.userIsActiveAdmin)
+	testTid, _ := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	err = guard.CheckRemove(context.Background(), testTid, "user-123", tc.userIsActiveAdmin)
 
 	assertGuardRemoveError(t, err, tc)
 

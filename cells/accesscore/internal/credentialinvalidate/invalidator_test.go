@@ -11,11 +11,16 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// testCtx is a context carrying a valid tenant so Apply's tenant.FromContext succeeds.
+var testCtx = ctxkeys.WithTenantID(context.Background(), "00000000-0000-0000-0000-000000000001")
 
 // ---------------------------------------------------------------------------
 // Type-safe stubs (follow fake-repo pattern from sessionmint_test.go)
@@ -29,12 +34,12 @@ type stubUserRepo struct {
 	bumpCallsFor []string // captures userID args
 }
 
-func (s *stubUserRepo) BumpAuthzEpoch(_ context.Context, userID string, _ credentialfence.FenceToken) (int64, error) {
+func (s *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, userID string, _ credentialfence.FenceToken) (int64, error) {
 	s.bumpCallsFor = append(s.bumpCallsFor, userID)
 	return s.bumpEpoch, s.bumpErr
 }
 
-func (s *stubUserRepo) Create(_ context.Context, _ *domain.User) error {
+func (s *stubUserRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	panic("stubUserRepo.Create: unexpected call")
 }
 
@@ -42,39 +47,41 @@ func (s *stubUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error
 	panic("stubUserRepo.GetByID: unexpected call")
 }
 
-func (s *stubUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+func (s *stubUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("stubUserRepo.GetByUsername: unexpected call")
 }
 
-func (s *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+func (s *stubUserRepo) UpdateProfile(
+	_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time,
+) (*domain.User, error) {
 	panic("stubUserRepo.UpdateProfile: unexpected call")
 }
 
-func (s *stubUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+func (s *stubUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
 	panic("stubUserRepo.UpdateLockState: unexpected call")
 }
 
-func (s *stubUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+func (s *stubUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
 	panic("stubUserRepo.UpdatePasswordResetFlag: unexpected call")
 }
 
-func (s *stubUserRepo) Delete(_ context.Context, _ string) error {
+func (s *stubUserRepo) Delete(_ context.Context, _ tenant.TenantID, _ string) error {
 	panic("stubUserRepo.Delete: unexpected call")
 }
 
-func (s *stubUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+func (s *stubUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	panic("stubUserRepo.UpdatePassword: unexpected call")
 }
 
-func (s *stubUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (s *stubUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("stubUserRepo.GetByIDForUpdate: unexpected call")
 }
 
-func (s *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (s *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("stubUserRepo.GetByUsernameForUpdate: unexpected call")
 }
 
-func (s *stubUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+func (s *stubUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	panic("stubUserRepo.UpdateLockoutFields: unexpected call")
 }
 
@@ -160,7 +167,7 @@ func TestApply_HappyPath(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(context.Background(), "subj-1", session.CredentialEventPasswordReset)
+	err = inv.Apply(testCtx, "subj-1", session.CredentialEventPasswordReset)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"subj-1"}, users.bumpCallsFor, "BumpAuthzEpoch must be called once")
@@ -177,7 +184,7 @@ func TestApply_UserRepoError_ShortCircuits(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(context.Background(), "subj-1", session.CredentialEventLock)
+	err = inv.Apply(testCtx, "subj-1", session.CredentialEventLock)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bump authz_epoch", "error must mention bump authz_epoch")
 	assert.ErrorIs(t, err, bumpErr, "original error must be in chain")
@@ -194,7 +201,7 @@ func TestApply_SessionStoreError(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(context.Background(), "subj-2", session.CredentialEventDelete)
+	err = inv.Apply(testCtx, "subj-2", session.CredentialEventDelete)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "revoke sessions", "error must mention revoke sessions")
 	assert.ErrorIs(t, err, sessErr)
@@ -212,7 +219,7 @@ func TestApply_RefreshStoreError(t *testing.T) {
 	inv, err := New(users, sess, ref)
 	require.NoError(t, err)
 
-	err = inv.Apply(context.Background(), "subj-3", session.CredentialEventRoleRevoke)
+	err = inv.Apply(testCtx, "subj-3", session.CredentialEventRoleRevoke)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "revoke refresh chain", "error must mention revoke refresh chain")
 	assert.ErrorIs(t, err, refErr)

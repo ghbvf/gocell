@@ -107,7 +107,7 @@ var testCredential = []byte("test-fixture-password")
 func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 	user, _ := domain.NewUser(username, username+"@test.com", passwordHash, time.Now())
 	user.ID = "usr-" + username
-	_ = repo.Create(context.Background(), user)
+	_ = repo.Create(context.Background(), testTenantID, user)
 }
 
 func TestService_WithEmitter(t *testing.T) {
@@ -122,7 +122,7 @@ func TestService_WithEmitter(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "alice", Password: string(testCredential)})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "alice", Password: string(testCredential)})
 	require.NoError(t, err)
 
 	require.Len(t, ow.entries, 1)
@@ -139,7 +139,7 @@ func TestService_WithTxManager(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "bob", string(hash))
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "bob", Password: string(testCredential)})
+	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "bob", Password: string(testCredential)})
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.calls)
 }
@@ -181,7 +181,9 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "durable-emit-fail", string(hash))
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "durable-emit-fail", Password: string(testCredential)})
+	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr, Username: "durable-emit-fail", Password: string(testCredential),
+	})
 	require.Error(t, err, "emit failure must propagate as an error")
 
 	// In durable tx mode, cleanupIssuedSession must NOT be called (tx rollback handles it).
@@ -209,7 +211,9 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "noop-emit-fail", string(hash))
 
-	_, err := svc.Login(context.Background(), LoginInput{Username: "noop-emit-fail", Password: string(testCredential)})
+	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr, Username: "noop-emit-fail", Password: string(testCredential),
+	})
 	require.Error(t, err, "emit failure must propagate as an error")
 
 	// In noop tx mode, cleanupIssuedSession must compensate the session write via Revoke.

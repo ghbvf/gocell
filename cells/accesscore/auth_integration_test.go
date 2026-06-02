@@ -131,12 +131,12 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash(), time.Now())
 	require.NoError(t, err)
 	alice.ID = "usr-alice-integration"
-	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, &domain.Role{
 		ID: auth.RoleAdmin, Name: auth.RoleAdmin,
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	}))
-	require.NoError(t, userRepo.Create(ctx, alice))
-	_, err = roleRepo.AssignToUser(ctx, alice.ID, auth.RoleAdmin)
+	require.NoError(t, userRepo.Create(ctx, testTenantID, alice))
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, alice.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	intClock := storetest.NewFakeClock(time.Now())
@@ -350,9 +350,9 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	refreshStore := testutil.RealRefreshStore(t)
 
 	// Seed "member" role.
-	roleRepo.SeedRole(&domain.Role{ID: "member", Name: "member"})
+	roleRepo.SeedRole(testTenantID, &domain.Role{ID: "member", Name: "member"})
 	// Seed "admin" role so bob doesn't become the last admin.
-	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	roleRepo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 
 	// Seed bob so userRepo.BumpAuthzEpoch (called via invalidator funnel)
 	// can find the row.
@@ -370,11 +370,11 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 		UpdatedAt:       bobNow,
 	})
 	require.NoError(t, bobErr)
-	require.NoError(t, userRepo.Create(ctx, bobUser))
+	require.NoError(t, userRepo.Create(ctx, testTenantID, bobUser))
 
 	// Assign bob and carol to "member" so last-holder guard doesn't block.
-	_, _ = roleRepo.AssignToUser(ctx, "usr-bob", "member")
-	_, _ = roleRepo.AssignToUser(ctx, "usr-carol", "member")
+	_, _ = roleRepo.AssignToUser(ctx, testTenantID, "usr-bob", "member")
+	_, _ = roleRepo.AssignToUser(ctx, testTenantID, "usr-carol", "member")
 
 	// Give bob an active session.
 	bobSession := &session.Session{
@@ -397,7 +397,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	stubWriter := &rbacStubOutboxWriter{}
 	stubTx := &rbacStubTxRunner{}
 	assignSvc, err := rbacassign.NewService(
-		clock.Real(), roleRepo, invalidator, slog.Default(),
+		clock.Real(), roleRepo, userRepo, invalidator, slog.Default(),
 		rbacassign.WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, stubWriter))),
 		rbacassign.WithTxManager(persistence.WrapForCell(stubTx)),
 	)

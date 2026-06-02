@@ -15,7 +15,7 @@ type cache interface{ Invalidate(key string) }
 
 func register(ctx context.Context, c cache) {
 	persistence.RegisterAfterCommit(ctx, func(hookCtx context.Context) {
-		c.Invalidate("k")                          // transient: cache invalidation
-		slog.InfoContext(hookCtx, "committed")     // transient: log
+		c.Invalidate("k")                      // transient: cache invalidation
+		slog.InfoContext(hookCtx, "committed") // transient: log
 	})
 }

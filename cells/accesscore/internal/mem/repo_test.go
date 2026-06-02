@@ -15,7 +15,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// testTenantID is the canonical test tenant UUID used by all mem repo tests.
+// It mirrors the value in internal/ports/conformance and accesscoretest.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("mem repo_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 // TestUserRepository_ConcurrentCreateAndGet verifies that concurrent
 // Create and Get calls do not race. Run with -race to verify.
@@ -42,7 +53,7 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 				)
 				if u != nil {
 					u.ID = fmt.Sprintf("uid-w%d-i%d", id, i)
-					_ = repo.Create(ctx, u)
+					_ = repo.Create(ctx, testTenantID, u)
 				}
 			}
 		}(w)
@@ -52,7 +63,7 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 		wg.Go(func() {
 			for range iterations {
 				_, _ = repo.GetByID(ctx, "uid-w0-i0")
-				_, _ = repo.GetByUsername(ctx, "user-w0-i0")
+				_, _ = repo.GetByUsername(ctx, testTenantID, "user-w0-i0")
 			}
 			_ = r
 		})
@@ -83,7 +94,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 		{
 			name: "get by username",
 			call: func() error {
-				_, err := repo.GetByUsername(ctx, "missing")
+				_, err := repo.GetByUsername(ctx, testTenantID, "missing")
 				return err
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
@@ -92,7 +103,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 		{
 			name: "update-lock-state",
 			call: func() error {
-				return repo.UpdateLockState(ctx, "usr-missing", domain.StatusLocked, time.Now())
+				return repo.UpdateLockState(ctx, testTenantID, "usr-missing", domain.StatusLocked, time.Now())
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
 			wantInternal: `id="usr-missing"`,
@@ -100,7 +111,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 		{
 			name: "delete",
 			call: func() error {
-				return repo.Delete(ctx, "usr-missing")
+				return repo.Delete(ctx, testTenantID, "usr-missing")
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
 			wantInternal: `id="usr-missing"`,
@@ -128,7 +139,7 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 
 	// Seed roles.
 	for i := range 5 {
-		repo.SeedRole(&domain.Role{
+		repo.SeedRole(testTenantID, &domain.Role{
 			ID:   fmt.Sprintf("role-%d", i),
 			Name: fmt.Sprintf("Role %d", i),
 		})
@@ -146,7 +157,7 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 			defer wg.Done()
 			for i := range iterations {
 				userID := fmt.Sprintf("uid-w%d-i%d", id, i)
-				_, _ = repo.AssignToUser(ctx, userID, fmt.Sprintf("role-%d", id%5))
+				_, _ = repo.AssignToUser(ctx, testTenantID, userID, fmt.Sprintf("role-%d", id%5))
 			}
 		}(w)
 	}
@@ -154,8 +165,8 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 	for r := range readers {
 		wg.Go(func() {
 			for range iterations {
-				_, _ = repo.GetByID(ctx, "role-0")
-				_, _ = repo.GetByUserID(ctx, "uid-w0-i0")
+				_, _ = repo.GetByID(ctx, testTenantID, "role-0")
+				_, _ = repo.GetByUserID(ctx, testTenantID, "uid-w0-i0")
 			}
 			_ = r
 		})
@@ -175,7 +186,7 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 	repo := store.RoleRepository()
 	userRepo := store.UserRepository()
 	ctx := context.Background()
-	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 
 	// Seed N active users with admin role. Effective-admin semantics require
 	// the users to exist in usersByID with Status=active, otherwise the
@@ -186,8 +197,8 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 		hu, huErr := domain.NewUser(id, id+"@test.local", "$2a$12$hash", time.Now())
 		require.NoError(t, huErr)
 		hu.ID = id
-		require.NoError(t, userRepo.Create(ctx, hu))
-		_, assignErr := repo.AssignToUser(ctx, id, "admin")
+		require.NoError(t, userRepo.Create(ctx, testTenantID, hu))
+		_, assignErr := repo.AssignToUser(ctx, testTenantID, id, "admin")
 		require.NoError(t, assignErr)
 	}
 
@@ -197,7 +208,7 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := repo.RemoveFromUserIfNotLast(ctx, fmt.Sprintf("uid-%d", idx), "admin")
+			_, err := repo.RemoveFromUserIfNotLast(ctx, testTenantID, fmt.Sprintf("uid-%d", idx), "admin")
 			errs <- err
 		}(i)
 	}
@@ -223,7 +234,7 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 	assert.Equal(t, holders-1, success, "all but the last holder should be removable")
 	assert.Equal(t, 1, rejected, "exactly one revoke must be rejected by last-holder guard")
 
-	count, err := repo.CountByRole(ctx, "admin")
+	count, err := repo.CountByRole(ctx, testTenantID, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "exactly one admin holder must survive concurrent revokes")
 }
@@ -236,17 +247,17 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 func TestRoleRepository_RemoveFromUserIfNotLast_NonAdminScopeNotProtected(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
-	repo.SeedRole(&domain.Role{ID: "editor", Name: "editor"})
+	repo.SeedRole(testTenantID, &domain.Role{ID: "editor", Name: "editor"})
 
-	_, err := repo.AssignToUser(ctx, "u1", "editor")
+	_, err := repo.AssignToUser(ctx, testTenantID, "u1", "editor")
 	require.NoError(t, err)
 
 	// Sole holder of a non-admin role MUST be removable (count drops to 0).
-	changed, err := repo.RemoveFromUserIfNotLast(ctx, "u1", "editor")
+	changed, err := repo.RemoveFromUserIfNotLast(ctx, testTenantID, "u1", "editor")
 	require.NoError(t, err, "non-admin sole holder must be revocable")
 	assert.True(t, changed, "non-admin removal must report state change")
 
-	count, err := repo.CountByRole(ctx, "editor")
+	count, err := repo.CountByRole(ctx, testTenantID, "editor")
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "non-admin role must drop to zero holders")
 }
@@ -258,7 +269,7 @@ func TestRoleRepository_GetByUserID_NoRoles(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
 
-	roles, err := repo.GetByUserID(ctx, "user-with-no-roles")
+	roles, err := repo.GetByUserID(ctx, testTenantID, "user-with-no-roles")
 	require.NoError(t, err)
 	require.NotNil(t, roles, "empty result must be non-nil slice")
 	require.Empty(t, roles)
@@ -267,7 +278,7 @@ func TestRoleRepository_GetByUserID_NoRoles(t *testing.T) {
 func TestRoleRepository_ListByUserID_NoRoles(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 
-	roles, err := repo.ListByUserID(context.Background(), "user-with-no-roles", query.ListParams{
+	roles, err := repo.ListByUserID(context.Background(), testTenantID, "user-with-no-roles", query.ListParams{
 		Limit: 2,
 		Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
 	})
@@ -286,8 +297,8 @@ func TestRoleRepository_ListByUserID_SortsPagesAndClones(t *testing.T) {
 		{ID: "role-b", Name: "operator", Permissions: []domain.Permission{{Resource: "devices", Action: "write"}}},
 	}
 	for _, role := range roles {
-		repo.SeedRole(role)
-		_, err := repo.AssignToUser(ctx, "user-1", role.ID)
+		repo.SeedRole(testTenantID, role)
+		_, err := repo.AssignToUser(ctx, testTenantID, "user-1", role.ID)
 		require.NoError(t, err)
 	}
 
@@ -298,18 +309,18 @@ func TestRoleRepository_ListByUserID_SortsPagesAndClones(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	page, err := repo.ListByUserID(ctx, "user-1", params)
+	page, err := repo.ListByUserID(ctx, testTenantID, "user-1", params)
 	require.NoError(t, err)
 	require.Len(t, page, 3, "repository returns Limit+1 rows for page-result hasMore detection")
 	assert.Equal(t, []string{"admin", "operator", "viewer"}, []string{page[0].Name, page[1].Name, page[2].Name})
 
 	page[0].Permissions[0].Action = "mutated"
-	got, err := repo.GetByID(ctx, "role-a")
+	got, err := repo.GetByID(ctx, testTenantID, "role-a")
 	require.NoError(t, err)
 	assert.Equal(t, "write", got.Permissions[0].Action, "listed roles must be cloned from repository state")
 
 	params.CursorValues = []any{"operator", "role-b"}
-	nextPage, err := repo.ListByUserID(ctx, "user-1", params)
+	nextPage, err := repo.ListByUserID(ctx, testTenantID, "user-1", params)
 	require.NoError(t, err)
 	require.Len(t, nextPage, 1)
 	assert.Equal(t, "viewer", nextPage[0].Name)
@@ -318,11 +329,11 @@ func TestRoleRepository_ListByUserID_SortsPagesAndClones(t *testing.T) {
 func TestRoleRepository_ListByUserID_InvalidCursorParams(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
-	repo.SeedRole(&domain.Role{ID: "role-a", Name: "admin"})
-	_, err := repo.AssignToUser(ctx, "user-1", "role-a")
+	repo.SeedRole(testTenantID, &domain.Role{ID: "role-a", Name: "admin"})
+	_, err := repo.AssignToUser(ctx, testTenantID, "user-1", "role-a")
 	require.NoError(t, err)
 
-	_, err = repo.ListByUserID(ctx, "user-1", query.ListParams{
+	_, err = repo.ListByUserID(ctx, testTenantID, "user-1", query.ListParams{
 		Limit:        2,
 		Sort:         []query.SortColumn{{Name: "name", Direction: query.SortASC}},
 		CursorValues: []any{"admin", "role-a"},
@@ -337,9 +348,9 @@ func TestRoleRepository_Create(t *testing.T) {
 	ctx := context.Background()
 
 	role := &domain.Role{ID: "editor", Name: "editor", Permissions: []domain.Permission{{Resource: "docs", Action: "write"}}}
-	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, repo.Create(ctx, testTenantID, role))
 
-	got, err := repo.GetByID(ctx, "editor")
+	got, err := repo.GetByID(ctx, testTenantID, "editor")
 	require.NoError(t, err)
 	assert.Equal(t, "editor", got.ID)
 	assert.Len(t, got.Permissions, 1)
@@ -350,10 +361,10 @@ func TestRoleRepository_Create_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
 	role := &domain.Role{ID: "admin", Name: "admin"}
-	require.NoError(t, repo.Create(ctx, role))
-	require.NoError(t, repo.Create(ctx, role)) // second call is no-op
+	require.NoError(t, repo.Create(ctx, testTenantID, role))
+	require.NoError(t, repo.Create(ctx, testTenantID, role)) // second call is no-op
 
-	got, err := repo.GetByID(ctx, "admin")
+	got, err := repo.GetByID(ctx, testTenantID, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, "admin", got.ID)
 }
@@ -362,13 +373,13 @@ func TestRoleRepository_CountByRole(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
 
-	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-	_, err := repo.AssignToUser(ctx, "usr-1", "admin")
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	_, err := repo.AssignToUser(ctx, testTenantID, "usr-1", "admin")
 	require.NoError(t, err)
-	_, err = repo.AssignToUser(ctx, "usr-2", "admin")
+	_, err = repo.AssignToUser(ctx, testTenantID, "usr-2", "admin")
 	require.NoError(t, err)
 
-	count, err := repo.CountByRole(ctx, "admin")
+	count, err := repo.CountByRole(ctx, testTenantID, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
 }
@@ -377,7 +388,7 @@ func TestRoleRepository_CountByRole_None(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
 
-	count, err := repo.CountByRole(ctx, "nonexistent")
+	count, err := repo.CountByRole(ctx, testTenantID, "nonexistent")
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
@@ -391,8 +402,8 @@ func seedActiveAdmin(t testing.TB, store *Store, userID string) {
 	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	u.ID = userID
-	require.NoError(t, store.UserRepository().Create(context.Background(), u))
-	_, err = store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
+	require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, u))
+	_, err = store.RoleRepository().AssignToUser(context.Background(), testTenantID, userID, "admin")
 	require.NoError(t, err)
 }
 
@@ -403,7 +414,7 @@ func seedActiveAdmin(t testing.TB, store *Store, userID string) {
 func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 	t.Run("empty_store_returns_false", func(t *testing.T) {
 		store := NewStore(clock.Real())
-		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background(), testTenantID)
 		require.NoError(t, err)
 		assert.False(t, exists, "fresh store has no effective admin")
 	})
@@ -414,7 +425,7 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 		// we write directly into the store maps (this test lives in
 		// package mem and exercises the read-side predicate).
 		store := NewStore(clock.Real())
-		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+		store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 		now := time.Now()
 		lockedUser, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // G101: test fixture
 			ID:           "locked-admin",
@@ -435,23 +446,30 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 		// state. Direct map writes are the only option here; this test lives in
 		// package mem to exercise the read-side EffectiveAdminExists predicate.
 		// NOTE: if Store's internal map layout changes, update this seed block too.
+		tid := string(testTenantID)
 		store.mu.Lock()
 		store.usersByID["locked-admin"] = lockedUser
-		store.byName["locked-admin"] = lockedUser
-		store.userRoles["locked-admin"] = map[string]struct{}{"admin": {}}
+		if store.byName[tid] == nil {
+			store.byName[tid] = make(map[string]*domain.User)
+		}
+		store.byName[tid]["locked-admin"] = lockedUser
+		if store.userRoles[tid] == nil {
+			store.userRoles[tid] = make(map[string]map[string]struct{})
+		}
+		store.userRoles[tid]["locked-admin"] = map[string]struct{}{"admin": {}}
 		store.mu.Unlock()
 
-		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background(), testTenantID)
 		require.NoError(t, err)
 		assert.False(t, exists, "locked admin must not satisfy the effective predicate")
 	})
 
 	t.Run("active_admin_returns_true", func(t *testing.T) {
 		store := NewStore(clock.Real())
-		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+		store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 		seedActiveAdmin(t, store, "active-admin")
 
-		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background(), testTenantID)
 		require.NoError(t, err)
 		assert.True(t, exists, "active admin must satisfy the effective predicate")
 	})
@@ -460,11 +478,11 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 		// Role assignment exists for a userID that has no users row (FK CASCADE
 		// would prevent this in PG, but the mem path defensively skips orphans).
 		store := NewStore(clock.Real())
-		store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-		_, err := store.RoleRepository().AssignToUser(context.Background(), "ghost", "admin")
+		store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+		_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "ghost", "admin")
 		require.NoError(t, err)
 
-		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background(), testTenantID)
 		require.NoError(t, err)
 		assert.False(t, exists, "orphan role assignment without user row must not count")
 	})
@@ -473,15 +491,15 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 		// Active user holds a non-admin role only; effective-admin predicate
 		// must reject because the role-id filter ignores them.
 		store := NewStore(clock.Real())
-		store.RoleRepository().SeedRole(&domain.Role{ID: "viewer", Name: "viewer"})
+		store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "viewer", Name: "viewer"})
 		vu, vuErr := domain.NewUser("viewer-user", "vu@test.local", "$2a$12$hash", time.Now())
 		require.NoError(t, vuErr)
 		vu.ID = "viewer-user"
-		require.NoError(t, store.UserRepository().Create(context.Background(), vu))
-		_, assignErr := store.RoleRepository().AssignToUser(context.Background(), "viewer-user", "viewer")
+		require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, vu))
+		_, assignErr := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "viewer-user", "viewer")
 		require.NoError(t, assignErr)
 
-		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background())
+		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background(), testTenantID)
 		require.NoError(t, err)
 		assert.False(t, exists, "non-admin role must not satisfy effective-admin predicate")
 	})
@@ -492,18 +510,20 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 // NOT count toward the at-least-one-effective-admin invariant.
 func TestRoleRepository_CountEffectiveAdmins_FiltersLocked(t *testing.T) {
 	store := NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 	seedActiveAdmin(t, store, "active-admin")
 	seedActiveAdmin(t, store, "locked-admin")
 	// Lock one admin — now only one effective admin remains.
-	require.NoError(t, store.UserRepository().UpdateLockState(context.Background(), "locked-admin", domain.StatusLocked, time.Now()))
+	require.NoError(t, store.UserRepository().UpdateLockState(
+		context.Background(), testTenantID, "locked-admin", domain.StatusLocked, time.Now(),
+	))
 
-	count, err := store.RoleRepository().CountEffectiveAdmins(context.Background())
+	count, err := store.RoleRepository().CountEffectiveAdmins(context.Background(), testTenantID)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "locked admin must not be counted")
 
 	// CountByRole sees BOTH (it's the bootstrap-idempotency counter, status-blind).
-	rawCount, err := store.RoleRepository().CountByRole(context.Background(), "admin")
+	rawCount, err := store.RoleRepository().CountByRole(context.Background(), testTenantID, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, 2, rawCount, "CountByRole is status-blind by design")
 }
@@ -513,12 +533,14 @@ func TestRoleRepository_CountEffectiveAdmins_FiltersLocked(t *testing.T) {
 // locked — the locked peer is not a usable fallback.
 func TestRoleRepository_RemoveFromUserIfNotLast_LockedPeerDoesNotCount(t *testing.T) {
 	store := NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 	seedActiveAdmin(t, store, "active-admin")
 	seedActiveAdmin(t, store, "locked-admin")
-	require.NoError(t, store.UserRepository().UpdateLockState(context.Background(), "locked-admin", domain.StatusLocked, time.Now()))
+	require.NoError(t, store.UserRepository().UpdateLockState(
+		context.Background(), testTenantID, "locked-admin", domain.StatusLocked, time.Now(),
+	))
 
-	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), "active-admin", "admin")
+	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), testTenantID, "active-admin", "admin")
 	require.Error(t, err, "must refuse revoke when only peer is locked")
 	assert.False(t, changed)
 	var ecErr *errcode.Error
@@ -532,12 +554,14 @@ func TestRoleRepository_RemoveFromUserIfNotLast_LockedPeerDoesNotCount(t *testin
 // active peer.
 func TestRoleRepository_RemoveFromUserIfNotLast_LockedAdminCanBeRevoked(t *testing.T) {
 	store := NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 	seedActiveAdmin(t, store, "active-admin")
 	seedActiveAdmin(t, store, "locked-admin")
-	require.NoError(t, store.UserRepository().UpdateLockState(context.Background(), "locked-admin", domain.StatusLocked, time.Now()))
+	require.NoError(t, store.UserRepository().UpdateLockState(
+		context.Background(), testTenantID, "locked-admin", domain.StatusLocked, time.Now(),
+	))
 
-	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), "locked-admin", "admin")
+	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), testTenantID, "locked-admin", "admin")
 	require.NoError(t, err)
 	assert.True(t, changed, "locked admin revoke does not reduce effective-admin count")
 }
@@ -548,7 +572,7 @@ func TestRoleRepository_RemoveFromUserIfNotLast_LockedAdminCanBeRevoked(t *testi
 // shared mutex, mirroring the PG advisory-lock + FOR UPDATE serialization.
 func TestStore_SharedMutex_AtomicityAcrossRepos(t *testing.T) {
 	store := NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 	seedActiveAdmin(t, store, "admin-a")
 	seedActiveAdmin(t, store, "admin-b")
 
@@ -562,18 +586,18 @@ func TestStore_SharedMutex_AtomicityAcrossRepos(t *testing.T) {
 	var revokeErr error
 	go func() {
 		defer wg.Done()
-		_ = store.UserRepository().UpdateLockState(context.Background(), "admin-b", domain.StatusLocked, time.Now())
+		_ = store.UserRepository().UpdateLockState(context.Background(), testTenantID, "admin-b", domain.StatusLocked, time.Now())
 	}()
 	go func() {
 		defer wg.Done()
-		_, revokeErr = store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), "admin-a", "admin")
+		_, revokeErr = store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), testTenantID, "admin-a", "admin")
 	}()
 	wg.Wait()
 
 	// Final state: at least one effective admin must remain. Either revokeErr
 	// is non-nil (refused because admin-b was locked first) or admin-a still
 	// holds admin (because admin-b was still active when revoke ran).
-	count, err := store.RoleRepository().CountEffectiveAdmins(context.Background())
+	count, err := store.RoleRepository().CountEffectiveAdmins(context.Background(), testTenantID)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, count, 1, "shared mutex must keep at least one effective admin")
 	_ = revokeErr // either nil or ErrAuthLastAdminProtected, both valid orderings

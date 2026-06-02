@@ -1,7 +1,6 @@
 package identitymanage
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"testing"
@@ -43,7 +42,7 @@ func newCascadeStore(t *testing.T) refresh.Store {
 }
 
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {
-	ctx := auth.TestContext("test-admin", []string{"admin"})
+	ctx := withTenant(auth.TestContext("test-admin", []string{"admin"}))
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
@@ -63,7 +62,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-lock", "other-user-lock", int64(1))
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Lock(auth.TestContext("test-admin", []string{"admin"}), user.ID))
+	require.NoError(t, svc.Lock(withTenant(auth.TestContext("test-admin", []string{"admin"})), user.ID))
 
 	// Rotating the pre-lock refresh token must be rejected.
 	_, _, err = refreshStore.Rotate(ctx, wire)
@@ -76,7 +75,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 }
 
 func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
-	ctx := context.Background()
+	ctx := withTenant(auth.TestContext("test-self", nil))
 	sessionRepo := testutil.RealSessionRepo(t)
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	refreshStore := newCascadeStore(t)
@@ -115,7 +114,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 }
 
 func TestService_Delete_RevokesRefreshChain(t *testing.T) {
-	ctx := auth.TestContext("test-admin", []string{"admin"})
+	ctx := withTenant(auth.TestContext("test-admin", []string{"admin"}))
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)

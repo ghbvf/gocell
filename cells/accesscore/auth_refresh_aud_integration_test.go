@@ -49,7 +49,8 @@ func TestAuthIntegration_RefreshAccessTokenAudienceDrift(t *testing.T) {
 			// — from compounding when the parent test also fans out under
 			// `go test -p`.
 			t.Parallel()
-			fx := loginAndGetPair(t,
+			fx := loginAndGetPair(
+				t,
 				withIssuerAuds(tc.issuerAuds...),
 				withVerifierAuds(tc.verifierAuds...),
 			)

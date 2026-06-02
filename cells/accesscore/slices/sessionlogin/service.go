@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -210,6 +211,11 @@ func NewService(
 type LoginInput struct {
 	Username string
 	Password string
+	// TenantID is required for pre-auth user lookup (GetByUsername is
+	// tenant-scoped). Parsed from the HTTP request (X-Tenant-ID header or
+	// request body tenantId field) by the handler and validated via
+	// tenant.ParseTenantID before constructing this struct.
+	TenantID string
 }
 
 // Login authenticates a user and returns a JWT token pair.
@@ -244,8 +250,19 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("password", input.Password),
+		validation.F("tenantId", input.TenantID),
 	); err != nil {
 		return dto.TokenPair{}, err
+	}
+
+	// Parse and validate the tenant before any DB access. Fail-closed: a
+	// malformed or empty tenantId returns an auth error (same as credential
+	// failure — no enumeration surface).
+	tid, parseErr := tenant.ParseTenantID(input.TenantID)
+	if parseErr != nil {
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid tenantId: %v", parseErr))))
 	}
 
 	// Authenticate the password outside the tx (bcrypt is CPU-bound and must
@@ -260,7 +277,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	// Timing normalisation: bcrypt runs for every attempt regardless of whether
 	// the user exists or is active, so callers cannot distinguish "user not found"
 	// from "wrong password" via response latency (zitadel-style constant-time path).
-	preUser, userLookupErr := s.userRepo.GetByUsername(ctx, input.Username)
+	preUser, userLookupErr := s.userRepo.GetByUsername(ctx, tid, input.Username)
 
 	// Choose the hash to compare against. If the user does not exist we use
 	// dummyBcryptHash to maintain constant time; if found we use the real hash.
@@ -297,7 +314,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	sessionID := uuid.NewString()
 	var outcome loginOutcome
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		o, infraErr := s.loginInTx(ctx, txCtx, input.Username, sessionID, pwVersionPin, bcryptErr)
+		o, infraErr := s.loginInTx(ctx, txCtx, tid, input.Username, sessionID, pwVersionPin, bcryptErr)
 		if infraErr != nil {
 			return infraErr // real infra error → tx rollback
 		}
@@ -381,14 +398,16 @@ type loginOutcome struct {
 // dropping the counter.
 // ctx is the outer (pre-tx) context used exclusively by lockout.TryLazyUnlock;
 // txCtx carries the FOR UPDATE row lock for the credential authority chain.
+// tid is the tenant derived from the login request (parsed before the tx).
 func (s *Service) loginInTx(
 	ctx context.Context,
 	txCtx context.Context,
+	tid tenant.TenantID,
 	username, sessionID string,
 	pwVersionPin credentialauthority.Check,
 	bcryptErr error,
 ) (loginOutcome, error) {
-	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
+	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, tid, username)
 	if err != nil {
 		return loginOutcome{}, classifyForUpdateErr(err)
 	}
@@ -398,12 +417,12 @@ func (s *Service) loginInTx(
 	// unlock we re-fetch the row inside the same tx so the rest of this
 	// function operates on the post-mutation view (status=Active,
 	// failed_login_count=0, locked_until=nil).
-	unlocked, err := s.lockout.TryLazyUnlock(ctx, txCtx, user)
+	unlocked, err := s.lockout.TryLazyUnlock(ctx, txCtx, tid, user)
 	if err != nil {
 		return loginOutcome{}, fmt.Errorf("sessionlogin:lazy unlock: %w", err)
 	}
 	if unlocked {
-		user, err = s.userRepo.GetByUsernameForUpdate(txCtx, username)
+		user, err = s.userRepo.GetByUsernameForUpdate(txCtx, tid, username)
 		if err != nil {
 			return loginOutcome{}, classifyForUpdateErr(err)
 		}
@@ -424,13 +443,14 @@ func (s *Service) loginInTx(
 	// For non-Active users accountlockout.RecordFailure short-circuits and does
 	// not touch the counter (P1#2).
 	if err := credentialauthority.Assert(user, pwVersionPin); err != nil {
-		s.recordFailureBestEffort(ctx, txCtx, user, "baseline_assert")
+		s.recordFailureBestEffort(ctx, txCtx, tid, user, "baseline_assert")
 		return loginOutcome{
 			failureErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				errMsgInvalidCredentials,
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
 					"credentialauthority: in-tx assert failed (user_id=%s): %v",
-					user.ID, err)))),
+					user.ID, err,
+				)))),
 		}, nil
 	}
 
@@ -452,7 +472,7 @@ func (s *Service) loginInTx(
 	// line itself so golangci-lint's "must be on same line as offender"
 	// scope rule applies precisely.
 	if bcryptErr != nil {
-		s.recordFailureBestEffort(ctx, txCtx, user, "wrong_password")
+		s.recordFailureBestEffort(ctx, txCtx, tid, user, "wrong_password")
 		return loginOutcome{ //nolint:nilerr // see godoc above; failureErr path
 			failureErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				errMsgInvalidCredentials),
@@ -462,7 +482,7 @@ func (s *Service) loginInTx(
 	// Successful credentials. Reset the auto-lockout counter (no-op if it was
 	// already clean) before minting tokens so the success path co-commits
 	// counter clear + session/refresh INSERT + outbox emit.
-	if err := s.lockout.RecordSuccess(txCtx, user); err != nil {
+	if err := s.lockout.RecordSuccess(txCtx, tid, user); err != nil {
 		s.logger.Error("sessionlogin:lockout reset failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 		// Counter reset failure is non-fatal: the user has proven their
@@ -471,7 +491,7 @@ func (s *Service) loginInTx(
 		// the alternative (rejecting a valid login) is worse.
 	}
 
-	return s.mintAndPersistSession(txCtx, user, sessionID)
+	return s.mintAndPersistSession(txCtx, tid, user, sessionID)
 }
 
 // mintAndPersistSession mints an access token, creates the session row, issues
@@ -484,6 +504,7 @@ func (s *Service) loginInTx(
 // mintAndPersistSession must be called inside an already-held txCtx (Login path).
 func (s *Service) mintAndPersistSession(
 	txCtx context.Context,
+	tid tenant.TenantID,
 	user *domain.User,
 	sessionID string,
 ) (loginOutcome, error) {
@@ -494,6 +515,7 @@ func (s *Service) mintAndPersistSession(
 		UserID:                user.ID,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired(),
+		TenantID:              tid,
 	})
 	if err != nil {
 		s.logger.Error("sessionlogin:token issuance failed",
@@ -573,8 +595,8 @@ func (s *Service) mintAndPersistSession(
 // to ROLLBACK at the connection level — the upstream caller then sees a
 // 5xx instead of the 401, which is correct: infra failure should surface,
 // not be disguised as a credential rejection.
-func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, user *domain.User, reason string) {
-	if err := s.lockout.RecordFailure(ctx, txCtx, user); err != nil {
+func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, tid tenant.TenantID, user *domain.User, reason string) {
+	if err := s.lockout.RecordFailure(ctx, txCtx, tid, user); err != nil {
 		s.logger.Error("sessionlogin:lockout record failure failed",
 			slog.Any("error", err),
 			slog.String("user_id", user.ID),
@@ -741,6 +763,12 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // implements the identitymanage.TokenIssuer interface without a cross-slice
 // import (F-ARCH-1). Value type makes (nil, nil) unrepresentable.
 func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
+	// Derive tenant for role lookup. IssueForUser is post-auth (called from
+	// identitymanage.ChangePassword which runs under an authenticated token).
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser tenant: %w", err)
+	}
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
@@ -759,6 +787,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		UserID:                userID,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired(),
+		TenantID:              tid,
 	})
 	if err != nil {
 		s.logger.Error("sessionlogin:IssueForUser token issuance failed",

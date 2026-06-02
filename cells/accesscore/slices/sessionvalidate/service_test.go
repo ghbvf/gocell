@@ -17,12 +17,22 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// testTenantID is the canonical test tenant UUID used in sessionvalidate tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("sessionvalidate_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 var (
 	testKeySet, testPrivKey, _ = keystest.MustNewKeySet(clock.Real())
@@ -311,40 +321,49 @@ func (r *stubUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error
 		errcode.WithCategory(errcode.CategoryDomain))
 }
 
-func (r *stubUserRepo) Create(_ context.Context, _ *domain.User) error { panic("not implemented") }
-func (r *stubUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+func (r *stubUserRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+func (r *stubUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+func (r *stubUserRepo) UpdateProfile(
+	_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time,
+) (*domain.User, error) {
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
-	panic("not implemented")
-}
-func (r *stubUserRepo) Delete(_ context.Context, _ string) error { panic("not implemented") }
-func (r *stubUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+func (r *stubUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
+func (r *stubUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *stubUserRepo) Delete(_ context.Context, _ tenant.TenantID, _ string) error {
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *stubUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
+	panic("not implemented")
+}
+
+func (r *stubUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+
+func (r *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+
+func (r *stubUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	panic("not implemented")
 }
 
@@ -450,42 +469,50 @@ func (r *capturingUserRepo) GetByID(_ context.Context, _ string) (*domain.User, 
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
 		errcode.WithCategory(errcode.CategoryDomain))
 }
-func (r *capturingUserRepo) Create(_ context.Context, _ *domain.User) error { return nil }
-func (r *capturingUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+
+func (r *capturingUserRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
+	return nil
+}
+
+func (r *capturingUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not implemented",
 		errcode.WithCategory(errcode.CategoryDomain))
 }
 
-func (r *capturingUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+func (r *capturingUserRepo) UpdateProfile(
+	_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time,
+) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not implemented",
 		errcode.WithCategory(errcode.CategoryDomain))
 }
 
-func (r *capturingUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+func (r *capturingUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
 
-func (r *capturingUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+func (r *capturingUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
 	return nil
 }
-func (r *capturingUserRepo) Delete(_ context.Context, _ string) error { return nil }
-func (r *capturingUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+
+func (r *capturingUserRepo) Delete(_ context.Context, _ tenant.TenantID, _ string) error { return nil }
+
+func (r *capturingUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }
 
-func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
+func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
 }
 
-func (r *capturingUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *capturingUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("not implemented")
 }
 
-func (r *capturingUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *capturingUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("not implemented")
 }
 
-func (r *capturingUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+func (r *capturingUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	panic("not implemented")
 }
 

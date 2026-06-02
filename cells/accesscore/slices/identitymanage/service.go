@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -267,7 +268,8 @@ type CreateInput struct {
 // both code paths reject the same blank input with the same field message,
 // avoiding domain-layer error-class drift (audit S-4).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthIdentityInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("email", input.Email),
 		validation.F("password", input.Password),
@@ -297,13 +299,17 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		user.SetPasswordResetRequired(true, s.clock.Now())
 	}
 
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("identity-manage: create: tenant: %w", err)
+	}
 	eventPayload := dto.UserCreatedEvent{
 		UserID:   user.ID,
 		Username: user.Username,
 		ActorID:  actor,
 	}
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Create(txCtx, user); err != nil {
+		if err := s.repo.Create(txCtx, tid, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)
 		}
 		if err := outbox.Emit(txCtx, s.clock, s.emitter, TopicUserCreated, eventPayload); err != nil {
@@ -354,7 +360,8 @@ type UpdateInput struct {
 // check and rejecting invalid values upfront avoids opening a tx that will
 // only roll back.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.ID),
 	); err != nil {
 		return nil, err
@@ -452,11 +459,15 @@ func (s *Service) applyUserUpdateTx(
 	ctx context.Context, txCtx context.Context,
 	input UpdateInput, actor string, now time.Time,
 ) (*domain.User, error) {
-	u, err := s.repo.GetByIDForUpdate(txCtx, input.ID)
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("identity-manage: update: tenant: %w", err)
+	}
+	u, err := s.repo.GetByIDForUpdate(txCtx, tid, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: update: %w", err)
 	}
-	if err := s.guardUpdateStatusDemotion(txCtx, u, input); err != nil {
+	if err := s.guardUpdateStatusDemotion(txCtx, tid, u, input); err != nil {
 		return nil, err
 	}
 	// Resolve the credential mutation inside the tx using the already-fetched
@@ -468,7 +479,7 @@ func (s *Service) applyUserUpdateTx(
 	// status-only and requirePasswordReset-only PATCHes must not touch these
 	// columns.
 	if input.Name != nil || input.Email != nil {
-		updated, uerr := s.repo.UpdateProfile(txCtx, input.ID, input.Name, input.Email, now)
+		updated, uerr := s.repo.UpdateProfile(txCtx, tid, input.ID, input.Name, input.Email, now)
 		if uerr != nil {
 			return nil, fmt.Errorf("identity-manage: update profile: %w", uerr)
 		}
@@ -478,7 +489,7 @@ func (s *Service) applyUserUpdateTx(
 	// Apply credential mutation via funnel inside the same tx — L2 OutboxFact:
 	// domain mutation, credential invalidation, and event publish co-commit.
 	if credMut.ok {
-		if err := s.authzmutator.ApplyInTx(ctx, txCtx, input.ID, credMut.m, now); err != nil {
+		if err := s.authzmutator.ApplyInTx(ctx, txCtx, tid, input.ID, credMut.m, now); err != nil {
 			return nil, fmt.Errorf("identity-manage: update credential mutation: %w", err)
 		}
 		// Post-mutation re-fetch is plain GetByID (not ForUpdate): the same-tx MVCC snapshot
@@ -561,18 +572,19 @@ func resolveCredentialMutationFromUser(u *domain.User, input UpdateInput) pendin
 // guardUpdateStatusDemotion enforces the effective-admin invariant when an
 // Update would demote an active admin to suspended. Returning a precise 403
 // here avoids falling through to the DB trigger's P0001 (500).
-func (s *Service) guardUpdateStatusDemotion(ctx context.Context, u *domain.User, input UpdateInput) error {
+func (s *Service) guardUpdateStatusDemotion(ctx context.Context, tid tenant.TenantID, u *domain.User, input UpdateInput) error {
 	if input.Status == nil || u.Status() != domain.StatusActive || *input.Status == string(domain.StatusActive) {
 		return nil
 	}
-	return s.checkLastAdminRemoval(ctx, u.ID, u.Status())
+	return s.checkLastAdminRemoval(ctx, tid, u.ID, u.Status())
 }
 
 // Delete removes a user. Before the user row is deleted, all sessions and
 // refresh-token chains owned by the user are revoked atomically so any
 // in-flight access/refresh tokens cannot survive the delete.
 func (s *Service) Delete(ctx context.Context, id string) error {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
@@ -592,6 +604,10 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 }
 
 func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor string) error {
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("identity-manage: delete: tenant: %w", err)
+	}
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		// S4.0: fetch the user so the effective-admin guard can use the real
 		// status (active vs locked/suspended). Pre-S4.0 the guard didn't need
@@ -602,7 +618,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
-		if err := s.checkLastAdminRemoval(txCtx, user.ID, user.Status()); err != nil {
+		if err := s.checkLastAdminRemoval(txCtx, tid, user.ID, user.Status()); err != nil {
 			return err
 		}
 		// Bump authz_epoch + revoke sessions + revoke refresh chains atomically.
@@ -610,7 +626,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err := s.invalidator.Apply(txCtx, id, session.CredentialEventDelete); err != nil {
 			return fmt.Errorf("identity-manage: delete invalidate credentials: %w", err)
 		}
-		if err := s.repo.Delete(txCtx, id); err != nil {
+		if err := s.repo.Delete(txCtx, tid, id); err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
 		if err := outbox.Emit(txCtx, s.clock, s.emitter, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
@@ -632,7 +648,8 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 // the 5-step closure would otherwise blow past (mirrors the
 // updatePasswordAndRevokeSessions split used by ChangePassword).
 func (s *Service) Lock(ctx context.Context, id string) error {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
@@ -669,6 +686,10 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 // Lock/ApplyInTx/publish are in the same RunInTx closure (tx2), satisfying
 // the L2 OutboxFact guarantee: domain mutation + event publish co-commit.
 func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor string) error {
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("identity-manage: lock: tenant: %w", err)
+	}
 	now := s.clock.Now()
 	// Guard tx (tx1): check last-admin protection before applying the mutation.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
@@ -676,14 +697,14 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock guard: %w", err)
 		}
-		return s.checkLastAdminRemoval(txCtx, user.ID, user.Status())
+		return s.checkLastAdminRemoval(txCtx, tid, user.ID, user.Status())
 	}); err != nil {
 		return err
 	}
 	// Apply + publish in a single RunInTx (tx2) — L2 OutboxFact: mutation and
 	// event publish co-commit atomically.
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.LockUser{}, now); err != nil {
+		if err := s.authzmutator.ApplyInTx(ctx, txCtx, tid, id, authzmutate.LockUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
 		return outbox.Emit(txCtx, s.clock, s.emitter, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
@@ -703,14 +724,14 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 // role) via lastAdminRoleRepo.CountEffectiveAdmins. The "hasAdminRole" leg is
 // kept as a fast pre-check so we do not query CountEffectiveAdmins for users
 // that don't hold admin at all.
-func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, userStatus domain.UserStatus) error {
+func (s *Service) checkLastAdminRemoval(ctx context.Context, tid tenant.TenantID, userID string, userStatus domain.UserStatus) error {
 	// No nil-guard on s.lastAdminGuard: NewService builds it unconditionally
 	// from the required roleRepo positional param (a nil roleRepo fails
 	// construction), so a *Service that reaches this method always holds a
 	// non-nil guard. The former `if s.lastAdminGuard == nil { return nil }`
 	// opt-out skip belonged to the deleted WithLastAdminProtection era and
 	// would silently bypass S4.0 — its removal is what makes the guard Hard.
-	roles, err := s.lastAdminRoleRepo.GetByUserID(ctx, userID)
+	roles, err := s.lastAdminRoleRepo.GetByUserID(ctx, tid, userID)
 	if err != nil {
 		return fmt.Errorf("identity-manage: last-admin roles: %w", err)
 	}
@@ -724,10 +745,10 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, user
 	// Effective admin = active + admin role. Locked/suspended admins are not
 	// counted by the invariant and may be freely removed.
 	userIsActiveAdmin := hasAdminRole && userStatus == domain.StatusActive
-	if err := s.lastAdminGuard.CheckRemove(ctx, userID, userIsActiveAdmin); err != nil {
+	if err := s.lastAdminGuard.CheckRemove(ctx, tid, userID, userIsActiveAdmin); err != nil {
 		// Application-layer guard blocked the removal — the expected S4.0 path.
 		// This log lets ops distinguish an app-layer 403 from a DB-trigger 403:
-		// the migration-024 trigger only fires when this guard did NOT (the
+		// the migration-046 trigger only fires when this guard did NOT (the
 		// tx1-check / tx2-mutate TOCTOU window of Lock/Update), so a 403 WITHOUT
 		// this log line indicates the trigger safety net caught a concurrent race.
 		s.logger.Info("last-admin guard blocked removal",
@@ -744,7 +765,8 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, user
 // RunInTx closure so a concurrent mutation between the read and the write
 // cannot be silently lost (audit S-3, mirrors Lock).
 func (s *Service) Unlock(ctx context.Context, id string) error {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
@@ -755,12 +777,16 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		return err
 	}
 
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("identity-manage: unlock: tenant: %w", err)
+	}
 	// Apply + publish in a single RunInTx — L2 OutboxFact: ActivateUser mutation
 	// and event publish co-commit atomically. Invalidates()==false so no
 	// epoch-bump — re-activating is additive, ADR §A6.
 	now := s.clock.Now()
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.ActivateUser{}, now); err != nil {
+		if err := s.authzmutator.ApplyInTx(ctx, txCtx, tid, id, authzmutate.ActivateUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
 		return outbox.Emit(txCtx, s.clock, s.emitter, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
@@ -808,7 +834,8 @@ type ChangePasswordInput struct {
 // because signing failed), and consistent with the principle that credential
 // rotation should not be undone by a transient signing-key unavailability.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (dto.TokenPair, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.UserID),
 		validation.F("oldPassword", input.OldPassword),
 		validation.F("newPassword", input.NewPassword),
@@ -884,6 +911,10 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 // active transaction. Caller MUST invoke inside RunInTx. Returns the resolved
 // userID so the caller can log and issue a token after the tx commits.
 func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePasswordInput) (string, error) {
+	tid, err := tenant.FromContext(txCtx)
+	if err != nil {
+		return "", fmt.Errorf("identity-manage: change-password: tenant: %w", err)
+	}
 	user, err := s.repo.GetByID(txCtx, input.UserID)
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password get user: %w", err)
@@ -927,7 +958,7 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	// resetRequired=false: password just rotated, no reset prompt needed.
 	const resetRequired = false
 	if _, err := s.repo.UpdatePassword(
-		txCtx, user.ID, newHash, resetRequired, user.PasswordVersion,
+		txCtx, tid, user.ID, newHash, resetRequired, user.PasswordVersion,
 	); err != nil {
 		return "", err // ErrVersionConflict on stale view
 	}

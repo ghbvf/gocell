@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -40,16 +41,21 @@ func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger 
 	return s, nil
 }
 
-// HasRole checks if a user has the specified role.
+// HasRole checks if a user has the specified role within the caller's tenant.
 func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userID", userID),
 		validation.F("roleName", roleName),
 	); err != nil {
 		return false, err
 	}
 
-	roles, err := s.roleRepo.GetByUserID(ctx, userID)
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return false, fmt.Errorf("rbac-check: has-role: tenant: %w", err)
+	}
+	roles, err := s.roleRepo.GetByUserID(ctx, tid, userID)
 	if err != nil {
 		return false, fmt.Errorf("rbac-check: has role: %w", err)
 	}
@@ -64,12 +70,17 @@ func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, e
 
 // ListRoles returns a paginated page of roles assigned to userID.
 func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.PageParams) (query.PageResult[*domain.Role], error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userID", userID),
 	); err != nil {
 		return query.PageResult[*domain.Role]{}, err
 	}
 
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return query.PageResult[*domain.Role]{}, fmt.Errorf("rbac-check: list-roles: tenant: %w", err)
+	}
 	qctx := query.QueryContext("endpoint", "rbac-list-roles", "userId", userID)
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Role]{
 		Codec:      s.codec,
@@ -77,7 +88,7 @@ func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.Pa
 		Sort:       roleSort,
 		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Role, error) {
-			roles, err := s.roleRepo.ListByUserID(ctx, userID, params)
+			roles, err := s.roleRepo.ListByUserID(ctx, tid, userID, params)
 			if err != nil {
 				return nil, fmt.Errorf("rbac-check: list roles: %w", err)
 			}

@@ -19,8 +19,8 @@ func badRevoke(ctx context.Context, store session.Store, subjectID string) error
 	return store.RevokeForSubject(ctx, subjectID, session.CredentialEventLock, credentialfence.Mint())
 }
 
-// 2. short-var method-value capture (AssignStmt) + deferred invocation. The
-//    `fn(...)` call has Fun = *ast.Ident, invisible to a CallExpr-only scan.
+//  2. short-var method-value capture (AssignStmt) + deferred invocation. The
+//     `fn(...)` call has Fun = *ast.Ident, invisible to a CallExpr-only scan.
 func badRevokeAssignCapture(ctx context.Context, store session.Store, subjectID string) error {
 	fn := store.RevokeForSubject
 	return fn(ctx, subjectID, session.CredentialEventLock, credentialfence.Mint())

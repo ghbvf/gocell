@@ -50,7 +50,7 @@ func setup(t testing.TB) (http.Handler, string) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	u, _ := domain.NewUser("usr-1", "usr-1@test.local", "hash", time.Now())
 	u.ID = "usr-1"
-	_ = userRepo.Create(context.Background(), u)
+	_ = userRepo.Create(context.Background(), testTenantID, u)
 
 	svc, err := NewService(
 		clock.Real(),
@@ -66,11 +66,14 @@ func setup(t testing.TB) (http.Handler, string) {
 		withTestInvalidator(userRepo, sessionStore, refreshStore),
 	)
 	require.NoError(t, err)
+	h := NewHandler(svc)
+	// Verify routes can be registered (governance check).
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
+	if err := h.RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
-	return mux, wireToken
+	// Return h directly so Handler.ServeHTTP (which injects X-Tenant-ID) is used.
+	return h, wireToken
 }
 
 type unavailableRefreshStore struct {
@@ -204,6 +207,7 @@ func TestHandleRefresh(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Tenant-ID", testTenantIDStr)
 			h.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
@@ -291,8 +295,8 @@ func TestHandleRefresh_UserNotActive_Returns401(t *testing.T) {
 	u, err := domain.NewUser("suspended-usr", "suspended@test.local", "hash", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-suspended"
-	require.NoError(t, userRepo.Create(context.Background(), u))
-	require.NoError(t, userRepo.UpdateLockState(context.Background(), u.ID, domain.StatusSuspended, time.Now()))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
+	require.NoError(t, userRepo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusSuspended, time.Now()))
 
 	sess := newTestSession(u.ID, "sess-suspended")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))

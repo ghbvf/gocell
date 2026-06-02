@@ -18,6 +18,8 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -27,6 +29,18 @@ import (
 // not exercise. A sentinel error keeps the linter happy and surfaces an
 // accidental call as a recognizable failure instead of a silent nil pair.
 var errFakeRepoUnused = errors.New("fakeUserRepo: method not exercised in this test")
+
+// testTenantID is the canonical test tenant UUID used in all accountlockout tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("accountlockout test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// testCtx carries a valid tenant so service methods' tenant.FromContext calls succeed.
+var testCtx = ctxkeys.WithTenantID(context.Background(), "00000000-0000-0000-0000-000000000001")
 
 // fakeEmitter collects all outbox entries emitted during the test.
 type fakeEmitter struct {
@@ -114,7 +128,7 @@ func cloneForFake(u *domain.User) *domain.User {
 	return clone
 }
 
-func (r *fakeUserRepo) Create(_ context.Context, u *domain.User) error {
+func (r *fakeUserRepo) Create(_ context.Context, _ tenant.TenantID, u *domain.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.byID[u.ID] = cloneForFake(u)
@@ -131,7 +145,7 @@ func (r *fakeUserRepo) GetByID(_ context.Context, id string) (*domain.User, erro
 	return cloneForFake(u), nil
 }
 
-func (r *fakeUserRepo) GetByUsername(_ context.Context, username string) (*domain.User, error) {
+func (r *fakeUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, username string) (*domain.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, u := range r.byID {
@@ -142,20 +156,22 @@ func (r *fakeUserRepo) GetByUsername(_ context.Context, username string) (*domai
 	return nil, errors.New("not found")
 }
 
-func (r *fakeUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+func (r *fakeUserRepo) GetByIDForUpdate(ctx context.Context, _ tenant.TenantID, id string) (*domain.User, error) {
 	return r.GetByID(ctx, id)
 }
 
-func (r *fakeUserRepo) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
-	return r.GetByUsername(ctx, username)
+func (r *fakeUserRepo) GetByUsernameForUpdate(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
+	return r.GetByUsername(ctx, t, username)
 }
 
-func (r *fakeUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+func (r *fakeUserRepo) UpdateProfile(
+	_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time,
+) (*domain.User, error) {
 	return nil, errFakeRepoUnused
 }
 
 // mirrors authzmutate LockUser / SuspendUser / ActivateUser side effect.
-func (r *fakeUserRepo) UpdateLockState(_ context.Context, userID string, status domain.UserStatus, now time.Time) error {
+func (r *fakeUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, userID string, status domain.UserStatus, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	u, ok := r.byID[userID]
@@ -188,22 +204,22 @@ func (r *fakeUserRepo) UpdateLockState(_ context.Context, userID string, status 
 	return nil
 }
 
-func (r *fakeUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+func (r *fakeUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
 	return errFakeRepoUnused
 }
 
-func (r *fakeUserRepo) Delete(_ context.Context, id string) error {
+func (r *fakeUserRepo) Delete(_ context.Context, _ tenant.TenantID, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.byID, id)
 	return nil
 }
 
-func (r *fakeUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+func (r *fakeUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, errors.New("not used in accountlockout tests")
 }
 
-func (r *fakeUserRepo) BumpAuthzEpoch(_ context.Context, id string, _ credentialfence.FenceToken) (int64, error) {
+func (r *fakeUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, id string, _ credentialfence.FenceToken) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	u, ok := r.byID[id]
@@ -230,7 +246,7 @@ func (r *fakeUserRepo) BumpAuthzEpoch(_ context.Context, id string, _ credential
 	return newEpoch, nil
 }
 
-func (r *fakeUserRepo) UpdateLockoutFields(_ context.Context, u *domain.User) error {
+func (r *fakeUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, u *domain.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.byID[u.ID]; !ok {
@@ -348,7 +364,7 @@ func TestService_RecordFailure_BelowThreshold(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusActive, 1, &last, nil)
 	svc, repo, emitter, metrics := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordFailure(context.Background(), context.Background(), seed))
+	require.NoError(t, svc.RecordFailure(testCtx, testCtx, testTenantID, seed))
 
 	assert.Equal(t, 1, repo.updateLockoutFieldsCalls, "UpdateLockoutFields must be invoked once")
 	assert.Equal(t, 0, repo.bumpEpochCalls, "no epoch bump when not locking")
@@ -367,7 +383,7 @@ func TestService_RecordFailure_TriggersLock(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusActive, 4, &last, nil)
 	svc, repo, emitter, metrics := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordFailure(context.Background(), context.Background(), seed))
+	require.NoError(t, svc.RecordFailure(testCtx, testCtx, testTenantID, seed))
 
 	assert.Equal(t, 1, repo.updateLockoutFieldsCalls, "UpdateLockoutFields once")
 	assert.Equal(t, 1, repo.bumpEpochCalls, "epoch bumped on auto-lock")
@@ -402,7 +418,7 @@ func TestService_RecordFailure_SuspendedShortCircuits(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusSuspended, 4, &last, nil)
 	svc, repo, emitter, metrics := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordFailure(context.Background(), context.Background(), seed))
+	require.NoError(t, svc.RecordFailure(testCtx, testCtx, testTenantID, seed))
 
 	assert.Zero(t, repo.updateLockoutFieldsCalls,
 		"no counter update for a Suspended user (P1#2)")
@@ -427,7 +443,7 @@ func TestService_RecordFailure_AlreadyLockedIsNoOp(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusLocked, 5, &last, &until)
 	svc, repo, emitter, metrics := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordFailure(context.Background(), context.Background(), seed))
+	require.NoError(t, svc.RecordFailure(testCtx, testCtx, testTenantID, seed))
 
 	assert.Zero(t, repo.updateLockoutFieldsCalls, "no counter update when already locked")
 	assert.Zero(t, repo.bumpEpochCalls, "no epoch bump when already locked")
@@ -441,7 +457,7 @@ func TestService_RecordSuccess_ResetsCounter(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusActive, 3, &last, nil)
 	svc, repo, _, _ := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordSuccess(context.Background(), seed))
+	require.NoError(t, svc.RecordSuccess(context.Background(), testTenantID, seed))
 
 	assert.Equal(t, 1, repo.updateLockoutFieldsCalls, "UpdateLockoutFields once")
 	persisted, err := repo.GetByID(context.Background(), seed.ID)
@@ -456,7 +472,7 @@ func TestService_RecordSuccess_AlreadyCleanIsNoOp(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusActive, 0, nil, nil)
 	svc, repo, _, _ := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordSuccess(context.Background(), seed))
+	require.NoError(t, svc.RecordSuccess(context.Background(), testTenantID, seed))
 
 	assert.Zero(t, repo.updateLockoutFieldsCalls, "no UPDATE when counter already clean")
 }
@@ -468,7 +484,7 @@ func TestService_TryLazyUnlock_TTLElapsed(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusLocked, 5, &last, &until)
 	svc, repo, emitter, metrics := newTestService(t, now, seed)
 
-	unlocked, err := svc.TryLazyUnlock(context.Background(), context.Background(), seed)
+	unlocked, err := svc.TryLazyUnlock(testCtx, context.Background(), testTenantID, seed)
 	require.NoError(t, err)
 	assert.True(t, unlocked, "should lazy-unlock when TTL elapsed")
 	assert.Equal(t, 1, metrics.count("lazy_unlocked"))
@@ -496,7 +512,7 @@ func TestService_TryLazyUnlock_StillInWindow(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusLocked, 5, &last, &until)
 	svc, repo, _, metrics := newTestService(t, now, seed)
 
-	unlocked, err := svc.TryLazyUnlock(context.Background(), context.Background(), seed)
+	unlocked, err := svc.TryLazyUnlock(testCtx, context.Background(), testTenantID, seed)
 	require.NoError(t, err)
 	assert.False(t, unlocked, "must not unlock while TTL still in the future")
 	assert.Zero(t, metrics.count("lazy_unlocked"))
@@ -511,7 +527,7 @@ func TestService_TryLazyUnlock_ManualLockNoTTL(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusLocked, 0, nil, nil) // admin-locked, no TTL
 	svc, _, _, metrics := newTestService(t, now, seed)
 
-	unlocked, err := svc.TryLazyUnlock(context.Background(), context.Background(), seed)
+	unlocked, err := svc.TryLazyUnlock(testCtx, context.Background(), testTenantID, seed)
 	require.NoError(t, err)
 	assert.False(t, unlocked, "manual lock (lockedUntil==nil) must not lazy-unlock")
 	assert.Zero(t, metrics.count("lazy_unlocked"))
@@ -522,7 +538,7 @@ func TestService_TryLazyUnlock_NotLocked(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusActive, 0, nil, nil)
 	svc, _, _, _ := newTestService(t, now, seed)
 
-	unlocked, err := svc.TryLazyUnlock(context.Background(), context.Background(), seed)
+	unlocked, err := svc.TryLazyUnlock(testCtx, context.Background(), testTenantID, seed)
 	require.NoError(t, err)
 	assert.False(t, unlocked)
 }
@@ -611,7 +627,7 @@ func TestService_RecordFailure_EmitFailed_PropagatesError(t *testing.T) {
 	svc, err := NewService(repo, mut, outbox.WrapEmitterForCell(fe), clk)
 	require.NoError(t, err)
 
-	err = svc.RecordFailure(context.Background(), context.Background(), seed)
+	err = svc.RecordFailure(testCtx, testCtx, testTenantID, seed)
 	require.Error(t, err, "RecordFailure must propagate the emit error")
 	assert.Contains(t, err.Error(), "emit locked event",
 		"error message must include 'emit locked event' context")

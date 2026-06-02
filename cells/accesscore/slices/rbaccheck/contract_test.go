@@ -16,37 +16,56 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+// testTenantID is the canonical test tenant UUID used in rbaccheck tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("rbaccheck_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// testTenantIDStr is the string form for use with ctxkeys.WithTenantID.
+const testTenantIDStr = "00000000-0000-0000-0000-000000000001"
+
+// testAuthContext creates an auth test context with the canonical test tenant injected.
+func testAuthContext(userID string, roles []string) context.Context {
+	return ctxkeys.WithTenantID(auth.TestContext(userID, roles), testTenantIDStr)
+}
 
 // newContractRBACHandler builds a full-path mux matching the contract-declared
 // routes (/api/v1/access/roles/...) so the contract test covers the complete
 // routing chain, not just the relative handler paths.
 func newContractRBACHandler() http.Handler {
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	roleRepo.SeedRole(&domain.Role{
+	roleRepo.SeedRole(testTenantID, &domain.Role{
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{
 			{Resource: "users", Action: "read"},
 		},
 	})
-	roleRepo.SeedRole(&domain.Role{
+	roleRepo.SeedRole(testTenantID, &domain.Role{
 		ID: "operator", Name: "operator",
 		Permissions: []domain.Permission{
 			{Resource: "devices", Action: "write"},
 		},
 	})
-	roleRepo.SeedRole(&domain.Role{
+	roleRepo.SeedRole(testTenantID, &domain.Role{
 		ID: "viewer", Name: "viewer",
 		Permissions: []domain.Permission{
 			{Resource: "devices", Action: "read"},
 		},
 	})
-	_, _ = roleRepo.AssignToUser(context.Background(), testutil.TestID("user-1"), "admin")
-	_, _ = roleRepo.AssignToUser(context.Background(), testutil.TestID("user-1"), "operator")
-	_, _ = roleRepo.AssignToUser(context.Background(), testutil.TestID("user-1"), "viewer")
+	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "operator")
+	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "viewer")
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
 	if err != nil {
 		panic(err)
@@ -118,7 +137,7 @@ func TestHttpAuthRoleListV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{userID}", testutil.TestID("user-1"), 1)
 	req := httptest.NewRequest(c.HTTP.Method, path+"?limit=2", nil)
-	req = req.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+	req = req.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	page1 := decodeRoleListPage(t, rec)
@@ -134,7 +153,7 @@ func TestHttpAuthRoleListV1Serve(t *testing.T) {
 
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(c.HTTP.Method, path+"?limit=2&cursor="+url.QueryEscape(page1.NextCursor), nil)
-	req2 = req2.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+	req2 = req2.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
 	h.ServeHTTP(rec2, req2)
 	c.ValidateHTTPResponseRecorder(t, rec2)
 	page2 := decodeRoleListPage(t, rec2)
@@ -153,7 +172,7 @@ func TestHttpAuthRoleListV1Serve(t *testing.T) {
 
 	rec400 := httptest.NewRecorder()
 	req400 := httptest.NewRequest(c.HTTP.Method, path+"?limit=notanumber", nil)
-	req400 = req400.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+	req400 = req400.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
 	h.ServeHTTP(rec400, req400)
 	if rec400.Code != http.StatusBadRequest {
 		t.Errorf("invalid limit: expected 400, got %d", rec400.Code)
@@ -162,7 +181,7 @@ func TestHttpAuthRoleListV1Serve(t *testing.T) {
 
 	recBadCursor := httptest.NewRecorder()
 	reqBadCursor := httptest.NewRequest(c.HTTP.Method, path+"?cursor=not-a-valid-cursor", nil)
-	reqBadCursor = reqBadCursor.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+	reqBadCursor = reqBadCursor.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
 	h.ServeHTTP(recBadCursor, reqBadCursor)
 	if recBadCursor.Code != http.StatusBadRequest {
 		t.Errorf("invalid cursor: expected 400, got %d", recBadCursor.Code)
@@ -179,7 +198,7 @@ func TestHttpAuthRoleCheckV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{userID}", testutil.TestID("user-1"), 1)
 	path = strings.Replace(path, "{roleName}", "admin", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
-	req = req.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
+	req = req.WithContext(testAuthContext(testutil.TestID("user-1"), nil))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 

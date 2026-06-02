@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -133,7 +134,7 @@ func NewService(
 //     epoch bump + session/refresh revoke + repo.Update (status & epoch).
 //  4. If shouldLock: emit event.user.locked.v1 with ActorID=SystemActorID.
 //  5. If shouldLock: metrics.IncAccountLockout(ctx, "threshold_locked").
-func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user *domain.User) error {
+func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, tid tenant.TenantID, user *domain.User) error {
 	if user == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accountlockout.RecordFailure: user must not be nil")
@@ -146,13 +147,13 @@ func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user
 	}
 	now := s.clk.Now()
 	shouldLock := user.RegisterFailedLogin(now, StaleWindow, LockoutTTL, Threshold)
-	if err := s.userRepo.UpdateLockoutFields(txCtx, user); err != nil {
+	if err := s.userRepo.UpdateLockoutFields(txCtx, tid, user); err != nil {
 		return fmt.Errorf("accountlockout.RecordFailure: update lockout fields: %w", err)
 	}
 	if !shouldLock {
 		return nil
 	}
-	if err := s.authzmutator.ApplyInTx(ctx, txCtx, user.ID, authzmutate.LockUser{}, now); err != nil {
+	if err := s.authzmutator.ApplyInTx(ctx, txCtx, tid, user.ID, authzmutate.LockUser{}, now); err != nil {
 		return fmt.Errorf("accountlockout.RecordFailure: apply lock: %w", err)
 	}
 	if err := s.publishLocked(txCtx, user.ID); err != nil {
@@ -177,7 +178,7 @@ func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user
 // tx earlier may leave the in-memory state clean while the persisted row
 // already has these columns zeroed (the implementation guard mirrors the
 // in-memory predicate to avoid a redundant UPDATE on every successful login).
-func (s *Service) RecordSuccess(txCtx context.Context, user *domain.User) error {
+func (s *Service) RecordSuccess(txCtx context.Context, tid tenant.TenantID, user *domain.User) error {
 	if user == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accountlockout.RecordSuccess: user must not be nil")
@@ -186,7 +187,7 @@ func (s *Service) RecordSuccess(txCtx context.Context, user *domain.User) error 
 		return nil
 	}
 	user.ResetFailedLogins()
-	if err := s.userRepo.UpdateLockoutFields(txCtx, user); err != nil {
+	if err := s.userRepo.UpdateLockoutFields(txCtx, tid, user); err != nil {
 		return fmt.Errorf("accountlockout.RecordSuccess: update lockout fields: %w", err)
 	}
 	return nil
@@ -208,7 +209,7 @@ func (s *Service) RecordSuccess(txCtx context.Context, user *domain.User) error 
 // of user by calling GetByIDForUpdate again to pick up the post-mutation
 // status/epoch (or uses the mutated in-memory user — ActivateUser mutation
 // updates the same aggregate via repo.GetByIDForUpdate in ApplyInTx).
-func (s *Service) TryLazyUnlock(ctx context.Context, txCtx context.Context, user *domain.User) (bool, error) {
+func (s *Service) TryLazyUnlock(ctx context.Context, txCtx context.Context, tid tenant.TenantID, user *domain.User) (bool, error) {
 	if user == nil {
 		return false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accountlockout.TryLazyUnlock: user must not be nil")
@@ -228,7 +229,7 @@ func (s *Service) TryLazyUnlock(ctx context.Context, txCtx context.Context, user
 	}
 	// TTL elapsed: apply ActivateUser mutation (which also calls
 	// user.ResetFailedLogins() via the mutation.apply extension).
-	if err := s.authzmutator.ApplyInTx(ctx, txCtx, user.ID, authzmutate.ActivateUser{}, now); err != nil {
+	if err := s.authzmutator.ApplyInTx(ctx, txCtx, tid, user.ID, authzmutate.ActivateUser{}, now); err != nil {
 		return false, fmt.Errorf("accountlockout.TryLazyUnlock: apply activate: %w", err)
 	}
 	if err := s.publishUnlocked(txCtx, user.ID); err != nil {

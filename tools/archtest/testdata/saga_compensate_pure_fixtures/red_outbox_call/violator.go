@@ -5,8 +5,8 @@ package redcompensateoutboxcall
 import (
 	"context"
 
-	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	ksaga "github.com/ghbvf/gocell/kernel/saga"
 )
 
 // buildStepWithOutboxCompensate creates a saga.Step whose Compensate func

@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -52,6 +53,9 @@ type Request struct {
 	UserID                string
 	SessionID             string
 	PasswordResetRequired bool
+	// TenantID scopes the role lookup to the correct tenant.
+	// Required for GetByUserID (RoleRepository.GetByUserID takes tenant param).
+	TenantID tenant.TenantID
 }
 
 // Result is the MintAccess output.
@@ -85,7 +89,7 @@ type Result struct {
 // epoch provenance is now stored exclusively in the session/refresh rows.
 func MintAccess(ctx context.Context, clk clock.Clock, deps Deps, req Request) (Result, error) {
 	clock.MustHaveClock(clk, "sessionmint.MintAccess")
-	roles, err := fetchRoleNames(ctx, deps.RoleRepo, req.UserID)
+	roles, err := fetchRoleNames(ctx, deps.RoleRepo, req.TenantID, req.UserID)
 	if err != nil {
 		return Result{}, errcode.Wrap(errcode.KindInternal, errcode.ErrAuthRoleFetchFailed,
 			"sessionmint: fetch roles", err,
@@ -113,11 +117,11 @@ func MintAccess(ctx context.Context, clk clock.Clock, deps Deps, req Request) (R
 	}, nil
 }
 
-// fetchRoleNames resolves role names for userID. A nil slice (user has no
-// roles) is a valid state; MintAccess signs a token with empty roles. Only a
-// repo error triggers fail-closed.
-func fetchRoleNames(ctx context.Context, repo ports.RoleRepository, userID string) ([]string, error) {
-	roles, err := repo.GetByUserID(ctx, userID)
+// fetchRoleNames resolves role names for userID within the given tenant.
+// A nil slice (user has no roles) is a valid state; MintAccess signs a token
+// with empty roles. Only a repo error triggers fail-closed.
+func fetchRoleNames(ctx context.Context, repo ports.RoleRepository, tid tenant.TenantID, userID string) ([]string, error) {
+	roles, err := repo.GetByUserID(ctx, tid, userID)
 	if err != nil {
 		return nil, err
 	}

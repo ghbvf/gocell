@@ -9,6 +9,7 @@ import (
 	accesscoremem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -70,6 +71,17 @@ type SeededRoleView struct {
 	Name string
 }
 
+// DefaultFixtureTenantID is the canonical test tenant UUID used by AccessFixture
+// for all tenant-scoped repo operations. Tests that need multi-tenant isolation
+// should use the TenantID field on fixture calls directly.
+var DefaultFixtureTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("accesscoretest: invalid DefaultFixtureTenantID: " + err.Error())
+	}
+	return t
+}()
+
 // AccessFixture is the canonical in-memory test aggregate for accesscore.
 // It wraps a single mem.Bundle so the four store-paired primitives
 // (UserRepository, RoleRepository, SetupLock, TxRunner) all originate from
@@ -84,12 +96,17 @@ type SeededRoleView struct {
 // isolating it from any sessionlogin.Service that callers might later inject
 // as TokenIssuer.
 //
+// All tenant-scoped repo operations use DefaultFixtureTenantID unless the
+// caller passes a specific tenant (#1337 PR-2).
+//
 // Use NewAccessFixture to construct; never embed the zero value.
 type AccessFixture struct {
 	bundle       accesscoremem.Bundle
 	sessionStore *session.MemStore
 	refreshStore refresh.Store
 	clk          clock.Clock
+	// TenantID scopes all repo operations. Defaults to DefaultFixtureTenantID.
+	TenantID tenant.TenantID
 }
 
 // NewAccessFixture constructs an AccessFixture backed by mem.NewBundle(clk).
@@ -119,6 +136,7 @@ func NewAccessFixture(t *testing.T, clk clock.Clock) *AccessFixture {
 		sessionStore: sess,
 		refreshStore: ref,
 		clk:          clk,
+		TenantID:     DefaultFixtureTenantID,
 	}
 }
 
@@ -137,19 +155,19 @@ func (f *AccessFixture) SeedUser(ctx context.Context, u SeededUser) error {
 		return err
 	}
 	user.ID = u.ID
-	return f.bundle.UserRepository().Create(ctx, user)
+	return f.bundle.UserRepository().Create(ctx, f.TenantID, user)
 }
 
 // SeedRole persists role directly via the bundle-paired RoleRepository.
 // AccessFixture does not expose the raw RoleRepository.
 func (f *AccessFixture) SeedRole(ctx context.Context, r SeededRole) error {
-	return f.bundle.RoleRepository().Create(ctx, &domain.Role{ID: r.ID, Name: r.Name})
+	return f.bundle.RoleRepository().Create(ctx, f.TenantID, &domain.Role{ID: r.ID, Name: r.Name})
 }
 
 // SeedAssignment assigns the role to the user via RoleRepository.AssignToUser.
 // Returns an error if either the user or role does not exist in the store.
 func (f *AccessFixture) SeedAssignment(ctx context.Context, userID, roleID string) error {
-	_, err := f.bundle.RoleRepository().AssignToUser(ctx, userID, roleID)
+	_, err := f.bundle.RoleRepository().AssignToUser(ctx, f.TenantID, userID, roleID)
 	return err
 }
 
@@ -166,7 +184,7 @@ func (f *AccessFixture) GetUser(ctx context.Context, id string) (SeededUserView,
 
 // GetRole returns the seeded role as a SeededRoleView.
 func (f *AccessFixture) GetRole(ctx context.Context, id string) (SeededRoleView, error) {
-	r, err := f.bundle.RoleRepository().GetByID(ctx, id)
+	r, err := f.bundle.RoleRepository().GetByID(ctx, f.TenantID, id)
 	if err != nil {
 		return SeededRoleView{}, err
 	}
@@ -175,7 +193,7 @@ func (f *AccessFixture) GetRole(ctx context.Context, id string) (SeededRoleView,
 
 // UserRoles returns the roles currently assigned to the given user.
 func (f *AccessFixture) UserRoles(ctx context.Context, userID string) ([]SeededRoleView, error) {
-	roles, err := f.bundle.RoleRepository().GetByUserID(ctx, userID)
+	roles, err := f.bundle.RoleRepository().GetByUserID(ctx, f.TenantID, userID)
 	if err != nil {
 		return nil, err
 	}

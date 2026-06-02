@@ -48,6 +48,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -55,6 +56,17 @@ import (
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// e2eTestTenantID is the canonical test tenant UUID for this e2e test.
+// Seed and query must use the same value so tenant-scoped repo reads return
+// the seeded rows.
+var e2eTestTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("changepassword_e2e_test: invalid e2eTestTenantID: " + err.Error())
+	}
+	return t
+}()
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
 var e2eTestKeySet, _, _ = keystest.MustNewKeySet(clock.Real())
@@ -152,7 +164,8 @@ func newE2EFixture() *e2eFixture {
 		panic("newE2EFixture: accountlockout setup failed: " + err.Error())
 	}
 
-	loginSvc, err := sessionlogin.NewService(clock.Real(),
+	loginSvc, err := sessionlogin.NewService(
+		clock.Real(),
 		sessionlogin.NewServiceParams{
 			UserRepo:     userRepo,
 			SessionStore: sessionStore,
@@ -168,7 +181,8 @@ func newE2EFixture() *e2eFixture {
 	if err != nil {
 		panic("newE2EFixture: loginSvc setup failed: " + err.Error())
 	}
-	idmSvc, err := NewService(clock.Real(),
+	idmSvc, err := NewService(
+		clock.Real(),
 		userRepo, inv, slog.Default(),
 		roleRepo,
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
@@ -213,7 +227,7 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 	// so seed and request paths agree.
 	user.ID = testutil.TestID("e2e-" + username)
 	user.SetPasswordResetRequired(true, time.Now())
-	require.NoError(t, f.userRepo.Create(context.Background(), user))
+	require.NoError(t, f.userRepo.Create(context.Background(), e2eTestTenantID, user))
 
 	// Assign admin role.
 	adminRole := &domain.Role{
@@ -221,8 +235,8 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 		Name:        auth.RoleAdmin,
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	}
-	_ = f.roleRepo.Create(context.Background(), adminRole)
-	_, err = f.roleRepo.AssignToUser(context.Background(), user.ID, auth.RoleAdmin)
+	_ = f.roleRepo.Create(context.Background(), e2eTestTenantID, adminRole)
+	_, err = f.roleRepo.AssignToUser(context.Background(), e2eTestTenantID, user.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	return user.ID
