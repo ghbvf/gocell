@@ -415,7 +415,7 @@ func TestReconcileTriggerInterfaceFrozen01_ReverseBlindSpot(t *testing.T) {
 // holds the line: a production composite literal of reconcile.Loop is forbidden
 // anywhere except the home package itself and the A8 kernel/command migration
 // point. Test files (`*_test.go`) construct Loop directly via exported fields and
-// are out of scope (RunTypedProduction excludes them).
+// are out of scope (the Production scope excludes them).
 //
 // AI-robust grade (per .claude/rules/gocell/ai-robust.md §"Funnel 双向锁评级"):
 //   - Downstream: Hard. The forbidden form is a single AST shape —
@@ -484,7 +484,7 @@ func isReconcileLoopType(info *types.Info, expr ast.Expr, reconcilePkgPath strin
 // scanReconcileLoopConstruction flags every reconcile.Loop composite literal in
 // p, unless p's package is in allowedPkgPaths (the home package + the A8
 // kernel/command migration point). Test files are excluded by the caller
-// (RunTypedProduction with Tests:false).
+// (Run(t, Production(...)) with Tests:false).
 func scanReconcileLoopConstruction(p *Pass, reconcilePkgPath string, allowedPkgPaths map[string]bool) []Diagnostic {
 	if p.Pkg != nil && allowedPkgPaths[p.Pkg.Path()] {
 		return nil
@@ -526,9 +526,10 @@ func TestReconcileLoopConstructionAllowlist01(t *testing.T) {
 	require.NoError(t, err, "read module path from go.mod")
 	reconcilePkgPath, allowed := reconcileLoopConstructionAllowed(modPath)
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanReconcileLoopConstruction(p, reconcilePkgPath, allowed)
 	})
+
 	Report(t, "RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01", diags)
 }
 
@@ -545,10 +546,13 @@ func TestReconcileLoopConstructionAllowlist01_RedFixture(t *testing.T) {
 	require.NoError(t, err, "read module path from go.mod")
 	reconcilePkgPath, allowed := reconcileLoopConstructionAllowed(modPath)
 
-	diags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/reconcileloopredfixture/..."},
+	diags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/reconcileloopredfixture/..."},
+		),
+
 		func(p *Pass) []Diagnostic {
 			return scanReconcileLoopConstruction(p, reconcilePkgPath, allowed)
 		},
@@ -788,7 +792,7 @@ func TestReconcileFencedWriteFunnel01_Callsites(t *testing.T) {
 	}
 	funnelFuncs := map[string]bool{"newFencedWriter": true, "withFencedWriter": true}
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg == nil || p.Pkg.Path() != reconcilePkg {
 			return nil
 		}
@@ -839,7 +843,7 @@ func TestReconcileFencedWriteFunnel01_ApplyFencedCaller(t *testing.T) {
 	}
 
 	var iface *types.Interface
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.Pkg != nil && p.Pkg.Path() == reconcilePkg {
 			if obj := p.Pkg.Scope().Lookup("FencedRepository"); obj != nil {
 				if named, ok := obj.Type().(*types.Named); ok {
@@ -854,7 +858,7 @@ func TestReconcileFencedWriteFunnel01_ApplyFencedCaller(t *testing.T) {
 	require.NotNil(t, iface, "RECONCILE-FENCED-WRITE-FUNNEL-01: failed to resolve reconcile.FencedRepository")
 
 	sawSanctioned := false
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
@@ -933,7 +937,7 @@ func TestReconcileLeaderImplFunnel01(t *testing.T) {
 
 	var iface *types.Interface
 	var pkgs []*types.Package
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}

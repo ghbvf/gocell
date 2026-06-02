@@ -10,7 +10,7 @@
 // pkg/ctxkeys/doc.go; this archtest is the static guard.
 //
 // Three Hard layers form a closed funnel; any single one fails CI. Layers
-// A/C run in typed mode (RunTyped + TypedOpts{Tests: false}) so that
+// A/C run in typed mode (Run(t, Typed(TypedOpts{Tests: false}, ...))) so that
 // (a) the walk naturally excludes _test.go files via Tests=false and
 // (b) value-expression resolution covers const-folded forms (BinaryExpr,
 // Ident-to-const, cross-package selector) via go/types — not just BasicLit.
@@ -86,7 +86,7 @@
 //     closing the only escape path of interest.
 //
 // ref: tools/archtest/observability_metrics_test.go
-// (RunTyped + EvaluateConstString const-fold pattern);
+// (Run(t, Typed(...)) + EvaluateConstString const-fold pattern);
 // tools/archtest/governance_rules_invariants_test.go
 // (EvaluateConstString for Ident / SelectorExpr / BinaryExpr forms);
 // tools/archtest/cells_no_contractspec_import_test.go
@@ -213,7 +213,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 
 	t.Run("LayerA_identifier_golden_diff", func(t *testing.T) {
 		t.Parallel()
-		diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}, func(p *Pass) []Diagnostic {
+		diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}), func(p *Pass) []Diagnostic {
 			actualValueDecls := make(map[string]foundDecl)
 			actualFuncs := make(map[string]foundDecl)
 			actualTypes := make(map[string]foundDecl)
@@ -232,6 +232,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 				diffNameSet("type", "allowedPkgCtxkeysTypeNames", actualTypes, allowedPkgCtxkeysTypeNames)...)
 			return ds
 		})
+
 		Report(t, rulePkgCtxkeysNoCellModel, diags)
 	})
 
@@ -246,7 +247,8 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 						violations = append(violations, fmt.Sprintf(
 							"%s golden contains cell-model substring %q in %q — "+
 								"cell-model identifiers belong in kernel/ctxkeys/, not pkg/ctxkeys/",
-							kind, sub, name))
+							kind, sub, name,
+						))
 					}
 				}
 			}
@@ -263,7 +265,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 
 	t.Run("LayerC_key_string_value_golden_diff", func(t *testing.T) {
 		t.Parallel()
-		diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}, func(p *Pass) []Diagnostic {
+		diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}), func(p *Pass) []Diagnostic {
 			actualValues := make(map[string]foundDecl)
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -271,6 +273,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 			}
 			return diffStringValueSet(actualValues, allowedPkgCtxkeysKeyStringValues)
 		})
+
 		Report(t, rulePkgCtxkeysNoCellModel, diags)
 	})
 
@@ -283,7 +286,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 		// the reverse self-check for the documented blind spot
 		// "build-tag-hidden files" — see file-header godoc.
 		boundaryScope := DirsScope(root, []string{"pkg/ctxkeys"}, IncludeTests())
-		diags := Run(t, boundaryScope, func(p *Pass) []Diagnostic {
+		diags := Run(t, AST(boundaryScope), func(p *Pass) []Diagnostic {
 			var ds []Diagnostic
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -319,6 +322,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 			}
 			return ds
 		})
+
 		Report(t, rulePkgCtxkeysNoCellModel, diags)
 	})
 }
@@ -413,7 +417,8 @@ func diffNameSet(kind, goldenVarName string, actual map[string]foundDecl, allowe
 						"cell-model identifiers belong in kernel/ctxkeys/; if this is "+
 						"a legitimate observability/networking key, add it to "+
 						"%s in pkg_ctxkeys_no_cell_model_test.go",
-					kind, name, goldenVarName),
+					kind, name, goldenVarName,
+				),
 			})
 		}
 	}
@@ -426,7 +431,8 @@ func diffNameSet(kind, goldenVarName string, actual map[string]foundDecl, allowe
 				Message: fmt.Sprintf(
 					"%s name %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden %s "+
 						"but missing from pkg/ctxkeys/ — remove from %s",
-					kind, name, goldenVarName, goldenVarName),
+					kind, name, goldenVarName, goldenVarName,
+				),
 			})
 		}
 	}
@@ -447,7 +453,8 @@ func diffStringValueSet(actual map[string]foundDecl, allowed map[string]struct{}
 						"cell-model wire keys belong in kernel/ctxkeys/; if this is a "+
 						"legitimate observability/networking key, add it to "+
 						"allowedPkgCtxkeysKeyStringValues",
-					val),
+					val,
+				),
 			})
 		}
 	}
@@ -460,7 +467,8 @@ func diffStringValueSet(actual map[string]foundDecl, allowed map[string]struct{}
 				Message: fmt.Sprintf(
 					"value-decl string value %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden "+
 						"but missing from pkg/ctxkeys/ — remove from allowedPkgCtxkeysKeyStringValues",
-					val),
+					val,
+				),
 			})
 		}
 	}

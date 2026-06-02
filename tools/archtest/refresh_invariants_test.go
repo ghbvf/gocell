@@ -154,11 +154,13 @@ var refreshGuardedMethods = map[refreshGuardedMethod]struct{}{
 //     from the guarded-method match (ResolveMethodCall); this anchor is
 //     a Soft assist, honestly disclosed here.
 func TestRefreshCrossStoreTX01(t *testing.T) {
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/slices/sessionrefresh/..."},
-		scanRefreshCrossStoreTX,
-	)
+	),
+
+		scanRefreshCrossStoreTX)
+
 	Report(t, ruleRefreshCrossStoreTX01, diags)
 }
 
@@ -184,9 +186,11 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 // to make BS-1 fail-loud rather than fail-silent — the章程级 minimum for
 // any blind-spot disclosure per ai-robust.md "盲区 + 反向自检测试".
 func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T) {
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/slices/sessionrefresh/..."},
+	),
+
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {
@@ -209,12 +213,14 @@ func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T)
 							"(*Service).Refresh receiver is %q; rule structural anchors hard-code "+
 								"`s` — update isTxRunnerRunInTxCall + closureCallsReceiverS + the "+
 								"rule godoc (BS-1) in lock-step before renaming the receiver",
-							name),
+							name,
+						),
 					})
 				})
 			}
 			return out
 		})
+
 	Report(t, ruleRefreshCrossStoreTX01+"-BS-1", diags)
 }
 
@@ -417,7 +423,8 @@ func scanGuardedCallsOutsideClosure(p *Pass, fn *ast.FuncDecl, closure *ast.Func
 			Message: fmt.Sprintf(
 				"call to %s.%s.%s outside the RunInTx closure — move it inside the closure to "+
 					"share the validate→update→rotate commit boundary",
-				lastPkgSegment(gm.pkgPath), gm.typeName, gm.name),
+				lastPkgSegment(gm.pkgPath), gm.typeName, gm.name,
+			),
 		})
 	})
 	return out
@@ -556,13 +563,13 @@ func TestRefreshInvalidIndexSingleSource01(t *testing.T) {
 	var declarations []declarationSite
 
 	scope := ModuleScope(root)
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 				if fd.Name.Name != "DetectInvalidIndexes" {
 					return
 				}
-				// Only top-level function declarations (no receiver).
+
 				if fd.Recv != nil {
 					return
 				}
@@ -616,7 +623,8 @@ func TestRefreshAmbientTX01(t *testing.T) {
 	const rel = "adapters/postgres/refresh_store.go"
 	root := findModuleRoot(t)
 
-	scope := DirsScope(root, []string{filepath.Dir(rel)},
+	scope := DirsScope(
+		root, []string{filepath.Dir(rel)},
 		MatchRels(func(r string) bool { return r == rel }),
 	)
 
@@ -629,7 +637,7 @@ func TestRefreshAmbientTX01(t *testing.T) {
 		foundFile  bool
 	)
 
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			if p.Rel(file) != rel {
 				continue

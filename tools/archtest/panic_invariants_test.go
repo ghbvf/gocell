@@ -106,8 +106,8 @@ func TestPanicLogRedact(t *testing.T) {
 	seen := make(map[string]bool)
 	var all []Diagnostic
 	both := append(
-		RunTypedProduction(t, TypedOpts{Tests: false}, rule),
-		RunTypedProduction(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, rule)...,
+		Run(t, Production(TypedOpts{Tests: false}), rule),
+		Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}), rule)...,
 	)
 	for _, d := range both {
 		key := d.Rel + ":" + strconv.Itoa(d.Line) + ":" + d.Message
@@ -121,7 +121,7 @@ func TestPanicLogRedact(t *testing.T) {
 
 // TestPanicLogRedact_DetectsViolation is the reverse self-check: it runs the
 // detector against a real fixture package (loaded type-checked via
-// RunTypedFixture) that contains one compliant call plus two violations (a bare
+// Run(t, Fixture(...))) that contains one compliant call plus two violations (a bare
 // value and a non-RedactAny wrapper) — asserting exactly the two violations are
 // flagged. This proves the typed form-lock is non-vacuous.
 func TestPanicLogRedact_DetectsViolation(t *testing.T) {
@@ -129,8 +129,9 @@ func TestPanicLogRedact_DetectsViolation(t *testing.T) {
 
 	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/panic_log_redact_fixtures/violation"
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/testdata/panic_log_redact_fixtures/violation"},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/testdata/panic_log_redact_fixtures/violation"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil
@@ -245,7 +246,7 @@ func TestPanicRegisteredScannerFixtures(t *testing.T) {
 
 			var diags []Diagnostic
 			// Load using module root so imports of panicregister/errcode resolve.
-			_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+			_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil || p.Fset == nil {
 					return nil
 				}

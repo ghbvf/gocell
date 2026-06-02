@@ -32,7 +32,7 @@
 //     a different package and not net.*, so url.Error unwrap
 //     preamble is permitted (matches the helper's documented shape).
 //
-// Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info Uses /
+// Tool: archtest Run(t, Production(...)) (040 Pass-Driver) + *types.Info Uses /
 // TypeOf for callee + type resolution; AST walk via EachInSubtree[ast.GenDecl] /
 // EachInSubtree[ast.SelectorExpr] / EachInSubtree[ast.CallExpr]; alias
 // transparency via types.Unalias.
@@ -71,7 +71,7 @@
 //
 // Reverse self-check: TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern
 // loads tools/archtest/internal/nettransientfunnelfixture/ via
-// RunTypedFixture and asserts the synthetic regressed forms are reported,
+// Run(t, Fixture(...)) and asserts the synthetic regressed forms are reported,
 // while the clean form is not. Bypassing the reverse self-check requires
 // editing the real fixture source.
 //
@@ -152,7 +152,7 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01(t *testing.T) {
 
 	allowed := resolveAllowlist(modPath, netErrorAllowlist)
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -161,6 +161,7 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01(t *testing.T) {
 		ds = append(ds, scanErrorsAsNetSubtypeNarrow(p, allowed)...)
 		return ds
 	})
+
 	Report(t, "ADAPTER-NET-TRANSIENT-FUNNEL-01", diags)
 }
 
@@ -172,7 +173,7 @@ func TestTRANSIENT_NET_HELPER_FORM_01(t *testing.T) {
 
 	helperPkgPath := modPath + helperFormPkgSuffix
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -181,6 +182,7 @@ func TestTRANSIENT_NET_HELPER_FORM_01(t *testing.T) {
 		}
 		return scanHelperFormViolations(p, helperFormFuncName)
 	})
+
 	Report(t, "TRANSIENT-NET-HELPER-FORM-01", diags)
 }
 
@@ -206,8 +208,9 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// regressedHelperTimeout + regressedHelperNarrow + forbiddenAliasNetError
 	// (the last one uses `type myNetErr = net.Error`, verifying the
 	// types.Unalias resolution path; without Unalias it slips past).
-	allowlistDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	allowlistDiags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -239,8 +242,9 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// regressedHelperNarrow (contains `var op *net.OpError; errors.As(err, &op)`)
 	// + forbiddenOpErrorNarrow (same shape). The function-name match excludes
 	// allowedSite (no narrow form) and forbiddenSite (no narrow form).
-	narrowFormDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	narrowFormDiags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -250,6 +254,7 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 			}
 			return scanErrorsAsNetSubtypeNarrow(p, fixtureAllowed)
 		})
+
 	for _, d := range narrowFormDiags {
 		t.Logf("narrow-form: %s", d.Message)
 	}
@@ -270,8 +275,9 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// net.Error; absence is RED.
 	for _, regressed := range []string{"regressedHelperEmptyFalse", "regressedHelperEmptyTrue"} {
 		regressed := regressed
-		emptyDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
-			[]string{fixturePattern},
+		emptyDiags := Run(t, Fixture(FixtureOpts{Tests: false},
+			[]string{fixturePattern}),
+
 			func(p *Pass) []Diagnostic {
 				if p.Pkg == nil || p.TypesInfo == nil {
 					return nil
@@ -281,6 +287,7 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 				}
 				return scanHelperFormViolations(p, regressed)
 			})
+
 		for _, d := range emptyDiags {
 			t.Logf("helper-form positive %s: %s", regressed, d.Message)
 		}
@@ -291,8 +298,9 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 
 	// Helper-form detector: targeting the synthetic "regressedHelperTimeout"
 	// function name; expect 1 RED diag (Timeout SelectorExpr present).
-	helperDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	helperDiags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -314,8 +322,9 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	// function name; expect 1 RED diag (*net.OpError narrowing present).
 	// Verifies each regressed form independently, each verified independently
 	// (asserts the detector catches both regressed forms, each verified independently).
-	narrowDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	narrowDiags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -325,6 +334,7 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 			}
 			return scanHelperFormViolations(p, "regressedHelperNarrow")
 		})
+
 	for _, d := range narrowDiags {
 		t.Logf("helper-form regressedHelperNarrow: %s", d.Message)
 	}
@@ -333,8 +343,9 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 			"in regressedHelperNarrow body")
 
 	// Also confirm the clean shape (allowedSite) is NOT flagged when targeted.
-	cleanDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	cleanDiags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -344,6 +355,7 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 			}
 			return scanHelperFormViolations(p, "allowedSite")
 		})
+
 	for _, d := range cleanDiags {
 		t.Logf("helper-form allowedSite: %s", d.Message)
 	}

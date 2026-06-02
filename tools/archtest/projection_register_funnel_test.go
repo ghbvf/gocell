@@ -175,7 +175,7 @@ func TestProjectionRegisterFunnel01(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -231,7 +231,7 @@ func TestProjectionRegisterFunnel01_ReverseFixture(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -288,7 +288,7 @@ func TestProjectionRegisterFunnel01_ReverseBlindSpot_NoFuncValue(t *testing.T) {
 
 	var violations []string
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

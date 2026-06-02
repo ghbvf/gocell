@@ -203,7 +203,7 @@ func TestWebhookSignerFunnel(t *testing.T) {
 
 	var a1 []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, webhookSignerPkgPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false}, webhookSignerPkgPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -259,7 +259,7 @@ func TestWebhookSignerFunnel_ReverseFixture(t *testing.T) {
 	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "webhook_signer_violate")
 
 	var a1 []Diagnostic
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

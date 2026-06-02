@@ -126,7 +126,8 @@ func scanSubscribersKey(rel string, data []byte) []string {
 func TestContractYAMLNoSubscribersKey01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"contracts", "examples"},
+	scope := scanner.DirsScope(
+		root, []string{"contracts", "examples"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),
@@ -172,7 +173,8 @@ func scanSubscribeMarker(rel string, data []byte) []string {
 func TestSubscribeMarkerRetired01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"cells", "examples"},
+	scope := scanner.DirsScope(
+		root, []string{"cells", "examples"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "cell.go"
 		}),

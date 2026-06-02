@@ -138,7 +138,7 @@ var allowedMustDecls = map[string]map[string]struct{}{
 // testFixturePkgPrefixes are package path prefixes (module-relative) that are
 // exempt from this rule. These packages declare Must* test fixtures by design
 // (K8s `httptest` model); callers are `_test.go` files which are not loaded
-// by RunTypedProduction.
+// by Run(t, Production(...)).
 //
 // Adding a prefix requires:
 //   - the package must have a name suggesting test use (testutil, contracttest,
@@ -201,13 +201,12 @@ func TestKernelMustCtorProductionDecl(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
 		relPkg := strings.TrimPrefix(p.Pkg.Path(), modPath+"/")
 		if relPkg == modPath {
-			// Top-level module (no sub-pkg prefix) — never a test fixture.
 			relPkg = ""
 		}
 		if isTestFixturePkg(relPkg) {

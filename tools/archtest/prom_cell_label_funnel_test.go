@@ -44,20 +44,17 @@ func TestPromCellLabelFunnel(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/prometheus/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/prometheus/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
-		// Only scan the production package itself; skip the *_test variant
-		// the test-loader synthesizes (its PkgPath ends with ".test" or has
-		// the `_test` suffix).
+
 		if p.Pkg.Path() != promAdapterPkgPath {
 			return nil
 		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			// Skip the funnel definition file (it reads its own `id` parameter,
-			// not a HookEvent.CellID) and any test file.
+
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}

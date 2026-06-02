@@ -124,14 +124,13 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	var managedResource *types.Interface
 	var adapterTypes []adapterExportedType
 
-	RunTypedProduction(t, TypedOpts{Tests: false},
+	Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
 
-			// Capture kernel/lifecycle.ManagedResource interface.
 			if pkgPath == lifecyclePkg {
 				obj := p.Pkg.Scope().Lookup("ManagedResource")
 				if obj != nil {
@@ -146,7 +145,6 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 				return nil
 			}
 
-			// Collect exported adapter types (direct sub-packages of adapters/ only).
 			adapterPkg, ok := strings.CutPrefix(pkgPath, adapterPrefix)
 			if !ok || strings.Contains(adapterPkg, "/") {
 				return nil

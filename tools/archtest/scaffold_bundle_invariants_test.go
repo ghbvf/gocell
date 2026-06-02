@@ -141,7 +141,7 @@ func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 	// Locate the exported ListenerMarker const in the cellgen package.
 	var constFound bool
 	var constValue string
-	_ = RunTyped(t, TypedOpts{}, []string{"./tools/codegen/cellgen/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./tools/codegen/cellgen/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != cellgenPkgPath {
 			return nil
 		}

@@ -13,8 +13,9 @@ import (
 // underlying function object, two import shapes.
 func _(t *testing.T) {
 	for _, tagGroup := range typeseval.KnownNonDefaultTags() {
-		_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: tagGroup},
-			[]string{"./tools/codegen/cellgen/..."},
+		_ = archtest.Run(t, archtest.Typed(archtest.TypedOpts{Tags: tagGroup},
+			[]string{"./tools/codegen/cellgen/..."}),
+
 			func(p *archtest.Pass) []archtest.Diagnostic { return nil })
 	}
 }

@@ -116,7 +116,7 @@ func TestBootstrapReasonSetEquivalence01(t *testing.T) {
 	auditVisited := false
 	setupVisited := false
 
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}

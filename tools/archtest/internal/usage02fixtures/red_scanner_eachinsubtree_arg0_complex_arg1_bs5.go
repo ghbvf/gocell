@@ -47,7 +47,7 @@ func _(file *ast.File) {
 		// implementations skip this FuncLit correctly; the new one does so
 		// by construction (positional anchor), the old one by accident
 		// (depth=1 doesn't reach grandchildren).
-		(func() ast.Node { return file })(),
+		func() ast.Node { return file }(),
 		// arg[1]: named callback — BS5 form. Detector MUST report this.
 		arg0ComplexBS5Helper,
 	)

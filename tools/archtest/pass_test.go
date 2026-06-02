@@ -3,19 +3,21 @@
 //   - INVARIANT: FACADE-CONTRACTED-EXPORTS-01
 //
 // ARCHTEST-PASS-DRIVER-UNIT-01 — unit-test coverage for the archtest.Pass
-// driver surface: archtest.Run / archtest.RunTyped / archtest.RunTypedDir
-// plus the unexported helpers buildTypedPass / newPackageRel /
-// isPackageWithTestFiles. Also covers the Stage 1.5 additions: Pass.Abs,
-// Pass.IsFileInScope, Pass.IsGenerated, the façade helpers (ResolvePackageRef,
-// ResolveMethodCall, EvaluateConstString, FlatNonDefaultTags,
-// KnownNonDefaultTags), and the ImportBan re-export. Stage 1.6 additions:
-// RunTypedDir (fixture-module driver) and runTypedWithRoot delegation.
-// Stage 1.7 additions: RunTypedProduction (production-only driver — generated/
-// packages unreachable; preserves ProductionResolver's Hard grade).
+// driver surface: archtest.Run / archtest.Run(t, Typed(...), rule) /
+// archtest.Run(t, StandaloneModule(...), rule) plus the unexported helpers
+// buildTypedPass / newPackageRel / isPackageWithTestFiles. Also covers the
+// Stage 1.5 additions: Pass.Abs, Pass.IsFileInScope, Pass.IsGenerated, the
+// façade helpers (ResolvePackageRef, ResolveMethodCall, EvaluateConstString,
+// FlatNonDefaultTags, KnownNonDefaultTags), and the ImportBan re-export.
+// Stage 1.6 additions: RunScope constructors AST / Typed / Production /
+// Fixture / StandaloneModule — these replaced the deleted RunTyped /
+// RunTypedDir / RunTypedFixture / RunTypedProduction entry points (issue
+// #1037 §1d). Driver tests use Run(t, Typed(...)), Run(t, Production(...)),
+// Run(t, Fixture(...)), and Run(t, StandaloneModule(...)) accordingly.
 // Not a meta-archtest enforcement rule — the anchor exists solely to satisfy
 // INVENTORY-ANCHOR-REQUIRED-01. Pairs with pass_funnel_test.go
 // (PASS-FUNNEL-*-01) and the façade source files pass.go / walk.go /
-// scope.go / resolve.go.
+// scope.go / resolve.go / fixture.go.
 package archtest
 
 import (
@@ -84,7 +86,7 @@ func TestRun_perPackageDelivery(t *testing.T) {
 		return nil
 	}
 
-	diags := Run(t, ModuleScope(root), rule)
+	diags := Run(t, AST(ModuleScope(root)), rule)
 	if diags != nil {
 		t.Errorf("Run returned %d diagnostics, want nil", len(diags))
 	}
@@ -106,7 +108,7 @@ func TestRun_emptyScopeIsNoOp(t *testing.T) {
 	}
 	called := false
 	rule := func(p *Pass) []Diagnostic { called = true; return nil }
-	diags := Run(t, ModuleScope(root), rule)
+	diags := Run(t, AST(ModuleScope(root)), rule)
 	if diags != nil {
 		t.Errorf("Run on empty scope: diags=%v, want nil", diags)
 	}
@@ -139,7 +141,7 @@ func TestRun_RelMapsFilesToModuleRelativePaths(t *testing.T) {
 		}
 		return nil
 	}
-	Run(t, ModuleScope(root), rule)
+	Run(t, AST(ModuleScope(root)), rule)
 	if len(got) != 1 || got[0] != "sub/x.go" {
 		t.Errorf("Pass.Rel: got %v, want [\"sub/x.go\"]", got)
 	}
@@ -172,45 +174,48 @@ func TestRun_FsetIsSharedAcrossFiles(t *testing.T) {
 		}
 		return nil
 	}
-	Run(t, ModuleScope(root), rule)
+	Run(t, AST(ModuleScope(root)), rule)
 }
 
-// TestRunTyped_typedPassShape verifies RunTyped delivers a Pass with
-// Pkg / TypesInfo / Fset populated and Pass.Typed()=true. Uses the
-// archtest_fixture-gated red fixture (which is a real Go package with
-// type info) as the load target.
-func TestRunTyped_typedPassShape(t *testing.T) {
+// TestRun_Fixture_typedPassShape verifies a typed scope (loaded here via the
+// Fixture entry, the only loader that can reach the archtest_fixture-gated
+// passfunnelfixture package) delivers a Pass with Pkg / TypesInfo / Fset
+// populated and Pass.Typed()=true. The property is generic across typed scopes;
+// Fixture is the load vehicle because the target package is tag-gated.
+func TestRun_Fixture_typedPassShape(t *testing.T) {
 	var calls int
 	rule := func(p *Pass) []Diagnostic {
 		calls++
 		if !p.Typed() {
-			t.Errorf("RunTyped Pass: Typed()=false")
+			t.Errorf("Run(t, Fixture(...)) Pass: Typed()=false")
 		}
 		if p.Pkg == nil {
-			t.Errorf("RunTyped Pass: Pkg nil")
+			t.Errorf("Run(t, Fixture(...)) Pass: Pkg nil")
 		}
 		if p.TypesInfo == nil {
-			t.Errorf("RunTyped Pass: TypesInfo nil")
+			t.Errorf("Run(t, Fixture(...)) Pass: TypesInfo nil")
 		}
 		if p.Fset == nil {
-			t.Errorf("RunTyped Pass: Fset nil")
+			t.Errorf("Run(t, Fixture(...)) Pass: Fset nil")
 		}
 		if len(p.Files) == 0 {
-			t.Errorf("RunTyped Pass: Files empty")
+			t.Errorf("Run(t, Fixture(...)) Pass: Files empty")
 		}
 		return nil
 	}
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}),
+		rule)
+
 	if calls == 0 {
-		t.Errorf("RunTyped invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
+		t.Errorf("Run(t, Fixture(...)) invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
 	}
 }
 
-// TestRunTyped_dedupesAcrossPackageVariants verifies the F3 contract:
-// loading with Tests=true returns regular + .test packages, but the same
-// *ast.File pointer must not appear in two Pass.Files slices.
-func TestRunTyped_dedupesAcrossPackageVariants(t *testing.T) {
+// TestRun_Fixture_dedupesAcrossPackageVariants verifies the F3 contract via the
+// Fixture scope: loading with Tests=true returns regular + .test packages, but
+// the same *ast.File pointer must not appear in two Pass.Files slices.
+func TestRun_Fixture_dedupesAcrossPackageVariants(t *testing.T) {
 	seenAcrossPasses := make(map[*ast.File]int)
 	rule := func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -218,8 +223,10 @@ func TestRunTyped_dedupesAcrossPackageVariants(t *testing.T) {
 		}
 		return nil
 	}
-	RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}),
+		rule)
+
 	for f, count := range seenAcrossPasses {
 		if count > 1 {
 			t.Errorf("file pointer %p delivered to %d Passes; want exactly 1", f, count)
@@ -228,10 +235,11 @@ func TestRunTyped_dedupesAcrossPackageVariants(t *testing.T) {
 }
 
 // The nil-rule and empty-patterns guards in runTypedWithRoot are now covered by
-// TestRunTypedDir_rejectsNilRule and TestRunTypedDir_rejectsEmptyPatterns below,
-// using the tbFatalSpy + goroutine + done-channel pattern established by
-// TestRunTypedDir_rejectsRelativeDir. RunTypedDir accepts a testing.TB interface
-// (unlike RunTyped which takes *testing.T), making the spy approach possible.
+// TestRun_StandaloneModule_rejectsNilRule and
+// TestRun_StandaloneModule_rejectsEmptyPatterns below, using the tbFatalSpy +
+// goroutine + done-channel pattern established by
+// TestRun_StandaloneModule_rejectsRelativeDir. The StandaloneModule scope's
+// spy tests drive Run with a testing.TB.
 
 // TestNewPackageRel_handlesEmptyFilename verifies the F4 fix: when fset
 // has no real filename for a node, the Rel closure returns "" rather than
@@ -254,7 +262,7 @@ func TestNewPackageRel_handlesEmptyFilename(t *testing.T) {
 }
 
 // TestIsPackageWithTestFiles validates the test-variant detector used by
-// RunTyped's sort.
+// Run(t, Typed(...))'s sort.
 func TestIsPackageWithTestFiles(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -366,17 +374,17 @@ package comments
 		}
 		return nil
 	}
-	Run(t, ModuleScope(root), rule)
+	Run(t, AST(ModuleScope(root)), rule)
 	if !foundComments {
 		t.Errorf("Run: Pass.Files[*].Comments empty; parser.ParseComments not active (gap #1)")
 	}
 }
 
-// TestRunTyped_CommentsRegressionLock verifies that the typed path (RunTyped)
-// ALREADY delivers comments (go/packages default ParseFile includes
-// parser.ParseComments). This test should be GREEN from the start; if it
-// fails, the plan fact #2 is falsified and implementation must STOP.
-func TestRunTyped_CommentsRegressionLock(t *testing.T) {
+// TestRun_Fixture_CommentsRegressionLock verifies that the typed path (exercised
+// here via the Fixture scope) ALREADY delivers comments (go/packages default
+// ParseFile includes parser.ParseComments). This test should be GREEN from the
+// start; if it fails, the plan fact #2 is falsified and implementation must STOP.
+func TestRun_Fixture_CommentsRegressionLock(t *testing.T) {
 	var foundComments bool
 	rule := func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -386,10 +394,12 @@ func TestRunTyped_CommentsRegressionLock(t *testing.T) {
 		}
 		return nil
 	}
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}),
+		rule)
+
 	if !foundComments {
-		t.Fatalf("STOP: RunTyped path does NOT deliver comments — plan fact #2 is falsified; do not proceed with implementation")
+		t.Fatalf("STOP: Run(t, Fixture(...)) does NOT deliver comments — plan fact #2 is falsified; do not proceed with implementation")
 	}
 }
 
@@ -428,31 +438,33 @@ func TestRun_AbsResolvesModuleAbsolutePath(t *testing.T) {
 		}
 		return nil
 	}
-	Run(t, ModuleScope(root), rule)
+	Run(t, AST(ModuleScope(root)), rule)
 }
 
-// TestRunTyped_AbsResolvesModuleAbsolutePath mirrors TestRun_AbsResolvesModuleAbsolutePath
-// for the typed path. RED until Pass.Abs is populated in buildTypedPass.
-func TestRunTyped_AbsResolvesModuleAbsolutePath(t *testing.T) {
+// TestRun_Fixture_AbsResolvesModuleAbsolutePath mirrors
+// TestRun_AbsResolvesModuleAbsolutePath for the typed path, exercised via the
+// Fixture scope. RED until Pass.Abs is populated in buildTypedPass.
+func TestRun_Fixture_AbsResolvesModuleAbsolutePath(t *testing.T) {
 	rule := func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			abs := p.Abs(f)
 			if !filepath.IsAbs(abs) {
-				t.Errorf("RunTyped Pass.Abs: %q is not absolute", abs)
+				t.Errorf("Run(t, Fixture(...)) Pass.Abs: %q is not absolute", abs)
 			}
 			rel := p.Rel(f)
 			if !strings.HasSuffix(filepath.ToSlash(abs), rel) {
-				t.Errorf("RunTyped Pass.Abs: %q does not have suffix %q", abs, rel)
+				t.Errorf("Run(t, Fixture(...)) Pass.Abs: %q does not have suffix %q", abs, rel)
 			}
 			fsetAbs := p.Fset.Position(f.Pos()).Filename
 			if abs != fsetAbs {
-				t.Errorf("RunTyped Pass.Abs: %q != Fset.Position().Filename %q", abs, fsetAbs)
+				t.Errorf("Run(t, Fixture(...)) Pass.Abs: %q != Fset.Position().Filename %q", abs, fsetAbs)
 			}
 		}
 		return nil
 	}
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}),
+		rule)
 }
 
 // TestPass_IsFileInScope verifies Pass.IsFileInScope delegates correctly to
@@ -505,7 +517,7 @@ func TestPass_IsFileInScope(t *testing.T) {
 		}
 		return nil
 	}
-	Run(t, ModuleScope(root, IncludeTests()), rule)
+	Run(t, AST(ModuleScope(root, IncludeTests())), rule)
 }
 
 // TestPass_IsGenerated verifies Pass.IsGenerated delegates correctly to
@@ -545,7 +557,7 @@ func TestPass_IsGenerated(t *testing.T) {
 		}
 		return nil
 	}
-	Run(t, ModuleScope(root, IncludeGenerated()), rule)
+	Run(t, AST(ModuleScope(root, IncludeGenerated())), rule)
 }
 
 // TestImportBanReExport verifies that archtest.ImportBan is a type alias for
@@ -605,7 +617,8 @@ func TestResolveHelpersReExported(t *testing.T) {
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(
 		root, false, []string{"archtest_fixture"},
-		"./tools/archtest/internal/passfunnelfixture")
+		"./tools/archtest/internal/passfunnelfixture",
+	)
 	if err != nil {
 		t.Fatalf("SharedResolver: %v", err)
 	}
@@ -737,13 +750,10 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 
 	// Scan only the direct-child (non-test) .go files in tools/archtest/ itself
 	// (façade boundary; see facadeScopeForArchtest).
-	diags := Run(t, facadeScopeForArchtest(t), func(p *Pass) []Diagnostic {
-		// Shared name-match scan (func/type/var/const) against the banned set.
+	diags := Run(t, AST(facadeScopeForArchtest(t)), func(p *Pass) []Diagnostic {
 		d := facadeBannedExportDiags(p, bannedLoaders,
 			"is a banned loader symbol; must NOT appear in facade")
-		// Loader-specific signature check: no exported func/method may mention
-		// *packages.Package in its params/results/receiver (catches a re-export
-		// under a non-banned alias name).
+
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
@@ -763,6 +773,7 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "FACADE-NO-LOADER-LEAK-01", diags)
 }
 
@@ -872,18 +883,17 @@ func facadeBannedExportDiags(p *Pass, banned map[string]bool, reasonSuffix strin
 		})
 		// Top-level type / var / const declarations only: the file's top-level
 		// GenDecls (direct children of *ast.File). Function-body-local GenDecls
-		// are nested and thus excluded.
+		// are nested and thus excluded. EachInChildren over each Spec kind
+		// avoids a for-range + type-switch on []ast.Spec (SCANNER-FRAMEWORK-USAGE-01).
 		EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
-			for _, spec := range gd.Specs {
-				switch s := spec.(type) {
-				case *ast.TypeSpec:
-					report("type", s.Name)
-				case *ast.ValueSpec:
-					for _, ident := range s.Names {
-						report("var/const", ident)
-					}
+			EachInChildren[ast.TypeSpec](gd, func(ts *ast.TypeSpec) {
+				report("type", ts.Name)
+			})
+			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+				for _, ident := range vs.Names {
+					report("var/const", ident)
 				}
-			}
+			})
 		})
 	}
 	return d
@@ -945,6 +955,10 @@ func helper() {
 //	IsGeneratedRelPath → use Pass.IsGenerated(f); the free function is removed
 //	                     (ParseBuildConstraint + BuildContextPredicate stay
 //	                     exported for the non-Pass multi-predicate use case)
+//	RunTyped           → use Run(t, Typed(opts, patterns), rule) (issue #1037 §1d)
+//	RunTypedProduction → use Run(t, Production(opts), rule)
+//	RunTypedDir        → use Run(t, StandaloneModule(dir, opts, patterns), rule)
+//	RunTypedFixture    → use Run(t, Fixture(opts, patterns), rule)
 //
 // # AI-robust
 //
@@ -977,18 +991,27 @@ func helper() {
 //     façade's own direct-child .go files (facadeScopeForArchtest).
 func TestFacadeContractedExports(t *testing.T) {
 	contractedExports := map[string]bool{
+		// Phase 0/1 (#1037) contractions — removed dead re-exports.
 		"FileContext":        true,
 		"LoadContentFiles":   true,
 		"IsGeneratedRelPath": true,
+		// Issue #1037 §1d contractions — old Run* entry points deleted in favor of
+		// the single Run(t, RunScope, Rule) + sealed RunScope constructors (AST /
+		// Typed / Production / Fixture / StandaloneModule). These must NOT reappear.
+		"RunTyped":           true,
+		"RunTypedProduction": true,
+		"RunTypedDir":        true,
+		"RunTypedFixture":    true,
 	}
 
-	diags := Run(t, facadeScopeForArchtest(t), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(facadeScopeForArchtest(t)), func(p *Pass) []Diagnostic {
 		return facadeBannedExportDiags(p, contractedExports,
 			"was contracted out of the archtest façade in #1037 Phase 0/1 and must NOT "+
 				"be re-exported (FileContext→Pass.Files/Fset/Rel; "+
 				"LoadContentFiles→loadContentFiles or EachContentFile; "+
 				"IsGeneratedRelPath→Pass.IsGenerated)")
 	})
+
 	Report(t, "FACADE-CONTRACTED-EXPORTS-01", diags)
 }
 
@@ -1032,7 +1055,7 @@ func TestPass_IsFileInScopeConstraintExpr(t *testing.T) {
 		}
 		return nil
 	}
-	Run(t, ModuleScope(root), rule)
+	Run(t, AST(ModuleScope(root)), rule)
 }
 
 // TestParseBuildConstraintReExported verifies that archtest.ParseBuildConstraint
@@ -1120,8 +1143,8 @@ func TestParseBuildConstraintReExported(t *testing.T) {
 //
 // Only Fatalf and FailNow are overridden: Fatalf records the message and marks
 // the spy as fatal; FailNow marks fatal and calls runtime.Goexit() to stop the
-// caller's goroutine (matching *testing.T semantics exactly — callers of
-// RunTypedDir depend on goroutine exit after Fatalf).
+// caller's goroutine (matching *testing.T semantics exactly — the
+// StandaloneModule scope's spy tests depend on goroutine exit after Fatalf).
 type tbFatalSpy struct {
 	testing.TB
 	fatal   bool
@@ -1141,11 +1164,11 @@ func (s *tbFatalSpy) FailNow() {
 	runtime.Goexit()
 }
 
-// TestRunTypedDir_loadsStandaloneFixtureModule verifies that RunTypedDir can
-// load a standalone fixture module (one with its own go.mod) that is isolated
-// from the main module. This is the primary motivation for RunTypedDir: rules
-// targeting intentional-violation fixtures can load them without polluting the
-// main module build.
+// TestRun_StandaloneModule_loadsStandaloneFixtureModule verifies that
+// Run(t, StandaloneModule(...)) can load a standalone fixture module (one with
+// its own go.mod) that is isolated from the main module. This is the primary
+// motivation for the StandaloneModule scope: rules targeting intentional-
+// violation fixtures can load them without polluting the main module build.
 //
 // The fixture used is tools/archtest/testdata/clock_leaf_fallback_fixtures/compliant
 // (module: fixturetest/clock_leaf_fallback/compliant). Assertions:
@@ -1154,7 +1177,7 @@ func (s *tbFatalSpy) FailNow() {
 //   - Pass.Rel(f) is non-empty and does NOT start with the main module prefix
 //     "tools/archtest/testdata/" (it is a module-relative path within the
 //     fixture module, e.g. "usage.go")
-func TestRunTypedDir_loadsStandaloneFixtureModule(t *testing.T) {
+func TestRun_StandaloneModule_loadsStandaloneFixtureModule(t *testing.T) {
 	root := findModuleRoot(t)
 	dir := filepath.Join(root, "tools", "archtest", "testdata",
 		"clock_leaf_fallback_fixtures", "compliant")
@@ -1163,141 +1186,149 @@ func TestRunTypedDir_loadsStandaloneFixtureModule(t *testing.T) {
 	rule := func(p *Pass) []Diagnostic {
 		calls++
 		if !p.Typed() {
-			t.Errorf("RunTypedDir Pass: Typed()=false")
+			t.Errorf("Run(t, StandaloneModule(...)) Pass: Typed()=false")
 		}
 		if p.Pkg == nil {
-			t.Errorf("RunTypedDir Pass: Pkg nil")
+			t.Errorf("Run(t, StandaloneModule(...)) Pass: Pkg nil")
 		}
 		if p.TypesInfo == nil {
-			t.Errorf("RunTypedDir Pass: TypesInfo nil")
+			t.Errorf("Run(t, StandaloneModule(...)) Pass: TypesInfo nil")
 		}
 		if len(p.Files) == 0 {
-			t.Errorf("RunTypedDir Pass: Files empty")
+			t.Errorf("Run(t, StandaloneModule(...)) Pass: Files empty")
 		}
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			if rel == "" {
-				t.Errorf("RunTypedDir Pass.Rel: empty for file in fixture module")
+				t.Errorf("Run(t, StandaloneModule(...)) Pass.Rel: empty for file in fixture module")
 			}
 			// The rel path must not contain the main-module prefix; it should
 			// be module-relative within the fixture module (e.g. "usage.go").
 			if strings.HasPrefix(rel, "tools/archtest/testdata/") {
-				t.Errorf("RunTypedDir Pass.Rel(%q): contains main-module prefix; "+
-					"RunTypedDir must produce fixture-module-relative paths", rel)
+				t.Errorf("Run(t, StandaloneModule(...)) Pass.Rel(%q): contains main-module prefix; "+
+					"StandaloneModule must produce fixture-module-relative paths", rel)
 			}
 		}
 		return nil
 	}
 
-	RunTypedDir(t, dir, TypedOpts{Tests: false}, []string{"./..."}, rule)
+	Run(t, StandaloneModule(dir, TypedOpts{Tests: false}, []string{"./..."}), rule)
 	if calls == 0 {
-		t.Errorf("RunTypedDir invoked rule 0 times; expected ≥ 1 (fixture module has at least one package)")
+		t.Errorf("Run(t, StandaloneModule(...)) invoked rule 0 times; expected ≥ 1 (fixture module has at least one package)")
 	}
 }
 
-// TestRunTypedDir_rejectsRelativeDir verifies that RunTypedDir calls t.Fatalf
-// when given a relative (non-absolute) directory path. Uses tbFatalSpy to
-// capture the fatal without terminating the enclosing test goroutine.
-func TestRunTypedDir_rejectsRelativeDir(t *testing.T) {
+// TestRun_StandaloneModule_rejectsRelativeDir verifies that
+// Run(t, StandaloneModule(...)) calls t.Fatalf when given a relative
+// (non-absolute) directory path. Uses tbFatalSpy to capture the fatal without
+// terminating the enclosing test goroutine.
+func TestRun_StandaloneModule_rejectsRelativeDir(t *testing.T) {
 	spy := &tbFatalSpy{TB: t}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		RunTypedDir(spy, "tools/archtest/testdata/clock_leaf_fallback_fixtures/compliant",
-			TypedOpts{Tests: false}, []string{"./..."}, func(*Pass) []Diagnostic { return nil })
-	}()
-	<-done
-	if !spy.fatal {
-		t.Errorf("RunTypedDir with relative dir: expected t.Fatalf to be called, got none")
-	}
-	if !strings.Contains(spy.lastMsg, "absolute") {
-		t.Errorf("RunTypedDir fatal message %q does not mention \"absolute\"", spy.lastMsg)
-	}
-}
-
-// TestRunTypedDir_rejectsNilRule verifies that RunTypedDir calls t.Fatalf when
-// rule is nil, reaching the nil-rule guard in runTypedWithRoot. Uses tbFatalSpy
-// with an absolute dir so the filepath.IsAbs check is satisfied and execution
-// reaches the nil-rule branch.
-func TestRunTypedDir_rejectsNilRule(t *testing.T) {
-	root := findModuleRoot(t)
-	spy := &tbFatalSpy{TB: t}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		RunTypedDir(spy, root, TypedOpts{Tests: false}, []string{"./..."}, nil)
-	}()
-	<-done
-	if !spy.fatal {
-		t.Errorf("RunTypedDir with nil rule: expected t.Fatalf to be called, got none")
-	}
-	if !strings.Contains(spy.lastMsg, "nil rule") {
-		t.Errorf("RunTypedDir fatal message %q does not mention \"nil rule\"", spy.lastMsg)
-	}
-}
-
-// TestRunTypedDir_rejectsEmptyPatterns verifies that RunTypedDir calls t.Fatalf
-// when patterns is nil/empty, reaching the empty-patterns guard in
-// runTypedWithRoot. Uses tbFatalSpy with an absolute dir so the filepath.IsAbs
-// check is satisfied and execution reaches the empty-patterns branch.
-func TestRunTypedDir_rejectsEmptyPatterns(t *testing.T) {
-	root := findModuleRoot(t)
-	spy := &tbFatalSpy{TB: t}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		RunTypedDir(spy, root, TypedOpts{Tests: false}, nil,
+		Run(spy, StandaloneModule("tools/archtest/testdata/clock_leaf_fallback_fixtures/compliant",
+			TypedOpts{Tests: false}, []string{"./..."}),
 			func(*Pass) []Diagnostic { return nil })
 	}()
 	<-done
 	if !spy.fatal {
-		t.Errorf("RunTypedDir with nil patterns: expected t.Fatalf to be called, got none")
+		t.Errorf("Run(t, StandaloneModule(...)) with relative dir: expected t.Fatalf to be called, got none")
 	}
-	if !strings.Contains(spy.lastMsg, "pattern") {
-		t.Errorf("RunTypedDir fatal message %q does not mention \"pattern\"", spy.lastMsg)
+	if !strings.Contains(spy.lastMsg, "absolute") {
+		t.Errorf("Run(t, StandaloneModule(...)) fatal message %q does not mention \"absolute\"", spy.lastMsg)
 	}
 }
 
-// TestRunTyped_delegatesToRunTypedDir verifies the regression contract for
-// RunTyped: it still loads the main module correctly after the Stage 1.6
-// refactor into runTypedWithRoot. Uses the same passfunnelfixture pattern as
-// TestRunTyped_typedPassShape to ensure the delegation path is covered.
-func TestRunTyped_delegatesToRunTypedDir(t *testing.T) {
+// TestRun_StandaloneModule_rejectsNilRule verifies that
+// Run(t, StandaloneModule(...)) calls t.Fatalf when rule is nil, reaching the
+// nil-rule guard in runTypedWithRoot. Uses tbFatalSpy with an absolute dir so
+// the filepath.IsAbs check is satisfied and execution reaches the nil-rule
+// branch.
+func TestRun_StandaloneModule_rejectsNilRule(t *testing.T) {
+	root := findModuleRoot(t)
+	spy := &tbFatalSpy{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Run(spy, StandaloneModule(root, TypedOpts{Tests: false}, []string{"./..."}), nil)
+	}()
+	<-done
+	if !spy.fatal {
+		t.Errorf("Run(t, StandaloneModule(...)) with nil rule: expected t.Fatalf to be called, got none")
+	}
+	if !strings.Contains(spy.lastMsg, "nil rule") {
+		t.Errorf("Run(t, StandaloneModule(...)) fatal message %q does not mention \"nil rule\"", spy.lastMsg)
+	}
+}
+
+// TestRun_StandaloneModule_rejectsEmptyPatterns verifies that
+// Run(t, StandaloneModule(...)) calls t.Fatalf when patterns is nil/empty,
+// reaching the empty-patterns guard in runTypedWithRoot. Uses tbFatalSpy with
+// an absolute dir so the filepath.IsAbs check is satisfied and execution
+// reaches the empty-patterns branch.
+func TestRun_StandaloneModule_rejectsEmptyPatterns(t *testing.T) {
+	root := findModuleRoot(t)
+	spy := &tbFatalSpy{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Run(spy, StandaloneModule(root, TypedOpts{Tests: false}, nil),
+			func(*Pass) []Diagnostic { return nil })
+	}()
+	<-done
+	if !spy.fatal {
+		t.Errorf("Run(t, StandaloneModule(...)) with nil patterns: expected t.Fatalf to be called, got none")
+	}
+	if !strings.Contains(spy.lastMsg, "pattern") {
+		t.Errorf("Run(t, StandaloneModule(...)) fatal message %q does not mention \"pattern\"", spy.lastMsg)
+	}
+}
+
+// TestRun_Fixture_delegatesToRunTypedWithRoot verifies the regression contract
+// for the typed scopes' shared delegation: Fixture (like Typed) routes through
+// runTypedWithRoot and still produces a valid typed Pass after the Stage 1.6
+// refactor. Uses the same passfunnelfixture pattern as
+// TestRun_Fixture_typedPassShape to ensure the delegation path is covered.
+func TestRun_Fixture_delegatesToRunTypedWithRoot(t *testing.T) {
 	var calls int
 	rule := func(p *Pass) []Diagnostic {
 		calls++
 		if !p.Typed() {
-			t.Errorf("RunTyped (delegation) Pass: Typed()=false")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: Typed()=false")
 		}
 		if p.Pkg == nil {
-			t.Errorf("RunTyped (delegation) Pass: Pkg nil")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: Pkg nil")
 		}
 		if p.TypesInfo == nil {
-			t.Errorf("RunTyped (delegation) Pass: TypesInfo nil")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: TypesInfo nil")
 		}
 		if len(p.Files) == 0 {
-			t.Errorf("RunTyped (delegation) Pass: Files empty")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: Files empty")
 		}
 		return nil
 	}
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}),
+		rule)
+
 	if calls == 0 {
-		t.Errorf("RunTyped (delegation) invoked rule 0 times; expected ≥ 1")
+		t.Errorf("Run(t, Fixture(...)) (delegation) invoked rule 0 times; expected ≥ 1")
 	}
 }
 
-// TestRunTypedProduction_excludesGeneratedPackages is the Stage 1.7 Hard
-// proof: a Pass yielded by RunTypedProduction NEVER contains a generated/
-// file. This is the "violation not expressible" property — a rule author
-// using this entry cannot observe codegen output even by forgetting a
+// TestRun_Production_excludesGeneratedPackages is the Stage 1.7 Hard
+// proof: a Pass yielded by Run(t, Production(...)) NEVER contains a
+// generated/ file. This is the "violation not expressible" property — a rule
+// author using this entry cannot observe codegen output even by forgetting a
 // per-file skip, because the driver never constructs a Pass for a generated
-// package. Reaching generated/ requires deliberately switching to RunTyped.
+// package. Reaching generated/ requires deliberately switching to
+// Run(t, Typed(...)).
 //
-// Contra-positive assertion: we also run RunTyped(./...) and assert it finds
-// ≥1 generated/ file. If it finds zero, the exclusion test is vacuous (there
-// is nothing to exclude, so RunTypedProduction's filter has no teeth).
-func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
+// Contra-positive assertion: we also run Run(t, Typed(...), ./...) and assert
+// it finds ≥1 generated/ file. If it finds zero, the exclusion test is vacuous
+// (there is nothing to exclude, so Production's filter has no teeth).
+func TestRun_Production_excludesGeneratedPackages(t *testing.T) {
 	if testing.Short() {
 		t.Skip("full-module packages.Load; skipped in -short")
 	}
@@ -1305,30 +1336,31 @@ func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
 	rule := func(p *Pass) []Diagnostic {
 		calls++
 		if !p.Typed() {
-			t.Errorf("RunTypedProduction Pass: Typed()=false")
+			t.Errorf("Run(t, Production(...)) Pass: Typed()=false")
 		}
 		for _, f := range p.Files {
 			files++
 			rel := p.Rel(f)
 			if strings.HasPrefix(rel, "generated/") {
-				t.Errorf("RunTypedProduction yielded generated/ file %q — "+
+				t.Errorf("Run(t, Production(...)) yielded generated/ file %q — "+
 					"generated packages must be unreachable under this entry", rel)
 			}
 		}
 		if p.Pkg != nil && strings.Contains(p.Pkg.Path(), "/generated/") {
-			t.Errorf("RunTypedProduction yielded generated package %q", p.Pkg.Path())
+			t.Errorf("Run(t, Production(...)) yielded generated package %q", p.Pkg.Path())
 		}
 		return nil
 	}
-	RunTypedProduction(t, TypedOpts{Tests: false}, rule)
+	Run(t, Production(TypedOpts{Tests: false}), rule)
 	if calls == 0 || files == 0 {
-		t.Errorf("RunTypedProduction invoked rule %d times over %d files; expected ≥ 1 of each", calls, files)
+		t.Errorf("Run(t, Production(...)) invoked rule %d times over %d files; expected ≥ 1 of each", calls, files)
 	}
 
-	// Contra-positive: RunTyped(./...) must see ≥1 generated/ file so the
-	// exclusion above is non-vacuous (there is actually something to filter).
+	// Contra-positive: Run(t, Typed(...), ./...) must see ≥1 generated/ file
+	// so the exclusion above is non-vacuous (there is actually something to
+	// filter).
 	var generatedCount int
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./..."}, func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./..."}), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			if strings.HasPrefix(p.Rel(f), "generated/") {
 				generatedCount++
@@ -1336,15 +1368,16 @@ func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
 		}
 		return nil
 	})
+
 	if generatedCount == 0 {
-		t.Errorf("contra-positive failed: RunTyped(./...) found 0 generated/ files — " +
-			"the module has no generated/ packages, so RunTypedProduction's exclusion " +
+		t.Errorf("contra-positive failed: Run(t, Typed(...), ./...) found 0 generated/ files — " +
+			"the module has no generated/ packages, so Run(t, Production(...))'s exclusion " +
 			"filter is vacuous and the above assertions prove nothing")
 	}
 }
 
-// TestRunTypedProduction_matchesProductionResolverSet verifies parity: the
-// package set RunTypedProduction delivers equals
+// TestRun_Production_matchesProductionResolverSet verifies parity: the
+// package set Run(t, Production(...)) delivers equals
 // typeseval.LoadProductionPackages(...).Production() restricted to packages
 // buildTypedPass can construct a Pass for (≥1 syntax file + non-nil
 // TypesInfo). pass_test.go is permanently depguard/allowlist self-exempt, so
@@ -1355,7 +1388,7 @@ func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
 // This directly proves the Production filter is actively non-empty rather than
 // a no-op (if the module has no generated/ packages, the parity test above
 // would vacuously pass for the wrong reason).
-func TestRunTypedProduction_matchesProductionResolverSet(t *testing.T) {
+func TestRun_Production_matchesProductionResolverSet(t *testing.T) {
 	if testing.Short() {
 		t.Skip("full-module packages.Load; skipped in -short")
 	}
@@ -1404,7 +1437,7 @@ func TestRunTypedProduction_matchesProductionResolverSet(t *testing.T) {
 	}
 
 	got := map[string]bool{}
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg != nil {
 			got[p.Pkg.Path()] = true
 		}
@@ -1413,43 +1446,45 @@ func TestRunTypedProduction_matchesProductionResolverSet(t *testing.T) {
 
 	for path := range want {
 		if !got[path] {
-			t.Errorf("RunTypedProduction missing production package %q", path)
+			t.Errorf("Run(t, Production(...)) missing production package %q", path)
 		}
 	}
 	for path := range got {
 		if !want[path] {
-			t.Errorf("RunTypedProduction delivered unexpected package %q "+
+			t.Errorf("Run(t, Production(...)) delivered unexpected package %q "+
 				"(not in LoadProductionPackages().Production())", path)
 		}
 	}
 	if len(got) == 0 {
-		t.Errorf("RunTypedProduction delivered zero packages")
+		t.Errorf("Run(t, Production(...)) delivered zero packages")
 	}
 }
 
-// TestRunTypedFixture_LoadsRedfixture verifies that RunTypedFixture with
+// TestRun_Fixture_LoadsRedfixture verifies that Run(t, Fixture(...)) with
 // Tests=false delivers at least one Pass for the passfunnelfixture package
 // (which is gated by the archtest_fixture build tag).
 //
-// RED until RunTypedFixture and FixtureOpts are defined in tools/archtest.
-func TestRunTypedFixture_LoadsRedfixture(t *testing.T) {
+// RED until Fixture and FixtureOpts are defined in tools/archtest.
+func TestRun_Fixture_LoadsRedfixture(t *testing.T) {
 	calls := 0
 	rule := func(p *Pass) []Diagnostic {
 		calls++
 		return nil
 	}
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}),
+		rule)
+
 	if calls == 0 {
-		t.Errorf("RunTypedFixture(Tests=false) invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
+		t.Errorf("Run(t, Fixture(Tests=false)) invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
 	}
 }
 
-// TestRunTypedFixture_TestVariantLoad verifies that RunTypedFixture with
+// TestRun_Fixture_TestVariantLoad verifies that Run(t, Fixture(...)) with
 // Tests=true also loads the passfunnelfixture package successfully.
 //
-// RED until RunTypedFixture and FixtureOpts are defined in tools/archtest.
-func TestRunTypedFixture_TestVariantLoad(t *testing.T) {
+// RED until Fixture and FixtureOpts are defined in tools/archtest.
+func TestRun_Fixture_TestVariantLoad(t *testing.T) {
 	seen := make(map[*ast.File]int)
 	rule := func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -1457,21 +1492,23 @@ func TestRunTypedFixture_TestVariantLoad(t *testing.T) {
 		}
 		return nil
 	}
-	RunTypedFixture(t, FixtureOpts{Tests: true},
-		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
+	Run(t, Fixture(FixtureOpts{Tests: true},
+		[]string{"./tools/archtest/internal/passfunnelfixture"}),
+		rule)
+
 	if len(seen) == 0 {
-		t.Errorf("RunTypedFixture(Tests=true) delivered zero files; expected ≥ 1")
+		t.Errorf("Run(t, Fixture(Tests=true)) delivered zero files; expected ≥ 1")
 	}
 }
 
-// TestRunTypedFixture_FixtureOptsLacksTagsField asserts that FixtureOpts has
+// TestRun_Fixture_FixtureOptsLacksTagsField asserts that FixtureOpts has
 // exactly one field named "Tests" of kind bool. This is the Hard-form struct
 // field-set constraint: business callers cannot express "load fixture with
 // custom tag" at the type level because Tags is absent from FixtureOpts.
 //
 // RED until FixtureOpts struct is defined; after definition, fails if the
 // struct grows a Tags field or any other extra field.
-func TestRunTypedFixture_FixtureOptsLacksTagsField(t *testing.T) {
+func TestRun_Fixture_FixtureOptsLacksTagsField(t *testing.T) {
 	rt := reflect.TypeOf(FixtureOpts{})
 	if rt.NumField() != 1 {
 		t.Errorf("FixtureOpts has %d fields, want exactly 1 (Tests bool); "+

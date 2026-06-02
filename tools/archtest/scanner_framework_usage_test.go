@@ -108,12 +108,11 @@ import (
 // New rules MUST go through the scanner framework + EachInSubtree/EachInChildren.
 func TestScannerFrameworkUsage01(t *testing.T) {
 	var diags []scanner.Diagnostic
-	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
-				// Only flag top-level archtest test files (tools/archtest/<file>_test.go).
-				// Subpackages under tools/archtest/internal/ are out of scope.
+
 				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
 					continue
 				}
@@ -125,6 +124,7 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 			}
 			return nil
 		})
+
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-01", diags)
 }
 
@@ -151,8 +151,9 @@ func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
 	// the tag packages.Load returns an empty package and the test fails red on
 	// got=0 want=4.
 	var diags []scanner.Diagnostic
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/inspectorredfixture"},
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/inspectorredfixture"}),
+
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -1390,7 +1391,7 @@ func _(file *ast.File, other []ast.Decl) {
 func TestScannerFrameworkUsage02(t *testing.T) {
 	var diags []scanner.Diagnostic
 	// Tests:true required — _test.go files are the scan target of USAGE-02.
-	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -1404,6 +1405,7 @@ func TestScannerFrameworkUsage02(t *testing.T) {
 			}
 			return nil
 		})
+
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
 }
 
@@ -1645,7 +1647,7 @@ func loadFixture02(t *testing.T, caseName string, detector usage02Detector) []sc
 	target := usage02FixturesRelDir + "/" + caseName + ".go"
 	var result []scanner.Diagnostic
 	found := false
-	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -1657,6 +1659,7 @@ func loadFixture02(t *testing.T, caseName string, detector usage02Detector) []sc
 			}
 			return nil
 		})
+
 	if !found {
 		t.Fatalf("loadFixture02: fixture not found at %s; ensure the file exists "+
 			"in tools/archtest/internal/usage02fixtures/ and the package is reachable "+
@@ -1958,7 +1961,7 @@ func enclosingFuncBody(file *ast.File, call *ast.CallExpr) ast.Node {
 // reported as a BS3 diagnostic here.
 func TestScannerFrameworkUsage02_BlindSpotReverse(t *testing.T) {
 	var diags []scanner.Diagnostic
-	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+	Run(t, Typed(TypedOpts{Tests: true}, []string{"./tools/archtest/..."}),
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -1972,6 +1975,7 @@ func TestScannerFrameworkUsage02_BlindSpotReverse(t *testing.T) {
 			}
 			return nil
 		})
+
 	if len(diags) != 0 {
 		t.Errorf("SCANNER-FRAMEWORK-USAGE-02 blind-spot shape present in "+
 			"production (rule would silently miss it); migrate to "+
@@ -2066,7 +2070,7 @@ func TestScannerFrameworkUsage02_MonitoredCalleeArgShape(t *testing.T) {
 			want[key{pkg: pkg, name: n}] = false
 		}
 	}
-	RunTyped(t, TypedOpts{Tests: false}, []string{scannerPkgPath, archtestPkgPath},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{scannerPkgPath, archtestPkgPath}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -2103,9 +2107,10 @@ func TestScannerFrameworkUsage02_MonitoredCalleeArgShape(t *testing.T) {
 			}
 			return nil
 		})
+
 	for k, seen := range want {
 		if !seen {
-			t.Errorf("%s.%s: package %s not loaded — RunTyped scope mismatch", k.pkg, k.name, k.pkg)
+			t.Errorf("%s.%s: package %s not loaded — typed Run scope mismatch", k.pkg, k.name, k.pkg)
 		}
 	}
 }

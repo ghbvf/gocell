@@ -287,7 +287,7 @@ func TestWebhookReceiverPipeline(t *testing.T) {
 
 	var a1, a2 []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{runtimeWebhookPattern},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{runtimeWebhookPattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != runtimeWebhookPkgPath {
 				return nil
@@ -329,7 +329,7 @@ func TestWebhookReceiverPipeline_ReverseFixture(t *testing.T) {
 	const fixturePkgPath = "fixturetest/webhook_pipeline_violate"
 
 	var a1, a2 []Diagnostic
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

@@ -261,8 +261,9 @@ func withRouteDeadLetter(t *testing.T, fn func(p *Pass, f *ast.File, fd *ast.Fun
 	// files (deadletter.go etc.) carry no special build constraint, so the
 	// default+flat tag set loads routeDeadLetter. If it ever moves behind a tag,
 	// the found==false assertion below fails loudly (rule cannot go vacuous).
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttPkgPath}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -280,6 +281,7 @@ func withRouteDeadLetter(t *testing.T, fn func(p *Pass, f *ast.File, fd *ast.Fun
 			}
 			return nil
 		})
+
 	assert.True(t, found,
 		"MQTT-DLX-FAILURE-SIGNAL-FUNNEL-01: (*Subscriber).routeDeadLetter not found in adapters/mqtt "+
 			"production AST — the rule target was renamed/removed; update this archtest")

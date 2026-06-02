@@ -28,7 +28,7 @@ import (
 // spot — default build excludes it, no rule loads it (the tag is absent from
 // FlatNonDefaultTags), and the coverage self-test would skip it. That is the
 // exact fail-open this self-test exists to deny (#944 F1). Mirrors x/tools
-// analysistest's dir/testdata isolation and the project's own RunTypedFixture
+// analysistest's dir/testdata isolation and the project's own Run(t, Fixture(...))
 // path-boundary funnel: a fixture-only / build-mode tag is bound to its
 // subtree, never globally whitelisted by name.
 type repoSkipTagRule struct {
@@ -65,10 +65,10 @@ var repoSkipTagAllowlist = map[string]repoSkipTagRule{
 	// file → undefined symbol on a clean tree). Bound to cmd/corebundle/.
 	"catalog_gen": {allowPath: underDir("cmd/corebundle/")},
 	// archtest_fixture — build-mode marker for archtest RED/GREEN fixtures. Must
-	// NOT enter KnownNonDefaultTags() (#944): a business RunTyped(Tags:
-	// FlatNonDefaultTags()) scan would otherwise load fixture-tagged code,
-	// bypassing the RunTypedFixture funnel. The only sanctioned loader is
-	// archtest.RunTypedFixture (+ framework-exempt SharedResolver self-tests).
+	// NOT enter KnownNonDefaultTags() (#944): a typed Run (Run(t, Typed(TypedOpts{Tags:
+	// FlatNonDefaultTags()}, ...))) scan would otherwise load fixture-tagged code,
+	// bypassing the Run(t, Fixture(...)) funnel. The only sanctioned loader is
+	// Run(t, Fixture(...)) (+ framework-exempt SharedResolver self-tests).
 	// Bound to tools/archtest/ so it cannot silently disable coverage elsewhere.
 	"archtest_fixture": {allowPath: underDir("tools/archtest/")},
 }
@@ -185,7 +185,8 @@ func TestKnownNonDefaultTagsCoverage(t *testing.T) {
 			}
 			unknown = append(unknown, fmt.Sprintf(
 				"%q (allowlisted skip-tag found outside its sanctioned subtree at %s)",
-				tag, strings.Join(offending, ", ")))
+				tag, strings.Join(offending, ", "),
+			))
 			continue
 		}
 		example := entry.paths[0]
@@ -563,4 +564,4 @@ func repoRoot(t *testing.T) string {
 // Compile-time verification: constraint.Expr interface usage must remain
 // consistent with the standard library. This blank assignment ensures
 // the compiler validates the Eval call signature.
-var _ = (constraint.Expr)(nil)
+var _ = constraint.Expr(nil)

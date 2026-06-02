@@ -15,8 +15,8 @@
 // ./...` so it never pollutes real-repo scans. It is loaded explicitly by
 // TestAuditLedgerProtocol_ScannerCatchesAliasBypass via
 //
-//	archtest.RunTypedFixture(t, archtest.FixtureOpts{Tests: false},
-//	    []string{"./tools/archtest/internal/auditledgerfixture"}, rule)
+//	archtest.Run(t, archtest.Fixture(archtest.FixtureOpts{Tests: false},
+//	    []string{"./tools/archtest/internal/auditledgerfixture"}), rule)
 //
 // AI co-authors who modify the fixture must keep exactly one call to a
 // forbidden ledger constructor (NewProtocol). The companion test asserts

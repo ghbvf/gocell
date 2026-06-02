@@ -21,21 +21,17 @@ import (
 func runFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
 	var violations []string
-	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}}, []string{"./..."},
+	Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				// Fixtures live in their own ad-hoc module rooted at fixtureDir;
-				// stdlib / dependency files come back with a "../" rel prefix
-				// from fileroles.Rel, which returns ok=false for them.
-				// RunTypedDir sets the root to fixtureDir, so p.Rel already
-				// returns fixture-relative paths without a "../" prefix for
-				// files in the fixture module; stdlib files won't appear in p.Files.
+
 				raw := scanProdDurationAST(p.Fset, f, rel, p.TypesInfo)
 				violations = append(violations, raw...)
 			}
 			return nil
 		})
+
 	return violations
 }
 
@@ -124,5 +120,5 @@ func TestProdDurationConstFixtures(t *testing.T) {
 }
 
 // TestProdDurationConstFailsClosedOnLoadError is intentionally removed: the
-// fail-closed property is now enforced by RunTypedDir itself (it calls
+// fail-closed property is now enforced by Run(t, StandaloneModule(...)) itself (it calls
 // t.Fatalf on load errors), making a separate test redundant.

@@ -39,7 +39,7 @@
 //
 // # _test.go scope
 //
-// RunTyped(opts.Tests=false) loads only production-variant packages, so
+// Run(t, Typed(TypedOpts{Tests: false}, ...)) loads only production-variant packages, so
 // _test.go files are not in pass.Files; the scanner additionally filters by
 // rel suffix.
 //
@@ -92,11 +92,13 @@ var capForbiddenCtors = map[string]map[string]struct{}{
 // be called from cmd/corebundle/cap_wiring.go. Cell module files must consume
 // the injected capability.PGProvider / capability.RedisProvider.
 func TestCapabilityProviderFunnel_CompositionRootOnly(t *testing.T) {
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false},
 		[]string{"./cmd/..."},
-		scanCapabilityProviderViolations,
-	)
+	),
+
+		scanCapabilityProviderViolations)
+
 	Report(t, capFunnelRuleID, diags)
 }
 
@@ -133,7 +135,8 @@ func scanCapabilityProviderViolations(p *Pass) []Diagnostic {
 				Message: fmt.Sprintf(
 					"%s.%s is shared infrastructure and may only be constructed in %s; "+
 						"cell modules must consume the injected capability.PGProvider / capability.RedisProvider",
-					shortPkg(pkgPath), name, capWiringRel),
+					shortPkg(pkgPath), name, capWiringRel,
+				),
 			})
 		})
 	}
@@ -155,11 +158,13 @@ func shortPkg(pkgPath string) string {
 // Coverage: 3 PG qualified (NewPool/NewTxManager/NewOutboxWriter) + 1 redis
 // qualified (NewClient) + 1 aliased (NewPool) + 1 dot-import (NewTxManager) = 6.
 func TestCapabilityProviderFunnel_RedFixtureDetected(t *testing.T) {
-	diags := RunTypedFixture(t,
+	diags := Run(t, Fixture(
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/capfunnelfixture/..."},
-		scanCapabilityProviderViolations,
-	)
+	),
+
+		scanCapabilityProviderViolations)
+
 	for _, d := range diags {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}

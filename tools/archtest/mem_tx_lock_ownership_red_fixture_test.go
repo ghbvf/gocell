@@ -32,11 +32,12 @@ func TestMemTxLockOwnership01_FixturePattern(t *testing.T) {
 	fixturePkgPath := modPath + "/tools/archtest/internal/memtxlockfixture"
 	fixturePattern := "./tools/archtest/internal/memtxlockfixture/..."
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != fixturePkgPath {
-				return nil // skip the txlock sub-package; scan the lease consumer
+				return nil
 			}
 			return scanMemTxLockWitness(p)
 		})

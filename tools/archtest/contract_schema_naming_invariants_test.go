@@ -140,7 +140,8 @@ func TestArchtest_ContractWireFieldCamelCase(t *testing.T) {
 
 		violations := walkForCamelCase(doc, "")
 		for _, v := range violations {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"CONTRACT-WIRE-FIELD-CAMELCASE-01 violation",
 				"file=%s path=%s property=%q does not match camelCase pattern %q",
 				cc.Rel, v.containerPath, v.name, camelCasePropertyRE.String(),
@@ -389,7 +390,8 @@ type httpContractYAML struct {
 //     (c) canonical names (limit, cursor) are accepted without violation.
 func TestArchtest_ContractPaginationParamLimit(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, contractRoots(t, root, "http"),
+	scope := scanner.DirsScope(
+		root, contractRoots(t, root, "http"),
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),
@@ -401,7 +403,8 @@ func TestArchtest_ContractPaginationParamLimit(t *testing.T) {
 
 		for name := range doc.Endpoints.HTTP.QueryParams {
 			if _, forbidden := forbiddenPaginationParams[name]; forbidden {
-				assert.Fail(t,
+				assert.Fail(
+					t,
 					"CONTRACT-PAGINATION-PARAM-LIMIT-01 violation",
 					"file=%s queryParam=%q is a forbidden pagination name; use cursor+limit",
 					cc.Rel, name,
@@ -514,7 +517,8 @@ type eventContractYAML struct {
 //     (c) canonical value "eventId" is accepted without violation.
 func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, contractRoots(t, root, "event"),
+	scope := scanner.DirsScope(
+		root, contractRoots(t, root, "event"),
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),
@@ -524,7 +528,8 @@ func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 		require.NoError(t, yaml.Unmarshal(cc.Bytes, &doc),
 			"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01: %s: parse YAML", cc.Rel)
 
-		assert.Equal(t, canonicalEventIdempotencyKey, doc.IdempotencyKey,
+		assert.Equal(
+			t, canonicalEventIdempotencyKey, doc.IdempotencyKey,
 			"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 violation: file=%s idempotencyKey=%q must be %q",
 			cc.Rel, doc.IdempotencyKey, canonicalEventIdempotencyKey,
 		)
@@ -632,7 +637,8 @@ type httpLimitContractYAML struct {
 //   - The 3 negative probes pin: missing-maximum / over-bound / canonical-500.
 func TestArchtest_ContractPaginationLimitMaximum(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, contractRoots(t, root, "http"),
+	scope := scanner.DirsScope(
+		root, contractRoots(t, root, "http"),
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),
@@ -647,14 +653,16 @@ func TestArchtest_ContractPaginationLimitMaximum(t *testing.T) {
 			return
 		}
 		if limit.Maximum == nil {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"CONTRACT-PAGINATION-LIMIT-MAXIMUM-01 violation",
 				"file=%s queryParam=limit must declare maximum<=%d", cc.Rel, MaxPaginationLimit,
 			)
 			return
 		}
 		if *limit.Maximum > MaxPaginationLimit {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"CONTRACT-PAGINATION-LIMIT-MAXIMUM-01 violation",
 				"file=%s queryParam=limit maximum=%d exceeds bound %d",
 				cc.Rel, *limit.Maximum, MaxPaginationLimit,
@@ -749,7 +757,8 @@ endpoints:
 func TestArchtest_ContractRoots_CoversAllExampleProjects(t *testing.T) {
 	root := findModuleRoot(t)
 
-	scope := scanner.DirsScope(root, []string{"examples"},
+	scope := scanner.DirsScope(
+		root, []string{"examples"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml" &&
 				strings.Contains(filepath.ToSlash(rel), "/contracts/")

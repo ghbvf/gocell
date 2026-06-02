@@ -133,7 +133,7 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 	}
 
 	hits := 0
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			hits++
 			rel := p.Rel(f)
@@ -163,6 +163,7 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 		}
 		return nil
 	})
+
 	if hits == 0 {
 		t.Fatal("OUTBOX-MARK-RETURNS-BOOL-01: no runtime/outbox/relay*.go files found")
 	}
@@ -1057,7 +1058,7 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 	}
 
 	var violations []outboxTopicViolation
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -1271,7 +1272,7 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 			t.Parallel()
 
 			var violations []outboxTopicViolation
-			_ = RunTypedDir(t, fixturesRoot, TypedOpts{}, []string{c.pattern}, func(p *Pass) []Diagnostic {
+			_ = Run(t, StandaloneModule(fixturesRoot, TypedOpts{}, []string{c.pattern}), func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil || p.Fset == nil {
 					return nil
 				}
@@ -1646,7 +1647,7 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // Test files (_test.go) are excluded by tests=false in
 // typeseval.SharedResolver; vendor/, testdata/ are skipped by go list
 // module-load defaults; generated/ is excluded at the package level by
-// RunTypedProduction (NOT by go list — `go list ./...` does include
+// Run(t, Production(...)) (NOT by go list — `go list ./...` does include
 // generated/contracts/.../v1 packages; the production-package partition
 // drops them, so no per-file path filter is needed here. Closes PR445-FU
 // finding F4).
@@ -1674,16 +1675,13 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
 
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			// Explicit kernel-internal allowlist remains in force; the
-			// production-package partition has already filtered codegen
-			// output at the package level (via RunTypedProduction), so
-			// no per-file generated/ skip is needed here.
+
 			if _, ok := handleResultLiteralAllowlist[rel]; ok {
 				continue
 			}
@@ -1706,22 +1704,22 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 // the load-vs-skip decision contract for the HandleResult factory rule.
 //
 // Anchor (informational, not a TDD RED): documents that the default resolver
-// `typeseval.SharedResolver(root, false, nil, "./...")` — the one behind plain
-// RunTyped — DOES load generated/ packages. That is exactly why the production
-// rule above uses RunTypedProduction, whose package-level partition drops
-// generated/ so no per-file skip is needed there.
+// `typeseval.SharedResolver(root, false, nil, "./...")` — the one behind a plain
+// Run(t, Typed(...)) — DOES load generated/ packages. That is exactly why the
+// production rule above uses Run(t, Production(...)), whose package-level
+// partition drops generated/ so no per-file skip is needed there.
 //
-// The anchor counts the generated/ files a plain RunTyped(./...) loads using
-// Pass.IsGenerated; a non-zero count confirms both that generated/ ARE loaded
+// The anchor counts the generated/ files a plain Run(t, Typed(TypedOpts{}, []string{"./..."}))
+// loads using Pass.IsGenerated; a non-zero count confirms both that generated/ ARE loaded
 // and that Pass.IsGenerated still recognizes them. If it ever drops to zero, the
-// premise behind RunTypedProduction's generated/ exclusion is invalid and must
+// premise behind the Production scope's generated/ exclusion is invalid and must
 // be re-examined (a packages.Load default change or a tags filter could silently
 // mask it).
 func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
 	t.Parallel()
 
 	var generatedFiles []string
-	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -1734,12 +1732,12 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 	})
 
 	if len(generatedFiles) == 0 {
-		t.Fatalf("anchor invalidated: RunTyped(./...) loaded 0 generated/ files; " +
+		t.Fatalf("anchor invalidated: Run(t, Typed(./...)) loaded 0 generated/ files; " +
 			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
 			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
-			"before changing generated-path handling in Pass.IsGenerated / RunTypedProduction")
+			"before changing generated-path handling in Pass.IsGenerated / the Production scope")
 	}
-	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — RunTypedProduction excludes them; "+
+	t.Logf("anchor: Run(t, Typed(./...)) loaded %d generated/ files — Run(t, Production(...)) excludes them; "+
 		"Pass.IsGenerated recognizes them", len(generatedFiles))
 }
 
@@ -1852,8 +1850,9 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 		return named.Obj().Pkg().Path() == outboxPkgPath
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: true},
-		[]string{outboxtestPattern},
+	_ = Run(t, Typed(TypedOpts{Tests: true},
+		[]string{outboxtestPattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -1869,7 +1868,7 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 					if !ok || !isSubscriberCloseMethod(fn) {
 						return
 					}
-					// This is a Subscriber.Close call — it must be inside closeWithBudget.
+
 					holder := enclosingFuncName(file, call.Pos())
 					if holder == sanctionedHolder {
 						return
@@ -1912,8 +1911,9 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 	}
 	var violations []violation
 
-	_ = RunTyped(t, TypedOpts{Tests: true},
-		[]string{outboxtestPattern},
+	_ = Run(t, Typed(TypedOpts{Tests: true},
+		[]string{outboxtestPattern}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -1921,7 +1921,6 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
 
-				// Collect all SelectorExpr positions that are in CallExpr.Fun position.
 				callFunPositions := map[ast.Node]bool{}
 				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
@@ -1929,15 +1928,12 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 					}
 				})
 
-				// Blind spot 1: SelectorExpr with Sel.Name == "Close" that is NOT
-				// in a CallExpr.Fun position — potential method-value assignment.
-				// Soft (name-only); typed-resolver upgrade tracked in #1118.
 				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 					if sel.Sel == nil || sel.Sel.Name != "Close" {
 						return
 					}
 					if callFunPositions[sel] {
-						return // legitimate direct call already covered by the main rule
+						return
 					}
 					violations = append(violations, violation{
 						rel:  rel,
@@ -1946,7 +1942,6 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 					})
 				})
 
-				// Blind spot 2: reflect.MethodByName("Close")
 				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
 					func(n string) bool { return n == "Close" }) {
 					violations = append(violations, violation{

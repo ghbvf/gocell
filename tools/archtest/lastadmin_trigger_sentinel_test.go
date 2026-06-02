@@ -189,7 +189,7 @@ const (
 // migration (Ory-style), which needs an integration DB this static rule omits.
 //
 // Blind-spot self-check (AI-robust §盲区自检): the chosen helpers are
-// RunTypedProduction + EvaluateConstString (Go side) and EachContentFile (SQL
+// Run(t, Production(...)) + EvaluateConstString (Go side) and EachContentFile (SQL
 // side). Forms outside their declared scope, and how each is covered:
 //
 //   - const re-declared as `var`, or in a 2nd file/spec → declCount != 1 fails
@@ -230,7 +230,8 @@ func TestLastadminTriggerSentinelConstSQLMatch01(t *testing.T) {
 	// have the `sentinel+":"` prefix. Bound to the extracted RAISE literal (not a
 	// whole-file substring) so comment/identifier residue cannot mask drift. ──
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{lastAdminMigrationsDir},
+	scope := scanner.DirsScope(
+		root, []string{lastAdminMigrationsDir},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.ToSlash(filepath.Dir(rel)) == lastAdminMigrationsDir
 		}),
@@ -313,7 +314,7 @@ func TestLastadminTriggerSentinelConstSQLMatch01_SelfCheck(t *testing.T) {
 // lastAdminSentinelConstRel) is the self-check that catches a silent rename/move.
 func resolveLastAdminSentinel(t *testing.T) (value string, declCount int) {
 	t.Helper()
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != lastAdminSentinelConstPkg {
 			return nil
 		}
@@ -342,5 +343,6 @@ func resolveLastAdminSentinel(t *testing.T) (value string, declCount int) {
 		}
 		return nil
 	})
+
 	return value, declCount
 }

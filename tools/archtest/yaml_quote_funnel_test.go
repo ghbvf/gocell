@@ -46,7 +46,7 @@ func TestYAMLQuoteFunnel_DetectsViolation(t *testing.T) {
 	var diags []Diagnostic
 	found := false
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/yamlsafe/"},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/yamlsafe/"}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != yamlsafePkgPath {
 				return nil
@@ -82,8 +82,9 @@ func TestYAMLQuoteFunnel_DetectsAliasBypass(t *testing.T) {
 	var diags []Diagnostic
 	found := false
 
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/yamlquotefixture/"},
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/yamlquotefixture/"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != yamlquotefixturePkgPath {
 				return nil
@@ -129,8 +130,9 @@ func TestYAMLQuoteFunnel_DetectsLiteralBypass(t *testing.T) {
 	var diags []Diagnostic
 	found := false
 
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/yamlquotefixture/"},
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/yamlquotefixture/"}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != yamlquotefixturePkgPath {
 				return nil

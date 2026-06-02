@@ -78,7 +78,7 @@ func TestDistlockLockNotContext01(t *testing.T) {
 		implements    bool
 	)
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/distlock/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != distlockPkgPath {
 				return nil
@@ -99,11 +99,6 @@ func TestDistlockLockNotContext01(t *testing.T) {
 			}
 			foundCtxIface = true
 
-			// Hard check: neither Lock nor *Lock may implement context.Context.
-			// If either does, Lock has accidentally grown Deadline()/Err()
-			// methods (or context.Context itself shrank) — either way, the
-			// type-system defense against caller misuse has been weakened.
-			// ImplementsInterface checks the value-or-pointer method set.
 			implements = typesutil.ImplementsInterface(lockType, ctxIface)
 			return nil
 		})

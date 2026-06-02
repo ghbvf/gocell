@@ -108,7 +108,7 @@ func testCMDFixFieldNegativeFixtures(t *testing.T) {
 		tc := tc
 		t.Run(tc.shape, func(t *testing.T) {
 			var violations []string
-			RunTypedFixture(t, FixtureOpts{Tests: false}, []string{tc.pattern},
+			Run(t, Fixture(FixtureOpts{Tests: false}, []string{tc.pattern}),
 				func(p *Pass) []Diagnostic {
 					consts := collectPackageStringConsts(p.Pkg.Scope())
 					for _, file := range p.Files {
@@ -130,7 +130,7 @@ func testCMDFixFieldNegativeFixtures(t *testing.T) {
 // composite literal carries a non-empty, resolvable Fix: field.
 func testCMDFixFieldProductionSource(t *testing.T) {
 	var violations []string
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./cmd/gocell/app"},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cmd/gocell/app"}),
 		func(p *Pass) []Diagnostic {
 			consts := collectPackageStringConsts(p.Pkg.Scope())
 			for _, file := range p.Files {

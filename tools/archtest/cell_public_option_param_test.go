@@ -15,7 +15,7 @@
 // by ADR 202605101900 Amendment 2026-05-12 (PR #481 / PR-S7); the previous
 // `isCellPackageRootFile` predicate is now `isCellSubtreeFile`.
 //
-// AI-robust 评级：Medium (archtest type-aware via RunTypedProduction
+// AI-robust 评级：Medium (archtest type-aware via Run(t, Production(...))
 // + types.Unalias). The kernel sealed marker is the AI-HARD primary
 // defense — it prevents writing a cell.go field typed `persistence.TxRunner`
 // and routing assignment via WrapForCell from a non-allowlisted location.
@@ -380,7 +380,7 @@ func TestCellRawInfraPublicOptionParam01_RealRepoClean(t *testing.T) {
 	t.Parallel()
 
 	var violations []rawPublicOptionViolation
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		violations = append(violations, scanPassForRawPublicOption(p, true)...)
 		return nil
 	})
@@ -407,8 +407,9 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	t.Parallel()
 
 	var violations []rawPublicOptionViolation
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/rawparamfixture"},
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/rawparamfixture"}),
+
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanPassForRawPublicOption(p, false)...)
 			return nil

@@ -31,7 +31,8 @@ import (
 // be caught here before it reaches CI.
 func TestEventPayloadSchemasUseCamelCase(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"contracts/event"},
+	scope := scanner.DirsScope(
+		root, []string{"contracts/event"},
 		scanner.MatchRels(func(rel string) bool {
 			if filepath.Base(rel) != "payload.schema.json" {
 				return false

@@ -77,12 +77,13 @@ func TestPrincipalKindExhaustiveSwitch01(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
 		return scanPrincipalKindSwitches(p)
 	})
+
 	Report(t, "PRINCIPAL-KIND-EXHAUSTIVE-SWITCH-01", diags)
 }
 
@@ -94,14 +95,16 @@ func TestPrincipalKindExhaustiveSwitch01_ReverseFixture(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/principalkindfixture/..."},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/principalkindfixture/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() {
 				return nil
 			}
 			return scanPrincipalKindSwitches(p)
 		})
+
 	require.NotEmpty(t, diags,
 		"non-exhaustive PrincipalKind switch in the fixture must be flagged; "+
 			"an empty result means the scanner regressed (vacuous pass)")
@@ -123,14 +126,16 @@ func TestPrincipalKindExhaustiveSwitch01_IfChainNotScanned(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/principalkindifchainfixture/..."},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/principalkindifchainfixture/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() {
 				return nil
 			}
 			return scanPrincipalKindSwitches(p)
 		})
+
 	assert.Empty(t, diags,
 		"if/else-if chains over PrincipalKind are out of scope and must not be flagged")
 }
@@ -177,7 +182,8 @@ func scanPrincipalKindSwitches(p *Pass) []Diagnostic {
 						"case(s) for %s. A default clause does NOT excuse a missing enum constant — "+
 						"add the case so a newly-added kind (e.g. PrincipalDevice) forces a conscious "+
 						"branch at every switch.",
-					principalKindPkgPath, principalKindTypeName, strings.Join(missing, ", ")),
+					principalKindPkgPath, principalKindTypeName, strings.Join(missing, ", "),
+				),
 			})
 		})
 	}

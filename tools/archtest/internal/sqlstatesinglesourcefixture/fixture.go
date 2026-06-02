@@ -6,7 +6,7 @@
 //
 // Gated by the archtest_fixture build tag; production builds never see this
 // package. Loaded by TestSQLStateSingleSource_RedFixtureDetected via
-// archtest.RunTypedFixture.
+// Run(t, Fixture(...)).
 //
 // # RED cases (must each produce exactly one diagnostic)
 //

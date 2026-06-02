@@ -167,34 +167,37 @@ func canonicalOSWriteCall(info *types.Info, call *ast.CallExpr) string {
 func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t, TypedOpts{}, []string{
+	diags := Run(t, Typed(TypedOpts{}, []string{
 		"./tools/codegen/...",
 		"./kernel/assembly/...",
 		"./cmd/gocell/app/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if !scaffoldFunnelPred(rel) {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				name := canonicalOSWriteCall(p.TypesInfo, call)
-				if name == "" {
-					return
+			var out []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if !scaffoldFunnelPred(rel) {
+					continue
 				}
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: p.Fset.Position(call.Pos()).Line,
-					Message: "SCAFFOLD-WRITE-FUNNEL-01: direct os." + name +
-						" call — must funnel through pkg/pathsafe.WritePlannedFiles",
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					name := canonicalOSWriteCall(p.TypesInfo, call)
+					if name == "" {
+						return
+					}
+					out = append(out, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(call.Pos()).Line,
+						Message: "SCAFFOLD-WRITE-FUNNEL-01: direct os." + name +
+							" call — must funnel through pkg/pathsafe.WritePlannedFiles",
+					})
 				})
-			})
-		}
-		return out
-	})
+			}
+			return out
+		})
+
 	Report(t, "SCAFFOLD-WRITE-FUNNEL-01", diags)
 }

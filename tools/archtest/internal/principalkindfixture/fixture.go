@@ -9,7 +9,7 @@
 // editing this real, type-checked source — not a hand-crafted AST.
 //
 // Loaded as a real Go package via packages.Load with the archtest_fixture build
-// tag (RunTypedFixture); the tag keeps it out of every production scan and
+// tag (Run(t, Fixture(...))); the tag keeps it out of every production scan and
 // `go build ./...`.
 //
 // DO NOT use this package in production code.

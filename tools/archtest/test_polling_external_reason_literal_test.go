@@ -208,7 +208,7 @@ func shouldSkipForTestwaitExternal(rel string) bool {
 // module-wide. Scans both production and test sources (Tests: true) because
 // testwait.External is a test-helper API whose callers live in *_test.go.
 //
-// Tool: archtest.RunTyped + *types.Info callee resolution + go/ast literal
+// Tool: Run(t, Typed(...)) + *types.Info callee resolution + go/ast literal
 // shape check. This is the typed-marker funnel downstream lock; the upstream
 // lock (ban bare require.Eventually / assert.Eventually) lives in sibling
 // archtest TEST-EVENTUALLY-FUNNEL-01 (test_eventually_funnel_test.go).
@@ -259,8 +259,8 @@ func TestExternalReasonLiteral(t *testing.T) {
 	// catches reverse build directives; Load 2 (FlatNonDefaultTags) catches all
 	// forward-tagged files in one union. Test-variant load (Tests:true) included
 	// in both so *_test.go callers of testwait.External are scanned.
-	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true}, []string{"./..."}), scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}), scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -316,7 +316,7 @@ func TestExternalReasonLiteralFixtures(t *testing.T) {
 
 			fixturePattern := "./tools/archtest/testdata/testwait_external_fixtures/" + dir
 
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{fixturePattern},
+			diags := Run(t, Fixture(FixtureOpts{}, []string{fixturePattern}),
 				func(p *Pass) []Diagnostic {
 					if p.TypesInfo == nil || p.Fset == nil {
 						return nil
@@ -417,8 +417,8 @@ func TestExternalReasonLiteral_NoIndirectReferences(t *testing.T) {
 		return nil
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true}, []string{"./..."}), scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}), scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -472,7 +472,7 @@ func TestExternalReasonLiteral_NoIndirectReferences_Fixtures(t *testing.T) {
 
 			fixturePattern := "./tools/archtest/testdata/testwait_external_fixtures/" + dir
 
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{fixturePattern},
+			diags := Run(t, Fixture(FixtureOpts{}, []string{fixturePattern}),
 				func(p *Pass) []Diagnostic {
 					if p.TypesInfo == nil || p.Fset == nil {
 						return nil
@@ -481,8 +481,6 @@ func TestExternalReasonLiteral_NoIndirectReferences_Fixtures(t *testing.T) {
 					for _, file := range p.Files {
 						rel := p.Rel(file)
 
-						// Pass 1: gather CallExpr.Fun positions whose Fun resolves to
-						// testwait.External (these are the legal direct-call sites).
 						legalCallFun := make(map[*ast.Ident]struct{})
 						EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 							sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -495,8 +493,6 @@ func TestExternalReasonLiteral_NoIndirectReferences_Fixtures(t *testing.T) {
 							legalCallFun[sel.Sel] = struct{}{}
 						})
 
-						// Pass 2: every Ident in types.Info.Uses pointing at External
-						// must be in legalCallFun; otherwise it's an indirect reference.
 						for ident, obj := range p.TypesInfo.Uses {
 							if ident == nil || obj == nil {
 								continue
@@ -504,7 +500,7 @@ func TestExternalReasonLiteral_NoIndirectReferences_Fixtures(t *testing.T) {
 							if !isExternalIdentObj(obj) {
 								continue
 							}
-							// Ensure this ident belongs to the current file.
+
 							identFile := p.Fset.Position(ident.Pos()).Filename
 							absFile := p.Abs(file)
 							if identFile != absFile {
@@ -522,7 +518,7 @@ func TestExternalReasonLiteral_NoIndirectReferences_Fixtures(t *testing.T) {
 							})
 						}
 					}
-					// Sort for deterministic golden output.
+
 					sort.Slice(out, func(i, j int) bool {
 						if out[i].Rel != out[j].Rel {
 							return out[i].Rel < out[j].Rel

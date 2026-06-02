@@ -64,8 +64,9 @@ func TestMQTTConnectDeadlineDecoupled01(t *testing.T) {
 	var openFD *ast.FuncDecl
 	var info *types.Info
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttPkgPath}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil

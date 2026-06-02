@@ -105,23 +105,25 @@ func TestSessionRevokedFieldAccess_Upstream_01(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/...",
 		"./runtime/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isRevokedAtReaderAllowlisted(rel) {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
 			}
-			violations = append(violations, scanRevokedAtReads(p, file, rel)...)
-		}
-		return nil
-	})
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if isRevokedAtReaderAllowlisted(rel) {
+					continue
+				}
+				violations = append(violations, scanRevokedAtReads(p, file, rel)...)
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -185,7 +187,7 @@ func scanRevokedAtReads(p *Pass, file *ast.File, rel string) []string {
 func verifyRevokedAtReadRedFixtureDetected(t *testing.T, pattern, label string) {
 	t.Helper()
 	var found int
-	_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -194,6 +196,7 @@ func verifyRevokedAtReadRedFixtureDetected(t *testing.T, pattern, label string) 
 		}
 		return nil
 	})
+
 	assert.GreaterOrEqual(t, found, 1,
 		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
 			"Check that the fixture reads session.{Session,ValidateView}.RevokedAt "+
@@ -211,30 +214,32 @@ func TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/...",
 		"./runtime/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
+					func(n string) bool { return n == credRevokedAt }) {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: SESSION-REVOKED-FIELD-ACCESS-01: reflect.FieldByName(%q) blind spot "+
+							"detected — archtest cannot see reflect-based field reads",
+						rel, hit.Line, hit.Name,
+					))
+				}
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
-				func(n string) bool { return n == credRevokedAt }) {
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: SESSION-REVOKED-FIELD-ACCESS-01: reflect.FieldByName(%q) blind spot "+
-						"detected — archtest cannot see reflect-based field reads",
-					rel, hit.Line, hit.Name,
-				))
-			}
-		}
-		return nil
-	})
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -256,36 +261,38 @@ func TestSessionRevokedFieldAccess_BlindSpot_UnsafePointerImport(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.Fset == nil {
+				return nil
 			}
-			for _, imp := range file.Imports {
-				if imp.Path == nil {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				impPath := strings.Trim(imp.Path.Value, `"`)
-				if impPath == "unsafe" {
-					line := p.Fset.Position(imp.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: imports \"unsafe\" — potential offset read of "+
-							"session.{Session,ValidateView}.RevokedAt could bypass "+
-							"SESSION-REVOKED-FIELD-ACCESS-01",
-						rel, line,
-					))
+				for _, imp := range file.Imports {
+					if imp.Path == nil {
+						continue
+					}
+					impPath := strings.Trim(imp.Path.Value, `"`)
+					if impPath == "unsafe" {
+						line := p.Fset.Position(imp.Pos()).Line
+						violations = append(violations, fmt.Sprintf(
+							"%s:%d: imports \"unsafe\" — potential offset read of "+
+								"session.{Session,ValidateView}.RevokedAt could bypass "+
+								"SESSION-REVOKED-FIELD-ACCESS-01",
+							rel, line,
+						))
+					}
 				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {

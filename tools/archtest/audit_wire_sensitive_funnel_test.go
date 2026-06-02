@@ -119,7 +119,7 @@ func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
 	scope := DirsScope(root, []string{"tools/codegen/contractgen"})
 
 	coveredRoles := map[string]bool{}
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
@@ -158,6 +158,7 @@ func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01", diags)
 
 	for role := range auditFunnelRequiredRoles {
@@ -196,7 +197,7 @@ func TestAuditWireFunnel_NoSelectorShadow(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"tools/codegen/contractgen"})
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
@@ -212,6 +213,7 @@ func TestAuditWireFunnel_NoSelectorShadow(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01", diags)
 }
 
@@ -229,7 +231,8 @@ type auditContractMeta struct {
 func TestAuditWireFunnel_ScopeCompleteness(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"contracts"},
+	scope := scanner.DirsScope(
+		root, []string{"contracts"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),

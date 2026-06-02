@@ -175,7 +175,7 @@ func TestArchtest_GRPCInterceptorChainOrder(t *testing.T) {
 	}
 
 	found := false
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
 			return nil
 		}
@@ -198,7 +198,8 @@ func TestArchtest_GRPCInterceptorChainOrder(t *testing.T) {
 								"RequestID→Tracing→Metrics→Auth→Recovery (RequestID outermost, Recovery "+
 								"innermost), each resolved to a runtime/grpc/interceptor constructor; got %v. "+
 								"See runtime/grpc/interceptor package doc.",
-							got),
+							got,
+						),
 					})
 				}
 			})
@@ -286,7 +287,7 @@ func equalStrings(a, b []string) bool {
 // EXACTLY ONE grpc.ChainUnaryInterceptor call, so the order scan above covers
 // the sole composition site within the package. A second composition elsewhere
 // in the package could install a differently-ordered chain that the order scan's
-// single read misses. Resolution is via go/types (RunTypedProduction), not raw
+// single read misses. Resolution is via go/types (Run(t, Production(...))), not raw
 // file parsing, to stay within the archtest framework (SCANNER-FRAMEWORK-USAGE).
 func TestArchtest_GRPCInterceptorChainOrder_BlindSpot_SingleCompositionSite(t *testing.T) {
 	t.Parallel()
@@ -295,7 +296,7 @@ func TestArchtest_GRPCInterceptorChainOrder_BlindSpot_SingleCompositionSite(t *t
 	}
 
 	var locations []string
-	RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
 			return nil
 		}
@@ -333,7 +334,7 @@ func TestArchtest_GRPCInterceptorChainOrder_BlindSpot_ArgsResolveToConstructors(
 
 	var violations []string
 	found := false
-	RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
 			return nil
 		}
@@ -379,7 +380,7 @@ func TestArchtest_GRPCChainUnaryInterceptorCaller01(t *testing.T) {
 
 	observed := map[string]struct{}{}
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
@@ -403,7 +404,8 @@ func TestArchtest_GRPCChainUnaryInterceptorCaller01(t *testing.T) {
 								"interceptor assembly through NewUnaryChain. If this IS a new sanctioned composition "+
 								"site, add it to chainUnaryInterceptorCallerAllowlist with rationale and extend "+
 								"ORDER-01 to cover it.",
-							rel),
+							rel,
+						),
 					})
 				}
 			})
@@ -421,7 +423,8 @@ func TestArchtest_GRPCChainUnaryInterceptorCaller01(t *testing.T) {
 						"grpc.ChainUnaryInterceptor reference observed. Either the scanner regressed or the "+
 						"composition site moved; drop or update the dead allowlist entry so it cannot become a "+
 						"silent bypass slot.",
-					f),
+					f,
+				),
 			})
 		}
 	}

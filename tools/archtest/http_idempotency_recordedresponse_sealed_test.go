@@ -197,8 +197,8 @@ func TestRecordedResponseSealedConstruction01_SoleReconstructionSurface(t *testi
 	}
 
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/http/idempotency/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/http/idempotency/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != httpIdempotencyPkgPath {
 				return nil
@@ -266,8 +266,8 @@ func TestRecordedResponseSealedConstruction01_NoNewPkgLevelConstructor(t *testin
 	// explicit about the B3 scope. We assert the same set — any deviation means
 	// either a new constructor appeared or SoleReconstructionSurface diverged.
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/http/idempotency/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/http/idempotency/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != httpIdempotencyPkgPath {
 				return nil

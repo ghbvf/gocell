@@ -6,7 +6,7 @@
 // classifyResolvedJournalType's types.Unalias path — on Go 1.23+ (gotypesalias=1)
 // the alias materializes as *types.Alias, so without types.Unalias the seal's
 // *types.Named assertion fails and the alias holder silently evades the rule.
-// Loaded only via RunTypedFixture.
+// Loaded only via Run(t, Fixture(...)).
 package aliasholder
 
 import "github.com/ghbvf/gocell/kernel/saga/journal"

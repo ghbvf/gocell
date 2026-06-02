@@ -140,7 +140,8 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 			continue
 		}
 		structName := cell.GoStructName.String()
-		scope := DirsScope(root, []string{dirRel},
+		scope := DirsScope(
+			root, []string{dirRel},
 			MatchRels(func(rel string) bool {
 				if filepath.ToSlash(filepath.Dir(rel)) != dirRel {
 					return false
@@ -148,7 +149,7 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 				return filepath.Base(rel) != "cell_gen.go"
 			}),
 		)
-		Run(t, scope, func(p *Pass) []Diagnostic {
+		Run(t, AST(scope), func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				abs := p.Fset.Position(file.Pos()).Filename
 				if hasInitMethod(t, abs, structName) {
@@ -226,7 +227,8 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 	t.Run("marker_present", func(t *testing.T) {
 		t.Parallel()
 		root := findModuleRoot(t)
-		scope := DirsScope(root,
+		scope := DirsScope(
+			root,
 			[]string{"tools/archtest/testdata/codegen_cell_gen_fixtures/marker_present"},
 			IncludeTestdata(),
 		)
@@ -391,7 +393,7 @@ func detectUserFilesUnderGeneratedContracts(t *testing.T, root, dirRel string) [
 	t.Helper()
 	scope := DirsScope(root, []string{dirRel}, IncludeTests())
 	var userFiles []string
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			abs := p.Fset.Position(file.Pos()).Filename
 			if strings.HasSuffix(abs, "_gen.go") {
@@ -401,6 +403,7 @@ func detectUserFilesUnderGeneratedContracts(t *testing.T, root, dirRel string) [
 		}
 		return nil
 	})
+
 	return userFiles
 }
 
@@ -698,7 +701,8 @@ func TestNoWireFieldsInYaml01(t *testing.T) {
 					"NO-WIRE-FIELDS-IN-YAML-01: %s declares `%s:` — routes are owned by cell.go "+
 						"// +slice:route markers; subscriptions are single-sourced from slice.yaml "+
 						"contractUsages[role=subscribe]; remove the legacy field",
-					filepath.ToSlash(rel), key)
+					filepath.ToSlash(rel), key,
+				)
 			}
 		}
 	}
@@ -773,7 +777,8 @@ func TestMarkerWireSingleSource01(t *testing.T) {
 			t.Errorf(
 				"MARKER-WIRE-SINGLE-SOURCE-01: %s (cell %q) is K#04 opted-in with reg.RouteGroup in cell_gen.go but declares no "+
 					"`// +cell:listener` marker — wire is single-sourced via markers after K#05",
-				filepath.ToSlash(rel), c.ID)
+				filepath.ToSlash(rel), c.ID,
+			)
 		}
 	}
 }
@@ -958,7 +963,7 @@ func checkInitInternalHook(t *testing.T, root, dirRel, structName string) []stri
 	found := false
 	var violations []string
 
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			path := p.Rel(file)
 			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
@@ -1290,7 +1295,8 @@ func findAllCellInitFiles(t *testing.T, root string) []string {
 	var files []string
 	for _, c := range project.Cells {
 		cellDirRel := filepath.ToSlash(filepath.Dir(c.File))
-		scope := DirsScope(root, []string{cellDirRel},
+		scope := DirsScope(
+			root, []string{cellDirRel},
 			MatchRels(func(rel string) bool {
 				if filepath.ToSlash(filepath.Dir(rel)) != cellDirRel {
 					return false

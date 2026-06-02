@@ -24,7 +24,7 @@ func _(file *ast.File) bool {
 	scanner.EachInSubtree[ast.CallExpr](
 		// arg[0]: result of calling an inline FuncLit (FuncLit grandchild
 		// at depth=2 of outer CallExpr — outside FindFirstChild depth=1).
-		(func() ast.Node { return file })(),
+		func() ast.Node { return file }(),
 		// arg[1]: inline FuncLit callback with the standard sentinel idiom.
 		func(call *ast.CallExpr) {
 			if found {

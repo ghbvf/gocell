@@ -17,7 +17,7 @@
 // The build tag excludes this package from `go build ./...` and `go test
 // ./...` so it never pollutes real-repo scans. It is loaded explicitly by
 // TestSecurityDefaults/SEC-FAIL-CLOSED-10_fixture_catches_primary_without_health
-// via archtest.RunTypedFixture.
+// via Run(t, archtest.Fixture(...)).
 //
 // AI co-authors who modify this fixture MUST keep it `package main`, keep exactly
 // one reference to cell.PrimaryListener, and keep ZERO references to

@@ -175,7 +175,7 @@ func TestReconcileResultLabelValuesFrozen01(t *testing.T) {
 	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
 	var gotValues []string
 
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != reconcilePkg {
 			return nil
 		}
@@ -271,13 +271,14 @@ func TestReconcileResultLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
 
 	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
 	var allDiags []Diagnostic
-	RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != reconcilePkg {
 			return nil
 		}
 		allDiags = append(allDiags, scanRecordResultCallsites(p)...)
 		return nil
 	})
+
 	Report(t, "RECONCILE-RESULT-LABEL-VALUES-FROZEN-01", allDiags)
 }
 
@@ -325,7 +326,7 @@ func TestReconcileResultLabelValuesFrozen01_CallsiteGuard_Fixtures(t *testing.T)
 		t.Run(c.dir, func(t *testing.T) {
 			t.Parallel()
 			pattern := "./tools/archtest/testdata/reconcile_result_callsite_fixtures/" + c.dir
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanRecordResultCallsites)
+			diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), scanRecordResultCallsites)
 			if len(diags) != c.want {
 				t.Fatalf("callsite-guard fixture %s: want %d diagnostic(s), got %d: %v",
 					c.dir, c.want, len(diags), diags)

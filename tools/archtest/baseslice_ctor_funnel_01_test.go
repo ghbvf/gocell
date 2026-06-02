@@ -22,13 +22,13 @@
 //     Exempt: `*_gen.go` files and `kernel/metadata` package itself (type tests).
 //
 // AI-robust grade: Medium (type-aware AST funnel lock, scoped to production
-// packages via RunTypedProduction). Hard-side counterpart is the deletion of
+// packages via Run(t, Production(...))). Hard-side counterpart is the deletion of
 // `cell.NewBaseSlice` plus the codegen funnel projecting slice.yaml into
 // slice_gen.go.sliceMeta — together they make the literal form unrepresentable
 // outside the funnel. This archtest pins the closure in case a future
 // contributor reintroduces NewBaseSlice or composite-literal forms.
 //
-// Scope: production packages only (RunTypedProduction). Tests (`*_test.go`)
+// Scope: production packages only (Run(t, Production(...))). Tests (`*_test.go`)
 // freely construct BaseSlice through the funnel or via test helpers; the
 // archtest does not police them. Generated files (`*_gen.go`) and the
 // kernel/metadata package itself are also exempt.
@@ -81,7 +81,7 @@ func TestBASESLICE_CTOR_FUNNEL_01(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 	})
 
@@ -227,10 +227,13 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+	diags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+		),
+
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 		},
@@ -283,10 +286,13 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+	diags := Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/basesliceredfixture/..."},
+		),
+
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 		},
@@ -313,8 +319,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
 // codebase currently has zero BASESLICE-CTOR-FUNNEL-01 violations.
 //
 // This is the canonical GREEN baseline. It is separate from
-// TestBASESLICE_CTOR_FUNNEL_01 (which uses RunTypedProduction) so the two RED
-// fixture tests above (which use RunTyped with archtest_fixture tags) share the
+// TestBASESLICE_CTOR_FUNNEL_01 (which uses Run(t, Production(...))) so the two RED
+// fixture tests above (which use Run(t, Fixture(...)) with archtest_fixture tags) share the
 // same test file and make the RED+GREEN coverage pair easy to review together.
 //
 // A pass here + a fail in the RED fixture tests above means the scanner is
@@ -328,7 +334,7 @@ func TestBASESLICE_CTOR_FUNNEL_01_GreenProduction(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 	})
 

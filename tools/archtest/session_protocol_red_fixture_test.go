@@ -39,11 +39,12 @@ import (
 // ("github.com/ghbvf/gocell/runtime/auth/session", "NewProtocol") — the
 // type-aware rule does not care about the source callee shape.
 func TestSessionProtocol_RedFixtureDetected(t *testing.T) {
-	diags := RunTypedFixture(t,
+	diags := Run(t, Fixture(
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/sessionprotocolfixture/..."},
-		scanSessionProtocolViolations,
-	)
+	),
+
+		scanSessionProtocolViolations)
 
 	for _, d := range diags {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)

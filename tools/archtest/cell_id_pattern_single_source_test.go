@@ -122,7 +122,7 @@ func bannedPatterns() map[string]struct{} {
 
 // TestCellIDPatternSingleSource enforces CELL-ID-PATTERN-SINGLE-SOURCE-01.
 //
-// Loads the production package set via RunTypedProduction (PRODUCTION-LOADER-FUNNEL-01 —
+// Loads the production package set via Run(t, Production(...)) (PRODUCTION-LOADER-FUNNEL-01 —
 // the raw SharedResolver(_, _, _, "./...") form is banned in archtest test
 // files) and walks every regexp.MustCompile family call. Records a
 // violation when the first arg is a banned string literal and the file
@@ -138,7 +138,7 @@ func TestCellIDPatternSingleSource(t *testing.T) {
 	banned := bannedPatterns()
 
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -271,7 +271,7 @@ func dedupSortedStrings(in []string) []string {
 // TestCellIDPatternSingleSourceLiterals enforces the BasicLit STRING half of
 // CELL-ID-PATTERN-SINGLE-SOURCE-01.
 //
-// Walks every .go file in the module (tests=true) via RunTypedProduction and
+// Walks every .go file in the module (tests=true) via Run(t, Production(...)) and
 // inspects every *ast.BasicLit of token.STRING. If the unquoted value equals
 // any entry in bannedPatterns(), and the file is not in the allowlist, the
 // test records a violation.
@@ -297,7 +297,7 @@ func TestCellIDPatternSingleSourceLiterals(t *testing.T) {
 	banned := bannedPatterns()
 
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if _, ok := allowFiles[rel]; ok {

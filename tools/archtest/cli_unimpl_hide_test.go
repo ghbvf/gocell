@@ -150,13 +150,13 @@ func TestCLIUnimplHide01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	diags := Run(t, DirsScope(root, []string{"cmd/gocell/app"}),
+	diags := Run(t, AST(DirsScope(root, []string{"cmd/gocell/app"})),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
 				if strings.HasSuffix(rel, "_test.go") {
-					continue // production-only invariant
+					continue
 				}
 				d = append(d, scanDispatchViaRegistry(p, f, rel)...)
 				d = append(d, scanHelpEntryNoLiteralName(p, f, rel)...)
@@ -164,6 +164,7 @@ func TestCLIUnimplHide01(t *testing.T) {
 			}
 			return d
 		})
+
 	Report(t, "CLI-UNIMPL-HIDE-01", diags)
 }
 
@@ -500,18 +501,19 @@ func TestCLITopLevelHelpRegistry01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	diags := Run(t, DirsScope(root, []string{"cmd/gocell/app"}),
+	diags := Run(t, AST(DirsScope(root, []string{"cmd/gocell/app"})),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
 				if strings.HasSuffix(rel, "_test.go") {
-					continue // production-only invariant
+					continue
 				}
 				d = append(d, scanPrintUsageDerived(p, f, rel)...)
 			}
 			return d
 		})
+
 	Report(t, "CLI-TOPLEVEL-HELP-REGISTRY-01", diags)
 }
 

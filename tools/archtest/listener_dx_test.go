@@ -66,13 +66,14 @@ func TestListenerDXA52Guard(t *testing.T) {
 	root := findModuleRoot(t)
 
 	t.Run("deleted_listener_options_not_reintroduced", func(t *testing.T) {
-		diags := Run(t, ModuleScope(root), func(p *Pass) []Diagnostic {
+		diags := Run(t, AST(ModuleScope(root)), func(p *Pass) []Diagnostic {
 			var ds []Diagnostic
 			for _, file := range p.Files {
 				ds = append(ds, oldListenerAPIIdentViolationsPass(p, file)...)
 			}
 			return ds
 		})
+
 		var violations []string
 		for _, d := range diags {
 			violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
@@ -82,7 +83,7 @@ func TestListenerDXA52Guard(t *testing.T) {
 	})
 
 	t.Run("delegated_route_surface_not_reintroduced", func(t *testing.T) {
-		diags := Run(t, ModuleScope(root), func(p *Pass) []Diagnostic {
+		diags := Run(t, AST(ModuleScope(root)), func(p *Pass) []Diagnostic {
 			var ds []Diagnostic
 			for _, file := range p.Files {
 				ds = append(ds, delegatedRouteFieldViolationsPass(p, file)...)
@@ -90,6 +91,7 @@ func TestListenerDXA52Guard(t *testing.T) {
 			}
 			return ds
 		})
+
 		var violations []string
 		for _, d := range diags {
 			violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
@@ -120,7 +122,7 @@ func TestListenerDXA52Guard(t *testing.T) {
 
 		// doc.go files and all production Go files via Run — comments need ParseComments.
 		goScope := ModuleScope(root)
-		Run(t, goScope, func(p *Pass) []Diagnostic {
+		Run(t, AST(goScope), func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)
 				isDocGo := filepath.Base(rel) == "doc.go"
@@ -237,7 +239,7 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 		root, []string{filepath.Dir(rel)},
 		MatchRels(func(r string) bool { return r == rel }),
 	)
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			if p.Rel(file) != rel {
 				continue
@@ -277,6 +279,7 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 		}
 		return nil
 	})
+
 	if !found {
 		return []string{listenerDXViolation(root, path, 1, "RouteGroup type missing")}
 	}
@@ -295,7 +298,7 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 		root, []string{filepath.Dir(rel)},
 		MatchRels(func(r string) bool { return r == rel }),
 	)
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			if p.Rel(file) != rel {
 				continue
@@ -318,6 +321,7 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 		}
 		return nil
 	})
+
 	if !found {
 		return []string{listenerDXViolation(root, path, 1, "auth.Mount function missing")}
 	}

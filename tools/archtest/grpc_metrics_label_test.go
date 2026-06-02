@@ -117,7 +117,7 @@ func TestGRPCMetricsLabelCellIDCtxSource01(t *testing.T) {
 	}
 
 	var visited bool
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg.Path() != grpcInterceptorPkgPath {
 			return nil
 		}

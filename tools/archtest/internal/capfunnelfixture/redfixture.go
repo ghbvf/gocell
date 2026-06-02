@@ -6,7 +6,7 @@
 //
 // Gated by the archtest_fixture build tag; production builds never see this
 // file. Loaded by TestCapabilityProviderFunnel_RedFixtureDetected via
-// archtest.RunTypedFixture (which injects the archtest_fixture tag).
+// Run(t, archtest.Fixture(...)) (which injects the archtest_fixture tag).
 //
 // # Forms covered
 //

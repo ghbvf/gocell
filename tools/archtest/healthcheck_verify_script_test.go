@@ -312,12 +312,14 @@ func checkHealthcheckVerifyScript(data []byte, scriptDesc string) []string {
 		diags = append(diags, fmt.Sprintf(
 			"%s (A): no `trap ... EXIT` line in %s; "+
 				"failure / SIGINT paths will leak containers",
-			ruleHealthcheckVerify01, scriptDesc))
+			ruleHealthcheckVerify01, scriptDesc,
+		))
 	case firstDockerComposeLine >= 0 && trapEXITLine > firstDockerComposeLine:
 		diags = append(diags, fmt.Sprintf(
 			"%s (A): `trap ... EXIT` at line %d is AFTER "+
 				"first `docker compose` at line %d; install trap first",
-			ruleHealthcheckVerify01, trapEXITLine+1, firstDockerComposeLine+1))
+			ruleHealthcheckVerify01, trapEXITLine+1, firstDockerComposeLine+1,
+		))
 	}
 
 	// Invariant D: the script must contain at least one literal
@@ -330,7 +332,8 @@ func checkHealthcheckVerifyScript(data []byte, scriptDesc string) []string {
 		diags = append(diags, fmt.Sprintf(
 			"%s (D): %s contains no `docker compose down` outside "+
 				"comments; the EXIT trap has no real cleanup target",
-			ruleHealthcheckVerify01, scriptDesc))
+			ruleHealthcheckVerify01, scriptDesc,
+		))
 	}
 
 	// Invariant B / C: each `docker compose up` must (B) bound `--wait`
@@ -345,7 +348,8 @@ func checkHealthcheckVerifyScript(data []byte, scriptDesc string) []string {
 				"%s (C): line %d uses bash line-continuation; "+
 					"the `docker compose up` command must stay on one "+
 					"logical line so per-line token scanning is reliable",
-				ruleHealthcheckVerify01, idx+1))
+				ruleHealthcheckVerify01, idx+1,
+			))
 			continue
 		}
 		tokens := strings.Fields(upLine)
@@ -372,12 +376,14 @@ func checkHealthcheckVerifyScript(data []byte, scriptDesc string) []string {
 				"%s (B): line %d combines `--wait` with `--timeout`; "+
 					"`--timeout` is the stop-shutdown flag, "+
 					"use `--wait-timeout` to bound `--wait` polling",
-				ruleHealthcheckVerify01, idx+1))
+				ruleHealthcheckVerify01, idx+1,
+			))
 		case hasWait && !hasWaitTimeout:
 			diags = append(diags, fmt.Sprintf(
 				"%s (B): line %d uses `--wait` without `--wait-timeout`; "+
 					"health-check wait must be bounded explicitly",
-				ruleHealthcheckVerify01, idx+1))
+				ruleHealthcheckVerify01, idx+1,
+			))
 		}
 	}
 	return diags

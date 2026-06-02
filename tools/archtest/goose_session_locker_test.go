@@ -74,7 +74,7 @@ func TestGooseSessionLocker01(t *testing.T) {
 	var violations []gooseLockerViolation
 	allowlistedHits := map[string]string{}
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/postgres/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/postgres/..."}),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)

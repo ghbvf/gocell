@@ -31,12 +31,13 @@ func TestProvisionStateAndUserSourceBootstrapRemoved(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"cells/accesscore"},
+	scope := DirsScope(
+		root, []string{"cells/accesscore"},
 		IncludeTests(),
 		ExcludeRels("tools/archtest/provision_state_removed_test.go"),
 	)
 
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			EachInSubtree[ast.Ident](file, func(ident *ast.Ident) {

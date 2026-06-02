@@ -43,7 +43,7 @@ func TestGooseSessionLocker01_Fixtures(t *testing.T) {
 	var violations []gooseLockerViolation
 	allowlistHits := map[string]string{}
 
-	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)

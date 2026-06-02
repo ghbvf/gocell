@@ -4,6 +4,8 @@
 
 Accepted — 2026-05-14. Refactor 574 is the stage-1 PR-1 implementation; stages 2 / 3 / 4 are tracked in `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.md`.
 
+**Amended 2026-06-02 (#1037 §1d)**: the five `Run*` entry points (`Run`(AST) / `RunTyped` / `RunTypedProduction` / `RunTypedDir` / `RunTypedFixture`) were collapsed into a single `Run(t, scope RunScope, rule Rule)` + a sealed `RunScope` interface with five typed constructors. The current authoritative API surface + threat-matrix re-evaluation is the **#1037 §1d amendment** subsection below; the original Decision code block and the Stage 1.6/1.7/4 narrative are retained as the historical decision record and read through that amendment.
+
 ## Context
 
 Before this ADR, GoCell's archtest framework exposed two parallel rule-authoring entry points:
@@ -35,7 +37,16 @@ func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diag
 func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
 ```
 
-Rule authors write `Rule` closures and let the driver (`Run` / `RunTyped` / `RunTypedDir`) construct `*Pass` from a single load. The framework owns `packages.Load` / `parser.ParseFile` timing; rule authors receive only `*Pass`.
+> **Superseded by the #1037 §1d amendment (2026-06-02)** — the multiple `Run*`
+> entries above were collapsed into a single `Run(t, scope RunScope, rule Rule)`
+> + a sealed `RunScope` with five typed constructors (`AST` / `Typed` /
+> `Production` / `Fixture` / `StandaloneModule`). See the amendment subsection
+> below for the current signatures and grading. The block above is retained as
+> the original (2026-05-14) decision record.
+
+Rule authors write `Rule` closures and let the driver (`Run` with its scope
+constructors) construct `*Pass` from a single load. The framework owns
+`packages.Load` / `parser.ParseFile` timing; rule authors receive only `*Pass`.
 
 **`RunTypedDir` API surface:**
 
@@ -54,7 +65,7 @@ ref: `golang.org/x/tools go/analysis/analysistest/analysistest.go` (`dir` positi
 | 1 | `Pass.Pkg` is `*types.Package` (go/types stdlib), NOT `*packages.Package` (golang.org/x/tools/go/packages) | **Hard** — type system | Author cannot reach `.Syntax` from `*Pass`; INV-1 form is not expressible at the call site. Reconstructing INV-1 requires explicitly importing `golang.org/x/tools/go/packages` and calling `packages.Load`. |
 | 2 | depguard rule `archtest-no-direct-packages-load` denies `golang.org/x/tools/go/packages` in `tools/archtest/*_test.go` (path-level import ban) | **Hard** — lint-blocking | Author must edit `.golangci.yml` to add their file to the negative-glob exemption (visible in diff, reviewer must approve). |
 | 3 | Meta-archtest `PASS-FUNNEL-EACHFILE-01` / `LOADPACKAGES-01` / `PACKAGES-IMPORT-01` re-detects bypass at test time via `*types.Info` resolution; symbol-level ban for `scanner.EachFile` / `typeseval.LoadPackages` / `typeseval.SharedResolver` plus packages-import path | **Hard** — type-aware | `typeseval.ResolvePackageRef` resolves call targets through go/types regardless of import alias / dot-import / vendor rewrites. Bypass requires editing `passFunnelPermanentExempt` (3-entry Medium funnel, mechanical sync with .golangci.yml). |
-| 4 | `RunTypedFixture` + `FixtureOpts` typed function choice with input-struct field exclusion (downstream) **AND** `PASS-FUNNEL-FIXTURE-TAG-01` `(callee, arg)`-pair type-aware ban in business `*_test.go` (upstream) **AND** unexported `fixtureBuildTag` (cross-package compile barrier) | **Hard** — funnel triple-lock (outward compile-time + upstream archtest-bound (callee, arg) form-uniqueness + cross-package type-system) | Downstream: `FixtureOpts` has no `Tags` field — `RunTypedFixture(t, FixtureOpts{Tags: ...}, ...)` is a compile error. Cross-package (#944): `fixtureBuildTag` is unexported, so a business `*_test.go` outside package `archtest` cannot feed it to a loader — a compile error (former Form D, the cross-pkg SelectorExpr `archtest.FixtureBuildTag`, is now type-system-unexpressible, not archtest-detected). Upstream: `diagsFixtureTagBypass` rejects any CallExpr whose callee resolves via `*types.Info` to a member of `fixtureTagLoaderSet` (archtest.{RunTyped, RunTypedProduction, RunTypedDir, **runTypedWithRoot**} + typeseval.{SharedResolver, LoadPackages, LoadProductionPackages}) AND any arg subtree contains an Expr whose `EvaluateConstString` result equals `"archtest_fixture"` **OR an `*ast.Ident` bound (same file) to a slice literal carrying such an Expr** — uniformly catching BasicLit literal / same-pkg const Ident / BinaryExpr const-concat / same-file var-indirection (#944). The same-package unexported `runTypedWithRoot` shared impl is in the loader set (#944) so an in-package business test cannot reach it with the tag. Isomorphic to charter §Hard 范本 第 2 条 `panic(panicregister.Approved(reason, value))` form (callee + arg pair, *types.Info-resolved, archtest-bound form-uniqueness — Go ceiling Hard). Same-package Go-code identity paths (callee NOT in loader set, e.g., `containsTag(group, fixtureBuildTag)`) remain legitimate. Same `passFunnelPermanentExempt` exempt set as defense #3 (3-entry framework files; `fixture.go` itself is excluded by the `*_test.go` suffix filter in `loadPassFunnelTargets`). Residual Medium (upstream, archtest-bound): same-file single-binding only — cross-func / cross-file var escape and multi-RHS positional binding are accepted Blind spots tracked for inter-procedural Hard upgrade (gh issue #973). |
+| 4 | `Fixture` + `FixtureOpts` typed function choice with input-struct field exclusion (downstream) **AND** `PASS-FUNNEL-FIXTURE-TAG-01` `(callee, arg)`-pair type-aware ban in business `*_test.go` (upstream) **AND** unexported `fixtureBuildTag` (cross-package compile barrier) | **Hard** — funnel triple-lock (outward compile-time + upstream archtest-bound (callee, arg) form-uniqueness + cross-package type-system) | Downstream: `FixtureOpts` has no `Tags` field — `Run(t, Fixture(FixtureOpts{Tags: ...}, ...), rule)` is a compile error. Cross-package (#944): `fixtureBuildTag` is unexported, so a business `*_test.go` outside package `archtest` cannot feed it to a loader — a compile error (former Form D, the cross-pkg SelectorExpr `archtest.FixtureBuildTag`, is now type-system-unexpressible, not archtest-detected). Upstream: `diagsFixtureTagBypass` rejects any CallExpr whose callee resolves via `*types.Info` to a member of `fixtureTagLoaderSet` (archtest.{Typed, Production, StandaloneModule, **runTypedWithRoot**} + typeseval.{SharedResolver, LoadPackages, LoadProductionPackages}; constructor members renamed by #1037 §1d) AND any arg subtree contains an Expr whose `EvaluateConstString` result equals `"archtest_fixture"` **OR an `*ast.Ident` bound (same file) to a slice literal carrying such an Expr** — uniformly catching BasicLit literal / same-pkg const Ident / BinaryExpr const-concat / same-file var-indirection (#944). The same-package unexported `runTypedWithRoot` shared impl is in the loader set (#944) so an in-package business test cannot reach it with the tag. Isomorphic to charter §Hard 范本 第 2 条 `panic(panicregister.Approved(reason, value))` form (callee + arg pair, *types.Info-resolved, archtest-bound form-uniqueness — Go ceiling Hard). Same-package Go-code identity paths (callee NOT in loader set, e.g., `containsTag(group, fixtureBuildTag)`) remain legitimate. Same `passFunnelPermanentExempt` exempt set as defense #3 (3-entry framework files; `fixture.go` itself is excluded by the `*_test.go` suffix filter in `loadPassFunnelTargets`). Residual Medium (upstream, archtest-bound): same-file single-binding only — cross-func / cross-file var escape and multi-RHS positional binding are accepted Blind spots tracked for inter-procedural Hard upgrade (gh issue #973). |
 
 Four independent failure modes: type system, lint, archtest (symbol-level), archtest ((callee, arg) form-uniqueness). Bypassing all four requires editing four independent locations in a single PR — reviewer-detectable by construction.
 
@@ -79,7 +90,7 @@ Three archtest framework files are **permanently** exempt — they form `passFun
 | File | Structural reason |
 |------|-------------------|
 | `pass_funnel_test.go` | Implements the PASS-FUNNEL meta-archtest itself; must reference the forbidden symbols. The type system cannot tell rule implementation from rule violator. |
-| `pass_test.go` | Unit-tests `archtest.Run` / `RunTyped` / `buildTypedPass` / `newPackageRel` / `isPackageWithTestFiles`; the latter three accept or construct `*packages.Package` fixtures by signature. |
+| `pass_test.go` | Unit-tests the `archtest.Run` driver (via its scope constructors) / `buildTypedPass` / `newPackageRel` / `isPackageWithTestFiles`; the latter three accept or construct `*packages.Package` fixtures by signature. |
 | `archtest_test.go` | Driver self-tests (LAYER-05..10 + PGQUERY-01) using `depgraph.FromPackages([]*packages.Package)` — this is the depgraph constructor, not a consumer archtest. Legitimate `*packages.Package` use is structurally identical to `pass_test.go`'s `buildTypedPass` input side. The `checkCellPublicAPIAdapterTypes` rule (LAYER-10) specifically requires `[]*packages.Package` to feed `tools/depgraph.FromPackages`; the Pass funnel deliberately hides `.Syntax` so the depgraph-based check is structurally inexpressible via the funnel — permanent exemption, tracked as backlog `ARCHTEST-LAYER10-PASS-MIGRATION-01`. |
 
 These files are exempt from defense #2 (depguard yaml allowlist) and are skipped by defense #3's scanner (path matching against `passFunnelPermanentExempt`).
@@ -173,6 +184,54 @@ Additionally, **`FixtureBuildTag` is unexported → `fixtureBuildTag`** (type-sy
 
 **Conclusion**: #944 strictly tightens defense #4 — one vector graduates archtest→type-system Hard (Form D via unexport), two previously-open vectors close (FlatNonDefaultTags union, runTypedWithRoot), one Blind spot closes (same-file var-binding), and the coverage self-test's by-name skip is path-bound (Medium) so item 1's `repoSkipTagAllowlist` recognition cannot itself reopen a fail-open hole for production files. The two residual ⚠️ rows (cross-func escape; loader-set maintenance) are unchanged accepted Blind spots at the same grade as the sibling rules (`diagsLoadPackages` / taggroup BS-4/BS-5), tracked for inter-procedural Hard upgrade via gh issue #973. No previously-clean row regresses. `passFunnelPermanentExempt` size unchanged.
 
+### #1037 §1d amendment — single Run + sealed RunScope (2026-06-02)
+
+The five `Run*` entry points were collapsed into one `Run(t, scope RunScope, rule Rule)` + a sealed `RunScope` interface (`isRunScope()` unexported) with five typed constructors. The driver no longer carries a build-tag parameter on its public surface at all — tags travel inside the scope value, constructed only by the framework.
+
+```go
+func Run(t testing.TB, scope RunScope, rule Rule) []Diagnostic
+
+// RunScope is sealed (unexported isRunScope()); obtain a value ONLY from:
+func AST(fs Scope) RunScope                                    // AST-only over a file-enumeration Scope
+func Typed(opts TypedOpts, patterns []string) RunScope         // typed main-module patterns
+func Production(opts TypedOpts) RunScope                        // typed main module, generated/ excluded
+func Fixture(opts FixtureOpts, patterns []string) RunScope     // typed archtest_fixture packages (tag injected by Run dispatch)
+func StandaloneModule(dir string, opts TypedOpts, patterns []string) RunScope // typed standalone fixture module
+```
+
+**Old → new mapping:**
+
+| Deleted entry | Replacement |
+|---------------|-------------|
+| `Run(t, Scope, rule)` (AST-only) | `Run(t, AST(scope), rule)` |
+| `RunTyped(t, opts, patterns, rule)` | `Run(t, Typed(opts, patterns), rule)` |
+| `RunTypedProduction(t, opts, rule)` | `Run(t, Production(opts), rule)` |
+| `RunTypedDir(t, dir, opts, patterns, rule)` | `Run(t, StandaloneModule(dir, opts, patterns), rule)` |
+| `RunTypedFixture(t, fopts, patterns, rule)` | `Run(t, Fixture(fopts, patterns), rule)` |
+
+**New enforcement:**
+
+- **`ARCHTEST-SINGLE-RUN-ENTRY-01`** (`single_run_entry_test.go`, Medium): the archtest façade exposes exactly one `Run`-prefixed export (`Run` + the external-cell `RunStandardCellRules`); any new `func Run<X>` reds CI. Go cannot forbid declaring a new exported func, so this is a Medium backstop — the Hard upstream is that the sealed-`RunScope` parameter makes the separate entries expressively unnecessary (re-adding `RunTyped` would be a no-op in what callers can express).
+- **`RUNSCOPE-CONSTRUCTOR-FUNNEL-01`** (`runscope_constructor_funnel_test.go`): composite-literal construction of the five sealed scope structs (`astRunScope` / `typedRunScope` / `productionRunScope` / `dirRunScope` / `fixtureRunScope`) is type-aware-banned outside the five sanctioned constructors. This **closes the struct-literal→`archtest_fixture` bypass that defense #4's `PASS-FUNNEL-FIXTURE-TAG-01` (CallExpr-only) does not catch**: a same-package business test could otherwise write `Run(t, typedRunScope{opts: TypedOpts{Tags: []string{"archtest_fixture"}}}, rule)`, sidestepping `Fixture`'s tag injection. It is load-bearing, not merely a grading note.
+
+**Sealed `RunScope` grade (honest double-axis):**
+
+- **Downstream / package-external: Hard** — `isRunScope()` is unexported, so no type outside package `archtest` can implement it; an external Cell repo (or any non-archtest package) cannot forge a production/fixture scope or inject a build tag into a fixture scope.
+- **In-package: Medium** — every GoCell archtest rule lives in package `archtest` (`*_test.go`), and Go package visibility cannot forbid a same-package file from constructing the unexported scope structs directly. `RUNSCOPE-CONSTRUCTOR-FUNNEL-01` is the type-aware in-package backstop. The permanent Go-language ceiling (a same-package test *can* construct the struct; Go cannot make that a compile error) is the same shape as #851 (SPAN-SETATTR-HOLDER-SEAL) / #893 (HEALTHZ-HOLDER-SEAL) / #1282 (outbox principal-write) / #1424 (slog handwritten seal). The true-Hard upgrade (scope structs + `Run` dispatch + `Pass` behind `tools/archtest/internal/driver`, re-exported via type aliases) is a deliberate won't-do tracked at **gh #1485**.
+
+**Threat matrix re-evaluation (per ai-robust.md §ADR amendment 落地必查):**
+
+| Defense | Before §1d (5 Run* entries) | After §1d (single Run + sealed RunScope) | Status change |
+|---------|------------------------------|-------------------------------------------|---------------|
+| #1 `Pass.Pkg *types.Package` (compile-time INV-1 block) | Active Hard | Unchanged — collapse does not touch `Pass` | ✅ Unchanged Hard |
+| #2 depguard `packages` import ban | Active Hard | Unchanged | ✅ Unchanged Hard |
+| #3 PASS-FUNNEL meta-archtest (symbol-level) | Active Hard | Unchanged | ✅ Unchanged Hard |
+| #4 fixture-tag funnel: public surface carries a tag parameter (`TypedOpts.Tags` reachable via `RunTyped`/`RunTypedProduction`/`RunTypedDir`) | Outward Hard + upstream archtest-bound Hard ((callee, arg) form-uniqueness over `fixtureTagLoaderSet = archtest.{RunTyped, RunTypedProduction, RunTypedDir, runTypedWithRoot} + typeseval loaders`) | **Strengthened**: `Run` carries no tag parameter (sealed `RunScope`); `fixtureTagLoaderSet` constructor members renamed to `{Typed, Production, StandaloneModule, runTypedWithRoot}` (per-member RED Forms G/H/I + E); `Fixture` (no `Tags` field) remains the only sanctioned fixture loader | ✅ Tightened — same Hard, smaller public tag surface |
+| **NEW** scope forgery / bypass via direct scope-struct literal (e.g. `typedRunScope{Tags: archtest_fixture}`) | n/a (entries were plain funcs; no struct to forge — but the *tag-bearing TypedOpts* was on the public surface) | Package-external: **Hard** (sealed `isRunScope()`). In-package: **Medium** (`RUNSCOPE-CONSTRUCTOR-FUNNEL-01` type-aware ban; Go visibility ceiling, won't-do gh #1485) | ⚠️→✅ New vector opened by sealing AND closed in the same change (downstream Hard + in-package Medium backstop) |
+| **NEW** single-Run surface drift (a new `RunTyped`-style export reappears) | n/a (5 entries were the surface) | **Medium** (`ARCHTEST-SINGLE-RUN-ENTRY-01`; Go cannot forbid a new exported func, but re-adding is expressively a no-op given the sealed scope) | ⚠️ Residual Medium, backstopped |
+
+**Conclusion**: §1d strictly tightens the funnel — the public driver surface loses its build-tag parameter entirely (tags are framework-injected inside `Fixture`), and the new `RUNSCOPE-CONSTRUCTOR-FUNNEL-01` closes the struct-literal bypass that the CallExpr-only `PASS-FUNNEL-FIXTURE-TAG-01` could not see. The two NEW rows are the honest cost of sealing: a package-external Hard guarantee plus a same-package Medium backstop (the permanent Go ceiling shared with #851/#893/#1282/#1424, won't-do tracked at gh #1485). No previously-clean defense row regresses; `passFunnelPermanentExempt` size unchanged.
+
 ## Industry precedent
 
 | Project | Pass shape | INV-1 defense |
@@ -249,10 +308,10 @@ The migration is complete when: (**All three achieved in PR #PENDING 2026-05-17.
 1. ✅ `archtestmeta.LegacyAllowlist` map is empty AND package deleted. **LegacyAllowlist emptied in PR #522 (2026-05-16); package deleted in PR #PENDING (2026-05-17). `TestArchtestmetaPackageDeleted` static reverse-lock prevents regression.**
 2. ✅ `.golangci.yml` `archtest-no-direct-packages-load.files` contains only the positive glob `**/tools/archtest/*_test.go` and the three permanent `passFunnelPermanentExempt` self-exemptions (`!**/tools/archtest/pass_funnel_test.go`, `!**/tools/archtest/pass_test.go`, `!**/tools/archtest/archtest_test.go`). The depguard `deny` list retains a single entry: `golang.org/x/tools/go/packages`. **Achieved in PR #PENDING (2026-05-17) — migration-period comment block removed.**
 3. ✅ The true end-state constraints are:
-   - (a) `archtestmeta.LegacyAllowlist` is empty and package deleted (criterion #1 above). `archtestmeta` package deleted entirely; `RunTypedFixture` typed helper supplies the build-tag literal via function-body inlining (single source for the `archtest_fixture` string; Go build directive syntax does not allow const reference).
+   - (a) `archtestmeta.LegacyAllowlist` is empty and package deleted (criterion #1 above). `archtestmeta` package deleted entirely; the `Fixture` loader — the `Run` dispatch for a `fixtureRunScope` (#1037 §1d; formerly `RunTypedFixture`) — supplies the build-tag literal via function-body inlining (single source for the `archtest_fixture` string; Go build directive syntax does not allow const reference).
    - (b) No production archtest `*_test.go` imports `golang.org/x/tools/go/packages` directly — enforced by depguard, except the three `passFunnelPermanentExempt` files.
    - (c) No production archtest `*_test.go` directly calls `scanner.EachFile` / `typeseval.LoadPackages` / `typeseval.SharedResolver` / `typeseval.LoadProductionPackages` / `typeseval.EachFileInPackage` — enforced by PASS-FUNNEL meta-archtest via `*types.Info` resolution. **Note**: direct `import` of `internal/scanner` or `internal/typeseval` for their walk/resolve helpers (`EachInSubtree`, `EachInChildren`, `ResolvePackageRef`, `EvaluateConstString`, etc.) remains **allowed** — path-level banning of these packages is NOT done (see §Why-depguard). The funnel bans specific high-risk symbols, not the package paths.
-   - (d) No production archtest `*_test.go` CallExpr resolves to a `fixtureTagLoaderSet` member (archtest.{RunTyped, RunTypedProduction, RunTypedDir} + typeseval.{SharedResolver, LoadPackages, LoadProductionPackages}) with any arg subtree containing an Expr whose `EvaluateConstString` value equals `"archtest_fixture"` — enforced by PASS-FUNNEL-FIXTURE-TAG-01 (defense #4 upstream). Catches BasicLit literal / same-pkg const Ident / cross-pkg SelectorExpr (incl. `archtest.FixtureBuildTag`) / BinaryExpr const-concat uniformly. Fixture loading uses `archtest.RunTypedFixture` (the literal is supplied inside the funnel body, single source = `archtest.FixtureBuildTag` const); Go-code tag-identity paths (callee NOT in loader set) reference `archtest.FixtureBuildTag` const. Added in PR #536 review R1 (2026-05-17), corrected to (callee, arg) pair form in same-PR R1.1 rewrite to close BasicLit-only Soft gap.
+   - (d) No production archtest `*_test.go` CallExpr resolves to a `fixtureTagLoaderSet` member (archtest.{Typed, Production, StandaloneModule, runTypedWithRoot} + typeseval.{SharedResolver, LoadPackages, LoadProductionPackages}; constructor members renamed by #1037 §1d) with any arg subtree containing an Expr whose `EvaluateConstString` value equals `"archtest_fixture"` — enforced by PASS-FUNNEL-FIXTURE-TAG-01 (defense #4 upstream). Catches BasicLit literal / same-pkg const Ident / BinaryExpr const-concat uniformly (the former cross-pkg SelectorExpr Form D `archtest.FixtureBuildTag` is now a compile error since `fixtureBuildTag` is unexported per #944, not an archtest finding). Fixture loading uses `Run(t, Fixture(...))` (the literal is supplied inside the `Run` dispatch for a `fixtureRunScope`, single source = the unexported `fixtureBuildTag` const); in-package Go-code tag-identity paths (callee NOT in loader set) reference that same const. Added in PR #536 review R1 (2026-05-17), corrected to (callee, arg) pair form in same-PR R1.1 rewrite to close BasicLit-only Soft gap.
 
 `tools/archtest/internal/scanner` and `tools/archtest/internal/typeseval` retain their exported APIs — they are intentionally reachable from archtest test files for their non-INV-1 helpers (walk + go/types resolution). Symbol-level bans on `EachFile` / `LoadPackages` / `SharedResolver` are enforced by the PASS-FUNNEL meta-archtest (defense #3), not by lint.
 

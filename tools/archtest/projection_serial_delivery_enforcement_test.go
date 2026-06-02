@@ -158,7 +158,7 @@ func TestProjectionSerialDeliveryEnforcement01_ImplementerSet(t *testing.T) {
 	var iface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -227,7 +227,7 @@ func TestProjectionSerialDeliveryEnforcement01_GuardCallsite(t *testing.T) {
 	prodPatterns := prodscan.Patterns(root)
 
 	var foundInGuardFile bool
-	diags := RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -289,7 +289,7 @@ func TestProjectionSerialDeliveryEnforcement01_GuardOnDrainPath(t *testing.T) {
 	prodPatterns := prodscan.Patterns(root)
 
 	var pkgSeen, drainSeen, guardCalled bool
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != serialGuardBootstrapPkgPath {
 				return nil
@@ -348,7 +348,7 @@ func TestProjectionSerialDeliveryEnforcement01_ReverseBlindSpot_NoTypeSwitch(t *
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
 
-	diags := RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

@@ -32,9 +32,9 @@ func TestGRPCMetricsLabelCellIDCtxSource01_RedFixtureDetected(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	diags := RunTypedFixture(t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/grpcmetricsfixture/..."},
+	diags := Run(t,
+		Fixture(FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/grpcmetricsfixture/..."}),
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() || !strings.HasSuffix(p.Pkg.Path(), "/grpcmetricsfixture") {
 				return nil

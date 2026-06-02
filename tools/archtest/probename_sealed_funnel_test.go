@@ -905,13 +905,14 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 
 	var entries []string
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
-			// Derive module-relative package path (strip module prefix).
+
 			modPrefix := "github.com/ghbvf/gocell/"
 			pkgPath := p.Pkg.Path()
 			if !strings.HasPrefix(pkgPath, modPrefix) {
@@ -992,7 +993,7 @@ func TestProbenameSealedFunnel(t *testing.T) {
 
 	var a1Diags, a2Diags, a3Diags, a4Diags, a4bDiags, a5Diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1115,7 +1116,7 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 
 			var a1, a2, a3, a4, b1b2, b3 []Diagnostic
 
-			_ = RunTypedDir(t, subFixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+			_ = Run(t, StandaloneModule(subFixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 				func(p *Pass) []Diagnostic {
 					if p.Pkg == nil {
 						return nil
@@ -1131,15 +1132,8 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 						a3 = append(a3, scanA3AggregatorRegisterAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 						a4 = append(a4, scanA4NewProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 
-						// B1 / B2 (via A3 + helper-wrapper scan) share the b1b2 bucket.
-						// B3 is the string-cast bypass (ProbeName(callExpr) form).
 						b3 = append(b3, scanA2CallsiteResolves(p.Fset, f, rel, p.TypesInfo)...)
 
-						// B1 reflect bypass — scan for reflect.MethodByName("RegisterReadiness").
-						// EvaluateConstString resolves BasicLit / named const /
-						// const concat / SelectorExpr to the underlying string,
-						// so `const M = "Register" + "Readiness"; v.MethodByName(M)`
-						// is caught the same as `v.MethodByName("RegisterReadiness")`.
 						EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 							sel, ok := call.Fun.(*ast.SelectorExpr)
 							if !ok || sel.Sel.Name != "MethodByName" {
@@ -1232,8 +1226,9 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoReflectBypass(t *testing.T) {
 	root := findModuleRoot(t)
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1251,8 +1246,7 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoReflectBypass(t *testing.T) {
 					if len(call.Args) != 1 {
 						return
 					}
-					// EvaluateConstString covers BasicLit + named const + const
-					// concat — see scanner pair in TestProbenameSealedFunnel_ReverseFixtures.
+
 					val, ok := EvaluateConstString(p.TypesInfo, call.Args[0])
 					if !ok {
 						return
@@ -1290,8 +1284,9 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoStringCastBypass(t *testing.T)
 	root := findModuleRoot(t)
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1361,8 +1356,9 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoHelperWrapper(t *testing.T) {
 	root := findModuleRoot(t)
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -1376,7 +1372,7 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoHelperWrapper(t *testing.T) {
 				if isSanctionedWrapper(rel, absPath) {
 					continue
 				}
-				// Look for func declarations whose body calls reg.RegisterReadiness.
+
 				EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 					if fd.Body == nil {
 						return
@@ -1420,13 +1416,14 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoNewProbeImpl(t *testing.T) {
 	sanctioned := map[string]bool{"funcProbe": true, "ctxSafeProbe": true}
 	var found []string
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"github.com/ghbvf/gocell/kernel/healthz/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"github.com/ghbvf/gocell/kernel/healthz/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != "github.com/ghbvf/gocell/kernel/healthz" {
 				return nil
 			}
-			// Scan all FuncDecl: method named "isHealthzProbe" on a receiver type.
+
 			for _, f := range p.Files {
 				EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 					if fd.Recv == nil || len(fd.Recv.List) != 1 {

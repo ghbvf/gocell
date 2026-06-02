@@ -215,7 +215,7 @@ func TestCellRawInfraWrapperLocation01_RealRepoClean(t *testing.T) {
 	t.Parallel()
 
 	var violations []wrapperViolation
-	RunTypedProduction(t, TypedOpts{Tests: false},
+	Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil
@@ -241,8 +241,9 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	t.Parallel()
 
 	var violations []wrapperViolation
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/wrapfixture/violation"},
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/wrapfixture/violation"}),
+
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil
@@ -301,8 +302,9 @@ func TestCellRawInfraWrapperLocation01_RejectsKernelCellSibling(t *testing.T) {
 	t.Parallel()
 
 	var violations []wrapperViolation
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/wrapfixture/kernelcellsibling"},
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/wrapfixture/kernelcellsibling"}),
+
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil

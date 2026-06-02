@@ -122,7 +122,7 @@ func TestOutboxReconstructionCaller01(t *testing.T) {
 		observed[symbol][rel] = struct{}{}
 	}
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
@@ -148,7 +148,8 @@ func TestOutboxReconstructionCaller01(t *testing.T) {
 								"Only storage adapters and wire/consumer decoders may reconstruct; route producer "+
 								"event creation through outbox.NewEntry. If this IS a new sanctioned infra site, "+
 								"add it to reconstructionFunnelAllowlist with rationale.",
-							symbol, rel),
+							symbol, rel,
+						),
 					})
 				}
 			})
@@ -171,7 +172,8 @@ func TestOutboxReconstructionCaller01(t *testing.T) {
 						"OUTBOX-RECONSTRUCTION-CALLER-01: allowlist entry %q for %s is STALE — no live "+
 							"call observed. Either the scanner stopped detecting the call (regression) or the "+
 							"call was removed; drop the dead allowlist entry so it cannot become a silent bypass slot.",
-						f, symbol),
+						f, symbol,
+					),
 				})
 			}
 		}
