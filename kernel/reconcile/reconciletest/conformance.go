@@ -3,7 +3,10 @@ package reconciletest
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/reconcile"
 )
@@ -207,5 +210,534 @@ func mustNoErr(t *testing.T, err error, msg string) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("%s: %v", msg, err)
+	}
+}
+
+// ── Loop end-to-end conformance harness (FR-013) ────────────────────────────
+//
+// RunConformance exercises the Loop's scheduling contracts end-to-end.
+// It mirrors commandtest.RunQueueConformance: each subtest calls newHarness
+// fresh, constructs its own Loop via the public Builder (reconcile.New), and
+// asserts the Loop's behavior under controlled conditions.
+//
+// The existing RunLeaderConformance / RunFencingConformance / ElectorFactory
+// (elector-level adapter contract) are untouched; RunConformance tests the
+// Loop scheduling layer, not the LeaderElector adapter.
+//
+// Plain testing.T assertions (no testify): this is a kernel test-support
+// package and the kernel-isolation depguard bans testify outside *_test.go.
+
+// Wiring is the consumer-supplied plug-in set the conformance suite drives a
+// Loop with. Each subtest calls HarnessFactory fresh so all state is isolated.
+type Wiring struct {
+	// NewTrigger returns a fresh Trigger plus a submit func that injects a
+	// Request into that trigger's source so the suite can drive work
+	// deterministically.
+	NewTrigger func() (trigger reconcile.Trigger, submit func(reconcile.Request))
+	// Leader is the LeaderElector for the loop under test; nil when
+	// Features.Leader is false.
+	Leader reconcile.LeaderElector
+	// Fenced is the consumer's epoch-aware repo; nil when Features.Fencing
+	// is false.
+	Fenced reconcile.FencedRepository
+	// Cleanup releases any resources (nil ok — called with defer after each
+	// subtest).
+	Cleanup func()
+}
+
+// HarnessFactory builds a fresh Wiring for one subtest invocation.
+// It mirrors commandtest.QueueFactory.
+type HarnessFactory func(t *testing.T) Wiring
+
+// Features captures which optional Loop contracts the harness supports.
+type Features struct {
+	Leader  bool // exercise LeaderFlow subtest
+	Fencing bool // exercise Fencing subtest (requires Leader)
+}
+
+// conformance timing constants (TEST-TIME-LITERAL-01: no inline literals).
+const (
+	confShortInterval = 20 * time.Millisecond  // loop interval for fast requeue
+	confEventualWait  = 3 * time.Second        // budget for require.Eventually-style polls
+	confPollTick      = 5 * time.Millisecond   // polling frequency inside wait loops
+	confQuietPeriod   = 80 * time.Millisecond  // quiet-period check for PermanentError
+	confLeaderTTL     = 100 * time.Millisecond // short lease TTL for leader tests
+	confLeaderRenew   = 10 * time.Millisecond  // fast renew cadence for leader tests
+	confBarrierWait   = 2 * time.Second        // barrier wait for concurrency test
+)
+
+// RunConformance runs the Loop scheduling conformance suite.
+// Subtests are skipped (not failed) when the corresponding feature is off.
+func RunConformance(t *testing.T, newHarness HarnessFactory, features Features) {
+	t.Helper()
+	t.Run("BasicReconcile", func(t *testing.T) {
+		confBasicReconcile(t, newHarness)
+	})
+	t.Run("RequeueAfter", func(t *testing.T) {
+		confRequeueAfter(t, newHarness)
+	})
+	t.Run("PermanentError", func(t *testing.T) {
+		confPermanentError(t, newHarness)
+	})
+	t.Run("PanicRecovery", func(t *testing.T) {
+		confPanicRecovery(t, newHarness)
+	})
+	t.Run("MaxConcurrentReconciles", func(t *testing.T) {
+		confMaxConcurrent(t, newHarness)
+	})
+	t.Run("LeaderFlow", func(t *testing.T) {
+		if !features.Leader {
+			t.Skip("LeaderFlow requires Features.Leader=true")
+		}
+		confLeaderFlow(t, newHarness)
+	})
+	t.Run("Fencing", func(t *testing.T) {
+		if !features.Fencing {
+			t.Skip("Fencing requires Features.Fencing=true")
+		}
+		confFencing(t, newHarness)
+	})
+}
+
+// confBasicReconcile verifies the happy path: a submitted Request is
+// dispatched to the Reconciler exactly once (on the first observation).
+func confBasicReconcile(t *testing.T, newHarness HarnessFactory) {
+	t.Helper()
+	w := newHarness(t)
+	if w.Cleanup != nil {
+		defer w.Cleanup()
+	}
+
+	trigger, submit := w.NewTrigger()
+	invoked := make(chan reconcile.Request, 1)
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		select {
+		case invoked <- req:
+		default:
+		}
+		return reconcile.Result{RequeueAfter: time.Hour}, nil // suppress fast requeue
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithInterval(confShortInterval).
+		Build()
+	mustNoErr(t, err, "Build")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	submit(reconcile.Request{EntityID: "basic-entity-1"})
+
+	select {
+	case got := <-invoked:
+		if got.EntityID != "basic-entity-1" {
+			t.Fatalf("BasicReconcile: got entity %q, want %q", got.EntityID, "basic-entity-1")
+		}
+	case <-time.After(confEventualWait):
+		t.Fatal("BasicReconcile: Reconcile never called within budget")
+	}
+}
+
+// confRequeueAfter verifies that returning Result{RequeueAfter: d>0} causes
+// the entity to be re-invoked at least twice within the wait budget.
+func confRequeueAfter(t *testing.T, newHarness HarnessFactory) {
+	t.Helper()
+	w := newHarness(t)
+	if w.Cleanup != nil {
+		defer w.Cleanup()
+	}
+
+	trigger, submit := w.NewTrigger()
+	var count atomic.Int64
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		if count.Add(1) == 1 {
+			return reconcile.Result{RequeueAfter: confShortInterval}, nil
+		}
+		return reconcile.Result{RequeueAfter: time.Hour}, nil // stop after 2nd
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithInterval(confShortInterval).
+		Build()
+	mustNoErr(t, err, "Build")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	submit(reconcile.Request{EntityID: "requeue-entity-1"})
+
+	deadline := time.Now().Add(confEventualWait)
+	for time.Now().Before(deadline) {
+		if count.Load() >= 2 {
+			return
+		}
+		time.Sleep(confPollTick)
+	}
+	t.Fatalf("RequeueAfter: invocation count = %d, want ≥ 2 within %s", count.Load(), confEventualWait)
+}
+
+// confPermanentError verifies that a PermanentError response causes exactly one
+// Reconcile invocation (dead-letter: no requeue).
+func confPermanentError(t *testing.T, newHarness HarnessFactory) {
+	t.Helper()
+	w := newHarness(t)
+	if w.Cleanup != nil {
+		defer w.Cleanup()
+	}
+
+	trigger, submit := w.NewTrigger()
+	var count atomic.Int64
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		count.Add(1)
+		return reconcile.Result{}, reconcile.PermanentError(errors.New("unrecoverable"))
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithInterval(confShortInterval).
+		Build()
+	mustNoErr(t, err, "Build")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	submit(reconcile.Request{EntityID: "perm-entity-1"})
+
+	// Wait until invoked at least once.
+	deadline := time.Now().Add(confEventualWait)
+	for time.Now().Before(deadline) {
+		if count.Load() >= 1 {
+			break
+		}
+		time.Sleep(confPollTick)
+	}
+	if count.Load() < 1 {
+		t.Fatalf("PermanentError: Reconcile never called within %s", confEventualWait)
+	}
+
+	// Quiet period: no further invocation expected after dead-letter.
+	snapshot := count.Load()
+	time.Sleep(confQuietPeriod)
+	if after := count.Load(); after != snapshot {
+		t.Fatalf("PermanentError: invoked %d more time(s) after dead-letter (expected 0 re-runs)", after-snapshot)
+	}
+}
+
+// confPanicRecovery verifies that a panic in the Reconciler is recovered by
+// the Loop (no crash) and the entity is retried (transient path), resulting
+// in at least 2 total invocations.
+func confPanicRecovery(t *testing.T, newHarness HarnessFactory) {
+	t.Helper()
+	w := newHarness(t)
+	if w.Cleanup != nil {
+		defer w.Cleanup()
+	}
+
+	trigger, submit := w.NewTrigger()
+	var count atomic.Int64
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		n := count.Add(1)
+		if n == 1 {
+			panic("boom — test panic")
+		}
+		return reconcile.Result{RequeueAfter: time.Hour}, nil
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithInterval(confShortInterval).
+		WithBackoff(confShortInterval, confShortInterval*10).
+		Build()
+	mustNoErr(t, err, "Build")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	submit(reconcile.Request{EntityID: "panic-entity-1"})
+
+	deadline := time.Now().Add(confEventualWait)
+	for time.Now().Before(deadline) {
+		if count.Load() >= 2 {
+			return
+		}
+		time.Sleep(confPollTick)
+	}
+	t.Fatalf("PanicRecovery: invocation count = %d after %s, want ≥ 2 (panic should be recovered and retried)", count.Load(), confEventualWait)
+}
+
+// confMaxConcurrent verifies two properties of MaxConcurrentReconciles > 1:
+//  1. Cross-entity concurrency: multiple distinct entities can be reconciled
+//     concurrently (in-flight count reaches > 1).
+//  2. Same-entity serialization: two submits of the same entity never overlap.
+func confMaxConcurrent(t *testing.T, newHarness HarnessFactory) {
+	t.Helper()
+	w := newHarness(t)
+	if w.Cleanup != nil {
+		defer w.Cleanup()
+	}
+	confMaxConcurrentCrossEntity(t, w)
+	confMaxConcurrentSameEntity(t, w)
+}
+
+// confMaxConcurrentCrossEntity checks that multiple distinct entities are
+// reconciled concurrently (in-flight count reaches the worker limit).
+func confMaxConcurrentCrossEntity(t *testing.T, w Wiring) {
+	t.Helper()
+	const workers = 3
+	trigger, submit := w.NewTrigger()
+
+	var (
+		mu       sync.Mutex
+		inflight int
+		maxSeen  int
+	)
+	barrier := make(chan struct{})
+	var barrierOnce sync.Once
+
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		mu.Lock()
+		inflight++
+		if inflight > maxSeen {
+			maxSeen = inflight
+		}
+		if inflight >= workers {
+			barrierOnce.Do(func() { close(barrier) })
+		}
+		mu.Unlock()
+
+		select {
+		case <-barrier:
+		case <-ctx.Done():
+		case <-time.After(confBarrierWait):
+		}
+
+		mu.Lock()
+		inflight--
+		mu.Unlock()
+		return reconcile.Result{RequeueAfter: time.Hour}, nil
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithConcurrency(workers).
+		WithInterval(confShortInterval).
+		Build()
+	mustNoErr(t, err, "Build cross-entity")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start cross-entity")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	for i := 0; i < workers; i++ {
+		submit(reconcile.Request{EntityID: string(rune('A' + i))})
+	}
+
+	select {
+	case <-barrier:
+	case <-time.After(confEventualWait):
+		mu.Lock()
+		seen := maxSeen
+		mu.Unlock()
+		t.Fatalf("MaxConcurrentReconciles cross-entity: expected %d concurrent workers; only reached %d", workers, seen)
+	}
+}
+
+// confMaxConcurrentSameEntity checks that two submits of the same entity never
+// run concurrently (the Loop's dirty/processing serialization guarantee).
+func confMaxConcurrentSameEntity(t *testing.T, w Wiring) {
+	t.Helper()
+	trigger, submit := w.NewTrigger()
+
+	var (
+		overlapDetected bool
+		sameInflight    int
+		sameEntityMu    sync.Mutex
+		sameBarrier     = make(chan struct{})
+		sameBarrierOnce sync.Once
+		sameDone        = make(chan struct{})
+	)
+
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		sameEntityMu.Lock()
+		sameInflight++
+		if sameInflight > 1 {
+			overlapDetected = true
+		}
+		sameEntityMu.Unlock()
+
+		sameBarrierOnce.Do(func() { close(sameBarrier) })
+		select {
+		case <-sameDone:
+		case <-ctx.Done():
+		case <-time.After(confBarrierWait):
+		}
+
+		sameEntityMu.Lock()
+		sameInflight--
+		sameEntityMu.Unlock()
+		return reconcile.Result{RequeueAfter: time.Hour}, nil
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithConcurrency(2).
+		WithInterval(confShortInterval).
+		Build()
+	mustNoErr(t, err, "Build same-entity")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start same-entity")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	submit(reconcile.Request{EntityID: "same-entity"})
+	submit(reconcile.Request{EntityID: "same-entity"})
+
+	select {
+	case <-sameBarrier:
+	case <-time.After(confEventualWait):
+		t.Fatal("MaxConcurrentReconciles same-entity: first invocation never started")
+	}
+	close(sameDone)
+
+	sameEntityMu.Lock()
+	detected := overlapDetected
+	sameEntityMu.Unlock()
+	if detected {
+		t.Fatal("MaxConcurrentReconciles same-entity: two reconciles ran concurrently for the same entity")
+	}
+}
+
+// confLeaderFlow verifies that a Loop with a LeaderElector acquires leadership
+// and dispatches submitted work end-to-end.
+func confLeaderFlow(t *testing.T, newHarness HarnessFactory) {
+	t.Helper()
+	w := newHarness(t)
+	if w.Cleanup != nil {
+		defer w.Cleanup()
+	}
+	if w.Leader == nil {
+		t.Fatal("LeaderFlow: Wiring.Leader must be non-nil when Features.Leader=true")
+	}
+
+	trigger, submit := w.NewTrigger()
+	dispatched := make(chan reconcile.Request, 1)
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		select {
+		case dispatched <- req:
+		default:
+		}
+		return reconcile.Result{RequeueAfter: time.Hour}, nil
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithLeader(w.Leader).
+		WithRenewInterval(confLeaderRenew).
+		WithInterval(confShortInterval).
+		Build()
+	mustNoErr(t, err, "Build")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	submit(reconcile.Request{EntityID: "leader-entity-1"})
+
+	select {
+	case got := <-dispatched:
+		if got.EntityID != "leader-entity-1" {
+			t.Fatalf("LeaderFlow: got entity %q, want %q", got.EntityID, "leader-entity-1")
+		}
+	case <-time.After(confEventualWait):
+		t.Fatal("LeaderFlow: work not dispatched within budget — Loop may not have acquired leadership")
+	}
+}
+
+// confFencing verifies the end-to-end FencedWriter path: a Reconciler that uses
+// FencedWriterFrom(ctx) to apply a write sees it accepted at the live epoch, and
+// the FencedRepository records the effect.
+func confFencing(t *testing.T, newHarness HarnessFactory) {
+	t.Helper()
+	w := newHarness(t)
+	if w.Cleanup != nil {
+		defer w.Cleanup()
+	}
+	if w.Leader == nil {
+		t.Fatal("Fencing: Wiring.Leader must be non-nil when Features.Fencing=true")
+	}
+	if w.Fenced == nil {
+		t.Fatal("Fencing: Wiring.Fenced must be non-nil when Features.Fencing=true")
+	}
+
+	trigger, submit := w.NewTrigger()
+	written := make(chan uint64, 1)
+	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		fw, ok := reconcile.FencedWriterFrom(ctx)
+		if !ok {
+			// Not yet leader — skip silently (leaderManage may still be acquiring).
+			return reconcile.Result{RequeueAfter: confShortInterval}, nil
+		}
+		if err := fw.Write(ctx, req.EntityID, "mutation"); err != nil {
+			return reconcile.Result{}, err
+		}
+		select {
+		case written <- fw.Epoch():
+		default:
+		}
+		return reconcile.Result{RequeueAfter: time.Hour}, nil
+	}}
+
+	l, err := reconcile.New(rec).
+		WithTrigger(trigger).
+		WithLeader(w.Leader).
+		WithFencedRepo(w.Fenced).
+		WithRenewInterval(confLeaderRenew).
+		WithInterval(confShortInterval).
+		Build()
+	mustNoErr(t, err, "Build")
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mustNoErr(t, l.Start(ownerCtx), "Start")
+	defer func() { _ = l.Stop(context.Background()) }()
+
+	submit(reconcile.Request{EntityID: "fence-entity-1"})
+
+	var epoch uint64
+	select {
+	case epoch = <-written:
+	case <-time.After(confEventualWait):
+		t.Fatal("Fencing: FencedWriter.Write never succeeded within budget")
+	}
+	if epoch == 0 {
+		t.Fatal("Fencing: FencedWriter must carry a non-zero epoch")
+	}
+
+	// Verify the FencedRepository recorded the effect.
+	repo, ok := w.Fenced.(*FakeFencedRepository)
+	if !ok {
+		// Non-fake implementations: at minimum check a non-zero last epoch via
+		// the interface (we only have ApplyFenced, so skip the extra check for
+		// non-fake repos).
+		return
+	}
+	if got := repo.LastEpoch("fence-entity-1"); got != epoch {
+		t.Fatalf("Fencing: repo.LastEpoch=%d, want %d (the live lease epoch)", got, epoch)
+	}
+	if effects := repo.Effects(); len(effects) == 0 {
+		t.Fatal("Fencing: no effect recorded in FakeFencedRepository")
 	}
 }

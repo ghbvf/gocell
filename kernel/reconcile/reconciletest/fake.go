@@ -239,3 +239,14 @@ func (t FakeTrigger) Start(ctx context.Context, queue chan<- reconcile.Request) 
 	}()
 	return nil
 }
+
+// NewFakeTrigger creates a FakeTrigger backed by a fresh buffered channel and
+// returns a submit function that injects a Request into that channel. The
+// submit function blocks briefly if the buffer is full; the buffer (size 64)
+// is large enough for any conformance use-case. This is the standard
+// Wiring.NewTrigger implementation for RunConformance.
+func NewFakeTrigger() (FakeTrigger, func(reconcile.Request)) {
+	ch := make(chan reconcile.Request, 64)
+	submit := func(req reconcile.Request) { ch <- req }
+	return FakeTrigger{In: ch}, submit
+}
