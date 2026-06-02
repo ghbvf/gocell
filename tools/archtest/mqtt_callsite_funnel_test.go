@@ -176,7 +176,7 @@ const pahoPkgPath = "github.com/eclipse/paho.golang/paho"
 // MQTT-ACK-CALLSITE-FUNNEL-01/K2's non-vacuous proof (#1287). It plants a REAL
 // (*paho.Client).Ack callsite so the K2 typed detector is proven non-vacuous
 // against the ACTUAL paho type.
-const mqttAckRedFixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/mqttackredfixture"
+const mqttAckRedFixturePkgPath = PlatformModulePath + "/tools/archtest/internal/mqttackredfixture"
 
 // connectionManagerTypeName is the type whose Publish/Subscribe/Unsubscribe
 // methods we funnel.
