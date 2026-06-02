@@ -212,9 +212,10 @@ type LoginInput struct {
 	Username string
 	Password string
 	// TenantID is required for pre-auth user lookup (GetByUsername is
-	// tenant-scoped). Parsed from the HTTP request (X-Tenant-ID header or
-	// request body tenantId field) by the handler and validated via
-	// tenant.ParseTenantID before constructing this struct.
+	// tenant-scoped). Parsed from the HTTP request X-Tenant-ID header by the
+	// handler and validated via tenant.ParseTenantID before constructing this
+	// struct (no JWT exists pre-login, so the header is the only source — see
+	// ADR 1160).
 	TenantID string
 }
 

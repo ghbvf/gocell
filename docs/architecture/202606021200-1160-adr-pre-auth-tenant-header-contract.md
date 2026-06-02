@@ -52,7 +52,7 @@ presence.
 | Endpoint | Missing/malformed X-Tenant-ID | Reason |
 |---|---|---|
 | `login` | 401 (same shape as wrong-password) | Prevents tenant enumeration — attacker cannot distinguish "tenant doesn't exist" from "wrong credentials" |
-| `setup/admin` | 400 ERR_VALIDATION_REQUIRED_FIELD | Bootstrap path; invalid tenant UUID is a caller error, not a security probe |
+| `setup/admin` | 400 ERR_AUTH_IDENTITY_INVALID_INPUT | Bootstrap path; invalid tenant UUID is a caller error, not a security probe (the setup service returns the existing identity-input errcode, not a generic validation code) |
 | `setup/status` | 200 `{hasAdmin: false}` | Same shape as "not yet provisioned"; prevents tenant existence disclosure |
 
 All three paths invoke `tenant.ParseTenantID` which rejects empty strings and

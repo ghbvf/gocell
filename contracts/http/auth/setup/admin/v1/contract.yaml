@@ -6,7 +6,7 @@
 #     Source:  HTTP request header; no JWT exists pre-bootstrap so the tenant
 #              cannot be derived from bearer token claims.
 #     Parsing: tenant.ParseTenantID — fail-closed; malformed or absent UUID
-#              → 400 ERR_VALIDATION_REQUIRED_FIELD via service-layer validation
+#              → 400 ERR_AUTH_IDENTITY_INVALID_INPUT via service-layer validation
 #              on CreateAdminInput.TenantID.
 #     Codegen: contractgen client generation does not yet emit this header.
 #              Callers must set it manually until the backlog issue is resolved.
