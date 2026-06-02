@@ -137,3 +137,71 @@ func TestFMT35_NonSubscribeWithGroupAndField_Rejected(t *testing.T) {
 	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].group")
 	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].field")
 }
+
+// --- FMT-35: projection / onReset placement (F3) ---
+
+// TestFMT35_NonSubscribeWithProjection_Rejected verifies that a non-subscribe
+// CU (e.g. provide) with projection set produces a FMT-35 error.
+func TestFMT35_NonSubscribeWithProjection_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract:   "data.foo.v1",
+		Role:       "provide",
+		Projection: "some_projection",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].projection")
+}
+
+// TestFMT35_NonSubscribeWithOnReset_Rejected verifies that a non-subscribe
+// CU with onReset set produces a FMT-35 error.
+func TestFMT35_NonSubscribeWithOnReset_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "data.foo.v1",
+		Role:     "serve",
+		OnReset:  "ResetModel",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].onReset")
+}
+
+// TestFMT35_SubscribeWithProjectionAndOnReset_Passes verifies that a subscribe
+// CU with projection and onReset set produces no FMT-35 finding on those columns.
+func TestFMT35_SubscribeWithProjectionAndOnReset_Passes(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract:   "event.foo.v1",
+		Role:       "subscribe",
+		Handler:    "HandleFoo",
+		Projection: "foo_projection",
+		OnReset:    "ResetFoo",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	for _, r := range results {
+		if r.Code == codeFMT35 {
+			// Check neither projection nor onReset is the violating field
+			if r.Field == "contractUsages[0].projection" || r.Field == "contractUsages[0].onReset" {
+				t.Errorf("unexpected FMT-35 finding on subscribe CU with projection/onReset: %v", r)
+			}
+		}
+	}
+}
+
+// TestFMT35_SubscribeWithProjectionOnly_Passes verifies that a subscribe CU
+// with only projection set (no onReset) produces no FMT-35 finding.
+func TestFMT35_SubscribeWithProjectionOnly_Passes(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract:   "event.foo.v1",
+		Role:       "subscribe",
+		Handler:    "HandleFoo",
+		Projection: "foo_projection",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertNoCode(t, results, codeFMT35)
+}

@@ -3,23 +3,31 @@ package archtest
 // invariants:
 //   - INVARIANT: HTTPUTIL-5XX-KIND-NORMALIZE-01
 //   - INVARIANT: HTTPUTIL-SURFACE-REGISTERED-01
+//   - INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
 //
 // httputil_invariants_test.go — consolidated AST guards for pkg/httputil invariants.
 //
 // Invariants covered:
 //   HTTPUTIL-5XX-KIND-NORMALIZE-01   errcode.New() in 5xx path must use errcode.KindXxx constant, not .Kind field access
 //   HTTPUTIL-SURFACE-REGISTERED-01   every exported pkg/httputil function must appear in doc.go or governance maps
+//   HTTPUTIL-5XX-LOG-REDACT-01       every Detail AsSlogAttr() in log4xx/log5xx must be wrapped in redaction.RedactSlogAttr
 //
-// Note: HTTPUTIL-5XX-LOG-REDACT-01 (log5xx must call redaction.RedactSlogAttr on
-// ecErr.Details) was retired in PR #1036 Batch 2. slog sink-side redaction
-// (SLOG-HANDLER-SEALED-FUNNEL-01, tools/archtest/slog_handler_sealed_funnel_test.go)
-// now provides fail-closed value redaction at the slog.Handler level for all log
-// output, superseding the call-site Soft archtest. The call-site
-// redaction.RedactSlogAttr calls in log5xx are preserved as defense-in-depth but
-// are no longer enforced by archtest.
+// HTTPUTIL-5XX-LOG-REDACT-01 was retired as a Soft "RedactSlogAttr appears" check
+// in PR #1036 Batch 2 (sink-side redaction superseded its value-redaction role).
+// It is RESTORED here (#1432) as a NARROW Medium TYPED form-lock — NOT the old
+// global Soft string-anchor form — to keep the call-site defense-in-depth from
+// silently regressing in the two named functions (log4xx / log5xx) that log error
+// Details: those run in library code that may execute before any process-global
+// slog seal is installed (pkg/httputil is imported by tests / tools), so the
+// call-site wrap is the only protection there. The lock binds every errcode-detail
+// `d.AsSlogAttr()` call (go/types ObjectOf → pkg/errcode method) in those two
+// functions to a `redaction.RedactSlogAttr(...)` wrapper (IsCallToPkgFunc →
+// pkg/redaction); both callee and locator are typed-resolved, not string-anchored.
+// A bare AsSlogAttr append is flagged.
 
 import (
 	"go/ast"
+	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -205,6 +213,141 @@ func TestHttputilExportedRegistry(t *testing.T) {
 		}
 	}
 	Report(t, "HTTPUTIL-SURFACE-REGISTERED-01", diags)
+}
+
+// httputilLogRedactTargets are the two named functions that log error Details
+// and must wrap every AsSlogAttr() in redaction.RedactSlogAttr (HTTPUTIL-5XX-LOG-REDACT-01).
+var httputilLogRedactTargets = map[string]bool{
+	"log4xx": true,
+	"log5xx": true,
+}
+
+// isErrcodeAsSlogAttrCall reports whether call is `<d>.AsSlogAttr()` where the
+// resolved method is defined in pkg/errcode (go/types ObjectOf → *types.Func →
+// defining package). This is the typed locator for the detail-attr appends that
+// must be redacted — NOT a bare method-name string anchor.
+func isErrcodeAsSlogAttrCall(info *types.Info, call *ast.CallExpr) bool {
+	if info == nil {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "AsSlogAttr" {
+		return false
+	}
+	fn, ok := info.ObjectOf(sel.Sel).(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return false
+	}
+	return fn.Pkg().Path() == errcodePkgPath
+}
+
+// httputilLogRedactViolations is the HTTPUTIL-5XX-LOG-REDACT-01 detector: within
+// each target function, every `<d>.AsSlogAttr()` call (typed-resolved to a
+// pkg/errcode method) must be a direct argument of a redaction.RedactSlogAttr(...)
+// call (typed-resolved via IsCallToPkgFunc). A bare AsSlogAttr append (no wrap) is
+// flagged. Both the wrapper callee and the AsSlogAttr locator are resolved through
+// go/types (not import-local-name / method-name string anchors), so the rule is
+// Medium, not Soft. Requires p.TypesInfo (typed load). Shared by the production
+// rule and the fixture reverse self-check.
+func httputilLogRedactViolations(p *Pass, f *ast.File) []Diagnostic {
+	if p.TypesInfo == nil {
+		return nil
+	}
+	var ds []Diagnostic
+	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		if fn.Name == nil || fn.Body == nil || !httputilLogRedactTargets[fn.Name.Name] {
+			return
+		}
+		// Collect AsSlogAttr() CallExprs that are direct args of a typed
+		// redaction.RedactSlogAttr(...) call.
+		wrapped := make(map[*ast.CallExpr]bool)
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			if !IsCallToPkgFunc(p.TypesInfo, call, redactionPkgPath, slogFunnelRedactSlogAttrFunc) {
+				return
+			}
+			// Direct CallExpr children of this RedactSlogAttr(...) call are its
+			// argument calls (its Fun is a SelectorExpr, not a CallExpr).
+			EachInChildren[ast.CallExpr](call, func(ac *ast.CallExpr) {
+				wrapped[ac] = true
+			})
+		})
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			if !isErrcodeAsSlogAttrCall(p.TypesInfo, call) {
+				return
+			}
+			if wrapped[call] {
+				return
+			}
+			pos := p.Fset.Position(call.Pos())
+			ds = append(ds, Diagnostic{
+				Rel:  filepath.ToSlash(p.Rel(f)),
+				Line: pos.Line,
+				Message: "errcode-detail AsSlogAttr() in " + fn.Name.Name + " must be wrapped" +
+					" in redaction.RedactSlogAttr(...) — call-site defense-in-depth must not" +
+					" regress (HTTPUTIL-5XX-LOG-REDACT-01)",
+			})
+		})
+	})
+	return ds
+}
+
+// INVARIANT: HTTPUTIL-5XX-LOG-REDACT-01
+//
+// TestHTTPUtil5xxLogRedact enforces HTTPUTIL-5XX-LOG-REDACT-01: log4xx and log5xx
+// in pkg/httputil/response.go must wrap every pkg/errcode-detail AsSlogAttr() in
+// redaction.RedactSlogAttr. AI-robust rating: Medium — both the redaction wrapper
+// (IsCallToPkgFunc → pkg/redaction.RedactSlogAttr) and the AsSlogAttr locator
+// (go/types ObjectOf → pkg/errcode method) are typed-resolved, scoped to two named
+// function bodies; NOT the retired Soft string-anchor form. Typed load required.
+func TestHTTPUtil5xxLogRedact(t *testing.T) {
+	t.Parallel()
+	const targetRel = "pkg/httputil/response.go"
+	var foundFile bool
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/httputil"}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			if filepath.ToSlash(p.Rel(f)) != targetRel {
+				continue
+			}
+			foundFile = true
+			ds = append(ds, httputilLogRedactViolations(p, f)...)
+		}
+		return ds
+	})
+	require.True(t, foundFile, "HTTPUTIL-5XX-LOG-REDACT-01: %s not found (renamed/deleted/scope drift)", targetRel)
+	Report(t, "HTTPUTIL-5XX-LOG-REDACT-01", diags)
+}
+
+// TestHTTPUtil5xxLogRedact_DetectsViolation is the reverse self-check: it runs the
+// typed detector against a real fixture package (loaded type-checked via
+// RunTypedFixture) whose log4xx/log5xx contain bare (unwrapped) errcode-detail
+// AsSlogAttr() appends alongside a compliant wrapped one — asserting exactly the
+// two bare appends are flagged. Type-checking is required for the go/types
+// resolution of both RedactSlogAttr and the errcode AsSlogAttr methods.
+func TestHTTPUtil5xxLogRedact_DetectsViolation(t *testing.T) {
+	t.Parallel()
+
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/httputil_log_redact_fixtures/violation"
+
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/testdata/httputil_log_redact_fixtures/violation"},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
+				return nil
+			}
+			var ds []Diagnostic
+			for _, f := range p.Files {
+				ds = append(ds, httputilLogRedactViolations(p, f)...)
+			}
+			return ds
+		})
+
+	require.Len(t, diags, 2,
+		"HTTPUTIL-5XX-LOG-REDACT-01 must flag exactly 2 bare AsSlogAttr() appends"+
+			" (log5xx + log4xx); the wrapped one must NOT be flagged; got: %v", diags)
 }
 
 // collectExportedFuncs returns a set of top-level exported function names

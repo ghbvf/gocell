@@ -1,6 +1,8 @@
 package archtest
 
-// INVARIANT: PANIC-REGISTERED-01
+// invariants:
+//   - INVARIANT: PANIC-REGISTERED-01
+//   - INVARIANT: PANIC-LOG-REDACT-01
 //
 // panic_invariants_test.go — test entry points for panic-related invariants.
 //
@@ -12,13 +14,23 @@ package archtest
 //	                    logic against GoCell itself — single source, no parallel
 //	                    rule body. See pkg/panicregister and
 //	                    docs/architecture/202604270030-architectural-panic-whitelist.md.
+//	PANIC-LOG-REDACT-01 every production slog.Any("panic", X) must have
+//	                    X = redaction.RedactAny(...).
 //
-// Note: PANIC-REDACT-01 (slog.Any("panic", X) must wrap X with redaction.RedactAny)
-// was retired in PR #1036 Batch 2. slog sink-side redaction (SLOG-HANDLER-SEALED-FUNNEL-01,
-// tools/archtest/slog_handler_sealed_funnel_test.go) now provides fail-closed
-// value redaction at the slog.Handler level for all log output, superseding the
-// call-site Soft archtest. The call-site redaction.RedactAny calls are preserved
-// as defense-in-depth but are no longer enforced by archtest.
+// PANIC-LOG-REDACT-01 was retired as a Soft string-anchor check in PR #1036
+// Batch 2 (sink-side redaction superseded its value-redaction role). It is
+// RESTORED here (#1432) as a Medium TYPED form-lock — NOT the old Soft form: the
+// callee (log/slog.Any) and the value wrapper (pkg/redaction.RedactAny) are both
+// resolved via go/types (IsCallToPkgFunc), and the "panic" key literal is only
+// the locator. This keeps the call-site defense-in-depth from silently
+// regressing across all production recovery sites, which matters because panic
+// logging runs in recovery paths that may execute in contexts where the
+// process-global slog seal is not active (library/test code).
+//
+// Residual (accepted): a panic value logged under a non-literal key, or via a
+// different slog constructor than slog.Any, is not matched — the same locator
+// limitation as the retired rule, but the form within the "panic"-keyed slog.Any
+// set is now typed-locked rather than string-anchored.
 
 import (
 	"go/ast"
@@ -26,8 +38,117 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// panicLogRedactViol is the PANIC-LOG-REDACT-01 diagnostic.
+const panicLogRedactViol = `slog.Any("panic", X) must wrap X with redaction.RedactAny(X)` +
+	` — call-site defense-in-depth must not regress (PANIC-LOG-REDACT-01)`
+
+// panicLogRedactViolations is the PANIC-LOG-REDACT-01 detector: every
+// slog.Any("panic", X) call (callee resolved via go/types) must have X be a
+// redaction.RedactAny(...) call (also go/types-resolved). Shared by the
+// production scan and the reverse self-check fixture.
+func panicLogRedactViolations(p *Pass, f *ast.File, rel string) []Diagnostic {
+	if p.TypesInfo == nil {
+		return nil
+	}
+	var ds []Diagnostic
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		if !IsCallToPkgFunc(p.TypesInfo, call, slogFunnelStdlibPkgPath, "Any") {
+			return
+		}
+		if len(call.Args) != 2 {
+			return
+		}
+		bl, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return
+		}
+		key, err := strconv.Unquote(bl.Value)
+		if err != nil || key != "panic" {
+			return
+		}
+		if valCall, ok := call.Args[1].(*ast.CallExpr); ok &&
+			IsCallToPkgFunc(p.TypesInfo, valCall, redactionPkgPath, "RedactAny") {
+			return // compliant
+		}
+		pos := p.Fset.Position(call.Pos())
+		ds = append(ds, Diagnostic{Rel: rel, Line: pos.Line, Message: panicLogRedactViol})
+	})
+	return ds
+}
+
+// INVARIANT: PANIC-LOG-REDACT-01
+//
+// TestPanicLogRedact enforces PANIC-LOG-REDACT-01 across the production tree:
+// every slog.Any("panic", X) must have X = redaction.RedactAny(...). AI-robust
+// rating: Medium (typed (callee, arg) form-lock; the "panic" key literal is the
+// locator, the RedactAny wrapper is the typed lock). See file-header note.
+func TestPanicLogRedact(t *testing.T) {
+	t.Parallel()
+	rule := func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			ds = append(ds, panicLogRedactViolations(p, f, filepath.ToSlash(p.Rel(f)))...)
+		}
+		return ds
+	}
+	// Two passes: default build tags PLUS the project's full non-default tag union
+	// (FlatNonDefaultTags), so tag-gated production files (`//go:build integration`
+	// etc.) that recover-and-log a panic are also scanned — same coverage discipline
+	// as the sibling PANIC-REGISTERED-01. A single default-tag pass would silently
+	// skip those files. Dedup by rel:line:message (a file may appear in both passes).
+	seen := make(map[string]bool)
+	var all []Diagnostic
+	both := append(
+		RunTypedProduction(t, TypedOpts{Tests: false}, rule),
+		RunTypedProduction(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, rule)...,
+	)
+	for _, d := range both {
+		key := d.Rel + ":" + strconv.Itoa(d.Line) + ":" + d.Message
+		if !seen[key] {
+			seen[key] = true
+			all = append(all, d)
+		}
+	}
+	Report(t, "PANIC-LOG-REDACT-01", all)
+}
+
+// TestPanicLogRedact_DetectsViolation is the reverse self-check: it runs the
+// detector against a real fixture package (loaded type-checked via
+// RunTypedFixture) that contains one compliant call plus two violations (a bare
+// value and a non-RedactAny wrapper) — asserting exactly the two violations are
+// flagged. This proves the typed form-lock is non-vacuous.
+func TestPanicLogRedact_DetectsViolation(t *testing.T) {
+	t.Parallel()
+
+	const fixturePkgPath = PlatformModulePath + "/tools/archtest/testdata/panic_log_redact_fixtures/violation"
+
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/testdata/panic_log_redact_fixtures/violation"},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
+				return nil
+			}
+			var ds []Diagnostic
+			for _, f := range p.Files {
+				ds = append(ds, panicLogRedactViolations(p, f, filepath.ToSlash(p.Rel(f)))...)
+			}
+			return ds
+		})
+
+	require.Len(t, diags, 2,
+		"PANIC-LOG-REDACT-01 must flag exactly 2 violations (bare value + non-RedactAny"+
+			" wrapper); the RedactAny-wrapped call must NOT be flagged; got: %v", diags)
+	for _, d := range diags {
+		assert.Contains(t, d.Message, "PANIC-LOG-REDACT-01")
+	}
+}
 
 // INVARIANT: PANIC-REGISTERED-01
 //

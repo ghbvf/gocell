@@ -1,0 +1,2 @@
+tools/archtest/testdata/saga_slog_instance_fields_fixtures/red_attr_literal/violator.go:10: SAGA-SLOG-INSTANCE-FIELDS-CALLER-01: slog.Attr{…} literal with key "instance_id" — build identity attrs via sagalog.InstanceFields, not a raw slog.Attr literal (#1266)
+tools/archtest/testdata/saga_slog_instance_fields_fixtures/red_attr_literal/violator.go:17: SAGA-SLOG-INSTANCE-FIELDS-CALLER-01: slog.Attr{…} literal with key "lease_id" — build identity attrs via sagalog.InstanceFields, not a raw slog.Attr literal (#1266)

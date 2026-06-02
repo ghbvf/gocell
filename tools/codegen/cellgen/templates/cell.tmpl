@@ -2,7 +2,7 @@
 
 import (
 	"context"
-{{- if or .Subscriptions .WebhookReceivers .WebhookDispatches }}
+{{- if or .Subscriptions .WebhookReceivers .WebhookDispatches .Projections }}
 	"fmt"
 {{- end }}
 
@@ -13,6 +13,9 @@ import (
 {{- end }}
 {{- range .Subscriptions }}
 	{{.SubscriptionAlias}} "{{.SubscriptionPackage}}"
+{{- end }}
+{{- range .Projections }}
+	{{.SpecAlias}} "{{.SpecPackage}}"
 {{- end }}
 )
 
@@ -95,6 +98,13 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 		CellID:     {{ printf "%q" $.CellID }},
 	}, {{ .SelectorExpr }}); err != nil {
 		return fmt.Errorf({{ printf "%q" (printf "%s: webhook-dispatch %s: %%w" $.CellID .ContractID) }}, err)
+	}
+{{ end }}
+{{- range .Projections }}
+	if err := reg.RegisterProjection({{.SpecAlias}}.NewProjectionRequest(
+		{{.ApplyExpr}}, {{ printf "%q" .ProjectionID }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }}, {{ if .OnResetExpr }}{{ .OnResetExpr }}{{ else }}nil{{ end }},
+	)); err != nil {
+		return fmt.Errorf({{ printf "%q" (printf "%s: projection %s: %%w" $.CellID .ProjectionID) }}, err)
 	}
 {{ end }}
 	return nil
