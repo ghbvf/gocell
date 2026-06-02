@@ -50,9 +50,12 @@
 //     require the call argument to also be renamed consistently for B to
 //     pass. TestSpanRecordErrorSeal_B_DetectsViolation covers the
 //     wrong-identifier shape.
-//   - Method-value expressions (f := s.inner.RecordError; f(err)) are not
-//     detected. TestSpanRecordErrorSeal_NoBlindspotsInProduction asserts
-//     this shape is absent from production code.
+//   - Method-value expressions on a FIELD receiver (f := s.inner.RecordError;
+//     f(err)) ARE now detected by sealAMethodValueViolationsInFile (#1432):
+//     RecordError SelectorExprs not in CallExpr.Fun position, outside the sink
+//     body, on a field receiver are flagged. A method-value on a plain Ident
+//     receiver remains the same Ident blind spot as the call form (see above).
+//     TestSpanRecordErrorSeal_MethodValue_DetectsViolation is the RED proof.
 //
 // ref: tools/archtest/span_setattr_redact_test.go (sibling INVARIANT, upstream
 // holder seal + A3b parameter-binding technique)
@@ -120,6 +123,14 @@ const recordErrorSinkFile = "adapters/otel/span.go"
 const violSealA = "RecordError call on field receiver outside otelSpan.RecordError body" +
 	" — bypass of sink funnel (SPAN-RECORD-ERROR-SEAL-01 A)"
 
+// violSealAMethodValue is the diagnostic for the A method-value sub-check: a
+// RecordError method-value reference (f := s.inner.RecordError) on a field
+// receiver outside otelSpan.RecordError body. Taking the method as a value lets
+// it be invoked later with a raw error, bypassing the sink redaction.
+const violSealAMethodValue = "RecordError taken as a method-value on a field receiver" +
+	" outside otelSpan.RecordError body — bypass of sink funnel via deferred" +
+	" invocation (SPAN-RECORD-ERROR-SEAL-01 A method-value)"
+
 // violSealB is the diagnostic for SPAN-RECORD-ERROR-SEAL-01 B.
 const violSealB = "otelSpan.RecordError body: inner.RecordError arg must be" +
 	" redaction.RedactError(<formalParam>) — argument identity-bound to formal" +
@@ -184,6 +195,45 @@ func sealAViolationsInFile(fset *token.FileSet, file *ast.File, relPath string) 
 			pos := fset.Position(call.Pos())
 			ds = append(ds, Diagnostic{Rel: relPath, Line: pos.Line, Message: violSealA})
 		}
+	})
+	return ds
+}
+
+// sealAMethodValueViolationsInFile closes the A method-value blind spot: a
+// RecordError SelectorExpr on a field receiver (e.g. s.inner.RecordError) that
+// is NOT the Fun of a CallExpr — i.e. taken as a method-value (f :=
+// s.inner.RecordError) — outside otelSpan.RecordError's body. sealAViolationsInFile
+// only scans CallExpr.Fun, so a method-value reference would slip past it and
+// could later be invoked with a raw (unredacted) error. The receiver constraint
+// (field selector, not plain Ident) mirrors sealAViolationsInFile; an Ident
+// receiver method-value remains the same declared Ident blind spot as the call
+// form.
+func sealAMethodValueViolationsInFile(fset *token.FileSet, file *ast.File, relPath string) []Diagnostic {
+	implRanges := collectOtelSpanRecordErrorBodyRanges(file)
+	// Collect the SelectorExpr nodes that are the Fun of a CallExpr — those are
+	// invocations (covered by sealAViolationsInFile), not method-values.
+	calledFuns := make(map[*ast.SelectorExpr]bool)
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			calledFuns[sel] = true
+		}
+	})
+	var ds []Diagnostic
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != "RecordError" {
+			return
+		}
+		if calledFuns[sel] {
+			return // invocation, not a method-value — covered by the call check
+		}
+		if posInRanges(sel.Pos(), implRanges) {
+			return // inside the sanctioned sink body
+		}
+		if _, isSel := sel.X.(*ast.SelectorExpr); !isSel {
+			return // Ident receiver — declared blind spot, same as call form
+		}
+		pos := fset.Position(sel.Pos())
+		ds = append(ds, Diagnostic{Rel: relPath, Line: pos.Line, Message: violSealAMethodValue})
 	})
 	return ds
 }
@@ -298,6 +348,8 @@ func TestSpanRecordErrorSeal(t *testing.T) {
 			rel := filepath.ToSlash(p.Rel(file))
 			// A: callsite locality — all files in the package.
 			ds = append(ds, sealAViolationsInFile(p.Fset, file, rel)...)
+			// A method-value: deferred-invocation form — all files.
+			ds = append(ds, sealAMethodValueViolationsInFile(p.Fset, file, rel)...)
 			// B: argument form — only the sink file.
 			if rel == recordErrorSinkFile {
 				redactionLocal := redactionLocalName(file)
@@ -313,15 +365,15 @@ func TestSpanRecordErrorSeal(t *testing.T) {
 // spots of SPAN-RECORD-ERROR-SEAL-01 do not appear in production adapters/otel
 // code, per .claude/rules/gocell/ai-robust.md §"工具选定后强制盲区自检".
 //
-// Checked blind spots:
+// Checked blind spot:
 //  1. RecordError on plain *ast.Ident receiver (local variable, not a field
-//     access): `var s Span; s.RecordError(err)`.
-//  2. RecordError used as a method-value (not as a call Fun): the AST
-//     for this looks like a SelectorExpr whose parent is NOT a CallExpr.
-//     Checking (1) is sufficient here because a method-value on s.inner would
-//     still have a SelectorExpr receiver and be indistinguishable at the
-//     syntactic level — this shape is still caught by A for any SelectorExpr
-//     receiver. Only (1) is a genuine blind spot.
+//     access): `var s Span; s.RecordError(err)`. This is the sole remaining
+//     A blind spot.
+//
+// The method-value form on a FIELD receiver (f := s.inner.RecordError) is NO
+// LONGER a blind spot (#1432): sealAMethodValueViolationsInFile flags it, since
+// sealAViolationsInFile alone only scans CallExpr.Fun and would miss the deferred
+// invocation. Only the Ident-receiver form (1) remains uncovered.
 func TestSpanRecordErrorSeal_NoBlindspotsInProduction(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -425,6 +477,94 @@ func leakViaInterface(s Span, err error) {
 			} else {
 				assert.Empty(t, diags,
 					"A must not flag %q: %s; got %v", name, tc.desc, diags)
+			}
+		})
+	}
+}
+
+// TestSpanRecordErrorSeal_MethodValue_DetectsViolation is the reverse-fixture for
+// the A method-value sub-check (#1432): sealAMethodValueViolationsInFile must
+// flag a RecordError method-value taken on a field receiver outside the sink
+// body, must NOT flag a normal call (covered by sealAViolationsInFile), must NOT
+// flag a method-value taken inside the sink body, and must NOT flag an
+// Ident-receiver method-value (declared blind spot).
+func TestSpanRecordErrorSeal_MethodValue_DetectsViolation(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		src     string
+		wantVio bool
+		desc    string
+	}{
+		"method_value_outside_body": {
+			src: `package otel
+import oteltrace "go.opentelemetry.io/otel/trace"
+type otelSpan struct { inner oteltrace.Span }
+func (s *otelSpan) RecordError(err error) {
+	s.inner.RecordError(err)
+}
+// VIOLATION: RecordError taken as a method-value on a field receiver, outside body
+func leakViaMethodValue(s *otelSpan) func(error) {
+	f := s.inner.RecordError
+	return f
+}
+`,
+			wantVio: true,
+			desc:    "field.RecordError method-value outside otelSpan body",
+		},
+		"call_not_method_value": {
+			src: `package otel
+import oteltrace "go.opentelemetry.io/otel/trace"
+type otelSpan struct { inner oteltrace.Span }
+func (s *otelSpan) RecordError(err error) {
+	s.inner.RecordError(err)
+}
+func helper(s *otelSpan, err error) {
+	s.inner.RecordError(err)  // a CALL, not a method-value — not this check's concern
+}
+`,
+			wantVio: false,
+			desc:    "plain call is covered by sealAViolationsInFile, not the method-value check",
+		},
+		"method_value_inside_body": {
+			src: `package otel
+import oteltrace "go.opentelemetry.io/otel/trace"
+type otelSpan struct { inner oteltrace.Span }
+func (s *otelSpan) RecordError(err error) {
+	f := s.inner.RecordError  // inside sink body — compliant
+	f(err)
+}
+`,
+			wantVio: false,
+			desc:    "method-value inside the sink body is sanctioned",
+		},
+		"ident_receiver_method_value": {
+			src: `package otel
+type Span interface{ RecordError(error) }
+func leak(s Span) func(error) {
+	return s.RecordError  // Ident receiver method-value — declared blind spot
+}
+`,
+			wantVio: false,
+			desc:    "Ident-receiver method-value is the declared blind spot",
+		},
+	}
+
+	for name, tc := range cases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "span.go", tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err, "fixture must parse")
+
+			diags := sealAMethodValueViolationsInFile(fset, file, "span.go")
+			if tc.wantVio {
+				assert.NotEmpty(t, diags,
+					"method-value check must detect violation for %q: %s; got no diags", name, tc.desc)
+			} else {
+				assert.Empty(t, diags,
+					"method-value check must not flag %q: %s; got %v", name, tc.desc, diags)
 			}
 		})
 	}

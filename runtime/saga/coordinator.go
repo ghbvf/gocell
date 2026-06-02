@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
+	"github.com/ghbvf/gocell/runtime/saga/internal/sagalog"
 )
 
 // Compile-time interface checks.
@@ -466,7 +467,7 @@ drain:
 	// so it cannot hang on an unreachable backend; future renewals stop and the
 	// key expires by TTL expiry (see orphanInflightLocks for the bound). The
 	// journal lease_id CAS fences the orphaned step at commit.
-	c.orphanInflightLocks()
+	c.orphanInflightLocks(ctx)
 	if cancel != nil {
 		cancel()
 	}
@@ -504,7 +505,7 @@ drain:
 // window from Stop), not a hard cap measured from the Stop call. This is the
 // deliberate cost of I/O-free shutdown (resilient even when the backend is
 // unreachable at shutdown).
-func (c *Coordinator) orphanInflightLocks() {
+func (c *Coordinator) orphanInflightLocks(ctx context.Context) {
 	var n int
 	c.inflightLocks.Range(func(key, val any) bool {
 		d, ok := val.(inflightDrive)
@@ -514,16 +515,13 @@ func (c *Coordinator) orphanInflightLocks() {
 		d.orphan()
 		n++
 		instanceID, _ := key.(idutil.SafeID)
-		c.logger.Debug(
-			"saga: orphaned in-flight distlock at shutdown",
-			slog.String("instance_id", string(instanceID)),
-			slog.String("definition_id", string(d.definitionID)),
-			slog.String("lease_id", string(d.leaseID)),
-		)
+		c.logger.LogAttrs(ctx, slog.LevelDebug, "saga: orphaned in-flight distlock at shutdown",
+			sagalog.InstanceFields(instanceID, d.leaseID,
+				slog.String("definition_id", string(d.definitionID)))...)
 		return true
 	})
 	if n > 0 {
-		c.logger.Info("saga: orphaned in-flight distlocks at shutdown", slog.Int("count", n))
+		c.logger.InfoContext(ctx, "saga: orphaned in-flight distlocks at shutdown", slog.Int("count", n))
 	}
 }
 
@@ -633,11 +631,10 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 			// Info; ErrSagaNotFound (instance gone) → Warn; default → Warn.
 			// Keeps multi-coordinator deployments from spamming WARN
 			// dashboards on every lease lost during normal handoff.
-			c.logger.Log(ctx, journalErrLevel(driveErr), "saga: drive failed",
-				slog.String("instance_id", string(ci.Instance.ID)),
-				slog.String("definition_id", string(ci.Instance.DefinitionID)),
-				slog.String("lease_id", string(ci.LeaseID)),
-				slog.Any("error", driveErr))
+			c.logger.LogAttrs(ctx, journalErrLevel(driveErr), "saga: drive failed",
+				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+					slog.String("definition_id", string(ci.Instance.DefinitionID)),
+					slog.Any("error", driveErr))...)
 		}
 		defID := ci.Instance.DefinitionID
 		c.safeObserve(ctx, "ObserveDrive", func() { c.observer.ObserveDrive(ctx, c.labelDefinitionID(defID), driveResult) })
@@ -766,11 +763,10 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 
 	cursor, prevState, foldErr := foldEvents(events, def)
 	if foldErr != nil {
-		c.logger.WarnContext(ctx, "saga: fold failed, marking terminal",
-			slog.String("instance_id", string(ci.Instance.ID)),
-			slog.String("definition_id", string(ci.Instance.DefinitionID)),
-			slog.String("lease_id", string(ci.LeaseID)),
-			slog.Any("error", foldErr))
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: fold failed, marking terminal",
+			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
+				slog.Any("error", foldErr))...)
 		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusFailed)
 	}
 	if cursor >= def.Len() {
@@ -834,10 +830,9 @@ func (c *Coordinator) routeOutcome(
 		// let another coordinator re-claim on the next tick.
 		return nil
 	case executor.OutcomeLeaseLost:
-		c.logger.InfoContext(ctx, "saga: lease lost during step run; another leader took over",
-			slog.String("instance_id", string(ci.Instance.ID)),
-			slog.String("definition_id", string(def.ID)),
-			slog.String("lease_id", string(ci.LeaseID)))
+		c.logger.LogAttrs(ctx, slog.LevelInfo, "saga: lease lost during step run; another leader took over",
+			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+				slog.String("definition_id", string(def.ID)))...)
 		return nil
 	default:
 		return fmt.Errorf("saga: unknown executor outcome: %v", res.Outcome)
@@ -989,10 +984,9 @@ func (c *Coordinator) reverseWalkCompensate(
 		cs := committed[i]
 		step, found := stepByName[cs.name]
 		if !found {
-			c.logger.WarnContext(hbCtx, "saga: compensation: unknown committed step name, skipping",
-				slog.String("instance_id", string(ci.Instance.ID)),
-				slog.String("step_name", string(cs.name)),
-				slog.String("lease_id", string(ci.LeaseID)))
+			c.logger.LogAttrs(hbCtx, slog.LevelWarn, "saga: compensation: unknown committed step name, skipping",
+				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+					slog.String("step_name", string(cs.name)))...)
 			continue
 		}
 		if compensateErr := c.compensateOneStep(hbCtx, ci, step, cs.payload); compensateErr != nil {
@@ -1106,12 +1100,11 @@ func (c *Coordinator) compensateOneStep(
 	}
 	compensateErr := c.executor.Compensate(ctx, &ci.Instance, ci.LeaseID, step, committedPayload)
 	if compensateErr != nil {
-		c.logger.WarnContext(ctx, "saga: compensation: step compensate failed, continuing",
-			slog.String("instance_id", string(ci.Instance.ID)),
-			slog.String("definition_id", string(ci.Instance.DefinitionID)),
-			slog.String("step_name", string(step.Name)),
-			slog.String("lease_id", string(ci.LeaseID)),
-			slog.Any("error", redaction.RedactAny(compensateErr)))
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: compensation: step compensate failed, continuing",
+			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
+				slog.String("step_name", string(step.Name)),
+				slog.Any("error", redaction.RedactAny(compensateErr)))...)
 		if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 			_, aErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
 				Kind:     journal.KindStepCompensationFailed,
@@ -1120,12 +1113,11 @@ func (c *Coordinator) compensateOneStep(
 			})
 			return aErr
 		}); txErr != nil {
-			c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepCompensationFailed",
-				slog.String("instance_id", string(ci.Instance.ID)),
-				slog.String("definition_id", string(ci.Instance.DefinitionID)),
-				slog.String("step_name", string(step.Name)),
-				slog.String("lease_id", string(ci.LeaseID)),
-				slog.Any("error", txErr))
+			c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: compensation: failed to append KindStepCompensationFailed",
+				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+					slog.String("definition_id", string(ci.Instance.DefinitionID)),
+					slog.String("step_name", string(step.Name)),
+					slog.Any("error", txErr))...)
 		}
 		return compensateErr
 	}
@@ -1140,12 +1132,11 @@ func (c *Coordinator) compensateOneStep(
 		})
 		return aErr
 	}); txErr != nil {
-		c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepCompensated",
-			slog.String("instance_id", string(ci.Instance.ID)),
-			slog.String("definition_id", string(ci.Instance.DefinitionID)),
-			slog.String("step_name", string(step.Name)),
-			slog.String("lease_id", string(ci.LeaseID)),
-			slog.Any("error", txErr))
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: compensation: failed to append KindStepCompensated",
+			sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
+				slog.String("step_name", string(step.Name)),
+				slog.Any("error", txErr))...)
 	}
 	return nil
 }
@@ -1217,10 +1208,9 @@ func (c *Coordinator) markTerminal(ctx context.Context, id, leaseID idutil.SafeI
 		return fmt.Errorf("MarkTerminal(%s): %w", finalStatus, err)
 	}
 	if !ok {
-		c.logger.WarnContext(ctx, "saga: MarkTerminal reported stale lease (ok=false)",
-			slog.String("instance_id", string(id)),
-			slog.String("lease_id", string(leaseID)),
-			slog.String("final_status", finalStatus.String()))
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: MarkTerminal reported stale lease (ok=false)",
+			sagalog.InstanceFields(id, leaseID,
+				slog.String("final_status", finalStatus.String()))...)
 	}
 	return nil
 }

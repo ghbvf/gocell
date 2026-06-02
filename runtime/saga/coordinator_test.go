@@ -1882,8 +1882,6 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	// Capture logs so we can assert the compensation-failure log carries lease_id
-	// (#1211): an operator must be able to correlate the entry to the claim cycle.
 	var logBuf syncBuffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
@@ -1899,9 +1897,6 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 	// Drive step1 → step2 → step3 (step3 fails, triggers compensation walk).
 	// After each non-terminal step completes, the journal lease remains active for
 	// LeaseDuration (60s). Advance past it so the next ClaimPending can re-claim.
-	// compLeaseID holds the lease of the last (compensation) round so we can
-	// assert the compensation-failed log carries it.
-	var compLeaseID idutil.SafeID
 	for i := 0; i < 3; i++ {
 		// Expire any previous lease before claiming.
 		clk.Advance(testtime.D60s + testtime.D1ms)
@@ -1912,7 +1907,6 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 		if len(claimed) == 0 {
 			break // instance terminal
 		}
-		compLeaseID = claimed[0].LeaseID
 		if err := c.driveOne(context.Background(), claimed[0]); err != nil {
 			t.Fatalf("driveOne round %d: %v", i, err)
 		}
@@ -1941,13 +1935,9 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 		t.Errorf("compensation order = %v, want %v", got, wantOrder)
 	}
 
-	// #1211: the "step compensate failed, continuing" Warn must carry lease_id.
 	entry := sloghelper.FindLogEntry(logBuf.String(), "step compensate failed, continuing")
 	if entry == nil {
 		t.Fatal("expected WARN log: step compensate failed, continuing")
-	}
-	if entry["lease_id"] != string(compLeaseID) {
-		t.Errorf("compensate-failed log lease_id = %v, want %q", entry["lease_id"], string(compLeaseID))
 	}
 }
 
@@ -1969,10 +1959,12 @@ func (f *foldFailJournal) Load(ctx context.Context, instanceID idutil.SafeID) ([
 	return append(evs, journal.Event{Kind: journal.KindStepFailed, StepName: "phantom"}), nil
 }
 
-// TestDriveOne_FoldFailed_LeaseIDLogged asserts the defensive "fold failed,
-// marking terminal" log carries lease_id (#1211). foldFailJournal injects a
-// KindStepFailed into Load so foldEvents returns an error during driveOne.
-func TestDriveOne_FoldFailed_LeaseIDLogged(t *testing.T) {
+// TestDriveOne_FoldFailed_LogsTerminalMark asserts the defensive "fold failed,
+// marking terminal" branch is reached and logs (lease_id presence is now
+// structurally guaranteed by the SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 funnel).
+// foldFailJournal injects a KindStepFailed into Load so foldEvents returns an
+// error during driveOne.
+func TestDriveOne_FoldFailed_LogsTerminalMark(t *testing.T) {
 	const defID idutil.SafeID = "foldfaillog"
 
 	def := &ksaga.Definition{
@@ -2010,18 +2002,23 @@ func TestDriveOne_FoldFailed_LeaseIDLogged(t *testing.T) {
 	if entry == nil {
 		t.Fatal("expected WARN log: fold failed, marking terminal")
 	}
+	// End-to-end proof: sagalog.InstanceFields is wired into this LogAttrs call at runtime (complements archtest B1).
 	if entry["lease_id"] != string(claimed[0].LeaseID) {
 		t.Errorf("fold-failed log lease_id = %v, want %q", entry["lease_id"], string(claimed[0].LeaseID))
 	}
+	if entry["instance_id"] != string(inst.ID) {
+		t.Errorf("fold-failed log instance_id = %v, want %q", entry["instance_id"], string(inst.ID))
+	}
 }
 
-// TestReverseWalkCompensate_UnknownStep_LeaseIDLogged asserts the "unknown
-// committed step name, skipping" Warn carries lease_id (#1211). White-box: a
+// TestReverseWalkCompensate_UnknownStep_LogsSkip asserts the "unknown committed
+// step name, skipping" Warn is emitted (lease_id presence is now structurally
+// guaranteed by the SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 funnel). White-box: a
 // committed entry whose name is absent from stepByName forces the unknown-step
 // branch directly, without needing a definition-drift fake journal — this is a
 // defensive branch (a committed step name not present in the current
 // definition) that the normal drive path does not reach.
-func TestReverseWalkCompensate_UnknownStep_LeaseIDLogged(t *testing.T) {
+func TestReverseWalkCompensate_UnknownStep_LogsSkip(t *testing.T) {
 	const leaseID = idutil.SafeID("lease-unknown-step")
 	var logBuf syncBuffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -2053,9 +2050,6 @@ func TestReverseWalkCompensate_UnknownStep_LeaseIDLogged(t *testing.T) {
 	if entry == nil {
 		t.Fatal("expected WARN log: unknown committed step name, skipping")
 	}
-	if entry["lease_id"] != string(leaseID) {
-		t.Errorf("unknown-step log lease_id = %v, want %q", entry["lease_id"], string(leaseID))
-	}
 }
 
 // mustNewUUID is a test helper that creates a UUID or fatals.
@@ -2066,6 +2060,362 @@ func mustNewUUID(t *testing.T) idutil.SafeID {
 		t.Fatalf("NewUUID: %v", err)
 	}
 	return idutil.SafeID(id)
+}
+
+// ---------------------------------------------------------------------------
+// loadErrJournal — wraps MemJournal and injects a Load error
+// ---------------------------------------------------------------------------
+
+// loadErrJournal wraps a MemJournal and returns a fixed error from Load.
+// Used by TestTickOnce_DriveOneFails_LogsDriveFailed to force driveOne to
+// return an error so the "saga: drive failed" log branch (coordinator.go:618)
+// is hit when called via tickOnce.
+type loadErrJournal struct {
+	*journal.MemJournal
+	loadErr error
+}
+
+func (l *loadErrJournal) Load(ctx context.Context, instanceID idutil.SafeID) ([]journal.Event, error) {
+	return nil, l.loadErr
+}
+
+// ---------------------------------------------------------------------------
+// TestTickOnce_DriveOneFails_LogsDriveFailed — covers coordinator.go:618
+// ---------------------------------------------------------------------------
+
+// TestTickOnce_DriveOneFails_LogsDriveFailed verifies that when driveOne
+// returns a non-nil error, tickOnce logs "saga: drive failed" (line 618).
+// Trigger: a journal whose Load returns an error so driveOne's event-replay
+// step fails → driveOne returns an error → tickOnce logs the drive failure.
+// tickOnce is the only call site of driveOne (SAGA-DRIVE-BEHIND-LEADER-GATE-01).
+func TestTickOnce_DriveOneFails_LogsDriveFailed(t *testing.T) {
+	const defID idutil.SafeID = "tickoncedriveload"
+
+	def := &ksaga.Definition{
+		ID:    defID,
+		Steps: []ksaga.Step{{Name: "step1", Run: noopStep}},
+	}
+
+	clk := newFakeClock()
+	memJ := newMemJournal(clk)
+	j := &loadErrJournal{
+		MemJournal: memJ,
+		loadErr:    errors.New("injected load error"),
+	}
+
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	// Enqueue an instance so ClaimPending returns it during tickOnce.
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// tickOnce claims the instance and calls driveOne; Load fails → driveOne
+	// returns error → "saga: drive failed" is logged at coordinator.go:618.
+	if err := c.tickOnce(context.Background()); err != nil {
+		t.Fatalf("tickOnce: unexpected error: %v", err)
+	}
+
+	entry := sloghelper.FindLogEntry(logBuf.String(), "saga: drive failed")
+	if entry == nil {
+		t.Fatal("expected log entry with message containing 'saga: drive failed'")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// appendFailOnKindJournal — wraps MemJournal; fails Append on a target Kind
+// ---------------------------------------------------------------------------
+
+// appendFailOnKindJournal wraps a MemJournal and returns a fixed error from
+// Append when the event Kind matches failKind. All other Append calls are
+// forwarded to the inner journal. Used by
+// TestCompensateOneStep_AppendCompensationFailedErrors_Logs and
+// TestCompensateOneStep_AppendCompensatedErrors_Logs to inject Append errors
+// at the exact compensation journal points (coordinator.go:1032 and :1051)
+// without disturbing the forward-phase journal writes.
+type appendFailOnKindJournal struct {
+	*journal.MemJournal
+	failKind journal.EventKind
+	failErr  error
+}
+
+func (a *appendFailOnKindJournal) Append(
+	ctx context.Context,
+	instanceID, leaseID idutil.SafeID,
+	event journal.Event,
+) (int64, error) {
+	if event.Kind == a.failKind {
+		return 0, a.failErr
+	}
+	return a.MemJournal.Append(ctx, instanceID, leaseID, event)
+}
+
+// ---------------------------------------------------------------------------
+// TestCompensateOneStep_AppendCompensationFailedErrors_Logs — covers :1032
+// ---------------------------------------------------------------------------
+
+// TestCompensateOneStep_AppendCompensationFailedErrors_Logs verifies that
+// when a compensate step FAILS and the subsequent Append of
+// KindStepCompensationFailed also errors, the coordinator logs
+// "saga: compensation: failed to append KindStepCompensationFailed"
+// (coordinator.go:1032). Trigger: saga with two steps; step1 succeeds,
+// step2 fails (triggering compensation); step1's Compensate returns an error;
+// the journal Append for KindStepCompensationFailed returns an error.
+func TestCompensateOneStep_AppendCompensationFailedErrors_Logs(t *testing.T) {
+	const defID idutil.SafeID = "appendcompfailederr"
+
+	clk := newFakeClock()
+	memJ := newMemJournal(clk)
+	j := &appendFailOnKindJournal{
+		MemJournal: memJ,
+		failKind:   journal.KindStepCompensationFailed,
+		failErr:    errors.New("injected KindStepCompensationFailed append error"),
+	}
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "step1",
+				Run:  noopStep,
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+					return errors.New("step1 compensation deliberately fails")
+				},
+			},
+			{
+				Name: "step2",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return nil, errors.New("step2 deliberately fails")
+				},
+			},
+		},
+	}
+
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Drive step1 (succeeds), then step2 (fails → triggers compensation).
+	for i := 0; i < 2; i++ {
+		clk.Advance(testtime.D60s + testtime.D1ms)
+		claimed, _, claimErr := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+		if claimErr != nil {
+			t.Fatalf("ClaimPending round %d: %v", i, claimErr)
+		}
+		if len(claimed) == 0 {
+			break
+		}
+		// driveOne may return an error on compensation round; ignore it here.
+		_ = c.driveOne(context.Background(), claimed[0])
+	}
+
+	entry := sloghelper.FindLogEntry(logBuf.String(), "saga: compensation: failed to append KindStepCompensationFailed")
+	if entry == nil {
+		t.Fatal("expected log entry with message containing 'saga: compensation: failed to append KindStepCompensationFailed'")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestCompensateOneStep_AppendCompensatedErrors_Logs — covers :1051
+// ---------------------------------------------------------------------------
+
+// TestCompensateOneStep_AppendCompensatedErrors_Logs verifies that when a
+// compensate step SUCCEEDS but the subsequent Append of KindStepCompensated
+// errors, the coordinator logs
+// "saga: compensation: failed to append KindStepCompensated"
+// (coordinator.go:1051). Trigger: saga with two steps; step1 succeeds with a
+// Compensate func that returns nil; step2 fails (triggering compensation);
+// the journal Append for KindStepCompensated returns an error.
+func TestCompensateOneStep_AppendCompensatedErrors_Logs(t *testing.T) {
+	const defID idutil.SafeID = "appendcompensatederr"
+
+	clk := newFakeClock()
+	memJ := newMemJournal(clk)
+	j := &appendFailOnKindJournal{
+		MemJournal: memJ,
+		failKind:   journal.KindStepCompensated,
+		failErr:    errors.New("injected KindStepCompensated append error"),
+	}
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "step1",
+				Run:  noopStep,
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+					return nil // compensate succeeds
+				},
+			},
+			{
+				Name: "step2",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return nil, errors.New("step2 deliberately fails")
+				},
+			},
+		},
+	}
+
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Drive step1 (succeeds), then step2 (fails → triggers compensation).
+	for i := 0; i < 2; i++ {
+		clk.Advance(testtime.D60s + testtime.D1ms)
+		claimed, _, claimErr := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+		if claimErr != nil {
+			t.Fatalf("ClaimPending round %d: %v", i, claimErr)
+		}
+		if len(claimed) == 0 {
+			break
+		}
+		_ = c.driveOne(context.Background(), claimed[0])
+	}
+
+	entry := sloghelper.FindLogEntry(logBuf.String(), "saga: compensation: failed to append KindStepCompensated")
+	if entry == nil {
+		t.Fatal("expected log entry with message containing 'saga: compensation: failed to append KindStepCompensated'")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// staleMarkTerminalJournal — wraps MemJournal; returns (false, nil) from MarkTerminal
+// ---------------------------------------------------------------------------
+
+// staleMarkTerminalJournal wraps a MemJournal and always returns (false, nil)
+// from MarkTerminal, simulating the CAS-fence stale-lease case where the row
+// exists but the lease no longer matches. Used by
+// TestMarkTerminal_StaleLease_LogsWarning to cover the
+// "saga: MarkTerminal reported stale lease (ok=false)" branch
+// (coordinator.go:1127).
+type staleMarkTerminalJournal struct {
+	*journal.MemJournal
+}
+
+func (s *staleMarkTerminalJournal) MarkTerminal(
+	ctx context.Context,
+	instanceID, leaseID idutil.SafeID,
+	finalStatus ksaga.Status,
+) (bool, error) {
+	return false, nil
+}
+
+// ---------------------------------------------------------------------------
+// TestMarkTerminal_StaleLease_LogsWarning — covers coordinator.go:1127
+// ---------------------------------------------------------------------------
+
+// TestMarkTerminal_StaleLease_LogsWarning verifies that when
+// journal.MarkTerminal returns (ok=false, err=nil) (stale lease CAS fence),
+// the coordinator logs
+// "saga: MarkTerminal reported stale lease (ok=false)" (coordinator.go:1127)
+// and driveOne returns nil (stale is not an error; another coordinator took over).
+//
+// Two-drive approach: first drive succeeds (step1 runs, KindStepCompleted
+// appended) but staleMarkTerminalJournal.MarkTerminal returns (false, nil) so
+// the instance is NOT marked terminal in MemJournal and remains claimable.
+// Second drive sees cursor=1 >= def.Len()=1 and calls c.markTerminal (the
+// Coordinator helper at coordinator.go:1121), which calls c.journal.MarkTerminal
+// and gets (false, nil) → logs the stale-lease warning at coordinator.go:1127.
+func TestMarkTerminal_StaleLease_LogsWarning(t *testing.T) {
+	const defID idutil.SafeID = "marktermstaleleaseok"
+
+	clk := newFakeClock()
+	memJ := newMemJournal(clk)
+	j := &staleMarkTerminalJournal{MemJournal: memJ}
+
+	def := &ksaga.Definition{
+		ID:    defID,
+		Steps: []ksaga.Step{{Name: "step1", Run: noopStep}},
+	}
+
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	// Enqueue into the inner MemJournal so ClaimPending can find it.
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// First drive: step1 succeeds. commitStepCompleted appends KindStepCompleted
+	// and calls c.journal.MarkTerminal inside the tx → staleMarkTerminalJournal
+	// returns (false, nil) → instance is NOT marked terminal in MemJournal.
+	claimed1, _, claimErr := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil || len(claimed1) != 1 {
+		t.Fatalf("ClaimPending round 1: %v / %d", claimErr, len(claimed1))
+	}
+	drive1Err := c.driveOne(context.Background(), claimed1[0])
+	if drive1Err != nil {
+		t.Fatalf("driveOne round 1 should return nil, got: %v", drive1Err)
+	}
+
+	// Advance clock past lease expiry so the instance is claimable again.
+	clk.Advance(testtime.D60s + testtime.D1ms)
+
+	// Second drive: cursor = 1 >= def.Len() = 1 → calls c.markTerminal (the
+	// Coordinator helper at coordinator.go:1121) → staleMarkTerminalJournal
+	// returns (false, nil) → "saga: MarkTerminal reported stale lease (ok=false)"
+	// is logged at coordinator.go:1127; driveOne returns nil.
+	claimed2, _, claimErr2 := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr2 != nil || len(claimed2) != 1 {
+		t.Fatalf("ClaimPending round 2: %v / %d", claimErr2, len(claimed2))
+	}
+	drive2Err := c.driveOne(context.Background(), claimed2[0])
+	if drive2Err != nil {
+		t.Errorf("driveOne round 2 should return nil on stale MarkTerminal (ok=false), got: %v", drive2Err)
+	}
+
+	entry := sloghelper.FindLogEntry(logBuf.String(), "saga: MarkTerminal reported stale lease (ok=false)")
+	if entry == nil {
+		t.Fatal("expected log entry with message containing 'saga: MarkTerminal reported stale lease (ok=false)'")
+	}
 }
 
 // ---------------------------------------------------------------------------

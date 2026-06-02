@@ -29,6 +29,8 @@ WHERE status IN (2, 3)            -- Running / Compensating
 ORDER BY updated_at ASC;
 ```
 
+**Log 诊断**：每条 per-instance saga 日志（心跳 / drive / 补偿 / leader 选举）均结构性保证携带 `instance_id` + `lease_id` 字段（`SAGA-SLOG-INSTANCE-FIELDS-CALLER-01`）。运维人员可通过 `instance_id=<id>` 过滤结构化日志，关联某卡死实例的 claim / 心跳活动，无需查询数据库。
+
 **处置**：
 
 1. **正常自愈路径（优先）**：lease TTL 过期后，任一存活 Coordinator 的 `ClaimPending` 会自动接管过期 lease 并继续驱动——**无需人工介入**。先确认是否有存活 Coordinator（检查 `saga_coordinator_ready` 探针 / leader 选举日志）。

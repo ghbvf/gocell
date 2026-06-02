@@ -57,6 +57,10 @@ type CellGenSpec struct {
 	// WebhookDispatches holds the per-slice outbound webhook registrations.
 	// Each entry emits one reg.RegisterWebhookDispatch() call.
 	WebhookDispatches []WebhookDispatchGenSpec
+	// Projections holds the per-slice CQRS projection registrations derived from
+	// subscribe CUs that carry a non-empty projection: field. Each entry emits
+	// one reg.RegisterProjection() call.
+	Projections []ProjectionGenSpec
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.
@@ -163,6 +167,19 @@ type WebhookDispatchGenSpec struct {
 	SourceID string
 	// SelectorExpr is the dotted selector reference, e.g. "c.shopifySvc.ShopifyTarget".
 	SelectorExpr string
+}
+
+// ProjectionGenSpec describes one reg.RegisterProjection() call derived from a
+// subscribe CU carrying a projection: field.
+type ProjectionGenSpec struct {
+	ContractID   string // event contract id (input stream); Spec.Kind=="event"
+	SliceID      string // primary sort key (mirrors SubscriptionGenSpec)
+	ProjectionID string // snake_case probe-name; half of checkpoint key
+	ApplyExpr    string // dotted apply ref, e.g. "c.projSvc.HandleOrderCreated"
+	OnResetExpr  string // dotted onReset ref or "" (renders nil)
+	// Populated by EnrichProjectionsWithModulePath (post-build, FS-derived):
+	SpecPackage string // import path of the generated event contract package
+	SpecAlias   string // "proj0","proj1",... unique import alias
 }
 
 // SliceGenSpec is the rendering input for slice.tmpl. It declares the

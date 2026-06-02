@@ -14,3 +14,8 @@ var ExportedApplyAssemblyDerivations = applyAssemblyDerivations
 // ExportedDeriveWebhookEndpoints exposes the unexported deriveWebhookEndpoints
 // function for use in package metadata_test test files (added by PR-2 webhook impl).
 var ExportedDeriveWebhookEndpoints = deriveWebhookEndpoints
+
+// ExportedValidateProjectionUniqueness exposes the unexported
+// validateProjectionUniqueness function for use in package metadata_test test
+// files (added by PR-04 projection/onReset metadata layer).
+var ExportedValidateProjectionUniqueness = validateProjectionUniqueness

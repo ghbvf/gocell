@@ -201,6 +201,18 @@ type ContractUsage struct {
 	// dispatcher to resolve the outbound webhook URL at runtime. REQUIRED for
 	// role=webhook-dispatch; forbidden for all other roles.
 	TargetSelector string `yaml:"targetSelector,omitempty"`
+	// Projection, when set on a role=subscribe CU, makes cellgen emit
+	// reg.RegisterProjection (an L3 CQRS projection) instead of reg.Subscribe.
+	// The value is the ProjectionID — half of the checkpoint key
+	// (cellID, projectionID). MUST be a snake_case probe-name identifier:
+	// ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$. Optional; forbidden on every
+	// non-subscribe role.
+	Projection string `yaml:"projection,omitempty"`
+	// OnReset names the optional rebuild Reset-phase hook method on the same
+	// slice service field as Handler (cell.ProjectionResetHook). Only meaningful
+	// when Projection is set; exported Go identifier (^[A-Z][A-Za-z0-9_]*$).
+	// Optional; subscribe-only. Forbidden when Projection is empty.
+	OnReset string `yaml:"onReset,omitempty"`
 }
 
 // SliceVerifyMeta holds verification requirements for a Slice.

@@ -388,6 +388,77 @@ EventRouter 在所有 cell 注册完成后按四阶段生命周期启动：
    `bootstrap.WithEventRouterReadyTimeout` 可调），任何未就绪的订阅会出现在错误信息中
 4. **Block**：阻塞至 ctx cancel 或运行时错误
 
+### 7b. 注册 L3 投影（可选）
+
+L3 投影（CQRS 读模型）是 `role: subscribe` contractUsage 的派生路径：在 CU 上添加
+`projection: <id>` 字段，cellgen 就会生成 `reg.RegisterProjection(...)` 而非
+`reg.Subscribe(...)`。`<id>` 是 snake_case 的 `ProjectionID`，与 `cellID` 共同构成
+checkpoint 键 `(cell_id, projection_id)`。
+
+#### slice.yaml 最小示例
+
+```yaml
+contractUsages:
+  - contract: event.order-created.v1
+    role: subscribe
+    handler: HandleOrderCreated   # 实现 cell.ProjectionApply：func(ctx, outbox.Entry) error
+    projection: order_status      # snake_case ProjectionID → cellgen 生成 reg.RegisterProjection
+    onReset: ResetOrderStatus     # 可选：重建 Reset 阶段钩子（cell.ProjectionResetHook）
+  - contract: projection.order.status-summary.v1
+    role: provide                 # 正交角色：声明读/查询侧，与 projection: 字段无耦合
+```
+
+**关键约束：**
+
+- **handler 签名不同于普通订阅**：handler 方法必须实现 `cell.ProjectionApply` =
+  `func(ctx context.Context, event outbox.Entry) error`，返回 `error`，**不是**
+  `outbox.HandleResult`。
+- **`onReset` 可选**：若读模型表无需清空（例如增量追加语义），省略即可；否则
+  指定方法名，实现 `cell.ProjectionResetHook` = `func(ctx context.Context) error`。
+- **`role: provide` 正交**：`kind: projection` contract 的 `role: provide` CU 声明读
+  /查询侧，与 `projection:` 字段无绑定关系，两者可独立存在于不同 slice。
+- **一个 slice 可声明多个投影**：每条带 `projection:` 的 CU 派生一个独立
+  `reg.RegisterProjection`（一个 projectionID + 一个 checkpoint）；projectionID 在同
+  一 cell 内须唯一（parser `validateProjectionUniqueness` fail-closed 守卫）。
+- **`cell.yaml` 须声明 `consistencyLevel: L3`**（单向蕴含：使用投影 ⟹ L3；见
+  `.claude/rules/gocell/saga.md` §"L3 与 Saga 的关键澄清"）。当前此为约定 +
+  `validateProjectionUniqueness` 守卫，cell 级别的 parse-time Hard enforcement
+  （`PROJECTION-CONSISTENCY-PARSE-TIME-01`）在后续 PR-05 落地。
+
+#### cellgen 派生行为
+
+运行 `gocell generate cell` 后，`cell_gen.go`（DO-NOT-EDIT）中自动生成：
+
+```go
+// cell_gen.go (DO NOT EDIT) — cellgen 从 slice.yaml contractUsages[projection=order_status] 派生
+import ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
+// ...
+if err := reg.RegisterProjection(ordercreated.NewProjectionRequest(
+    c.orderProj.HandleOrderCreated, "order_status", "ordercell", "orderprojection",
+    c.orderProj.ResetOrderStatus, // onReset；未声明时此参为 nil
+)); err != nil {
+    return fmt.Errorf("ordercell: projection order_status: %w", err)
+}
+```
+
+`NewProjectionRequest` 签名为 `(apply cell.ProjectionApply, projectionID, cellID, sliceID string, onReset cell.ProjectionResetHook)`，由 contractgen 从 `event.order-created.v1` 的 contract.yaml 派生进 `generated/contracts/event/order-created/v1/projection_gen.go`。
+
+handler 实现示例（注意返回 `error`，不是 `outbox.HandleResult`）：
+
+```go
+// <slice>/service.go — ProjectionApply 签名
+func (s *Service) HandleOrderCreated(ctx context.Context, event outbox.Entry) error {
+    // tx 经 ctx 传递（ambient-tx，见 ADR Q1/Q2）；apply 与 checkpoint SaveOffset 在同一 CellTx 内提交
+    return s.store.Apply(ctx, event)
+}
+```
+
+bootstrap 将 `RegistrySnapshot.Projections` drain 为每个 projection 对应一个
+`projection.Coordinator`，checkpoint 以 ambient-tx 方式（`SaveOffset` 与业务 apply
+在同一 `CellTx` 内提交）实现 exactly-once。
+
+详见 ADR `docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md`（Q1–Q3 决策 + §6 威胁矩阵）。
+
 ### 8. 注册到 Assembly
 
 ```go

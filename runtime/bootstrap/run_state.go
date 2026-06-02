@@ -39,6 +39,8 @@ const (
 	reasonWorkerError
 	// reasonRouterError: the event router goroutine returned a non-nil error.
 	reasonRouterError
+	// reasonGRPCError: a gRPC server goroutine returned an unexpected error.
+	reasonGRPCError
 )
 
 // shutdownSignal bundles the reason with the originating error (if any).
@@ -78,9 +80,10 @@ type runState struct {
 	// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go (engageStopProcedure LIFO teardown).
 	teardowns []namedTeardown
 
-	// channels wired during phase6/7/8; awaited in phase9.
+	// channels wired during phase6/7/7b/8; awaited in phase9.
 	// nil channels are never selected (Go select semantics).
 	httpErrCh   chan error
+	grpcErrCh   chan error
 	workerErrCh chan error
 	routerErrCh chan error
 }

@@ -42,7 +42,7 @@ func startServing(t *testing.T, srv *grpcadapter.Server, lis net.Listener) (stop
 	ctx, cancel := context.WithTimeout(context.Background(), integServeTimeout)
 	done := make(chan error, 1)
 	go func() {
-		done <- srv.ServeListenerForTest(ctx, lis)
+		done <- srv.Serve(ctx, lis)
 	}()
 	return func() {
 		cancel()
@@ -230,6 +230,57 @@ func TestIntegration_ServerTLS(t *testing.T) {
 	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, st)
 }
 
+// TestIntegration_ServerOptionsCannotOverrideTLS is the fail-closed regression
+// for F1 (#1148): a caller-supplied grpc.Creds(insecure) in Config.ServerOptions
+// must NOT downgrade the adapter's validated TLS posture. grpc.NewServer applies
+// options in order and a later grpc.Creds wins, so New appends the adapter creds
+// LAST. Proof: with an insecure ServerOption present, a plaintext client is still
+// rejected (TLS enforced) and a TLS client still succeeds.
+func TestIntegration_ServerOptionsCannotOverrideTLS(t *testing.T) {
+	t.Parallel()
+
+	chain := genIntegChain(t)
+	cfg := grpcadapter.Config{
+		Addr:            "127.0.0.1:0",
+		ShutdownTimeout: integServeTimeout,
+		TLS: grpcadapter.TLSConfig{
+			CertPEM: chain.serverCertPEM,
+			KeyPEM:  chain.serverKeyPEM,
+		},
+		// Adversarial: try to downgrade transport security to plaintext.
+		ServerOptions: []grpc.ServerOption{grpc.Creds(insecure.NewCredentials())},
+	}
+	srv, err := grpcadapter.New(cfg)
+	require.NoError(t, err)
+
+	healthSrv := health.NewServer()
+	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := lis.Addr().String()
+
+	stop := startServing(t, srv, lis)
+	defer stop()
+	waitForServing(t, srv)
+
+	// Plaintext client must FAIL — TLS was not overridden by the insecure option.
+	plain := dialInsecure(t, addr)
+	defer func() { _ = plain.Close() }()
+	_, plainErr := healthCheck(t, plain)
+	require.Error(t, plainErr, "plaintext client must be rejected; adapter TLS must win over ServerOptions grpc.Creds")
+
+	// TLS client must still succeed.
+	rootCAs := x509.NewCertPool()
+	require.True(t, rootCAs.AppendCertsFromPEM(chain.rootCertPEM))
+	tlsCC := dialTLS(t, addr, rootCAs, "localhost")
+	defer func() { _ = tlsCC.Close() }()
+	st, err := healthCheck(t, tlsCC)
+	require.NoError(t, err)
+	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, st)
+}
+
 // TestIntegration_MTLS_WithValidClientCert verifies mTLS with a CA-signed client cert.
 func TestIntegration_MTLS_WithValidClientCert(t *testing.T) {
 	t.Parallel()
@@ -354,7 +405,7 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 	serveCtx, serveCancel := context.WithTimeout(context.Background(), integServeTimeout)
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- srv.ServeListenerForTest(serveCtx, lis)
+		serveDone <- srv.Serve(serveCtx, lis)
 	}()
 	defer serveCancel()
 
@@ -436,7 +487,7 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 	defer serveCancel()
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- srv.ServeListenerForTest(serveCtx, lis)
+		serveDone <- srv.Serve(serveCtx, lis)
 	}()
 
 	waitForServing(t, srv)
@@ -467,7 +518,7 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 
 // TestIntegration_ServeContextCancel_GracefulDrain verifies the serve() ctx.Done
 // branch performs a real GRACEFUL drain — not a hard stop — when the context
-// passed to ServeListenerForTest is canceled (simulating a WorkerGroup / bootstrap
+// passed to Serve is canceled (simulating a WorkerGroup / bootstrap
 // external cancel: sibling worker crash, SIGTERM, etc.).
 //
 // To prove gracefulness (rather than merely that the branch returns
@@ -511,7 +562,7 @@ func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- srv.ServeListenerForTest(cancelableCtx, lis)
+		serveDone <- srv.Serve(cancelableCtx, lis)
 	}()
 
 	waitForServing(t, srv)

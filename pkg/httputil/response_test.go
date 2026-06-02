@@ -566,10 +566,11 @@ func TestWriteErrorBody_HappyPathStatusReachesWire(t *testing.T) {
 // TestWriteErrorBody_FailClosedOnMarshalFailure verifies writeErrorBody's
 // fail-closed contract via the sentinel writer in isolation: marshal
 // failure → 500 + canonical body. The body+status invariant is validated
-// directly because reaching the in-flow marshal-error branch would require
-// monkey-patching encoding/json (not a useful test seam). With the sealed
-// PublicDetail newtype, a non-serializable value injected via direct field
-// assignment triggers this path (see TestWriteError_DetailsBypassFencedBySentinel).
+// directly because the in-flow marshal-error branch is unreachable in
+// production — errcode.MarshalHTTPEnvelope cannot fail for any value the
+// sealed PublicDetail newtype admits (copyDetails filters invalid entries;
+// every wire-safe scalar marshals cleanly), so the branch is a defensive
+// guard rather than a reachable test seam.
 func TestWriteErrorBody_FailClosedOnMarshalFailure(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeInternalErrorSentinel(rec)
@@ -672,10 +673,11 @@ func TestLog5xx_DetailsRedacted(t *testing.T) {
 }
 
 // TestWriteErrorBody_PreservesInt64Precision verifies that int64 detail
-// values larger than 2^53 round-trip through writeErrorBody without
-// precision loss. The default json.Decoder coerces JSON numbers into
-// float64 for map[string]any, which silently truncates anything beyond
-// 2^53 — writeErrorBody mitigates this with json.Decoder.UseNumber().
+// values larger than 2^53 reach the wire without precision loss. The single-
+// pass errcode.MarshalHTTPEnvelope path encodes int64 directly (json.Marshal
+// is exact); there is no intermediate map[string]any that would coerce JSON
+// numbers to float64 and silently truncate anything beyond 2^53. This is the
+// regression guard for the round-trip removal in issue #622.
 //
 // Reproduces the "Medium F4" finding from PR #391 round-2 review:
 // slog.Int64("size", 9007199254740993) would otherwise lose precision.
@@ -694,36 +696,4 @@ func TestWriteErrorBody_PreservesInt64Precision(t *testing.T) {
 	// notation, no ".0", no "9007199254740992" rounding.
 	assert.Contains(t, rec.Body.String(), `"value":9007199254740993`,
 		"int64 detail must round-trip without precision loss")
-}
-
-// ioFailingWriter is a writer that fails after writing failAfter bytes.
-// Used to exercise the io.Writer error path in encodeErrorEnvelopeTo.
-type ioFailingWriter struct {
-	failAfter int
-	written   int
-}
-
-func (w *ioFailingWriter) Write(p []byte) (int, error) {
-	if w.written >= w.failAfter {
-		return 0, errors.New("simulated io failure")
-	}
-	n := len(p)
-	if n > w.failAfter-w.written {
-		n = w.failAfter - w.written
-	}
-	w.written += n
-	return n, nil
-}
-
-// TestEncodeErrorEnvelopeTo_FailingWriter verifies that encodeErrorEnvelopeTo
-// propagates a write error when the underlying io.Writer fails. This is only
-// reachable now that the parameter type is io.Writer (not *bytes.Buffer), which
-// makes the function directly testable with a synthetic failing writer.
-func TestEncodeErrorEnvelopeTo_FailingWriter(t *testing.T) {
-	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "fail path test")
-	w := &ioFailingWriter{failAfter: 0}
-	err := encodeErrorEnvelopeTo(w, context.Background(), ec)
-	if err == nil {
-		t.Fatal("want err on io failure, got nil")
-	}
 }

@@ -27,9 +27,9 @@ import (
 // Returns immediately on the first violation so the error message is unambiguous.
 //
 // splitting into sub-validators is the obvious refactor but would scatter
-// the "first violation wins" ordering across multiple call sites.
-//
-//nolint:cyclop // sequential precondition gate covering ~16 distinct options;
+// the "first violation wins" ordering across multiple call sites; the nil
+// dependency sentinels are grouped into validateNilDependencySentinels to keep
+// this gate within the cognitive-complexity budget.
 func (b *Bootstrap) phase0ValidateOptions() error {
 	// Surface shutdown metrics registration errors before any component starts.
 	if b.shutdownMetricsErr != nil {
@@ -45,17 +45,11 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateHealthCheckers(); err != nil {
 		return err
 	}
-	if b.circuitBreakerNil {
-		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
+	if err := b.validateNilDependencySentinels(); err != nil {
+		return err
 	}
-	if b.managedResourceNil {
-		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
-	}
-	if b.closerNil {
-		return fmt.Errorf("bootstrap: managed closer must not be nil in WithManagedCloser")
-	}
-	if b.rateLimiterNil {
-		return fmt.Errorf("bootstrap: rate limiter must not be nil in WithRateLimiter")
+	if err := b.validateGRPCListenerConfigs(); err != nil {
+		return err
 	}
 	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
 		return err
@@ -84,6 +78,55 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	// Advisory check (non-blocking): warn when the declared K8s grace period
 	// is smaller than the bootstrap shutdown budget plus a 10s safety margin.
 	b.warnTerminationGracePeriodInsufficient()
+	return nil
+}
+
+// validateNilDependencySentinels rejects strong-dependency wiring options whose
+// input was nil (bare or typed). Each option's setter records a sentinel flag
+// instead of failing inline (functional options cannot return errors); phase0
+// surfaces them here with the option name. Extracted from phase0ValidateOptions
+// to keep that gate's cognitive complexity within budget.
+func (b *Bootstrap) validateNilDependencySentinels() error {
+	if b.circuitBreakerNil {
+		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
+	}
+	if b.managedResourceNil {
+		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
+	}
+	if b.closerNil {
+		return fmt.Errorf("bootstrap: managed closer must not be nil in WithManagedCloser")
+	}
+	if b.rateLimiterNil {
+		return fmt.Errorf("bootstrap: rate limiter must not be nil in WithRateLimiter")
+	}
+	if b.grpcServerNil {
+		return errcode.New(errcode.KindInternal, errcode.ErrGRPCServerMissing,
+			"bootstrap: gRPC server must not be nil in WithGRPCListener; "+
+				"both bare-nil and typed-nil interface values are rejected at phase0")
+	}
+	return nil
+}
+
+// validateGRPCListenerConfigs rejects per-listener shutdown-grace budgets that
+// are negative, mirroring the HTTP validateListenerConfig shutGrace check. A
+// negative budget would make the drain ctx expire immediately, silently
+// degrading every graceful stop into a hard stop.
+func (b *Bootstrap) validateGRPCListenerConfigs() error {
+	for _, gc := range b.grpcListenerConfigs {
+		// Mirror HTTP validateListenerConfig: a listener with neither an addr nor
+		// a pre-bound socket cannot bind. Fail fast at phase0 rather than letting
+		// net.Listen("tcp", "") fail in phase7b after HTTP has already started.
+		if gc.addr == "" && gc.net == nil {
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"bootstrap: gRPC listener requires a non-empty addr or a pre-bound "+
+					"listener via WithGRPCListenerNet")
+		}
+		if gc.shutGrace < 0 {
+			return fmt.Errorf("bootstrap: gRPC listener %q has negative shutdownGrace %v;"+
+				" use a non-negative duration or zero to inherit the global shutdownTimeout",
+				gc.addr, gc.shutGrace)
+		}
+	}
 	return nil
 }
 

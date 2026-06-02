@@ -5,7 +5,7 @@ package bootstrap
 //
 // Covers:
 //   - phase9AwaitShutdownSignal: blocks on ctx cancel / HTTP error / worker error / router error
-//   - drainHTTPErrors: collects all buffered HTTP errors before joining
+//   - drainBufferedErrors: collects all buffered errors (HTTP or gRPC) before joining
 //   - phase10OrchestrateShutdown: four explicit stages — readiness flip → HTTP drain → LIFO teardown → finalize
 //   - phase10ReadinessFlip: health handler SetShuttingDown + optional pre-shutdown delay
 //   - phase10LIFOTeardown: LIFO teardown with per-component error collection
@@ -21,14 +21,16 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync"
 
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// drainHTTPErrors collects the first error and any additional errors already
+// drainBufferedErrors collects the first error and any additional errors already
 // buffered in ch, then joins them. Called only after receiving the first error
-// from httpErrCh so the channel is guaranteed non-empty at entry.
-func drainHTTPErrors(ch <-chan error, first error) error {
+// from a transport error channel (httpErrCh or grpcErrCh), so the channel is
+// guaranteed non-empty at entry.
+func drainBufferedErrors(ch <-chan error, first error) error {
 	allErrs := []error{first}
 	for {
 		select {
@@ -45,12 +47,35 @@ func drainHTTPErrors(ch <-chan error, first error) error {
 	}
 }
 
+// drainTransports drains the HTTP and gRPC transport intakes CONCURRENTLY within
+// the shared stage-2 budget (ctx). Both are transport-intake drains that begin
+// together and run BEFORE LIFO teardown, so in-flight requests/RPCs drain while
+// workers / event router / assembly are still alive. Mirrors kube-apiserver
+// entering the drain phase for all transports at once — serializing them would
+// let a slow HTTP drain consume the shared budget and force gRPC into an
+// immediate hard-stop with a near-expired ctx. Both transports share the
+// ShutdownPhaseHTTPDrain metric (one budget bucket); per-transport error
+// attribution is preserved by the caller (teardown_http_drain / teardown_grpc_drain).
+func drainTransports(ctx context.Context, s *phaseState) (httpErr, grpcErr error) {
+	var wg sync.WaitGroup
+	if s.httpDrain != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); httpErr = s.httpDrain(ctx) }()
+	}
+	if s.grpcDrain != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); grpcErr = s.grpcDrain(ctx) }()
+	}
+	wg.Wait()
+	return httpErr, grpcErr
+}
+
 // phase9AwaitShutdownSignal blocks until one of: external ctx cancel, HTTP error,
-// worker error, or router error. It returns a shutdownSignal describing what fired.
-// It does NOT cancel workerCtx or runCtx — that happens in phase10.
+// gRPC error, worker error, or router error. It returns a shutdownSignal describing
+// what fired. It does NOT cancel workerCtx or runCtx — that happens in phase10.
 //
-// CORR-04: after receiving the first HTTP error from httpErrCh, drain any remaining
-// errors and join them so no error is silently discarded.
+// CORR-04: after receiving the first HTTP or gRPC error from the respective errCh,
+// drain any remaining buffered errors and join them so no error is silently discarded.
 func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState) shutdownSignal {
 	slog.Info("bootstrap: application started successfully")
 	select {
@@ -58,7 +83,12 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 		slog.Info("bootstrap: context canceled, shutting down")
 		return shutdownSignal{reason: reasonCtxCancel}
 	case firstErr := <-s.httpErrCh:
-		return shutdownSignal{reason: reasonHTTPError, err: drainHTTPErrors(s.httpErrCh, firstErr)}
+		return shutdownSignal{reason: reasonHTTPError, err: drainBufferedErrors(s.httpErrCh, firstErr)}
+	case firstErr := <-s.grpcErrCh:
+		// Reuse the HTTP drain-and-join helper: it collects any additional
+		// buffered errors before joining, so a multi-listener gRPC failure burst
+		// is not silently truncated to the first error.
+		return shutdownSignal{reason: reasonGRPCError, err: drainBufferedErrors(s.grpcErrCh, firstErr)}
 	case err := <-s.workerErrCh:
 		if err != nil {
 			slog.Error("bootstrap: worker failed, initiating shutdown",
@@ -133,10 +163,7 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	// --- stage 2: HTTP drain (explicit; runs BEFORE LIFO teardown) ---
 	m.RecordPhaseEntry(drainCtx, metricsmiddleware.ShutdownPhaseHTTPDrain)
 	drainStart := b.clock.Now()
-	var httpDrainErr error
-	if s.httpDrain != nil {
-		httpDrainErr = s.httpDrain(drainCtx)
-	}
+	httpDrainErr, grpcDrainErr := drainTransports(drainCtx, s)
 	m.ObservePhaseDuration(drainCtx, metricsmiddleware.ShutdownPhaseHTTPDrain, b.clock.Since(drainStart))
 
 	// --- stage 3: LIFO teardown — fresh tearCtx, independent of drainCtx ---
@@ -162,6 +189,11 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 		allTeardownErrs = append([]error{
 			&phaseError{Phase: "teardown_http_drain", Err: httpDrainErr},
 		}, teardownErrs...)
+	}
+	if grpcDrainErr != nil {
+		allTeardownErrs = append([]error{
+			&phaseError{Phase: "teardown_grpc_drain", Err: grpcDrainErr},
+		}, allTeardownErrs...)
 	}
 
 	// F3: outcome reflects the final return semantics, not just ctx state.

@@ -61,6 +61,18 @@
           "targetSelector": {
             "type": "string",
             "description": "Target-URL selector method name for outbound webhook dispatch. REQUIRED for role=webhook-dispatch; forbidden for all other roles."
+          },
+          "projection": {
+            "type": "string",
+            "description": "ProjectionID marking this subscribe CU as feeding an L3 CQRS projection. Makes cellgen emit reg.RegisterProjection instead of reg.Subscribe. snake_case probe-name format. Optional; forbidden on every non-subscribe role.",
+            "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$",
+            "minLength": 1
+          },
+          "onReset": {
+            "type": "string",
+            "description": "Exported Go identifier naming the optional rebuild Reset-phase hook method on the slice service (cell.ProjectionResetHook). Only meaningful when projection is set. Optional; subscribe-only.",
+            "pattern": "^[A-Z][A-Za-z0-9_]*$",
+            "minLength": 1
           }
         },
         "allOf": [
@@ -74,6 +86,14 @@
             }
           },
           {
+            "if": { "required": ["onReset"] },
+            "then": { "required": ["projection"] }
+          },
+          {
+            "if": { "required": ["projection"] },
+            "then": { "not": { "required": ["group"] } }
+          },
+          {
             "if": {
               "properties": { "role": { "const": "webhook-receive" } },
               "required": ["role"]
@@ -83,7 +103,9 @@
               "not": {
                 "anyOf": [
                   { "required": ["group"] },
-                  { "required": ["targetSelector"] }
+                  { "required": ["targetSelector"] },
+                  { "required": ["projection"] },
+                  { "required": ["onReset"] }
                 ]
               }
             }
@@ -98,7 +120,9 @@
               "not": {
                 "anyOf": [
                   { "required": ["handler"] },
-                  { "required": ["group"] }
+                  { "required": ["group"] },
+                  { "required": ["projection"] },
+                  { "required": ["onReset"] }
                 ]
               }
             }
@@ -120,7 +144,9 @@
                   { "required": ["group"] },
                   { "required": ["field"] },
                   { "required": ["sourceID"] },
-                  { "required": ["targetSelector"] }
+                  { "required": ["targetSelector"] },
+                  { "required": ["projection"] },
+                  { "required": ["onReset"] }
                 ]
               }
             }

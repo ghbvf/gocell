@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
+	"github.com/ghbvf/gocell/runtime/saga/internal/sagalog"
 )
 
 // LeaderElectModeLabel is the slog "mode" field value emitted at Start() when
@@ -125,12 +126,11 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 			// under. They are distinct leases (see package doc) — lease_id is logged
 			// purely for claim-cycle correlation, consistent with every other
 			// per-instance saga log, not because the distlock is fenced by it.
-			c.logger.WarnContext(ctx, "saga: distlock release failed",
-				slog.String("instance_id", string(ci.Instance.ID)),
-				slog.String("definition_id", string(ci.Instance.DefinitionID)),
-				slog.String("lock_key", key),
-				slog.String("lease_id", string(ci.LeaseID)),
-				slog.Any("error", rerr))
+			c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: distlock release failed",
+				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+					slog.String("definition_id", string(ci.Instance.DefinitionID)),
+					slog.String("lock_key", key),
+					slog.Any("error", rerr))...)
 		}
 	}
 	orp := func() { lock.Orphan() }
@@ -179,11 +179,10 @@ func (c *Coordinator) logLeaderSkip(
 	// embeds a Redis DSN/credentials; redact it (defense-in-depth alongside the
 	// slog sink, which also covers contexts where the process-global seal is not
 	// active — unit tests / embedded saga use). Same form as Coordinator.safeObserve.
-	c.logger.Log(ctx, leaderSkipLogLevel(reason), "saga: leader-elect skip (lock not acquired)",
-		slog.String("instance_id", string(ci.Instance.ID)),
-		slog.String("definition_id", string(ci.Instance.DefinitionID)),
-		slog.String("lock_key", key),
-		slog.String("lease_id", string(ci.LeaseID)),
-		slog.String("reason", string(reason)),
-		slog.Any("error", redaction.RedactAny(err)))
+	c.logger.LogAttrs(ctx, leaderSkipLogLevel(reason), "saga: leader-elect skip (lock not acquired)",
+		sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+			slog.String("definition_id", string(ci.Instance.DefinitionID)),
+			slog.String("lock_key", key),
+			slog.String("reason", string(reason)),
+			slog.Any("error", redaction.RedactAny(err)))...)
 }
