@@ -17,6 +17,14 @@
       "description": "Contract kind that determines the endpoint structure.",
       "enum": ["http", "event", "command", "projection", "webhook", "grpc", "saga"]
     },
+    "transports": {
+      "type": "array",
+      "description": "Sanctioned wire transports for this contract. Each value must be a known Transport; the first entry is the primary transport used by generated ContractSpec. Optional — omitting the key is valid and means the default transport for the kind applies.",
+      "items": {
+        "type": "string",
+        "enum": ["amqp", "mqtt", "internal", "http", "grpc"]
+      }
+    },
     "ownerCell": {
       "type": "string",
       "description": "The cell that owns (provides) this contract. Defaults to the provider endpoint cell. May be omitted."
