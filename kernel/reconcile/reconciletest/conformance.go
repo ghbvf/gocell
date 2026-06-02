@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/reconcile"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
@@ -454,7 +456,11 @@ func confPanicRecovery(t *testing.T, newHarness HarnessFactory) {
 	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 		n := count.Add(1)
 		if n == 1 {
-			panic("boom — test panic")
+			// Simulated reconciler panic to exercise the Loop's recover→transient
+			// path. conformance.go is a production (non-_test.go) test-support file,
+			// so PANIC-REGISTERED-01 requires the panicregister.Approved wrap.
+			panic(panicregister.Approved("reconcile-conformance-panic-probe",
+				errcode.Assertion("conformance: simulated reconciler panic for panic-recovery test")))
 		}
 		return reconcile.Result{RequeueAfter: time.Hour}, nil
 	}}
