@@ -17,7 +17,10 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports/conformance"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -817,4 +820,18 @@ func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
 	count, err := roleRepo.CountByRole(ctx, testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "advisory lock must leave exactly one admin after concurrent raw deletes")
+}
+
+// TestPGRoleRepo_Conformance enrolls the PG RoleRepository into the shared ports
+// conformance suite (review F5: PG was previously absent, leaving the
+// cross-tenant read/count/last-admin isolation contract unverified on the real
+// backend). Both repos share one pool so FK constraints and the per-tenant
+// effective-admin trigger are exercised against real PG.
+func TestPGRoleRepo_Conformance(t *testing.T) {
+	conformance.RunRoleRepoConformance(t, func(t *testing.T) (
+		ports.RoleRepository, ports.UserRepository, persistence.TxRunner, func(),
+	) {
+		roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
+		return roleRepo, userRepo, txMgr, func() {}
+	})
 }

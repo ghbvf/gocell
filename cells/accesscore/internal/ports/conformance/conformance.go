@@ -24,7 +24,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
@@ -1434,11 +1436,117 @@ type RoleRepoFactory func(t *testing.T) (
 
 // RunRoleRepoConformance executes the RoleRepository contract acceptance suite.
 // All implementations (mem, PG) must call this from a _test.go in their package.
+//
+// Tenancy (#1337 PR-2a, review F5): every RoleRepository method takes a mandatory
+// tenant.TenantID, so the suite asserts cross-tenant isolation across the read
+// (GetByID/GetByUserID), list (ListByUserID), count (CountByRole) and last-admin
+// (CountEffectiveAdmins/EffectiveAdminExists) surfaces — not just the AssignToUser
+// write path. The last-admin per-tenant assertion is the security-critical one: a
+// tenant must never count another tenant's effective admins.
 func RunRoleRepoConformance(t *testing.T, factory RoleRepoFactory) {
 	t.Helper()
 	t.Run("AssignToUser_CrossTenant_RejectsUser", func(t *testing.T) {
 		conformRoleAssignCrossTenantUser(t, factory)
 	})
+	t.Run("Reads_CrossTenant_Invisible", func(t *testing.T) {
+		conformRoleReadsCrossTenant(t, factory)
+	})
+	t.Run("EffectiveAdmin_CrossTenant_PerTenant", func(t *testing.T) {
+		conformEffectiveAdminCrossTenant(t, factory)
+	})
+}
+
+// seedRoleAssignment creates role roleID in tenant tid and assigns it to an
+// active user (seeded in the same tenant), returning the user id. Shared by the
+// RoleRepository cross-tenant read/count sub-tests.
+func seedRoleAssignment(
+	t *testing.T,
+	roleRepo ports.RoleRepository, userRepo ports.UserRepository, txRunner persistence.TxRunner,
+	tid tenant.TenantID, roleID string,
+) string {
+	t.Helper()
+	user := seedActiveInTenant(t, txRunner, userRepo, tid, uuid.NewString(), "role_seed_"+uuid.NewString())
+	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
+		return roleRepo.Create(ctx, tid, &domain.Role{ID: roleID, Name: roleID})
+	}); err != nil {
+		t.Fatalf("seedRoleAssignment: create role %q in tenant %q: %v", roleID, tid, err)
+	}
+	if _, err := roleRepo.AssignToUser(context.Background(), tid, user.ID, roleID); err != nil {
+		t.Fatalf("seedRoleAssignment: assign role %q to user in tenant %q: %v", roleID, tid, err)
+	}
+	return user.ID
+}
+
+// conformRoleReadsCrossTenant (F5): a role + assignment created in tenant A must
+// be invisible to GetByID/GetByUserID/ListByUserID/CountByRole scoped to tenant
+// B, while remaining visible from tenant A.
+func conformRoleReadsCrossTenant(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	roleID := "role_reads_" + uuid.NewString()
+	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+	ctx := context.Background()
+	listParams := query.ListParams{Limit: 50, Sort: []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}}
+
+	// Tenant B (testTenantIDOther) must see nothing.
+	if got, err := roleRepo.GetByUserID(ctx, testTenantIDOther, userID); err != nil || len(got) != 0 {
+		t.Errorf("GetByUserID(tenantB): want 0 roles/no error, got %d roles err=%v", len(got), err)
+	}
+	if got, err := roleRepo.ListByUserID(ctx, testTenantIDOther, userID, listParams); err != nil || len(got) != 0 {
+		t.Errorf("ListByUserID(tenantB): want 0 roles/no error, got %d roles err=%v", len(got), err)
+	}
+	if n, err := roleRepo.CountByRole(ctx, testTenantIDOther, roleID); err != nil || n != 0 {
+		t.Errorf("CountByRole(tenantB): want 0/no error, got %d err=%v", n, err)
+	}
+	if r, err := roleRepo.GetByID(ctx, testTenantIDOther, roleID); err == nil && r != nil {
+		t.Errorf("GetByID(tenantB): tenant-A role must not be visible, got %+v", r)
+	}
+
+	// Tenant A (testTenantID) still sees the role + assignment.
+	if got, err := roleRepo.GetByUserID(ctx, testTenantID, userID); err != nil || len(got) != 1 {
+		t.Fatalf("GetByUserID(tenantA): want 1 role/no error, got %d roles err=%v", len(got), err)
+	}
+	if n, err := roleRepo.CountByRole(ctx, testTenantID, roleID); err != nil || n != 1 {
+		t.Errorf("CountByRole(tenantA): want 1/no error, got %d err=%v", n, err)
+	}
+	if got, err := roleRepo.ListByUserID(ctx, testTenantID, userID, listParams); err != nil || len(got) != 1 {
+		t.Errorf("ListByUserID(tenantA): want 1 role/no error, got %d roles err=%v", len(got), err)
+	}
+}
+
+// conformEffectiveAdminCrossTenant (F5): the last-admin invariant counters must
+// be per-tenant. An effective admin seeded in tenant A must NOT be counted by
+// CountEffectiveAdmins/EffectiveAdminExists scoped to tenant B — otherwise a
+// tenant could be blocked from (or wrongly allowed) removing its last admin
+// because another tenant happens to have one.
+func conformEffectiveAdminCrossTenant(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, auth.RoleAdmin)
+	ctx := context.Background()
+
+	// Tenant A has exactly one effective admin.
+	if n, err := roleRepo.CountEffectiveAdmins(ctx, testTenantID); err != nil || n != 1 {
+		t.Errorf("CountEffectiveAdmins(tenantA): want 1/no error, got %d err=%v", n, err)
+	}
+	if ok, err := roleRepo.EffectiveAdminExists(ctx, testTenantID); err != nil || !ok {
+		t.Errorf("EffectiveAdminExists(tenantA): want true/no error, got %v err=%v", ok, err)
+	}
+
+	// Tenant B must see zero — the tenant-A admin is invisible.
+	if n, err := roleRepo.CountEffectiveAdmins(ctx, testTenantIDOther); err != nil || n != 0 {
+		t.Errorf("CountEffectiveAdmins(tenantB): want 0/no error, got %d err=%v", n, err)
+	}
+	if ok, err := roleRepo.EffectiveAdminExists(ctx, testTenantIDOther); err != nil || ok {
+		t.Errorf("EffectiveAdminExists(tenantB): want false/no error, got %v err=%v", ok, err)
+	}
 }
 
 // conformRoleAssignCrossTenantUser (F4): assigning a role (which exists in
