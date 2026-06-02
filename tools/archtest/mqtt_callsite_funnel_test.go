@@ -172,6 +172,12 @@ const autophoPkgPath = "github.com/eclipse/paho.golang/autopaho"
 // pahoPkgPath is the import path of the paho package that owns Client.
 const pahoPkgPath = "github.com/eclipse/paho.golang/paho"
 
+// mqttAckRedFixturePkgPath is the import path of the real-source red fixture for
+// MQTT-ACK-CALLSITE-FUNNEL-01/K2's non-vacuous proof (#1287). It plants a REAL
+// (*paho.Client).Ack callsite so the K2 typed detector is proven non-vacuous
+// against the ACTUAL paho type.
+const mqttAckRedFixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/mqttackredfixture"
+
 // connectionManagerTypeName is the type whose Publish/Subscribe/Unsubscribe
 // methods we funnel.
 const connectionManagerTypeName = "ConnectionManager"
@@ -214,6 +220,44 @@ const (
 
 // ─── Shared callsite-funnel scanner ──────────────────────────────────────────
 
+// collectMQTTCallsiteDiags scans one typed Pass for every CallExpr whose
+// resolved callee FullName() == targetFull but whose enclosing FuncDecl is NOT
+// in allowedKeys. Shared by the production funnel scan (scanMQTTCallsiteFunnel,
+// path-guarded to adapters/mqtt) and the K2 real-fixture non-vacuous proof
+// (#1287), so the fixture exercises the identical go/types resolution path.
+func collectMQTTCallsiteDiags(p *Pass, ruleID, targetFull string, allowedKeys []string) (diags []Diagnostic, matched int) {
+	for _, f := range p.Files {
+		rel := p.Rel(f)
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+			if !ok || fn == nil || fn.FullName() != targetFull {
+				return
+			}
+			matched++
+			if mqttEnclosingKeyAllowed(p, f, call, allowedKeys) {
+				return
+			}
+			pos := p.Fset.Position(call.Pos())
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"%s: %s callsite at %s:%d is outside the allowed funnel %v",
+					ruleID, targetFull, rel, pos.Line, allowedKeys,
+				),
+			})
+		})
+	}
+	return diags, matched
+}
+
 // scanMQTTCallsiteFunnel walks the adapters/mqtt production AST and reports a
 // diagnostic for every CallExpr whose resolved callee FullName() == targetFull
 // but whose enclosing FuncDecl is NOT in allowedKeys (set semantics). This is
@@ -231,35 +275,7 @@ func scanMQTTCallsiteFunnel(t *testing.T, ruleID, targetFull string, allowedKeys
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
 			}
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return
-					}
-					fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-					if !ok || fn == nil || fn.FullName() != targetFull {
-						return
-					}
-					matched++
-					if mqttEnclosingKeyAllowed(p, f, call, allowedKeys) {
-						return
-					}
-					pos := p.Fset.Position(call.Pos())
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"%s: %s callsite at %s:%d is outside the allowed funnel %v",
-							ruleID, targetFull, rel, pos.Line, allowedKeys,
-						),
-					})
-				})
-			}
+			diags, matched = collectMQTTCallsiteDiags(p, ruleID, targetFull, allowedKeys)
 			return nil
 		})
 
@@ -423,32 +439,33 @@ func TestMQTTAckCallsiteFunnel_K2_NoDirectPahoClientAck(t *testing.T) {
 			"ack must route through the mqttAcker interface via (*Connection).ack")
 }
 
-// TestMQTTAckCallsiteFunnel_K2_ScannerNonVacuous proves the K2 detector's
-// callee-resolution path resolves a *paho.Client.Ack call. Since production
-// MUST NOT contain such a call, this is proven against a synthetic in-memory
-// snippet (the same discipline as the AST-mechanism non-vacuous proofs) rather
-// than the production tree.
+// TestMQTTAckCallsiteFunnel_K2_ScannerNonVacuous proves the K2 detector resolves
+// a REAL (*paho.Client).Ack call. Production MUST contain zero such calls, so the
+// proof runs against internal/mqttackredfixture (a real paho.Client.Ack callsite
+// behind the archtest_fixture build tag) using the identical typed detector
+// (collectMQTTCallsiteDiags + ResolveMethodCall → pahoClientAckFullName). This is
+// the real-source-AST-capture upgrade of the former synthetic snippet (#1287).
 func TestMQTTAckCallsiteFunnel_K2_ScannerNonVacuous(t *testing.T) {
 	t.Parallel()
-	// A pure-AST sanity check: a `c.Ack(pb)` selector with Sel "Ack" is the form
-	// the K2 typed scanner resolves. We prove the SelectorExpr/Sel-name precursor
-	// fires; the go/types callee resolution itself is the same ResolveMethodCall
-	// path proven non-vacuous by K1 (which DOES find a real interface Ack call).
-	const src = `package x
-type client struct{}
-func (client) Ack(pb any) error { return nil }
-func f(c client, pb any) { _ = c.Ack(pb) }
-`
-	f := mqttParseSnippet(t, src)
-	var fired bool
-	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == ackMethodName {
-			fired = true
-		}
-	})
-	assert.True(t, fired,
-		"MQTT-ACK-CALLSITE-FUNNEL-01/K2: the `_.Ack(...)` CallExpr precursor did not fire on a "+
-			"known Ack call snippet — the scanner traversal is broken (K2 would pass vacuously)")
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	var diags []Diagnostic
+	var matched int
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, []string{mqttAckRedFixturePkgPath}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttAckRedFixturePkgPath {
+				return nil
+			}
+			diags, matched = collectMQTTCallsiteDiags(p, "MQTT-ACK-CALLSITE-FUNNEL-01/K2",
+				pahoClientAckFullName, nil /* empty allowlist: any callsite is a violation */)
+			return nil
+		})
+	assert.GreaterOrEqual(t, matched, 1,
+		"MQTT-ACK-CALLSITE-FUNNEL-01/K2: the typed detector resolved 0 (*paho.Client).Ack callsites in "+
+			"internal/mqttackredfixture — the ResolveMethodCall path is broken (K2 would pass vacuously)")
+	assert.NotEmpty(t, diags,
+		"MQTT-ACK-CALLSITE-FUNNEL-01/K2: with an empty allowlist the real (*paho.Client).Ack callsite must be reported")
 }
 
 // ─── A2 / S3: sealed-token construction allowlist (Medium) ───────────────────
