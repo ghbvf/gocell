@@ -153,7 +153,6 @@ func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
 	var diags []scanner.Diagnostic
 	Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/inspectorredfixture"}),
-
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				rel := p.Rel(file)

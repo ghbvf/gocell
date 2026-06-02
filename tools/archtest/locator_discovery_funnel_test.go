@@ -576,7 +576,6 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	// Uses EvaluateConstString to resolve the second argument.
 	replaceDiags := Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -631,7 +630,6 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	// Uses EvaluateConstString to resolve the second argument.
 	trimPrefixDiags := Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -705,7 +703,6 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 	// bypass the funnel this way.
 	hasPrefixConstDiags := Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -750,7 +747,6 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 	// Blind-spot BS-B: const Ident as equality operand evaluating to a banned token.
 	equalityConstDiags := Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil

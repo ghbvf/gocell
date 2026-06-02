@@ -109,7 +109,7 @@ archtest 将期望名集合与实际 `go/ast` FuncDecl 精确名 match，任何�
 
 形态参照 `.claude/rules/gocell/ai-robust.md` §"Hard 范本目录"中的"codegen funnel + golden"（metadata-driven 枚举 + 代码 SoR 派生）与"string-typed concept funnel"（类型信息精确解析代替字符串启发式）的近亲组合。
 
-**Enforcement 运行位置（nightly，非 PR-time）**：`L2-OUTBOX-ATOMICITY-COVERAGE-01` 由 `archtest-nightly.yml`（16-shard）执行；**不**纳入 PR-time `hack/verify-archtest-invariants.sh`。后者由 ADR `202605120000` §Amendment 2026-05-23 §D8 冻结为 4 类核心运行时 invariant（clock / duration / testtime / panic），扩充该集合需另行 amend 该 ADR，不在本 PR 范围。本 coverage gate 选择 nightly 的理由：(1) 它守护的是 integration 测试的**存在性**，而被守护的测试本身 `//go:build integration` 依赖 Docker、只在 CI integration 分片实跑，PR-time 无法验证其真实通过；(2) `RunTypedProduction` 全量 typed-load 成本与 nightly 预算更匹配。新 L2 单元漏测试 → 当晚 nightly 红 + 本地 `make verify` 即时红。若未来需 PR-time 即时阻断，走 ADR `202605120000` §D8 amendment 把本 ID 加入冻结集（届时按 §"ADR amendment 落地必查"逐行重评威胁矩阵）。
+**Enforcement 运行位置（nightly，非 PR-time）**：`L2-OUTBOX-ATOMICITY-COVERAGE-01` 由 `archtest-nightly.yml`（16-shard）执行；**不**纳入 PR-time `hack/verify-archtest-invariants.sh`。后者由 ADR `202605120000` §Amendment 2026-05-23 §D8 冻结为 4 类核心运行时 invariant（clock / duration / testtime / panic），扩充该集合需另行 amend 该 ADR，不在本 PR 范围。本 coverage gate 选择 nightly 的理由：(1) 它守护的是 integration 测试的**存在性**，而被守护的测试本身 `//go:build integration` 依赖 Docker、只在 CI integration 分片实跑，PR-time 无法验证其真实通过；(2) `Run(t, Production(...))` 全量 typed-load 成本与 nightly 预算更匹配。新 L2 单元漏测试 → 当晚 nightly 红 + 本地 `make verify` 即时红。若未来需 PR-time 即时阻断，走 ADR `202605120000` §D8 amendment 把本 ID 加入冻结集（届时按 §"ADR amendment 落地必查"逐行重评威胁矩阵）。
 
 **Gate 粒度 = per-unit（非 per-mutation）**：本 archtest 对每个 L2 slice 强制**一个** canonical `TestL2Atomicity_<pkg>_RollsBack`（hybrid 另加 `_ReplayIdempotent`），对齐 issue #876 的明文粒度「按 `consistencyLevel: L2` 枚举所有 L2 单元」。同一 slice 的多条 outbox mutation 路径（如 configwrite 的 Create/Update/Delete、configpublish 的 Publish/Rollback）各自的 `*_RollsBack_<Mutation>` 测试是**有意保留的 defense-in-depth，不在本 gate 的 Hard 期望集内**——删除它们不会触发 archtest 红。这是**已知且文档化**的边界，不是隐式 false-green：
 
@@ -130,7 +130,7 @@ archtest 将期望名集合与实际 `go/ast` FuncDecl 精确名 match，任何�
 | auditappend 去 alias 绕过折叠 | `_AliasFoldsToSinglePackage` 反向自检：断言 4 个 slice 的 Unalias 均指向 `appender` 包，去 alias 后自检失败 ✓ |
 | 测试漏 `//go:build integration` tag | archtest 解析 build constraint，要求 producer/hybrid 的 `_RollsBack` / `_ReplayIdempotent` 测试携带 integration tag（否则无 PG 实例的 CI 会静默 skip，无原子性保护） ✓ |
 | L2 slice 的 Service 改名/删除致期望集静默缩水 | `_ServiceLookupTotal` 反向自检：断言 go/types 加载到的 L2 Service 总数 ≥ 已知下限，防 Service 符号消失导致枚举静默归零 ✓ |
-| 期望名派生公式依赖 go/types，但 go/types 加载失败静默跳过 | archtest 在 `RunTyped` 错误路径 `t.Fatal`，不静默跳过；`_ServiceLookupTotal` 额外守 ✓ |
+| 期望名派生公式依赖 go/types，但 go/types 加载失败静默跳过 | archtest 在 `Run(t, Typed(...))` 错误路径 `t.Fatal`，不静默跳过；`_ServiceLookupTotal` 额外守 ✓ |
 
 ---
 

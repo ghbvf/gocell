@@ -893,7 +893,6 @@ func TestErrcodeMessageConstLiteral(t *testing.T) {
 		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
 		patterns,
 	),
-
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {
@@ -1112,7 +1111,6 @@ func TestErrorFirstAPI01(t *testing.T) {
 		_, ok := enforcedSet[rel]
 		return ok
 	}))),
-
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {
@@ -1640,7 +1638,6 @@ func TestExportedErrorNew(t *testing.T) {
 		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
 		patterns,
 	),
-
 		func(p *Pass) []Diagnostic {
 			var out []Diagnostic
 			for _, file := range p.Files {

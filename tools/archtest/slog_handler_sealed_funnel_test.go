@@ -810,7 +810,6 @@ func TestSlogHandlerSealedFunnel_A1_DetectsViolation(t *testing.T) {
 
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/testdata/slog_bare_handler_fixtures/external_violation"}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil
