@@ -82,9 +82,15 @@ registering a cellID outside the assembly is a configuration bug, and `_runtime`
 is reserved for framework/unmatched traffic. Mirrors K8s `runtime.Scheme`:
 registration-time enumeration + hard rejection of unregistered identities.
 
-This **replaces** the hand-written `cmd/corebundle.assertModuleIDsMatch` (which
-covered corebundle only); the framework guard is inherited by every assembly,
-including future external ones. The check is order-agnostic set membership
+This **replaces** the hand-written `cmd/corebundle.assertModuleIDsMatch` (deleted
+in this PR). The framework guard is inherited by every assembly **that composes
+via `composition.Builder`** — today `cmd/corebundle` + `examples/corebundlestarter`
+(compositionAPI form) and any future external one. The legacy-form example
+assemblies (`examples/todoorder` / `iotdevice` / `orderfulfillment`, which use the
+local-CellModule `generatedCellModules() []CellModule` form and do **not** go
+through `composition.Builder`) retain their own per-assembly `assertModuleIDsMatch`;
+migrating them to `composition.New` closed-set is deferred until they adopt the
+compositionAPI/cellmodules form. The check is order-agnostic set membership
 (slice order carries no runtime meaning — cross-module value handoff was removed
 in #1423).
 

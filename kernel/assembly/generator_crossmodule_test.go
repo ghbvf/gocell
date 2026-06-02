@@ -62,6 +62,33 @@ func TestGenerateModulesGen_CrossModuleImportPath(t *testing.T) {
 		"cross-module cell must NOT fall back to the current module")
 }
 
+// TestGenerateModulesGen_ExplicitSameModuleIsNotCrossModule verifies that a cell
+// declaring `module: <the assembly's own module>` explicitly renders identically
+// to the omitted-module form (moduleOf treats module == current as same-module).
+func TestGenerateModulesGen_ExplicitSameModuleIsNotCrossModule(t *testing.T) {
+	const currentModule = "github.com/ghbvf/gocell"
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			metadatatest.CellIDConfigCore: {ID: metadatatest.CellIDConfigCore},
+		},
+		Slices:    make(map[string]*metadata.SliceMeta),
+		Contracts: make(map[string]*metadata.ContractMeta),
+		Journeys:  make(map[string]*metadata.JourneyMeta),
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"explicitsame": {
+				ID:    "explicitsame",
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDConfigCore, Module: currentModule}},
+				Build: metadata.BuildMeta{CompositionAPI: true},
+				File:  "assemblies/explicitsame/assembly.yaml",
+			},
+		},
+	}
+	out, err := NewGenerator(project, currentModule, "").GenerateModulesGen("explicitsame")
+	require.NoError(t, err)
+	assert.Contains(t, string(out), currentModule+"/cellmodules/configcore",
+		"module == current module must render the same import as an omitted module")
+}
+
 // TestGenerateModulesGen_CrossModuleRequiresCompositionAPI verifies that a
 // cross-module cell in a legacy (non-compositionAPI) assembly fail-fasts: the
 // legacy local-CellModule-type form has no import path and cannot express a

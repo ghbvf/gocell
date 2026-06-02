@@ -495,9 +495,17 @@ type PassCriterion struct {
 // is enforced by the Go compiler when the generated modules_gen.go is built, not
 // by a metadata governance rule (a declared-but-unresolvable module fails
 // `go build`).
+//
+// A non-empty Module also requires the owning assembly to declare
+// `build.compositionAPI: true`; otherwise `gocell generate assembly` fails with
+// ErrMetadataInvalid (the legacy local-CellModule form has no import path and
+// cannot express a foreign module).
 type AssemblyCellRef struct {
-	ID     string
-	Module string
+	// yaml tags drive only marshaling (decode is the custom UnmarshalYAML below);
+	// module is omitempty so a round-trip of a same-module ref emits `id: x`
+	// rather than `module: ""` (which the decoder rejects as explicit-empty).
+	ID     string `yaml:"id"`
+	Module string `yaml:"module,omitempty"`
 }
 
 // UnmarshalYAML decodes the scalar-or-object union form of an assembly cell
@@ -517,10 +525,13 @@ func (r *AssemblyCellRef) UnmarshalYAML(node *yaml.Node) error {
 }
 
 // decodeMapping handles the object form `{id, module}` of an assembly cell
-// entry, enforcing the known-field set (id, module) and the required id.
+// entry, enforcing the known-field set (id, module), the required non-empty id,
+// and module-path hygiene (a non-empty module must not carry characters that
+// could be smuggled into the generated cellmodules import — defense-in-depth on
+// top of the %q-quoting + Go-compiler gate; see ADR §D3).
 func (r *AssemblyCellRef) decodeMapping(node *yaml.Node) error {
 	var id, module string
-	var sawID bool
+	var sawID, sawModule bool
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		keyNode, valNode := node.Content[i], node.Content[i+1]
 		switch keyNode.Value {
@@ -533,6 +544,7 @@ func (r *AssemblyCellRef) decodeMapping(node *yaml.Node) error {
 			if err := valNode.Decode(&module); err != nil {
 				return err
 			}
+			sawModule = true
 		default:
 			return fmt.Errorf("line %d: unknown field %q in assembly cell entry (allowed: id, module)",
 				keyNode.Line, keyNode.Value)
@@ -541,7 +553,29 @@ func (r *AssemblyCellRef) decodeMapping(node *yaml.Node) error {
 	if !sawID || id == "" {
 		return fmt.Errorf("line %d: assembly cell entry missing required field \"id\"", node.Line)
 	}
+	if err := validateOptionalModulePath(sawModule, module); err != nil {
+		return fmt.Errorf("line %d: %w", node.Line, err)
+	}
 	r.ID, r.Module = id, module
+	return nil
+}
+
+// validateOptionalModulePath rejects an explicit-but-empty module (meaningless
+// noise — omit it for same-module) and any module carrying control characters,
+// whitespace, or quote/backslash runes that could break out of the generated
+// import-path string literal.
+func validateOptionalModulePath(present bool, module string) error {
+	if !present {
+		return nil
+	}
+	if module == "" {
+		return fmt.Errorf("assembly cell entry \"module\" must be non-empty when set (omit it for same-module)")
+	}
+	for _, rn := range module {
+		if rn < 0x20 || rn == 0x7f || rn == ' ' || rn == '"' || rn == '`' || rn == '\\' {
+			return fmt.Errorf("invalid character %q in assembly cell module %q", rn, module)
+		}
+	}
 	return nil
 }
 

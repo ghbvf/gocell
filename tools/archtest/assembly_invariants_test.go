@@ -1578,6 +1578,19 @@ const cellModulesPathSeg = "/cellmodules/"
 // import that bypasses the per-cell module funnel. Combined with the upstream
 // codegen golden (modules_gen.go DO NOT EDIT + regenerate-diff), generated
 // cross-module imports are provably bounded by the assembly.yaml declared set.
+//
+// AI-robust: Hard downstream (callsite/form uniqueness of the "/cellmodules/"
+// BasicLit) + Hard upstream (codegen regenerate-diff golden).
+//
+// Known blind spot (ai-robust.md §载体决策原则 强制盲区自检): the scan keys on the
+// exact `"/cellmodules/"` STRING BasicLit. A construction that assembles the
+// segment without that literal — e.g. strings.Join([]string{mod, "cellmodules",
+// id}, "/") or a split fmt.Sprintf format — is not detected. This is acceptable:
+// the upstream regenerate-diff golden byte-locks the generated output regardless
+// of how the funnel builds the string, so a divergent construction cannot reach
+// a committed modules_gen.go undetected. No fixture is added (the upstream lock
+// is the real guard); documented so a contributor does not mistake the literal
+// scan for total coverage.
 func TestAssemblyCrossModuleImportFunnel(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

@@ -57,14 +57,37 @@ func TestBuilder_ClosedSet_RejectsDuplicateModule(t *testing.T) {
 }
 
 // TestBuilder_ClosedSet_HappyPathBijection verifies that an exact bijection
-// (every declared cell provided once, no extras) Builds successfully.
+// (every declared cell provided once, no extras) Builds successfully — and that
+// the closed-set guard (set membership, order-agnostic on the declared set)
+// does not disturb the module Provide order, which stays the With() order.
 func TestBuilder_ClosedSet_HappyPathBijection(t *testing.T) {
 	ctx := context.Background()
 	mA := &fakeCellModule{id: "configcore", cell: stubCell("configcore")}
 	mB := &fakeCellModule{id: "auditcore", cell: stubCell("auditcore")}
 
-	app, err := New("auditcore", "configcore").With(mA, mB).Build(ctx, minimalSharedDeps(t), noopRuntimeOpts)
+	var runtimeCells []cell.Cell
+	rtFn := func(cells []cell.Cell) ([]bootstrap.Option, error) {
+		runtimeCells = cells
+		return nil, nil
+	}
+
+	// expectedCellIDs order ("auditcore","configcore") is intentionally the
+	// reverse of the With() order to prove the guard is order-agnostic on the
+	// declared set while Provide order follows With().
+	app, err := New("auditcore", "configcore").With(mA, mB).Build(ctx, minimalSharedDeps(t), rtFn)
 	require.NoError(t, err)
 	require.NotNil(t, app)
 	assert.True(t, mA.called && mB.called, "happy-path bijection must run all module Provides")
+	require.Len(t, runtimeCells, 2)
+	assert.Equal(t, "configcore", runtimeCells[0].ID(), "Provide order follows With(), not the declared-set order")
+	assert.Equal(t, "auditcore", runtimeCells[1].ID())
+}
+
+// TestBuilder_ClosedSet_EmptyAssembly verifies the degenerate bijection: a
+// cell-less assembly (no declared ids, no modules) Builds successfully.
+func TestBuilder_ClosedSet_EmptyAssembly(t *testing.T) {
+	ctx := context.Background()
+	app, err := New().Build(ctx, minimalSharedDeps(t), noopRuntimeOpts)
+	require.NoError(t, err)
+	require.NotNil(t, app)
 }

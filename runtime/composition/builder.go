@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -145,6 +146,9 @@ func (b *Builder) validateClosedSet() error {
 	for _, id := range b.expectedCellIDs {
 		expected[id] = struct{}{}
 	}
+	// Sorted display for deterministic, readable diagnostics regardless of set size.
+	closedSet := strings.Join(slices.Sorted(slices.Values(b.expectedCellIDs)), ", ")
+	const fixHint = "add it to assembly.yaml cells or run `gocell generate assembly`"
 	provided := make(map[string]struct{}, len(b.modules))
 	for _, m := range b.modules {
 		if m == nil {
@@ -153,13 +157,12 @@ func (b *Builder) validateClosedSet() error {
 		id := m.ID()
 		if _, dup := provided[id]; dup {
 			return fmt.Errorf("composition.Builder.Build: duplicate cell module %q; "+
-				"each assembly cell must be provided by exactly one module", id)
+				"each assembly cell must be provided by exactly one module; %s", id, fixHint)
 		}
 		provided[id] = struct{}{}
 		if _, ok := expected[id]; !ok {
 			return fmt.Errorf("composition.Builder.Build: cell %q is not in the assembly "+
-				"closed set %v; add it to assembly.yaml cells or correct the cell ID",
-				id, b.expectedCellIDs)
+				"closed set [%s]; %s", id, closedSet, fixHint)
 		}
 	}
 	for _, id := range b.expectedCellIDs {

@@ -78,7 +78,7 @@
         },
         "compositionAPI": {
           "type": "boolean",
-          "description": "When true, GenerateModulesGen emits the runtime/composition.CellModule form (cellmodules/{cell}.Module() constructors) instead of the legacy local-CellModule-type form. Set true only in cellmodules-based assemblies (currently assemblies/corebundle)."
+          "description": "When true, GenerateModulesGen emits the runtime/composition.CellModule form (cellmodules/{cell}.Module() constructors) instead of the legacy local-CellModule-type form. Set true for cellmodules-based assemblies; REQUIRED when any cell declares a non-empty `module` (cross-module cell from an independent Go module, #1086) — the legacy form has no import path and cannot reference a foreign module."
         }
       }
     }

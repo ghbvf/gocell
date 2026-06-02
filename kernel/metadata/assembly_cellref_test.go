@@ -47,6 +47,11 @@ func TestAssemblyCellRef_UnmarshalYAML_Rejections(t *testing.T) {
 		{"missing id", "- {module: github.com/acme/x}", "id"},
 		{"empty id", `- {id: ""}`, "id"},
 		{"non-scalar-non-mapping element", "- [nested, seq]", "must be a string"},
+		// module hygiene (defense-in-depth on the generated import path):
+		{"explicit empty module", `- {id: x, module: ""}`, "non-empty"},
+		{"null module", "- {id: x, module: ~}", "non-empty"},
+		{"module with space", `- {id: x, module: "github.com/a b/c"}`, "invalid character"},
+		{"module with quote", `- {id: x, module: "a\"b"}`, "invalid character"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,7 +63,8 @@ func TestAssemblyCellRef_UnmarshalYAML_Rejections(t *testing.T) {
 	}
 }
 
-// TestCellRefsAndCellIDs covers the ergonomic constructor/projection helpers.
+// TestCellRefsAndCellIDs covers the ergonomic constructor/projection helpers,
+// including empty/zero boundaries.
 func TestCellRefsAndCellIDs(t *testing.T) {
 	refs := metadata.CellRefs("configcore", "auditcore")
 	require.Len(t, refs, 2)
@@ -67,5 +73,9 @@ func TestCellRefsAndCellIDs(t *testing.T) {
 	assert.Equal(t, "auditcore", refs[1].ID)
 
 	assert.Equal(t, []string{"configcore", "auditcore"}, metadata.CellIDs(refs))
-	assert.Empty(t, metadata.CellIDs(nil))
+
+	// Empty/zero boundaries.
+	assert.Empty(t, metadata.CellRefs(), "CellRefs() with no ids is empty")
+	assert.Empty(t, metadata.CellIDs(nil), "CellIDs(nil) is empty")
+	assert.Empty(t, metadata.CellIDs([]metadata.AssemblyCellRef{}), "CellIDs(empty) is empty")
 }
