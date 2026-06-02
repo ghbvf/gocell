@@ -83,6 +83,27 @@ func TestBuilder_ClosedSet_HappyPathBijection(t *testing.T) {
 	assert.Equal(t, "auditcore", runtimeCells[1].ID())
 }
 
+// TestBuilder_ClosedSet_RejectsCellIdentityMismatch verifies the post-Provide
+// identity guard (F1 / cluster C1): a module whose ID() IS in the closed set but
+// whose Provide constructs a cell with a DIFFERENT runtime ID is rejected.
+//
+// validateClosedSet runs pre-Provide against m.ID() (the module's self-reported,
+// hardcoded identifier). The identity that actually reaches runtime — the metric
+// `cell` label, healthz probe names — is c.ID(), sourced independently from cell
+// metadata. Without the post-Provide c.ID() == m.ID() guard, a module declared
+// "configcore" could smuggle an out-of-set cell identity ("imposter") past the
+// closed set. The guard runs AFTER Provide (so the module IS invoked).
+func TestBuilder_ClosedSet_RejectsCellIdentityMismatch(t *testing.T) {
+	ctx := context.Background()
+	mMismatch := &fakeCellModule{id: "configcore", cell: stubCell("imposter")}
+
+	_, err := New("configcore").With(mMismatch).Build(ctx, minimalSharedDeps(t), noopRuntimeOpts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "configcore")
+	assert.Contains(t, err.Error(), "imposter")
+	assert.True(t, mMismatch.called, "identity mismatch is detected after Provide, not before")
+}
+
 // TestBuilder_ClosedSet_EmptyAssembly verifies the degenerate bijection: a
 // cell-less assembly (no declared ids, no modules) Builds successfully.
 func TestBuilder_ClosedSet_EmptyAssembly(t *testing.T) {

@@ -54,7 +54,12 @@ type Builder struct {
 // `_runtime` sentinel. Mirrors K8s runtime.Scheme: registration-time enumeration
 // + hard rejection of out-of-set identities.
 func New(expectedCellIDs ...string) *Builder {
-	return &Builder{expectedCellIDs: expectedCellIDs}
+	// Defensive copy: a variadic parameter aliases the caller's backing array
+	// when invoked in spread form (composition.New(ids...) — see
+	// cmd/corebundle/run.go). Without the clone the caller could mutate the
+	// sealed closed set after New but before Build. slices.Clone of a nil/empty
+	// slice yields nil/empty, preserving the empty-assembly degenerate case.
+	return &Builder{expectedCellIDs: slices.Clone(expectedCellIDs)}
 }
 
 // With appends modules to the builder.  Calls are accumulating: successive
@@ -70,9 +75,10 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // Flow:
 //  1. Guard that shared was produced by [NewSharedDeps] (sealed-construction
 //     marker check) and that runtimeOptsFn is non-nil — startup invariants.
-//  2. For each module: nil-guard, call [CellModule.Provide], accumulate cells +
+//  2. For each module: nil-guard, call [CellModule.Provide], nil-cell guard,
+//     closed-set identity guard (c.ID() == m.ID(), see below), accumulate cells +
 //     cellOpts + provisional ManagedResources, with LIFO Close(ctx) rollback on
-//     any failure; nil-cell guard.
+//     any failure.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
 //  4. allOpts := runtimeOpts ++ cellOpts.
@@ -141,6 +147,12 @@ func validateBuildInputs(shared *SharedDeps, runtimeOptsFn RuntimeOptionsFunc) e
 // nil modules are deliberately skipped here: the Build provide loop owns the
 // nil-module path (with provisional-resource rollback), so the closed-set guard
 // must not pre-empt it.
+//
+// This guard keys on the module's self-reported ID() so it can fail fast before
+// any Provide opens resources. It does NOT see the cell each module constructs;
+// the Build provide loop closes that gap with a post-Provide c.ID() == m.ID()
+// identity guard (F1/cluster C1), so the runtime cell identity is bound to the
+// declaration validated here.
 func (b *Builder) validateClosedSet() error {
 	expected := make(map[string]struct{}, len(b.expectedCellIDs))
 	for _, id := range b.expectedCellIDs {
@@ -215,6 +227,23 @@ func (b *Builder) Build(
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module %q returned nil Cell "+
 				"(use explicit Optional semantics if cell is optional)", m.ID())
+		}
+		// Closed-set identity guard (M12a #1093, F1/cluster C1): validateClosedSet
+		// runs pre-Provide against the module's self-reported ID(), but the cell
+		// identity that actually reaches runtime (metric `cell` label, healthz
+		// probe names) is c.ID() — sourced independently from the cell's metadata,
+		// not bound to m.ID(). A module whose ID is in the closed set could still
+		// construct a cell with an out-of-set ID. Requiring c.ID() == m.ID()
+		// binds the validated declaration to the constructed identity; since
+		// m.ID() ∈ closed set was already proven, this transitively guarantees
+		// c.ID() ∈ closed set. Mirrors K8s runtime.Scheme: registration enumerates
+		// the real object identity, not a wrapper label.
+		if c.ID() != m.ID() {
+			rollback()
+			return nil, fmt.Errorf("composition.Builder.Build: module %q provided a cell whose ID is %q; "+
+				"a module's ID must equal the ID of the cell it constructs — the closed-set guard validates "+
+				"the module ID pre-Provide, so a mismatch would let an out-of-set cell identity reach runtime "+
+				"(metric labels, healthz probes)", m.ID(), c.ID())
 		}
 		cells = append(cells, c)
 		cellOpts = append(cellOpts, mOpts...)

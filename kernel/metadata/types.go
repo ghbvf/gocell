@@ -571,10 +571,13 @@ func validateOptionalModulePath(present bool, module string) error {
 	if module == "" {
 		return fmt.Errorf("assembly cell entry \"module\" must be non-empty when set (omit it for same-module)")
 	}
-	for _, rn := range module {
-		if rn < 0x20 || rn == 0x7f || rn == ' ' || rn == '"' || rn == '`' || rn == '\\' {
-			return fmt.Errorf("invalid character %q in assembly cell module %q", rn, module)
-		}
+	// Single source: the char blocklist lives in metadata.AssemblyModulePathPattern
+	// (byte-locked to the JSON schema). MatchAssemblyModulePath rejects the same
+	// runes the prior imperative loop did — control+space range, DEL, quote,
+	// backtick, backslash — that could break out of the generated cellmodules
+	// import string literal.
+	if !MatchAssemblyModulePath(module) {
+		return fmt.Errorf("invalid character in assembly cell module %q", module)
 	}
 	return nil
 }

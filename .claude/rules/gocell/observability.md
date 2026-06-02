@@ -205,7 +205,7 @@ HTTP/gRPC **request-metrics** `cell` label 的 `_runtime` 哨兵单源 = `runtim
 
 ### cellID closed set（M12a #1093）
 
-业务 `cell` label 的合法取值集 = assembly.yaml 列举的 cell 集合。该 closed set 的 build 期真值源是 `composition.Builder.Build`（`runtime/composition/builder.go`）：`composition.New(assemblyCellIDs...)` 注入 assembly 声明的 cell-id 集，`Build` 对每个被装配 module 的 `ID()` 做双射校验（越界 / 缺失 / 重复 fail-fast），**越界 cellID 硬拒、不降级 `_runtime`**（外部 cell 注册不在 assembly 的 cellID 是配置 bug，混入 `_runtime` 会污染哨兵语义）。对标 K8s `runtime.Scheme` 注册期枚举 → 越界拒绝。
+业务 `cell` label 的合法取值集 = assembly.yaml 列举的 cell 集合。该 closed set 的 build 期真值源是 `composition.Builder.Build`（`runtime/composition/builder.go`），**两阶段**：(1) pre-Provide 对每个被装配 module 的 `ID()` 做双射校验（越界 / 缺失 / 重复 fail-fast）；(2) post-Provide 对每个 module 构造出的 cell 校验 `c.ID() == m.ID()`。`composition.New(assemblyCellIDs...)` 注入 assembly 声明的 cell-id 集（内部 `slices.Clone` 防 caller 篡改）。**越界 cellID 硬拒、不降级 `_runtime`**（外部 cell 注册不在 assembly 的 cellID 是配置 bug，混入 `_runtime` 会污染哨兵语义）。对标 K8s `runtime.Scheme` 注册期枚举 → 越界拒绝。第二阶段是必要的：runtime `cell` label 取自 `c.ID()`（cell metadata 派生），与 module 自报的 `m.ID()` 独立来源；只校验 `m.ID()` 会让 module 构造出越界身份的 cell 蒙混过双射（PR #1514 review F1）。
 
 **覆盖范围**：该 funnel 覆盖**走 `composition.Builder` 的 compositionAPI assembly**——当前 `cmd/corebundle` + `examples/corebundlestarter`，`cmd/corebundle` 原手写 `assertModuleIDsMatch` 已删。**legacy-form 示例 assembly**（`examples/todoorder` / `iotdevice` / `orderfulfillment`，用 `generatedCellModules() []CellModule` 本地类型形态，不经 `composition.Builder`）仍保留各自的手写 `assertModuleIDsMatch`；它们迁移到 `composition.New` closed set 是后续工作（待这些示例采用 compositionAPI/cellmodules 形态时）。详见 ADR `docs/architecture/202606030230-adr-assembly-cross-module-composition.md` §D4。
 

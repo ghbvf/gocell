@@ -82,6 +82,20 @@ registering a cellID outside the assembly is a configuration bug, and `_runtime`
 is reserved for framework/unmatched traffic. Mirrors K8s `runtime.Scheme`:
 registration-time enumeration + hard rejection of unregistered identities.
 
+The bijection above keys on `CellModule.ID()` (the module's self-reported
+identifier) so it can fail fast **before** any `Provide` opens resources. But the
+cell identity that actually reaches runtime — the metric `cell` label, healthz
+probe names — is `c.ID()` of the cell each module *constructs*, sourced
+independently from the cell's metadata and not bound to `m.ID()`. So `Build` adds
+a second, **post-Provide identity guard**: for each module it requires
+`c.ID() == m.ID()`. Because `m.ID() ∈ set` is already proven, this transitively
+binds the constructed cell identity into the closed set. Without it a module whose
+ID is in the set could construct a cell with an out-of-set ID, smuggling an
+unenumerated identity past the pre-Provide bijection (F1 / cluster C1, PR #1514
+review). The two phases together — pre-Provide set bijection on `m.ID()` +
+post-Provide `c.ID() == m.ID()` binding — are what make "the closed set constrains
+the runtime cell identity" true, not just "constrains the module label."
+
 This **replaces** the hand-written `cmd/corebundle.assertModuleIDsMatch` (deleted
 in this PR). The framework guard is inherited by every assembly **that composes
 via `composition.Builder`** — today `cmd/corebundle` + `examples/corebundlestarter`
@@ -101,7 +115,7 @@ in #1423).
 | module resolvability | `go build` of generated `cellmodules` import | **Hard** (compiler) |
 | generated import ⊆ assembly.yaml | regenerate-diff byte-lock (modules_gen.go DO NOT EDIT) | **Hard** (codegen golden) |
 | no rogue cellmodules import construction | archtest `ASSEMBLY-CROSS-MODULE-IMPORT-01` — `"/cellmodules/"` interpolation callsite-uniqueness ⊆ `cellModuleImportPath` body | **Hard** downstream (callsite/form uniqueness) + Hard upstream (codegen golden) |
-| cellID closed set at compose time | `composition.Builder.Build` bijection guard (fail-closed, table-driven) | **Medium** (runtime invariant guard; cell IDs are runtime strings → Hard not reachable, same ceiling as `SAGA-CONSTRUCTOR-NIL-GUARD`) |
+| cellID closed set at compose time | `composition.Builder.Build` two-phase guard: pre-Provide bijection on `m.ID()` + post-Provide `c.ID() == m.ID()` identity binding (fail-closed, table-driven) | **Medium** (runtime invariant guard; cell IDs are runtime strings → Hard not reachable, same ceiling as `SAGA-CONSTRUCTOR-NIL-GUARD`) |
 | AssemblyCellRef.ID typed-builder | `FIXTURE-CELLID-TYPED-BUILDER-01/A1` field position moved `AssemblyMeta.Cells` (slice elem) → `AssemblyCellRef.ID` (struct field) | unchanged rating (Hard downstream / upstream per its godoc) |
 
 M12a's Medium is the honest ceiling, not a settle: `CellModule.ID()` is a runtime

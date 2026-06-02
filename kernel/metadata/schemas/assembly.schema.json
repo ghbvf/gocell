@@ -19,7 +19,8 @@
         "oneOf": [
           {
             "type": "string",
-            "description": "Same-module cell id shorthand."
+            "description": "Same-module cell id shorthand.",
+            "pattern": "^[a-z][a-z0-9]{1,31}$"
           },
           {
             "type": "object",
@@ -29,11 +30,14 @@
             "properties": {
               "id": {
                 "type": "string",
-                "description": "Cell id."
+                "description": "Cell id.",
+                "pattern": "^[a-z][a-z0-9]{1,31}$"
               },
               "module": {
                 "type": "string",
-                "description": "Go module path the cell's cellmodules/ package lives in (e.g. github.com/acme/payment-cell). Omit for the assembly's own module. Must be a declared go.mod/go.work dependency; the Go compiler enforces resolvability at build time."
+                "description": "Go module path the cell's cellmodules/ package lives in (e.g. github.com/acme/payment-cell). Omit for the assembly's own module. Must be a declared go.mod/go.work dependency; the Go compiler enforces resolvability at build time.",
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x20\\x7f\"\\x60\\\\]+$"
               }
             }
           }
