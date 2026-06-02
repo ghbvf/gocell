@@ -18,16 +18,18 @@ import (
 // absent from any RunReplaySourceConformance call.
 func TestEnrolledReplaySourceConformance(t *testing.T) {
 	clk := clockmock.New(time.Now())
-	seedEntries := func(n int) []outbox.Entry {
+	src := newEnrolledReplaySource()
+	seed := func(n int) []outbox.Entry {
 		entries := make([]outbox.Entry, n)
 		for i := range entries {
 			e, err := outbox.NewEntry(clk, context.Background(), "topic.v1", []byte(`{}`))
 			if err != nil {
 				t.Fatalf("outbox.NewEntry: %v", err)
 			}
+			src.Append(e)
 			entries[i] = e
 		}
 		return entries
 	}
-	projectiontest.RunReplaySourceConformance(t, newEnrolledReplaySource(), seedEntries)
+	projectiontest.RunReplaySourceConformance(t, src, seed)
 }

@@ -167,7 +167,7 @@ func TestBootstrapAutoWireCollectorFunnel01(t *testing.T) {
 
 	observed := map[string]bool{}
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg.Path() != autoWireBootstrapPkgPath {
 			return nil
 		}
@@ -226,8 +226,7 @@ func TestBootstrapAutoWireCollectorFunnel01_PlantedBypass(t *testing.T) {
 		{collectorsPkgPath, "NewBeta"}:  "collectors.NewBeta",
 	}
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePattern},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePattern}),
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() || p.Pkg.Path() != fixturePkgPath {
 				return nil
