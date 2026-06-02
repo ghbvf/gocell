@@ -385,7 +385,8 @@ per-rule opt-in 名单。
 | `./...` tests=T | 1338 MB → **508 MB** | **↓62.0%（2.6×）** | 923（不变） |
 
 `loadErrs=0` 两种 mode 一致；pkgs 计数不变（同一 import 图，仅依赖包字段填充程度不同）。
-未把内存问题转成编译时间（NoDeps 仍走 export data，build cache 命中时已在）。
+未把内存问题转成编译时间——NoDeps 仍走 export data、无额外源码编译（issue #1499 实测单
+`Load` wall-time ~1.6s vs ~1.3s 量级，build cache 命中时已在；本 amendment 未独立复测 wall-time）。
 
 ### 正确性
 
@@ -394,8 +395,12 @@ per-rule opt-in 名单。
 - 唯一行为变化 = 依赖包的传递 `(*types.Package).Imports()` 闭包裁剪到 type-referenced 包
   （export-data importer 只物化实际被引用的依赖）。全仓 4 个做类型层传递 `.Imports()` BFS/DFS
   的 archtest 规则（`loadForbiddenIfacesFromPkg` / `resolveSagaStepFuncType` / `lookupInterface`
-  / `findTypesPackageByPath`）在该裁剪下 **sound**：产生 finding 必然要求根包 type-reference
-  target 包，故 target 仍是直接 import、必在裁剪后闭包内；裁剪只丢对该根无关的包。
+  / `findTypesPackageByPath`）在该裁剪下 **sound**：经 **命名类型引用**产生 finding 必然要求根包
+  type-reference target 包，故 target 仍是直接 import、必在裁剪后闭包内；裁剪只丢对该根无关的包。
+  **唯一 corpus-依赖路径** = cell raw-option 规则的 `types.Implements` structural-match
+  （匹配 forbidden 方法集的匿名 interface 不必命名 forbidden 包）——其依赖 cell 的 import 闭包
+  能触及 forbidden 包；当前每个平台 cell 均直接 import kernel/persistence + kernel/outbox，由
+  `loadmode_nodeps_invariants_test.go` 跨 `./cells/...` 机器断言（len == forbidden 集大小）。
 - 全仓 **0 处** 访问依赖包的 `.Syntax` / `.TypesInfo`（NeedDeps 专属字段）。
 - 守卫：`typeseval.TestLoadMode_NoNeedDeps`（Medium，type-aware 值断言；Hard 不可达——
   `packages.LoadMode` 是 public int-flag，「任何地方不得带 NeedDeps」类型系统不可表达，同

@@ -89,10 +89,14 @@ func (r *Resolver) Packages() []*packages.Package {
 //
 // Do NOT re-add NeedDeps "to be safe". Its ONLY behavioral effect here is to
 // prune the transitive (*types.Package).Imports() closure to type-referenced
-// packages. Every archtest transitive-walk rule is sound under that pruning
-// because producing a finding requires the root package to type-reference the
-// target package (so the target stays a direct import and survives pruning) —
-// see ../../loadmode_nodeps_invariants_test.go. Guarded by
+// packages. The archtest transitive-walk rules are sound under that pruning
+// because producing a finding via a NAMED-TYPE reference requires the root to
+// type-reference the target package (so the target stays a direct import and
+// survives pruning). The one corpus-dependent path is the cell raw-option rule's
+// types.Implements structural-match (an anonymous interface matching a forbidden
+// method set need not name the forbidden package); it holds today because every
+// platform cell directly imports kernel/persistence + kernel/outbox, machine-
+// asserted in ../../loadmode_nodeps_invariants_test.go. Guarded by
 // TestLoadMode_NoNeedDeps.
 //
 // ref: golang/tools go/packages/packages.go usesExportData + NeedDeps doc
