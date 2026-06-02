@@ -29,7 +29,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -41,7 +40,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
@@ -85,34 +83,34 @@ const bootstrapAppendDetachedTimeout = 2 * time.Second
 // the environment.
 func (m module) Provide(
 	_ context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+) (composition.ModuleResult, error) {
 	creds, err := loadBootstrapCredentials(
 		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME"),
 		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD"),
 	)
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 	if creds.Username == nil {
-		return nil, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+		return composition.ModuleResult{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"GOCELL_BOOTSTRAP_ADMIN_USERNAME and GOCELL_BOOTSTRAP_ADMIN_PASSWORD are required "+
 				"to protect setup/admin endpoint")
 	}
 
 	accessOpts, sessionProto, err := buildAccessBaseOpts(shared)
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	innerSessionStore, storageOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 	accessOpts = storageOpts
 
 	sessionStore, err := wrapSessionStoreWithCache(innerSessionStore, shared, nil)
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 	accessOpts = append(accessOpts, accesscell.WithSessionStore(sessionStore))
 
@@ -139,19 +137,18 @@ func (m module) Provide(
 	// only after HTTP servers start (post-Init), so Load always sees non-nil.
 	cellAtomicPtr.Store(c)
 
-	// The bootstrap rate limiter spawns a cleanup goroutine, so it must be
-	// managed in two places (pg-cell-template Chapter 4 contract):
-	//   - opts: bootstrap.WithManagedResource so bootstrap.Run closes it at
-	//     phase10 shutdown during the normal run (the steady-state lifecycle).
-	//   - 3rd return value: so Builder.Build closes it (LIFO) if a *later*
-	//     module's Provide fails before bootstrap.Run starts (rollback).
-	// The same value flows through both; bootstrap registers it once (only the
-	// success path reaches bootstrap.Run), the rollback path only fires on
-	// pre-Run failure, so there is no double-close.
+	// The bootstrap rate limiter spawns a cleanup goroutine, so it is a
+	// ManagedResource. Return it ONLY in ModuleResult.Resources (single source,
+	// PR #591 / #1420): Builder.Build derives BOTH the steady-state
+	// bootstrap.WithManagedResource registration (phase10 LIFO Close on the
+	// normal run) AND the pre-Run rollback Close (if a later module's Provide
+	// fails before bootstrap.Run starts) from that one entry. The module does not
+	// call bootstrap.WithManagedResource itself (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
 	limiterRes := bootstrapLimiterResource{lim: rlLimiter}
-	return c,
-		[]bootstrap.Option{bootstrap.WithManagedResource(limiterRes)},
-		[]kernellifecycle.ManagedResource{limiterRes}, nil
+	return composition.ModuleResult{
+		Cell:      c,
+		Resources: []kernellifecycle.ManagedResource{limiterRes},
+	}, nil
 }
 
 // buildAccessBaseOpts builds the base accesscore options and session protocol.

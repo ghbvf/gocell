@@ -83,15 +83,26 @@ bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
 
 ## CellModule 接口
 
-每个模块实现 `composition.CellModule`，提供 Cell + bootstrap.Option + ManagedResource：
+每个模块实现 `composition.CellModule`，通过单一 `ModuleResult` 返回 Cell +
+非资源 bootstrap.Option + ManagedResource（#1420 单源化，取代旧 4 返回值）：
 
 ```go
+type ModuleResult struct {
+    Cell      cell.Cell                        // 构造的 Cell，成功时非 nil
+    Opts      []bootstrap.Option               // 非资源 option（如 WithRelay）
+    Resources []lifecycle.ManagedResource      // 本模块打开的资源（PG pool / vault…）
+}
+
 type CellModule interface {
     ID() string
-    Provide(ctx context.Context, shared *SharedDeps) (
-        cell.Cell, []bootstrap.Option, []lifecycle.ManagedResource, error)
+    Provide(ctx context.Context, shared *SharedDeps) (ModuleResult, error)
 }
 ```
+
+资源**只**放进 `Resources`，模块自身**不**调 `bootstrap.WithManagedResource`
+（由 `WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01` type-aware 守卫）；`Builder.Build`
+从 `Resources` 一处同时派生稳态注册（`WithManagedResource`）与 pre-Run rollback
+栈，两条生命周期通道不可能漂移（#1420 收口前的双写 bug）。
 
 Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数）；
 跨 cell 通信改为 event（contract-based）。不再经可变 `*SharedDeps` 字段或

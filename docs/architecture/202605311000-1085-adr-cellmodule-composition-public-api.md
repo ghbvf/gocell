@@ -23,7 +23,8 @@
 
 | 类型 | 职责 |
 |---|---|
-| `CellModule` | 接口：`ID() string` + `Provide(ctx, *SharedDeps) (cell.Cell, []Option, []ManagedResource, error)` |
+| `CellModule` | 接口：`ID() string` + `Provide(ctx, *SharedDeps) (ModuleResult, error)`（出参形态见 `ModuleResult`，Amendment 2026-06-03 #1420 单源化） |
+| `ModuleResult` | 结构体 `{Cell cell.Cell; Opts []bootstrap.Option; Resources []lifecycle.ManagedResource}`——`Provide` 的单源出参；Builder 从 `Resources` 派生 happy-path `WithManagedResource` + pre-Run rollback 两条通道（Amendment 2026-06-03 #1420） |
 | `SharedDeps` | 跨 cell 共享依赖的公开 bag（接口字段，无 adapter 具体类型）；**sealed construction**——经 `NewSharedDeps(...)` 构造盖 marker，`Build` 拒未盖戳实例 |
 | `Builder` | `New() / With(...) / Build(ctx, *SharedDeps, RuntimeOptionsFunc) (*App, error)`；`Build` 校验 marker + `runtimeOptsFn` 非 nil |
 | `App` | `Run(ctx) error`（委托 bootstrap.New(...).Run） |
@@ -31,7 +32,9 @@
 
 `SharedDeps` 字段全部为接口或 kernel/runtime 类型（`kernelmetrics.Provider`、`idempotency.Claimer`、`*auth.JWTIssuer` 等），**不包含**任何 `adapters/prometheus` 或 `prometheus/client_golang` 具体类型，使 `runtime/composition` 不向 adapters/ 引入依赖。
 
-**Amendment 2026-06-02 #1423**：`CellModule.Provide` 签名已从 `Provide(ctx, *SharedDeps, in ModuleExports) (cell.Cell, ModuleExports, []bootstrap.Option, []ManagedResource, error)` 简化为 `Provide(ctx, *SharedDeps) (cell.Cell, []bootstrap.Option, []ManagedResource, error)`。`ModuleExports` 类型已完全删除（详见本文末尾 §Amendment 2026-06-02）。
+**Amendment 2026-06-02 #1423**：`CellModule.Provide` 签名已从 `Provide(ctx, *SharedDeps, in ModuleExports) (cell.Cell, ModuleExports, []bootstrap.Option, []ManagedResource, error)` 简化为 `Provide(ctx, *SharedDeps) (cell.Cell, []bootstrap.Option, []ManagedResource, error)`。`ModuleExports` 类型已完全删除（详见 §Amendment 2026-06-02）。
+
+**Amendment 2026-06-03 #1420 / #1413**：`Provide` 出参进一步收口为单一 `ModuleResult` 结构体——`Provide(ctx, *SharedDeps) (ModuleResult, error)`，`ModuleResult{Cell, Opts, Resources}`。资源生命周期改为**单源**：模块只在 `Resources` 列资源，`Builder.Build` 从该一处同时派生 happy-path `bootstrap.WithManagedResource` 注册与 pre-Run rollback 栈，消除原「同一资源双写 opts + provisional」漂移面。同时（#1413）`SharedDeps` 移除两个 configcore 专属字段（`EventbusCacheCollector` / `ConfigStaleCipherInc`），configcore 经 kernel `MetricsProvider` 自建（详见本文末尾 §Amendment 2026-06-03）。
 
 ### 新建 `cellmodules/` Composition Root 层
 
@@ -95,7 +98,8 @@ composition.New().
 | prom 构造只在允许位置调用 | archtest `PROM-CALLER-*`（nightly CI allowlist 含 cellmodules/） | Medium（同上） |
 | `Build()` error-first，无 Must | type system（函数签名，无 MustBuild 导出符号） | Hard |
 | `cellmodules/` 独立层分类（`LayerCellModules = "cellmodules"`，区别于 `LayerCmd`） | `kernel/depgraph/layer.go` + `tools/archtest/archtest_test.go` LAYER-06 豁免扩展 | Medium（archtest LAYER-06，nightly CI） |
-| `CellModule.Provide` 签名冻结：2 入参（context.Context, *SharedDeps）/ 4 出参（cell.Cell, []Option, []ManagedResource, error），无跨 module 值传递通道 | archtest `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）——reflect 冻结接口方法签名；重新引入 handoff 通道 = 签名变 → CI 红 | **Hard**（reflect interface method 签名；重引入 handoff 使签名变，archtest pin 即断——上下游均 Hard） |
+| `CellModule.Provide` 签名冻结：2 入参（context.Context, *SharedDeps）/ 2 出参（ModuleResult, error）+ `ModuleResult` 字段集冻结 `{Cell, Opts, Resources}`，无跨 module 值传递通道（Amendment 2026-06-03 #1420 由 4-out 收口为 ModuleResult） | archtest `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）——reflect 冻结接口方法签名 + ModuleResult struct 字段（NumField()==3 + 字段名/类型）；重新引入 handoff 字段/通道 = 形态变 → CI 红 | **Hard**（reflect interface method 签名 + struct 字段集；重引入 handoff 使形态变，archtest pin 即断——上下游均 Hard） |
+| cellmodules/ 不得调 `bootstrap.WithManagedResource`（资源经 `ModuleResult.Resources` 单源，Builder 是唯一漏斗） | archtest `WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01`（`tools/archtest/withmanagedresource_cellmodule_funnel_test.go`）（Amendment 2026-06-03 #1420 新增） | 下游 **Hard**（cellmodules 内零容忍 caller-ban）/ 上游 **Medium**（Go 无法令「调某导出 func」编译不可表达，同 #851/#893/#1282 天花板） |
 
 **注**：`cellmodules/` 与 `cmd/` 同属 composition-root 层，既有 composition-root archtests（cas/session/ledger 协议位置、wrapper 调用点）已通过 `cellmodules/` 前缀覆盖，不存在扫描盲区。
 
@@ -156,7 +160,7 @@ composition.New().
    - **新**：accesscore observer 调 `setup.Service.RecordBootstrapAuthFail`，在 tx 内 emit `event.auth.bootstrap-failed.v1`（持久 L2 outbox）→ relay 异步投递 → auditcore `auditappendbootstrap` subscriber 消费 → `AppendBootstrapAuthFail` 写 bootstrap-namespace ledger。
 4. `*audit.BootstrapLedgerStore` 类型保留，现由 auditcore cell 通过 `auditcell.WithBootstrapStore(bootstrapWrapped)` 在 auditcore 内部持有（不再 export）。Namespace/HMAC 隔离保持不变（独立 `"bootstrap"` namespace + 独立 HMAC key `GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY`，见 ADR-1121）。
 5. **archtest 变更**：
-   - **新增** `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）：Hard，reflect 冻结 `CellModule.Provide` 签名（2 入参 / 4 出参）——重新引入跨 module 值传递通道必须改签名，archtest 即断。
+   - **新增** `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）：Hard，reflect 冻结 `CellModule.Provide` 签名（2 入参 / 出参——#1423 时为 4-out，后经 #1420 收口为 `ModuleResult` 2-out + struct 字段集冻结，见 §Amendment 2026-06-03）——重新引入跨 module 值传递通道必须改形态，archtest 即断。
    - **退役** `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01`：事件消费者经 EventRouter 路由，Provide 时不存在顺序依赖，前提消失。
    - **退役** `BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-{DOWNSTREAM-HARD,UPSTREAM-MEDIUM}-01`：observer 不再写 ledger；emit 路径由 `EMIT-DECL-COVER-01`（已存在）+ event contract + auditcore subscriber conformance test 覆盖。
 
@@ -178,3 +182,32 @@ composition.New().
 - ADR-1121 `docs/architecture/202605270230-1121-audit-chain-bootstrap-namespace-isolation.md`（bootstrap namespace 隔离原始决策）
 - Archtest `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`：`tools/archtest/module_provide_signature_frozen_test.go`（符号清单与盲区清单活在该文件的 package godoc）
 - Plan：`.claude/plans/1423-issues-foamy-orbit.md`（设计裁决历程 + HTTP 方案被否原因 + DEP-02 环分析）
+
+---
+
+## Amendment 2026-06-03 #1420 / #1413 — 单源 ModuleResult + configcore 字段收口
+
+**#1420（资源双写单源化）**：`CellModule.Provide` 原出参 `(cell.Cell, []bootstrap.Option, []ManagedResource, error)` 要求每个模块把同一个 `ManagedResource` 写进**两条**通道——`opts` 经 `bootstrap.WithManagedResource`（happy-path probe/worker/LIFO-Close）+ 第 3 返回值 `provisional`（pre-Run rollback）。双写仅靠 godoc 约定（Soft），漏写任一半 → 资源泄漏或 /readyz 缺 probe。
+
+收口为单一 `ModuleResult{Cell, Opts, Resources}`：模块只在 `Resources` 列资源，`Builder.Build` 从该一处**同时**派生 `WithManagedResource` 注册（`managedResourceOpts` 助手）与 provisional rollback 栈，两通道结构上不可能分叉。模块禁止自行调 `bootstrap.WithManagedResource`（cellmodules 内由 `WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01` 零容忍拦截）。
+
+Enforcement 演进：
+- `MODULE-PROVIDE-NO-VALUE-HANDOFF-01` 由「reflect 冻结 4-out 返回列表」升级为「冻结 2-out（`ModuleResult`, error）+ `ModuleResult` struct 字段集（`NumField()==3` + 字段名 `{Cell,Opts,Resources}` + 类型）」。**威胁矩阵强化**：原 #1423 矩阵「accesscore 拿到 nil BootstrapLedgerStore」「进程内跨 cell 直写」两行依赖「ModuleExports 通道无法被重新引入」——该保证此前只覆盖「返回列表新增 handoff 出参」，现 `NumField()==3` 冻结**额外**封闭「把 Exports 夹带为 `ModuleResult` 结构体字段」这一新向量（✅ → ✅ 强化）。其余矩阵行不受影响（资源生命周期与跨 cell handoff 正交）。
+- **新增** `WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01`（下游 Hard cellmodules 内 caller-ban / 上游 Medium，同 #851/#893/#1282 天花板）。
+
+**#1413（configcore 字段收口）**：`SharedDeps` 移除 `EventbusCacheCollector`（required）+ `ConfigStaleCipherInc`（optional）两个 configcore 专属字段——configcore 经 kernel `MetricsProvider` 用 `obmetrics.NewProviderEventbusCacheCollector` / `NewProviderConfigStaleCipherCollector` 自建（这两个 collector 走 kernel Provider，非 raw `client_golang`，不违反「cellmodules 不 import client_golang」治理姿态）。
+
+威胁/正确性再评：
+- **Prometheus wire 不变，但 generated metrics-schema 是可见 contract 载体且本 PR 改了它**（F5 披露补全——原表述只说「wire 名不变」不完整）：`gocell_config_stale_cipher_total` / `gocell_eventbus_cache_tombstone_evicted_total` 的 **fqName（Prometheus series 名）+ label 与迁移前字节一致**——运维侧按 series 名 key 的 dashboard/alert 不受影响。但 `gocell generate metrics-schema` 派生的 golden（contract-fanout 5 载体之一、消费方可读的 inventory）有两类**可感知**变化：
+  1. **corebundle**：schema `name` 字段由 `stale_cipher_total` **rename** 为 `config_stale_cipher_total`（新 Provider collector `Name="config_stale_cipher_total"`，旧 raw-prom 为 `Subsystem="config" Name="stale_cipher_total"`；二者 fqName 同为 `gocell_config_stale_cipher_total`），外加 `file` 字段从 `cmd/` 移到 `runtime/observability/metrics/`。
+  2. **examples/iotdevice / orderfulfillment / todoorder**：collector 移入 shared `runtime/observability/metrics` 包后，`config_stale_cipher_total` 成为这三个 assembly schema 的**净新增条目**（迁移前不在其 inventory），与 sibling `eventbus_cache_tombstone_evicted_total` 同行为。
+  4 份 golden 已 `gocell generate metrics-schema --all` regen + `go test ./tools/metricschema/...` 绿；无 wire 改名分支。
+- **无双注册**：两 collector 各仅 configcore 消费；configcore 自建一次 + corebundle 停建 = 恰一次。
+- **`ConfigEventCollector` 前提纠正**：原表述「configcore 专属」有误——它由 accesscore + configcore + corebundle config-event middleware 共同消费且 `Validate` required，是真·跨 cell 字段，**保留**在 `SharedDeps`。
+- **`ConfigKeyProvider` 残留（唯一未收口字段）**：vault-transit 路径经 `adapters/vault.TransitMetrics`（raw prometheus registry），受 `adapterPromCallerAllowlist` 姿态阻挡，configcore 自建被 **#885**（vault TransitMetrics → kernel Provider）gate；#885 落地后该字段随之移入 configcore，`SharedDeps` 即完全 cell-agnostic。`#1413` 保持 open 跟踪此残留。
+- `adapters/prometheus.RegisterOrReuseCounter` 迁移后无生产调用方，其 `adapterPromCallerAllowlist` 置空（symbol 仍受治理，未来调用方须带理由加入）；export + 自测保留（删除留作后续 cleanup）。
+
+**参考**：
+- 单源生命周期对标：uber-go/fx `fx.Lifecycle.Append(Hook{OnStart,OnStop})`——一次注册派生 start/stop 双向，对应 `ModuleResult.Resources → {WithManagedResource, rollback}`。
+- Archtest：`WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01`（`tools/archtest/withmanagedresource_cellmodule_funnel_test.go`）；`MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（已扩展 ModuleResult 字段冻结）。
+- gh #885（vault metrics → kernel Provider，解锁 ConfigKeyProvider 收口）；gh #1413（剩余范围跟踪）。

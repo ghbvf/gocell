@@ -98,23 +98,25 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 	}, nil
 }
 
-// buildConfigCoreResult wires the provisional resources, relay opts, and
-// key-provider managed resource.
+// buildConfigCoreResult assembles the configcore module result: the cell, the
+// non-resource bootstrap opts (relay), and the single-source ManagedResource
+// list. When the KeyProvider is itself a ManagedResource (vault-transit) it is
+// returned ONLY in the resources slice — Builder.Build derives both the
+// steady-state bootstrap.WithManagedResource registration and the pre-Run
+// rollback from it. This function must NOT call bootstrap.WithManagedResource
+// (banned in cellmodules/ by WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
 func buildConfigCoreResult(
 	c *configcell.ConfigCore,
 	kp kcrypto.KeyProvider,
 	modResult configCoreModuleResult,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource) {
-	var opts []bootstrap.Option
-	var provisional []kernellifecycle.ManagedResource
+	opts := modResult.bootstrapOpts
 
-	opts = append(opts, modResult.bootstrapOpts...)
-
+	var resources []kernellifecycle.ManagedResource
 	if kpRes, ok := kp.(kernellifecycle.ManagedResource); ok {
-		opts = append(opts, bootstrap.WithManagedResource(kpRes))
-		provisional = append(provisional, kpRes)
+		resources = append(resources, kpRes)
 	}
-	return c, opts, provisional
+	return c, opts, resources
 }
 
 // buildConfigCorePGRelay constructs the configcore PG relay.

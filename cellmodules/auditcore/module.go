@@ -19,14 +19,11 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	auditcell "github.com/ghbvf/gocell/cells/auditcore"
-	"github.com/ghbvf/gocell/kernel/cell"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -47,25 +44,25 @@ func (module) ID() string { return "auditcore" }
 //   - GOCELL_AUDITCORE_CURSOR_KEY / *_PREVIOUS_KEY (cursor codec)
 func (m module) Provide(
 	ctx context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+) (composition.ModuleResult, error) {
 	cursorCodec, auditProtocol, bootstrapProtocol, err := buildAuditProtocols(shared)
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	// Build the two ledger.Store instances (PG or mem).
 	auditcoreStore, bootstrapInnerStore, err := buildAuditStores(shared, auditProtocol, bootstrapProtocol)
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	// Run strict tail verify against the bootstrap chain at composition time.
 	bootstrapWrapped, err := audit.NewBootstrapLedgerStore(bootstrapInnerStore)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("wrap bootstrap audit store: %w", err)
+		return composition.ModuleResult{}, fmt.Errorf("wrap bootstrap audit store: %w", err)
 	}
 	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, nil); err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	// C4 durable-mode fail-fast: in durable (postgres) mode, bootstrapWrapped
@@ -75,14 +72,14 @@ func (m module) Provide(
 	// Demo/memory mode allows nil (in-memory stores are always non-nil here
 	// anyway, but the guard is storage-mode scoped to mirror existing patterns).
 	if bootstrapWrapped == nil && shared.Topology.StorageBackend() == "postgres" {
-		return nil, nil, nil, fmt.Errorf("auditcore: bootstrap ledger store is nil in durable mode (postgres); " +
+		return composition.ModuleResult{}, fmt.Errorf("auditcore: bootstrap ledger store is nil in durable mode (postgres); " +
 			"this is a permanent misconfiguration — auditappendbootstrap would Reject all events")
 	}
 
 	// Build the read-side aggregator. auditquery reads across both chains.
 	multiStore, err := ledger.NewMultiStore(auditcoreStore, bootstrapInnerStore)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("audit multi-store: %w", err)
+		return composition.ModuleResult{}, fmt.Errorf("audit multi-store: %w", err)
 	}
 
 	auditOpts := []auditcell.Option{
@@ -111,7 +108,7 @@ func (m module) Provide(
 
 	c := auditcell.NewAuditCore(shared.Clock, auditOpts...)
 
-	return c, nil, nil, nil
+	return composition.ModuleResult{Cell: c}, nil
 }
 
 // buildAuditProtocols builds the cursor codec and both ledger protocols

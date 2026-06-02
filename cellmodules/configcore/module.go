@@ -6,14 +6,17 @@
 // and cellmodules/cellsecrets/. It must NOT be imported by cells/, runtime/, or
 // adapters/.
 //
-// # Key provider and stale-cipher counter routing
+// # Key provider routing
 //
-// The configcore key provider and stale-cipher prometheus counter are
-// constructed in cmd/corebundle (which may import adapters/vault and
-// github.com/prometheus/client_golang). They are passed to this module via
-// composition.SharedDeps.ConfigKeyProvider and
-// composition.SharedDeps.ConfigStaleCipherInc so that cellmodules/configcore
-// never imports those adapter-specific packages.
+// The configcore key provider is constructed in cmd/corebundle (which may import
+// adapters/vault and github.com/prometheus/client_golang) and passed via
+// composition.SharedDeps.ConfigKeyProvider, so cellmodules/configcore never
+// imports those adapter-specific packages. This is the last cmd-supplied
+// configcore dependency; its removal is gated on #885 (vault TransitMetrics →
+// kernel MetricsProvider). The stale-cipher and eventbus-cache collectors were
+// moved here (#1413): they route through the kernel MetricsProvider, so this
+// module self-builds them from SharedDeps.MetricsProvider via
+// runtime/observability/metrics without importing client_golang.
 //
 // ref: uber-go/fx fx.Module("configcore", ...) — self-contained module.
 package configcore
@@ -24,13 +27,11 @@ import (
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	configcell "github.com/ghbvf/gocell/cells/configcore"
-	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/crypto"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -66,10 +67,11 @@ func Module(opts ...ModuleOption) composition.CellModule {
 func (*module) ID() string { return "configcore" }
 
 // Provide resolves all configcore-specific dependencies and returns the
-// constructed cell, bootstrap options, and provisional resources.
+// constructed cell, non-resource bootstrap options, and the single-source
+// ManagedResource list (Builder derives WithManagedResource + rollback from it).
 func (m *module) Provide(
 	_ context.Context, shared *composition.SharedDeps,
-) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+) (composition.ModuleResult, error) {
 	// 1. Cursor codec.
 	cfgPrimary, cfgPrevious := cellsecrets.LoadCursorKeys("CONFIGCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
@@ -82,20 +84,28 @@ func (m *module) Provide(
 		Label:       "config",
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
+		return composition.ModuleResult{}, fmt.Errorf("configcore cursor codec: %w", err)
 	}
 
 	// 2. KeyProvider (test override OR cmd-supplied via SharedDeps).
 	kp := m.resolveKeyProvider(shared)
 	vt, err := resolveValueTransformer(kp, shared.Topology.StorageBackend() == "postgres")
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
-	// 3. Stale-cipher increment callback (supplied by cmd via SharedDeps).
-	staleCipherInc := shared.ConfigStaleCipherInc
-	if staleCipherInc == nil {
-		staleCipherInc = func() {} // no-op fallback for tests without prom setup
+	// 3. Config observability collectors — self-built from the shared kernel
+	// MetricsProvider (#1413). These route through the kernel Provider (not raw
+	// github.com/prometheus/client_golang), so configcore owns them without
+	// tripping the "no client_golang in cellmodules" posture. Metric names are
+	// unchanged (gocell_config_stale_cipher_total / gocell_eventbus_cache_*).
+	staleCipherCollector, err := obmetrics.NewProviderConfigStaleCipherCollector(shared.MetricsProvider)
+	if err != nil {
+		return composition.ModuleResult{}, fmt.Errorf("configcore stale-cipher collector: %w", err)
+	}
+	ebcCollector, err := obmetrics.NewProviderEventbusCacheCollector(shared.MetricsProvider)
+	if err != nil {
+		return composition.ModuleResult{}, fmt.Errorf("configcore eventbus-cache collector: %w", err)
 	}
 
 	// 4. PG storage and cell options.
@@ -106,31 +116,34 @@ func (m *module) Provide(
 		metricsProvider:  shared.MetricsProvider,
 		valueTransformer: vt,
 		onStaleCipher: func(_, _, _ string) {
-			staleCipherInc()
+			// onStaleCipher fires deep in the PG repo read path with no request
+			// context, so a background ctx is intentional here: this is an
+			// unlabeled global counter with no per-request trace correlation.
+			staleCipherCollector.RecordStaleCipher(context.Background())
 		},
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	// 5. CAS protocol (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest).
 	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
-		return nil, nil, nil, err
+		return composition.ModuleResult{}, err
 	}
 
 	baseOpts := []configcell.Option{
 		configcell.WithCursorCodec(cursorCodec),
 		configcell.WithMetricsProvider(shared.MetricsProvider),
 		configcell.WithConfigEventCollector(shared.ConfigEventCollector),
-		configcell.WithEventbusCacheCollector(shared.EventbusCacheCollector),
+		configcell.WithEventbusCacheCollector(ebcCollector),
 		configcell.WithCASProtocol(casProto),
 	}
 	baseOpts = append(baseOpts, modResult.cellOptions...)
 	c := configcell.NewConfigCore(shared.Clock, baseOpts...)
 
 	builtCell, opts, res := buildConfigCoreResult(c, kp, modResult)
-	return builtCell, opts, res, nil
+	return composition.ModuleResult{Cell: builtCell, Opts: opts, Resources: res}, nil
 }
 
 // resolveKeyProvider returns the test override when set, otherwise uses the
