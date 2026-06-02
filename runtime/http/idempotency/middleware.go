@@ -120,6 +120,7 @@ type middlewareConfig struct {
 	leaseTTL      time.Duration
 	doneTTL       time.Duration
 	exemptMatcher func(*http.Request) bool
+	metrics       MetricsObserver
 }
 
 func defaultConfig() middlewareConfig {
@@ -195,6 +196,27 @@ func WithDoneTTL(d time.Duration) Option {
 func WithExemptMatcher(fn func(*http.Request) bool) Option {
 	return func(c *middlewareConfig) {
 		c.exemptMatcher = fn
+	}
+}
+
+// WithMetrics installs an optional MetricsObserver that records one
+// idempotency_requests_total{cell,state} increment per terminal idempotency
+// decision. Metrics are best-effort: a nil/typed-nil observer is not stored
+// and emission is skipped — idempotency correctness never depends on it.
+func WithMetrics(obs MetricsObserver) Option {
+	return func(c *middlewareConfig) {
+		if validation.IsNilInterface(obs) {
+			return
+		}
+		c.metrics = obs
+	}
+}
+
+// observeState emits one metric observation for the terminal idempotency
+// decision. It is a no-op when no MetricsObserver was wired (metrics optional).
+func (c middlewareConfig) observeState(ctx context.Context, state RequestState) {
+	if c.metrics != nil {
+		c.metrics.ObserveRequest(ctx, state)
 	}
 }
 
@@ -346,6 +368,7 @@ func handleWithIdempotency(
 				"subject", p.Subject,
 				"tenant_id", ns,
 			)
+			cfg.observeState(ctx, StateKeyReused)
 			httputil.WriteError(ctx, w, errcode.New(
 				errcode.KindConflict,
 				errcode.ErrIdempotencyKeyReused,
@@ -359,6 +382,7 @@ func handleWithIdempotency(
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateStoreError)
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindInternal,
 			errcode.ErrInternal,
@@ -374,6 +398,7 @@ func handleWithIdempotency(
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateReplayed)
 		replayResponse(w, rec)
 
 	case idempotency.ClaimBusy:
@@ -382,6 +407,7 @@ func handleWithIdempotency(
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateBusy)
 		// Use a small fixed hint (retryAfterHintSeconds) rather than the full
 		// leaseTTL (300 s default) so clients retry soon without a long wait.
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterHintSeconds))
@@ -392,6 +418,7 @@ func handleWithIdempotency(
 		))
 
 	default: // ClaimAcquired
+		cfg.observeState(ctx, StateAcquired)
 		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns)
 	}
 }
@@ -514,6 +541,7 @@ func recordOrRelease(
 			"idempotency_key_hash", keyHash,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateOversize)
 	}
 }
 
