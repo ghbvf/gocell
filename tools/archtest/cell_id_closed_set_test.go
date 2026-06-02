@@ -45,7 +45,6 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -195,14 +194,13 @@ func ResolveCellLabel(ctx context.Context, valid map[string]struct{}) CellLabel 
 func TestCellIDClosedSet01_SealedConstruction(t *testing.T) {
 	root := findModuleRoot(t)
 	dir := filepath.Join(root, "runtime", "observability", "metrics")
-	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	// findProductionGoFilesInDir wraps scanner.DirsScope(...).Files() (the
+	// scanner framework, SCANNER-FRAMEWORK-USAGE-01) and excludes _test.go.
+	files, err := findProductionGoFilesInDir(dir)
 	require.NoError(t, err)
 
 	fset := token.NewFileSet()
 	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
 		rel := slashRel(t, root, path)
 		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		require.NoErrorf(t, err, "%s: parse failed", rel)

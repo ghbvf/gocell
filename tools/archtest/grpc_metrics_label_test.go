@@ -224,18 +224,24 @@ func cellLabelFromResolve(info *types.Info, body ast.Node, argExpr ast.Expr) boo
 		return false
 	}
 	found := false
+	// The funnel assignment is always single-assign (`cell := ResolveCellLabel(...)`),
+	// so match `<arg> = <call>` / `<arg> := <call>` directly without iterating an
+	// index-correlated Lhs/Rhs slice (SCANNER-FRAMEWORK-USAGE-01).
 	EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
-		for i, lhs := range as.Lhs {
-			id, isIdent := lhs.(*ast.Ident)
-			if !isIdent || info.ObjectOf(id) != argObj || i >= len(as.Rhs) {
-				continue
-			}
-			if call, ok := as.Rhs[i].(*ast.CallExpr); ok {
-				if pkg, name, ok := ResolvePackageRef(info, call.Fun); ok &&
-					pkg == grpcMetricsPkgPath && name == grpcMetricsResolveLabelName {
-					found = true
-				}
-			}
+		if len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return
+		}
+		id, isIdent := as.Lhs[0].(*ast.Ident)
+		if !isIdent || info.ObjectOf(id) != argObj {
+			return
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return
+		}
+		if pkg, name, ok := ResolvePackageRef(info, call.Fun); ok &&
+			pkg == grpcMetricsPkgPath && name == grpcMetricsResolveLabelName {
+			found = true
 		}
 	})
 	return found
