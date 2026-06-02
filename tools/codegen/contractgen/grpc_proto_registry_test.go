@@ -83,7 +83,7 @@ const grpcSingleSourceContractID = "grpc.device.command.v1"
 
 func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle(t *testing.T) {
 	t.Parallel()
-	oracle, err := readProtoTypeInfo(fixtureProtoPath(t), "IssueCommand")
+	oracle, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
 	if err != nil {
 		t.Fatalf("oracle readProtoTypeInfo: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle(t *testin
 // site C1 locks).
 func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_PopulatesProtoFields(t *testing.T) {
 	t.Parallel()
-	oracle, err := readProtoTypeInfo(fixtureProtoPath(t), "IssueCommand")
+	oracle, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
 	if err != nil {
 		t.Fatalf("oracle: %v", err)
 	}

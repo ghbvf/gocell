@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+// Fully-qualified service names matching the fixtures' proto package +
+// service declarations (readProtoTypeInfo scopes the method to this service).
+const (
+	fixtureFQService = "device.command.v1.DeviceCommandService"
+	synthFQServiceS  = "device.command.v1.S"
+)
+
 // fixtureProtoPath returns the absolute path to the synth_grpc_minimal proto.
 func fixtureProtoPath(t *testing.T) string {
 	t.Helper()
@@ -21,7 +28,7 @@ func fixtureProtoPath(t *testing.T) string {
 
 func TestReadProtoTypeInfo_HappyPath(t *testing.T) {
 	t.Parallel()
-	info, err := readProtoTypeInfo(fixtureProtoPath(t), "IssueCommand")
+	info, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
 	if err != nil {
 		t.Fatalf("readProtoTypeInfo: %v", err)
 	}
@@ -39,7 +46,7 @@ func TestReadProtoTypeInfo_HappyPath(t *testing.T) {
 
 func TestReadProtoTypeInfo_FileUnreadable(t *testing.T) {
 	t.Parallel()
-	_, err := readProtoTypeInfo(filepath.Join(t.TempDir(), "missing.proto"), "IssueCommand")
+	_, err := readProtoTypeInfo(filepath.Join(t.TempDir(), "missing.proto"), fixtureFQService, "IssueCommand")
 	if err == nil {
 		t.Fatal("expected error for missing proto file")
 	}
@@ -54,7 +61,7 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, "IssueCommand")
+	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "go_package") {
 		t.Fatalf("expected go_package error, got %v", err)
 	}
@@ -70,7 +77,7 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, "IssueCommand")
+	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	// Distinct from the missing-go_package path: this is the no-";alias" branch.
 	if err == nil || !strings.Contains(err.Error(), "must be") {
 		t.Fatalf("expected go_package missing-alias (`must be`) error, got %v", err)
@@ -87,7 +94,7 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, "IssueCommand")
+	_, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "identifier") {
 		t.Fatalf("expected alias-not-identifier error, got %v", err)
 	}
@@ -103,7 +110,7 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, "IssueCommand")
+	_, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "whitespace") {
 		t.Fatalf("expected import-path whitespace error, got %v", err)
 	}
@@ -118,7 +125,7 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, "IssueCommand")
+	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "package") {
 		t.Fatalf("expected package error, got %v", err)
 	}
@@ -126,7 +133,7 @@ service DeviceCommandService {
 
 func TestReadProtoTypeInfo_MethodNotFound(t *testing.T) {
 	t.Parallel()
-	_, err := readProtoTypeInfo(fixtureProtoPath(t), "Ghost")
+	_, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "Ghost")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected method-not-found error, got %v", err)
 	}
@@ -142,7 +149,7 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, "Watch")
+	_, err := readProtoTypeInfo(path, synthFQServiceS, "Watch")
 	if err == nil || !strings.Contains(err.Error(), "streaming") {
 		t.Fatalf("expected streaming-rejected error, got %v", err)
 	}
@@ -163,7 +170,7 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	info, err := readProtoTypeInfo(path, "IssueCommand")
+	info, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err != nil {
 		t.Fatalf("readProtoTypeInfo: %v", err)
 	}
@@ -172,8 +179,9 @@ service S {
 	}
 }
 
-// TestReadProtoTypeInfo_PackageQualifiedMessage strips a leading package
-// qualifier from message names (proto allows `.pkg.Msg` references).
+// TestReadProtoTypeInfo_PackageQualifiedMessage accepts a message qualified with
+// the proto's OWN package (proto allows `.pkg.Msg` self-references), resolving it
+// to the simple name.
 func TestReadProtoTypeInfo_PackageQualifiedMessage(t *testing.T) {
 	t.Parallel()
 	src := `syntax = "proto3";
@@ -184,12 +192,95 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	info, err := readProtoTypeInfo(path, "IssueCommand")
+	info, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err != nil {
 		t.Fatalf("readProtoTypeInfo: %v", err)
 	}
 	if info.RequestType != "IssueCommandRequest" || info.ResponseType != "IssueCommandResponse" {
 		t.Errorf("package-qualifier strip failed: %q/%q", info.RequestType, info.ResponseType)
+	}
+}
+
+// TestReadProtoTypeInfo_ServiceScoped (F1 regression) proves the method is
+// resolved within the CONTRACT'S declared service, not the first file-wide
+// match: a sibling service with the same method name must not shadow it.
+func TestReadProtoTypeInfo_ServiceScoped(t *testing.T) {
+	t.Parallel()
+	src := `syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+service OtherService {
+  rpc IssueCommand(OtherRequest) returns (OtherResponse) {}
+}
+service DeviceCommandService {
+  rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
+}
+`
+	path := writeTempProto(t, src)
+	info, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
+	if err != nil {
+		t.Fatalf("readProtoTypeInfo: %v", err)
+	}
+	// Must pick DeviceCommandService's types, NOT OtherService's (which appears
+	// first in the file and would win a whole-file scan).
+	if info.RequestType != "IssueCommandRequest" || info.ResponseType != "IssueCommandResponse" {
+		t.Errorf("service scoping failed: matched %q/%q (sibling service leaked)", info.RequestType, info.ResponseType)
+	}
+}
+
+// TestReadProtoTypeInfo_MethodInOtherServiceNotFound (F1 regression) proves a
+// method that exists only in a NON-declared service is not found.
+func TestReadProtoTypeInfo_MethodInOtherServiceNotFound(t *testing.T) {
+	t.Parallel()
+	src := `syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+service OtherService {
+  rpc IssueCommand(OtherRequest) returns (OtherResponse) {}
+}
+service DeviceCommandService {
+  rpc RevokeCommand(RevokeRequest) returns (RevokeResponse) {}
+}
+`
+	path := writeTempProto(t, src)
+	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
+	if err == nil || !strings.Contains(err.Error(), "not found in service block") {
+		t.Fatalf("expected method-not-in-declared-service error, got %v", err)
+	}
+}
+
+// TestReadProtoTypeInfo_ExternalQualifiedMessageRejected (F2 regression) proves a
+// message qualified with a foreign proto package is rejected fail-closed rather
+// than mis-bound to the current service's import alias.
+func TestReadProtoTypeInfo_ExternalQualifiedMessageRejected(t *testing.T) {
+	t.Parallel()
+	src := `syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+service S {
+  rpc IssueCommand(other.pkg.ForeignRequest) returns (IssueCommandResponse) {}
+}
+`
+	path := writeTempProto(t, src)
+	_, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
+	if err == nil || !strings.Contains(err.Error(), "external package") {
+		t.Fatalf("expected external-package rejection, got %v", err)
+	}
+}
+
+func TestReadProtoTypeInfo_ServiceNotInDeclaredPackage(t *testing.T) {
+	t.Parallel()
+	_, err := readProtoTypeInfo(fixtureProtoPath(t), "wrong.pkg.DeviceCommandService", "IssueCommand")
+	if err == nil || !strings.Contains(err.Error(), "not in proto package") {
+		t.Fatalf("expected service-package-mismatch error, got %v", err)
+	}
+}
+
+func TestReadProtoTypeInfo_ServiceBlockNotFound(t *testing.T) {
+	t.Parallel()
+	_, err := readProtoTypeInfo(fixtureProtoPath(t), "device.command.v1.NoSuchService", "IssueCommand")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected service-not-found error, got %v", err)
 	}
 }
 
@@ -225,17 +316,33 @@ func TestIndexLineComment(t *testing.T) {
 	}
 }
 
-func TestLastDotSegment(t *testing.T) {
+func TestLocalMessageName(t *testing.T) {
 	t.Parallel()
-	cases := []struct{ in, want string }{
-		{"Msg", "Msg"},
-		{"pkg.Msg", "Msg"},
-		{".device.command.v1.Msg", "Msg"},
-		{"", ""},
+	const pkg = "device.command.v1"
+	cases := []struct {
+		name    string
+		ref     string
+		want    string
+		wantErr bool
+	}{
+		{"unqualified", "Msg", "Msg", false},
+		{"same-package qualified", "device.command.v1.Msg", "Msg", false},
+		{"same-package leading-dot", ".device.command.v1.Msg", "Msg", false},
+		{"external package rejected", "other.pkg.Msg", "", true},
 	}
 	for _, tc := range cases {
-		if got := lastDotSegment(tc.in); got != tc.want {
-			t.Errorf("lastDotSegment(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := localMessageName(tc.ref, pkg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("localMessageName(%q) expected error", tc.ref)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("localMessageName(%q) = %q, %v; want %q, nil", tc.ref, got, err, tc.want)
+			}
+		})
 	}
 }

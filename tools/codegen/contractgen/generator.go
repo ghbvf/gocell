@@ -113,7 +113,10 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 	reg := newProtoRegistry()
 	ids := make([]string, 0, len(p.Contracts))
 	for id, c := range p.Contracts {
-		if c != nil && c.Kind == "grpc" && c.Endpoints.GRPC != nil {
+		// Honor the codegen:false opt-out, same as selectContractIDsByScope: a
+		// disabled grpc draft (placeholder/absent proto) must not be read here, or
+		// it would block generation of every other contract in the run.
+		if c != nil && c.Codegen && c.Kind == "grpc" && c.Endpoints.GRPC != nil {
 			ids = append(ids, id)
 		}
 	}
@@ -128,7 +131,7 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 		if err := validateGRPCProtoPath(id, g.Proto); err != nil {
 			return err
 		}
-		info, err := readProtoTypeInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Method)
+		info, err := readProtoTypeInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Service, g.Method)
 		if err != nil {
 			return fmt.Errorf("contract %q: %w", id, err)
 		}
