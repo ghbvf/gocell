@@ -70,16 +70,19 @@ func WithTracer(t wrapper.Tracer) Option {
 	}
 }
 
-// WithObserver attaches an executor.Observer that receives per-step outcome /
-// retry / heartbeat-failure events. A typed-nil observer is silently ignored;
-// the internally-constructed Executor falls back to executor.NopObserver{}.
-// Must be called before Start.
+// WithObserver attaches an executor.Observer — the saga-wide observability sink.
+// It receives both step-level events (outcome / retry / heartbeat-failure, from
+// the internally-constructed Executor) and coordinator-level events (tick /
+// drive / leader-skip, from the Coordinator itself). A typed-nil observer is
+// silently ignored; both the internal Executor and the Coordinator's own observe
+// path fall back to executor.NopObserver{}. Must be called before Start.
 //
-// Category: builder-noop (cf. runtime-api.md). The Observer is wired into
-// the Executor that NewCoordinator constructs internally.
+// Category: builder-noop (cf. runtime-api.md). The Observer is stored on the
+// Coordinator (used by safeObserve) and wired into the Executor NewCoordinator
+// constructs internally — a single sink satisfies both producers.
 //
 // #1181 F8 typed-nil guard: WithObserver uses validation.IsNilInterface so a
-// nil *SagaStepCollector is rejected and NopObserver is kept.
+// nil *SagaCollector is rejected and NopObserver is kept.
 //
 // For why the Coordinator owns Executor construction (rather than accepting an
 // injected Executor), see runtime/saga/coordinator.go Coordinator struct

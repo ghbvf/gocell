@@ -115,12 +115,12 @@ func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger
 		return nil, nil, fmt.Errorf("register saga: %w", err)
 	}
 
-	// Build the saga step metrics observer.
+	// Build the saga metrics observer.
 	// Demo mode uses NopProvider (discards metrics) — production wiring would
 	// pass a real Prometheus provider from bootstrap.MetricsProvider().
-	sagaObs, err := obmetrics.NewSagaStepCollector(kernelmetrics.NopProvider{}, "orderfulfillmentcell")
+	sagaObs, err := obmetrics.NewSagaCollector(kernelmetrics.NopProvider{}, "orderfulfillmentcell")
 	if err != nil {
-		return nil, nil, fmt.Errorf("create saga step collector: %w", err)
+		return nil, nil, fmt.Errorf("create saga collector: %w", err)
 	}
 
 	// Build the saga Coordinator.

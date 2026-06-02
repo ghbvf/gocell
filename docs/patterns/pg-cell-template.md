@@ -9,8 +9,10 @@
 > ⚠️ **组装层已迁移（#1085）**：本文档 Chapter 1 起描述的 `BuildApp(...)` +
 > `cmd/corebundle/<cell>_module.go` + `bundle_<cell>_storage.go` 模式**已废弃**。
 > 平台 cell 的 composition module 现在活在 `cellmodules/<cell>/module.go`，实现公开的
-> `composition.CellModule` 接口（`Provide(ctx, shared, in ModuleExports) (cell.Cell,
-> ModuleExports, []bootstrap.Option, []lifecycle.ManagedResource, error)`），由
+> `composition.CellModule` 接口（`Provide(ctx, shared) (cell.Cell,
+> []bootstrap.Option, []lifecycle.ManagedResource, error)`——Wave-1 #1423 删除了
+> `ModuleExports` 入参与返回值，跨 cell 通信改走事件契约，签名由
+> `MODULE-PROVIDE-NO-VALUE-HANDOFF-01` archtest 冻结），由
 > `composition.New().With(modules...).Build(ctx, shared, runtimeOptsFn)` 组装；
 > `SharedDeps` 经 `composition.NewSharedDeps(...)` 构造（sealed marker），`Topology`
 > 经 `bootstrap.NewTopology(...)` 构造（postgres 强制 real）。**canonical 参考实现见
@@ -34,11 +36,11 @@ operator env
      │         PG capability provider (shared pool)
      │         └─→ *composition.SharedDeps
      │
-     └─── CellModule.Provide(ctx, shared, in)   ← per-cell 各自读自己的 env
+     └─── CellModule.Provide(ctx, shared)       ← per-cell 各自读自己的 env
                GOCELL_<CELLID>_CURSOR_KEY
                GOCELL_<CELLID>_CURSOR_PREVIOUS_KEY
                （PG URL / TxManager / OutboxWriter 经 shared.PG 取得）
-               └─→ (cell.Cell, ModuleExports, []bootstrap.Option, []ManagedResource, error)
+               └─→ (cell.Cell, []bootstrap.Option, []ManagedResource, error)
 
      ↓
 composition.New().With(moduleA, moduleB, ...).Build(ctx, shared, runtimeOptsFn)
@@ -147,8 +149,8 @@ func (module) ID() string { return "foocore" }
 // Reads GOCELL_FOOCORE_CURSOR_KEY, GOCELL_FOOCORE_CURSOR_PREVIOUS_KEY from
 // the environment. PG DSN and pool are supplied via shared.PG.
 func (m module) Provide(
-	_ context.Context, shared *composition.SharedDeps, _ composition.ModuleExports,
-) (cell.Cell, composition.ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	_ context.Context, shared *composition.SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// 1. Cursor codec.
 	pri, prev := cellsecrets.LoadCursorKeys("FOOCORE")
 	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
@@ -161,7 +163,7 @@ func (m module) Provide(
 		Label:       "foo",
 	})
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, fmt.Errorf("foocore cursor codec: %w", err)
+		return nil, nil, nil, fmt.Errorf("foocore cursor codec: %w", err)
 	}
 
 	// 2. Storage-backend branching via shared.Topology + shared.PG.
@@ -171,7 +173,7 @@ func (m module) Provide(
 		publisher: shared.EventBus,
 	})
 	if err != nil {
-		return nil, composition.ModuleExports{}, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	baseOpts := []foocorecell.Option{
@@ -192,7 +194,7 @@ func (m module) Provide(
 	// are the rollback channel; modResult.bootstrapOpts carries the steady-state
 	// bootstrap.WithManagedResource registrations.
 	provisional = append(provisional, modResult.provisional...)
-	return c, composition.ModuleExports{}, opts, provisional, nil
+	return c, opts, provisional, nil
 }
 
 var _ composition.CellModule = module{}
@@ -399,7 +401,7 @@ func TestFooCoreModule_CursorKey_FailFast(t *testing.T) {
 	t.Setenv("GOCELL_FOOCORE_CURSOR_KEY", "") // empty in real mode → fail-fast
 
 	shared := buildMinimalTestSharedDeps(t) // memory topology
-	_, _, _, _, err := foocore.Module().Provide(context.Background(), shared, composition.ModuleExports{})
+	_, _, _, err := foocore.Module().Provide(context.Background(), shared)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cursor")
 }
@@ -435,7 +437,7 @@ func TestFooCoreModule_Postgres_SchemaMatched(t *testing.T) {
 	t.Setenv("GOCELL_FOOCORE_CURSOR_KEY", "foocore-test-cursor-key-32byte!!")
 
 	shared := buildMinimalTestSharedDeps(t) // supply pgCap via composition.NewSharedDeps
-	c, _, opts, resources, err := foocore.Module().Provide(ctx, shared, composition.ModuleExports{})
+	c, opts, resources, err := foocore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	assert.NotEmpty(t, opts) // relay bootstrap option present
@@ -445,7 +447,7 @@ func TestFooCoreModule_Postgres_SchemaMatched(t *testing.T) {
 ```
 
 参照 `cmd/corebundle/integration_testhelpers_test.go` 的 `buildConfigCoreCellFromShared`
-helper（调用 `cellmodulesconfigcore.Module().Provide(ctx, shared, composition.ModuleExports{})`）。
+helper（调用 `cellmodulesconfigcore.Module().Provide(ctx, shared)`）。
 完整集成测试通过以下命令触发：
 
 ```
