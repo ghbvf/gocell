@@ -469,11 +469,7 @@ func TestStartStop_Idempotency(t *testing.T) {
 	}
 
 	// Wait for Start to return (ctx expired or we stopped).
-	select {
-	case <-startErr:
-	case <-time.After(testtime.D500ms):
-		t.Fatal("Start goroutine did not return")
-	}
+	_ = testwait.Deterministic(t, startErr, "start-goroutine-exit")
 }
 
 // ---------------------------------------------------------------------------
@@ -502,11 +498,7 @@ func TestStartStop_LifecycleCAS(t *testing.T) {
 	if err := c.Stop(stopCtx); err != nil {
 		t.Fatalf("Stop() run1: %v", err)
 	}
-	select {
-	case <-startErr:
-	case <-time.After(testtime.D500ms):
-		t.Fatal("Start goroutine did not return after Stop")
-	}
+	_ = testwait.Deterministic(t, startErr, "start-goroutine-exit-run1")
 
 	// Second run: Start again → should succeed.
 	run2Ctx, run2Cancel := context.WithTimeout(context.Background(), testtime.D200ms)
@@ -526,11 +518,7 @@ func TestStartStop_LifecycleCAS(t *testing.T) {
 	if err := c.Stop(stopCtx2); err != nil {
 		t.Fatalf("Stop() run2: %v", err)
 	}
-	select {
-	case <-startErr2:
-	case <-time.After(testtime.D500ms):
-		t.Fatal("Start goroutine 2 did not return after Stop")
-	}
+	_ = testwait.Deterministic(t, startErr2, "start-goroutine-exit-run2")
 }
 
 // ---------------------------------------------------------------------------
@@ -599,11 +587,7 @@ func TestRepoReady_Running_DelegatesToJournal(t *testing.T) {
 	defer cancel()
 	startDone := make(chan error, 1)
 	go func() { startDone <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator did not become ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	got := c.RepoReady(context.Background())
 	if got == nil || got.Error() != "repo down" {
@@ -678,12 +662,7 @@ func startRunningCoordinator(t *testing.T, j journal.Journal, clk clock.Clock) *
 	ctx, cancel := context.WithCancel(context.Background())
 	startDone := make(chan error, 1)
 	go func() { startDone <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		cancel()
-		t.Fatal("coordinator did not become ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 	t.Cleanup(func() {
 		cancel()
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
@@ -773,11 +752,7 @@ func TestStop_DrainsInflight(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	startDone := make(chan error, 1)
 	go func() { startDone <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator not ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	fakeclk := c.clock.(*clockmock.FakeClock)
 	testwait.External(t, "tickers-registered",
@@ -821,13 +796,8 @@ func TestStop_DrainsInflight(t *testing.T) {
 	close(stepBlockCh)
 
 	// Stop should return after the step finishes (drain detects inflightLocks empty).
-	select {
-	case stopErr := <-stopDone:
-		if stopErr != nil && !errors.Is(stopErr, context.Canceled) {
-			t.Errorf("Stop returned error: %v", stopErr)
-		}
-	case <-time.After(testtime.D3s):
-		t.Error("Stop did not return after step completed")
+	if stopErr := testwait.Deterministic(t, stopDone, "stop-returned"); stopErr != nil && !errors.Is(stopErr, context.Canceled) {
+		t.Errorf("Stop returned error: %v", stopErr)
 	}
 
 	// Step must have finished.
@@ -838,11 +808,7 @@ func TestStop_DrainsInflight(t *testing.T) {
 	}
 
 	cancel()
-	select {
-	case <-startDone:
-	case <-time.After(testtime.D3s):
-		t.Error("coordinator goroutine did not exit")
-	}
+	_ = testwait.Deterministic(t, startDone, "start-goroutine-exit")
 }
 
 // TestStop_DrainTimeout verifies that Stop() returns a deadline-exceeded error
@@ -900,11 +866,7 @@ func TestStop_DrainTimeout(t *testing.T) {
 	defer cancel()
 	startDone := make(chan error, 1)
 	go func() { startDone <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator not ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	fakeclk := c.clock.(*clockmock.FakeClock)
 	testwait.External(t, "tickers-registered",
@@ -956,11 +918,7 @@ func TestStop_DrainTimeout(t *testing.T) {
 
 	// The coordinator goroutine should still exit (cancel the outer ctx).
 	cancel()
-	select {
-	case <-startDone:
-	case <-time.After(testtime.D3s):
-		t.Error("coordinator goroutine did not exit")
-	}
+	_ = testwait.Deterministic(t, startDone, "start-goroutine-exit")
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,11 +1090,7 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	defer cancel()
 	startDone := make(chan error, 1)
 	go func() { startDone <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator not ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	// Wait for tickLoop ticker to register.
 	fakeclk := c.clock.(*clockmock.FakeClock)
@@ -1149,11 +1103,7 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 
 	// Wait for the step to start executing, then advance past the step timeout
 	// (50ms) so the executor's AfterFunc fires errStepTimeout.
-	select {
-	case <-stepStarted:
-	case <-time.After(testtime.D2s):
-		t.Fatal("step did not start within 2s")
-	}
+	testwait.Deterministic(t, stepStarted, "step-started")
 	fakeclk.Advance(testtime.D50ms + testtime.D1ms)
 
 	// Wait for the instance to become terminal (KindSagaExpired).
@@ -1201,11 +1151,7 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	if stopErr := c.Stop(stopCtx); stopErr != nil && !errors.Is(stopErr, context.Canceled) {
 		t.Errorf("Stop: %v", stopErr)
 	}
-	select {
-	case <-startDone:
-	case <-time.After(testtime.D3s):
-		t.Error("coordinator goroutine did not exit")
-	}
+	_ = testwait.Deterministic(t, startDone, "start-goroutine-exit")
 }
 
 // ---------------------------------------------------------------------------
@@ -1665,20 +1611,11 @@ func TestDriveOne_OutcomeCanceled_NoTerminalWrite(t *testing.T) {
 	go func() { driveErr <- c.driveOne(ctx, claimed[0]) }()
 
 	// Wait for step to start, then cancel.
-	select {
-	case <-stepStarted:
-	case <-time.After(testtime.D2s):
-		t.Fatal("step did not start")
-	}
+	testwait.Deterministic(t, stepStarted, "step-started")
 	cancel()
 
-	select {
-	case err := <-driveErr:
-		if err != nil {
-			t.Errorf("driveOne should return nil on OutcomeCanceled, got: %v", err)
-		}
-	case <-time.After(testtime.D2s):
-		t.Fatal("driveOne did not return after cancel")
+	if err := testwait.Deterministic(t, driveErr, "drive-returned"); err != nil {
+		t.Errorf("driveOne should return nil on OutcomeCanceled, got: %v", err)
 	}
 
 	// No terminal event written.
