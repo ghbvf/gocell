@@ -2,22 +2,25 @@ package bootstrap
 
 // options_webhook.go — With* option functions for webhook wiring.
 //
-// Covers: WithWebhookSourceStore, WithWebhookClaimer (inbound receiver),
-// WithWebhookSSRFPolicy (outbound dispatcher).
+// Covers: WithWebhookSourceStore (inbound receivers phase5 AND outbound
+// dispatchers phase6), WithWebhookClaimer (inbound receiver), WithWebhookSSRFPolicy
+// (outbound dispatcher).
 //
-// Both are "cumulative builder" options (see runtime-api.md §Option 范式分层):
-// nil inputs are silently ignored; the final nil check happens inside
-// phase5DrainWebhookReceivers when a cell has registered receivers.
+// WithWebhookSourceStore and WithWebhookClaimer are "cumulative builder" options
+// (see runtime-api.md §Option 范式分层): nil inputs are silently ignored; the
+// final nil check happens at the consuming phase.
 //
 // Design note — fail-fast timing: the missing-dependency error is deliberately
-// raised at phase5 (when receivers are drained) rather than at option-apply
-// time. A deployment with zero webhook receivers is a valid configuration that
-// needs neither a SourceStore nor a Claimer, so requiring them unconditionally
-// at option time would reject correct setups. The dependency only becomes
-// mandatory once a cell has actually declared a receiver — which is exactly when
-// phase5 can see both the snapshot and the wired options. This matches the
-// builder-option convention used elsewhere in bootstrap (final validation at the
-// consuming phase, not at the setter).
+// raised at the consuming phase (phase5 when inbound receivers are drained;
+// phase6 when outbound dispatchers are built) rather than at option-apply time.
+// A deployment with zero webhook receivers AND zero dispatchers is a valid
+// configuration that needs neither a SourceStore nor a Claimer, so requiring
+// them unconditionally at option time would reject correct setups. The
+// dependency only becomes mandatory once a cell has actually declared a receiver
+// (phase5) or a dispatcher (phase6) — exactly when that phase can see both the
+// snapshot and the wired options. This matches the builder-option convention
+// used elsewhere in bootstrap (final validation at the consuming phase, not at
+// the setter).
 
 import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -25,10 +28,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// WithWebhookSourceStore injects the [kwh.SourceStore] used by all inbound
-// webhook receivers to look up HMAC secrets by source ID. A nil or typed-nil
-// value is silently ignored; the final nil check happens during phase5 when
-// any cell has declared a webhook receiver.
+// WithWebhookSourceStore injects the [kwh.SourceStore] used to look up HMAC
+// secrets by source ID. It serves BOTH directions: inbound webhook receivers
+// (phase5) verify incoming signatures against it, and outbound webhook
+// dispatchers (phase6) resolve each dispatcher's signing secret from it
+// (inbound: BuildRouteGroups → SourceStore.Lookup; outbound: BuildConsumers →
+// SourceStore.Lookup). A nil or typed-nil value is silently
+// ignored; the final nil check happens at the consuming phase — phase5 if any
+// cell declared a receiver, phase6 if any cell declared a dispatcher.
 //
 // Typical usage: pass a pre-populated [kwh.NewSourceRegistry] that has been
 // seeded with [kwh.Source] values for each expected sender.
