@@ -40,10 +40,10 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 	}
 	_ = mods // cell construction is done directly below; mods only validates drift
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	// The redacting slog default is sealed by the generated main.go's run()
+	// (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated segment) before this function
+	// runs, so logger (and every slog.Default() call) is already scrubbed.
+	logger := slog.Default()
 
 	clk := clock.Real()
 

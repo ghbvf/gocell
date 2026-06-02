@@ -101,7 +101,7 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 // dry-run/write/verify branches × per-artifact emit (types / iface / handler /
 // spec / subscription). Splitting would only push the same matrix into helpers.
 //
-//nolint:gocognit,cyclop // structural orchestration; see godoc above.
+//nolint:gocognit,cyclop,funlen // structural orchestration; see godoc above.
 func generateOneContract(root string, p *metadata.ProjectMeta, contractID string, opts Options, res *Result) error {
 	// B.5: contract ID sanity — must not contain path separators or traversal sequences.
 	if strings.Contains(contractID, "..") || strings.ContainsAny(contractID, `/\`) {
@@ -130,12 +130,19 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		return nil
 	}
 
-	// For kind=command and kind=projection only types_gen.go + iface_gen.go are
-	// emitted (no handler/spec/subscription). This keeps the closed-set valid
-	// while full generators are pending.
-	if spec.Kind == "command" || spec.Kind == "projection" {
+	// For kind=command: only types_gen.go + iface_gen.go are emitted; full
+	// generator is pending.
+	if spec.Kind == "command" {
 		slog.Warn("contractgen: kind in closed set but no full generator yet; only types/iface emitted",
 			"contractID", contractID, "kind", spec.Kind)
+	}
+	// For kind=projection, types_gen.go + iface_gen.go IS the complete product by
+	// design: NewProjectionRequest is generated on the event-contract side, and
+	// cellgen derives reg.RegisterProjection from event-subscribe CUs.
+	if spec.Kind == "projection" {
+		slog.Debug("contractgen: projection contract emits types/iface only by design; "+
+			"NewProjectionRequest is generated on the event-contract side",
+			"contractID", contractID)
 	}
 
 	// types_gen.go — always generated.
@@ -161,7 +168,7 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		}
 	}
 
-	// spec_gen.go + subscription_gen.go — only for kind=event.
+	// spec_gen.go + subscription_gen.go + projection_gen.go — only for kind=event.
 	if spec.Kind == "event" {
 		specPath := filepath.Join(pkgDir, "spec_gen.go")
 		errPfxSpec := "contractgen generate: render spec " + contractID
@@ -172,6 +179,12 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		subPath := filepath.Join(pkgDir, "subscription_gen.go")
 		errPfxSub := "contractgen generate: render subscription " + contractID
 		if err := renderWriteContract(root, "subscription.tmpl", spec, subPath, opts, res, errPfxSub); err != nil {
+			return err
+		}
+
+		projPath := filepath.Join(pkgDir, "projection_gen.go")
+		errPfxProj := "contractgen generate: render projection " + contractID
+		if err := renderWriteContract(root, "projection.tmpl", spec, projPath, opts, res, errPfxProj); err != nil {
 			return err
 		}
 	}
@@ -313,7 +326,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 		out = append(out, CodegenArtifact{Path: handlerRel, Content: handlerContent})
 	}
 
-	// spec_gen.go + subscription_gen.go — only for kind=event.
+	// spec_gen.go + subscription_gen.go + projection_gen.go — only for kind=event.
 	if spec.Kind == "event" {
 		specPath := filepath.Join(pkgDir, "spec_gen.go")
 		specContent, err := codegen.Render(modulePath, codegen.RenderOptions{
@@ -346,6 +359,22 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 			return nil, err
 		}
 		out = append(out, CodegenArtifact{Path: subRel, Content: subContent})
+
+		projPath := filepath.Join(pkgDir, "projection_gen.go")
+		projContent, err := codegen.Render(modulePath, codegen.RenderOptions{
+			TemplateName: "projection.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     projPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q projection: %w", contractID, err)
+		}
+		projRel, err := relFromRoot(root, projPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: projRel, Content: projContent})
 	}
 
 	// saga_gen.go — only for kind=saga.

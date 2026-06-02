@@ -36,20 +36,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/lifecycle"
-	"github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
 // runCorebundle is the handwritten runtime half behind the generated
 // assembly entrypoint. The generated main.go owns the assembly ID and cell
 // order; this function owns environment loading and runtime option wiring.
 func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []string) error {
-	// Fail-closed sink-side redaction: seal the process-global slog default with
-	// the redacting handler before any work, so every package-level slog.Default()
-	// call (pkg/httputil, adapters/postgres, panic recovery, …) is scrubbed
-	// (SLOG-HANDLER-SEALED-FUNNEL-01). The generated main.go calls this before
-	// emitting any log; tests invoke bootstrap directly and are unaffected.
-	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
-
+	// The redacting slog default is sealed by the generated main.go's run()
+	// (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated segment) before this function
+	// is invoked, so every slog.Default() call here is already scrubbed.
 	compShared, locals, err := LoadSharedDepsFromEnv(ctx)
 	if err != nil {
 		return err

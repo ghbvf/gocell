@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
@@ -20,6 +21,13 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	// Fail-closed sink-side redaction: seal the process-global slog default with
+	// the redacting handler FIRST — before any work that may log — so every
+	// slog.Default() call is scrubbed (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated
+	// segment, Hard self-covering). main() only calls shutdown.NotifyContext
+	// before run(), which does not log, so this is the first log-relevant action.
+	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
+
 	return runIotdevice(ctx, "iotdevice", []string{
 		"devicecell",
 	})

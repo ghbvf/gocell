@@ -69,8 +69,11 @@ type contextHandler struct {
 //
 //	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{...})))
 //
-// This is enforced by archtest SLOG-HANDLER-SEALED-FUNNEL-01 A3 (upstream
-// Medium; Hard-upgrade path tracked at gh #1401).
+// This is enforced by archtest SLOG-HANDLER-SEALED-FUNNEL-01 A3 in two
+// segments: generated assemblies are sealed by the assembly template and locked
+// by generated-verify + marker-derived archtest coverage (Hard, #1401
+// delivered); hand-written entry points are sealed by a bounded allowlist
+// (Medium, residual tracked at gh #1424).
 //
 // Building a fresh sink (rather than wrapping the stdlib default) avoids the
 // slog↔log recursion that wrapping the default handler would trigger.

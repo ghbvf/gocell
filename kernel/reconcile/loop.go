@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"container/heap"
 	"context"
 	"fmt"
 	"log/slog"
@@ -13,7 +14,7 @@ import (
 
 const (
 	// defaultReconcileInterval is the requeue delay used when a Reconciler
-	// returns Result{} (RequeueAfter == 0) or a transient error.
+	// returns Result{} (RequeueAfter == 0).
 	defaultReconcileInterval = 30 * time.Second
 	// defaultMaxConcurrentReconciles is the worker count when unset.
 	defaultMaxConcurrentReconciles = 1
@@ -28,9 +29,19 @@ const (
 	// startProbeTimeout bounds how long Start waits for the worker pool to
 	// confirm it is running before returning (fast-return OnStart contract).
 	startProbeTimeout = 50 * time.Millisecond
+	// waitingQueueIdleDelay is the "never" sentinel the delaying-queue timer
+	// sleeps for when the heap is empty; it is reset to a real readyAt as soon
+	// as an item arrives. Mirrors client-go delaying_queue.go maxWait.
+	//
+	// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+	waitingQueueIdleDelay = 24 * time.Hour
 	// queueBuffer sizes the internal work queue. Source and requeue both feed
 	// it; backpressure (a full buffer) blocks the producer, never drops.
 	queueBuffer = 1024
+	// addChBuffer sizes the channel from process() to waitingLoop. One slot per
+	// requeue call is sufficient since senders block on the channel write; a
+	// small buffer reduces lock contention under bursts.
+	addChBuffer = 256
 )
 
 // controlPlaneClock is the sealed, real-only clock for control-plane scheduling
@@ -63,7 +74,8 @@ func (controlPlaneClock) newProbeTimer(d time.Duration) *time.Timer {
 	return time.NewTimer(d)
 }
 
-// newRequeueTimer creates a real-time timer for a delayed requeue.
+// newRequeueTimer creates a real-time timer for a delayed requeue (used by the
+// shared waitingLoop as its single heap-driven sleep timer).
 func (controlPlaneClock) newRequeueTimer(d time.Duration) *time.Timer {
 	return time.NewTimer(d)
 }
@@ -83,6 +95,43 @@ type reconcilerReadinessChecker interface {
 	Validate() error
 }
 
+// waitingItem is a pending requeue entry in the delaying-queue heap.
+// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+type waitingItem struct {
+	req     Request
+	readyAt time.Time
+	// index is maintained by the heap interface for heap.Fix.
+	index int
+}
+
+// waitingHeap is a min-heap of *waitingItem ordered by readyAt (earliest first).
+// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+type waitingHeap []*waitingItem
+
+func (h waitingHeap) Len() int           { return len(h) }
+func (h waitingHeap) Less(i, j int) bool { return h[i].readyAt.Before(h[j].readyAt) }
+func (h waitingHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+
+func (h *waitingHeap) Push(x any) {
+	it := x.(*waitingItem)
+	it.index = len(*h)
+	*h = append(*h, it)
+}
+
+func (h *waitingHeap) Pop() any {
+	old := *h
+	n := len(old)
+	it := old[n-1]
+	old[n-1] = nil
+	it.index = -1
+	*h = old[:n-1]
+	return it
+}
+
 // Loop is the reconcile scheduling environment: it pulls Requests from a Source,
 // dispatches each to the Reconciler across a bounded worker pool (serializing
 // per EntityID), and requeues per the returned Result. Its lifecycle skeleton
@@ -90,8 +139,8 @@ type reconcilerReadinessChecker interface {
 // transplanted from runtime/command.SweeperLifecycle; the per-entity worker
 // dispatch and requeue are reconcile-specific.
 //
-// Construct via the Builder (a later PR) in production; the exported fields
-// support direct struct construction for tests and the kernel/command migration.
+// Construct via the Builder (PR-A7, not yet landed) in production; the exported
+// fields support direct struct construction for tests and the kernel/command migration.
 //
 // Owner ctx (controller-runtime Runnable.Start semantics): Start receives the
 // long-lived owner ctx and derives the workers' runCtx from it, so assembly
@@ -105,18 +154,19 @@ type Loop struct {
 	// ReconcilerID is the metric/log owner dimension; when empty it defaults to
 	// the "_runtime" sentinel (see reconcilerIDSentinel). When set it MUST be a
 	// low-cardinality, label-safe identifier: Start rejects any value that fails
-	// validateReconcilerID (lowercase [a-z0-9_], leading [a-z_], ≤48 runes) so a
+	// validateReconcilerID (lowercase [a-z0-9_], leading [a-z_], ≤48 bytes
+	// (ASCII-only)) so a
 	// high-cardinality or separator-bearing owner cannot blow up / corrupt the
 	// reconciler metric label.
 	ReconcilerID string
 	// Reconciler is the required convergence callback.
 	Reconciler Reconciler
-	// Source feeds Requests into the Loop (a Trigger produces it in a later PR;
+	// Source feeds Requests into the Loop (a Trigger, PR-A4, produces it;
 	// tests inject a channel directly). nil means "no external feed" — the Loop
 	// still runs and self-sustains entities already seeded via requeue.
 	Source <-chan Request
-	// Interval is the requeue delay for Result{} (RequeueAfter == 0) and
-	// transient errors; defaults to 30s.
+	// Interval is the requeue delay for Result{} (RequeueAfter == 0);
+	// defaults to 30s.
 	Interval time.Duration
 	// MaxConcurrentReconciles bounds concurrent reconciles across distinct
 	// EntityIDs; defaults to 1. Same-EntityID reconciles are always serial.
@@ -129,6 +179,28 @@ type Loop struct {
 	// Metrics holds optional pre-bound instruments (nil-safe).
 	Metrics Metrics
 
+	// BaseDelay is the initial (first-retry) backoff delay for transient errors.
+	// Zero or negative means use the default of 5ms (mirroring client-go
+	// ItemExponentialFailureRateLimiter). The delay doubles on each consecutive
+	// transient failure for the same entity, capped at MaxDelay.
+	//
+	// BaseDelay governs ONLY the transient-error exponential backoff — it does
+	// NOT affect the success-path Interval requeue.
+	//
+	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
+	BaseDelay time.Duration
+	// MaxDelay is the cap on the transient-error backoff delay for a single
+	// entity. Zero or negative means use the default of 1000s (mirroring
+	// client-go ItemExponentialFailureRateLimiter). After MaxDelay is reached, retries
+	// continue at MaxDelay until the entity succeeds (backoff.Forget) or is
+	// dead-lettered (permanent error).
+	//
+	// MaxDelay governs ONLY the transient-error exponential backoff — it does
+	// NOT affect the success-path Interval requeue.
+	//
+	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
+	MaxDelay time.Duration
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -136,14 +208,48 @@ type Loop struct {
 	// done-watcher captures its generation and only writes the leader gauge /
 	// clears state if it is still the active generation — so a slow watcher from
 	// an old run cannot reset a newer run's leader=1 (generation ownership).
-	gen      uint64
-	inflight sync.Map // EntityID(string) -> struct{}: same-entity serial guard
+	gen uint64
+
+	// entityMu guards processing and dirty — the F5 dirty/processing maps.
+	//
+	// Concurrency invariants (DX2) — read this before touching process():
+	//
+	//  (1) What entityMu protects: the processing map (entities currently being
+	//      reconciled) and the dirty map (coalesced latest trigger per entity
+	//      received while that entity is in-flight). No other state.
+	//
+	//  (2) Lost-wakeup-safety: a trigger arriving during in-flight processing
+	//      EITHER sets dirty (→ guaranteed single re-run on completion) OR, if
+	//      it races past the completion window and the entity is no longer marked
+	//      processing, lands as a fresh enqueue via the normal queue path. A
+	//      trigger is NEVER silently dropped.
+	//
+	//  (3) Atomicity requirement: the dirty read+clear and the processing-marker
+	//      delete MUST happen atomically under entityMu in the completion path
+	//      (process's post-reconcile block). Separating these two operations
+	//      opens a window where a new trigger arrives after dirty is cleared but
+	//      before processing is deleted: it sees processing=true, sets dirty again,
+	//      but the completion path already read dirty and won't re-enqueue it —
+	//      a lost-wakeup. Keep them in the same Lock/Unlock block.
+	entityMu   sync.Mutex
+	processing map[string]bool    // entities currently being reconciled
+	dirty      map[string]Request // coalesced dirty trigger per entity
 }
 
 // Start launches the worker pool and returns once it is confirmed running.
 //
 // All stdlib time.* calls are funneled through the sealed controlPlaneClock.
 func (l *Loop) Start(ownerCtx context.Context) error {
+	if err := l.preStartValidate(); err != nil {
+		return err
+	}
+	return l.start(ownerCtx)
+}
+
+// preStartValidate runs the fail-fast checks that must pass before Start creates
+// any per-run state or spawns a goroutine. Safe on a nil receiver (the nil check
+// is first). Kept separate from start() so Start stays within the funlen budget.
+func (l *Loop) preStartValidate() error {
 	if l == nil || validation.IsNilInterface(l.Reconciler) {
 		return fmt.Errorf("reconcile: Loop requires non-nil Reconciler")
 	}
@@ -155,10 +261,20 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	if err := validateReconcilerID(l.ReconcilerID); err != nil {
 		return err
 	}
-	if err := l.Metrics.preflight(l.reconcilerID()); err != nil {
-		return err
+	// Fail fast on an inverted backoff window. Both must be explicitly set
+	// (>0) to be a misconfiguration; a zero field means "use the default"
+	// (newEntityBackoff fills it in). With base > max the first When would
+	// already return max, silently violating the documented [base, max]
+	// interval — surface it as a Start error instead.
+	if l.BaseDelay > 0 && l.MaxDelay > 0 && l.BaseDelay > l.MaxDelay {
+		return fmt.Errorf("reconcile: BaseDelay (%s) must not exceed MaxDelay (%s)", l.BaseDelay, l.MaxDelay)
 	}
+	return l.Metrics.preflight(l.reconcilerID())
+}
 
+// start performs the run setup (per-run state, worker pool, delaying queue,
+// startup probe) after preStartValidate has passed.
+func (l *Loop) start(ownerCtx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.cancel != nil {
@@ -167,11 +283,24 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	l.gen++
 	gen := l.gen
 
+	// Initialize per-run entity state.
+	l.entityMu.Lock()
+	l.processing = make(map[string]bool)
+	l.dirty = make(map[string]Request)
+	l.entityMu.Unlock()
+
 	runCtx, cancel := context.WithCancel(ownerCtx)
 	queue := make(chan Request, queueBuffer)
+	addCh := make(chan waitingItem, addChBuffer)
+	// cancelCh carries EntityIDs whose pending requeue must be removed from the
+	// delaying queue (permanent dead-letter). Same buffer/lifecycle as addCh.
+	cancelCh := make(chan string, addChBuffer)
 	ready := make(chan struct{})
 	var readyOnce sync.Once
 	var wg sync.WaitGroup
+
+	// Backoff state for this run.
+	backoff := newEntityBackoff(l.BaseDelay, l.MaxDelay)
 
 	workers := l.maxConcurrent()
 	for i := 0; i < workers; i++ {
@@ -179,13 +308,18 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 		go func() {
 			defer wg.Done()
 			readyOnce.Do(func() { close(ready) }) // first worker confirms the pool is live
-			l.runWorker(runCtx, queue, &wg)
+			l.runWorker(runCtx, queue, addCh, cancelCh, backoff)
 		}()
 	}
 	if l.Source != nil {
 		wg.Add(1)
-		go l.pump(runCtx, queue, &wg)
+		go l.feedFromSource(runCtx, queue, &wg)
 	}
+
+	// F6: single shared delaying queue — ONE goroutine, ONE timer.
+	// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+	wg.Add(1)
+	go l.waitingLoop(runCtx, addCh, cancelCh, queue, &wg)
 
 	done := make(chan struct{})
 	//nolint:gosec // G118: watchDrain resets the leader gauge after the run has
@@ -212,6 +346,141 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 			slog.Int("workers", workers))
 	}
 	return nil
+}
+
+// drainReadyItems pops all items from h whose readyAt is not after now and
+// pushes each Request into queue, removing each popped entity from pending (the
+// EntityID→item index that addOrMergeWaiting maintains). Returns false if runCtx
+// was canceled.
+//
+// Paired with enqueueDelayed, which is the sole path that adds items to the heap
+// via the addCh channel consumed by waitingLoop.
+//
+// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+func drainReadyItems(runCtx context.Context, h *waitingHeap, pending map[string]*waitingItem, now time.Time, queue chan<- Request) bool {
+	for h.Len() > 0 && !(*h)[0].readyAt.After(now) {
+		it := heap.Pop(h).(*waitingItem)
+		delete(pending, it.req.EntityID)
+		select {
+		case queue <- it.req:
+		case <-runCtx.Done():
+			return false
+		}
+	}
+	return true
+}
+
+// addOrMergeWaiting inserts item into the delaying-queue heap, or — when an item
+// for the same EntityID is already waiting — keeps whichever readyAt is earlier
+// (heap.Fix repositions the existing entry). At most one heap entry exists per
+// distinct entity, so a repeat requeue cannot grow the heap and a sooner
+// (delay=0 dirty re-run) supersedes a later (interval/backoff) entry.
+//
+// ref: kubernetes/client-go util/workqueue/delaying_queue.go (waitingForMap merge)
+func addOrMergeWaiting(h *waitingHeap, pending map[string]*waitingItem, item waitingItem) {
+	if existing, ok := pending[item.req.EntityID]; ok {
+		if item.readyAt.Before(existing.readyAt) {
+			existing.readyAt = item.readyAt
+			heap.Fix(h, existing.index)
+		}
+		return
+	}
+	it := item // copy to take a stable address shared by heap and pending
+	heap.Push(h, &it)
+	pending[item.req.EntityID] = &it
+}
+
+// cancelPending removes any pending requeue for entityID from the delaying-queue
+// heap (permanent dead-letter: the entity must not be re-reconciled by a stale
+// pre-existing requeue). No-op when the entity has no pending item.
+func cancelPending(h *waitingHeap, pending map[string]*waitingItem, entityID string) {
+	existing, ok := pending[entityID]
+	if !ok {
+		return
+	}
+	heap.Remove(h, existing.index)
+	delete(pending, entityID)
+}
+
+// nextWaitingDelay returns how long to sleep until the earliest item in h is
+// ready. Returns the idle sentinel (waitingQueueIdleDelay) when h is empty.
+//
+// ref: kubernetes/client-go util/workqueue/delaying_queue.go
+func nextWaitingDelay(h *waitingHeap, now time.Time) time.Duration {
+	if h.Len() == 0 {
+		return waitingQueueIdleDelay
+	}
+	d := (*h)[0].readyAt.Sub(now)
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+// resetTimer drains the timer channel if needed and resets it to d.
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
+
+// waitingLoop is the single shared delaying queue goroutine (F6).
+// It maintains a min-heap of pending requeue items and uses ONE reusable timer
+// (from controlPlaneClock{}.newRequeueTimer) to sleep until the earliest readyAt.
+// When an item is ready, it pushes the Request into the worker queue.
+//
+// On runCtx cancellation it exits cleanly (goleak-clean): pending items are
+// abandoned (the run is shutting down).
+//
+// ref: kubernetes/client-go util/workqueue/delaying_queue.go waitingLoop
+func (l *Loop) waitingLoop(
+	runCtx context.Context,
+	addCh <-chan waitingItem,
+	cancelCh <-chan string,
+	queue chan<- Request,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
+
+	var h waitingHeap
+	heap.Init(&h)
+
+	// pending indexes the heap by EntityID so a repeat requeue for an entity
+	// already waiting MERGES into the existing item (keeping the earlier readyAt)
+	// rather than pushing a duplicate. This bounds the heap to one entry per
+	// distinct waiting entity and gives client-go's "only update if sooner"
+	// convergence: a dirty re-run at delay=0 supersedes a later interval/backoff
+	// entry for the same entity instead of leaving two heap entries.
+	//
+	// ref: kubernetes/client-go util/workqueue/delaying_queue.go (waitingForMap)
+	pending := make(map[string]*waitingItem)
+
+	clk := controlPlaneClock{}
+	timer := clk.newRequeueTimer(waitingQueueIdleDelay) // sentinel: empty heap
+	defer timer.Stop()
+
+	for {
+		if !drainReadyItems(runCtx, &h, pending, clk.now(), queue) {
+			return
+		}
+
+		resetTimer(timer, nextWaitingDelay(&h, clk.now()))
+
+		select {
+		case <-runCtx.Done():
+			return
+		case item := <-addCh:
+			addOrMergeWaiting(&h, pending, item)
+		case id := <-cancelCh:
+			cancelPending(&h, pending, id)
+		case <-timer.C:
+			// Timer fired — loop back to drain ready items.
+		}
+	}
 }
 
 // watchDrain waits for run gen's goroutines to finish, then — if gen is still
@@ -245,8 +514,8 @@ func (l *Loop) watchDrain(gen uint64, done chan struct{}, wg *sync.WaitGroup) {
 	close(done)
 }
 
-// pump copies Source into the internal queue until the run ctx is canceled.
-func (l *Loop) pump(runCtx context.Context, queue chan<- Request, wg *sync.WaitGroup) {
+// feedFromSource copies Source into the internal queue until the run ctx is canceled.
+func (l *Loop) feedFromSource(runCtx context.Context, queue chan<- Request, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		select {
@@ -266,111 +535,164 @@ func (l *Loop) pump(runCtx context.Context, queue chan<- Request, wg *sync.WaitG
 }
 
 // runWorker pulls Requests from the queue and dispatches each until canceled.
-func (l *Loop) runWorker(runCtx context.Context, queue chan Request, wg *sync.WaitGroup) {
+func (l *Loop) runWorker(
+	runCtx context.Context,
+	queue chan Request,
+	addCh chan<- waitingItem,
+	cancelCh chan<- string,
+	backoff *entityBackoff,
+) {
 	for {
 		select {
 		case <-runCtx.Done():
 			return
 		case req := <-queue:
-			l.process(runCtx, req, queue, wg)
+			l.process(runCtx, req, addCh, cancelCh, backoff)
 		}
 	}
 }
 
-// process reconciles one Request: it serializes per EntityID (dropping a
-// duplicate while one is in flight — safe under level-triggering, since the next
-// trigger / requeue re-observes), records metrics, and requeues per the result.
+// process reconciles one Request: it serializes per EntityID (F5: dirty/processing
+// dedup — a duplicate arriving during an in-flight reconcile is coalesced into
+// a single dirty re-run, not silently dropped), records metrics, and requeues
+// per the result via the shared delaying queue (F6).
 //
-// Scope note (ADR §2.2): A3 deliberately uses skip-if-busy rather than
-// controller-runtime's dirty/processing dedup. A coalesced trigger is NOT lost
-// under level-triggering — the next resync / requeue re-observes the latest
-// state — but a "mark-dirty, re-run once after the in-flight reconcile" queue
-// (so convergence does not wait for the next resync) is deferred to PR-A5
-// (#1166, F5) — accepted deferral, not yet implemented.
-func (l *Loop) process(runCtx context.Context, req Request, queue chan<- Request, wg *sync.WaitGroup) {
-	if _, busy := l.inflight.LoadOrStore(req.EntityID, struct{}{}); busy {
+// F5 dirty/processing dedup: replaces the old inflight sync.Map skip-if-busy with
+// explicit processing/dirty state under entityMu. A duplicate trigger arriving
+// while one is in flight sets dirty=true (coalesced into ONE re-run); the
+// re-run is enqueued at delay 0 immediately after the in-flight reconcile
+// completes. This is level-triggered convergence: the re-run observes the latest
+// state regardless of how many duplicates were coalesced.
+//
+// Lost-wakeup safety: {set-processing-on-entry}, {clear-dirty+remove-processing
+// on completion}, and {check-processing+set-dirty on duplicate arrival} are all
+// atomic under entityMu, so a trigger arriving exactly as process finishes is
+// either seen as dirty→re-run or lands as a fresh enqueue — never silently dropped.
+//
+// Scope note (ADR §2.2): F5+F6 are the PR-A5 features that complete the
+// controller-runtime dirty/processing + rate-limited delaying queue equivalence.
+func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waitingItem, cancelCh chan<- string, backoff *entityBackoff) {
+	// F5: check/set processing under entityMu.
+	l.entityMu.Lock()
+	if l.processing[req.EntityID] {
+		// Entity is in flight — coalesce this trigger as dirty (latest wins).
+		l.dirty[req.EntityID] = req
+		l.entityMu.Unlock()
 		l.Metrics.recordResult(runCtx, l.reconcilerID(), resultSkipped)
 		return
 	}
-	defer l.inflight.Delete(req.EntityID)
+	l.processing[req.EntityID] = true
+	l.entityMu.Unlock()
 
 	l.Metrics.inFlightDelta(runCtx, l.reconcilerID(), 1)
 	defer l.Metrics.inFlightDelta(runCtx, l.reconcilerID(), -1)
 
 	start := controlPlaneClock{}.now()
-	res, err := l.safeReconcile(runCtx, req)
+	res, err := recoverReconcile(runCtx, l.Reconciler, req, l.logger(), l.reconcilerID())
 	l.Metrics.observeDuration(runCtx, l.reconcilerID(), controlPlaneClock{}.now().Sub(start).Seconds())
 
-	switch {
-	case err == nil:
-		l.Metrics.recordResult(runCtx, l.reconcilerID(), resultSuccess)
-		l.scheduleRequeue(runCtx, req, res.normalizedRequeueAfter(), queue, wg)
-	case IsPermanent(err):
-		l.Metrics.recordResult(runCtx, l.reconcilerID(), resultPermanent)
+	label := classify(err)
+	l.Metrics.recordResult(runCtx, l.reconcilerID(), label)
+
+	l.dispatchResult(runCtx, req, res, err, label, addCh, cancelCh, backoff)
+
+	// F5: clear processing and check dirty under entityMu.
+	l.entityMu.Lock()
+	dirtyReq, wasDirty := l.dirty[req.EntityID]
+	delete(l.dirty, req.EntityID)
+	delete(l.processing, req.EntityID)
+	l.entityMu.Unlock()
+
+	if wasDirty && label != resultPermanent {
+		// Re-enqueue the coalesced dirty trigger immediately (delay=0).
+		// This is a fresh convergence run, not a backoff retry.
+		//
+		// dispatchResult already enqueued the normal success/transient requeue
+		// above (at the Interval or backoff delay). addOrMergeWaiting MERGES this
+		// delay=0 re-run with that later entry for the same entity (earlier
+		// readyAt wins), so the entity ends up with ONE heap entry that fires
+		// immediately as the convergence run — not two. Convergence is preserved
+		// without leaving a duplicate pending item.
+		//
+		// Suppressed on resultPermanent: a permanent dead-letter must NOT be
+		// re-reconciled. The dispatchResult permanent branch already canceled the
+		// entity's pending item (cancelCh); re-running the in-flight dirty trigger
+		// here would resurrect it and race the cancel across two channels. A fresh
+		// Source trigger re-observes the entity if the consumer resets its state.
+		l.enqueueDelayed(runCtx, dirtyReq, 0, addCh)
+	}
+}
+
+// dispatchResult routes the reconcile outcome to the appropriate requeue action.
+func (l *Loop) dispatchResult(
+	runCtx context.Context,
+	req Request,
+	res Result,
+	err error,
+	label resultLabel,
+	addCh chan<- waitingItem,
+	cancelCh chan<- string,
+	backoff *entityBackoff,
+) {
+	switch label {
+	case resultSuccess:
+		backoff.Forget(req.EntityID)
+		delay := res.normalizedRequeueAfter()
+		if delay <= 0 {
+			delay = l.interval()
+		}
+		l.enqueueDelayed(runCtx, req, delay, addCh)
+	case resultPermanent:
+		backoff.Forget(req.EntityID)
+		// Cancel any pending requeue for this entity: an earlier success/transient
+		// may have enqueued a (possibly long) Interval/backoff item that, left in
+		// place, would re-reconcile a now-dead-lettered entity once it fires. A
+		// fresh Source trigger re-observes it if the consumer resets its state.
+		l.enqueueCancel(runCtx, req.EntityID, cancelCh)
 		l.logger().Error("reconcile: permanent error (dead-letter; not requeued)",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()),
 			slog.String("entity", req.EntityID),
 			slog.Any("error", redaction.RedactError(err)))
-		// Permanent: do NOT requeue. A fresh Source trigger re-observes it if the
-		// consumer resets the entity's state.
-	default:
-		l.Metrics.recordResult(runCtx, l.reconcilerID(), resultTransient)
-		l.logger().Error("reconcile: transient error (requeued)",
+	default: // resultTransient (including recovered panics)
+		delay := backoff.When(req.EntityID)
+		l.logger().Warn("reconcile: transient error (requeued with backoff)",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()),
 			slog.String("entity", req.EntityID),
+			slog.Duration("backoff_delay", delay),
 			slog.Any("error", redaction.RedactError(err)))
-		// Transient: requeue at the default interval. Exponential backoff is the
-		// backoff/recovery PR's refinement.
-		l.scheduleRequeue(runCtx, req, 0, queue, wg)
+		l.enqueueDelayed(runCtx, req, delay, addCh)
 	}
 }
 
-// safeReconcile invokes the Reconciler with panic recovery so a single entity's
-// panic cannot crash the worker goroutine (and the process). A recovered panic
-// is reported as a transient error (retryable); a dedicated panic disposition /
-// taxonomy is the backoff/recovery PR's concern.
-func (l *Loop) safeReconcile(ctx context.Context, req Request) (res Result, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("reconcile: recovered panic in Reconcile(entity=%q): %v", req.EntityID, r)
-			res = Result{}
-		}
-	}()
-	return l.Reconciler.Reconcile(ctx, req)
-}
-
-// scheduleRequeue re-enqueues req after the given delay (0 → default Interval)
-// via a goroutine bounded by the run ctx. The goroutine is tracked by wg so Stop
-// waits for it, and exits immediately on cancellation (no leak, no requeue into
-// a draining Loop).
+// enqueueDelayed sends a waitingItem to the shared delaying queue.
+// If delay <= 0 the item is considered immediately ready (readyAt = now).
+// Respects runCtx cancellation so a shutting-down Loop doesn't leak goroutines.
 //
-// Scope note (ADR §2.2, threat T-LEAK): A3 spawns one short-lived timer
-// goroutine per requeue — simpler than client-go's shared delaying queue, and
-// leak-free (every goroutine is runCtx-derived + WaitGroup-tracked). The
-// concurrent count is bounded by the live entity set, not capped; a shared
-// rate-limited delaying queue (one timer goroutine total, exponential backoff)
-// is deferred to PR-A5 (#1166, F6) — accepted deferral, not yet implemented.
-func (l *Loop) scheduleRequeue(runCtx context.Context, req Request, after time.Duration, queue chan<- Request, wg *sync.WaitGroup) {
-	if after <= 0 {
-		after = l.interval()
+// Paired with drainReadyItems, which moves ready items from the heap to the
+// worker queue inside waitingLoop.
+func (l *Loop) enqueueDelayed(runCtx context.Context, req Request, delay time.Duration, addCh chan<- waitingItem) {
+	readyAt := controlPlaneClock{}.now()
+	if delay > 0 {
+		readyAt = readyAt.Add(delay)
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		timer := controlPlaneClock{}.newRequeueTimer(after)
-		defer timer.Stop()
-		select {
-		case <-runCtx.Done():
-			return
-		case <-timer.C:
-		}
-		select {
-		case queue <- req:
-		case <-runCtx.Done():
-		}
-	}()
+	item := waitingItem{req: req, readyAt: readyAt}
+	select {
+	case addCh <- item:
+	case <-runCtx.Done():
+	}
+}
+
+// enqueueCancel asks waitingLoop to remove entityID's pending requeue (permanent
+// dead-letter). Sole funnel from the worker path into cancelCh; respects runCtx
+// cancellation. Paired with cancelPending, which performs the heap removal inside
+// waitingLoop.
+func (l *Loop) enqueueCancel(runCtx context.Context, entityID string, cancelCh chan<- string) {
+	select {
+	case cancelCh <- entityID:
+	case <-runCtx.Done():
+	}
 }
 
 // awaitProbe waits for the worker pool to confirm it is running, returning nil
@@ -410,8 +732,8 @@ func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, rea
 	return nil
 }
 
-// Stop cancels the Loop and waits for all goroutines (workers, pump, pending
-// requeues) to exit within ctx's budget.
+// Stop cancels the Loop and waits for all goroutines (workers, feedFromSource, waitingLoop)
+// to exit within ctx's budget.
 //
 // State (l.cancel / l.done) is cleared by watchDrain ONLY after the goroutines
 // actually drain. Until then the fields stay set so that (a) a concurrent Start

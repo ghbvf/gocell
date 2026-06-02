@@ -84,6 +84,11 @@ type Bootstrap struct {
 	assemblyID           string
 	configWatcherFactory func(string, clock.Clock, ...config.WatcherOption) (*config.Watcher, error)
 
+	// --- grpc: listener declarations (server lifecycle owned by adapters/grpc,
+	// injected via the GRPCServer interface; see grpc_listener.go) ---
+	grpcListenerConfigs []grpcListenerConfig
+	grpcServerNil       bool // WithGRPCListener(nil) sentinel — phase0 fail-fast
+
 	// --- http: listener declarations + router options + health + tracing ---
 	listenerConfigs       map[cell.ListenerRef]listenerConfig
 	duplicateListenerRefs []cell.ListenerRef
@@ -126,6 +131,7 @@ type Bootstrap struct {
 	managedResourceNil       bool
 	closerNil                bool  // WithManagedCloser(nil) sentinel — phase0 fail-fast
 	rateLimiterNil           bool  // WithRateLimiter(nil) sentinel — phase0 fail-fast
+	idempotencyStoreNil      bool  // WithIdempotencyStore(nil) sentinel — phase0 fail-fast
 	closers                  []any // ContextCloser/io.Closer from any option (e.g. WithRateLimiter); LIFO teardown
 	shutdownTimeout          time.Duration
 	preShutdownDelay         time.Duration
@@ -425,11 +431,12 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 //	phase5: build HTTP router + health handler; register all health checkers
 //	phase6: register event subscriptions; start event router on runCtx
 //	phase7: start HTTP server; wire httpErrCh + s.httpDrain (NOT a LIFO teardown)
+//	phase7b: start gRPC servers in parallel; wire grpcErrCh + s.grpcDrain (NOT a LIFO teardown)
 //	phase8: start worker group on runCtx; wire workerErrCh
-//	phase9: block until external ctx cancel, HTTP error, worker error, or router error
+//	phase9: block until external ctx cancel, HTTP/gRPC error, worker error, or router error
 //	phase10: explicit shutdown stages — runs in this order:
 //	         stage1: readiness flip (/readyz=503 + preShutdownDelay)
-//	         stage2: HTTP drain    (s.httpDrain — stop accept + drain in-flight)
+//	         stage2: HTTP + gRPC drain (s.httpDrain / s.grpcDrain — stop accept + drain in-flight)
 //	         stage3: LIFO teardown (workers, event router, assembly, kernel
 //	                                lifecycle, closers, managed resources)
 //	         stage4: finalize      (cancel runCtx + outcome metric)
@@ -554,6 +561,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		return rollback(err)
 	}
 	if err := b.phase7StartHTTPServer(s); err != nil {
+		return rollback(err)
+	}
+	// phase7b: start gRPC servers in parallel to HTTP (serve on runCtx; drained
+	// explicitly in phase10 stage2 alongside HTTP, BEFORE LIFO teardown). On a
+	// bind failure it drains the already-serving HTTP before returning so
+	// rollback does not leak it.
+	if err := b.phase7bStartGRPCServers(runCtx, s); err != nil {
 		return rollback(err)
 	}
 	b.phase8StartWorkers(runCtx, s)

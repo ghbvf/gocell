@@ -138,3 +138,5 @@ Option C 相比 A 代码更少（无重试调度器），对 MQTT 的能力边�
 ### $dead DLT 已在本 PR 实施
 
 `DispositionReject`（含 ConsumerBase retry_exhausted 转换的 Reject）和 unmarshal poison 均在 PUBACK-as-poison 之前 publish 到 `$dead/<originalTopic>`，通过 sealed `TopicNamespace.MintDeadLetter` funnel 路由，指标 `mqtt_dlx_total` 可观测。
+
+> **`$dead` publish 本身失败时的 no-loss 边界**（#1356）：同 §1 的 HoL 论证，`$dead` 发布失败时 adapter **不能** leave-unacked（会复活 paho 按序-PUBACK 队头阻塞），故 fail-closed ack-as-poison 丢弃 + alertable `mqtt_dlx_failed_total`。字面 no-loss 在 transport 层不可达，重定位到消费 cell 事务层。完整 OSS 证据矩阵 + 决策见 ADR-048 §Amendment 2026-06-02。

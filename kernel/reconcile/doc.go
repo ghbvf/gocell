@@ -6,9 +6,11 @@
 // from runtime/command.SweeperLifecycle — which is present from that commit on;
 // PR-A4 landed the Trigger source abstraction (TickerTrigger / ChannelTrigger).
 // Comments here describe how each type is consumed by the Loop to pin its
-// contract. Later PRs refine scheduling (PR-A5 adds a rate-limited delaying
-// queue + dirty dedup) and construction (PR-A7 privatizes the Loop constructor
-// behind a Builder, wiring a Trigger's output into the Loop's queue); see the
+// contract. PR-A5 (#1166) refined scheduling: it added the shared heap-based
+// delaying queue (F6, one waitingLoop goroutine) + dirty/processing dedup (F5,
+// coalescing in-flight triggers into a single re-run) + per-entity exponential
+// backoff (5ms..1000s, no jitter). PR-A7 will privatize the Loop constructor
+// behind a Builder, wiring a Trigger's output into the Loop's queue; see the
 // design ADR for the staged plan.
 //
 // # When to use
@@ -120,6 +122,12 @@
 //     no stdlib time.* call.
 //   - RECONCILE-TRIGGER-INTERFACE-FROZEN-01 (PR-A4): Trigger's method set is
 //     exactly Start(context.Context, chan<- Request) error (send-only sink).
+//   - RECONCILE-RESULT-LABEL-VALUES-FROZEN-01 (PR-A5): the result* const value
+//     set is frozen to {success, transient, permanent, skipped}; recovered panics
+//     map to "transient" — no 5th "panic" label.
+//   - RECONCILE-REQUEUE-ENQUEUE-CALLER-01 (PR-A5): every channel send in
+//     kernel/reconcile must be inside one of the three sanctioned functions
+//     (drainReadyItems / feedFromSource / enqueueDelayed).
 //
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: docs/architecture/202605291600-661-adr-kernel-reconcile-design.md

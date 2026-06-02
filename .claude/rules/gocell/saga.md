@@ -20,6 +20,7 @@
 | SAGA-STEP-RUN-OUTSIDE-TX-01 | `runtime/saga/` 生产文件中 `kernel/saga.StepFunc` 调用必须只出现在 `safeRun` 函数体内（A1）；`TxRunner.RunInTx` 的 closure body 内禁止调用 `safeRun`（A2）；合称确保步骤不在持有数据库事务时执行 | A1 Hard（TypesInfo.ObjectOf typed callsite-uniqueness + posInRanges body gate）+ A2 Medium（AST EachInSubtree closure scan；helper 包间传递链 B2 参见 gh #980） |
 | SAGA-INVARIANTS-FILE-CONSOLIDATED-01 | 所有 `tools/archtest/*_test.go` 中声明 `// INVARIANT: SAGA-*` 的文件必须是 `saga_invariants_test.go` 本身；禁止 saga 主题规则散落在独立文件中（防止 PR #1213 清理后再度碎片化） | Medium（内容扫描 + 跨文件不变式；Hard 不可达——Go 编译不受文件分布约束） |
 | SAGA-CONSTRUCTOR-NIL-GUARD-01 | `runtime/saga` 与 `runtime/saga/executor` 下的顶层 `New*` 构造器，其非 variadic 的 interface 位置参数（`journal.Journal`、`persistence.TxRunner`、`outbox.Emitter`、`saga.Resolver`、`executor.Heartbeater`）须在函数体内经 `validation.IsNilInterface` 显式守卫，`clock.Clock` 经 `clock.MustHaveClock` 守 | Medium（**非 funnel 类约束，单轴评级**——「必填 interface 参数缺守卫」无 caller-allowlist 下游 / sealed-interface 上游可分，不套用双向锁格式。archtest type-aware：绑定参数 types.Object 身份 + callee 解析；缺守卫在 Go 可表达故非类型系统封闭。Hard 路径 = 接入 `gocell:"required"` tag funnel + `gocell generate required-deps` 生成 `validateRequired()`，追踪 gh #1317） |
+| SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 | "每条 per-instance saga 日志携带 lease_id"（#1266）的载体 funnel：所有 per-instance 标识属性经 `runtime/saga/internal/sagalog.InstanceFields(instanceID, leaseID, extra...)` 单源构造（`lease_id`/`instance_id` 为必填位置参，漏 lease_id = 编译错误）；archtest 禁止 `runtime/saga/` 生产代码在 `InstanceFields` 体外裸写 `slog.String("instance_id"\|"lease_id", …)`，强制所有日志站点过 funnel + 自动覆盖未来站点。取代 #1263 起逐站点 lease_id 测试断言（Soft）——typed funnel ≠ log-string-anchor archtest | 下游 Hard（lease_id 必填位置参，type system 守）+ 上游 Medium（archtest caller-allowlist；Go 无法强制所有 LogAttrs 过 funnel，与 SPAN-SETATTR-HOLDER-SEAL #851 / HEALTHZ-HOLDER-SEAL #893 / outbox principal-write #1282 同永久天花板，won't-do（追踪 gh #1452））|
 
 ---
 
@@ -77,6 +78,7 @@ GoCell 中有三个 L3 cell 并非 saga 编排：
 ## 参考
 
 - 实施计划：`docs/plans/202605230231-046-saga-l3-workflow-implementation-plan.md` §4 PR-08（governance + archtest 落地 PR）
-- Saga 专属 ADR：**尚未创建**（PR-10 deliverable，计划命名 `…-adr-saga-l3-orchestration-engine.md`）；在它落地前，权威视图以上述实施计划和代码 godoc 为准——本文件刻意不给出可点击路径以免 404
+- Saga 专属 ADR：`docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`（决策 D1–D10 + enforcement 档位映射 + 威胁矩阵 + 演进路径）；本文件是 archtest / governance 导航索引，决策权威以该 ADR 为准
+- 运维故障 runbook：`docs/ops/saga-runbook.md`（lease 卡死 / 补偿失败 / journal 增长三场景诊断 SQL + 决策树）
 - 契约变更扇出闭环：`.claude/rules/gocell/contract-fanout.md`（`saga.Status` / `journal.EventKind` 新常量触发扇出规则）
 - AI-robust 治理章程：`.claude/rules/gocell/ai-robust.md`（评级定义、archtest 文件命名约定）

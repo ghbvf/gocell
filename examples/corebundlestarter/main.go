@@ -25,14 +25,18 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/ghbvf/gocell/runtime/observability/logging"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	// Fail-closed sink-side redaction: seal the process-global slog default with
+	// the redacting handler FIRST, before any work that may log, so every
+	// slog.Default() call is scrubbed (SLOG-HANDLER-SEALED-FUNNEL-01 A3
+	// handwritten segment). This is a hand-written entry point (not a generated
+	// assembly main), so the seal is hand-maintained and tracked by the A3
+	// handwritten allowlist.
+	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
 
 	ctx, cancel := shutdown.NotifyContext(context.Background())
 	defer cancel()

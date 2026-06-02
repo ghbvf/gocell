@@ -1,6 +1,6 @@
 # GoCell 完整能力清单
 
-> 更新日期: 2026-04-24 | A13 文档事实源收口后
+> 更新日期: 2026-06-02 | A13 文档事实源收口后（W6 saga 章节补入）
 
 ---
 
@@ -8,8 +8,8 @@
 
 | 层 | 模块数 | 状态 | 说明 |
 |----|--------|------|------|
-| **kernel/** | 11 包 | 全部 IMPL | cell/assembly/metadata/governance/outbox/idempotency/journey/registry/scaffold/slice + schemas |
-| **runtime/** | 11 子包 | 全部 IMPL | auth/bootstrap/config/eventbus/http×3/observability×3/shutdown/worker |
+| **kernel/** | 12 包 | 全部 IMPL | cell/assembly/metadata/governance/outbox/idempotency/journey/registry/scaffold/slice/saga + schemas |
+| **runtime/** | 12 子包 | 全部 IMPL | auth/bootstrap/config/eventbus/http×3/observability×3/shutdown/worker/saga |
 | **adapters/** | 6 包 | 全部 IMPL | postgres/redis/rabbitmq/oidc/s3/websocket |
 | **cells/** | 3 platform Cell, 22 platform slices | 全部 IMPL | accesscore(10s) / auditcore(5s) / configcore(7s) |
 | **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + corebundle |
@@ -21,7 +21,7 @@
 
 ---
 
-## 2. Kernel 层（11 包）
+## 2. Kernel 层（12 包）
 
 ### 2.1 cell — Cell/Slice/Contract 核心模型
 - `Cell` interface — ID/Type/ConsistencyLevel/Init/Start/Stop/Health/Ready
@@ -85,9 +85,15 @@
 - 7 个 schema（cell/slice/contract/assembly/journey/status-board/actors）
 - `//go:embed *.json` 内嵌
 
+### 2.12 saga — L3 Saga 状态机原语 + journal
+- `kernel/saga` — `Status`（8 态，iota+1 零值非法，5 终态）+ `Step{Run, Compensate, Timeout, Retries}` + `SagaDefinition` + `Instance` + `RetryPolicy`；状态机 `Transition` / `IsTerminal` 纯函数
+- `kernel/saga/journal` — append-only 事件日志接口（`EventKind` 11 种 + `Event` + `TerminalEventKind` 映射）；窄接口分层 `JournalCore`（Coordinator 持有）/ `Enqueuer` / `Reader` / `ProducerReader`（业务 cell 持有）/ `Heartbeater`
+- `MemJournal` — 进程内实现；PG 实现见 §4.1 `adapters/postgres/saga`
+- `sagajournaltest.RunConformanceSuite` — Journal 契约一致性套件，mem 与 PG 必须同时通过
+
 ---
 
-## 3. Runtime 层（11 子包）
+## 3. Runtime 层（12 子包）
 
 ### 3.1 auth — 认证授权
 - `JWTVerifier` — RS256 验证 + exp/iss/aud 检查
@@ -154,6 +160,13 @@
 - `MarshalEnvelope(Entry) ([]byte, error)` / `UnmarshalEnvelope(topic, raw) (Entry, error)` — outbox → broker 的标准 v1 wire envelope I/O（package-private `wireMessage` struct，跨包不可构造；替代 adapters/postgres + adapters/rabbitmq + runtime/eventbus 三处重复 struct，S28）
 - `outboxtest.RunStoreConformanceSuite` — Store 契约 18 子测，FakeStore 与 PGOutboxStore 必须同时通过
 
+### 3.14 saga — L3 Saga 编排运行时
+- `Coordinator` — saga 实例驱动器：`ClaimPending` 认领 → 正向 `Step.Run` → 失败反向 `Compensate`；持 `JournalCore`（无 Heartbeat，集中心跳 compile 不可表达）
+- leader-elect — 经 `runtime/distlock` 每 instance 单 leader（`WithLeaderElect` 注入；缺省 unsafe 模式打 `UnsafeModeLabel` 警告）；`distlock.Lock.Orphan()` 支持优雅交接
+- `executor` 子包 — per-step 重试（可注入 jitter 源）+ heartbeat goroutine（lease 续租）+ 三层 timeout
+- `ProbeCoordinatorReady`（`saga_coordinator_ready`）— 已声明，cell-side 注册待 saga-as-cell 迁移（#978）
+- 设计决策见 ADR `docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`
+
 ---
 
 ## 4. Adapters 层（6 包）
@@ -165,6 +178,7 @@
 - `OutboxWriter` — 实现 outbox.Writer + fail-fast ERR_ADAPTER_NO_TX
 - `PGOutboxStore` — 实现 `runtime/outbox.Store`（FOR UPDATE SKIP LOCKED claim + 数据驱动 cleanup via OldestEligibleAt）。relay 调度循环搬到 `runtime/outbox.Relay`，本适配器只承担 SQL 边界
 - `RowScanner` — pgx Row/Rows 抽象（QueryBuilder 已迁至 `pkg/pgquery.Builder`）
+- `adapters/postgres/saga` — `journal.Journal` 的 PG 实现（`saga_instances` / `saga_events` 表 + lease_id CAS fencing）；与 `MemJournal` 共用 `sagajournaltest.RunConformanceSuite`
 - migrations/001_create_outbox_entries.sql
 
 ### 4.2 redis — Redis (go-redis/v9)
@@ -202,7 +216,7 @@
 
 ## 5. Cells 层（3 platform Cells, 22 platform Slices）
 
-### 5.1 accesscore (L2, core)
+### 5.1 accesscore (L3, core)
 | Slice | 功能 | 端点 |
 |-------|------|------|
 | sessionlogin | 密码登录 + JWT 签发 | POST /api/v1/access/sessions/login |
@@ -220,7 +234,7 @@ Domain: User (PasswordHash/Status/CreatedAt) + Session (TokenPair/ExpiresAt/Prev
 Ports: UserRepository + SessionRepository + RoleRepository
 Adapters: internal/mem (in-memory)
 
-### 5.2 auditcore (L3, core)
+### 5.2 auditcore (L2, core)
 | Slice | 功能 |
 |-------|------|
 | auditappendconfig | event.config.entry-upserted.v1 → event.audit.appended.v1（hash chain 追加） |
@@ -230,10 +244,10 @@ Adapters: internal/mem (in-memory)
 | auditquery | GET /api/v1/audit/entries + time.Parse 400 校验 + 出站 redaction |
 
 Domain: AuditEntry (PrevHash/Hash/Payload)，HMAC-SHA256 hash chain
-Ports: `runtime/audit/ledger.Store`（Append/Tail + RepoReady → `audit_ledger_ready` probe）
+Ports: `runtime/audit/ledger.Store`（Append/Tail + RepoReady → `auditcore_repo_ready` probe）
 Adapters: internal/mem + PG-backed ledger store（`audit_entries` JSONB）
 
-### 5.3 configcore (L2, core)
+### 5.3 configcore (L3, core)
 | Slice | 功能 |
 |-------|------|
 | configread | GET /api/v1/config/{key} + GET /api/v1/config/ (public, admin-gated) |

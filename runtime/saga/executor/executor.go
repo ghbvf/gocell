@@ -37,6 +37,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/saga/internal/sagalog"
 )
 
 // Outcome classifies the result of an Execute call.
@@ -206,12 +207,10 @@ func (e *Executor) callObserverBounded(ctx context.Context, instanceID, leaseID 
 	select {
 	case <-done:
 	case <-timer.C():
-		e.logger.WarnContext(ctx, "saga executor: observer call exceeded deadline; continuing",
-			slog.String("instance_id", string(instanceID)),
-			slog.String("lease_id", string(leaseID)),
-			slog.String("method", method),
-			slog.Duration("deadline", e.observerCallDeadline),
-		)
+		e.logger.LogAttrs(ctx, slog.LevelWarn, "saga executor: observer call exceeded deadline; continuing",
+			sagalog.InstanceFields(instanceID, leaseID,
+				slog.String("method", method),
+				slog.Duration("deadline", e.observerCallDeadline))...)
 	}
 }
 
@@ -225,12 +224,10 @@ func (e *Executor) callObserverBounded(ctx context.Context, instanceID, leaseID 
 // timeout branch in callObserverBounded.
 func (e *Executor) recoverObserverPanic(ctx context.Context, instanceID, leaseID idutil.SafeID, method string) {
 	if r := recover(); r != nil {
-		e.logger.WarnContext(ctx, "saga executor: observer call panicked, ignoring",
-			slog.String("instance_id", string(instanceID)),
-			slog.String("lease_id", string(leaseID)),
-			slog.String("method", method),
-			slog.Any("panic", redaction.RedactAny(r)),
-		)
+		e.logger.LogAttrs(ctx, slog.LevelWarn, "saga executor: observer call panicked, ignoring",
+			sagalog.InstanceFields(instanceID, leaseID,
+				slog.String("method", method),
+				slog.Any("panic", redaction.RedactAny(r)))...)
 	}
 }
 
@@ -387,25 +384,21 @@ func (e *Executor) executeInner(
 	// as if heartbeat succeeded) since the async heartbeat goroutine will
 	// detect persistent infra failure via the regular tick budget.
 	if ok, err := e.heartbeater.Heartbeat(ctx, inst.ID, leaseID, e.leaseDuration); err == nil && !ok {
-		e.logger.InfoContext(ctx, "saga executor: preflight heartbeat reported stale lease",
-			slog.String("instance_id", string(inst.ID)),
-			slog.String("definition_id", string(inst.DefinitionID)),
-			slog.String("lease_id", string(leaseID)),
-			slog.String("reason", string(HeartbeatFailureStaleLease)),
-		)
+		e.logger.LogAttrs(ctx, slog.LevelInfo, "saga executor: preflight heartbeat reported stale lease",
+			sagalog.InstanceFields(inst.ID, leaseID,
+				slog.String("definition_id", string(inst.DefinitionID)),
+				slog.String("reason", string(HeartbeatFailureStaleLease)))...)
 		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureStaleLease)
 		return Result{Outcome: OutcomeLeaseLost, Err: errLeaseLost, Attempts: 0}
 	} else if err != nil {
 		// F4: infra error on preflight — fail-open (don't block execution) but
 		// emit Warn + observer metric so the operator can see repeated preflight
 		// failures without inspecting per-tick heartbeat logs separately.
-		e.logger.WarnContext(ctx, "saga executor: preflight heartbeat infra error (fail-open)",
-			slog.String("instance_id", string(inst.ID)),
-			slog.String("definition_id", string(inst.DefinitionID)),
-			slog.String("lease_id", string(leaseID)),
-			slog.String("reason", string(HeartbeatFailureInfraError)),
-			slog.Any("error", err),
-		)
+		e.logger.LogAttrs(ctx, slog.LevelWarn, "saga executor: preflight heartbeat infra error (fail-open)",
+			sagalog.InstanceFields(inst.ID, leaseID,
+				slog.String("definition_id", string(inst.DefinitionID)),
+				slog.String("reason", string(HeartbeatFailureInfraError)),
+				slog.Any("error", err))...)
 		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureInfraError)
 		// continue — fail-open matches original intent; async heartbeat will
 		// detect persistent infra failures via the regular tick budget.
@@ -438,13 +431,11 @@ func (e *Executor) executeInner(
 			if r := recover(); r != nil {
 				// #1181 F10: redact panic payload — slog sinks are operator-
 				// visible and the panic value may carry headers / tokens.
-				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
-					slog.String("instance_id", string(inst.ID)),
-					slog.String("definition_id", string(inst.DefinitionID)),
-					slog.String("lease_id", string(leaseID)),
-					slog.String("reason", string(HeartbeatFailureInfraError)),
-					slog.Any("panic", redaction.RedactAny(r)),
-				)
+				e.logger.LogAttrs(hbCtx, slog.LevelWarn, "saga executor: heartbeat goroutine recovered from panic",
+					sagalog.InstanceFields(inst.ID, leaseID,
+						slog.String("definition_id", string(inst.DefinitionID)),
+						slog.String("reason", string(HeartbeatFailureInfraError)),
+						slog.Any("panic", redaction.RedactAny(r)))...)
 				onStale() // cancel runCtx with errLeaseLost so the in-flight step bails
 			}
 		}()
@@ -516,24 +507,20 @@ func (e *Executor) RunWithHeartbeat(
 	// from externalizing side effects under a lease another coordinator already
 	// owns. Matches the same preflight in executeInner (#1210 round-N F3).
 	if ok, err := e.heartbeater.Heartbeat(ctx, inst.ID, leaseID, e.leaseDuration); err == nil && !ok {
-		e.logger.InfoContext(ctx, "saga executor: preflight heartbeat reported stale lease (RunWithHeartbeat)",
-			slog.String("instance_id", string(inst.ID)),
-			slog.String("definition_id", string(inst.DefinitionID)),
-			slog.String("lease_id", string(leaseID)),
-			slog.String("reason", string(HeartbeatFailureStaleLease)),
-		)
+		e.logger.LogAttrs(ctx, slog.LevelInfo, "saga executor: preflight heartbeat reported stale lease (RunWithHeartbeat)",
+			sagalog.InstanceFields(inst.ID, leaseID,
+				slog.String("definition_id", string(inst.DefinitionID)),
+				slog.String("reason", string(HeartbeatFailureStaleLease)))...)
 		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureStaleLease)
 		return errLeaseLost
 	} else if err != nil {
 		// F4: infra error on preflight — fail-open (don't block compensation) but
 		// emit Warn + observer metric.
-		e.logger.WarnContext(ctx, "saga executor: preflight heartbeat infra error (fail-open, RunWithHeartbeat)",
-			slog.String("instance_id", string(inst.ID)),
-			slog.String("definition_id", string(inst.DefinitionID)),
-			slog.String("lease_id", string(leaseID)),
-			slog.String("reason", string(HeartbeatFailureInfraError)),
-			slog.Any("error", err),
-		)
+		e.logger.LogAttrs(ctx, slog.LevelWarn, "saga executor: preflight heartbeat infra error (fail-open, RunWithHeartbeat)",
+			sagalog.InstanceFields(inst.ID, leaseID,
+				slog.String("definition_id", string(inst.DefinitionID)),
+				slog.String("reason", string(HeartbeatFailureInfraError)),
+				slog.Any("error", err))...)
 		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureInfraError)
 		// continue — fail-open; async heartbeat goroutine will detect persistent
 		// infra failures via the regular tick budget.
@@ -553,13 +540,11 @@ func (e *Executor) RunWithHeartbeat(
 		defer hbWG.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
-					slog.String("instance_id", string(inst.ID)),
-					slog.String("definition_id", string(inst.DefinitionID)),
-					slog.String("lease_id", string(leaseID)),
-					slog.String("reason", string(HeartbeatFailureInfraError)),
-					slog.Any("panic", redaction.RedactAny(r)),
-				)
+				e.logger.LogAttrs(hbCtx, slog.LevelWarn, "saga executor: heartbeat goroutine recovered from panic",
+					sagalog.InstanceFields(inst.ID, leaseID,
+						slog.String("definition_id", string(inst.DefinitionID)),
+						slog.String("reason", string(HeartbeatFailureInfraError)),
+						slog.Any("panic", redaction.RedactAny(r)))...)
 				onStale() // cancel runCtx with errLeaseLost so the in-flight fn bails
 			}
 		}()
@@ -632,14 +617,12 @@ func (e *Executor) runAttempt(
 	//    Compensating vs Failed from committed history; the executor must not
 	//    inspect step.Compensate here).
 	if !policy.ShouldRetry(attempt) {
-		e.logger.WarnContext(runCtx, "saga executor: retry budget exhausted",
-			slog.String("instance_id", string(inst.ID)),
-			slog.String("step_name", string(step.Name)),
-			slog.String("lease_id", string(leaseID)),
-			slog.Int("attempts", attempt),
-			slog.String("outcome", OutcomeFailed.String()),
-			slog.Any("error", runErr),
-		)
+		e.logger.LogAttrs(runCtx, slog.LevelWarn, "saga executor: retry budget exhausted",
+			sagalog.InstanceFields(inst.ID, leaseID,
+				slog.String("step_name", string(step.Name)),
+				slog.Int("attempts", attempt),
+				slog.String("outcome", OutcomeFailed.String()),
+				slog.Any("error", runErr))...)
 		return Result{Outcome: OutcomeFailed, Err: runErr, Attempts: attempt}, true
 	}
 	return Result{}, false
@@ -719,18 +702,14 @@ func (e *Executor) Compensate(
 	)
 	defer span.End()
 
-	e.logger.InfoContext(ctx, "saga executor: compensating step",
-		slog.String("instance_id", string(inst.ID)),
-		slog.String("step_name", string(step.Name)),
-		slog.String("lease_id", string(leaseID)),
-	)
+	e.logger.LogAttrs(ctx, slog.LevelInfo, "saga executor: compensating step",
+		sagalog.InstanceFields(inst.ID, leaseID,
+			slog.String("step_name", string(step.Name)))...)
 	if err := safeRunCompensate(ctx, step.Compensate, inst, committedState); err != nil {
-		e.logger.WarnContext(ctx, "saga executor: compensate failed",
-			slog.String("instance_id", string(inst.ID)),
-			slog.String("step_name", string(step.Name)),
-			slog.String("lease_id", string(leaseID)),
-			slog.Any("error", err),
-		)
+		e.logger.LogAttrs(ctx, slog.LevelWarn, "saga executor: compensate failed",
+			sagalog.InstanceFields(inst.ID, leaseID,
+				slog.String("step_name", string(step.Name)),
+				slog.Any("error", err))...)
 		// Redaction applied at sink (otelSpan.RecordError in
 		// adapters/otel/span.go); pass raw error here.
 		span.RecordError(err)

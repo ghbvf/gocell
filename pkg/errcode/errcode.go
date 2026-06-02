@@ -599,6 +599,17 @@ const (
 	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
 	ErrListenerAuthChainMissing Code = "ERR_LISTENER_AUTH_CHAIN_MISSING"
 
+	// ErrGRPCServerMissing signals that a bootstrap gRPC listener was declared
+	// via WithGRPCListener with a nil (bare or typed) GRPCServer. Bootstrap
+	// phase0 fail-fasts with this code, mirroring WithManagedResource's nil
+	// guard. The composition root owns gRPC auth wiring: the interceptor chain
+	// is built via runtime/grpc/interceptor.NewUnaryChain (which always wires
+	// UnaryAuth and panics on a nil verifier), so the fail-closed auth gate lives
+	// at chain construction; this sentinel guards the bootstrap wiring seam.
+	//
+	// ref: docs/plans/specs/202605262300-048-grpc-adapter/plan.md PR 5 (RL-14)
+	ErrGRPCServerMissing Code = "ERR_GRPC_SERVER_MISSING"
+
 	// ErrReadyzVerboseUnconfigured signals that /readyz?verbose was requested
 	// but neither a verbose token nor the explicit disabled flag has been
 	// configured. This fail-closed default forces operators to make an explicit
@@ -620,6 +631,17 @@ const (
 	// ErrIdempotencyNoClaimLease signals that Receipt methods were called for a
 	// Claim result that did not acquire a processing lease. Maps to HTTP 409.
 	ErrIdempotencyNoClaimLease Code = "ERR_IDEMPOTENCY_NO_CLAIM_LEASE"
+	// ErrIdempotencyInProgress signals that another request is currently
+	// processing the same idempotency key (ClaimBusy). The client should retry
+	// after the in-flight request completes. Maps to HTTP 409.
+	ErrIdempotencyInProgress Code = "ERR_IDEMPOTENCY_IN_PROGRESS"
+	// ErrIdempotencyKeyReused signals that the same Idempotency-Key was sent with
+	// a different request body (fingerprint mismatch). Per IETF idempotency-key
+	// draft §6 and Stripe's idempotency guide, reusing a key with a different
+	// payload is a client error. Maps to HTTP 409 (KindConflict) because the
+	// errcode Kind set has no KindUnprocessable (422) — 409 is the closest safe
+	// choice that signals a conflict between the stored request and the new one.
+	ErrIdempotencyKeyReused Code = "ERR_IDEMPOTENCY_KEY_REUSED"
 
 	// Metrics error codes (kernel/observability/metrics).
 	//
@@ -946,6 +968,61 @@ func (e *Error) FindAttr(key string) (PublicDetail, bool) {
 // Go compile error rather than a runtime panic.
 func (e *Error) MarshalJSON() ([]byte, error) {
 	return json.Marshal(e.PublicProjection())
+}
+
+// httpErrorObject is the inner error object of the v1 HTTP wire envelope. It is
+// deliberately NARROWER than PublicError: it carries only the four wire fields
+// (code/message/details/requestId) and structurally cannot express the
+// operator-only SourceCode/Status fields, so those can never leak onto the HTTP
+// wire regardless of how the projection is constructed — the type system is the
+// guard, not an omitempty zero-value coincidence. Field set is frozen by the v1
+// schema's additionalProperties:false constraint (any new field must update
+// contracts/shared/errors/error-response-v1.schema.json + the envelope tests).
+type httpErrorObject struct {
+	Code      Code           `json:"code"`
+	Message   string         `json:"message"`
+	Details   []PublicDetail `json:"details"`
+	RequestID string         `json:"requestId,omitempty"`
+}
+
+// errorEnvelope is the canonical outer {"error":{...}} wrapper defined by
+// contracts/shared/errors/error-response-v1.schema.json. It exists so the wire
+// envelope can be produced in a single marshal pass (see MarshalHTTPEnvelope).
+type errorEnvelope struct {
+	Error httpErrorObject `json:"error"`
+}
+
+// MarshalHTTPEnvelope renders the canonical v1 wire envelope {"error":{...}} in
+// a single marshal pass, injecting requestID into the inner error object
+// (omitted when empty). It is the choke point all HTTP error responses funnel
+// through via pkg/httputil.writeErrorBody.
+//
+// Because the result is built directly from PublicProjection — with no
+// intermediate map[string]any — int64 detail values retain full precision
+// (json.Marshal encodes int64 exactly; a map[string]any round-trip would coerce
+// them to float64 and truncate beyond 2^53). PublicProjection performs the 5xx
+// detail-strip + public-code normalization, and the narrowed httpErrorObject
+// makes the operator-only SourceCode/Status fields type-level unrepresentable on
+// the wire, so the body matches the v1 schema's additionalProperties:false error
+// object exactly.
+//
+// Caller contract: this is a framework-layer primitive — business handlers must
+// emit errors via httputil.WriteError / WriteErrorWithStatus, which call this
+// and add the fail-closed sentinel fallback. requestID is trusted as opaque
+// correlation metadata sourced from ctxkeys.RequestIDFrom (framework RequestID
+// middleware, UUID-shaped); it is written to the wire verbatim, so callers must
+// not pass user-controlled input. The receiver may be nil (PublicProjection
+// returns a valid ErrInternal 500 envelope). The output carries no trailing
+// newline (unlike json.Encoder.Encode); joined error chains are not expanded —
+// use the package-level PublicProjection(error) for those.
+func (e *Error) MarshalHTTPEnvelope(requestID string) ([]byte, error) {
+	pub := e.PublicProjection()
+	return json.Marshal(errorEnvelope{Error: httpErrorObject{
+		Code:      pub.Code,
+		Message:   pub.Message,
+		Details:   pub.Details,
+		RequestID: requestID,
+	}})
 }
 
 // Error returns a formatted string representation for logging/diagnostics.
