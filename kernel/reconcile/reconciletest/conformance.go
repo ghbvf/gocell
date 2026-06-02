@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/reconcile"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // ElectorFactory builds a LeaderElector for the given holderID, all sharing one
@@ -264,6 +265,7 @@ const (
 	confLeaderTTL     = 100 * time.Millisecond // short lease TTL for leader tests
 	confLeaderRenew   = 10 * time.Millisecond  // fast renew cadence for leader tests
 	confBarrierWait   = 2 * time.Second        // barrier wait for concurrency test
+	confBackoffMax    = confShortInterval * 10 // panic-recovery backoff cap (TEST-TIME-LITERAL-01)
 )
 
 // RunConformance runs the Loop scheduling conformance suite.
@@ -372,14 +374,9 @@ func confRequeueAfter(t *testing.T, newHarness HarnessFactory) {
 
 	submit(reconcile.Request{EntityID: "requeue-entity-1"})
 
-	deadline := time.Now().Add(confEventualWait)
-	for time.Now().Before(deadline) {
-		if count.Load() >= 2 {
-			return
-		}
-		time.Sleep(confPollTick)
-	}
-	t.Fatalf("RequeueAfter: invocation count = %d, want ≥ 2 within %s", count.Load(), confEventualWait)
+	testwait.External(t, "reconcile-requeued", func() bool {
+		return count.Load() >= 2
+	}, confEventualWait, confPollTick, "RequeueAfter: entity not re-invoked ≥ 2 times")
 }
 
 // confPermanentError verifies that a PermanentError response causes exactly one
@@ -412,20 +409,15 @@ func confPermanentError(t *testing.T, newHarness HarnessFactory) {
 	submit(reconcile.Request{EntityID: "perm-entity-1"})
 
 	// Wait until invoked at least once.
-	deadline := time.Now().Add(confEventualWait)
-	for time.Now().Before(deadline) {
-		if count.Load() >= 1 {
-			break
-		}
-		time.Sleep(confPollTick)
-	}
-	if count.Load() < 1 {
-		t.Fatalf("PermanentError: Reconcile never called within %s", confEventualWait)
-	}
+	testwait.External(t, "reconcile-invoked-once", func() bool {
+		return count.Load() >= 1
+	}, confEventualWait, confPollTick, "PermanentError: Reconcile never called")
 
-	// Quiet period: no further invocation expected after dead-letter.
+	// Quiet period: no further invocation expected after dead-letter. This is a
+	// genuine sleep (asserting the ABSENCE of an event cannot be polled-for) —
+	// not synchronous polling, so testwait does not apply.
 	snapshot := count.Load()
-	time.Sleep(confQuietPeriod)
+	time.Sleep(confQuietPeriod) //archtest:allow:test-sleep quiet-period asserts no re-run after dead-letter (absence cannot be polled)
 	if after := count.Load(); after != snapshot {
 		t.Fatalf("PermanentError: invoked %d more time(s) after dead-letter (expected 0 re-runs)", after-snapshot)
 	}
@@ -454,7 +446,7 @@ func confPanicRecovery(t *testing.T, newHarness HarnessFactory) {
 	l, err := reconcile.New(rec).
 		WithTrigger(trigger).
 		WithInterval(confShortInterval).
-		WithBackoff(confShortInterval, confShortInterval*10).
+		WithBackoff(confShortInterval, confBackoffMax).
 		Build()
 	mustNoErr(t, err, "Build")
 
@@ -465,14 +457,9 @@ func confPanicRecovery(t *testing.T, newHarness HarnessFactory) {
 
 	submit(reconcile.Request{EntityID: "panic-entity-1"})
 
-	deadline := time.Now().Add(confEventualWait)
-	for time.Now().Before(deadline) {
-		if count.Load() >= 2 {
-			return
-		}
-		time.Sleep(confPollTick)
-	}
-	t.Fatalf("PanicRecovery: invocation count = %d after %s, want ≥ 2 (panic should be recovered and retried)", count.Load(), confEventualWait)
+	testwait.External(t, "reconcile-retried-after-panic", func() bool {
+		return count.Load() >= 2
+	}, confEventualWait, confPollTick, "PanicRecovery: panic not recovered and retried")
 }
 
 // confMaxConcurrent verifies two properties of MaxConcurrentReconciles > 1:

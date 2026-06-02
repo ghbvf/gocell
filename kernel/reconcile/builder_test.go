@@ -17,6 +17,10 @@ type realTrigger struct{}
 
 func (realTrigger) Start(_ context.Context, _ chan<- Request) error { return nil }
 
+// builderExplicitInterval is the explicit interval used by the
+// interval_explicit_unchanged case (TEST-TIME-LITERAL-01: package-level const).
+const builderExplicitInterval = 7 * time.Second
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TestBuilder_RequiresReconcilerAndTrigger: missing reconciler or trigger → error
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,10 +109,9 @@ func TestLoop_ApplyDefaults(t *testing.T) {
 	})
 	t.Run("interval_explicit_unchanged", func(t *testing.T) {
 		t.Parallel()
-		const explicit = 7 * time.Second
-		l := &Loop{interval: explicit}
+		l := &Loop{interval: builderExplicitInterval}
 		l.applyDefaults()
-		assert.Equal(t, explicit, l.interval)
+		assert.Equal(t, builderExplicitInterval, l.interval)
 	})
 	t.Run("maxConcurrent_zero_becomes_1", func(t *testing.T) {
 		t.Parallel()
