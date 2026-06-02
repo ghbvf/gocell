@@ -33,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
+	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -204,6 +205,24 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 			return
 		}
 		r.circuitBreaker = cb
+	}
+}
+
+// WithIdempotency enables HTTP idempotency middleware for mutating methods
+// (POST/PUT/PATCH/DELETE). The middleware is placed in the chain after BodyLimit,
+// so request bodies are already bounded before idempotency key derivation.
+// When wired together with WithAuthMiddleware, idempotency runs AFTER auth so
+// the authenticated Principal is available for namespace composition.
+//
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected by NewForListener so idempotency is never silently absent.
+func WithIdempotency(store idemhttp.Store) Option {
+	return func(r *Router) {
+		if validation.IsNilInterface(store) {
+			r.idempotencyStoreNil = true
+			return
+		}
+		r.idempotencyStore = store
 	}
 }
 
@@ -385,6 +404,8 @@ type Router struct {
 	rateLimiterNil              bool
 	circuitBreaker              middleware.Allower
 	circuitBreakerNil           bool
+	idempotencyStore            idemhttp.Store
+	idempotencyStoreNil         bool
 	authVerifier                kauth.IntentTokenVerifier
 	authVerifierNil             bool
 	authMetrics                 *auth.AuthMetrics
@@ -410,6 +431,7 @@ type Router struct {
 	routePatterns              []registeredRoutePattern
 	ownedPrefixes              []ownedRoutePrefix
 	passwordResetExemptMatcher func(method, urlPath string) bool
+	idempotencyExemptMatcher   func(*http.Request) bool
 	derivedHint                string
 
 	policyCoverageWhitelist []string
@@ -534,6 +556,9 @@ func NewForListener(clk clock.Clock, ref kcell.ListenerRef, opts ...Option) (*Ro
 	}
 	if r.authVerifierNil {
 		return nil, fmt.Errorf("router: auth middleware verifier must not be nil")
+	}
+	if r.idempotencyStoreNil {
+		return nil, fmt.Errorf("router: idempotency store must not be nil (WithIdempotency)")
 	}
 
 	realIPMW, err := r.buildRealIPMiddleware()
@@ -688,6 +713,19 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		r.use(auth.AuthMiddleware(r.clock, r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.use(middleware.BodyLimit(r.bodyLimit, r.metricsCollector))
+	if r.idempotencyStore != nil {
+		// lazyIdempotencyExempt reads the compiled exempt matcher lazily so
+		// FinalizeAuth (which runs AFTER buildMux) can compile the set from
+		// IdempotencyExempt=true AuthRouteMeta entries declared via auth.Mount.
+		lazyIdempotencyExempt := func(req *http.Request) bool {
+			if r.idempotencyExemptMatcher == nil {
+				return false
+			}
+			return r.idempotencyExemptMatcher(req)
+		}
+		r.use(idemhttp.Middleware(r.clock, r.idempotencyStore,
+			idemhttp.WithExemptMatcher(lazyIdempotencyExempt)))
+	}
 	r.composeHandler()
 	return nil
 }
@@ -988,25 +1026,8 @@ func (r *Router) FinalizeAuth() error {
 	r.authFinalized = true
 
 	if len(r.declaredAuthMetas) > 0 {
-		if err := r.verifyInternalRouteAffinity(); err != nil {
+		if err := r.compileAuthMetas(); err != nil {
 			return err
-		}
-
-		partitioned, err := partitionAuthMetas(r.declaredAuthMetas)
-		if err != nil {
-			return err
-		}
-
-		if err := r.mergePublicMatcher(partitioned.publicEntries); err != nil {
-			return err
-		}
-		if err := r.mergeExemptMatcher(partitioned.exemptEntries); err != nil {
-			return err
-		}
-		r.deriveHint()
-
-		if r.authVerifier == nil && !r.suppressNoVerifierWarn {
-			r.warnNoAuthVerifier(partitioned)
 		}
 	}
 
@@ -1016,6 +1037,35 @@ func (r *Router) FinalizeAuth() error {
 		return fmt.Errorf("router: policy coverage: %w", err)
 	}
 
+	return nil
+}
+
+// compileAuthMetas compiles all accumulated AuthRouteMeta declarations into
+// matchers. Called from FinalizeAuth when at least one declaration exists.
+func (r *Router) compileAuthMetas() error {
+	if err := r.verifyInternalRouteAffinity(); err != nil {
+		return err
+	}
+
+	partitioned, err := partitionAuthMetas(r.declaredAuthMetas)
+	if err != nil {
+		return err
+	}
+
+	if err := r.mergePublicMatcher(partitioned.publicEntries); err != nil {
+		return err
+	}
+	if err := r.mergeExemptMatcher(partitioned.exemptEntries); err != nil {
+		return err
+	}
+	if err := r.mergeIdempotencyExemptMatcher(partitioned.idempotencyExemptEntries); err != nil {
+		return err
+	}
+	r.deriveHint()
+
+	if r.authVerifier == nil && !r.suppressNoVerifierWarn {
+		r.warnNoAuthVerifier(partitioned)
+	}
 	return nil
 }
 
@@ -1084,8 +1134,9 @@ func (r *Router) enumerateRoutes() []routeKey {
 
 // authMetaPartition holds the categorized results of partitionAuthMetas.
 type authMetaPartition struct {
-	publicEntries []string
-	exemptEntries []string
+	publicEntries            []string
+	exemptEntries            []string
+	idempotencyExemptEntries []string
 }
 
 // partitionAuthMetas deduplicates the metas and splits them into entry slices.
@@ -1112,6 +1163,9 @@ func partitionAuthMetas(metas []kcell.AuthRouteMeta) (authMetaPartition, error) 
 		}
 		if m.PasswordResetExempt {
 			p.exemptEntries = append(p.exemptEntries, entry)
+		}
+		if m.IdempotencyExempt {
+			p.idempotencyExemptEntries = append(p.idempotencyExemptEntries, entry)
 		}
 	}
 	return p, nil
@@ -1140,6 +1194,22 @@ func (r *Router) mergeExemptMatcher(entries []string) error {
 		return fmt.Errorf("router: FinalizeAuth exempt entries: %w", err)
 	}
 	r.passwordResetExemptMatcher = orMergeMethodPath(r.passwordResetExemptMatcher, compiled)
+	return nil
+}
+
+// mergeIdempotencyExemptMatcher OR-merges the compiled idempotency-exempt entries
+// into r.idempotencyExemptMatcher. Entries are in "METHOD /path" form; {xxx}
+// segments match any single non-empty URL segment (template semantics, same as
+// the password-reset-exempt matcher), compiled via auth.CompileIdempotencyExempts.
+func (r *Router) mergeIdempotencyExemptMatcher(entries []string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	compiled, err := auth.CompileIdempotencyExempts(entries)
+	if err != nil {
+		return fmt.Errorf("router: FinalizeAuth idempotency-exempt entries: %w", err)
+	}
+	r.idempotencyExemptMatcher = orMergeRequest(r.idempotencyExemptMatcher, compiled)
 	return nil
 }
 

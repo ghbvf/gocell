@@ -43,6 +43,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
+	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/internal/authtest"
@@ -4537,4 +4538,40 @@ func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
 	require.Error(t, err, "undeclared listener ref must cause Run to fail fast")
 	assert.Contains(t, err.Error(), "undeclared listener",
 		"error must mention 'undeclared listener'")
+}
+
+// ---------------------------------------------------------------------------
+// WithIdempotencyStore fail-fast tests (Batch 3)
+// ---------------------------------------------------------------------------
+
+// TestBootstrap_WithIdempotencyStore_NilFailFast verifies that
+// WithIdempotencyStore(nil) sets the sentinel flag and Run() rejects it at
+// phase0. Mirrors TestBootstrap_WithRateLimiter_NilFailFast.
+func TestBootstrap_WithIdempotencyStore_NilFailFast(t *testing.T) {
+	app := New(clock.Real(), WithIdempotencyStore(nil))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithIdempotencyStore(nil) was used")
+	}
+	const want = "idempotency store must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestBootstrap_WithIdempotencyStore_TypedNilFailFast verifies that a
+// typed-nil idemhttp.Store is rejected at phase0.
+func TestBootstrap_WithIdempotencyStore_TypedNilFailFast(t *testing.T) {
+	var store *idemhttp.MemStore // typed nil
+	var iface idemhttp.Store = store
+
+	app := New(clock.Real(), WithIdempotencyStore(iface))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithIdempotencyStore receives a typed-nil interface")
+	}
+	const want = "idempotency store must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
 }

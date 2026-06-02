@@ -13,6 +13,7 @@ import (
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 
 	"github.com/coder/websocket"
 
@@ -2055,4 +2056,186 @@ func TestMountRouteGroup_NonServeMuxHandler_RouteLabelDegrades(t *testing.T) {
 	unmatchedKey := routerRequestKey("legacycell", http.MethodGet, "unmatched", http.StatusOK)
 	assert.Equal(t, int64(0), snap.RequestCounts[unmatchedKey],
 		"route label must not be 'unmatched' for a mounted non-ServeMux handler")
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency middleware wiring tests (Batch 3)
+// ---------------------------------------------------------------------------
+
+// TestWithIdempotency_NilInterface_Error verifies that a bare nil Store causes
+// NewForListener to return an error so Bootstrap fails fast instead of silently
+// skipping idempotency protection. Mirrors WithRateLimiter fail-fast pattern.
+func TestWithIdempotency_NilInterface_Error(t *testing.T) {
+	_, err := New(clock.Real(), WithIdempotency(nil))
+	require.Error(t, err, "nil interface Store must return error from New")
+	assert.Contains(t, err.Error(), "idempotency store")
+}
+
+// TestWithIdempotency_TypedNilPointer_Error verifies that a typed-nil
+// (*idemhttp.MemStore)(nil) is rejected: the interface value is non-nil but
+// the underlying pointer is nil.
+func TestWithIdempotency_TypedNilPointer_Error(t *testing.T) {
+	var store *idemhttp.MemStore // typed nil
+	_, err := New(clock.Real(), WithIdempotency(store))
+	require.Error(t, err, "typed-nil Store must return error from New")
+	assert.Contains(t, err.Error(), "idempotency store")
+}
+
+// TestWithIdempotency_MiddlewareRunsAfterAuth verifies that when the
+// idempotency middleware is wired and a request carries an Idempotency-Key
+// header, two identical requests produce the same response (second is replayed)
+// — proving the middleware is installed AFTER auth populates the principal.
+func TestWithIdempotency_MiddlewareRunsAfterAuth(t *testing.T) {
+	clk := clock.Real()
+	memStore := idemhttp.NewMemStore(clk)
+
+	// routerTestVerifier accepts any token and injects a PrincipalUser with
+	// Subject "user-1". The idempotency middleware requires PrincipalUser with
+	// a non-empty Subject to activate, so this exercises the auth-before-idem chain.
+	verifier := &routerTestVerifier{
+		claims: kauth.Claims{Subject: "user-1"},
+	}
+	rtr := mustNew(clk,
+		WithAuthMiddleware(verifier),
+		WithIdempotency(memStore),
+	)
+
+	handlerCalls := 0
+	mustMountRoute(rtr, auth.Route{
+		Contract: testHTTPContract(http.MethodPost, "/api/v1/orders"),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handlerCalls++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"order":"1"}`))
+		}),
+	})
+	require.NoError(t, rtr.FinalizeAuth())
+
+	makeReq := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/orders", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("Idempotency-Key", "order-req-001")
+		w := httptest.NewRecorder()
+		rtr.ServeHTTP(w, req)
+		return w
+	}
+
+	// First request: handler must be invoked.
+	resp1 := makeReq()
+	require.Equal(t, http.StatusCreated, resp1.Code, "first request must return 201")
+	require.Equal(t, 1, handlerCalls, "handler must be called on first request")
+
+	// Second request with the same Idempotency-Key: response is replayed.
+	resp2 := makeReq()
+	require.Equal(t, http.StatusCreated, resp2.Code, "replayed request must return 201")
+	assert.Equal(t, 1, handlerCalls, "handler must NOT be called again on replayed request")
+	assert.Equal(t, "true", resp2.Header().Get("Idempotency-Replayed"),
+		"replayed response must carry Idempotency-Replayed: true header")
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency-exempt matcher tests (C2)
+// ---------------------------------------------------------------------------
+
+// TestIdempotencyExempt_FinalizeAuth_CompilesExemptMatcher verifies that a route
+// declared with IdempotencyExempt:true causes the router's idempotencyExemptMatcher
+// to return true for that path and false for others after FinalizeAuth.
+func TestIdempotencyExempt_FinalizeAuth_CompilesExemptMatcher(t *testing.T) {
+	clk := clock.Real()
+	rtr := mustNew(clk)
+
+	mustMountRoute(rtr, auth.Route{
+		Contract:          testHTTPContract(http.MethodPost, "/api/v1/users/{id}/password"),
+		Handler:           http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+		IdempotencyExempt: true,
+	})
+	mustMountRoute(rtr, auth.Route{
+		Contract: testHTTPContract(http.MethodPost, "/api/v1/orders"),
+		Handler:  http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+	})
+	require.NoError(t, rtr.FinalizeAuth())
+
+	// After FinalizeAuth the idempotencyExemptMatcher must be compiled.
+	require.NotNil(t, rtr.idempotencyExemptMatcher,
+		"idempotencyExemptMatcher must be non-nil after FinalizeAuth with IdempotencyExempt route")
+
+	// Exempt path must return true.
+	exemptReq := httptest.NewRequest(http.MethodPost, "/api/v1/users/abc/password", nil)
+	assert.True(t, rtr.idempotencyExemptMatcher(exemptReq),
+		"exempt path must match")
+
+	// Non-exempt path must return false.
+	normalReq := httptest.NewRequest(http.MethodPost, "/api/v1/orders", nil)
+	assert.False(t, rtr.idempotencyExemptMatcher(normalReq),
+		"non-exempt path must not match")
+}
+
+// TestIdempotencyExempt_NoExemptRoute_MatcherNilAfterFinalize verifies that when no
+// route declares IdempotencyExempt:true, the matcher field stays nil (zero allocation).
+func TestIdempotencyExempt_NoExemptRoute_MatcherNilAfterFinalize(t *testing.T) {
+	clk := clock.Real()
+	rtr := mustNew(clk)
+	mustMountRoute(rtr, auth.Route{
+		Contract: testHTTPContract(http.MethodPost, "/api/v1/orders"),
+		Handler:  http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+	})
+	require.NoError(t, rtr.FinalizeAuth())
+	assert.Nil(t, rtr.idempotencyExemptMatcher,
+		"idempotencyExemptMatcher must remain nil when no route is declared IdempotencyExempt")
+}
+
+// TestIdempotencyExempt_ExemptRouteNotRecorded verifies the end-to-end behavior:
+// a route declared IdempotencyExempt:true is never recorded in the replay store, so
+// repeated POSTs with the same Idempotency-Key always invoke the handler.
+func TestIdempotencyExempt_ExemptRouteNotRecorded(t *testing.T) {
+	clk := clock.Real()
+	memStore := idemhttp.NewMemStore(clk)
+	verifier := &routerTestVerifier{
+		claims: kauth.Claims{Subject: "user-1"},
+	}
+	rtr := mustNew(clk,
+		WithAuthMiddleware(verifier),
+		WithIdempotency(memStore),
+	)
+
+	handlerCalls := 0
+	mustMountRoute(rtr, auth.Route{
+		Contract: testHTTPContract(http.MethodPost, "/api/v1/users/{id}/password"),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handlerCalls++
+			w.WriteHeader(http.StatusOK)
+		}),
+		IdempotencyExempt: true,
+	})
+	// Non-exempt sibling to verify ordinary recording still works.
+	mustMountRoute(rtr, auth.Route{
+		Contract: testHTTPContract(http.MethodPost, "/api/v1/orders"),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}),
+	})
+	require.NoError(t, rtr.FinalizeAuth())
+
+	makeExemptReq := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/abc/password", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("Idempotency-Key", "pwd-change-001")
+		w := httptest.NewRecorder()
+		rtr.ServeHTTP(w, req)
+		return w
+	}
+
+	// First request: handler invoked.
+	resp1 := makeExemptReq()
+	require.Equal(t, http.StatusOK, resp1.Code)
+	require.Equal(t, 1, handlerCalls)
+
+	// Second request with same Idempotency-Key: handler must be invoked again
+	// (not replayed) because the route is exempt.
+	resp2 := makeExemptReq()
+	require.Equal(t, http.StatusOK, resp2.Code)
+	assert.Equal(t, 2, handlerCalls,
+		"handler must be called on every request for an exempt route — no replay")
+	assert.Empty(t, resp2.Header().Get("Idempotency-Replayed"),
+		"Idempotency-Replayed must not be set for exempt routes")
 }
