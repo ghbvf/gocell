@@ -140,6 +140,7 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 		TenantID:      "tenant-must-not-leak",
 		SessionID:     "session-must-not-leak",
 		CorrelationID: "corr-id-123",
+		TraceID:       "trace-proj-001",
 		OccurredAt:    occurred,
 		Timestamp:     time.Date(2026, 1, 2, 3, 4, 6, 987654321, time.UTC),
 		Payload:       []byte(`{"key":"value"}`),
@@ -153,11 +154,12 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// PRESENT — subjectId + correlationId surfaced.
+	// PRESENT — subjectId + correlationId + traceId surfaced.
 	var resp struct {
 		Data []struct {
 			SubjectID     string `json:"subjectId"`
 			CorrelationID string `json:"correlationId"`
+			TraceID       string `json:"traceId"`
 			OccurredAt    string `json:"occurredAt"`
 		} `json:"data"`
 	}
@@ -173,12 +175,20 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	if resp.Data[0].CorrelationID != "corr-id-123" {
 		t.Errorf("correlationId = %q, want %q", resp.Data[0].CorrelationID, "corr-id-123")
 	}
+	if resp.Data[0].TraceID != "trace-proj-001" {
+		t.Errorf("traceId = %q, want %q", resp.Data[0].TraceID, "trace-proj-001")
+	}
 	// PRESENT — occurredAt at nanosecond precision (F6).
 	if want := occurred.Format(time.RFC3339Nano); resp.Data[0].OccurredAt != want {
 		t.Errorf("occurredAt = %q, want %q (RFC3339Nano sub-second precision)", resp.Data[0].OccurredAt, want)
 	}
 	if !strings.Contains(resp.Data[0].OccurredAt, ".123456789") {
 		t.Errorf("occurredAt %q lost sub-second precision — RFC3339Nano expected", resp.Data[0].OccurredAt)
+	}
+
+	// PRESENT — pin the camelCase wire name for traceId (raw-body check).
+	if !strings.Contains(body, "traceId") {
+		t.Errorf("response body missing %q key — traceId must appear on the wire\nbody=%s", "traceId", body)
 	}
 
 	// ABSENT — sessionId / tenantId must not appear by key or by value, in

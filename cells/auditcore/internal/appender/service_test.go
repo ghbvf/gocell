@@ -396,11 +396,9 @@ func TestHandleEvent_PrincipalFieldMapping(t *testing.T) {
 // an observability envelope with a TraceID (and CorrelationID), the appended
 // ledger.Entry has TraceID and CorrelationID equal to those envelope values.
 //
-// Both fields are derived via correlation.FromObservability (the sealed read-model)
+// Both fields are derived via correlation.New (the sealed read-model constructor)
 // so neither can be fabricated from caller input — this is the SOLE sanctioned
 // injection site locked by AUDIT-TRACE-ID-WRITE-CALLER-01 (later batch).
-//
-// RED: fails until service.go sets ledger.Entry.TraceID via corr.TraceID().
 func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 	p := newTestProtocol(t)
 	inner, err := ledger.NewMemStore(p, clock.Real())
@@ -432,9 +430,18 @@ func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 
 	got := cap.appended[0]
 	assert.Equal(t, wantTraceID, got.TraceID,
-		"TraceID must be derived from Observability.TraceID via correlation.FromObservability")
+		"TraceID must be derived from Observability.TraceID via correlation.New")
 	assert.Equal(t, wantCorrID, got.CorrelationID,
-		"CorrelationID must be derived from Observability.CorrelationID via correlation.FromObservability")
+		"CorrelationID must be derived from Observability.CorrelationID via correlation.New")
+
+	// Round-trip: confirm TraceID survives the full Append lifecycle and is
+	// readable via GetBySeq (not just captured pre-persist in cap.appended).
+	roundTrip, err := cap.GetBySeq(context.Background(), got.SeqNo)
+	require.NoError(t, err, "GetBySeq round-trip after Append must succeed")
+	assert.Equal(t, wantTraceID, roundTrip.TraceID,
+		"TraceID must survive full Append lifecycle (GetBySeq round-trip)")
+	assert.Equal(t, wantCorrID, roundTrip.CorrelationID,
+		"CorrelationID must survive full Append lifecycle (GetBySeq round-trip)")
 }
 
 // TestHandleEvent_SingleTenantInvariantTripwire pins #1289 (option A,

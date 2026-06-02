@@ -696,6 +696,48 @@ func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
 	}
 }
 
+// TestHandleQuery_TraceIDFilter_EmptyParam verifies that an empty ?traceId=
+// query parameter is treated as NO filter (equivalent to omitting the
+// parameter entirely) and returns all matching rows, not WHERE trace_id="".
+func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	seed := []*ledger.Entry{
+		{
+			ID: "ep-1", EventID: "evt-ep-1", EventType: "event.test.v1",
+			ActorID: "usr-ep", TraceID: "trace-present",
+			Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "ep-2", EventID: "evt-ep-2", EventType: "event.test.v1",
+			ActorID: "usr-ep", TraceID: "",
+			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+	}
+	for _, e := range seed {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	// ?traceId= (empty value) must behave as no filter → all rows for the actor.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-ep&traceId=", nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []struct {
+			EventID string `json:"eventId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Len(t, resp.Data, 2, "empty ?traceId= must act as no filter and return all rows")
+}
+
 // TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf verifies that a
 // non-admin caller with ?traceId=X still only sees their own actor_id rows.
 // The traceId filter is AND-ed with the actor-self policy enforced by

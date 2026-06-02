@@ -57,6 +57,12 @@ func (s *Service) Query(
 		// for one subjectId must not silently resume against another (#1290).
 		attrs = append(attrs, "subjectId", filters.SubjectID)
 	}
+	if filters.TraceID != "" {
+		// traceId participates in the cursor scope fingerprint exactly like
+		// subjectId/actorId: a cursor minted for one traceId must not silently
+		// resume against a different traceId or an unfiltered query (#1048).
+		attrs = append(attrs, "traceId", filters.TraceID)
+	}
 	// From/To are time-range filter predicates, not cursor-scope identifiers.
 	// Including zero-value time.Time in the scope would embed "0001-01-01T00:00:00Z"
 	// and break cursor reuse when callers omit From/To (F-07). Non-zero values
