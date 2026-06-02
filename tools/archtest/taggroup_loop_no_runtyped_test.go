@@ -62,6 +62,13 @@ func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 		"red_subpath_runtyped",
 		"red_typeseval_qualified",
 		"red_var_bound_range",
+		// Per-member typed-scope trip-wires (F3): each locks one entry of
+		// taggroupTypedScopeCtors so dropping it from the set fails CI.
+		"red_production_scope",
+		"red_fixture_scope",
+		"red_standalone_module_scope",
+		// F2 scope-var-indirection form: scope := Typed(...); Run(t, scope, ...).
+		"red_scope_var_indirection",
 	}
 	for _, name := range expectedRed {
 		if hits[name] == 0 {

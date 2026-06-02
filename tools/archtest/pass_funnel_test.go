@@ -78,7 +78,7 @@ const (
 //
 //   - pass_funnel_test.go: implements the PASS-FUNNEL meta-archtest, must
 //     reference the forbidden symbols.
-//   - pass_test.go: unit-tests archtest.Run / RunTyped / buildTypedPass /
+//   - pass_test.go: unit-tests archtest.Run / buildTypedPass /
 //     newPackageRel / isPackageWithTestFiles; the last three accept or
 //     construct *packages.Package fixtures by signature.
 //   - archtest_test.go: archtest driver self-tests (LAYER-05..10 + PGQUERY-01)
@@ -280,7 +280,10 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 			Rel:  tgt.rel,
 			Line: tgt.pkg.Fset.Position(imp.Pos()).Line,
 			Message: fmt.Sprintf(
-				"direct import of %q forbidden in archtest *_test.go; use archtest.Run(t, Typed(...), rule)",
+				"direct import of %q forbidden in archtest *_test.go; use archtest.Run with the "+
+					"appropriate RunScope constructor — Typed (main module) / Production "+
+					"(generated/-excluded) / Fixture (archtest_fixture packages) / StandaloneModule "+
+					"(standalone fixture module) — e.g. archtest.Run(t, Typed(...), rule)",
 				packagesPkgPath,
 			),
 		})
@@ -555,7 +558,9 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //   - Form B — same-pkg const Ident (localFixtureTag)   (typeseval.SharedResolver)
 //   - Form C — BinaryExpr "archtest" + "_fixture"       (typeseval.SharedResolver)
 //   - Form F — same-file var bound to a fixture-tag slice (var-indirection, typeseval.SharedResolver)
-//   - Form G — BasicLit "archtest_fixture" via archtest.Typed (new exported ctor callee)
+//   - Form G — BasicLit "archtest_fixture" via archtest.Typed (per-member callee, issue #1037)
+//   - Form H — BasicLit "archtest_fixture" via archtest.Production (per-member callee)
+//   - Form I — BasicLit "archtest_fixture" via archtest.StandaloneModule (per-member callee)
 //
 // The former Form D (cross-pkg SelectorExpr archtest.FixtureBuildTag) is GONE:
 // fixtureBuildTag is unexported (#944), so that vector is a compile error
@@ -831,7 +836,8 @@ func TestPassFunnelLoadPackages01(t *testing.T) {
 //
 // Archtest tools/archtest/<file>_test.go must NOT import
 // golang.org/x/tools/go/packages directly. The Pass-Driver paradigm wraps
-// packages.Load inside archtest.RunTyped; direct imports allow authors to
+// packages.Load inside the typed Run drivers (Run(t, Typed(...)) etc.); direct
+// imports allow authors to
 // reconstruct the INV-1 form by loading packages and pairing pkg.Syntax
 // with a pass.TypesInfo from a different load.
 //
@@ -1043,7 +1049,8 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // for ImportBan (== 3) that would drop to 2 if the TypeName fix were reverted.
 //
 // The fixture is loaded with the "archtest_fixture" build tag (single source:
-// RunTypedFixture helper in tools/archtest/fixture.go); without the tag the
+// the Fixture loader in tools/archtest/fixture.go, whose Run dispatch injects
+// the tag); without the tag the
 // fixture is invisible and packages.Load returns an empty *.Syntax slice.
 func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	root := findModuleRoot(t)
@@ -1235,7 +1242,9 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	//   - Form B — same-pkg const Ident (localFixtureTag)     (typeseval.SharedResolver)
 	//   - Form C — BinaryExpr "archtest" + "_fixture"         (typeseval.SharedResolver)
 	//   - Form F — same-file var bound to fixture-tag slice   (typeseval.SharedResolver)
-	//   - Form G — BasicLit "archtest_fixture" direct         (archtest.Typed, new ctor callee)
+	//   - Form G — BasicLit "archtest_fixture" direct         (archtest.Typed, per-member callee)
+	//   - Form H — BasicLit "archtest_fixture" direct         (archtest.Production, per-member callee)
+	//   - Form I — BasicLit "archtest_fixture" direct         (archtest.StandaloneModule, per-member callee)
 	// plus two GREEN-parity negatives (non-fixture-tag var to a loader; fixture
 	// tag to a non-LOADER_SET callee) that MUST produce zero diagnostics. The
 	// same-package Form E (unexported runTypedWithRoot) is asserted separately
@@ -1249,7 +1258,7 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	// fixture source line (anchor comment + 1), so assertions stay stable under
 	// unrelated edits that shift line numbers.
 	const redfixtureRel = "tools/archtest/internal/passfunnelfixture/redfixture.go"
-	crossPkgForms := []string{"A", "B", "C", "F", "G"}
+	crossPkgForms := []string{"A", "B", "C", "F", "G", "H", "I"}
 	var fixtureTagDiags []scanner.Diagnostic
 	for _, tgt := range fixtureTargets {
 		fixtureTagDiags = append(fixtureTagDiags, diagsFixtureTagBypass(tgt)...)

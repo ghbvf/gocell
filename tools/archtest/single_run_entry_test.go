@@ -79,7 +79,7 @@ func TestArchtestSingleRunEntry(t *testing.T) {
 					Line: p.Fset.Position(fn.Name.Pos()).Line,
 					Message: "exported func " + name + " starts with \"Run\" but is not in the " +
 						"archtest single-Run-entry allowlist {Run, RunStandardCellRules}; " +
-						"use Run(t, <Scope>, rule) with the appropriate RunScope constructor " +
+						"use Run(t, <RunScope>, rule) with the appropriate RunScope constructor " +
 						"(AST / Typed / Production / Fixture / StandaloneModule) — " +
 						"ARCHTEST-SINGLE-RUN-ENTRY-01",
 				})

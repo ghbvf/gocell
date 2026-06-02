@@ -108,13 +108,29 @@ type TypedOpts struct {
 // <module>/generated/ excluded), [Fixture] (typed archtest_fixture-tagged
 // packages), or [StandaloneModule] (typed standalone fixture module).
 //
-// The sealing method [RunScope] declares is unexported, so no type outside
-// package archtest can implement it. Business archtest code therefore cannot
-// forge a production or fixture scope, cannot inject build tags into a fixture
-// scope (the only public entry that loads fixture-tagged code is [Fixture],
-// whose body injects the tag), and cannot reconstruct any banned load shape at
-// the call site. This is the type-system Hard upstream of the single-Run
-// funnel; the "single Run entry, no other Run* export" surface property is
+// The sealing method [RunScope] declares is unexported, so no type OUTSIDE
+// package archtest can implement it: an external Cell repo (or any non-archtest
+// package) cannot forge a production/fixture scope, cannot inject a build tag
+// into a fixture scope (the only public entry that loads fixture-tagged code is
+// [Fixture], whose body injects the tag), and cannot reconstruct any banned
+// load shape at the call site. This is the Hard DOWNSTREAM / package-external
+// leg of the seal.
+//
+// In-package, the seal is Medium, NOT Hard: every GoCell archtest rule lives in
+// package archtest (*_test.go), and Go package visibility cannot forbid a
+// same-package file from constructing the unexported scope structs directly
+// (e.g. `Run(t, typedRunScope{opts: TypedOpts{Tags: …}}, rule)`, which would
+// sidestep [Fixture]'s tag injection). That in-package leg is guarded by the
+// RUNSCOPE-CONSTRUCTOR-FUNNEL-01 meta-archtest, which type-aware-bans
+// scope-struct composite literals outside their five sanctioned constructors
+// (it also closes the struct-literal→archtest_fixture bypass that
+// PASS-FUNNEL-FIXTURE-TAG-01, being CallExpr-only, does not catch). The
+// permanent Go-language ceiling (a same-package test CAN construct the struct;
+// Go cannot make that a compile error) matches #851 / #893 / #1282 / #1424; the
+// true-Hard upgrade (scope structs + Run dispatch behind tools/archtest/
+// internal/driver) is a deliberate won't-do tracked at gh #1485.
+//
+// Separately, the "single Run entry, no other Run* export" surface property is
 // guarded by the ARCHTEST-SINGLE-RUN-ENTRY-01 meta-archtest (Medium — Go cannot
 // forbid declaring a new exported func).
 //
@@ -180,6 +196,12 @@ func Typed(opts TypedOpts, patterns []string) RunScope {
 // the typed choice that makes generated/ exclusion non-bypassable: a Pass it
 // yields can never contain a generated/ file, and there is no patterns argument
 // to widen the set.
+//
+// "Production" here means GENERATED-excluded, NOT test-excluded: opts.Tests is
+// still honored, so Production(TypedOpts{Tests: true}) loads each package's
+// test variant (its *_test.go files) just like [Typed] — the "ONLY" qualifier
+// is about the generated/ filter, not about *_test.go. Use Tests: false for a
+// hand-written-non-test walk; Tests: true to also see test files.
 //
 // Use this for rules that reason over hand-written source and must never
 // observe codegen output (false-positive risk + duplicated declarations). It is

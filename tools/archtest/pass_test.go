@@ -177,28 +177,29 @@ func TestRun_FsetIsSharedAcrossFiles(t *testing.T) {
 	Run(t, AST(ModuleScope(root)), rule)
 }
 
-// TestRun_Typed_typedPassShape verifies Run(t, Typed(...)) delivers a Pass
-// with Pkg / TypesInfo / Fset populated and Pass.Typed()=true. Uses the
-// archtest_fixture-gated red fixture (which is a real Go package with
-// type info) as the load target.
-func TestRun_Typed_typedPassShape(t *testing.T) {
+// TestRun_Fixture_typedPassShape verifies a typed scope (loaded here via the
+// Fixture entry, the only loader that can reach the archtest_fixture-gated
+// passfunnelfixture package) delivers a Pass with Pkg / TypesInfo / Fset
+// populated and Pass.Typed()=true. The property is generic across typed scopes;
+// Fixture is the load vehicle because the target package is tag-gated.
+func TestRun_Fixture_typedPassShape(t *testing.T) {
 	var calls int
 	rule := func(p *Pass) []Diagnostic {
 		calls++
 		if !p.Typed() {
-			t.Errorf("Run(t, Typed(...)) Pass: Typed()=false")
+			t.Errorf("Run(t, Fixture(...)) Pass: Typed()=false")
 		}
 		if p.Pkg == nil {
-			t.Errorf("Run(t, Typed(...)) Pass: Pkg nil")
+			t.Errorf("Run(t, Fixture(...)) Pass: Pkg nil")
 		}
 		if p.TypesInfo == nil {
-			t.Errorf("Run(t, Typed(...)) Pass: TypesInfo nil")
+			t.Errorf("Run(t, Fixture(...)) Pass: TypesInfo nil")
 		}
 		if p.Fset == nil {
-			t.Errorf("Run(t, Typed(...)) Pass: Fset nil")
+			t.Errorf("Run(t, Fixture(...)) Pass: Fset nil")
 		}
 		if len(p.Files) == 0 {
-			t.Errorf("Run(t, Typed(...)) Pass: Files empty")
+			t.Errorf("Run(t, Fixture(...)) Pass: Files empty")
 		}
 		return nil
 	}
@@ -207,14 +208,14 @@ func TestRun_Typed_typedPassShape(t *testing.T) {
 		rule)
 
 	if calls == 0 {
-		t.Errorf("Run(t, Typed(...)) invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
+		t.Errorf("Run(t, Fixture(...)) invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
 	}
 }
 
-// TestRun_Typed_dedupesAcrossPackageVariants verifies the F3 contract:
-// loading with Tests=true returns regular + .test packages, but the same
-// *ast.File pointer must not appear in two Pass.Files slices.
-func TestRun_Typed_dedupesAcrossPackageVariants(t *testing.T) {
+// TestRun_Fixture_dedupesAcrossPackageVariants verifies the F3 contract via the
+// Fixture scope: loading with Tests=true returns regular + .test packages, but
+// the same *ast.File pointer must not appear in two Pass.Files slices.
+func TestRun_Fixture_dedupesAcrossPackageVariants(t *testing.T) {
 	seenAcrossPasses := make(map[*ast.File]int)
 	rule := func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -379,11 +380,11 @@ package comments
 	}
 }
 
-// TestRun_Typed_CommentsRegressionLock verifies that the typed path
-// (Run(t, Typed(...))) ALREADY delivers comments (go/packages default ParseFile
-// includes parser.ParseComments). This test should be GREEN from the start; if
-// it fails, the plan fact #2 is falsified and implementation must STOP.
-func TestRun_Typed_CommentsRegressionLock(t *testing.T) {
+// TestRun_Fixture_CommentsRegressionLock verifies that the typed path (exercised
+// here via the Fixture scope) ALREADY delivers comments (go/packages default
+// ParseFile includes parser.ParseComments). This test should be GREEN from the
+// start; if it fails, the plan fact #2 is falsified and implementation must STOP.
+func TestRun_Fixture_CommentsRegressionLock(t *testing.T) {
 	var foundComments bool
 	rule := func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -398,7 +399,7 @@ func TestRun_Typed_CommentsRegressionLock(t *testing.T) {
 		rule)
 
 	if !foundComments {
-		t.Fatalf("STOP: Run(t, Typed(...)) path does NOT deliver comments — plan fact #2 is falsified; do not proceed with implementation")
+		t.Fatalf("STOP: Run(t, Fixture(...)) does NOT deliver comments — plan fact #2 is falsified; do not proceed with implementation")
 	}
 }
 
@@ -440,23 +441,23 @@ func TestRun_AbsResolvesModuleAbsolutePath(t *testing.T) {
 	Run(t, AST(ModuleScope(root)), rule)
 }
 
-// TestRun_Typed_AbsResolvesModuleAbsolutePath mirrors
-// TestRun_AbsResolvesModuleAbsolutePath for the typed path. RED until
-// Pass.Abs is populated in buildTypedPass.
-func TestRun_Typed_AbsResolvesModuleAbsolutePath(t *testing.T) {
+// TestRun_Fixture_AbsResolvesModuleAbsolutePath mirrors
+// TestRun_AbsResolvesModuleAbsolutePath for the typed path, exercised via the
+// Fixture scope. RED until Pass.Abs is populated in buildTypedPass.
+func TestRun_Fixture_AbsResolvesModuleAbsolutePath(t *testing.T) {
 	rule := func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			abs := p.Abs(f)
 			if !filepath.IsAbs(abs) {
-				t.Errorf("Run(t, Typed(...)) Pass.Abs: %q is not absolute", abs)
+				t.Errorf("Run(t, Fixture(...)) Pass.Abs: %q is not absolute", abs)
 			}
 			rel := p.Rel(f)
 			if !strings.HasSuffix(filepath.ToSlash(abs), rel) {
-				t.Errorf("Run(t, Typed(...)) Pass.Abs: %q does not have suffix %q", abs, rel)
+				t.Errorf("Run(t, Fixture(...)) Pass.Abs: %q does not have suffix %q", abs, rel)
 			}
 			fsetAbs := p.Fset.Position(f.Pos()).Filename
 			if abs != fsetAbs {
-				t.Errorf("Run(t, Typed(...)) Pass.Abs: %q != Fset.Position().Filename %q", abs, fsetAbs)
+				t.Errorf("Run(t, Fixture(...)) Pass.Abs: %q != Fset.Position().Filename %q", abs, fsetAbs)
 			}
 		}
 		return nil
@@ -1284,26 +1285,26 @@ func TestRun_StandaloneModule_rejectsEmptyPatterns(t *testing.T) {
 	}
 }
 
-// TestRun_Typed_delegatesToStandaloneModule verifies the regression contract
-// for Run(t, Typed(...)): it still loads the main module correctly after the
-// Stage 1.6 refactor into runTypedWithRoot. Uses the same passfunnelfixture
-// pattern as TestRun_Typed_typedPassShape to ensure the delegation path is
-// covered.
-func TestRun_Typed_delegatesToStandaloneModule(t *testing.T) {
+// TestRun_Fixture_delegatesToRunTypedWithRoot verifies the regression contract
+// for the typed scopes' shared delegation: Fixture (like Typed) routes through
+// runTypedWithRoot and still produces a valid typed Pass after the Stage 1.6
+// refactor. Uses the same passfunnelfixture pattern as
+// TestRun_Fixture_typedPassShape to ensure the delegation path is covered.
+func TestRun_Fixture_delegatesToRunTypedWithRoot(t *testing.T) {
 	var calls int
 	rule := func(p *Pass) []Diagnostic {
 		calls++
 		if !p.Typed() {
-			t.Errorf("Run(t, Typed(...)) (delegation) Pass: Typed()=false")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: Typed()=false")
 		}
 		if p.Pkg == nil {
-			t.Errorf("Run(t, Typed(...)) (delegation) Pass: Pkg nil")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: Pkg nil")
 		}
 		if p.TypesInfo == nil {
-			t.Errorf("Run(t, Typed(...)) (delegation) Pass: TypesInfo nil")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: TypesInfo nil")
 		}
 		if len(p.Files) == 0 {
-			t.Errorf("Run(t, Typed(...)) (delegation) Pass: Files empty")
+			t.Errorf("Run(t, Fixture(...)) (delegation) Pass: Files empty")
 		}
 		return nil
 	}
@@ -1312,7 +1313,7 @@ func TestRun_Typed_delegatesToStandaloneModule(t *testing.T) {
 		rule)
 
 	if calls == 0 {
-		t.Errorf("Run(t, Typed(...)) (delegation) invoked rule 0 times; expected ≥ 1")
+		t.Errorf("Run(t, Fixture(...)) (delegation) invoked rule 0 times; expected ≥ 1")
 	}
 }
 
@@ -1445,17 +1446,17 @@ func TestRun_Production_matchesProductionResolverSet(t *testing.T) {
 
 	for path := range want {
 		if !got[path] {
-			t.Errorf("RunTypedProduction missing production package %q", path)
+			t.Errorf("Run(t, Production(...)) missing production package %q", path)
 		}
 	}
 	for path := range got {
 		if !want[path] {
-			t.Errorf("RunTypedProduction delivered unexpected package %q "+
+			t.Errorf("Run(t, Production(...)) delivered unexpected package %q "+
 				"(not in LoadProductionPackages().Production())", path)
 		}
 	}
 	if len(got) == 0 {
-		t.Errorf("RunTypedProduction delivered zero packages")
+		t.Errorf("Run(t, Production(...)) delivered zero packages")
 	}
 }
 
