@@ -267,21 +267,23 @@ func TestAuditLedgerStore_HashFormatConstraint(t *testing.T) {
 
 	// insertRow inserts directly (bypassing the store) so we exercise the DB
 	// constraint in isolation. Distinct namespaces avoid uq_audit_namespace_seq
-	// collisions across cases. Five Principal/Correlation/OccurredAt columns
-	// (subject_id / tenant_id / session_id / correlation_id / occurred_at) are
-	// passed as empty strings + epoch — these are NOT NULL with no DEFAULT in
-	// 043_audit_entries_v2.sql, but the test exercises ck_audit_hash_format
-	// in isolation so we supply zero values rather than business data.
+	// collisions across cases. Six Principal/Correlation/OccurredAt columns
+	// (subject_id / tenant_id / session_id / correlation_id / trace_id /
+	// occurred_at) are passed as empty strings + epoch — these are NOT NULL with
+	// no DEFAULT (correlation_id/subject_id/etc. in 043_audit_entries_v2.sql,
+	// trace_id in 047_audit_entries_trace_id.sql), but the test exercises
+	// ck_audit_hash_format in isolation so we supply zero values rather than
+	// business data.
 	insertRow := func(ns string, seq int64, prevHash, hash string) error {
 		// event_id is gen_random_uuid()::text so the 021 (namespace, event_id)
 		// UNIQUE index never collides — this test isolates ck_audit_hash_format.
 		_, err := p.DB().Exec(ctx,
 			`INSERT INTO audit_entries
 			   (id, namespace, seq_no, event_id, event_type, actor_id,
-			    subject_id, tenant_id, session_id, correlation_id, occurred_at,
+			    subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
 			    timestamp, payload, prev_hash, hash)
 			 VALUES (gen_random_uuid(), $1, $2, gen_random_uuid()::text, 'type', 'actor',
-			         '', '', '', '', '1970-01-01 00:00:00+00'::timestamptz,
+			         '', '', '', '', '', '1970-01-01 00:00:00+00'::timestamptz,
 			         now(), '\x7b7d'::bytea, $3, $4)`,
 			ns, seq, prevHash, hash)
 		return err

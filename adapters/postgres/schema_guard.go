@@ -298,10 +298,14 @@ type expectedFK struct {
 }
 
 // expectedIndex describes a named index (unique or non-unique).
+// Columns lists the key column names in index key order (DDL order).
+// For expression columns (e.g. functional indexes) use the sentinel "(expr)".
+// INCLUDE columns are not listed here — only key columns.
 type expectedIndex struct {
-	Table  string
-	Name   string
-	Unique bool
+	Table   string
+	Name    string
+	Unique  bool
+	Columns []string
 }
 
 // expectedTrigger describes a trigger with its enabled state and function.
@@ -529,34 +533,48 @@ var expectedDefaults = []expectedDefault{
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
+// Columns is the DDL key-column order sourced from the migration SQL file
+// (not from DB catalog output — that would be tautological).
+// Partial index WHERE predicates are NOT listed in Columns (predicate columns
+// are not key columns). Expression indexes use "(expr)" as a sentinel for any
+// expression-valued key position.
 var expectedIndexes = []expectedIndex{
-	// users
-	{Table: "users", Name: "idx_users_username", Unique: true},
-	{Table: "users", Name: "idx_users_email", Unique: true},
-	{Table: "users", Name: "idx_users_status", Unique: false},
-	// sessions
-	{Table: "sessions", Name: "idx_sessions_jti", Unique: true},
-	{Table: "sessions", Name: "idx_sessions_subject_active", Unique: false},
-	{Table: "sessions", Name: "idx_sessions_expires", Unique: false},
+	// users (017_users.sql)
+	{Table: "users", Name: "idx_users_username", Unique: true, Columns: []string{"username"}},
+	{Table: "users", Name: "idx_users_email", Unique: true, Columns: []string{"email"}},
+	{Table: "users", Name: "idx_users_status", Unique: false, Columns: []string{"status"}},
+	// sessions (018_sessions.sql)
+	{Table: "sessions", Name: "idx_sessions_jti", Unique: true, Columns: []string{"jti"}},
+	// partial index: WHERE revoked_at IS NULL — key column only
+	{Table: "sessions", Name: "idx_sessions_subject_active", Unique: false, Columns: []string{"subject_id"}},
+	{Table: "sessions", Name: "idx_sessions_expires", Unique: false, Columns: []string{"expires_at"}},
 	// roles: no additional non-PK indexes in migration 019
-	// role_assignments
-	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false},
+	// role_assignments (019_roles.sql)
+	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false, Columns: []string{"role_id"}},
 	// audit_entries (020_audit_ledger.sql + 021 event_id unique;
 	// 043_audit_entries_v2.sql rebuilds the table preserving index names;
 	// 048 adds idx_audit_namespace_trace_id CONCURRENTLY for TraceID filter)
-	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
-	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
-	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
-	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true},
-	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false}, // 048 NEW
+	// uq_audit_namespace_seq is a UNIQUE constraint (inline DDL) — PG creates
+	// an index for it; key columns mirror CONSTRAINT ... UNIQUE (namespace, seq_no).
+	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true, Columns: []string{"namespace", "seq_no"}},
+	// idx_audit_namespace_ts_id: (namespace, timestamp DESC, id ASC)
+	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false, Columns: []string{"namespace", "timestamp", "id"}},
+	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false, Columns: []string{"namespace", "event_type"}},
+	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true, Columns: []string{"namespace", "event_id"}},
+	// 048_audit_entries_trace_id_index.sql: (namespace, trace_id) — leading column matters for filter pushdown
+	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false, Columns: []string{"namespace", "trace_id"}},
 	// devices / commands (029, 030, 031) — B2.B.
-	{Table: "devices", Name: "idx_devices_status", Unique: false},
-	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false},
-	{Table: "commands", Name: "idx_commands_active_lease", Unique: false},
-	{Table: "commands", Name: "idx_commands_device_active", Unique: false},
-	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true},
+	{Table: "devices", Name: "idx_devices_status", Unique: false, Columns: []string{"status"}},
+	// 030_commands.sql partial indexes — Columns lists only key columns, not WHERE predicate columns
+	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false, Columns: []string{"device_id", "created_at"}},
+	{Table: "commands", Name: "idx_commands_active_lease", Unique: false, Columns: []string{"lease_expiry"}},
+	{Table: "commands", Name: "idx_commands_device_active", Unique: false, Columns: []string{"device_id", "status", "created_at"}},
+	// 031_commands_idempotency_unique.sql: expression index on (metadata->>'_idempotency_key')
+	// The key position is an expression; pg_index.indkey = 0 for expression columns,
+	// pg_attribute.attname is NULL. The sentinel "(expr)" marks this position.
+	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: []string{"(expr)"}},
 	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
-	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false},
+	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false, Columns: []string{"started_at", "id"}},
 }
 
 // expectedFKs is the foreign key constraint registry. ON DELETE action uses
@@ -870,46 +888,88 @@ func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 // Dimension helper: indexes (unique + non-unique)
 // ---------------------------------------------------------------------------
 
-// verifyIndexes checks both unique and non-unique index presence.
+// verifyIndexes checks unique/non-unique index presence, uniqueness flag, and
+// key-column order for every entry in expectedIndexes.
 func verifyIndexes(ctx context.Context, pool *Pool) error {
+	// Query returns indisunique and the ordered key-column names.
+	// unnest(i.indkey) WITH ORDINALITY expands the key-column attnum array;
+	// LEFT JOIN pg_attribute maps attnum → attname (NULL for expression columns).
+	// Only key columns are returned: ord <= i.indnkeyatts excludes any INCLUDE
+	// columns that may appear at the end of indkey.
+	// Expression columns have indkey[n] = 0 and attname IS NULL; COALESCE maps
+	// them to the sentinel "(expr)".
 	const q = `
-	SELECT i.indisunique
+	SELECT i.indisunique,
+	       array_agg(
+	           COALESCE(a.attname, '(expr)')
+	           ORDER BY ord
+	       ) AS key_columns
 	  FROM pg_index i
 	  JOIN pg_class ci ON ci.oid = i.indexrelid
 	  JOIN pg_class ct ON ct.oid = i.indrelid
 	  JOIN pg_namespace n ON n.oid = ct.relnamespace
+	  JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS u(attnum, ord)
+	            ON u.ord <= i.indnkeyatts
+	  LEFT JOIN pg_attribute a
+	            ON a.attrelid = i.indrelid AND a.attnum = u.attnum AND a.attnum > 0
 	 WHERE n.nspname = current_schema()
 	   AND ct.relname = $1
 	   AND ci.relname = $2
-	   AND NOT i.indisprimary`
+	   AND NOT i.indisprimary
+	 GROUP BY i.indisunique, i.indnkeyatts`
 
 	for _, idx := range expectedIndexes {
-		var gotUnique bool
-		err := pool.inner.QueryRow(ctx, q, idx.Table, idx.Name).Scan(&gotUnique)
-		if err != nil {
-			return errcode.New(
-				errcode.KindInternal, ErrAdapterPGSchemaShape,
-				"schema_guard: expected index missing",
-				errcode.WithDetails(
-					errcode.PublicString("dimension", "index"),
-					errcode.PublicString("table", idx.Table),
-					errcode.PublicString("index", idx.Name),
-				),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(queryErrFmt, err))),
-			)
+		if err := verifyOneIndex(ctx, pool, idx, q); err != nil {
+			return err
 		}
-		if gotUnique != idx.Unique {
-			return errcode.New(
-				errcode.KindInternal, ErrAdapterPGSchemaShape,
-				"schema_guard: index uniqueness mismatch",
-				errcode.WithDetails(
-					errcode.PublicString("dimension", "index_unique"),
-					errcode.PublicString("table", idx.Table),
-					errcode.PublicString("index", idx.Name),
-				),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got unique=%v want %v", gotUnique, idx.Unique))),
-			)
-		}
+	}
+	return nil
+}
+
+// verifyOneIndex verifies a single expectedIndex entry against the pg catalog.
+// Extracted to keep verifyIndexes below the cognitive complexity limit.
+func verifyOneIndex(ctx context.Context, pool *Pool, idx expectedIndex, q string) error {
+	var gotUnique bool
+	var gotColumns []string
+	err := pool.inner.QueryRow(ctx, q, idx.Table, idx.Name).Scan(&gotUnique, &gotColumns)
+	if err != nil {
+		return errcode.New(
+			errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: expected index missing",
+			errcode.WithDetails(
+				errcode.PublicString("dimension", "index"),
+				errcode.PublicString("table", idx.Table),
+				errcode.PublicString("index", idx.Name),
+			),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(queryErrFmt, err))),
+		)
+	}
+	if gotUnique != idx.Unique {
+		return errcode.New(
+			errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: index uniqueness mismatch",
+			errcode.WithDetails(
+				errcode.PublicString("dimension", "index_unique"),
+				errcode.PublicString("table", idx.Table),
+				errcode.PublicString("index", idx.Name),
+			),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got unique=%v want %v", gotUnique, idx.Unique))),
+		)
+	}
+	if !slices.Equal(gotColumns, idx.Columns) {
+		return errcode.New(
+			errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: index columns mismatch",
+			errcode.WithDetails(
+				errcode.PublicString("dimension", "index_columns"),
+				errcode.PublicString("table", idx.Table),
+				errcode.PublicString("index", idx.Name),
+			),
+			errcode.WithInternal(
+				errcode.InternalAttr("got", strings.Join(gotColumns, ",")),
+				errcode.InternalAttr("want", strings.Join(idx.Columns, ",")),
+			),
+		)
 	}
 	return nil
 }

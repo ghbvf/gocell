@@ -18,35 +18,43 @@
 //     correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))
 //     and obs = entry.Observability()
 //
-// This is the sole sanctioned injection path (issue #1048 Batch F).
-// The outbox.Entry seal (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01) and the
-// outbox observability-envelope construction (kernel/outbox) guarantee
-// that trace_id and correlation_id flow into the audit record from a
-// trusted provenance (the OTel trace span and correlation id active at
-// producer time), not from caller-supplied data. Allowing any other code
-// to write these fields would let any audit-event producer fabricate the
-// observability context that correlates the audit record.
+// This is the sole sanctioned WRITE site (issue #1048 Batch F). Scope this
+// rule precisely: it enforces the write LOCATION (only the appender + test
+// conformance may write ledger.Entry.TraceID / .CorrelationID), NOT the
+// value's source. Within the appender, the written value actually being the
+// obs-envelope value (corr.TraceID() / corr.CorrelationID()) rests on two
+// non-archtest facts: (a) the appender is a single, small, reviewed injection
+// site, and (b) the anti-vacuity check below fails CI if that write ever
+// disappears. The trustworthiness of the obs-envelope value itself is the
+// Hard, inherited part (below). Allowing any OTHER code to write these fields
+// would let an audit-event producer fabricate the observability context that
+// correlates the audit record — that is exactly what the location allowlist
+// forecloses.
 //
-// # Why upstream sealing is inherited, not separate
+// # Why the upstream guarantee is inherited, not separate
 //
-// The upstream provenance chain for TraceID and CorrelationID is already
-// sealed by two complementary mechanisms:
+// The obs-envelope values the appender writes are trustworthy because of one
+// Hard mechanism — plus one value-object wrapper that is NOT itself a
+// provenance gate (F6):
 //
 //  1. kernel/outbox.Entry is fully unexported (sealed construction,
-//     OUTBOX-ENTRY-SEALED-CONSTRUCTION-01): no business code can
-//     construct or populate outbox.Entry.observability.TraceID or
-//     outbox.Entry.observability.CorrelationID directly — the only
-//     write path is OTel span extraction in the tracing adapter.
-//  2. kernel/observability/correlation.Correlation is similarly sealed:
-//     the CorrelationID and TraceID in the outbox observability envelope
-//     come from the http/grpc middleware layer, not from business code.
+//     OUTBOX-ENTRY-SEALED-CONSTRUCTION-01): no business code can construct or
+//     populate outbox.Entry.observability.TraceID or .CorrelationID directly —
+//     the only write path is OTel span extraction in the tracing adapter.
+//     This is the Hard upstream guarantee this rule inherits.
+//  2. kernel/observability/correlation.Correlation has unexported fields, so
+//     external code cannot build one via a struct literal — but correlation.New
+//     is a PUBLIC general constructor. The field seal prevents literal
+//     construction; it does NOT gate provenance. Provenance comes ONLY from
+//     fact 1: the appender feeds New the values it read from the sealed
+//     entry.Observability() envelope. Do NOT cite the Correlation seal as a
+//     provenance guarantee.
 //
-// This archtest therefore does NOT need a separate upstream funnel lock
-// for ledger.Entry.TraceID or ledger.Entry.CorrelationID — it INHERITS
-// the upstream Hard guarantee from the sealed envelope. What this test
-// adds is the downstream Medium guard: even if some future code tried to
-// bypass the envelope and write these fields directly (via a composite
-// literal or assignment), this archtest catches it in CI before it
+// This archtest therefore does NOT add a separate upstream funnel lock for
+// ledger.Entry.TraceID / .CorrelationID — it inherits the Hard guarantee from
+// the sealed outbox.Entry envelope (fact 1) and adds the downstream Medium
+// location guard: if some future code wrote these fields outside the appender
+// (composite literal or assignment), this archtest catches it in CI before it
 // reaches production.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
@@ -62,12 +70,13 @@
 //   - Upstream Hard (INHERITED, NOT duplicated here): The outbox.Entry
 //     sealed construction (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01) and the
 //     sealed observability envelope make it structurally impossible for
-//     business code to inject fabricated TraceID or CorrelationID into an
-//     outbox.Entry in the first place. The sealed provenance chain means
-//     that ledger.Entry.TraceID / ledger.Entry.CorrelationID can ONLY
-//     receive values that the appender extracted from a trusted
-//     outbox.Entry.Observability() — no upstream funnel lock is needed on
-//     top of that.
+//     business code to inject a fabricated TraceID or CorrelationID into an
+//     outbox.Entry in the first place — so entry.Observability() is a trusted
+//     source. This rule does not machine-verify that the appender writes that
+//     trusted value (the downstream guard is location-only, see "# What this
+//     guards"); it relies on the single reviewed appender site + the
+//     anti-vacuity check for that last hop. No upstream funnel lock is added
+//     on top of the inherited envelope seal.
 //   - Permanent ceiling rationale: Go package visibility cannot express
 //     "only cells/auditcore/internal/appender may write these exported
 //     struct fields". A type-system Hard upstream lock would require
@@ -146,16 +155,18 @@
 //     Today no such helper exists (verified by anti-vacuity assertion on
 //     the appender allowlist file).
 //
-//  4. Dot-import of the ledger package
-//     (import . "github.com/ghbvf/gocell/runtime/audit/ledger"):
-//     ResolvePackageRef cannot resolve a bare "Entry" ident to its
-//     package path for the composite literal type check. However, the
-//     type-info check on p.TypesInfo.Types[lit] uses the canonical
-//     *types.Named path regardless of import style — a dot-imported
-//     struct literal still has the correct *types.Named identity. The
-//     assignment LHS scan via info.Selections is similarly alias-proof.
-//     Dot-import of ledger is absent today
-//     (TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent).
+// # Handled — NOT a blind spot (F10: corrects a prior misclassification)
+//
+//   - Dot-import of the ledger package
+//     (import . "github.com/ghbvf/gocell/runtime/audit/ledger"): a bare "Entry"
+//     ident is unresolvable by name-based ResolvePackageRef, but this scanner
+//     never relies on name resolution — the composite-literal check reads
+//     p.TypesInfo.Types[lit].Type and the assignment check reads
+//     info.Selections, both of which carry the canonical *types.Named identity
+//     regardless of import style. A dot-imported ledger.Entry write is
+//     therefore still detected. Dot-import of ledger is also absent today, and
+//     TestAuditTraceIDWriteCaller01_DotImportAbsent keeps it absent as HYGIENE
+//     (uniform AST shape), not as a correctness backstop.
 package archtest
 
 import (
@@ -174,6 +185,11 @@ const (
 	ledgerPkgPath   = PlatformModulePath + "/runtime/audit/ledger"
 	ledgerEntryName = "Entry"
 )
+
+// auditTraceIDRuleID is the single source for this rule's ID. It is used in the
+// Report call and every diagnostic / assertion message so the string literal is
+// declared once (F9 — was repeated across ~7 sites).
+const auditTraceIDRuleID = "AUDIT-TRACE-ID-WRITE-CALLER-01"
 
 // ledgerObservabilityFields is the closed set of ledger.Entry observability-id
 // fields guarded by this rule. Both TraceID and CorrelationID flow from the
@@ -269,9 +285,17 @@ func TestAuditTraceIDWriteCaller01(t *testing.T) {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if isObservabilityIDWriteAllowed(rel) {
-				// Observe injection-allowlist files so anti-vacuity can verify them.
+				// F2: mark an injection-allowlist file observed ONLY when it
+				// actually writes a guarded field — not merely because it loaded.
+				// If a refactor drops the write (e.g. the appender stops setting
+				// TraceID), the anti-vacuity check below then surfaces the entry
+				// as STALE instead of silently reserving a dead bypass slot. The
+				// scanners' diagnostics are consumed here purely as a presence
+				// count, never reported (these files are sanctioned by design).
 				if _, inAllowlist := observabilityIDInjectionAllowlist[rel]; inAllowlist {
-					observed[rel] = struct{}{}
+					if obsIDWriteCount(p, file, rel) > 0 {
+						observed[rel] = struct{}{}
+					}
 				}
 				continue
 			}
@@ -301,7 +325,7 @@ func TestAuditTraceIDWriteCaller01(t *testing.T) {
 		if _, seen := observed[f]; !seen {
 			diags = append(diags, Diagnostic{
 				Message: fmt.Sprintf(
-					"AUDIT-TRACE-ID-WRITE-CALLER-01: allowlist entry %q is STALE — no "+
+					auditTraceIDRuleID+": allowlist entry %q is STALE — no "+
 						"production write of ledger.Entry.TraceID or .CorrelationID "+
 						"observed in that file. Either the scanner regressed or the write "+
 						"was removed/refactored. Drop the stale entry so it cannot become "+
@@ -312,55 +336,118 @@ func TestAuditTraceIDWriteCaller01(t *testing.T) {
 		}
 	}
 
-	Report(t, "AUDIT-TRACE-ID-WRITE-CALLER-01", diags)
+	Report(t, auditTraceIDRuleID, diags)
+}
+
+// obsIDWriteCount returns the number of guarded ledger.Entry observability-id
+// field writes (composite literal + assignment) detected in file. The
+// anti-vacuity check (F2) uses it to confirm an injection-allowlist file is
+// LIVE — the scanners' diagnostics are consumed purely as a presence count
+// here, never reported (allowlist files are sanctioned by design).
+func obsIDWriteCount(p *Pass, file *ast.File, rel string) int {
+	return len(scanObsIDCompositeLitWrites(p, file, rel)) +
+		len(scanObsIDAssignWrites(p, file, rel))
+}
+
+// ledgerLitGuardedWrite is one guarded observability-id field set by a
+// ledger.Entry composite literal, with the source position of its element.
+type ledgerLitGuardedWrite struct {
+	field string
+	pos   token.Pos
+}
+
+// ledgerStructType returns the *types.Struct underlying lit's resolved type, or
+// nil when type info is unavailable. Used to map positional composite-literal
+// elements to struct fields by declaration index (F3).
+func ledgerStructType(info *types.Info, lit *ast.CompositeLit) *types.Struct {
+	if info == nil {
+		return nil
+	}
+	tv, ok := info.Types[lit]
+	if !ok {
+		return nil
+	}
+	st, ok := tv.Type.Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+	return st
+}
+
+// guardedWritesInLedgerLit returns every guarded observability-id field set by a
+// ledger.Entry composite literal, covering BOTH element forms:
+//   - keyed:      ledger.Entry{TraceID: v} — matched by KeyValueExpr key name.
+//   - positional: ledger.Entry{a, b, ..., v, ...} (F3) — each element index is
+//     mapped to the struct field at that index via the resolved *types.Struct,
+//     so an unkeyed literal can no longer slip past the keyed-only scan. (Go
+//     forbids mixing keyed and positional elements, so the first element's form
+//     determines the whole literal.)
+func guardedWritesInLedgerLit(info *types.Info, lit *ast.CompositeLit) []ledgerLitGuardedWrite {
+	var out []ledgerLitGuardedWrite
+	keyed := len(lit.Elts) > 0
+	if keyed {
+		_, keyed = lit.Elts[0].(*ast.KeyValueExpr)
+	}
+	if keyed {
+		// EachInChildren iterates the CompositeLit's direct elements without a
+		// raw for-range + type assertion over []ast.Expr
+		// (SCANNER-FRAMEWORK-USAGE-01 Path B).
+		EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
+			keyIdent, ok := kv.Key.(*ast.Ident)
+			if !ok || !isGuardedObsIDField(keyIdent.Name) {
+				return
+			}
+			out = append(out, ledgerLitGuardedWrite{field: keyIdent.Name, pos: kv.Pos()})
+		})
+		return out
+	}
+	// Positional form. The for-range over []ast.Expr carries NO type assertion
+	// in its body (only elt.Pos(), an interface method), so it is the allowed
+	// "_no_assertion" shape, not SCANNER-FRAMEWORK-USAGE-01 Path B.
+	st := ledgerStructType(info, lit)
+	if st == nil {
+		return out
+	}
+	for i, elt := range lit.Elts {
+		if i >= st.NumFields() {
+			break
+		}
+		if isGuardedObsIDField(st.Field(i).Name()) {
+			out = append(out, ledgerLitGuardedWrite{field: st.Field(i).Name(), pos: elt.Pos()})
+		}
+	}
+	return out
 }
 
 // scanObsIDCompositeLitWrites detects composite literal writes of any guarded
 // ledger.Entry observability-id field (TraceID or CorrelationID). It walks
-// ast.CompositeLit nodes and checks whether:
-//  1. The literal's resolved go/types type is ledger.Entry (or *ledger.Entry
-//     — the CompositeLit itself is typed as ledger.Entry; the enclosing
-//     &-unary gives *ledger.Entry). The type check uses
-//     p.TypesInfo.Types[lit].Type to get the canonical named type path,
-//     immune to import aliases and dot-imports.
-//  2. Any KeyValueExpr in Elts has Key in ledgerObservabilityFields with a
-//     non-empty value.
+// ast.CompositeLit nodes whose resolved go/types type is ledger.Entry (the
+// type check uses p.TypesInfo.Types[lit].Type — the canonical named type path,
+// immune to import aliases and dot-imports) and reports every guarded field set
+// via guardedWritesInLedgerLit (keyed or positional). The scanner only runs on
+// non-allowlisted files, so any guarded element present is a violation.
 func scanObsIDCompositeLitWrites(p *Pass, file *ast.File, rel string) []Diagnostic {
 	var d []Diagnostic
 	EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
 		if !isLedgerEntryType(p.TypesInfo, lit) {
 			return
 		}
-		// Use EachInChildren to iterate the CompositeLit's direct elements
-		// (its Elts field) without a raw for-range + type assertion over
-		// []ast.Expr (SCANNER-FRAMEWORK-USAGE-01 Path B).
-		EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
-			keyIdent, ok := kv.Key.(*ast.Ident)
-			if !ok {
-				return
-			}
-			if !isGuardedObsIDField(keyIdent.Name) {
-				return
-			}
-			// A composite literal key for a guarded field is present. Any
-			// non-zero value expression is a violation (the scanner only runs on
-			// non-allowlisted files).
-			pos := p.Fset.Position(kv.Pos())
+		for _, w := range guardedWritesInLedgerLit(p.TypesInfo, lit) {
+			pos := p.Fset.Position(w.pos)
 			d = append(d, Diagnostic{
 				Rel:  rel,
 				Line: pos.Line,
 				Message: fmt.Sprintf(
-					"AUDIT-TRACE-ID-WRITE-CALLER-01: composite literal write of "+
-						"ledger.Entry.%s at %s:%d from %q is outside the sanctioned "+
+					auditTraceIDRuleID+": composite literal write of "+
+						"ledger.Entry.%s at %s:%d is outside the sanctioned "+
 						"injection allowlist. TraceID and CorrelationID must flow "+
 						"exclusively from the outbox observability envelope via "+
-						"cells/auditcore/internal/appender "+
-						"(AUDIT-TRACE-ID-WRITE-CALLER-01). To add a new sanctioned site, "+
-						"add it to observabilityIDInjectionAllowlist with a rationale.",
-					keyIdent.Name, rel, pos.Line, rel,
+						"cells/auditcore/internal/appender. To add a new sanctioned "+
+						"site, add it to observabilityIDInjectionAllowlist with a rationale.",
+					w.field, rel, pos.Line,
 				),
 			})
-		})
+		}
 	})
 	return d
 }
@@ -393,7 +480,7 @@ func scanObsIDAssignWrites(p *Pass, file *ast.File, rel string) []Diagnostic {
 				Rel:  rel,
 				Line: pos.Line,
 				Message: fmt.Sprintf(
-					"AUDIT-TRACE-ID-WRITE-CALLER-01: assignment write of "+
+					auditTraceIDRuleID+": assignment write of "+
 						"ledger.Entry.%s at %s:%d from %q is outside the sanctioned "+
 						"injection allowlist. TraceID and CorrelationID must flow "+
 						"exclusively from the outbox observability envelope via "+
@@ -491,17 +578,21 @@ func isLedgerEntryNamedType(t types.Type) bool {
 // ---------------------------------------------------------------------------
 
 // TestAuditTraceIDWriteCaller01_RedFixture verifies that the scanner fires
-// against both deliberate violations in audittraceididfixture:
-//  1. badCompositeLit — composite literal write of ledger.Entry.TraceID.
-//  2. badAssignment   — direct assignment write of ledger.Entry.TraceID.
+// against every deliberate violation in audittraceidfixture, covering BOTH
+// guarded fields (F4) AND both composite-literal forms (F3):
+//  1. badCompositeLit          — KEYED composite literal writes of TraceID AND
+//     CorrelationID (two violations).
+//  2. badPositionalLit         — POSITIONAL composite literal; CorrelationID
+//     (idx 8) and TraceID (idx 9) positions (two violations, F3).
+//  3. badAssignment            — direct assignment write of TraceID.
+//  4. badAssignmentCorrelation — direct assignment write of CorrelationID.
 //
-// The scanner must report exactly 2 violations (one per write shape). This
-// also validates the F6 granularity requirement: a value-assignment inside
-// a file that would otherwise only contain &e.TraceID scan-address takes
-// IS caught — confirming that the tightened reconstruction-file handling
-// works correctly. The count is exact (not ≥ 2) so that a regression that
-// wrongly flags addressTake (blind-spot #1) would produce found==3 and fail
-// the assertion, catching over-detection as well as under-detection.
+// The scanner must report exactly 6 violations (4 composite + 2 assignment).
+// This also validates the reconstruction-granularity requirement: a
+// value-assignment inside a file that would otherwise only contain &e.Field
+// scan-address takes IS caught. The count is exact (not ≥ 6) so that a
+// regression which wrongly flags addressTake (blind-spot #1) would produce
+// found==7 and fail, catching over-detection as well as under-detection.
 func TestAuditTraceIDWriteCaller01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -510,7 +601,7 @@ func TestAuditTraceIDWriteCaller01_RedFixture(t *testing.T) {
 
 	var found int
 	_ = Run(t, Fixture(FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/audittraceididfixture"}),
+		[]string{"./tools/archtest/internal/audittraceidfixture"}),
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() {
 				return nil
@@ -522,14 +613,15 @@ func TestAuditTraceIDWriteCaller01_RedFixture(t *testing.T) {
 			}
 			return nil
 		})
-	assert.Equal(t, 2, found,
-		"AUDIT-TRACE-ID-WRITE-CALLER-01 RED fixture self-check FAILED: "+
-			"expected exactly 2 violations from audittraceididfixture "+
-			"(badCompositeLit + badAssignment); addressTake (blind-spot #1) must "+
-			"produce 0. Got %d — if found==1 the scanner missed a violation shape; "+
-			"if found==3 the scanner wrongly flagged addressTake (regression in "+
-			"blind-spot #1 handling). Check isLedgerEntryType / "+
-			"scanObsIDCompositeLitWrites / scanObsIDAssignWrites.",
+	assert.Equal(t, 6, found,
+		auditTraceIDRuleID+" RED fixture self-check FAILED: "+
+			"expected exactly 6 violations from audittraceidfixture "+
+			"(badCompositeLit keyed ×2, badPositionalLit positional ×2, "+
+			"badAssignment, badAssignmentCorrelation); addressTake (blind-spot #1) "+
+			"must produce 0. Got %d — if found<6 the scanner missed a violation "+
+			"shape (e.g. positional/F3 regression); if found==7 the scanner wrongly "+
+			"flagged addressTake (regression in blind-spot #1 handling). Check "+
+			"isLedgerEntryType / scanObsIDCompositeLitWrites / scanObsIDAssignWrites.",
 		found)
 }
 
@@ -551,7 +643,7 @@ func TestAuditTraceIDWriteCaller01_ReconstructionFileValueWriteFires(t *testing.
 
 	var assignFound int
 	_ = Run(t, Fixture(FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/audittraceididfixture"}),
+		[]string{"./tools/archtest/internal/audittraceidfixture"}),
 		func(p *Pass) []Diagnostic {
 			if !p.Typed() {
 				return nil
@@ -563,7 +655,7 @@ func TestAuditTraceIDWriteCaller01_ReconstructionFileValueWriteFires(t *testing.
 			return nil
 		})
 	assert.GreaterOrEqual(t, assignFound, 1,
-		"AUDIT-TRACE-ID-WRITE-CALLER-01 reconstruction granularity check FAILED: "+
+		auditTraceIDRuleID+" reconstruction granularity check FAILED: "+
 			"expected the assignment scanner to fire ≥ 1 time on the fixture "+
 			"(simulating a value-assignment inside a postgres-reconstruction-like file), "+
 			"got 0. Reconstruction files must NOT suppress value-write detection; "+
@@ -593,7 +685,7 @@ func TestAuditTraceIDWriteCaller01_BlindSpot_ReflectNotPresent(t *testing.T) {
 	}
 	sort.Strings(hits)
 	assert.Empty(t, hits,
-		"AUDIT-TRACE-ID-WRITE-CALLER-01 blind-spot #2 check: found "+
+		auditTraceIDRuleID+" blind-spot #2 check: found "+
 			"reflect.Value.FieldByName(\"TraceID\" or \"CorrelationID\") calls in "+
 			"production code. These bypass the SelectorExpr scanner and must be "+
 			"reviewed. Add the files to observabilityIDInjectionAllowlist or "+
@@ -649,12 +741,19 @@ func scanFieldByNameCallsAudit(p *Pass, file *ast.File, rel, fieldName string) [
 	return hits
 }
 
-// TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent asserts that
-// no production file in cells/, runtime/, adapters/, or cmd/ dot-imports
-// the ledger package. A dot-import changes the composite literal type-check
-// path (the type literal shape is different) and is documented as blind spot
-// #4. Absence today is verified.
-func TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent(t *testing.T) {
+// TestAuditTraceIDWriteCaller01_DotImportAbsent asserts that no production file
+// in cells/, runtime/, adapters/, or cmd/ dot-imports the ledger package.
+//
+// F10: a dot-import is NOT a scanner blind spot — both the composite-literal
+// check (p.TypesInfo.Types[lit].Type) and the assignment check
+// (info.Selections) resolve the canonical *types.Named identity regardless of
+// import style, so a dot-imported ledger.Entry write is still detected (see
+// package godoc "blind spot #4", which documents exactly this). This absence
+// assertion is therefore HYGIENE, not a correctness backstop: dot-imports are
+// avoided project-wide for readability, and keeping the ledger package
+// non-dot-imported keeps the AST shape uniform with the keyed/positional cases
+// the scanner is exercised against.
+func TestAuditTraceIDWriteCaller01_DotImportAbsent(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
@@ -662,11 +761,10 @@ func TestAuditTraceIDWriteCaller01_BlindSpot_DotImportNotPresent(t *testing.T) {
 
 	hits := collectDotImportHitsAudit(t, ledgerPkgPath)
 	assert.Empty(t, hits,
-		"AUDIT-TRACE-ID-WRITE-CALLER-01 blind-spot #4 check: found dot-import of "+
-			"runtime/audit/ledger in production code. Dot-imports change the AST "+
-			"shape for composite literal type-checking and are a documented scanner "+
-			"blind spot. Remove the dot-import or add an explicit type-aware check "+
-			"for dot-import form.")
+		auditTraceIDRuleID+" dot-import hygiene check: found dot-import of "+
+			"runtime/audit/ledger in production code. The scanner still resolves "+
+			"the canonical type via go/types (not a correctness gap), but "+
+			"dot-imports are avoided project-wide — remove it.")
 }
 
 // collectDotImportHitsAudit scans cells/, runtime/, adapters/, and cmd/ for
