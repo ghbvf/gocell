@@ -42,6 +42,27 @@ import (
 // gh #1466. This replaced the prior hardcoded-name
 // TestVaultIntegrationContainerFailuresFailFast (Soft: a new vault container
 // helper escaped the no-skip check).
+//
+// Detector blind spots (ai-robust 盲区自检, asserted absent by
+// detectorBlindSpotFindings below): the selector-name + import-alias detection
+// cannot see these AST shapes, so each would silently bypass the no-skip scan
+// rather than fail it. The reverse self-check asserts the vault test AST
+// contains none of them today; a future occurrence fails this test:
+//   - dot-import of a testcontainers core/module package — importSelectorName
+//     returns "" for ".", blanking testcontainerAliasesFor's alias map, so a
+//     bare Run(...) is invisible to isTestcontainerRun and the whole func is
+//     never counted as a starter (its skips never scanned).
+//   - a testcontainer constructor (modules .Run / core .GenericContainer) taken
+//     as a function value (e.g. r := k3s.Run; r(...)) instead of called via
+//     selector — firstTestcontainerRunPos only matches the call-position
+//     selector form.
+//   - t.Skip/Skipf/SkipNow taken as a function value (skip := t.Skip; skip())
+//     — selectorName resolves .Sel.Name only when the selector is a call Fun, so
+//     a value-form skip evades the skip scan.
+//
+// A typed (go/types) rewrite of the whole file would subsume these by resolving
+// objects instead of selector names; that is the Hard ceiling tracked at
+// gh #1466, not this PR's scope.
 func TestVaultContainerStartersFailFast(t *testing.T) {
 	root := findModuleRoot(t)
 	dir := filepath.Join(root, "adapters", "vault")
@@ -51,12 +72,17 @@ func TestVaultContainerStartersFailFast(t *testing.T) {
 	fset := token.NewFileSet()
 	var starters int
 	var skipCalls []string
+	var blindSpots []string
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
 		}
 		file, perr := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, 0)
 		require.NoError(t, perr)
+		// Scan blind-spot forms before the alias-empty skip below: a dot-import
+		// blanks the alias map, which would otherwise drop the file at the continue
+		// and hide exactly the bypass the reverse self-check exists to catch.
+		blindSpots = append(blindSpots, detectorBlindSpotFindings(fset, file)...)
 		aliases := testcontainerAliasesFor(file)
 		if len(aliases.core)+len(aliases.modules) == 0 {
 			continue
@@ -77,6 +103,66 @@ func TestVaultContainerStartersFailFast(t *testing.T) {
 
 	require.Positive(t, starters, "expected at least one vault container-starting func (startVaultContainer)")
 	assert.Empty(t, skipCalls, "vault container starters must fail-fast on container errors, not skip")
+	assert.Empty(t, blindSpots,
+		"detector blind-spot forms must be absent from vault test AST (see "+
+			"TestVaultContainerStartersFailFast godoc); a new one would silently bypass the no-skip scan")
+}
+
+// detectorBlindSpotFindings reports the AST forms the selector-name + alias
+// detection in TestVaultContainerStartersFailFast cannot see (enumerated in that
+// test's godoc). It is the ai-robust reverse self-check: these forms must be
+// absent from production (vault test) AST, so the Medium coverage is not silently
+// bypassed.
+func detectorBlindSpotFindings(fset *token.FileSet, file *ast.File) []string {
+	findings := dotImportedTestcontainerFindings(fset, file)
+	return append(findings, functionValueSelectorFindings(fset, file)...)
+}
+
+// dotImportedTestcontainerFindings flags a dot-import of a testcontainers core or
+// module package: importSelectorName returns "" for ".", blanking the alias map
+// in testcontainerAliasesFor so a bare Run(...) becomes invisible to detection.
+func dotImportedTestcontainerFindings(fset *token.FileSet, file *ast.File) []string {
+	var findings []string
+	for _, imp := range file.Imports {
+		if imp.Name == nil || imp.Name.Name != "." {
+			continue
+		}
+		path := archStringLiteralValue(imp.Path)
+		if path == "github.com/testcontainers/testcontainers-go" ||
+			strings.HasPrefix(path, "github.com/testcontainers/testcontainers-go/modules/") {
+			findings = append(findings, fset.Position(imp.Pos()).String()+
+				": dot-import of a testcontainers package blanks the alias map and hides bare Run(...) from detection")
+		}
+	}
+	return findings
+}
+
+// functionValueSelectorFindings flags a testcontainer constructor (.Run /
+// .GenericContainer) or t.Skip/Skipf/SkipNow used as a function value rather than
+// in call position: both evade the call-position selector matching in
+// firstTestcontainerRunPos and the skip scan. A selector node that is the Fun of
+// a CallExpr is in call position (detectable); any other occurrence of these
+// selector names is a value-form blind spot.
+func functionValueSelectorFindings(fset *token.FileSet, file *ast.File) []string {
+	calledFuns := map[ast.Expr]struct{}{}
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		calledFuns[call.Fun] = struct{}{}
+	})
+
+	var findings []string
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		switch sel.Sel.Name {
+		case "Run", "GenericContainer", "Skip", "Skipf", "SkipNow":
+		default:
+			return
+		}
+		if _, called := calledFuns[sel]; called {
+			return
+		}
+		findings = append(findings, fset.Position(sel.Pos()).String()+
+			": "+sel.Sel.Name+" used as a function value evades call-position selector detection")
+	})
+	return findings
 }
 
 func TestPostgresUnreachableHostIsNotEnvGated(t *testing.T) {

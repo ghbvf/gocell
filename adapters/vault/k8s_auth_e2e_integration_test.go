@@ -202,11 +202,18 @@ func provisionK8sAuthMaterial(ctx context.Context, t *testing.T, k3sC *k3s.K3sCo
 // requireJWT trims kubectl output and asserts it looks like a JWT (base64url
 // "eyJ" header), so unexpected kubectl preamble surfaces here rather than as a
 // cryptic Vault login error downstream.
+//
+// On failure it reports only the byte length, never the value: `kubectl create
+// token` succeeds (exit 0) yet can emit a warning/preamble inline with the
+// minted SA JWT (e.g. "Warning: ...\n<token>"), which TrimSpace leaves in `jwt`.
+// Printing %q would then leak a live (short-lived) credential into the CI log.
+// The length alone distinguishes a short error preamble from a ~kilobyte token.
 func requireJWT(t *testing.T, raw, label string) string {
 	t.Helper()
 	jwt := strings.TrimSpace(raw)
 	require.Truef(t, strings.HasPrefix(jwt, "eyJ"),
-		"%s token must be a JWT (base64url 'eyJ' header), got: %q", label, jwt)
+		"%s token must be a JWT (base64url 'eyJ' header); got %d bytes not starting with eyJ (value withheld to avoid logging a credential)",
+		label, len(jwt))
 	return jwt
 }
 

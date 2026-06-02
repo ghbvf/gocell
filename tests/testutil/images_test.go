@@ -25,13 +25,18 @@ var imagePinnedByDigest = regexp.MustCompile(`^[a-z0-9./-]+:[A-Za-z0-9._\-]+@sha
 // uses tag+digest pinning, not floating tags like "postgres:15-alpine".
 //
 // Coverage is AST-derived (not a hand-maintained map): the test parses
-// images.go, collects every package-level const whose name ends with "Image"
-// and whose value is a string literal, and asserts each matches
-// imagePinnedByDigest. A new image constant (e.g. K3sImage) is therefore
-// auto-enrolled — adding a string-literal const without a digest fails this
-// test without any edit here. (Coverage is scoped to string-literal consts; a
-// const defined indirectly, e.g. K3sImage = otherpkg.Const, would not be a
-// BasicLit and is intentionally out of scope — image pins are always literals.)
+// images.go, collects every package-level const whose name ends with "Image",
+// and asserts each matches imagePinnedByDigest. A new image constant (e.g.
+// K3sImage) is therefore auto-enrolled — adding a const without a digest fails
+// this test without any edit here.
+//
+// Coverage is fail-closed on the const *form*: a "*Image" const that lacks an
+// explicit initializer or whose value is not a plain string literal (e.g.
+// K3sImage = otherpkg.Const or a concatenation) fails imageConstsFromSource
+// rather than being silently skipped. Image pins are always string literals, so
+// a non-literal "*Image" const is a coverage-escape attempt, not a legitimate
+// pattern — flagging it keeps an indirect definition from evading the digest
+// check.
 //
 // AI-robust grade: Medium (AST-derived coverage of the declaration set). A Hard
 // form is unreachable: Go cannot force a string const literal to carry a digest
@@ -49,8 +54,12 @@ func TestContainerImagesPinned(t *testing.T) {
 	}
 }
 
-// imageConstsFromSource parses images.go and returns every package-level string
-// const whose name ends with "Image", mapped to its unquoted literal value.
+// imageConstsFromSource parses images.go and returns every package-level const
+// whose name ends with "Image", mapped to its unquoted literal value. It is
+// fail-closed on the const form: a "*Image" const without an explicit
+// initializer or whose value is not a STRING BasicLit fails the test rather than
+// being skipped, so an indirect definition cannot evade the digest check.
+//
 // `go test` runs with the working directory set to the package dir, so the
 // relative path resolves without runtime.Caller (which would break under
 // -trimpath).
@@ -72,13 +81,15 @@ func imageConstsFromSource(t *testing.T) map[string]string {
 				continue
 			}
 			for i, ident := range vs.Names {
-				if !strings.HasSuffix(ident.Name, "Image") || i >= len(vs.Values) {
+				if !strings.HasSuffix(ident.Name, "Image") {
 					continue
 				}
+				require.Lessf(t, i, len(vs.Values),
+					"%s: *Image const must have an explicit string-literal initializer (no iota/implicit-repeat)", ident.Name)
 				lit, isLit := vs.Values[i].(*ast.BasicLit)
-				if !isLit || lit.Kind != token.STRING {
-					continue
-				}
+				require.Truef(t, isLit && lit.Kind == token.STRING,
+					"%s: *Image const must be a plain string literal; an indirect "+
+						"value (var/concat/cross-pkg const) escapes the digest pin check", ident.Name)
 				val, uerr := strconv.Unquote(lit.Value)
 				require.NoError(t, uerr, "unquote %s", ident.Name)
 				out[ident.Name] = val
