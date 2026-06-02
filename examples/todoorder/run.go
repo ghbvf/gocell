@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -113,6 +114,14 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("invalid JWT auth plan: %w", err)
 	}
 
+	// Demo wires in-memory projection infra; events are discarded by NoopWriter
+	// so live consumption is best-effort (same as every todoorder demo) — the
+	// harness still cold-starts and registers its readyz probe; faithful
+	// PG-backed replay is tracked in backlog.
+	projCheckpoint := projection.NewMemCheckpointStore()
+	projReplay := projection.NewMemReplaySource()
+	projCursor := projection.NewMemCursor(projReplay)
+
 	app := bootstrap.New(
 		clock.Real(),
 		bootstrap.WithAssembly(asm),
@@ -124,6 +133,10 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		// /metrics no longer fall back onto the primary listener.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9092", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
+		bootstrap.WithProjectionCheckpointStore(projCheckpoint),
+		bootstrap.WithProjectionTxRunner(demoTxRunner{}),
+		bootstrap.WithProjectionReplaySource(projReplay),
+		bootstrap.WithProjectionCursor(projCursor),
 	)
 
 	logger.Info("todoorder: starting on :8082; protected routes require an RS256 bearer token")

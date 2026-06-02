@@ -28,15 +28,11 @@
         },
         "totalOrders": {
           "type": "integer"
-        },
-        "lastAppliedSeq": {
-          "type": "integer"
         }
       },
       "required": [
         "statuses",
-        "totalOrders",
-        "lastAppliedSeq"
+        "totalOrders"
       ]
     }
   },

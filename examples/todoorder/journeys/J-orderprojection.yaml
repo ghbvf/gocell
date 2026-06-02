@@ -1,5 +1,5 @@
 id: J-orderprojection
-goal: "Confirm an order, observe the L3 status-summary read model update via async event consumption, then rebuild the projection from the in-memory event log"
+goal: "Create an order, observe the L3 status-summary read model reflect it via async (in-process best-effort) event consumption driven by the framework projection.Coordinator harness (single-stream, reg.RegisterProjection)"
 lifecycle: active
 owner:
   team: examples
@@ -7,16 +7,14 @@ owner:
 cells:
   - ordercell
 contracts:
-  - http.order.confirm.v1
-  - event.order-status-changed.v1
+  - http.order.create.v1
+  - event.order-created.v1
   - projection.order.status-summary.v1
   - http.order.projection-summary.v1
-  - http.order.internal.projection-rebuild.v1
 passCriteria:
-  - text: "PATCH /api/v1/orders/{id}/status confirms a pending order and publishes event.order-status-changed.v1"
-    mode: auto
-    checkRef: journey.J-orderprojection.http-confirm
-  - text: "GET /api/v1/orders/projection/summary reflects the confirmed order in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort)"
+  - text: "POST /api/v1/orders creates an order and publishes event.order-created.v1 via the L2 outbox path"
     mode: manual
-  - text: "POST /internal/v1/orders/projection/rebuild (service-token, caller-cell=ordercell) replays the in-memory event log and reproduces a byte-identical summary (rebuild idempotence)"
+  - text: "GET /api/v1/orders/projection/summary reflects the created order in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort via the framework projection.Coordinator)"
+    mode: manual
+  - text: "Framework-owned rebuild (Coordinator.Rebuild, programmatic — no HTTP endpoint in v1) calls ResetOrderStatus then replays event.order-created.v1 from MemReplaySource to reconstruct a byte-identical projection snapshot (rebuild idempotence)"
     mode: manual

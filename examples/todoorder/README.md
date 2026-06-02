@@ -185,26 +185,19 @@ curl -X PATCH -H "Authorization: Bearer $TODOORDER_TOKEN" \
 # Query the status-grouped read model (eventually consistent; empty in demo mode)
 curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
   http://localhost:8082/api/v1/orders/projection/summary
-# {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1,"lastAppliedSeq":1}}
+# {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1}}
 
-# Rebuild the projection from the event log (internal listener :9082)
-# NOTE: the internal listener requires a 4-part HMAC service-token header
-# (ts:nonce:callerCell:mac). The demo provides no token-generation script;
-# validate this path via the orderprojectionrebuild contract/handler tests,
-# which use auth.TestServiceContext("ordercell").
-curl -X POST http://localhost:9082/internal/v1/orders/projection/rebuild
-# Without a valid service-token the above returns 401.
-# Expected response in durable mode:
-# {"data":{"eventsReplayed":2,"statusesRebuilt":1,"lastAppliedSeq":1}}
+# Rebuild is now framework-owned (projection.Coordinator.Rebuild, programmatic).
+# No HTTP rebuild endpoint is exposed in v1; the harness drives onReset+replay
+# automatically. A backlog item tracks a future /internal/v1/.../rebuild endpoint.
 ```
 
-> **Demo limitation**: the projection's event log is unbounded by design — a
-> production projection would snapshot + truncate, or replay from a durable
-> outbox. The public summary slice and the internal rebuild slice are kept
-> separate (`orderprojection` vs `orderprojectionrebuild`) per governance rule
-> FMT-33 (public/internal trust-boundary segregation). If `gocell validate`
-> reports `PROJECTION-CONSISTENCY-01`, set `consistencyLevel` to `L3` or `L4`
-> in the projection's `contract.yaml`.
+> **Demo note**: the orderprojection slice is the canonical L3 CQRS harness reference:
+> it uses `reg.RegisterProjection` (cellgen-derived) and the framework
+> `projection.Coordinator` owns checkpoint + rebuild. Demo wires in-memory projection
+> infra (MemCheckpointStore + MemReplaySource + MemCursor); events are discarded by
+> NoopWriter so live consumption is best-effort. Faithful PG-backed replay is tracked
+> in backlog.
 
 ## Durable Wiring Checklist
 

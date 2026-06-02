@@ -2,7 +2,7 @@ id: event.order-status-changed.v1
 kind: event
 ownerCell: ordercell
 consistencyLevel: L2
-lifecycle: active
+lifecycle: draft
 endpoints:
   publisher: ordercell
   actorSubscribers: [example-order-platform]
