@@ -146,20 +146,22 @@ The loop has four parts, all inside `ordercell`:
    confirms a pending order and publishes `event.order-status-changed.v1`
    through the transactional outbox.
 2. **Projection** — `orderprojection` slice (L3): subscribes to
-   `event.order-created.v1` + `event.order-status-changed.v1`, maintaining an
-   in-memory status-grouped read model declared as the
-   `projection.order.status-summary.v1` contract (GoCell's first
-   `kind: projection` instance). The read model is a *derived view* (per-status
-   counts + order IDs) the write-side `orders` map cannot cheaply serve — `GET
-   /api/v1/orders/` returns a flat list of complete order records; `GET
-   /api/v1/orders/projection/summary` returns a server-side aggregated-by-status
-   read model (`{statuses:[{status,count,orderIds}]}`) that the write-side
-   by-id map cannot provide without a full scan.
+   `event.order-created.v1` (single-stream), maintaining an in-memory
+   status-grouped read model declared as the `projection.order.status-summary.v1`
+   contract (GoCell's first `kind: projection` instance). The read model is a
+   *derived view* (per-status counts + order IDs) the write-side `orders` map
+   cannot cheaply serve — `GET /api/v1/orders/` returns a flat list of complete
+   order records; `GET /api/v1/orders/projection/summary` returns a server-side
+   aggregated-by-status read model (`{statuses:[{status,count,orderIds}]}`) that
+   the write-side by-id map cannot provide without a full scan.
+   Status-transition projection (consuming `event.order-status-changed.v1`) is a
+   natural next step tracked in #1482, out of scope for this single-stream
+   harness reference.
 3. **Query** — `GET /api/v1/orders/projection/summary` reads the projection.
-4. **Rebuild** — `POST /internal/v1/orders/projection/rebuild` (internal
-   listener, service-token + caller-cell auth) replays the slice's own
-   append-only event log to reconstruct the read model. This demonstrates
-   business-level rebuild without any `kernel/replay` primitive.
+4. **Rebuild** — rebuild is framework-owned (`projection.Coordinator.Rebuild`,
+   programmatic); no HTTP endpoint is exposed in v1. The Coordinator drives
+   `onReset + replay` automatically. A future framework HTTP endpoint is tracked
+   in #1370.
 
 > **Security note (demo simplification)**: this demo's `Order` has no
 > `ownerID`; `projection/summary` exposes all `orderIds` and `orderconfirm`
@@ -171,10 +173,9 @@ The loop has four parts, all inside `ordercell`:
 > uses `outbox.NoopWriter{}`, so events are validated then discarded; there is
 > no in-process fan-out. In demo mode, `PATCH confirm` does not update the
 > projection, so `GET /projection/summary` always returns an empty statuses
-> array and `POST /projection/rebuild` always reports `eventsReplayed:0`. The
-> outputs below reflect **durable mode** (real broker + relay) or the unit
-> tests in `orderprojection/service_test.go`. For the projection closed-loop
-> runtime validation, see that test file.
+> array. The outputs below reflect **durable mode** (real broker + relay) or
+> the unit tests in `orderprojection/service_test.go`. For the projection
+> closed-loop runtime validation, see that test file.
 
 ```bash
 # Confirm an order (PATCH) → publishes order-status-changed (durable mode only)

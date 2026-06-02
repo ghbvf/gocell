@@ -122,6 +122,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	projReplay := projection.NewMemReplaySource()
 	projCursor := projection.NewMemCursor(projReplay)
 
+	// No WithMetricsProvider in demo → projection metric instruments are no-ops.
 	app := bootstrap.New(
 		clock.Real(),
 		bootstrap.WithAssembly(asm),

@@ -37,6 +37,10 @@ func TestMemCursor(t *testing.T) {
 		wantPos    int64
 		wantPerm   bool // expect a *outbox.PermanentError
 		wantErrNil bool // expect nil error
+		// Note: wantPerm=false && !wantErrNil is structurally unreachable for
+		// MemCursor: an absent entry always returns a *outbox.PermanentError,
+		// so every non-nil error case has wantPerm=true. The field is kept
+		// for future implementations that may return non-permanent errors.
 	}{
 		{
 			name:       "first entry returns position 1",

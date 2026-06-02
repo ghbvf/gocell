@@ -459,6 +459,8 @@ bootstrap 将 `RegistrySnapshot.Projections` drain 为每个 projection 对应�
 
 详见 ADR `docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md`（Q1–Q3 决策 + §6 威胁矩阵）。
 
+> 运行参考实现：`examples/todoorder/cells/ordercell/slices/orderprojection`（L3 投影 harness canonical reference，L3-EXAMPLE-PROJECTION-01）。
+
 ### 8. 注册到 Assembly
 
 ```go

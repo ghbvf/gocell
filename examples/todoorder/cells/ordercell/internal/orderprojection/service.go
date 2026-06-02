@@ -7,10 +7,15 @@
 // implements cell.ProjectionResetHook — it is called during a Coordinator.Rebuild
 // Reset phase to clear the read model before replay.
 //
+// The readyz probe for this projection is registered by the framework
+// Coordinator (via Coordinator.Probes() in bootstrap), not by this Service.
+//
 // Demo note: the read model is in-memory only; events are discarded by the
 // NoopWriter, so live consumption is best-effort (in-process bus). The harness
-// still cold-starts and registers its readyz probe; faithful PG-backed replay is
-// tracked in backlog.
+// cold-starts and the Coordinator registers its readyz probe automatically.
+// Faithful PG-backed replay is tracked in #1368 (production PG ReplaySource/Cursor)
+// and #1370 (real-PG integration test). Status-transition projection (consuming
+// order-status-changed events) is tracked in #1482.
 package orderprojection
 
 import (
@@ -126,6 +131,8 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) er
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
 
+	// TODO(#1482): demonstrate status-transition aggregation (consume order-status-changed)
+	// once the unified lifecycle stream / multi-stream harness lands.
 	s.store.applyCreated(payload.ID, payload.Status)
 
 	s.logger.Debug("orderprojection: order-created applied",

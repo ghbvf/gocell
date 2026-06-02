@@ -2,6 +2,7 @@ id: event.order-status-changed.v1
 kind: event
 ownerCell: ordercell
 consistencyLevel: L2
+# draft: producer (orderconfirm) exists but no consumer yet; orderprojection is single-stream (order-created). Re-consume + flip to active tracked in #1482.
 lifecycle: draft
 endpoints:
   publisher: ordercell

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +19,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	testtime "github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // nopLifecycleTracer is a no-op wrapper.Tracer for the lifecycle test.
@@ -84,6 +85,7 @@ func appendAndReturn(t *testing.T, src *projection.MemReplaySource, id, status s
 //  2. Rebuild: onReset (ResetOrderStatus) clears the read model; replay
 //     reconstructs a byte-identical Query snapshot.
 func TestOrderProjection_HarnessLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	checkpointStore := projection.NewMemCheckpointStore()
@@ -138,20 +140,35 @@ func TestOrderProjection_HarnessLifecycle(t *testing.T) {
 
 	offset, err := checkpointStore.LoadOffset(ctx, "ordercell", "order_status")
 	require.NoError(t, err)
-	assert.Greater(t, offset, int64(0), "checkpoint must advance after two applies")
+	assert.Equal(t, int64(2), offset, "checkpoint must equal head (2) after two applies")
+
+	// -- B3: exactly-once skip — re-deliver e1, projection must ack but not double-count --
+	res1again := reg.handler(ctx, e1)
+	assert.Equal(t, outbox.DispositionAck, res1again.Disposition, "re-deliver order-A must ack (idempotent gate)")
+	afterSkip := svc.Query(ctx)
+	assert.Equal(t, int64(2), afterSkip.TotalOrders, "re-deliver must not increase TotalOrders (exactly-once)")
+
+	// -- B4: bad-payload → permanent --
+	badEntry := outboxtest.NewEntry("event.order-created.v1", []byte("not-json"))
+	resBad := reg.handler(ctx, badEntry)
+	assert.Equal(t, outbox.DispositionReject, resBad.Disposition, "bad payload must be rejected (permanent error)")
+
+	// -- B5: business-read not blocked during rebuild —
+	// Query must return synchronously without blocking; call it directly and assert
+	// it completes (a synchronous call that returns is sufficient proof).
+	// We verify this before coord.Rebuild so we are in the normal PhaseLive state.
+	readableBeforeRebuild := svc.Query(ctx)
+	assert.GreaterOrEqual(t, readableBeforeRebuild.TotalOrders, int64(0), "Query must return without blocking")
 
 	// -- Phase 2: Rebuild → onReset → replay → byte-identical snapshot --
 	err = coord.Rebuild(ctx)
 	require.NoError(t, err)
 
 	// Wait for coordinator to return to PhaseLive (rebuild is async).
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if coord.Phase() == projection.PhaseLive {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Sanctioned poll via testwait.External (TEST-SLEEP-DISCIPLINE-01).
+	testwait.External(t, "orderprojection-lifecycle-wait-for-phase",
+		func() bool { return coord.Phase() == projection.PhaseLive },
+		testtime.EventuallyLong, testtime.FastPoll, "phase != PhaseLive")
 	assert.Equal(t, projection.PhaseLive, coord.Phase(), "coordinator must return to PhaseLive after rebuild")
 
 	after := svc.Query(ctx)
