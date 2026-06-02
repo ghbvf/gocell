@@ -2156,34 +2156,48 @@ func resolveCodeGatedCallee(call *ast.CallExpr, info *types.Info) (codeGatedCall
 // ERR_INTERNAL were actually observed; if absent the scan loaded nothing and
 // a false-green from an empty scope is rejected.
 //
-// AI-robust rating:
-//   - Downstream Hard: EvaluateConstString + typed callee resolution +
-//     non-const-mint hard-fail; any runtime-assembled code arg is rejected
-//     immediately, not merely flagged.
-//   - Upstream Hard: pkg/errcode.RegisteredPrefixes() is the runtime golden
-//     state; the golden byte-lock (pkg/errcode/testdata/prefix_set.golden)
-//     is regenerated and verified by the errcode package tests, locking the
-//     platform prefix set via go test + review gate (ERRCODE_PREFIX_GOLDEN_UPDATE=1
-//     required to update).
+// AI-robust rating (honest, per-form — NOT unqualified Hard):
+//   - Downstream Hard for the drift-relevant forms: literal code args
+//     (BasicLit) at New/Wrap arg-1, const-resolvable selector codes (e.g.
+//     errcode.ErrAuthForbidden, via EvaluateConstString + typed callee
+//     resolution), exported Code sentinel decls (Target B), and directly
+//     runtime-assembled args (errcode.Code(non-const) / "ERR_"+x at the mint
+//     site) which are rejected outright. Accidental prefix drift travels these
+//     forms and is fully caught.
+//   - Medium residual: a bare non-const Ident/SelectorExpr code arg (a Code
+//     value forwarded through a parameter/variable) is SKIPPED at the mint site
+//     (see scanErrcodePrefixOwnershipDiags: "Variable/parameter reference:
+//     skip"). Laundering an unregistered code through a forwarding helper
+//     (assemble → store in a Code var → pass the var to errcode.New) therefore
+//     escapes — but only via DELIBERATE construction; it is not an accidental
+//     drift path. Data-flow tracing would be needed to close it, and tightening
+//     to "ban every errcode.Code(non-const) conversion" would false-positive on
+//     legitimate parse/compare-side conversions. Accepted residual gap (tracked
+//     for PR-body backlog per .claude/rules/gocell/ai-robust.md Funnel rating).
+//   - Upstream: pkg/errcode.RegisteredPrefixes() is the runtime SSOT; the golden
+//     byte-lock (pkg/errcode/testdata/prefix_set.golden) is regenerated/verified
+//     by the errcode package tests. Hard byte-lock with a review-gated
+//     ERRCODE_PREFIX_GOLDEN_UPDATE=1 ceiling — the same adversarial-`-update`
+//     ceiling shared by every golden in the repo, not a rule-specific weakness.
 //
 // Blind spots:
 //  1. Dot-import of errcode: `import . "…/pkg/errcode"` + bare `New(...)`.
-//     The typed info resolves the callee via info.Uses, so dot-import callsites
-//     ARE detected correctly (info.Uses resolves the bare Ident "New" to the
-//     errcode.New *types.Func). No blind spot here.
-//  2. Non-literal sentinel `var ErrX errcode.Code = expr` where expr is not
-//     a BasicLit: if the expr is a const (EvaluateConstString handles it); if
-//     it is truly non-const, it is caught by Target A non-const hard-fail when
-//     the value flows into errcode.New. Standalone non-literal sentinel decls
-//     are not caught by Target B, but those are programmer-error situations
-//     already blocked by the type system (errcode.Code is string-typed, so a
-//     non-const assignment requires an explicit conversion). Acceptable blind spot.
-//  3. Canary anchor: the two canary codes (ERR_AUTH_FORBIDDEN, ERR_INTERNAL)
-//     are declared in pkg/errcode/errcode.go which is excluded from production
-//     scan by fileroles.IsProductionCode. Canary observes these from the Typed
-//     scan of OTHER production files that use these sentinel values at call sites.
-//     If the codebase ever removes all callsites of these sentinels, the canary
-//     would fire, prompting a review of the anchor selection.
+//     info.Uses resolves the bare Ident "New" to the errcode.New *types.Func,
+//     so dot-import callsites ARE detected. No blind spot here.
+//  2. Forwarded non-const Code args (bare Ident/SelectorExpr param/var) are
+//     skipped at the mint site — see the Medium residual above. The definition
+//     site of a literal/sentinel Code is covered by Target A/B; a value
+//     assembled at runtime and laundered through a helper is the residual gap.
+//  3. ALL CallExpr code args are treated as runtime-assembled (hard fail),
+//     including a hypothetical safe function return (e.g. a status→Code mapper).
+//     Zero such New/Wrap callsites exist today, so no false-positive; if one is
+//     introduced it must use a named sentinel or an explicit known-safe-callee
+//     allowlist must be added here (do not silently broaden the skip set).
+//  4. Canary anchor: ERR_AUTH_FORBIDDEN / ERR_INTERNAL are declared in
+//     pkg/errcode/errcode.go (excluded from the production scan). The canary
+//     observes them from OTHER production files that reference the sentinels at
+//     call sites; if all such callsites disappear the canary fires, prompting a
+//     review of the anchor selection.
 //
 // ref: docs/architecture/202606031200-1091-adr-errcode-prefix-ownership-registry.md
 // Issue #1091.
