@@ -237,8 +237,8 @@ func (ts *TargetSelector) matchFromAssemblyPath(f string, cellSet map[string]str
 			continue
 		}
 		if pathWithin(f, path.Dir(asm.File)) {
-			for _, cellID := range asm.Cells {
-				cellSet[cellID] = struct{}{}
+			for _, ref := range asm.Cells {
+				cellSet[ref.ID] = struct{}{}
 			}
 			return true
 		}

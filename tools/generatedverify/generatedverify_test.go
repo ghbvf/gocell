@@ -432,7 +432,7 @@ func (PlaceholderModule) ID() string { return "placeholder" }
 	// Update the fixture assembly to include the placeholder cell.
 	project.Assemblies["fixture"] = &metadata.AssemblyMeta{
 		ID:    "fixture",
-		Cells: []string{metadatatest.NewCellID("placeholder")},
+		Cells: metadata.CellRefs(metadatatest.NewCellID("placeholder")),
 		Build: metadata.BuildMeta{
 			Entrypoint: "cmd/fixture/main.go",
 			Binary:     "bin/fixture",
@@ -596,7 +596,7 @@ func runFixture(context.Context, string, []string) error {
 	}
 	project.Assemblies["fixture"] = &metadata.AssemblyMeta{
 		ID:    "fixture",
-		Cells: []string{},
+		Cells: metadata.CellRefs(),
 		Build: metadata.BuildMeta{
 			Entrypoint: "cmd/fixture/main.go",
 			Binary:     "bin/fixture",

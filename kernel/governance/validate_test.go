@@ -224,8 +224,12 @@ func validProject() *metadata.ProjectMeta {
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
-				ID:                  "corebundle",
-				Cells:               []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore, metadatatest.CellIDSharedCrypto},
+				ID: "corebundle",
+				Cells: []metadata.AssemblyCellRef{
+					{ID: metadatatest.CellIDAccessCore},
+					{ID: metadatatest.CellIDAuditCore},
+					{ID: metadatatest.CellIDSharedCrypto},
+				},
 				MaxConsistencyLevel: "L3", // derived: max of L3, L2, L0
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Build: metadata.BuildMeta{
@@ -555,7 +559,8 @@ func TestREF08(t *testing.T) {
 		{
 			name: "assembly references missing cell",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Assemblies["corebundle"].Cells = append(pm.Assemblies["corebundle"].Cells, "nonexistent")
+				pm.Assemblies["corebundle"].Cells = append(pm.Assemblies["corebundle"].Cells,
+					metadata.AssemblyCellRef{ID: metadatatest.NewCellID("nonexistent")})
 			},
 			wantCount: 1,
 		},
@@ -941,7 +946,7 @@ func TestTOPO06(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
 					ID:    "edge-bundle",
-					Cells: []string{metadatatest.CellIDAccessCore}, // also in corebundle
+					Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}}, // also in corebundle
 					Build: metadata.BuildMeta{
 						Entrypoint:     "cmd/edge-bundle/main.go",
 						Binary:         "edge-bundle",
@@ -2995,7 +3000,7 @@ func TestREF15(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Assemblies["wrong-key"] = &metadata.AssemblyMeta{
 					ID:    "actual-id",
-					Cells: []string{metadatatest.CellIDAccessCore},
+					Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}},
 					Build: metadata.BuildMeta{Entrypoint: "cmd/main.go"},
 				}
 			},
@@ -4398,7 +4403,7 @@ func TestREF16(t *testing.T) {
 		pm := validProject()
 		pm.Assemblies["../../etc"] = &metadata.AssemblyMeta{
 			ID:    "../../etc",
-			Cells: []string{metadatatest.CellIDAccessCore},
+			Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}},
 			Build: metadata.BuildMeta{
 				Entrypoint: "cmd/evil/main.go",
 				Binary:     "evil",
@@ -4433,7 +4438,7 @@ func TestREF16(t *testing.T) {
 		pm := validProject()
 		pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
 			ID:    "edge-bundle",
-			Cells: []string{metadatatest.CellIDAccessCore},
+			Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}},
 			Build: metadata.BuildMeta{
 				Entrypoint:     "cmd/edge-bundle/main.go",
 				Binary:         "edge-bundle",

@@ -114,7 +114,7 @@ func fullPM() *metadata.ProjectMeta {
 	}
 	pm.Assemblies["mainbundle"] = &metadata.AssemblyMeta{
 		ID:    "mainbundle",
-		Cells: []string{"accesscore", "auditcore"},
+		Cells: metadata.CellRefs("accesscore", "auditcore"),
 		Build: metadata.BuildMeta{Entrypoint: "cmd/server/main.go", Binary: "gocell-server"},
 	}
 	pm.Actors = []metadata.ActorMeta{
