@@ -243,9 +243,14 @@ func TestHandleEvent_TransientAppendError_Requeues(t *testing.T) {
 		"transient error must NOT be wrapped in PermanentError")
 }
 
-// F18: idempotency / duplicate-delivery — same payload delivered twice must Ack both times.
-// The ledger uses IdempotencyContentFingerprint which deduplicates by content hash;
-// the second Append for the same payload is a no-op success, so both must Ack.
+// F18 (C1/F2): idempotency / duplicate-delivery — redelivering the SAME outbox
+// entry must Ack both times AND leave exactly one ledger row. The ledger keys
+// idempotency on EventID (= entry.ID()); because HandleEvent now forwards the
+// stable entry.ID() (not a per-call uuid), the second Append collapses to
+// ErrAuditLedgerAlreadyExists which HandleEvent treats as a replay Ack.
+// Asserting EntryCount==1 is the regression guard: minting a fresh EventID per
+// call (the prior bug) would Ack twice but persist two rows — double-counting
+// the same auth failure in the compliance ledger.
 func TestHandleEvent_DuplicateDelivery_BothAck(t *testing.T) {
 	bs := newTestBootstrapStore(t)
 	svc, err := auditappendbootstrap.NewService(testClock(),
@@ -260,7 +265,12 @@ func TestHandleEvent_DuplicateDelivery_BothAck(t *testing.T) {
 
 	result2 := svc.HandleEvent(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result2.Disposition,
-		"duplicate delivery must Ack (idempotency via content fingerprint)")
+		"duplicate delivery must Ack (idempotent replay via stable EventID)")
+
+	snap, terr := bs.Tail(context.Background())
+	require.NoError(t, terr)
+	assert.Equal(t, int64(1), snap.EntryCount,
+		"redelivery must NOT double-write: exactly one ledger entry expected")
 }
 
 // F19: Reject path (nil store and invalid-JSON) must carry an error whose inner

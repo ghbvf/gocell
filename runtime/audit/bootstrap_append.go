@@ -23,8 +23,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/google/uuid"
-
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -36,9 +34,15 @@ import (
 // runtime/auth/bootstrap.go and are re-declared in
 // cells/accesscore/internal/dto (which cannot import runtime/audit) and in
 // cells/accesscore/slices/setup (reason whitelist for RecordBootstrapAuthFail).
-// Drift is prevented by the event contract (event.auth.bootstrap-failed.v1
-// payload.schema.json) and the validate/whitelist checks in both producer and
-// consumer code paths.
+//
+// The event contract (event.auth.bootstrap-failed.v1 payload.schema.json)
+// only constrains reason to type string — it does NOT express the closed
+// {missing_header, wrong_credentials, rate_limited} set (no JSON-schema enum).
+// The closed set is maintained at runtime by validBootstrapAuthFailReasons
+// (consumer) + the setup reason whitelist (producer), and the cross-package
+// equivalence of these declared sets is enforced statically by the
+// BOOTSTRAP-REASON-SET-EQUIVALENCE archtest. Schema = type guard; archtest +
+// whitelists = closed-set guard.
 const (
 	ReasonMissingHeader    = "missing_header"
 	ReasonWrongCredentials = "wrong_credentials"
@@ -75,6 +79,18 @@ type bootstrapAuthFailPayload struct {
 // when the request did not flow through middleware that sets ctxkeys.RealIP
 // (e.g. health probes).
 //
+// eventID is the stable source-event identity (the consuming slice passes
+// outbox.Entry.ID()). It becomes the ledger EventID, which is the SOLE
+// idempotency key (ledger.IdempotencyContentFingerprint hashes EventID only,
+// see runtime/audit/ledger/mem_store.go). Using the stable entry ID — rather
+// than a freshly minted uuid.NewString() — is what makes at-least-once
+// redelivery idempotent: a redelivered event carries the same outbox UUID, so
+// the second Append collapses to ErrAuditLedgerAlreadyExists instead of
+// appending a duplicate ledger row. This mirrors the relay-chain appender
+// (cells/auditcore/internal/appender) which also keys on entry.ID().
+// Callers must treat ErrAuditLedgerAlreadyExists (KindConflict) as an
+// idempotent SUCCESS and Ack — see auditappendbootstrap.Service.HandleEvent.
+//
 // Consistency level: L1 LocalTx — store.Append runs in a single PG transaction
 // with the advisory-lock-fenced chain tail read; no outbox emit follows, so
 // L2 atomicity coverage does not apply. The bootstrap chain is physically
@@ -90,12 +106,13 @@ type bootstrapAuthFailPayload struct {
 //	 "clientIp": "<IPv4/IPv6 or empty>"}
 //
 // Errors:
-//   - ErrValidationFailed when store / clock is nil, or reason is not in
-//     {missing_header, wrong_credentials, rate_limited}.
-//   - The wrapped Append error otherwise — most commonly ledger duplicate
-//     fingerprint or chain-write failure; callers (auditappendbootstrap.Service.HandleEvent)
-//     log and Requeue on transient errors.
-func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, clk clock.Clock, reason, clientIP string) error {
+//   - ErrValidationFailed when store / clock is nil, eventID is empty, or
+//     reason is not in {missing_header, wrong_credentials, rate_limited}.
+//   - The wrapped Append error otherwise — most commonly
+//     ErrAuditLedgerAlreadyExists (idempotent replay; callers Ack) or a
+//     chain-write failure (transient; callers Requeue). The wrap preserves the
+//     inner *errcode.Error code so callers can classify via errors.As.
+func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, clk clock.Clock, eventID, reason, clientIP string) error {
 	if store == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: AppendBootstrapAuthFail requires non-nil *BootstrapLedgerStore",
@@ -105,6 +122,14 @@ func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, c
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: AppendBootstrapAuthFail requires non-nil clock",
 			errcode.WithInternal(errcode.InternalAttr("_", "nil clock")))
+	}
+	if eventID == "" {
+		// eventID is the sole idempotency key; an empty key would collide all
+		// empty-id appends into one fingerprint. Fail-fast rather than silently
+		// corrupt the chain's at-least-once dedup guarantee.
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit: AppendBootstrapAuthFail requires non-empty eventID",
+			errcode.WithInternal(errcode.InternalAttr("_", "empty eventID")))
 	}
 	if _, ok := validBootstrapAuthFailReasons[reason]; !ok {
 		allowed := make([]string, 0, len(validBootstrapAuthFailReasons))
@@ -123,7 +148,7 @@ func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, c
 		return fmt.Errorf("audit: marshal bootstrap auth-fail payload: %w", err)
 	}
 	entry := &ledger.Entry{
-		EventID:   uuid.NewString(),
+		EventID:   eventID,
 		EventType: bootstrapAuthFailEventType,
 		ActorID:   bootstrapAuthFailActorID,
 		Timestamp: clk.Now().UTC(),

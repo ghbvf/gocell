@@ -15,6 +15,7 @@ package auditappendbootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -72,7 +73,9 @@ type Service struct {
 // Deliberate deviation from REQUIRED-DEP-NIL-GUARD-01: bootstrapStore is
 // intentionally optional here (nil = permanent misconfiguration detected at
 // event-handle time, not at construction time). The startup fail-fast guard
-// for durable assemblies lives in cellmodules/auditcore/module.go.
+// for durable assemblies lives in cells/auditcore/cell.go::initSlices, which
+// rejects a nil store in DurabilityDurable mode with
+// errcode.ErrCellMissingBootstrapStore.
 func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "auditappendbootstrap.NewService")
 	svc := &Service{
@@ -136,7 +139,22 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 				"auditappendbootstrap: bootstrap-failed payload missing reason")))
 	}
 
-	if err := audit.AppendBootstrapAuthFail(ctx, s.bootstrapStore, s.clk, payload.Reason, payload.ClientIP); err != nil {
+	if err := audit.AppendBootstrapAuthFail(ctx, s.bootstrapStore, s.clk, entry.ID(), payload.Reason, payload.ClientIP); err != nil {
+		// Idempotent replay: the ledger already holds this entry (same stable
+		// EventID = entry.ID(), keyed by IdempotencyContentFingerprint), e.g.
+		// outbox redelivery. ErrAuditLedgerAlreadyExists (KindConflict) is an
+		// idempotent SUCCESS — the entry is committed; Ack (not Reject/DLX,
+		// even though KindConflict is a 4xx) and log at Info. This branch must
+		// precede the IsExpected4xx check, which would otherwise route the
+		// 409 to DLX. Mirrors cells/auditcore/internal/appender.
+		var dup *errcode.Error
+		if errors.As(err, &dup) && dup.Code == errcode.ErrAuditLedgerAlreadyExists {
+			s.logger.InfoContext(ctx, "auditappendbootstrap: entry already appended (idempotent replay)",
+				slog.String("namespace", "bootstrap"),
+				slog.String("event_id", entry.ID()),
+				slog.String("reason", payload.Reason))
+			return outbox.Ack()
+		}
 		s.logger.ErrorContext(ctx, "auditappendbootstrap: append failed",
 			slog.String("namespace", "bootstrap"),
 			slog.String("event_id", entry.ID()),

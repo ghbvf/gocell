@@ -95,8 +95,11 @@ func WithQueryStore(s ledger.QueryStore) Option {
 // entries. This is an internal wiring option — it is only callable from the
 // cellmodules/auditcore composition-root layer.
 //
-// Bare-nil inputs are silently ignored; the final nil validation happens in
-// initSlices when the auditappendbootstrap.Service is constructed.
+// Bare-nil inputs are silently ignored (builder-option semantics). The final
+// validation happens in initSlices: DurabilityDurable mode with a nil store
+// fails fast at Init() (ErrCellMissingBootstrapStore); demo/test mode tolerates
+// nil — the auditappendbootstrap.Service then permanently Rejects any consumed
+// event to DLX rather than Requeueing.
 func WithBootstrapStore(s *audit.BootstrapLedgerStore) Option {
 	return func(c *AuditCore) {
 		if s != nil {
@@ -273,7 +276,7 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registrar) error 
 		}
 	}
 
-	if err := c.initSlices(); err != nil {
+	if err := c.initSlices(durabilityMode); err != nil {
 		return err
 	}
 	// Default cursor codec for pagination if not injected. Durable mode
@@ -396,7 +399,7 @@ func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
 // L2: store.Append + emitter.Emit run inside the same txRunner.RunInTx block
 // (OutboxFact pattern). Consumer receives cross-cell events (L3 source), but
 // the write side is L2 atomic — F3 correction.
-func (c *AuditCore) initSlices() error {
+func (c *AuditCore) initSlices(mode outbox.DurabilityMode) error {
 	appenders := []struct {
 		spec     appender.Spec
 		target   **appender.Service
@@ -420,9 +423,19 @@ func (c *AuditCore) initSlices() error {
 		c.AddSlice(cell.MustNewBaseSliceFromMeta(a.metadata()))
 	}
 
-	// Bootstrap subscriber slice — always initialized. When bootstrapStore is nil
-	// (demo/test mode) the service runs in no-op mode (Requeue until wired).
-	// Production assemblies wire a real store via WithBootstrapStore.
+	// Bootstrap subscriber slice — always initialized. In DurabilityDurable mode
+	// a nil bootstrapStore is a wiring mistake: the slice would consume
+	// event.auth.bootstrap-failed.v1 and permanently Reject each one to DLX
+	// (see auditappendbootstrap.Service.HandleEvent). Fail fast at Init() so the
+	// misconfiguration surfaces at process startup, not on the first auth-fail
+	// event. Demo/test mode tolerates nil (HandleEvent Rejects, but no real
+	// bootstrap events flow). Mirrors the CheckNotNoop / initCursorCodec durable
+	// guards above.
+	if mode == outbox.DurabilityDurable && c.bootstrapStore == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingBootstrapStore,
+			"auditcore durable mode requires a bootstrap ledger store; "+
+				"wire one via WithBootstrapStore from the cellmodules/auditcore composition root")
+	}
 	bootstrapSvc, err := auditappendbootstrap.NewService(c.clk,
 		auditappendbootstrap.WithBootstrapStore(c.bootstrapStore),
 	)

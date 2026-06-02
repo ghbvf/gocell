@@ -82,6 +82,14 @@ const bootstrapGoSuffix = "/runtime/auth/bootstrap.go"
 // authoritative Reason* constants live.
 const runtimeAuditPkgSuffix = "/runtime/audit"
 
+// setupPkgSuffix is the package path suffix for cells/accesscore/slices/setup,
+// the producer-side whitelist site (third reason set).
+const setupPkgSuffix = "/cells/accesscore/slices/setup"
+
+// setupWhitelistVarName is the package-level map var whose keys are the
+// producer-side reason whitelist (keyed by audit.Reason* selector exprs).
+const setupWhitelistVarName = "validBootstrapAuthFailReasons"
+
 // TestBootstrapReasonSetEquivalence01 enforces that the bootstrap auth-fail
 // reason string values are identical across:
 //
@@ -96,31 +104,43 @@ func TestBootstrapReasonSetEquivalence01(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)
 	auditPkg := modPath + runtimeAuditPkgSuffix
+	setupPkg := modPath + setupPkgSuffix
 
-	// Step 1: collect authoritative Reason* const values from runtime/audit.
+	// Step 1: collect authoritative Reason* const values from runtime/audit AND
+	// the producer-side whitelist map keys from cells/accesscore/slices/setup,
+	// in a single typed pass. The setup keys are audit.Reason* selector exprs;
+	// TypesInfo resolves them to their underlying string const values, so this
+	// catches drift even though the source uses const references (not literals).
 	var auditReasons []string
+	var setupReasons []string
 	auditVisited := false
+	setupVisited := false
 
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != auditPkg {
+		if p.Pkg == nil {
 			return nil
 		}
-		auditVisited = true
-		scope := p.Pkg.Scope()
-		for _, name := range scope.Names() {
-			if !strings.HasPrefix(name, reasonPrefixInAudit) {
-				continue
+		switch p.Pkg.Path() {
+		case auditPkg:
+			auditVisited = true
+			scope := p.Pkg.Scope()
+			for _, name := range scope.Names() {
+				if !strings.HasPrefix(name, reasonPrefixInAudit) {
+					continue
+				}
+				obj := scope.Lookup(name)
+				c, ok := obj.(*types.Const)
+				if !ok {
+					continue
+				}
+				if c.Val() == nil || c.Val().Kind() != constant.String {
+					continue
+				}
+				auditReasons = append(auditReasons, constant.StringVal(c.Val()))
 			}
-			obj := scope.Lookup(name)
-			c, ok := obj.(*types.Const)
-			if !ok {
-				continue
-			}
-			if c.Val() == nil || c.Val().Kind() != constant.String {
-				continue
-			}
-			val := constant.StringVal(c.Val())
-			auditReasons = append(auditReasons, val)
+		case setupPkg:
+			setupVisited = true
+			setupReasons = append(setupReasons, extractSetupWhitelistKeys(p)...)
 		}
 		return nil
 	})
@@ -131,17 +151,72 @@ func TestBootstrapReasonSetEquivalence01(t *testing.T) {
 	require.NotEmpty(t, auditReasons,
 		"%s: no Reason* consts found in %q — authoritative set is empty (bug)",
 		ruleBootstrapReasonSetEquivalence01, auditPkg)
+	require.True(t, setupVisited,
+		"%s: RunTypedProduction did not visit %q — scope gap, rule would pass vacuously",
+		ruleBootstrapReasonSetEquivalence01, setupPkg)
+	require.NotEmpty(t, setupReasons,
+		"%s: no %s map keys resolved in %q — whitelist set is empty (bug)",
+		ruleBootstrapReasonSetEquivalence01, setupWhitelistVarName, setupPkg)
 	sort.Strings(auditReasons)
+	sort.Strings(setupReasons)
 
 	// Step 2: extract inline string literals from runtime/auth/bootstrap.go.
 	authReasons := extractBootstrapGoLiterals(t, root)
 	sort.Strings(authReasons)
 
-	// Step 3: compare sets.
+	// Step 3: compare all three sets against the authoritative runtime/audit set.
 	assert.Equal(t, auditReasons, authReasons,
 		"%s: reason string values in runtime/auth/bootstrap.go (%v) must equal "+
 			"runtime/audit Reason* consts (%v) — drift means events may be silently DLX'd",
 		ruleBootstrapReasonSetEquivalence01, authReasons, auditReasons)
+	assert.Equal(t, auditReasons, setupReasons,
+		"%s: %s map keys in cells/accesscore/slices/setup (%v) must equal "+
+			"runtime/audit Reason* consts (%v) — drift means the producer whitelist "+
+			"rejects valid reasons (→ DLX) or admits invalid ones",
+		ruleBootstrapReasonSetEquivalence01, setupWhitelistVarName, setupReasons, auditReasons)
+}
+
+// extractSetupWhitelistKeys finds the package-level setupWhitelistVarName map
+// var in the setup package's files and returns its resolved string keys. Keys
+// are audit.Reason* selector exprs; TypesInfo.Types[key].Value resolves each to
+// its underlying string const value, so const indirection cannot bypass the
+// equivalence check (the rationale for the typed pass over a pure AST scan).
+func extractSetupWhitelistKeys(p *Pass) []string {
+	var keys []string
+	for _, f := range p.Files {
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if name.Name != setupWhitelistVarName || i >= len(vs.Values) {
+						continue
+					}
+					cl, ok := vs.Values[i].(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					for _, elt := range cl.Elts {
+						kv, ok := elt.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						if tv, ok := p.TypesInfo.Types[kv.Key]; ok &&
+							tv.Value != nil && tv.Value.Kind() == constant.String {
+							keys = append(keys, constant.StringVal(tv.Value))
+						}
+					}
+				}
+			}
+		}
+	}
+	return keys
 }
 
 // findFileWithSuffix walks the module root and returns the first regular file

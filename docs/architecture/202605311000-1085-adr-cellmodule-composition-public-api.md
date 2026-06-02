@@ -146,18 +146,18 @@ composition.New().
 **变更**：
 
 1. `composition.ModuleExports` 类型已**完全删除**（`ModuleExports` 结构体 + `merge` 方法均已移除）。
-2. `CellModule.Provide` 签名从  
-   `Provide(ctx, *SharedDeps, in ModuleExports) (cell.Cell, ModuleExports, []bootstrap.Option, []ManagedResource, error)`  
-   更改为  
-   `Provide(ctx, *SharedDeps) (cell.Cell, []bootstrap.Option, []ManagedResource, error)`  
+2. `CellModule.Provide` 签名从
+   `Provide(ctx, *SharedDeps, in ModuleExports) (cell.Cell, ModuleExports, []bootstrap.Option, []ManagedResource, error)`
+   更改为
+   `Provide(ctx, *SharedDeps) (cell.Cell, []bootstrap.Option, []ManagedResource, error)`
    每个实现均已机械更新（accesscore / auditcore / configcore + 所有 examples）。
-3. Bootstrap auth-fail 审计写入路径变更：  
-   - **旧**：accesscore 持有 auditcore 的 `*audit.BootstrapLedgerStore`，直接调 `AppendBootstrapAuthFail`（进程内跨 cell 直写）。  
+3. Bootstrap auth-fail 审计写入路径变更：
+   - **旧**：accesscore 持有 auditcore 的 `*audit.BootstrapLedgerStore`，直接调 `AppendBootstrapAuthFail`（进程内跨 cell 直写）。
    - **新**：accesscore observer 调 `setup.Service.RecordBootstrapAuthFail`，在 tx 内 emit `event.auth.bootstrap-failed.v1`（持久 L2 outbox）→ relay 异步投递 → auditcore `auditappendbootstrap` subscriber 消费 → `AppendBootstrapAuthFail` 写 bootstrap-namespace ledger。
 4. `*audit.BootstrapLedgerStore` 类型保留，现由 auditcore cell 通过 `auditcell.WithBootstrapStore(bootstrapWrapped)` 在 auditcore 内部持有（不再 export）。Namespace/HMAC 隔离保持不变（独立 `"bootstrap"` namespace + 独立 HMAC key `GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY`，见 ADR-1121）。
-5. **archtest 变更**：  
-   - **新增** `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）：Hard，reflect 冻结 `CellModule.Provide` 签名（2 入参 / 4 出参）——重新引入跨 module 值传递通道必须改签名，archtest 即断。  
-   - **退役** `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01`：事件消费者经 EventRouter 路由，Provide 时不存在顺序依赖，前提消失。  
+5. **archtest 变更**：
+   - **新增** `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`（`tools/archtest/module_provide_signature_frozen_test.go`）：Hard，reflect 冻结 `CellModule.Provide` 签名（2 入参 / 4 出参）——重新引入跨 module 值传递通道必须改签名，archtest 即断。
+   - **退役** `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01`：事件消费者经 EventRouter 路由，Provide 时不存在顺序依赖，前提消失。
    - **退役** `BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-{DOWNSTREAM-HARD,UPSTREAM-MEDIUM}-01`：observer 不再写 ledger；emit 路径由 `EMIT-DECL-COVER-01`（已存在）+ event contract + auditcore subscriber conformance test 覆盖。
 
 **威胁矩阵重评**（对应 ADR-1121 §Threat model，影响行逐项列出）：
@@ -174,7 +174,7 @@ composition.New().
 
 **不变的安全属性**：namespace 物理隔离（`"auditcore"` vs `"bootstrap"`）、独立 HMAC key（D3）、`*BootstrapLedgerStore` sealed handle（D2）、`ledger.MultiStore` 只实现 `QueryStore`（D4）——均保持原 ADR-1121 保证。
 
-**参考**：  
-- ADR-1121 `docs/architecture/202605270230-1121-audit-chain-bootstrap-namespace-isolation.md`（bootstrap namespace 隔离原始决策）  
-- Archtest `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`：`tools/archtest/module_provide_signature_frozen_test.go`（符号清单与盲区清单活在该文件的 package godoc）  
+**参考**：
+- ADR-1121 `docs/architecture/202605270230-1121-audit-chain-bootstrap-namespace-isolation.md`（bootstrap namespace 隔离原始决策）
+- Archtest `MODULE-PROVIDE-NO-VALUE-HANDOFF-01`：`tools/archtest/module_provide_signature_frozen_test.go`（符号清单与盲区清单活在该文件的 package godoc）
 - Plan：`.claude/plans/1423-issues-foamy-orbit.md`（设计裁决历程 + HTTP 方案被否原因 + DEP-02 环分析）

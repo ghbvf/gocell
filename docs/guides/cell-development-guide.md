@@ -667,7 +667,7 @@ See `docs/guides/integration-testing.md` for full details and environment variab
 ### 步骤
 
 1. **assembly.yaml 加 cell**：在 `assemblies/<assemblyID>/assembly.yaml` 的 `cells:` 列表追加新 cell ID
-2. **加 composition module**：实现公开的 `composition.CellModule` 接口（`Provide(ctx, shared, in ModuleExports) (...)`）。平台 cell 放在 `cellmodules/<cell>/module.go`（参考 `cellmodules/accesscore/module.go`，由 `composition.New().With(...).Build(...)` 组装）；example assembly 的 cell 放在 `cmd/<assemblyID>/<cell>_module.go` 或 `examples/<assemblyID>/`
+2. **加 composition module**：实现公开的 `composition.CellModule` 接口（`Provide(ctx, shared) (cell.Cell, []bootstrap.Option, []lifecycle.ManagedResource, error)`——Wave-1 #1423 删除了 `ModuleExports` 入参/返回值，跨 cell 通信走事件契约，签名由 `MODULE-PROVIDE-NO-VALUE-HANDOFF-01` archtest 冻结）。平台 cell 放在 `cellmodules/<cell>/module.go`（参考 `cellmodules/accesscore/module.go`，由 `composition.New().With(...).Build(...)` 组装）；example assembly 的 cell 放在 `cmd/<assemblyID>/<cell>_module.go` 或 `examples/<assemblyID>/`
 3. **跑 codegen**：`gocell generate assembly --id=<assemblyID>` 派生新 `cmd/<assemblyID>/modules_gen.go`
 4. **CI drift gate**：`gocell verify codegen-assembly` 自动校验 modules_gen.go ↔ assembly.yaml 一致性
 
