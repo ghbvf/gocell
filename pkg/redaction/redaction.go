@@ -13,6 +13,8 @@
 package redaction
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -408,6 +410,25 @@ func redactValue(v any) any {
 		// string / float64 / bool / nil — no sensitive key structure; return as-is.
 		return v
 	}
+}
+
+// HashIPForLog returns a short stable SHA-256 prefix of ip suitable for
+// slog observability fields (client_ip_hash). The first 8 hex characters
+// (32 bits) provide enough uniqueness to correlate log lines from the same
+// source while avoiding plaintext IP logging.
+//
+// An empty ip returns "" — callers can use the empty string as a signal that
+// no IP was available and omit the field entirely.
+//
+// The real IP is preserved in the ledger payload (RecordBootstrapAuthFail →
+// AppendBootstrapAuthFail) for compliance purposes; only the slog path is
+// hashed.
+func HashIPForLog(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(ip))
+	return hex.EncodeToString(sum[:4]) // first 8 hex chars = 32 bits
 }
 
 // RedactAny scrubs sensitive substrings from arbitrary panic-style payloads

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -25,7 +26,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -231,21 +235,23 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// The demo uses the package-local ssobffBootstrap* constants; production
 	// deployments inject from K8s Secret / Vault.
 	//
-	// Build pgOutboxWriter + auditcore BEFORE the bootstrap middleware: the
-	// bootstrap auth-fail observer needs the typed *audit.BootstrapLedgerStore
-	// returned by buildSSOBFFAuditCore (issue #1121 — the bootstrap chain is
-	// physically isolated from the auditcore relay chain).
+	// Build pgOutboxWriter + auditcore. After Wave-1 #1423 the bootstrap
+	// chain is wired internally into auditcore (WithBootstrapStore); auditcore
+	// now subscribes to event.auth.bootstrap-failed.v1 and writes the chain.
 	pgOutboxWriter := adapterpg.NewOutboxWriter(clk)
-	auc, bootstrapAuditStore, err := buildSSOBFFAuditCore(ctx, clk, cfg.logger, eb, pgOutboxWriter, pool, txMgr)
+	auc, err := buildSSOBFFAuditCore(ctx, clk, cfg.logger, eb, pgOutboxWriter, pool, txMgr)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, err
 	}
-	authFailObserver, err := audit.NewBootstrapAuthFailObserver(cfg.logger, bootstrapAuditStore, clk)
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: audit.NewBootstrapAuthFailObserver: %w", err)
-	}
+
+	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
+	// Uses the same lazy-pointer pattern as cellmodules/accesscore: the observer
+	// captures acPtr; acPtr is set after the accesscore cell is constructed.
+	// The observer fires only after Init (i.e. HTTP servers start), so *acPtr
+	// is always non-nil by then.
+	var acPtr *accesscore.AccessCore
+	authFailObserver := newSSOBFFAuthFailObserver(cfg.logger, &acPtr)
 
 	ssobffBootstrapCreds := auth.BootstrapCredentials{
 		Username: []byte(ssobffBootstrapUsername),
@@ -283,7 +289,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		pool: pool, txMgr: txMgr, eb: eb, pgOutboxWriter: pgOutboxWriter,
 		jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
 		bootstrapMW: bootstrapMW, sessionProto: ssobffSessionProto, logger: cfg.logger,
-		auc: auc,
+		auc: auc, acRef: &acPtr,
 	})
 	if err != nil {
 		_ = pool.Close(ctx)
@@ -313,6 +319,40 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}, nil
 }
 
+// newSSOBFFAuthFailObserver returns an auth.BootstrapAuthFailObserver that logs
+// the bootstrap auth failure with a hashed client IP and then (lazily) calls
+// RecordBootstrapAuthFail on the accesscore cell via the *acPtr forward pointer.
+//
+// *acPtr is set by the caller immediately after the accesscore cell is
+// constructed (see buildSSOBFFAssembly). The observer fires only after HTTP
+// servers start (post-Init), so *acPtr is always non-nil by then.
+func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCore) auth.BootstrapAuthFailObserver {
+	return func(ctx context.Context, reason string) {
+		ip, _ := ctxkeys.RealIPFrom(ctx)
+		// C3: slog uses hashed IP; ledger payload keeps plaintext for compliance.
+		ipHash := redaction.HashIPForLog(ip)
+		logger.ErrorContext(ctx, "bootstrap_auth_failed",
+			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("namespace", "bootstrap"),
+			slog.String("reason", reason),
+			slog.String("client_ip_hash", ipHash))
+		if *acPtr == nil {
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if err := (*acPtr).RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("client_ip_hash", ipHash),
+				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
+				slog.Any("error", err))
+		}
+	}
+}
+
 // buildSSOBFFAuditCore wires the ssobff auditcore Cell backed by PostgreSQL —
 // ledger.Protocol is owned by the composition root; cells never hold the raw
 // HMAC key. Mirrors cellmodules/auditcore/module.go durable path but uses
@@ -322,8 +362,9 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 // Since issue #1121 (ADR 202605270230) the bootstrap auth-fail chain is
 // physically isolated from the auditcore relay chain: two independent
 // (Protocol, Store) pairs are built, each with its own NamespaceID and HMAC
-// key. auditquery reads from both via ledger.MultiStore; the returned
-// *audit.BootstrapLedgerStore is handed to runtime/audit.NewBootstrapAuthFailObserver.
+// key. auditquery reads from both via ledger.MultiStore. The bootstrap store
+// is now wired into auditcore.WithBootstrapStore (Wave-1 #1423 event-based
+// decoupling) and is no longer returned to the caller.
 func buildSSOBFFAuditCore(
 	ctx context.Context,
 	clk clock.Clock,
@@ -332,14 +373,14 @@ func buildSSOBFFAuditCore(
 	outboxWriter *adapterpg.OutboxWriter,
 	pool *adapterpg.Pool,
 	txMgr *adapterpg.TxManager,
-) (*auditcore.AuditCore, *audit.BootstrapLedgerStore, error) {
+) (*auditcore.AuditCore, error) {
 	cursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
+		return nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
 	}
 	auditNS, err := ledger.ParseNamespaceID("auditcore")
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: parse audit namespace: %w", err)
+		return nil, fmt.Errorf("ssobff: parse audit namespace: %w", err)
 	}
 	// WARNING: demo keys only. Production deployments must inject from a secret manager.
 	relayProtocol, err := ledger.NewProtocol(
@@ -349,7 +390,7 @@ func buildSSOBFFAuditCore(
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
+		return nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
 	}
 	// Independent HMAC key for the bootstrap chain (ref: hashicorp/vault per-
 	// device Salt) so compromise of one chain's key cannot forge entries in
@@ -361,26 +402,26 @@ func buildSSOBFFAuditCore(
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: build bootstrap audit protocol: %w", err)
+		return nil, fmt.Errorf("ssobff: build bootstrap audit protocol: %w", err)
 	}
 	relayStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, relayProtocol, clk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (relay): %w", err)
+		return nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (relay): %w", err)
 	}
 	bootstrapStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, bootstrapProtocol, clk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (bootstrap): %w", err)
+		return nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (bootstrap): %w", err)
 	}
 	bootstrapWrapped, err := audit.NewBootstrapLedgerStore(bootstrapStore)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: wrap bootstrap ledger store: %w", err)
+		return nil, fmt.Errorf("ssobff: wrap bootstrap ledger store: %w", err)
 	}
 	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, logger); err != nil {
-		return nil, nil, fmt.Errorf("ssobff: bootstrap audit tail verify: %w", err)
+		return nil, fmt.Errorf("ssobff: bootstrap audit tail verify: %w", err)
 	}
 	multiStore, err := ledger.NewMultiStore(relayStore, bootstrapStore)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: build audit multi-store: %w", err)
+		return nil, fmt.Errorf("ssobff: build audit multi-store: %w", err)
 	}
 	auc := auditcore.NewAuditCore(
 		clk,
@@ -392,8 +433,11 @@ func buildSSOBFFAuditCore(
 		auditcore.WithCursorCodec(cursorCodec),
 		auditcore.WithLogger(logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
+		// Wave-1 #1423: bootstrap store wired internally; auditappendbootstrap
+		// subscriber slice writes to it when event.auth.bootstrap-failed.v1 arrives.
+		auditcore.WithBootstrapStore(bootstrapWrapped),
 	)
-	return auc, bootstrapWrapped, nil
+	return auc, nil
 }
 
 // registerSSOBFFCells registers all three platform cells into the assembly.
@@ -420,6 +464,10 @@ type ssobffBuildParams struct {
 	sessionProto   *session.Protocol
 	logger         *slog.Logger
 	auc            *auditcore.AuditCore
+	// acRef is a pointer to a pointer that will be set to the constructed
+	// accesscore cell after construction, allowing the bootstrap auth-fail
+	// observer closure (Wave-1 #1423) to call RecordBootstrapAuthFail.
+	acRef **accesscore.AccessCore
 }
 
 // buildSSOBFFAssembly wires all three platform cells, registers them in a new
@@ -452,10 +500,15 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (*assembly.CoreAs
 		accesscore.WithLogger(p.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)...)
+	// Set acRef so the bootstrap auth-fail observer closure can call
+	// ac.RecordBootstrapAuthFail (Wave-1 #1423 event-based decoupling).
+	if p.acRef != nil {
+		*p.acRef = ac
+	}
 
-	// auditcore is built by NewSSOBFFApp so its ledger.Store can also feed
-	// runtime/audit.NewBootstrapAuthFailObserver before the bootstrap
-	// middleware constructs.
+	// auditcore is built by NewSSOBFFApp (Wave-1 #1423: bootstrap store now wired
+	// internally into auditcore via WithBootstrapStore; auditcore subscribes to
+	// event.auth.bootstrap-failed.v1 and writes the chain asynchronously).
 	auc := p.auc
 
 	configStorageOpts, err := buildSSOBFFConfigCoreStorageOpts(clk, p.pool)

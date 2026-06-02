@@ -85,7 +85,7 @@ func WithTracer(t wrapper.Tracer) Option {
 // is an optional best-effort sink, not a wiring-required dependency. NopObserver
 // is a correct zero-value default. New composition roots may attach a metrics
 // collector without forcing every test to inject one. Typed-nil (e.g. a nil
-// *SagaStepCollector) is rejected via validation.IsNilInterface (#1181 F8)
+// *SagaCollector) is rejected via validation.IsNilInterface (#1181 F8)
 // so a downstream method call never dereferences a nil receiver.
 func WithObserver(o Observer) Option {
 	return func(e *Executor) {

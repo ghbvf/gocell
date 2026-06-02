@@ -83,20 +83,19 @@ bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
 
 ## CellModule 接口
 
-每个模块实现 `composition.CellModule`，提供 Cell + 向下游模块传递的 typed
-`ModuleExports` + bootstrap.Option + ManagedResource：
+每个模块实现 `composition.CellModule`，提供 Cell + bootstrap.Option + ManagedResource：
 
 ```go
 type CellModule interface {
     ID() string
-    Provide(ctx context.Context, shared *SharedDeps, in ModuleExports) (
-        cell.Cell, ModuleExports, []bootstrap.Option, []lifecycle.ManagedResource, error)
+    Provide(ctx context.Context, shared *SharedDeps) (
+        cell.Cell, []bootstrap.Option, []lifecycle.ManagedResource, error)
 }
 ```
 
-`in` 是先注册模块的累积导出；返回值 `ModuleExports` 是本模块向下游交付的 typed
-值（如 auditcore 产出 `BootstrapLedgerStore`，accesscore 经 `in` 消费并在缺失时
-fail-fast）。不再经可变 `*SharedDeps` 字段做 mid-Build handoff。
+Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数）；
+跨 cell 通信改为 event（contract-based）。不再经可变 `*SharedDeps` 字段或
+`ModuleExports` 做 mid-Build handoff。
 
 参考实现：`cellmodules/{accesscore,auditcore,configcore}/module.go`。
 

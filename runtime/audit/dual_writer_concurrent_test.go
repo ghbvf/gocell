@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -90,6 +91,7 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 			if err := audit.AppendBootstrapAuthFail(
 				context.Background(),
 				bootstrapWrapped, clk,
+				uuid.NewString(),
 				audit.ReasonWrongCredentials,
 				fmt.Sprintf("192.0.2.%d", i+1),
 			); err != nil {

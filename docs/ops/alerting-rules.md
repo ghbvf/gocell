@@ -803,11 +803,17 @@ lazy-unlock 频率持续偏高，可能意味着攻击者在利用 TTL 边界周
 
 ---
 
-## Saga (PR-1210)
+## Saga (PR-1210 / #1109)
 
-Saga step metrics are registered per-cell when a `SagaStepCollector` is wired via
-`obmetrics.NewSagaStepCollector(provider, cellID)`. The three counters share the
-`gocell_` namespace prefix.
+Saga metrics are registered per-cell when a `SagaCollector` is wired via
+`obmetrics.NewSagaCollector(provider, cellID)`. The six counters share the
+`gocell_` namespace prefix. Three are step-level (Executor-emitted); three are
+coordinator-level (Coordinator-emitted, added in #1109). They are only emitted
+when a real metrics `Provider` is wired — saga is not yet in a production cell
+(examples/orderfulfillment uses `NopProvider`), so production wiring lands with
+the saga-as-cell migration.
+
+Step-level:
 
 - `gocell_saga_step_outcome_total{cell,definition_id,outcome}`: total Execute calls
   terminated, labeled by outcome variant (`succeeded` / `failed` / `expired` /
@@ -822,6 +828,78 @@ Saga step metrics are registered per-cell when a `SagaStepCollector` is wired vi
   labeled by reason (`infra_error` = transient backend error; `stale_lease` = another
   coordinator owns the lease). Sustained `stale_lease` rate indicates leader-elect
   instability.
+
+Coordinator-level:
+
+- `gocell_saga_tick_total{cell,result}`: total Coordinator ClaimPending cycles,
+  labeled by `result` (`claimed` = ≥1 instance claimed; `empty` = idle tick;
+  `error` = ClaimPending failed). Loop liveness — a flat tick rate means the
+  coordinator goroutine stalled.
+
+- `gocell_saga_drive_total{cell,definition_id,result}`: total driveOne completions,
+  labeled by `result` (`ok` / `error`). Per-instance forward-progress throughput.
+
+- `gocell_saga_leader_elect_skip_total{cell,definition_id,reason}`: total
+  leader-elect skips, labeled by `reason` (`contended` = another coordinator holds
+  the per-instance distlock — normal in multi-process; `ctx_canceled` = shutdown;
+  `backend_error` = distlock backend I/O fault). `reason="backend_error"` is the
+  **lock-acquire failure rate**. Replaces log-scraping the Debug-level skip path.
+
+### GoCellSagaInstanceStuckSkipping
+
+An instance is being claimed and leader-elect-skipped every tick (high `contended`)
+but never advances (`drive{result="ok"}` ≈ 0) — a coordinator that holds neither
+the distlock nor makes progress, e.g. a wedged peer holding a stale distlock.
+
+```yaml
+# Fires when leader-elect contended skips are sustained while successful drives
+# are absent for the same (cell, definition_id) pair — the "stuck skipping, not
+# advancing" signal #1109 was created to surface without log scraping.
+#
+# Grouped by (cell, definition_id): if cell X has definition A stuck-skipping
+# (contended) but definition B advancing (ok-drives), collapsing to `by (cell)`
+# would mask A's stuck-skip via the `unless` set-difference. Per-definition
+# grouping surfaces the correct signal without cardinality explosion (definition_id
+# is bounded to the registered set in the producer).
+#
+# `unless on(cell, definition_id)` (set difference) — NOT `and ... == 0`: the
+# worst case this alert targets is a coordinator that NEVER drives, in which case
+# the gocell_saga_drive_total{result="ok"} series does not exist at all. With
+# `and ... == 0` the right side is an empty vector and the alert silently never
+# fires. `unless <right> > 0` keeps every contended-heavy (cell, definition_id)
+# that has no matching pair with a positive ok-drive rate — including absent series.
+- alert: GoCellSagaInstanceStuckSkipping
+  expr: |
+    sum(rate(gocell_saga_leader_elect_skip_total{reason="contended"}[5m])) by (cell, definition_id) > 0.1
+    unless on(cell, definition_id)
+    sum(rate(gocell_saga_drive_total{result="ok"}[5m])) by (cell, definition_id) > 0
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga instances skipping (contended) but not advancing"
+    description: "Cell {{ $labels.cell }} definition {{ $labels.definition_id }} has sustained leader-elect contended skips with zero successful drives over 10min. A peer may hold a stale distlock. Runbook: docs/ops/saga-runbook.md"
+```
+
+### GoCellSagaLockAcquireFailures
+
+distlock backend I/O faults are preventing leader election — the coordinator
+cannot confirm leadership and skips every instance fail-closed.
+
+```yaml
+# rate() = events/sec; `> 0.05` fires at >0.05 backend-error skips/sec (≈ 3/min)
+# over the 5m window. backend_error is distlock backend I/O (Redis) faults only
+# (contended / ctx_canceled are classified separately), so any sustained rate is
+# a real fault — tune by your distlock backend's acceptable transient-error floor.
+- alert: GoCellSagaLockAcquireFailures
+  expr: sum(rate(gocell_saga_leader_elect_skip_total{reason="backend_error"}[5m])) by (cell) > 0.05
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga distlock lock-acquire failures"
+    description: "Cell {{ $labels.cell }} leader-elect is failing on distlock backend I/O (>0.05/sec over 5min). Check the distlock backend (Redis) health. Runbook: docs/ops/saga-runbook.md"
+```
 
 **StatusCompensationFailed terminal state**: when a saga instance reaches
 `status=compensation_failed` (status=8 in PG), the compensation phase itself failed.

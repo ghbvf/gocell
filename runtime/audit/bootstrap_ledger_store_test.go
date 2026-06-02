@@ -16,8 +16,9 @@ import (
 
 // TestNewBootstrapLedgerStore_RejectsNilInner asserts the construction guard.
 // The typed wrapper is the Hard upstream defense — passing a nil inner store
-// to AppendBootstrapAuthFail / NewBootstrapAuthFailObserver is meant to fail
-// at wiring time, never at the first 401/429.
+// to AppendBootstrapAuthFail is meant to fail at wiring time (cellmodules/auditcore
+// injects the store into the auditappendbootstrap slice before bootstrap), never
+// at the first 401/429 event.
 func TestNewBootstrapLedgerStore_RejectsNilInner(t *testing.T) {
 	t.Parallel()
 	_, err := audit.NewBootstrapLedgerStore(nil)
