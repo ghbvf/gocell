@@ -480,6 +480,136 @@ func TestPhase6_ProjectionWithoutSubscriber_FailsFast(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 — serial in-order delivery guard
+// ---------------------------------------------------------------------------
+
+// concurrentFakeSubscriber implements outbox.Subscriber but deliberately does
+// NOT implement outbox.SerialInOrderGuarantor — it models a concurrent transport
+// (e.g. AMQP dispatching one goroutine per delivery with prefetch>1). Ready is
+// pre-closed so the event router can reach Running for the subscription-only
+// acceptance path; Subscribe blocks until ctx cancel.
+type concurrentFakeSubscriber struct{}
+
+func (concurrentFakeSubscriber) Setup(context.Context, outbox.Subscription) error { return nil }
+
+func (concurrentFakeSubscriber) Ready(outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (concurrentFakeSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (concurrentFakeSubscriber) Close(context.Context) error { return nil }
+
+// liarSubscriber implements the marker but returns false (an explicit non-serial
+// declaration). It locks that an explicit false is rejected too — the guard must
+// reject both absence (concurrentFakeSubscriber) and false, so a transport cannot
+// pass by implementing the method with the wrong answer.
+type liarSubscriber struct{ concurrentFakeSubscriber }
+
+func (liarSubscriber) GuaranteesSerialInOrderDelivery() bool { return false }
+
+// newProjectionBootstrapWithSubscriber wires the four projection deps plus the
+// given subscriber (so phase6 reaches the projection drain) and the test
+// consumer base / health aggregator that phase0 normally populate.
+func newProjectionBootstrapWithSubscriber(t *testing.T, asm *assembly.CoreAssembly, sub outbox.Subscriber) *Bootstrap {
+	t.Helper()
+	b := newProjectionBootstrap(t,
+		WithAssembly(asm),
+		WithSubscriber(sub),
+		WithConsumerBase(newTestConsumerBase(t)),
+	)
+	b.healthAggregator = newEventsTestAggregator() // phase0 normally sets this.
+	return b
+}
+
+// TestPhase6_Projection_RejectsConcurrentSubscriber is the core fail-closed
+// path: a projection wired onto a subscriber that does NOT implement
+// outbox.SerialInOrderGuarantor must fail fast at the projection drain
+// (ADR §6 row 4 — no concurrent transport may carry a projection).
+func TestPhase6_Projection_RejectsConcurrentSubscriber(t *testing.T) {
+	t.Parallel()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-proj-reject", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newProjectionCell()))
+	require.NoError(t, asm.Start(context.Background()))
+
+	sub := concurrentFakeSubscriber{}
+	b := newProjectionBootstrapWithSubscriber(t, asm, sub)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = sub
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err, "projection on a concurrent (non-serial) subscriber must fail fast")
+	assert.Contains(t, err.Error(), "serial in-order delivery",
+		"error must name the violated precondition")
+	assert.Empty(t, b.projectionCoordinators,
+		"no projection coordinator must be wired when the guard rejects the transport")
+}
+
+// TestPhase6_Projection_RejectsLiarSubscriber locks that an explicit
+// GuaranteesSerialInOrderDelivery() == false is rejected just like absence —
+// implementing the method with the wrong answer must not pass the guard.
+func TestPhase6_Projection_RejectsLiarSubscriber(t *testing.T) {
+	t.Parallel()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-proj-liar", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newProjectionCell()))
+	require.NoError(t, asm.Start(context.Background()))
+
+	sub := liarSubscriber{}
+	b := newProjectionBootstrapWithSubscriber(t, asm, sub)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = sub
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err, "projection on a subscriber declaring serial=false must fail fast")
+	assert.Contains(t, err.Error(), "serial in-order delivery")
+}
+
+// TestPhase6_SubscriptionOnly_AllowsConcurrentSubscriber proves the guard does
+// NOT over-reach: a plain subscription (not a projection) on a concurrent
+// subscriber is allowed — only projections require serial in-order delivery.
+func TestPhase6_SubscriptionOnly_AllowsConcurrentSubscriber(t *testing.T) {
+	t.Parallel()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-sub-only", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.subonly.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	sub := concurrentFakeSubscriber{}
+	b := newProjectionBootstrapWithSubscriber(t, asm, sub)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = sub
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	require.NoError(t, b.phase6StartEventRouter(runCtx, s),
+		"a plain subscription on a concurrent subscriber must not trip the projection serial guard")
+
+	for _, v := range slices.Backward(s.teardowns) {
+		_ = v.fn(context.Background())
+	}
+}
+
+// ---------------------------------------------------------------------------
 // WithProjection* options
 // ---------------------------------------------------------------------------
 

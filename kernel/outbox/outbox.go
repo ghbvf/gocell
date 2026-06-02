@@ -907,6 +907,42 @@ type SubscriberIntakeStopper interface {
 	StopIntake(ctx context.Context) error
 }
 
+// SerialInOrderGuarantor is an optional Subscriber-implementer extension
+// contract. Business handlers must never reference this interface.
+//
+// A Subscriber that implements it and returns true ASSERTS that it delivers a
+// single subscription's stream strictly serially and in order: at most one
+// delivery is dispatched at a time and the next is handed off only after the
+// previous handler returns. This is the precondition L3 CQRS projection
+// subscriptions REQUIRE — projection exactly-once rests on a monotonic
+// checkpoint (applyOne skips any event whose stream position ≤ the stored
+// checkpoint), which is only SOUND under serial in-order delivery. Under
+// concurrent delivery (e.g. the AMQP subscriber dispatching one goroutine per
+// delivery with prefetch>1) a higher position can commit the checkpoint before
+// a lower position is applied, silently dropping the lower event's distinct
+// apply (a projection gap). See kernel/projection/doc.go "Ordering precondition"
+// and ADR docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md
+// §6 threat row 4.
+//
+// Scope of the guarantee: it holds for a SINGLE subscriber on a given
+// (consumerGroup, topic). A projection's consumer group is derived as
+// "<cellID>-<projectionID>" and the bootstrap drain registers exactly one
+// subscription for it, so the single-subscriber precondition is structurally
+// satisfied. The guarantee does NOT extend to multiple competing subscribers
+// sharing one consumer group (e.g. the in-memory bus round-robins across them
+// on independent goroutines).
+//
+// fail-closed by absence: a Subscriber that does NOT implement this interface
+// is treated as NOT serial. The projection drain rejects wiring a projection
+// onto such a transport. A concurrent transport therefore opts OUT simply by
+// not implementing the method — and any future transport that forgets to
+// implement it is auto-rejected for projections rather than silently unsafe.
+//
+// Guarded by archtest PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01.
+type SerialInOrderGuarantor interface {
+	GuaranteesSerialInOrderDelivery() bool
+}
+
 // SubscriberWithMiddleware wraps a Subscriber with a business middleware chain
 // and a required ConsumerBase for idempotency/retry.
 //
