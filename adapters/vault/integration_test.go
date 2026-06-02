@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	vaultapi "github.com/hashicorp/vault/api"
+	"github.com/testcontainers/testcontainers-go"
 	vaultcontainer "github.com/testcontainers/testcontainers-go/modules/vault"
 
 	"github.com/stretchr/testify/assert"
@@ -30,19 +31,24 @@ import (
 // The transit secret engine is enabled and the key "gocell-config" is created
 // during init. Returns (addr, token, teardown). Only a missing Docker daemon is
 // allowed to skip; image digest, init command, and address failures must fail.
-func startVaultContainer(t *testing.T) (addr, token string, teardown func()) {
+//
+// Extra opts are appended to the container request — the Kubernetes-auth e2e
+// (k8s_auth_e2e_integration_test.go) passes network.WithNetwork(...) so Vault
+// can reach the in-cluster k3s API server for TokenReview over a shared network.
+func startVaultContainer(t *testing.T, opts ...testcontainers.ContainerCustomizer) (addr, token string, teardown func()) {
 	t.Helper()
 	testutil.RequireDocker(t)
 	ctx := context.Background()
 
-	container, err := vaultcontainer.Run(ctx,
-		testutil.VaultImage,
+	runOpts := append([]testcontainers.ContainerCustomizer{
 		vaultcontainer.WithToken("root-test-token"),
 		vaultcontainer.WithInitCommand(
 			"secrets enable transit",
 			"write -f transit/keys/gocell-config",
 		),
-	)
+	}, opts...)
+
+	container, err := vaultcontainer.Run(ctx, testutil.VaultImage, runOpts...)
 	require.NoError(t, err, "start vault container")
 
 	vaultAddr, err := container.HttpHostAddress(ctx)
