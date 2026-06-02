@@ -6,6 +6,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/auth"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -123,6 +125,11 @@ func defaultRuntimeOptions(
 	//
 	// ref: go-kratos/kratos app.go — per-server option pattern.
 	opts := runtimeBaseOptions(shared, locals, asm, consumerBase, metricsHandler, adapterInfo)
+	projOpts, err := projectionRuntimeOptions(shared)
+	if err != nil {
+		return nil, fmt.Errorf("projection harness wiring: %w", err)
+	}
+	opts = append(opts, projOpts...)
 	if shared.PrimaryHTTPAddr != "" {
 		primaryAuth, err := auth.NewAuthJWTFromAssembly(asm)
 		if err != nil {
@@ -166,4 +173,43 @@ func buildInternalAuthChain(guard *internalGuard) ([]auth.ListenerAuth, error) {
 		return nil, fmt.Errorf("build internal auth chain: %w", err)
 	}
 	return []auth.ListenerAuth{plan}, nil
+}
+
+// projectionRuntimeOptions builds the four L3 CQRS projection-harness dependency
+// options (#1368) from the shared postgres capability: the PG-backed
+// CheckpointStore, the pool-bound TxRunner, and the journal-backed ReplaySource +
+// Cursor (the cursor delegates to the replay source — single seq-SQL holder).
+//
+// PG mode only. In memory mode (shared.PG == nil) it returns no options: the
+// projection harness requires a durable checkpoint store, not an in-memory fake,
+// so a projection declared without PG fails fast in the bootstrap phase6 drain
+// (checkProjectionDeps), which is the correct outcome. corebundle ships no
+// projection cell today, so these options are dormant until one is added —
+// forward-provisioning per #1368.
+func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Option, error) {
+	if shared.PG == nil {
+		return nil, nil
+	}
+	pool, err := cellsecrets.PgxPoolFromProvider(shared.PG)
+	if err != nil {
+		return nil, fmt.Errorf("projection pg pool: %w", err)
+	}
+	checkpointStore, err := adapterpg.NewProjectionCheckpointStore(pool)
+	if err != nil {
+		return nil, fmt.Errorf("projection checkpoint store: %w", err)
+	}
+	replaySource, err := adapterpg.NewProjectionReplaySource(pool)
+	if err != nil {
+		return nil, fmt.Errorf("projection replay source: %w", err)
+	}
+	cursor, err := adapterpg.NewProjectionCursor(replaySource)
+	if err != nil {
+		return nil, fmt.Errorf("projection cursor: %w", err)
+	}
+	return []bootstrap.Option{
+		bootstrap.WithProjectionCheckpointStore(checkpointStore),
+		bootstrap.WithProjectionTxRunner(shared.PG.TxManager()),
+		bootstrap.WithProjectionReplaySource(replaySource),
+		bootstrap.WithProjectionCursor(cursor),
+	}, nil
 }

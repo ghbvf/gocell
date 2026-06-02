@@ -360,6 +360,9 @@ var expectedColumns = []expectedColumn{
 	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
 	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
 	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
+	// seq is GENERATED ALWAYS AS IDENTITY (implicitly NOT NULL) — the monotonic
+	// stream position consumed by the projection ReplaySource/Cursor (047 / #1368).
+	{Table: "outbox_entries", Column: "seq", Type: "bigint", NotNull: true}, // 047 NEW
 	// users (017_users.sql + 022_users_password_version.sql)
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "users", Column: "username", Type: "text", NotNull: true},
@@ -527,6 +530,12 @@ var expectedDefaults = []expectedDefault{
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
 var expectedIndexes = []expectedIndex{
+	// outbox_entries — projection stream position (047_outbox_entries_seq.sql / #1368).
+	// The relay claim index (idx_outbox_pending*) is intentionally not registered
+	// here (it evolves with the relay state machine, independent of this guard);
+	// idx_outbox_seq is tracked because the projection ReplaySource/Cursor depend
+	// on it for ordered range scans, so a partial migration must fail fast.
+	{Table: "outbox_entries", Name: "idx_outbox_seq", Unique: true},
 	// users
 	{Table: "users", Name: "idx_users_username", Unique: true},
 	{Table: "users", Name: "idx_users_email", Unique: true},

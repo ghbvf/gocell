@@ -99,7 +99,12 @@ var reconstructionFunnelAllowlist = map[string]map[string]struct{}{
 	},
 	// Storage-reconstruction funnel: persisted DB row → sealed Entry.
 	"(kernel/outbox.EntryScan).ToEntry": {
-		"adapters/postgres/outbox_store.go":              {}, // PG relay claim/scan path
+		"adapters/postgres/outbox_store.go": {}, // PG relay claim/scan path
+		// PG projection journal replay (#1368): reconstructs a sealed Entry from
+		// outbox_entries rows for the projection ReplaySource. Same sanctioned
+		// "persisted DB row → Entry" infra role as the relay claim path; producers
+		// (cells/examples) cannot reach it.
+		"adapters/postgres/projection_replay_source.go":  {},
 		"runtime/outbox/outboxtest/store_conformance.go": {}, // store-conformance helper lib (not _test.go)
 	},
 }

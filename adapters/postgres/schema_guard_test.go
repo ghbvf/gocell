@@ -73,8 +73,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// (#1174 / W10 PR-02 — owner column reserved, v1 unread/unwritten).
 	// 046 creates reconcile_leases for the kernel/reconcile LeaderElector PG backend
 	// (#661 / PR-A6 — holder + monotonic fencing epoch + lease window).
-	assert.Equal(t, int64(46), v,
-		"expected version should be exactly 46 (current migration max — 046 reconcile_leases)")
+	// 047 adds outbox_entries.seq (BIGINT GENERATED ALWAYS AS IDENTITY) + idx_outbox_seq:
+	// the monotonic stream position for the projection journal ReplaySource/Cursor
+	// (#1368 / W10 PR-04c).
+	assert.Equal(t, int64(47), v,
+		"expected version should be exactly 47 (current migration max — 047 outbox_entries_seq)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
