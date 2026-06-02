@@ -409,10 +409,12 @@ var expectedColumns = []expectedColumn{
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
-	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql)
+	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql + 047_audit_entries_trace_id.sql)
 	// 043 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
 	// the 12-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
 	// must supply values.
+	// 047 adds trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
+	// NOT part of the HMAC chain (observability only).
 	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "seq_no", Type: "bigint", NotNull: true},
@@ -423,6 +425,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "audit_entries", Column: "tenant_id", Type: "text", NotNull: true},       // 043 NEW
 	{Table: "audit_entries", Column: "session_id", Type: "text", NotNull: true},      // 043 NEW
 	{Table: "audit_entries", Column: "correlation_id", Type: "text", NotNull: true},  // 043 NEW
+	{Table: "audit_entries", Column: "trace_id", Type: "text", NotNull: true},        // 047 NEW
 	{Table: "audit_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 043 NEW
 	{Table: "audit_entries", Column: "timestamp", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
@@ -539,11 +542,13 @@ var expectedIndexes = []expectedIndex{
 	// role_assignments
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false},
 	// audit_entries (020_audit_ledger.sql + 021 event_id unique;
-	// 043_audit_entries_v2.sql rebuilds the table preserving index names)
+	// 043_audit_entries_v2.sql rebuilds the table preserving index names;
+	// 048 adds idx_audit_namespace_trace_id CONCURRENTLY for TraceID filter)
 	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
 	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true},
+	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false}, // 048 NEW
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false},
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false},
