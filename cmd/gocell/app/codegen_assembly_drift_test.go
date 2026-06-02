@@ -69,6 +69,20 @@ func minimalAssemblyProject(t *testing.T) string {
 	return root
 }
 
+// assemblyTestModulePath resolves the module path from the project's go.mod —
+// the same source runVerifyCodegenAssembly uses. generateAssemblyModulesGen's
+// formatter (codegen.FormatGoSource) rejects an empty modulePath, and the
+// pre-render must use the SAME path the verify pass resolves, or the on-disk
+// file won't match regeneration (spurious drift).
+func assemblyTestModulePath(t *testing.T, root string) string {
+	t.Helper()
+	mp, err := readModule(root)
+	if err != nil {
+		t.Fatalf("readModule: %v", err)
+	}
+	return mp
+}
+
 // preRenderAssemblyModulesGen generates all assembly modules_gen.go files for
 // the project at root using the generateAssemblyModulesGen helper (verify=false).
 func preRenderAssemblyModulesGen(t *testing.T, root string) {
@@ -77,7 +91,8 @@ func preRenderAssemblyModulesGen(t *testing.T, root string) {
 	if err != nil {
 		t.Fatalf("pre-render metadata parse: %v", err)
 	}
-	if _, err := generateAssemblyModulesGen(root, project, false, false, "", ""); err != nil {
+	mp := assemblyTestModulePath(t, root)
+	if _, err := generateAssemblyModulesGen(root, project, false, false, "", mp); err != nil {
 		t.Fatalf("pre-render generateAssemblyModulesGen: %v", err)
 	}
 }
@@ -90,7 +105,7 @@ func TestCollectAssemblyModulesGenDrift_NoDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	res, err := generateAssemblyModulesGen(root, project, false, true, "", "")
+	res, err := generateAssemblyModulesGen(root, project, false, true, "", assemblyTestModulePath(t, root))
 	if err != nil {
 		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
@@ -115,7 +130,7 @@ func TestCollectAssemblyModulesGenDrift_DetectsTampering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	res, err := generateAssemblyModulesGen(root, project, false, true, "", "")
+	res, err := generateAssemblyModulesGen(root, project, false, true, "", assemblyTestModulePath(t, root))
 	if err != nil {
 		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
@@ -140,7 +155,7 @@ func TestCollectAssemblyModulesGenDrift_DetectsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	res, err := generateAssemblyModulesGen(root, project, false, true, "", "")
+	res, err := generateAssemblyModulesGen(root, project, false, true, "", assemblyTestModulePath(t, root))
 	if err != nil {
 		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
