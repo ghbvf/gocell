@@ -4,7 +4,7 @@
 
 Accepted — 2026-05-14. Refactor 574 is the stage-1 PR-1 implementation; stages 2 / 3 / 4 are tracked in `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.md`.
 
-**Amended 2026-06-02 (#1037 §1d)**: the five `Run*` entry points (`Run`(AST) / `RunTyped` / `RunTypedProduction` / `RunTypedDir` / `RunTypedFixture`) were collapsed into a single `Run(t, scope RunScope, rule Rule)` + a sealed `RunScope` interface with five typed constructors. The current authoritative API surface + threat-matrix re-evaluation is the **#1037 §1d amendment** subsection below; the original Decision code block and the Stage 1.6/1.7/4 narrative are retained as the historical decision record and read through that amendment.
+**Amended 2026-06-02 (#1037 §1d)**: the five `Run*` entry points (`Run`(AST) / `RunTyped` / `RunTypedProduction` / `RunTypedDir` / `RunTypedFixture`) were collapsed into a single `Run(t, scope RunScope, rule Rule)` + a sealed `RunScope` interface with five typed constructors. The Decision code block below has been updated in place to the current signatures (no stale dual-entry surface presented as the API). The Stage 1.6/1.7/4 narrative further down is dated decision-provenance — it records *why* the now-superseded dual-entry shape was chosen at each stage and which PRs migrated it (past-tense history, not current API guidance). The **#1037 §1d amendment** subsection is the authoritative source for the full old→new mapping, sealed grading, and threat-matrix re-evaluation.
 
 ## Context
 
@@ -32,29 +32,39 @@ type Pass struct {
 
 type Rule func(*Pass) []Diagnostic
 
-func Run(t *testing.T, scope Scope, rule Rule) []Diagnostic
-func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
-func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic
+// Single rule-dispatch entry + sealed scope descriptor (#1037 §1d, 2026-06-02).
+func Run(t testing.TB, scope RunScope, rule Rule) []Diagnostic
+
+// RunScope is sealed (unexported isRunScope); the five constructors below are
+// the only ways to build one.
+func AST(fs Scope) RunScope                                          // AST-only
+func Typed(opts TypedOpts, patterns []string) RunScope              // typed, main module
+func Production(opts TypedOpts) RunScope                            // typed, generated/ excluded
+func Fixture(opts FixtureOpts, patterns []string) RunScope          // typed, archtest_fixture tag injected
+func StandaloneModule(dir string, opts TypedOpts, patterns []string) RunScope // typed, standalone module
 ```
 
-> **Superseded by the #1037 §1d amendment (2026-06-02)** — the multiple `Run*`
-> entries above were collapsed into a single `Run(t, scope RunScope, rule Rule)`
-> + a sealed `RunScope` with five typed constructors (`AST` / `Typed` /
-> `Production` / `Fixture` / `StandaloneModule`). See the amendment subsection
-> below for the current signatures and grading. The block above is retained as
-> the original (2026-05-14) decision record.
+> **Evolution note (#1037 §1d, 2026-06-02).** The original 2026-05-14 decision
+> exposed five separate entry points — `Run`(AST-only) / `RunTyped` /
+> `RunTypedProduction` / `RunTypedDir` / `RunTypedFixture`. #1037 §1d collapsed
+> them into the single `Run(t, scope RunScope, rule Rule)` shown above, moving
+> the mode/source choice into the sealed `RunScope` value (which also removes the
+> public build-tag parameter, sealing the fixture-tag bypass surface). The
+> signatures above are current; the **#1037 §1d amendment subsection** below is
+> the authoritative source for the full old→new mapping, sealed grading, and
+> threat-matrix re-evaluation.
 
 Rule authors write `Rule` closures and let the driver (`Run` with its scope
 constructors) construct `*Pass` from a single load. The framework owns
 `packages.Load` / `parser.ParseFile` timing; rule authors receive only `*Pass`.
 
-**`RunTypedDir` API surface:**
+**Standalone fixture-module scope (`StandaloneModule`):**
 
-- **Purpose**: load a standalone fixture module living under `testdata/` that carries its own `go.mod` + `replace` directives (intentional-violation isolation). This form is not addressable by `RunTyped` because `findModuleRoot` resolves the repo root, not the fixture subdirectory.
-- **Internals**: delegates to `runTypedWithRoot(t, dir, opts, patterns, rule)` — the same single construction path shared with `RunTyped` (which delegates to `runTypedWithRoot(t, findModuleRoot(t), opts, patterns, rule)`). No fork in the driver logic.
-- **`dir` constraint**: must be an absolute path; `filepath.IsAbs(dir)` is checked at entry with `t.Fatal` on violation.
-- **Parameter type**: `testing.TB` (not `*testing.T`) to support fatal-path spy tests and `TestMain` callsites; consistent with `analysistest.Run`'s `Testing` interface.
-- **Precedent**: `golang.org/x/tools/go/analysis/analysistest.Run(t, dir, analysers…)` feeds `dir` as `packages.Config.Dir`, allowing the loader to resolve imports relative to an arbitrary directory. `RunTypedDir` adopts the same position-parameter shape.
+- **Purpose**: load a standalone fixture module living under `testdata/` that carries its own `go.mod` + `replace` directives (intentional-violation isolation). This form is not addressable by `Typed` because `findModuleRoot` resolves the repo root, not the fixture subdirectory.
+- **Internals**: delegates to `runTypedWithRoot(t, dir, opts, patterns, rule)` — the same single construction path shared with `Typed` (which delegates to `runTypedWithRoot(t, findModuleRoot(t), opts, patterns, rule)`). No fork in the driver logic.
+- **`dir` constraint**: must be an absolute path; `filepath.IsAbs(dir)` is checked in the `Run` dispatch with `t.Fatal` on violation.
+- **Parameter type**: `Run` takes `testing.TB` (not `*testing.T`) to support fatal-path spy tests and `TestMain` callsites; consistent with `analysistest.Run`'s `Testing` interface.
+- **Precedent**: `golang.org/x/tools/go/analysis/analysistest.Run(t, dir, analysers…)` feeds `dir` as `packages.Config.Dir`, allowing the loader to resolve imports relative to an arbitrary directory. `StandaloneModule` adopts the same position-parameter shape.
 
 ref: `golang.org/x/tools go/analysis/analysistest/analysistest.go` (`dir` position param → `packages.Config.Dir`)
 

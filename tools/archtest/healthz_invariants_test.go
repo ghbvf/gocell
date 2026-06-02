@@ -464,7 +464,6 @@ func TestHealthzInvariants_ReverseBlindSpot_NoDynamicHealthzPath(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		prodscan.PatternsExtended(findModuleRoot(t))),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil

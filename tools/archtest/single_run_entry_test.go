@@ -26,8 +26,11 @@
 // # Blind spots (per ai-robust.md Medium evidence requirement)
 //
 //   - A new Run* entry point declared under a different func type (method,
-//     closure assigned to a var) is not detected. Only top-level FuncDecl
-//     with no receiver is scanned.
+//     closure assigned to a var) is not detected by the MAIN scan, which only
+//     visits top-level receiver-less FuncDecls. This blind spot has its own
+//     reverse self-check: TestArchtestSingleRunEntry_BlindSpotProbe asserts
+//     neither form occurs in the façade (currently vacuous), so introducing one
+//     fires the probe.
 //   - This scan covers only direct-child non-test .go files of
 //     tools/archtest/ (the façade boundary). Sub-packages are not scanned
 //     (they are inaccessible to business archtest authors who import only
@@ -35,11 +38,13 @@
 //
 // Reverse self-check: the test verifies that [Run] and [RunStandardCellRules]
 // ARE present (non-empty allowlist) so a future removal of the main entry
-// point also fails CI.
+// point also fails CI; TestArchtestSingleRunEntry_BlindSpotProbe covers the
+// method / var-closure blind-spot forms.
 package archtest
 
 import (
 	"go/ast"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -110,5 +115,75 @@ func TestArchtestSingleRunEntry(t *testing.T) {
 				"the allowlist entry is stale or the function was accidentally removed",
 				name)
 		}
+	}
+}
+
+// TestArchtestSingleRunEntry_BlindSpotProbe is the reverse self-check for the
+// first documented blind spot of ARCHTEST-SINGLE-RUN-ENTRY-01: a Run* entry
+// declared under a func type the main scan does not cover — a method
+// (`func (x X) RunFoo()`) or a package-level var bound to a func literal
+// (`var RunFoo = func(){...}`). The main test only scans top-level FuncDecls
+// with no receiver, so these two forms slip past it.
+//
+// Per ai-robust.md (each blind spot needs a reverse self-check asserting it does
+// NOT occur in production AST), this probe scans the façade for both forms and
+// asserts zero. It is currently vacuous (no such forms exist), which is exactly
+// the point: if a future change introduces a method or var-closure Run* entry,
+// this probe — not the main rule — fires, keeping the blind spot from going
+// silently live.
+func TestArchtestSingleRunEntry_BlindSpotProbe(t *testing.T) {
+	type hit struct {
+		rel, name, form string
+		line            int
+	}
+	var hits []hit
+	Run(t, AST(facadeScopeForArchtest(t)), func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			// Method-receiver form: exported Run* method.
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+				if fn.Recv == nil || fn.Name == nil || !fn.Name.IsExported() {
+					return
+				}
+				if !strings.HasPrefix(fn.Name.Name, "Run") || runEntryAllowlist[fn.Name.Name] {
+					return
+				}
+				hits = append(hits, hit{
+					rel, fn.Name.Name, "method",
+					p.Fset.Position(fn.Name.Pos()).Line,
+				})
+			})
+			// Var-closure form: package-level exported Run* var bound to a func
+			// literal. EachInChildren[ast.ValueSpec] is the sanctioned depth-1
+			// walk over GenDecl.Specs (SCANNER-FRAMEWORK-USAGE-01 funnel).
+			EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+				if gd.Tok != token.VAR {
+					return
+				}
+				EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+					hasFuncLit := false
+					EachInChildren[ast.FuncLit](vs, func(*ast.FuncLit) { hasFuncLit = true })
+					if !hasFuncLit {
+						return
+					}
+					EachInChildren[ast.Ident](vs, func(id *ast.Ident) {
+						if !id.IsExported() || !strings.HasPrefix(id.Name, "Run") ||
+							runEntryAllowlist[id.Name] {
+							return
+						}
+						hits = append(hits, hit{
+							rel, id.Name, "var-closure",
+							p.Fset.Position(id.Pos()).Line,
+						})
+					})
+				})
+			})
+		}
+		return nil
+	})
+	for _, h := range hits {
+		t.Errorf("ARCHTEST-SINGLE-RUN-ENTRY-01 blind-spot probe: %s:%d declares %s Run* entry %q — "+
+			"the main rule only scans top-level receiver-less FuncDecls, so this form would slip past it; "+
+			"express it as Run(t, <RunScope>, rule) instead", h.rel, h.line, h.form, h.name)
 	}
 }

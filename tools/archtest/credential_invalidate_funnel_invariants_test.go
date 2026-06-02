@@ -626,7 +626,6 @@ func TestCredentialInvalidateFunnel_AllowlistEntriesAreLive(t *testing.T) {
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -700,7 +699,6 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

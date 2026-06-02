@@ -1285,6 +1285,25 @@ func TestRun_StandaloneModule_rejectsEmptyPatterns(t *testing.T) {
 	}
 }
 
+// TestRun_rejectsNilScope verifies that Run(t, nil, rule) fails loud with a
+// message naming the five constructors, rather than the ambiguous former
+// "nil RunScope" wording that also covered the unknown-type default branch.
+func TestRun_rejectsNilScope(t *testing.T) {
+	spy := &tbFatalSpy{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Run(spy, nil, func(*Pass) []Diagnostic { return nil })
+	}()
+	<-done
+	if !spy.fatal {
+		t.Errorf("Run(t, nil, rule): expected t.Fatalf, got none")
+	}
+	if !strings.Contains(spy.lastMsg, "nil scope") {
+		t.Errorf("Run(t, nil, rule) fatal message %q does not mention \"nil scope\"", spy.lastMsg)
+	}
+}
+
 // TestRun_Fixture_delegatesToRunTypedWithRoot verifies the regression contract
 // for the typed scopes' shared delegation: Fixture (like Typed) routes through
 // runTypedWithRoot and still produces a valid typed Pass after the Stage 1.6

@@ -227,7 +227,6 @@ func scanMQTTCallsiteFunnel(t *testing.T, ruleID, targetFull string, allowedKeys
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -530,7 +529,6 @@ func scanMQTTTokenConstruction(t *testing.T, typeName string, allowedFuncs []str
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -557,7 +555,6 @@ func countMQTTTokenLiteralsInsideFunc(t *testing.T, typeName, funcName string) i
 	var inside int
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -633,7 +630,6 @@ func scanMQTTTokenFieldAssignment(t *testing.T, typeName string, fieldNames []st
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -791,7 +787,6 @@ func mqttAssertTokenFieldFreeze(t *testing.T, typeName string, wantFields []mqtt
 	var checked bool
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -879,7 +874,6 @@ func scanMQTTCMMethodValue(t *testing.T, methodNames []string, ruleID string) []
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -938,7 +932,6 @@ func TestMQTTCallsiteFunnel_A4S4_ScannerNonVacuous(t *testing.T) {
 	cmMethods := []string{publishMethodName, subscribeMethodName, unsubscribeMethodName}
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -1008,7 +1001,6 @@ func scanMQTTCMMethodExpression(t *testing.T, methodNames, allowedKeys []string,
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -1112,7 +1104,6 @@ func scanMQTTReflectMethodByName(t *testing.T, methodNames []string, ruleID stri
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -1207,7 +1198,6 @@ func TestMQTTPublishCallsiteFunnel_A7_BlindSpot_NoConnectionManagerAlias(t *test
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{mqttPkgPath}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
