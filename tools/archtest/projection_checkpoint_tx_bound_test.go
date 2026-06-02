@@ -230,7 +230,6 @@ func TestProjectionCheckpointTxBound01_RedFixture(t *testing.T) {
 			FixtureOpts{Tests: false},
 			[]string{"./tools/archtest/internal/projectioncheckpointtxfixture/..."},
 		),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

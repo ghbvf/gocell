@@ -18,14 +18,16 @@
 //
 // Each construction below is at NON-constructor scope (helper func body, never
 // AST / Typed / Production / StandaloneModule / Fixture), so each of the five
-// scope structs must be flagged — making every entry in runScopeStructNames a
+// scope structs must be flagged — making every entry in runScopeStructToCtor a
 // load-bearing per-member trip-wire. The functions are never invoked; they
-// exist only as *ast.CompositeLit + *types.Info source for the detector.
+// exist only as *ast.CompositeLit / *ast.ValueSpec + *types.Info source for the
+// detector. Total RED count = seven (5 direct + 1 alias + 1 var-decl).
 
 package archtest
 
 // runScopeConstructorBypassFixture constructs each of the five sealed RunScope
-// structs OUTSIDE its sanctioned constructor — every line is a RED violation.
+// structs OUTSIDE its sanctioned constructor — every line is a RED violation
+// (Form 1: composite literal).
 func runScopeConstructorBypassFixture() {
 	_ = astRunScope{}        // bypass: astRunScope outside AST
 	_ = typedRunScope{}      // bypass: typedRunScope outside Typed
@@ -34,14 +36,34 @@ func runScopeConstructorBypassFixture() {
 	_ = fixtureRunScope{}    // bypass: fixtureRunScope outside Fixture
 }
 
+// aliasOfTypedRunScope is a same-package type alias to typedRunScope. Under
+// gotypesalias=1 (Go 1.23+ default) the type of aliasOfTypedRunScope{} is a
+// *types.Alias, so the detector must types.Unalias it to flag the literal below
+// — this fixture proves the Unalias leg (F2) is load-bearing.
+type aliasOfTypedRunScope = typedRunScope
+
+// runScopeConstructorAliasBypassFixture builds typedRunScope via a type-alias
+// literal outside Typed — RED only if the detector unaliases (Form 1, F2).
+func runScopeConstructorAliasBypassFixture() {
+	_ = aliasOfTypedRunScope{} // bypass: alias of typedRunScope outside Typed
+}
+
+// runScopeConstructorVarDeclBypassFixture builds typedRunScope by a zero-value
+// var declaration outside Typed — RED only if the detector scans Form 2 (F1); a
+// composite-literal-only scan misses it (there is no CompositeLit node).
+func runScopeConstructorVarDeclBypassFixture() {
+	var _ typedRunScope // bypass: zero-value var-decl construction outside Typed
+}
+
 // runScopeConstructorGreenNegatives constructs NON-scope structs of package
 // archtest outside any constructor — these MUST NOT be flagged. They are the
-// GREEN false-positive control: the FixtureCoverage exact-count lock (== 5,
-// the RED lines above) makes them load-bearing — if a non-scope name were
-// mistakenly added to runScopeStructNames, one of these would trip and the
-// count would exceed 5.
+// GREEN false-positive control: the FixtureCoverage exact-count lock (== 7, the
+// RED lines above) makes them load-bearing — if a non-scope name were mistakenly
+// tracked, or the Form-2 var-decl scan over-flagged non-scope vars, one of these
+// would trip and the count would exceed 7.
 func runScopeConstructorGreenNegatives() {
-	_ = TypedOpts{}   // not a RunScope struct → must NOT be flagged
-	_ = FixtureOpts{} // not a RunScope struct → must NOT be flagged
-	_ = Diagnostic{}  // not a RunScope struct → must NOT be flagged
+	_ = TypedOpts{}   // not a RunScope struct → must NOT be flagged (Form 1)
+	_ = FixtureOpts{} // not a RunScope struct → must NOT be flagged (Form 1)
+	_ = Diagnostic{}  // not a RunScope struct → must NOT be flagged (Form 1)
+	var _ TypedOpts   // not a RunScope struct → must NOT be flagged (Form 2)
 }

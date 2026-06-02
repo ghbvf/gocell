@@ -361,7 +361,6 @@ func TestAuthRouteBootstrapClientsMutex_FixturePattern(t *testing.T) {
 	specVars := map[*types.Var]bool{}
 	_ = Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			collectContractSpecVars(p, specTypePath, specVars)
 			return nil
@@ -370,7 +369,6 @@ func TestAuthRouteBootstrapClientsMutex_FixturePattern(t *testing.T) {
 	// Phase 2: scan fixture packages for mutex violations.
 	diags := Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{fixturePattern}),
-
 		func(p *Pass) []Diagnostic {
 			return scanRouteBootstrapClients(p, routeTypePath, specTypePath, specVars)
 		})
