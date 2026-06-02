@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cellmodules/accesscore"
-	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -40,9 +39,10 @@ func TestModule_ImplementsCellModule(*testing.T) {
 // TestModule_Provide_MemMode exercises accesscore.Module().Provide with a
 // memory-mode SharedDeps (no Postgres, no Redis).
 //
-// accesscore.Provide requires shared.BootstrapLedgerStore (wired by auditcore),
-// so we first run auditcore.Module().Provide to populate it — mirroring the real
-// composition assembly order (auditcore before accesscore).
+// After Wave-1 #1423, accesscore.Provide no longer requires auditcore's
+// BootstrapLedgerStore export — the cross-module handoff channel has been
+// deleted. accesscore now publishes event.auth.bootstrap-failed.v1 via outbox
+// and auditcore subscribes. The two modules are fully independent at Provide time.
 func TestModule_Provide_MemMode(t *testing.T) {
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "admin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "admin-test-pass")
@@ -50,13 +50,7 @@ func TestModule_Provide_MemMode(t *testing.T) {
 	ctx := context.Background()
 	shared := buildMemSharedDeps(t)
 
-	// auditcore must run first: it exports BootstrapLedgerStore, which accesscore
-	// consumes via the typed ModuleExports handoff.
-	_, exports, _, _, err := cellmodulesauditcore.Module().Provide(ctx, shared, composition.ModuleExports{})
-	require.NoError(t, err, "auditcore.Provide must succeed before accesscore")
-	require.NotNil(t, exports.BootstrapLedgerStore, "auditcore.Provide must export BootstrapLedgerStore")
-
-	c, _, _, _, err := accesscore.Module().Provide(ctx, shared, exports)
+	c, _, _, err := accesscore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	assert.Equal(t, "accesscore", c.ID())
