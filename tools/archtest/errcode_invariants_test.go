@@ -2219,11 +2219,13 @@ func resolveCodeGatedCallee(call *ast.CallExpr, info *types.Info) (codeGatedCall
 //     Zero such New/Wrap callsites exist today, so no false-positive; if one is
 //     introduced it must use a named sentinel or an explicit known-safe-callee
 //     allowlist must be added here (do not silently broaden the skip set).
-//  4. Canary anchor: ERR_AUTH_FORBIDDEN / ERR_INTERNAL are declared in
-//     pkg/errcode/errcode.go (excluded from the production scan). The canary
-//     observes them from OTHER production files that reference the sentinels at
-//     call sites; if all such callsites disappear the canary fires, prompting a
-//     review of the anchor selection.
+//  4. Canary anchor: ERR_AUTH_FORBIDDEN / ERR_INTERNAL are declared as
+//     sentinels in pkg/errcode/errcode.go. pkg/errcode is no longer skipped
+//     wholesale — it is scanned for Target B (Target A disabled there) — so the
+//     canary observes them directly from those sentinel declarations, plus any
+//     other-file Target A callsites. If both the declarations and all
+//     referencing callsites disappear, the canary fires, prompting a review of
+//     the anchor selection.
 //
 // ref: docs/architecture/202606031200-1091-adr-errcode-prefix-ownership-registry.md
 // Issue #1091.
