@@ -94,7 +94,7 @@ func TestEvalPredicateCentralization01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	// RunTyped with tests=true loads *_test.go files so the rule can
+	// Run(t, Typed(TypedOpts{Tests: true}, ...)) loads *_test.go files so the rule can
 	// inspect archtest tests themselves. Pattern is scoped to ./tools/archtest/...
 	// — not the real-repo "./..." that PRODUCTION-LOADER-FUNNEL-01 polices —
 	// so this is the canonical narrow-scope archtest-self load shape, same
@@ -340,7 +340,7 @@ func isAllFalseSentinelFuncLit(fl *ast.FuncLit) bool {
 // is a synthetic single-file Go package that demonstrates one canonical
 // shape (GREEN, 0 violations expected) or one violation shape (RED, the
 // expected violation line(s) listed in the table below). Loading goes
-// through RunTyped with full types.Info so the type-aware
+// through Run(t, Typed(...)) with full types.Info so the type-aware
 // detection paths (isConstraintExprEvalCall via ResolveMethodCall;
 // isBuildContextPredicateCallee via ResolvePackageRef) are exercised the
 // same way as the main test.

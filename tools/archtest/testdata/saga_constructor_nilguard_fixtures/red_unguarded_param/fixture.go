@@ -5,7 +5,7 @@
 // parameter without calling IsNilInterface or clock.MustHaveClock on it.
 // A guarded counterpart (NewGuarded) is the negative control proving the detector
 // does not fire for properly guarded constructors.
-// Loaded only via RunTypedFixture.
+// Loaded only via Run(t, Fixture(...)).
 package redunguardedparam
 
 import (

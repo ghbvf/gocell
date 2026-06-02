@@ -8,8 +8,10 @@
 //
 // The six loader symbols (LoadPackages, SharedResolver, LoadProductionPackages,
 // Resolver, ProductionResolver, EachFileInPackage) are intentionally NOT
-// re-exported here. They are reachable only via archtest.RunTyped, which wraps
-// the SharedResolver cache and constructs a *Pass with *types.Package (not
+// re-exported here. They are reachable only via archtest.Run with a typed scope
+// (Run(t, Typed(...)) / Production(...) / Fixture(...) / StandaloneModule(...)),
+// which wraps the SharedResolver cache and constructs a *Pass with
+// *types.Package (not
 // *packages.Package). This is the Hard defensive layer described in
 // docs/architecture/202605141519-adr-archtest-pass-funnel.md: a business
 // *_test.go that receives a *Pass cannot reach .Syntax or reconstruct a fresh
@@ -127,11 +129,11 @@ func EvaluateConstString(info *types.Info, expr ast.Expr) (string, bool) {
 // appearing in [KnownNonDefaultTags], sorted. It carries only production
 // build tags — the archtest_fixture build tag is deliberately NOT in
 // [KnownNonDefaultTags] (#944), so this union never activates fixture-tagged
-// code. Use it as TypedOpts.Tags for the single RunTyped call that scans
-// hand-written production code under all tag-gated activations at once —
-// the compliant idiom for TAGGROUP-LOOP-FORBIDS-RUNTYPED-01.
+// code. Use it as TypedOpts.Tags for the single Run(t, Typed(...), ...) call
+// that scans hand-written production code under all tag-gated activations at
+// once — the compliant idiom for TAGGROUP-LOOP-FORBIDS-RUNTYPED-01.
 //
-// **Always pair with** a second RunTyped(t, TypedOpts{}, ...) call (tags=nil)
+// **Always pair with** a second Run(t, Typed(TypedOpts{}, ...), ...) call (tags=nil)
 // to cover reverse build directives (//go:build !X) which are silently
 // excluded from a -tags=...,X,... union load. Omitting the nil-tags call is
 // safe only if no //go:build !<tag> files exist in the scanned tree — prefer

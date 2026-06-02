@@ -33,7 +33,7 @@ type FuncDeclContext = callresolver.FuncDeclContext
 // WalkFuncDecls iterates p.Files; for each top-level *ast.FuncDecl with a
 // non-nil Body it invokes fn with a [FuncDeclContext] bound to p.TypesInfo,
 // p.Fset and p.Rel(file). Works in both AST-only mode (ctx.Info == nil, e.g.
-// a Pass from archtest.Run) and typed mode (Pass from RunTyped).
+// a Pass from Run(t, AST(...))) and typed mode (Pass from Run(t, Typed(...))).
 //
 // It does NOT auto-skip _test.go / generated files — the callback decides
 // (callers already branch on ctx.Rel suffix and p.IsGenerated). See

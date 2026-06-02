@@ -22,5 +22,5 @@
 //     call-bound ExecDirect(approval, …) function.
 //
 // The fixture is loaded by TestPGRepoAmbientTx_RedFixtureDetected via
-// archtest.RunTypedFixture (which injects the archtest_fixture build tag).
+// Run(t, Fixture(...)) (which injects the archtest_fixture build tag).
 package pgrepoambienttxfixture

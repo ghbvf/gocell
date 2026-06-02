@@ -8,7 +8,7 @@
 // shared helpers against GoCell itself — single source, no parallel rule body.
 //
 // Production dogfood: one-liner via CheckAfterCommitHookPureTransient.
-// Fixture/RED tests: RunTypedFixture against testdata/ fixture dirs, reusing
+// Fixture/RED tests: Run(t, Fixture(...)) against testdata/ fixture dirs, reusing
 // the shared per-Pass scan helpers from the non-test file.
 package archtest
 

@@ -42,8 +42,9 @@ package archtest
 // the literal because Go's //go:build syntax cannot reference a Go constant;
 // this const is the parallel single source for Go-code paths within package
 // archtest. Both sources of truth point at the same value by construction
-// (RunTypedFixture body below uses fixtureBuildTag, and the build directive in
-// each fixture package is a verbatim "archtest_fixture" string).
+// (the [Run] dispatch for a fixtureRunScope injects fixtureBuildTag — see
+// pass.go — and the build directive in each fixture package is a verbatim
+// "archtest_fixture" string).
 const fixtureBuildTag = "archtest_fixture"
 
 // FixtureOpts is the option struct accepted by [Fixture].
@@ -55,7 +56,7 @@ const fixtureBuildTag = "archtest_fixture"
 // PASS-FUNNEL-FIXTURE-TAG-01 (façade bypass closure).
 //
 // This is the Hard-form upgrade of typed function choice: not only the
-// function name (RunTyped vs RunTypedFixture) but the input struct field set
+// constructor name (Typed vs Fixture) but the input struct field set
 // (FixtureOpts has no Tags) participates in the type-system constraint. See
 // AI-robust §Hard 范本 in .claude/rules/gocell/ai-robust.md.
 type FixtureOpts struct {

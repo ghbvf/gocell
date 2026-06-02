@@ -9,7 +9,7 @@
 // the CellEmitter wrapper).
 //
 // AI-robust 评级：Hard (typed auto-discovery via go/types package scope).
-// RunTyped loads ./kernel/... and the rule walks pass.Pkg.Scope().Names() for
+// Run(t, Typed(...)) loads ./kernel/... and the rule walks pass.Pkg.Scope().Names() for
 // internalCell*-prefixed struct TypeNames, asserting each carries Noop() bool
 // in its method set. There is NO hand-maintained file list: a new sealed-marker
 // package or type is discovered automatically, and an internalCell* struct
@@ -92,7 +92,7 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 		return nil
 	})
 
-	// Floor guard against a silent discovery break (RunTyped scope resolving
+	// Floor guard against a silent discovery break (typed Production scope resolving
 	// nothing, prefix typo, etc.): the known sealed markers are
 	// internalCellTxManager (kernel/persistence) + internalCellPublisher /
 	// internalCellWriter / internalCellEmitter (kernel/outbox) +

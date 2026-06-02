@@ -67,8 +67,8 @@ package archtest
 // ref: tools/archtest/prom_cell_label_funnel_test.go — companion Hard pattern
 // ref: docs/architecture/202605141519-adr-archtest-pass-funnel.md — Pass-driver
 //
-//	paradigm; this file uses RunTyped / RunTypedProduction (no direct
-//	packages.Load).
+//	paradigm; this file uses Run(t, Typed(...)) / Run(t, Production(...)) (no
+//	direct packages.Load).
 
 import (
 	"go/ast"

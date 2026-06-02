@@ -766,10 +766,10 @@ func TestCredentialInvalidateApplierInterfaceCanonical_01(t *testing.T) {
 	t.Parallel()
 
 	// Production scan: load credentialinvalidate (canonical home) + caller
-	// trees in ONE RunTyped, so types.Identical sees matching stdlib
+	// trees in ONE typed Run, so types.Identical sees matching stdlib
 	// *types.Named instances. The canonical *types.Type is captured during
 	// the same pass that records candidate interfaces; comparison runs
-	// AFTER RunTyped returns (every package has been visited and canonical
+	// AFTER the typed Run returns (every package has been visited and canonical
 	// is set).
 	prodViolations := scanApplierInterfaceCanonical(t, []string{
 		"./cells/accesscore/internal/credentialinvalidate",
@@ -805,7 +805,7 @@ func TestCredentialInvalidateApplierInterfaceCanonical_01(t *testing.T) {
 
 // applierInterfaceCandidate records a *types.TypeName whose underlying type
 // is an interface with an explicitly declared Apply method, captured during
-// a single RunTyped pass. methodType is the *types.Signature of that Apply
+// a single typed Run pass. methodType is the *types.Signature of that Apply
 // method, comparable via types.Identical against the canonical signature
 // loaded by the same pass.
 type applierInterfaceCandidate struct {
@@ -816,7 +816,7 @@ type applierInterfaceCandidate struct {
 }
 
 // scanApplierInterfaceCanonical loads the canonical credentialinvalidate
-// package together with the scan-target patterns in a SINGLE RunTyped call,
+// package together with the scan-target patterns in a SINGLE Run(t, Typed(...)) call,
 // then compares each candidate interface's Apply signature against the
 // canonical via types.Identical.
 //
@@ -940,7 +940,7 @@ func scanFunnelViolationsPass(
 	return out
 }
 
-// verifyRedFixtureDetectedPass loads the given fixture pattern via RunTyped and
+// verifyRedFixtureDetectedPass loads the given fixture pattern via Run(t, Typed(...)) and
 // asserts the scanner finds ≥ wantMin violations — proving the rule is not
 // permanently GREEN. This is the "反向 RED 自检" (reverse RED self-check)
 // mandated by ai-robust.md. wantMin is the number of distinct banned-method

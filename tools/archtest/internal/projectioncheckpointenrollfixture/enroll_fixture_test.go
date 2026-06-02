@@ -14,7 +14,7 @@ import (
 // from any RunCheckpointConformance call.
 //
 // Under the archtest_fixture build tag this file is type-checked by
-// archtest.RunTypedFixture but never executed by normal `go test` (the tag is not
+// Run(t, archtest.Fixture(...)) but never executed by normal `go test` (the tag is not
 // set in normal builds), so it exists purely as a real, resolvable enrollment
 // callsite for the scanner — not as a running conformance suite.
 func TestEnrolledStoreConformance(t *testing.T) {

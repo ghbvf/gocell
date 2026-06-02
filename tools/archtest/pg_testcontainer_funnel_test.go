@@ -14,7 +14,7 @@
 //
 // Every tcpostgres.Run call and every testcontainers import lives in a
 // `//go:build integration` file. Neither golangci-lint (depguard) nor the
-// archtest typed façade (RunTypedProduction) loads integration-tagged files
+// archtest typed façade (Run(t, Production(...))) loads integration-tagged files
 // by default — both would need a global `integration` build tag, which would
 // drag every other linter across all integration files (funlen / gocognit /
 // dupl / gosec) for no benefit. So this guard parses files with

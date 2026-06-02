@@ -269,7 +269,7 @@ func TestCellgenErrcodeFunnel(t *testing.T) {
 // KnownNonDefaultTags (mirroring panic_invariants_test.go pattern) AND
 // (b) update this test to allow the specific tag, all in the same PR.
 //
-// Implementation note: uses two RunTyped calls to comply with
+// Implementation note: uses two typed Run calls to comply with
 // SCANNER-FRAMEWORK-USAGE-01 while covering the full build directive file set.
 // Load 1 (tags=nil) catches files active under the default context, including
 // those with reverse //go:build !X directives that a union-tag load would

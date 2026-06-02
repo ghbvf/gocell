@@ -121,7 +121,7 @@ func TestPanicLogRedact(t *testing.T) {
 
 // TestPanicLogRedact_DetectsViolation is the reverse self-check: it runs the
 // detector against a real fixture package (loaded type-checked via
-// RunTypedFixture) that contains one compliant call plus two violations (a bare
+// Run(t, Fixture(...))) that contains one compliant call plus two violations (a bare
 // value and a non-RedactAny wrapper) — asserting exactly the two violations are
 // flagged. This proves the typed form-lock is non-vacuous.
 func TestPanicLogRedact_DetectsViolation(t *testing.T) {

@@ -118,7 +118,7 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 	})
 
 	require.True(t, visited,
-		"%s: RunTypedProduction did not visit %q — scope coverage gap, AUDIT-NS-DISJOINT-01 would pass vacuously",
+		"%s: Run(t, Production(...)) did not visit %q — scope coverage gap, AUDIT-NS-DISJOINT-01 would pass vacuously",
 		ruleAuditNSDisjoint01, scanPkgPath)
 
 	assert.True(t, bootstrapNamespaceFound,

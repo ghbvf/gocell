@@ -451,7 +451,7 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 // --- go list integration ---
 
 // findModuleRoot is defined in module_root.go (single source shared by
-// archtest.RunTyped drivers and the go-list integration helpers below).
+// Run(t, ...) typed-scope drivers and the go-list integration helpers below).
 
 // loadModule loads the entire module under root once via the
 // typeseval.LoadProductionPackages typed funnel, then folds the resulting

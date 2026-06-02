@@ -7,8 +7,8 @@
 // ./...` so it never pollutes real-repo scans. It is loaded explicitly by
 // TestCellRawInfraWrapperLocation01_ScannerDetectsViolation via
 //
-//	archtest.RunTypedFixture(t, archtest.FixtureOpts{Tests: false},
-//	    []string{"./tools/archtest/internal/wrapfixture/violation"}, rule)
+//	archtest.Run(t, archtest.Fixture(archtest.FixtureOpts{Tests: false},
+//	    []string{"./tools/archtest/internal/wrapfixture/violation"}), rule)
 //
 // The scan must report the WrapForCell call below as a violation because
 // tools/archtest/internal/wrapfixture/violation is NOT in the

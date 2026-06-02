@@ -248,7 +248,7 @@ func shouldSkipForEventuallyFunnel(rel string) bool {
 // require/assert Eventually variants are test-only APIs whose callers live
 // in *_test.go.
 //
-// Tool: archtest.RunTyped + resolveSelectorCalleeFunc (info.Uses ∪ info.Selections)
+// Tool: archtest.Run(t, Typed(...)) + resolveSelectorCalleeFunc (info.Uses ∪ info.Selections)
 // + go/ast SelectorExpr matching. This is the typed-marker funnel upstream
 // lock; the downstream lock (testwait.External callee+arg form-uniqueness)
 // is TEST-POLLING-EXTERNAL-REASON-LITERAL-01.
@@ -526,7 +526,7 @@ func TestEventuallyFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 // walked here; they are anchored at compile time by the assertions_method_call_red
 // fixture, which fails to load if testify renames a method forwarder.
 //
-// Tool: RunTyped + *types.Package.Imports() + Scope().Lookup. No new
+// Tool: Run(t, Typed(...)) + *types.Package.Imports() + Scope().Lookup. No new
 // archtest entry point; reuses the existing module-wide typed load.
 func TestEventuallyFunnel_SymbolSentinel(t *testing.T) {
 	t.Parallel()
@@ -781,7 +781,7 @@ func scanFileForIndirectEventuallyReferences(
 //     stops guarding it. Mitigated by the fact that any rename is a breaking
 //     change visible in diff and reviewed.
 //
-// Tool: RunTyped + *types.Package.Scope().Lookup + *types.Signature parameter
+// Tool: Run(t, Typed(...)) + *types.Package.Scope().Lookup + *types.Signature parameter
 // iteration. Reuses the existing module-wide typed load.
 func TestEventuallyFunnel_DeterministicNoTimeoutParam(t *testing.T) {
 	t.Parallel()

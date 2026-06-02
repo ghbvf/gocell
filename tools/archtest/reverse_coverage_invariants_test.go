@@ -526,7 +526,7 @@ import (
 // contracts/http/.../Service interface must trace to an existing
 // contracts/<id-path>/contract.yaml.
 //
-// Mechanism: A single RunTyped call loads generated/contracts/http/... plus
+// Mechanism: A single typed Run call loads generated/contracts/http/... plus
 // cells/... plus examples/... in one packages.Load invocation. In a single
 // callback, the code collects both the generated Service interfaces (when
 // visiting generated/* pkgs) and the concrete impl types (when visiting
@@ -1003,13 +1003,13 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 //     the repo tree; broken scan triggers floor assertion.
 //   - downstream: Hard — event subscriber dimension uses slice.yaml scan +
 //     actorSubscribers []string field (now correctly typed); http uses typed
-//     types.Implements via single-pass RunTyped.
+//     types.Implements via a single-pass typed Run.
 //
 // Blind-spot self-check:
 //   - draft/deprecated lifecycle: excluded (only active checked).
 //   - examples/ contracts with no platform backing: handled via ownerCell check.
 //   - actorSubscribers: correctly parsed as []string matching kernel/metadata/types.go.
-//   - Cross-load type identity: eliminated by single-pass RunTyped (all patterns
+//   - Cross-load type identity: eliminated by a single-pass typed Run (all patterns
 //     loaded in one packages.Load invocation).
 func TestDeadContractCover(t *testing.T) {
 	t.Parallel()
@@ -1064,7 +1064,7 @@ func TestDeadContractCover(t *testing.T) {
 		contractPathToGenPkg[contractPath] = genPkg
 	}
 
-	// For http contracts: build implemented Service set using a single RunTyped
+	// For http contracts: build implemented Service set using a single typed Run
 	// call that loads generated/contracts/http/... + cells/... + examples/... in
 	// one packages.Load invocation. Collect both iface and impl types in the same
 	// callback pass to eliminate cross-pass type-identity assumptions.

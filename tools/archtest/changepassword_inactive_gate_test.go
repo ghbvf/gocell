@@ -33,7 +33,7 @@
 // to Hard — is tracked in #1212; a type-state token proving Assert ran is
 // over-engineering for a single call site, so Medium is the documented ceiling.
 //
-// Blind-spot inventory (tools: archtest.RunTyped + archtest.ResolvePackageRef
+// Blind-spot inventory (tools: archtest.Run(t, Typed(...)) + archtest.ResolvePackageRef
 // + scanner.EachInSubtree[ast.CallExpr]):
 //
 //   - Cross-function extraction: if the Assert call is moved into a helper
@@ -76,7 +76,7 @@
 //
 // Self-check: TestChangePasswordInactiveGate_01_NegativeFixture loads four
 // testdata packages (green / red_no_gate / red_gate_after_mutation /
-// red_conditional_gate_bypass) via archtest.RunTyped, sharing the same
+// red_conditional_gate_bypass) via archtest.Run(t, Typed(...)), sharing the same
 // changePasswordGateDiagnostics core as the production scan. Fixtures live
 // under cells/accesscore/ (not tools/archtest/testdata/) because they import
 // the internal credentialauthority package.

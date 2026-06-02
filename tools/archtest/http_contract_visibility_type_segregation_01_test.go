@@ -32,7 +32,7 @@
 // defense — once Service stops implementing the contract interfaces the violation
 // is inexpressible at the compiler level too).
 //
-// Blindspot inventory (tools: RunTyped + types.Implements; rule scope:
+// Blindspot inventory (tools: typed Run + types.Implements; rule scope:
 // production non-generated non-test struct types):
 //
 //   - Adapter pattern bypass: if a single struct T simultaneously holds a public
@@ -248,10 +248,10 @@ func checkPassForVisibilityViolations(pass *Pass, ifaceSet *contractServiceIface
 // passing the right set of patterns.
 //
 // fixture selects the loader façade:
-//   - false → archtest.RunTyped (production scan: real-repo clean check)
-//   - true  → archtest.RunTypedFixture (fixture scan: scanner-catches-violation
+//   - false → Run(t, Typed(...)) (production scan: real-repo clean check)
+//   - true  → Run(t, Fixture(...)) (fixture scan: scanner-catches-violation
 //     check). The archtest_fixture build tag is supplied entirely inside
-//     RunTypedFixture's body; this helper never names the tag literal, in
+//     Run(t, Fixture(...))'s body; this helper never names the tag literal, in
 //     compliance with PASS-FUNNEL-FIXTURE-TAG-01.
 //
 // Both load paths underneath go through the singleflight-cached
@@ -282,7 +282,7 @@ func runHTTPContractVisibilityCheck(
 	}
 
 	if fixture {
-		// Fixture scan: archtest_fixture build tag injected by RunTypedFixture body.
+		// Fixture scan: archtest_fixture build tag injected by Run(t, Fixture(...)) body.
 		_ = Run(t, Fixture(FixtureOpts{Tests: false}, patterns), phase1Rule)
 		Run(t, Fixture(FixtureOpts{Tests: false}, patterns), phase2Rule)
 	} else {

@@ -189,7 +189,7 @@ const (
 // migration (Ory-style), which needs an integration DB this static rule omits.
 //
 // Blind-spot self-check (AI-robust §盲区自检): the chosen helpers are
-// RunTypedProduction + EvaluateConstString (Go side) and EachContentFile (SQL
+// Run(t, Production(...)) + EvaluateConstString (Go side) and EachContentFile (SQL
 // side). Forms outside their declared scope, and how each is covered:
 //
 //   - const re-declared as `var`, or in a 2nd file/spec → declCount != 1 fails

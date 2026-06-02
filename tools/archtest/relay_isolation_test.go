@@ -46,7 +46,7 @@
 // `newRelayAdapter` constructor stays package-private.
 //
 // AI-robust grade: Hard (downstream). The production type universe is
-// walked via `RunTypedProduction`; for each `*types.Named` whose
+// walked via `Run(t, Production(...))`; for each `*types.Named` whose
 // underlying is `*types.Struct` and whose pointer method set satisfies
 // `ManagedResource`, every struct field is inspected and any
 // `*Relay` / `Relay` field that does not live in `relayAdapter` fails the
@@ -71,7 +71,7 @@
 //     which already routes through `relayAdapter`. New public Bootstrap
 //     options that accept a `*Relay` from outside the package would be
 //     caught by inspection of their resulting struct fields.
-//   - Generated/ packages are excluded by `RunTypedProduction`
+//   - Generated/ packages are excluded by `Run(t, Production(...))`
 //     (production loader filters `<module>/generated/`).
 //   - Reverse self-check: `runtime/bootstrap.relayAdapter` MUST appear
 //     in the satisfying-AND-holding set, otherwise the filter is

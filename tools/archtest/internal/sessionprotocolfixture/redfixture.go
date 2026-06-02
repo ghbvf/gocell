@@ -7,8 +7,8 @@
 //
 // Gated by the archtest_fixture build tag; production builds never see this
 // file. The fixture is loaded by TestSessionProtocol_RedFixtureDetected via
-// archtest.RunTypedFixture (which injects the archtest_fixture tag inside
-// its body).
+// archtest.Run(t, archtest.Fixture(...)) (which injects the archtest_fixture
+// tag inside its body).
 //
 // # Forms covered
 //

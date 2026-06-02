@@ -162,7 +162,7 @@ const (
 // a deliberate won't-do at gh #1424 (analogous to #851 / #893 holder-seal
 // ceilings).
 var slogHandwrittenEntryPoints = []struct {
-	pkgPattern string // pattern for RunTyped
+	pkgPattern string // pattern for Run(t, Typed(...))
 	funcName   string // top-level function name
 	relPath    string // module-relative path (for diagnostics)
 }{
@@ -794,7 +794,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 // TestSlogHandlerSealedFunnel_A1_DetectsViolation is the reverse self-check for
 // A1. It runs the production A1 detector (slogBareHandlerViolations) against a
 // real external fixture package (testdata/slog_bare_handler_fixtures/external_violation,
-// loaded type-checked via RunTypedFixture) that calls slog.NewJSONHandler /
+// loaded type-checked via Run(t, Fixture(...))) that calls slog.NewJSONHandler /
 // NewTextHandler outside runtime/observability/logging — and asserts BOTH call
 // sites are flagged. This is a true external-violation RED proof (replacing the
 // earlier "production tree self-proof", which only showed the logging package
@@ -1318,7 +1318,7 @@ func TestSlogHandlerSealedFunnel_NoBlindspotsInProduction(t *testing.T) {
 	loggingFullPkgPath := modPath + "/" + slogFunnelLoggingPkgImportSuffix
 
 	// healthtest contains a CaptureHandler for testing (acceptable test helper).
-	// The check skips _test.go files since RunTypedProduction uses Tests:false.
+	// The check skips _test.go files since a Production scope uses Tests:false.
 	var ds []Diagnostic
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {

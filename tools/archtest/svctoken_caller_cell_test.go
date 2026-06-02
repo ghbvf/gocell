@@ -56,7 +56,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	// (e.g. examples/ssobff/walkthrough_test.go) that call
 	// GenerateServiceToken are also scanned. FlatNonDefaultTags()
 	// returns the union of every tag tracked in KnownNonDefaultTags(); a
-	// single RunTyped call carrying all tags simultaneously satisfies
+	// single Run(t, Typed(...)) call carrying all tags simultaneously satisfies
 	// every //go:build constraint at once (e.g. `//go:build integration` is
 	// included because `integration` is in the set; `//go:build integration
 	// && otelcollector` is included because both tags are present). This
@@ -188,7 +188,7 @@ func collectGenerateServiceTokenDiagsFromFile(
 // RED-step regression test (TDD per ai-robust.md) for PR445-FU finding F2.
 //
 // The production rule TestSVCTOKEN_CALLER_CELL_REQUIRED_01 calls
-// RunTyped with FlatNonDefaultTags() — so packages.Load uses all known
+// Run(t, Typed(TypedOpts{...}, ...)) with FlatNonDefaultTags() — so packages.Load uses all known
 // build tags and includes every file gated by `//go:build <tag>`. Two real
 // callsites of auth.GenerateServiceToken are gated this way and therefore
 // escape the rule without the flat-tag load:
@@ -211,7 +211,7 @@ func collectGenerateServiceTokenDiagsFromFile(
 // loader exactly.
 //
 // Single-load (vs the obvious "iterate KnownNonDefaultTags() and call
-// RunTyped per tag-set") avoids retaining 7 independent type graphs in
+// Run(t, Typed(...)) per tag-set") avoids retaining 7 independent type graphs in
 // SharedResolver's package-cache, which OOM'd CI runners with ~7GB RAM
 // before this fix.
 func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *testing.T) {

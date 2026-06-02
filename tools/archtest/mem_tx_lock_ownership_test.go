@@ -26,7 +26,7 @@ package archtest
 //     *Tx.done → ErrTxDone analog.)
 //
 // This file is the Medium regression layer over that Hard core. It runs the
-// shared detector scanMemTxLockWitness over package mem (typed, via RunTyped) and
+// shared detector scanMemTxLockWitness over package mem (typed, via Run(t, Typed(...))) and
 // reports:
 //
 //	W1 — txlock.Acquire is the single sanctioned mint: it appears ONLY as
@@ -571,7 +571,7 @@ func assertMemTreeDoesNotImport(t *testing.T, pkg string) {
 	scope := DirsScope(root, []string{memPkgRel, memPkgRel + "/internal/txlock"})
 
 	var offenders []string
-	// Bare Run (not RunTyped): a direct import-path string match suffices for
+	// Bare Run (not a typed Run): a direct import-path string match suffices for
 	// stdlib "reflect"/"unsafe" — they have no alias form in ImportSpec.Path.Value
 	// and the threat is a direct import within mem/txlock, not a transitive one.
 	Run(t, AST(scope), func(p *Pass) []Diagnostic {

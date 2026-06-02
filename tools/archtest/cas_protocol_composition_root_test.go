@@ -29,7 +29,7 @@
 //
 // # _test.go scope
 //
-// RunTyped(opts.Tests=false) loads only production-variant packages, so
+// Run(t, Typed(TypedOpts{Tests: false}, ...)) loads only production-variant packages, so
 // _test.go files are not in pass.Files. The scanner additionally filters by
 // rel suffix for clarity — both gates are conservative.
 //

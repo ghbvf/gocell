@@ -10,7 +10,7 @@
 // pkg/ctxkeys/doc.go; this archtest is the static guard.
 //
 // Three Hard layers form a closed funnel; any single one fails CI. Layers
-// A/C run in typed mode (RunTyped + TypedOpts{Tests: false}) so that
+// A/C run in typed mode (Run(t, Typed(TypedOpts{Tests: false}, ...))) so that
 // (a) the walk naturally excludes _test.go files via Tests=false and
 // (b) value-expression resolution covers const-folded forms (BinaryExpr,
 // Ident-to-const, cross-package selector) via go/types — not just BasicLit.
@@ -86,7 +86,7 @@
 //     closing the only escape path of interest.
 //
 // ref: tools/archtest/observability_metrics_test.go
-// (RunTyped + EvaluateConstString const-fold pattern);
+// (Run(t, Typed(...)) + EvaluateConstString const-fold pattern);
 // tools/archtest/governance_rules_invariants_test.go
 // (EvaluateConstString for Ident / SelectorExpr / BinaryExpr forms);
 // tools/archtest/cells_no_contractspec_import_test.go

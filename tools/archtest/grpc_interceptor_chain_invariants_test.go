@@ -287,7 +287,7 @@ func equalStrings(a, b []string) bool {
 // EXACTLY ONE grpc.ChainUnaryInterceptor call, so the order scan above covers
 // the sole composition site within the package. A second composition elsewhere
 // in the package could install a differently-ordered chain that the order scan's
-// single read misses. Resolution is via go/types (RunTypedProduction), not raw
+// single read misses. Resolution is via go/types (Run(t, Production(...))), not raw
 // file parsing, to stay within the archtest framework (SCANNER-FRAMEWORK-USAGE).
 func TestArchtest_GRPCInterceptorChainOrder_BlindSpot_SingleCompositionSite(t *testing.T) {
 	t.Parallel()

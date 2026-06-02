@@ -736,7 +736,7 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 // go/types type-resolution path (tobj.Pkg().Path() + tobj.Name() checks).
 // That path is exercised implicitly by the production tests
 // TestMQTTClientIDNamespace01/A2 and TestMQTTTopicNamespace01/A2 which load
-// real packages via RunTyped. A refactor that breaks the Pkg().Path() check
+// real packages via Run(t, Typed(...)). A refactor that breaks the Pkg().Path() check
 // would be caught by those tests finding zero violations where violations exist.
 func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 	t.Parallel()

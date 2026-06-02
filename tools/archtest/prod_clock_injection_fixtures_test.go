@@ -40,7 +40,7 @@ import (
 // runProdClockInjectionFixtureScan loads the fixture package at fixtureDir
 // and returns the sorted slice of violation Diagnostics using the same predicate
 // as TestProdClockInjection (scanProdClockInjectionAST). Files outside the
-// fixture module root (stdlib, deps) are excluded via RunTypedDir's Rel filter.
+// fixture module root (stdlib, deps) are excluded via Run(t, StandaloneModule(...))'s Rel filter.
 func runProdClockInjectionFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
 	return Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),

@@ -297,8 +297,8 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A2_HandlerEmitTemplateUniqueness
 // folding (EvaluateConstString), so a const indirection
 // (`const tmpl = "handler.tmpl"`) or string concatenation
 // (`"handler" + ".tmpl"`) folds to the same value and is caught — the prior
-// BasicLit-only scan missed both. RunTyped (not the AST-only Run) supplies the
-// types.Info the folding needs.
+// BasicLit-only scan missed both. Run(t, Typed(...)) (not the AST-only Run)
+// supplies the types.Info the folding needs.
 //
 // Blind spot (documented, not detected): the template name assembled from
 // runtime-only data (e.g. filepath.Join of a value read from disk) — no

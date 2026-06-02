@@ -12,7 +12,7 @@ package archtest
 // Platform-symbol paths (panicregister.Approved, *errcode.Error) are anchored
 // to [PlatformModulePath] (fixed: external repos import these packages as a
 // GoCell dependency at that path). The scan SCOPE is the running module,
-// supplied by RunTyped → findModuleRoot. See external.go for the design.
+// supplied by Run(t, Typed(...)) → findModuleRoot. See external.go for the design.
 
 import (
 	"fmt"
@@ -317,11 +317,12 @@ func shouldSkipForPanicRegistered(rel string) bool {
 // returns its diagnostics. It is the importable [CellRule] body wrapped by
 // [StandardCellRules]; GoCell's TestPanicRegistered calls it directly so the
 // gate has a single source. The scan SCOPE is the running module (resolved from
-// its go.mod by RunTyped); cfg.BuildTags supplies the build tags for the second
-// pass so panics behind the consumer's //go:build directives are scanned too.
+// its go.mod by Run(t, Typed(...))); cfg.BuildTags supplies the build tags for
+// the second pass so panics behind the consumer's //go:build directives are
+// scanned too.
 //
 // The default build config is always scanned; when cfg.BuildTags is non-empty a
-// second RunTyped load covers files behind those tags, deduped by
+// second Run(t, Typed(...)) load covers files behind those tags, deduped by
 // "rel:line:reason". GoCell's dogfood passes FlatNonDefaultTags(); an external
 // repo passes its own production tags. See the long note in the prior
 // TestPanicRegistered body / ADR 202605190000 §Alternatives for why a single

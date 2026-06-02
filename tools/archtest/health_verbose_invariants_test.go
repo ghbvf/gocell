@@ -25,7 +25,7 @@
 // HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 — the slog dependency entry error text
 //
 //	must pass through newRedactedErrorMsg → pkg/redaction.RedactString. Four
-//	go/types-resolved guards (RunTyped, not pure AST):
+//	go/types-resolved guards (typed Run, not pure AST):
 //	  1. TestHealthRedactedErrorMsgCreationFunnel — every redactedErrorMsg value
 //	     CREATED in the package is created inside newRedactedErrorMsg's body span.
 //	     A value is created by either an explicit conversion redactedErrorMsg(x)
@@ -100,7 +100,7 @@
 //	    {status,duration_ms,error_msg} is a separate enforcement gap tracked in
 //	    gh issue #998 — out of #947 scope.)
 //	(g) test-file `redactedErrorMsg(...)` literals — guard 1 loads with
-//	    RunTyped(Tests:false), so verbose_shape_test.go's white-box
+//	    Run(t, Typed(TypedOpts{Tests: false}, ...)), so verbose_shape_test.go's white-box
 //	    redactedErrorMsg("") literals are out of scope by construction.
 //	    Switching to Tests:true would require an allowlist for those sites.
 //	(h) generic conversion laundering — `func g[T ~string](s string) T {
@@ -177,7 +177,7 @@ var healthVerboseWireJSONTags = map[string]string{
 
 // healthScope returns the DirsScope used by the wire-shape gates. The wire shape
 // is a syntactic struct-tag contract, so AST-only Run + DirsScope is sufficient;
-// the funnel gates use RunTyped (go/types) instead.
+// the funnel gates use Run(t, Typed(...)) (go/types) instead.
 func healthScope(t *testing.T) Scope {
 	t.Helper()
 	return DirsScope(findModuleRoot(t), []string{healthPackageRelativeRoot})

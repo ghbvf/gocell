@@ -334,7 +334,7 @@ func scanDomainUserViolations(pkg *types.Package) []string {
 // permanently GREEN.
 func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, label string) {
 	t.Helper()
-	_ = root // root is the module root; RunTyped resolves it via findModuleRoot internally
+	_ = root // root is the module root; Run(t, Typed(...)) resolves it via findModuleRoot internally
 	var found int
 	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {

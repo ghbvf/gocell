@@ -1647,7 +1647,7 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // Test files (_test.go) are excluded by tests=false in
 // typeseval.SharedResolver; vendor/, testdata/ are skipped by go list
 // module-load defaults; generated/ is excluded at the package level by
-// RunTypedProduction (NOT by go list — `go list ./...` does include
+// Run(t, Production(...)) (NOT by go list — `go list ./...` does include
 // generated/contracts/.../v1 packages; the production-package partition
 // drops them, so no per-file path filter is needed here. Closes PR445-FU
 // finding F4).
@@ -1704,15 +1704,15 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 // the load-vs-skip decision contract for the HandleResult factory rule.
 //
 // Anchor (informational, not a TDD RED): documents that the default resolver
-// `typeseval.SharedResolver(root, false, nil, "./...")` — the one behind plain
-// RunTyped — DOES load generated/ packages. That is exactly why the production
-// rule above uses RunTypedProduction, whose package-level partition drops
-// generated/ so no per-file skip is needed there.
+// `typeseval.SharedResolver(root, false, nil, "./...")` — the one behind a plain
+// Run(t, Typed(...)) — DOES load generated/ packages. That is exactly why the
+// production rule above uses Run(t, Production(...)), whose package-level
+// partition drops generated/ so no per-file skip is needed there.
 //
-// The anchor counts the generated/ files a plain RunTyped(./...) loads using
-// Pass.IsGenerated; a non-zero count confirms both that generated/ ARE loaded
+// The anchor counts the generated/ files a plain Run(t, Typed(TypedOpts{}, []string{"./..."}))
+// loads using Pass.IsGenerated; a non-zero count confirms both that generated/ ARE loaded
 // and that Pass.IsGenerated still recognizes them. If it ever drops to zero, the
-// premise behind RunTypedProduction's generated/ exclusion is invalid and must
+// premise behind the Production scope's generated/ exclusion is invalid and must
 // be re-examined (a packages.Load default change or a tags filter could silently
 // mask it).
 func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
@@ -1732,12 +1732,12 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 	})
 
 	if len(generatedFiles) == 0 {
-		t.Fatalf("anchor invalidated: RunTyped(./...) loaded 0 generated/ files; " +
+		t.Fatalf("anchor invalidated: Run(t, Typed(./...)) loaded 0 generated/ files; " +
 			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
 			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
-			"before changing generated-path handling in Pass.IsGenerated / RunTypedProduction")
+			"before changing generated-path handling in Pass.IsGenerated / the Production scope")
 	}
-	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — RunTypedProduction excludes them; "+
+	t.Logf("anchor: Run(t, Typed(./...)) loaded %d generated/ files — Run(t, Production(...)) excludes them; "+
 		"Pass.IsGenerated recognizes them", len(generatedFiles))
 }
 

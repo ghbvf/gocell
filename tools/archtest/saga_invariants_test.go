@@ -79,7 +79,7 @@ import (
 //  4. var _ ksaga.CompensateFunc = myFunc            (ValueSpec — named func)
 //  5. saga.Step{Compensate: myFunc}                  (CompositeLit KV — named func)
 //
-// Detection uses typed AST (RunTypedProduction / RunTypedFixture):
+// Detection uses typed AST (Run(t, Production(...)) / Run(t, Fixture(...))):
 // the match is on the *declared type* of the LHS / struct field, resolved via
 // TypesInfo.TypeOf / TypesInfo.Defs — NOT a string anchor on the name
 // "Compensate".
@@ -1094,7 +1094,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 //
 // # Detection mechanism
 //
-// Typed AST (RunTypedProduction): scan every CallExpr whose callee is a
+// Typed AST (typed Production load): scan every CallExpr whose callee is a
 // *ast.SelectorExpr. Resolve the callee Ident via TypesInfo.ObjectOf to a
 // *types.Func. If the function's package path is "math/rand" or "math/rand/v2"
 // AND it has a nil receiver (package-level function) AND its name is NOT in the
@@ -2033,7 +2033,7 @@ func heartbeatFuncFieldDiag(p *Pass, rel, holderName string, field *ast.Field) (
 //   - journal.Journal / journal.Heartbeater field anywhere → violation
 //   - journal.JournalCore field outside Coordinator → violation
 //
-// Uses RunTyped (not Run) so go/types can resolve field types across package
+// Uses Run(t, Typed(...)) (not Run(t, AST(...))) so go/types can resolve field types across package
 // boundaries — a pure AST scan cannot distinguish `journal.JournalCore` from any
 // other selector named "JournalCore" without type information.
 func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
@@ -3763,8 +3763,8 @@ func callIsSafeRun(call *ast.CallExpr) bool {
 // via typed StepFunc alias detection — gh issue #979"). This blind-spot
 // reverse self-test is an existing Soft carve-out for A1's Hard primary
 // path; new Soft enforcement is rejected (see .claude/rules/gocell/ai-robust.md).
-// Upgrading B1 to Medium requires switching from pure-AST `Run` to typed
-// `RunTyped` + resolving the kernel/saga package via TypesInfo.PkgNameOf
+// Upgrading B1 to Medium requires switching from pure-AST `Run` to a typed
+// `Run(t, Typed(...))` + resolving the kernel/saga package via TypesInfo.PkgNameOf
 // (no longer string-anchored on import path literal) — tracked in #979.
 func TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias(t *testing.T) {
 	t.Parallel()
@@ -4312,7 +4312,7 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 //
 // # Detection mechanism (A1)
 //
-// Scan every production file under runtime/saga/ (typed pass; RunTyped over
+// Scan every production file under runtime/saga/ (typed pass; Run(t, Typed(...)) over
 // ./runtime/saga/...). For each file, collect the body Pos/End ranges of any
 // FuncDecl named InstanceFields (collectFuncBodyRanges) — in practice only
 // sagalog.go declares one. Then flag every CallExpr that is a log/slog Attr

@@ -282,7 +282,7 @@ func isHTTPHandlerSelector(expr ast.Expr) bool {
 // primary guard against the mutex being violated should either YAML rule
 // be weakened or bypassed by hand-written Mount calls.
 //
-// Detection scheme — type-aware: RunTypedProduction walks the full production
+// Detection scheme — type-aware: Run(t, Production(...)) walks the full production
 // package set. The Route type and ContractSpec type are matched by canonical
 // *types.Named (package path + name), so import aliases cannot bypass
 // detection. The Contract field value is resolved via *types.Info.Uses / Defs

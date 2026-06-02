@@ -16,7 +16,7 @@
 //     MarkPublished/MarkDead/MarkRetry must also call kernel/outbox.Transition
 //     (typed-resolved, not string-matched) so the Go state machine guards the
 //     real runtime transitions rather than being a decorative table.
-//     AI-robust grade: Medium (type-aware via RunTyped + ResolvePackageRef).
+//     AI-robust grade: Medium (type-aware via Run(t, Typed(...)) + ResolvePackageRef).
 //     Hard is unattainable: the guard verifies call-site co-location, which is
 //     inherently archtest-bound rather than type-system-bound. See blind-spot
 //     notes on TestOutboxStateTransitionGuard.
@@ -230,7 +230,7 @@ var markToTransitionTarget = map[string]string{
 // kernel/outbox.Transition (typed-resolved via ResolvePackageRef, not string-
 // matched) with a second argument targeting the expected state constant.
 //
-// AI-robust grade: Medium — type-aware via RunTyped + ResolvePackageRef.
+// AI-robust grade: Medium — type-aware via Run(t, Typed(...)) + ResolvePackageRef.
 // Hard is unattainable: this rule verifies call-site co-location, which is
 // inherently archtest-bound rather than type-system-bound (no typed construct
 // forces a Transition call adjacent to a Mark call at compile time).

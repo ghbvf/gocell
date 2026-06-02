@@ -32,7 +32,7 @@
 //     a different package and not net.*, so url.Error unwrap
 //     preamble is permitted (matches the helper's documented shape).
 //
-// Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info Uses /
+// Tool: archtest Run(t, Production(...)) (040 Pass-Driver) + *types.Info Uses /
 // TypeOf for callee + type resolution; AST walk via EachInSubtree[ast.GenDecl] /
 // EachInSubtree[ast.SelectorExpr] / EachInSubtree[ast.CallExpr]; alias
 // transparency via types.Unalias.
@@ -71,7 +71,7 @@
 //
 // Reverse self-check: TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern
 // loads tools/archtest/internal/nettransientfunnelfixture/ via
-// RunTypedFixture and asserts the synthetic regressed forms are reported,
+// Run(t, Fixture(...)) and asserts the synthetic regressed forms are reported,
 // while the clean form is not. Bypassing the reverse self-check requires
 // editing the real fixture source.
 //

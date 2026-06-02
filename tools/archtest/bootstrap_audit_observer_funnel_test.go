@@ -79,8 +79,8 @@
 //     root. Migrated through the funnel by ssobff bootstrap-audit-chain wiring;
 //     keeping it in scope guarantees the demo cannot regress to slog-only.
 //   - *_test.go invocations are mocks for rate-limit / bootstrap-credential
-//     paths and do not represent production wiring; RunTypedProduction(
-//     opts.Tests=false) keeps them out of the Pass set in both packages above.
+//     paths and do not represent production wiring; Run(t, Production(
+//     TypedOpts{Tests: false})) keeps them out of the Pass set in both packages above.
 
 package archtest
 
@@ -425,7 +425,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	}
 	// Reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): record
 	// which scope packages were actually visited so we fail loudly if a
-	// future RunTypedProduction loader config silently skips one (e.g. drops
+	// future Run(t, Production(...)) loader config silently skips one (e.g. drops
 	// package main binaries under examples/). Without this guard a vacuous
 	// pass would let the demo regress to slog-only undetected.
 	visited := map[string]bool{}
@@ -481,7 +481,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	// the demo or platform composition root regress to slog-only undetected.
 	for path := range scanPaths {
 		require.Truef(t, visited[path],
-			"%s: RunTypedProduction did not visit %q — scope coverage gap, "+
+			"%s: Run(t, Production(...)) did not visit %q — scope coverage gap, "+
 				"upstream Medium guard would pass vacuously without it",
 			ruleBootstrapAuditObserverFunnelUpstreamMedium01, path)
 	}

@@ -240,7 +240,7 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 
 	// Collect the exported function names from each wrap package by scanning
 	// the module for imports of those packages and inspecting their scope.
-	// We use RunTyped to reuse the SharedResolver cache; the scan func
+	// We use Run(t, Typed(...)) to reuse the SharedResolver cache; the scan func
 	// accumulates exported function names from p.Pkg.Imports().
 	observed := make(map[string]map[string]struct{}) // importPath → set of func names
 	for _, c := range cases {

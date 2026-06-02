@@ -39,7 +39,7 @@
 //	`message.Message` is NOT a Hard equivalent — its UUID/Metadata/Payload
 //	are exported, only ack channels are sealed.
 //
-// Scanning tool: typeseval.SharedResolver via RunTyped + go/types struct
+// Scanning tool: typeseval.SharedResolver via Run(t, Typed(...)) + go/types struct
 // field inspection (kernel/outbox package scope, no fixture). Selected per
 // ai-robust.md §"载体决策原则" — type information required (resolve named
 // type to package + name; resolve scope.Lookup to detect unexported/exported
@@ -60,7 +60,7 @@
 //     written as a type argument from outside the package, so this path
 //     is compile-time blocked without any archtest involvement.
 //
-// Tool blind spots (forms RunTyped + go/types cannot see):
+// Tool blind spots (forms Run(t, Typed(...)) + go/types cannot see):
 //
 //  1. Type aliases (`type Foo = idutil.SafeID`): alias resolution flattens
 //     to the same TypeName via types.Named.Obj(), so the underlying check

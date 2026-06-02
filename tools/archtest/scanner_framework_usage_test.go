@@ -2110,7 +2110,7 @@ func TestScannerFrameworkUsage02_MonitoredCalleeArgShape(t *testing.T) {
 
 	for k, seen := range want {
 		if !seen {
-			t.Errorf("%s.%s: package %s not loaded — RunTyped scope mismatch", k.pkg, k.name, k.pkg)
+			t.Errorf("%s.%s: package %s not loaded — typed Run scope mismatch", k.pkg, k.name, k.pkg)
 		}
 	}
 }

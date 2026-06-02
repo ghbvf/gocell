@@ -16,7 +16,7 @@
 //     classifier fails CI. The wantAdapters map below is the authoritative
 //     list — keep it in sync with the godoc.
 //
-// Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info call /
+// Tool: archtest.Run(t, Production(...)) (040 Pass-Driver) + *types.Info call /
 // field resolution. NOT exempted (uses archtest.Pass façade per ADR 040 stage-4 terminal state).
 //
 // Declared blind spots (ai-robust.md §"工具选定后强制盲区自检"), each with a

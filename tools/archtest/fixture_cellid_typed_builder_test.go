@@ -98,7 +98,7 @@
 //
 //   - TestMetadatatestImportScope — enforces METADATATEST-IMPORT-SCOPE-01:
 //     no production (.go non-_test.go) file may import metadatatest.
-//     Uses Run (AST-only, ModuleScope) rather than RunTypedProduction —
+//     Uses Run (AST-only, ModuleScope) rather than Run(t, Production(...)) —
 //     import scope is a syntactic question and does not require typed
 //     graph load (R3 narrowing: ~12s → 0.1s).
 //
@@ -235,7 +235,7 @@ func TestFixtureCellIDTypedBuilder(t *testing.T) {
 	}
 }
 
-// scanCellIDFixtureViolations runs RunTyped over the kernel/ package
+// scanCellIDFixtureViolations runs Run(t, Typed(...)) over the kernel/ package
 // tree (tests=true) twice — once with FlatNonDefaultTags, once with no
 // tags — to cover //go:build !X reverse directives. Returns one
 // diagnostic per violating position with file:line:column source
@@ -563,7 +563,7 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	t.Parallel()
 
 	// A2 loads only the metadatatest package — no need to pull in the entire
-	// module type-graph. RunTyped with a single-package pattern is faster and
+	// module type-graph. Run(t, Typed(...)) with a single-package pattern is faster and
 	// matches the "narrow scope" guidance in ai-robust.md §载体决策原则.
 	type a2Result struct {
 		fn    *ast.FuncDecl
@@ -925,7 +925,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	}
 
 	// Verify that good, blind-spot, and new bad fixture files were actually
-	// loaded by RunTypedFixture. If a file is absent (e.g. build-tag mismatch
+	// loaded by Run(t, Fixture(...)). If a file is absent (e.g. build-tag mismatch
 	// or path error), the assertions above silently pass because there is
 	// nothing to check — a false positive on success.
 	wantVisited := []string{
@@ -938,7 +938,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	}
 	for _, want := range wantVisited {
 		if _, ok := visitedFiles[want]; !ok {
-			t.Errorf("%s/A3: expected fixture file %s was not loaded by RunTypedFixture (build-tag or path issue?)", fixtureCellIDRuleID, want)
+			t.Errorf("%s/A3: expected fixture file %s was not loaded by Run(t, Fixture(...)) (build-tag or path issue?)", fixtureCellIDRuleID, want)
 		}
 	}
 }
@@ -1040,9 +1040,9 @@ func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) {
 // Implementation uses [Run] (AST-only, no go/packages.Load type-graph
 // build) over [ModuleScope] — import scope is a syntactic question (does
 // `import "..." appear in a non-_test.go file under the default build
-// context?), so the typed-load cost of RunTypedProduction is structurally
+// context?), so the typed-load cost of Run(t, Production(...)) is structurally
 // unnecessary. The single-pass AST walk replaces the previous double
-// RunTypedProduction (FlatNonDefaultTags + default tags); files gated by
+// Run(t, Production(...)) (FlatNonDefaultTags + default tags); files gated by
 // reverse `//go:build !X` directives are still loaded under the default
 // build context the AST walker uses (those files are visible when X is
 // not set, which is the CI default). archtest_fixture-tagged fixture

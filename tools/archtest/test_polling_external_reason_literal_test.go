@@ -208,7 +208,7 @@ func shouldSkipForTestwaitExternal(rel string) bool {
 // module-wide. Scans both production and test sources (Tests: true) because
 // testwait.External is a test-helper API whose callers live in *_test.go.
 //
-// Tool: archtest.RunTyped + *types.Info callee resolution + go/ast literal
+// Tool: Run(t, Typed(...)) + *types.Info callee resolution + go/ast literal
 // shape check. This is the typed-marker funnel downstream lock; the upstream
 // lock (ban bare require.Eventually / assert.Eventually) lives in sibling
 // archtest TEST-EVENTUALLY-FUNNEL-01 (test_eventually_funnel_test.go).

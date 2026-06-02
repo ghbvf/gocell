@@ -20,7 +20,7 @@
 //     cells/*/slices/*/slice.yaml to enumerate L2 units.
 //     Floor assert: >= 12 L2 units (fail-closed against broken scan).
 //
-//  2. Typed derivation (Hard, via go/types): RunTypedProduction loads every
+//  2. Typed derivation (Hard, via go/types): a typed Production load loads every
 //     production package; for L2 slice packages the Service symbol is
 //     resolved via pass.Pkg.Scope().Lookup("Service") + types.Unalias to
 //     pierce aliases. Alias-to-appender folding: all 4 auditappend* slices
@@ -47,7 +47,7 @@
 //
 // Tools used + blind spots:
 //
-//   - RunTypedProduction: does not see *_test.go files (Tests:false);
+//   - Run(t, Production(...)): does not see *_test.go files (Tests:false);
 //     guard: all expected test funcs live in test-only files, the
 //     downstream AST scan uses DirsScope+IncludeTests.
 //   - types.Unalias: Go 1.22+; must be applied before (*types.Named) assert.
@@ -245,7 +245,7 @@ func l2SliceKey(cellID, sliceDir string) string {
 	return cellID + "/" + sliceDir
 }
 
-// l2ResolveSliceInfos uses RunTypedProduction to resolve Service type + hybrid
+// l2ResolveSliceInfos uses Run(t, Production(...)) to resolve Service type + hybrid
 // flag for every L2 slice unit. Returns a map from l2SliceKey(cellID,sliceDir)
 // → l2SliceInfo (composite key avoids cross-cell same-name collisions).
 func l2ResolveSliceInfos(t *testing.T, root string, units []l2Unit) map[string]l2SliceInfo {

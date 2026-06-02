@@ -6,7 +6,7 @@
 // prevent static analysis tools (including CONTRACT-PATH-QUERY-COVERAGE-01)
 // from associating a LoadByID call site with a specific contract.
 //
-// Tool: RunTypedProduction (040 Pass-Driver) with Tests=true — resolves the
+// Tool: Run(t, Production(TypedOpts{Tests: true})) (040 Pass-Driver) — resolves the
 // callee via *types.Info.Uses against tests/contracttest.LoadByID for both
 // the cross-package selector form (contracttest.LoadByID) and the same-package
 // bare-ident form (LoadByID, used inside tests/contracttest's own test files).

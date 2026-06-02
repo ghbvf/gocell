@@ -722,7 +722,7 @@ const compositionPkgPath = PlatformModulePath + "/runtime/composition"
 // hostile package aliased as `composition` but pointing elsewhere — does NOT
 // satisfy it; only a real import of runtime/composition does. This is stronger
 // than a bare Sel.Name check but is not full go/types resolution (this guard
-// runs under the AST-only Run, not RunTyped). The Hard upstream for the
+// runs under the AST-only Run, not a typed Run). The Hard upstream for the
 // generated form lives in the codegen golden TestGenerateModulesGen_CompositionForm
 // (kernel/assembly), which byte-locks the emitted []composition.CellModule
 // return type and its import; this archtest is the type-aware backstop for the

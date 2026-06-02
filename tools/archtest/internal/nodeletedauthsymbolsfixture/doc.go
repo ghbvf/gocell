@@ -22,8 +22,8 @@
 // ./...` so it never pollutes real-repo scans. It is loaded explicitly by
 // TestNoDeletedAuthSymbols_FixtureCatchesAllForms via
 //
-//	archtest.RunTypedFixture(t, archtest.FixtureOpts{Tests: false},
-//	    []string{"./tools/archtest/internal/nodeletedauthsymbolsfixture/..."}, rule)
+//	archtest.Run(t, archtest.Fixture(archtest.FixtureOpts{Tests: false},
+//	    []string{"./tools/archtest/internal/nodeletedauthsymbolsfixture/..."}), rule)
 //
 // AI co-authors who modify the fixture must keep the hit counts in sync with
 // TestNoDeletedAuthSymbols_FixtureCatchesAllForms (exact-count assertion).

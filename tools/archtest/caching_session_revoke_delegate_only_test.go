@@ -14,7 +14,7 @@
 // ReturnStmt whose callee is s.inner.SameMethodName" has no gray zone.
 // Any other shape fails CI.
 //
-// Scanning tool: RunTyped + ast.FuncDecl receiver-type check (syntactic) +
+// Scanning tool: Run(t, Typed(...)) + ast.FuncDecl receiver-type check (syntactic) +
 // ast.BlockStmt length check + ast.ReturnStmt / ast.CallExpr shape check.
 // ResolveMethodCall is intentionally NOT used for the delegate callee check
 // because we need to verify the method name matches the enclosing FuncDecl,
@@ -105,7 +105,7 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 	t.Parallel()
 
 	// Single packages.Load over production + all 7 RED fixtures. Per-Pass
-	// dispatch by pkg path: each RunTyped call carries ~3s of toolchain
+	// dispatch by pkg path: each typed Run call carries ~3s of toolchain
 	// overhead on GHA 2-CPU runners, so collapsing 8 separate loads into 1
 	// keeps the test under the 20s slowgate budget as the fixture set grows.
 	fixtureRoot := "./tools/archtest/testdata/caching_session_revoke_fixtures"

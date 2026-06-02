@@ -7,7 +7,7 @@ import (
 )
 
 // green_single_load_production_flat is the compliant idiom: a single
-// archtest.RunTyped call with Tags = archtest.FlatNonDefaultTags() — one
+// Run(t, Typed(TypedOpts{Tags: archtest.FlatNonDefaultTags()}, ...)) call — one
 // packages.Load covers all tag-gated production file sets via go/build
 // matchTag's "tag ∈ BuildTags" semantics. The rule must NOT catch this.
 func _(t *testing.T) {

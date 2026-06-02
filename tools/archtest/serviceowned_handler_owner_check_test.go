@@ -79,7 +79,7 @@
 // only API name carrying the IDOR-safe semantics, and any other AST form
 // constructing KindNotFound in serviceOwned service.go is rejected.
 //
-// Blindspot inventory (tools: metadata.NewParser + archtest.RunTyped +
+// Blindspot inventory (tools: metadata.NewParser + Run(t, Typed(...)) +
 // archtest.ResolvePackageRef + EachInSubtree[ast.CallExpr]):
 //
 //   - Cross-package re-export: a hypothetical `cells/foo.CheckOwner`
@@ -99,7 +99,7 @@
 //     convention.
 //
 // Self-check: TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture
-// loads nine testdata packages with full types.Info via archtest.RunTyped,
+// loads nine testdata packages with full types.Info via Run(t, Typed(...)),
 // sharing the same predicate closures as the production scans. Each
 // predicate is exercised on both a green path (silent) and one or more red
 // paths (firing), and cross-predicate silence is asserted on red fixtures

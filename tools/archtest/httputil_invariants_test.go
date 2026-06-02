@@ -326,7 +326,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 
 // TestHTTPUtil5xxLogRedact_DetectsViolation is the reverse self-check: it runs the
 // typed detector against a real fixture package (loaded type-checked via
-// RunTypedFixture) whose log4xx/log5xx contain bare (unwrapped) errcode-detail
+// Run(t, Fixture(...))) whose log4xx/log5xx contain bare (unwrapped) errcode-detail
 // AsSlogAttr() appends alongside a compliant wrapped one — asserting exactly the
 // two bare appends are flagged. Type-checking is required for the go/types
 // resolution of both RedactSlogAttr and the errcode AsSlogAttr methods.

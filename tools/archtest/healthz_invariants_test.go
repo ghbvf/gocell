@@ -41,7 +41,7 @@
 //
 //   - A4 reverse self-test fixture (testdata/healthz_violate/): synthetic
 //     violations of A1/A3 each detected by the rule logic against a
-//     RunTypedDir-loaded subpackage. (A2 violation fixture retained for A3
+//     Run(t, StandaloneModule(...))-loaded subpackage. (A2 violation fixture retained for A3
 //     Register-from-non-allowlisted-file detection — the fixture structure
 //     is unchanged, but HEALTHZ-TYPED-REGISTER-01 fixture leg is removed.)
 //
@@ -52,7 +52,7 @@
 // archtest enforcement is structurally redundant. The funnel collapsed
 // into PROBENAME-SEALED-FUNNEL-01 (probename_sealed_funnel_test.go).
 //
-// # Tool blind spots (forms RunTyped / *types.Info cannot see)
+// # Tool blind spots (forms a typed Run / *types.Info cannot see)
 //
 // B-A1: A dynamic path string assembled at runtime (strings.Join, fmt.Sprintf)
 //
@@ -334,7 +334,7 @@ func fileHasCellgenMarker(absPath string) bool {
 // archtest enforcement is structurally redundant. Direct Aggregator.Register
 // callsites are now guarded by PROBENAME-SEALED-FUNNEL-01/A3.
 //
-// # Blind spots (forms RunTyped cannot see)
+// # Blind spots (forms a typed Run cannot see)
 //
 // B-A1: A dynamic path string assembled at runtime (strings.Join, fmt.Sprintf)
 // would bypass A1's EvaluateConstString resolution. Reverse self-check
@@ -406,7 +406,7 @@ func TestHealthzInvariants_ReverseFixture(t *testing.T) {
 
 	var a1Diags, a3Diags []Diagnostic
 
-	// Load the fixture module with RunTypedDir so it shares one type universe.
+	// Load the fixture module with Run(t, StandaloneModule(...)) so it shares one type universe.
 	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {

@@ -17,7 +17,7 @@
 //
 // This archtest protects against future L2+ cells forgetting the CheckNotNoop call.
 //
-// AI-robust grade: Medium (type-aware AST funnel via RunTypedProduction +
+// AI-robust grade: Medium (type-aware AST funnel via Run(t, Production(...)) +
 // *types.Info callee resolution; scoped to production packages).
 //
 // # Algorithm
@@ -34,7 +34,7 @@
 //
 // Phase B — scan production code per target:
 //
-//	RunTypedProduction loads the production package set. matchTarget
+//	Run(t, Production(...)) loads the production package set. matchTarget
 //	compares Pass.Pkg.Path() to target.pkgPath via `==` (exact equality,
 //	not HasSuffix — F4 fix prevents examples/foo/cells/<id> from being
 //	mis-attributed). For the matched target, locate the Init FuncDecl on
@@ -641,7 +641,7 @@ const fixturePkgRoot = "./tools/archtest/testdata/cell_init_checknotnoop_fixture
 
 // fixturePkgs lists the patterns for the fixture sub-packages keyed by name.
 // Each test passes only the subset it actually exercises — the framework's
-// RunTypedFixture loads exactly the given patterns, so per-test scoping
+// Run(t, Fixture(...)) loads exactly the given patterns, so per-test scoping
 // keeps per-test compile blast radius bounded to the fixture under test.
 var fixturePkgs = map[string][]string{
 	"red_l2_missing":      {fixturePkgRoot + "red_l2_missing"},

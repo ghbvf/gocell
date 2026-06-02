@@ -5,7 +5,7 @@
 // Holding such a callable is the func-value equivalent of a journal.Heartbeater
 // field — it lets a centralized heartbeat loop be reconstructed from a heartbeat
 // func handed in from outside runtime/saga — and must be flagged. A non-
-// heartbeat func field is the negative control. Loaded only via RunTypedFixture.
+// heartbeat func field is the negative control. Loaded only via Run(t, Fixture(...)).
 package funcfieldholder
 
 import (

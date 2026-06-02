@@ -328,7 +328,7 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 // logic to listener topology decisions.
 //
 // Scanned packages:
-//   - all production packages under cells/ and runtime/ (RunTypedProduction
+//   - all production packages under cells/ and runtime/ (the Production scope
 //     already excludes generated/)
 //   - runtime/bootstrap/... is the authorized wiring layer and is skipped
 //

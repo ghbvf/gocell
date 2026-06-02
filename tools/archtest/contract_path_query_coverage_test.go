@@ -20,7 +20,7 @@
 // abstract variable name for a covered parameter, sneaking past the per-param
 // gate. Form mirrors MESSAGE-CONST-LITERAL-01 and CONTRACTTEST-LOADBYID-LITERAL-01.
 //
-// Tool: RunTypedProduction (040 Pass-Driver) for test files — uses
+// Tool: Run(t, Production(TypedOpts{...})) (040 Pass-Driver) for test files — uses
 // *types.Info.Uses to resolve MustReject{Path,Query}Param / Validate{Path,Query}Param
 // receiver calls to the *contracttest.Contract type, and
 // typeseval.EvaluateConstString to fold const idents / selectors / binary

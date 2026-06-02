@@ -447,7 +447,7 @@ func notFoundDiagsFromPass(p *Pass) []notFoundViolation {
 }
 
 // TestNotFoundTestStrict enforces POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01
-// module-wide via the Pass-Driver funnel (RunTyped + Tests:true so _test.go
+// module-wide via the Pass-Driver funnel (Run(t, Typed(...)) with Tests:true so _test.go
 // files participate in the typed load). Walks every Go file (production +
 // test) and emits a violation for each _NotFound test site that does not
 // contain at least one compliant errcodetest funnel call.
@@ -464,7 +464,7 @@ func TestNotFoundTestStrict(t *testing.T) {
 
 	// FlatNonDefaultTags() returns the union of all distinct non-empty build
 	// tags across KnownNonDefaultTags() groups, sorted. Using FlatNonDefaultTags
-	// + single RunTyped (clock_invariants_test.go pattern) collapses N
+	// + single typed Run (clock_invariants_test.go pattern) collapses N
 	// packages.Load calls into 1; KnownNonDefaultTags loop (panic_invariants
 	// pattern) does N parallel loads with full *types.Info cached per call,
 	// accumulating RSS that pushes GHA 2-CPU 7GB runners into OOM SIGTERM and

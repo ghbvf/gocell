@@ -285,7 +285,7 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 // Driver method call.
 //
 // This test uses an in-memory types.Config/importer.Default() (not the
-// RunTypedFixture façade) because it is a synthetic no-op-detector probe, not
+// Run(t, Fixture(...)) façade) because it is a synthetic no-op-detector probe, not
 // an on-disk fixture package.
 //
 // ai-robust.md §"AI-robust 三档分级" mandates a blind-spot self-check for

@@ -120,5 +120,5 @@ func TestProdDurationConstFixtures(t *testing.T) {
 }
 
 // TestProdDurationConstFailsClosedOnLoadError is intentionally removed: the
-// fail-closed property is now enforced by RunTypedDir itself (it calls
+// fail-closed property is now enforced by Run(t, StandaloneModule(...)) itself (it calls
 // t.Fatalf on load errors), making a separate test redundant.

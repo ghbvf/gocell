@@ -138,7 +138,7 @@ var allowedMustDecls = map[string]map[string]struct{}{
 // testFixturePkgPrefixes are package path prefixes (module-relative) that are
 // exempt from this rule. These packages declare Must* test fixtures by design
 // (K8s `httptest` model); callers are `_test.go` files which are not loaded
-// by RunTypedProduction.
+// by Run(t, Production(...)).
 //
 // Adding a prefix requires:
 //   - the package must have a name suggesting test use (testutil, contracttest,

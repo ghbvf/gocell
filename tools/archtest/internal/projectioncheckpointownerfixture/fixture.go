@@ -4,7 +4,7 @@
 // PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01. It contains an
 // INSERT-into-projection_checkpoints SQL string literal that ILLEGALLY writes
 // the reserved owner column, which the rule's detector must flag. The fixture
-// is loaded only via archtest.RunTypedFixture (archtest_fixture build tag), so
+// is loaded only via Run(t, Fixture(...)) (archtest_fixture build tag), so
 // it never enters a normal build or the production scan scoped to adapters/postgres.
 //
 // DO NOT use this package in production code.

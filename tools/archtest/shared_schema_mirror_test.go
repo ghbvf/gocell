@@ -164,7 +164,7 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 // bypass the single-source funnel silently.
 //
 // Tool choice: typed AST (needs type resolution to identify codegen.WriteOptions
-// struct type from possibly-aliased imports) → RunTypedProduction +
+// struct type from possibly-aliased imports) → Run(t, Production(...)) +
 // EachInSubtree[ast.CompositeLit] + types.Info to confirm the struct type.
 func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2(t *testing.T) {
 	t.Parallel()

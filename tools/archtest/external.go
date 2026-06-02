@@ -24,9 +24,9 @@ import (
 //   - [RunStandardCellRules] is the single entry an external repo calls — the
 //     analog of ArchUnit's ArchTests.in(StandardRules.class) driven against
 //     the consumer's @AnalyzeClasses scan scope. The scan TARGET is supplied
-//     by the running module (RunTyped → findModuleRoot walks up from the test
-//     process cwd, so it resolves the consumer's own go.mod), never baked into
-//     the rule. ref: ArchUnit user guide; arch-go config.Load(modulePath).
+//     by the running module (the typed Run drivers → findModuleRoot walk up from
+//     the test process cwd, so they resolve the consumer's own go.mod), never
+//     baked into the rule. ref: ArchUnit user guide; arch-go config.Load(modulePath).
 //
 // Platform-vs-scan path split (the core correctness invariant of M3):
 //
@@ -50,8 +50,8 @@ import (
 // so a module rename / /v2 bump updates exactly one place and the ratchet
 // meta-archtest ARCHTEST-MODULE-PATH-FUNNEL-01 can prove no rule reintroduces a
 // bare literal. It is NOT the scan target: the module being analyzed is
-// supplied by the driver (RunTyped/RunTypedProduction → findModuleRoot), which
-// resolves the consumer's own go.mod for external repos.
+// supplied by the driver (the Run typed scopes Typed/Production → findModuleRoot),
+// which resolves the consumer's own go.mod for external repos.
 const PlatformModulePath = "github.com/ghbvf/gocell"
 
 // CellRule is a reusable, importable architecture invariant — the GoCell
@@ -61,8 +61,8 @@ const PlatformModulePath = "github.com/ghbvf/gocell"
 // observed (it does NOT call t.Errorf itself — [RunStandardCellRules] funnels
 // every rule's diagnostics through [Report] uniformly).
 //
-// Run takes *testing.T because the underlying drivers (Run / RunTyped /
-// RunTypedProduction) fail-loud via t.Fatalf on load errors and need the test
+// Run takes *testing.T because the underlying driver (Run with its AST / Typed /
+// Production scopes) fails loud via t.Fatalf on load errors and needs the test
 // handle. A rule whose scan is module-wide under the default build config may
 // ignore cfg; rules that must see build-tagged files read cfg.BuildTags.
 type CellRule struct {

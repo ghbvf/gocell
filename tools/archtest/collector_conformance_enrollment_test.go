@@ -14,7 +14,7 @@
 //     identifies every concrete named type (exported AND unexported) that
 //     satisfies runtime/observability/metrics.Collector in the production
 //     source tree (Tests=false pass).
-//   - Conformance call scan: RunTyped with Tests=true; for every _test.go file
+//   - Conformance call scan: a typed Run with Tests=true; for every _test.go file
 //     containing a RunCollectorConformance call, walk all CallExpr nodes to find
 //     the first argument to New() within the same file's harness. Because the
 //     harness pattern stores the Collector in a field, impl-level resolution is
@@ -90,7 +90,7 @@ func TestCollectorConformanceEnrollment(t *testing.T) {
 
 	// ─── Step 1: resolve Collector interface + collect impl pkgs ───────────
 	// Use prodscan.Patterns directly (runtime/observability/metrics is already
-	// included). A single RunTyped load resolves both the interface and all
+	// included). A single typed Run resolves both the interface and all
 	// candidate impl packages, sharing the SharedResolver cache.
 	prodPatterns := prodscan.Patterns(root)
 

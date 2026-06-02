@@ -15,7 +15,7 @@
 // by ADR 202605101900 Amendment 2026-05-12 (PR #481 / PR-S7); the previous
 // `isCellPackageRootFile` predicate is now `isCellSubtreeFile`.
 //
-// AI-robust 评级：Medium (archtest type-aware via RunTypedProduction
+// AI-robust 评级：Medium (archtest type-aware via Run(t, Production(...))
 // + types.Unalias). The kernel sealed marker is the AI-HARD primary
 // defense — it prevents writing a cell.go field typed `persistence.TxRunner`
 // and routing assignment via WrapForCell from a non-allowlisted location.
