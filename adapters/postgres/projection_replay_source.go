@@ -36,7 +36,7 @@ ORDER BY seq`
 const cursorPositionSQL = `SELECT seq FROM outbox_entries WHERE id = $1`
 
 // PGProjectionReplaySource is the production projection.ReplaySource backed by the
-// outbox journal (outbox_entries). The monotonic position is the migration-047
+// outbox journal (outbox_entries). The monotonic position is the migration-049
 // `seq BIGINT GENERATED ALWAYS AS IDENTITY` column; deletions by the relay's
 // CleanupPublished/CleanupDead create gaps, which the projection Cursor contract
 // tolerates (gap-allowed). It holds a pgexec.PGExecutor (the sealed pool funnel,

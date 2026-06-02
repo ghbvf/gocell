@@ -60,6 +60,14 @@ type Entry struct {
 	// no-DEFAULT in DB.
 	CorrelationID string
 
+	// TraceID carries the OpenTelemetry trace id from the outbox observability
+	// envelope. Observability metadata, NOT an audited fact — it is deliberately
+	// EXCLUDED from the HMAC hash chain (Protocol.ComputeHash) so audit
+	// tamper-evidence is unchanged. Empty string when absent. NOT NULL no-DEFAULT
+	// in DB (app supplies explicit value).
+	// Writes are restricted to the audit appender by AUDIT-TRACE-ID-WRITE-CALLER-01 (tools/archtest).
+	TraceID string
+
 	// OccurredAt is the producer-clock event time (distinct from Timestamp
 	// which is the ledger persistence / HMAC time). The audit chain pins both
 	// times so consumers can distinguish "when the business event happened"

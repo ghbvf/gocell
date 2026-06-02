@@ -331,6 +331,26 @@ func (v *projRecordingGaugeVec) value(l kernelmetrics.Labels) float64 {
 	return v.vals[projLabelsKey(l)]
 }
 
+// wasSet reports whether Set was ever called for the given label series —
+// distinguishing "never written" from "written to 0", which value() cannot.
+func (v *projRecordingGaugeVec) wasSet(l kernelmetrics.Labels) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	_, ok := v.vals[projLabelsKey(l)]
+	return ok
+}
+
+// gaugeWasSet reports whether the named gauge's label series has had Set called.
+func (p *projRecordingProvider) gaugeWasSet(name string, l kernelmetrics.Labels) bool {
+	p.mu.Lock()
+	v, ok := p.gauges[name]
+	p.mu.Unlock()
+	if !ok {
+		return false
+	}
+	return v.wasSet(l)
+}
+
 type projRecordingGauge struct {
 	vec *projRecordingGaugeVec
 	key string

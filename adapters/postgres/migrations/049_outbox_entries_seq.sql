@@ -1,4 +1,4 @@
--- Migration 047: add a monotonic position column `seq` to outbox_entries for the
+-- Migration 049: add a monotonic position column `seq` to outbox_entries for the
 -- production journal-backed projection ReplaySource + Cursor (epic #1100, PR-04c
 -- / #1368).
 --

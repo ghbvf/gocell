@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -36,12 +37,29 @@ type RuntimeOptionsFunc func(cells []cell.Cell) ([]bootstrap.Option, error)
 // ref: kubernetes-sigs/controller-runtime pkg/manager/manager.go — Manager
 // accumulates options via functional options.
 type Builder struct {
-	modules []CellModule
+	modules         []CellModule
+	expectedCellIDs []string
 }
 
-// New returns a new Builder with no modules.
-func New() *Builder {
-	return &Builder{}
+// New returns a new Builder whose composed cells must form exactly the
+// assembly's declared cell-id closed set (expectedCellIDs — the assembly.yaml
+// cells list, threaded in by the generated entrypoint). Build fail-fasts if any
+// composed module's ID is not in the set, if a declared cell is not provided by
+// any module, or on duplicate module IDs (see Build).
+//
+// This is the M12a build-time closed-set guard (#1093): once multi-module
+// assembly composition exists (#1086), the assembly.yaml cell set is the
+// authoritative enumeration of legal cell identities, and a module composing a
+// cell outside it is a configuration bug — rejected outright, not degraded to a
+// `_runtime` sentinel. Mirrors K8s runtime.Scheme: registration-time enumeration
+// + hard rejection of out-of-set identities.
+func New(expectedCellIDs ...string) *Builder {
+	// Defensive copy: a variadic parameter aliases the caller's backing array
+	// when invoked in spread form (composition.New(ids...) — see
+	// cmd/corebundle/run.go). Without the clone the caller could mutate the
+	// sealed closed set after New but before Build. slices.Clone of a nil/empty
+	// slice yields nil/empty, preserving the empty-assembly degenerate case.
+	return &Builder{expectedCellIDs: slices.Clone(expectedCellIDs)}
 }
 
 // With appends modules to the builder.  Calls are accumulating: successive
@@ -57,9 +75,10 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // Flow:
 //  1. Guard that shared was produced by [NewSharedDeps] (sealed-construction
 //     marker check) and that runtimeOptsFn is non-nil — startup invariants.
-//  2. For each module: nil-guard, call [CellModule.Provide], accumulate cells +
+//  2. For each module: nil-guard, call [CellModule.Provide], nil-cell guard,
+//     closed-set identity guard (c.ID() == m.ID(), see below), accumulate cells +
 //     cellOpts + provisional ManagedResources, with LIFO Close(ctx) rollback on
-//     any failure; nil-cell guard.
+//     any failure.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
 //  4. allOpts := runtimeOpts ++ cellOpts.
@@ -116,12 +135,66 @@ func validateBuildInputs(shared *SharedDeps, runtimeOptsFn RuntimeOptionsFunc) e
 	return nil
 }
 
+// validateClosedSet enforces the M12a build-time closed-set invariant: the set
+// of composed cell IDs must equal the assembly's declared cell-id set
+// (b.expectedCellIDs) — a bijection. It runs before any module Provide so a
+// misconfiguration fails fast without opening resources.
+//
+//   - every module ID must be in the declared set (no out-of-set cell),
+//   - every declared cell must be provided by some module (no missing cell),
+//   - no two modules may share a cell ID (no duplicate).
+//
+// nil modules are deliberately skipped here: the Build provide loop owns the
+// nil-module path (with provisional-resource rollback), so the closed-set guard
+// must not pre-empt it.
+//
+// This guard keys on the module's self-reported ID() so it can fail fast before
+// any Provide opens resources. It does NOT see the cell each module constructs;
+// the Build provide loop closes that gap with a post-Provide c.ID() == m.ID()
+// identity guard (F1/cluster C1), so the runtime cell identity is bound to the
+// declaration validated here.
+func (b *Builder) validateClosedSet() error {
+	expected := make(map[string]struct{}, len(b.expectedCellIDs))
+	for _, id := range b.expectedCellIDs {
+		expected[id] = struct{}{}
+	}
+	// Sorted display for deterministic, readable diagnostics regardless of set size.
+	closedSet := strings.Join(slices.Sorted(slices.Values(b.expectedCellIDs)), ", ")
+	const fixHint = "add it to assembly.yaml cells or run `gocell generate assembly`"
+	provided := make(map[string]struct{}, len(b.modules))
+	for _, m := range b.modules {
+		if m == nil {
+			continue
+		}
+		id := m.ID()
+		if _, dup := provided[id]; dup {
+			return fmt.Errorf("composition.Builder.Build: duplicate cell module %q; "+
+				"each assembly cell must be provided by exactly one module; %s", id, fixHint)
+		}
+		provided[id] = struct{}{}
+		if _, ok := expected[id]; !ok {
+			return fmt.Errorf("composition.Builder.Build: cell %q is not in the assembly "+
+				"closed set [%s]; %s", id, closedSet, fixHint)
+		}
+	}
+	for _, id := range b.expectedCellIDs {
+		if _, ok := provided[id]; !ok {
+			return fmt.Errorf("composition.Builder.Build: assembly declares cell %q but no "+
+				"module provides it; run `gocell generate assembly`", id)
+		}
+	}
+	return nil
+}
+
 func (b *Builder) Build(
 	ctx context.Context,
 	shared *SharedDeps,
 	runtimeOptsFn RuntimeOptionsFunc,
 ) (*App, error) {
 	if err := validateBuildInputs(shared, runtimeOptsFn); err != nil {
+		return nil, err
+	}
+	if err := b.validateClosedSet(); err != nil {
 		return nil, err
 	}
 
@@ -154,6 +227,23 @@ func (b *Builder) Build(
 			rollback()
 			return nil, fmt.Errorf("composition.Builder.Build: module %q returned nil Cell "+
 				"(use explicit Optional semantics if cell is optional)", m.ID())
+		}
+		// Closed-set identity guard (M12a #1093, F1/cluster C1): validateClosedSet
+		// runs pre-Provide against the module's self-reported ID(), but the cell
+		// identity that actually reaches runtime (metric `cell` label, healthz
+		// probe names) is c.ID() — sourced independently from the cell's metadata,
+		// not bound to m.ID(). A module whose ID is in the closed set could still
+		// construct a cell with an out-of-set ID. Requiring c.ID() == m.ID()
+		// binds the validated declaration to the constructed identity; since
+		// m.ID() ∈ closed set was already proven, this transitively guarantees
+		// c.ID() ∈ closed set. Mirrors K8s runtime.Scheme: registration enumerates
+		// the real object identity, not a wrapper label.
+		if c.ID() != m.ID() {
+			rollback()
+			return nil, fmt.Errorf("composition.Builder.Build: module %q provided a cell whose ID is %q; "+
+				"a module's ID must equal the ID of the cell it constructs — the closed-set guard validates "+
+				"the module ID pre-Provide, so a mismatch would let an out-of-set cell identity reach runtime "+
+				"(metric labels, healthz probes)", m.ID(), c.ID())
 		}
 		cells = append(cells, c)
 		cellOpts = append(cellOpts, mOpts...)

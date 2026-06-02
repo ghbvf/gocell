@@ -385,11 +385,63 @@ func TestHandleEvent_PrincipalFieldMapping(t *testing.T) {
 	assert.Equal(t, "tenant-1", got.TenantID, "TenantID must map from Principal.TenantID")
 	assert.Equal(t, "sess-1", got.SessionID, "SessionID must map from Principal.SessionID")
 	assert.Equal(t, "corr-1", got.CorrelationID,
-		"CorrelationID must map from Observability.CorrelationID")
+		"CorrelationID must map from Observability.CorrelationID via sealed read-model")
 	assert.True(t, got.OccurredAt.Equal(occ), "OccurredAt must propagate from entry.OccurredAt()")
 	// B8: actor stays the domain payload actor, NOT the request-context subject.
 	assert.Equal(t, "actor-1", got.ActorID,
 		"ActorID must be sourced from the payload actor, not the principal subject")
+}
+
+// TestHandleEvent_TraceIDFromEnvelope verifies that when an outbox entry carries
+// an observability envelope with a TraceID (and CorrelationID), the appended
+// ledger.Entry has TraceID and CorrelationID equal to those envelope values.
+//
+// Both fields are derived via correlation.New (the sealed read-model constructor)
+// so neither can be fabricated from caller input — this is the SOLE sanctioned
+// injection site locked by AUDIT-TRACE-ID-WRITE-CALLER-01 (later batch).
+func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	svc := newService(t, spec, cap, p)
+
+	occ := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	const wantCorrID = "01bf32e31d93d713"
+	e, err := outbox.EntryScan{
+		ID:         "evt-trace-id",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		OccurredAt: occ,
+		CreatedAt:  occ,
+		Observability: outbox.ObservabilityMetadata{
+			TraceID:       idutil.SafeID(wantTraceID),
+			CorrelationID: idutil.SafeID(wantCorrID),
+		},
+	}.ToEntry()
+	require.NoError(t, err)
+
+	result := svc.HandleEvent(context.Background(), e)
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"HandleEvent must Ack a valid entry; err=%v", result.Err)
+	require.Len(t, cap.appended, 1, "must have appended exactly one ledger entry")
+
+	got := cap.appended[0]
+	assert.Equal(t, wantTraceID, got.TraceID,
+		"TraceID must be derived from Observability.TraceID via correlation.New")
+	assert.Equal(t, wantCorrID, got.CorrelationID,
+		"CorrelationID must be derived from Observability.CorrelationID via correlation.New")
+
+	// Round-trip: confirm TraceID survives the full Append lifecycle and is
+	// readable via GetBySeq (not just captured pre-persist in cap.appended).
+	roundTrip, err := cap.GetBySeq(context.Background(), got.SeqNo)
+	require.NoError(t, err, "GetBySeq round-trip after Append must succeed")
+	assert.Equal(t, wantTraceID, roundTrip.TraceID,
+		"TraceID must survive full Append lifecycle (GetBySeq round-trip)")
+	assert.Equal(t, wantCorrID, roundTrip.CorrelationID,
+		"CorrelationID must survive full Append lifecycle (GetBySeq round-trip)")
 }
 
 // TestHandleEvent_SingleTenantInvariantTripwire pins #1289 (option A,

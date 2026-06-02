@@ -18,6 +18,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -375,10 +376,13 @@ func TestPhase6_ProjectionDrain_WiresCoordinatorAndProbes(t *testing.T) {
 	require.NoError(t, b.phase6StartEventRouter(runCtx, s),
 		"phase6 must drain the projection cleanly")
 
-	// Coordinator indexed for the rebuild HTTP endpoint.
-	coord, ok := b.projectionCoordinators[projTestCellID+"/"+projTestProjID]
+	// Coordinator indexed for the rebuild HTTP endpoint (held as the narrow
+	// rebuildController interface; assert the concrete type to inspect probes).
+	ctrl, ok := b.projectionRebuilds[projTestCellID+"/"+projTestProjID]
 	require.True(t, ok, "coordinator must be indexed by <cell>/<projection>")
-	require.NotNil(t, coord)
+	require.NotNil(t, ctrl)
+	coord, ok := ctrl.(*projection.Coordinator)
+	require.True(t, ok, "registry must hold a *projection.Coordinator")
 
 	// Probes were registered (Register returns an error on dup/invalid; a clean
 	// phase6 proves both store-ready and lag probes registered without collision).
@@ -392,14 +396,20 @@ func TestPhase6_ProjectionDrain_WiresCoordinatorAndProbes(t *testing.T) {
 	}
 }
 
+// projectionApplyRoundTripTimeout bounds the publish→Apply round-trip wait. The
+// in-mem bus fires Apply in milliseconds; this generous deadline only matters on
+// a wiring regression, where it produces an actionable failure. Package-level
+// const per TEST-TIME-LITERAL-01.
+const projectionApplyRoundTripTimeout = 10 * time.Second
+
 // TestPhase6_ProjectionDrain_PublishApplyRoundTrip verifies that after phase6
 // drains the projection into the running event router, publishing a real event
 // on the projection's topic causes the business Apply to be invoked. This is the
 // true E2E guarantee: coordinator wired, handler registered, router running, and
 // publish → Apply round-trip confirmed.
 //
-// The test uses an atomic counter + Eventually to avoid sleep-based polling.
-// In-mem eventbus + mem projection deps ensure no external deps and determinism.
+// In-mem eventbus + mem projection deps ensure no external deps and determinism;
+// the Apply channel gives deterministic sync with a bounded, diagnosable deadline.
 func TestPhase6_ProjectionDrain_PublishApplyRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -456,10 +466,16 @@ func TestPhase6_ProjectionDrain_PublishApplyRoundTrip(t *testing.T) {
 	require.NoError(t, bus.Publish(context.Background(), projTestTopic, payload),
 		"Publish must succeed when the router is running")
 
-	// Wait for Apply to be called. The in-mem bus dispatches into a goroutine so
-	// we use a channel for deterministic sync — no wall-clock literal required,
-	// satisfying TEST-TIME-LITERAL-CONST-01. Failure is bounded by go test -timeout.
-	<-applied
+	// Wait for Apply to be called. The in-mem bus dispatches into a goroutine, so
+	// sync on the channel; a generous bounded deadline (package-level const per
+	// TEST-TIME-LITERAL-01) turns a wiring regression into an actionable failure
+	// message instead of a generic `go test -timeout` kill.
+	select {
+	case <-applied:
+	case <-time.After(projectionApplyRoundTripTimeout):
+		t.Fatal("phase6 round-trip: projection Apply was not invoked within the deadline " +
+			"after publishing to the projection topic — check the coordinator/router wiring")
+	}
 
 	// Teardown: LIFO stop the router + coordinator.
 	for _, v := range slices.Backward(s.teardowns) {
@@ -557,7 +573,7 @@ func TestPhase6_Projection_RejectsConcurrentSubscriber(t *testing.T) {
 	// offending transport type, so ops can see which declarations are blocked.
 	assert.Contains(t, err.Error(), projTestCellID+"/"+projTestProjID,
 		"error must name the projection that triggered the serial-delivery guard")
-	assert.Empty(t, b.projectionCoordinators,
+	assert.Empty(t, b.projectionRebuilds,
 		"no projection coordinator must be wired when the guard rejects the transport")
 }
 

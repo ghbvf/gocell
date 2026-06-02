@@ -94,11 +94,13 @@ Principal 是 transport-coupled——HTTP 路径才有，进入事件 / Worker /
 
 **设计骨架**：`PrincipalEnvelope`（含 OnBehalfOf 链）；outbox.Entry.Headers 自动注入 envelope；consumer 端 ConsumerBase 自动 unmarshal 写回 ctx。
 
-### 缺口 11：观测三栈反查链路断裂
+### 缺口 11：观测三栈反查链路断裂 ✅ 已交付（#1048，修正范围）
 
 cell label 对齐了，但 trace_id → audit / metric exemplar / alert → cell.yaml owner 反查链路缺失。
 
-**设计骨架**：`kernel/observability/correlation.Correlation` envelope；outbox + audit ledger 自动注入 trace_id；提供 `/internal/v1/correlate?trace_id=` 反查 API。
+**原设计骨架**（endpoint-centric，2026-06-03 作废）：独立 `/internal/v1/correlate?trace_id=` 反查 API + `?cell=` owner mode——经评审认定大半重复 auditquery（store+admin policy+游标分页）与 devtools catalog（Backstage owner），整体收敛。
+
+**已交付（#1048）**：`kernel/observability/correlation.Correlation` sealed read-model（从 W0 outbox observability envelope 派生）；audit ledger `trace_id` 列 + 索引 + appender 唯一注入路径（`AUDIT-TRACE-ID-WRITE-CALLER-01` 守，覆盖 trace_id+correlation_id）；auditquery 加 `?traceId=` filter（复用 store/admin policy/游标分页）。**不新增端点**。metric exemplar 自动注入延后 #1447。设计真值源：ADR `docs/architecture/202606021400-1048-adr-observability-correlate-reverse-lookup.md`。
 
 ### 缺口 12：Large Payload / Stream
 

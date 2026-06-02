@@ -34,6 +34,11 @@ func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel strin
 		cm.ID = validated
 		cells[validated] = cm
 	}
+	// Build refs via the CellRefs constructor (validated above per cell). A1
+	// cannot trace a runtime ident back to NewCellID, so an inline
+	// AssemblyCellRef{ID: validated} literal would be rejected; CellRefs (a call,
+	// not a composite literal) is the sanctioned dynamic-id path.
+	refs := metadata.CellRefs(cellIDs...)
 	return &metadata.ProjectMeta{
 		Cells:     cells,
 		Slices:    map[string]*metadata.SliceMeta{},
@@ -42,7 +47,7 @@ func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel strin
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": {
 				ID:                  "testasm",
-				Cells:               cellIDs,
+				Cells:               refs,
 				MaxConsistencyLevel: asmMaxLevel,
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "testasm",
@@ -94,7 +99,7 @@ func TestTOPO09_AssemblyEmptyCells(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"emptyasm": {
 				ID:                  "emptyasm",
-				Cells:               []string{},
+				Cells:               []metadata.AssemblyCellRef{},
 				MaxConsistencyLevel: "",
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "emptyasm",
@@ -129,7 +134,7 @@ func TestTOPO09_InvalidCellLevelSkips(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"badasm": {
 				ID:                  "badasm",
-				Cells:               []string{metadatatest.NewCellID("badlevelcell")},
+				Cells:               []metadata.AssemblyCellRef{{ID: metadatatest.NewCellID("badlevelcell")}},
 				MaxConsistencyLevel: "L2",
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "badasm",
@@ -152,8 +157,9 @@ func TestTOPO09_AssemblyUnknownCellRef(t *testing.T) {
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"ghostasm": {
-				ID:                  "ghostasm",
-				Cells:               []string{metadatatest.NewCellID("unknowncell")}, // legacy "unknown-cell" (kebab → compliant)
+				ID: "ghostasm",
+				// legacy "unknown-cell" (kebab → compliant)
+				Cells:               []metadata.AssemblyCellRef{{ID: metadatatest.NewCellID("unknowncell")}},
 				MaxConsistencyLevel: "L2",
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "ghostasm",

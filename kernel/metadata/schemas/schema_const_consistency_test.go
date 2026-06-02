@@ -147,6 +147,47 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 	})
 }
 
+// TestAssemblyCellRefSchemaPatternsMatchConstants byte-locks the assembly.yaml
+// `cells[]` union patterns (#1086) to their Go single-source constants:
+//   - oneOf[0] (scalar shorthand) .pattern        == metadata.CellIDPattern
+//   - oneOf[1] (object) .properties.id.pattern    == metadata.CellIDPattern
+//   - oneOf[1] .properties.module.pattern         == metadata.AssemblyModulePathPattern
+//
+// The cells.items.oneOf branches are addressed by array index (scalar = 0,
+// object = 1), the stable shape declared in assembly.schema.json. Drift in
+// either direction (schema looser/stricter than the parser's accepted set) is a
+// hard failure: the schema is the on-disk authority for IDE/standalone tooling,
+// the constants are the runtime authority used by AssemblyCellRef.decodeMapping
+// (via metadata.MatchAssemblyModulePath) and governance cell-existence checks.
+func TestAssemblyCellRefSchemaPatternsMatchConstants(t *testing.T) {
+	t.Parallel()
+
+	oneOf, ok := walkSchema(t, "assembly.schema.json",
+		[]string{"properties", "cells", "items", "oneOf"}).([]any)
+	require.True(t, ok, "assembly.schema.json cells.items.oneOf must be an array")
+	require.Len(t, oneOf, 2, "cells.items.oneOf must have exactly 2 branches (scalar, object)")
+
+	scalar, ok := oneOf[0].(map[string]any)
+	require.True(t, ok, "oneOf[0] (scalar shorthand) must be an object")
+	require.Equal(t, metadata.CellIDPattern, scalar["pattern"],
+		"assembly.schema.json cells scalar-shorthand pattern drifted from metadata.CellIDPattern")
+
+	object, ok := oneOf[1].(map[string]any)
+	require.True(t, ok, "oneOf[1] (object form) must be an object")
+	objProps, ok := object["properties"].(map[string]any)
+	require.True(t, ok, "oneOf[1].properties must be an object")
+
+	idProp, ok := objProps["id"].(map[string]any)
+	require.True(t, ok, "oneOf[1].properties.id must be an object")
+	require.Equal(t, metadata.CellIDPattern, idProp["pattern"],
+		"assembly.schema.json cells object-form id.pattern drifted from metadata.CellIDPattern")
+
+	moduleProp, ok := objProps["module"].(map[string]any)
+	require.True(t, ok, "oneOf[1].properties.module must be an object")
+	require.Equal(t, metadata.AssemblyModulePathPattern, moduleProp["pattern"],
+		"assembly.schema.json cells object-form module.pattern drifted from metadata.AssemblyModulePathPattern")
+}
+
 // walkGRPCEndpointField returns the leaf value at
 // then.properties.endpoints.properties.grpc.properties.<field>.<leaf> inside the
 // contract.schema.json allOf branch guarded by kind=grpc. The branch is located

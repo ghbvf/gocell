@@ -76,7 +76,10 @@ func runStarter(ctx context.Context) error {
 	// auditcore→accesscore BootstrapLedgerStore handoff was removed in #1423
 	// (bootstrap auth-fail is now event-driven via event.auth.bootstrap-failed.v1),
 	// so module Provide order carries no cross-cell dependency.
-	app, err := composition.New().
+	// composition.New(<cell ids>) seals the assembly's cell-id closed set (M12a
+	// #1093): Build fail-fasts if the composed modules drift from this declared
+	// set. corebundlestarter mirrors the corebundle cell set.
+	app, err := composition.New("auditcore", "accesscore", "configcore").
 		With(
 			cellmodulesauditcore.Module(),
 			cellmodulesaccesscore.Module(),

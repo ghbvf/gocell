@@ -97,6 +97,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		EventType: req.EventType,
 		ActorID:   actorID,
 		SubjectID: req.SubjectID,
+		TraceID:   req.TraceID,
 	}
 
 	// Inbound from/to filters parse with RFC3339Nano (RFC3339 with optional
@@ -205,6 +206,7 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		ActorID:       e.ActorID,
 		SubjectID:     e.SubjectID,
 		CorrelationID: e.CorrelationID,
+		TraceID:       e.TraceID,
 		OccurredAt:    occurredAt,
 		Timestamp:     e.Timestamp.Format(time.RFC3339Nano),
 		Payload:       json.RawMessage(redaction.RedactPayload(e.Payload)),

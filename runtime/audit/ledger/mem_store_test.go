@@ -827,6 +827,165 @@ func TestMemStore_RepoReady_Conformance(t *testing.T) {
 	celltest.RunRepoReadinessConformance(t, "ledger-mem", store, nil)
 }
 
+// TestMemStore_TraceID_RoundTrip verifies that TraceID is stored and retrieved
+// correctly via Append + GetBySeq.
+func TestMemStore_TraceID_RoundTrip(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Now())
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+
+	e := &ledger.Entry{
+		EventID:   "trace-roundtrip-evt",
+		EventType: "trace.roundtrip",
+		ActorID:   "actor",
+		TraceID:   "4bf92f3577b34da6a3ce929d0e0e4736",
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{}`),
+	}
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	got, err := store.GetBySeq(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetBySeq(1): %v", err)
+	}
+	if got.TraceID != e.TraceID {
+		t.Errorf("TraceID round-trip: got %q, want %q", got.TraceID, e.TraceID)
+	}
+}
+
+// TestMemStore_TraceID_NotInHashChain verifies that two entries differing ONLY
+// in TraceID produce the SAME Hash. This proves trace_id is excluded from the
+// HMAC chain (Protocol.ComputeHash) and that audit tamper-evidence is unchanged.
+//
+// This is the key non-chained property: observability metadata must NOT affect
+// the chain hash so that the presence/absence of trace context does not
+// invalidate historical entries.
+//
+// Independent oracle: storetest.ReferenceComputeHash (the 12-field mirror that
+// never calls Protocol.ComputeHash) is used to verify that the hash of the
+// withTrace entry equals the production hash — proving TraceID is excluded from
+// the HMAC input set via an independent path (not a production-vs-production
+// circular comparison). The independent oracle lives in
+// storetest.RunPrincipalFieldsRoundTrip for the conformance suite path; this
+// test adds the targeted single-field exclusion assertion.
+func TestMemStore_TraceID_NotInHashChain(t *testing.T) {
+	t.Parallel()
+	p := newTestProtocol(t)
+
+	baseTs := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	// Two entries identical in every HMAC field, differing only in TraceID.
+	withTrace := &ledger.Entry{
+		EventID:   "hash-chain-evt",
+		EventType: "hash.chain.test",
+		ActorID:   "actor-1",
+		TraceID:   "4bf92f3577b34da6a3ce929d0e0e4736", // present
+		Timestamp: baseTs,
+		Payload:   []byte(`{"a":1}`),
+	}
+	withoutTrace := &ledger.Entry{
+		EventID:   "hash-chain-evt",
+		EventType: "hash.chain.test",
+		ActorID:   "actor-1",
+		TraceID:   "", // absent
+		Timestamp: baseTs,
+		Payload:   []byte(`{"a":1}`),
+	}
+
+	hashWith := p.ComputeHash("", withTrace)
+	hashWithout := p.ComputeHash("", withoutTrace)
+
+	if hashWith != hashWithout {
+		t.Errorf("TraceID must NOT affect HMAC hash (non-chained invariant):\n  hash(with trace)    = %s\n  hash(without trace) = %s",
+			hashWith, hashWithout)
+	}
+
+	// Independent oracle: ReferenceComputeHash recomputes the canonical HMAC
+	// using an external 12-field mirror struct that does NOT call
+	// Protocol.ComputeHash. The reference excludes TraceID (it is not in
+	// referenceHashInput), so its output for withTrace must equal hashWith.
+	// A regression that silently adds TraceID to auditHashInput would make
+	// hashWith ≠ refHash (the reference stays at 12 fields), exposing the drift
+	// without relying on the production hash function itself.
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	if err != nil {
+		t.Fatalf("ParseNamespaceID: %v", err)
+	}
+	refHash := storetest.ReferenceComputeHash(t, testHMACKey(), ns, "", withTrace)
+	if hashWith != refHash {
+		t.Errorf("Independent oracle mismatch: TraceID appears to be included in the HMAC chain:\n  production hash = %s\n  reference hash  = %s",
+			hashWith, refHash)
+	}
+}
+
+// TestMemStore_Query_ByTraceID verifies that Query with AuditFilters{TraceID:...}
+// returns only matching entries, and that an empty filter returns all entries.
+func TestMemStore_Query_ByTraceID(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC))
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+
+	// Append 3 entries: 2 with traceID "trace-abc", 1 with "trace-xyz".
+	entries := []struct {
+		eventID string
+		traceID string
+	}{
+		{"trace-evt-1", "trace-abc"},
+		{"trace-evt-2", "trace-abc"},
+		{"trace-evt-3", "trace-xyz"},
+	}
+	for _, tc := range entries {
+		e := &ledger.Entry{
+			EventID:   tc.eventID,
+			EventType: "trace.test",
+			ActorID:   "actor",
+			TraceID:   tc.traceID,
+			Timestamp: fc.Now(),
+			Payload:   []byte(`{}`),
+		}
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append %s: %v", tc.eventID, err)
+		}
+	}
+
+	// Filter by trace-abc: must return 2 entries.
+	results, err := store.Query(context.Background(),
+		ledger.AuditFilters{TraceID: "trace-abc"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(TraceID=trace-abc): %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Query(TraceID=trace-abc): got %d results, want 2", len(results))
+	}
+	for _, r := range results {
+		if r.TraceID != "trace-abc" {
+			t.Errorf("Query returned unexpected TraceID %q", r.TraceID)
+		}
+	}
+
+	// Empty filter must return all 3 entries.
+	all, err := store.Query(context.Background(),
+		ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(empty filter): %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("Query(empty): got %d results, want 3", len(all))
+	}
+}
+
 // TestMemStore_RepoReady_AlwaysNil verifies directly that MemStore.RepoReady
 // returns nil regardless of store state.
 func TestMemStore_RepoReady_AlwaysNil(t *testing.T) {

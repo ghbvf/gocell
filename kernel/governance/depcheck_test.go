@@ -276,7 +276,7 @@ func TestDEP03_SameAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"main-bundle": {
 				ID:    "main-bundle",
-				Cells: []string{metadatatest.CellIDAppCore, metadatatest.CellIDSharedCrypto},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAppCore}, {ID: metadatatest.CellIDSharedCrypto}},
 			},
 		},
 	}
@@ -307,11 +307,11 @@ func TestDEP03_DifferentAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"bundle-a": {
 				ID:    "bundle-a",
-				Cells: []string{metadatatest.CellIDAppCore},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAppCore}},
 			},
 			"bundle-b": {
 				ID:    "bundle-b",
-				Cells: []string{metadatatest.CellIDSharedCrypto},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDSharedCrypto}},
 			},
 		},
 	}
@@ -426,7 +426,7 @@ func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"bundle-a": {
 				ID:    "bundle-a",
-				Cells: []string{metadatatest.CellIDSharedCrypto}, // app-core not in any assembly
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDSharedCrypto}}, // app-core not in any assembly
 			},
 		},
 	}

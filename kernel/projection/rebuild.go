@@ -29,8 +29,11 @@ var ErrRebuildInProgress = errcode.New(errcode.KindConflict, errcode.ErrConflict
 // Subscribe must have been called before Rebuild — the projection must have a
 // registered apply function and spec before rebuild can start.
 //
-// The rebuild goroutine is detached from the request context: it is only
-// canceled by Close (which sets rebuildCancel).
+// The rebuild goroutine is detached from the request's cancellation and
+// deadline (via context.WithoutCancel) but inherits its values — request_id /
+// trace_id / correlation_id / cell_id — so the async lifecycle logs correlate
+// to the request that admitted the rebuild. It is canceled only by Close (which
+// sets rebuildCancel), never by the triggering request completing.
 func (c *Coordinator) Rebuild(ctx context.Context) error {
 	if !c.subscribed.Load() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -41,7 +44,10 @@ func (c *Coordinator) Rebuild(ctx context.Context) error {
 		return ErrRebuildInProgress
 	}
 
-	rctx, cancel := context.WithCancel(context.Background())
+	// WithoutCancel detaches from the request's cancellation/deadline (a rebuild
+	// must outlive the short-lived 202 request) while preserving its values for
+	// log correlation; WithCancel layers the Close-driven cancellation on top.
+	rctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	c.rebuildCancel.Store(&cancel)
 	c.rebuildWG.Add(1)
 	go c.runRebuild(rctx)
@@ -181,8 +187,10 @@ var errReplayDone = errors.New("projection.rebuild: replay reached head0")
 // Each event is applied via applyOne in its own tx (exactly-once skip + pos<1
 // guard apply). Stops at head0 (catchup picks up from there).
 //
-// v1: replay is bounded only by ctx cancellation (no max-entries / max-duration).
-// Operators bound duration via the ctx timeout passed to Rebuild.
+// v1: replay is bounded only by Close()/process shutdown (no max-entries /
+// max-duration). The triggering request's deadline does NOT bound it — the
+// rebuild ctx is derived via context.WithoutCancel, which strips the parent
+// deadline so a detached rebuild outlives the short-lived 202 request.
 func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 	err := c.replay.Replay(ctx, 0, func(entry outbox.Entry) error {
 		if err := ctx.Err(); err != nil {

@@ -47,42 +47,29 @@ func setPodReachableHealthAddr(t *testing.T) {
 	t.Setenv("GOCELL_HTTP_HEALTH_ADDR", ":9091")
 }
 
-func TestCorebundleModulesMatchAssemblyMetadataOrder(t *testing.T) {
+// TestCorebundleAssemblyMatchesGeneratedModules verifies the corebundle
+// assembly.yaml cell set equals the generatedCellModules() ID set — the
+// assembly.yaml ↔ modules_gen.go drift guard. That guard is now enforced at
+// runtime by composition.Builder.Build's closed-set check (M12a #1093; the
+// hand-written assertModuleIDsMatch was removed); this test asserts the
+// production wiring satisfies the bijection. Order-agnostic because the
+// closed-set check is set membership, not positional equality.
+func TestCorebundleAssemblyMatchesGeneratedModules(t *testing.T) {
 	root := findRepoRoot(t)
 	project, err := metadata.NewParser(root).Parse()
 	require.NoError(t, err)
 	asm := project.Assemblies["corebundle"]
 	require.NotNil(t, asm)
 
-	modules, err := corebundleModules(asm.ID, asm.Cells)
-	require.NoError(t, err)
-	require.Len(t, modules, len(asm.Cells))
-
-	gotIDs := make([]string, 0, len(modules))
-	for _, module := range modules {
-		gotIDs = append(gotIDs, module.ID())
+	want := metadata.CellIDs(asm.Cells)
+	mods := generatedCellModules()
+	got := make([]string, len(mods))
+	for i, m := range mods {
+		got[i] = m.ID()
 	}
-	assert.Equal(t, asm.Cells, gotIDs)
-}
-
-// TestCorebundleModulesRejectDrift verifies that corebundleModules returns an
-// error when the provided cellIDs diverge from the generated module list. This
-// guards against assembly.yaml ↔ modules_gen.go drift where the caller forgets
-// to run `gocell generate assembly --id=corebundle` after editing assembly.yaml.
-func TestCorebundleModulesRejectDrift(t *testing.T) {
-	// Length mismatch: 2 IDs vs 3 generated modules.
-	modules, err := corebundleModules("corebundle", []string{"configcore", "ghostcore"})
-	require.Error(t, err)
-	assert.Nil(t, modules)
-	assert.Contains(t, err.Error(), "length mismatch")
-	assert.Contains(t, err.Error(), "gocell generate assembly")
-
-	// ID drift: correct count but wrong IDs.
-	modules, err = corebundleModules("corebundle", []string{"configcore", "ghostcore", "auditcore"})
-	require.Error(t, err)
-	assert.Nil(t, modules)
-	assert.Contains(t, err.Error(), "drift")
-	assert.Contains(t, err.Error(), "gocell generate assembly")
+	assert.ElementsMatch(t, want, got,
+		"corebundle assembly.yaml cells must match generatedCellModules() IDs; "+
+			"run `gocell generate assembly --id=corebundle` after editing assembly.yaml")
 }
 
 // TestLoadKeySet collapses 5 fragmented per-mode tests into a single

@@ -16,6 +16,48 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+// TestLoadMode_NoNeedDeps guards the #1499 RSS optimization: the shared
+// go/packages load mode MUST NOT request packages.NeedDeps. NeedDeps keeps full
+// Syntax(AST)+TypesInfo resident for every transitive dependency package — the
+// dominant RSS increment of a single packages.Load (~954MB→149MB tests=F /
+// ~1337MB→509MB tests=T). Without NeedDeps, go/packages satisfies dependency
+// types from export data (gcexportdata), which leaves the root package's
+// Types/TypesInfo/Syntax untouched and resolves cross-package symbols (info.Uses
+// / types.Implements) identically. This is exactly go/packages' usesExportData
+// fast path (NeedTypes && !NeedDeps) and matches go/analysis' LoadSyntax preset.
+//
+// The required bits below MUST stay present — a too-aggressive trim would break
+// typed resolution across the archtest suite.
+//
+// Rating: Medium (type-aware value assertion on the typed packages.LoadMode
+// const; not a string-anchor). Hard is unreachable — packages.LoadMode is a
+// public int-flag type, so "no NeedDeps anywhere" cannot be made
+// type-system-unexpressible (analogous to the documented won't-do ceilings
+// #851/#893/#1282). No Soft grep-for-"NeedDeps" guard is added.
+func TestLoadMode_NoNeedDeps(t *testing.T) {
+	if loadMode&packages.NeedDeps != 0 {
+		t.Fatalf("loadMode must NOT include packages.NeedDeps (#1499 RSS optimization); "+
+			"go/packages satisfies dependency types from export data without it. mode=%b", loadMode)
+	}
+
+	required := []struct {
+		name string
+		bit  packages.LoadMode
+	}{
+		{"NeedName", packages.NeedName},
+		{"NeedFiles", packages.NeedFiles},
+		{"NeedSyntax", packages.NeedSyntax},
+		{"NeedTypes", packages.NeedTypes},
+		{"NeedTypesInfo", packages.NeedTypesInfo},
+		{"NeedImports", packages.NeedImports},
+	}
+	for _, r := range required {
+		if loadMode&r.bit == 0 {
+			t.Fatalf("loadMode missing required bit %s — typed resolution would break", r.name)
+		}
+	}
+}
+
 func buildFakePkg(t *testing.T, src string) (*packages.Package, *ast.File) {
 	t.Helper()
 	fset := token.NewFileSet()

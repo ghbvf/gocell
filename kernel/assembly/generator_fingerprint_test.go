@@ -112,7 +112,7 @@ func fingerprintProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"ssobff": {
 				ID:    "ssobff",
-				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
+				Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}, {ID: metadatatest.CellIDAuditCore}},
 				Build: metadata.BuildMeta{
 					Entrypoint: "cmd/ssobff/main.go",
 					Binary:     "ssobff",
