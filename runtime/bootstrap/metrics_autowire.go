@@ -38,10 +38,23 @@ import (
 //     This is the load-bearing rule — there is NO warn-then-degrade path, so a
 //     registration conflict can never silently disable a metric family.
 //
-// T is constrained to comparable so *cache can be nil-tested against the zero
-// value; both interface collector types (metricsmiddleware.Collector) and
-// concrete pointer types satisfy it, and comparing either against its nil zero
-// value never panics.
+// The cached collector is also returned as val with wired=true so callers that
+// need the value immediately (HTTP option-wrap, outbox AttachObserver) can use
+// it; callers that only need the side effect of populating *cache (projection)
+// may discard val/wired and just check err.
+//
+// Preconditions:
+//   - cache must be non-nil (pass &b.someField); a nil cache is a programmer
+//     error and panics at the *cache deref.
+//   - T is constrained to comparable so *cache can be tested against the zero
+//     value. Both pointer types and pointer-backed interfaces (the four current
+//     callers) satisfy it; comparing against the nil zero value never panics
+//     (a nil-interface zero differs in dynamic type from any populated value, so
+//     the comparison short-circuits before any value compare).
+//   - construct must return a non-nil value on success. A typed-nil interface
+//     (non-nil interface wrapping a nil pointer) would compare unequal to the
+//     zero value and be cached as if populated; none of the four collector
+//     constructors do this.
 //
 // conflictMsg is the actionable, per-collector message (everything before the
 // wrapped cause); the helper appends ": <cause>".

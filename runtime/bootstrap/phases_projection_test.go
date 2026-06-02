@@ -539,17 +539,21 @@ func TestBuildProjectionCoordinators_WithRealProvider_RegistersMetrics(t *testin
 	require.NoError(t, err)
 	require.Len(t, wirings, 1)
 
-	// Verify that the three projection metric gauges/histograms were registered.
+	// RegisterMetrics registers all three projection metrics against the provider:
+	// two gauges (replay_lag, pending_events) and one histogram (rebuild_duration).
+	// Assert each appears in its respective registration slot — proving the
+	// provider is threaded through (F4 regression).
 	spy.mu.Lock()
-	gauges := append([]string(nil), spy.histogramNames...)
+	gauges := append([]string(nil), spy.gaugeNames...)
+	histograms := append([]string(nil), spy.histogramNames...)
 	spy.mu.Unlock()
 
-	// RegisterMetrics registers: projection_event_replay_lag_seconds (gauge),
-	// projection_rebuild_duration_seconds (histogram), projection_pending_events (gauge).
-	// At least the histogram name must appear in the spy's histogram registration.
-	assert.Contains(t, gauges, "projection_rebuild_duration_seconds",
-		"projection_rebuild_duration_seconds must be registered on the real provider; "+
-			"got %v — means metrics were not threaded into the Coordinator (F4 regression)", gauges)
+	assert.Contains(t, gauges, "projection_event_replay_lag_seconds",
+		"projection_event_replay_lag_seconds (gauge) must be registered on the real provider; got %v", gauges)
+	assert.Contains(t, gauges, "projection_pending_events",
+		"projection_pending_events (gauge) must be registered on the real provider; got %v", gauges)
+	assert.Contains(t, histograms, "projection_rebuild_duration_seconds",
+		"projection_rebuild_duration_seconds (histogram) must be registered on the real provider; got %v", histograms)
 }
 
 // TestBuildProjectionCoordinators_NopProvider_SkipsMetrics verifies that when no
@@ -581,6 +585,38 @@ func newProjectionCellNamed(cellID, projID string) *projectionTestCell {
 		spec:         projTestSpec(),
 		projectionID: projID,
 		apply:        func(context.Context, outbox.Entry) error { return nil },
+	}
+}
+
+// multiProjectionCell registers SEVERAL projections under ONE cell — the exact
+// shape of the original #1399 bug (one cell, N projections, the 2nd+ silently
+// losing metrics under the old per-projection registration).
+type multiProjectionCell struct {
+	*cell.BaseCell
+	projectionIDs []string
+}
+
+func (c *multiProjectionCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	for _, pid := range c.projectionIDs {
+		if err := reg.RegisterProjection(cell.ProjectionRequest{
+			Spec:         projTestSpec(),
+			ProjectionID: pid,
+			CellID:       c.ID(),
+			Apply:        func(context.Context, outbox.Entry) error { return nil },
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newMultiProjectionCell(cellID string, projIDs ...string) *multiProjectionCell {
+	return &multiProjectionCell{
+		BaseCell:      cell.MustNewBaseCell(&metadata.CellMeta{ID: cellID, Type: "core"}),
+		projectionIDs: projIDs,
 	}
 }
 
@@ -671,6 +707,32 @@ func TestBuildProjectionCoordinators_MultiProjection_SharesSingleMetrics(t *test
 	}
 }
 
+// TestBuildProjectionCoordinators_SameCellMultiProjection_SharesSingleMetrics
+// reproduces the EXACT #1399 shape: a single cell with two projections. The old
+// per-projection path called RegisterMetrics inside buildOneProjection, so the
+// 2nd projection re-registered the fixed-name family (collide → warn-degrade →
+// lost metrics). The shared registration must register each metric exactly once.
+func TestBuildProjectionCoordinators_SameCellMultiProjection_SharesSingleMetrics(t *testing.T) {
+	t.Parallel()
+	prov := &projMetricRegProvider{}
+	s := buildProjectionPhaseState(t, newMultiProjectionCell("ordercell", "summary", "detail"))
+
+	b := newProjectionBootstrap(t, WithMetricsProvider(prov))
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 2, "one cell declared two projections")
+
+	require.NotNil(t, b.projectionMetrics)
+	for _, name := range []string{
+		"projection_event_replay_lag_seconds",
+		"projection_rebuild_duration_seconds",
+		"projection_pending_events",
+	} {
+		assert.Equalf(t, 1, prov.regs[name],
+			"%s must register EXACTLY once for one cell's two projections, not once per projection (#1399)", name)
+	}
+}
+
 // TestAutoWireProjectionMetrics_NopProvider_Skips confirms the Nop default
 // short-circuits before any registration and leaves the cache nil.
 func TestAutoWireProjectionMetrics_NopProvider_Skips(t *testing.T) {
@@ -695,6 +757,7 @@ func TestAutoWireProjectionMetrics_Conflict_FailFast(t *testing.T) {
 // Compile-time anchors.
 var (
 	_ cell.Cell              = (*projectionTestCell)(nil)
+	_ cell.Cell              = (*multiProjectionCell)(nil)
 	_ projection.Cursor      = fakeProjectionCursor{}
 	_ kernelmetrics.Provider = (*projMetricRegProvider)(nil)
 	_ kernelmetrics.Provider = failGaugeProvider{}

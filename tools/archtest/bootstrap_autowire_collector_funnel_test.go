@@ -58,8 +58,10 @@
 //
 //   - Dot-import bare-identifier form (import . "…/observability/metrics";
 //     NewEventRouterCollector(p)) references the symbol as a bare *ast.Ident, not
-//     a SelectorExpr, so it is not matched. Dot-importing these packages is absent
-//     from the corpus and conspicuous; documented, not enforced.
+//     a SelectorExpr, so the SelectorExpr scan would not match it. This blind spot
+//     is CLOSED by a reverse self-check below: bootstrap is forbidden from
+//     dot-importing either funneled package (autoWireFunneledPkgs), keeping the
+//     bare-ident form unrepresentable.
 //   - Raw ad-hoc collector construction that bypasses the four named constructors
 //     entirely (e.g. calling b.metricsProvider.GaugeVec/CounterVec/HistogramVec
 //     directly in bootstrap to assemble a private collector) is OUT of this
@@ -80,6 +82,7 @@ import (
 	"go/ast"
 	"go/types"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +102,15 @@ var autoWireCtorSymbols = map[[2]string]string{
 	{"github.com/ghbvf/gocell/runtime/observability/metrics", "NewEventRouterCollector"}:  "metricsmiddleware.NewEventRouterCollector",
 	{"github.com/ghbvf/gocell/runtime/observability/metrics", "NewOutboxRejectCollector"}: "metricsmiddleware.NewOutboxRejectCollector",
 	{"github.com/ghbvf/gocell/kernel/projection", "RegisterMetrics"}:                      "projection.RegisterMetrics",
+}
+
+// autoWireFunneledPkgs is the set of packages whose collector constructors the
+// funnel guards. A bootstrap dot-import of any of these would expose those
+// constructors as bare identifiers and bypass the SelectorExpr scan, so the
+// reverse self-check forbids it.
+var autoWireFunneledPkgs = map[string]struct{}{
+	"github.com/ghbvf/gocell/runtime/observability/metrics": {},
+	"github.com/ghbvf/gocell/kernel/projection":             {},
 }
 
 // TestBootstrapAutoWireCollectorFunnel01 asserts that every reference to a
@@ -121,6 +133,27 @@ func TestBootstrapAutoWireCollectorFunnel01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
+			// Blind-spot reverse self-check: a dot-import of a funneled package
+			// would let its constructor be referenced as a bare *ast.Ident (not a
+			// SelectorExpr), bypassing the scan below. Assert bootstrap never
+			// dot-imports either funneled package so that blind spot stays vacuous.
+			for _, imp := range file.Imports {
+				if imp.Name == nil || imp.Name.Name != "." {
+					continue
+				}
+				path := strings.Trim(imp.Path.Value, `"`)
+				if _, funneled := autoWireFunneledPkgs[path]; funneled {
+					pos := p.Fset.Position(imp.Pos())
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01: dot-import of funneled package %q in bootstrap "+
+								"would expose its collector constructors as bare identifiers, bypassing the "+
+								"SelectorExpr-based funnel scan. Import it qualified.", path),
+					})
+				}
+			}
 			// ancestors holds the AST path from the file root down to (but not
 			// including) the node currently being visited. Push after the check,
 			// pop on the post-visit nil callback — every non-nil node returns
@@ -145,8 +178,9 @@ func TestBootstrapAutoWireCollectorFunnel01(t *testing.T) {
 										"single-source helper so the skip/cache/fail-fast discipline cannot be "+
 										"re-implemented inline (the #1399 warn-then-degrade regression). Pass the "+
 										"constructor as the construct argument of autoWireCachedCollector (or invoke "+
-										"it inside that construct closure); do not call it directly.",
-									symbol, autoWireHelperName),
+										"it inside that construct closure); do not call it directly. Correct form: "+
+										"`autoWireCachedCollector(b, &b.myCollector, %s, \"...conflict msg...\")`.",
+									symbol, autoWireHelperName, symbol),
 							})
 						}
 					}

@@ -168,10 +168,11 @@ func (b *Bootstrap) buildCellProjections(
 	if err := b.checkProjectionDeps(); err != nil {
 		return nil, fmt.Errorf("bootstrap: cell %s: %w", id, err)
 	}
-	// Register the shared projection metric family ONCE (cached in
-	// b.projectionMetrics) before building any coordinator. The funnel is
-	// cache-guarded, so this is idempotent across cells; a real provider conflict
-	// is startup-fatal (never warn-degraded — #1399).
+	// Register the shared projection metric family before building any
+	// coordinator. Called once per cell that declares projections, but the funnel
+	// is cache-guarded so it actually constructs the family only on the first
+	// invocation and is a no-op cache hit thereafter; a real provider conflict is
+	// startup-fatal (never warn-degraded — #1399).
 	if err := b.autoWireProjectionMetrics(); err != nil {
 		return nil, err
 	}
