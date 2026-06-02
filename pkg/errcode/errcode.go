@@ -752,6 +752,11 @@ const (
 	// ErrConflict so operator dashboards can route saga producer-side races
 	// separately from cell-wide conflict signals.
 	ErrSagaDuplicateInstance Code = "ERR_SAGA_DUPLICATE_INSTANCE"
+	// ErrProjectionNotFound signals that the projection rebuild control-plane
+	// endpoint (POST /internal/v1/<cell>/projection/<name>/rebuild) was given a
+	// <cell>/<name> path that resolves to no registered projection Coordinator.
+	// Constructed with KindNotFound → HTTP 404.
+	ErrProjectionNotFound Code = "ERR_PROJECTION_NOT_FOUND"
 
 	// Webhook signing / verification / delivery codes (KERNEL-WEBHOOK-01).
 	// Each comment notes the intended Kind the construction site passes to

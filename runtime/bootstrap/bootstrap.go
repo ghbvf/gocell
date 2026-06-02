@@ -189,9 +189,19 @@ type Bootstrap struct {
 	projectionReplay   projection.ReplaySource
 	projectionCursor   projection.Cursor
 	// projectionCoordinators maps "<cellID>/<projectionID>" → the constructed
-	// Coordinator, so the PR-04 HTTP rebuild endpoint can resolve and trigger
-	// Coordinator.Rebuild. Populated by phase6 projection drain.
-	projectionCoordinators map[string]*projection.Coordinator
+	// projection.RebuildController (a *projection.Coordinator), so the framework
+	// rebuild control-plane endpoint can resolve a {cell}/{name} path and trigger
+	// Rebuild + read a Snapshot. Populated by the phase6 projection drain; read by
+	// the rebuild handler at request time (phase6 runs after phase5 mounts the
+	// route but before any request is served, so the lazy read sees a full map).
+	projectionCoordinators map[string]projection.RebuildController
+
+	// projectionRebuildCallers is the caller-cell allowlist for the framework
+	// projection rebuild endpoint, set by WithProjectionRebuildEndpoint. Non-empty
+	// = opt-in: phase5 mounts POST /internal/v1/{cell}/projection/{name}/rebuild on
+	// the InternalListener with a RequireCallerCell guard over these IDs. Empty =
+	// endpoint not mounted (rebuild remains programmatic-only).
+	projectionRebuildCallers []string
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.

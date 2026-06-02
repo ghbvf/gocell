@@ -99,3 +99,32 @@ func WithProjectionCursor(cursor projection.Cursor) Option {
 		b.projectionCursor = cursor
 	}
 }
+
+// WithProjectionRebuildEndpoint opts the assembly into the framework projection
+// rebuild control-plane endpoint:
+//
+//	POST /internal/v1/{cell}/projection/{name}/rebuild
+//
+// mounted by bootstrap on the InternalListener (the framework-owned-RouteGroup
+// pattern, like /healthz·/readyz·/metrics — no contract.yaml, no host cell). The
+// handler dispatches by {cell}/{name} to the Coordinator wired in the phase6
+// drain and returns 202 (rebuild admitted, body carries the {phase,
+// pendingEvents, replayLagSeconds} snapshot) / 409 (already running) / 404
+// (unknown cell/projection).
+//
+// allowedCallers is the caller-cell allowlist (service-token callerCell segment).
+// A non-listed caller is rejected 403 via RequireCallerCell. At least one caller
+// is REQUIRED: an /internal/ endpoint must name its callers
+// (ContractSpec.validateHTTP fails closed on empty Clients), and the
+// InternalListener MUST be declared via WithListener — phase0
+// (validateProjectionRebuildEndpoint) fails fast otherwise.
+//
+// Not calling this option (or calling it with no callers) leaves the endpoint
+// unmounted: projection rebuilds remain triggerable only programmatically via
+// Coordinator.Rebuild. This is a wiring option — a later call replaces the
+// allowlist set by an earlier one.
+func WithProjectionRebuildEndpoint(allowedCallers ...string) Option {
+	return func(b *Bootstrap) {
+		b.projectionRebuildCallers = allowedCallers
+	}
+}

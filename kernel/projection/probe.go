@@ -71,47 +71,77 @@ func (c *Coordinator) checkStoreReady(ctx context.Context) error {
 	return nil
 }
 
-// checkLag is the operational-health probe check. It computes pending events
-// and lag on demand (no background ticker).
+// computeLagPending is the single-source pending-events / replay-lag computation
+// shared by the lag readyz probe (checkLag) and the rebuild control-plane
+// snapshot (Coordinator.Snapshot). It is PURE — no metric side-effects — so the
+// two consumers cannot diverge: checkLag adds the gauge writes + threshold
+// verdict, Snapshot reads the values for the wire response.
 //
-// F13: if pending < 0 (checkpoint > head anomaly), log a warning and treat as
-// healthy (set lag gauge to 0 — do NOT write a negative gauge).
-func (c *Coordinator) checkLag(ctx context.Context) error {
+// It reads the replay head and stored checkpoint and derives:
+//   - pending: head − checkpoint, clamped to ≥ 0. A checkpoint > head anomaly
+//     (negative raw difference, F13) yields pending=0 (treated as caught up),
+//     mirroring the lag probe's "no negative gauge" rule.
+//   - lagSecs: 0 when there are no pending events, or when nothing has been
+//     applied yet (lastApplied == 0 — cold start / fresh rebuild). Otherwise it
+//     is the wall-clock time since the last applied event's domain OccurredAt.
+//   - lagApplicable: false when pending == 0 OR lastApplied == 0. checkLag uses
+//     it to decide whether to WRITE the lag gauge — under startup grace
+//     (pending > 0 but nothing applied) the gauge is deliberately left untouched
+//     so an idle cold start does not report a false-healthy zero lag.
+func (c *Coordinator) computeLagPending(ctx context.Context) (pending int64, lagSecs float64, lagApplicable bool, err error) {
 	head, err := c.replay.Head(ctx)
 	if err != nil {
-		return fmt.Errorf("projection.probe: Head: %w", err)
+		return 0, 0, false, fmt.Errorf("projection.probe: Head: %w", err)
 	}
 	cp, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
 	if err != nil {
-		return fmt.Errorf("projection.probe: LoadOffset: %w", err)
+		return 0, 0, false, fmt.Errorf("projection.probe: LoadOffset: %w", err)
 	}
-	pending := head - cp
+	pending = head - cp
+	// F13: checkpoint > head anomaly (pending < 0) → clamp to 0 (caught up).
+	// pending == 0 → caught up. Either way lag is not applicable.
+	if pending <= 0 {
+		return 0, 0, false, nil
+	}
+	// Startup grace: nothing has been applied yet (cold start or fresh rebuild) →
+	// lag is unknown, not zero. lagApplicable=false so checkLag skips the gauge.
+	last := c.lastAppliedUnixNano.Load()
+	if last == 0 {
+		return pending, 0, false, nil
+	}
+	// Lag = time since the last applied event's domain time (OccurredAt).
+	return pending, c.clk.Since(time.Unix(0, last)).Seconds(), true, nil
+}
 
-	// F13: checkpoint > head anomaly — log warn and treat as healthy (0 gauge).
-	if pending < 0 {
-		c.metrics.setPendingEvents(ctx, c.cellID, c.projectionID, 0)
-		c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, 0)
-		return nil
+// checkLag is the operational-health probe check. It computes pending events and
+// lag on demand (no background ticker) via computeLagPending, writes the gauges,
+// and returns unhealthy when the lag exceeds the threshold.
+//
+// F13: a checkpoint > head anomaly is collapsed into the pending==0 branch by
+// computeLagPending (clamped to 0), so both write pending=0/lag=0 and report
+// healthy. Startup grace (pending > 0, nothing applied) leaves the lag gauge
+// untouched (lagApplicable == false) so a stuck cold start is not masked healthy.
+func (c *Coordinator) checkLag(ctx context.Context) error {
+	pending, lagSecs, lagApplicable, err := c.computeLagPending(ctx)
+	if err != nil {
+		return err
 	}
 
 	// Update pending_events gauge on demand.
 	c.metrics.setPendingEvents(ctx, c.cellID, c.projectionID, float64(pending))
 
-	// No pending events → always healthy; zero the lag gauge so it does not
-	// produce false-positive GoCellProjectionReplayLagHigh alerts on idle streams.
 	if pending == 0 {
+		// No pending events → always healthy; zero the lag gauge so it does not
+		// produce false-positive GoCellProjectionReplayLagHigh alerts on idle streams.
 		c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, 0)
 		return nil
 	}
 
-	// Startup grace: nothing has been applied yet (cold start or fresh rebuild).
-	last := c.lastAppliedUnixNano.Load()
-	if last == 0 {
+	if !lagApplicable {
+		// Startup grace: nothing applied yet. Leave the lag gauge untouched.
 		return nil
 	}
 
-	// Lag = time since the last applied event's domain time (OccurredAt).
-	lagSecs := c.clk.Since(time.Unix(0, last)).Seconds()
 	// Update replay lag gauge on demand.
 	c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, lagSecs)
 

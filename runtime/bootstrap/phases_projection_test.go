@@ -375,10 +375,13 @@ func TestPhase6_ProjectionDrain_WiresCoordinatorAndProbes(t *testing.T) {
 	require.NoError(t, b.phase6StartEventRouter(runCtx, s),
 		"phase6 must drain the projection cleanly")
 
-	// Coordinator indexed for the rebuild HTTP endpoint.
-	coord, ok := b.projectionCoordinators[projTestCellID+"/"+projTestProjID]
+	// Coordinator indexed for the rebuild HTTP endpoint (held as the narrow
+	// RebuildController interface; assert the concrete type to inspect probes).
+	ctrl, ok := b.projectionCoordinators[projTestCellID+"/"+projTestProjID]
 	require.True(t, ok, "coordinator must be indexed by <cell>/<projection>")
-	require.NotNil(t, coord)
+	require.NotNil(t, ctrl)
+	coord, ok := ctrl.(*projection.Coordinator)
+	require.True(t, ok, "registry must hold a *projection.Coordinator")
 
 	// Probes were registered (Register returns an error on dup/invalid; a clean
 	// phase6 proves both store-ready and lag probes registered without collision).

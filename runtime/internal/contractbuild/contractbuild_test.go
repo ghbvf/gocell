@@ -48,11 +48,12 @@ func assertSpecEqual(t *testing.T, got, want contractspec.ContractSpec) {
 func TestNewFrameworkHTTP(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name   string
-		id     string
-		method string
-		path   string
-		want   contractspec.ContractSpec
+		name    string
+		id      string
+		method  string
+		path    string
+		clients []string
+		want    contractspec.ContractSpec
 	}{
 		{
 			name:   "valid health livez",
@@ -106,12 +107,30 @@ func TestNewFrameworkHTTP(t *testing.T) {
 				Path:      "/api/v1/test",
 			},
 		},
+		{
+			// Internal control-plane framework endpoint: an /internal/ path requires
+			// a non-empty Clients allowlist (ContractSpec.validateHTTP invariant), so
+			// the variadic clients carry the caller-cell allowlist into the spec.
+			name:    "internal endpoint with caller-cell allowlist",
+			id:      "http.framework.projection.rebuild.v1",
+			method:  "POST",
+			path:    "/internal/v1/{cell}/projection/{name}/rebuild",
+			clients: []string{"controlplane"},
+			want: contractspec.ContractSpec{
+				ID:        "http.framework.projection.rebuild.v1",
+				Kind:      cellvocab.ContractHTTP,
+				Transport: "http",
+				Method:    "POST",
+				Path:      "/internal/v1/{cell}/projection/{name}/rebuild",
+				Clients:   []string{"controlplane"},
+			},
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := contractbuild.NewFrameworkHTTP(tc.id, tc.method, tc.path)
+			got := contractbuild.NewFrameworkHTTP(tc.id, tc.method, tc.path, tc.clients...)
 			assertSpecEqual(t, got, tc.want)
 			if err := got.Validate(); err != nil {
 				t.Errorf("Validate() unexpected error: %v", err)

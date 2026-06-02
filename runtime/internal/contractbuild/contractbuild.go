@@ -23,8 +23,16 @@ import (
 const frameworkHTTPIDPrefix = "http.framework."
 
 // NewFrameworkHTTP constructs a ContractSpec for runtime-owned HTTP
-// infrastructure endpoints (health probes, devtools catalog, etc.). Kind is
-// fixed as cellvocab.ContractHTTP; Transport is fixed as "http".
+// infrastructure endpoints (health probes, devtools catalog, projection rebuild
+// control-plane, etc.). Kind is fixed as cellvocab.ContractHTTP; Transport is
+// fixed as "http".
+//
+// The optional clients carry the caller-cell allowlist. An /internal/ path
+// REQUIRES a non-empty allowlist (ContractSpec.validateHTTP fails closed
+// otherwise — every internal API must name its callers); public framework
+// endpoints (/healthz, /readyz, /metrics, devtools) pass no clients. Validation
+// of the path↔clients pairing is deferred to ContractSpec.Validate() at the
+// mount site, so the funnel itself stays a pure constructor.
 //
 // The id MUST start with "http.framework.". This constraint is enforced at
 // construction time with a panic (A-class assertion), not merely by code
@@ -38,7 +46,7 @@ const frameworkHTTPIDPrefix = "http.framework."
 // The package lives under runtime/internal/ so the Go compiler refuses imports
 // from outside the runtime/ subtree — business code physically cannot call
 // this funnel (see doc.go for the compiler-Hard upstream rationale).
-func NewFrameworkHTTP(id, method, path string) contractspec.ContractSpec {
+func NewFrameworkHTTP(id, method, path string, clients ...string) contractspec.ContractSpec {
 	if !strings.HasPrefix(id, frameworkHTTPIDPrefix) {
 		panic(panicregister.Approved(
 			"contractspec-framework-id-prefix",
@@ -51,6 +59,7 @@ func NewFrameworkHTTP(id, method, path string) contractspec.ContractSpec {
 		Transport: "http",
 		Method:    method,
 		Path:      path,
+		Clients:   clients,
 	}
 }
 
