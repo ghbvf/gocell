@@ -287,6 +287,7 @@ var gocellPlatformPrefixes = []string{
 	"ERR_ASSEMBLY_",
 	"ERR_SLICE_",
 	"ERR_PG_",
+	"ERR_PROJECTION_",
 	"ERR_CIRCUIT_",
 	"ERR_CURSOR_",
 	"ERR_CSRF_",
