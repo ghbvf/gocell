@@ -436,7 +436,7 @@ M3 (#1084) 解 R1：让外部 Cell 仓库 `go get github.com/ghbvf/gocell/tools/
 
 规则对 **GoCell 平台符号路径**（errcode / redaction / panicregister，外部仓库作依赖在固定
 路径导入）的引用保持锚定 `PlatformModulePath`；规则的**扫描范围**（扫哪个 module 找违规）
-由 driver（`RunTyped`→`findModuleRoot` 从运行 module 的 go.mod 解析）供给。二者对应
+由 driver（`Run(t, Typed(...))`→`findModuleRoot` 从运行 module 的 go.mod 解析）供给。二者对应
 `go/analysis` 中 `printf` 硬编码 `"fmt.Printf"` / `copylock` 硬编码 `"sync"`（稳定依赖路径）
 vs `pass.Pkg`（被分析目标）的标准分离。
 

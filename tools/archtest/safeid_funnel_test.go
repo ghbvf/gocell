@@ -192,7 +192,6 @@ func TestSAFEIDWireMessageUsage01(t *testing.T) {
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"./kernel/outbox/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil
@@ -319,7 +318,6 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"./kernel/outbox/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil
@@ -407,7 +405,6 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"./kernel/outbox/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil

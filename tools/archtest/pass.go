@@ -259,11 +259,15 @@ func StandaloneModule(dir string, opts TypedOpts, patterns []string) RunScope {
 // satisfies it) so the [StandaloneModule] fatal-path spy tests can drive Run
 // with a tbFatalSpy.
 //
-// scope selects the mode and source: [AST] (AST-only), [Typed] (typed main
-// module), [Production] (typed main module, generated/ excluded), [Fixture]
-// (typed archtest_fixture packages), [StandaloneModule] (typed standalone
-// module). All failure modes (module-root not found, load error, parse error,
-// non-absolute StandaloneModule dir) fail-loud via t.Fatalf.
+// scope selects the mode and source. Scope quick-pick:
+//   - No go/types needed (pure AST) → [AST]
+//   - Need go/types over the main module → [Typed]
+//   - Same as Typed but generated/ excluded (hand-written-source rules) → [Production]
+//   - Loading archtest_fixture-tagged fixture packages → [Fixture]
+//   - Standalone testdata module with its own go.mod → [StandaloneModule]
+//
+// All failure modes (nil scope, nil rule, module-root not found, load error,
+// parse error, non-absolute StandaloneModule dir) fail-loud via t.Fatalf.
 //
 // Typed rules read pass.TypesInfo (and pass.Pkg) for resolution; AST-only
 // helpers ([EachInSubtree] etc.) work unchanged on pass.Files in either mode.
@@ -271,6 +275,10 @@ func Run(t testing.TB, scope RunScope, rule Rule) []Diagnostic {
 	t.Helper()
 	if rule == nil {
 		t.Fatalf("archtest.Run: nil rule")
+	}
+	if scope == nil {
+		t.Fatalf("archtest.Run: nil scope; use AST/Typed/Production/Fixture/StandaloneModule")
+		return nil
 	}
 	switch s := scope.(type) {
 	case astRunScope:
@@ -290,7 +298,7 @@ func Run(t testing.TB, scope RunScope, rule Rule) []Diagnostic {
 	case productionRunScope:
 		return runProduction(t, s.opts, rule)
 	default:
-		t.Fatalf("archtest.Run: nil RunScope; use AST/Typed/Production/Fixture/StandaloneModule")
+		t.Fatalf("archtest.Run: unknown RunScope %T; use AST/Typed/Production/Fixture/StandaloneModule", scope)
 		return nil
 	}
 }
@@ -339,7 +347,8 @@ func runProduction(t testing.TB, opts TypedOpts, rule Rule) []Diagnostic {
 	}
 	resolver, err := typeseval.LoadProductionPackages(root, modPath, opts.Tests, opts.Tags)
 	if err != nil {
-		t.Fatalf("archtest.Run: Production: LoadProductionPackages: %v", err)
+		t.Fatalf("archtest.Run: Production: LoadProductionPackages(root=%s, tests=%v, tags=%v): %v",
+			root, opts.Tests, opts.Tags, err)
 	}
 	return runRulePasses(root, resolver.Production(), rule)
 }
@@ -416,11 +425,12 @@ func collectASTFiles(t testing.TB, scope Scope) (
 func runTypedWithRoot(t testing.TB, root string, opts TypedOpts, patterns []string, rule Rule) []Diagnostic {
 	t.Helper()
 	if len(patterns) == 0 {
-		t.Fatalf("archtest.Run: typed scope requires at least one pattern")
+		t.Fatalf("archtest.Run: typed scope (Typed/Fixture/StandaloneModule) requires at least one pattern; got none")
 	}
 	resolver, err := typeseval.SharedResolver(root, opts.Tests, opts.Tags, patterns...)
 	if err != nil {
-		t.Fatalf("archtest.Run: SharedResolver: %v", err)
+		t.Fatalf("archtest.Run: SharedResolver(root=%s, tests=%v, tags=%v, patterns=%v): %v",
+			root, opts.Tests, opts.Tags, patterns, err)
 	}
 	return runRulePasses(root, resolver.Packages(), rule)
 }

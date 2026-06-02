@@ -4,7 +4,7 @@
 // GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01 (see
 // tools/archtest/grpc_metrics_label_test.go). It is gated by the
 // archtest_fixture build tag and loaded only by
-// TestGRPCMetricsLabelCellIDCtxSource01_RedFixtureDetected via RunTypedFixture;
+// TestGRPCMetricsLabelCellIDCtxSource01_RedFixtureDetected via Run(t, Fixture(...));
 // it is never part of a production build.
 package grpcmetricsfixture
 

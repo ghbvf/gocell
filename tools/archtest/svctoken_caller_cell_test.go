@@ -73,7 +73,6 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -221,7 +220,6 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *t
 	loadedFiles := map[string]bool{}
 	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
-
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				loadedFiles[p.Rel(file)] = true
