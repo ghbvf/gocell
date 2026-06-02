@@ -55,7 +55,7 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	// the composition.Builder.Build call here; we assert they are non-empty to guard
 	// the A11 regression (relay not started).
 	var capturedBootstrapOpts []bootstrap.Option
-	app, buildErr := composition.New().With(mods...).Build(ctx, shared,
+	app, buildErr := composition.New(corebundleCellIDs()...).With(mods...).Build(ctx, shared,
 		func(cells []cell.Cell) ([]bootstrap.Option, error) {
 			// Return nil from the runtime func; bootstrap opts from cell modules
 			// are appended inside Build and returned as part of App.opts.

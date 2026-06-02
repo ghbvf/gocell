@@ -97,7 +97,7 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 		Module:     g.module,
 		AssemblyID: assemblyID,
 		HelperName: helperName,
-		Cells:      append([]string(nil), asm.Cells...),
+		Cells:      metadata.CellIDs(asm.Cells),
 	}
 
 	return g.executeTemplate("main.go.tpl", ctx)
@@ -213,8 +213,8 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	}
 
 	cellSet := make(map[string]bool, len(asm.Cells))
-	for _, c := range asm.Cells {
-		cellSet[c] = true
+	for _, ref := range asm.Cells {
+		cellSet[ref.ID] = true
 	}
 
 	exported, imported, err := g.computeBoundaryContracts(cellSet)
@@ -276,14 +276,14 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 
 // collectCapabilityConsts returns the sorted de-duplicated capability.Kind
 // const names for all cells in the assembly.
-func (g *Generator) collectCapabilityConsts(assemblyID string, cellIDs []string) ([]string, error) {
+func (g *Generator) collectCapabilityConsts(assemblyID string, cellRefs []metadata.AssemblyCellRef) ([]string, error) {
 	capSet := make(map[string]struct{})
-	for _, cellID := range cellIDs {
-		cm := g.cells.Get(cellID)
+	for _, ref := range cellRefs {
+		cm := g.cells.Get(ref.ID)
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
 				"assembly references unknown cell",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
 		}
 		for _, c := range cm.Requires {
 			capSet[c] = struct{}{}
@@ -313,17 +313,28 @@ func (g *Generator) generateModulesGenLegacy(
 	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
 ) ([]byte, error) {
 	modules := make([]string, 0, len(asm.Cells))
-	for _, cellID := range asm.Cells {
-		cm := g.cells.Get(cellID)
+	for _, ref := range asm.Cells {
+		// The legacy form references a local CellModule type ({GoStructName}Module)
+		// hand-written in cmd/{assemblyID}/; it has no import path and therefore
+		// cannot express a cell sourced from another Go module. Cross-module
+		// assembly composition requires build.compositionAPI: true (the
+		// cellmodules/{cell}.Module() form, which carries a per-cell import path).
+		if g.isCrossModule(ref) {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"cross-module cell requires build.compositionAPI: true",
+				errcode.WithInternal(errcode.InternalAttr("_",
+					fmt.Sprintf("assembly=%q cell=%q module=%q", assemblyID, ref.ID, ref.Module))))
+		}
+		cm := g.cells.Get(ref.ID)
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
 				"assembly references unknown cell",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
 		}
 		if cm.GoStructName.IsZero() {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				"cell missing GoStructName for modules_gen factory derivation",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
 		}
 		modules = append(modules, cm.GoStructName.String()+"Module")
 	}
@@ -336,6 +347,32 @@ func (g *Generator) generateModulesGenLegacy(
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
 }
 
+// isCrossModule reports whether ref names a cell sourced from a Go module other
+// than the assembly's own (g.module). An empty ref.Module, or one equal to
+// g.module, is same-module.
+func (g *Generator) isCrossModule(ref metadata.AssemblyCellRef) bool {
+	return ref.Module != "" && ref.Module != g.module
+}
+
+// moduleOf returns the Go module path a cell's cellmodules/ package lives in:
+// ref.Module when set, otherwise the assembly's own module (g.module).
+func (g *Generator) moduleOf(ref metadata.AssemblyCellRef) string {
+	if ref.Module != "" {
+		return ref.Module
+	}
+	return g.module
+}
+
+// cellModuleImportPath is the SINGLE sanctioned construction site for a
+// cellmodules import path. The module prefix is resolved per-cell upstream
+// (g.moduleOf, from AssemblyCellRef.Module — the cross-module funnel); this
+// function is the sole place that interpolates "/cellmodules/". Archtest
+// ASSEMBLY-CROSS-MODULE-IMPORT-01 locks that uniqueness so no second code path
+// can fabricate a cellmodules import outside the per-cell module funnel.
+func cellModuleImportPath(module, cellID string) string {
+	return module + "/cellmodules/" + cellID
+}
+
 // generateModulesGenComposition emits the composition.CellModule form used by
 // platform assemblies (assembly.yaml build.compositionAPI: true).
 // Each cell maps to cellmodules{cellID}.Module() with a matching import alias.
@@ -345,18 +382,18 @@ func (g *Generator) generateModulesGenComposition(
 	moduleCalls := make([]string, 0, len(asm.Cells))
 	importLines := make([]string, 0, len(asm.Cells))
 	seen := make(map[string]bool, len(asm.Cells))
-	for _, cellID := range asm.Cells {
-		cm := g.cells.Get(cellID)
+	for _, ref := range asm.Cells {
+		cm := g.cells.Get(ref.ID)
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
 				"assembly references unknown cell",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, ref.ID))))
 		}
-		alias := "cellmodules" + cellID
-		if !seen[cellID] {
-			seen[cellID] = true
+		alias := "cellmodules" + ref.ID
+		if !seen[ref.ID] {
+			seen[ref.ID] = true
 			importLines = append(importLines, fmt.Sprintf("%s %q",
-				alias, g.module+"/cellmodules/"+cellID))
+				alias, cellModuleImportPath(g.moduleOf(ref), ref.ID)))
 		}
 		moduleCalls = append(moduleCalls, alias+".Module()")
 	}
@@ -546,13 +583,16 @@ func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 		// which the boundary sourceFingerprint depends on.
 		deployTemplate = "k8s"
 	}
-	cellsAsString := make([]string, len(spec.Cells))
+	// Scaffolded assemblies are always same-module (cross-module authoring is a
+	// hand-edit / future scaffold flag, tracked in backlog); synthesize bare
+	// same-module cell refs via the metadata.CellRefs constructor.
+	cellIDs := make([]string, len(spec.Cells))
 	for i, c := range spec.Cells {
-		cellsAsString[i] = c.String()
+		cellIDs[i] = c.String()
 	}
 	return &metadata.AssemblyMeta{
 		ID:    spec.ID.String(),
-		Cells: cellsAsString,
+		Cells: metadata.CellRefs(cellIDs...),
 		Owner: metadata.OwnerMeta{
 			Team: spec.OwnerTeam,
 			Role: spec.OwnerRole,
@@ -881,13 +921,21 @@ func (g *Generator) hashAssemblyIdentity(h io.Writer, asm *metadata.AssemblyMeta
 	if err := writeHash(h, "build.deployTemplate:%s\n", asm.Build.DeployTemplate); err != nil {
 		return err
 	}
-	for i, c := range asm.Cells {
-		if err := writeHash(h, "cells.order:%d:%s\n", i, c); err != nil {
+	for i, ref := range asm.Cells {
+		if err := writeHash(h, "cells.order:%d:%s\n", i, ref.ID); err != nil {
 			return err
 		}
+		// Same-module entries (Module == "") keep the historical fingerprint
+		// byte-for-byte so existing boundary.yaml outputs do not churn; a
+		// cross-module entry adds its module to the hash.
+		if ref.Module != "" {
+			if err := writeHash(h, "cells.module:%d:%s\n", i, ref.Module); err != nil {
+				return err
+			}
+		}
 	}
-	for _, cellID := range asm.Cells {
-		if err := g.hashCellIdentity(h, cellID); err != nil {
+	for _, ref := range asm.Cells {
+		if err := g.hashCellIdentity(h, ref.ID); err != nil {
 			return err
 		}
 	}

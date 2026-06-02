@@ -203,6 +203,14 @@ HTTP/gRPC **request-metrics** `cell` label 的 `_runtime` 哨兵单源 = `runtim
 - `cell` 是粗粒度 owner 维度，不是 slice / contract / tenant / user 维度；业务 SLO / 告警默认过滤 `cell!="_runtime"`，运行时探针与未匹配流量排查使用 `cell="_runtime"`。
 - 旧 dashboard / alert 需要过渡时，在 Prometheus 侧用 recording rule 聚合新序列；remote-write 或业务专用 Prometheus 需要降噪时，用 metric relabel drop `_runtime` 序列。示例见 `docs/ops/alerting-rules.md`。
 
+### cellID closed set（M12a #1093）
+
+业务 `cell` label 的合法取值集 = assembly.yaml 列举的 cell 集合。该 closed set 的 build 期真值源是 `composition.Builder.Build`（`runtime/composition/builder.go`），**两阶段**：(1) pre-Provide 对每个被装配 module 的 `ID()` 做双射校验（越界 / 缺失 / 重复 fail-fast）；(2) post-Provide 对每个 module 构造出的 cell 校验 `c.ID() == m.ID()`。`composition.New(assemblyCellIDs...)` 注入 assembly 声明的 cell-id 集（内部 `slices.Clone` 防 caller 篡改）。**越界 cellID 硬拒、不降级 `_runtime`**（外部 cell 注册不在 assembly 的 cellID 是配置 bug，混入 `_runtime` 会污染哨兵语义）。对标 K8s `runtime.Scheme` 注册期枚举 → 越界拒绝。第二阶段是必要的：runtime `cell` label 取自 `c.ID()`（cell metadata 派生），与 module 自报的 `m.ID()` 独立来源；只校验 `m.ID()` 会让 module 构造出越界身份的 cell 蒙混过双射（PR #1514 review F1）。
+
+**覆盖范围**：该 funnel 覆盖**走 `composition.Builder` 的 compositionAPI assembly**——当前 `cmd/corebundle` + `examples/corebundlestarter`，`cmd/corebundle` 原手写 `assertModuleIDsMatch` 已删。**legacy-form 示例 assembly**（`examples/todoorder` / `iotdevice` / `orderfulfillment`，用 `generatedCellModules() []CellModule` 本地类型形态，不经 `composition.Builder`）仍保留各自的手写 `assertModuleIDsMatch`；它们迁移到 `composition.New` closed set 是后续工作（待这些示例采用 compositionAPI/cellmodules 形态时）。详见 ADR `docs/architecture/202606030230-adr-assembly-cross-module-composition.md` §D4。
+
+> **M12b（label 写入点 defense-in-depth）未并入本 PR**：`http_requests_total{cell}` 的 label value 在 registration-time enumerated set + `MustValidateLabels` 拒分隔符 + cardinality 上限 2000 + overflow bucket 已覆盖大部分；缺的「外部 cellID 是否 ∈ closed set」这层留在 #1093 M12b。
+
 ## gRPC Metrics `cell` Label（当前恒为 `_runtime`）
 
 `grpc_server_requests_total` / `grpc_server_request_duration_seconds` 复用与 HTTP 同一 `cell` label 语义与同一 `_runtime` 哨兵单源（`runtime/observability/metrics.RuntimeCellSentinel`）。但 gRPC cell attribution 接线尚未落地——HTTP 侧 router-root `CellAttribution` 从 `RouteGroup.CellID` 归属 cell，gRPC 对应的 `FullMethod → cellID` 归属（生成式 registrar 派生）随 epic PR-7/8 落地（tracking #1383）。**在此之前所有 gRPC 流量的 `cell` 恒为 `_runtime`，运维侧不要对 gRPC 指标用 `cell!="_runtime"` 过滤**（详见 `docs/ops/alerting-rules.md`）。reader 侧契约（cell label 取自 `ctxkeys.CellID`，缺失回退 `RuntimeCellSentinel`，禁硬编码）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01` 守卫，故 attribution 一旦接线，`cell` 自动反映归属 cell 而无需改 interceptor。

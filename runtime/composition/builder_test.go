@@ -68,8 +68,8 @@ func (o *orderedMR) Close(_ context.Context) error {
 func TestBuilder_HappyPath(t *testing.T) {
 	ctx := context.Background()
 
-	c1 := stubCell("cell-1")
-	c2 := stubCell("cell-2")
+	c1 := stubCell("mod1")
+	c2 := stubCell("mod2")
 
 	m1 := &fakeCellModule{id: "mod1", cell: c1}
 	m2 := &fakeCellModule{id: "mod2", cell: c2}
@@ -81,14 +81,14 @@ func TestBuilder_HappyPath(t *testing.T) {
 	}
 
 	shared := minimalSharedDeps(t)
-	app, err := New().With(m1, m2).Build(ctx, shared, rtFn)
+	app, err := New("mod1", "mod2").With(m1, m2).Build(ctx, shared, rtFn)
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
 	// runtimeFn received cells in module order.
 	require.Len(t, runtimeCells, 2)
-	assert.Equal(t, "cell-1", runtimeCells[0].ID())
-	assert.Equal(t, "cell-2", runtimeCells[1].ID())
+	assert.Equal(t, "mod1", runtimeCells[0].ID())
+	assert.Equal(t, "mod2", runtimeCells[1].ID())
 
 	assert.True(t, m1.called)
 	assert.True(t, m2.called)
@@ -113,7 +113,7 @@ func TestBuilder_HappyPath_SingleSourceResourceContract(t *testing.T) {
 	order := &closedOrder{}
 	r1 := &orderedMR{id: "r1", order: order}
 
-	c1 := stubCell("cell-1")
+	c1 := stubCell("mod1")
 	m1 := &fakeCellModule{
 		id:   "mod1",
 		cell: c1,
@@ -123,7 +123,7 @@ func TestBuilder_HappyPath_SingleSourceResourceContract(t *testing.T) {
 		mres: []kernellifecycle.ManagedResource{r1},
 	}
 
-	app, err := New().With(m1).Build(ctx, minimalSharedDeps(t),
+	app, err := New("mod1").With(m1).Build(ctx, minimalSharedDeps(t),
 		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
 	require.NoError(t, err)
 	require.NotNil(t, app)
@@ -147,11 +147,11 @@ func TestBuilder_SingleSourceResource_RollsBack(t *testing.T) {
 	order := &closedOrder{}
 	r1 := &orderedMR{id: "r1", order: order}
 
-	c1 := stubCell("cell-1")
+	c1 := stubCell("mod1")
 	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
 	m2 := &fakeCellModule{id: "mod2", provideErr: errors.New("provide failed")}
 
-	_, err := New().With(m1, m2).Build(ctx, minimalSharedDeps(t),
+	_, err := New("mod1", "mod2").With(m1, m2).Build(ctx, minimalSharedDeps(t),
 		func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
 	require.Error(t, err)
 
@@ -167,11 +167,11 @@ func TestBuilder_NilModule_RollsBack(t *testing.T) {
 	r1 := &orderedMR{id: "r1", order: order}
 	r2 := &orderedMR{id: "r2", order: order}
 
-	c1 := stubCell("cell-1")
+	c1 := stubCell("mod1")
 	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1, r2}}
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1, nil).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New("mod1").With(m1, nil).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -191,12 +191,12 @@ func TestBuilder_ProvideError_RollsBack(t *testing.T) {
 	r1 := &orderedMR{id: "r1", order: order}
 	r2 := &orderedMR{id: "r2", order: order}
 
-	c1 := stubCell("cell-1")
+	c1 := stubCell("mod1")
 	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1, r2}}
 	m2 := &fakeCellModule{id: "mod2", provideErr: errors.New("provide failed")}
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1, m2).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New("mod1", "mod2").With(m1, m2).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -215,12 +215,12 @@ func TestBuilder_NilCell_RollsBack(t *testing.T) {
 	order := &closedOrder{}
 	r1 := &orderedMR{id: "r1", order: order}
 
-	c1 := stubCell("cell-1")
+	c1 := stubCell("mod1")
 	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
 	m2 := &fakeCellModule{id: "mod2", cell: nil} // nil cell
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1, m2).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New("mod1", "mod2").With(m1, m2).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -255,13 +255,13 @@ func TestBuilder_NilResource_FailFast(t *testing.T) {
 			order := &closedOrder{}
 			r1 := &orderedMR{id: "r1", order: order}
 
-			c1 := stubCell("cell-1")
+			c1 := stubCell("mod1")
 			m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
-			c2 := stubCell("cell-2")
+			c2 := stubCell("mod2")
 			m2 := &fakeCellModule{id: "mod2", cell: c2, mres: []kernellifecycle.ManagedResource{tc.bad}}
 
 			// Must NOT panic; must return a fail-fast error naming the module.
-			_, err := New().With(m1, m2).Build(ctx, minimalSharedDeps(t),
+			_, err := New("mod1", "mod2").With(m1, m2).Build(ctx, minimalSharedDeps(t),
 				func([]cell.Cell) ([]bootstrap.Option, error) { return nil, nil })
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "mod2")
@@ -282,11 +282,11 @@ func TestBuilder_RuntimeFnError_RollsBack(t *testing.T) {
 	order := &closedOrder{}
 	r1 := &orderedMR{id: "r1", order: order}
 
-	c1 := stubCell("cell-1")
+	c1 := stubCell("mod1")
 	m1 := &fakeCellModule{id: "mod1", cell: c1, mres: []kernellifecycle.ManagedResource{r1}}
 
 	shared := minimalSharedDeps(t)
-	_, err := New().With(m1).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New("mod1").With(m1).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
 		return nil, errors.New("runtime fn error")
 	})
 	require.Error(t, err)
@@ -334,9 +334,9 @@ func TestBuilder_MutatedAfterSeal_Rejected(t *testing.T) {
 	shared.JWTVerifier = nil
 	require.True(t, shared.valid, "precondition: marker still set after mutation")
 
-	c1 := stubCell("cell-1")
+	c1 := stubCell("mod1")
 	m1 := &fakeCellModule{id: "mod1", cell: c1}
-	_, err := New().With(m1).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
+	_, err := New("mod1").With(m1).Build(ctx, shared, func([]cell.Cell) ([]bootstrap.Option, error) {
 		return nil, nil
 	})
 	require.Error(t, err)
@@ -356,8 +356,8 @@ func TestBuilder_NilRuntimeOptsFn_Rejected(t *testing.T) {
 
 // TestBuilder_With_Accumulates verifies that With() calls accumulate modules.
 func TestBuilder_With_Accumulates(t *testing.T) {
-	c1 := stubCell("c1")
-	c2 := stubCell("c2")
+	c1 := stubCell("m1")
+	c2 := stubCell("m2")
 	m1 := &fakeCellModule{id: "m1", cell: c1}
 	m2 := &fakeCellModule{id: "m2", cell: c2}
 

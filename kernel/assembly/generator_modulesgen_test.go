@@ -37,8 +37,12 @@ func buildModulesTestProject() *metadata.ProjectMeta {
 		Journeys:  make(map[string]*metadata.JourneyMeta),
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
-				ID:    "corebundle",
-				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore, metadatatest.CellIDConfigCore},
+				ID: "corebundle",
+				Cells: []metadata.AssemblyCellRef{
+					{ID: metadatatest.CellIDAccessCore},
+					{ID: metadatatest.CellIDAuditCore},
+					{ID: metadatatest.CellIDConfigCore},
+				},
 			},
 		},
 	}
@@ -210,7 +214,7 @@ func TestGenerateModulesGen_UnknownCellRef(t *testing.T) {
 	// Add assembly with an unregistered cell ID.
 	project.Assemblies["ghostbundle"] = &metadata.AssemblyMeta{
 		ID:    "ghostbundle",
-		Cells: []string{metadatatest.CellIDAccessCore, metadatatest.NewCellID("ghostcellnotregistered")},
+		Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}, {ID: metadatatest.NewCellID("ghostcellnotregistered")}},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
@@ -234,7 +238,7 @@ func TestGenerateModulesGen_PreservesCellsOrder(t *testing.T) {
 	project.Cells[metadatatest.CellIDCC] = &metadata.CellMeta{ID: metadatatest.CellIDCC, GoStructName: metadata.MustNewGoIdentifier("C")}
 	project.Assemblies["ordered"] = &metadata.AssemblyMeta{
 		ID:    "ordered",
-		Cells: []string{metadatatest.CellIDBB, metadatatest.CellIDAA, metadatatest.CellIDCC},
+		Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDBB}, {ID: metadatatest.CellIDAA}, {ID: metadatatest.CellIDCC}},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
@@ -266,10 +270,10 @@ func TestGenerateModulesGen_CompositionForm(t *testing.T) {
 	asm.Build.CompositionAPI = true
 	// Order configcore, auditcore, accesscore to assert the call list preserves
 	// assembly (not sorted) order.
-	asm.Cells = []string{
-		metadatatest.CellIDConfigCore,
-		metadatatest.CellIDAuditCore,
-		metadatatest.CellIDAccessCore,
+	asm.Cells = []metadata.AssemblyCellRef{
+		{ID: metadatatest.CellIDConfigCore},
+		{ID: metadatatest.CellIDAuditCore},
+		{ID: metadatatest.CellIDAccessCore},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
@@ -342,7 +346,7 @@ func TestGenerateModulesGen_CompositionUnknownCellRef(t *testing.T) {
 	project.Assemblies["ghostcomp"] = &metadata.AssemblyMeta{
 		ID:    "ghostcomp",
 		Build: metadata.BuildMeta{CompositionAPI: true},
-		Cells: []string{metadatatest.CellIDAccessCore, metadatatest.NewCellID("ghostcellnotregistered")},
+		Cells: []metadata.AssemblyCellRef{{ID: metadatatest.CellIDAccessCore}, {ID: metadatatest.NewCellID("ghostcellnotregistered")}},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 

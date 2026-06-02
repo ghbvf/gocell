@@ -473,7 +473,8 @@ func checkAssemblyCompleteness(args []string) error {
 	var results []governance.ValidationResult
 
 	seen := make(map[string]bool, len(asm.Cells))
-	for _, cid := range asm.Cells {
+	for _, ref := range asm.Cells {
+		cid := ref.ID
 		if seen[cid] {
 			results = append(results, governance.ValidationResult{
 				Code:      governance.RuleCode("CHECK-ASSEMBLY-DUPLICATE-CELL"),

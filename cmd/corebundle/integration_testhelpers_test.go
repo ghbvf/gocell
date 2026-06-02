@@ -84,7 +84,21 @@ func buildBootstrapFromShared(
 		return opts, nil
 	}
 
-	return composition.New().With(mods...).Build(ctx, shared, runtimeOptsFunc)
+	return composition.New(corebundleCellIDs()...).With(mods...).Build(ctx, shared, runtimeOptsFunc)
+}
+
+// corebundleCellIDs returns the cell-id closed set for the corebundle assembly,
+// derived from generatedCellModules() so integration tests satisfy
+// composition.Builder.Build's M12a closed-set guard without hardcoding the cell
+// list. In production the set comes from the generated main.go's assembly cell
+// slice; both are derived from assembly.yaml.
+func corebundleCellIDs() []string {
+	mods := generatedCellModules()
+	ids := make([]string, len(mods))
+	for i, m := range mods {
+		ids[i] = m.ID()
+	}
+	return ids
 }
 
 // withCorebundleTestInternalListener returns a bootstrap.Option that registers

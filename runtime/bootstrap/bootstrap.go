@@ -188,10 +188,30 @@ type Bootstrap struct {
 	projectionTxRunner persistence.TxRunner
 	projectionReplay   projection.ReplaySource
 	projectionCursor   projection.Cursor
-	// projectionCoordinators maps "<cellID>/<projectionID>" → the constructed
-	// Coordinator, so the PR-04 HTTP rebuild endpoint can resolve and trigger
-	// Coordinator.Rebuild. Populated by phase6 projection drain.
-	projectionCoordinators map[string]*projection.Coordinator
+	// projectionRebuilds maps "<cellID>/<projectionID>" → the constructed
+	// rebuildController (a *projection.Coordinator), so the framework rebuild
+	// control-plane endpoint can resolve a {cell}/{name} path and trigger
+	// Rebuild + read a Snapshot.
+	//
+	// Concurrency: this is a plain map with no lock, and that is safe by
+	// construction — it is written ONLY by the phase6 projection drain
+	// (phase6StartEventRouter, Run() line ~104) and read ONLY by the rebuild
+	// handler. HTTP serving goroutines are launched in phase7
+	// (phase7StartHTTPServer, Run() line ~107) via `go server.Serve(...)`, which
+	// is sequenced AFTER phase6. The Go memory model's goroutine-start
+	// happens-before (the `go` statement happens-before the goroutine body) gives
+	// phase6 writes → phase7 serve-goroutine launch → handler reads. The map is
+	// therefore fully populated and frozen before any request can observe it; no
+	// mutex/sync.Map is needed (same pattern as the phase5-built health/router
+	// state). Do NOT add concurrent writers after phase6.
+	projectionRebuilds map[string]rebuildController
+
+	// projectionRebuildCallers is the caller-cell allowlist for the framework
+	// projection rebuild endpoint, set by WithProjectionRebuildEndpoint. Non-empty
+	// = opt-in: phase5 mounts POST /internal/v1/{cell}/projection/{name}/rebuild on
+	// the InternalListener with a RequireCallerCell guard over these IDs. Empty =
+	// endpoint not mounted (rebuild remains programmatic-only).
+	projectionRebuildCallers []string
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.

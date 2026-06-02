@@ -123,8 +123,8 @@ func computeMaxConsistencyLevel(pm *ProjectMeta, asm *AssemblyMeta) (string, boo
 	}
 	maxRank := -1
 	maxLevel := "L0"
-	for _, cellID := range asm.Cells {
-		c, ok := pm.Cells[cellID]
+	for _, ref := range asm.Cells {
+		c, ok := pm.Cells[ref.ID]
 		if !ok {
 			return "", false
 		}

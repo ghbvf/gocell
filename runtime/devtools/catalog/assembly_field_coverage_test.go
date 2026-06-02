@@ -25,7 +25,7 @@ func TestAssemblySpec_OwnerAndMaxConsistencyLevelRoundTrip(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"mainbundle": {
 				ID:                  "mainbundle",
-				Cells:               []string{"alpha"},
+				Cells:               metadata.CellRefs("alpha"),
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "bundle-owner"},
 				MaxConsistencyLevel: "L2",
 				Build: metadata.BuildMeta{
