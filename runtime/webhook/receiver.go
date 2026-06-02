@@ -73,10 +73,26 @@ type Receiver struct {
 	store    kwh.SourceStore
 	claimer  idempotency.Claimer
 	handler  kwh.WebhookReceiveHandler
+	// recorder is the optional receive-side observability dependency (PR-6).
+	// The zero kwh.Metrics value disables every record (no-op); injected via
+	// WithMetrics. It is NOT a required dep — like logger/emitter it falls back
+	// to no-op rather than failing construction.
+	recorder kwh.Metrics
 }
 
-// NewReceiver constructs a Receiver. All parameters are mandatory; any nil or
-// invalid argument returns an [errcode.ErrWebhookConfigInvalid] error.
+// ReceiverOption customizes a Receiver at construction time.
+type ReceiverOption func(*Receiver)
+
+// WithMetrics injects the optional receive-side metrics recorder. Omitting it
+// leaves the zero kwh.Metrics value, which records as a no-op (the disabled /
+// NopProvider case). The {source} label is the receiver's configured SourceID.
+func WithMetrics(rec kwh.Metrics) ReceiverOption {
+	return func(r *Receiver) { r.recorder = rec }
+}
+
+// NewReceiver constructs a Receiver. All positional parameters are mandatory;
+// any nil or invalid argument returns an [errcode.ErrWebhookConfigInvalid]
+// error. opts carry optional dependencies (metrics).
 func NewReceiver(
 	clk clock.Clock,
 	spec kwh.ReceiverSpec,
@@ -84,6 +100,7 @@ func NewReceiver(
 	store kwh.SourceStore,
 	claimer idempotency.Claimer,
 	handler kwh.WebhookReceiveHandler,
+	opts ...ReceiverOption,
 ) (*Receiver, error) {
 	clock.MustHaveClock(clk, "webhook.NewReceiver")
 	if err := spec.Validate(); err != nil {
@@ -105,14 +122,18 @@ func NewReceiver(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
 			"webhook receiver: handler must not be nil")
 	}
-	return &Receiver{
+	r := &Receiver{
 		clk:      clk,
 		spec:     spec,
 		verifier: verifier,
 		store:    store,
 		claimer:  claimer,
 		handler:  handler,
-	}, nil
+	}
+	for _, o := range opts {
+		o(r)
+	}
+	return r, nil
 }
 
 // ServeHTTP implements http.Handler. Pipeline:
@@ -131,8 +152,12 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// 2. Verify — produces unforgeable verified token.
-	v, err := r.verify(body, req)
+	v, reason, err := r.verify(body, req)
 	if err != nil {
+		// Record the failure by classified reason (server-side metric; the wire
+		// 401 stays uniform for unknown_source/bad_signature per the anti-oracle
+		// design in verify, but the metric distinguishes them).
+		r.recorder.RecordSignatureFailure(ctx, r.spec.SourceID, reason)
 		// Warn (not Error): a verification failure is a 4xx caused by an
 		// external caller (bad/missing signature, unknown source, expired
 		// timestamp), not a server-side correctness fault. observability.md
@@ -165,6 +190,8 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch state {
 	case idempotency.ClaimDone:
 		// Already processed — idempotent 200 without re-invoking handler.
+		// A duplicate delivery the claimer deduplicated.
+		r.recorder.RecordIdempotencyHit(ctx, r.spec.SourceID)
 		writeAccepted(w)
 		return
 
@@ -172,6 +199,8 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		// Another worker is currently processing — 409 so the sender retries.
 		// ErrWebhookDuplicateDelivery (KindConflict → 409) is the semantically
 		// correct sentinel: the delivery is a known duplicate, not a lease expiry.
+		// Also a duplicate (concurrent in-flight), counted as an idempotency hit.
+		r.recorder.RecordIdempotencyHit(ctx, r.spec.SourceID)
 		httputil.WriteError(ctx, w, errcode.New(errcode.KindConflict, errcode.ErrWebhookDuplicateDelivery,
 			"webhook receiver: delivery is already being processed"))
 		return
@@ -269,20 +298,23 @@ func (r *Receiver) readBody(w http.ResponseWriter, req *http.Request) ([]byte, e
 
 // verify reads the configured signature headers from req, looks up the source,
 // and validates the HMAC. Returns an unforgeable [verified] token on success.
-// Errors are already typed *errcode.Error ready for httputil.WriteError.
-func (r *Receiver) verify(body []byte, req *http.Request) (verified, error) {
+// Errors are already typed *errcode.Error ready for httputil.WriteError. The
+// second return is the classified [kwh.SignatureFailureReason] for the
+// webhook_signature_failures_total{reason} metric; it is meaningful only when
+// err != nil (the success path returns the zero reason, which is never recorded).
+func (r *Receiver) verify(body []byte, req *http.Request) (verified, kwh.SignatureFailureReason, error) {
 	deliveryIDRaw := req.Header.Get(r.spec.DeliveryIDHeader)
 	timestampRaw := req.Header.Get(r.spec.TimestampHeader)
 	signatureRaw := req.Header.Get(r.spec.SignatureHeader)
 
 	if deliveryIDRaw == "" || timestampRaw == "" || signatureRaw == "" {
-		return verified{}, errcode.New(errcode.KindInvalid, errcode.ErrWebhookInvalidHeader,
+		return verified{}, kwh.ReasonMissingHeader, errcode.New(errcode.KindInvalid, errcode.ErrWebhookInvalidHeader,
 			"webhook receiver: one or more required signature headers are missing")
 	}
 
 	deliveryID, err := kwh.NewDeliveryID(deliveryIDRaw)
 	if err != nil {
-		return verified{}, err
+		return verified{}, kwh.ReasonInvalidHeader, err
 	}
 
 	headers := kwh.Headers{
@@ -296,10 +328,11 @@ func (r *Receiver) verify(body []byte, req *http.Request) (verified, error) {
 	// unregistered source is byte-identical to a signature mismatch and cannot
 	// be used as a source-ID enumeration oracle (WEBHOOK-HMAC-FUNNEL-01 F8/F9;
 	// OWASP Generic Error Messages). The "source not registered" reason is kept
-	// in WithInternal (server-side slog only, never on the wire).
+	// in WithInternal (server-side slog only, never on the wire) — and in the
+	// server-side metric reason (unknown_source), which is not a wire oracle.
 	src, ok := r.store.Lookup(kwh.SourceID(r.spec.SourceID))
 	if !ok {
-		return verified{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookInvalidSignature,
+		return verified{}, kwh.ReasonUnknownSource, errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookInvalidSignature,
 			kwh.MsgSignatureVerificationFailed,
 			errcode.WithInternal(
 				errcode.InternalAttr("source_id", r.spec.SourceID),
@@ -307,7 +340,7 @@ func (r *Receiver) verify(body []byte, req *http.Request) (verified, error) {
 	}
 
 	if err := r.verifier.Verify(body, headers, src); err != nil {
-		return verified{}, err
+		return verified{}, verifyErrReason(err), err
 	}
 
 	return verified{d: kwh.Delivery{
@@ -315,7 +348,24 @@ func (r *Receiver) verify(body []byte, req *http.Request) (verified, error) {
 		SourceID:   kwh.SourceID(r.spec.SourceID),
 		Headers:    headers,
 		Payload:    body,
-	}}, nil
+	}}, "", nil
+}
+
+// verifyErrReason classifies a kwh.Verifier.Verify error into the metric reason.
+// The verifier returns ErrWebhookTimestampExpired for skew beyond tolerance,
+// ErrWebhookInvalidHeader for a malformed timestamp, and ErrWebhookInvalidSignature
+// for a MAC mismatch; any unexpected error defaults to bad_signature (fail-closed).
+func verifyErrReason(err error) kwh.SignatureFailureReason {
+	var ee *errcode.Error
+	if errors.As(err, &ee) {
+		switch ee.Code {
+		case errcode.ErrWebhookTimestampExpired:
+			return kwh.ReasonTimestampExpired
+		case errcode.ErrWebhookInvalidHeader:
+			return kwh.ReasonInvalidHeader
+		}
+	}
+	return kwh.ReasonBadSignature
 }
 
 // claim uses the idempotency Claimer to acquire a processing lease keyed on

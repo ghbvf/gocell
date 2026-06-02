@@ -158,7 +158,11 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 		// Default production policy: block all private/reserved ranges, no loopback.
 		policy = kwh.NewSafePolicy()
 	}
-	consumers, err := webhookdispatch.BuildConsumers(b.clock, reqs, b.webhookSourceStore, policy)
+	rec, err := b.autoWireWebhookMetricsCollector()
+	if err != nil {
+		return err
+	}
+	consumers, err := webhookdispatch.BuildConsumers(b.clock, reqs, b.webhookSourceStore, policy, rec)
 	if err != nil {
 		return fmt.Errorf("bootstrap: build webhook dispatch consumers: %w", err)
 	}

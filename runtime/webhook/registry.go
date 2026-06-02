@@ -24,11 +24,15 @@ import (
 // clk is the mandatory positional clock (CLOCK-POSITIONAL-INJECTION-01); it
 // is the first parameter per the GoCell clock-injection convention.
 // store and claimer are shared across all receivers; they must not be nil.
+// rec is the optional receive-side metrics recorder (the zero value disables
+// recording); the bootstrap auto-wire passes the registered collector when a
+// metrics provider is configured.
 func BuildRouteGroups(
 	clk clock.Clock,
 	reqs []cell.WebhookReceiverRequest,
 	store kwh.SourceStore,
 	claimer idempotency.Claimer,
+	rec kwh.Metrics,
 ) ([]cell.RouteGroup, error) {
 	clock.MustHaveClock(clk, "webhook.BuildRouteGroups")
 	if validation.IsNilInterface(store) {
@@ -42,7 +46,7 @@ func BuildRouteGroups(
 
 	groups := make([]cell.RouteGroup, 0, len(reqs))
 	for _, req := range reqs {
-		rg, err := buildRouteGroup(clk, req, store, claimer)
+		rg, err := buildRouteGroup(clk, req, store, claimer, rec)
 		if err != nil {
 			return nil, fmt.Errorf("webhook BuildRouteGroups: contract %q: %w",
 				req.Spec.ContractID, err)
@@ -64,6 +68,7 @@ func buildRouteGroup(
 	req cell.WebhookReceiverRequest,
 	store kwh.SourceStore,
 	claimer idempotency.Claimer,
+	rec kwh.Metrics,
 ) (cell.RouteGroup, error) {
 	tolerance := time.Duration(req.Spec.ToleranceSeconds) * time.Second
 	verifier, err := kwh.NewHMACVerifier(clk, kwh.WithTolerance(tolerance))
@@ -71,7 +76,7 @@ func buildRouteGroup(
 		return cell.RouteGroup{}, fmt.Errorf("build verifier: %w", err)
 	}
 
-	recv, err := NewReceiver(clk, req.Spec, verifier, store, claimer, req.Handler)
+	recv, err := NewReceiver(clk, req.Spec, verifier, store, claimer, req.Handler, WithMetrics(rec))
 	if err != nil {
 		return cell.RouteGroup{}, fmt.Errorf("build receiver: %w", err)
 	}

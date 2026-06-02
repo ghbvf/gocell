@@ -177,6 +177,14 @@ type Bootstrap struct {
 	// dispatcher. The dispatcher reuses webhookSourceStore for signing secrets.
 	webhookSSRFPolicy *kwh.SafePolicy
 
+	// webhookMetrics is the single shared kwh.Metrics collector registered once
+	// (cached here) so the receiver (phase5) and dispatcher (phase6) record to
+	// the same fixed-name instruments instead of re-registering the metric
+	// family. The zero value means "not wired" (no provider / NopProvider) and
+	// records as a no-op. Wired by autoWireWebhookMetricsCollector, mirroring
+	// httpCollector / eventRouterCollector / outboxRejectCollector / projectionMetrics.
+	webhookMetrics kwh.Metrics
+
 	// --- projection: L3 CQRS projection harness dependencies ---
 	// Injected via WithProjectionCheckpointStore / WithProjectionTxRunner /
 	// WithProjectionReplaySource / WithProjectionCursor. nil means "not

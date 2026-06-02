@@ -23,6 +23,7 @@ import (
 	"fmt"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	kwh "github.com/ghbvf/gocell/kernel/webhook"
 )
 
 // autoWireCachedCollector registers a metrics collector exactly ONCE, caching it
@@ -81,4 +82,26 @@ func autoWireCachedCollector[T comparable](
 		*cache = c
 	}
 	return *cache, true, nil
+}
+
+// autoWireWebhookMetricsCollector registers the shared webhook metrics collector
+// (once, cached in b.webhookMetrics) and returns it for injection into the
+// receiver (phase5 BuildRouteGroups) and the dispatcher (phase6 BuildConsumers) —
+// one collector instance serves both sides, the instrument sets are disjoint.
+// Returns the zero kwh.Metrics (records as a no-op) when no real metrics provider
+// is configured. A duplicate-registration conflict is startup-fatal, never a
+// silent degrade — the autoWireCachedCollector discipline.
+//
+// kwh.Metrics satisfies the comparable constraint (a struct of interface-typed
+// instrument fields); the cache check only ever compares the populated value
+// against the all-nil zero, so it never compares two live instruments (which
+// could panic on a non-comparable dynamic type).
+func (b *Bootstrap) autoWireWebhookMetricsCollector() (kwh.Metrics, error) {
+	m, _, err := autoWireCachedCollector(b, &b.webhookMetrics, kwh.RegisterMetrics,
+		"bootstrap: webhook metrics auto-wire conflict: WithMetricsProvider constructs the webhook collector; "+
+			"do not also register webhook_deliveries_total manually on the same provider. Remove one side")
+	if err != nil {
+		return kwh.Metrics{}, err
+	}
+	return m, nil
 }

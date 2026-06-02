@@ -30,7 +30,7 @@ func TestBuildRouteGroups_HappyPath(t *testing.T) {
 		validReceiverRequest(t),
 	}
 
-	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestBuildRouteGroups_MultipleRequests(t *testing.T) {
 		},
 	}
 
-	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestBuildRouteGroups_EmptyReqs(t *testing.T) {
 	store := testStore(t)
 	claimer := idempotency.NewInMemClaimer(clk)
 
-	groups, err := rtwh.BuildRouteGroups(clk, nil, store, claimer)
+	groups, err := rtwh.BuildRouteGroups(clk, nil, store, claimer, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups(nil): %v", err)
 	}
@@ -106,7 +106,7 @@ func TestBuildRouteGroups_NilStore(t *testing.T) {
 	clk := clockmock.New(fixedNow)
 	claimer := idempotency.NewInMemClaimer(clk)
 
-	_, err := rtwh.BuildRouteGroups(clk, nil, nil, claimer)
+	_, err := rtwh.BuildRouteGroups(clk, nil, nil, claimer, kwh.Metrics{})
 	if err == nil {
 		t.Fatal("expected error for nil store")
 	}
@@ -117,7 +117,7 @@ func TestBuildRouteGroups_NilClaimer(t *testing.T) {
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 
-	_, err := rtwh.BuildRouteGroups(clk, nil, store, nil)
+	_, err := rtwh.BuildRouteGroups(clk, nil, store, nil, kwh.Metrics{})
 	if err == nil {
 		t.Fatal("expected error for nil claimer")
 	}
@@ -137,7 +137,7 @@ func TestBuildRouteGroups_InvalidSpec(t *testing.T) {
 		},
 	}
 
-	_, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	_, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{})
 	if err == nil {
 		t.Fatal("expected error for invalid spec")
 	}
@@ -149,7 +149,7 @@ func TestBuildRouteGroups_Register_IsMountCall(t *testing.T) {
 	store := testStore(t)
 	claimer := idempotency.NewInMemClaimer(clk)
 
-	groups, err := rtwh.BuildRouteGroups(clk, []cell.WebhookReceiverRequest{validReceiverRequest(t)}, store, claimer)
+	groups, err := rtwh.BuildRouteGroups(clk, []cell.WebhookReceiverRequest{validReceiverRequest(t)}, store, claimer, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestBuildRouteGroups_NewReceiverError(t *testing.T) {
 		},
 	}
 
-	_, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	_, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{})
 	if err == nil {
 		t.Fatal("expected error from NewReceiver inside buildRouteGroup")
 	}

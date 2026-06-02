@@ -106,11 +106,15 @@ func (c Consumer) Validate() error {
 // DLX: the composition root must configure the broker subscriber's DLX exchange
 // for dispatch subscription topics; permanently-failed deliveries (Reject) are
 // Nack(requeue=false)→DLX and are otherwise silently discarded.
+// rec is the optional dispatch-side metrics recorder (the zero value disables
+// recording); the bootstrap auto-wire passes the registered collector when a
+// metrics provider is configured.
 func BuildConsumers(
 	clk clock.Clock,
 	reqs []cell.WebhookDispatchRequest,
 	store kwh.SourceStore,
 	policy *kwh.SafePolicy,
+	rec kwh.Metrics,
 ) ([]Consumer, error) {
 	clock.MustHaveClock(clk, "webhook/dispatch.BuildConsumers")
 	if validation.IsNilInterface(store) {
@@ -123,7 +127,7 @@ func BuildConsumers(
 	}
 	out := make([]Consumer, 0, len(reqs))
 	for _, req := range reqs {
-		c, err := buildConsumer(clk, req, store, policy)
+		c, err := buildConsumer(clk, req, store, policy, rec)
 		if err != nil {
 			return nil, fmt.Errorf("webhook dispatch: contract %q: %w", req.Spec.ContractID, err)
 		}
@@ -143,6 +147,7 @@ func buildConsumer(
 	req cell.WebhookDispatchRequest,
 	store kwh.SourceStore,
 	policy *kwh.SafePolicy,
+	rec kwh.Metrics,
 ) (Consumer, error) {
 	spec := req.Spec
 	if err := spec.Validate(); err != nil {
@@ -167,7 +172,8 @@ func buildConsumer(
 	if err != nil {
 		return Consumer{}, err
 	}
-	dispatcher, err := kwh.NewDispatcher(clk, signer, policy, req.Selector)
+	dispatcher, err := kwh.NewDispatcher(clk, signer, policy, req.Selector,
+		kwh.WithMetrics(rec, spec.SourceID))
 	if err != nil {
 		return Consumer{}, err
 	}
