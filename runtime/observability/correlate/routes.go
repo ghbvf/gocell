@@ -2,15 +2,15 @@ package correlate
 
 import (
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
 
 // specCorrelate is the framework-internal ContractSpec for the correlate
 // reverse-lookup endpoint. The "http.framework." prefix marks it as
 // runtime-internal, distinguishing it from cell-owned routes.
 //
-// Built via contractspec.NewFrameworkHTTP — the only legitimate ContractSpec
+// Built via contractbuild.NewFrameworkHTTP — the only legitimate ContractSpec
 // construction path under runtime/ per NO-MANUAL-CONTRACTSPEC-LITERAL-01.
 //
 // Route: GET /internal/v1/audit/correlate
@@ -18,7 +18,7 @@ import (
 // Public: false — any valid service token passes (no Clients allowlist →
 //
 //	no RequireCallerCell guard, intended ops posture per issue #1048).
-var specCorrelate = contractspec.NewFrameworkHTTP(
+var specCorrelate = contractbuild.NewFrameworkHTTP(
 	"http.framework.audit.correlate.v1",
 	"GET",
 	"/internal/v1/audit/correlate",

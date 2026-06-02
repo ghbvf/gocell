@@ -96,6 +96,19 @@ func renderSaga(spec *ContractGenSpec) ([]byte, error) {
 	return b, nil
 }
 
+func renderProjection(spec *ContractGenSpec) ([]byte, error) {
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("contractgen render projection: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "projection.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render projection: %w", err)
+	}
+	return b, nil
+}
+
 // update flag: run with -update to regenerate golden files.
 var updateGolden = flag.Bool("update", false, "update golden files")
 
@@ -449,7 +462,7 @@ func TestRender_Golden(t *testing.T) {
 		{"http.order.create.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
 		{"http.order.get.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
 		{"http.order.list.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
-		{"event.order-created.v1", "event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"}},
+		{"event.order-created.v1", "event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"}},
 	}
 
 	for _, tc := range cases {
@@ -638,7 +651,7 @@ func TestRender_Golden_Synth_Event(t *testing.T) {
 		t.Fatal("event.item-created.v1 not found in synth fixture")
 	}
 
-	outputs := []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"}
+	outputs := []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"}
 	for _, outFile := range outputs {
 		t.Run(outFile, func(t *testing.T) {
 			spec, err := buildContractSpec(absTestDir, p, "event.item-created.v1")
@@ -1168,6 +1181,8 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 		content, err = renderSpec(spec)
 	case "subscription_gen.go":
 		content, err = renderSubscription(spec)
+	case "projection_gen.go":
+		content, err = renderProjection(spec)
 	case "saga_gen.go":
 		content, err = renderSaga(spec)
 	default:
@@ -1554,6 +1569,34 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 				t.Errorf("subscription_gen.go missing Mount:\n%s", content)
 			}
 		}
+	}
+}
+
+// TestRenderProjection_ContractIDConsumedInGodoc asserts that the rendered
+// projection_gen.go for the event.order-created.v1 contract contains the
+// literal contract ID in the godoc comment. This proves the template consumes
+// spec.ContractID (e.g. "consumes event.order-created.v1") rather than a
+// hardcoded string, so a future contract rename will surface as a golden diff.
+func TestRenderProjection_ContractIDConsumedInGodoc(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["event.order-created.v1"].Codegen = true
+
+	spec, err := buildContractSpec(root, p, "event.order-created.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	content, err := renderProjection(spec)
+	if err != nil {
+		t.Fatalf("renderProjection: %v", err)
+	}
+	got := string(content)
+
+	const wantContractID = "event.order-created.v1"
+	if !strings.Contains(got, wantContractID) {
+		t.Errorf("projection_gen.go godoc must contain contract ID %q; rendered output:\n%s", wantContractID, got)
 	}
 }
 

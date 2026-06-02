@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/validation"
+	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/correlate"
@@ -112,6 +113,30 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 		}
 		b.routerOpts = append(b.routerOpts, router.WithRateLimiter(rl))
 		b.closers = append(b.closers, rl)
+	}
+}
+
+// WithIdempotencyStore enables HTTP idempotency middleware for mutating methods
+// (POST/PUT/PATCH/DELETE). The store is forwarded to the router's middleware
+// chain via router.WithIdempotency so replayed responses are served directly
+// without re-invoking business handlers.
+//
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected at phase0 with a fatal error so operators are not silently left
+// without idempotency protection.
+//
+// Concrete implementations:
+//   - production: adapters/redis.NewHTTPIdempotencyStore(client, ns)
+//   - tests: idempotency.NewMemStore(clk) from runtime/http/idempotency
+//
+// ref: runtime-api.md strong-dependency wiring option pattern.
+func WithIdempotencyStore(store idemhttp.Store) Option {
+	return func(b *Bootstrap) {
+		if validation.IsNilInterface(store) {
+			b.idempotencyStoreNil = true
+			return
+		}
+		b.routerOpts = append(b.routerOpts, router.WithIdempotency(store))
 	}
 }
 

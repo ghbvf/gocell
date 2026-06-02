@@ -471,6 +471,39 @@ func TestMount_AcceptsValidSegmentPrefix(t *testing.T) {
 // is the case AUTH-BOOTSTRAP-CLIENTS-MUTEX-01 specifically targets; the
 // matrix shape also documents the deterministic order in which the existing
 // three mutex branches plus the new one fire.
+// TestMount_IdempotencyExempt_RoundTripsToAuthRouteMeta verifies that
+// Route.IdempotencyExempt=true is forwarded to AuthRouteMeta.IdempotencyExempt
+// by auth.Mount and is orthogonal to the other bypass flags.
+func TestMount_IdempotencyExempt_RoundTripsToAuthRouteMeta(t *testing.T) {
+	cases := []struct {
+		name              string
+		idempotencyExempt bool
+		public            bool
+		passwordReset     bool
+	}{
+		{"exempt-only", true, false, false},
+		{"exempt+public", true, true, false},
+		{"exempt+passwordReset", true, false, true},
+		{"not-exempt", false, false, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			mux := newCaptureMux()
+			require.NoError(t, Mount(mux, Route{
+				Contract:            loginContractSpec(),
+				Handler:             noopHandler,
+				Public:              tc.public,
+				PasswordResetExempt: tc.passwordReset,
+				IdempotencyExempt:   tc.idempotencyExempt,
+			}))
+			require.Len(t, mux.metas, 1)
+			assert.Equal(t, tc.idempotencyExempt, mux.metas[0].IdempotencyExempt,
+				"IdempotencyExempt must round-trip through AuthRouteMeta")
+		})
+	}
+}
+
 func TestValidateBypassCompatibility_Matrix(t *testing.T) {
 	contractWith := func(clients []string) contractspec.ContractSpec {
 		return contractspec.ContractSpec{

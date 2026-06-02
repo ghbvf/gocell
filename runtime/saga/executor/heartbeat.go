@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/runtime/saga/internal/sagalog"
 )
 
 // Heartbeater extends a saga instance's lease by calling Heartbeat periodically.
@@ -104,23 +105,19 @@ func runHeartbeat(
 				// #1181 F12: include reason + definition_id so per-definition
 				// dashboards can group heartbeat failures without parsing the
 				// observer counter labels separately.
-				logger.WarnContext(ctx, "saga executor: heartbeat failed",
-					slog.String("instance_id", string(instanceID)),
-					slog.String("definition_id", string(definitionID)),
-					slog.String("lease_id", string(leaseID)),
-					slog.String("reason", string(HeartbeatFailureInfraError)),
-					slog.Any("error", err),
-				)
+				logger.LogAttrs(ctx, slog.LevelWarn, "saga executor: heartbeat failed",
+					sagalog.InstanceFields(instanceID, leaseID,
+						slog.String("definition_id", string(definitionID)),
+						slog.String("reason", string(HeartbeatFailureInfraError)),
+						slog.Any("error", err))...)
 				onHBFailure(HeartbeatFailureInfraError)
 				continue
 			}
 			if !ok {
-				logger.InfoContext(ctx, "saga executor: lease lost (stale); canceling step",
-					slog.String("instance_id", string(instanceID)),
-					slog.String("definition_id", string(definitionID)),
-					slog.String("lease_id", string(leaseID)),
-					slog.String("reason", string(HeartbeatFailureStaleLease)),
-				)
+				logger.LogAttrs(ctx, slog.LevelInfo, "saga executor: lease lost (stale); canceling step",
+					sagalog.InstanceFields(instanceID, leaseID,
+						slog.String("definition_id", string(definitionID)),
+						slog.String("reason", string(HeartbeatFailureStaleLease)))...)
 				// #1210 round-N F2: onStale FIRST — cancel the worker ctx so
 				// the in-flight step can bail immediately. onHBFailure is
 				// synchronous and potentially slow (observer implementations

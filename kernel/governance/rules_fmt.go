@@ -1958,14 +1958,18 @@ func (v *Validator) sliceMixesHTTPVisibility(s *metadata.SliceMeta) bool {
 }
 
 // validateFMT35 enforces the per-role placement of the contractUsage
-// handler / group / field / sourceID / targetSelector columns. Each role
-// permits a different subset of columns; the rule fires when a required column
-// is absent or a forbidden column is set:
+// handler / group / field / sourceID / targetSelector / projection / onReset
+// columns. Each role permits a different subset of columns; the rule fires
+// when a required column is absent or a forbidden column is set:
 //
-//   - subscribe:        handler required; group/field optional; sourceID/targetSelector forbidden
-//   - webhook-receive:  handler+sourceID required; field optional; group/targetSelector forbidden
-//   - webhook-dispatch: targetSelector+sourceID required; field optional; handler/group forbidden
-//   - any other role:   all five columns forbidden
+//   - subscribe:        handler required; group/field/projection/onReset optional; sourceID/targetSelector forbidden
+//   - webhook-receive:  handler+sourceID required; field optional; group/targetSelector/projection/onReset forbidden
+//   - webhook-dispatch: targetSelector+sourceID required; field optional; handler/group/projection/onReset forbidden
+//   - any other role:   all seven columns forbidden
+//
+// NOTE: the group-forbidden-when-projection-set coupling (a cross-column
+// constraint) cannot be expressed in the per-role matrix; it is enforced by
+// the parser (validateProjectionUniqueness) and the JSON schema instead.
 //
 // These constraints also live in slice.schema.json as if/then conditionals,
 // but that schema is not run by `gocell validate` (see
@@ -1992,20 +1996,20 @@ const (
 	fmt35Required                        // column must be non-empty
 )
 
-// fmt35RoleColumns returns the placement rule for each of the five placement
-// columns (handler, group, field, sourceID, targetSelector) for the given
-// role. The matrix mirrors the if/then conditionals in slice.schema.json; any
-// role not listed forbids all five columns.
-func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelector fmt35Placement) {
+// fmt35RoleColumns returns the placement rule for each of the seven placement
+// columns (handler, group, field, sourceID, targetSelector, projection, onReset)
+// for the given role. The matrix mirrors the if/then conditionals in
+// slice.schema.json; any role not listed forbids all seven columns.
+func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelector, projection, onReset fmt35Placement) {
 	switch role {
 	case string(cellvocab.RoleSubscribe):
-		return fmt35Required, fmt35Optional, fmt35Optional, fmt35Forbidden, fmt35Forbidden
+		return fmt35Required, fmt35Optional, fmt35Optional, fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Optional
 	case string(cellvocab.RoleWebhookReceive):
-		return fmt35Required, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Forbidden
+		return fmt35Required, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
 	case string(cellvocab.RoleWebhookDispatch):
-		return fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Required
+		return fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Required, fmt35Forbidden, fmt35Forbidden
 	default:
-		return fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
+		return fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
 	}
 }
 
@@ -2014,7 +2018,7 @@ func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelec
 func (v *Validator) checkFMT35Columns(
 	s *metadata.SliceMeta, cu metadata.ContractUsage, field string,
 ) []ValidationResult {
-	hRule, gRule, fRule, sRule, tRule := fmt35RoleColumns(cu.Role)
+	hRule, gRule, fRule, sRule, tRule, projRule, resetRule := fmt35RoleColumns(cu.Role)
 	cols := []struct {
 		name  string
 		value string
@@ -2025,6 +2029,8 @@ func (v *Validator) checkFMT35Columns(
 		{"field", cu.Field, fRule},
 		{"sourceID", cu.SourceID, sRule},
 		{"targetSelector", cu.TargetSelector, tRule},
+		{"projection", cu.Projection, projRule},
+		{"onReset", cu.OnReset, resetRule},
 	}
 	var results []ValidationResult
 	for _, c := range cols {

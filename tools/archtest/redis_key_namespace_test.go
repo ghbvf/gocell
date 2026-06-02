@@ -52,14 +52,15 @@ type redisConstructorSpec struct {
 	takesClient bool
 }
 
-// redisConstructors enumerates the four constructors required to take a
-// KeyNamespace. Adding a fifth Redis primitive is a deliberate event: extend
+// redisConstructors enumerates the five constructors required to take a
+// KeyNamespace. Adding a sixth Redis primitive is a deliberate event: extend
 // this list and the gate ensures the new constructor follows the same shape.
 var redisConstructors = []redisConstructorSpec{
 	{file: "idempotency.go", fnName: "NewIdempotencyClaimer", takesClient: true},
 	{file: "cache.go", fnName: "NewCache", takesClient: true},
 	{file: "nonce.go", fnName: "NewNonceStore", takesClient: true},
 	{file: "distlock.go", fnName: "NewRedisDriver", takesClient: false},
+	{file: "http_idempotency.go", fnName: "NewHTTPIdempotencyStore", takesClient: true},
 }
 
 // TestRedisConstructorsRequireKeyNamespace asserts each constructor's

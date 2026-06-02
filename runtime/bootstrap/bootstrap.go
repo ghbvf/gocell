@@ -132,6 +132,7 @@ type Bootstrap struct {
 	managedResourceNil       bool
 	closerNil                bool  // WithManagedCloser(nil) sentinel — phase0 fail-fast
 	rateLimiterNil           bool  // WithRateLimiter(nil) sentinel — phase0 fail-fast
+	idempotencyStoreNil      bool  // WithIdempotencyStore(nil) sentinel — phase0 fail-fast
 	closers                  []any // ContextCloser/io.Closer from any option (e.g. WithRateLimiter); LIFO teardown
 	shutdownTimeout          time.Duration
 	preShutdownDelay         time.Duration

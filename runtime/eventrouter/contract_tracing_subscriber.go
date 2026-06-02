@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/cellvocab"
-	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
 
 // NewContractTracingSubscriber decorates an outbox.Subscriber so every
@@ -63,17 +62,12 @@ func (s *contractTracingSubscriber) Subscribe(
 	if err := sub.Validate(); err != nil {
 		return fmt.Errorf("eventrouter: contract tracing subscriber Subscribe: %w", err)
 	}
-	// Derivation funnel — projects already-validated Subscription metadata
-	// into ContractSpec shape for the tracer; not a declaration. The only
-	// legitimate runtime/ derivation path per NO-MANUAL-CONTRACTSPEC-LITERAL-01.
-	// Validate() runs inside the funnel, so a derived-spec error surfaces here
-	// with a wrapped context.
-	spec, err := contractspec.NewEventDerivation(
-		sub.ContractID,
-		cellvocab.ContractKind(sub.ContractKind),
-		sub.ContractTransport,
-		sub.Topic,
-	)
+	// Derivation funnel — projects the validated Subscription into ContractSpec
+	// shape for the tracer; not a declaration. The only legitimate runtime/
+	// derivation path per NO-MANUAL-CONTRACTSPEC-LITERAL-01. The funnel takes the
+	// typed Subscription (provenance via type) and re-validates it, so a
+	// derived-spec error surfaces here with a wrapped context.
+	spec, err := contractbuild.NewEventDerivation(sub)
 	if err != nil {
 		return fmt.Errorf("eventrouter: contract tracing subscriber: %w", err)
 	}

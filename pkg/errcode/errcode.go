@@ -631,6 +631,17 @@ const (
 	// ErrIdempotencyNoClaimLease signals that Receipt methods were called for a
 	// Claim result that did not acquire a processing lease. Maps to HTTP 409.
 	ErrIdempotencyNoClaimLease Code = "ERR_IDEMPOTENCY_NO_CLAIM_LEASE"
+	// ErrIdempotencyInProgress signals that another request is currently
+	// processing the same idempotency key (ClaimBusy). The client should retry
+	// after the in-flight request completes. Maps to HTTP 409.
+	ErrIdempotencyInProgress Code = "ERR_IDEMPOTENCY_IN_PROGRESS"
+	// ErrIdempotencyKeyReused signals that the same Idempotency-Key was sent with
+	// a different request body (fingerprint mismatch). Per IETF idempotency-key
+	// draft §6 and Stripe's idempotency guide, reusing a key with a different
+	// payload is a client error. Maps to HTTP 409 (KindConflict) because the
+	// errcode Kind set has no KindUnprocessable (422) — 409 is the closest safe
+	// choice that signals a conflict between the stored request and the new one.
+	ErrIdempotencyKeyReused Code = "ERR_IDEMPOTENCY_KEY_REUSED"
 
 	// Metrics error codes (kernel/observability/metrics).
 	//
