@@ -338,22 +338,38 @@ adapter 不改 kernel。
 > election 本身**不是 fencing 保证**（见 §4），正确性闭环靠 `Epoch` + §4.3 `FencedRepository`
 > 写路径 CAS。注意它与 `kernel/outbox` 的 UUID `lease_id`（identity-fencing）语义不同（§4.3）。
 
-### 3.5 Builder（PR-A7 设计）
+### 3.5 Builder（PR-A7 **已交付**）
 
 ```go
 func New(reconciler Reconciler) *Builder
 func (*Builder) WithTrigger(Trigger) *Builder
 func (*Builder) WithLeader(LeaderElector) *Builder
+func (*Builder) WithFencedRepo(FencedRepository) *Builder
 func (*Builder) WithConcurrency(int) *Builder
-func (*Builder) WithBackoff(...) *Builder
+func (*Builder) WithBackoff(base, max time.Duration) *Builder
 func (*Builder) WithMetrics(Metrics) *Builder
+func (*Builder) WithInterval(time.Duration) *Builder
+func (*Builder) WithName(string) *Builder
+func (*Builder) WithReconcilerID(string) *Builder
+func (*Builder) WithRenewInterval(time.Duration) *Builder
+func (*Builder) WithStartTimeout(time.Duration) *Builder
+func (*Builder) WithStopTimeout(time.Duration) *Builder
 func (*Builder) Build() (*Loop, error)   // Loop 构造私有化：Builder 是唯一公开入口
 ```
 
-funnel：`Loop` 公开构造私有化（PR-A7 把 A3 的 exported `Loop{}` 字面量构造收口到 Builder），
-`RECONCILE-BUILDER-FUNNEL-01` 锁「消费方构造 Loop 必经 Builder」（funnel 上游 Hard = 构造函数
-私有化；下游 Hard = callsite allowlist）。**注**：PR-A3 阶段 `Loop` 字段 exported（支持
-struct 字面量构造，供测试 + kernel/command 迁移过渡）；A7 收口为私有 + Builder。
+上述 With* 集合是 §3.5 示意列表的忠实超集——每个私有字段均可通过对应 With* 方法触达，
+非投机扩张。`Build()` 缺 reconciler/trigger → err；其余运行时 fail-fast 保留在
+`Loop.Start.preStartValidate`。
+
+funnel（**已闭环**）：`Loop` 所有配置字段私有化（PR-A7），包外 `reconcile.Loop{field: v}`
+是编译错误。`RECONCILE-BUILDER-FUNNEL-01` 锁「消费方构造 Loop 必经 Builder」（funnel
+上游 Hard = 字段私有化，type system 封闭；下游 Hard = AST+Unalias 禁零值字面量
+`reconcile.Loop{}` 出现在 `kernel/reconcile` 包外）。临时过渡 archtest
+`RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 已退役。
+
+**默认值策略**：lazy 默认 getter（`interval()`/`name()`/`reconcilerID()`/`logger()`/
+`maxConcurrent()`）已删除，默认值收口到 `start()` 顶部的单一 `applyDefaults()`（eager
+defaulting）；对标 controller-runtime builder `doController()` eager 默认，消除双路径。
 
 ### 3.6 Metrics（由 PR-A3 交付）
 
@@ -537,17 +553,12 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 | **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | **leader election 非 fencing**（§4，client-go 明示不保证单 leader）——只 best-effort 收窄窗口。跨副本正确性靠 §4.3 `FencedRepository` + monotonic-epoch 写路径 CAS（结构拒 stale-epoch 写）+ §4.4 消费方幂等；同实例内同 EntityID 由 dirty/processing dedup（F5，PR-A5 已落地）串行：processing 标记下互斥（同时到达的 trigger 被 coalesced 到 dirty 等待一次 re-run，非多路并行），`TestLoop_SameEntityIDSerial` + `TestLoop_DirtyDedup_CoalescesDuplicates` 守。**T-DUAL 评级维持 ✅ 不退化**：F5 是对 A3 sync.Map skip-if-busy 的强化——旧方案丢弃 duplicate（level-triggered 安全，但错过了一次 re-run）；新方案将 duplicate coalesced 为一次 re-run，收敛更快，不引入新的 dual-execution 路径。 | 同实例串行 **Medium**（runtime guard + 测试，已兑现）；跨副本正确性 **设计**（A6：`FencedWriter` 上游 Hard + `RECONCILE-FENCED-WRITE-FUNNEL-01` 下游 Hard + `RunFencingConformance` real-failure-injection 后定级；leader election 永远只是 best-effort 收窄，不计入正确性保证） |
 | **T-LEADER** | leader 流转失败（双 leader / 长期空窗） | lease/renew 模型（§4.1–4.2）+ lost-lease ctx-cancel 中断（§4.2，收窄）；fail-closed（lease 故障 follower 不抢）；RTO ≤ LeaseDuration+1s（接管延迟，**非**双执行保证）。**双 leader 不靠 lease 排除**——靠 §4.3 epoch fencing CAS 让旧 leader 迟到写被结构拒绝 | **设计**（A6 落地 lease 模型 + epoch fencing + real-failure-injection conformance 后定级；明确 leader election ≠ fencing） |
 | **T-FENCE** | 旧 leader 迟到设备写绕过 fencing → 落地为重复命令（leader election 残余窗口的兜底失效） | §4.3 `FencedRepository`：`Loop` 只给 Reconciler epoch-bound `FencedWriter`，写路径 CAS 拒 `incoming_epoch < 已见最高`（**单调 epoch**，非 outbox 的 UUID identity-fencing）；绕过在 type system 不可表达（消费方无裸写面）。**⚠️ Redis-eviction residual（C6）**：Redis adapter 的 epoch **值** provenance 依赖 epoch key 持久性——live-holder 路径（acquire same-holder + renew）缺失即 fail-closed，但 free-holder 分支 eviction 后从 1 重建无法 fail-closed（first-acquire 与 post-eviction 不可区分）；缓解 = 30d TTL 刷新 + 非 `allkeys-*` eviction policy + 监控；**严格跨副本 fencing 选 PG adapter（持久 epoch SoR）**。写面 Hard 不退化（与 epoch 值 provenance 正交）。 | **设计**（A6：上游 Hard = `FencedWriter` 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + conformance 入列；leader election ≠ fencing 由本行结构兜底）；Redis epoch provenance **⚠️ residual（accepted，见 round-3 C6）** |
-| **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | 终态 Builder funnel：`Loop` 构造私有化 + `RECONCILE-BUILDER-FUNNEL-01`（PR-A7）；A3–A6 exported-`Loop` 窗口期由临时 Medium archtest `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 机器守（见下注，**非** code review 兜底） | **过渡**（A3–A6：Medium 上游 archtest allowlist + 下游 Hard callsite）→ **A7 闭环**（上游 Hard 构造私有化 + 下游 Hard callsite） |
+| **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | **已交付**（PR-A7）：上游 Hard = `Loop` 配置字段私有化（包外 `Loop{field:v}` 编译错误）；下游 Hard = `RECONCILE-BUILDER-FUNNEL-01` AST+Unalias ban（禁零值字面量 `Loop{}` 出现在 `kernel/reconcile` 包外）；临时 `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 退役 | **已闭环 Hard**（上游 Hard 字段私有化 + 下游 Hard callsite ban；双侧均 Hard，无过渡 Medium） |
 
-> A3 阶段 `Loop` 字段 exported（过渡，支持 struct 字面量 + kernel/command 迁移），故 T-BUILDER
-> 的**上游 Hard 要到 A7 才闭环**。A3–A6 期间**不以 code review 兜底**——AI-robust 章程明定 code
-> review 是 Soft 机制、严禁作为 standing enforcement，故旧表述「裸构造由 code review 兜底，不是
-> silent gap」本身就是被章程禁止的 Soft gap。替代：A2/A3 同 PR 必须补一条**临时 Medium archtest**
-> `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01`（callsite allowlist：禁止 `kernel/reconcile` 包外裸
-> 构造 `Loop{}`，仅放行 `*_test.go` + A8 `kernel/command` 迁移点），把 exported-`Loop` 窗口期从
-> 「人审」降到「机器守」。A7 落地 Builder + `Loop` 构造私有化后，该临时 Medium archtest 退役、由
-> 上游 Hard `RECONCILE-BUILDER-FUNNEL-01` 取代。此「Medium 上游 + Hard 下游」过渡形态按章程
-> §Funnel 双向锁评级开 gh issue 跟踪显式 Hard 化（归口父 issue #661 的 A7 任务）。
+> PR-A7 已交付：`Loop` 所有配置字段私有化，Builder 是唯一公开构造入口（`reconcile.New(r).With*().Build()`）。
+> A3–A6 窗口期使用的临时 Medium archtest `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 已退役，由
+> 上游 Hard 字段私有化 + 下游 Hard `RECONCILE-BUILDER-FUNNEL-01` 取代，funnel 双侧均 Hard 闭环。
+> kernel/command 不再在允许列表中——它无任何 Loop 字面量（grep 确认），A8 迁移将使用 Builder。
 
 > **F5 amendment 重评（AI-robust §ADR amendment 落地必查）**：本次 review 把 leader election 从
 > 「单实例 fencing 保证」更正为「best-effort 收窄，非 fencing」。受影响格子逐行重评：
@@ -607,9 +618,9 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 >   实现 ⊆ {adapters/redis, adapters/postgres, reconciletest fake}。**评级：Medium，永久 Go 天花板**
 >   （Go 无法 seal interface 实现，同 #851/#893/#1282；won't-do）。**非正确性闭环**——跨副本正确性
 >   由 T-DUAL/T-FENCE 的 Hard 兜底，本规则只防「业务包手搓 elector 绕过 adapter 边界」的分层 smell。
-> - **T-BUILDER**：A6 新增 `Loop.Leader` / `Loop.FencedRepo` exported 字段，仍由
->   `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01`（Medium 上游 + Hard 下游）守，**posture 不回退**；
->   上游 Hard 闭环仍待 A7 Builder（#661/A7）。
+> - **T-BUILDER**：A6 新增 `Loop.Leader` / `Loop.FencedRepo` exported 字段（过渡），当时由
+>   临时 `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01`（Medium 上游 + Hard 下游）守。PR-A7 已交付：
+>   全部配置字段私有化，funnel 上升为双侧 Hard（`RECONCILE-BUILDER-FUNNEL-01`），ALLOWLIST-01 退役。
 > - **as-built 偏离 controller-runtime（已核实并记录）**：client-go/controller-runtime 丢 lease 时
 >   `log.Fatal()` 退进程；GoCell `Loop` 是 cell lifecycle hook 而非独立进程，故丢 lease 后
 >   `leaseCancel()` 中断 in-flight + 转 follower 重新竞争（不退进程）——cancel-and-recontend，理由

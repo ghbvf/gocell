@@ -1,7 +1,7 @@
 //go:build archtest_fixture
 
 // This file adds the alias-bypass RED forms for
-// RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01 (#1292 r2 F2/F3): an import-aliased
+// RECONCILE-BUILDER-FUNNEL-01 (#1292 r2 F2/F3): an import-aliased
 // selector and a Go 1.23 type alias. The type-alias form is the one a bare
 // *types.Named assertion (without types.Unalias) would miss, so it proves the
 // Unalias fix is load-bearing. Gated by the archtest_fixture build tag.
