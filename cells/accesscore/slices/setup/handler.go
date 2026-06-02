@@ -7,8 +7,8 @@ import (
 	adminGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/admin/v1"
 	statusGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/status/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
 
 // headerTenantID is the HTTP header name for the tenant identifier on
@@ -104,51 +104,24 @@ func NewHandler(svc *Service, bootstrapAuth func(http.Handler) http.Handler) *Ha
 // RegisterRoutes mounts the setup contract handlers on mux. Both handlers are
 // wrapped with a thin middleware that reads X-Tenant-ID from the HTTP request
 // headers and stores it in ctx under setupTenantCtxKey.
+//
+// cellmw.NewHeaderInjectMux is used instead of a local wrapper struct so that
+// DeclareHTTPContract (which names contractspec.ContractSpec) stays in
+// runtime/ — cells/ must not import kernel/contractspec directly
+// (archtest CELLS-NO-CONTRACTSPEC-IMPORT-01).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
-	if err := h.statusH.RegisterRoutes(&setupTenantInjectMux{mux: mux}); err != nil {
+	wrapped := cellmw.NewHeaderInjectMux(mux, injectSetupTenant)
+	if err := h.statusH.RegisterRoutes(wrapped); err != nil {
 		return err
 	}
-	return h.adminH.RegisterRoutes(&setupTenantInjectMux{mux: mux})
+	return h.adminH.RegisterRoutes(wrapped)
 }
 
-// setupTenantInjectMux is a cell.RouteHandler wrapper that injects a middleware
-// around any registered http.Handler to forward X-Tenant-ID into ctx.
-type setupTenantInjectMux struct {
-	mux kcell.RouteHandler
-}
-
-func (m *setupTenantInjectMux) Handle(pattern string, handler http.Handler) {
-	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// injectSetupTenant is the per-request middleware that reads X-Tenant-ID from
+// the HTTP header and stores it in ctx under setupTenantCtxKey.
+func injectSetupTenant(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), setupTenantCtxKey{}, r.Header.Get(headerTenantID))
-		handler.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-	m.mux.Handle(pattern, wrapped)
-}
-
-// Prefix delegates to the inner mux if it implements the Prefixer interface.
-func (m *setupTenantInjectMux) Prefix() string {
-	if p, ok := m.mux.(kcell.Prefixer); ok {
-		return p.Prefix()
-	}
-	return ""
-}
-
-// DeclareAuthMeta forwards auth-route metadata to the inner mux so auth.Mount's
-// cell.AuthRouteDeclarer assertion succeeds through the wrapper (otherwise the
-// router policy-coverage check flags the setup routes as registered without
-// auth.Mount).
-func (m *setupTenantInjectMux) DeclareAuthMeta(meta kcell.AuthRouteMeta) error {
-	if d, ok := m.mux.(kcell.AuthRouteDeclarer); ok {
-		return d.DeclareAuthMeta(meta)
-	}
-	return nil
-}
-
-// DeclareHTTPContract forwards the route's ContractSpec to the inner mux
-// (auth.Mount type-asserts to cell.HTTPContractDeclarer).
-func (m *setupTenantInjectMux) DeclareHTTPContract(spec contractspec.ContractSpec) error {
-	if d, ok := m.mux.(kcell.HTTPContractDeclarer); ok {
-		return d.DeclareHTTPContract(spec)
-	}
-	return nil
 }

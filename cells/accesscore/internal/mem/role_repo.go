@@ -40,6 +40,20 @@ func (r *RoleRepository) SeedRole(t tenant.TenantID, role *domain.Role) {
 	tRoles[role.ID] = &clone
 }
 
+// SeedUserRoleAssignment directly inserts a user-role mapping into the store,
+// bypassing the F4 user-in-tenant check. Use ONLY in tests that exercise role
+// semantics in isolation (e.g. without a paired UserRepository in the same
+// store). Production paths must use AssignToUser, which enforces the check.
+func (r *RoleRepository) SeedUserRoleAssignment(t tenant.TenantID, userID, roleID string) {
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
+	tUserRoles := r.store.tenantUserRoles(string(t))
+	if tUserRoles[userID] == nil {
+		tUserRoles[userID] = make(map[string]struct{})
+	}
+	tUserRoles[userID][roleID] = struct{}{}
+}
+
 // Create persists a new role within the tenant. Idempotent: if a role with
 // the same ID already exists in the tenant, it is silently overwritten
 // (upsert semantics for seed/bootstrap). Safe to call both inside and outside
@@ -115,6 +129,10 @@ func (r *RoleRepository) GetByUserID(ctx context.Context, t tenant.TenantID, use
 // AssignToUser assigns roleID to userID within the tenant. Safe to call both
 // inside and outside a RunInTx closure; see the lock contract on
 // UserRepository.
+//
+// F4: verifies that the user belongs to tenant t before inserting the
+// assignment — mirrors the PG composite FK (user_id, tenant_id) added by
+// Agent A. Returns ErrAuthUserNotFound when the user does not exist in t.
 func (r *RoleRepository) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
 	if err := t.Validate(); err != nil {
 		return false, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "role_repo: invalid tenant", err)
@@ -122,6 +140,15 @@ func (r *RoleRepository) AssignToUser(ctx context.Context, t tenant.TenantID, us
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
+	}
+
+	// F4: verify user belongs to this tenant before assigning. Mem has no FK —
+	// must check explicitly to match PG behaviour. Returns not-found (not
+	// forbidden) to avoid leaking cross-tenant user existence.
+	if _, ok := r.store.userByIDInTenant(userID, string(t)); !ok {
+		return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("user_id=%s", userID))))
 	}
 
 	tRoles := r.store.tenantRoles(string(t))

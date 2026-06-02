@@ -47,6 +47,10 @@ func (s *stubUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error
 	panic("stubUserRepo.GetByID: unexpected call")
 }
 
+func (s *stubUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("stubUserRepo.GetByIDInTenant: unexpected call")
+}
+
 func (s *stubUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("stubUserRepo.GetByUsername: unexpected call")
 }

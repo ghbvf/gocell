@@ -936,10 +936,10 @@ func TestUsersMigration033_PasswordVersionNonNegative(t *testing.T) {
 	// password_version = 0 must succeed (NewUser baseline).
 	_, execErr := pool.DB().Exec(ctx, `
 		INSERT INTO users
-			(id, username, email, password_hash, password_version,
+			(id, tenant_id, username, email, password_hash, password_version,
 			 creation_source, status, authz_epoch, created_at, updated_at)
 		VALUES
-			($1, $2, $3, $4, 0,
+			($1, '00000000-0000-0000-0000-000000000001', $2, $3, $4, 0,
 			 'identity', 'active', 1, now(), now())`,
 		"00000000-0000-0000-0033-000000000001",
 		"alice_pw0",
@@ -951,10 +951,10 @@ func TestUsersMigration033_PasswordVersionNonNegative(t *testing.T) {
 	// password_version = -1 must be rejected by users_password_version_non_negative.
 	_, execErr = pool.DB().Exec(ctx, `
 		INSERT INTO users
-			(id, username, email, password_hash, password_version,
+			(id, tenant_id, username, email, password_hash, password_version,
 			 creation_source, status, authz_epoch, created_at, updated_at)
 		VALUES
-			($1, $2, $3, $4, -1,
+			($1, '00000000-0000-0000-0000-000000000001', $2, $3, $4, -1,
 			 'identity', 'active', 1, now(), now())`,
 		"00000000-0000-0000-0033-000000000002",
 		"alice_pwminus1",

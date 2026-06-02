@@ -1092,8 +1092,10 @@ func seedAdminUser(
 // initialized when the admin role and user are pre-filled directly into repos
 // (equivalent to the old WithSeedAdmin fixture pattern for integration tests).
 func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// Shared store: role repo needs to see the user created by user repo (F4).
+	sharedStore := mem.NewStore(clock.Real())
+	userRepo := sharedStore.UserRepository()
+	roleRepo := sharedStore.RoleRepository()
 	ctx := context.Background()
 
 	seedAdminUser(t, ctx, userRepo, roleRepo, "admin", "admin-pass-123")

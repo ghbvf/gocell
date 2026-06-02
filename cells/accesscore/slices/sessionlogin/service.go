@@ -256,8 +256,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	}
 
 	// Parse and validate the tenant before any DB access. Fail-closed: a
-	// malformed or empty tenantId returns an auth error (same as credential
-	// failure — no enumeration surface).
+	// malformed or empty tenantId returns 401 (ErrAuthLoginFailed) — the same
+	// error as an invalid credential. This is intentional non-enumerable posture:
+	// callers must not be able to distinguish a valid-but-wrong tenant from a
+	// malformed tenant string, preventing cross-tenant tenant ID enumeration. The
+	// setup handler (setup/handler.go, CreateAdmin) uses the same non-enumerable
+	// design for the same reason. Missing tenantId was already rejected above as
+	// 400 (RequireNotEmpty); only a non-empty but syntactically invalid UUID reaches
+	// this branch.
 	tid, parseErr := tenant.ParseTenantID(input.TenantID)
 	if parseErr != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
@@ -769,7 +775,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser tenant: %w", err)
 	}
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByIDInTenant(ctx, tid, userID)
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
 	}

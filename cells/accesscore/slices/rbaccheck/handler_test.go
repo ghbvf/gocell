@@ -1,7 +1,6 @@
 package rbaccheck
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -68,7 +67,7 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 			{Resource: "users", Action: "write"},
 		},
 	})
-	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "r1")
+	roleRepo.SeedUserRoleAssignment(testTenantID, testutil.TestID("user-1"), "r1")
 
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
 	if err != nil {

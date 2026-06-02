@@ -722,6 +722,10 @@ func (refreshUnavailableUserRepo) BumpAuthzEpoch(
 	return 0, nil
 }
 
+func (refreshUnavailableUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
+}
+
 func (refreshUnavailableUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }

@@ -1,3 +1,15 @@
+# Request headers (documentation; contractgen does not yet emit header params —
+# tracked in backlog issue "contractgen: support header parameters"):
+#
+#   X-Tenant-ID  (required)
+#     Type:    string (canonical UUID)
+#     Source:  HTTP request header; no JWT exists pre-bootstrap so the tenant
+#              cannot be derived from bearer token claims.
+#     Parsing: tenant.ParseTenantID — fail-closed; malformed or absent UUID
+#              → 400 ERR_VALIDATION_REQUIRED_FIELD via service-layer validation
+#              on CreateAdminInput.TenantID.
+#     Codegen: contractgen client generation does not yet emit this header.
+#              Callers must set it manually until the backlog issue is resolved.
 id: http.auth.setup.admin.v1
 kind: http
 ownerCell: accesscore

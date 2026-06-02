@@ -263,7 +263,11 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID
 	if err != nil {
 		if pgquery.IsForeignKeyViolation(err) {
 			switch fkConstraintName(err) {
-			case "role_assignments_user_id_fkey":
+			case "role_assignments_user_id_fkey",
+				// F4: composite (tenant_id, user_id) FK added by migration —
+				// a cross-tenant user_id now violates this constraint; map to
+				// ErrAuthUserNotFound so the app layer gives a clean 404.
+				"role_assignments_tenant_id_user_id_fkey":
 				return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
 					errcode.WithCategory(errcode.CategoryDomain),
 					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("user_id=%s", userID))))

@@ -54,6 +54,15 @@ type UserRepository interface {
 	Create(ctx context.Context, t tenant.TenantID, user *domain.User) error
 	// GetByID is the by-PK tenant-deriving carve-out — see the interface godoc.
 	GetByID(ctx context.Context, id string) (*domain.User, error)
+	// GetByIDInTenant fetches a user by primary key and requires it to belong to
+	// tenant t. Returns ErrAuthUserNotFound when the row is absent OR belongs to a
+	// different tenant — the caller cannot distinguish the two cases (no cross-tenant
+	// existence leak). Validates t at the top (non-empty, canonical UUID).
+	//
+	// Use this method on every admin / post-auth path that already holds a tenant
+	// context (identitymanage user-detail and lockUserAndRevokeSessions). The
+	// tenant-less GetByID carve-out must NOT be used on those paths.
+	GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)
 	GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)
 	Delete(ctx context.Context, t tenant.TenantID, id string) error
 

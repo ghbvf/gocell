@@ -128,6 +128,27 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 	return cloneUser(u), nil
 }
 
+// GetByIDInTenant fetches a user by primary key and verifies it belongs to t.
+// Returns ErrAuthUserNotFound when the row is absent OR in a different tenant,
+// collapsing both cases to prevent cross-tenant existence enumeration.
+func (r *UserRepository) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
+	if !r.store.inLiveTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
+
+	existing, exists := r.store.userByIDInTenant(id, string(t))
+	if !exists {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
+	}
+	return cloneUser(existing), nil
+}
+
 // GetByUsername returns the User with the given username within the tenant.
 // Safe to call both inside and outside a RunInTx closure.
 func (r *UserRepository) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {

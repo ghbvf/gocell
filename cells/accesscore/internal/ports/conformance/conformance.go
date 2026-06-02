@@ -1416,3 +1416,64 @@ func conformUpdatePasswordResetFlagNotFound(t *testing.T, factory UserRepoFactor
 	}
 	return err
 }
+
+// ─── RoleRepository conformance ───────────────────────────────────────────────
+
+// RoleRepoFactory constructs a fresh ports.RoleRepository, a matching
+// ports.UserRepository (needed to seed users across tenants), a shared
+// persistence.TxRunner, and a cleanup func. Called once per sub-test.
+type RoleRepoFactory func(t *testing.T) (
+	roleRepo ports.RoleRepository,
+	userRepo ports.UserRepository,
+	txRunner persistence.TxRunner,
+	cleanup func(),
+)
+
+// RunRoleRepoConformance executes the RoleRepository contract acceptance suite.
+// All implementations (mem, PG) must call this from a _test.go in their package.
+func RunRoleRepoConformance(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	t.Run("AssignToUser_CrossTenant_RejectsUser", func(t *testing.T) {
+		conformRoleAssignCrossTenantUser(t, factory)
+	})
+}
+
+// conformRoleAssignCrossTenantUser (F4): assigning a role (which exists in
+// testTenantID) to a user that lives in testTenantIDOther must return
+// ErrAuthUserNotFound — the same error as "user not found", so the caller
+// cannot enumerate cross-tenant user existence.
+func conformRoleAssignCrossTenantUser(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	// Seed a role in tenant A (testTenantID).
+	roleID := "role_xten_" + uuid.NewString()
+	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
+		return roleRepo.Create(ctx, testTenantID, &domain.Role{ID: roleID, Name: roleID})
+	}); err != nil {
+		t.Fatalf("conformRoleAssignCrossTenantUser: seed role: %v", err)
+	}
+
+	// Seed a user in tenant B (testTenantIDOther).
+	userB := seedActiveInTenant(t, txRunner, userRepo, testTenantIDOther, uuid.NewString(), "xten_user_"+uuid.NewString())
+
+	// Attempt to assign the tenant-A role to the tenant-B user (cross-tenant write).
+	_, err := roleRepo.AssignToUser(context.Background(), testTenantID, userB.ID, roleID)
+	if err == nil {
+		t.Fatal("AssignToUser_CrossTenant: must return error for user from different tenant, got nil")
+	}
+	if !isErrAuthUserNotFound(err) {
+		t.Errorf("AssignToUser_CrossTenant: want ErrAuthUserNotFound, got %v", err)
+	}
+
+	// Sanity: assigning to a user in the SAME tenant must still succeed.
+	userA := seedActiveInTenant(t, txRunner, userRepo, testTenantID, uuid.NewString(), "xten_usera_"+uuid.NewString())
+	changed, err := roleRepo.AssignToUser(context.Background(), testTenantID, userA.ID, roleID)
+	if err != nil {
+		t.Fatalf("AssignToUser_CrossTenant: same-tenant assign must succeed, got %v", err)
+	}
+	if !changed {
+		t.Error("AssignToUser_CrossTenant: same-tenant first assign must return changed=true")
+	}
+}

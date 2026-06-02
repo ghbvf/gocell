@@ -355,6 +355,10 @@ func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ st
 	panic("not implemented")
 }
 
+func (r *stubUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+
 func (r *stubUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("not implemented")
 }
@@ -502,6 +506,10 @@ func (r *capturingUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID,
 
 func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
+}
+
+func (r *capturingUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("not implemented")
 }
 
 func (r *capturingUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {

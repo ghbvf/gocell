@@ -324,9 +324,14 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 	return user, nil
 }
 
-// GetByID retrieves a user by ID.
+// GetByID retrieves a user by ID. Tenant-scoped: uses GetByIDInTenant so an
+// admin cannot read a user from a different tenant even if they know the UUID.
 func (s *Service) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	user, err := s.repo.GetByID(ctx, id)
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("identity-manage: get: tenant: %w", err)
+	}
+	user, err := s.repo.GetByIDInTenant(ctx, tid, id)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: get: %w", err)
 	}
@@ -492,10 +497,11 @@ func (s *Service) applyUserUpdateTx(
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, tid, input.ID, credMut.m, now); err != nil {
 			return nil, fmt.Errorf("identity-manage: update credential mutation: %w", err)
 		}
-		// Post-mutation re-fetch is plain GetByID (not ForUpdate): the same-tx MVCC snapshot
-		// already sees the just-committed writes; FOR UPDATE row-lock semantics apply only to
-		// cross-tx concurrency.
-		refetched, err := s.repo.GetByID(txCtx, input.ID)
+		// Post-mutation re-fetch: tenant-scoped (GetByIDInTenant) so a stale
+		// row from another tenant cannot surface here. ForUpdate lock is not
+		// needed — the same-tx MVCC snapshot already sees the just-committed
+		// writes; FOR UPDATE row-lock semantics apply only to cross-tx concurrency.
+		refetched, err := s.repo.GetByIDInTenant(txCtx, tid, input.ID)
 		if err != nil {
 			return nil, fmt.Errorf("identity-manage: update re-fetch after mutation: %w", err)
 		}
@@ -610,11 +616,9 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 	}
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		// S4.0: fetch the user so the effective-admin guard can use the real
-		// status (active vs locked/suspended). Pre-S4.0 the guard didn't need
-		// the user record because hasAdminRole was sufficient, but the
-		// effective-admin semantics make locked admins removable without the
-		// invariant being touched, so we need status to short-circuit.
-		user, err := s.repo.GetByID(txCtx, id)
+		// status (active vs locked/suspended). Tenant-scoped: prevents a
+		// cross-tenant admin from deleting a user they merely know the UUID of.
+		user, err := s.repo.GetByIDInTenant(txCtx, tid, id)
 		if err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
@@ -692,8 +696,9 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 	}
 	now := s.clock.Now()
 	// Guard tx (tx1): check last-admin protection before applying the mutation.
+	// Tenant-scoped: admin cannot lock a user from another tenant.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		user, err := s.repo.GetByID(txCtx, id)
+		user, err := s.repo.GetByIDInTenant(txCtx, tid, id)
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock guard: %w", err)
 		}
@@ -915,7 +920,7 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password: tenant: %w", err)
 	}
-	user, err := s.repo.GetByID(txCtx, input.UserID)
+	user, err := s.repo.GetByIDInTenant(txCtx, tid, input.UserID)
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password get user: %w", err)
 	}

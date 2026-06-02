@@ -80,7 +80,9 @@ func TestService_Authorize(t *testing.T) {
 					ID: "admin", Name: "admin",
 					Permissions: []domain.Permission{{Resource: "/api/v1/config", Action: "write"}},
 				})
-				_, _ = r.AssignToUser(context.Background(), testTenantID, "usr-1", "admin")
+				// SeedUserRoleAssignment bypasses the F4 user-in-tenant check —
+				// this test exercises authorization decision, not user-exists guard.
+				r.SeedUserRoleAssignment(testTenantID, "usr-1", "admin")
 			},
 			subject: "usr-1", resource: "/api/v1/config", action: "write",
 			want: true,
@@ -92,7 +94,7 @@ func TestService_Authorize(t *testing.T) {
 					ID: "viewer", Name: "viewer",
 					Permissions: []domain.Permission{{Resource: "/api/v1/config", Action: "read"}},
 				})
-				_, _ = r.AssignToUser(context.Background(), testTenantID, "usr-2", "viewer")
+				r.SeedUserRoleAssignment(testTenantID, "usr-2", "viewer")
 			},
 			subject: "usr-2", resource: "/api/v1/config", action: "write",
 			want: false,

@@ -103,7 +103,9 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"username":"root","email":"root@local","password":"`+strings.Repeat("界", 8)+`"}`))
 
 	// Real-handler produced 201 payload must satisfy the response schema.
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), &stubWriter{})
+	// Shared store: role repo needs to see the user created by user repo (F4).
+	cs201 := mem.NewStore(clock.Real())
+	svc := newService(t, cs201.UserRepository(), cs201.RoleRepository(), &stubWriter{})
 	h := setup.NewHandler(svc, testPassthroughAuth)
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
@@ -210,7 +212,11 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
 
 	w := &stubWriter{}
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), w)
+	// Use a single shared mem.Store so user and role repos share the same in-memory
+	// state — required by the F4 user-in-tenant check (role repo needs to see the
+	// user that was just created by the user repo).
+	sharedStore := mem.NewStore(clock.Real())
+	svc := newService(t, sharedStore.UserRepository(), sharedStore.RoleRepository(), w)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
 		TenantID: "00000000-0000-0000-0000-000000000001",

@@ -194,12 +194,12 @@ func TestService_LockUnlock(t *testing.T) {
 
 	// Lock
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
-	locked, _ := svc.GetByID(context.Background(), user.ID)
+	locked, _ := svc.GetByID(adminCtxForService(), user.ID)
 	assert.True(t, locked.IsLocked())
 
 	// Unlock
 	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
-	unlocked, _ := svc.GetByID(context.Background(), user.ID)
+	unlocked, _ := svc.GetByID(adminCtxForService(), user.ID)
 	assert.False(t, unlocked.IsLocked())
 }
 
@@ -244,7 +244,7 @@ func TestService_Delete(t *testing.T) {
 	})
 
 	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))
-	_, err := svc.GetByID(context.Background(), user.ID)
+	_, err := svc.GetByID(adminCtxForService(), user.ID)
 	assert.Error(t, err)
 }
 
@@ -849,6 +849,18 @@ func (r *freezeAfterReadRepo) GetByID(ctx context.Context, id string) (*domain.U
 		_ = r.UpdateLockState(ctx, testTenantID, id, domain.StatusLocked, time.Now())
 	}
 	return u, err // stale active snapshot
+}
+
+// GetByIDInTenant mirrors the GetByID spy behaviour for the changePasswordInTx
+// path which now uses GetByIDInTenant (F2). Freeze-after-read semantics are
+// identical: the caller gets a stale active snapshot and the write guard rejects.
+func (r *freezeAfterReadRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	u, err := r.UserRepository.GetByIDInTenant(ctx, t, id)
+	if err == nil && id == r.target && !r.froze {
+		r.froze = true
+		_ = r.UpdateLockState(ctx, t, id, domain.StatusLocked, time.Now())
+	}
+	return u, err
 }
 
 // TestService_ChangePassword_ConcurrentFreeze_RejectedAtWriteGuard pins #1017 F1:
@@ -1527,6 +1539,11 @@ func (r *observingUserRepo) Create(ctx context.Context, t tenant.TenantID, user 
 func (r *observingUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	r.getInTx = r.runner.inTx
 	return r.UserRepository.GetByID(ctx, id)
+}
+
+func (r *observingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	r.getInTx = r.runner.inTx
+	return r.UserRepository.GetByIDInTenant(ctx, t, id)
 }
 
 func (r *observingUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {

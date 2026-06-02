@@ -25,16 +25,14 @@
 -- Schema changes (role_assignments):
 --   - Add tenant_id TEXT NOT NULL.
 --   - PK becomes (tenant_id, user_id, role_id).
---   - FK shape decision: two separate FKs keep each reference lean:
---       (user_id) REFERENCES users(id) ON DELETE CASCADE — user row is globally
---         unique by UUID; cascade still works correctly because deleting a user
---         means ALL their role_assignments go regardless of tenant.
+--   - FK shape: two FKs enforce tenant boundary at the DB layer:
+--       (tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE —
+--         enforces same-tenant user membership; cross-tenant authorization grants
+--         (tenant_id=A, user_id=<user in tenant B>) are FK violations, rejected
+--         by the DB. Uses the UNIQUE(tenant_id, id) support index on users.
+--         ON DELETE CASCADE: removing a user removes all their role grants.
 --       (tenant_id, role_id) REFERENCES roles(tenant_id, id) ON DELETE RESTRICT —
 --         role must exist in the same tenant; prevents cross-tenant role grant.
---     Alternative considered: (tenant_id, user_id) → users(tenant_id, id) via
---     the UNIQUE(tenant_id, id) support index. Rejected because it would prevent
---     moving a user across tenants (not a v1 requirement) and adds an extra index
---     to maintain with no query benefit in the current access patterns.
 --
 -- effective_admin_invariant trigger family (ported from migration 024):
 --   - Advisory lock key incorporates the tenant:
@@ -153,10 +151,13 @@ CREATE TABLE role_assignments (
     role_id     TEXT        NOT NULL,
     granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (tenant_id, user_id, role_id),
-    -- user_id references users(id) globally: a user UUID is unique across tenants.
+    -- (tenant_id, user_id) references users(tenant_id, id) via the UNIQUE(tenant_id, id)
+    -- support index, enforcing same-tenant user membership at the DB layer.
+    -- This prevents cross-tenant authorization grants: a row (tenant_id=A, user_id=<user in tenant B>)
+    -- is now a FK violation and is rejected by the DB.
     -- ON DELETE CASCADE: removing a user removes all their role grants.
     CONSTRAINT role_assignments_user_id_fkey
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
     -- (tenant_id, role_id) references roles composite PK: role must exist in same tenant.
     -- ON DELETE RESTRICT: cannot delete a role that has active assignments.
     CONSTRAINT role_assignments_role_id_fkey
@@ -269,9 +270,20 @@ ALTER TABLE sessions
         FOREIGN KEY (subject_id) REFERENCES users(id) ON DELETE CASCADE;
 
 -- +goose Down
--- WARNING: This down migration drops users, roles, role_assignments v2 and
--- PERMANENTLY DELETES all multi-tenant accesscore data. Production rollback
--- MUST back up these tables first.
+-- FORWARD-ONLY MIGRATION — NO ROLLBACK SUPPORTED.
+--
+-- This migration is irreversible / destructive. Rolling back to the pre-046
+-- single-tenant schema is NOT supported via goose Down:
+--   - The down section drops all v2 tables (users / roles / role_assignments)
+--     and ALL multi-tenant accesscore data is permanently deleted.
+--   - Restoring the pre-046 schema in production requires a backup restore.
+--   - Dev environments must re-run from migration 001 forward (drop + migrate up).
+--
+-- Per CLAUDE.md "不考虑向后兼容": GoCell is pre-v1.0 with no external consumers;
+-- destructive-rebuild is the accepted pattern (mirrors migration 043 audit_entries_v2).
+--
+-- WARNING: Running goose Down on this migration in any environment with data
+-- WILL PERMANENTLY DELETE all users, roles, and role_assignments.
 --
 -- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 

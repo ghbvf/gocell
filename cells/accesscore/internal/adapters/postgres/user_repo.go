@@ -102,6 +102,17 @@ SELECT id, username, email, password_hash, password_version, password_reset_requ
 FROM users
 WHERE id = $1`
 
+	// selectUserByIDInTenantSQL: $1=id, $2=tenant_id — tenant-scoped by-PK read.
+	// Used by admin paths that hold a tenant context (identitymanage GetByID
+	// callsites converted by F2). Collapses "row not in this tenant" and "row
+	// absent" into a single pgx.ErrNoRows so no cross-tenant existence leaks.
+	selectUserByIDInTenantSQL = `
+SELECT id, username, email, password_hash, password_version, password_reset_required,
+       status, creation_source, authz_epoch, created_at, updated_at,
+       failed_login_count, last_failed_at, locked_until, tenant_id
+FROM users
+WHERE id = $1 AND tenant_id = $2`
+
 	// selectUserByUsernameSQL: $1=tenant_id, $2=username.
 	selectUserByUsernameSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
@@ -277,6 +288,30 @@ func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, erro
 			return nil, err
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id", err)
+	}
+	return u, nil
+}
+
+// GetByIDInTenant fetches a user by primary key within tenant t. Returns
+// ErrAuthUserNotFound when the row is absent OR belongs to a different tenant —
+// both cases produce pgx.ErrNoRows from `WHERE id=$1 AND tenant_id=$2`.
+func (r *PGUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
+	row := r.db.QueryRow(ctx, selectUserByIDInTenantSQL, id, string(t))
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-in-tenant", err)
 	}
 	return u, nil
 }

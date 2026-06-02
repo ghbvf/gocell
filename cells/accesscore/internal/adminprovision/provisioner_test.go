@@ -204,8 +204,10 @@ func TestProvisioner_Status_InfraError_Surfaced(t *testing.T) {
 // --- Ensure ---------------------------------------------------------------
 
 func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// Shared store: role repo needs to see users created by user repo (F4).
+	sharedStore := mem.NewStore(clock.Real())
+	userRepo := sharedStore.UserRepository()
+	roleRepo := sharedStore.RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("00000000-0000-4000-8000-000000000001"))
 
 	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
@@ -283,11 +285,13 @@ func TestProvisioner_Ensure_RoleCreateNonDuplicateError_Surfaced(t *testing.T) {
 
 func TestProvisioner_Ensure_RoleCreateDuplicate_Tolerated(t *testing.T) {
 	// Admin role already exists (but no users assigned yet).
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// Shared store: role repo needs to see the user created by user repo (F4).
+	sharedStore := mem.NewStore(clock.Real())
+	roleRepo := sharedStore.RoleRepository()
 	role := &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}
 	require.NoError(t, roleRepo.Create(context.Background(), testTenantID, role))
 
-	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
+	p := newProvisioner(t, sharedStore.UserRepository(), roleRepo, fixedUUID("x"))
 	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeCreated, outcome)
@@ -332,8 +336,10 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 // --- Compensate -----------------------------------------------------------
 
 func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// Shared store: role repo needs to see the user created by user repo (F4).
+	sharedStore := mem.NewStore(clock.Real())
+	userRepo := sharedStore.UserRepository()
+	roleRepo := sharedStore.RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("zzz"))
 	user, _, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
@@ -430,6 +436,10 @@ func (r *duplicateUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID,
 
 func (r *duplicateUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
+}
+
+func (r *duplicateUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("duplicateUserRepo.GetByIDInTenant: unexpected call")
 }
 
 func (r *duplicateUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
@@ -635,6 +645,10 @@ func (r *errUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ str
 
 func (r *errUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
+}
+
+func (r *errUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("errUserRepo.GetByIDInTenant: unexpected call")
 }
 
 func (r *errUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {

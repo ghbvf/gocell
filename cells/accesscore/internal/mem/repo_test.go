@@ -249,8 +249,9 @@ func TestRoleRepository_RemoveFromUserIfNotLast_NonAdminScopeNotProtected(t *tes
 	ctx := context.Background()
 	repo.SeedRole(testTenantID, &domain.Role{ID: "editor", Name: "editor"})
 
-	_, err := repo.AssignToUser(ctx, testTenantID, "u1", "editor")
-	require.NoError(t, err)
+	// SeedUserRoleAssignment bypasses the F4 user-in-tenant check — this test
+	// exercises role-removal semantics in isolation, not the user-exists guard.
+	repo.SeedUserRoleAssignment(testTenantID, "u1", "editor")
 
 	// Sole holder of a non-admin role MUST be removable (count drops to 0).
 	changed, err := repo.RemoveFromUserIfNotLast(ctx, testTenantID, "u1", "editor")
@@ -298,8 +299,9 @@ func TestRoleRepository_ListByUserID_SortsPagesAndClones(t *testing.T) {
 	}
 	for _, role := range roles {
 		repo.SeedRole(testTenantID, role)
-		_, err := repo.AssignToUser(ctx, testTenantID, "user-1", role.ID)
-		require.NoError(t, err)
+		// SeedUserRoleAssignment bypasses the F4 user-in-tenant check — this
+		// test exercises list/pagination semantics, not the user-exists guard.
+		repo.SeedUserRoleAssignment(testTenantID, "user-1", role.ID)
 	}
 
 	params := query.ListParams{
@@ -330,17 +332,17 @@ func TestRoleRepository_ListByUserID_InvalidCursorParams(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
 	repo.SeedRole(testTenantID, &domain.Role{ID: "role-a", Name: "admin"})
-	_, err := repo.AssignToUser(ctx, testTenantID, "user-1", "role-a")
-	require.NoError(t, err)
+	// SeedUserRoleAssignment bypasses the F4 user-in-tenant check.
+	repo.SeedUserRoleAssignment(testTenantID, "user-1", "role-a")
 
-	_, err = repo.ListByUserID(ctx, testTenantID, "user-1", query.ListParams{
+	_, listErr := repo.ListByUserID(ctx, testTenantID, "user-1", query.ListParams{
 		Limit:        2,
 		Sort:         []query.SortColumn{{Name: "name", Direction: query.SortASC}},
 		CursorValues: []any{"admin", "role-a"},
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "role-repo: list-by-user")
+	require.Error(t, listErr)
+	assert.Contains(t, listErr.Error(), "role-repo: list-by-user")
 }
 
 func TestRoleRepository_Create(t *testing.T) {
@@ -374,10 +376,10 @@ func TestRoleRepository_CountByRole(t *testing.T) {
 	ctx := context.Background()
 
 	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
-	_, err := repo.AssignToUser(ctx, testTenantID, "usr-1", "admin")
-	require.NoError(t, err)
-	_, err = repo.AssignToUser(ctx, testTenantID, "usr-2", "admin")
-	require.NoError(t, err)
+	// SeedUserRoleAssignment bypasses the F4 user-in-tenant check — this test
+	// exercises CountByRole semantics, not the user-exists guard.
+	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "admin")
+	repo.SeedUserRoleAssignment(testTenantID, "usr-2", "admin")
 
 	count, err := repo.CountByRole(ctx, testTenantID, "admin")
 	require.NoError(t, err)
@@ -477,10 +479,11 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 	t.Run("orphan_role_assignment_returns_false", func(t *testing.T) {
 		// Role assignment exists for a userID that has no users row (FK CASCADE
 		// would prevent this in PG, but the mem path defensively skips orphans).
+		// F4: AssignToUser now rejects a user that is not in the store, so we
+		// use SeedUserRoleAssignment to inject the orphan mapping directly.
 		store := NewStore(clock.Real())
 		store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
-		_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "ghost", "admin")
-		require.NoError(t, err)
+		store.RoleRepository().SeedUserRoleAssignment(testTenantID, "ghost", "admin")
 
 		exists, err := store.RoleRepository().EffectiveAdminExists(context.Background(), testTenantID)
 		require.NoError(t, err)

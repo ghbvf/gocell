@@ -63,9 +63,9 @@ func newContractRBACHandler() http.Handler {
 			{Resource: "devices", Action: "read"},
 		},
 	})
-	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "admin")
-	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "operator")
-	_, _ = roleRepo.AssignToUser(context.Background(), testTenantID, testutil.TestID("user-1"), "viewer")
+	roleRepo.SeedUserRoleAssignment(testTenantID, testutil.TestID("user-1"), "admin")
+	roleRepo.SeedUserRoleAssignment(testTenantID, testutil.TestID("user-1"), "operator")
+	roleRepo.SeedUserRoleAssignment(testTenantID, testutil.TestID("user-1"), "viewer")
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
 	if err != nil {
 		panic(err)
