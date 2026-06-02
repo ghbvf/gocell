@@ -24,7 +24,8 @@ type Request struct {
 	Limit     int64  `json:"limit,omitempty"`
 	SubjectID string `json:"subjectId,omitempty"`
 	// format: date-time
-	To string `json:"to,omitempty"`
+	To      string `json:"to,omitempty"`
+	TraceID string `json:"traceId,omitempty"`
 }
 
 // Response — http.audit.list.v1.response
@@ -42,6 +43,7 @@ type ResponseDataItem struct {
 	ActorID       string `json:"actorId"`
 	SubjectID     string `json:"subjectId,omitempty"`
 	CorrelationID string `json:"correlationId,omitempty"`
+	TraceID       string `json:"traceId,omitempty"`
 	// format: date-time
 	OccurredAt string `json:"occurredAt,omitempty"`
 	// format: date-time

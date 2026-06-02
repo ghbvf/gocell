@@ -61,7 +61,7 @@ func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Pr
 	seedEntryRoundTripCorpus(f)
 
 	f.Fuzz(func(t *testing.T,
-		eventID, eventType, actorID, subjectID, sessionID, tenantID, correlationID string,
+		eventID, eventType, actorID, subjectID, sessionID, tenantID, correlationID, traceID string,
 		occNano, tsNano int64, payload []byte,
 	) {
 		// Restrict string fields to the domain both backends can store
@@ -71,7 +71,8 @@ func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Pr
 		// parity assertion only fires on values both stores can represent.
 		// Arbitrary binary content is exercised through the BYTEA Payload
 		// (within valid-JSON-object framing), not the text identity fields.
-		for _, s := range []string{eventID, eventType, actorID, subjectID, sessionID, tenantID, correlationID} {
+		// traceID is also a text column so it must satisfy the same constraint.
+		for _, s := range []string{eventID, eventType, actorID, subjectID, sessionID, tenantID, correlationID, traceID} {
 			if !pgRepresentableString(s) {
 				return
 			}
@@ -85,6 +86,7 @@ func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Pr
 			SessionID:     sessionID,
 			TenantID:      tenantID,
 			CorrelationID: correlationID,
+			TraceID:       traceID,
 			OccurredAt:    time.Unix(0, occNano).UTC().Truncate(fuzzTimePrecision),
 			Timestamp:     time.Unix(0, tsNano).UTC().Truncate(fuzzTimePrecision),
 			Payload:       payload,
@@ -172,36 +174,45 @@ func pgRepresentableString(s string) bool {
 // the interesting binary content (pipe byte, Unicode boundary, escaped NUL,
 // non-alphabetical multi-key) lives inside JSON string values, which is the
 // only shape a strict-JSON-object payload can carry.
+//
+// traceID is the new 8th string parameter added to the fuzz signature for
+// Entry.TraceID coverage; seeds use empty, a canonical 32-hex W3C trace-id,
+// and a second distinct trace to exercise TraceID round-trip across backends.
 func seedEntryRoundTripCorpus(f *testing.F) {
 	tsNano := epochAnchor.UnixNano()
 	occNano := epochAnchor.Add(principalOccurredAtSkew).UnixNano()
 
-	add := func(eventID, payload string) {
+	add := func(eventID, traceID, payload string) {
 		f.Add(
-			eventID, "audit.test", "actor-1", "subject-1", "session-1", "tenant-1", "corr-1",
+			eventID, "audit.test", "actor-1", "subject-1", "session-1", "tenant-1", "corr-1", traceID,
 			occNano, tsNano, []byte(payload),
 		)
 	}
 
-	add("seed-empty-object", `{}`)
-	add("seed-null", `null`)
-	add("seed-empty-bytes", ``)
-	add("seed-pipe-byte", `{"k":"a|b|c"}`)        // pipe byte (legacy HMAC delimiter)
-	add("seed-unicode", `{"k":"日本語"}`)            // multi-byte UTF-8 boundary
-	add("seed-emoji", `{"k":"😀🔒"}`)               // surrogate-range / 4-byte runes
-	add("seed-escaped-nul", `{"k":"a\u0000b"}`)   // NUL byte as JSON escape (raw 0x00 is invalid JSON)
-	add("seed-multikey", `{"b":1,"a":2,"c":"x"}`) // non-alphabetical multi-key (A-01 guard)
-	add("seed-nested", `{"x":{"y":[1,2,3]},"z":true}`)
+	// traceID seeds: empty (no trace), a canonical 32-hex W3C trace-id, and a
+	// second distinct trace to exercise filtering correctness across backends.
+	add("seed-empty-object", "", `{}`)
+	add("seed-null", "4bf92f3577b34da6a3ce929d0e0e4736", `null`)
+	add("seed-empty-bytes", "", ``)
+	add("seed-pipe-byte", "", `{"k":"a|b|c"}`) // pipe byte (legacy HMAC delimiter)
+	add("seed-unicode", "", `{"k":"日本語"}`)     // multi-byte UTF-8 boundary
+	add("seed-emoji", "", `{"k":"😀🔒"}`)        // surrogate-range / 4-byte runes
+	// JSON unicode-escape for NUL (6 ASCII chars in JSON payload, valid JSON);
+	// uses a regular string literal so the source file contains no raw NUL byte.
+	add("seed-escaped-nul", "", "{\"k\":\"a\\u0000b\"}")
+	add("seed-multikey", "", `{"b":1,"a":2,"c":"x"}`) // non-alphabetical multi-key (A-01 guard)
+	add("seed-nested", "00f067aa0ba902b7000000000000000a", `{"x":{"y":[1,2,3]},"z":true}`)
 
 	// Field-permutation seeds: distinct values across every identity field so
 	// the fuzzer starts from a corpus that would surface a field-swap bug
 	// (e.g. SubjectID/TenantID crossed) through AssertEntryRoundTrip.
 	f.Add(
 		"seed-perm-a", "user.login", "impersonator", "end-user", "sess-42", "tenant-alpha", "corr-xyz",
+		"4bf92f3577b34da6a3ce929d0e0e4736",
 		occNano, tsNano, []byte(`{"action":"login"}`),
 	)
 	f.Add(
-		"e", "t", "a", "s", "se", "te", "c",
+		"e", "t", "a", "s", "se", "te", "c", "",
 		occNano, tsNano, []byte(`{}`),
 	)
 }

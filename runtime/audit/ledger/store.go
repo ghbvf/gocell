@@ -40,6 +40,12 @@ type AuditFilters struct {
 	// caller's own actions.
 	SubjectID string
 
+	// TraceID filters by exact trace_id. Empty means no filter. This field
+	// allows correlating audit entries with distributed traces for operational
+	// investigation. trace_id is an observability field and is NOT part of the
+	// HMAC hash chain.
+	TraceID string
+
 	// From filters entries with Timestamp >= From. Zero means no lower bound.
 	From time.Time
 

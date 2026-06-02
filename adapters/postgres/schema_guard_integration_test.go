@@ -669,6 +669,44 @@ func TestVerifyExpectedShape_DetectsMissingUniqueIndex(t *testing.T) {
 		"details must contain dimension=index; got %v", ec.Details)
 }
 
+// TestVerifyExpectedShape_DetectsIndexColumnsMismatch verifies that rebuilding
+// an index with a wrong column order causes VerifyExpectedShape to return
+// ErrAdapterPGSchemaShape with dimension="index_columns". This guards
+// performance-critical indexes such as idx_audit_namespace_trace_id whose
+// leading column determines whether a filter query can use the index.
+func TestVerifyExpectedShape_DetectsIndexColumnsMismatch(t *testing.T) {
+	pool := emptyPool(t)
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_idxcols")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Positive baseline: the migrated schema passes column-order checks.
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"VerifyExpectedShape must pass on the migrated schema")
+
+	// Simulate column-order drift: drop and recreate idx_sessions_expires with
+	// the columns reversed (expires_at, subject_id instead of just expires_at).
+	// We add an extra column so the key-column set differs from the registry.
+	_, execErr := pool.DB().Exec(ctx, `DROP INDEX idx_sessions_expires`)
+	require.NoError(t, execErr, "DROP INDEX must succeed")
+	// Recreate with wrong column order: subject_id leading instead of expires_at.
+	_, execErr = pool.DB().Exec(ctx,
+		`CREATE INDEX idx_sessions_expires ON sessions (subject_id, expires_at)`)
+	require.NoError(t, execErr, "CREATE INDEX with wrong columns must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect index column mismatch")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "index_columns", extractDimensionDetail(ec),
+		"details must contain dimension=index_columns; got %v", ec.Details)
+}
+
 // TestVerifyExpectedShape_DetectsMissingTrigger verifies that dropping a
 // trigger causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="trigger".

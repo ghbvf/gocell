@@ -48,6 +48,11 @@ endpoints:
         required: false
         minLength: 0
         maxLength: 64
+      traceId:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 256
     successStatus: 200
     auth:
       responses:
