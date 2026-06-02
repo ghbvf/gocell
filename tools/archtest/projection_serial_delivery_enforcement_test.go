@@ -50,7 +50,7 @@
 //     permanent ceiling as SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL
 //     (#893). Hard-ification (a sealed framework-owned projection-transport token
 //     that AMQP cannot construct) requires reworking the WithSubscriber injection
-//     surface; tracked as a #1369 follow-up (see ADR §Amendment 2026-06-02).
+//     surface; tracked as gh #1475 (see ADR §Amendment 2026-06-02).
 //
 // # Blind spots
 //

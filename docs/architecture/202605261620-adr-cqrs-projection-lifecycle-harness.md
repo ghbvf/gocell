@@ -394,7 +394,7 @@ verified by the listed PR).
 | 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` lands in **PR-04c (#1368)** (a #1176 follow-up — see §Amendment 2026-05-31; until then projection cells run on the mem cursor/replay fakes, sufficient for the serial in-memory bus); PR-06 real-PG integration |
 | 2 | **crash recovery** (no replay window after restart) | checkpoint persisted in the apply tx; restart loads checkpoint, resumes at offset+1 | PR-01 crash-recovery unit test; PR-06 real-PG integration (kill → restart) |
 | 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. The HTTP trigger moved to **PR-04e (#1370)** (a #1176 follow-up — §Amendment 2026-05-31); the Phase()/readyz discharge mechanism landed in PR-03 as planned (the HTTP trigger is a convenience surface, not a threat-discharge mechanism). |
-| 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement deferred to PR-04d (#1369)** (a #1176 follow-up — §Amendment 2026-05-31). PR-04a wires only the serial in-memory bus (the production wiring path it enables); a concurrent transport carrying a projection must not ship until PR-04d lands |
+| 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement DISCHARGED by PR-04d (#1369)** — the `outbox.SerialInOrderGuarantor` capability marker + the fail-closed-by-absence guard `checkSubscriberGuaranteesSerialDelivery` in `runtime/bootstrap/phases_projection.go` (rejects wiring a projection onto any subscriber that does not guarantee serial in-order delivery), locked by archtest `PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01`. A concurrent transport (AMQP prefetch>1 / MQTT worker pool) now fails fast at bootstrap instead of silently dropping positions. See §Amendment 2026-06-02 |
 | 5 | **fail-closed** (checkpoint store failure) | `SaveOffset` failure rolls back the whole `CellTx` (apply not committed); Coordinator requeues; never advances offset past an un-applied event | PR-01 fail-closed unit test |
 | 6 | **GAP-8 boundary** (harness must not prescribe read-model schema) | CellTx-offset design touches only the framework offset table; apply body + read-model schema stay business-owned (§4) | This PR (§4 record) + PR-02 schema review |
 | 7 | **multi-pod concurrency (v1 boundary)** | v1 single-pod (Q5); `owner` column reserved, **write-guarded** (reads harmless/unused); multi-pod safety = upper-layer leader election; **2+ replicas without leader election is unsafe in v1** | PR-02 `owner`-reserved archtest (write-scoped, landed); `schema_guard.verifyDefaults` asserts the load-bearing `owner DEFAULT ''`; documented v1 limitation (Q5) |
@@ -413,6 +413,7 @@ package godoc (not duplicated here).
 | **PROJECTION-CHECKPOINT-TX-BOUND-01** | PR-01 stub → PR-02 green | **Medium** (`SaveOffset` impl must obtain tx via `persistence.TxFromContext`; raw `db.Exec` / `*sql.Tx` form fails). Rides the existing `PG-REPO-AMBIENT-TX-01` Hard funnel for the PG adapter. | typed-param / ambient-tx form |
 | **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | PR-02 | **Medium** (SQL-literal scan rejects `owner` in INSERT/UPDATE write paths; v1 scope — removed in the same PR that enables v1.1 claim). | input-struct field exclusion (SQL-write variant) |
 | **PROJECTION-CONSISTENCY-PARSE-TIME-01** | PR-05 | 下游 **Hard** (parser load path must call `jsonschema.Validate`; callsite identity locked) — upgrades #960 from Medium governance rule to Hard parse-time gate. | codegen/parse funnel + callsite identity |
+| **PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01** | PR-04d (#1369) green | **Medium** (single axis — runtime drain fail-fast + fail-closed-by-absence capability marker; injected-Subscriber dynamic property has no compile-time expression, same ceiling as #851 / #893). Sub-rules: marker freeze / exact implementer set `{InMemoryEventBus}` / single guard callsite. Hard path (sealed projection-transport token) = gh #1475. | runtime invariant guard + typed marker (fail-closed-by-absence) |
 
 Sealed-marker note: `CellCheckpointStore` (PR-00 `cell_marker.go`) is the
 sealed-marker Hard at the field/assignment layer (external code cannot express
@@ -506,15 +507,66 @@ that lands each moves from "PR-04" to a named sub-PR:
 - **Row 3** (rebuild read consistency / HTTP trigger) → PR-04e. The actual
   discharge (`Phase()` + readyz) already landed in PR-03; the HTTP trigger is a
   convenience surface, not a threat-discharge mechanism — moving it is inert.
-- **Row 4** (serial-delivery enforcement) → PR-04d. **Compensation, load-bearing:**
+- **Row 4** (serial-delivery enforcement) → PR-04d, **now DISCHARGED** (see
+  §Amendment 2026-06-02). Until #1369 landed, the compensation was load-bearing:
   PR-04a's `checkNoEventConsumersWhenSubscriberNil` + the drain require a
-  Subscriber; production wiring (corebundle) carries only the serial in-memory bus
-  today. A concurrent transport (AMQP prefetch>1) MUST NOT carry a projection
-  subscription until PR-04d (#1369)'s enforcement lands — restated here, not
-  silently deferred. PR-04c (#1368, corebundle wiring) must likewise not wire a
-  concurrent subscriber to a projection before #1369 lands; #1368 reviewers enforce this.
+  Subscriber, and production wiring (corebundle) carries only the serial in-memory
+  bus. #1369 replaces that "must not until it lands" convention with a hard
+  bootstrap guard: a concurrent transport (AMQP prefetch>1 / MQTT) wired onto a
+  projection now fails fast rather than relying on reviewers. PR-04c (#1368,
+  corebundle wiring) is therefore protected by the guard, not by review alone.
 
 §3 Q3 (single subscribe-CU → single projection; a slice may declare multiple
 projections) is unchanged: PR-04b derives one `RegisterProjection` per
 `projection:`-bearing CU; a slice that lists multiple such CUs produces multiple
 projections, each with its own checkpoint.
+
+## Amendment 2026-06-02 (PR-04d #1369 — serial-delivery enforcement landed)
+
+Row 4's compensation ("no concurrent transport may carry a projection until the
+enforcement lands") is replaced by a hard bootstrap guard.
+
+**Mechanism.**
+
+- `kernel/outbox.SerialInOrderGuarantor` — an optional Subscriber-implementer
+  extension contract (`GuaranteesSerialInOrderDelivery() bool`), mirroring the
+  existing `SubscriberIntakeStopper` pattern. A transport opts in to carrying a
+  projection by implementing it and returning true.
+- `runtime/eventbus.InMemoryEventBus` implements it (single consume goroutine per
+  subscription → FIFO in-order). The guarantee is scoped to a single subscriber on
+  a `(consumerGroup, topic)`; a projection's group is `"<cellID>-<projectionID>"`
+  with exactly one subscription registered by the drain, so the precondition
+  holds. AMQP/MQTT do **not** implement it.
+- `runtime/bootstrap/phases_projection.go::checkSubscriberGuaranteesSerialDelivery`
+  type-asserts the raw wired transport (`s.sub`, not the `contractTracingSubscriber`
+  decorator, which wraps rather than embeds and does not forward the marker)
+  against the marker. Invoked once from `drainCellProjections` when any projection
+  exists; **absence or false → fail-fast** (`ERR_CELL_INVALID_CONFIG`). This is
+  fail-closed-by-absence: a future transport that forgets the method is
+  auto-rejected for projections rather than silently unsafe.
+
+**AI-robust rating: Medium** (single axis — runtime invariant guard +
+fail-closed-by-absence positive-capability marker). The guarded property is the
+runtime concurrent-delivery behavior of an injected `outbox.Subscriber` (wired at
+the composition root); Go cannot express "this injected interface value
+guarantees serial delivery" at compile time, and the marker is self-attestation
+(the framework cannot compile-verify its truth). A runtime drain fail-fast +
+fail-closed-by-absence + archtest `PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01`
+(marker freeze / exact implementer set `{InMemoryEventBus}` / single guard
+callsite) is the strongest achievable form — the same permanent ceiling as
+`SPAN-SETATTR-HOLDER-SEAL` (#851) / `HEALTHZ-HOLDER-SEAL` (#893). The **Hard**
+path — a sealed framework-owned projection-transport token that AMQP physically
+cannot construct — requires reworking the `WithSubscriber` injection surface and
+has no concrete consumer in v1 (only the in-memory bus is wired); tracked as
+gh #1475.
+
+**Threat-matrix re-evaluation (逐行重评).**
+
+- **Row 4** (out-of-order / concurrent delivery): ✅ → **✅ (strengthened)**. The
+  discharge moves from a documented convention ("must not ship") to a machine
+  guard (bootstrap fail-fast). No regression.
+- **Rows 1, 2, 3, 5, 6, 7**: **unchanged**. #1369 adds only a transport-capability
+  gate at the projection drain; it touches no checkpoint / replay / rebuild /
+  fail-closed / GAP-8 / multi-pod mechanism. Row 7's multi-pod boundary remains a
+  documented v1 limitation (distinct from Row 4's intra-pod concurrency, which this
+  amendment closes).
