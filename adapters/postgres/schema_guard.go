@@ -717,7 +717,7 @@ var expectedChecks = []expectedCheck{
 // verifyColumns checks each entry in expectedColumns against pg_attribute.
 func verifyColumns(ctx context.Context, pool *Pool) error {
 	const q = `
-	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity
+	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity::text
 	  FROM pg_attribute a
 	  JOIN pg_class c ON c.oid = a.attrelid
 	  JOIN pg_namespace n ON n.oid = c.relnamespace
