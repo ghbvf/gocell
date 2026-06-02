@@ -128,7 +128,24 @@
 //   - RECONCILE-REQUEUE-ENQUEUE-CALLER-01 (PR-A5): every channel send in
 //     kernel/reconcile must be inside one of the three sanctioned functions
 //     (drainReadyItems / feedFromSource / enqueueDelayed).
+//   - RECONCILE-LEADER-INTERFACE-FROZEN-01 (PR-A6): the LeaderElector method set
+//     (AcquireLease / ReleaseLease / RenewLease) and the LeaseToken field set
+//     (incl. the monotonic Epoch uint64 fencing token) are reflect golden-locked.
+//   - RECONCILE-FENCED-WRITE-FUNNEL-01 (PR-A6): the epoch-bound FencedWriter is
+//     the reconciler's sole write surface — its fields + constructor are sealed
+//     (unexported) so a consumer cannot forge an arbitrary-epoch writer; the mint
+//     sites are pinned to loop.go / fenced.go.
+//   - RECONCILE-LEADER-IMPL-FUNNEL-01 (PR-A6): LeaderElector is implemented only
+//     in adapters/{redis,postgres} + the reconciletest fake (layering hygiene).
+//
+// Leader election (PR-A6) is whole-loop: when a LeaderElector is wired only the
+// lease holder dispatches Reconcile; a lost lease cancels the lease-scoped ctx to
+// interrupt the in-flight Reconcile. Leader election is NOT fencing — cross-replica
+// correctness comes from the monotonic LeaseToken.Epoch threaded into a FencedWriter
+// (write-path CAS) plus consumer idempotency, never the lease. A nil LeaderElector
+// is single-process mode (always leader, Epoch 0, no fencing).
 //
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
+// ref: kubernetes/client-go tools/leaderelection/leaderelection.go
 // ref: docs/architecture/202605291600-661-adr-kernel-reconcile-design.md
 package reconcile

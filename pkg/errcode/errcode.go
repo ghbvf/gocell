@@ -814,6 +814,34 @@ const (
 	// ErrWebhookConfigInvalid signals invalid webhook configuration (bad source
 	// ID / delivery ID / empty secret). Constructed with KindInvalid → HTTP 400.
 	ErrWebhookConfigInvalid Code = "ERR_WEBHOOK_CONFIG_INVALID"
+
+	// Reconcile leader-election / epoch-fencing codes (KERNEL-RECONCILE-01 PR-A6).
+	//
+	// ErrReconcileLeaseLost signals that a LeaderElector.RenewLease found the
+	// lease no longer owned by this holder (expired / taken over by a follower).
+	// The reconcile Loop cancels its lease-scoped ctx on this sentinel to
+	// interrupt the in-flight Reconcile. Constructed with KindConflict → HTTP 409
+	// (mirrors ErrDistlockLockLost / ErrSagaStaleLease). It is a control-plane
+	// signal that normally never surfaces at an HTTP boundary.
+	ErrReconcileLeaseLost Code = "ERR_RECONCILE_LEASE_LOST"
+	// ErrFencedWriteStale signals that a FencedRepository.ApplyFenced rejected a
+	// write because the presented epoch is older than the highest epoch the
+	// resource row has already seen (monotonic-epoch fencing CAS, Kleppmann DDIA
+	// §8.4 — NOT the outbox UUID identity-fencing). A zombie leader's late write
+	// must be structurally rejected, not silently applied. Constructed with
+	// KindConflict → HTTP 409 (mirrors ErrSagaStaleLease).
+	ErrFencedWriteStale Code = "ERR_FENCED_WRITE_STALE"
+	// ErrFencedWriterUnbound signals that a FencedWriter with no bound repository
+	// was written through (programmer error: the writer was zero-valued rather
+	// than minted by the Loop from a live lease). Constructed with KindInternal →
+	// HTTP 500 (server-side bug, not an external conflict).
+	ErrFencedWriterUnbound Code = "ERR_FENCED_WRITER_UNBOUND"
+	// ErrReconcileLeaseHeld signals that AcquireLease lost the race: another holder
+	// owns a live lease for this reconcilerID. It is the EXPECTED steady-state
+	// signal a follower sees on every poll, so the Loop logs it at Debug (not Warn).
+	// Constructed with KindConflict → HTTP 409 (control-plane signal; normally
+	// never surfaces at an HTTP boundary).
+	ErrReconcileLeaseHeld Code = "ERR_RECONCILE_LEASE_HELD"
 )
 
 // PublicError is the structured projection shared by HTTP responses, CLI text

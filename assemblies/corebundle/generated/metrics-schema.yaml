@@ -433,6 +433,53 @@ metrics:
         - "900"
         - "1800"
       file: kernel/projection/metrics.go
+    - name: reconcile_duration_seconds
+      fqName: gocell_reconcile_duration_seconds
+      namespace: gocell
+      type: histogram
+      help: Reconcile call wall-clock duration in seconds.
+      labels:
+        - reconciler
+      buckets:
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+        - "30"
+        - "60"
+      file: kernel/reconcile/metrics.go
+    - name: reconcile_in_flight
+      fqName: gocell_reconcile_in_flight
+      namespace: gocell
+      type: gauge
+      help: Reconciles currently executing.
+      labels:
+        - reconciler
+      file: kernel/reconcile/metrics.go
+    - name: reconcile_leader
+      fqName: gocell_reconcile_leader
+      namespace: gocell
+      type: gauge
+      help: 1 when this instance holds the reconcile lease, else 0.
+      labels:
+        - reconciler
+      file: kernel/reconcile/metrics.go
+    - name: reconcile_total
+      fqName: gocell_reconcile_total
+      namespace: gocell
+      type: counter
+      help: Total reconcile attempts by outcome.
+      labels:
+        - reconciler
+        - result
+      file: kernel/reconcile/metrics.go
     - name: saga_drive_total
       fqName: gocell_saga_drive_total
       namespace: gocell

@@ -474,6 +474,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
 	{Table: "projection_checkpoints", Column: "owner", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
+	// reconcile_leases (046_create_reconcile_leases.sql) — kernel/reconcile
+	// LeaderElector PG backend. epoch is the monotonic fencing token; expires_at is
+	// the row-TTL lease authority (PR-A6 review C2).
+	{Table: "reconcile_leases", Column: "reconciler_id", Type: "text", NotNull: true},
+	{Table: "reconcile_leases", Column: "holder_id", Type: "text", NotNull: true},
+	{Table: "reconcile_leases", Column: "epoch", Type: "bigint", NotNull: true},
+	{Table: "reconcile_leases", Column: "acquired_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "reconcile_leases", Column: "expires_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
@@ -502,6 +510,8 @@ var expectedPKs = []expectedPK{
 	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
 	// projection_checkpoints: composite PK (cell_id, projection_id) (045_create_projection_checkpoints.sql).
 	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
+	// reconcile_leases: PK on reconciler_id (046_create_reconcile_leases.sql).
+	{Table: "reconcile_leases", Columns: []string{"reconciler_id"}},
 }
 
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
