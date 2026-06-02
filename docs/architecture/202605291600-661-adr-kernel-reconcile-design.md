@@ -536,7 +536,7 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 | **T-PANIC** | 单实体 Reconcile panic 杀 worker goroutine → 整进程崩 / 其他实体停摆 | `recoverReconcile`（PR-A5，替换 A3 的 `safeReconcile`）recover → 转 transient error → 记 metric（resultTransient，无独立 panic label）→ 不影响其他实体；`TestLoop_PanicRecoveredAndOtherEntitiesUnaffected` + `TestRecovery_PanicConvertsToError` + `TestRecovery_PanicMetricRecorded` 守（PR-A5 #1166 落地，panic → transient 语义已兑现） | **Medium**（runtime recover guard + 测试；对标 controller-runtime `RecoverPanic`） |
 | **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | **leader election 非 fencing**（§4，client-go 明示不保证单 leader）——只 best-effort 收窄窗口。跨副本正确性靠 §4.3 `FencedRepository` + monotonic-epoch 写路径 CAS（结构拒 stale-epoch 写）+ §4.4 消费方幂等；同实例内同 EntityID 由 dirty/processing dedup（F5，PR-A5 已落地）串行：processing 标记下互斥（同时到达的 trigger 被 coalesced 到 dirty 等待一次 re-run，非多路并行），`TestLoop_SameEntityIDSerial` + `TestLoop_DirtyDedup_CoalescesDuplicates` 守。**T-DUAL 评级维持 ✅ 不退化**：F5 是对 A3 sync.Map skip-if-busy 的强化——旧方案丢弃 duplicate（level-triggered 安全，但错过了一次 re-run）；新方案将 duplicate coalesced 为一次 re-run，收敛更快，不引入新的 dual-execution 路径。 | 同实例串行 **Medium**（runtime guard + 测试，已兑现）；跨副本正确性 **设计**（A6：`FencedWriter` 上游 Hard + `RECONCILE-FENCED-WRITE-FUNNEL-01` 下游 Hard + `RunFencingConformance` real-failure-injection 后定级；leader election 永远只是 best-effort 收窄，不计入正确性保证） |
 | **T-LEADER** | leader 流转失败（双 leader / 长期空窗） | lease/renew 模型（§4.1–4.2）+ lost-lease ctx-cancel 中断（§4.2，收窄）；fail-closed（lease 故障 follower 不抢）；RTO ≤ LeaseDuration+1s（接管延迟，**非**双执行保证）。**双 leader 不靠 lease 排除**——靠 §4.3 epoch fencing CAS 让旧 leader 迟到写被结构拒绝 | **设计**（A6 落地 lease 模型 + epoch fencing + real-failure-injection conformance 后定级；明确 leader election ≠ fencing） |
-| **T-FENCE** | 旧 leader 迟到设备写绕过 fencing → 落地为重复命令（leader election 残余窗口的兜底失效） | §4.3 `FencedRepository`：`Loop` 只给 Reconciler epoch-bound `FencedWriter`，写路径 CAS 拒 `incoming_epoch < 已见最高`（**单调 epoch**，非 outbox 的 UUID identity-fencing）；绕过在 type system 不可表达（消费方无裸写面） | **设计**（A6：上游 Hard = `FencedWriter` 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + conformance 入列；leader election ≠ fencing 由本行结构兜底） |
+| **T-FENCE** | 旧 leader 迟到设备写绕过 fencing → 落地为重复命令（leader election 残余窗口的兜底失效） | §4.3 `FencedRepository`：`Loop` 只给 Reconciler epoch-bound `FencedWriter`，写路径 CAS 拒 `incoming_epoch < 已见最高`（**单调 epoch**，非 outbox 的 UUID identity-fencing）；绕过在 type system 不可表达（消费方无裸写面）。**⚠️ Redis-eviction residual（C6）**：Redis adapter 的 epoch **值** provenance 依赖 epoch key 持久性——live-holder 路径（acquire same-holder + renew）缺失即 fail-closed，但 free-holder 分支 eviction 后从 1 重建无法 fail-closed（first-acquire 与 post-eviction 不可区分）；缓解 = 30d TTL 刷新 + 非 `allkeys-*` eviction policy + 监控；**严格跨副本 fencing 选 PG adapter（持久 epoch SoR）**。写面 Hard 不退化（与 epoch 值 provenance 正交）。 | **设计**（A6：上游 Hard = `FencedWriter` 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + conformance 入列；leader election ≠ fencing 由本行结构兜底）；Redis epoch provenance **⚠️ residual（accepted，见 round-3 C6）** |
 | **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | 终态 Builder funnel：`Loop` 构造私有化 + `RECONCILE-BUILDER-FUNNEL-01`（PR-A7）；A3–A6 exported-`Loop` 窗口期由临时 Medium archtest `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 机器守（见下注，**非** code review 兜底） | **过渡**（A3–A6：Medium 上游 archtest allowlist + 下游 Hard callsite）→ **A7 闭环**（上游 Hard 构造私有化 + 下游 Hard callsite） |
 
 > A3 阶段 `Loop` 字段 exported（过渡，支持 struct 字面量 + kernel/command 迁移），故 T-BUILDER
@@ -643,6 +643,42 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 >   Loop.Leader/FencedRepo 加 Start 期 typed-nil fail-fast。
 > 受影响威胁格子均不退化：T-LEADER/T-DUAL/T-FENCE 的「已兑现」结论仍成立，只是**实现机制**
 > （PG row-TTL、redis hashtag、fencing 三向量评级）被更正为生产可用 + 诚实形态。
+
+> **PR-A6 round-3 review（C6 — Redis epoch-key fail-closed + eviction residual 诚实重评）**：
+> C1/F1 修了「renew 不刷 epoch-key TTL → 自然过期归零」，但**未**覆盖 epoch key 被
+> eviction / 运维误删 后的 live-holder 路径。两处 fail-OPEN 缺口在 round-3 闭合：
+> - **same-holder acquire 分支**（`reconcileAcquireScript`）：原 `if e == false then e = 0`
+>   把缺失 epoch 静默当 0 → 持有 epoch N 的 leader 重入后 token epoch 倒退至 0（zombie
+>   write 被错误 fence）。改为 `redis.error_reply` → `AcquireLease` 返回非 `ErrLeaseHeld`
+>   错误 → `leaderManage` fail-closed（不 dispatch）+ Warn 日志；stale holder key 不刷新，
+>   自然 lapse 后下次走 free-holder 路径干净重启。
+> - **renew 分支**（`reconcileRenewScript`，**长持有 leader 的主路径**）：原脚本对缺失 epoch
+>   key 只 `EXPIRE`（Redis no-op 返回 0）却仍 `return 1` 成功 → leader 带着「Redis 已无
+>   epoch key、本地 token 仍 epoch N」继续持有，换手时 free-branch 从 1 重建 → 新 leader
+>   epoch 1 < 旧僵尸 leader epoch N 的 **fencing 反转**静默落地。改为先 `GET KEYS[2]`，缺失
+>   即 `redis.error_reply` → `RenewLease` 返回非 `ErrReconcileLeaseLost` 错误 → `renewLoop`
+>   lease-ctx cancel 结束 term → 重新 acquire（同样 fail-closed）。
+>   守卫：单测 `TestReconcileElector_EpochKeyMissing_FailClosed`（mock，两路径）+ 真 Redis
+>   `TestIntegration_ReconcileElector_EpochKeyMissing_FailClosed`（Lua error_reply 实跑）+
+>   两处脚本 golden（`Test*ScriptContent`）。
+>
+> **威胁矩阵逐行重评（C6）——T-DUAL / T-FENCE / T-LEADER 的 Redis-eviction residual（accepted risk）**：
+> Redis 单调 epoch 的正确性依赖 **epoch key 在 Redis 的持久性**。round-3 把 live-holder
+> 路径（acquire same-holder + renew）的缺失检测做成 fail-closed，但 **free-holder 分支**
+> （`cur == false` → `INCR` 一个被 evict 成 nil 的 key → 从 1 重建）**无法**做成 fail-closed：
+> 「史上第一次 acquire」与「eviction 后接管」在 Redis 上不可区分（皆无 epoch key）。因此：
+> - **Redis adapter 的单调 fencing 是 eviction-best-effort**——全 key 丢失后只能从 1 重建，
+>   无法提供跨 eviction 的永久单调性。这是 **accepted residual risk**，不是 round-3 能修的 bug。
+> - **缓解**：① epoch key 在 acquire+renew 均刷 30d TTL（远超任何 lease）；② 部署 Redis 配
+>   `volatile-*` eviction policy 或排除 reconcile keyspace，避免 `allkeys-*` 误删；③ 监控
+>   epoch key 存在性 + `reconcile_leader` gauge 抖动告警。
+> - **强持久单调保证选 Postgres adapter**：`reconcile_leases` 行是持久 epoch SoR
+>   （`ON CONFLICT epoch+1`，release 只置 `expires_at` 不删行），无 eviction 面，是需要严格
+>   跨副本 fencing 时的权威实现。
+> - 评级影响：T-FENCE / T-LEADER 的 `FencedWriter` 上游/下游 Hard（写面封闭）**不退化**——
+>   该 Hard 约束的是「消费方无裸写面」，与 epoch **值的 provenance** 正交；Redis-eviction
+>   residual 只削弱 **Redis 来源** epoch 的单调 provenance（标 ⚠️ residual，缓解如上 + 迁
+>   PG），不影响 PG 来源 + 写面封闭结论。
 
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：

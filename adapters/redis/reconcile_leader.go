@@ -38,9 +38,28 @@ const reconcileEpochKeyTTL = 30 * 24 * time.Hour
 // (see reconcileRenewScript) so it survives Redis allkeys-* eviction AND never
 // expires under a long-held leader. Without a refreshed TTL the key can be evicted
 // or simply lapse mid-term, resetting the monotonic counter to 0 and breaking
-// fencing (PR-A6 review C1/F1). In the same-holder branch we also guard against a
-// nil GET (race where the epoch key was evicted between the holder check and the
-// GET) by treating false as 0.
+// fencing (PR-A6 review C1/F1).
+//
+// Same-holder fail-closed: a same-holder re-acquire MUST find the epoch key
+// present — ReleaseLease never deletes it and RenewLease keeps refreshing its TTL,
+// so the only way it is absent while this holder still owns the lease is a true
+// anomaly (Redis eviction or operational deletion). The branch therefore returns
+// a Lua error_reply rather than coercing a missing epoch to 0: silently rolling
+// the holder's monotonic Epoch backward to 0 is fail-OPEN (a zombie write fenced
+// at the lower epoch is mis-accepted/rejected and the holder believes it is still
+// a valid leader). The error surfaces as a non-ErrLeaseHeld acquire failure, which
+// leaderManage treats as fail-closed (no dispatch) + logs at Warn (operator-visible)
+// before backing off; the stale holder key is left untouched so it lapses and the
+// next acquire takes the free-holder path cleanly. (PR-A6 round-3 review.)
+//
+// Residual, by design — NOT closed here: the free-holder branch INCRs a missing
+// epoch key from nil to 1, so a takeover AFTER an eviction resets the monotonic
+// counter regardless. That branch CANNOT be made fail-closed in Redis: a genuine
+// first-ever acquire is indistinguishable from a post-eviction takeover (both see
+// no epoch key). Redis-backed monotonic-epoch fencing is therefore best-effort
+// under eviction; the durable monotonic guarantee lives in the Postgres adapter
+// (reconcile_leases row, persistent, never deleted on release). See ADR
+// 202605291600-661 §threat-matrix (T-DUAL/T-FENCE) Redis-eviction residual.
 //
 // Both keys share a Redis Cluster hash tag ({reconcilerID}) so they colocate on a
 // single slot — a multi-key Lua script touching two different slots is a CROSSSLOT
@@ -53,9 +72,9 @@ if cur == false then
     redis.call("EXPIRE", KEYS[2], ARGV[3])
     return {1, e}
 elseif cur == ARGV[1] then
-    redis.call("PEXPIRE", KEYS[1], ARGV[2])
     local e = redis.call("GET", KEYS[2])
-    if e == false then e = 0 end
+    if e == false then return redis.error_reply("reconcile epoch key missing on same-holder re-acquire") end
+    redis.call("PEXPIRE", KEYS[1], ARGV[2])
     redis.call("EXPIRE", KEYS[2], ARGV[3])
     return {1, tonumber(e)}
 else
@@ -68,10 +87,24 @@ end
 // review C1/F1), ownership-guarded. Returns 1 if still held, 0 if ownership lost.
 // Two keys, colocated via the shared {reconcilerID} hash tag.
 //
+// Renew is the DOMINANT path for a long-held leader (it renews far more often than
+// it re-acquires), so the epoch-key fail-closed guard must live here too — not only
+// in reconcileAcquireScript's same-holder branch. A still-owned holder whose epoch
+// key has vanished (eviction / operational deletion) is the same anomaly: the bare
+// EXPIRE KEYS[2] would no-op on a missing key (Redis returns 0) yet the script would
+// still return 1, so the leader keeps renewing while its monotonic token has silently
+// disappeared from Redis — and on the next handoff the free-holder branch rebuilds
+// the epoch from 1, inverting fencing against this leader's still-live token (epoch
+// N). The branch therefore returns a Lua error_reply when the epoch key is absent;
+// RenewLease surfaces it as a non-ErrReconcileLeaseLost renew error, renewLoop ends
+// the term (lease-ctx cancel) and leaderManage re-acquires — the stale holder key is
+// left to lapse so the next acquire takes the free-holder path cleanly.
+//
 //	KEYS[1] = holder key   KEYS[2] = epoch key
 //	ARGV[1] = holderID     ARGV[2] = lease TTL (ms)   ARGV[3] = epoch key TTL (s)
 const reconcileRenewScript = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
+    if redis.call("GET", KEYS[2]) == false then return redis.error_reply("reconcile epoch key missing on renew") end
     redis.call("PEXPIRE", KEYS[1], ARGV[2])
     redis.call("EXPIRE", KEYS[2], ARGV[3])
     return 1

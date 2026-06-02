@@ -2,7 +2,9 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,10 +57,14 @@ func (m *reconcileMockCmdable) Eval(_ context.Context, script string, keys []str
 // evalReconcileRenew mirrors reconcileRenewScript (ownership-guarded refresh of
 // both holder + epoch key TTL). Caller holds m.mu.
 func (m *reconcileMockCmdable) evalReconcileRenew(cmd *goredis.Cmd, keys []string, args []any) {
-	holderKey := keys[0]
+	holderKey, epochKey := keys[0], keys[1]
 	holderID := toString(args[0])
 	ttl := time.Duration(toInt64(args[1])) * time.Millisecond
 	if cur, live := m.liveValue(holderKey); live && cur == holderID {
+		if _, ok := m.store[epochKey]; !ok { // epoch key vanished mid-term → fail-closed
+			cmd.SetErr(errors.New("reconcile epoch key missing on renew"))
+			return
+		}
 		m.store[holderKey] = mockEntry{value: holderID, expiry: time.Now().Add(ttl)}
 		cmd.SetVal(int64(1))
 		return
@@ -78,6 +84,10 @@ func (m *reconcileMockCmdable) evalReconcileAcquire(cmd *goredis.Cmd, keys []str
 		m.store[holderKey] = mockEntry{value: holderID, expiry: time.Now().Add(ttl)}
 		cmd.SetVal([]any{int64(1), m.incrEpoch(epochKey)})
 	case cur == holderID: // idempotent same-holder re-acquire → keep epoch, refresh
+		if _, ok := m.store[epochKey]; !ok { // epoch key vanished while still holding → fail-closed
+			cmd.SetErr(errors.New("reconcile epoch key missing on same-holder re-acquire"))
+			return
+		}
 		m.store[holderKey] = mockEntry{value: holderID, expiry: time.Now().Add(ttl)}
 		cmd.SetVal([]any{int64(1), m.readEpoch(epochKey)})
 	default: // held by another holder
@@ -192,9 +202,9 @@ func TestReconcileElector_AcquireScriptContent(t *testing.T) {
 		"    redis.call(\"EXPIRE\", KEYS[2], ARGV[3])\n" +
 		"    return {1, e}\n" +
 		"elseif cur == ARGV[1] then\n" +
-		"    redis.call(\"PEXPIRE\", KEYS[1], ARGV[2])\n" +
 		"    local e = redis.call(\"GET\", KEYS[2])\n" +
-		"    if e == false then e = 0 end\n" +
+		"    if e == false then return redis.error_reply(\"reconcile epoch key missing on same-holder re-acquire\") end\n" +
+		"    redis.call(\"PEXPIRE\", KEYS[1], ARGV[2])\n" +
 		"    redis.call(\"EXPIRE\", KEYS[2], ARGV[3])\n" +
 		"    return {1, tonumber(e)}\n" +
 		"else\n" +
@@ -207,6 +217,7 @@ func TestReconcileElector_AcquireScriptContent(t *testing.T) {
 // BOTH the holder and epoch key TTL — the F1 fix the mock cannot otherwise catch).
 func TestReconcileElector_RenewScriptContent(t *testing.T) {
 	want := "\nif redis.call(\"GET\", KEYS[1]) == ARGV[1] then\n" +
+		"    if redis.call(\"GET\", KEYS[2]) == false then return redis.error_reply(\"reconcile epoch key missing on renew\") end\n" +
 		"    redis.call(\"PEXPIRE\", KEYS[1], ARGV[2])\n" +
 		"    redis.call(\"EXPIRE\", KEYS[2], ARGV[3])\n" +
 		"    return 1\n" +
@@ -214,4 +225,57 @@ func TestReconcileElector_RenewScriptContent(t *testing.T) {
 		"    return 0\n" +
 		"end\n"
 	assert.Equal(t, want, reconcileRenewScript, "reconcileRenewScript must not be modified without updating the golden")
+}
+
+// TestReconcileElector_EpochKeyMissing_FailClosed verifies that a live holder whose
+// epoch key has vanished (Redis eviction / operational deletion) gets a fail-closed
+// error on BOTH live-holder paths — same-holder re-acquire AND renew — never a
+// silently rolled-back epoch 0 (PR-A6 round-3 review). The free-holder
+// rebuild-from-1 residual is an inherent Redis limitation (a genuine first-ever
+// acquire is indistinguishable from a post-eviction takeover) documented in
+// reconcileAcquireScript's godoc; the durable monotonic SoR is the Postgres adapter.
+func TestReconcileElector_EpochKeyMissing_FailClosed(t *testing.T) {
+	ctx := context.Background()
+
+	// deleteEpochKeys drops every epoch key (suffix ":epoch") while leaving the
+	// holder key (":lease") live — i.e. the holder still owns the lease but its
+	// monotonic token has vanished from Redis.
+	deleteEpochKeys := func(m *reconcileMockCmdable) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for k := range m.store {
+			if strings.HasSuffix(k, ":epoch") {
+				delete(m.store, k)
+			}
+		}
+	}
+
+	t.Run("same_holder_reacquire", func(t *testing.T) {
+		mock := newReconcileMock()
+		e := mustElector(t, mock)
+		tok, err := e.AcquireLease(ctx, "rid")
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), tok.Epoch)
+
+		deleteEpochKeys(mock)
+
+		_, err = e.AcquireLease(ctx, "rid")
+		require.Error(t, err, "same-holder re-acquire with missing epoch key must fail-closed")
+		require.NotErrorIs(t, err, reconcile.ErrLeaseHeld,
+			"missing epoch is a fencing-integrity fault, not contention")
+	})
+
+	t.Run("renew", func(t *testing.T) {
+		mock := newReconcileMock()
+		e := mustElector(t, mock)
+		tok, err := e.AcquireLease(ctx, "rid")
+		require.NoError(t, err)
+
+		deleteEpochKeys(mock)
+
+		err = e.RenewLease(ctx, tok)
+		require.Error(t, err, "renew with missing epoch key must fail-closed")
+		require.NotErrorIs(t, err, reconcile.ErrReconcileLeaseLost,
+			"missing epoch is a fencing-integrity fault, not a normal handoff")
+	})
 }
