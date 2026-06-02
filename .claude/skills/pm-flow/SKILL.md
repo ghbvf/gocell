@@ -7,7 +7,7 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 
 # pm-flow — ship → codex → fix 双轮编排
 
-> 编排器：串起 `ship`（round-1 实施+内置 review+fix）→ **外部 codex 二轮 review**（你手动跑）→ `fix --from-pr`
+> 编排器：串起 `ship`（round-1 实施+内置 review+fix）→ **外部 codex 二轮 review**（你手动跑）→ `/fix <PR#>`
 > （round-2 续修）。label/评论原子操作的规范见 `pm-issue`（评论格式单源）；真源见 `.github/PROJECT.md`。
 > codex 是外部独立审查工具，**本技能无法直接调用**——round-1 完成后停下交接，你跑完 codex 再 resume。
 > `gh` 命令用 `dangerouslyDisableSandbox: true`。仓库 `ghbvf/gocell`。
@@ -59,36 +59,18 @@ gh pr edit <PR#> --add-label pr-status/needs-codex --remove-label pr-status/in-p
 
 > 不自动等待 / 不轮询；codex 是外部动作。
 
-## 阶段 4：resume — 读 codex 评论 + round-2（运行 fix）
+## 阶段 4：resume — round-2（运行 fix）
 
-```bash
-# 读 codex 二轮 review 评论（review 概要 + inline 行评论）
-gh pr view <PR#> --json reviews,comments
-gh api repos/ghbvf/gocell/pulls/<PR#>/comments --jq '.[] | {path,line,body}'
-```
+运行 `/fix <PR#>`。fix 自动：按 PR 号读 review 评论 → 提取 codex findings → 批量 triage（CONFIRMED
+IN/OUT/RELATED、RESOLVED、CANNOT_VERIFY，按 Cx 自动决策）→ 修 IN_SCOPE/RELATED → **round-2 收尾**
+（贴 `<!-- pm:round-2 -->` 评论 + 切 `pr-status/ready` 或 `pr-review/changes-requested`）。
 
-把 codex findings 交 `/fix --from-pr <PR#>`（fix 内部 triage：CONFIRMED IN/OUT/RELATED、RESOLVED、
-CANNOT_VERIFY，按 Cx 自动决策 + 修 IN_SCOPE/RELATED）。
+> 读评论 / triage / 评论 / 改 label 全由 fix 单源完成，pm-flow 不重复。codex 无新评论 / 全 approved →
+> fix 跳过修复直接收尾 ready。
 
-> codex 无新评论 / 全部 approved → 跳过 round-2 修复，直接阶段 5 收尾为 ready。
+## 阶段 5：最终摘要
 
-## 阶段 5：round-2 收尾（pr-status + 评论）
-
-```bash
-# 按 pm-issue §4 格式贴 round-2 评论（含 <!-- pm:round-2 --> 标记）
-gh pr comment <PR#> --body "$(cat <<'C'
-<!-- pm:round-2 -->
-## 🔁 Round-2（codex 二轮 review + fix）
-...codex findings triage + 修复结果...
-C
-)"
-
-# 全清 → ready；仍有遗留 → changes-requested
-gh pr edit <PR#> --add-label pr-status/ready --remove-label pr-status/needs-codex
-# 或：gh pr edit <PR#> --add-label pr-review/changes-requested
-```
-
-输出最终摘要：PR 链接 / 两轮 findings 计数 / 未处理项（需人工决策）表。
+输出：PR 链接 / 两轮 findings 计数 / 未处理项（需人工决策）表。
 
 ## 沟通规则
 

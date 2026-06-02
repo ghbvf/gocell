@@ -1,7 +1,7 @@
 ---
 name: fix
-description: "问题诊断与修复: 验证+根因+复杂度分级+修复方案+backlog登记。当用户说'这个问题存在吗''帮我分析这个bug''诊断一下这个模块''修复这个问题'时触发。支持单条问题和多方审查报告批量输入。"
-argument-hint: "<问题描述|文件:行号|review报告路径>"
+description: "问题诊断与修复: 验证+根因+复杂度分级+修复方案+backlog登记。当用户说'这个问题存在吗''帮我分析这个bug''诊断一下这个模块''修复这个问题'时触发。输入优先 PR 号（自动读 PR 评论），也支持 issue 号 / 文件:行号 / 自然语言；多 findings 自动批量。"
+argument-hint: "<#PR | #issue | 文件:行号 | 问题描述>"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
@@ -13,56 +13,37 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 ## 输入解析
 
-支持单条（自然语言 / `文件:行号` / `#NNN` 或裸数字 issue 号）或批量（`--from-pr <N>` 读 codex PR 二轮 review 评论；或 ship round-1 传入的 inline findings）。
+按优先级识别输入；提取出 ≥ 2 条 findings 即自动批量（无需 flag / 不特意交代）：
 
-> review 输入只此两路（**不向后兼容，无本地 review 文档 / `--from-review <stage>` 双路径**）：codex 把二轮
-> findings 写进 PR，fix 用 `gh` 读回；ship round-1 findings 由 ship 直接 inline 传入。
+1. **PR 号（优先）** — `#NNN` / 裸数字先按 PR 试：`gh pr view <N> --json reviews,comments` +
+   `gh api repos/ghbvf/gocell/pulls/<N>/comments --jq '.[]|{path,line,body}'` 读 review 概要 + inline 行评论，
+   提取所有 findings（file / line / 描述）。
+2. **issue 号** — 裸数字非 PR → `gh issue view <N>`（取 title / body / labels）当单条问题；404 报错停止；
+   缺 `backlog` label 警告后续作外部上下文。
+3. **文件:行号** — 直接定位代码。
+4. **自然语言 / 多条 findings 文本**（含 ship round-1 传入）— Grep/Glob 定位。
 
-解析规则：
-1. 如果包含 `文件路径:行号` → 直接定位到代码
-2. 如果包含 GitHub backlog issue 编号（如 `#720` 或裸数字 `720`）→ `gh issue view <num>` 解析条目（取 title / body / labels）
-   - issue 不存在（404）→ 报错 `指定 issue #<num> 不存在` 并停止
-   - issue 存在但缺 `backlog` label → 警告后继续，将其视为外部上下文（非 backlog 工作流）
-3. 如果是 `--from-pr <N>`（读 codex PR 二轮评论）或一次传入多条 inline findings → 进入**批量模式**
-4. 如果是自然语言 → 用 Grep/Glob 在代码库中定位相关代码
-### 批量模式（codex 二轮评论 / 多条 findings）
+## 多 findings 批量处理（≥ 2 条自动）
 
-当输入是 `--from-pr <N>`（codex 二轮）或多条 findings 时：
+1. **按 Cell 包聚类**（`cells/<cellid>/*`、`kernel/*`、`runtime/*`、`adapters/*`、`pkg/*` 各为一组）。
+2. **决定并发度**（subagent 上限 1-3）：`≤3` → 0（主 agent 直接处理）；`4-9` → 2；`≥10` → 3。
+3. **Triage 并行**（`Explore`）：聚类组分发，每组跑阶段 1.1→1.4 + 2.4 返回结构化表；**同 Cell 包必分同一 agent**
+   （防重复 Read + 写冲突）；prompt 自包含（finding 列表、当前分支 diff 摘要、CLAUDE.md 关键约束）。
+4. 主 agent 汇总 → 状态/归属表：
 
-1. **读 codex PR 评论**（仅 `--from-pr <N>`）：
-   ```bash
-   gh pr view <N> --json reviews,comments
-   gh api repos/ghbvf/gocell/pulls/<N>/comments --jq '.[] | {path,line,body}'
-   ```
-   解析 review 概要 + inline 行评论里的所有 findings（按 file/line/描述提取）。ship round-1 inline findings 直接进步骤 2。
-2. **按 Cell 包聚类**（`cells/<cellid>/*`、`kernel/*`、`runtime/*`、`adapters/*`、`pkg/*` 各为一组）
-3. **决定并发度**（subagent 数量上限 1-3）：
+   | 状态 | 归属 | 处理 |
+   |------|------|------|
+   | CONFIRMED | IN_SCOPE | 当前分支修 |
+   | CONFIRMED | RELATED | 搭车修，标注"搭车" |
+   | CONFIRMED | OUT_OF_SCOPE | §沟通规则闸门输出 issue 建议命令 |
+   | RESOLVED | — | 已修，跳过 |
+   | CANNOT_VERIFY | — | 待确认，跳过 |
 
-   | finding 数 | 并发 sub-agent 数 |
-   |-----------|------------------|
-   | ≤ 3 | 0（主 agent 直接处理） |
-   | 4-9 | 2 |
-   | ≥ 10 | 3 |
-
-4. **Triage 并行**（subagent_type: `Explore`）：将聚类后的组分发给 sub-agent，每组完整执行阶段 1.1→1.4 + 2.4，返回结构化表格。**同 Cell 包必须分给同一 agent**（避免重复 Read 同文件 + 防 fix 阶段写冲突）。Sub-agent prompt 必须自包含（finding 列表、当前分支 diff 摘要、CLAUDE.md 关键约束）。
-5. 主 agent 汇总各 sub-agent 结果，输出状态/归属表：
-
-   | 状态 | 归属 | 处理方式 |
-   |------|------|---------|
-   | CONFIRMED | IN_SCOPE | 在当前分支修 |
-   | CONFIRMED | RELATED | 建议搭车修，标注"搭车" |
-   | CONFIRMED | OUT_OF_SCOPE | 按 §沟通规则闸门输出 issue 建议命令 |
-   | RESOLVED | — | 标注已修，跳过 |
-   | CANNOT_VERIFY | — | 标注待确认，跳过 |
-
-6. **只修 IN_SCOPE + RELATED 条目**，按分析结果决策：
-   - IN_SCOPE + Cx1 + 满足自动执行条件 → 直接修
-   - IN_SCOPE + Cx2 → 执行推荐方案（最小或彻底，由时机判断决定）
-   - IN_SCOPE + Cx3/Cx4 → 只输出方案，标注"需人工决策"
-   - RELATED + Cx1/Cx2 → 搭车修，标注"搭车"
-   - OUT_OF_SCOPE → 不修；按 §沟通规则闸门输出建议命令
-7. **修复并行**（subagent_type: `developer`）：按相同的 Cell 包聚类分发，并发数同步骤 3。每个 sub-agent 串行处理自己组内的 finding（同包内串行避免写冲突），跑阶段 4.4 的 Edit-Test Loop。Cx1 + Cx2 都并行；Cx3/Cx4 只输出方案不派发。
-8. 主 agent 汇总各 sub-agent 修复结果，跑阶段 4.5 最终测试 + 4.8 git 收尾 + issue 闭合/创建。
+5. **只修 IN_SCOPE + RELATED**，决策见阶段 3.4：Cx1 自动 / Cx2 推荐方案 / Cx3·Cx4 只出方案标"需人工决策" /
+   RELATED 搭车 / OUT_OF_SCOPE 按 §沟通规则闸门。
+6. **修复并行**（`developer`）：同聚类分发，并发数同步骤 2；sub-agent 串行处理组内 finding（防写冲突），跑阶段
+   4.4 Edit-Test Loop。Cx1+Cx2 并行，Cx3/Cx4 不派发。
+7. 主 agent 汇总，跑阶段 4.5 最终测试 + 4.8 git 收尾 + issue 闭合/创建。
 
 ---
 
@@ -180,7 +161,7 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 - **不向后兼容**：直接改签名/删字段/换实现，不留 deprecation 别名、shim、双路径。自检"是否留了别名、旧字段、双路径？"
 - **优雅简洁**：最少代码、最少抽象、最少新文件，不预设未来需求。自检"能否用更少代码、抽象、新文件达成？"
 
-不通过 → 修订；必须保留的违反项 → 显式列入"遗留 / 取舍说明"，不得默默放行。默认走彻底方案；Cx2 最小修复仅在 3.2 明确"不能现在做"时启用，必须给升级窗口 + 按 §沟通规则闸门输出 issue 建议命令。批量模式"搭车修"同样适用。
+不通过 → 修订；必须保留的违反项 → 显式列入"遗留 / 取舍说明"，不得默默放行。默认走彻底方案；Cx2 最小修复仅在 3.2 明确"不能现在做"时启用，必须给升级窗口 + 按 §沟通规则闸门输出 issue 建议命令。批量处理"搭车修"同样适用。
 
 ### 3.0 对标参考查询（Cx2+ 必须执行）
 
@@ -272,7 +253,7 @@ scope 按层：kernel/runtime/cells/pkg。安全约束：只 add 修复文件（
 
 ### 4.4 执行代码修改（逐编辑测试循环）
 
-> **批量模式并行**：4+ 条 finding 时按批量模式步骤 7 派发 developer sub-agent，下面循环在每个 sub-agent 内对其分组的 finding 串行执行；单条 / ≤3 条由主 agent 直接执行。
+> **批量并行**：4+ 条 finding 时按批量处理步骤 6 派发 developer sub-agent，下面循环在每个 sub-agent 内对其分组的 finding 串行执行；单条 / ≤3 条由主 agent 直接执行。
 
 对每个任务，执行 Edit-Test Loop + 状态更新：
 
@@ -341,7 +322,7 @@ go test ./kernel/...                            # 改了 kernel 时
 
 完成后 **TaskUpdate → completed**（"issue 闭合/创建" 任务）。
 
-**步骤 3: round-2 收尾（仅 `--from-pr <N>` codex 二轮路径）**
+**步骤 3: round-2 收尾（仅输入为 PR 号的 codex 二轮路径）**
 
 按 `pm-issue` §4 评论格式收尾该 PR：
 
@@ -352,7 +333,7 @@ gh pr edit <N> --add-label pr-status/ready --remove-label pr-status/needs-codex
 # 或：gh pr edit <N> --add-label pr-review/changes-requested
 ```
 
-> 非 `--from-pr` 的单条 / issue / 自然语言修复**不涉及** PR 状态 label 与 round-2 评论。
+> 非 PR-号输入的单条 / issue / 自然语言修复**不涉及** PR 状态 label 与 round-2 评论。
 
 ---
 
