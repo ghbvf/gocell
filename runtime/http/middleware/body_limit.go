@@ -57,7 +57,7 @@ func recordBodyLimitRejection(collector metrics.Collector, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	cellID := RuntimeCellIDSentinel
+	cellID := metrics.RuntimeCellSentinel
 	if v, ok := ctxkeys.CellIDFrom(ctx); ok && v != "" {
 		cellID = v
 	}
