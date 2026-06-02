@@ -50,8 +50,9 @@ type queryInfo struct {
 //
 // Each param value must be 1–256 bytes.
 //
-// Auth is listener-level (InternalListener service-token); this handler does
-// not perform authentication.
+// Auth is enforced ahead of this handler: PrimaryListener JWT (listener level)
+// plus an admin-role Policy (auth.AnyRole(auth.RoleAdmin), see routes.go). This
+// handler performs no authentication or authorization itself.
 func (s *Service) HTTPHandler() http.Handler {
 	return http.HandlerFunc(s.serveHTTP)
 }

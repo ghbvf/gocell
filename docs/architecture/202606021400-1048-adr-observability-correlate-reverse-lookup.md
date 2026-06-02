@@ -22,6 +22,21 @@ sealed construction（`OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`）。audit ledger �
 自动注入 + 双模 `/correlate` 反查 API + cell→owner 拓扑派生。**OTel metric exemplar 自动注入延后**
 （独立 OTel-SDK 写侧机制，反查 API 不依赖；见 D6）。
 
+## Amendment 2026-06-03 — `/correlate` 改挂 PrimaryListener + admin 角色（取代 D4 的 InternalListener 姿态）
+
+**起因**：D4 原决策把 `/correlate` 挂在 `/internal/v1/audit/correlate`（InternalListener，framework route，无 `Clients`）。但 `/internal/v1/*` 是 **cell→cell 控制面**命名空间，`kernel/contractspec/spec.go::validateHTTP` 在 `auth.Mount` 时**强制**该前缀路径声明非空 `Clients` caller-cell allowlist。framework route 经 `NewFrameworkHTTP` 构造、不能表达 `Clients`，于是 **corebundle 启动即 fail-closed 崩溃**（e2e `container exited (1)`：`internal path requires non-empty Clients`）。该崩溃此前无单测/集成测试覆盖——只有 e2e full-boot 触发（测试盲区，本次补 `runtime/observability/correlate/routes_test.go` mount+FinalizeAuth 回归）。
+
+**决策**：`/correlate` 不是 cell→cell 控制面流量，而是 **ops/admin 流量**。框架对 admin/特权端点的既有范式是「合适 listener + 授权 Policy」（如 auditquery `/api/v1/audit/entries` = PrimaryListener + `auth.AnyRole(RoleAdmin)`），对齐 Kubernetes RBAC / Vault ACL。故：
+
+- **路径**：`/internal/v1/audit/correlate` → **`/api/v1/observability/correlate`**（framework 区，与 `/api/v1/devtools/` 平行；**不**入 auditcore 拥有的 `/api/v1/audit/` 前缀，避免跨 owner 命名空间冲突）。
+- **Listener**：InternalListener → **PrimaryListener**（JWT）。
+- **授权**：无 caller-cell allowlist（service-token 任意放行）→ **`auth.Route.Policy = auth.AnyRole(auth.RoleAdmin)`**。这把 `actorId` 暴露从「任意合法 service-token」收紧为「仅 admin 角色」——**净改善**，且与更敏感的 auditquery 同款门。
+- 端点仍是 framework route（`runtime/observability/correlate`，metric `cell=_runtime`），双模 + topology + minimal-PII 字段集 + F1 presence-XOR（`q.Has`）全部不变。
+
+下方 **D3 `actorId` 缓解**、**D4 全文**、**AI-robust 表末行**、**Threat model 越权/PII 两行**已据此就地改写（原 InternalListener/service-token 表述不保留，避免两套真值源）。issue #1048。
+
+---
+
 ## Decisions
 
 ### D1 — Correlation envelope = 从 W0 派生的 sealed read-model（不新增 wire 类型）
@@ -59,9 +74,9 @@ audit entry 不记录 source cell（且补 source cell 需动冻结 wire envelop
   - `eventId`：outbox 事件 UUID，**非 PII**，明确添回——用于 forward-correlation（从 audit entry
     回查 outbox relay 日志 / event payload 调试）。
   - `actorId`：触发主体 ID，是 trace 关联所需的**最小身份**，**刻意保留**。`actorId` 可能
-    与终端用户身份重合（业务 actor 即 user UUID），缓解措施：InternalListener loopback 隔离
-    + service-token（HMAC + nonce）；deeper/target identity（subjectId/tenantId/sessionId）
-    仅通过 JWT-authed auditquery 获取。
+    与终端用户身份重合（业务 actor 即 user UUID），缓解措施（见 Amendment 2026-06-03）：
+    **admin 角色授权门**（`auth.AnyRole(RoleAdmin)`，非 admin → 403）；deeper/target identity
+    （subjectId/tenantId/sessionId）仅通过同 admin 门的 auditquery 获取。
   - **刻意 EXCLUDE**：`subjectId / tenantId / sessionId / payload / hash / prevHash`——
     minimal-PII fail-closed 设计，该端点无 cell 调用方。
   - **单页 point-lookup**：结果上限 `traceQueryLimit=500`，**不支持游标分页**；响应带
@@ -80,31 +95,32 @@ audit entry 不记录 source cell（且补 source cell 需动冻结 wire envelop
 selector 是**派生字符串指针**（`metric: {cell="X"}`、alert 名提示），**非实时数据**——GoCell 不内嵌
 TSDB，反查 API 不查 Prometheus。
 
-### D4 — ops-plane runtime framework route（**非** cell contract）
+### D4 — ops-plane runtime framework route（**非** cell contract）— *已据 Amendment 2026-06-03 改写*
 
-`/correlate` 是 oncall/工具面端点，**无 cell 调用方**。诚实满足 FMT-31（`/internal/v1/*` contract 须声明
-非空 `endpoints.clients`）的唯一路径 = **不建 contract.yaml**。
+`/correlate` 是 oncall/工具面端点，**无 cell 调用方**，是 ops/admin 流量而非 cell→cell 控制面流量。
 
 - **cell-owned 路径架构不可能**：`CELLS-NO-CONTRACTSPEC-IMPORT-01` archtest 显式封禁 cells/ 调
-  `contractspec.NewFrameworkHTTP`（含专门 `FunnelBlocked` 测试）。∴ 复用 `/healthz`·`/metrics` 的
-  runtime framework-route 机制：`runtime/observability/correlate` 提供 service + handler +
-  `CorrelateRouteGroups`，bootstrap `WithCorrelateRoutes` 在 phase5 挂载于 InternalListener。
-  物理 owner = 框架（metric `cell=_runtime`，与 /healthz·/metrics 一致）。decision「auditcore 宿主」落为
+  `contractspec.NewFrameworkHTTP`（含专门 `FunnelBlocked` 测试）。∴ 复用 `/healthz`·`/metrics`·
+  `/api/v1/devtools/catalog` 的 runtime framework-route 机制：`runtime/observability/correlate` 提供
+  service + handler + `CorrelateRouteGroups`，bootstrap `WithCorrelateRoutes` 在 phase5 挂载于
+  **PrimaryListener**。物理 owner = 框架（metric `cell=_runtime`）。decision「auditcore 宿主」落为
   「用 auditcore 的 ledger QueryStore 供能」（经 `ModuleExports.AuditQueryStore` 同实例导出，无二次构造）。
-- **认证姿态**：`Public:false` → InternalListener service-token；contract 无 `Clients` ⇒ `auth.Mount`
-  不注入 `RequireCallerCell` ⇒ **任意合法 service-token 放行（无 caller-cell allowlist）**。这是**刻意的
-  ops 姿态**：网络隔离边界 = InternalListener loopback（`127.0.0.1:9090`）+ service-token（HMAC + nonce
-  防重放）。FinalizeAuth 的 internal-path↔InternalListener 亲和性校验通过（已验证）。
+- **认证/授权姿态**：PrimaryListener JWT（`Public:false`）+ **`auth.Route.Policy = auth.AnyRole(auth.RoleAdmin)`**
+  —— 仅持 admin 角色的 JWT 放行，非 admin → 403。这与 auditquery（`/api/v1/audit/entries`，同样在
+  PrimaryListener 读 audit 数据）同款 RBAC 门，对齐 Kubernetes RBAC / Vault ACL 对特权端点的范式。
+  **为何不挂 `/internal/v1/*`**：该前缀是 cell→cell 控制面，`validateHTTP` 在 `auth.Mount` 强制非空
+  `Clients` caller-cell allowlist；framework route 经 `NewFrameworkHTTP` 不能表达 `Clients`，挂上去启动即
+  fail-closed 崩溃（见 Amendment 2026-06-03）。ops 端点无 caller cell，不属于该模型。
 - wire-out minimal-PII：`?traceId=` 响应字段集为
   `id / eventId / eventType / actorId / occurredAt / timestamp / correlationId`（含 `hasMore` / `returned`
   顶层元数据）；`subjectId / tenantId / sessionId / payload / hash / prevHash` **刻意排除**
-  （fail-closed，无 cell 调用方端点）。`eventId` 是非 PII UUID；`actorId` 是 trace 关联最小身份，
-  刻意保留（详见 D3 `actorId` 决策说明）。`?cell=` 响应仅含 cell owner metadata，不含 audit 内容。
-  slog 出口经全局 sink redaction。
-- **路径与参数命名约定**：端点物理路径为 `/internal/v1/audit/correlate`（resource-grouped，
-  遵循 API versioning 规范），而非 issue #1048 原文的 `/internal/v1/correlate`——`audit` 子路径
-  明确了资源归属。查询参数为 `traceId`（camelCase，遵循 CLAUDE.md Query-param 约定），
-  而非 `trace_id`（DB snake_case 约定仅适用于数据库字段）。
+  （fail-closed）。`eventId` 是非 PII UUID；`actorId` 是 trace 关联最小身份，
+  刻意保留（详见 D3 `actorId` 决策说明，现由 admin 角色门缓解）。`?cell=` 响应仅含 cell owner metadata，
+  不含 audit 内容。slog 出口经全局 sink redaction。
+- **路径与参数命名约定**：端点物理路径为 **`/api/v1/observability/correlate`**（framework 区，与
+  `/api/v1/devtools/` 平行；**不**入 auditcore 拥有的 `/api/v1/audit/` 前缀，避免跨 owner 命名空间冲突）。
+  查询参数为 `traceId`（camelCase，遵循 CLAUDE.md Query-param 约定），而非 `trace_id`（DB snake_case
+  约定仅适用于数据库字段）。
 
 ### D5 — cell→owner 拓扑 codegen 单源派生
 
@@ -136,7 +152,7 @@ issue 范围项 2 含「metric exemplar 自动注入」。本 PR **不实现**�
 | trace_id 进 audit 唯一 injection 写路径（下游） | **Medium** | `AUDIT-TRACE-ID-WRITE-CALLER-01`（caller-allowlist，type-aware）；上游单源继承自 sealed `outbox.Entry` + sealed `Correlation`，无独立上游 funnel |
 | cell-owner 拓扑单源 | **Hard**（既有 codegen golden） | `gocell verify codegen-assembly` 字节锁 `modules_gen.go` |
 | cells/ 禁构造 framework route | **Hard**（既有，type/import） | `CELLS-NO-CONTRACTSPEC-IMPORT-01` |
-| ops-route 无 caller-cell 姿态 | 非新 enforcement 机制（auth 姿态） | 不新增 archtest；本 ADR 记录刻意设计 + 网络隔离边界 |
+| ops-route admin 角色授权姿态 | 非新 enforcement 机制（复用既有 auth Policy） | 不新增 archtest；`auth.AnyRole(RoleAdmin)` Policy（与 auditquery 同款）；mount 回归测试 `routes_test.go`（PrimaryListener mount + FinalizeAuth）守「不回退到 internal 路径」 |
 
 ## Threat model（§威胁矩阵）
 
@@ -144,8 +160,8 @@ issue 范围项 2 含「metric exemplar 自动注入」。本 PR **不实现**�
 |------|------|
 | 业务代码伪造 audit trace_id | appender 唯一 injection 站点（`AUDIT-TRACE-ID-WRITE-CALLER-01`）；且即便伪造，trace_id 非链入 HMAC，不影响被审计事件 tamper-evidence |
 | 伪造 Correlation 视图绕过 W0 | sealed construction：包外不可构造/fabricate |
-| `/correlate` 越权访问（无 caller-cell gate） | InternalListener loopback 隔离 + service-token（HMAC + nonce 防重放）；端点只读，`?traceId=` 仅返 `id/eventId/eventType/actorId/occurredAt/timestamp/correlationId`，`?cell=` 仅返 owner metadata；ops 面非业务面，无 cell 调用方故无 allowlist 可言 |
-| 反查响应泄漏 PII | `?traceId=` 响应刻意排除 `subjectId / tenantId / sessionId / payload / hash / prevHash`（minimal-PII fail-closed）；`eventId` 是非 PII UUID（outbox 事件 ID），明确保留用于 forward-correlation；`actorId` 是 trace 关联最小身份，**刻意保留**——它可能与终端用户身份重合，缓解措施：InternalListener loopback + service-token 边界（非公网），deeper/target identity 走 JWT-authed auditquery；slog 出口全局 sink redaction |
+| `/correlate` 越权访问 | **admin 角色授权门**（`auth.AnyRole(RoleAdmin)` Policy；非 admin → 403）——与更敏感的 auditquery 同款 RBAC 门（见 Amendment 2026-06-03）；端点只读，`?traceId=` 仅返 `id/eventId/eventType/actorId/occurredAt/timestamp/correlationId`，`?cell=` 仅返 owner metadata。注：此前的「InternalListener loopback + service-token、无 caller-cell gate」姿态已废弃——它在 `/internal/v1/*` 前缀下启动即崩溃，且「任意 service-token 放行」弱于 admin 角色门 |
+| 反查响应泄漏 PII | `?traceId=` 响应刻意排除 `subjectId / tenantId / sessionId / payload / hash / prevHash`（minimal-PII fail-closed）；`eventId` 是非 PII UUID（outbox 事件 ID），明确保留用于 forward-correlation；`actorId` 是 trace 关联最小身份，**刻意保留**——它可能与终端用户身份重合，缓解措施：**admin 角色授权门**，deeper/target identity 走同 admin 门的 auditquery；slog 出口全局 sink redaction |
 | 截断响应（hasMore=true）误导 oncall 以为已完整查看 | 响应体明确携带 `hasMore` flag + `returned` 计数（K8s list-completeness 模式），指引使用 auditquery 完整分页；ops 文档记录 500 上限与缩小时间窗口建议 |
 | 拓扑漂移（owner 错配） | 单源 codegen + golden byte-lock；漂移 = CI 红 |
 

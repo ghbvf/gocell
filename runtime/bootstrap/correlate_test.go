@@ -41,8 +41,21 @@ func TestWithCorrelateRoutes_SetsSvc(t *testing.T) {
 	assert.Same(t, svc, b.correlateSvc, "non-nil svc must be stored on Bootstrap")
 }
 
+// countListener returns how many groups target the given listener.
+func countListener(groups []cell.RouteGroup, ref cell.ListenerRef) int {
+	n := 0
+	for _, rg := range groups {
+		if rg.Listener == ref {
+			n++
+		}
+	}
+	return n
+}
+
 // TestPhase5CollectRouteGroups_AppendsCorrelate verifies that when correlateSvc is
-// non-nil, phase5CollectRouteGroups appends one RouteGroup targeting InternalListener.
+// non-nil, phase5CollectRouteGroups appends exactly one RouteGroup, and that the
+// added group targets PrimaryListener (the correlate endpoint is admin-role-gated
+// on /api/v1/observability/correlate, issue #1048; it is NOT on InternalListener).
 func TestPhase5CollectRouteGroups_AppendsCorrelate(t *testing.T) {
 	t.Parallel()
 	b := New(clock.Real())
@@ -51,6 +64,7 @@ func TestPhase5CollectRouteGroups_AppendsCorrelate(t *testing.T) {
 	// Baseline: no correlate svc — count the route groups without it.
 	withoutCorrelate := b.phase5CollectRouteGroups(s)
 	baselineCount := len(withoutCorrelate)
+	baselinePrimary := countListener(withoutCorrelate, cell.PrimaryListener)
 
 	// Install correlate svc.
 	svc := bootstrapCorrelateService(t)
@@ -61,30 +75,25 @@ func TestPhase5CollectRouteGroups_AppendsCorrelate(t *testing.T) {
 	assert.Len(t, withCorrelate, baselineCount+1,
 		"installing correlate svc must append exactly one route group")
 
-	// Verify the new group targets InternalListener.
-	var found bool
-	for _, rg := range withCorrelate {
-		if rg.Listener == cell.InternalListener {
-			found = true
-		}
-	}
-	require.True(t, found, "correlate RouteGroup must target InternalListener")
+	// The added group must target PrimaryListener.
+	assert.Equal(t, baselinePrimary+1, countListener(withCorrelate, cell.PrimaryListener),
+		"correlate RouteGroup must target PrimaryListener")
 }
 
-// TestPhase5CollectRouteGroups_NoCorrelate verifies that the baseline state
-// (no correlateSvc) produces no InternalListener groups.
-func TestPhase5CollectRouteGroups_NoCorrelate(t *testing.T) {
+// TestPhase5CollectRouteGroups_CorrelateNotInternal is a regression guard for
+// issue #1048: the correlate endpoint moved off /internal/v1/* (which requires a
+// cell-caller Clients allowlist and crashed startup) onto PrimaryListener behind
+// an admin-role Policy. It must never target InternalListener again.
+func TestPhase5CollectRouteGroups_CorrelateNotInternal(t *testing.T) {
 	t.Parallel()
 	b := New(clock.Real())
-	// b.correlateSvc is nil by default.
+	b.correlateSvc = bootstrapCorrelateService(t)
 	s := buildPhase5State(t)
 
 	groups := b.phase5CollectRouteGroups(s)
 
-	// In the baseline state (no cells declare internal routes, no correlateSvc),
-	// no InternalListener groups should be present.
 	for _, rg := range groups {
 		assert.NotEqual(t, cell.InternalListener, rg.Listener,
-			"no InternalListener groups expected in baseline without correlate svc")
+			"correlate must not target InternalListener (would require a Clients allowlist; #1048)")
 	}
 }

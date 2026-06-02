@@ -285,7 +285,8 @@ func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 }
 
 // WithCorrelateRoutes enables the ops/tooling reverse-lookup endpoint
-// GET /internal/v1/audit/correlate on InternalListener.
+// GET /api/v1/observability/correlate on PrimaryListener (JWT + admin-role
+// Policy; see runtime/observability/correlate/routes.go).
 //
 // A nil svc is a deliberate no-op: the correlate endpoint stays absent and
 // bootstrap proceeds normally. This mirrors WithDevtoolsCatalog — an optional

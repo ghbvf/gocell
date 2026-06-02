@@ -1,6 +1,6 @@
 # Oncall 反查链路 (`/correlate`)
 
-> 端点由 `runtime/observability/correlate` 注册于 InternalListener，metric `cell=_runtime`（与 `/healthz`/`/metrics` 一致）。
+> 端点由 `runtime/observability/correlate` 注册于 PrimaryListener（framework route，metric `cell=_runtime`，与 `/healthz`/`/metrics` 一致），路径在 framework 区 `/api/v1/observability/`（与 `/api/v1/devtools/` 平行），授权为 admin 角色 Policy（与 auditquery 同款）。
 > 设计决策见 ADR `docs/architecture/202606021400-1048-adr-observability-correlate-reverse-lookup.md`。
 
 ---
@@ -9,10 +9,10 @@
 
 | 属性 | 值 |
 |------|---|
-| URL | `GET /internal/v1/audit/correlate` |
-| Listener | InternalListener（默认 `127.0.0.1:9090`，loopback only） |
-| 认证 | service-token（HMAC + nonce 防重放，`Authorization: Bearer <token>`） |
-| 授权 | 无 caller-cell allowlist——任意合法 service-token 均可调用（ops 面设计，见 ADR D4） |
+| URL | `GET /api/v1/observability/correlate` |
+| Listener | PrimaryListener（默认 `:8080`，公开 API 面） |
+| 认证 | JWT（`Authorization: Bearer <jwt>`，与所有 `/api/v1/*` 一致） |
+| 授权 | admin 角色（`auth.AnyRole(auth.RoleAdmin)` Policy）——非 admin → 403，与 auditquery 同款 RBAC 门 |
 | 模式 | `?traceId=<id>` XOR `?cell=<id>`，二选一；同时传或均不传 → 400 |
 
 ---
@@ -20,8 +20,8 @@
 ## 模式一：`?traceId=` — trace → audit 反查
 
 ```
-GET /internal/v1/audit/correlate?traceId=<otel-trace-id>
-Authorization: Bearer <service-token>
+GET /api/v1/observability/correlate?traceId=<otel-trace-id>
+Authorization: Bearer <admin-jwt>
 ```
 
 返回与该 trace_id 关联的 audit entries 列表（最多 500 条，单页无游标）。
@@ -53,10 +53,11 @@ Authorization: Bearer <service-token>
 
 **刻意排除**：`subjectId / tenantId / sessionId / payload / hash / prevHash`——minimal-PII fail-closed 设计。
 `actorId`（触发主体）是 trace 关联所需的最小身份，明确保留；它可能与终端用户身份重合，
-由 InternalListener loopback + service-token 双重边界缓解。`eventId` 是非 PII 的 UUID，
-用于 forward-correlation（从 audit entry 回查 outbox / 日志）。
-deeper identity（subject / tenant / session）及事件 payload 需走 JWT-authed auditquery endpoint
-（`/api/v1/audit/entries`）。
+由 **admin 角色授权门**缓解（仅持 admin 角色的 JWT 可调，非 admin 直接 403）——与更敏感的
+auditquery（`/api/v1/audit/entries`）同款 RBAC 门，且 correlate 暴露面更小（minimal-PII）。
+`eventId` 是非 PII 的 UUID，用于 forward-correlation（从 audit entry 回查 outbox / 日志）。
+deeper identity（subject / tenant / session）及事件 payload 需走 auditquery endpoint
+（`/api/v1/audit/entries`，同 admin 门 + 完整 payload）。
 
 | 字段 | 含义 |
 |------|------|
@@ -87,8 +88,8 @@ trace-mode 是 **单页 point-lookup**（上限 `traceQueryLimit=500`），**不
 ## 模式二：`?cell=` — cell owner 反查
 
 ```
-GET /internal/v1/audit/correlate?cell=<cell-id>
-Authorization: Bearer <service-token>
+GET /api/v1/observability/correlate?cell=<cell-id>
+Authorization: Bearer <admin-jwt>
 ```
 
 返回该 cell 的 owner 信息与 metric/alert selector 指针。
@@ -134,12 +135,14 @@ GoCell 不内嵌 TSDB，不查 Prometheus。
 
 ## curl 示例
 
+> `$ADMIN_JWT` 是一个携带 admin 角色的业务 JWT（同调用 `/api/v1/audit/entries` 的凭据）。
+
 ### 查 trace 关联的 audit entries
 
 ```bash
 curl -s \
-  -H "Authorization: Bearer $(gocell-token gen --cell ops-client)" \
-  "http://127.0.0.1:9090/internal/v1/audit/correlate?traceId=4bf92f3577b34da6a3ce929d0e0e4736" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  "http://127.0.0.1:8080/api/v1/observability/correlate?traceId=4bf92f3577b34da6a3ce929d0e0e4736" \
   | jq '.data.auditEntries[] | {id, eventId, eventType, actorId, occurredAt}'
 ```
 
@@ -147,8 +150,8 @@ curl -s \
 
 ```bash
 curl -s \
-  -H "Authorization: Bearer $(gocell-token gen --cell ops-client)" \
-  "http://127.0.0.1:9090/internal/v1/audit/correlate?traceId=4bf92f3577b34da6a3ce929d0e0e4736" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  "http://127.0.0.1:8080/api/v1/observability/correlate?traceId=4bf92f3577b34da6a3ce929d0e0e4736" \
   | jq '{hasMore: .data.hasMore, returned: .data.returned, entries: .data.auditEntries}'
 ```
 
@@ -156,8 +159,8 @@ curl -s \
 
 ```bash
 curl -s \
-  -H "Authorization: Bearer $(gocell-token gen --cell ops-client)" \
-  "http://127.0.0.1:9090/internal/v1/audit/correlate?cell=accesscore" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  "http://127.0.0.1:8080/api/v1/observability/correlate?cell=accesscore" \
   | jq .
 ```
 
@@ -167,8 +170,9 @@ curl -s \
 
 | 状态 | 场景 |
 |------|------|
-| 400 | `traceId` 与 `cell` 同时传，或均未传 |
-| 401 | service-token 缺失 / 无效 / 过期 / nonce 已消费（replay） |
+| 400 | `traceId` 与 `cell` 同时传，或均未传（含「传了但为空」如 `?traceId=`） |
+| 401 | JWT 缺失 / 无效 / 过期 |
+| 403 | 已认证但缺 admin 角色 |
 | 404 | 未找到匹配的 audit entries 或 cell topology |
 | 500 | 内部错误（查 slog `cell=_runtime` 日志） |
 
@@ -188,12 +192,14 @@ curl -s \
 
 ## 注意事项
 
-- 该端点仅监听在 InternalListener loopback（`127.0.0.1:9090`）；k8s 上通过 exec
-  进入 pod 或 port-forward 使用，**不暴露外网**。
-- metric `cell=_runtime`：该端点归属 runtime 框架而非业务 cell（与 `/healthz`/`/metrics` 一致），
-  SLO 告警过滤 `cell!="_runtime"` 时不覆盖该端点的错误率。
-- deeper identity（subject / tenant / session）及 payload 走 JWT-authed auditquery：
-  `GET /api/v1/audit/entries`（需业务 JWT，有 RBAC 检查）。
+- 该端点在 PrimaryListener（`:8080`，公开 API 面）；访问控制靠 **admin 角色 JWT**，
+  非 admin → 403。与 auditquery（同样在 PrimaryListener 读 audit 数据）一致。
+- metric `cell=_runtime`：该端点是 framework route 而非业务 cell（与 `/healthz`/`/metrics`、
+  `/api/v1/devtools/catalog` 一致），SLO 告警过滤 `cell!="_runtime"` 时不覆盖该端点的错误率。
+- 路径在 framework 区 `/api/v1/observability/`，**不**在 auditcore 拥有的 `/api/v1/audit/` 命名空间下
+  （避免跨 owner 命名空间冲突）。
+- deeper identity（subject / tenant / session）及 payload 走 auditquery：
+  `GET /api/v1/audit/entries`（同 admin 角色门，返回完整 payload）。
 
 ---
 

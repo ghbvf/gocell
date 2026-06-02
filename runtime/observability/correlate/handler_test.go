@@ -37,7 +37,7 @@ func TestHandler_BothParams_400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?traceId=abc&cell=xyz")
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?traceId=abc&cell=xyz")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want 400", rec.Code)
 	}
@@ -57,8 +57,8 @@ func TestHandler_BothParams_OneEmpty_400(t *testing.T) {
 		name string
 		url  string
 	}{
-		{"traceId=&cell=x", "/internal/v1/audit/correlate?traceId=&cell=x"},
-		{"traceId=x&cell=", "/internal/v1/audit/correlate?traceId=x&cell="},
+		{"traceId=&cell=x", "/api/v1/observability/correlate?traceId=&cell=x"},
+		{"traceId=x&cell=", "/api/v1/observability/correlate?traceId=x&cell="},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,7 +78,7 @@ func TestHandler_NeitherParam_400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate")
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want 400", rec.Code)
 	}
@@ -99,8 +99,8 @@ func TestHandler_PresentEmptyParam_400(t *testing.T) {
 		name string
 		url  string
 	}{
-		{"traceId present empty", "/internal/v1/audit/correlate?traceId="},
-		{"cell present empty", "/internal/v1/audit/correlate?cell="},
+		{"traceId present empty", "/api/v1/observability/correlate?traceId="},
+		{"cell present empty", "/api/v1/observability/correlate?cell="},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,7 +134,7 @@ func TestHandler_TraceMode_Found_200(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?traceId="+traceID)
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?traceId="+traceID)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200; body: %s", rec.Code, rec.Body)
 	}
@@ -211,7 +211,7 @@ func TestHandler_TraceMode_NotFound_404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?traceId=missing")
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?traceId=missing")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
 	}
@@ -229,7 +229,7 @@ func TestHandler_TraceMode_TooLong_400(t *testing.T) {
 	for i := range long {
 		long[i] = 'a'
 	}
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?traceId="+string(long))
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?traceId="+string(long))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want 400", rec.Code)
 	}
@@ -247,7 +247,7 @@ func TestHandler_CellMode_Found_200(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?cell=auditcore")
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?cell=auditcore")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200; body: %s", rec.Code, rec.Body)
 	}
@@ -291,7 +291,7 @@ func TestHandler_CellMode_NotFound_404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?cell=nosuchcell")
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?cell=nosuchcell")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
 	}
@@ -308,7 +308,7 @@ func TestHandler_CellMode_TooLong_400(t *testing.T) {
 	for i := range long {
 		long[i] = 'x'
 	}
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?cell="+string(long))
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?cell="+string(long))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want 400", rec.Code)
 	}
@@ -393,7 +393,7 @@ func TestHandler_TraceMode_ResponseEnvelope(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?traceId="+traceID)
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?traceId="+traceID)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body)
 	}
@@ -418,7 +418,7 @@ func TestHandler_CellMode_ResponseEnvelope(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	rec := doGet(t, svc.HTTPHandler(), "/internal/v1/audit/correlate?cell=envtest")
+	rec := doGet(t, svc.HTTPHandler(), "/api/v1/observability/correlate?cell=envtest")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body)
 	}
