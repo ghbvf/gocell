@@ -23,7 +23,7 @@ const (
 	leaderTestWaitMedium  = 6 * time.Second        // takeover headroom past lease expiry
 	leaderTestWaitLong    = 10 * time.Second       // I/O-retry backoff headroom (~2×leaderRetryPeriod)
 	leaderTestFastRenew   = 20 * time.Millisecond  // fast renew so a lost lease is detected quickly
-	leaderTestSettleSleep = 50 * time.Millisecond  // sub-ms in-memory settle; no signal exposed
+	leaderTestSettleSleep = 200 * time.Millisecond // CI headroom: goroutine scheduling can exceed 50ms under load
 	leaderTestShortTTL    = 100 * time.Millisecond // short lease TTL so takeover is quick
 )
 

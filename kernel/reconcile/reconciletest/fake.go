@@ -245,8 +245,8 @@ func (t FakeTrigger) Start(ctx context.Context, queue chan<- reconcile.Request) 
 // submit function blocks briefly if the buffer is full; the buffer (size 64)
 // is large enough for any conformance use-case. This is the standard
 // Wiring.NewTrigger implementation for RunConformance.
-func NewFakeTrigger() (FakeTrigger, func(reconcile.Request)) {
+func NewFakeTrigger() (trigger FakeTrigger, submit func(reconcile.Request)) {
 	ch := make(chan reconcile.Request, 64)
-	submit := func(req reconcile.Request) { ch <- req }
+	submit = func(req reconcile.Request) { ch <- req }
 	return FakeTrigger{In: ch}, submit
 }

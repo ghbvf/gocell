@@ -178,9 +178,9 @@ func (h *waitingHeap) Pop() any {
 // &reconcile.Loop{Field: ...} from outside the package is a compile error —
 // the funnel is enforced by the type system (Hard upstream).
 //
-// Defaulting is handled by a single applyDefaults() called at the top of
-// start(), after preStartValidate() passes. This is the sole site for default
-// values; there are no lazy getter methods.
+// Defaulting is handled by a single applyDefaults() called once at the end of
+// preStartValidate(), before the metric preflight, so start() sees all config
+// fields at their final values.
 //
 // Owner ctx (controller-runtime Runnable.Start semantics): Start receives the
 // long-lived owner ctx and derives the workers' runCtx from it, so assembly

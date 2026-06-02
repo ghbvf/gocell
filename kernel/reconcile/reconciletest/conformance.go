@@ -234,6 +234,7 @@ type Wiring struct {
 	// NewTrigger returns a fresh Trigger plus a submit func that injects a
 	// Request into that trigger's source so the suite can drive work
 	// deterministically.
+	// Standard impl: func() (reconcile.Trigger, func(reconcile.Request)) { return reconciletest.NewFakeTrigger() }
 	NewTrigger func() (trigger reconcile.Trigger, submit func(reconcile.Request))
 	// Leader is the LeaderElector for the loop under test; nil when
 	// Features.Leader is false.
@@ -251,6 +252,8 @@ type Wiring struct {
 type HarnessFactory func(t *testing.T) Wiring
 
 // Features captures which optional Loop contracts the harness supports.
+// Fencing requires Leader=true; RunConformance fatals immediately when
+// Fencing=true and Leader=false.
 type Features struct {
 	Leader  bool // exercise LeaderFlow subtest
 	Fencing bool // exercise Fencing subtest (requires Leader)
@@ -262,16 +265,29 @@ const (
 	confEventualWait  = 3 * time.Second        // budget for require.Eventually-style polls
 	confPollTick      = 5 * time.Millisecond   // polling frequency inside wait loops
 	confQuietPeriod   = 80 * time.Millisecond  // quiet-period check for PermanentError
-	confLeaderTTL     = 100 * time.Millisecond // short lease TTL for leader tests
 	confLeaderRenew   = 10 * time.Millisecond  // fast renew cadence for leader tests
 	confBarrierWait   = 2 * time.Second        // barrier wait for concurrency test
 	confBackoffMax    = confShortInterval * 10 // panic-recovery backoff cap (TEST-TIME-LITERAL-01)
 )
 
+// confStop stops l with a bounded drain budget so a hung Loop fails the test
+// fast instead of blocking the goroutine forever.
+func confStop(l *reconcile.Loop) {
+	ctx, cancel := context.WithTimeout(context.Background(), confEventualWait)
+	defer cancel()
+	_ = l.Stop(ctx)
+}
+
 // RunConformance runs the Loop scheduling conformance suite.
 // Subtests are skipped (not failed) when the corresponding feature is off.
+//
+// Features.Fencing requires Features.Leader=true; RunConformance fatals immediately
+// if Fencing=true and Leader=false.
 func RunConformance(t *testing.T, newHarness HarnessFactory, features Features) {
 	t.Helper()
+	if features.Fencing && !features.Leader {
+		t.Fatal("reconciletest.RunConformance: Features.Fencing requires Features.Leader=true")
+	}
 	t.Run("BasicReconcile", func(t *testing.T) {
 		confBasicReconcile(t, newHarness)
 	})
@@ -329,7 +345,7 @@ func confBasicReconcile(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	submit(reconcile.Request{EntityID: "basic-entity-1"})
 
@@ -370,7 +386,7 @@ func confRequeueAfter(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	submit(reconcile.Request{EntityID: "requeue-entity-1"})
 
@@ -404,7 +420,7 @@ func confPermanentError(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	submit(reconcile.Request{EntityID: "perm-entity-1"})
 
@@ -453,7 +469,7 @@ func confPanicRecovery(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	submit(reconcile.Request{EntityID: "panic-entity-1"})
 
@@ -524,7 +540,7 @@ func confMaxConcurrentCrossEntity(t *testing.T, w Wiring) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start cross-entity")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	for i := 0; i < workers; i++ {
 		submit(reconcile.Request{EntityID: string(rune('A' + i))})
@@ -541,12 +557,15 @@ func confMaxConcurrentCrossEntity(t *testing.T, w Wiring) {
 }
 
 // confMaxConcurrentSameEntity checks that two submits of the same entity never
-// run concurrently (the Loop's dirty/processing serialization guarantee).
+// run concurrently (the Loop's dirty/processing serialization guarantee) AND
+// that the coalesced second submit actually triggers a re-run (same-entity
+// serialization contract = coalesce-into-dirty-rerun, not drop).
 func confMaxConcurrentSameEntity(t *testing.T, w Wiring) {
 	t.Helper()
 	trigger, submit := w.NewTrigger()
 
 	var (
+		calls           atomic.Int64
 		overlapDetected bool
 		sameInflight    int
 		sameEntityMu    sync.Mutex
@@ -556,6 +575,8 @@ func confMaxConcurrentSameEntity(t *testing.T, w Wiring) {
 	)
 
 	rec := FakeReconciler{Fn: func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		calls.Add(1)
+
 		sameEntityMu.Lock()
 		sameInflight++
 		if sameInflight > 1 {
@@ -586,7 +607,7 @@ func confMaxConcurrentSameEntity(t *testing.T, w Wiring) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start same-entity")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	submit(reconcile.Request{EntityID: "same-entity"})
 	submit(reconcile.Request{EntityID: "same-entity"})
@@ -597,6 +618,12 @@ func confMaxConcurrentSameEntity(t *testing.T, w Wiring) {
 		t.Fatal("MaxConcurrentReconciles same-entity: first invocation never started")
 	}
 	close(sameDone)
+
+	// The coalesced second submit must actually re-run (dirty re-run guarantee):
+	// verify ≥2 invocations before checking the overlap flag.
+	testwait.External(t, "same-entity-rerun", func() bool { return calls.Load() >= 2 },
+		confEventualWait, confPollTick,
+		"same-entity coalesced re-run never executed")
 
 	sameEntityMu.Lock()
 	detected := overlapDetected
@@ -639,7 +666,7 @@ func confLeaderFlow(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	submit(reconcile.Request{EntityID: "leader-entity-1"})
 
@@ -699,7 +726,7 @@ func confFencing(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer func() { _ = l.Stop(context.Background()) }()
+	defer confStop(l)
 
 	submit(reconcile.Request{EntityID: "fence-entity-1"})
 

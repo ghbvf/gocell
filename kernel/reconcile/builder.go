@@ -23,6 +23,11 @@ import (
 // reconcilerID charset) are preserved in preStartValidate (Loop.Start) —
 // not duplicated in Build.
 //
+// There is no WithClock option by design: control-plane scheduling (timers,
+// startup probe, lease renew) uses a sealed real-only clock (see
+// Loop.controlPlaneClock); Reconciler implementations source their own domain
+// clock.
+//
 // ref: kubernetes-sigs/controller-runtime pkg/builder/controller.go
 // (TypedBuilder.Build — fields unexported, fluent With* return *Builder,
 // terminal Build validates and constructs the controller).
@@ -149,7 +154,7 @@ func (b *Builder) WithStopTimeout(d time.Duration) *Builder {
 // triggerCh. No goroutines are started; Start() begins execution.
 func (b *Builder) Build() (*Loop, error) {
 	if validation.IsNilInterface(b.reconciler) {
-		return nil, fmt.Errorf("reconcile: Builder requires non-nil Reconciler")
+		return nil, fmt.Errorf("reconcile: Builder requires a non-nil Reconciler; pass it to reconcile.New(reconciler)")
 	}
 	if validation.IsNilInterface(b.trigger) {
 		return nil, fmt.Errorf(

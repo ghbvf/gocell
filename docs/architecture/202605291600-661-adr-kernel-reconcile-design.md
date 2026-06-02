@@ -3,7 +3,7 @@
 | 字段 | 值 |
 |------|---|
 | ADR ID | 661 |
-| 状态 | **Accepted（设计冻结）。PR-A1（本 ADR，docs-only）= 当前 PR；A2/A3 实现已在同 stack 原型分支 `661-loop-skeleton` 验证，但尚未合入 develop、不在本 PR；A4–A10 PARKED-ON-TRIGGER（详见 §6）** |
+| 状态 | **Accepted（设计冻结）。PR-A1–A7 已合入 develop；A8–A10 在 §6.1 trigger gate 内（kernel 基建 A1–A8 不门 trigger，详见 §6.2 Amendment 2026-06-02）** |
 | 日期 | 2026-05-29 |
 | Issue | [#661](https://github.com/ghbvf/gocell/issues/661)（父）/ [#1162](https://github.com/ghbvf/gocell/issues/1162)（PR-A1） |
 | Spec | `docs/plans/specs/202605262359-661-kernel-reconcile-{spec,plan,tasks}.md` |
@@ -368,8 +368,9 @@ funnel（**已闭环**）：`Loop` 所有配置字段私有化（PR-A7），包�
 `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 已退役。
 
 **默认值策略**：lazy 默认 getter（`interval()`/`name()`/`reconcilerID()`/`logger()`/
-`maxConcurrent()`）已删除，默认值收口到 `start()` 顶部的单一 `applyDefaults()`（eager
-defaulting）；对标 controller-runtime builder `doController()` eager 默认，消除双路径。
+`maxConcurrent()`）已删除，默认值收口到 `preStartValidate()` 末尾（metrics preflight 之前）
+的单一 `applyDefaults()`（eager defaulting）——`start()` 看到所有字段均为最终值；对标
+controller-runtime builder `doController()` eager 默认，消除双路径。
 
 ### 3.6 Metrics（由 PR-A3 交付）
 
@@ -553,11 +554,13 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 | **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | **leader election 非 fencing**（§4，client-go 明示不保证单 leader）——只 best-effort 收窄窗口。跨副本正确性靠 §4.3 `FencedRepository` + monotonic-epoch 写路径 CAS（结构拒 stale-epoch 写）+ §4.4 消费方幂等；同实例内同 EntityID 由 dirty/processing dedup（F5，PR-A5 已落地）串行：processing 标记下互斥（同时到达的 trigger 被 coalesced 到 dirty 等待一次 re-run，非多路并行），`TestLoop_SameEntityIDSerial` + `TestLoop_DirtyDedup_CoalescesDuplicates` 守。**T-DUAL 评级维持 ✅ 不退化**：F5 是对 A3 sync.Map skip-if-busy 的强化——旧方案丢弃 duplicate（level-triggered 安全，但错过了一次 re-run）；新方案将 duplicate coalesced 为一次 re-run，收敛更快，不引入新的 dual-execution 路径。 | 同实例串行 **Medium**（runtime guard + 测试，已兑现）；跨副本正确性 **设计**（A6：`FencedWriter` 上游 Hard + `RECONCILE-FENCED-WRITE-FUNNEL-01` 下游 Hard + `RunFencingConformance` real-failure-injection 后定级；leader election 永远只是 best-effort 收窄，不计入正确性保证） |
 | **T-LEADER** | leader 流转失败（双 leader / 长期空窗） | lease/renew 模型（§4.1–4.2）+ lost-lease ctx-cancel 中断（§4.2，收窄）；fail-closed（lease 故障 follower 不抢）；RTO ≤ LeaseDuration+1s（接管延迟，**非**双执行保证）。**双 leader 不靠 lease 排除**——靠 §4.3 epoch fencing CAS 让旧 leader 迟到写被结构拒绝 | **设计**（A6 落地 lease 模型 + epoch fencing + real-failure-injection conformance 后定级；明确 leader election ≠ fencing） |
 | **T-FENCE** | 旧 leader 迟到设备写绕过 fencing → 落地为重复命令（leader election 残余窗口的兜底失效） | §4.3 `FencedRepository`：`Loop` 只给 Reconciler epoch-bound `FencedWriter`，写路径 CAS 拒 `incoming_epoch < 已见最高`（**单调 epoch**，非 outbox 的 UUID identity-fencing）；绕过在 type system 不可表达（消费方无裸写面）。**⚠️ Redis-eviction residual（C6）**：Redis adapter 的 epoch **值** provenance 依赖 epoch key 持久性——live-holder 路径（acquire same-holder + renew）缺失即 fail-closed，但 free-holder 分支 eviction 后从 1 重建无法 fail-closed（first-acquire 与 post-eviction 不可区分）；缓解 = 30d TTL 刷新 + 非 `allkeys-*` eviction policy + 监控；**严格跨副本 fencing 选 PG adapter（持久 epoch SoR）**。写面 Hard 不退化（与 epoch 值 provenance 正交）。 | **设计**（A6：上游 Hard = `FencedWriter` 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + conformance 入列；leader election ≠ fencing 由本行结构兜底）；Redis epoch provenance **⚠️ residual（accepted，见 round-3 C6）** |
-| **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | **已交付**（PR-A7）：上游 Hard = `Loop` 配置字段私有化（包外 `Loop{field:v}` 编译错误）；下游 Hard = `RECONCILE-BUILDER-FUNNEL-01` AST+Unalias ban（禁零值字面量 `Loop{}` 出现在 `kernel/reconcile` 包外）；临时 `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 退役 | **已闭环 Hard**（上游 Hard 字段私有化 + 下游 Hard callsite ban；双侧均 Hard，无过渡 Medium） |
+| **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | **已交付**（PR-A7）：上游 Hard 含两个子声明——(i) 带字段赋值的复合字面量（`reconcile.Loop{field: v}`）在包外是编译错误（type system 封闭）；(ii) 零值字面量 `reconcile.Loop{}` 仍可编译但被 `RECONCILE-BUILDER-FUNNEL-01` archtest（AST+Unalias ban）在下游 Hard 拦截，禁止其出现在 `kernel/reconcile` 包外——两者共同封闭全部裸构造路径。临时 `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 退役 | **已闭环 Hard**（上游 Hard 字段私有化封闭含字段赋值的字面量 + 下游 Hard callsite ban 封闭零值字面量；双侧均 Hard，无过渡 Medium） |
 
 > PR-A7 已交付：`Loop` 所有配置字段私有化，Builder 是唯一公开构造入口（`reconcile.New(r).With*().Build()`）。
-> A3–A6 窗口期使用的临时 Medium archtest `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 已退役，由
-> 上游 Hard 字段私有化 + 下游 Hard `RECONCILE-BUILDER-FUNNEL-01` 取代，funnel 双侧均 Hard 闭环。
+> 上游 Hard 封闭含字段赋值的复合字面量（`reconcile.Loop{field: v}` 包外编译错误）；零值字面量
+> `reconcile.Loop{}` 仍可编译但由下游 Hard `RECONCILE-BUILDER-FUNNEL-01` AST+Unalias ban 拦截——
+> 两者合力封闭全部裸构造路径。A3–A6 窗口期使用的临时 Medium archtest
+> `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 已退役，funnel 双侧均 Hard 闭环。
 > kernel/command 不再在允许列表中——它无任何 Loop 字面量（grep 确认），A8 迁移将使用 Builder。
 
 > **F5 amendment 重评（AI-robust §ADR amendment 落地必查）**：本次 review 把 leader election 从
