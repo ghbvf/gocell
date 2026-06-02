@@ -140,6 +140,20 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 			errcode.WithDetails(errcode.PublicString("field", "to"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
+
+	req.TraceID = r.URL.Query().Get("traceId")
+	if req.TraceID != "" && len(req.TraceID) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "traceId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+	if len(req.TraceID) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "traceId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

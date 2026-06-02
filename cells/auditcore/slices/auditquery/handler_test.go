@@ -640,6 +640,118 @@ func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	assert.Equal(t, "victim", resp.Data[0].SubjectID)
 }
 
+// TestHandleQuery_TraceIDFilter_Admin verifies that ?traceId=X returns only
+// entries whose TraceID == X for an admin caller (global scope).
+// Without the handler binding TraceID → AuditFilters.TraceID the filter has no
+// effect and all three entries are returned (RED). The test also confirms that
+// the matched entry's traceId is surfaced in the response item.
+func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	seed := []*ledger.Entry{
+		{
+			ID: "tid-1", EventID: "evt-tid-1", EventType: "event.test.v1",
+			ActorID: "actor-a", TraceID: "trace-abc",
+			Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "tid-2", EventID: "evt-tid-2", EventType: "event.test.v1",
+			ActorID: "actor-b", TraceID: "trace-abc",
+			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+		{
+			ID: "tid-3", EventID: "evt-tid-3", EventType: "event.test.v1",
+			ActorID: "actor-c", TraceID: "trace-xyz",
+			Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+		},
+	}
+	for _, e := range seed {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=trace-abc", nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []struct {
+			EventID string `json:"eventId"`
+			TraceID string `json:"traceId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 2, "expected exactly two entries with traceId=trace-abc")
+	for _, d := range resp.Data {
+		assert.Equal(t, "trace-abc", d.TraceID, "response item must surface traceId")
+	}
+	// Confirm the trace-xyz entry is not returned.
+	for _, d := range resp.Data {
+		assert.NotEqual(t, "evt-tid-3", d.EventID, "trace-xyz entry must not be returned")
+	}
+}
+
+// TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf verifies that a
+// non-admin caller with ?traceId=X still only sees their own actor_id rows.
+// The traceId filter is AND-ed with the actor-self policy enforced by
+// auditQueryPolicy — it does NOT widen scope beyond the caller's own actions.
+func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
+	seed := []*ledger.Entry{
+		// usr-1's own action under trace-abc — must be visible.
+		{
+			ID: "ta-1", EventID: "evt-ta-1", EventType: "event.test.v1",
+			ActorID: "usr-1", TraceID: "trace-abc",
+			Timestamp: base, Payload: []byte("{}"),
+		},
+		// usr-2's action under the same trace-abc — must NOT be visible to usr-1.
+		{
+			ID: "ta-2", EventID: "evt-ta-2", EventType: "event.test.v1",
+			ActorID: "usr-2", TraceID: "trace-abc",
+			Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+		// usr-1's action under a different trace — excluded by the traceId filter.
+		{
+			ID: "ta-3", EventID: "evt-ta-3", EventType: "event.test.v1",
+			ActorID: "usr-1", TraceID: "trace-xyz",
+			Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+		},
+	}
+	for _, e := range seed {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=trace-abc", nil)
+	req = req.WithContext(auth.TestContext("usr-1", nil)) // non-admin
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []struct {
+			EventID string `json:"eventId"`
+			ActorID string `json:"actorId"`
+			TraceID string `json:"traceId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// Only ta-1 (usr-1 + trace-abc). ta-2 excluded by actor-self; ta-3 by traceId.
+	require.Len(t, resp.Data, 1)
+	assert.Equal(t, "evt-ta-1", resp.Data[0].EventID)
+	assert.Equal(t, "usr-1", resp.Data[0].ActorID)
+	assert.Equal(t, "trace-abc", resp.Data[0].TraceID)
+}
+
 type actorBindingCase struct {
 	name            string
 	query           string

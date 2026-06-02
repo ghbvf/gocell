@@ -27,6 +27,10 @@
             "type": "string",
             "description": "Opaque cross-cell correlation identifier from the originating request context. Lets consumers stitch an audited action back to its request. Empty for entries predating its introduction."
           },
+          "traceId": {
+            "type": "string",
+            "description": "Opaque distributed trace identifier from the originating request context. Lets consumers correlate an audited action back to its trace. Empty for entries predating its introduction."
+          },
           "occurredAt": {
             "type": "string",
             "format": "date-time"
