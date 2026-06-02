@@ -165,15 +165,22 @@ func (h *waitingHeap) Pop() any {
 	return it
 }
 
-// Loop is the reconcile scheduling environment: it pulls Requests from a Source,
+// Loop is the reconcile scheduling environment: it pulls Requests from a source,
 // dispatches each to the Reconciler across a bounded worker pool (serializing
 // per EntityID), and requeues per the returned Result. Its lifecycle skeleton
 // (Start fast-return + startup probe, owner-ctx derivation, graceful Stop) is
 // transplanted from runtime/command.SweeperLifecycle; the per-entity worker
 // dispatch and requeue are reconcile-specific.
 //
-// Construct via the Builder (PR-A7, not yet landed) in production; the exported
-// fields support direct struct construction for tests and the kernel/command migration.
+// Construct via the Builder (reconcile.New(r).With*().Build()) in production.
+// All configuration fields are unexported; the Builder is the sole public
+// construction entry point. Loop config fields are private so that
+// &reconcile.Loop{Field: ...} from outside the package is a compile error —
+// the funnel is enforced by the type system (Hard upstream).
+//
+// Defaulting is handled by a single applyDefaults() called at the top of
+// start(), after preStartValidate() passes. This is the sole site for default
+// values; there are no lazy getter methods.
 //
 // Owner ctx (controller-runtime Runnable.Start semantics): Start receives the
 // long-lived owner ctx and derives the workers' runCtx from it, so assembly
@@ -181,80 +188,56 @@ func (h *waitingHeap) Pop() any {
 //
 // Start must return promptly (spawn pool + fast probe, then return) — it is
 // usable directly as a cell.LifecycleHook.OnStart; Stop as OnStop.
+//
+// ref: kubernetes-sigs/controller-runtime pkg/builder/controller.go
 type Loop struct {
-	// Name labels logs; defaults to "reconcile.loop".
-	Name string
-	// ReconcilerID is the metric/log owner dimension; when empty it defaults to
-	// the "_runtime" sentinel (see reconcilerIDSentinel). When set it MUST be a
+	// name labels logs; defaults to defaultLoopName via applyDefaults.
+	name string
+	// reconcilerID is the metric/log owner dimension; when empty it defaults to
+	// the "_runtime" sentinel via applyDefaults. When set it MUST be a
 	// low-cardinality, label-safe identifier: Start rejects any value that fails
-	// validateReconcilerID (lowercase [a-z0-9_], leading [a-z_], ≤48 bytes
-	// (ASCII-only)) so a
-	// high-cardinality or separator-bearing owner cannot blow up / corrupt the
-	// reconciler metric label.
-	ReconcilerID string
-	// Reconciler is the required convergence callback.
-	Reconciler Reconciler
-	// Source feeds Requests into the Loop (a Trigger, PR-A4, produces it;
-	// tests inject a channel directly). nil means "no external feed" — the Loop
-	// still runs and self-sustains entities already seeded via requeue.
-	Source <-chan Request
-	// Interval is the requeue delay for Result{} (RequeueAfter == 0);
-	// defaults to 30s.
-	Interval time.Duration
-	// MaxConcurrentReconciles bounds concurrent reconciles across distinct
-	// EntityIDs; defaults to 1. Same-EntityID reconciles are always serial.
-	MaxConcurrentReconciles int
-	// StartTimeout / StopTimeout integrate with a lifecycle hook; StopTimeout is
-	// consulted by Stop as the drain budget.
-	StartTimeout time.Duration
-	StopTimeout  time.Duration
-	Logger       *slog.Logger
-	// Metrics holds optional pre-bound instruments (nil-safe).
-	Metrics Metrics
+	// validateReconcilerID (lowercase [a-z0-9_], leading [a-z_], ≤48 bytes).
+	reconcilerID string
+	// reconciler is the required convergence callback.
+	reconciler Reconciler
+	// source feeds Requests into the Loop. Set by the Builder to triggerCh.
+	// nil means "no external feed" — the Loop still runs and self-sustains
+	// entities already seeded via requeue.
+	source <-chan Request
+	// trigger is the Trigger wired by the Builder; started in start().
+	trigger Trigger
+	// triggerCh is the bidirectional channel created by Build; trigger writes
+	// into it, source (read end) feeds the work queue.
+	triggerCh chan Request
+	// interval is the requeue delay for Result{} (RequeueAfter == 0);
+	// defaults to defaultReconcileInterval via applyDefaults.
+	interval time.Duration
+	// maxConcurrentReconciles bounds concurrent reconciles across distinct
+	// EntityIDs; defaults to defaultMaxConcurrentReconciles via applyDefaults.
+	maxConcurrentReconciles int
+	// startTimeout / stopTimeout integrate with a lifecycle hook.
+	startTimeout time.Duration
+	stopTimeout  time.Duration
+	// logger defaults to slog.Default() via applyDefaults.
+	logger *slog.Logger
+	// metrics holds optional pre-bound instruments (nil-safe).
+	metrics Metrics
 
-	// BaseDelay is the initial (first-retry) backoff delay for transient errors.
-	// Zero or negative means use the default of 5ms (mirroring client-go
-	// ItemExponentialFailureRateLimiter). The delay doubles on each consecutive
-	// transient failure for the same entity, capped at MaxDelay.
-	//
-	// BaseDelay governs ONLY the transient-error exponential backoff — it does
-	// NOT affect the success-path Interval requeue.
-	//
-	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
-	BaseDelay time.Duration
-	// MaxDelay is the cap on the transient-error backoff delay for a single
-	// entity. Zero or negative means use the default of 1000s (mirroring
-	// client-go ItemExponentialFailureRateLimiter). After MaxDelay is reached, retries
-	// continue at MaxDelay until the entity succeeds (backoff.Forget) or is
-	// dead-lettered (permanent error).
-	//
-	// MaxDelay governs ONLY the transient-error exponential backoff — it does
-	// NOT affect the success-path Interval requeue.
-	//
-	// ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
-	MaxDelay time.Duration
+	// baseDelay is the initial backoff delay for transient errors.
+	// Zero → default 5ms (mirroring client-go ItemExponentialFailureRateLimiter).
+	baseDelay time.Duration
+	// maxDelay is the cap on transient-error backoff delay per entity.
+	// Zero → default 1000s (mirroring client-go ItemExponentialFailureRateLimiter).
+	maxDelay time.Duration
 
-	// Leader, when non-nil, gates the WHOLE loop: only the lease holder dispatches
-	// Reconcile; a follower holds the worker pool idle and reconcile_leader at 0
-	// until it wins the lease. nil = single-process mode (always leader, Epoch 0,
-	// no fencing). See leader.go — leader election is NOT fencing; cross-replica
-	// correctness comes from FencedRepo + LeaseToken.Epoch, not the lease.
-	Leader LeaderElector
-	// FencedRepo, when non-nil, is the consumer's epoch-aware write seam. The Loop
-	// injects a per-Reconcile epoch-bound FencedWriter (bound to the live lease's
-	// Epoch) into each Reconcile's ctx; the reconciler reads it via
-	// FencedWriterFrom. nil = no fenced write surface (single-process / no consumer
-	// repo). See fenced.go.
-	FencedRepo FencedRepository
-	// RenewInterval optionally overrides the lease renew cadence (Leader != nil).
-	// Zero → the Loop derives it from the acquired token as
-	// (ExpiresAt-AcquiredAt)/3 (clamped to a sane floor), so it adapts to whatever
-	// TTL the elector adapter is configured with. The LeaseToken TTL itself is
-	// owned by the elector (AcquireLease takes no duration — ADR §3.4), not the
-	// Loop. An explicit value MUST be shorter than the elector's TTL.
-	// Setting RenewInterval >= the elector's lease TTL causes spurious
-	// ErrReconcileLeaseLost; prefer the default (derived as TTL/3).
-	RenewInterval time.Duration
+	// leader, when non-nil, gates the whole loop to the lease holder.
+	// nil = single-process mode (always leader, Epoch 0, no fencing).
+	leader LeaderElector
+	// fencedRepo, when non-nil, is the epoch-aware write seam.
+	fencedRepo FencedRepository
+	// renewInterval optionally overrides the lease renew cadence.
+	// Zero → derived as (ExpiresAt-AcquiredAt)/3 from the acquired token.
+	renewInterval time.Duration
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -310,15 +293,15 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 // any per-run state or spawns a goroutine. Safe on a nil receiver (the nil check
 // is first). Kept separate from start() so Start stays within the funlen budget.
 func (l *Loop) preStartValidate() error {
-	if l == nil || validation.IsNilInterface(l.Reconciler) {
+	if l == nil || validation.IsNilInterface(l.reconciler) {
 		return fmt.Errorf("reconcile: Loop requires non-nil Reconciler")
 	}
-	if rc, ok := l.Reconciler.(reconcilerReadinessChecker); ok {
+	if rc, ok := l.reconciler.(reconcilerReadinessChecker); ok {
 		if err := rc.Validate(); err != nil {
 			return fmt.Errorf("reconcile: reconciler not ready: %w", err)
 		}
 	}
-	if err := validateReconcilerID(l.ReconcilerID); err != nil {
+	if err := validateReconcilerID(l.reconcilerID); err != nil {
 		return err
 	}
 	// Fail fast on an inverted backoff window. Both must be explicitly set
@@ -326,24 +309,27 @@ func (l *Loop) preStartValidate() error {
 	// (newEntityBackoff fills it in). With base > max the first When would
 	// already return max, silently violating the documented [base, max]
 	// interval — surface it as a Start error instead.
-	if l.BaseDelay > 0 && l.MaxDelay > 0 && l.BaseDelay > l.MaxDelay {
-		return fmt.Errorf("reconcile: BaseDelay (%s) must not exceed MaxDelay (%s)", l.BaseDelay, l.MaxDelay)
+	if l.baseDelay > 0 && l.maxDelay > 0 && l.baseDelay > l.maxDelay {
+		return fmt.Errorf("reconcile: BaseDelay (%s) must not exceed MaxDelay (%s)", l.baseDelay, l.maxDelay)
 	}
 	// Typed-nil fail-fast (PR-A6 review C5/F11): a typed-nil interface stored in
-	// Leader/FencedRepo is != nil, so it would slip past the leader==nil mode gate
+	// leader/fencedRepo is != nil, so it would slip past the leader==nil mode gate
 	// and panic inside leaderManage / process (a goroutine) rather than at Start.
 	// Surface it here so a misconstructed Loop fails at OnStart (bootstrap rolls back).
-	if l.Leader != nil && validation.IsNilInterface(l.Leader) {
+	if l.leader != nil && validation.IsNilInterface(l.leader) {
 		return fmt.Errorf("reconcile: Loop.Leader is a typed-nil LeaderElector; leave it nil for single-process mode")
 	}
-	if l.FencedRepo != nil && validation.IsNilInterface(l.FencedRepo) {
+	if l.fencedRepo != nil && validation.IsNilInterface(l.fencedRepo) {
 		return fmt.Errorf("reconcile: Loop.FencedRepo is a typed-nil FencedRepository; leave it nil when no fenced write surface is wired")
 	}
-	return l.Metrics.preflight(l.reconcilerID())
+	// applyDefaults must run before preflight so l.reconcilerID is the final value.
+	l.applyDefaults()
+	return l.metrics.preflight(l.reconcilerID)
 }
 
 // start performs the run setup (per-run state, worker pool, delaying queue,
-// startup probe) after preStartValidate has passed.
+// startup probe) after preStartValidate has passed. applyDefaults was already
+// called inside preStartValidate, so all config fields hold their final values.
 func (l *Loop) start(ownerCtx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -354,11 +340,21 @@ func (l *Loop) start(ownerCtx context.Context) error {
 	gen := l.gen
 
 	runCtx, cancel := context.WithCancel(ownerCtx)
+
+	// Start the Trigger (if wired) so it begins sending Requests into triggerCh.
+	// This must happen before spawnActive so feedFromSource finds source populated.
+	if l.trigger != nil {
+		if err := l.trigger.Start(runCtx, l.triggerCh); err != nil {
+			cancel()
+			return fmt.Errorf("reconcile: trigger start failed: %w", err)
+		}
+	}
+
 	ready := make(chan struct{})
 	var readyOnce sync.Once
 	var wg sync.WaitGroup
 
-	if l.Leader == nil {
+	if l.leader == nil {
 		// Single-process mode: spawn the active work directly under runCtx (the A3
 		// behavior, preserved verbatim — always leader, Epoch 0, no fencing).
 		l.spawnActive(runCtx, &wg, &readyOnce, ready)
@@ -391,13 +387,13 @@ func (l *Loop) start(ownerCtx context.Context) error {
 	// 0 on loss/drain), so Start does NOT raise it here — this replica may be a
 	// follower (gauge stays 0 until it wins the lease).
 	if l.cancel != nil {
-		if l.Leader == nil {
-			l.Metrics.setLeader(runCtx, l.reconcilerID(), 1)
+		if l.leader == nil {
+			l.metrics.setLeader(runCtx, l.reconcilerID, 1)
 		}
-		l.logger().Info("reconcile: loop started",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()),
-			slog.Bool("leader_elect", l.Leader != nil))
+		l.logger.Info("reconcile: loop started",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID),
+			slog.Bool("leader_elect", l.leader != nil))
 	}
 	return nil
 }
@@ -424,9 +420,9 @@ func (l *Loop) spawnActive(ctx context.Context, wg *sync.WaitGroup, readyOnce *s
 	// cancelCh carries EntityIDs whose pending requeue must be removed from the
 	// delaying queue (permanent dead-letter). Same buffer/lifecycle as addCh.
 	cancelCh := make(chan string, addChBuffer)
-	backoff := newEntityBackoff(l.BaseDelay, l.MaxDelay)
+	backoff := newEntityBackoff(l.baseDelay, l.maxDelay)
 
-	workers := l.maxConcurrent()
+	workers := l.maxConcurrentReconciles
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -435,7 +431,7 @@ func (l *Loop) spawnActive(ctx context.Context, wg *sync.WaitGroup, readyOnce *s
 			l.runWorker(ctx, queue, addCh, cancelCh, backoff)
 		}()
 	}
-	if l.Source != nil {
+	if l.source != nil {
 		wg.Add(1)
 		go l.feedFromSource(ctx, queue, wg)
 	}
@@ -462,7 +458,7 @@ func (l *Loop) leaderManage(runCtx context.Context, gen uint64, wg *sync.WaitGro
 	readyOnce.Do(func() { close(readyCh) }) // Start's probe: confirmed once we begin contending
 
 	for runCtx.Err() == nil {
-		token, err := l.Leader.AcquireLease(runCtx, l.reconcilerID())
+		token, err := l.leader.AcquireLease(runCtx, l.reconcilerID)
 		if err != nil {
 			l.logLeaderAcquireSkip(runCtx, err)
 			if !sleepCtx(runCtx, leaderRetryPeriod) {
@@ -515,7 +511,7 @@ func (l *Loop) renewLoop(leaseCtx context.Context, leaseCancel context.CancelFun
 		case <-leaseCtx.Done():
 			return
 		case <-ticker.C:
-			if err := l.Leader.RenewLease(leaseCtx, token); err != nil {
+			if err := l.leader.RenewLease(leaseCtx, token); err != nil {
 				l.logLeaseLost(leaseCtx, token, err)
 				leaseCancel()
 				return
@@ -532,10 +528,10 @@ func (l *Loop) renewLoop(leaseCtx context.Context, leaseCancel context.CancelFun
 func (l *Loop) releaseLease(runCtx context.Context, token LeaseToken) {
 	relCtx, cancel := context.WithTimeout(context.WithoutCancel(runCtx), leaseReleaseTimeout)
 	defer cancel()
-	if err := l.Leader.ReleaseLease(relCtx, token); err != nil {
-		l.logger().Warn("reconcile: lease release failed (will expire on TTL)",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()),
+	if err := l.leader.ReleaseLease(relCtx, token); err != nil {
+		l.logger.Warn("reconcile: lease release failed (will expire on TTL)",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID),
 			slog.Uint64("epoch", token.Epoch),
 			slog.Any("error", redaction.RedactError(err)))
 	}
@@ -548,7 +544,7 @@ func (l *Loop) releaseLease(runCtx context.Context, token LeaseToken) {
 func (l *Loop) setLeaderGauge(gen uint64, val float64) {
 	l.mu.Lock()
 	if l.gen == gen {
-		l.Metrics.setLeader(context.Background(), l.reconcilerID(), val)
+		l.metrics.setLeader(context.Background(), l.reconcilerID, val)
 	}
 	l.mu.Unlock()
 }
@@ -568,8 +564,8 @@ func (l *Loop) currentEpoch() uint64 {
 // it adapts to the elector adapter's configured TTL, clamped to defaultRenewInterval
 // when the token carries no usable TTL.
 func (l *Loop) renewIntervalFor(token LeaseToken) time.Duration {
-	if l.RenewInterval > 0 {
-		return l.RenewInterval
+	if l.renewInterval > 0 {
+		return l.renewInterval
 	}
 	if d := token.ExpiresAt.Sub(token.AcquiredAt) / renewIntervalDivisor; d > 0 {
 		return d
@@ -606,9 +602,9 @@ func (l *Loop) logLeaderAcquireSkip(ctx context.Context, err error) {
 		// or loop-owned deadline exceeded) are expected steady-state signals, not faults.
 		level = slog.LevelDebug
 	}
-	l.logger().Log(ctx, level, "reconcile: leader-elect skip (lease not acquired)",
-		slog.String("loop", l.name()),
-		slog.String("reconciler", l.reconcilerID()),
+	l.logger.Log(ctx, level, "reconcile: leader-elect skip (lease not acquired)",
+		slog.String("loop", l.name),
+		slog.String("reconciler", l.reconcilerID),
 		slog.Any("error", redaction.RedactError(err)))
 }
 
@@ -623,15 +619,15 @@ func (l *Loop) logLeaderAcquireSkip(ctx context.Context, err error) {
 // Reconcile per ADR §4.2.
 func (l *Loop) logLeaseLost(ctx context.Context, token LeaseToken, err error) {
 	if errors.Is(err, ErrReconcileLeaseLost) {
-		l.logger().WarnContext(ctx, "reconcile: lease lost; relinquishing leadership",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()),
+		l.logger.WarnContext(ctx, "reconcile: lease lost; relinquishing leadership",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID),
 			slog.Uint64("epoch", token.Epoch),
 			slog.Any("error", redaction.RedactError(err)))
 	} else {
-		l.logger().WarnContext(ctx, "reconcile: renew I/O error; abandoning lease term",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()),
+		l.logger.WarnContext(ctx, "reconcile: renew I/O error; abandoning lease term",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID),
 			slog.Uint64("epoch", token.Epoch),
 			slog.Bool("io_fault", true),
 			slog.Any("error", redaction.RedactError(err)))
@@ -796,7 +792,7 @@ func (l *Loop) watchDrain(gen uint64, done chan struct{}, wg *sync.WaitGroup) {
 		// context.Background: the run has drained (runCtx canceled), so the
 		// leader-reset record must use a live ctx. The G118 nolint sits on the
 		// `go l.watchDrain(...)` launch in Start (that is where gosec reports it).
-		l.Metrics.setLeader(context.Background(), l.reconcilerID(), 0)
+		l.metrics.setLeader(context.Background(), l.reconcilerID, 0)
 		l.cancel = nil
 		l.done = nil
 	}
@@ -804,16 +800,16 @@ func (l *Loop) watchDrain(gen uint64, done chan struct{}, wg *sync.WaitGroup) {
 	close(done)
 }
 
-// feedFromSource copies Source into the internal queue until the run ctx is canceled.
+// feedFromSource copies source into the internal queue until the run ctx is canceled.
 func (l *Loop) feedFromSource(runCtx context.Context, queue chan<- Request, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		select {
 		case <-runCtx.Done():
 			return
-		case req, ok := <-l.Source:
+		case req, ok := <-l.source:
 			if !ok {
-				return // Source closed — no more external feed
+				return // source closed — no more external feed
 			}
 			select {
 			case queue <- req:
@@ -868,14 +864,14 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 		// Entity is in flight — coalesce this trigger as dirty (latest wins).
 		l.dirty[req.EntityID] = req
 		l.entityMu.Unlock()
-		l.Metrics.recordResult(runCtx, l.reconcilerID(), resultSkipped)
+		l.metrics.recordResult(runCtx, l.reconcilerID, resultSkipped)
 		return
 	}
 	l.processing[req.EntityID] = true
 	l.entityMu.Unlock()
 
-	l.Metrics.inFlightDelta(runCtx, l.reconcilerID(), 1)
-	defer l.Metrics.inFlightDelta(runCtx, l.reconcilerID(), -1)
+	l.metrics.inFlightDelta(runCtx, l.reconcilerID, 1)
+	defer l.metrics.inFlightDelta(runCtx, l.reconcilerID, -1)
 
 	// Inject the epoch-bound FencedWriter when a FencedRepository is wired: it is
 	// the reconciler's only write surface (FencedWriterFrom). The epoch comes from
@@ -888,16 +884,16 @@ func (l *Loop) process(runCtx context.Context, req Request, addCh chan<- waiting
 	// writes. Do NOT point a single-process Loop at a store shared with a
 	// leader-elect deployment — use distinct stores or a fresh store.
 	reconcileCtx := runCtx
-	if l.FencedRepo != nil {
-		reconcileCtx = withFencedWriter(runCtx, newFencedWriter(l.FencedRepo, l.currentEpoch()))
+	if l.fencedRepo != nil {
+		reconcileCtx = withFencedWriter(runCtx, newFencedWriter(l.fencedRepo, l.currentEpoch()))
 	}
 
 	start := controlPlaneClock{}.now()
-	res, err := recoverReconcile(reconcileCtx, l.Reconciler, req, l.logger(), l.reconcilerID())
-	l.Metrics.observeDuration(runCtx, l.reconcilerID(), controlPlaneClock{}.now().Sub(start).Seconds())
+	res, err := recoverReconcile(reconcileCtx, l.reconciler, req, l.logger, l.reconcilerID)
+	l.metrics.observeDuration(runCtx, l.reconcilerID, controlPlaneClock{}.now().Sub(start).Seconds())
 
 	label := classify(err)
-	l.Metrics.recordResult(runCtx, l.reconcilerID(), label)
+	l.metrics.recordResult(runCtx, l.reconcilerID, label)
 
 	l.dispatchResult(runCtx, req, res, err, label, addCh, cancelCh, backoff)
 
@@ -944,36 +940,36 @@ func (l *Loop) dispatchResult(
 		backoff.Forget(req.EntityID)
 		delay := res.normalizedRequeueAfter()
 		if delay <= 0 {
-			delay = l.interval()
+			delay = l.interval
 		}
 		l.enqueueDelayed(runCtx, req, delay, addCh)
 	case resultPermanent:
 		backoff.Forget(req.EntityID)
 		// Cancel any pending requeue for this entity: an earlier success/transient
-		// may have enqueued a (possibly long) Interval/backoff item that, left in
+		// may have enqueued a (possibly long) interval/backoff item that, left in
 		// place, would re-reconcile a now-dead-lettered entity once it fires. A
-		// fresh Source trigger re-observes it if the consumer resets its state.
+		// fresh source trigger re-observes it if the consumer resets its state.
 		l.enqueueCancel(runCtx, req.EntityID, cancelCh)
 		// ErrFencedWriteStale is an expected fencing race (this replica is no longer
 		// the epoch owner); log at Warn, not Error, to avoid false-alarm alerting.
 		// All other permanent errors are real dead-letters and warrant Error level.
 		if errors.Is(err, ErrFencedWriteStale) {
-			l.logger().Warn("reconcile: stale-epoch write rejected (fencing race); awaiting fresh trigger",
-				slog.String("loop", l.name()),
-				slog.String("reconciler", l.reconcilerID()),
+			l.logger.Warn("reconcile: stale-epoch write rejected (fencing race); awaiting fresh trigger",
+				slog.String("loop", l.name),
+				slog.String("reconciler", l.reconcilerID),
 				slog.String("entity", req.EntityID))
 		} else {
-			l.logger().Error("reconcile: permanent error (dead-letter; not requeued)",
-				slog.String("loop", l.name()),
-				slog.String("reconciler", l.reconcilerID()),
+			l.logger.Error("reconcile: permanent error (dead-letter; not requeued)",
+				slog.String("loop", l.name),
+				slog.String("reconciler", l.reconcilerID),
 				slog.String("entity", req.EntityID),
 				slog.Any("error", redaction.RedactError(err)))
 		}
 	default: // resultTransient (including recovered panics)
 		delay := backoff.When(req.EntityID)
-		l.logger().Warn("reconcile: transient error (requeued with backoff)",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()),
+		l.logger.Warn("reconcile: transient error (requeued with backoff)",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID),
 			slog.String("entity", req.EntityID),
 			slog.Duration("backoff_delay", delay),
 			slog.Any("error", redaction.RedactError(err)))
@@ -1025,9 +1021,9 @@ func (l *Loop) enqueueCancel(runCtx context.Context, entityID string, cancelCh c
 // Runs under Start's l.mu, so clearing l.cancel/l.done here needs no extra lock.
 func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, ready <-chan struct{}) error {
 	if runCtx.Err() != nil {
-		l.logger().Warn("reconcile: owner ctx canceled before loop confirmed running",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()))
+		l.logger.Warn("reconcile: owner ctx canceled before loop confirmed running",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID))
 		cancel()
 		// Clear l.cancel so Start's post-probe check skips the leader=1 claim:
 		// the gauge is never raised on this path, so there is nothing to reset
@@ -1078,9 +1074,9 @@ func (l *Loop) Stop(ctx context.Context) error {
 		// Drained: watchDrain has already reset the leader gauge to 0 and cleared
 		// l.cancel/l.done (sequenced before close(done)), so a later Start can
 		// restart the loop. Nothing left to do but log.
-		l.logger().Info("reconcile: loop stopped",
-			slog.String("loop", l.name()),
-			slog.String("reconciler", l.reconcilerID()))
+		l.logger.Info("reconcile: loop stopped",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID))
 		return nil
 	case <-ctx.Done():
 		// Budget exhausted before drain. cancel() has fired so the goroutines
@@ -1090,25 +1086,26 @@ func (l *Loop) Stop(ctx context.Context) error {
 	}
 }
 
-func (l *Loop) maxConcurrent() int {
-	if l.MaxConcurrentReconciles > 0 {
-		return l.MaxConcurrentReconciles
+// applyDefaults fills all zero-valued config fields with their defaults. It is
+// called once at the top of preStartValidate() so every subsequent field read
+// sees the final value. This is the single defaulting funnel — there are no
+// lazy getter methods (controller-runtime doController() eager-default pattern).
+func (l *Loop) applyDefaults() {
+	if l.interval <= 0 {
+		l.interval = defaultReconcileInterval
 	}
-	return defaultMaxConcurrentReconciles
-}
-
-func (l *Loop) interval() time.Duration {
-	if l.Interval > 0 {
-		return l.Interval
+	if l.maxConcurrentReconciles <= 0 {
+		l.maxConcurrentReconciles = defaultMaxConcurrentReconciles
 	}
-	return defaultReconcileInterval
-}
-
-func (l *Loop) reconcilerID() string {
-	if l != nil && l.ReconcilerID != "" {
-		return l.ReconcilerID
+	if l.name == "" {
+		l.name = defaultLoopName
 	}
-	return reconcilerIDSentinel
+	if l.reconcilerID == "" {
+		l.reconcilerID = reconcilerIDSentinel
+	}
+	if l.logger == nil {
+		l.logger = slog.Default()
+	}
 }
 
 // maxReconcilerIDLen bounds a ReconcilerID, mirroring the owner-dimension length
@@ -1142,18 +1139,4 @@ func validateReconcilerID(id string) error {
 		}
 	}
 	return nil
-}
-
-func (l *Loop) name() string {
-	if l != nil && l.Name != "" {
-		return l.Name
-	}
-	return defaultLoopName
-}
-
-func (l *Loop) logger() *slog.Logger {
-	if l != nil && l.Logger != nil {
-		return l.Logger
-	}
-	return slog.Default()
 }

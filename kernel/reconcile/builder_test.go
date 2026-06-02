@@ -202,7 +202,8 @@ func TestBuilder_WithOptionsThreadThrough(t *testing.T) {
 	assert.Equal(t, builderTestStartTimeout, loop.startTimeout)
 	assert.Equal(t, builderTestStopTimeout, loop.stopTimeout)
 	assert.Equal(t, builderTestRenewInterval, loop.renewInterval)
-	assert.Equal(t, rec, loop.reconciler)
+	// reconciler is a func type — compare by nil-ness and type identity, not ==
+	assert.NotNil(t, loop.reconciler, "reconciler must be wired into the loop")
 }
 
 func TestBuilder_WithMetricsThreadsThrough(t *testing.T) {

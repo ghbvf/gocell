@@ -50,13 +50,14 @@ func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil // avoid rapid requeue churn
 	}}
 
-	l := &reconcile.Loop{
-		ReconcilerID: "leadertest",
-		Reconciler:   rec,
-		Source:       src,
-		Leader:       backend.Elector("A"),
-		FencedRepo:   repo,
-	}
+	l, err := reconcile.New(rec).
+		WithTrigger(reconciletest.FakeTrigger{In: src}).
+		WithReconcilerID("leadertest").
+		WithLeader(backend.Elector("A")).
+		WithFencedRepo(repo).
+		Build()
+	require.NoError(t, err)
+
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, l.Start(ownerCtx))
 	src <- reconcile.Request{EntityID: "dev-1"}
@@ -93,13 +94,14 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 		return reconcile.Result{}, ctx.Err()
 	}}
 
-	l := &reconcile.Loop{
-		ReconcilerID:  "leaderlost",
-		Reconciler:    rec,
-		Source:        src,
-		Leader:        backend.Elector("A"),
-		RenewInterval: leaderTestFastRenew, // fast renew so the lost lease is detected quickly
-	}
+	l, err := reconcile.New(rec).
+		WithTrigger(reconciletest.FakeTrigger{In: src}).
+		WithReconcilerID("leaderlost").
+		WithLeader(backend.Elector("A")).
+		WithRenewInterval(leaderTestFastRenew). // fast renew so the lost lease is detected quickly
+		Build()
+	require.NoError(t, err)
+
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -148,8 +150,20 @@ func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 
 	srcA := make(chan reconcile.Request, 1)
 	srcB := make(chan reconcile.Request, 1)
-	la := &reconcile.Loop{ReconcilerID: "foll", Reconciler: leaderRec, Source: srcA, Leader: backend.Elector("A")}
-	lb := &reconcile.Loop{ReconcilerID: "foll", Reconciler: followerRec, Source: srcB, Leader: backend.Elector("B")}
+
+	la, err := reconcile.New(leaderRec).
+		WithTrigger(reconciletest.FakeTrigger{In: srcA}).
+		WithReconcilerID("foll").
+		WithLeader(backend.Elector("A")).
+		Build()
+	require.NoError(t, err)
+
+	lb, err := reconcile.New(followerRec).
+		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
+		WithReconcilerID("foll").
+		WithLeader(backend.Elector("B")).
+		Build()
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -196,19 +210,21 @@ func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
 
 	srcA := make(chan reconcile.Request, 2)
 	srcB := make(chan reconcile.Request, 2)
+
 	// Use a short TTL so B can take over quickly after expiry.
-	la := &reconcile.Loop{
-		ReconcilerID: "takeover",
-		Reconciler:   mkRec(aDispatched),
-		Source:       srcA,
-		Leader:       backend.ElectorWithTTL("A", leaderTestShortTTL),
-	}
-	lb := &reconcile.Loop{
-		ReconcilerID: "takeover",
-		Reconciler:   mkRec(bDispatched),
-		Source:       srcB,
-		Leader:       backend.ElectorWithTTL("B", leaderTestShortTTL),
-	}
+	la, err := reconcile.New(mkRec(aDispatched)).
+		WithTrigger(reconciletest.FakeTrigger{In: srcA}).
+		WithReconcilerID("takeover").
+		WithLeader(backend.ElectorWithTTL("A", leaderTestShortTTL)).
+		Build()
+	require.NoError(t, err)
+
+	lb, err := reconcile.New(mkRec(bDispatched)).
+		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
+		WithReconcilerID("takeover").
+		WithLeader(backend.ElectorWithTTL("B", leaderTestShortTTL)).
+		Build()
+	require.NoError(t, err)
 
 	// Use separate contexts: cancelA stops A from re-contending after its lease
 	// is expired so B can cleanly take over. cancelAll stops both loops at the end.
@@ -301,12 +317,12 @@ func TestLoop_LeaderManageIOErrorRetry(t *testing.T) {
 	// Fail the first 2 AcquireLease calls with an I/O error, then succeed on the 3rd.
 	elector := &errAfterN{failFor: 2, inner: backend.Elector("A")}
 
-	l := &reconcile.Loop{
-		ReconcilerID: "ioretry",
-		Reconciler:   rec,
-		Source:       src,
-		Leader:       elector,
-	}
+	l, err := reconcile.New(rec).
+		WithTrigger(reconciletest.FakeTrigger{In: src}).
+		WithReconcilerID("ioretry").
+		WithLeader(elector).
+		Build()
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
