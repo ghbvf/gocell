@@ -27,6 +27,7 @@ package bootstrap
 // ref: runtime/bootstrap/health.go — framework-owned RouteGroup mount pattern.
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -38,6 +39,28 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
+
+// rebuildController is the narrow control-plane surface the rebuild HTTP handler
+// consumes from a projection Coordinator: trigger a background rebuild and read a
+// status snapshot. *projection.Coordinator satisfies it.
+//
+// It is declared here — the consumer — rather than in kernel/projection: the
+// accept-interfaces-at-the-consumer idiom keeps kernel's exported surface free of
+// a bootstrap-only seam while keeping the handler honest (it only triggers + reads,
+// never touches the raw checkpoint store / tx runner) and unit-testable with a fake.
+type rebuildController interface {
+	// Rebuild triggers a background full rebuild; nil = admitted (caller → 202),
+	// projection.ErrRebuildInProgress = already running (caller → 409).
+	Rebuild(ctx context.Context) error
+	// Snapshot returns the current phase plus best-effort pending/lag. On a
+	// store/replay read error the Phase is still valid; only PendingEvents and
+	// ReplayLagSeconds are zeroed, and the error is returned for the caller to log
+	// (a degraded snapshot never downgrades an already-admitted rebuild).
+	Snapshot(ctx context.Context) (projection.Snapshot, error)
+}
+
+// Compile-time assertion that *projection.Coordinator satisfies rebuildController.
+var _ rebuildController = (*projection.Coordinator)(nil)
 
 const (
 	projectionRebuildContractID = "http.framework.projection.rebuild.v1"

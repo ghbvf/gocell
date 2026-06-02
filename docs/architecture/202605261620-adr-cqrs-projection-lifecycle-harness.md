@@ -681,8 +681,11 @@ the host-cell/`DEAD-CONTRACT-01` complication the original framing introduced.
   helper that the lag readyz probe (`checkLag`) also calls — so the wire snapshot
   can never diverge from the probe (single-source, type-system Hard). A degraded
   snapshot read after admission is logged but never downgrades the 202 (the
-  rebuild was already admitted). `projection.RebuildController` is the narrow
-  consumer interface the bootstrap handler holds (`*Coordinator` satisfies it).
+  rebuild was already admitted). The bootstrap handler consumes the Coordinator
+  through a narrow consumer-local interface (`runtime/bootstrap.rebuildController`
+  = `Rebuild` + `Snapshot`; `*Coordinator` satisfies it) — declared at the
+  consumer per Go idiom, keeping kernel/projection's exported surface free of a
+  bootstrap-only seam.
 
 ### Deferred (scope carve-out)
 

@@ -13,6 +13,7 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -1105,6 +1106,70 @@ func TestRebuild_PanicRecovered(t *testing.T) {
 		// any disposition is fine — gate is open
 	case <-time.After(rebuildTestHandlerTimeout):
 		t.Fatal("buildHandler hung after panic recovery (gate not reopened)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_PropagatesRequestCorrelation — F1: the detached rebuild goroutine
+// must inherit request-scoped correlation values from the triggering ctx.
+//
+// The HTTP rebuild endpoint calls Rebuild(r.Context()); the request ctx carries
+// request_id/trace_id/correlation_id that the slog sink (contextHandler) emits
+// as log attrs. A context.Background()-rooted goroutine drops them, so the async
+// started/completed/failed/panic logs cannot be correlated to the request that
+// admitted the rebuild. context.WithoutCancel preserves the Values while still
+// detaching from request cancellation/deadline (cancellation stays via Close).
+// ---------------------------------------------------------------------------
+
+// ctxRecordingReplaySource records the request_id observed in the ctx passed to
+// Head — the first I/O the detached rebuild goroutine performs (via captureHead),
+// so it witnesses exactly the ctx that runRebuild runs under.
+type ctxRecordingReplaySource struct {
+	mu        sync.Mutex
+	requestID string
+	seen      bool
+}
+
+func (s *ctxRecordingReplaySource) Head(ctx context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.seen {
+		s.requestID, _ = ctxkeys.RequestIDFrom(ctx)
+		s.seen = true
+	}
+	return 0, nil
+}
+
+func (s *ctxRecordingReplaySource) Replay(_ context.Context, _ int64, _ func(outbox.Entry) error) error {
+	return nil
+}
+
+func (s *ctxRecordingReplaySource) observedRequestID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requestID
+}
+
+func TestRebuild_PropagatesRequestCorrelation(t *testing.T) {
+	t.Parallel()
+	src := &ctxRecordingReplaySource{}
+	clk := clockmock.New(time.Now())
+	c := newCoordinatorFull(t, coordinatorFullParams{
+		clk: clk, cursor: &fakeCursor{pos: 1}, replay: src,
+	})
+	subscribeWithDefaults(t, c, applyNoop)
+
+	const wantReqID = "req-corr-123"
+	ctx := ctxkeys.WithRequestID(context.Background(), wantReqID)
+	if err := c.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitForPhase(t, c, PhaseLive)
+
+	if got := src.observedRequestID(); got != wantReqID {
+		t.Errorf("detached rebuild ctx request_id = %q, want %q "+
+			"(rebuild goroutine must inherit request correlation via context.WithoutCancel)",
+			got, wantReqID)
 	}
 }
 

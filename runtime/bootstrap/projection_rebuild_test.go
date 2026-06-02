@@ -19,9 +19,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// fakeRebuildController is a test double for projection.RebuildController so the
-// rebuild handler can be exercised without constructing a full Coordinator. The
-// real implementer is *projection.Coordinator (kernel-tested separately).
+// fakeRebuildController is a test double for the unexported rebuildController so
+// the rebuild handler can be exercised without constructing a full Coordinator.
+// The real implementer is *projection.Coordinator (kernel-tested separately).
 type fakeRebuildController struct {
 	rebuildErr   error
 	snap         projection.Snapshot
@@ -38,7 +38,7 @@ func (f *fakeRebuildController) Snapshot(context.Context) (projection.Snapshot, 
 	return f.snap, f.snapErr
 }
 
-var _ projection.RebuildController = (*fakeRebuildController)(nil)
+var _ rebuildController = (*fakeRebuildController)(nil)
 
 // serveMuxRouteMux adapts *http.ServeMux to cell.RouteMux so a RouteGroup's
 // Register (which only calls Handle for a top-level non-prefixed mount) can be
@@ -66,7 +66,7 @@ func mountRebuildEndpoint(t *testing.T, b *Bootstrap) *http.ServeMux {
 
 // rebuildBootstrap returns a Bootstrap with the rebuild endpoint opted in for
 // caller "controlplane" and the given registry contents.
-func rebuildBootstrap(reg map[string]projection.RebuildController) *Bootstrap {
+func rebuildBootstrap(reg map[string]rebuildController) *Bootstrap {
 	b := New(clock.Real(), WithProjectionRebuildEndpoint("controlplane"))
 	b.projectionRebuilds = reg
 	return b
@@ -89,7 +89,7 @@ func doRebuild(mux *http.ServeMux, caller, cellID, projID string) *httptest.Resp
 func TestProjectionRebuild_202(t *testing.T) {
 	t.Parallel()
 	fake := &fakeRebuildController{snap: projection.Snapshot{Phase: projection.PhaseLive, PendingEvents: 5, ReplayLagSeconds: 12.5}}
-	b := rebuildBootstrap(map[string]projection.RebuildController{"ordercell/order_status": fake})
+	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
 	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
@@ -107,7 +107,7 @@ func TestProjectionRebuild_202(t *testing.T) {
 func TestProjectionRebuild_409(t *testing.T) {
 	t.Parallel()
 	fake := &fakeRebuildController{rebuildErr: projection.ErrRebuildInProgress}
-	b := rebuildBootstrap(map[string]projection.RebuildController{"ordercell/order_status": fake})
+	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
 	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
@@ -121,7 +121,7 @@ func TestProjectionRebuild_409(t *testing.T) {
 func TestProjectionRebuild_404(t *testing.T) {
 	t.Parallel()
 	// Registry holds only ordercell/order_status.
-	b := rebuildBootstrap(map[string]projection.RebuildController{
+	b := rebuildBootstrap(map[string]rebuildController{
 		"ordercell/order_status": &fakeRebuildController{},
 	})
 	mux := mountRebuildEndpoint(t, b)
@@ -151,7 +151,7 @@ func TestProjectionRebuild_DegradedSnapshotStill202(t *testing.T) {
 		snap:    projection.Snapshot{Phase: projection.PhaseLive},
 		snapErr: errors.New("checkpoint store unreachable"),
 	}
-	b := rebuildBootstrap(map[string]projection.RebuildController{"ordercell/order_status": fake})
+	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
 	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
@@ -170,7 +170,7 @@ func TestProjectionRebuild_DegradedSnapshotStill202(t *testing.T) {
 func TestProjectionRebuild_UnexpectedRebuildError500(t *testing.T) {
 	t.Parallel()
 	fake := &fakeRebuildController{rebuildErr: errors.New("coordinator not subscribed")}
-	b := rebuildBootstrap(map[string]projection.RebuildController{"ordercell/order_status": fake})
+	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
 	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
@@ -182,7 +182,7 @@ func TestProjectionRebuild_UnexpectedRebuildError500(t *testing.T) {
 // truncated in the 404 body (bounds the response/log against an oversized path).
 func TestProjectionRebuild_LongPathParamClamped(t *testing.T) {
 	t.Parallel()
-	b := rebuildBootstrap(map[string]projection.RebuildController{})
+	b := rebuildBootstrap(map[string]rebuildController{})
 	mux := mountRebuildEndpoint(t, b)
 
 	longName := strings.Repeat("a", 200)
@@ -200,7 +200,7 @@ func TestProjectionRebuild_LongPathParamClamped(t *testing.T) {
 func TestProjectionRebuild_CallerCellAllowlist(t *testing.T) {
 	t.Parallel()
 	fake := &fakeRebuildController{snap: projection.Snapshot{Phase: projection.PhaseLive}}
-	b := rebuildBootstrap(map[string]projection.RebuildController{"ordercell/order_status": fake})
+	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
 	// Caller not in the allowlist → 403 (and the handler never runs).

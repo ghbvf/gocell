@@ -433,9 +433,9 @@ func (b *Bootstrap) wireOneProjection(s *phaseState, evtRouter *eventrouter.Rout
 		func(c context.Context) error { return coord.Close(c) })
 
 	if b.projectionRebuilds == nil {
-		b.projectionRebuilds = make(map[string]projection.RebuildController)
+		b.projectionRebuilds = make(map[string]rebuildController)
 	}
-	// coord (*projection.Coordinator) satisfies projection.RebuildController.
+	// coord (*projection.Coordinator) satisfies rebuildController.
 	b.projectionRebuilds[w.cellID+"/"+w.projectionID] = coord
 	return nil
 }

@@ -377,7 +377,7 @@ func TestPhase6_ProjectionDrain_WiresCoordinatorAndProbes(t *testing.T) {
 		"phase6 must drain the projection cleanly")
 
 	// Coordinator indexed for the rebuild HTTP endpoint (held as the narrow
-	// RebuildController interface; assert the concrete type to inspect probes).
+	// rebuildController interface; assert the concrete type to inspect probes).
 	ctrl, ok := b.projectionRebuilds[projTestCellID+"/"+projTestProjID]
 	require.True(t, ok, "coordinator must be indexed by <cell>/<projection>")
 	require.NotNil(t, ctrl)

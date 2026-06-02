@@ -2,29 +2,6 @@ package projection
 
 import "context"
 
-// RebuildController is the narrow control-plane surface the rebuild HTTP
-// endpoint consumes from a projection Coordinator: trigger a background rebuild
-// and read a status snapshot. *Coordinator satisfies it.
-//
-// The endpoint (runtime/bootstrap) holds this interface rather than the concrete
-// *Coordinator so the handler's dependency is honest (it only triggers + reads,
-// never touches the raw checkpoint store / tx runner) and is unit-testable with
-// a fake. This is the standard accept-interfaces-at-the-consumer idiom, not a
-// speculative abstraction — there is exactly one production implementer.
-type RebuildController interface {
-	// Rebuild triggers a background full rebuild; nil = admitted (caller → 202),
-	// ErrRebuildInProgress = already running (caller → 409).
-	Rebuild(ctx context.Context) error
-	// Snapshot returns the current phase plus best-effort pending/lag. On a
-	// store/replay read error the returned Snapshot still carries a valid Phase
-	// (in-memory, never fails); only PendingEvents and ReplayLagSeconds are
-	// zeroed, and the error is returned for the caller to log.
-	Snapshot(ctx context.Context) (Snapshot, error)
-}
-
-// Compile-time assertion that *Coordinator satisfies RebuildController.
-var _ RebuildController = (*Coordinator)(nil)
-
 // Snapshot is a point-in-time view of a projection's lifecycle and replay lag,
 // returned by the rebuild control-plane endpoint as the 202 response body
 // ({phase, pendingEvents, replayLagSeconds}).
