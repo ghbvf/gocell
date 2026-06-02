@@ -16,3 +16,10 @@ var spec = contractspec.ContractSpec{
 	Transport: "amqp",
 	Topic:     "event.device-registered.v1",
 }
+
+// Transports is the full set of wire transports this contract is sanctioned to
+// bind to (contract.yaml transports:). The primary (Transports[0]) is the spec's
+// Transport above; additional members are alternate sanctioned bindings. Exposed
+// so out-of-band subscribers reference the contract truth source instead of
+// hand-writing a transport string. Emitted only for multi-transport contracts.
+var Transports = []string{"amqp", "mqtt"}

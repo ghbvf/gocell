@@ -16,7 +16,9 @@ import (
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
+	deviceregistered "github.com/ghbvf/gocell/generated/contracts/event/device-registered/v1"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -35,6 +37,23 @@ type noopSettlement struct{}
 
 func (noopSettlement) Commit(context.Context) error  { return nil }
 func (noopSettlement) Release(context.Context) error { return nil }
+
+// mqttTransportFromContract returns the mqtt transport ONLY if the
+// device-registered contract sanctions it, reading the codegen-derived truth
+// source deviceregistered.Transports (generated from contract.yaml transports:).
+// It fails the smoke if mqtt is ever dropped from the set — so the verifier's
+// MQTT delivery channel is bound to the contract, not a hand-written literal (#1389).
+func mqttTransportFromContract(t *testing.T) string {
+	t.Helper()
+	for _, tr := range deviceregistered.Transports {
+		if tr == string(cellvocab.TransportMQTT) {
+			return tr
+		}
+	}
+	t.Fatalf("event.device-registered.v1 does not sanction the mqtt transport; Transports=%v",
+		deviceregistered.Transports)
+	return ""
+}
 
 // startSmokeBroker boots an in-process mochi MQTT v2 broker on a random
 // loopback port (AllowHook permits all clients) and returns its address.
@@ -191,14 +210,15 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 		CellID:        smokeNamespace,
 		ContractID:    "event.device-registered.v1",
 		ContractKind:  "event",
-		// ContractTransport here is the verifier subscriber's own MQTT delivery
-		// channel for this demo smoke — it is NOT a claim about the contract's
-		// transport truth source. event.device-registered.v1's contract does not
-		// declare an MQTT transport (it defaults to amqp); MQTT is a demo-only
-		// observation channel wired by the single-channel DI swap. Folding MQTT
-		// into the contract/codegen transports truth source is deferred V11 work
-		// (plan §7), tracked separately.
-		ContractTransport: "mqtt",
+		// ContractTransport is derived from the contract truth source (#1389): the
+		// device-registered contract now declares transports: [amqp, mqtt], so the
+		// generated package exposes deviceregistered.Transports. mqttTransportFromContract
+		// fails the smoke if mqtt is ever removed from that set — the verifier's MQTT
+		// delivery channel is no longer a hand-written string but a contract-sanctioned
+		// transport. (Per-binding runtime transport selection — a production cell
+		// routing this contract over mqtt rather than the primary amqp — is deferred,
+		// tracked as a backlog item.)
+		ContractTransport: mqttTransportFromContract(t),
 	}
 	received := make(chan outbox.Entry, 1)
 	runCtx, runCancel := context.WithCancel(context.Background())

@@ -290,6 +290,53 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 	}
 }
 
+// TestRender_Event_Transports verifies the spec.tmpl transport derivation (#1389):
+// the generated ContractSpec.Transport is always the primary (Transports[0]), and
+// the exported `var Transports` set is emitted ONLY for multi-transport contracts.
+// This locks the {{if gt (len .Transports) 1}} branch in contractgen's own tests
+// (the real device-registered regen is the integration witness; this is the unit).
+func TestRender_Event_Transports(t *testing.T) {
+	root := repoRoot(t)
+	renderSpec := func(t *testing.T, transports []string) string {
+		t.Helper()
+		p := loadTodoorderProject(t, root)
+		c := p.Contracts["event.order-created.v1"]
+		c.Codegen = true
+		c.Transports = transports
+		spec, err := buildContractSpec(root, p, "event.order-created.v1")
+		if err != nil {
+			t.Fatalf("buildContractSpec: %v", err)
+		}
+		out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+			TemplateName: "spec.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+		})
+		if err != nil {
+			t.Fatalf("Render spec.tmpl: %v", err)
+		}
+		return string(out)
+	}
+
+	t.Run("single transport: primary only, no Transports var", func(t *testing.T) {
+		out := renderSpec(t, []string{"amqp"})
+		if !strings.Contains(out, `Transport: "amqp"`) {
+			t.Errorf("expected primary Transport \"amqp\", got:\n%s", out)
+		}
+		if strings.Contains(out, "var Transports") {
+			t.Errorf("single-transport contract must NOT emit a Transports var, got:\n%s", out)
+		}
+	})
+
+	t.Run("multi transport: primary + exported Transports set", func(t *testing.T) {
+		out := renderSpec(t, []string{"amqp", "mqtt"})
+		if !strings.Contains(out, `Transport: "amqp"`) {
+			t.Errorf("expected primary Transport \"amqp\" (transports[0]), got:\n%s", out)
+		}
+		if !strings.Contains(out, `var Transports = []string{"amqp", "mqtt"}`) {
+			t.Errorf("expected exported Transports set, got:\n%s", out)
+		}
+	})
+}
+
 // TestRender_ExternalModulePath proves modulePath flows through contractgen
 // rendering: rendering the subscription template (which imports framework
 // kernel packages) under an EXTERNAL module path produces valid Go, and the

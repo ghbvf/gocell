@@ -1,5 +1,6 @@
 id: event.device-registered.v1
 kind: event
+transports: [amqp, mqtt]
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
