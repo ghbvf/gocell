@@ -277,6 +277,14 @@ func (p *Parser) parseContract(fsys fs.FS, src MetadataSource, pm *ProjectMeta) 
 	if m.OwnerCell == "" {
 		m.OwnerCell = m.ProviderEndpoint()
 	}
+	// transports default derivation (#1389): an omitted `transports:` is
+	// defaulted per kind so every existing contract stays byte-identical and the
+	// generated ContractSpec.Transport primary is unchanged. Only contracts that
+	// explicitly declare a multi-transport set (today: device-registered) differ.
+	// Mirrors k8s SetDefaults_Service (if Protocol == "" → ProtocolTCP).
+	if m.Transports == nil {
+		m.Transports = defaultTransportsForKind(m.Kind)
+	}
 	// Contract directory is derived uniformly from the source path (works
 	// for both conventional layout and manifest mode with arbitrary layout).
 	m.Dir = path.Dir(filepath.ToSlash(src.Path))
@@ -483,6 +491,29 @@ func contractYAMLHasKey(node *yaml.Node, key string) bool {
 		}
 	}
 	return false
+}
+
+// defaultTransportsForKind returns the canonical default transport set for a
+// contract kind when the contract.yaml omits `transports:` (#1389). The defaults
+// reproduce the pre-#1389 hardcoded wire protocol per kind so every existing
+// contract derives a byte-identical generated ContractSpec.Transport primary:
+// event/command publish over amqp, http/webhook over http, grpc over grpc, and
+// projection/saga have no wire transport of their own (read-side / orchestrated)
+// so they default to "internal". Unknown kinds yield nil; governance FMT-39 then
+// flags the empty set. Mirrors k8s SetDefaults_Service per-field defaulting.
+func defaultTransportsForKind(kind string) []string {
+	switch cellvocab.ContractKind(kind) {
+	case cellvocab.ContractEvent, cellvocab.ContractCommand:
+		return []string{string(cellvocab.TransportAMQP)}
+	case cellvocab.ContractHTTP, cellvocab.ContractWebhook:
+		return []string{string(cellvocab.TransportHTTP)}
+	case cellvocab.ContractGRPC:
+		return []string{string(cellvocab.TransportGRPC)}
+	case cellvocab.ContractProjection, cellvocab.ContractSaga:
+		return []string{string(cellvocab.TransportInternal)}
+	default:
+		return nil
+	}
 }
 
 // deriveEventSubscribers adds slices' owning cell IDs to the Subscribers list of

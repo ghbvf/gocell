@@ -232,10 +232,21 @@ type WaiverMeta struct {
 
 // ContractMeta maps to contracts/{kind}/{domain...}/{version}/contract.yaml.
 type ContractMeta struct {
-	ID               string `yaml:"id"`
-	Kind             string `yaml:"kind"` // http|event|command|projection|webhook|grpc|saga
-	OwnerCell        string `yaml:"ownerCell"`
-	ConsistencyLevel string `yaml:"consistencyLevel"`
+	ID   string `yaml:"id"`
+	Kind string `yaml:"kind"` // http|event|command|projection|webhook|grpc|saga
+	// Transports is the non-empty SET of wire transports this contract is
+	// sanctioned to bind to (e.g. [amqp, mqtt] for an event published over both
+	// brokers). When the contract.yaml omits `transports:`, parser.parseContract
+	// defaults it per kind (event/command→[amqp], http/webhook→[http],
+	// grpc→[grpc], projection/saga→[internal]) so every existing contract stays
+	// byte-identical. Each member MUST be one of cellvocab.AllTransports();
+	// kind↔transport compatibility is enforced by governance FMT-39. contractgen
+	// derives the generated ContractSpec.Transport as the primary (Transports[0])
+	// and emits the full exported set for multi-transport contracts.
+	// ref: asyncapi/spec channel.servers (transport set); k8s SetDefaults (per-kind default).
+	Transports       []string `yaml:"transports,omitempty"`
+	OwnerCell        string   `yaml:"ownerCell"`
+	ConsistencyLevel string   `yaml:"consistencyLevel"`
 	Lifecycle        string `yaml:"lifecycle"` // draft|active|deprecated
 	// Triggers lists the outbox event topics emitted by this contract's owner
 	// cell when the HTTP handler succeeds. Required for L2+ HTTP contracts.
