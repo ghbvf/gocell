@@ -14,7 +14,7 @@
 //
 //   - cells/auditcore/internal/appender/service.go — HandleEvent
 //     composite literal: TraceID: corr.TraceID() and
-//     CorrelationID: corr.CorrelationID() (via correlation.FromObservability)
+//     CorrelationID: corr.CorrelationID() (via correlation.New(string(obs.TraceID), ...))
 //
 // This is the sole sanctioned injection path (issue #1048 Batch F).
 // The outbox.Entry seal (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01) and the
@@ -328,17 +328,16 @@ func scanObsIDCompositeLitWrites(p *Pass, file *ast.File, rel string) []Diagnost
 		if !isLedgerEntryType(p.TypesInfo, lit) {
 			return
 		}
-		for _, elt := range lit.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
+		// Use EachInChildren to iterate the CompositeLit's direct elements
+		// (its Elts field) without a raw for-range + type assertion over
+		// []ast.Expr (SCANNER-FRAMEWORK-USAGE-01 Path B).
+		EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 			keyIdent, ok := kv.Key.(*ast.Ident)
 			if !ok {
-				continue
+				return
 			}
 			if !isGuardedObsIDField(keyIdent.Name) {
-				continue
+				return
 			}
 			// A composite literal key for a guarded field is present. Any
 			// non-zero value expression is a violation (the scanner only runs on
@@ -358,7 +357,7 @@ func scanObsIDCompositeLitWrites(p *Pass, file *ast.File, rel string) []Diagnost
 					keyIdent.Name, rel, pos.Line, rel,
 				),
 			})
-		}
+		})
 	})
 	return d
 }
@@ -371,16 +370,20 @@ func scanObsIDCompositeLitWrites(p *Pass, file *ast.File, rel string) []Diagnost
 func scanObsIDAssignWrites(p *Pass, file *ast.File, rel string) []Diagnostic {
 	var d []Diagnostic
 	EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
-		for _, lhs := range as.Lhs {
-			sel, ok := lhs.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil {
-				continue
+		// EachInChildren visits direct children of as, which includes both Lhs
+		// and Rhs SelectorExprs. The exprInList guard restricts matches to
+		// write-side (LHS) semantics, avoiding false positives on RHS reads.
+		// Using EachInChildren avoids the raw for-range + type assertion over
+		// []ast.Expr that would self-trigger SCANNER-FRAMEWORK-USAGE-01 Path B.
+		EachInChildren[ast.SelectorExpr](as, func(sel *ast.SelectorExpr) {
+			if sel.Sel == nil || !exprInList(as.Lhs, sel) {
+				return // LHS-only: write semantics
 			}
 			if !isGuardedObsIDField(sel.Sel.Name) {
-				continue
+				return
 			}
 			if !isLedgerEntryFieldSel(p.TypesInfo, sel) {
-				continue
+				return
 			}
 			pos := p.Fset.Position(sel.Pos())
 			d = append(d, Diagnostic{
@@ -397,9 +400,22 @@ func scanObsIDAssignWrites(p *Pass, file *ast.File, rel string) []Diagnostic {
 					sel.Sel.Name, rel, pos.Line, rel,
 				),
 			})
-		}
+		})
 	})
 	return d
+}
+
+// exprInList reports whether target is an element of list (identity compare,
+// no type assertion — avoids self-triggering SCANNER-FRAMEWORK-USAGE-01).
+// Used to restrict EachInChildren[ast.SelectorExpr] hits to write-side (LHS)
+// positions in an AssignStmt.
+func exprInList(list []ast.Expr, target ast.Expr) bool {
+	for _, e := range list {
+		if e == target {
+			return true
+		}
+	}
+	return false
 }
 
 // isGuardedObsIDField reports whether fieldName is in the closed set of

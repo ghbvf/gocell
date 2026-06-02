@@ -666,7 +666,7 @@ func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
 		{
 			ID: "tid-3", EventID: "evt-tid-3", EventType: "event.test.v1",
 			ActorID: "actor-c", TraceID: "trace-xyz",
-			Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+			Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
 		},
 	}
 	for _, e := range seed {
@@ -724,7 +724,7 @@ func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
 		{
 			ID: "ta-3", EventID: "evt-ta-3", EventType: "event.test.v1",
 			ActorID: "usr-1", TraceID: "trace-xyz",
-			Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+			Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
 		},
 	}
 	for _, e := range seed {
