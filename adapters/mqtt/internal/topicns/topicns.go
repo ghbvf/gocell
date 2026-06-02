@@ -396,7 +396,7 @@ const sharedSubPrefix = "$share/"
 // ErrTopicOutsideNamespace / ErrInvalidNamespace) on
 // filter / namespace violations.
 //
-// ref: adapters/mqtt/topicns.go Mint/PublishableTopic
+// ref: Mint / PublishableTopic (same package)
 func (n Namespace) MintFilter(consumerGroup, filter string) (SubscribableFilter, error) {
 	if consumerGroup == "" {
 		// filter is a topic pattern (may embed identifiers) → Internal channel

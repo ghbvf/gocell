@@ -3,6 +3,7 @@ package topicns
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -19,6 +20,7 @@ func TestParse_Valid(t *testing.T) {
 		{"with-hyphens", "my-device"},
 		{"deep", "a/b/c/d"},
 		{"alphanumeric", "dev01"},
+		{"len-128", strings.Repeat("a", 128)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -700,5 +702,90 @@ func TestPublishableTopic_FieldFreeze(t *testing.T) {
 	}
 	if f.IsExported() {
 		t.Error("field[0] is exported; want unexported")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FIX 7 coverage additions
+// ---------------------------------------------------------------------------
+
+// TestNamespace_MintFilter_InvalidGroup verifies that a non-empty but
+// invalid consumer group (containing uppercase, slash, plus, or hash) is
+// rejected with ErrInvalidSubscribeFilter and returns a zero SubscribableFilter.
+// This exercises the isValidConsumerGroup path, distinct from the empty-group
+// path already tested by TestNamespace_MintFilter_EmptyGroup.
+func TestNamespace_MintFilter_InvalidGroup(t *testing.T) {
+	t.Parallel()
+	ns, err := Parse("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		group string
+	}{
+		{"uppercase", "BAD"},
+		{"slash", "bad/group"},
+		{"plus", "bad+group"},
+		{"hash", "bad#group"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f, err := ns.MintFilter(tc.group, "ns/a")
+			if err == nil {
+				t.Fatalf("MintFilter(group=%q) expected error, got nil", tc.group)
+			}
+			if f != (SubscribableFilter{}) {
+				t.Errorf("MintFilter(group=%q) returned non-zero filter: %v", tc.group, f)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != ErrInvalidSubscribeFilter {
+				t.Errorf("code = %s, want %s", ec.Code, ErrInvalidSubscribeFilter)
+			}
+		})
+	}
+}
+
+// TestNamespace_SubscribeOK_BareWildcardOutsideNamespace verifies that bare
+// wildcard filters "#" and "+/x" are rejected with ErrTopicOutsideNamespace
+// when the namespace is "ns" — the filter head is empty (before the first "/")
+// and therefore outside the namespace prefix boundary.
+func TestNamespace_SubscribeOK_BareWildcardOutsideNamespace(t *testing.T) {
+	t.Parallel()
+	ns, err := Parse("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		filter string
+	}{
+		{"bare-hash", "#"},
+		{"bare-plus-subpath", "+/x"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := ns.SubscribeOK(tc.filter)
+			if err == nil {
+				t.Fatalf("SubscribeOK(%q) expected error, got nil", tc.filter)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != ErrTopicOutsideNamespace {
+				t.Errorf("SubscribeOK(%q) code = %s, want %s",
+					tc.filter, ec.Code, ErrTopicOutsideNamespace)
+			}
+		})
 	}
 }

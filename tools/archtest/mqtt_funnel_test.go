@@ -288,15 +288,25 @@ func scanSealedCompositeLitConstruction(
 // ─── A3: alias / re-shape blind-spot scanner ─────────────────────────────────
 
 // scanMQTTTypeAliases scans file for type alias declarations of the form
-// `type X = ClientID` or `type X = TopicNamespace` anywhere in the repo.
-// Such aliases would not re-open construction (unexported fields remain
-// inaccessible) but are banned for clarity and to prevent future confusion.
+// `type X = <targetTypeName>` (where the RHS resolves to targetPkgPath/targetTypeName)
+// anywhere in the repo. Such aliases would not re-open construction (unexported fields
+// remain inaccessible) but are banned for clarity and to prevent future confusion.
+//
+// sanctionedAliasName, if non-empty, names one alias that IS permitted — the
+// canonical re-export alias (e.g. adapters/mqtt namespace.go declares
+// `type TopicNamespace = topicns.Namespace`). Only that one alias is skipped;
+// all other aliases of the target type trigger a diagnostic.
+//
+// For TopicNamespace the type moved to internal/topicns as Namespace (#1247);
+// the sanctioned alias is namespace.go's `TopicNamespace = topicns.Namespace`.
+// For ClientID the type remains in adapters/mqtt; there is no sanctioned alias
+// (sanctionedAliasName = "").
 func scanMQTTTypeAliases(
 	fset *token.FileSet,
 	file *ast.File,
 	rel string,
 	info *types.Info,
-	mqttTypeName string,
+	targetPkgPath, targetTypeName, sanctionedAliasName string,
 	ruleID string,
 ) []Diagnostic {
 	if info == nil {
@@ -309,7 +319,14 @@ func scanMQTTTypeAliases(
 			// Not an alias declaration.
 			return
 		}
-		// It's an alias. Check if the RHS resolves to our target type.
+		// Skip the one sanctioned re-export alias (e.g. adapters/mqtt's
+		// `type TopicNamespace = topicns.Namespace`). It is the clarity-preserving
+		// re-export; only OTHER aliases of the sealed type are banned.
+		if sanctionedAliasName != "" && ts.Name.Name == sanctionedAliasName {
+			return
+		}
+		// It's an alias (and not the sanctioned one). Check if the RHS resolves to
+		// our target type.
 		tv, ok := info.Types[ts.Type]
 		if !ok {
 			return
@@ -319,10 +336,10 @@ func scanMQTTTypeAliases(
 			return
 		}
 		tobj := named.Obj()
-		if tobj.Pkg() == nil || tobj.Pkg().Path() != mqttPkgPath {
+		if tobj.Pkg() == nil || tobj.Pkg().Path() != targetPkgPath {
 			return
 		}
-		if tobj.Name() != mqttTypeName {
+		if tobj.Name() != targetTypeName {
 			return
 		}
 		pos := fset.Position(ts.Pos())
@@ -330,9 +347,10 @@ func scanMQTTTypeAliases(
 			Rel:  rel,
 			Line: pos.Line,
 			Message: fmt.Sprintf(
-				"%s/A3: type alias `type %s = mqtt.%s` at %s:%d is prohibited — "+
-					"aliases of sealed structs obscure the construction funnel",
-				ruleID, ts.Name.Name, mqttTypeName, rel, pos.Line,
+				"%s/A3: type alias `type %s = %s.%s` at %s:%d is prohibited — "+
+					"aliases of the sealed token type obscure the construction funnel "+
+					"(the sanctioned re-export is adapters/mqtt namespace.go)",
+				ruleID, ts.Name.Name, tobj.Pkg().Name(), targetTypeName, rel, pos.Line,
 			),
 		})
 	})
@@ -399,7 +417,7 @@ func TestMQTTClientIDNamespace01(t *testing.T) {
 
 				a3Diags = append(a3Diags, scanMQTTTypeAliases(
 					p.Fset, f, rel, p.TypesInfo,
-					"ClientID", ruleID,
+					mqttPkgPath, "ClientID", "", ruleID,
 				)...)
 			}
 			return nil
@@ -483,7 +501,7 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 				}
 				a3Diags = append(a3Diags, scanMQTTTypeAliases(
 					p.Fset, f, rel, p.TypesInfo,
-					"TopicNamespace", ruleID,
+					topicnsPkgPath, "Namespace", "TopicNamespace", ruleID,
 				)...)
 			}
 			return nil
