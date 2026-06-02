@@ -291,6 +291,12 @@ type Subscription struct {
 // ObservabilityID on a (value or pointer) Subscription receiver and reports any
 // deviation from the canonical single-statement `return s.CellID` body. found
 // reports whether the method was located at all.
+//
+// The receiver must be named: an anonymous receiver cannot reference s.CellID,
+// so it can never express the canonical body, and it would silently disable the
+// selector-base check (there is no receiver name to anchor `s.CellID` against),
+// letting `return other.CellID` read a foreign value while still passing the
+// field-name check. An anonymous receiver is therefore a violation outright.
 func collectObservabilityIDViolations(f *ast.File, fset *token.FileSet, label string) (found bool, violations []string) {
 	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Name.Name != "ObservabilityID" {
@@ -314,6 +320,13 @@ func collectObservabilityIDViolations(f *ast.File, fset *token.FileSet, label st
 			recvName = recvField.Names[0].Name
 		}
 		found = true
+		if recvName == "" {
+			violations = append(violations, fmt.Sprintf("%s:%d: ObservabilityID must use a named receiver "+
+				"(`func (s Subscription) ObservabilityID()`); an anonymous receiver cannot reference s.CellID "+
+				"and disables the selector-base check, letting `return other.CellID` read a foreign value",
+				label, fset.Position(recvField.Pos()).Line))
+			return
+		}
 		if fn.Body == nil {
 			violations = append(violations, label+": ObservabilityID has no body")
 			return
@@ -341,14 +354,14 @@ func collectObservabilityIDViolations(f *ast.File, fset *token.FileSet, label st
 		}
 		// The selector base must be the receiver itself (s.CellID), not some
 		// other value's CellID field — `return other.CellID` would otherwise
-		// satisfy the field-name check while reading a different source.
-		if recvName != "" {
-			base, ok := sel.X.(*ast.Ident)
-			if !ok || base.Name != recvName {
-				violations = append(violations, fmt.Sprintf("%s:%d: ObservabilityID body must return the "+
-					"receiver's CellID (%s.CellID), not another value's CellID",
-					label, fset.Position(fn.Body.Pos()).Line, recvName))
-			}
+		// satisfy the field-name check while reading a different source. recvName
+		// is guaranteed non-empty here (anonymous receivers returned above), so
+		// this check is unconditional.
+		base, ok := sel.X.(*ast.Ident)
+		if !ok || base.Name != recvName {
+			violations = append(violations, fmt.Sprintf("%s:%d: ObservabilityID body must return the "+
+				"receiver's CellID (%s.CellID), not another value's CellID",
+				label, fset.Position(fn.Body.Pos()).Line, recvName))
 		}
 	})
 	return found, violations
@@ -413,6 +426,19 @@ func (s *Subscription) ObservabilityID() string { return s.CellID }`,
 			src: `package fixture
 type Subscription struct{}
 func (s Subscription) ObservabilityID() string { return other.CellID }`,
+			wantFound:      true,
+			wantViolations: true,
+		},
+		{
+			// Anonymous receiver: there is no receiver name to anchor the
+			// selector base against, so `other.CellID` satisfies the field-name
+			// check while reading a foreign value. An anonymous receiver also
+			// cannot reference s.CellID at all, so it can never express the
+			// canonical body — it must be a violation outright.
+			name: "red_anonymous_receiver_other_cellid",
+			src: `package fixture
+type Subscription struct{}
+func (Subscription) ObservabilityID() string { return other.CellID }`,
 			wantFound:      true,
 			wantViolations: true,
 		},
@@ -681,6 +707,18 @@ type Registrar interface {
 			src: `package fixture
 type Registrar interface {
 	Subscribe(spec ContractSpec, handler EntryHandler, consumerGroup string, cellID string, opts SubscriptionOption) error
+}`,
+			wantViolations: true,
+		},
+		{
+			// Variadic, but the element type is not SubscriptionOption. Guards
+			// the ell.Elt type check at the bottom of the collector — without
+			// this row, an inverted/dropped element-type branch would pass
+			// vacuously (every other red row returns early before reaching it).
+			name: "red_5th_wrong_variadic_element",
+			src: `package fixture
+type Registrar interface {
+	Subscribe(spec ContractSpec, handler EntryHandler, consumerGroup string, cellID string, opts ...OtherOption) error
 }`,
 			wantViolations: true,
 		},
