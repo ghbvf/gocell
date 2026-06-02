@@ -71,9 +71,11 @@ func runStarter(ctx context.Context) error {
 	}
 
 	// composition.New().With(...).Build(...) is the public API under test (#1085).
-	// Module order: auditcore first (it sets shared.BootstrapLedgerStore which
-	// accesscore reads), then accesscore, then configcore — matching corebundle
-	// assembly.yaml cell order.
+	// Module order mirrors corebundle assembly.yaml cell order purely for
+	// convention/determinism — it is NOT runtime-significant. The former
+	// auditcore→accesscore BootstrapLedgerStore handoff was removed in #1423
+	// (bootstrap auth-fail is now event-driven via event.auth.bootstrap-failed.v1),
+	// so module Provide order carries no cross-cell dependency.
 	app, err := composition.New().
 		With(
 			cellmodulesauditcore.Module(),

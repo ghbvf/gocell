@@ -152,7 +152,7 @@ func buildConfigCoreCellFromShared(
 	t testing.TB, ctx context.Context, shared *composition.SharedDeps,
 ) configCoreProvideResult {
 	t.Helper()
-	c, _, opts, res, err := cellmodulesconfigcore.Module().Provide(ctx, shared, composition.ModuleExports{})
+	c, opts, res, err := cellmodulesconfigcore.Module().Provide(ctx, shared)
 	require.NoError(t, err, "cellmodules/configcore.Module().Provide must succeed")
 	require.NotNil(t, c, "configcore cell must be non-nil")
 	return configCoreProvideResult{

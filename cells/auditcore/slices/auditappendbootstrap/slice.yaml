@@ -1,0 +1,23 @@
+id: auditappendbootstrap
+belongsToCell: auditcore
+# L1 LocalTx: the handler appends the bootstrap-namespace ledger in a single
+# transaction (audit.AppendBootstrapAuthFail → store.Append) with NO outbox
+# re-emit — unlike the relay appenders (auditappendsession etc.) which publish
+# event.audit.appended.v1 and are therefore L2 OutboxFact. A slice may declare a
+# level weaker than its parent cell (SLICE-CONSISTENCY); subscribe-only without a
+# publish role does not force L2.
+consistencyLevel: L1
+lifecycle: asset
+contractUsages:
+  - contract: event.auth.bootstrap-failed.v1
+    role: subscribe
+    handler: HandleEvent
+verify:
+  unit:
+    - unit.auditappendbootstrap.service
+  contract:
+    - contract.event.auth.bootstrap-failed.v1.subscribe
+  waivers: []
+
+allowedFiles:
+  - cells/auditcore/slices/auditappendbootstrap/**

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -65,7 +66,7 @@ func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIP(t *testing.T) 
 			t.Parallel()
 			store, raw, clk := buildTestLedgerStore(t)
 
-			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, tc.reason, tc.clientIP)
+			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, uuid.NewString(), tc.reason, tc.clientIP)
 			require.NoError(t, err, "AppendBootstrapAuthFail must succeed for valid reason %q", tc.reason)
 
 			entries, err := raw.Query(context.Background(),
@@ -103,7 +104,7 @@ func TestAppendBootstrapAuthFail_RejectsUnknownReason(t *testing.T) {
 		t.Run(reason, func(t *testing.T) {
 			t.Parallel()
 			store, _, clk := buildTestLedgerStore(t)
-			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, reason, "192.0.2.1")
+			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, uuid.NewString(), reason, "192.0.2.1")
 			require.Error(t, err, "unknown reason %q must be rejected", reason)
 			var coded *errcode.Error
 			require.True(t, errors.As(err, &coded), "error must be *errcode.Error; got %T", err)
@@ -117,35 +118,60 @@ func TestAppendBootstrapAuthFail_RejectsUnknownReason(t *testing.T) {
 	}
 }
 
-// TestAppendBootstrapAuthFail_DuplicateFingerprintRejected covers T4.
-// IdempotencyContentFingerprint keys on (eventID + eventType + actorID + timestamp + payload).
-// Because AppendBootstrapAuthFail calls uuid.NewString() per invocation, each
-// call produces a distinct EventID — the fingerprint differs even when all
-// business fields are identical, so two consecutive Appends both succeed and
-// the ledger holds exactly two entries.
-// This test documents the real behavior as a regression guard; if the
-// implementation ever switches to a content-only fingerprint that ignores
-// EventID, it will immediately fail here.
-func TestAppendBootstrapAuthFail_DuplicateFingerprintRejected(t *testing.T) {
+// TestAppendBootstrapAuthFail_RedeliverySameEventID_Deduplicates covers T4 (C1/F1).
+// IdempotencyContentFingerprint keys on EventID alone. AppendBootstrapAuthFail
+// now takes the stable source-event ID (outbox.Entry.ID()) as EventID, so
+// at-least-once redelivery — the SAME eventID twice — collapses to
+// ErrAuditLedgerAlreadyExists on the second call and the ledger holds exactly
+// ONE entry. Two DIFFERENT events (distinct eventIDs) each persist.
+// Regression guard: if the implementation ever reverts to minting a per-call
+// uuid.NewString(), the redelivery case below would store two rows and fail.
+func TestAppendBootstrapAuthFail_RedeliverySameEventID_Deduplicates(t *testing.T) {
 	t.Parallel()
 	store, raw, clk := buildTestLedgerStore(t)
 	ctx := context.Background()
+	eventID := uuid.NewString()
 
-	// First append — must succeed.
-	err := audit.AppendBootstrapAuthFail(ctx, store, clk, "rate_limited", "192.0.2.1")
-	require.NoError(t, err, "first Append must succeed")
+	// First delivery — must succeed.
+	err := audit.AppendBootstrapAuthFail(ctx, store, clk, eventID, "rate_limited", "192.0.2.1")
+	require.NoError(t, err, "first delivery must succeed")
 
-	// Second append — same reason + clientIP, but uuid.NewString() gives a
-	// fresh EventID each time, so IdempotencyContentFingerprint yields a
-	// different key. Both entries are stored (store has 2 entries, not 1).
-	err = audit.AppendBootstrapAuthFail(ctx, store, clk, "rate_limited", "192.0.2.1")
-	require.NoError(t, err, "second Append must also succeed — EventID uniqueness prevents fingerprint collision")
+	// Redelivery — same stable eventID ⇒ same fingerprint ⇒ idempotent dedup.
+	err = audit.AppendBootstrapAuthFail(ctx, store, clk, eventID, "rate_limited", "192.0.2.1")
+	require.Error(t, err, "redelivery of the same eventID must be rejected as duplicate")
+	var coded *errcode.Error
+	require.True(t, errors.As(err, &coded), "duplicate error must be *errcode.Error; got %T", err)
+	assert.Equal(t, errcode.ErrAuditLedgerAlreadyExists, coded.Code,
+		"redelivery must surface ErrAuditLedgerAlreadyExists (idempotent replay)")
 
 	entries, qerr := raw.Query(ctx,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
-	assert.Len(t, entries, 2, "both Appends should produce distinct ledger entries due to unique EventIDs")
+	assert.Len(t, entries, 1, "redelivery of the same eventID must leave exactly one ledger entry")
+
+	// A genuinely distinct event (different eventID) persists independently.
+	err = audit.AppendBootstrapAuthFail(ctx, store, clk, uuid.NewString(), "rate_limited", "192.0.2.1")
+	require.NoError(t, err, "distinct eventID must persist a second entry")
+	entries, qerr = raw.Query(ctx,
+		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
+	require.NoError(t, qerr)
+	assert.Len(t, entries, 2, "two distinct eventIDs produce two ledger entries")
+}
+
+// TestAppendBootstrapAuthFail_EmptyEventID_Rejected covers the new eventID
+// fail-fast guard (C1/F1): an empty idempotency key is rejected before any
+// write, so it cannot silently collide all empty-id appends into one row.
+func TestAppendBootstrapAuthFail_EmptyEventID_Rejected(t *testing.T) {
+	t.Parallel()
+	store, _, clk := buildTestLedgerStore(t)
+	err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, "", "rate_limited", "192.0.2.1")
+	require.Error(t, err, "empty eventID must be rejected")
+	var coded *errcode.Error
+	require.True(t, errors.As(err, &coded), "error must be *errcode.Error; got %T", err)
+	assert.Equal(t, errcode.ErrValidationFailed, coded.Code,
+		"empty eventID must surface as ErrValidationFailed")
 }
 
 // TestAppendBootstrapAuthFail_NilStoreOrClock_Errors covers T3.
@@ -155,7 +181,7 @@ func TestAppendBootstrapAuthFail_NilStoreOrClock_Errors(t *testing.T) {
 	t.Run("nil store", func(t *testing.T) {
 		t.Parallel()
 		_, _, clk := buildTestLedgerStore(t)
-		err := audit.AppendBootstrapAuthFail(context.Background(), nil, clk, "rate_limited", "192.0.2.1")
+		err := audit.AppendBootstrapAuthFail(context.Background(), nil, clk, uuid.NewString(), "rate_limited", "192.0.2.1")
 		require.Error(t, err)
 		var coded *errcode.Error
 		require.True(t, errors.As(err, &coded))
@@ -164,7 +190,7 @@ func TestAppendBootstrapAuthFail_NilStoreOrClock_Errors(t *testing.T) {
 	t.Run("nil clock", func(t *testing.T) {
 		t.Parallel()
 		store, _, _ := buildTestLedgerStore(t)
-		err := audit.AppendBootstrapAuthFail(context.Background(), store, nil, "missing_header", "")
+		err := audit.AppendBootstrapAuthFail(context.Background(), store, nil, uuid.NewString(), "missing_header", "")
 		require.Error(t, err, "nil clock must be rejected; Timestamp provenance is load-bearing")
 	})
 }

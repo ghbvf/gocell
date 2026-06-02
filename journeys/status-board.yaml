@@ -27,7 +27,7 @@
   state: done
   risk: low
   blocker: ""
-  updatedAt: 2026-05-19
+  updatedAt: 2026-06-02
 - journeyId: J-confighotreload
   state: todo
   risk: low

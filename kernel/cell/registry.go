@@ -303,6 +303,11 @@ type AuthRouteMeta struct {
 	// routes — the per-route bootstrap middleware authenticates instead. Bootstrap,
 	// Public, and PasswordResetExempt are mutually exclusive.
 	Bootstrap bool
+	// IdempotencyExempt marks the route as opt-out from the HTTP idempotency
+	// middleware. When true, the middleware never claims or records this route's
+	// responses. The route still executes normally; clients sending Idempotency-Key
+	// get no replay guarantee.
+	IdempotencyExempt bool
 }
 
 // IsInternal reports whether this route lives on the internal listener.

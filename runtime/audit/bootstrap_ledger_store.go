@@ -9,17 +9,16 @@ import (
 )
 
 // BootstrapLedgerStore is a sealed handle for the bootstrap audit chain. It
-// is the only typed value accepted by AppendBootstrapAuthFail and
-// NewBootstrapAuthFailObserver — passing the auditcore-namespace store there
-// is a compile error rather than a runtime fork of the hash chain.
+// is the only typed value accepted by AppendBootstrapAuthFail — passing the
+// auditcore-namespace store there is a compile error rather than a runtime
+// fork of the hash chain.
 //
 // Construct with NewBootstrapLedgerStore(inner) at the composition root
-// (cmd/corebundle / examples/*/app.go) after building the
-// BootstrapNamespace()-scoped ledger.Store, and hand the returned pointer
-// to NewBootstrapAuthFailObserver. The Append/Tail/Verify/RepoReady methods
-// delegate to the wrapped store; the `inner` field is unexported and no
-// accessor returns it, so callers cannot extract the wrapped store and
-// route writes around the sealed surface.
+// (cellmodules/auditcore or examples/*/app.go) after building the
+// BootstrapNamespace()-scoped ledger.Store. The handle is wired into the
+// auditcore cell via auditcore.WithBootstrapStore (Wave-1 #1423); the
+// auditappendbootstrap subscriber slice calls AppendBootstrapAuthFail when
+// event.auth.bootstrap-failed.v1 arrives.
 //
 // ref: google/trillian storage.ReadWriteTransaction(ctx, *trillian.Tree, ...) —
 // typed *Tree pointer prevents cross-tree writes at the type-system layer
@@ -27,11 +26,10 @@ import (
 //
 // Enforcement note (AI-robust grading, see ADR 202605270230 §AI-robust):
 // downstream is Hard (the type-checker rejects every bare `ledger.Store`
-// argument at the AppendBootstrapAuthFail / NewBootstrapAuthFailObserver call
-// sites); upstream is also Hard because ledger.Store exposes Protocol() and
-// NewBootstrapLedgerStore rejects any store not scoped to BootstrapNamespace().
-// AUDIT-NS-DISJOINT-01 remains a composition-root backstop for production
-// wiring, but namespace correctness no longer depends on that static scan.
+// argument at the AppendBootstrapAuthFail call sites); upstream is also Hard
+// because ledger.Store exposes Protocol() and NewBootstrapLedgerStore rejects
+// any store not scoped to BootstrapNamespace(). AUDIT-NS-DISJOINT-01 remains
+// a composition-root backstop for production wiring.
 type BootstrapLedgerStore struct {
 	inner ledger.Store
 }

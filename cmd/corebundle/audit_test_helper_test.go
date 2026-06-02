@@ -53,10 +53,11 @@ func auditcoreLedgerOpts(t testing.TB, hmacKey []byte) []auditcore.Option {
 }
 
 // buildTestBootstrapAuditChain constructs a (raw store, sealed wrapper) pair on
-// the bootstrap namespace for integration tests that need to drive
-// audit.NewBootstrapAuthFailObserver with a real *audit.BootstrapLedgerStore.
-// The raw store is returned alongside so test assertions can call Query on it
-// directly, and so a ledger.MultiStore can include it next to the auditcore
+// the bootstrap namespace for integration tests. The sealed wrapper is injected
+// into auditcore via WithBootstrapStore so the auditappendbootstrap subscriber
+// (consuming event.auth.bootstrap-failed.v1) writes the bootstrap-namespace
+// ledger. The raw store is returned alongside so test assertions can call Query
+// on it directly, and so a ledger.MultiStore can include it next to the auditcore
 // relay store (mirroring the production wiring in cellmodules/auditcore/module.go).
 func buildTestBootstrapAuditChain(t testing.TB, hmacKey []byte) (ledger.Store, *audit.BootstrapLedgerStore) {
 	t.Helper()

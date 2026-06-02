@@ -54,7 +54,13 @@ const (
 	// ErrCellMissingTokenIssuer signals that a Cell was started without a token
 	// issuer dependency that it requires.
 	ErrCellMissingTokenIssuer Code = "ERR_CELL_MISSING_TOKEN_ISSUER"
-	ErrCellInvalidConfig      Code = "ERR_CELL_INVALID_CONFIG"
+	// ErrCellMissingBootstrapStore signals that a Cell was started in durable
+	// mode without the bootstrap-chain ledger store it requires to persist
+	// bootstrap auth-fail events. Surfaced fail-fast at cell.Init() so a
+	// misconfigured production assembly fails at startup rather than deferring
+	// the failure to the first consumed event (Reject → DLX).
+	ErrCellMissingBootstrapStore Code = "ERR_CELL_MISSING_BOOTSTRAP_STORE"
+	ErrCellInvalidConfig         Code = "ERR_CELL_INVALID_CONFIG"
 	// ErrCellPlatformUnsupported signals that a Cell option requested capability
 	// that is not implemented on the current GOOS — distinct from
 	// ErrCellInvalidConfig (configuration mistake) so operators can route
@@ -631,6 +637,17 @@ const (
 	// ErrIdempotencyNoClaimLease signals that Receipt methods were called for a
 	// Claim result that did not acquire a processing lease. Maps to HTTP 409.
 	ErrIdempotencyNoClaimLease Code = "ERR_IDEMPOTENCY_NO_CLAIM_LEASE"
+	// ErrIdempotencyInProgress signals that another request is currently
+	// processing the same idempotency key (ClaimBusy). The client should retry
+	// after the in-flight request completes. Maps to HTTP 409.
+	ErrIdempotencyInProgress Code = "ERR_IDEMPOTENCY_IN_PROGRESS"
+	// ErrIdempotencyKeyReused signals that the same Idempotency-Key was sent with
+	// a different request body (fingerprint mismatch). Per IETF idempotency-key
+	// draft §6 and Stripe's idempotency guide, reusing a key with a different
+	// payload is a client error. Maps to HTTP 409 (KindConflict) because the
+	// errcode Kind set has no KindUnprocessable (422) — 409 is the closest safe
+	// choice that signals a conflict between the stored request and the new one.
+	ErrIdempotencyKeyReused Code = "ERR_IDEMPOTENCY_KEY_REUSED"
 
 	// Metrics error codes (kernel/observability/metrics).
 	//
@@ -783,13 +800,12 @@ const (
 	// refused, 5xx from target). Constructed with KindUnavailable → HTTP 503.
 	// First constructed in PR-5 (dispatcher).
 	ErrWebhookDeliveryFailed Code = "ERR_WEBHOOK_DELIVERY_FAILED"
-	// ErrWebhookDeliveryTimeout signals delivery exceeded its deadline.
-	// Constructed with KindDeadlineExceeded → HTTP 504. First constructed in
-	// PR-5 (dispatcher).
-	ErrWebhookDeliveryTimeout Code = "ERR_WEBHOOK_DELIVERY_TIMEOUT"
 	// ErrWebhookPermanentFailure signals a non-retryable delivery failure
-	// (retry budget exhausted, endpoint disabled). Constructed with KindInternal
-	// → HTTP 500. First constructed in PR-5 (dispatcher).
+	// (bad delivery id / signing failure / a selector that signals no
+	// subscription is configured). Constructed with the Kind appropriate to the
+	// failure — e.g. KindInvalid (HTTP 400). Non-2xx delivery RESPONSES are not
+	// permanent (standard-webhooks aligned: every non-2xx is retried). First
+	// constructed in PR-5 (dispatcher).
 	ErrWebhookPermanentFailure Code = "ERR_WEBHOOK_PERMANENT_FAILURE"
 	// ErrWebhookBodyTooLarge signals the inbound webhook body exceeded the size
 	// limit. Constructed with KindPayloadTooLarge → HTTP 413. First constructed

@@ -184,6 +184,41 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	})
 }
 
+// TestEventAuthBootstrapFailedV1Publish_FromSetup satisfies
+// contract.event.auth.bootstrap-failed.v1.publish in slice.yaml verify.contract
+// (VERIFY-01 closure). It drives setup.Service.RecordBootstrapAuthFail and
+// asserts that the emitted outbox entry's payload and headers both satisfy the
+// event contract schema — mirroring the subscribe-side test in
+// cells/auditcore/slices/auditappendbootstrap/contract_test.go.
+func TestEventAuthBootstrapFailedV1Publish_FromSetup(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "event.auth.bootstrap-failed.v1")
+
+	w := &stubWriter{}
+	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), w)
+
+	err := svc.RecordBootstrapAuthFail(context.Background(), "missing_header", "1.2.3.4")
+	require.NoError(t, err, "RecordBootstrapAuthFail must succeed for a valid reason")
+	require.Len(t, w.entries, 1, "RecordBootstrapAuthFail must emit exactly one entry")
+
+	entry := w.entries[0]
+	assert.Equal(t, dto.TopicBootstrapAuthFailed, entry.EventType())
+
+	// Payload must satisfy the published contract schema.
+	c.ValidatePayload(t, entry.Payload())
+	// Headers must include eventId.
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
+
+	// Negative: missing reason must fail validation.
+	c.MustRejectPayload(t, []byte(`{"clientIp":"1.2.3.4"}`))
+
+	// All three valid reasons must pass the schema.
+	for _, reason := range []string{"missing_header", "wrong_credentials", "rate_limited"} {
+		payloadJSON, _ := json.Marshal(map[string]string{"reason": reason})
+		c.ValidatePayload(t, payloadJSON)
+	}
+}
+
 // TestEventUserCreatedV1Publish_FromSetup closes the slice.yaml
 // contract.event.user.created.v1.publish verification gap: the setup slice
 // declares it publishes event.user.created.v1, so this test must drive the
