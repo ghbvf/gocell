@@ -866,6 +866,14 @@ func TestMemStore_TraceID_RoundTrip(t *testing.T) {
 // This is the key non-chained property: observability metadata must NOT affect
 // the chain hash so that the presence/absence of trace context does not
 // invalidate historical entries.
+//
+// Independent oracle: storetest.ReferenceComputeHash (the 12-field mirror that
+// never calls Protocol.ComputeHash) is used to verify that the hash of the
+// withTrace entry equals the production hash — proving TraceID is excluded from
+// the HMAC input set via an independent path (not a production-vs-production
+// circular comparison). The independent oracle lives in
+// storetest.RunPrincipalFieldsRoundTrip for the conformance suite path; this
+// test adds the targeted single-field exclusion assertion.
 func TestMemStore_TraceID_NotInHashChain(t *testing.T) {
 	t.Parallel()
 	p := newTestProtocol(t)
@@ -896,6 +904,23 @@ func TestMemStore_TraceID_NotInHashChain(t *testing.T) {
 	if hashWith != hashWithout {
 		t.Errorf("TraceID must NOT affect HMAC hash (non-chained invariant):\n  hash(with trace)    = %s\n  hash(without trace) = %s",
 			hashWith, hashWithout)
+	}
+
+	// Independent oracle: ReferenceComputeHash recomputes the canonical HMAC
+	// using an external 12-field mirror struct that does NOT call
+	// Protocol.ComputeHash. The reference excludes TraceID (it is not in
+	// referenceHashInput), so its output for withTrace must equal hashWith.
+	// A regression that silently adds TraceID to auditHashInput would make
+	// hashWith ≠ refHash (the reference stays at 12 fields), exposing the drift
+	// without relying on the production hash function itself.
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	if err != nil {
+		t.Fatalf("ParseNamespaceID: %v", err)
+	}
+	refHash := storetest.ReferenceComputeHash(t, testHMACKey(), ns, "", withTrace)
+	if hashWith != refHash {
+		t.Errorf("Independent oracle mismatch: TraceID appears to be included in the HMAC chain:\n  production hash = %s\n  reference hash  = %s",
+			hashWith, refHash)
 	}
 }
 

@@ -37,7 +37,7 @@ import (
 //   - roles              (019)  accesscore role definitions
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
-//   - audit_entries      (020/043)  tamper-evident audit ledger (per-namespace hash chain)
+//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index))  tamper-evident audit ledger (per-namespace hash chain)
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
 //                                   session_id / correlation_id / occurred_at) for
