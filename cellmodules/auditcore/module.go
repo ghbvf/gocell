@@ -23,6 +23,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -47,46 +48,9 @@ func (module) ID() string { return "auditcore" }
 func (m module) Provide(
 	ctx context.Context, shared *composition.SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
-	// Cursor codec for auditcore.
-	auditPrimary, auditPrevious := cellsecrets.LoadCursorKeys("AUDITCORE")
-	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
-		AdapterMode: shared.Topology.AdapterMode(),
-		EnvName:     "GOCELL_AUDITCORE_CURSOR_KEY",
-		PrevEnvName: "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
-		Primary:     auditPrimary,
-		Previous:    auditPrevious,
-		DevDefault:  "corebundle-audit-cursor-key-32b!",
-		Label:       "audit",
-	})
+	cursorCodec, auditProtocol, bootstrapProtocol, err := buildAuditProtocols(shared)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
-	}
-
-	// Build the auditcore relay protocol (HMAC key A, namespace="auditcore").
-	auditNamespace, err := ledger.ParseNamespaceID("auditcore")
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
-	}
-	auditProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode(),
-		"GOCELL_AUDITCORE_HMAC_KEY",
-		cellsecrets.LoadCellHMACKey("AUDITCORE"),
-		"dev-hmac-key-replace-in-prod!!!!",
-		auditNamespace)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
-	}
-
-	// Build the bootstrap protocol (HMAC key B, namespace="bootstrap").
-	// Independent HMAC key per chain (ref: hashicorp/vault audit/backend.go
-	// per-device Salt) so compromise of one chain's key cannot forge entries
-	// in the other.
-	bootstrapProtocol, err := buildAuditProtocol(shared.Topology.AdapterMode(),
-		"GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY",
-		cellsecrets.LoadCellHMACKey("AUDIT_BOOTSTRAP"),
-		"dev-hmac-bootstrap-replace-32b!!",
-		audit.BootstrapNamespace())
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("bootstrap audit HMAC key: %w", err)
+		return nil, nil, nil, err
 	}
 
 	// Build the two ledger.Store instances (PG or mem).
@@ -148,6 +112,59 @@ func (m module) Provide(
 	c := auditcell.NewAuditCore(shared.Clock, auditOpts...)
 
 	return c, nil, nil, nil
+}
+
+// buildAuditProtocols builds the cursor codec and both ledger protocols
+// (auditcore relay chain + bootstrap chain) from environment-sourced secrets.
+// Extracted from Provide to keep funlen within 80.
+func buildAuditProtocols(shared *composition.SharedDeps) (
+	cursorCodec *query.CursorCodec,
+	auditProtocol *ledger.Protocol,
+	bootstrapProtocol *ledger.Protocol,
+	err error,
+) {
+	// Cursor codec for auditcore.
+	auditPrimary, auditPrevious := cellsecrets.LoadCursorKeys("AUDITCORE")
+	cursorCodec, err = cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
+		AdapterMode: shared.Topology.AdapterMode(),
+		EnvName:     "GOCELL_AUDITCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     auditPrimary,
+		Previous:    auditPrevious,
+		DevDefault:  "corebundle-audit-cursor-key-32b!",
+		Label:       "audit",
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
+	}
+
+	// Build the auditcore relay protocol (HMAC key A, namespace="auditcore").
+	auditNamespace, err := ledger.ParseNamespaceID("auditcore")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
+	}
+	auditProtocol, err = buildAuditProtocol(shared.Topology.AdapterMode(),
+		"GOCELL_AUDITCORE_HMAC_KEY",
+		cellsecrets.LoadCellHMACKey("AUDITCORE"),
+		"dev-hmac-key-replace-in-prod!!!!",
+		auditNamespace)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
+	}
+
+	// Build the bootstrap protocol (HMAC key B, namespace="bootstrap").
+	// Independent HMAC key per chain (ref: hashicorp/vault audit/backend.go
+	// per-device Salt) so compromise of one chain's key cannot forge entries
+	// in the other.
+	bootstrapProtocol, err = buildAuditProtocol(shared.Topology.AdapterMode(),
+		"GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY",
+		cellsecrets.LoadCellHMACKey("AUDIT_BOOTSTRAP"),
+		"dev-hmac-bootstrap-replace-32b!!",
+		audit.BootstrapNamespace())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("bootstrap audit HMAC key: %w", err)
+	}
+	return cursorCodec, auditProtocol, bootstrapProtocol, nil
 }
 
 // buildAuditProtocol assembles a ledger.Protocol with an isolated HMAC key.

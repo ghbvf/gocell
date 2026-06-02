@@ -122,49 +122,9 @@ func (m module) Provide(
 	}, shared.Clock)
 
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
-	//
-	// C7: use atomic.Pointer to eliminate the unsynchronized late-assignment.
-	// The observer closure is registered before NewAccessCore returns, so we
-	// need a forward reference to the cell. atomic.Pointer provides a safe
-	// load/store without a mutex, which is sufficient because:
-	//   - Store happens once (immediately after NewAccessCore) in Provide.
-	//   - Load happens from observer goroutines only after HTTP servers start
-	//     (post-Init), which is after Provide returns and cellPtr.Store has run.
-	// A nil Load still results in a defensive fast-path (see below).
+	// See newBootstrapAuthObserver for the lazy atomic.Pointer semantics (C7).
 	var cellAtomicPtr atomic.Pointer[accesscell.AccessCore]
-	logger := slog.Default()
-	bootstrapAuthObserver := func(ctx context.Context, reason string) {
-		ip, _ := ctxkeys.RealIPFrom(ctx)
-		// C3: slog uses hashed IP for observability; ledger payload keeps plaintext
-		// IP for compliance (RecordBootstrapAuthFail passes ip unchanged).
-		ipHash := redaction.HashIPForLog(ip)
-		logger.ErrorContext(ctx, "bootstrap_auth_failed",
-			slog.String("event", "bootstrap_auth_failed"),
-			slog.String("namespace", "bootstrap"),
-			slog.String("reason", reason),
-			slog.String("client_ip_hash", ipHash))
-		c := cellAtomicPtr.Load()
-		if c == nil {
-			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
-				slog.String("namespace", "bootstrap"),
-				slog.String("auth_reason", reason),
-				slog.String("failure", "cell not yet initialized"),
-				slog.String("client_ip_hash", ipHash))
-			return
-		}
-		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, bootstrapAppendDetachedTimeout)
-		defer cancel()
-		if err := c.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
-			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
-				slog.String("namespace", "bootstrap"),
-				slog.String("auth_reason", reason),
-				slog.String("client_ip_hash", ipHash),
-				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
-				slog.Any("error", err))
-		}
-	}
+	bootstrapAuthObserver := newBootstrapAuthObserver(slog.Default(), &cellAtomicPtr)
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{Username: creds.Username, Password: creds.Password},
@@ -424,6 +384,53 @@ func (bootstrapLimiterResource) Probes() []healthz.Probe {
 func (bootstrapLimiterResource) Worker() worker.Worker { return nil }
 func (r bootstrapLimiterResource) Close(ctx context.Context) error {
 	return r.lim.Close(ctx)
+}
+
+// newBootstrapAuthObserver returns an auth.BootstrapAuthFailObserver that:
+//   - logs the event with a hashed client IP (C3: observability-safe),
+//   - lazily loads the cell via cellPtr (C7: atomic.Pointer forward reference),
+//   - calls RecordBootstrapAuthFail with a 2s detached timeout.
+//
+// cellPtr must be non-nil; *cellPtr is stored by the caller immediately after
+// NewAccessCore returns. The observer fires only after HTTP servers start
+// (post-Init), so *cellPtr is always non-nil by the time Load is called.
+func newBootstrapAuthObserver(
+	logger *slog.Logger,
+	cellPtr *atomic.Pointer[accesscell.AccessCore],
+) auth.BootstrapAuthFailObserver {
+	return func(ctx context.Context, reason string) {
+		ip, _ := ctxkeys.RealIPFrom(ctx)
+		// C3: slog uses hashed IP for observability; ledger payload keeps
+		// plaintext IP for compliance (RecordBootstrapAuthFail passes ip
+		// unchanged).
+		ipHash := redaction.HashIPForLog(ip)
+		logger.ErrorContext(ctx, "bootstrap_auth_failed",
+			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("namespace", "bootstrap"),
+			slog.String("reason", reason),
+			slog.String("client_ip_hash", ipHash))
+		c := cellPtr.Load()
+		if c == nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("failure", "cell not yet initialized"),
+				slog.String("client_ip_hash", ipHash))
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, bootstrapAppendDetachedTimeout)
+		defer cancel()
+		if err := c.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("client_ip_hash", ipHash),
+				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
+				slog.Any("error", err))
+		}
+	}
 }
 
 var _ composition.CellModule = module{}

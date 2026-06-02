@@ -247,35 +247,11 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
 	// Uses the same lazy-pointer pattern as cellmodules/accesscore: the observer
-	// closure captures *acPtr; acPtr is set after the accesscore cell is
-	// constructed. The observer fires only after Init (i.e. HTTP servers start),
-	// so acPtr is always non-nil by then.
+	// captures acPtr; acPtr is set after the accesscore cell is constructed.
+	// The observer fires only after Init (i.e. HTTP servers start), so *acPtr
+	// is always non-nil by then.
 	var acPtr *accesscore.AccessCore
-	ssobffLogger := cfg.logger
-	authFailObserver := func(ctx context.Context, reason string) {
-		ip, _ := ctxkeys.RealIPFrom(ctx)
-		// C3: slog uses hashed IP; ledger payload keeps plaintext for compliance.
-		ipHash := redaction.HashIPForLog(ip)
-		ssobffLogger.ErrorContext(ctx, "bootstrap_auth_failed",
-			slog.String("event", "bootstrap_auth_failed"),
-			slog.String("namespace", "bootstrap"),
-			slog.String("reason", reason),
-			slog.String("client_ip_hash", ipHash))
-		if acPtr == nil {
-			return
-		}
-		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, 2*time.Second)
-		defer cancel()
-		if err := acPtr.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
-			ssobffLogger.ErrorContext(ctx, "bootstrap_audit_append_failed",
-				slog.String("event", "bootstrap_audit_append_failed"),
-				slog.String("namespace", "bootstrap"),
-				slog.String("auth_reason", reason),
-				slog.String("client_ip_hash", ipHash),
-				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
-				slog.Any("error", err))
-		}
-	}
+	authFailObserver := newSSOBFFAuthFailObserver(cfg.logger, &acPtr)
 
 	ssobffBootstrapCreds := auth.BootstrapCredentials{
 		Username: []byte(ssobffBootstrapUsername),
@@ -341,6 +317,40 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		internalListenAddr: cfg.internal.addr,
 		healthListenAddr:   cfg.health.addr,
 	}, nil
+}
+
+// newSSOBFFAuthFailObserver returns an auth.BootstrapAuthFailObserver that logs
+// the bootstrap auth failure with a hashed client IP and then (lazily) calls
+// RecordBootstrapAuthFail on the accesscore cell via the *acPtr forward pointer.
+//
+// *acPtr is set by the caller immediately after the accesscore cell is
+// constructed (see buildSSOBFFAssembly). The observer fires only after HTTP
+// servers start (post-Init), so *acPtr is always non-nil by then.
+func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCore) auth.BootstrapAuthFailObserver {
+	return func(ctx context.Context, reason string) {
+		ip, _ := ctxkeys.RealIPFrom(ctx)
+		// C3: slog uses hashed IP; ledger payload keeps plaintext for compliance.
+		ipHash := redaction.HashIPForLog(ip)
+		logger.ErrorContext(ctx, "bootstrap_auth_failed",
+			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("namespace", "bootstrap"),
+			slog.String("reason", reason),
+			slog.String("client_ip_hash", ipHash))
+		if *acPtr == nil {
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if err := (*acPtr).RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("client_ip_hash", ipHash),
+				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
+				slog.Any("error", err))
+		}
+	}
 }
 
 // buildSSOBFFAuditCore wires the ssobff auditcore Cell backed by PostgreSQL —
