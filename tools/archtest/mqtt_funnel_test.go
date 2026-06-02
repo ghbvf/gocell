@@ -128,14 +128,16 @@ func checkMQTTSealedSingleValueField(name string, dt reflect.Type) []string {
 		violations = append(violations, fmt.Sprintf(
 			"%s is not a struct (Kind=%s); the sealed-struct guarantee is gone — "+
 				"type may have been changed to a string newtype or alias",
-			name, dt.Kind()))
+			name, dt.Kind(),
+		))
 		return violations
 	}
 	if dt.NumField() != 1 {
 		violations = append(violations, fmt.Sprintf(
 			"%s NumField = %d, want 1 (single unexported value string field); "+
 				"adding a field re-opens sealed-construction — update ADR amendment first",
-			name, dt.NumField()))
+			name, dt.NumField(),
+		))
 		// Still try to check the value field if the count is off but the field exists.
 	}
 	valueField, ok := dt.FieldByName("value")
@@ -143,19 +145,22 @@ func checkMQTTSealedSingleValueField(name string, dt reflect.Type) []string {
 		violations = append(violations, fmt.Sprintf(
 			"%s has no 'value' field (renamed or exported?); "+
 				"sealed-construction invariant broken",
-			name))
+			name,
+		))
 		return violations
 	}
 	if valueField.PkgPath == "" {
 		violations = append(violations, fmt.Sprintf(
 			"%s.value is exported (PkgPath empty); "+
 				"outside-package literal construction becomes possible — lowercase it",
-			name))
+			name,
+		))
 	}
 	if valueField.Type.Kind() != reflect.String {
 		violations = append(violations, fmt.Sprintf(
 			"%s.value Kind = %s, want String",
-			name, valueField.Type.Kind()))
+			name, valueField.Type.Kind(),
+		))
 	}
 	return violations
 }
@@ -370,24 +375,20 @@ func TestMQTTClientIDNamespace01(t *testing.T) {
 
 	var a2Diags, a3Diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
 			}
-			// A2 + A3 only scan the adapters/mqtt package itself (A2) and the
-			// entire production tree (A3 looks for aliases anywhere).
+
 			for _, f := range p.Files {
 				rel := p.Rel(f)
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				// A2: construction allowlist — only meaningful inside adapters/mqtt.
-				// assembleClientID is the SOLE in-package site for non-zero
-				// ClientID literal construction. ParseEphemeralClientID and
-				// ParseStableClientID delegate to it; this gives a single
-				// composite-literal callsite to lock.
+
 				if p.Pkg.Path() == mqttPkgPath {
 					a2Diags = append(a2Diags, scanMQTTCompositeLitConstruction(
 						p.Fset, f, rel, p.TypesInfo,
@@ -396,7 +397,7 @@ func TestMQTTClientIDNamespace01(t *testing.T) {
 						ruleID,
 					)...)
 				}
-				// A3: alias anywhere in the repo.
+
 				a3Diags = append(a3Diags, scanMQTTTypeAliases(
 					p.Fset, f, rel, p.TypesInfo,
 					"ClientID", ruleID,
@@ -455,8 +456,9 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 
 	var a2Diags, a3Diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -588,8 +590,9 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 	root := findModuleRoot(t)
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -663,13 +666,14 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 	root := findModuleRoot(t)
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
-			// First pass: does any file in this package import mqtt?
+
 			importsMQTT := false
 			for _, f := range p.Files {
 				for _, imp := range f.Imports {
@@ -682,7 +686,7 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 					break
 				}
 			}
-			// In-package mqtt files are also covered (Pkg().Path() == mqttPkgPath).
+
 			isMQTT := p.Pkg.Path() == mqttPkgPath
 
 			if !importsMQTT && !isMQTT {
@@ -732,7 +736,7 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 // go/types type-resolution path (tobj.Pkg().Path() + tobj.Name() checks).
 // That path is exercised implicitly by the production tests
 // TestMQTTClientIDNamespace01/A2 and TestMQTTTopicNamespace01/A2 which load
-// real packages via RunTyped. A refactor that breaks the Pkg().Path() check
+// real packages via Run(t, Typed(...)). A refactor that breaks the Pkg().Path() check
 // would be caught by those tests finding zero violations where violations exist.
 func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 	t.Parallel()
@@ -749,8 +753,9 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 	// would fail — which is what we want to confirm fires correctly.
 	var outsideCount, insideCount int
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root),
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root)),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -764,12 +769,9 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 					p.Fset, f, rel, p.TypesInfo,
 					"ClientID", []string{"assembleClientID"}, "MQTT-CLIENT-ID-NAMESPACE-01",
 				)
-				// Count violations (sites outside allowedFuncs) and count
-				// sites that passed (inside assembleClientID, not in diags).
+
 				outsideCount += len(diags)
 
-				// Count non-zero composite literals inside assembleClientID
-				// using the inverse: scan all literals and subtract violations.
 				EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
 					if lit.Type == nil || len(lit.Elts) == 0 {
 						return
@@ -840,8 +842,9 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 	const ruleID = "MQTT-CLIENT-ID-NAMESPACE-01"
 	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/mqttredfixture"
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{fixturePkgPath},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{fixturePkgPath}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil

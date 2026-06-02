@@ -16,10 +16,11 @@
 //     pins it as generated — defense in depth, same shape as the former
 //     apply-hook F6 distinction which now lives here).
 //
-// PR-04a status: genuinely-green, vacuous. Zero production callsites exist
-// (cellgen derivation of reg.RegisterProjection lands in PR-04b). The rule fires
-// immediately if a hand-written callsite appears before then. It becomes
-// load-bearing in PR-04b.
+// Status: load-bearing. The first production callsite now exists —
+// examples/todoorder/cells/ordercell/cell_gen.go emits the cellgen-derived
+// reg.RegisterProjection for the orderprojection harness (#834). The allowlist
+// confines that (and every future) RegisterProjection call to cell_gen.go; a
+// hand-written call elsewhere in business code fails the rule.
 //
 // # AI-robust grading (Funnel 双向锁评级)
 //
@@ -174,7 +175,7 @@ func TestProjectionRegisterFunnel01(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -230,7 +231,7 @@ func TestProjectionRegisterFunnel01_ReverseFixture(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -287,7 +288,7 @@ func TestProjectionRegisterFunnel01_ReverseBlindSpot_NoFuncValue(t *testing.T) {
 
 	var violations []string
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

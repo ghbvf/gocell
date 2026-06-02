@@ -303,6 +303,23 @@ func (b *InMemoryEventBus) StopIntake(_ context.Context) error {
 	return nil
 }
 
+// GuaranteesSerialInOrderDelivery satisfies outbox.SerialInOrderGuarantor: the
+// in-memory bus is the one transport that may carry an L3 projection
+// subscription. Each subscription runs one consume goroutine that reads its
+// buffered channel FIFO and invokes the handler synchronously (see Subscribe),
+// so a single subscription's stream is delivered strictly serially and in
+// order — the precondition projection exactly-once requires (ADR §6 row 4).
+//
+// The guarantee is scoped to a SINGLE subscriber on a (consumerGroup, topic):
+// a projection's group is "<cellID>-<projectionID>" with exactly one
+// subscription registered by the bootstrap drain, so the precondition holds.
+// It does NOT extend to multiple competing subscribers in one group, which
+// roundRobin dispatches across independent goroutines (irrelevant to
+// projections, which never share a group).
+func (b *InMemoryEventBus) GuaranteesSerialInOrderDelivery() bool {
+	return true
+}
+
 // Close terminates all subscriber goroutines and prevents new publishes.
 // Safety: Close holds mu.Lock() for the full channel-closing loop, while
 // Publish holds mu.RLock() while sending to subscriber channels. That lock

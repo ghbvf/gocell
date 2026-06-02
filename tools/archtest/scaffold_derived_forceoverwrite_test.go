@@ -122,7 +122,7 @@ func callsDerivedOverwrite(info *types.Info, call *ast.CallExpr) bool {
 func TestScaffoldDerivedForceOverwrite_OnlyInConstructor(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -140,8 +140,7 @@ func TestScaffoldDerivedForceOverwrite_OnlyInConstructor(t *testing.T) {
 					if !callsDerivedOverwrite(p.TypesInfo, call) {
 						return
 					}
-					// Allow the sole gatekeeper: planDerivedArtifact in
-					// stage_render.go.
+
 					if fn.Name != nil && fn.Name.Name == derivedCtorFuncName &&
 						rel == derivedCtorRel {
 						return
@@ -158,6 +157,7 @@ func TestScaffoldDerivedForceOverwrite_OnlyInConstructor(t *testing.T) {
 		}
 		return out
 	})
+
 	Report(t, "SCAFFOLD-DERIVED-FORCEOVERWRITE-01", diags)
 }
 
@@ -170,7 +170,7 @@ func TestScaffoldDerivedForceOverwrite_OnlyInConstructor(t *testing.T) {
 func TestScaffoldDerivedForceOverwrite_NoIndirectReference(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -180,8 +180,7 @@ func TestScaffoldDerivedForceOverwrite_NoIndirectReference(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			// SelectorExpr form: pathsafe.DerivedOverwrite as a non-call
-			// reference.
+
 			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 				if resolveDerivedOverwriteIdent(p.TypesInfo, sel.Sel) == nil {
 					return
@@ -197,7 +196,7 @@ func TestScaffoldDerivedForceOverwrite_NoIndirectReference(t *testing.T) {
 						"caller-allowlist archtest — must always appear inside a direct CallExpr",
 				})
 			})
-			// Dot-import Ident form: DerivedOverwrite as a non-call reference.
+
 			EachInSubtree[ast.Ident](file, func(ident *ast.Ident) {
 				if resolveDerivedOverwriteIdent(p.TypesInfo, ident) == nil {
 					return
@@ -216,6 +215,7 @@ func TestScaffoldDerivedForceOverwrite_NoIndirectReference(t *testing.T) {
 		}
 		return out
 	})
+
 	Report(t, "SCAFFOLD-DERIVED-FORCEOVERWRITE-01", diags)
 }
 

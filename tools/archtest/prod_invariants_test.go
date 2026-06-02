@@ -56,7 +56,7 @@ func TestProdDurationConst(t *testing.T) {
 	patterns := prodscan.PatternsExtended(root)
 
 	var violations []string
-	RunTyped(t, TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}}, patterns,
+	Run(t, Typed(TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}}, patterns),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)

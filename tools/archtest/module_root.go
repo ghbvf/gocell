@@ -31,11 +31,16 @@ func lookupModuleRoot() (string, error) {
 
 // findModuleRoot is a thin wrapper around [lookupModuleRoot] that converts
 // errors to t.Fatalf. It is the single module-root discovery source shared by
-// [RunTyped] (pass.go) and the go-list integration helpers in archtest_test.go.
+// [Run] (pass.go) and the go-list integration helpers in archtest_test.go.
+//
+// The parameter is [testing.TB] (not [*testing.T]) so the unified [Run] driver
+// — which accepts testing.TB to support the StandaloneModule fatal-path spy
+// tests — can resolve the module root for its Typed / Production / Fixture
+// scopes through this single source.
 //
 // Failure modes (getwd error, no go.mod above cwd) terminate the test via
 // t.Fatalf. archtest drivers are unconditionally fail-loud.
-func findModuleRoot(t *testing.T) string {
+func findModuleRoot(t testing.TB) string {
 	t.Helper()
 	root, err := lookupModuleRoot()
 	if err != nil {
@@ -45,8 +50,8 @@ func findModuleRoot(t *testing.T) string {
 }
 
 // moduleImportPath returns the declared import path (e.g. "github.com/ghbvf/gocell")
-// from root/go.mod. It is the production-code module-path source for
-// [RunTypedProduction], which must hand the path to
+// from root/go.mod. It is the production-code module-path source for the
+// [Production] scope of [Run], which must hand the path to
 // typeseval.LoadProductionPackages so the <module>/generated/ prefix can be
 // computed. Hardcoding the path would silently mis-filter on a module rename or
 // /v2 bump, so it is always read from go.mod — via gomodutil.ReadModulePath, the

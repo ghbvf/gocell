@@ -10,7 +10,7 @@
 //
 // Real pkg/errcode + pkg/redaction imports are required so go/types resolves the
 // AsSlogAttr methods to their defining package. Parsed + type-checked via
-// RunTypedFixture; the archtest_fixture build tag keeps it out of normal builds.
+// Run(t, Fixture(...)); the archtest_fixture build tag keeps it out of normal builds.
 package violation
 
 import (

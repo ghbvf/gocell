@@ -64,6 +64,29 @@ metric_relabel_configs:
   action: drop
 ```
 
+## gRPC Metrics `cell` Label（当前恒为 `_runtime`）
+
+gRPC 指标 `gocell_grpc_server_requests_total` 与
+`gocell_grpc_server_request_duration_seconds` 的 `cell` label 与 HTTP 共享同一
+`_runtime` 哨兵语义与单源（`runtime/observability/metrics.RuntimeCellSentinel`）。
+
+**重要**：gRPC cell attribution 尚未接线——HTTP 侧从 router-root `CellAttribution`
+中间件按 `RouteGroup.CellID` 归属 cell，gRPC 侧对应的 `FullMethod → cellID` 归属
+机制（由生成式 registrar 派生）随 epic PR-7/8 落地（tracking issue #1383）。在此
+之前，**所有 gRPC 流量的 `cell` label 恒为 `_runtime`**。
+
+运维影响：
+
+- 业务 SLO / 告警**不要**对 gRPC 指标使用 `{cell!="_runtime"}` 过滤——会过滤掉
+  全部 gRPC 流量。在 attribution 落地前，gRPC 流量按 `{cell="_runtime"}` 或不
+  过滤 `cell` 来观察。
+- gRPC 指标的 reader 侧契约（cell label 取自 `ctxkeys.CellID`，缺失回退
+  `RuntimeCellSentinel`）由 archtest `GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01`
+  守卫，故 attribution 一旦接线，`cell` label 会自动反映归属 cell 而无需改
+  interceptor。
+- attribution 落地（#1383）后，本节将更新为与 HTTP 一致的 `{cell!="_runtime"}`
+  推荐过滤。
+
 ## HTTP Body-Limit 拒绝计数器
 
 `gocell_http_request_body_limit_rejections_total{cell, route}` 记录 BodyLimit 中间件
@@ -921,6 +944,73 @@ increase(gocell_saga_heartbeat_failed_total{reason="stale_lease"}[5m])
 <!-- /gocell:generated:saga-event-kind-legend -->
 
 **诊断与处置 runbook**：补偿失败（CompensationFailed）/ lease 卡死 / journal 增长的完整诊断 SQL、决策树（幂等外部副作用 / 不可逆操作 / 基础设施故障三分支）与审计要求见 **`docs/ops/saga-runbook.md`**。本节只保留指标告警职责；上面的 `kind` 速查生成区供 runbook 诊断 SQL 交叉引用。
+
+---
+
+## Reconcile Leader 可观测性
+
+`gocell_reconcile_leader{reconciler}` 是一个 Gauge，值为 1 当该实例持有对应 reconcilerID
+的 lease，否则为 0（由 kernel/reconcile/metrics.go 的 `metricReconcileLeader` 注册）。
+在 leader-elect 模式下，任意时刻健康集群中**每个 reconcilerID 恰好应有 1 个实例持有 lease**；
+0 代表 leader 空缺，>1 代表脑裂异常（应由 fencing 机制阻止写放大，但 gauge 层面不应出现）。
+
+### ReconcileLeaderVacancy
+
+leader 空缺持续超过 LeaseDuration + 1s：无实例持有 lease，reconcile 工作停摆。
+
+`sum by (reconciler)` keeps the per-reconciler dimension (so each reconcilerID
+alerts independently and `{{ $labels.reconciler }}` is populated — a bare `sum`
+would collapse all reconcilers and drop the label). The vacancy rule has TWO arms:
+the `== 0` arm catches "exporting but no holder"; the `absent(...)` arm catches
+"the whole series vanished" (every replica down / scrape lost), which `== 0` alone
+would miss (a comparison on an empty vector yields no samples → no alert). Replace
+`<id>` in the `absent()` arm with each reconcilerID you run (absent() needs a fully
+specified series).
+
+```yaml
+- alert: GoCellReconcileLeaderVacancy
+  expr: |
+    sum by (reconciler) (gocell_reconcile_leader) == 0
+    or absent(gocell_reconcile_leader{reconciler="<id>"})
+  for: 16s
+  labels:
+    severity: critical
+  annotations:
+    summary: "Reconcile leader vacant ({{ $labels.reconciler }})"
+    description: |
+      No instance holds the reconcile lease for reconciler={{ $labels.reconciler }}
+      (or the metric series is entirely absent — total scrape loss / all replicas down).
+      All reconcile work is paused until a follower acquires the lease.
+      Typical causes: all replicas crashed, Redis/PG backend unreachable, or
+      lease TTL misconfiguration (RenewInterval >= TTL causes spurious lease loss).
+      Triage: check logs for "lease lost; relinquishing leadership" /
+      "renew I/O error; abandoning lease term" and verify elector backend health.
+      Note: for=16s assumes a default lease TTL of ~15s (LeaseDuration+1s headroom);
+      adjust to match your configured leaseDuration + 1s.
+```
+
+### ReconcileLeaderSplitBrain
+
+多个实例同时持有 gauge=1：脑裂异常信号。正常 handoff 期间可能出现短暂双重 gauge=1，
+但持续 > 2s 表示 fencing 层以上的 gauge 未及时更新（或 lease backend 状态异常）。
+
+```yaml
+- alert: GoCellReconcileLeaderSplitBrain
+  expr: |
+    sum by (reconciler) (gocell_reconcile_leader) > 1
+  for: 2s
+  labels:
+    severity: critical
+  annotations:
+    summary: "Reconcile leader split-brain anomaly ({{ $labels.reconciler }})"
+    description: |
+      More than one instance reports reconcile_leader=1 for
+      reconciler={{ $labels.reconciler }}. Cross-replica correctness is guarded
+      by the epoch-fencing CAS (ErrFencedWriteStale will dead-letter stale writes),
+      but the gauge anomaly indicates the lease backend or gauge update path is
+      inconsistent. Investigate elector backend state and lease TTL configuration.
+      Short transient doubles during handoff are expected; sustained > 2s is not.
+```
 
 ---
 

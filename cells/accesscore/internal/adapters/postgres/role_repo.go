@@ -121,7 +121,7 @@ WHERE tenant_id = $1 AND user_id = $2 AND role_id = $3`
 	// remains the safety net for any direct DELETE that bypasses this CTE path.
 	// removeIfNotLastSQL is a per-tenant CTE. $1=tenant_id, $2=user_id, $3=role_id.
 	// The advisory lock key includes hashtext(tenant_id) so concurrent guards
-	// in different tenants do NOT serialize against each other (migration 046
+	// in different tenants do NOT serialize against each other (migration 047
 	// per-tenant effective-admin invariant).
 	removeIfNotLastSQL = `
 WITH lock_acquired AS MATERIALIZED (
@@ -344,7 +344,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.Tenan
 	}
 	if roleID != auth.RoleAdmin {
 		// Non-admin role: plain DELETE, no last-holder check. Trigger
-		// (migration 046) also short-circuits on `role_id <> 'admin'`.
+		// (migration 047) also short-circuits on `role_id <> 'admin'`.
 		tag, err := r.db.Exec(ctx, deleteAssignmentSQL, string(t), userID, roleID)
 		if err != nil {
 			return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,

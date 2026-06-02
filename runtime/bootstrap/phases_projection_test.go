@@ -14,6 +14,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -480,6 +481,140 @@ func TestPhase6_ProjectionWithoutSubscriber_FailsFast(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 — serial in-order delivery guard
+// ---------------------------------------------------------------------------
+
+// concurrentFakeSubscriber implements outbox.Subscriber but deliberately does
+// NOT implement outbox.SerialInOrderGuarantor — it models a concurrent transport
+// (e.g. AMQP dispatching one goroutine per delivery with prefetch>1). Ready is
+// pre-closed so the event router can reach Running for the subscription-only
+// acceptance path; Subscribe blocks until ctx cancel.
+type concurrentFakeSubscriber struct{}
+
+func (concurrentFakeSubscriber) Setup(context.Context, outbox.Subscription) error { return nil }
+
+func (concurrentFakeSubscriber) Ready(outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (concurrentFakeSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (concurrentFakeSubscriber) Close(context.Context) error { return nil }
+
+// liarSubscriber implements the marker but returns false (an explicit non-serial
+// declaration). It locks that an explicit false is rejected too — the guard must
+// reject both absence (concurrentFakeSubscriber) and false, so a transport cannot
+// pass by implementing the method with the wrong answer.
+type liarSubscriber struct{ concurrentFakeSubscriber }
+
+func (liarSubscriber) GuaranteesSerialInOrderDelivery() bool { return false }
+
+// newProjectionBootstrapWithSubscriber wires the four projection deps plus the
+// given subscriber (so phase6 reaches the projection drain) and the test
+// consumer base / health aggregator that phase0 normally populate.
+func newProjectionBootstrapWithSubscriber(t *testing.T, asm *assembly.CoreAssembly, sub outbox.Subscriber) *Bootstrap {
+	t.Helper()
+	b := newProjectionBootstrap(t,
+		WithAssembly(asm),
+		WithSubscriber(sub),
+		WithConsumerBase(newTestConsumerBase(t)),
+	)
+	b.healthAggregator = newEventsTestAggregator() // phase0 normally sets this.
+	return b
+}
+
+// TestPhase6_Projection_RejectsConcurrentSubscriber is the core fail-closed
+// path: a projection wired onto a subscriber that does NOT implement
+// outbox.SerialInOrderGuarantor must fail fast at the projection drain
+// (ADR §6 row 4 — no concurrent transport may carry a projection).
+func TestPhase6_Projection_RejectsConcurrentSubscriber(t *testing.T) {
+	t.Parallel()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-proj-reject", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newProjectionCell()))
+	require.NoError(t, asm.Start(context.Background()))
+
+	sub := concurrentFakeSubscriber{}
+	b := newProjectionBootstrapWithSubscriber(t, asm, sub)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = sub
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err, "projection on a concurrent (non-serial) subscriber must fail fast")
+	assert.Contains(t, err.Error(), "serial in-order delivery",
+		"error must name the violated precondition")
+	// F3 (#1369): the failure must name the affected projection(s), not just the
+	// offending transport type, so ops can see which declarations are blocked.
+	assert.Contains(t, err.Error(), projTestCellID+"/"+projTestProjID,
+		"error must name the projection that triggered the serial-delivery guard")
+	assert.Empty(t, b.projectionCoordinators,
+		"no projection coordinator must be wired when the guard rejects the transport")
+}
+
+// TestPhase6_Projection_RejectsLiarSubscriber locks that an explicit
+// GuaranteesSerialInOrderDelivery() == false is rejected just like absence —
+// implementing the method with the wrong answer must not pass the guard.
+func TestPhase6_Projection_RejectsLiarSubscriber(t *testing.T) {
+	t.Parallel()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-proj-liar", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newProjectionCell()))
+	require.NoError(t, asm.Start(context.Background()))
+
+	sub := liarSubscriber{}
+	b := newProjectionBootstrapWithSubscriber(t, asm, sub)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = sub
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err, "projection on a subscriber declaring serial=false must fail fast")
+	assert.Contains(t, err.Error(), "serial in-order delivery")
+}
+
+// TestPhase6_SubscriptionOnly_AllowsConcurrentSubscriber proves the guard does
+// NOT over-reach: a plain subscription (not a projection) on a concurrent
+// subscriber is allowed — only projections require serial in-order delivery.
+func TestPhase6_SubscriptionOnly_AllowsConcurrentSubscriber(t *testing.T) {
+	t.Parallel()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-sub-only", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.subonly.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	sub := concurrentFakeSubscriber{}
+	b := newProjectionBootstrapWithSubscriber(t, asm, sub)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = sub
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	require.NoError(t, b.phase6StartEventRouter(runCtx, s),
+		"a plain subscription on a concurrent subscriber must not trip the projection serial guard")
+
+	for _, v := range slices.Backward(s.teardowns) {
+		_ = v.fn(context.Background())
+	}
+}
+
+// ---------------------------------------------------------------------------
 // WithProjection* options
 // ---------------------------------------------------------------------------
 
@@ -524,10 +659,10 @@ func TestWithProjectionOptions_StoreValueAndNilIgnored(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestBuildProjectionCoordinators_WithRealProvider_RegistersMetrics verifies
-// that when a real (non-Nop) metrics provider is injected, buildOneProjection
-// calls projection.RegisterMetrics and registers the three canonical metric names
-// against the provider. The spy captures names at registration time, proving the
-// provider is threaded through to the Coordinator.
+// that when a real (non-Nop) metrics provider is injected, buildProjectionCoordinators
+// (via autoWireProjectionMetrics) calls projection.RegisterMetrics and registers
+// the three canonical metric names against the provider. The spy captures names at
+// registration time, proving the provider is threaded through to the Coordinator.
 func TestBuildProjectionCoordinators_WithRealProvider_RegistersMetrics(t *testing.T) {
 	t.Parallel()
 	spy := &registrationSpy{}
@@ -538,22 +673,117 @@ func TestBuildProjectionCoordinators_WithRealProvider_RegistersMetrics(t *testin
 	require.NoError(t, err)
 	require.Len(t, wirings, 1)
 
-	// Verify that the three projection metric gauges/histograms were registered.
+	// RegisterMetrics registers all three projection metrics against the provider:
+	// two gauges (replay_lag, pending_events) and one histogram (rebuild_duration).
+	// Assert each appears in its respective registration slot — proving the
+	// provider is threaded through (F4 regression).
 	spy.mu.Lock()
-	gauges := append([]string(nil), spy.histogramNames...)
+	gauges := append([]string(nil), spy.gaugeNames...)
+	histograms := append([]string(nil), spy.histogramNames...)
 	spy.mu.Unlock()
 
-	// RegisterMetrics registers: projection_event_replay_lag_seconds (gauge),
-	// projection_rebuild_duration_seconds (histogram), projection_pending_events (gauge).
-	// At least the histogram name must appear in the spy's histogram registration.
-	assert.Contains(t, gauges, "projection_rebuild_duration_seconds",
-		"projection_rebuild_duration_seconds must be registered on the real provider; "+
-			"got %v — means metrics were not threaded into the Coordinator (F4 regression)", gauges)
+	assert.Contains(t, gauges, "projection_event_replay_lag_seconds",
+		"projection_event_replay_lag_seconds (gauge) must be registered on the real provider; got %v", gauges)
+	assert.Contains(t, gauges, "projection_pending_events",
+		"projection_pending_events (gauge) must be registered on the real provider; got %v", gauges)
+	assert.Contains(t, histograms, "projection_rebuild_duration_seconds",
+		"projection_rebuild_duration_seconds (histogram) must be registered on the real provider; got %v", histograms)
+}
+
+// recordingLabelProvider wraps NopProvider but returns Gauge/Histogram vecs that
+// record every .With(labels) call. projection.NewCoordinator runs
+// Metrics.preflight — which calls .With({cell, projection}) on each registered
+// vec — at CONSTRUCTION time, and ONLY when CoordinatorConfig.Metrics is non-nil.
+// A recorded .With therefore proves the shared b.projectionMetrics was actually
+// threaded into NewCoordinator (not merely registered + cached on the Bootstrap).
+type recordingLabelProvider struct {
+	nop       kernelmetrics.NopProvider
+	withCalls *[]kernelmetrics.Labels
+}
+
+func (p recordingLabelProvider) GaugeVec(o kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	g, err := p.nop.GaugeVec(o)
+	if err != nil {
+		return nil, err
+	}
+	return recordingGaugeVec{GaugeVec: g, withCalls: p.withCalls}, nil
+}
+
+func (p recordingLabelProvider) HistogramVec(o kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	h, err := p.nop.HistogramVec(o)
+	if err != nil {
+		return nil, err
+	}
+	return recordingHistogramVec{HistogramVec: h, withCalls: p.withCalls}, nil
+}
+
+func (p recordingLabelProvider) CounterVec(o kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return p.nop.CounterVec(o)
+}
+
+func (p recordingLabelProvider) Unregister(kernelmetrics.Collector) error { return nil }
+
+type recordingGaugeVec struct {
+	kernelmetrics.GaugeVec
+	withCalls *[]kernelmetrics.Labels
+}
+
+func (v recordingGaugeVec) With(l kernelmetrics.Labels) kernelmetrics.Gauge {
+	*v.withCalls = append(*v.withCalls, l)
+	return v.GaugeVec.With(l)
+}
+
+type recordingHistogramVec struct {
+	kernelmetrics.HistogramVec
+	withCalls *[]kernelmetrics.Labels
+}
+
+func (v recordingHistogramVec) With(l kernelmetrics.Labels) kernelmetrics.Histogram {
+	*v.withCalls = append(*v.withCalls, l)
+	return v.HistogramVec.With(l)
+}
+
+// TestBuildProjectionCoordinators_SharedMetricsReachCoordinator is the F2 wiring
+// guard: it proves the cached shared b.projectionMetrics is actually passed into
+// projection.NewCoordinator (phases_projection.go CoordinatorConfig.Metrics:
+// b.projectionMetrics), not merely registered and cached on the Bootstrap. The
+// older RegistersMetrics test only asserts the metric NAMES register on the
+// provider and that b.projectionMetrics is non-nil — both stay true even if the
+// CoordinatorConfig.Metrics wiring regressed to nil. This test goes RED on that
+// regression: with Metrics: nil the Coordinator skips preflight, so no .With is
+// recorded.
+func TestBuildProjectionCoordinators_SharedMetricsReachCoordinator(t *testing.T) {
+	t.Parallel()
+	var withCalls []kernelmetrics.Labels
+	prov := recordingLabelProvider{withCalls: &withCalls}
+	s := buildProjectionPhaseState(t, newProjectionCellNamed("ordercell", "summary"))
+
+	b := newProjectionBootstrap(t, WithMetricsProvider(prov))
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 1)
+	require.NotNil(t, b.projectionMetrics,
+		"shared projection metrics must be registered once and cached")
+
+	// preflight runs at NewCoordinator construction only when Metrics is non-nil;
+	// a recorded .With proves b.projectionMetrics was threaded into NewCoordinator.
+	require.NotEmpty(t, withCalls,
+		"Coordinator must run Metrics.preflight (.With on the shared vecs) at construction — "+
+			"proves b.projectionMetrics reached NewCoordinator; empty means CoordinatorConfig.Metrics regressed to nil")
+	found := false
+	for _, l := range withCalls {
+		if l["cell"] == "ordercell" && l["projection"] == "summary" {
+			found = true
+			break
+		}
+	}
+	assert.Truef(t, found,
+		"preflight must bind the projection's own {cell, projection} labels; got %v", withCalls)
 }
 
 // TestBuildProjectionCoordinators_NopProvider_SkipsMetrics verifies that when no
-// provider is configured (NopProvider default), buildOneProjection does NOT call
-// projection.RegisterMetrics — matching the pattern used by autoWireHTTPMetricsCollector.
+// provider is configured (NopProvider default), autoWireProjectionMetrics does NOT
+// call projection.RegisterMetrics — matching the pattern used by autoWireHTTPMetricsCollector.
 func TestBuildProjectionCoordinators_NopProvider_SkipsMetrics(t *testing.T) {
 	t.Parallel()
 	s := buildProjectionPhaseState(t, newProjectionCell())
@@ -571,8 +801,190 @@ func TestBuildProjectionCoordinators_NopProvider_SkipsMetrics(t *testing.T) {
 	// This test proves no panic and no registration attempt occurred on NopProvider.
 }
 
+// newProjectionCellNamed builds a projection cell with an explicit cellID +
+// projectionID so a single phaseState can host multiple projections (the
+// multi-projection regression case from #1399).
+func newProjectionCellNamed(cellID, projID string) *projectionTestCell {
+	return &projectionTestCell{
+		BaseCell:     cell.MustNewBaseCell(&metadata.CellMeta{ID: cellID, Type: "core"}),
+		spec:         projTestSpec(),
+		projectionID: projID,
+		apply:        func(context.Context, outbox.Entry) error { return nil },
+	}
+}
+
+// multiProjectionCell registers SEVERAL projections under ONE cell — the exact
+// shape of the original #1399 bug (one cell, N projections, the 2nd+ silently
+// losing metrics under the old per-projection registration).
+type multiProjectionCell struct {
+	*cell.BaseCell
+	projectionIDs []string
+}
+
+func (c *multiProjectionCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	for _, pid := range c.projectionIDs {
+		if err := reg.RegisterProjection(cell.ProjectionRequest{
+			Spec:         projTestSpec(),
+			ProjectionID: pid,
+			CellID:       c.ID(),
+			Apply:        func(context.Context, outbox.Entry) error { return nil },
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newMultiProjectionCell(cellID string, projIDs ...string) *multiProjectionCell {
+	return &multiProjectionCell{
+		BaseCell:      cell.MustNewBaseCell(&metadata.CellMeta{ID: cellID, Type: "core"}),
+		projectionIDs: projIDs,
+	}
+}
+
+// projMetricRegProvider records how many times each metric NAME is registered so
+// a test can prove the fixed-name projection metric family is registered EXACTLY
+// ONCE regardless of how many projections are declared. Counting by name (not raw
+// GaugeVec/HistogramVec totals) isolates the projection family from unrelated
+// bootstrap metrics (e.g. the shutdown-duration histogram registered in New).
+type projMetricRegProvider struct {
+	nop  kernelmetrics.NopProvider
+	regs map[string]int
+}
+
+func (p *projMetricRegProvider) count(name string) {
+	if p.regs == nil {
+		p.regs = map[string]int{}
+	}
+	p.regs[name]++
+}
+
+func (p *projMetricRegProvider) GaugeVec(o kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	p.count(o.Name)
+	return p.nop.GaugeVec(o)
+}
+
+func (p *projMetricRegProvider) HistogramVec(o kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	p.count(o.Name)
+	return p.nop.HistogramVec(o)
+}
+
+func (p *projMetricRegProvider) CounterVec(o kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return p.nop.CounterVec(o)
+}
+
+func (p *projMetricRegProvider) Unregister(kernelmetrics.Collector) error { return nil }
+
+// failGaugeProvider returns an error on GaugeVec — projection.RegisterMetrics
+// registers replay_lag (a gauge) first, so this drives the registration-conflict
+// fail-fast path.
+type failGaugeProvider struct{ nop kernelmetrics.NopProvider }
+
+func (p failGaugeProvider) GaugeVec(kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return nil, errors.New("gauge registration boom")
+}
+
+func (p failGaugeProvider) HistogramVec(o kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	return p.nop.HistogramVec(o)
+}
+
+func (p failGaugeProvider) CounterVec(o kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return p.nop.CounterVec(o)
+}
+
+func (p failGaugeProvider) Unregister(kernelmetrics.Collector) error { return nil }
+
+// TestBuildProjectionCoordinators_MultiProjection_SharesSingleMetrics is the
+// direct regression guard for #1399: before the fix, buildOneProjection called
+// projection.RegisterMetrics PER projection, so the fixed-name metric family was
+// registered N times (the 2nd+ registration collides and was warn-degraded).
+// After the fix a single shared *projection.Metrics is registered once via
+// autoWireProjectionMetrics and reused for every projection — proven here by the
+// gauge/histogram registration counts staying at one family across two projections.
+func TestBuildProjectionCoordinators_MultiProjection_SharesSingleMetrics(t *testing.T) {
+	t.Parallel()
+	prov := &projMetricRegProvider{}
+	s := buildProjectionPhaseState(t,
+		newProjectionCellNamed("ordercell_a", "summary"),
+		newProjectionCellNamed("ordercell_b", "summary"),
+	)
+
+	b := newProjectionBootstrap(t, WithMetricsProvider(prov))
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 2)
+
+	require.NotNil(t, b.projectionMetrics,
+		"a single shared *projection.Metrics must be registered once and cached for all projections")
+	// Each fixed-name projection metric must be registered EXACTLY once across the
+	// two projections — the old per-projection path registered them N times (the
+	// 2nd colliding and being warn-degraded). #1399.
+	for _, name := range []string{
+		"projection_event_replay_lag_seconds",
+		"projection_rebuild_duration_seconds",
+		"projection_pending_events",
+	} {
+		assert.Equalf(t, 1, prov.regs[name],
+			"%s must register EXACTLY once for a single shared *projection.Metrics, not once per projection (#1399)", name)
+	}
+}
+
+// TestBuildProjectionCoordinators_SameCellMultiProjection_SharesSingleMetrics
+// reproduces the EXACT #1399 shape: a single cell with two projections. The old
+// per-projection path called RegisterMetrics inside buildOneProjection, so the
+// 2nd projection re-registered the fixed-name family (collide → warn-degrade →
+// lost metrics). The shared registration must register each metric exactly once.
+func TestBuildProjectionCoordinators_SameCellMultiProjection_SharesSingleMetrics(t *testing.T) {
+	t.Parallel()
+	prov := &projMetricRegProvider{}
+	s := buildProjectionPhaseState(t, newMultiProjectionCell("ordercell", "summary", "detail"))
+
+	b := newProjectionBootstrap(t, WithMetricsProvider(prov))
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 2, "one cell declared two projections")
+
+	require.NotNil(t, b.projectionMetrics)
+	for _, name := range []string{
+		"projection_event_replay_lag_seconds",
+		"projection_rebuild_duration_seconds",
+		"projection_pending_events",
+	} {
+		assert.Equalf(t, 1, prov.regs[name],
+			"%s must register EXACTLY once for one cell's two projections, not once per projection (#1399)", name)
+	}
+}
+
+// TestAutoWireProjectionMetrics_NopProvider_Skips confirms the Nop default
+// short-circuits before any registration and leaves the cache nil.
+func TestAutoWireProjectionMetrics_NopProvider_Skips(t *testing.T) {
+	t.Parallel()
+	b := newProjectionBootstrap(t) // default NopProvider
+	require.NoError(t, b.autoWireProjectionMetrics())
+	assert.Nil(t, b.projectionMetrics, "Nop provider must not register projection metrics")
+}
+
+// TestAutoWireProjectionMetrics_Conflict_FailFast confirms a registration
+// conflict is startup-fatal with an actionable message — never warn-degraded.
+func TestAutoWireProjectionMetrics_Conflict_FailFast(t *testing.T) {
+	t.Parallel()
+	b := newProjectionBootstrap(t, WithMetricsProvider(failGaugeProvider{}))
+	err := b.autoWireProjectionMetrics()
+	require.Error(t, err, "registration conflict must fail fast, not degrade to no-metrics")
+	assert.Contains(t, err.Error(), "projection metrics auto-wire conflict")
+	assert.Contains(t, err.Error(), "Remove one side")
+	assert.Nil(t, b.projectionMetrics, "cache must stay nil when registration fails")
+}
+
 // Compile-time anchors.
 var (
-	_ cell.Cell         = (*projectionTestCell)(nil)
-	_ projection.Cursor = fakeProjectionCursor{}
+	_ cell.Cell              = (*projectionTestCell)(nil)
+	_ cell.Cell              = (*multiProjectionCell)(nil)
+	_ projection.Cursor      = fakeProjectionCursor{}
+	_ kernelmetrics.Provider = (*projMetricRegProvider)(nil)
+	_ kernelmetrics.Provider = failGaugeProvider{}
+	_ kernelmetrics.Provider = recordingLabelProvider{}
 )

@@ -68,13 +68,15 @@ func TestArchtestVerifyCoverage01(t *testing.T) {
 	if len(missingFromScript) > 0 || len(missingFromAST) > 0 {
 		var msg []string
 		if len(missingFromScript) > 0 {
-			msg = append(msg,
+			msg = append(
+				msg,
 				"verify-archtest.sh discovery is MISSING tests that exist in tools/archtest/*_test.go:",
 				"  "+strings.Join(missingFromScript, "\n  "),
 			)
 		}
 		if len(missingFromAST) > 0 {
-			msg = append(msg,
+			msg = append(
+				msg,
 				"verify-archtest.sh discovery reports tests that AST scan cannot find under tools/archtest/ (excluding internal/):",
 				"  "+strings.Join(missingFromAST, "\n  "),
 			)
@@ -221,13 +223,10 @@ func scanArchtestTopLevelTestNames(t *testing.T, repoRoot string) map[string]str
 	scope := DirsScope(repoRoot, []string{"tools/archtest"}, IncludeTests())
 
 	names := map[string]struct{}{}
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// Only the archtest top-level Go package (matches the script's
-			// `./tools/archtest` non-recursive package selector). Subpackages
-			// like internal/scanner and internal/typeseval have their own
-			// `go test ./tools/archtest/internal/...` entry.
+
 			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
 				continue
 			}
@@ -235,7 +234,7 @@ func scanArchtestTopLevelTestNames(t *testing.T, repoRoot string) map[string]str
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-				if fd.Recv != nil { // method — not a Test* function
+				if fd.Recv != nil {
 					return
 				}
 				if fd.Name == nil || !strings.HasPrefix(fd.Name.Name, "Test") {
@@ -249,6 +248,7 @@ func scanArchtestTopLevelTestNames(t *testing.T, repoRoot string) map[string]str
 		}
 		return nil
 	})
+
 	return names
 }
 

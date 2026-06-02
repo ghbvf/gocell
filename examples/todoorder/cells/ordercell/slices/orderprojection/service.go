@@ -1,19 +1,20 @@
 // Package orderprojection implements the public-facing order-projection slice
-// (L3): subscribes to order-created and order-status-changed events, maintains
-// an in-memory "by-status" read model, and serves the summary query endpoint on
-// the PrimaryListener (/api/v1). The internal control-plane rebuild endpoint is
-// kept in a separate slice (orderprojectionrebuild) per governance rule
-// SLICE-HTTP-VISIBILITY-SEGREGATION-01 (FMT-33).
+// (L3 CQRS harness reference): reg.RegisterProjection drives HandleOrderCreated
+// (apply) and ResetOrderStatus (onReset) via the framework projection.Coordinator.
+// The subscription wiring is emitted into cell_gen.go from the slice.yaml
+// contractUsages[role=subscribe, projection=order_status, onReset=ResetOrderStatus].
+// Rebuild is now framework-owned (Coordinator.Rebuild); the separate
+// orderprojectionrebuild slice has been removed.
 //
-// Projection logic is shared with the orderprojectionrebuild slice via the
-// internal package cells/ordercell/internal/orderprojection, following the
-// FMT-33 internal-shared-package pattern (prior art: configcore/internal/configreader).
+// The projection logic lives in cells/ordercell/internal/orderprojection.
+// This file re-exports only the symbols that the cell composition root and
+// tests need from the shared internal package.
 package orderprojection
 
 import internalproj "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
 
-// Service is the slice service type; the projection logic is shared with the
-// orderprojectionrebuild slice via cells/ordercell/internal/orderprojection.
+// Service is the slice service type; the projection logic lives in
+// cells/ordercell/internal/orderprojection.
 type Service = internalproj.Service
 
 // StatusBucket re-exports the type from the shared internal package.
@@ -21,9 +22,6 @@ type StatusBucket = internalproj.StatusBucket
 
 // Summary re-exports the type from the shared internal package.
 type Summary = internalproj.Summary
-
-// RebuildReport re-exports the type from the shared internal package.
-type RebuildReport = internalproj.RebuildReport
 
 // Option re-exports the type from the shared internal package.
 type Option = internalproj.Option

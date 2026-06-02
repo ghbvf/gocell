@@ -168,6 +168,13 @@ const (
 	// projection that depends on cross-cell eventual consistency.
 	codePROJECTIONCONSISTENCY01 RuleCode = "PROJECTION-CONSISTENCY-01"
 
+	// PROJECTION-PROVIDE-NEEDS-WRITE-CU-01 — a slice with role=provide referencing
+	// a kind=projection contract must belong to a cell that also has at least one
+	// subscribe CU with a non-empty Projection field (the write side that emits
+	// reg.RegisterProjection). Without the write side, the projection silently
+	// degrades to a plain subscription with no checkpoint or rebuild support.
+	codePROJECTIONPROVIDENEEDSWRITECU01 RuleCode = "PROJECTION-PROVIDE-NEEDS-WRITE-CU-01"
+
 	// SAGA — saga contract format (rules_saga.go).
 	codeSAGACONTRACTBLOCKPRESENT01      RuleCode = "SAGA-CONTRACT-BLOCK-PRESENT-01"
 	codeSAGACONTRACTSTEPSNONEMPTY01     RuleCode = "SAGA-CONTRACT-STEPS-NONEMPTY-01"

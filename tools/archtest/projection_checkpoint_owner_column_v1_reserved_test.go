@@ -128,7 +128,7 @@ func isProjectionCheckpointWriteSQL(sql string) bool {
 func TestProjectionCheckpointOwnerColumnV1Reserved01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, []string{"adapters/postgres"}), ownerColumnWriteDiags)
+	diags := Run(t, AST(DirsScope(root, []string{"adapters/postgres"})), ownerColumnWriteDiags)
 	Report(t, "PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01", diags)
 }
 
@@ -142,9 +142,11 @@ func TestProjectionCheckpointOwnerColumnV1Reserved01_RedFixture(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based fixture test in -short mode")
 	}
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/projectioncheckpointownerfixture/..."},
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/projectioncheckpointownerfixture/..."}),
+
 		ownerColumnWriteDiags)
+
 	require.Len(t, diags, 1,
 		"RED fixture: detector must fire exactly once — on badUpsertSQL (INSERT/UPDATE owner) "+
 			"and NOT on readSQL (SELECT owner). got: %v", diags)
@@ -162,17 +164,17 @@ func TestProjectionCheckpointOwnerColumnV1Reserved01_ReverseBlindSpot_NoDynamicS
 	const msg = "B1 blind spot: projection_checkpoints SQL assembled dynamically " +
 		"(`+` concatenation / fmt.Sprintf|Fprintf / strings.Join / *.WriteString); " +
 		"keep it a single static literal so the owner-column scan stays effective"
-	diags := Run(t, DirsScope(root, []string{"adapters/postgres"}), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(DirsScope(root, []string{"adapters/postgres"})), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// String `+` concatenation.
+
 			EachInSubtree[ast.BinaryExpr](f, func(be *ast.BinaryExpr) {
 				if be.Op == token.ADD && nodeMentionsCheckpointTable(be) {
 					out = append(out, Diagnostic{Rel: rel, Line: p.Fset.Position(be.Pos()).Line, Message: msg})
 				}
 			})
-			// fmt.Sprintf/Fprintf, strings.Join, *.WriteString builder calls.
+
 			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 				if isDynamicSQLBuilderCall(call) && callArgsMentionCheckpointTable(call) {
 					out = append(out, Diagnostic{Rel: rel, Line: p.Fset.Position(call.Pos()).Line, Message: msg})
@@ -181,6 +183,7 @@ func TestProjectionCheckpointOwnerColumnV1Reserved01_ReverseBlindSpot_NoDynamicS
 		}
 		return out
 	})
+
 	assert.Empty(t, diags,
 		"B1 reverse: projection_checkpoints SQL must be a single static string literal, "+
 			"not built via dynamic construction")

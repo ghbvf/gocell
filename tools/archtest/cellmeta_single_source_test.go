@@ -55,7 +55,7 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 		"L0Dep":        true,
 	}
 	scope := DirsScope(root, []string{"kernel/cell"})
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 				if forbidden[ts.Name.Name] {

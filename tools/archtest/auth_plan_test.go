@@ -328,7 +328,7 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 // logic to listener topology decisions.
 //
 // Scanned packages:
-//   - all production packages under cells/ and runtime/ (RunTypedProduction
+//   - all production packages under cells/ and runtime/ (the Production scope
 //     already excludes generated/)
 //   - runtime/bootstrap/... is the authorized wiring layer and is skipped
 //
@@ -375,7 +375,7 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}

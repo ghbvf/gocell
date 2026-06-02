@@ -9,8 +9,8 @@
 // pollute real-repo scans, lint, or coverage. It is loaded explicitly by
 // TestScannerFrameworkUsage01_InspectorMethodBanLive via
 //
-//	archtest.RunTypedFixture(t, archtest.FixtureOpts{Tests: false},
-//	    []string{"./tools/archtest/internal/inspectorredfixture"}, rule)
+//	archtest.Run(t, archtest.Fixture(archtest.FixtureOpts{Tests: false},
+//	    []string{"./tools/archtest/internal/inspectorredfixture"}), rule)
 //
 // Sister fixture packages (wrapfixture/violation, rawparamfixture,
 // wrapfixture/kernelcellsibling) follow the same convention.

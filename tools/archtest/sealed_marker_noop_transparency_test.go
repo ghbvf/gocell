@@ -9,7 +9,7 @@
 // the CellEmitter wrapper).
 //
 // AI-robust 评级：Hard (typed auto-discovery via go/types package scope).
-// RunTyped loads ./kernel/... and the rule walks pass.Pkg.Scope().Names() for
+// Run(t, Typed(...)) loads ./kernel/... and the rule walks pass.Pkg.Scope().Names() for
 // internalCell*-prefixed struct TypeNames, asserting each carries Noop() bool
 // in its method set. There is NO hand-maintained file list: a new sealed-marker
 // package or type is discovered automatically, and an internalCell* struct
@@ -62,7 +62,7 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 	t.Parallel()
 
 	found := 0
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/..."}, func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/..."}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
@@ -92,16 +92,18 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 		return nil
 	})
 
-	// Floor guard against a silent discovery break (RunTyped scope resolving
+	// Floor guard against a silent discovery break (typed Production scope resolving
 	// nothing, prefix typo, etc.): the known sealed markers are
 	// internalCellTxManager (kernel/persistence) + internalCellPublisher /
-	// internalCellWriter / internalCellEmitter (kernel/outbox) +
-	// internalCellCheckpointStore (kernel/projection) = 5. Assert we found at
-	// least those so a load regression cannot make this archtest vacuously
-	// pass. Bump this floor whenever a sealed marker is added.
-	if found < 5 {
+	// internalCellWriter / internalCellEmitter (kernel/outbox) = 4.
+	// internalCellCheckpointStore (kernel/projection) was removed with
+	// WrapCheckpointStoreForCell when the bootstrap-owned projection harness
+	// made the cell-level sealed marker dead code (#1285 / #834). Assert we
+	// found at least those so a load regression cannot make this archtest
+	// vacuously pass. Bump this floor whenever a sealed marker is added.
+	if found < 4 {
 		t.Fatalf("SEALED-MARKER-NOOP-TRANSPARENCY-01: discovered only %d internalCell* struct types under "+
-			"kernel/...; expected ≥5 (auto-discovery likely broken)", found)
+			"kernel/...; expected ≥4 (auto-discovery likely broken)", found)
 	}
 }
 

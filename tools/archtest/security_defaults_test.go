@@ -679,7 +679,8 @@ services:
 // two-level os.ReadDir loop, which failed open on nested compose files.
 func findExampleComposeCredentialViolations(t *testing.T, root string) []string {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{"examples"},
+	scope := scanner.DirsScope(
+		root, []string{"examples"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "docker-compose.yml"
 		}),
@@ -1235,10 +1236,11 @@ func sec10Violations(p *Pass) []string {
 func testSEC10HealthListenerRequiredInMain(t *testing.T) {
 	t.Helper()
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		violations = append(violations, sec10Violations(p)...)
 		return nil
 	})
+
 	for _, v := range violations {
 		t.Logf("%s violation: %s", secFailClosed10, v)
 	}
@@ -1280,13 +1282,14 @@ func dotImportKernelCellHits(p *Pass) []string {
 func testSEC10NoDotImportKernelCellBlindSpotInProduction(t *testing.T) {
 	t.Helper()
 	var blindspots []string
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Name() != "main" {
 			return nil
 		}
 		blindspots = append(blindspots, dotImportKernelCellHits(p)...)
 		return nil
 	})
+
 	for _, b := range blindspots {
 		t.Logf("%s blind spot: %s", secFailClosed10, b)
 	}
@@ -1306,12 +1309,14 @@ func testSEC10NoDotImportKernelCellBlindSpotInProduction(t *testing.T) {
 func testSEC10FixtureCatchesPrimaryWithoutHealth(t *testing.T) {
 	t.Helper()
 	var violations []string
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/healthlistenerfixture"},
+	_ = Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/healthlistenerfixture"}),
+
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, sec10Violations(p)...)
 			return nil
 		})
+
 	require.Len(t, violations, 1,
 		"the primary-without-health fixture must produce exactly one SEC-FAIL-CLOSED-10 violation; "+
 			"this exercises the full rule path (package-main gate + primary-without-health detection), "+

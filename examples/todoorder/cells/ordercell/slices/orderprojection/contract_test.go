@@ -3,6 +3,7 @@ package orderprojection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-// TestHttpOrderProjectionSummaryV1Serve verifies http.order.projection-summary.v1 provide contract.
+// TestHttpOrderProjectionSummaryV1Serve verifies http.order.projection-summary.v1 serve contract.
 func TestHttpOrderProjectionSummaryV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.projection-summary.v1")
@@ -42,9 +43,8 @@ func TestProjectionOrderStatusSummaryV1Provide(t *testing.T) {
 	svc, err := NewService()
 	require.NoError(t, err)
 
-	// seed some events so the summary is non-trivial
-	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "c-order-1", "pending"))
-	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "c-order-1"))
+	// seed an order so the summary is non-trivial
+	require.NoError(t, svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "c-order-1", "pending")))
 
 	summary := svc.Query(ctx)
 
@@ -57,9 +57,8 @@ func TestProjectionOrderStatusSummaryV1Provide(t *testing.T) {
 		})
 	}
 	payload := map[string]any{
-		"statuses":       statuses,
-		"totalOrders":    summary.TotalOrders,
-		"lastAppliedSeq": summary.LastAppliedSeq,
+		"statuses":    statuses,
+		"totalOrders": summary.TotalOrders,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	require.NoError(t, err)
@@ -67,9 +66,10 @@ func TestProjectionOrderStatusSummaryV1Provide(t *testing.T) {
 	c.ValidatePayload(t, payloadBytes)
 }
 
-// TestEventOrderCreatedV1Subscribe verifies subscribe contract for event.order-created.v1:
-// HandleOrderCreated correctly processes conforming payloads and Acks them.
-func TestEventOrderCreatedV1Subscribe(t *testing.T) {
+// TestEventOrderCreatedV1Apply verifies the projection apply contract for
+// event.order-created.v1: HandleOrderCreated correctly processes conforming
+// payloads (returns nil) and rejects invalid ones (returns permanent error).
+func TestEventOrderCreatedV1Apply(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "event.order-created.v1")
 
@@ -77,40 +77,23 @@ func TestEventOrderCreatedV1Subscribe(t *testing.T) {
 	svc, err := NewService()
 	require.NoError(t, err)
 
-	// positive: valid payload must Ack
+	// positive: valid payload must return nil (apply success)
 	validPayload := []byte(`{"id":"order-ct-1","item":"widget","status":"pending"}`)
 	c.ValidatePayload(t, validPayload)
 
-	result := svc.HandleOrderCreated(ctx, outboxtest.NewEntry("event.order-created.v1", validPayload))
-	assert.Equal(t, outbox.Ack(), result, "HandleOrderCreated must Ack valid payload")
+	applyErr := svc.HandleOrderCreated(ctx, outboxtest.NewEntry("event.order-created.v1", validPayload))
+	assert.NoError(t, applyErr, "HandleOrderCreated must return nil for valid payload")
 
 	summary := svc.Query(ctx)
 	assert.Equal(t, int64(1), summary.TotalOrders)
 
 	// negative: payload missing required field must be rejected by schema
 	c.MustRejectPayload(t, []byte(`{"item":"widget","status":"pending"}`))
-}
 
-// TestEventOrderStatusChangedV1Subscribe verifies subscribe contract for event.order-status-changed.v1:
-// HandleOrderStatusChanged correctly processes conforming payloads and Acks them.
-func TestEventOrderStatusChangedV1Subscribe(t *testing.T) {
-	root := contracttest.ExampleContractsRoot(t, "todoorder")
-	c := contracttest.LoadByID(t, root, "event.order-status-changed.v1")
-
-	ctx := context.Background()
-	svc, err := NewService()
-	require.NoError(t, err)
-
-	// seed a created order first
-	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-ct-2", "pending"))
-
-	// positive: valid payload must Ack
-	validPayload := []byte(`{"id":"order-ct-2","oldStatus":"pending","newStatus":"confirmed"}`)
-	c.ValidatePayload(t, validPayload)
-
-	result := svc.HandleOrderStatusChanged(ctx, outboxtest.NewEntry("event.order-status-changed.v1", validPayload))
-	assert.Equal(t, outbox.Ack(), result, "HandleOrderStatusChanged must Ack valid payload")
-
-	// negative: payload missing required field must be rejected by schema
-	c.MustRejectPayload(t, []byte(`{"id":"order-ct-2","oldStatus":"pending"}`))
+	// negative: invalid JSON must return permanent error
+	badEntry := outboxtest.NewEntry("event.order-created.v1", []byte("not-json"))
+	badErr := svc.HandleOrderCreated(ctx, badEntry)
+	require.Error(t, badErr)
+	var pe *outbox.PermanentError
+	assert.True(t, errors.As(badErr, &pe), "undecodable payload must be a PermanentError")
 }

@@ -126,6 +126,7 @@ type recorderTB struct {
 func (r *recorderTB) Helper()                   {}
 func (r *recorderTB) Name() string              { return "recorderTB" }
 func (r *recorderTB) Fatalf(f string, a ...any) { r.fatals = append(r.fatals, fmt.Sprintf(f, a...)) }
+
 func (r *recorderTB) Errorf(f string, a ...any) { r.errors = append(r.errors, fmt.Sprintf(f, a...)) }
 
 func TestCanonicalDedupAndSort(t *testing.T) {

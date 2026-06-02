@@ -73,7 +73,7 @@ func scanOutboxSubscriberSettlement(t *testing.T) (implPkgSet, notifyPkgSet map[
 	var allPkgs []*types.Package
 	notifyPkgSet = make(map[string]bool)
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -147,7 +147,8 @@ func TestOutboxSubscriberSettlementNotify(t *testing.T) {
 					"implementation but never calls outbox.NotifySettlement — SettlementObservers attached "+
 					"to a HandleResult would be silently dropped on its consume path. Call "+
 					"outbox.NotifySettlement on every broker-settlement branch (mirror adapters/rabbitmq), "+
-					"or add a documented waiver if this is a delegating decorator.", pkgPath),
+					"or add a documented waiver if this is a delegating decorator.", pkgPath,
+			),
 		})
 	}
 
@@ -160,7 +161,8 @@ func TestOutboxSubscriberSettlementNotify(t *testing.T) {
 				Line: 0,
 				Message: fmt.Sprintf(
 					"OUTBOX-SUBSCRIBER-SETTLEMENT-NOTIFY-01: package %s is waived but now calls "+
-						"outbox.NotifySettlement — remove the stale waiver entry.", pkgPath),
+						"outbox.NotifySettlement — remove the stale waiver entry.", pkgPath,
+				),
 			})
 		}
 	}

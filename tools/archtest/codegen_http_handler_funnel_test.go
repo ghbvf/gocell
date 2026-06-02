@@ -154,7 +154,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1a_SpecTypeSealed(t *testing.T)
 	scope := DirsScope(root, []string{"tools/codegen/contractgen"})
 
 	var violations []string
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var endpointFound bool
 		var endpointBase string
 		for _, f := range p.Files {
@@ -210,7 +210,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1b_SoleConstructorAndCaller(t *
 	scope := DirsScope(root, []string{"tools/codegen/contractgen"})
 
 	var violations []string
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		ctorBody, callerBodies, typeFound, ctorFound := collectA1bRanges(p.Files)
 		if !typeFound {
 			violations = append(violations,
@@ -219,7 +219,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1b_SoleConstructorAndCaller(t *
 		if !ctorFound {
 			violations = append(violations,
 				"constructor "+codegenSpecCtorFunc+" not found in contractgen — renamed without updating this lock?")
-			return nil // cannot range-check constructions without the constructor body
+			return nil
 		}
 		for _, f := range p.Files {
 			violations = append(violations, scanSealedSpecViolations(f, p.Rel(f), ctorBody, callerBodies)...)
@@ -251,7 +251,8 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1b_SoleConstructorAndCaller(t *
 func TestCodegenBuildHTTPEndpointSpecSoleCaller_A2_HandlerEmitTemplateUniqueness(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"tools/codegen"},
+	scope := DirsScope(
+		root, []string{"tools/codegen"},
 		MatchRels(func(rel string) bool {
 			if strings.Contains(rel, "/testdata/") {
 				return false // golden snapshots are codegen output, not generator source
@@ -296,8 +297,8 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A2_HandlerEmitTemplateUniqueness
 // folding (EvaluateConstString), so a const indirection
 // (`const tmpl = "handler.tmpl"`) or string concatenation
 // (`"handler" + ".tmpl"`) folds to the same value and is caught — the prior
-// BasicLit-only scan missed both. RunTyped (not the AST-only Run) supplies the
-// types.Info the folding needs.
+// BasicLit-only scan missed both. Run(t, Typed(...)) (not the AST-only Run)
+// supplies the types.Info the folding needs.
 //
 // Blind spot (documented, not detected): the template name assembled from
 // runtime-only data (e.g. filepath.Join of a value read from disk) — no
@@ -309,7 +310,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A3_HandlerTmplRenderedOnlyInCont
 
 	var outside []string
 	var insideCount int
-	_ = RunTyped(t, TypedOpts{}, []string{"./tools/codegen/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./tools/codegen/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
@@ -329,6 +330,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A3_HandlerTmplRenderedOnlyInCont
 		}
 		return nil
 	})
+
 	sort.Strings(outside)
 	for _, v := range outside {
 		t.Errorf("CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 (A3): %s references template %q outside "+
@@ -376,18 +378,20 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A3_HandlerTmplRenderedOnlyInCont
 func TestCodegenBuildHTTPEndpointSpecSoleCaller_A4_NoExportedSpecLeak(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"tools/codegen/contractgen"},
+	scope := DirsScope(
+		root, []string{"tools/codegen/contractgen"},
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, ".go") && !strings.HasSuffix(rel, "_test.go")
 		}),
 	)
 	var violations []string
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			violations = append(violations, scanExportedSpecLeak(f, p.Rel(f))...)
 		}
 		return nil
 	})
+
 	reportCodegenFunnel(t, violations)
 }
 
@@ -804,11 +808,10 @@ func TestCodegenFunnel_A1b_NoMethodValueIndirectionInProduction(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"tools/codegen/contractgen"})
 	var hits []string
-	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			// A value reference to buildHTTPEndpointSpec that is NOT the callee of
-			// a CallExpr (i.e. the func used as a value: assignment, arg, return).
+
 			calleeIdents := map[*ast.Ident]bool{}
 			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 				if id := exprToIdent(call.Fun); id != nil {
@@ -823,6 +826,7 @@ func TestCodegenFunnel_A1b_NoMethodValueIndirectionInProduction(t *testing.T) {
 		}
 		return nil
 	})
+
 	// The decl of buildHTTPEndpointSpec is itself an Ident occurrence that is not
 	// a callee; tolerate exactly the declaration, flag any additional value ref.
 	if len(hits) > 1 {

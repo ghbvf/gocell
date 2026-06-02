@@ -247,7 +247,7 @@ func TestTenantRepoParamFunnel01(t *testing.T) {
 		totalWithTenant int
 		allSeen         = map[string]struct{}{}
 	)
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg == nil || p.Pkg.Path() != accesscorePortsPkg {
 			return nil
 		}
@@ -303,15 +303,13 @@ func TestTenantRepoParamFunnel01_ScannerCatchesViolation(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{tenantRepoParamFixPkg},
-		func(p *Pass) []Diagnostic {
-			if !p.Typed() || p.Pkg == nil {
-				return nil
-			}
-			d, _, _ := scanTenantRepoParam(p, []string{"FakeRepo"}, nil)
-			return d
-		})
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{tenantRepoParamFixPkg}), func(p *Pass) []Diagnostic {
+		if !p.Typed() || p.Pkg == nil {
+			return nil
+		}
+		d, _, _ := scanTenantRepoParam(p, []string{"FakeRepo"}, nil)
+		return d
+	})
 
 	if len(diags) != 2 {
 		t.Fatalf("expected exactly 2 diagnostics (GetByThing + WrongPosition), got %d: %v", len(diags), diags)
@@ -426,7 +424,7 @@ func TestTenantRepoCallsiteFunnel01(t *testing.T) {
 	var allDiags []Diagnostic
 
 	// First pass: resolve the function object from the ports package.
-	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg == nil || p.Pkg.Path() != accesscorePortsPkg {
 			return nil
 		}
@@ -443,7 +441,7 @@ func TestTenantRepoCallsiteFunnel01(t *testing.T) {
 	}
 
 	// Second pass: scan all production code for calls to that *types.Func.
-	scanDiags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	scanDiags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.TypesInfo == nil {
 			return nil
 		}
@@ -538,30 +536,28 @@ func TestTenantRepoCallsiteFunnel01_FixtureCatchesViolation(t *testing.T) {
 	var fixtureDiags []Diagnostic
 
 	// First: resolve FakeUserRepository.GetByID from the fixture package.
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{tenantRepoParamFixPkg},
-		func(p *Pass) []Diagnostic {
-			if !p.Typed() || p.Pkg == nil {
-				return nil
-			}
-			scope := p.Pkg.Scope()
-			obj := scope.Lookup("FakeUserRepository")
-			if obj == nil {
-				return nil
-			}
-			iface, ok := obj.Type().Underlying().(*types.Interface)
-			if !ok {
-				return nil
-			}
-			for i := 0; i < iface.NumExplicitMethods(); i++ {
-				m := iface.ExplicitMethod(i)
-				if m.Name() == "GetByID" {
-					fakeGetByIDObj = m
-					return nil
-				}
-			}
+	_ = Run(t, Fixture(FixtureOpts{Tests: false}, []string{tenantRepoParamFixPkg}), func(p *Pass) []Diagnostic {
+		if !p.Typed() || p.Pkg == nil {
 			return nil
-		})
+		}
+		scope := p.Pkg.Scope()
+		obj := scope.Lookup("FakeUserRepository")
+		if obj == nil {
+			return nil
+		}
+		iface, ok := obj.Type().Underlying().(*types.Interface)
+		if !ok {
+			return nil
+		}
+		for i := 0; i < iface.NumExplicitMethods(); i++ {
+			m := iface.ExplicitMethod(i)
+			if m.Name() == "GetByID" {
+				fakeGetByIDObj = m
+				return nil
+			}
+		}
+		return nil
+	})
 
 	if fakeGetByIDObj == nil {
 		t.Fatal("fixture scanner: could not resolve FakeUserRepository.GetByID — fixture regressed")
@@ -569,43 +565,41 @@ func TestTenantRepoCallsiteFunnel01_FixtureCatchesViolation(t *testing.T) {
 
 	// Second: scan the fixture for calls to FakeUserRepository.GetByID.
 	observed := map[string]struct{}{}
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{tenantRepoParamFixPkg},
-		func(p *Pass) []Diagnostic {
-			if !p.Typed() || p.TypesInfo == nil {
-				return nil
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{tenantRepoParamFixPkg}), func(p *Pass) []Diagnostic {
+		if !p.Typed() || p.TypesInfo == nil {
+			return nil
+		}
+		relByAbs := make(map[string]string, len(p.Files))
+		for _, f := range p.Files {
+			relByAbs[p.Abs(f)] = p.Rel(f)
+		}
+		var d []Diagnostic
+		for selExpr, sel := range p.TypesInfo.Selections {
+			if sel.Kind() != types.MethodExpr && sel.Kind() != types.MethodVal {
+				continue
 			}
-			relByAbs := make(map[string]string, len(p.Files))
-			for _, f := range p.Files {
-				relByAbs[p.Abs(f)] = p.Rel(f)
+			if sel.Obj() != fakeGetByIDObj {
+				continue
 			}
-			var d []Diagnostic
-			for selExpr, sel := range p.TypesInfo.Selections {
-				if sel.Kind() != types.MethodExpr && sel.Kind() != types.MethodVal {
-					continue
-				}
-				if sel.Obj() != fakeGetByIDObj {
-					continue
-				}
-				pos := p.Fset.Position(selExpr.Pos())
-				rel, ok := relByAbs[pos.Filename]
-				if !ok {
-					continue
-				}
-				observed[rel] = struct{}{}
-				if _, allowed := fixtureCallsiteAllowlist[rel]; !allowed {
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"TENANT-REPO-CALLSITE-FUNNEL-01 fixture: unsanctioned call to "+
-								"FakeUserRepository.GetByID from %s:%d",
-							rel, pos.Line),
-					})
-				}
+			pos := p.Fset.Position(selExpr.Pos())
+			rel, ok := relByAbs[pos.Filename]
+			if !ok {
+				continue
 			}
-			return d
-		})
+			observed[rel] = struct{}{}
+			if _, allowed := fixtureCallsiteAllowlist[rel]; !allowed {
+				d = append(d, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"TENANT-REPO-CALLSITE-FUNNEL-01 fixture: unsanctioned call to "+
+							"FakeUserRepository.GetByID from %s:%d",
+						rel, pos.Line),
+				})
+			}
+		}
+		return d
+	})
 	fixtureDiags = append(fixtureDiags, diags...)
 
 	if len(fixtureDiags) == 0 {

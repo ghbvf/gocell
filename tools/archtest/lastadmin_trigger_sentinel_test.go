@@ -6,7 +6,7 @@
 // lastadmin.go) and the `RAISE EXCEPTION` message of the
 // effective_admin_invariant_fn trigger (adapters/postgres/migrations/
 // 024_effective_admin_invariant.sql and its per-tenant rebuild in
-// 046_accesscore_tenant_id.sql) are two artifacts in two languages that MUST
+// 047_accesscore_tenant_id.sql) are two artifacts in two languages that MUST
 // stay byte-consistent: `isLastAdminProtected` classifies the PL/pgSQL
 // exception into errcode.ErrAuthLastAdminProtected (HTTP 403) by matching
 // `strings.HasPrefix(pgErr.Message, lastAdminTriggerSentinel+":")`. A future
@@ -15,7 +15,7 @@
 // that was missing (gh #740 / PR #578 DX4 S5 OUT_OF_SCOPE finding).
 //
 // As of PR #1481 (#1340) there are TWO legitimate copies of the sentinel in
-// migrations: 024 (original trigger creation) and 046 (per-tenant trigger
+// migrations: 024 (original trigger creation) and 047 (per-tenant trigger
 // rebuild). The guard is therefore "ALL copies agree with the Go const" rather
 // than "exactly one copy exists".
 //
@@ -190,7 +190,7 @@ const (
 //     as the inverse.
 //
 // Multiple legitimate copies: as of PR #1481 (#1340) migrations 024 (original
-// trigger creation) and 046 (per-tenant trigger rebuild) both carry the sentinel.
+// trigger creation) and 047 (per-tenant trigger rebuild) both carry the sentinel.
 // Both copies are intentional; the guard verifies that ALL copies still agree
 // with the Go const, not that there is only one copy. A future rebuild migration
 // may add further copies without needing to update this archtest, as long as it
@@ -203,7 +203,7 @@ const (
 // migration (Ory-style), which needs an integration DB this static rule omits.
 //
 // Blind-spot self-check (AI-robust §盲区自检): the chosen helpers are
-// RunTypedProduction + EvaluateConstString (Go side) and EachContentFile (SQL
+// Run(t, Production(...)) + EvaluateConstString (Go side) and EachContentFile (SQL
 // side). Forms outside their declared scope, and how each is covered:
 //
 //   - const re-declared as `var`, or in a 2nd file/spec → declCount != 1 fails
@@ -251,12 +251,13 @@ func TestLastadminTriggerSentinelConstSQLMatch01(t *testing.T) {
 	// that prefix (drift check per-match). Bound to the extracted RAISE literal
 	// (not a whole-file substring) so comment/identifier residue cannot mask drift.
 	//
-	// Multiple copies are legitimate: 024 (original) + 046 (per-tenant rebuild,
+	// Multiple copies are legitimate: 024 (original) + 047 (per-tenant rebuild,
 	// PR #1481 / #1340) both carry the sentinel intentionally. A future rebuild
 	// migration may add further copies; the guard fires only when a copy drifts.
 	// ──
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{lastAdminMigrationsDir},
+	scope := scanner.DirsScope(
+		root, []string{lastAdminMigrationsDir},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.ToSlash(filepath.Dir(rel)) == lastAdminMigrationsDir
 		}),
@@ -334,11 +335,11 @@ func TestLastadminTriggerSentinelConstSQLMatch01_SelfCheck(t *testing.T) {
 	}
 
 	// Two-copy positive (rebuild semantics): both copies carry the correct sentinel.
-	// This mirrors 024 + 046 co-existence: both must produce 2 matches.
+	// This mirrors 024 + 047 co-existence: both must produce 2 matches.
 	twoCorrect := `-- migration 024
 	RAISE EXCEPTION 'effective_admin_invariant: would leave the system with no effective admin'
 		USING ERRCODE = 'P0001';
-	-- migration 046 per-tenant rebuild
+	-- migration 047 per-tenant rebuild
 	RAISE EXCEPTION 'effective_admin_invariant: would leave the system with no effective admin'
 		USING ERRCODE = 'P0001';`
 	if got := raiseExceptionMessagesWithPrefix(twoCorrect, prefix); len(got) != 2 {
@@ -404,7 +405,7 @@ func TestLastadminTriggerSentinelConstSQLMatch01_SelfCheck(t *testing.T) {
 // lastAdminSentinelConstRel) is the self-check that catches a silent rename/move.
 func resolveLastAdminSentinel(t *testing.T) (value string, declCount int) {
 	t.Helper()
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != lastAdminSentinelConstPkg {
 			return nil
 		}
@@ -433,5 +434,6 @@ func resolveLastAdminSentinel(t *testing.T) (value string, declCount int) {
 		}
 		return nil
 	})
+
 	return value, declCount
 }

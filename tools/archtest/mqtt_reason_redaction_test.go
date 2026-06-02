@@ -64,8 +64,9 @@ func TestMQTTReasonNameRedaction_FunnelOnly(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttPkgPath}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -89,12 +90,14 @@ func TestMQTTReasonNameRedaction_FunnelOnly(t *testing.T) {
 						Message: fmt.Sprintf(
 							"REASON-NAME-REDACTION-01: errcode.PublicString(%q, …) at %s:%d outside %s — "+
 								"reasonName must be built only via %s so auth-code redaction cannot be bypassed",
-							mqttReasonNameDetailKey, rel, pos.Line, mqttReasonDetailFunnelFunc, mqttReasonDetailFunnelFunc),
+							mqttReasonNameDetailKey, rel, pos.Line, mqttReasonDetailFunnelFunc, mqttReasonDetailFunnelFunc,
+						),
 					})
 				})
 			}
 			return nil
 		})
+
 	assert.Empty(t, diags,
 		"REASON-NAME-REDACTION-01: errcode.PublicString(\"reasonName\", …) outside reasonDetailOptions detected")
 }
@@ -108,8 +111,9 @@ func TestMQTTReasonNameRedaction_ScannerNonVacuous(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	var inside int
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath},
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttPkgPath}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
 				return nil
@@ -127,6 +131,7 @@ func TestMQTTReasonNameRedaction_ScannerNonVacuous(t *testing.T) {
 			}
 			return nil
 		})
+
 	assert.GreaterOrEqual(t, inside, 1,
 		"REASON-NAME-REDACTION-01: scanner found 0 PublicString(\"reasonName\") inside reasonDetailOptions — "+
 			"the go/types resolution path may be silently broken")

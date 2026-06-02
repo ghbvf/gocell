@@ -120,7 +120,8 @@ func scanTestServiceContextCalls(path, rel string) ([]string, error) {
 		pos := fset.Position(call.Pos())
 		violations = append(violations, fmt.Sprintf(
 			"%s:%d: auth.TestServiceContext called in non-test file — move to _test.go",
-			rel, pos.Line))
+			rel, pos.Line,
+		))
 	})
 	return violations, nil
 }

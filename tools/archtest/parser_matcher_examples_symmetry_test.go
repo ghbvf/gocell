@@ -142,13 +142,11 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 	}
 	results := make(map[string]*matcherResult)
 
-	_ = RunTyped(t, TypedOpts{}, []string{"./kernel/metadata/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadataPkg {
 			return nil
 		}
 
-		// Build a map of function name → FuncDecl for package-private helpers in parser.go.
-		// We need this to look up helper bodies when a matcher delegates to one.
 		parserFuncs := make(map[string]*ast.FuncDecl)
 		for _, f := range p.Files {
 			if p.Rel(f) != "kernel/metadata/locator_conventional.go" {
@@ -161,8 +159,6 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 			})
 		}
 
-		// scanParts0Values collects all const-evaluated RHS values in `parts[0] == X`
-		// BinaryExpr nodes inside the given AST node.
 		scanParts0Values := func(root ast.Node) map[string]bool {
 			vals := make(map[string]bool)
 			EachInSubtree[ast.BinaryExpr](root, func(be *ast.BinaryExpr) {
@@ -190,8 +186,6 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 			return vals
 		}
 
-		// collectCalleeNames returns the names of all package-level functions called
-		// directly in the given AST node (one level deep, same package only).
 		collectCalleeNames := func(root ast.Node) []string {
 			var names []string
 			EachInSubtree[ast.CallExpr](root, func(ce *ast.CallExpr) {
@@ -220,10 +214,8 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 					results[funcName] = &matcherResult{}
 				}
 
-				// Collect parts[0] values from the matcher body itself.
 				allVals := scanParts0Values(fn.Body)
 
-				// Also scan direct callee helper bodies (one level deep).
 				for _, callee := range collectCalleeNames(fn.Body) {
 					if helperFn, ok := parserFuncs[callee]; ok {
 						for v := range scanParts0Values(helperFn.Body) {
@@ -267,7 +259,7 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 	// newly added matcher silently bypasses the symmetry check by being absent
 	// from the map. Failure message directs the author to add the expected root
 	// segment to the test.
-	_ = RunTyped(t, TypedOpts{}, []string{"./kernel/metadata/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadataPkg {
 			return nil
 		}
@@ -313,7 +305,7 @@ func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 
 	const metadataPkg = "github.com/ghbvf/gocell/kernel/metadata"
 
-	_ = RunTyped(t, TypedOpts{}, []string{"./kernel/metadata/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadataPkg {
 			return nil
 		}
@@ -339,13 +331,9 @@ func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 							return
 						}
 						if _, ok := idx.Index.(*ast.BasicLit); ok {
-							// Literal index: within the main check's scope, not a blind spot.
 							return
 						}
-						// Exempt `parts[len(parts)-k]`: index is a BinaryExpr whose LHS is
-						// a CallExpr (the len(...) call). This is the canonical last-element
-						// pattern — not an index-0 access, so it cannot evade the root-segment
-						// check. Any other non-literal index is flagged.
+
 						if binIdx, ok := idx.Index.(*ast.BinaryExpr); ok {
 							if _, lhsIsCall := binIdx.X.(*ast.CallExpr); lhsIsCall {
 								return
@@ -386,7 +374,7 @@ func TestParserMatcherSymmetry_BlindSpot_SwitchStmt(t *testing.T) {
 
 	const metadataPkg = "github.com/ghbvf/gocell/kernel/metadata"
 
-	_ = RunTyped(t, TypedOpts{}, []string{"./kernel/metadata/..."}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadataPkg {
 			return nil
 		}
@@ -400,9 +388,6 @@ func TestParserMatcherSymmetry_BlindSpot_SwitchStmt(t *testing.T) {
 				}
 				for _, body := range matcherAndCalleeBodies(f, fn) {
 					EachInSubtree[ast.SwitchStmt](body, func(sw *ast.SwitchStmt) {
-						// Only flag `switch parts[<intlit>]` — the form that would
-						// evade EvaluateConstString by placing the parts index
-						// comparison in a switch tag rather than a BinaryExpr.
 						if sw.Tag == nil {
 							return
 						}

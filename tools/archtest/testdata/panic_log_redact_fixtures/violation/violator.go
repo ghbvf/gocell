@@ -6,7 +6,7 @@
 // (panicLogRedactViolations, go/types IsCallToPkgFunc) must flag exactly the two
 // violations — the non-vacuity proof for TestPanicLogRedact_DetectsViolation.
 //
-// Parsed + type-checked by archtest via RunTypedFixture; intentionally violates
+// Parsed + type-checked by archtest via Run(t, Fixture(...)); intentionally violates
 // the funnel, so the archtest_fixture build tag keeps it out of normal builds.
 package violation
 

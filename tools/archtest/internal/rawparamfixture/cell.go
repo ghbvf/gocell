@@ -12,8 +12,8 @@
 // ./...` so it never pollutes real-repo scans. It is loaded explicitly by
 // TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation via
 //
-//	archtest.RunTypedFixture(t, archtest.FixtureOpts{Tests: false},
-//	    []string{"./tools/archtest/internal/rawparamfixture"}, rule)
+//	archtest.Run(t, archtest.Fixture(archtest.FixtureOpts{Tests: false},
+//	    []string{"./tools/archtest/internal/rawparamfixture"}), rule)
 //
 // The archtest scans cells/<x>/*.go + examples/<demo>/cells/<x>/*.go for
 // exported With* functions whose parameter canonical type is in the

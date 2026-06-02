@@ -113,6 +113,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 const (
@@ -147,7 +149,7 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 		violations        []Diagnostic
 	)
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/distlock/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -156,7 +158,6 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 				return nil
 			}
 
-			// Resolve the Driver interface type from the package scope.
 			driverObj := p.Pkg.Scope().Lookup(driverIfaceName)
 			if driverObj == nil {
 				return nil
@@ -171,18 +172,17 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 			}
 			foundDriverIface = true
 
-			// Index every FuncDecl in the package by name + remember its file.
 			type funcEntry struct {
 				fd   *ast.FuncDecl
 				file *ast.File
 			}
 			funcByName := map[string]funcEntry{}
 			for _, file := range p.Files {
-				for _, decl := range file.Decls {
-					if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name != nil {
+				EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+					if fd.Name != nil {
 						funcByName[fd.Name.Name] = funcEntry{fd: fd, file: file}
 					}
-				}
+				})
 			}
 
 			orphan, ok := funcByName[handleOrphanFuncName]
@@ -191,10 +191,6 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 			}
 			foundHandleOrphan = true
 
-			// scanBody flags every Driver method call inside fn's body. For the
-			// orphan path, ANY Driver call is a violation — including ones nested
-			// in a go statement (orphan must perform zero backend I/O, not merely
-			// offload it).
 			scanBody := func(name string, fe funcEntry) {
 				EachInSubtree[ast.CallExpr](fe.fd.Body, func(call *ast.CallExpr) {
 					sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -221,10 +217,6 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 				})
 			}
 
-			// samePkgCallee resolves a CallExpr's target to a same-package
-			// *types.Func name, or "" if the callee is a builtin / stdlib / other
-			// package / non-func. Handles both method selectors (m.detachLock) and
-			// bare same-package function idents.
 			samePkgCallee := func(call *ast.CallExpr) string {
 				var id *ast.Ident
 				switch fun := call.Fun.(type) {
@@ -242,13 +234,6 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 				return fn.Name()
 			}
 
-			// Scan set = handleOrphan plus the FULL transitive closure of its
-			// same-package callees (BFS worklist). The closure rooted at a single
-			// function is small and bounded (the orphan path reaches detachLock +
-			// markCause, then only builtins/stdlib), so the cost that rules out a
-			// package-wide transitive scan does not apply here. This closes the
-			// deep (>1-hop) indirect-dispatch blind spot: a Driver call added at
-			// ANY depth reachable from handleOrphan is flagged.
 			scanSet := map[string]funcEntry{}
 			queue := []string{handleOrphanFuncName}
 			for len(queue) > 0 {
@@ -300,7 +285,7 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 // Driver method call.
 //
 // This test uses an in-memory types.Config/importer.Default() (not the
-// RunTypedFixture façade) because it is a synthetic no-op-detector probe, not
+// Run(t, Fixture(...)) façade) because it is a synthetic no-op-detector probe, not
 // an on-disk fixture package.
 //
 // ai-robust.md §"AI-robust 三档分级" mandates a blind-spot self-check for
@@ -345,10 +330,9 @@ func (m *FakeMgr) syntheticOrphan(ctx context.Context, key, token string) {
 
 	// Walk the syntheticOrphan function body and check if the Release call is detected.
 	var detectedDriverCall bool
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Name == nil || fd.Name.Name != "syntheticOrphan" {
-			continue
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name == nil || fd.Name.Name != "syntheticOrphan" {
+			return
 		}
 		require.NotNil(t, fd.Body, "syntheticOrphan body must not be nil")
 		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
@@ -372,7 +356,7 @@ func (m *FakeMgr) syntheticOrphan(ctx context.Context, key, token string) {
 				detectedDriverCall = true
 			}
 		})
-	}
+	})
 
 	assert.True(t, detectedDriverCall,
 		"BlindSpotSelfCheck: syntheticOrphan calls FakeDriver.Release but the "+
@@ -426,11 +410,11 @@ func (m *FakeMgr) leaf(ctx context.Context) { _ = m.d.Release(ctx, "k", "t") }
 	require.True(t, ok, "FakeDriver must have interface underlying type")
 
 	funcByName := map[string]*ast.FuncDecl{}
-	for _, decl := range file.Decls {
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name != nil {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name != nil {
 			funcByName[fd.Name.Name] = fd
 		}
-	}
+	})
 
 	samePkgCallee := func(call *ast.CallExpr) string {
 		var id *ast.Ident
@@ -508,15 +492,10 @@ func (m *FakeMgr) leaf(ctx context.Context) { _ = m.d.Release(ctx, "k", "t") }
 }
 
 // isTypeOrPtrImplementsIface reports whether t or *t implements iface.
-// Used instead of typesutil.ImplementsInterface because we specifically want
-// to check both value and pointer receiver forms of the Driver interface
-// methods (which take pointer receivers in production).
+// Delegates to typesutil.ImplementsInterface which checks both value and
+// pointer receiver forms — identical semantic to the original inline check.
 func isTypeOrPtrImplementsIface(t types.Type, iface *types.Interface) bool {
-	if types.Implements(t, iface) {
-		return true
-	}
-	ptr := types.NewPointer(t)
-	return types.Implements(ptr, iface)
+	return typesutil.ImplementsInterface(t, iface)
 }
 
 // ---- F1b: DISTLOCK-MANAGER-DRIVER-IO-OFFLOADED-01 -------------------------
@@ -554,7 +533,7 @@ func TestDistlockMgrDriverIOOffloaded01(t *testing.T) {
 		violations       []Diagnostic
 	)
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/distlock/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -563,7 +542,6 @@ func TestDistlockMgrDriverIOOffloaded01(t *testing.T) {
 				return nil
 			}
 
-			// Resolve the Driver interface type from the package scope.
 			driverObj := p.Pkg.Scope().Lookup(driverIfaceName)
 			if driverObj == nil {
 				return nil
@@ -578,17 +556,14 @@ func TestDistlockMgrDriverIOOffloaded01(t *testing.T) {
 			}
 			foundDriverIface = true
 
-			// Walk every call expression in every production function and check
-			// whether Driver method calls are always inside a go statement.
 			for _, file := range p.Files {
-				for _, decl := range file.Decls {
-					fd, ok := decl.(*ast.FuncDecl)
-					if !ok || fd.Body == nil {
-						continue
+				EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+					if fd.Body == nil {
+						return
 					}
-					// Skip exempt functions (see driverIOOffloadedExemptFuncs).
+
 					if fd.Name != nil && driverIOOffloadedExemptFuncs[fd.Name.Name] {
-						continue
+						return
 					}
 					EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 						sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -606,7 +581,7 @@ func TestDistlockMgrDriverIOOffloaded01(t *testing.T) {
 						if !isTypeOrPtrImplementsIface(sig.Recv().Type(), driverIface) {
 							return
 						}
-						// Driver method call found. Check if it is inside a go statement.
+
 						if !isInsideGoStmt(fd.Body, call) {
 							pos := p.Fset.Position(call.Pos())
 							violations = append(violations, Diagnostic{
@@ -618,7 +593,7 @@ func TestDistlockMgrDriverIOOffloaded01(t *testing.T) {
 							})
 						}
 					})
-				}
+				})
 			}
 			return nil
 		})
@@ -636,33 +611,20 @@ func TestDistlockMgrDriverIOOffloaded01(t *testing.T) {
 //  2. go m.someMethod(...) where target == the go statement's call itself —
 //     the Driver method call IS the call that runs in the goroutine.
 func isInsideGoStmt(root ast.Node, target *ast.CallExpr) bool {
-	found := false
-	ast.Inspect(root, func(n ast.Node) bool {
-		if n == nil || found {
-			return false
-		}
-		goStmt, ok := n.(*ast.GoStmt)
-		if !ok {
-			return true
-		}
+	_, found := FindFirstInSubtree[ast.GoStmt](root, func(gs *ast.GoStmt) bool {
 		// Form 2: the go statement's Call IS the target (e.g. go m.renewWorker(...)).
-		if goStmt.Call == target {
-			found = true
-			return false
+		if gs.Call == target {
+			return true
 		}
 		// Form 1: target is nested inside a func-literal body.
-		funcLit, ok := goStmt.Call.Fun.(*ast.FuncLit)
+		funcLit, ok := gs.Call.Fun.(*ast.FuncLit)
 		if !ok {
-			return true
+			return false
 		}
-		ast.Inspect(funcLit.Body, func(inner ast.Node) bool {
-			if inner == target {
-				found = true
-				return false
-			}
-			return true
+		_, nested := FindFirstInSubtree[ast.CallExpr](funcLit.Body, func(call *ast.CallExpr) bool {
+			return call == target
 		})
-		return !found
+		return nested
 	})
 	return found
 }
@@ -686,7 +648,7 @@ func TestDistlockOrphanNoDriverIO01_ReverseCheck_LocalVarMethodValue(t *testing.
 	// a call).
 	var violations []Diagnostic
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/distlock/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != distlockMgrPkgPath {
 				return nil
@@ -705,35 +667,37 @@ func TestDistlockOrphanNoDriverIO01_ReverseCheck_LocalVarMethodValue(t *testing.
 			}
 
 			for _, file := range p.Files {
-				// Walk all SelectorExprs that are NOT the Fun of a CallExpr (method values).
-				ast.Inspect(file, func(n ast.Node) bool {
-					assign, ok := n.(*ast.AssignStmt)
-					if !ok {
-						return true
-					}
+				EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
 					for _, rhs := range assign.Rhs {
-						sel, ok := rhs.(*ast.SelectorExpr)
-						if !ok {
-							continue
-						}
-						fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-						if !ok || fn == nil {
-							continue
-						}
-						sig, ok := fn.Type().(*types.Signature)
-						if !ok || sig.Recv() == nil {
-							continue
-						}
-						if isTypeOrPtrImplementsIface(sig.Recv().Type(), driverIface) {
-							pos := p.Fset.Position(sel.Pos())
-							violations = append(violations, Diagnostic{
-								Rel:     p.Rel(file),
-								Line:    pos.Line,
-								Message: "F3 reverse-check: found local-var-method-value blind spot form: Driver." + fn.Name() + " taken as method value",
-							})
-						}
+						// Only flag direct (top-level) SelectorExpr in RHS — the
+						// method-value form `f := receiver.Method`. Nested selectors
+						// inside a call expression (e.g. `f := pkg.Func()`) are NOT
+						// method-value blind spots, so we restrict to rhs itself.
+						// Compare End() positions: the rhs CallExpr ends after ')' but
+						// the nested Fun SelectorExpr ends after the method name, so
+						// they differ; a direct SelectorExpr rhs has matching End().
+						EachInSubtree[ast.SelectorExpr](rhs, func(sel *ast.SelectorExpr) {
+							if sel.End() != rhs.End() {
+								return // skip nested SelectorExprs
+							}
+							fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+							if !ok || fn == nil {
+								return
+							}
+							sig, ok := fn.Type().(*types.Signature)
+							if !ok || sig.Recv() == nil {
+								return
+							}
+							if isTypeOrPtrImplementsIface(sig.Recv().Type(), driverIface) {
+								pos := p.Fset.Position(sel.Pos())
+								violations = append(violations, Diagnostic{
+									Rel:     p.Rel(file),
+									Line:    pos.Line,
+									Message: "F3 reverse-check: found local-var-method-value blind spot form: Driver." + fn.Name() + " taken as method value",
+								})
+							}
+						})
 					}
-					return true
 				})
 			}
 			return nil
@@ -756,7 +720,7 @@ func TestDistlockOrphanNoDriverIO01_ReverseCheck_DriverFuncField(t *testing.T) {
 	// holds such a field, it would be a blind spot for the orphan-no-IO rule.
 	var violations []Diagnostic
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/distlock/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != distlockMgrPkgPath {
 				return nil
@@ -774,8 +738,6 @@ func TestDistlockOrphanNoDriverIO01_ReverseCheck_DriverFuncField(t *testing.T) {
 				return nil
 			}
 
-			// Walk type declarations looking for struct fields with func types that
-			// match a Driver method signature.
 			for _, name := range p.Pkg.Scope().Names() {
 				obj := p.Pkg.Scope().Lookup(name)
 				if obj == nil {
@@ -795,7 +757,7 @@ func TestDistlockOrphanNoDriverIO01_ReverseCheck_DriverFuncField(t *testing.T) {
 					if !ok {
 						continue
 					}
-					// Check if this func signature matches any Driver method signature.
+
 					for j := range driverIface.NumMethods() {
 						mSig, ok := driverIface.Method(j).Type().(*types.Signature)
 						if !ok {

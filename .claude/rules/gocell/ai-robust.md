@@ -32,10 +32,10 @@
 2. **type system**——Go interface / typed struct 让违反不可表达（Hard）；PII / 安全语义并存 archtest 双重防线
 3. **archtest 平铺兜底**，按规则真值类型选工具：
    - 路径级 import ban → `.golangci.yml` `depguard`
-   - 跨包归属 / 传递闭包 → `kernel/depgraph`；archtest 内需 typed load 走 `archtest.RunTyped` / `RunTypedProduction` 公开 façade
+   - 跨包归属 / 传递闭包 → `kernel/depgraph`；archtest 内需 typed load 走 `Run(t, Typed(...))` / `Run(t, Production(...))` 公开 façade
    - 需要类型信息（receiver type / interface 实现 / exported API 类型 / 表达式求值，含 const 拼接、跨包 Ident、untyped const）→ `archtest` typed façade（`ResolvePackageRef` / `ResolveMethodCall` / `EvaluateConstString` 等）+ `Pass` scope/generated 判定
    - 纯 AST 模式 → `archtest.Run` + walk helper（`EachInSubtree` / `EachInChildren` / `FindFirstChild`）
-   - 加载 fixture 子包 → `archtest.RunTypedFixture` typed funnel（`FixtureOpts` 不含 Tags 字段）
+   - 加载 fixture 子包 → `Run(t, Fixture(...))` typed funnel（`FixtureOpts` 不含 Tags 字段）
    - 元数据 / YAML 派生 → `archtest.EachContentFile` + 解析
 
 以上路由仅约束**新增** archtest；既有直接 import internal helper 的用法合法，不触发批量重构。

@@ -267,7 +267,7 @@ func rootsContainTestdataSegment(modRoot string, roots []string) bool {
 // fixture names it explicitly, and neither path is affected here:
 //   - [DirsScope] rooted AT the fixture directory — rel paths are then
 //     fixture-root relative (e.g. "redfixture.go"), so this prefix never matches;
-//   - go/packages typed load (RunTypedFixture) — bypasses Scope entirely.
+//   - go/packages typed load (Run(t, Fixture(...))) — bypasses Scope entirely.
 //
 // Upstream lock: SCANNER-FRAMEWORK-USAGE-01 forbids hand-rolled ast/fs/inspector
 // walks in tools/archtest/*_test.go, forcing every archtest through this

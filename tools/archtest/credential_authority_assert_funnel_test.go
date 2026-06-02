@@ -211,22 +211,24 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isAssertCallerAllowlisted(rel) {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
 			}
-			violations = append(violations, scanAssertCallSites(p, file, rel)...)
-		}
-		return nil
-	})
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if isAssertCallerAllowlisted(rel) {
+					continue
+				}
+				violations = append(violations, scanAssertCallSites(p, file, rel)...)
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -265,7 +267,7 @@ func scanAssertCallSites(p *Pass, file *ast.File, rel string) []string {
 func verifyAssertCallerRedFixtureDetected(t *testing.T, pattern, label string) {
 	t.Helper()
 	var found int
-	_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -274,6 +276,7 @@ func verifyAssertCallerRedFixtureDetected(t *testing.T, pattern, label string) {
 		}
 		return nil
 	})
+
 	assert.GreaterOrEqual(t, found, 1,
 		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
 			"Check that the fixture calls credentialauthority.Assert from a non-allowlisted file.",
@@ -297,27 +300,29 @@ func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/slices/sessionlogin/...",
 		"./cells/accesscore/slices/sessionrefresh/...",
 		"./cells/accesscore/slices/sessionvalidate/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				if !isInSliceFunnelScope(rel) {
+					continue
+				}
+				violations = append(violations, scanDirectCanAuthCalls(p, file, rel)...)
+				violations = append(violations, scanDirectFieldReads(p, file, rel)...)
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			if !isInSliceFunnelScope(rel) {
-				continue
-			}
-			violations = append(violations, scanDirectCanAuthCalls(p, file, rel)...)
-			violations = append(violations, scanDirectFieldReads(p, file, rel)...)
-		}
-		return nil
-	})
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -413,7 +418,7 @@ func scanDirectFieldReads(p *Pass, file *ast.File, rel string) []string {
 func verifyDirectReadRedFixtureDetectedPerBucket(t *testing.T, pattern, label string) {
 	t.Helper()
 	var canAuthHits, passwordVerHits int
-	_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -423,6 +428,7 @@ func verifyDirectReadRedFixtureDetectedPerBucket(t *testing.T, pattern, label st
 		}
 		return nil
 	})
+
 	assert.GreaterOrEqual(t, canAuthHits, 1,
 		"RED fixture self-check FAILED (CanAuthenticate bucket): %s — "+
 			"expected ≥ 1 violation in CanAuthenticate detector, got 0. "+
@@ -451,39 +457,37 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_MethodValueAssignment(t *test
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
 			}
-			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-				// EachInSubtree (not EachInChildren) so chained-call shapes
-				// like `fn := obj.GetUser().CanAuthenticate` are covered —
-				// the SelectorExpr nests inside a CallExpr child of the
-				// AssignStmt, which EachInChildren (depth=1) would miss.
-				EachInSubtree[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-					fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-					if !ok || !isFunnelMethod(fn) {
-						return
-					}
-					line := p.Fset.Position(assign.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: method-value assignment of CanAuthenticate "+
-							"blind spot detected — archtest would miss the deferred call",
-						rel, line,
-					))
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+					EachInSubtree[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
+						fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+						if !ok || !isFunnelMethod(fn) {
+							return
+						}
+						line := p.Fset.Position(assign.Pos()).Line
+						violations = append(violations, fmt.Sprintf(
+							"%s:%d: method-value assignment of CanAuthenticate "+
+								"blind spot detected — archtest would miss the deferred call",
+							rel, line,
+						))
+					})
 				})
-			})
-		}
-		return nil
-	})
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -501,29 +505,31 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+					func(n string) bool { return n == credCanAuthenticate }) {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: reflect.MethodByName(%q) blind "+
+							"spot detected — archtest cannot see reflect-based invocations",
+						rel, hit.Line, hit.Name,
+					))
+				}
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
-				func(n string) bool { return n == credCanAuthenticate }) {
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: reflect.MethodByName(%q) blind "+
-						"spot detected — archtest cannot see reflect-based invocations",
-					rel, hit.Line, hit.Name,
-				))
-			}
-		}
-		return nil
-	})
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -543,29 +549,31 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
+					func(n string) bool { return n == credPasswordVersion }) {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: reflect.FieldByName(%q) blind "+
+							"spot detected — archtest cannot see reflect-based field reads",
+						rel, hit.Line, hit.Name,
+					))
+				}
+			}
 			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
-				func(n string) bool { return n == credPasswordVersion }) {
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: reflect.FieldByName(%q) blind "+
-						"spot detected — archtest cannot see reflect-based field reads",
-					rel, hit.Line, hit.Name,
-				))
-			}
-		}
-		return nil
-	})
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -585,36 +593,38 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead(t *testing.
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.Fset == nil {
+				return nil
 			}
-			for _, imp := range file.Imports {
-				if imp.Path == nil {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				impPath := strings.Trim(imp.Path.Value, `"`)
-				if impPath == "unsafe" {
-					line := p.Fset.Position(imp.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: imports \"unsafe\" — potential offset read of "+
-							"domain.User / session.{Session,ValidateView} could bypass "+
-							"credentialauthority funnel",
-						rel, line,
-					))
+				for _, imp := range file.Imports {
+					if imp.Path == nil {
+						continue
+					}
+					impPath := strings.Trim(imp.Path.Value, `"`)
+					if impPath == "unsafe" {
+						line := p.Fset.Position(imp.Pos()).Line
+						violations = append(violations, fmt.Sprintf(
+							"%s:%d: imports \"unsafe\" — potential offset read of "+
+								"domain.User / session.{Session,ValidateView} could bypass "+
+								"credentialauthority funnel",
+							rel, line,
+						))
+					}
 				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -651,64 +661,60 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/credentialauthority/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		// credAuthorityPkgPath is the const at file top; reuse instead of
-		// reassembling from credAuthorityPkgRel.
-		if p.Pkg.Path() != credAuthorityPkgPath {
-			return nil
-		}
-		// Find the Check interface in this package.
-		checkObj := p.Pkg.Scope().Lookup("Check")
-		if checkObj == nil {
-			return nil
-		}
-		checkIface, ok := checkObj.Type().Underlying().(*types.Interface)
-		if !ok {
-			return nil
-		}
-		// Walk all type names in this package; for each named struct, check
-		// whether it implements Check. If so, the name must be unexported.
-		scope := p.Pkg.Scope()
-		for _, name := range scope.Names() {
-			obj := scope.Lookup(name)
-			tn, ok := obj.(*types.TypeName)
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+
+			if p.Pkg.Path() != credAuthorityPkgPath {
+				return nil
+			}
+
+			checkObj := p.Pkg.Scope().Lookup("Check")
+			if checkObj == nil {
+				return nil
+			}
+			checkIface, ok := checkObj.Type().Underlying().(*types.Interface)
 			if !ok {
-				continue
+				return nil
 			}
-			named, ok := tn.Type().(*types.Named)
-			if !ok {
-				continue
+
+			scope := p.Pkg.Scope()
+			for _, name := range scope.Names() {
+				obj := scope.Lookup(name)
+				tn, ok := obj.(*types.TypeName)
+				if !ok {
+					continue
+				}
+				named, ok := tn.Type().(*types.Named)
+				if !ok {
+					continue
+				}
+				if _, ok := named.Underlying().(*types.Struct); !ok {
+					continue
+				}
+
+				if !typesutil.ImplementsInterface(named, checkIface) {
+					continue
+				}
+				if !ast.IsExported(name) {
+					continue
+				}
+				pos := p.Fset.Position(tn.Pos())
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (sealed-by-name): "+
+						"concrete Check struct %q is exported — external callers can "+
+						"zero-value construct it and bypass the factory function. "+
+						"Rename to lowercase and expose only the factory.",
+					stripModuleRoot(pos.Filename), pos.Line, name,
+				))
 			}
-			if _, ok := named.Underlying().(*types.Struct); !ok {
-				continue
-			}
-			// typesutil.ImplementsInterface covers both value receiver
-			// (types.Implements(named,...)) and pointer receiver
-			// (types.Implements(*named,...)) so a concrete struct with
-			// pointer-only methods is correctly flagged. Required by
-			// TYPESUTIL-IMPLEMENTS-FUNNEL-01.
-			if !typesutil.ImplementsInterface(named, checkIface) {
-				continue
-			}
-			if !ast.IsExported(name) {
-				continue
-			}
-			pos := p.Fset.Position(tn.Pos())
-			violations = append(violations, fmt.Sprintf(
-				"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (sealed-by-name): "+
-					"concrete Check struct %q is exported — external callers can "+
-					"zero-value construct it and bypass the factory function. "+
-					"Rename to lowercase and expose only the factory.",
-				stripModuleRoot(pos.Filename), pos.Line, name,
-			))
-		}
-		return nil
-	})
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -778,23 +784,25 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 	t.Parallel()
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{}, []string{
+	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/...",
 		"./cmd/...",
 		"./runtime/...",
-	}, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
 			}
-			violations = append(violations, scanFunnelCalleeReferences(p, file, rel)...)
-		}
-		return nil
-	})
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				violations = append(violations, scanFunnelCalleeReferences(p, file, rel)...)
+			}
+			return nil
+		})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -951,7 +959,7 @@ func isFunnelMethod(fn *types.Func) bool {
 func verifyFunnelCalleeReferenceRedFixtureDetected(t *testing.T, pattern, label string) {
 	t.Helper()
 	byCallee := map[string]int{}
-	_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -962,6 +970,7 @@ func verifyFunnelCalleeReferenceRedFixtureDetected(t *testing.T, pattern, label 
 		}
 		return nil
 	})
+
 	assert.GreaterOrEqual(t, byCallee[funnelCalleeAssert], 1,
 		"RED fixture self-check FAILED (Assert via info.Uses): %s — expected ≥ 1 "+
 			"value-capture of credentialauthority.Assert, got 0.", label)

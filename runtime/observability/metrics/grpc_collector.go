@@ -10,11 +10,11 @@ import (
 )
 
 // RuntimeCellSentinel is the framework "owner" used as the cell label for
-// requests that do not belong to any cell-owned namespace. It is the
-// transport-neutral home for the "_runtime" sentinel (the HTTP middleware
-// exposes the same value as RuntimeCellIDSentinel); the gRPC metrics
-// interceptor reads it from here so it does not depend on the HTTP middleware
-// package. See observability.md "HTTP Metrics cell Label".
+// requests that do not belong to any cell-owned namespace. It is the single,
+// transport-neutral source of the "_runtime" sentinel: both the HTTP middleware
+// (runtime/http/middleware.Metrics / CellAttribution / body-limit rejection) and
+// the gRPC metrics interceptor read this constant, so the value is declared
+// exactly once. See observability.md "HTTP Metrics cell Label".
 const RuntimeCellSentinel = "_runtime"
 
 // GRPCCollector records gRPC unary server request metrics. It mirrors the HTTP

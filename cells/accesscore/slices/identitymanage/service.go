@@ -753,7 +753,7 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, tid tenant.TenantID
 	if err := s.lastAdminGuard.CheckRemove(ctx, tid, userID, userIsActiveAdmin); err != nil {
 		// Application-layer guard blocked the removal — the expected S4.0 path.
 		// This log lets ops distinguish an app-layer 403 from a DB-trigger 403:
-		// the migration-046 trigger only fires when this guard did NOT (the
+		// the migration-047 trigger only fires when this guard did NOT (the
 		// tx1-check / tx2-mutate TOCTOU window of Lock/Update), so a 403 WITHOUT
 		// this log line indicates the trigger safety net caught a concurrent race.
 		s.logger.Info("last-admin guard blocked removal",

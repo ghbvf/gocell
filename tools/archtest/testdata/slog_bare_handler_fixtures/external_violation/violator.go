@@ -11,7 +11,7 @@
 // resolves the callee by package PATH via go/types, not by a textual "slog."
 // prefix, so this fixture also proves import-alias resolution.
 //
-// Parsed + type-checked by archtest via RunTypedFixture; intentionally violates
+// Parsed + type-checked by archtest via Run(t, Fixture(...)); intentionally violates
 // the funnel, so it must NEVER be compiled into a production build (the
 // archtest_fixture build tag keeps it out of normal builds).
 package externalviolation

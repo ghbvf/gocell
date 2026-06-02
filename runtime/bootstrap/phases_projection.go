@@ -47,10 +47,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/contractspec"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -120,16 +120,29 @@ func (c *captureRegistrar) Subscribe(
 // least one projection. Used alongside cellSnapshotsHaveSubscriptions to decide
 // whether phase6 must build the event router.
 func cellSnapshotsHaveProjections(s *phaseState) bool {
+	return len(collectProjectionKeys(s)) > 0
+}
+
+// collectProjectionKeys returns the "<cellID>/<projectionID>" identifier of every
+// projection declared across the cell snapshots, in assembly cell order. It is the
+// single source for both the phase6 "is there work?" predicate
+// (cellSnapshotsHaveProjections) and the diagnostic that names the affected
+// projections when the serial-delivery guard rejects the wired transport (#1369 F3
+// — without it the failure only carries the subscriber type, not which projections
+// triggered the check). cellID / projectionID are framework snake_case identifiers,
+// not PII.
+func collectProjectionKeys(s *phaseState) []string {
+	var keys []string
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {
 			continue
 		}
-		if len(snap.Projections) > 0 {
-			return true
+		for _, req := range snap.Projections {
+			keys = append(keys, req.CellID+"/"+req.ProjectionID)
 		}
 	}
-	return false
+	return keys
 }
 
 // buildProjectionCoordinators constructs one projection.Coordinator per
@@ -144,31 +157,52 @@ func (b *Bootstrap) buildProjectionCoordinators(ctx context.Context, s *phaseSta
 	var out []projectionWiring
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
-		if !ok {
+		if !ok || len(snap.Projections) == 0 {
 			continue
 		}
-		if len(snap.Projections) == 0 {
-			continue
+		wirings, err := b.buildCellProjections(ctx, id, snap.Projections)
+		if err != nil {
+			return nil, err
 		}
-		// Required-dep check runs once per cell that declares any projection
-		// (not per request); wrap with the cell context so ops sees which cell
-		// triggered the missing-option error.
-		if err := b.checkProjectionDeps(); err != nil {
-			return nil, fmt.Errorf("bootstrap: cell %s: %w", id, err)
+		out = append(out, wirings...)
+	}
+	return out, nil
+}
+
+// buildCellProjections constructs the coordinators for one cell's projection
+// set: it checks the required framework deps and registers the shared metric
+// family once (both per-cell, before any coordinator), then builds one
+// coordinator per request with a CellID-drift fail-fast.
+func (b *Bootstrap) buildCellProjections(
+	ctx context.Context, id string, reqs []cell.ProjectionRequest,
+) ([]projectionWiring, error) {
+	// Required-dep check runs once per cell that declares any projection (not per
+	// request); wrap with the cell context so ops sees which cell triggered the
+	// missing-option error.
+	if err := b.checkProjectionDeps(); err != nil {
+		return nil, fmt.Errorf("bootstrap: cell %s: %w", id, err)
+	}
+	// Register the shared projection metric family before building any
+	// coordinator. Called once per cell that declares projections, but the funnel
+	// is cache-guarded so it actually constructs the family only on the first
+	// invocation and is a no-op cache hit thereafter; a real provider conflict is
+	// startup-fatal (never warn-degraded — #1399).
+	if err := b.autoWireProjectionMetrics(); err != nil {
+		return nil, err
+	}
+	out := make([]projectionWiring, 0, len(reqs))
+	for _, req := range reqs {
+		if req.CellID != id {
+			return nil, fmt.Errorf(
+				"bootstrap: cell %s projection drift: declared CellID=%q but snapshot owner=%q"+
+					" (codegen should inject cellID from cell metadata; check cellgen templates)",
+				id, req.CellID, id)
 		}
-		for _, req := range snap.Projections {
-			if req.CellID != id {
-				return nil, fmt.Errorf(
-					"bootstrap: cell %s projection drift: declared CellID=%q but snapshot owner=%q"+
-						" (codegen should inject cellID from cell metadata; check cellgen templates)",
-					id, req.CellID, id)
-			}
-			w, err := b.buildOneProjection(ctx, req)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, w)
+		w, err := b.buildOneProjection(ctx, req)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, w)
 	}
 	return out, nil
 }
@@ -198,6 +232,69 @@ func (b *Bootstrap) checkProjectionDeps() error {
 	return nil
 }
 
+// Const literal (MESSAGE-CONST-LITERAL-01); the offending transport type is
+// appended as diagnostic context via fmt.Errorf at the callsite. The message
+// states the failure + the actionable fix (implement the marker), deliberately
+// not the current implementer list — that list lives in the ADR / archtest and
+// would drift here.
+const errMsgProjectionSubscriberNotSerial = "bootstrap: projection declared but the configured subscriber does not " +
+	"guarantee serial in-order delivery; projection subscriptions require prefetch=1 / single-goroutine dispatch — " +
+	"implement outbox.SerialInOrderGuarantor returning true to opt in. See ADR " +
+	"docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §6 threat row 4 + §Amendment 2026-06-02"
+
+// checkSubscriberGuaranteesSerialDelivery fail-closes the projection drain when
+// the wired raw transport does not GUARANTEE strictly serial, in-order delivery.
+// Projection exactly-once rests on a monotonic checkpoint that silently skips any
+// position ≤ the stored checkpoint; under concurrent delivery a higher position
+// can commit before a lower one is applied, dropping the lower event's apply (a
+// projection gap). A transport opts in by implementing outbox.SerialInOrderGuarantor
+// and returning true; absence or false is rejected (fail-closed-by-absence), so a
+// concurrent transport (AMQP/MQTT) — or any future transport that forgets the
+// method — cannot carry a projection. See ADR §6 threat row 4 + §Amendment 2026-06-02.
+//
+// This is the single sanctioned type assertion to the marker
+// (PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 sub-rule C). It is invoked from
+// drainCellProjections — the transport-meets-projection boundary — and asserts
+// the RAW s.sub, before buildEventRouter wraps it in contractTracingSubscriber
+// (that decorator wraps rather than embeds and does not forward the marker, so
+// asserting the wrapped value would be wrong; sub-rule D locks the decorator out
+// of the implementer set as defense-in-depth). A nil subscriber needs no special
+// branch: the assertion below returns ok == false and is rejected fail-closed —
+// and phase6StartEventRouter routes nil subscribers to
+// checkNoEventConsumersWhenSubscriberNil before the projection drain anyway.
+func checkSubscriberGuaranteesSerialDelivery(sub outbox.Subscriber) error {
+	g, ok := sub.(outbox.SerialInOrderGuarantor)
+	if !ok || !g.GuaranteesSerialInOrderDelivery() {
+		// Append the wired transport type as diagnostic context (a type name, not
+		// PII). errcode.Error.Error() collapses Message into the internal-details
+		// string when any WithInternal attrs are present (errcode.go), which would
+		// HIDE the const Message from operator logs; fmt.Errorf wrapping keeps both
+		// the Message and the transport type visible.
+		return fmt.Errorf("%w (configured subscriber type: %T)",
+			errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, errMsgProjectionSubscriberNotSerial), sub)
+	}
+	return nil
+}
+
+// autoWireProjectionMetrics registers the shared projection metric family ONCE
+// (cached in b.projectionMetrics) so every Coordinator reuses it via
+// .With({cell, projection}) labels. Skips on nil/Nop provider; a registration
+// conflict is startup-fatal with an actionable message — never silently
+// degraded (the #1399 regression). The metric names are fixed-name with
+// {cell, projection} labels, so per-projection registration would collide on the
+// second projection; a single shared registration is the only correct shape.
+//
+// ref: runtime/bootstrap/phases_events.go autoWireEventRouterCollector — same
+// skip-on-nil/skip-on-Nop + cached-field + fail-fast-on-conflict funnel.
+func (b *Bootstrap) autoWireProjectionMetrics() error {
+	_, _, err := autoWireCachedCollector(b, &b.projectionMetrics,
+		projection.RegisterMetrics,
+		"bootstrap: projection metrics auto-wire conflict: WithMetricsProvider constructs the projection metric family; "+
+			"do not also register projection_event_replay_lag_seconds / projection_rebuild_duration_seconds / "+
+			"projection_pending_events manually on the same provider. Remove one side")
+	return err
+}
+
 // buildOneProjection constructs the Coordinator for one ProjectionRequest and
 // drives Coordinator.Subscribe through a captureRegistrar to obtain the wrapped
 // subscription. The cell-local ProjectionApply / ProjectionResetHook are
@@ -213,24 +310,6 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 		tracer = wrapper.NoopTracer{}
 	}
 
-	// Wire metrics when a real (non-Nop) provider is configured; leave cfg.Metrics
-	// nil when no provider is set so the Coordinator silently disables instruments.
-	// Mirrors the autoWireHTTPMetricsCollector / autoWireEventRouterCollector pattern.
-	var projMetrics *projection.Metrics
-	if p := b.metricsProvider; p != nil {
-		if _, isNop := p.(kernelmetrics.NopProvider); !isNop {
-			var regErr error
-			projMetrics, regErr = projection.RegisterMetrics(p)
-			if regErr != nil {
-				slog.Warn("bootstrap: projection metrics registration failed; running without metrics",
-					slog.String("cell", req.CellID),
-					slog.String("projection", req.ProjectionID),
-					slog.String("error", regErr.Error()))
-				projMetrics = nil // defensive: treat registration error as no-metrics
-			}
-		}
-	}
-
 	capReg := &captureRegistrar{}
 	coord, err := projection.NewCoordinator(b.clock, projection.CoordinatorConfig{
 		Registrar:    capReg,
@@ -241,7 +320,10 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 		Cursor:       b.projectionCursor,
 		Replay:       b.projectionReplay,
 		Tracer:       tracer,
-		Metrics:      projMetrics,
+		// Shared metrics registered once by autoWireProjectionMetrics (cached in
+		// b.projectionMetrics); nil when no real provider is configured, which the
+		// Coordinator treats as instruments-disabled.
+		Metrics: b.projectionMetrics,
 	})
 	if err != nil {
 		return projectionWiring{}, fmt.Errorf(
@@ -287,6 +369,17 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 // Runs inside phase6 after drainCellSubscriptions and before the router starts,
 // so projection handlers are registered before consumption begins.
 func (b *Bootstrap) drainCellProjections(ctx context.Context, s *phaseState, evtRouter *eventrouter.Router) error {
+	// Serial-delivery enforcement (#1369, ADR §6 row 4): a projection may only be
+	// carried by a transport that guarantees serial in-order delivery. Checked
+	// once here — the transport-meets-projection boundary — before any wiring, so
+	// a concurrent transport fails fast instead of silently dropping events.
+	if keys := collectProjectionKeys(s); len(keys) > 0 {
+		if err := checkSubscriberGuaranteesSerialDelivery(s.sub); err != nil {
+			// Name the projections that triggered the guard so ops sees which
+			// declarations are blocked, not just the offending transport type.
+			return fmt.Errorf("%w (declared projections: %s)", err, strings.Join(keys, ", "))
+		}
+	}
 	wirings, err := b.buildProjectionCoordinators(ctx, s)
 	if err != nil {
 		return err

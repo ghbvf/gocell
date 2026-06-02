@@ -36,7 +36,7 @@ func TestCellLifecycleRankCompleteness(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, []string{"kernel/cellvocab"}), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(DirsScope(root, []string{"kernel/cellvocab"})), func(p *Pass) []Diagnostic {
 		declared := map[string]token.Pos{}
 		covered := map[string]struct{}{}
 		var declFile *ast.File
@@ -62,6 +62,7 @@ func TestCellLifecycleRankCompleteness(t *testing.T) {
 		}
 		return d
 	})
+
 	Report(t, "CELL-LIFECYCLE-RANK-COMPLETENESS-01", diags)
 }
 
@@ -73,13 +74,9 @@ func TestCellLifecycleRankCompleteness(t *testing.T) {
 func TestCellLifecycleRankCompleteness_BlindSpotShape(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	_ = Run(t, DirsScope(root, []string{"kernel/cellvocab"}), func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(DirsScope(root, []string{"kernel/cellvocab"})), func(p *Pass) []Diagnostic {
 		var sawTypedConst, sawCompositeCellLifecycles bool
 		for _, f := range p.Files {
-			// Reuse the (USAGE-compliant) collectors: a non-empty typed-const set
-			// proves the `CellLifecycle` const block is typed; a non-empty element
-			// set proves `cellLifecycles` is a composite literal (forEachVarComposite
-			// only fires on *ast.CompositeLit). A runtime-built slice would yield none.
 			if len(collectConstNamesOfType(f, lifecycleConstTypeName)) > 0 {
 				sawTypedConst = true
 			}

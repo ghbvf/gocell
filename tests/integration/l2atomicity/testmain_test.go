@@ -51,7 +51,7 @@ var sharedPG = pgclone.New("gocell_l2atomicity_test_template",
 		if err := adapterpg.VerifyExpectedShape(ctx, pool); err != nil {
 			return fmt.Errorf("verify schema shape: %w", err)
 		}
-		// Migration 046 rebuilt roles with composite PK (tenant_id, id). Seed the
+		// Migration 047 rebuilt roles with composite PK (tenant_id, id). Seed the
 		// "editor" role for a fixed test-tenant so RBAC cascade tests can
 		// assign/revoke it without FK violations. ON CONFLICT now targets the
 		// composite PK; the single-column (id) constraint no longer exists.

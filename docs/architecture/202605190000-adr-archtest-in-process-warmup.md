@@ -43,7 +43,7 @@ Accepted (2026-05-19)
 
 ### 改造 3 — AI Hard archtest 防复抄
 
-新建 `tools/archtest/taggroup_loop_no_runtyped_test.go`，`TAGGROUP-LOOP-FORBIDS-RUNTYPED-01` 用 (callee, body) 双因子 form-uniqueness 锁 RangeStmt+RunTyped 范本。fresh Claude 复抄 = CI 红。
+新建 `tools/archtest/taggroup_loop_no_typed_run_test.go`，`TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01` 用 (callee, body) 双因子 form-uniqueness 锁 RangeStmt+RunTyped 范本。fresh Claude 复抄 = CI 红。
 
 ## 开源对标参考
 
@@ -78,7 +78,7 @@ Accepted (2026-05-19)
 | 反向 build directive 监控 | 不感知 | 未来加 `//go:build !X` (X ∈ KnownNonDefaultTags) 需 review 两次 Load 设计完整性 | 新增隐含约束 |
 | 复抄范本 | 已 2 处实证 + fresh Claude 必复发 | archtest 静态拦截 | 改造 3 解 |
 | `warm.go` 直调 typeseval | 不存在 | 不受 PASS-FUNNEL-LOADPACKAGES-01 保护（该规则仅扫 `_test.go`） | 已接受：warm.go 是 archtest 包内 unexported helper，仅 TestMain 调用，无外部 _test.go 滥用风险；future-proof 升级路径见 backlog `PASS-FUNNEL-NONTESTGO-EXEMPT-UPGRADE-01` |
-| TAGGROUP-LOOP scope gap | 不存在 | `tools/archtest/internal/<subpkg>/*_test.go` (e.g. internal/scanner/, internal/typeseval/) 不被 TAGGROUP-LOOP-FORBIDS-RUNTYPED-01 扫描 | 已接受：internal 子包测试内部符号，不调 archtest.RunTyped；若未来某 internal _test.go 加直调 RunTyped 形态需扩 scope |
+| TAGGROUP-LOOP scope gap | 不存在 | `tools/archtest/internal/<subpkg>/*_test.go` (e.g. internal/scanner/, internal/typeseval/) 不被 TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01 扫描 | 已接受：internal 子包测试内部符号，不调 archtest.RunTyped；若未来某 internal _test.go 加直调 RunTyped 形态需扩 scope |
 | CI log path exposure | 不存在 | TestMain fail-fast 时 slog.Error 输出含完整 modRoot/cwd 路径，会出现在 GHA artifact 中 | 已接受：路径非凭据，且 testmain 是 perf/bootstrap 路径，无 PII；如未来仓库公开化需重评 |
 | Total CI wall (16 shard) | 受 borderline test 跨 budget 影响 + B 轴 OOM SIGTERM 重跑 | 预期：单 shard wall ≤ 5s (warm) + 0-3 个 borderline ≤ 10s (warm 后)；16 shard parallel wall ~30-40s + 启动开销 | warmup 在轻 shard (e.g. shard 0 = 33 tests / 4.78s) 上付 +15-25s 启动成本是 wash 或微亏；在重 shard / borderline shard 上净赚；实测需 CI 矩阵观察 2-3 次 |
 
@@ -118,13 +118,13 @@ PR #584 CI 首次运行 shard 12 触发 slowgate fail：`TestArchtestVerifyCover
 
 ## AI-robust 评级
 
-- 改造 3 `TAGGROUP-LOOP-FORBIDS-RUNTYPED-01` = typed-function-call funnel **Hard**（对齐 ai-robust.md §"Hard 范本" 第 2 条 panic 范本同构 + staticcheck SA4000 同构）
+- 改造 3 `TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01` = typed-function-call funnel **Hard**（对齐 ai-robust.md §"Hard 范本" 第 2 条 panic 范本同构 + staticcheck SA4000 同构）
 - 改造 1 (TestMain) / 改造 2 (两次 Load) = perf refactor，不在 ai-robust.md §适用范围
 
 ## 参考
 
 - ADR `docs/architecture/202605120000-adr-archtest-process-isolation.md`（前置 ADR — process isolation 与本 ADR 叠加非冲突）
 - `tools/archtest/internal/typeseval/typeseval.go` — SharedResolver godoc 同 PR 补"为什么保留 patterns 维度"段
-- `tools/archtest/taggroup_loop_no_runtyped_test.go` — 改造 3 实现
+- `tools/archtest/taggroup_loop_no_typed_run_test.go` — 改造 3 实现
 - `tools/archtest/internal/taggrouploopfixtures/` — 改造 3 fixture self-check
 - Backlog `ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01` (cap-14-tooling.md) — 关闭于本 ADR

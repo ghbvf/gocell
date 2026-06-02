@@ -204,7 +204,7 @@ func TestWebhookHMACFunnel(t *testing.T) {
 	var a1, a2, b6 []Diagnostic
 	sealed := map[string]bool{}
 
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{webhookPkgPattern},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{webhookPkgPattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != "github.com/ghbvf/gocell/kernel/webhook" {
 				return nil
@@ -251,7 +251,7 @@ func TestWebhookHMACFunnel_ReverseFixture(t *testing.T) {
 	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "webhook_hmac_violate")
 
 	var a1, a2, b6 []Diagnostic
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -289,7 +289,7 @@ func TestWebhookFunnel_NoRawSecretSlog(t *testing.T) {
 	}
 
 	var b6 []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{webhookPkgPattern},
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{webhookPkgPattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != "github.com/ghbvf/gocell/kernel/webhook" {
 				return nil
@@ -303,5 +303,6 @@ func TestWebhookFunnel_NoRawSecretSlog(t *testing.T) {
 			}
 			return nil
 		})
+
 	require.Empty(t, b6, "B6 self-check: no slog call may reference a raw .secret field")
 }

@@ -20,7 +20,7 @@ package archtest
 // Platform-symbol paths (persistence.RegisterAfterCommit, outbox.Writer) are
 // anchored to [PlatformModulePath] (fixed: external repos import these packages
 // as a GoCell dependency at that path). The scan SCOPE is the running module,
-// supplied by RunTyped → findModuleRoot.
+// supplied by Run(t, Typed(...)) → findModuleRoot.
 //
 // Funnel: guards persistence after-commit hooks. Hooks run after a durable
 // commit, with the tx stripped from their ctx
@@ -423,7 +423,7 @@ func scanHookBodyEscapes(p *Pass, rel string, lit *ast.FuncLit) []Diagnostic {
 func CheckAfterCommitHookPureTransient(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	var a1a2Diags, a3Diags []Diagnostic
-	_ = RunTypedProduction(t, TypedOpts{Tags: cfg.BuildTags}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -435,6 +435,7 @@ func CheckAfterCommitHookPureTransient(t *testing.T, cfg ConfigForExternalCell) 
 		}
 		return nil
 	})
+
 	var out []Diagnostic
 	out = append(out, a1a2Diags...)
 	out = append(out, a3Diags...)

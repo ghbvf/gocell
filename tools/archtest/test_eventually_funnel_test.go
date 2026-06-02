@@ -248,7 +248,7 @@ func shouldSkipForEventuallyFunnel(rel string) bool {
 // require/assert Eventually variants are test-only APIs whose callers live
 // in *_test.go.
 //
-// Tool: archtest.RunTyped + resolveSelectorCalleeFunc (info.Uses ∪ info.Selections)
+// Tool: archtest.Run(t, Typed(...)) + resolveSelectorCalleeFunc (info.Uses ∪ info.Selections)
 // + go/ast SelectorExpr matching. This is the typed-marker funnel upstream
 // lock; the downstream lock (testwait.External callee+arg form-uniqueness)
 // is TEST-POLLING-EXTERNAL-REASON-LITERAL-01.
@@ -302,8 +302,8 @@ func TestEventuallyFunnel(t *testing.T) {
 	// Two-load coverage (mirror PANIC-REGISTERED-01 / TEST-POLLING-EXTERNAL-REASON-LITERAL-01):
 	// Load 1 (tags=nil) catches reverse build directives; Load 2 (FlatNonDefaultTags) catches all
 	// forward-tagged files in one union. Tests:true in both so *_test.go callers are scanned.
-	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true}, []string{"./..."}), scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}), scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -356,7 +356,7 @@ func TestEventuallyFunnelFixtures(t *testing.T) {
 
 			fixturePattern := "./tools/archtest/testdata/eventually_funnel_fixtures/" + dir
 
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{fixturePattern},
+			diags := Run(t, Fixture(FixtureOpts{}, []string{fixturePattern}),
 				func(p *Pass) []Diagnostic {
 					if p.TypesInfo == nil || p.Fset == nil {
 						return nil
@@ -418,8 +418,8 @@ func TestEventuallyFunnel_NoIndirectReferences(t *testing.T) {
 		return nil
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true}, []string{"./..."}), scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}), scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -482,7 +482,7 @@ func TestEventuallyFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 
 			fixturePattern := "./tools/archtest/testdata/eventually_funnel_fixtures/" + dir
 
-			diags := RunTypedFixture(t, FixtureOpts{}, []string{fixturePattern},
+			diags := Run(t, Fixture(FixtureOpts{}, []string{fixturePattern}),
 				func(p *Pass) []Diagnostic {
 					if p.TypesInfo == nil || p.Fset == nil {
 						return nil
@@ -526,7 +526,7 @@ func TestEventuallyFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 // walked here; they are anchored at compile time by the assertions_method_call_red
 // fixture, which fails to load if testify renames a method forwarder.
 //
-// Tool: RunTyped + *types.Package.Imports() + Scope().Lookup. No new
+// Tool: Run(t, Typed(...)) + *types.Package.Imports() + Scope().Lookup. No new
 // archtest entry point; reuses the existing module-wide typed load.
 func TestEventuallyFunnel_SymbolSentinel(t *testing.T) {
 	t.Parallel()
@@ -558,7 +558,7 @@ func TestEventuallyFunnel_SymbolSentinel(t *testing.T) {
 		return nil
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true}, []string{"./..."}), scan)
 
 	// v1.11.1 baseline. The four names per package are testify's complete
 	// Eventually* surface as of this writing; if testify removes/renames any,
@@ -781,7 +781,7 @@ func scanFileForIndirectEventuallyReferences(
 //     stops guarding it. Mitigated by the fact that any rename is a breaking
 //     change visible in diff and reviewed.
 //
-// Tool: RunTyped + *types.Package.Scope().Lookup + *types.Signature parameter
+// Tool: Run(t, Typed(...)) + *types.Package.Scope().Lookup + *types.Signature parameter
 // iteration. Reuses the existing module-wide typed load.
 func TestEventuallyFunnel_DeterministicNoTimeoutParam(t *testing.T) {
 	t.Parallel()
@@ -882,7 +882,7 @@ func TestEventuallyFunnel_DeterministicNoTimeoutParam(t *testing.T) {
 		return nil
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
+	_ = Run(t, Typed(TypedOpts{Tests: true}, []string{"./..."}), scan)
 
 	if !sigFound {
 		t.Errorf("%s: testwait.Deterministic signature not resolved — "+

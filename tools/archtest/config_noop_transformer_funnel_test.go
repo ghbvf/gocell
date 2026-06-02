@@ -57,7 +57,7 @@ func TestConfigNoopTransformerFunnel01(t *testing.T) {
 	root := findModuleRoot(t)
 
 	var violations []string
-	Run(t, ModuleScope(root), func(p *Pass) []Diagnostic {
+	Run(t, AST(ModuleScope(root)), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {

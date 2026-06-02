@@ -20,8 +20,8 @@
 //     `errors.As(err, &netErrVar)` call where netErrVar is typed net.Error;
 //     empty / stub bodies (return false / return true) are RED.
 //
-// The fixture is loaded via RunTypedFixture with the archtest_fixture build
-// tag; bypassing the reverse self-check requires editing this real source.
+// The fixture is loaded via Run(t, Fixture(...)) with the archtest_fixture
+// build tag; bypassing the reverse self-check requires editing this real source.
 package nettransientfunnelfixture
 
 import (

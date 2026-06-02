@@ -103,7 +103,7 @@ var allowedKernelEdges = map[string][]string{
 	"outbox":        {"cellvocab", "clock", "fsm", "healthz", "idempotency", "metautil", "observability", "persistence"},
 	"persistence":   nil,
 	"projection":    {"cell", "cellvocab", "clock", "contractspec", "healthz", "observability", "outbox", "persistence", "wrapper"},
-	"reconcile":     {"observability"},
+	"reconcile":     {"clock", "observability"},
 	"registry":      {"metadata"},
 	"saga":          {"clock", "fsm", "healthz"},
 	"verify":        {"metadata"},

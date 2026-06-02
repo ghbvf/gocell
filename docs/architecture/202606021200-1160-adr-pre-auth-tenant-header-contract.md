@@ -14,7 +14,7 @@ Three endpoints are accessed before a JWT is available:
 | `http.auth.setup.admin.v1` | `POST /api/v1/access/setup/admin` |
 | `http.auth.setup.status.v1` | `GET /api/v1/access/setup/status` |
 
-After migration 046 (`adapters/postgres/migrations/046_accesscore_tenant_id.sql`)
+After migration 047 (`adapters/postgres/migrations/047_accesscore_tenant_id.sql`)
 rebuilt `users` / `roles` / `role_assignments` with `tenant_id NOT NULL`, every
 lookup in these pre-auth handlers requires a tenant scope that cannot come from
 JWT claims (no JWT exists yet). The handler implementation reads `X-Tenant-ID`

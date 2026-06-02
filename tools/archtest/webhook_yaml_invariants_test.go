@@ -194,7 +194,8 @@ func scanWebhookMarker(rel string, data []byte) []string {
 func TestWebhookMarkerRetired01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"cells", "examples"},
+	scope := scanner.DirsScope(
+		root, []string{"cells", "examples"},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "cell.go"
 		}),

@@ -362,7 +362,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, migrator.Up(ctx))
 	require.NoError(t, adapterpg.VerifyExpectedShape(ctx, pool))
 
-	// Migration 046 rebuilt roles with composite PK (tenant_id, id). Seed the
+	// Migration 047 rebuilt roles with composite PK (tenant_id, id). Seed the
 	// "editor" role for the test tenant so S4b RBAC tests have a non-admin role
 	// to assign and revoke without FK violations.
 	_, err = pool.DB().Exec(ctx,

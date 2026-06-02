@@ -32,7 +32,8 @@ func (b *badCheckpointStore) LoadOffset(_ context.Context, _, _ string) (int64, 
 // SaveOffset calls pool.Exec directly instead of using an ambient tx.
 // VIOLATION: raw pool.Exec call bypasses ambient transaction.
 func (b *badCheckpointStore) SaveOffset(ctx context.Context, cellID, projectionID string, offset int64) error {
-	_, err := b.pool.Exec(ctx,
+	_, err := b.pool.Exec(
+		ctx,
 		"INSERT INTO projection_checkpoints(cell_id, projection_id, offset) VALUES($1,$2,$3) ON CONFLICT DO UPDATE SET offset=$3",
 		cellID, projectionID, offset,
 	)

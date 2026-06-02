@@ -291,7 +291,8 @@ func TestArchtest_MigrationNoGUCResidue(t *testing.T) {
 	scanner.EachContentFile(t, scope, []string{".sql"}, func(t *testing.T, cc scanner.ContentContext) {
 		content := string(cc.Bytes)
 		if strings.Contains(strings.ToLower(content), "gocell.allow_") {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"migration SQL file contains residual GUC reference",
 				"file: %s\n"+
 					"  Contains 'gocell.allow_' which is a reference to the legacy GUC variables\n"+
@@ -401,7 +402,8 @@ func TestArchtest_SchemaGuardCoversEveryOwnedTable(t *testing.T) {
 			continue
 		}
 		if _, ok := guardedTables[tableName]; !ok {
-			assert.Fail(t,
+			assert.Fail(
+				t,
 				"migration 017+ table missing from schema_guard expectedColumns",
 				"table %q (introduced in %s) has no entry in adapters/postgres/schema_guard.go expectedColumns.\n"+
 					"Either add the table's column shapes to expectedColumns, or add it to archtestExcludedTables "+

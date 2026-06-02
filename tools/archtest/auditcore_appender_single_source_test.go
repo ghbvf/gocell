@@ -63,7 +63,8 @@ const allowedTypeAlias = "type Service = appender.Service"
 func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 	root := findModuleRoot(t)
 
-	scope := DirsScope(root, auditcoreAppenderSlicePackages,
+	scope := DirsScope(
+		root, auditcoreAppenderSlicePackages,
 		MatchRels(func(rel string) bool {
 			base := filepath.Base(rel)
 			// Skip generated files (own DO NOT EDIT guard) and tests.
@@ -75,7 +76,7 @@ func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {
 	)
 
 	var violations []string
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			violations = append(violations, scanAuditcoreAppenderSliceFile(p.Rel(file), p.Fset, file)...)
 		}
@@ -108,7 +109,8 @@ func scanAuditcoreAppenderSliceFile(rel string, fset *token.FileSet, file *ast.F
 			violations = append(violations, fmt.Sprintf(
 				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 					"forbidden `type Service` definition (must be `%s`)",
-				rel, fset.Position(ts.Pos()).Line, allowedTypeAlias))
+				rel, fset.Position(ts.Pos()).Line, allowedTypeAlias,
+			))
 		}
 	})
 
@@ -139,7 +141,8 @@ func scanAppenderFuncDecl(rel string, fset *token.FileSet, d *ast.FuncDecl) []st
 				"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 					"forbidden method on Service "+
 					"(slice must not extend the appender.Service alias)",
-				rel, pos)}
+				rel, pos,
+			)}
 		}
 		// Methods on other types are allowed (none expected today, but
 		// not banned).
@@ -153,13 +156,15 @@ func scanAppenderFuncDecl(rel string, fset *token.FileSet, d *ast.FuncDecl) []st
 			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 				"forbidden `func NewService` "+
 				"(call appender.NewService directly from cell.go)",
-			rel, pos)}
+			rel, pos,
+		)}
 	case strings.HasPrefix(d.Name.Name, "With"):
 		return []string{fmt.Sprintf(
 			"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: "+
 				"forbidden `func %s` "+
 				"(call appender.%s directly from cell.go)",
-			rel, pos, d.Name.Name, d.Name.Name)}
+			rel, pos, d.Name.Name, d.Name.Name,
+		)}
 	}
 	// Other top-level functions are flagged so the next reviewer notices —
 	// slice packages are metadata holders only.
@@ -167,7 +172,8 @@ func scanAppenderFuncDecl(rel string, fset *token.FileSet, d *ast.FuncDecl) []st
 		"%s:%d: AUDITCORE-APPENDER-SINGLE-SOURCE-01: unexpected top-level "+
 			"func %s; slice packages should hold only `type Service = "+
 			"appender.Service` + `var Spec = ...`",
-		rel, pos, d.Name.Name)}
+		rel, pos, d.Name.Name,
+	)}
 }
 
 // appenderReceiverTypeName extracts the named receiver type, unwrapping pointer

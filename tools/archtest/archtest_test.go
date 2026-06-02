@@ -451,7 +451,7 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 // --- go list integration ---
 
 // findModuleRoot is defined in module_root.go (single source shared by
-// archtest.RunTyped drivers and the go-list integration helpers below).
+// Run(t, ...) typed-scope drivers and the go-list integration helpers below).
 
 // loadModule loads the entire module under root once via the
 // typeseval.LoadProductionPackages typed funnel, then folds the resulting
@@ -1515,7 +1515,7 @@ func TestCountLines_Boundaries(t *testing.T) {
 }
 
 func TestCorebundleMainLineLimit(t *testing.T) {
-	const maxLines = 30
+	const maxLines = 37 // raised from 30 when codegen-inject added slog seal in 39b75fc61
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "cmd", "corebundle", "main.go")
 	data, err := os.ReadFile(filepath.Clean(path))

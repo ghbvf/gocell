@@ -67,7 +67,7 @@ const goimportsPkgPath = "golang.org/x/tools/imports"
 func TestCODEGEN_LOCALPREFIX_SEALED_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	diags := Run(t, ModuleScope(root), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(ModuleScope(root)), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -78,6 +78,7 @@ func TestCODEGEN_LOCALPREFIX_SEALED_01(t *testing.T) {
 		}
 		return out
 	})
+
 	Report(t, "CODEGEN-LOCALPREFIX-SEALED-01", diags)
 }
 

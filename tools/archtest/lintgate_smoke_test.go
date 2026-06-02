@@ -301,7 +301,8 @@ func copyConfig(t *testing.T, src, dst string) {
 func runGolangciLint(t *testing.T, workDir string) []golangciIssue {
 	t.Helper()
 	out := filepath.Join(workDir, "lint-out.json")
-	cmd := exec.Command("golangci-lint", "run", //nolint:gosec // R2-approved: G204 const binary, t.TempDir() arg
+	cmd := exec.Command( //nolint:gosec // R2-approved: G204 const binary, t.TempDir() arg
+		"golangci-lint", "run",
 		"--allow-serial-runners",
 		"--output.json.path", out,
 		"--output.text.path", "/dev/null",

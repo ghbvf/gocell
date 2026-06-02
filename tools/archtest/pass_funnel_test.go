@@ -10,20 +10,22 @@ package archtest
 //
 // The first four rules forbid archtest tools/archtest/<file>_test.go from
 // reaching the legacy entry points directly. Authors must use archtest.Run
-// (AST-only) / archtest.RunTyped (typed) / archtest.RunTypedFixture (fixture
-// packages) / archtest.RunTypedProduction (production-only) via the
-// Pass-Driver paradigm, and must call the façade helper functions in
+// (AST-only) / archtest.Run(t, Typed(...)) (typed) /
+// archtest.Run(t, Fixture(FixtureOpts{...}, patterns), rule) (fixture
+// packages) / archtest.Run(t, Production(...), rule) (production-only) via
+// the Pass-Driver paradigm, and must call the façade helper functions in
 // archtest.ResolvePackageRef / ResolveMethodCall / EvaluateConstString /
 // FlatNonDefaultTags / KnownNonDefaultTags / Pass.IsFileInScope /
 // Pass.IsGenerated instead of importing internal/typeseval directly.
 //
 // PASS-FUNNEL-FIXTURE-TAG-01 closes the façade-bypass leg of the
-// archtest_fixture funnel: RunTypedFixture's outward Hard (FixtureOpts has
+// archtest_fixture funnel: Fixture's outward Hard (FixtureOpts has
 // no Tags field) prevents typed expression of "load fixture with custom
-// tag" in business call sites, but RunTyped / typeseval.SharedResolver
-// still accept arbitrary Tags, so a business archtest could in principle
-// pass the archtest_fixture build tag (in any const-resolvable form) to a
-// loader and bypass RunTypedFixture. The rule rejects any
+// tag" in business call sites, but Typed / Production / StandaloneModule /
+// typeseval.SharedResolver still accept arbitrary Tags (via TypedOpts.Tags),
+// so a business archtest could in principle pass the archtest_fixture build
+// tag (in any const-resolvable form) to one of those constructors and bypass
+// Fixture. The rule rejects any
 // (callee, arg) pair where the callee resolves via *types.Info to a member
 // of fixtureTagLoaderSet AND any arg subtree contains an Expr that
 // EvaluateConstString resolves to "archtest_fixture" — catching BasicLit
@@ -76,7 +78,7 @@ const (
 //
 //   - pass_funnel_test.go: implements the PASS-FUNNEL meta-archtest, must
 //     reference the forbidden symbols.
-//   - pass_test.go: unit-tests archtest.Run / RunTyped / buildTypedPass /
+//   - pass_test.go: unit-tests archtest.Run / buildTypedPass /
 //     newPackageRel / isPackageWithTestFiles; the last three accept or
 //     construct *packages.Package fixtures by signature.
 //   - archtest_test.go: archtest driver self-tests (LAYER-05..10 + PGQUERY-01)
@@ -181,7 +183,7 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 	return scanForForbiddenCallees(
 		tgt,
 		map[string]map[string]bool{scannerPkgPath: {"EachFile": true}},
-		"archtest.Run / archtest.RunTyped",
+		"archtest.Run (AST-only) / archtest.Run(t, Typed(...), rule) (typed)",
 	)
 }
 
@@ -259,7 +261,7 @@ func diagsLoadPackages(tgt passFunnelTarget) []scanner.Diagnostic {
 				"EachFileInPackage":      true,
 			},
 		},
-		"archtest.RunTyped / archtest.RunTypedProduction",
+		"archtest.Run(t, Typed(...), rule) / archtest.Run(t, Production(...), rule)",
 	)
 }
 
@@ -278,7 +280,10 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 			Rel:  tgt.rel,
 			Line: tgt.pkg.Fset.Position(imp.Pos()).Line,
 			Message: fmt.Sprintf(
-				"direct import of %q forbidden in archtest *_test.go; use archtest.RunTyped",
+				"direct import of %q forbidden in archtest *_test.go; use archtest.Run with the "+
+					"appropriate RunScope constructor — Typed (main module) / Production "+
+					"(generated/-excluded) / Fixture (archtest_fixture packages) / StandaloneModule "+
+					"(standalone fixture module) — e.g. archtest.Run(t, Typed(...), rule)",
 				packagesPkgPath,
 			),
 		})
@@ -407,29 +412,38 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 // would flag if this file were not in passFunnelPermanentExempt).
 const fixtureTagSentinelValue = "archtest_fixture"
 
-// fixtureTagLoaderSet enumerates the loader callees (archtest façade +
-// typeseval package-load primitives) whose argument subtrees the detector
-// scans for fixture-tag bypass. EachFileInPackage is intentionally NOT in
-// the set: its signature takes an already-loaded *packages.Package, not
-// build tags, so it cannot be a fixture-tag bypass vector.
+// fixtureTagLoaderSet enumerates the loader callees (archtest façade typed-scope
+// constructors + typeseval package-load primitives) whose argument subtrees the
+// detector scans for fixture-tag bypass. EachFileInPackage is intentionally NOT
+// in the set: its signature takes an already-loaded *packages.Package, not build
+// tags, so it cannot be a fixture-tag bypass vector. Fixture / Run / AST are NOT
+// in the set: Fixture's FixtureOpts has no Tags field (type-system Hard), Run
+// takes a sealed RunScope (tags already inside the scope), and AST carries no
+// TypedOpts at all.
 //
-// Adding a new loader API (e.g., a hypothetical `RunTypedFixtureDir`) MUST
-// be reflected here or the rule silently misses the new vector. The
-// detector godoc lists this as an enumeration-maintenance Blind spot
-// (same grade as the banned-symbol list in diagsLoadPackages).
+// Post-unification (issue #1037 §1d), build tags travel in TypedOpts.Tags, which
+// is accepted by the three exported typed-scope constructors Typed / Production /
+// StandaloneModule and by the unexported runTypedWithRoot. These replace the
+// deleted RunTyped / RunTypedProduction / RunTypedDir entry points.
+//
+// Adding a new typed-scope constructor that accepts TypedOpts MUST be reflected
+// here or the rule silently misses the new vector. The detector godoc lists this
+// as an enumeration-maintenance Blind spot (same grade as the banned-symbol list
+// in diagsLoadPackages).
 var fixtureTagLoaderSet = map[string]map[string]bool{
 	archtestPkgPath: {
-		"RunTyped":           true,
-		"RunTypedProduction": true,
-		"RunTypedDir":        true,
-		// runTypedWithRoot is the UNEXPORTED shared impl behind RunTyped /
-		// RunTypedDir / RunTypedFixture. A business *_test.go in package
-		// archtest can call it directly with the fixture tag — sidestepping
-		// the FixtureOpts-has-no-Tags compile lock — so it must be enumerated
-		// here (#944). ResolvePackageRef resolves the same-package bare-Ident
-		// callee to (archtestPkgPath, "runTypedWithRoot"); covered by Form E
-		// in passfunnel_inpkg_redfixture.go (cross-package fixtures cannot
-		// reference the unexported symbol).
+		// Exported typed-scope constructors (accept TypedOpts with a Tags field).
+		"Typed":            true,
+		"Production":       true,
+		"StandaloneModule": true,
+		// runTypedWithRoot is the UNEXPORTED shared impl called by the typed-scope
+		// constructors and by Run's dispatch. A business *_test.go in package
+		// archtest can call it directly with the fixture tag — sidestepping the
+		// FixtureOpts-has-no-Tags compile lock — so it must be enumerated here
+		// (#944). ResolvePackageRef resolves the same-package bare-Ident callee to
+		// (archtestPkgPath, "runTypedWithRoot"); covered by Form E in
+		// passfunnel_inpkg_redfixture.go (cross-package fixtures cannot reference
+		// the unexported symbol).
 		"runTypedWithRoot": true,
 	},
 	typesevalPkgPath: {
@@ -477,23 +491,24 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //
 // # Funnel double-lock (per ai-robust.md §Funnel 双向锁评级)
 //
-//   - Downstream / outward Hard: RunTypedFixture's FixtureOpts has no
-//     Tags field; `RunTypedFixture(t, FixtureOpts{Tags: ...}, ...)` is a
+//   - Downstream / outward Hard: Fixture's FixtureOpts has no
+//     Tags field; `Run(t, Fixture(FixtureOpts{Tags: ...}, ...), ...)` is a
 //     compile error (type system, not archtest-bound).
-//   - Upstream / archtest-bound Hard: this rule rejects any loader-call +
+//   - Upstream / archtest-bound Hard: this rule rejects any
+//     (Typed/Production/StandaloneModule/runTypedWithRoot/typeseval loader)-call +
 //     arg-resolves-to-archtest_fixture pair regardless of arg shape,
 //     including the same-package unexported runTypedWithRoot callee and the
 //     same-file var-indirection arg shape (#944).
 //
 // Together: business archtest cannot express "load a fixture package
 // (or any package with the fixture build tag activated)" via any
-// reachable AST path — the only legitimate route is RunTypedFixture,
+// reachable AST path — the only legitimate route is Run(t, Fixture(...), rule),
 // whose body injects the tag inside the framework.
 //
 // # Closed by #944
 //
 //   - Same-file var-indirection: `var tagSet = []string{fixtureBuildTag};
-//     RunTyped(.., TypedOpts{Tags: tagSet}, ..)`. collectFixtureTagBoundObjects
+//     Run(t, Typed(TypedOpts{Tags: tagSet}, ...), rule)`. collectFixtureTagBoundObjects
 //     records, file-scoped, every types.Object bound (single `:=` / `=` /
 //     `var`) to a slice literal carrying a fixture-tag-resolving element; the
 //     Ident walker then reports a loader-arg Ident that resolves to such an
@@ -536,13 +551,16 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //
 // Cross-package forms in internal/passfunnelfixture/redfixture.go exercise the
 // EvaluateConstString-resolvable arg shapes plus the var-indirection shape
-// against typeseval.SharedResolver (one LOADER_SET callee; the rule predicate
-// is callee-shape-agnostic across the set):
+// against typeseval.SharedResolver (arg-shape coverage, rule predicate is
+// callee-shape-agnostic) and archtest.Typed (new-callee coverage, issue #1037):
 //
-//   - Form A — BasicLit "archtest_fixture" direct
-//   - Form B — same-pkg const Ident (localFixtureTag)
-//   - Form C — BinaryExpr "archtest" + "_fixture"
-//   - Form F — same-file var bound to a fixture-tag slice (var-indirection)
+//   - Form A — BasicLit "archtest_fixture" direct       (typeseval.SharedResolver)
+//   - Form B — same-pkg const Ident (localFixtureTag)   (typeseval.SharedResolver)
+//   - Form C — BinaryExpr "archtest" + "_fixture"       (typeseval.SharedResolver)
+//   - Form F — same-file var bound to a fixture-tag slice (var-indirection, typeseval.SharedResolver)
+//   - Form G — BasicLit "archtest_fixture" via archtest.Typed (per-member callee, issue #1037)
+//   - Form H — BasicLit "archtest_fixture" via archtest.Production (per-member callee)
+//   - Form I — BasicLit "archtest_fixture" via archtest.StandaloneModule (per-member callee)
 //
 // The former Form D (cross-pkg SelectorExpr archtest.FixtureBuildTag) is GONE:
 // fixtureBuildTag is unexported (#944), so that vector is a compile error
@@ -573,7 +591,7 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 	// Var-indirection closure (#944): collect same-file objects bound to a
 	// slice literal carrying a fixture-tag-resolving element, so a loader arg
 	// that is a plain *ast.Ident (the var name) is still caught. Mirrors
-	// collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_invariants.go.
+	// collectKnownTagsBoundObjects in taggroup_loop_no_typed_run_invariants.go.
 	boundObjs := collectFixtureTagBoundObjects(info, tgt.file)
 	// Position-based dedup: a single arg expression may contain nested Exprs
 	// that all resolve to the same const value (e.g. BinaryExpr "X"+"Y" plus
@@ -603,8 +621,8 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 			diags = append(diags, scanner.Diagnostic{
 				Rel:  tgt.rel,
 				Line: line,
-				Message: "use archtest.RunTypedFixture(t, FixtureOpts{...}, patterns, " +
-					"rule) (the only sanctioned fixture-load path; FixtureOpts has no " +
+				Message: "use archtest.Run(t, Fixture(FixtureOpts{...}, patterns), rule) " +
+					"(the only sanctioned fixture-load path; FixtureOpts has no " +
 					"Tags field — see tools/archtest/fixture.go) instead of feeding the " +
 					"archtest_fixture build tag to " + path + "." + name +
 					" (PASS-FUNNEL-FIXTURE-TAG-01)",
@@ -690,7 +708,7 @@ func exprCarriesFixtureTag(info *types.Info, expr ast.Expr) bool {
 //
 // Scope is file-level (the realistic copy template declares the binding in the
 // same file as the loader call) and single-binding only (LHS/RHS length 1),
-// mirroring collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_invariants.go.
+// mirroring collectKnownTagsBoundObjects in taggroup_loop_no_typed_run_invariants.go.
 // Only `var` declarations and `:=` / `=` assignments are collected — `const`
 // ValueSpecs are deliberately skipped because a const ident is already reported
 // via the const path in the Ident walker (it never reaches the bound-object
@@ -797,7 +815,7 @@ func TestPassFunnelEachFile01(t *testing.T) {
 // Archtest tools/archtest/<file>_test.go must NOT call
 // tools/archtest/internal/typeseval.LoadPackages, typeseval.SharedResolver,
 // typeseval.LoadProductionPackages, or typeseval.EachFileInPackage directly.
-// Use archtest.RunTyped (full set) or archtest.RunTypedProduction
+// Use Run(t, Typed(...), rule) (full set) or Run(t, Production(...), rule)
 // (generated/-excluded set) — both load packages once via the
 // singleflight-cached SharedResolver underneath and construct Pass with
 // *types.Package (not *packages.Package) so .Syntax is unreachable.
@@ -818,7 +836,8 @@ func TestPassFunnelLoadPackages01(t *testing.T) {
 //
 // Archtest tools/archtest/<file>_test.go must NOT import
 // golang.org/x/tools/go/packages directly. The Pass-Driver paradigm wraps
-// packages.Load inside archtest.RunTyped; direct imports allow authors to
+// packages.Load inside the typed Run drivers (Run(t, Typed(...)) etc.); direct
+// imports allow authors to
 // reconstruct the INV-1 form by loading packages and pairing pkg.Syntax
 // with a pass.TypesInfo from a different load.
 //
@@ -836,16 +855,17 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 //
 // Archtest tools/archtest/<file>_test.go must NOT feed the archtest_fixture
 // build tag into a loader's Tags. The only sanctioned fixture-load path is
-// archtest.RunTypedFixture(t, FixtureOpts{...}, patterns, rule) — FixtureOpts
+// Run(t, Fixture(FixtureOpts{...}, patterns), rule) — FixtureOpts
 // deliberately lacks a Tags field, so the build tag stays inside the framework
 // body.
 //
 // There is no longer any legitimate business reason to reference the fixture
 // tag from Go code (#944): it was removed from the generic tag union, so no
-// module-wide RunTyped(Tags: FlatNonDefaultTags()) scan activates fixture code
-// and there is no "skip the fixture tag group" case. The literal lives only in
-// the unexported fixtureBuildTag const (fixture.go) and the //go:build
-// directives of fixture packages — both framework-internal.
+// module-wide Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, ...), rule)
+// scan activates fixture code and there is no "skip the fixture tag group"
+// case. The literal lives only in the unexported fixtureBuildTag const
+// (fixture.go) and the //go:build directives of fixture packages — both
+// framework-internal.
 //
 // Detection (delegated to diagsFixtureTagBypass): a (callee, arg)-pair walk —
 // it fires only when a CallExpr's callee resolves via *types.Info to a member
@@ -1029,7 +1049,8 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // for ImportBan (== 3) that would drop to 2 if the TypeName fix were reverted.
 //
 // The fixture is loaded with the "archtest_fixture" build tag (single source:
-// RunTypedFixture helper in tools/archtest/fixture.go); without the tag the
+// the Fixture loader in tools/archtest/fixture.go, whose Run dispatch injects
+// the tag); without the tag the
 // fixture is invisible and packages.Load returns an empty *.Syntax slice.
 func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	root := findModuleRoot(t)
@@ -1216,11 +1237,14 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	}
 
 	// PASS-FUNNEL-FIXTURE-TAG-01 per-form coverage. Cross-package fixture forms
-	// (redfixture.go, package passfunnelfixture) fed to typeseval.SharedResolver:
-	//   - Form A — BasicLit "archtest_fixture" direct
-	//   - Form B — same-pkg const Ident (localFixtureTag)
-	//   - Form C — BinaryExpr "archtest" + "_fixture"
-	//   - Form F — same-file var bound to a fixture-tag slice (var-indirection)
+	// (redfixture.go, package passfunnelfixture):
+	//   - Form A — BasicLit "archtest_fixture" direct         (typeseval.SharedResolver)
+	//   - Form B — same-pkg const Ident (localFixtureTag)     (typeseval.SharedResolver)
+	//   - Form C — BinaryExpr "archtest" + "_fixture"         (typeseval.SharedResolver)
+	//   - Form F — same-file var bound to fixture-tag slice   (typeseval.SharedResolver)
+	//   - Form G — BasicLit "archtest_fixture" direct         (archtest.Typed, per-member callee)
+	//   - Form H — BasicLit "archtest_fixture" direct         (archtest.Production, per-member callee)
+	//   - Form I — BasicLit "archtest_fixture" direct         (archtest.StandaloneModule, per-member callee)
 	// plus two GREEN-parity negatives (non-fixture-tag var to a loader; fixture
 	// tag to a non-LOADER_SET callee) that MUST produce zero diagnostics. The
 	// same-package Form E (unexported runTypedWithRoot) is asserted separately
@@ -1234,7 +1258,7 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	// fixture source line (anchor comment + 1), so assertions stay stable under
 	// unrelated edits that shift line numbers.
 	const redfixtureRel = "tools/archtest/internal/passfunnelfixture/redfixture.go"
-	crossPkgForms := []string{"A", "B", "C", "F"}
+	crossPkgForms := []string{"A", "B", "C", "F", "G", "H", "I"}
 	var fixtureTagDiags []scanner.Diagnostic
 	for _, tgt := range fixtureTargets {
 		fixtureTagDiags = append(fixtureTagDiags, diagsFixtureTagBypass(tgt)...)
@@ -1343,11 +1367,12 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 // TestFlatNonDefaultTagsExcludesFixtureTag locks sub-1 of #944: the generic
 // build-tag union must NOT carry the fixture build tag. After #944 removed
 // {"archtest_fixture"} from typeseval.KnownNonDefaultTags, FlatNonDefaultTags()
-// — and thus every business RunTyped(Tags: FlatNonDefaultTags()) scan — no
-// longer activates fixture-tagged code; the only sanctioned fixture loader is
-// RunTypedFixture. Re-adding the tag to KnownNonDefaultTags reopens the
-// FlatNonDefaultTags() bypass (a function-call-result tag the detector cannot
-// const-resolve) and fails this assertion.
+// — and thus every business Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, ...), rule)
+// scan — no longer activates fixture-tagged code; the only sanctioned fixture
+// loader is Run(t, Fixture(FixtureOpts{...}, patterns), rule). Re-adding the
+// tag to KnownNonDefaultTags reopens the FlatNonDefaultTags() bypass (a
+// function-call-result tag the detector cannot const-resolve) and fails this
+// assertion.
 func TestFlatNonDefaultTagsExcludesFixtureTag(t *testing.T) {
 	t.Parallel()
 	for _, tag := range FlatNonDefaultTags() {
@@ -1355,7 +1380,8 @@ func TestFlatNonDefaultTagsExcludesFixtureTag(t *testing.T) {
 			t.Fatalf("FlatNonDefaultTags() must not contain the fixture build tag %q: "+
 				"it was removed from KnownNonDefaultTags in #944 so module-wide scans "+
 				"never load fixture-tagged code. The only sanctioned fixture loader is "+
-				"RunTypedFixture; re-adding the tag reopens the FlatNonDefaultTags bypass.",
+				"Run(t, Fixture(FixtureOpts{...}, patterns), rule); re-adding the tag "+
+				"reopens the FlatNonDefaultTags bypass.",
 				fixtureBuildTag)
 		}
 	}

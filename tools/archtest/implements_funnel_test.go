@@ -52,7 +52,7 @@
 //     `func_value_red` exercises the equivalent Uses entry. Honest scope
 //     declaration, no separate fixture needed.
 //   - *_test.go files — IN SCOPE. TestTypesutilImplementsFunnel01 uses
-//     RunTypedProduction with Tests:true so test-variant packages (every
+//     Run(t, Production(...)) with Tests:true so test-variant packages (every
 //     *_test.go) are scanned. This is the critical surface, not a blind
 //     spot: the 6 callsites R2-P2 PR-a consolidated all lived in
 //     tools/archtest/*_test.go, so a test-file-excluding scope would make
@@ -71,12 +71,12 @@
 //   - testdata/ RED fixtures (this rule's own intentional-violation
 //     fixtures) — NOT covered by the implementsFunnelFileRel allowlist;
 //     they are excluded from the production scan because
-//     RunTypedProduction loads "./..." which Go excludes testdata/ from
+//     Run(t, Production(...)) loads "./..." which Go excludes testdata/
 //     by convention, and the fixture reverse self-check loads them via
-//     explicit non-recursive RunTyped patterns. Honest scope
+//     explicit non-recursive Run(t, Typed(...)) patterns. Honest scope
 //     declaration: the only allowlist is the single funnel file; the
 //     fixtures' exemption is path-scope, not allowlist.
-//   - generated/ codegen output — excluded by RunTypedProduction (the
+//   - generated/ codegen output — excluded by Run(t, Production(...)) (the
 //     ProductionResolver generated/ funnel); codegen templates do not emit
 //     go/types.Implements, so there is no enforcement gap. Honest scope
 //     declaration.
@@ -166,7 +166,7 @@ func collectImplementsFunnelViolations(p *Pass) []Diagnostic {
 //
 // CRITICAL — Tests:true is mandatory, not optional. The 6 consolidated
 // callsites all live in tools/archtest/*_test.go (archtest rules ARE test
-// files). With Tests:false, RunTypedProduction never loads any *_test.go,
+// files). With Tests:false, a typed Production load never loads any *_test.go,
 // so re-inlining a raw go/types.Implements in any _test.go would NOT turn
 // this rule red — the funnel would be toothless exactly where the original
 // duplication lived. Tests:true loads test-variant packages so every
@@ -175,7 +175,7 @@ func collectImplementsFunnelViolations(p *Pass) []Diagnostic {
 // Tests:false (the gap would otherwise be invisible — the scan would stay
 // vacuously green).
 //
-// A single RunTypedProduction (default tags, Tests:true) replaces the
+// A single Run(t, Production(TypedOpts{Tests: true})) (default tags) replaces the
 // earlier per-KnownNonDefaultTags loop: go/types.Implements is a
 // compile-time go/types type-checker primitive that only appears in
 // default-build tooling code (the 6 real callsites + the funnel are all
@@ -190,7 +190,7 @@ func TestTypesutilImplementsFunnel01(t *testing.T) {
 	var violations []Diagnostic
 	sawTestFile := false
 
-	_ = RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Production(TypedOpts{Tests: true}), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			if strings.HasSuffix(p.Rel(f), "_test.go") {
 				sawTestFile = true
@@ -231,13 +231,13 @@ func TestTypesutilImplementsFunnel01(t *testing.T) {
 // inventory. RED fixtures must report a violation on the exact ident line;
 // the GREEN fixture (routes through the funnel) must report zero.
 //
-// Each fixture pattern is non-recursive (RunTyped, not RunTypedDir) so
-// RunTyped yields exactly the fixture package as a Pass (deps are loaded
+// Each fixture pattern is non-recursive (Run(t, Typed(...)), not Run(t, StandaloneModule(...)))
+// so a typed Run yields exactly the fixture package as a Pass (deps are loaded
 // for type info but not yielded as Passes), and the funnel-file allowlist
-// never matches a fixture path. RunTyped is used here (rather than
-// RunTypedDir) because approved_wrapper_green imports the main-module
+// never matches a fixture path. Run(t, Typed(...)) is used here (rather than
+// Run(t, StandaloneModule(...))) because approved_wrapper_green imports the main-module
 // package github.com/ghbvf/gocell/tools/typesutil; an isolated fixture
-// module (RunTypedDir) would require a replace directive. RunTyped with
+// module (Run(t, StandaloneModule(...))) would require a replace directive. Run(t, Typed(...)) with
 // explicit non-recursive patterns is the correct entry here, matching the
 // panic_registered_fixtures precedent.
 func TestTypesutilImplementsFunnel01_Fixtures(t *testing.T) {
@@ -264,13 +264,14 @@ func TestTypesutilImplementsFunnel01_Fixtures(t *testing.T) {
 
 			var diags []Diagnostic
 			scanned := false
-			_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+			_ = Run(t, Typed(TypedOpts{}, []string{pattern}), func(p *Pass) []Diagnostic {
 				if len(p.Files) > 0 {
 					scanned = true
 				}
 				diags = append(diags, collectImplementsFunnelViolations(p)...)
 				return nil
 			})
+
 			require.True(t, scanned, "fixture %s: no package loaded (path renamed?)", dir)
 
 			goldenPath := filepath.Join(root, "tools", "archtest", "testdata",

@@ -33,7 +33,7 @@
 // to Hard — is tracked in #1212; a type-state token proving Assert ran is
 // over-engineering for a single call site, so Medium is the documented ceiling.
 //
-// Blind-spot inventory (tools: archtest.RunTyped + archtest.ResolvePackageRef
+// Blind-spot inventory (tools: archtest.Run(t, Typed(...)) + archtest.ResolvePackageRef
 // + scanner.EachInSubtree[ast.CallExpr]):
 //
 //   - Cross-function extraction: if the Assert call is moved into a helper
@@ -76,7 +76,7 @@
 //
 // Self-check: TestChangePasswordInactiveGate_01_NegativeFixture loads four
 // testdata packages (green / red_no_gate / red_gate_after_mutation /
-// red_conditional_gate_bypass) via archtest.RunTyped, sharing the same
+// red_conditional_gate_bypass) via archtest.Run(t, Typed(...)), sharing the same
 // changePasswordGateDiagnostics core as the production scan. Fixtures live
 // under cells/accesscore/ (not tools/archtest/testdata/) because they import
 // the internal credentialauthority package.
@@ -113,26 +113,28 @@ func TestChangePasswordInactiveGate_01(t *testing.T) {
 	t.Parallel()
 
 	var sawTarget bool
-	diags := RunTyped(t, TypedOpts{}, []string{
+	diags := Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/slices/identitymanage/...",
-	}, func(p *Pass) []Diagnostic {
-		if !p.Typed() || p.Fset == nil {
-			return nil
-		}
-		var d []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+	}),
+
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() || p.Fset == nil {
+				return nil
 			}
-			fileDiags, found := changePasswordGateDiagnostics(p.TypesInfo, p.Fset, file, rel)
-			if found {
-				sawTarget = true
+			var d []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				fileDiags, found := changePasswordGateDiagnostics(p.TypesInfo, p.Fset, file, rel)
+				if found {
+					sawTarget = true
+				}
+				d = append(d, fileDiags...)
 			}
-			d = append(d, fileDiags...)
-		}
-		return d
-	})
+			return d
+		})
 
 	if !sawTarget {
 		t.Fatalf("%s: target function %q not found under "+
@@ -168,7 +170,7 @@ func TestChangePasswordInactiveGate_01_NegativeFixture(t *testing.T) {
 			t.Parallel()
 
 			var sawTarget bool
-			diags := RunTyped(t, TypedOpts{}, []string{fixtureBase + "/" + tc.subdir},
+			diags := Run(t, Typed(TypedOpts{}, []string{fixtureBase + "/" + tc.subdir}),
 				func(p *Pass) []Diagnostic {
 					if !p.Typed() || p.Fset == nil {
 						return nil
@@ -260,7 +262,8 @@ func checkGateOrdering(info *types.Info, fset *token.FileSet, fd *ast.FuncDecl, 
 				"changed; the inactive-gate dominance check cannot verify the gate "+
 				"precedes the password write. Update cpgMutationMethod if the repo "+
 				"method was renamed.",
-			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod)}}
+			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod,
+		)}}
 	case assertIdx == -1:
 		return []Diagnostic{{Rel: rel, Line: line(mutationNode), Message: fmt.Sprintf(
 			"%s: %s has no UNCONDITIONAL top-level credentialauthority.Assert guard "+
@@ -268,13 +271,15 @@ func checkGateOrdering(info *types.Info, fset *token.FileSet, fd *ast.FuncDecl, 
 				"be rewritten. A gate nested inside a conditional does not dominate the "+
 				"mutation; place `if err := credentialauthority.Assert(user); err != nil "+
 				"{ return ... }` as a top-level statement (issue #1017).",
-			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod)}}
+			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod,
+		)}}
 	case assertIdx >= mutationIdx:
 		return []Diagnostic{{Rel: rel, Line: line(assertNode), Message: fmt.Sprintf(
 			"%s: the credentialauthority.Assert guard does not precede %s in %s — the "+
 				"inactive gate must run BEFORE the credential mutation, else the password "+
 				"is committed before the 403 (issue #1017 regression).",
-			ruleChangePasswordInactiveGate01, cpgMutationMethod, cpgTargetFunc)}}
+			ruleChangePasswordInactiveGate01, cpgMutationMethod, cpgTargetFunc,
+		)}}
 	default:
 		return nil
 	}

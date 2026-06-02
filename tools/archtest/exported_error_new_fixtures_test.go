@@ -19,7 +19,7 @@ import (
 func runExportedErrorNewFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
 	var diags []Diagnostic
-	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)
@@ -27,6 +27,7 @@ func runExportedErrorNewFixtureScan(t *testing.T, fixtureDir string) []Diagnosti
 			}
 			return nil
 		})
+
 	return diags
 }
 

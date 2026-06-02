@@ -9,7 +9,7 @@
 //   - unenrolledReplaySource: deliberately NOT enrolled (the rule must flag it).
 //
 // Gated by the archtest_fixture build tag: invisible to normal `go build` /
-// `go test` and to prodscan; loaded only via archtest.RunTypedFixture. Mirrors
+// `go test` and to prodscan; loaded only via Run(t, Fixture(...)). Mirrors
 // internal/projectioncheckpointenrollfixture.
 //
 // DO NOT use this package in production code.

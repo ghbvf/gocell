@@ -52,7 +52,8 @@ func TestMigrationPairDeploy01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	const migrationsDir = "adapters/postgres/migrations"
-	scope := scanner.DirsScope(root, []string{migrationsDir},
+	scope := scanner.DirsScope(
+		root, []string{migrationsDir},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.ToSlash(filepath.Dir(rel)) == migrationsDir
 		}),

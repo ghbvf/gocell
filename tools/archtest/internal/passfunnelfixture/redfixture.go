@@ -44,6 +44,11 @@ import (
 	// VIOLATION: PASS-FUNNEL-PACKAGES-IMPORT-01 (qualified import path scan).
 	"golang.org/x/tools/go/packages"
 
+	// VIOLATION sources for PASS-FUNNEL-FIXTURE-TAG-01 Form G — new typed-scope
+	// constructors (Typed / Production / StandaloneModule) added to fixtureTagLoaderSet
+	// by issue #1037 §1d after RunTyped/RunTypedProduction/RunTypedDir were deleted.
+	archtest "github.com/ghbvf/gocell/tools/archtest"
+
 	// VIOLATION sources for PASS-FUNNEL-EACHFILE-01 — qualified + alias + dot forms.
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	. "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
@@ -169,7 +174,7 @@ const localFixtureTag = "archtest_fixture"
 // fixtureTagBypassRedForms exercises the const-resolvable arg shapes a business
 // archtest could use to feed the archtest_fixture build tag to a loader from
 // LOADER_SET (typeseval.SharedResolver / LoadPackages / LoadProductionPackages
-// plus archtest.RunTyped / RunTypedProduction / RunTypedDir / runTypedWithRoot).
+// plus archtest.Typed / Production / StandaloneModule / runTypedWithRoot).
 // The detector must catch every form regardless of whether the literal is
 // direct, via local const, or via const concatenation.
 //
@@ -182,14 +187,20 @@ const localFixtureTag = "archtest_fixture"
 //
 // The function is never invoked at runtime; the package is gated by
 // //go:build archtest_fixture and exists only as *ast.CallExpr +
-// *types.Info source for analysis. typeseval.SharedResolver is chosen as
-// the LOADER_SET canary because (i) it has the simplest signature for
-// fixture construction (positional tags slice at arg 3), (ii) it is
-// already a permanent RunTypedFixture-adjacent loader that business
-// archtest must not call directly (also caught by PASS-FUNNEL-LOADPACKAGES-01),
-// and (iii) the detector predicate is callee-shape-agnostic across the
-// LOADER_SET — a single callee suffices to lock the arg shapes; the
-// remaining LOADER_SET members add no new arg-shape coverage axis.
+// *types.Info source for analysis.
+//
+// Two coverage axes coexist:
+//   - Arg-shape axis (Forms A / B / C): typeseval.SharedResolver is the canary
+//     because (i) it has the simplest signature (positional tags slice at arg 3),
+//     (ii) it is a loader business archtest must not call directly, and (iii) the
+//     detector predicate is callee-shape-agnostic across the LOADER_SET, so a
+//     single callee suffices to lock the const-resolvable arg shapes.
+//   - Per-member callee axis (Forms G / H / I): each exported archtest typed-scope
+//     constructor in fixtureTagLoaderSet (Typed / Production / StandaloneModule)
+//     gets its own trip-wire so DROPPING it from the set fails CI — a per-member
+//     regression lock, not a new arg-shape axis. (runTypedWithRoot is Form E,
+//     in-package; the typeseval loaders LoadPackages / LoadProductionPackages are
+//     also covered by PASS-FUNNEL-LOADPACKAGES-01's per-symbol lock.)
 func fixtureTagBypassRedForms() {
 	// Form A — BasicLit STRING literal direct.
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{"archtest_fixture"}, "x")
@@ -197,6 +208,12 @@ func fixtureTagBypassRedForms() {
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{localFixtureTag}, "x")
 	// Form C — BinaryExpr const concatenation.
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{"archtest" + "_fixture"}, "x")
+	// Form G — BasicLit "archtest_fixture" via archtest.Typed (per-member callee).
+	_ = archtest.Typed(archtest.TypedOpts{Tags: []string{"archtest_fixture"}}, nil)
+	// Form H — BasicLit "archtest_fixture" via archtest.Production (per-member callee).
+	_ = archtest.Production(archtest.TypedOpts{Tags: []string{"archtest_fixture"}})
+	// Form I — BasicLit "archtest_fixture" via archtest.StandaloneModule (per-member callee).
+	_ = archtest.StandaloneModule("/dummy", archtest.TypedOpts{Tags: []string{"archtest_fixture"}}, nil)
 }
 
 // fixtureTagSlice exercises Form F: a same-file var bound to a []string

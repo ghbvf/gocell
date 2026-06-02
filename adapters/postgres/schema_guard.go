@@ -32,18 +32,18 @@ import (
 //   - users              (017)  accesscore user identities
 //                                 + users_status_chk, users_creation_source_chk (023 CHECK)
 //                                 + effective_admin_invariant_on_users trigger (024)
-//                                 + tenant_id TEXT NOT NULL (046 DROP+CREATE rebuild)
+//                                 + tenant_id TEXT NOT NULL (047 DROP+CREATE rebuild)
 //                                   UNIQUE(tenant_id,username) / UNIQUE(tenant_id,email)
 //                                   replacing global idx_users_username / idx_users_email;
 //                                   support index UNIQUE(tenant_id,id) for role FK.
 //   - sessions           (018)  accesscore session / JTI store
 //                                 + authz_epoch_at_issue restored (026; ADR §A8 — row is SoR, claim was retracted)
 //   - roles              (019)  accesscore role definitions
-//                                 + tenant_id TEXT NOT NULL, PK becomes (tenant_id, id) (046)
+//                                 + tenant_id TEXT NOT NULL, PK becomes (tenant_id, id) (047)
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //                                 + tenant_id TEXT NOT NULL, PK (tenant_id,user_id,role_id),
-//                                   role FK references roles(tenant_id,id) composite (046)
+//                                   role FK references roles(tenant_id,id) composite (047)
 //   - audit_entries      (020/043)  tamper-evident audit ledger (per-namespace hash chain)
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
@@ -371,10 +371,10 @@ var expectedColumns = []expectedColumn{
 	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
 	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
 	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
-	// users (017_users.sql + 022_users_password_version.sql + 046_accesscore_tenant_id.sql)
-	// 046 drops+recreates the table adding tenant_id TEXT NOT NULL as the second column.
+	// users (017_users.sql + 022_users_password_version.sql + 047_accesscore_tenant_id.sql)
+	// 047 drops+recreates the table adding tenant_id TEXT NOT NULL as the second column.
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
-	{Table: "users", Column: "tenant_id", Type: "text", NotNull: true}, // 046 NEW
+	{Table: "users", Column: "tenant_id", Type: "text", NotNull: true}, // 047 NEW
 	{Table: "users", Column: "username", Type: "text", NotNull: true},
 	{Table: "users", Column: "email", Type: "text", NotNull: true},
 	{Table: "users", Column: "password_hash", Type: "text", NotNull: true},
@@ -413,16 +413,16 @@ var expectedColumns = []expectedColumn{
 	// Only the S4d-introduced column is registered here; the rest of the
 	// refresh_tokens schema predates schema_guard's requiredColumns coverage.
 	{Table: "refresh_tokens", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
-	// roles (019_roles.sql + 046_accesscore_tenant_id.sql)
-	// 046 drops+recreates the table; PK is now composite (tenant_id, id).
-	{Table: "roles", Column: "tenant_id", Type: "text", NotNull: true}, // 046 NEW
+	// roles (019_roles.sql + 047_accesscore_tenant_id.sql)
+	// 047 drops+recreates the table; PK is now composite (tenant_id, id).
+	{Table: "roles", Column: "tenant_id", Type: "text", NotNull: true}, // 047 NEW
 	{Table: "roles", Column: "id", Type: "text", NotNull: true},
 	{Table: "roles", Column: "name", Type: "text", NotNull: true},
 	{Table: "roles", Column: "permissions", Type: "jsonb", NotNull: true},
 	{Table: "roles", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
-	// role_assignments (019_roles.sql + 046_accesscore_tenant_id.sql)
-	// 046 drops+recreates the table; PK is (tenant_id, user_id, role_id).
-	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 046 NEW
+	// role_assignments (019_roles.sql + 047_accesscore_tenant_id.sql)
+	// 047 drops+recreates the table; PK is (tenant_id, user_id, role_id).
+	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 047 NEW
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
@@ -491,6 +491,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
 	{Table: "projection_checkpoints", Column: "owner", Type: "text", NotNull: true},
 	{Table: "projection_checkpoints", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
+	// reconcile_leases (046_create_reconcile_leases.sql) — kernel/reconcile
+	// LeaderElector PG backend. epoch is the monotonic fencing token; expires_at is
+	// the row-TTL lease authority (PR-A6 review C2).
+	{Table: "reconcile_leases", Column: "reconciler_id", Type: "text", NotNull: true},
+	{Table: "reconcile_leases", Column: "holder_id", Type: "text", NotNull: true},
+	{Table: "reconcile_leases", Column: "epoch", Type: "bigint", NotNull: true},
+	{Table: "reconcile_leases", Column: "acquired_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "reconcile_leases", Column: "expires_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
@@ -506,9 +514,9 @@ var forbiddenColumns = []requiredColumn{
 var expectedPKs = []expectedPK{
 	{Table: "users", Columns: []string{"id"}},
 	{Table: "sessions", Columns: []string{"id"}},
-	// 046: roles PK is now composite (tenant_id, id) — roles are per-tenant scoped.
+	// 047: roles PK is now composite (tenant_id, id) — roles are per-tenant scoped.
 	{Table: "roles", Columns: []string{"tenant_id", "id"}},
-	// 046: role_assignments PK is now (tenant_id, user_id, role_id).
+	// 047: role_assignments PK is now (tenant_id, user_id, role_id).
 	{Table: "role_assignments", Columns: []string{"tenant_id", "user_id", "role_id"}},
 	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql rebuild)
 	{Table: "audit_entries", Columns: []string{"id"}},
@@ -521,6 +529,8 @@ var expectedPKs = []expectedPK{
 	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
 	// projection_checkpoints: composite PK (cell_id, projection_id) (045_create_projection_checkpoints.sql).
 	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
+	// reconcile_leases: PK on reconciler_id (046_create_reconcile_leases.sql).
+	{Table: "reconcile_leases", Columns: []string{"reconciler_id"}},
 }
 
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
@@ -532,7 +542,7 @@ var expectedDefaults = []expectedDefault{
 	// would make the first SaveOffset fail at write time; asserting it here surfaces
 	// the drift at startup (readyz) instead.
 	{Table: "projection_checkpoints", Column: "owner", Default: "''::text"},
-	// users.password_version (022 → 046 rebuild) — insertUserSQL omits this column
+	// users.password_version (022 → 047 rebuild) — insertUserSQL omits this column
 	// and relies on DEFAULT 0 to satisfy the NOT NULL constraint (migration 033
 	// adds users_password_version_non_negative CHECK >= 0). A dropped default would
 	// cause every new-user Create to fail at write time.
@@ -546,12 +556,12 @@ var expectedDefaults = []expectedDefault{
 // e.g. idx_commands_idempotency_key on (metadata->>'_idempotency_key')).
 var expectedIndexes = []expectedIndex{
 	// users
-	// 046: idx_users_username and idx_users_email are now composite
+	// 047: idx_users_username and idx_users_email are now composite
 	// UNIQUE(tenant_id, username) / UNIQUE(tenant_id, email) — same names, still unique.
 	{Table: "users", Name: "idx_users_username", Unique: true, Columns: []string{"tenant_id", "username"}},
 	{Table: "users", Name: "idx_users_email", Unique: true, Columns: []string{"tenant_id", "email"}},
 	{Table: "users", Name: "idx_users_status", Unique: false, Columns: []string{"status"}},
-	// 046: support index for role_assignments FK (tenant_id, user_id) reference.
+	// 047: support index for role_assignments FK (tenant_id, user_id) reference.
 	{Table: "users", Name: "idx_users_tenant_id_id", Unique: true, Columns: []string{"tenant_id", "id"}},
 	// sessions (018_sessions.sql)
 	{Table: "sessions", Name: "idx_sessions_jti", Unique: true, Columns: []string{"jti"}},
@@ -559,7 +569,7 @@ var expectedIndexes = []expectedIndex{
 	{Table: "sessions", Name: "idx_sessions_subject_active", Unique: false, Columns: []string{"subject_id"}},
 	{Table: "sessions", Name: "idx_sessions_expires", Unique: false, Columns: []string{"expires_at"}},
 	// roles: no additional non-PK indexes in migration 019
-	// role_assignments (046_accesscore_tenant_id.sql)
+	// role_assignments (047_accesscore_tenant_id.sql)
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false, Columns: []string{"tenant_id", "role_id"}},
 	// audit_entries (020_audit_ledger.sql + 021 event_id unique;
 	// 043_audit_entries_v2.sql rebuilds the table preserving index names)
@@ -604,7 +614,7 @@ var expectedFKs = []expectedFK{
 		OnDelete:   "c", // CASCADE — migrations/018_sessions.sql
 	},
 	{
-		// 046: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
+		// 047: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
 		// support index. This enforces same-tenant user membership at the DB layer,
 		// preventing cross-tenant authorization grants.
 		// ON DELETE CASCADE: removing a user removes all their role_assignments.
@@ -612,16 +622,16 @@ var expectedFKs = []expectedFK{
 		Constraint: "role_assignments_user_id_fkey",
 		RefTable:   "users",
 		RefColumns: []string{"tenant_id", "id"},
-		OnDelete:   "c", // CASCADE — migrations/046_accesscore_tenant_id.sql
+		OnDelete:   "c", // CASCADE — migrations/047_accesscore_tenant_id.sql
 	},
 	{
-		// 046: (tenant_id, role_id) references roles composite PK (tenant_id, id).
+		// 047: (tenant_id, role_id) references roles composite PK (tenant_id, id).
 		// ON DELETE RESTRICT: cannot delete a role that has active assignments.
 		Table:      "role_assignments",
 		Constraint: "role_assignments_role_id_fkey",
 		RefTable:   "roles",
 		RefColumns: []string{"tenant_id", "id"},
-		OnDelete:   "r", // RESTRICT — migrations/046_accesscore_tenant_id.sql
+		OnDelete:   "r", // RESTRICT — migrations/047_accesscore_tenant_id.sql
 	},
 	{
 		Table:      "commands",

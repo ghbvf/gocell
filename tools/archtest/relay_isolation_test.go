@@ -46,7 +46,7 @@
 // `newRelayAdapter` constructor stays package-private.
 //
 // AI-robust grade: Hard (downstream). The production type universe is
-// walked via `RunTypedProduction`; for each `*types.Named` whose
+// walked via `Run(t, Production(...))`; for each `*types.Named` whose
 // underlying is `*types.Struct` and whose pointer method set satisfies
 // `ManagedResource`, every struct field is inspected and any
 // `*Relay` / `Relay` field that does not live in `relayAdapter` fails the
@@ -71,7 +71,7 @@
 //     which already routes through `relayAdapter`. New public Bootstrap
 //     options that accept a `*Relay` from outside the package would be
 //     caught by inspection of their resulting struct fields.
-//   - Generated/ packages are excluded by `RunTypedProduction`
+//   - Generated/ packages are excluded by `Run(t, Production(...))`
 //     (production loader filters `<module>/generated/`).
 //   - Reverse self-check: `runtime/bootstrap.relayAdapter` MUST appear
 //     in the satisfying-AND-holding set, otherwise the filter is
@@ -114,7 +114,7 @@ func TestRELAY_NOT_MANAGEDRESOURCE_01(t *testing.T) {
 		"./runtime/bootstrap/...",
 	}
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, loadPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, loadPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -229,7 +229,7 @@ func TestRELAY_SOLE_HOLDER_01(t *testing.T) {
 	var managedResourceIface *types.Interface
 	var candidates []*types.Named
 
-	_ = RunTypedProduction(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -250,10 +250,7 @@ func TestRELAY_SOLE_HOLDER_01(t *testing.T) {
 					}
 				}
 			}
-			// Collect every named struct in production so post-pass
-			// analysis can intersect against the MR satisfying set + the
-			// *Relay holder predicate. Generic origin types are skipped
-			// (see §"Blind-spot inventory").
+
 			for _, name := range p.Pkg.Scope().Names() {
 				obj := p.Pkg.Scope().Lookup(name)
 				if obj == nil {
@@ -264,7 +261,7 @@ func TestRELAY_SOLE_HOLDER_01(t *testing.T) {
 					continue
 				}
 				if named.TypeParams() != nil && named.TypeArgs() == nil {
-					continue // skip generic origin types
+					continue
 				}
 				if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
 					continue

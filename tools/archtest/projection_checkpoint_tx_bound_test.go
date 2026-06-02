@@ -107,12 +107,12 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 	var checkpointStoreIface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
-			// Capture the CheckpointStore interface from kernel/projection.
+
 			if p.Pkg.Path() == checkpointStoreIfacePkg {
 				if obj := p.Pkg.Scope().Lookup(checkpointStoreIfaceName); obj != nil {
 					if named, ok := obj.Type().(*types.Named); ok {
@@ -122,7 +122,7 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 					}
 				}
 			}
-			// Collect all packages for impl scanning.
+
 			implPkgs = append(implPkgs, p.Pkg)
 			return nil
 		})
@@ -149,7 +149,7 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 
 	// Scan for pool fields in each impl.
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -224,10 +224,13 @@ func TestProjectionCheckpointTxBound01_RedFixture(t *testing.T) {
 
 	var diags []Diagnostic
 
-	_ = RunTypedFixture(
-		t,
-		FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/projectioncheckpointtxfixture/..."},
+	_ = Run(
+		t, Fixture(
+
+			FixtureOpts{Tests: false},
+			[]string{"./tools/archtest/internal/projectioncheckpointtxfixture/..."},
+		),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -289,7 +292,7 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 	var implPkgPaths []string
 
 	// First pass: collect iface + impl package paths.
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -313,7 +316,7 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 
 	// Second pass: collect impl pkg paths.
 	implsByPkg := make(map[string]*types.Named)
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -321,6 +324,7 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 			collectCheckpointStoreImpls(p.Pkg, checkpointStoreIface, implsByPkg)
 			return nil
 		})
+
 	seen := make(map[string]bool)
 	for key := range implsByPkg {
 		dotIdx := strings.LastIndex(key, ".")
@@ -333,7 +337,7 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

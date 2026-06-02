@@ -3,7 +3,7 @@
 //
 // CELL-RAW-INFRA-WRAPPER-LOCATION-01 — persistence.WrapForCell /
 // outbox.WrapPublisherForCell / outbox.WrapWriterForCell /
-// outbox.WrapEmitterForCell / projection.WrapCheckpointStoreForCell are the
+// outbox.WrapEmitterForCell are the
 // sole authorized paths for handing raw infra types into a cell's With* Option. They MUST be called only from
 // composition roots (cmd/* + cellmodules/* + examples/<demo>/main.go +
 // examples/<demo>/app.go + examples/<demo>/run.go) or *_test.go, plus the kernel-internal resolution
@@ -43,11 +43,10 @@ import (
 // new wrapper requires updating this set AND wrapperLocationAllowlistDoc
 // (godoc above) so the rule's surface stays trivially auditable.
 var wrapperFunctionsCanonical = map[string]bool{
-	"github.com/ghbvf/gocell/kernel/persistence.WrapForCell":               true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell":           true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell":              true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell":             true,
-	"github.com/ghbvf/gocell/kernel/projection.WrapCheckpointStoreForCell": true,
+	"github.com/ghbvf/gocell/kernel/persistence.WrapForCell":     true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell": true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell":    true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell":   true,
 }
 
 type wrapperViolation struct {
@@ -104,7 +103,6 @@ func isWrapperCallerAllowed(rel string) bool {
 	switch rel {
 	case "kernel/persistence/cell_marker.go",
 		"kernel/outbox/cell_marker.go",
-		"kernel/projection/cell_marker.go",
 		"kernel/outbox/demo_tx_runner.go",
 		"kernel/outbox/mode_resolver.go",
 		"kernel/outbox/outboxtest/recorder.go",
@@ -190,7 +188,7 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 // impossible.
 func allowlistDescription() string {
 	return "cmd/* | cellmodules/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
-		"kernel/{persistence,outbox,projection}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
+		"kernel/{persistence,outbox}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
 		"kernel/outbox/mode_resolver.go | kernel/outbox/outboxtest/recorder.go | " +
 		"cells/accesscore/{mem,postgres}/bundle.go"
 }
@@ -217,7 +215,7 @@ func TestCellRawInfraWrapperLocation01_RealRepoClean(t *testing.T) {
 	t.Parallel()
 
 	var violations []wrapperViolation
-	RunTypedProduction(t, TypedOpts{Tests: false},
+	Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil
@@ -243,8 +241,9 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	t.Parallel()
 
 	var violations []wrapperViolation
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/wrapfixture/violation"},
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/wrapfixture/violation"}),
+
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil
@@ -261,7 +260,7 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 			"violation expected in wrapfixture path, got %s", v.File)
 	}
 
-	// The fixture covers all three wrapper functions; the scanner must
+	// The fixture covers all four wrapper functions; the scanner must
 	// report each one. A pre-fix gap (only WrapForCell case in fixture)
 	// silently masked detection regressions on the publisher/writer legs.
 	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/persistence.WrapForCell"],
@@ -272,8 +271,6 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 		"fixture must trigger outbox.WrapWriterForCell detection")
 	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell"],
 		"fixture must trigger outbox.WrapEmitterForCell detection")
-	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/projection.WrapCheckpointStoreForCell"],
-		"fixture must trigger projection.WrapCheckpointStoreForCell detection")
 
 	// dotimport.go uses `import . "kernel/outbox"` and writes the wrap
 	// calls without a package selector — call.Fun is *ast.Ident, not
@@ -305,8 +302,9 @@ func TestCellRawInfraWrapperLocation01_RejectsKernelCellSibling(t *testing.T) {
 	t.Parallel()
 
 	var violations []wrapperViolation
-	RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{"./tools/archtest/internal/wrapfixture/kernelcellsibling"},
+	Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/wrapfixture/kernelcellsibling"}),
+
 		func(p *Pass) []Diagnostic {
 			violations = append(violations, scanWrapperViolationsFromPass(p)...)
 			return nil

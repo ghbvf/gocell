@@ -243,7 +243,8 @@ func formatBannedSymbolDiag(authImportPath, name, qualifier string) string {
 	return fmt.Sprintf(
 		"deprecated symbol %s.%s%s — replace with auth.RequireCallerCell (authz) "+
 			"or auth.TestServiceContext (test principals); see PR #362 SVCTOKEN-CALLER-IDENTITY",
-		shortPkg(authImportPath), name, qualifier)
+		shortPkg(authImportPath), name, qualifier,
+	)
 }
 
 // formatBannedSymbolDeclDiag composes the diagnostic message for a
@@ -256,7 +257,8 @@ func formatBannedSymbolDeclDiag(authImportPath, name string) string {
 			"these symbols were removed in Wave 2 of SVCTOKEN-CALLER-IDENTITY (PR #362) "+
 			"and callers must migrate to auth.RequireCallerCell (authz) or "+
 			"auth.TestServiceContext (test principals)",
-		shortPkg(authImportPath), name)
+		shortPkg(authImportPath), name,
+	)
 }
 
 // productionScanPatterns is the seven production roots scanned by both the
@@ -278,9 +280,11 @@ var productionScanPatterns = []string{
 func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		productionScanPatterns,
+	),
+
 		func(p *Pass) []Diagnostic {
 			return scanDeletedAuthSymbolsAgainst(p, authRuntimeImportPath)
 		})
@@ -318,9 +322,11 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedFixture(t,
+	diags := Run(t, Fixture(
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/nodeletedauthsymbolsfixture/..."},
+	),
+
 		func(p *Pass) []Diagnostic {
 			return scanDeletedAuthSymbolsAgainst(p, fixtureAuthImportPath)
 		})
@@ -378,9 +384,11 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 func TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		productionScanPatterns,
+	),
+
 		scanDeletedAuthSymbolsReflectBypass)
 
 	assert.Empty(t, diags,
@@ -400,9 +408,11 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess(t *testing.T) {
 func TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedFixture(t,
+	diags := Run(t, Fixture(
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/nodeletedauthsymbolsfixture/..."},
+	),
+
 		scanDeletedAuthSymbolsReflectBypass)
 
 	require.Len(t, diags, 2,
@@ -451,7 +461,8 @@ func scanDeletedAuthSymbolsReflectBypass(p *Pass) []Diagnostic {
 						"NO-DELETED-AUTH-SYMBOLS-01 BS-1: reflect.Value.%s called with %q — banned symbol; "+
 							"replace with auth.RequireCallerCell (authz) or auth.TestServiceContext (test principals); "+
 							"see PR #362 SVCTOKEN-CALLER-IDENTITY",
-						method, hit.Name),
+						method, hit.Name,
+					),
 				})
 			}
 		}

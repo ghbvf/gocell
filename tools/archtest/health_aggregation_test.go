@@ -57,7 +57,7 @@ func (s *typeMethodSet) has(qualified, methodName string) bool {
 // accumulateMethodSet accumulates every exported method (own or promoted) on
 // every exported named type in p.Pkg into s. Keys are qualified by import path
 // so types from different packages with the same simple name do not collide.
-// Called once per Pass inside RunTyped/RunTypedDir.
+// Called once per Pass inside Run(t, Typed(...))/Run(t, StandaloneModule(...)).
 func accumulateMethodSet(p *Pass, s *typeMethodSet) {
 	if p.Pkg == nil {
 		return
@@ -134,7 +134,7 @@ var healthAggSanctionedAdapterCarveOuts = map[string]string{
 // pins the type isolation.
 func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 	s := newTypeMethodSet()
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."}),
 		func(p *Pass) []Diagnostic {
 			accumulateMethodSet(p, s)
 			return nil
@@ -175,7 +175,7 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 // direction without forcing the main HEALTH-AGG-01 assertion to re-scan.
 func TestHealthCheckersImpliesManagedResource_CarveOutsProbesOnly(t *testing.T) {
 	s := newTypeMethodSet()
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."}),
 		func(p *Pass) []Diagnostic {
 			accumulateMethodSet(p, s)
 			return nil
@@ -199,7 +199,7 @@ func TestHealthCheckersImpliesManagedResource_CarveOutsProbesOnly(t *testing.T) 
 func TestHealthAggregation_FixtureRegression(t *testing.T) {
 	fixturesRoot := filepath.Join(findArchTestDir(t), "testdata", "health_agg_fixtures")
 	s := newTypeMethodSet()
-	RunTypedDir(t, fixturesRoot, TypedOpts{Tests: false}, []string{"./promoted_ok", "./checkers_only", "./base"},
+	Run(t, StandaloneModule(fixturesRoot, TypedOpts{Tests: false}, []string{"./promoted_ok", "./checkers_only", "./base"}),
 		func(p *Pass) []Diagnostic {
 			accumulateMethodSet(p, s)
 			return nil

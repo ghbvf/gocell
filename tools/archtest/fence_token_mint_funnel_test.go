@@ -143,7 +143,7 @@ func TestFenceTokenMintFunnel_AllowlistEnforced(t *testing.T) {
 	}
 
 	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -237,7 +237,7 @@ func verifyFenceTokenMintRedFixture(t *testing.T, fixturePattern, label string, 
 	t.Helper()
 
 	var found int
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
@@ -246,6 +246,7 @@ func verifyFenceTokenMintRedFixture(t *testing.T, fixturePattern, label string, 
 		}
 		return nil
 	})
+
 	require.GreaterOrEqual(t, found, wantMin,
 		"RED fixture self-check FAILED: %s — expected ≥ %d violations, got %d. "+
 			"A shortfall means the scanner is NOT form-complete (e.g. it only "+

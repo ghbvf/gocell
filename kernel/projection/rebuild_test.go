@@ -78,11 +78,14 @@ func newCoordinatorFull(t *testing.T, p coordinatorFullParams) *Coordinator {
 
 // makeReplayWithEntries seeds a MemReplaySource with n entries and returns
 // the source and a MemCursor that resolves positions by insertion index.
-func makeReplayWithEntries(t *testing.T, n int) (*MemReplaySource, *memCursor) {
+func makeReplayWithEntries(t *testing.T, n int) (*MemReplaySource, *MemCursor) {
 	t.Helper()
 	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
-	cur := newMemCursor(src)
+	cur, err := NewMemCursor(src)
+	if err != nil {
+		t.Fatalf("NewMemCursor() error = %v", err)
+	}
 	for i := 0; i < n; i++ {
 		entry := mustNewTestEntry(t, clk, "topic.v1")
 		src.Append(entry)
@@ -90,25 +93,15 @@ func makeReplayWithEntries(t *testing.T, n int) (*MemReplaySource, *memCursor) {
 	return src, cur
 }
 
-// memCursor is a Cursor that uses MemReplaySource.positionOf to resolve the
-// position of replayed entries. This ensures MemReplaySource position scheme
-// and the Cursor used during replay agree (Cursor/Replay position coupling
-// requirement from spec). Position returns the 1-based insertion index of the
-// entry as stored by MemReplaySource.
-type memCursor struct {
-	src *MemReplaySource
-}
-
-func newMemCursor(src *MemReplaySource) *memCursor {
-	return &memCursor{src: src}
-}
-
-func (c *memCursor) Position(e outbox.Entry) (int64, error) {
-	pos := c.src.positionOf(e)
-	if pos < 1 {
-		return 0, errors.New("memCursor: entry not found in replay source")
+// newMemCursor is a package-test alias for NewMemCursor, kept for callers in
+// replay_test.go and probe_test.go that predate the public MemCursor export.
+// src is always non-nil in these callers, so the error path panics.
+func newMemCursor(src *MemReplaySource) *MemCursor {
+	cur, err := NewMemCursor(src)
+	if err != nil {
+		panic(err)
 	}
-	return pos, nil
+	return cur
 }
 
 // subscribeWithDefaults calls Subscribe on c with a minimal spec and apply fn.

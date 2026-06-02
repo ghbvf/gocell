@@ -500,7 +500,7 @@ func scanSpanSetAttrDirDiags(t *testing.T, root, dir string, spanGoBaseNames ...
 		return false
 	}
 
-	return Run(t, scope, func(p *Pass) []Diagnostic {
+	return Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			otelTraceLocal := otelTraceLocalName(file)
@@ -690,16 +690,13 @@ func TestSpanSetAttrRedacted_NoBlindspotsInProduction(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"adapters/otel"}, IncludeGenerated())
 	var ds []Diagnostic
-	Run(t, scope, func(p *Pass) []Diagnostic {
+	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			otelAttrLocal := otelAttributeLocalName(file)
 			if otelAttrLocal == "" {
 				continue
 			}
 			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				// (i) attribute.Key(_).<X>(...) chain shape — SDK-supported
-				// alternative to attribute.String(...) that the original A2
-				// bare-Ident check misses entirely.
 				if isAttributeKeyChainStringCall(call, otelAttrLocal) {
 					pos := p.Fset.Position(call.Pos())
 					ds = append(ds, Diagnostic{
@@ -710,8 +707,7 @@ func TestSpanSetAttrRedacted_NoBlindspotsInProduction(t *testing.T) {
 					})
 					return
 				}
-				// (ii) attribute.StringValue / StringSlice — non-String
-				// string-shaped constructors.
+
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok || sel.Sel == nil {
 					return
@@ -735,6 +731,7 @@ func TestSpanSetAttrRedacted_NoBlindspotsInProduction(t *testing.T) {
 		}
 		return ds
 	})
+
 	Report(t, "SPAN-SETATTR-REDACT-01-BLINDSPOT", ds)
 }
 

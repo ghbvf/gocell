@@ -29,7 +29,8 @@ func TestBootstrapPathPredicateSole(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := scanner.ModuleScope(root,
+	scope := scanner.ModuleScope(
+		root,
 		scanner.IncludeTests(),
 		// IncludeGenerated honors the rule's "anywhere in the codebase except
 		// kernel/metadata/bootstrap_path.go" docstring: a regenerated file

@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 40 migrations: 001-033 contiguous, plus 040-046 (intentional gap
+	// Currently 41 migrations: 001-033 contiguous, plus 040-047 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -71,10 +71,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// outbox_entries for the sealed-construction principal-injection feature (#1229);
 	// 045 creates projection_checkpoints for the CQRS projection harness PG CheckpointStore
 	// (#1174 / W10 PR-02 — owner column reserved, v1 unread/unwritten);
-	// 046 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
-	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a).
-	assert.Equal(t, int64(46), v,
-		"expected version should be exactly 46 (current migration max — 046 accesscore_tenant_id)")
+	// 046 creates reconcile_leases for the kernel/reconcile LeaderElector PG backend
+	// (#661 / PR-A6 — holder + monotonic fencing epoch + lease window);
+	// 047 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
+	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered from 046 on merge).
+	assert.Equal(t, int64(47), v,
+		"expected version should be exactly 47 (current migration max — 047 accesscore_tenant_id)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

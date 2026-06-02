@@ -52,7 +52,7 @@ var sessionProtocolForbidden = map[string]struct{}{
 //
 // # _test.go scope
 //
-// RunTyped(opts.Tests=false) loads only production-variant packages, so
+// Run(t, Typed(TypedOpts{Tests: false}, ...)) loads only production-variant packages, so
 // _test.go files are not in pass.Files. The rule additionally filters by
 // rel suffix for clarity — both gates are conservative and align with the
 // SESSIONREFRESH-NO-SESSION-CREATE-01 convention.
@@ -73,11 +73,13 @@ var sessionProtocolForbidden = map[string]struct{}{
 //   - BS-3 Reflection construction (reflect.New + MethodByName): out of
 //     scope per ai-robust.md §3 (no Go static rule reaches it).
 func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
-	diags := RunTyped(t,
+	diags := Run(t, Typed(
 		TypedOpts{Tests: false},
 		sessionProtocolProductionPatterns(),
-		scanSessionProtocolViolations,
-	)
+	),
+
+		scanSessionProtocolViolations)
+
 	Report(t, sessionProtocolRuleID, diags)
 }
 
@@ -147,7 +149,8 @@ func scanSessionProtocolViolations(p *Pass) []Diagnostic {
 				Message: fmt.Sprintf(
 					"session.%s must only be called from cmd/* (composition root) or runtime/auth/session/*; "+
 						"cells / runtime (non-session) / adapters must consume an injected *session.Protocol",
-					name),
+					name,
+				),
 			})
 		})
 	}

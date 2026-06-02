@@ -118,7 +118,8 @@ func TestBCRYPT_COST_FUNNEL_01_A1_SingleHashOrigin(t *testing.T) {
 		require.NoError(t, perr)
 		if ok {
 			findings = append(findings, fmt.Sprintf(
-				"%s:%d: bcrypt.GenerateFromPassword outside credential.Hasher", rel, line))
+				"%s:%d: bcrypt.GenerateFromPassword outside credential.Hasher", rel, line,
+			))
 		}
 	}
 	assert.Empty(t, findings,
@@ -146,7 +147,8 @@ func TestBCRYPT_COST_FUNNEL_01_A2_TestHasherCallerAllowlist(t *testing.T) {
 		require.NoError(t, perr)
 		if ok {
 			findings = append(findings, fmt.Sprintf(
-				"%s:%d: credential.NewTestHasher called outside test code", rel, line))
+				"%s:%d: credential.NewTestHasher called outside test code", rel, line,
+			))
 		}
 	}
 	assert.Empty(t, findings,

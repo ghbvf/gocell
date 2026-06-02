@@ -75,23 +75,27 @@ func checkPeerIdentityShape(dt reflect.Type) []string {
 	var violations []string
 	if dt.NumField() != len(peerIdentityWantFields) {
 		violations = append(violations, fmt.Sprintf(
-			"NumField = %d, want exactly %d", dt.NumField(), len(peerIdentityWantFields)))
+			"NumField = %d, want exactly %d", dt.NumField(), len(peerIdentityWantFields),
+		))
 	}
 	for i := 0; i < dt.NumField(); i++ {
 		f := dt.Field(i)
 		if f.Anonymous {
 			violations = append(violations, fmt.Sprintf(
-				"field %q is embedded (embedding re-opens the cert-internal surface)", f.Name))
+				"field %q is embedded (embedding re-opens the cert-internal surface)", f.Name,
+			))
 			continue
 		}
 		if !f.IsExported() {
 			violations = append(violations, fmt.Sprintf(
-				"field %q is unexported (curated fields are the handler read surface)", f.Name))
+				"field %q is unexported (curated fields are the handler read surface)", f.Name,
+			))
 		}
 		ts := f.Type.String()
 		if ts == "x509.Certificate" || ts == "*x509.Certificate" {
 			violations = append(violations, fmt.Sprintf(
-				"field %q exposes raw %s (the curated type never surfaces the raw certificate)", f.Name, ts))
+				"field %q exposes raw %s (the curated type never surfaces the raw certificate)", f.Name, ts,
+			))
 		}
 		wantType, ok := peerIdentityWantFields[f.Name]
 		if !ok {
@@ -100,7 +104,8 @@ func checkPeerIdentityShape(dt reflect.Type) []string {
 		}
 		if ts != wantType {
 			violations = append(violations, fmt.Sprintf(
-				"field %q type = %q, want %q", f.Name, ts, wantType))
+				"field %q type = %q, want %q", f.Name, ts, wantType,
+			))
 		}
 	}
 	return violations

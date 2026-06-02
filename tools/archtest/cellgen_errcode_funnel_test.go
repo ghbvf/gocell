@@ -210,8 +210,9 @@ func TestCellgenErrcodeFunnel(t *testing.T) {
 	seen := make(map[string]struct{})
 	var violations []cellgenErrcodeViolation
 
-	_ = RunTyped(t, TypedOpts{},
-		[]string{"./tools/codegen/cellgen/..."},
+	_ = Run(t, Typed(TypedOpts{},
+		[]string{"./tools/codegen/cellgen/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -268,7 +269,7 @@ func TestCellgenErrcodeFunnel(t *testing.T) {
 // KnownNonDefaultTags (mirroring panic_invariants_test.go pattern) AND
 // (b) update this test to allow the specific tag, all in the same PR.
 //
-// Implementation note: uses two RunTyped calls to comply with
+// Implementation note: uses two typed Run calls to comply with
 // SCANNER-FRAMEWORK-USAGE-01 while covering the full build directive file set.
 // Load 1 (tags=nil) catches files active under the default context, including
 // those with reverse //go:build !X directives that a union-tag load would
@@ -323,8 +324,8 @@ func TestCellgenErrcodeFunnelNoBuildTagFiles(t *testing.T) {
 	// 在 union load（a∧b → !b 假）与 nil load（a 未置）下均被排除。GoCell
 	// 当前无此形态文件；新增此类文件时必须回到 ADR §Alternatives 重评两次
 	// Load 覆盖完整性，不能假定 nil+union 二次 Load 自动兜底。
-	_ = RunTyped(t, TypedOpts{}, []string{"./tools/codegen/cellgen/..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./tools/codegen/cellgen/..."}, scan)
+	_ = Run(t, Typed(TypedOpts{}, []string{"./tools/codegen/cellgen/..."}), scan)
+	_ = Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./tools/codegen/cellgen/..."}), scan)
 
 	if len(offending) > 0 {
 		for _, o := range offending {
@@ -361,8 +362,9 @@ func TestCellgenErrcodeFunnelBlindSpotsAbsent(t *testing.T) {
 	var compositeLitErrs []string
 	var reflectCalls []string
 
-	_ = RunTyped(t, TypedOpts{},
-		[]string{"./tools/codegen/cellgen/..."},
+	_ = Run(t, Typed(TypedOpts{},
+		[]string{"./tools/codegen/cellgen/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -373,7 +375,6 @@ func TestCellgenErrcodeFunnelBlindSpotsAbsent(t *testing.T) {
 					continue
 				}
 
-				// Blind spot 1: CompositeLit whose type implements error.
 				EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
 					if lit.Type == nil {
 						return
@@ -389,7 +390,6 @@ func TestCellgenErrcodeFunnelBlindSpotsAbsent(t *testing.T) {
 					}
 				})
 
-				// Blind spot 2: reflect.MakeFunc.
 				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 					sel, ok := call.Fun.(*ast.SelectorExpr)
 					if !ok {
@@ -488,7 +488,7 @@ func TestCellgenErrcodeFunnelScannerFixtures(t *testing.T) {
 			fixturePattern := "./tools/archtest/testdata/cellgen_errcode_funnel_fixtures/" + dir
 
 			var diags []Diagnostic
-			_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+			_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil || p.Fset == nil {
 					return nil
 				}

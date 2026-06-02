@@ -46,7 +46,7 @@
 // ref: G-13 (governance rule registration archtest); #687 (M3-RULE-ENGINE)
 //
 // Performance note: each Test* function calls loadGovernancePackage (single
-// RunTyped over ./kernel/governance) or RunTyped over targeted fixture
+// typed Run over ./kernel/governance) or a typed Run over targeted fixture
 // patterns. The typeseval.SharedResolver process-wide cache amortizes repeated
 // loads across sub-tests in the same go test binary invocation. Measured
 // locally (2026-05-16): TestGovernanceRulesRegistrationGuard ≈3s,
@@ -134,7 +134,7 @@ func testINV1OrphanFixture(t *testing.T) {
 
 	var fixtureGP *governancePackage
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}),
 		func(p *Pass) []Diagnostic {
 			fixtureGP = &governancePackage{
 				scope:     p.Pkg.Scope(),
@@ -146,7 +146,7 @@ func testINV1OrphanFixture(t *testing.T) {
 			return nil
 		})
 
-	require.NotNil(t, fixtureGP, "RunTyped must visit the fixture package")
+	require.NotNil(t, fixtureGP, "the typed Run must visit the fixture package")
 
 	declared := declaredRuleMethodNames(t, fixtureGP)
 	registered, fatal := extractRegisteredFromAllRules(t, fixtureGP)
@@ -286,7 +286,7 @@ func ruleShapeSignature(sig *types.Signature) bool {
 // single-package (kernel/governance), so no other type named Validator exists.
 //
 // Same-source guarantee: pkg.files, pkg.info, and pkg.fset come from a single
-// RunTyped Pass invocation (loadGovernancePackage), so AST nodes and TypesInfo
+// typed Pass invocation (loadGovernancePackage), so AST nodes and TypesInfo
 // are co-derived from the same packages.Load call.
 //
 // Fatal propagation: once a malformed Detect entry sets fatal, each enclosing
@@ -545,13 +545,8 @@ func testINV2CompositeLitFixtures(t *testing.T) {
 		tc := tc
 		t.Run(tc.shape, func(t *testing.T) {
 			var violations []string
-			RunTyped(t, TypedOpts{Tests: false}, []string{tc.pattern},
+			Run(t, Typed(TypedOpts{Tests: false}, []string{tc.pattern}),
 				func(p *Pass) []Diagnostic {
-					// Find kernel/governance in the transitive *types.Package graph
-					// to get the RuleCode const set with position-resolvable Fset.
-					// Since all packages in a single RunTyped invocation share the
-					// same *token.FileSet, p.Fset resolves positions for governance
-					// consts loaded transitively.
 					govTypesPkg := findTypesPackageByPath(p.Pkg, governancePkgPath)
 					if govTypesPkg == nil {
 						t.Errorf("kernel/governance not found in transitive deps of fixture %s", tc.pattern)
@@ -736,13 +731,10 @@ func TestGovernanceRuleCodeConstSingleSource_FilenameGuard(t *testing.T) {
 	var included []string
 	var excluded []string
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}),
 		func(p *Pass) []Diagnostic {
 			scope := p.Pkg.Scope()
 
-			// Apply the same filter logic as collectRuleCodeConsts but without the
-			// governancePkgPath check (the testdata package has a different import
-			// path). This isolates the filename guard specifically.
 			for _, name := range scope.Names() {
 				obj := scope.Lookup(name)
 				c, ok := obj.(*types.Const)
@@ -756,7 +748,7 @@ func TestGovernanceRuleCodeConstSingleSource_FilenameGuard(t *testing.T) {
 				if named.Obj().Name() != "RuleCode" {
 					continue
 				}
-				// Apply filename guard — the key invariant under test.
+
 				pos := p.Fset.Position(c.Pos())
 				if filepath.Base(pos.Filename) == ruleCodesFile {
 					included = append(included, name)
@@ -1067,7 +1059,7 @@ func testINV3NegativeFixture(t *testing.T) {
 		tc := tc
 		t.Run(tc.shape, func(t *testing.T) {
 			var violations []string
-			RunTyped(t, TypedOpts{Tests: false}, []string{tc.pattern},
+			Run(t, Typed(TypedOpts{Tests: false}, []string{tc.pattern}),
 				func(p *Pass) []Diagnostic {
 					consts := collectPackageStringConsts(p.Pkg.Scope())
 					for _, file := range p.Files {
@@ -1286,16 +1278,16 @@ func (gp *governancePackage) fileRel(f *ast.File) string {
 	return ""
 }
 
-// loadGovernancePackage loads kernel/governance via RunTyped and returns a
+// loadGovernancePackage loads kernel/governance via Run(t, Typed(...)) and returns a
 // governancePackage holding the Pass-provided Files/TypesInfo/Fset.
 //
-// RunTyped drives packages.Load once and passes a fully constructed Pass —
+// Run(t, Typed(...)) drives packages.Load once and passes a fully constructed Pass —
 // Files, TypesInfo, and Fset are co-derived from a single load, satisfying
 // the same-source invariant that EachFileInPackage previously provided.
 func loadGovernancePackage(t *testing.T, root string) *governancePackage {
 	t.Helper()
 	var gp *governancePackage
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/governance"},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/governance"}),
 		func(p *Pass) []Diagnostic {
 			gp = &governancePackage{
 				scope:     p.Pkg.Scope(),
@@ -1306,7 +1298,8 @@ func loadGovernancePackage(t *testing.T, root string) *governancePackage {
 			}
 			return nil
 		})
-	require.NotNil(t, gp, "RunTyped must visit kernel/governance package")
+
+	require.NotNil(t, gp, "the typed Run must visit kernel/governance package")
 	_ = root
 	return gp
 }
@@ -1328,7 +1321,7 @@ func TestFindTypesPackageByPath(t *testing.T) {
 	gp := loadGovernancePackage(t, root)
 
 	// The governancePackage.scope belongs to gp.info which was loaded via
-	// RunTyped with ./kernel/governance. We can obtain the *types.Package
+	// a typed Run over ./kernel/governance. We can obtain the *types.Package
 	// directly from the scope's package reference. Since governancePackage
 	// does not expose the *types.Package directly, we resolve it via scope
 	// — the scope belongs to the governance *types.Package itself.
@@ -1420,7 +1413,7 @@ func testBindingNegativeFixture(t *testing.T) {
 
 	var fixtureGP *governancePackage
 
-	RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+	Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}),
 		func(p *Pass) []Diagnostic {
 			fixtureGP = &governancePackage{
 				scope:     p.Pkg.Scope(),
@@ -1432,7 +1425,7 @@ func testBindingNegativeFixture(t *testing.T) {
 			return nil
 		})
 
-	require.NotNil(t, fixtureGP, "RunTyped must visit the fixture package")
+	require.NotNil(t, fixtureGP, "the typed Run must visit the fixture package")
 
 	// Collect RuleCode consts from the fixture package's own scope.
 	// The fixture defines its own RuleCode type, so we cannot use
@@ -1492,13 +1485,14 @@ func TestGovernanceEmitterConstructorsNeverFuncValue(t *testing.T) {
 	t.Run("negative_fixture_funcvalue_detected", func(t *testing.T) {
 		const fixturePattern = "./tools/archtest/testdata/governance_emitter_funcvalue_fixtures/funcvalue_indirection_red"
 		var count int
-		RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+		Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}),
 			func(p *Pass) []Diagnostic {
 				for _, f := range p.Files {
 					count += len(scanEmitterFuncValueUsages(f))
 				}
 				return nil
 			})
+
 		assert.Positive(t, count,
 			"scanEmitterFuncValueUsages must detect the fixture's `f := newError` "+
 				"func-value indirection — a zero result means the scan is vacuous")

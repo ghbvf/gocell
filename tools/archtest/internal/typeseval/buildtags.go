@@ -32,11 +32,11 @@ func KnownNonDefaultTags() [][]string {
 		{"integration_cluster"},
 		// archtest_fixture is deliberately ABSENT (#944): the fixture build tag
 		// is NOT a generic production tag and must never enter this union, or a
-		// business RunTyped(Tags: FlatNonDefaultTags()) scan would load
-		// fixture-tagged code, bypassing the RunTypedFixture funnel. The tag is
-		// a build-mode skip marker recognized by the coverage self-test via
+		// business Run(t, Typed(TypedOpts{Tags: FlatNonDefaultTags()}, ...)) scan
+		// would load fixture-tagged code, bypassing the Fixture-scope funnel. The
+		// tag is a build-mode skip marker recognized by the coverage self-test via
 		// repoSkipTagAllowlist (buildtags_test.go), alongside catalog_gen/never.
-		// The only sanctioned fixture loader is archtest.RunTypedFixture, whose
+		// The only sanctioned fixture loader is Run(t, Fixture(...)), whose
 		// body injects the literal internally.
 	}
 }

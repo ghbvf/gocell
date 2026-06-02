@@ -226,11 +226,19 @@ const (
 // Apply writes the three signature headers (HeaderID, HeaderTimestamp,
 // HeaderSignature) onto an outbound request's http.Header.
 //
-// It is the SOLE sanctioned writer of these headers (WEBHOOK-SIGNER-FUNNEL-01
-// downstream funnel): the dispatcher MUST call headers.Apply(req.Header) rather
-// than Header.Set the signature header from an arbitrary value, so the only
-// value that can reach the wire is one produced by a sealed [Signer.Sign]. The
-// archtest locks Header.Set of these header-name constants to this method body.
+// It is the SOLE sanctioned writer of these header-name constants
+// (WEBHOOK-SIGNER-FUNNEL-01 downstream funnel): the dispatcher MUST call
+// headers.Apply(req.Header) rather than Header.Set a signature header from an
+// arbitrary value, and the archtest locks every Header.Set of these constants to
+// this method body. That makes the *write site* uniform.
+//
+// It does NOT guarantee Headers *provenance*. Headers is a public struct with
+// exported fields — it is also the inbound DTO that [Verifier.Verify] consumes,
+// constructed by the receiver from request headers — so a caller could build a
+// Headers literal and call Apply with a value that did not come from
+// [Signer.Sign]. Such a forged value carries an invalid HMAC the receiver
+// rejects (low severity); sealing provenance via a dedicated sealed outbound
+// type is tracked at gh #1492.
 func (h Headers) Apply(header http.Header) {
 	header.Set(HeaderID, string(h.DeliveryID))
 	header.Set(HeaderTimestamp, h.Timestamp)

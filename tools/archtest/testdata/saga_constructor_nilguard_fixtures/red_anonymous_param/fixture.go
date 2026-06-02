@@ -5,7 +5,7 @@
 // identifier — an unnamed parameter (NewUnnamed) and a blank-identifier
 // parameter (NewBlank). Both must be flagged (closes the anonymous-param
 // bypass). NewNamed is the negative control (named + guarded → no fire).
-// Loaded only via RunTypedFixture.
+// Loaded only via Run(t, Fixture(...)).
 package redanonymousparam
 
 import "github.com/ghbvf/gocell/pkg/validation"

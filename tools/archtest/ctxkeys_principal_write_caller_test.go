@@ -139,7 +139,7 @@ func TestCtxkeysPrincipalWriteCaller01(t *testing.T) {
 		observed[setter][rel] = struct{}{}
 	}
 
-	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
@@ -164,7 +164,8 @@ func TestCtxkeysPrincipalWriteCaller01(t *testing.T) {
 								"(runtime/auth) and the consumer-side RestoreToContext (kernel/outbox) may write it. "+
 								"Producers MUST NOT set principal ctx keys; the identity comes from authentication. "+
 								"If this IS a new sanctioned writer, add it to principalSetterAllowlist with rationale.",
-							setter, rel),
+							setter, rel,
+						),
 					})
 				}
 			})
@@ -186,7 +187,8 @@ func TestCtxkeysPrincipalWriteCaller01(t *testing.T) {
 						"CTXKEYS-PRINCIPAL-WRITE-CALLER-01: allowlist entry %q for ctxkeys.%s is STALE — no "+
 							"live call observed. Either the scanner regressed or the call was removed; drop the dead "+
 							"allowlist entry so it cannot become a silent bypass slot.",
-						f, setter),
+						f, setter,
+					),
 				})
 			}
 		}

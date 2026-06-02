@@ -56,7 +56,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	// (e.g. examples/ssobff/walkthrough_test.go) that call
 	// GenerateServiceToken are also scanned. FlatNonDefaultTags()
 	// returns the union of every tag tracked in KnownNonDefaultTags(); a
-	// single RunTyped call carrying all tags simultaneously satisfies
+	// single Run(t, Typed(...)) call carrying all tags simultaneously satisfies
 	// every //go:build constraint at once (e.g. `//go:build integration` is
 	// included because `integration` is in the set; `//go:build integration
 	// && otelcollector` is included because both tags are present). This
@@ -71,8 +71,9 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	// post-load filtering by file build constraints.
 	seen := map[string]struct{}{}
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
+
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -87,6 +88,7 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 			}
 			return nil
 		})
+
 	Report(t, ruleSvctokenCallerCellRequired01, diags)
 }
 
@@ -163,7 +165,8 @@ func collectGenerateServiceTokenDiagsFromFile(
 				Line: pos.Line,
 				Message: fmt.Sprintf(
 					"auth.GenerateServiceToken callerCell %q does not match metadata.CellIDPattern (%s)",
-					callerCell, metadata.CellIDPattern),
+					callerCell, metadata.CellIDPattern,
+				),
 			})
 			return
 		}
@@ -174,7 +177,8 @@ func collectGenerateServiceTokenDiagsFromFile(
 				Line: pos.Line,
 				Message: fmt.Sprintf(
 					"auth.GenerateServiceToken callerCell %q is not a known cell ID"+
-						" — register it in cells/ or actors.yaml", callerCell),
+						" — register it in cells/ or actors.yaml", callerCell,
+				),
 			})
 		}
 	})
@@ -184,7 +188,7 @@ func collectGenerateServiceTokenDiagsFromFile(
 // RED-step regression test (TDD per ai-robust.md) for PR445-FU finding F2.
 //
 // The production rule TestSVCTOKEN_CALLER_CELL_REQUIRED_01 calls
-// RunTyped with FlatNonDefaultTags() — so packages.Load uses all known
+// Run(t, Typed(TypedOpts{...}, ...)) with FlatNonDefaultTags() — so packages.Load uses all known
 // build tags and includes every file gated by `//go:build <tag>`. Two real
 // callsites of auth.GenerateServiceToken are gated this way and therefore
 // escape the rule without the flat-tag load:
@@ -207,7 +211,7 @@ func collectGenerateServiceTokenDiagsFromFile(
 // loader exactly.
 //
 // Single-load (vs the obvious "iterate KnownNonDefaultTags() and call
-// RunTyped per tag-set") avoids retaining 7 independent type graphs in
+// Run(t, Typed(...)) per tag-set") avoids retaining 7 independent type graphs in
 // SharedResolver's package-cache, which OOM'd CI runners with ~7GB RAM
 // before this fix.
 func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *testing.T) {
@@ -215,8 +219,9 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *t
 
 	// Mirror the production rule's loader call (single flat-tag load) exactly.
 	loadedFiles := map[string]bool{}
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."},
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."}),
+
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {
 				loadedFiles[p.Rel(file)] = true
