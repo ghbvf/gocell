@@ -32,9 +32,11 @@ import "github.com/ghbvf/gocell/kernel/outbox"
 //     error in outbox.NewPermanentError to signal that the event is unrecoverable
 //     and should be routed to the dead-letter exchange.
 //
-// PR-01 ships this interface and a test fake only; the production
-// journal/metadata-backed cursor implementation lands in PR-04 (#1176), where
-// cellgen-derived wiring first needs a concrete Cursor to pass to Subscribe.
+// PR-01 shipped this interface and the MemCursor test fake; the production
+// outbox-journal-backed cursor (adapters/postgres.PGProjectionCursor, reading
+// outbox_entries.seq) landed in PR-04c (#1368). Note the v1 limitation: positions
+// come from the transient outbox relay, so the cursor/replay are gated to
+// dev/preview until a durable projection journal lands (#1504).
 //
 // ref: Axon TrackingToken (position is a property of the token store / stream).
 type Cursor interface {

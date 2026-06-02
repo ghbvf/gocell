@@ -669,25 +669,44 @@ TRUNCATE; IDENTITY back-fills existing rows) and the outbox writer is unchanged
   refactored to a seed-persists contract so a read-only production ReplaySource
   needs no test-only Append method.
 
-**Retention boundary (new documented v1 limitation — NOT a threat-row
-downgrade).** The outbox is a transient relay: CleanupPublished/CleanupDead
-delete published/dead rows after retention. A projection's **full
-rebuild-from-0** therefore replays only un-cleaned history; live consumption and
-catch-up (resume from a recent checkpoint within the retention window) are
-unaffected, since gaps are tolerated. This is the gap between "transient outbox"
-and "retained event store" that §1's "reuse the existing outbox journal"
-glossed. It is bounded and documented here; faithful retention of
-projection-consumed events is a follow-up tracked at **gh #1504** (the real PG
-e2e rebuild test T-06-2 is likewise a follow-up, blocked on the retention
-model). It does **not** weaken any §6 threat row — exactly-once, crash recovery,
-and ordering all hold over whatever history the journal retains.
+**Retention boundary — escalated to a HARD GATE (PR #1509 review C1).** The
+outbox is a transient relay: CleanupPublished/CleanupDead delete published/dead
+rows after retention, but the journal-backed `Cursor`/`ReplaySource` source the
+stream position from those same rows. The review correctly sharpened the original
+"rebuild-only" framing: it is **not** limited to full rebuild-from-0 — even the
+**live** path resolves `Cursor.Position(entry)` by `SELECT seq WHERE id=…`, so any
+event whose row was cleaned before the projection consumes it (consume-lag >
+cleanup-retention: projection downtime, backlog, or replaying old history)
+resolves to a permanent error → the live event is dead-lettered (dropped), and a
+rebuild aborts. Reusing a transient relay as a *durable* projection journal is the
+wrong foundation; this is the "transient outbox vs retained event store" gap that
+§1's "reuse the existing outbox journal" glossed (open-source corroboration: Axon
+tracking tokens / Marten high-water marks sit on a retained event store, not on a
+publish-transit outbox).
+
+**Compensation (no un-mitigated ⚠️).** Rather than a doc note, the production
+wiring now **fails closed**: `cmd/corebundle` does **not** wire the PG
+journal-backed reader by default — a projection declared in PG mode then fails
+fast in the phase6 drain (`checkProjectionDeps`). The reader is only wired under
+an explicit `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW=true` opt-in (dev/preview only,
+with a NOT-production-safe startup WARN). So no production projection can silently
+run on the unsound foundation. The durable append-only projection journal that
+removes the limitation is tracked at **gh #1504 (P1)** as the C1 design item; the
+real PG e2e rebuild test T-06-2 and per-spec replay filtering (#1482) remain
+follow-ups blocked on it. The review also hardened the adapter: a schema_guard
+IDENTITY guard on `seq` (F5), a bounded-ctx position lookup (F6), rebuild ctx
+identity restore (F4), and a no-duplicate conformance assertion (F7).
 
 ### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement — 逐行重评)
 
-- **Row 1** (exactly-once / production Cursor): ✅ → **✅ (delivered)**. The
+- **Row 1** (exactly-once / production Cursor): ✅ → **✅ (delivered, gated)**. The
   compare/skip mechanism is unchanged; PR-04c supplies the production position
-  source. The cursor↔replay single-holder structure makes position agreement
-  structural rather than conventional — a strengthening, not a regression.
+  source, and the cursor↔replay single-holder structure makes position agreement
+  structural rather than conventional. The transient-journal risk (cleaned row →
+  live event dropped / rebuild abort) is **not** an un-mitigated regression: the
+  corebundle hard gate keeps the PG reader off by default (fail-fast if a
+  projection is declared), so no production projection runs on it until the
+  durable journal (#1504 P1) lands. See the Retention-boundary compensation above.
 - **Row 2** (crash recovery): unchanged. Checkpoint persistence semantics are
   independent of the position source; resume-at-offset+1 now runs over a durable
   `seq` (within the retention window).

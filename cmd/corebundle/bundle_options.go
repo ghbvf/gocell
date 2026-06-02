@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 
 	"github.com/ghbvf/gocell/kernel/auth"
 
@@ -186,10 +189,39 @@ func buildInternalAuthChain(guard *internalGuard) ([]auth.ListenerAuth, error) {
 // (checkProjectionDeps), which is the correct outcome. corebundle ships no
 // projection cell today, so these options are dormant until one is added —
 // forward-provisioning per #1368.
+// envProjectionPGJournalPreview opts into wiring the PG journal-backed projection
+// reader. It defaults OFF (the hard gate): the reader resolves stream positions
+// from the TRANSIENT outbox relay (CleanupPublished/CleanupDead delete rows), so
+// it is NOT a durable projection journal — an event whose row is cleaned before
+// the projection consumes it resolves to a permanent error (dropped on the live
+// path, aborts a rebuild). Until a durable append-only projection journal lands
+// (#1504), the reader is dev/preview only. When OFF, a projection declared in PG
+// mode fails fast in the bootstrap phase6 drain (checkProjectionDeps) — wiring no
+// replay source is the gate, not a silent production-unsafe reader.
+const envProjectionPGJournalPreview = "GOCELL_PROJECTION_PG_JOURNAL_PREVIEW"
+
+func projectionPGJournalPreviewEnabled() bool {
+	v, _ := strconv.ParseBool(os.Getenv(envProjectionPGJournalPreview))
+	return v
+}
+
 func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Option, error) {
 	if shared.PG == nil {
 		return nil, nil
 	}
+	if !projectionPGJournalPreviewEnabled() {
+		// Hard gate (C1, review #1509): do NOT silently wire a production-unsafe
+		// reader. A projection declared in PG mode without the opt-in fails fast at
+		// bootstrap; durable journal tracked in #1504.
+		slog.Warn("projection: PG journal-backed reader NOT wired — the outbox relay is transient " +
+			"(CleanupPublished/CleanupDead), so it is not a production-safe projection journal/position " +
+			"source; a projection declared in PG mode will fail fast at bootstrap. Durable journal tracked " +
+			"in gh #1504. Set " + envProjectionPGJournalPreview + "=true to opt in for dev/preview only.")
+		return nil, nil
+	}
+	slog.Warn("projection: PG journal-backed reader wired in PREVIEW mode (" + envProjectionPGJournalPreview +
+		"=true) — NOT production-safe: positions come from the transient outbox relay; events cleaned " +
+		"before consume are dropped. Dev/preview only; durable journal tracked in gh #1504.")
 	pool, err := cellsecrets.PgxPoolFromProvider(shared.PG)
 	if err != nil {
 		return nil, fmt.Errorf("projection pg pool: %w", err)

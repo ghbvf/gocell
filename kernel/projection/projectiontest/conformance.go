@@ -279,6 +279,7 @@ func checkReplayDeliversInOrder(t *testing.T, src projection.ReplaySource, seed 
 	want := idsOf(seed(4))
 	got := collectReplayIDs(t, src, before)
 	assertOrderedSubsequence(t, got, want)
+	assertEachDeliveredOnce(t, got, want)
 }
 
 // checkReplayFromOffsetSkips seeds a first batch, captures the head, seeds a
@@ -430,6 +431,23 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// assertEachDeliveredOnce fails t unless every id in want appears EXACTLY once in
+// got. This rejects duplicate delivery of a seeded event — the ordered-subsequence
+// check alone would tolerate a source that re-delivers a seeded entry (a real
+// exactly-once hazard), so the two assertions are complementary.
+func assertEachDeliveredOnce(t *testing.T, got, want []string) {
+	t.Helper()
+	count := make(map[string]int, len(got))
+	for _, id := range got {
+		count[id]++
+	}
+	for _, id := range want {
+		if count[id] != 1 {
+			t.Errorf("seeded entry %s was delivered %d times, want exactly 1 (no duplicate replay)", id, count[id])
+		}
+	}
 }
 
 // assertOrderedSubsequence fails t unless every id in want appears in got in the

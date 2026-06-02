@@ -31,21 +31,34 @@ func TestProjectionRuntimeOptions_MemoryMode(t *testing.T) {
 	assert.Nil(t, opts, "memory mode (shared.PG == nil) must wire no projection options")
 }
 
-// TestProjectionRuntimeOptions_PGMode verifies the PG-mode happy path constructs
-// all four projection deps. The pool is non-connecting: MinConns defaults to 0 so
-// NewWithConfig opens no connection, and the projection constructors only wrap the
-// pool in pgexec (no query), so 127.0.0.1:1 is never dialed.
+// TestProjectionRuntimeOptions_PGMode verifies the C1 hard gate: in PG mode the
+// journal-backed reader is NOT wired by default (transient-outbox limitation, see
+// #1504) and is only wired under the explicit preview opt-in. The pool is
+// non-connecting: MinConns defaults to 0 so NewWithConfig opens no connection, and
+// the projection constructors only wrap the pool in pgexec (no query), so
+// 127.0.0.1:1 is never dialed.
 func TestProjectionRuntimeOptions_PGMode(t *testing.T) {
-	t.Parallel()
 	cfg, err := pgxpool.ParseConfig("postgres://u:p@127.0.0.1:1/gocell_unit")
 	require.NoError(t, err)
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	require.NoError(t, err)
 	defer pool.Close()
-
 	shared := &composition.SharedDeps{PG: capability.NewPGProvider(projNoopTxRunner{}, nil, pool)}
-	opts, err := projectionRuntimeOptions(shared)
-	require.NoError(t, err)
-	assert.Len(t, opts, 4,
-		"PG mode wires WithProjection{CheckpointStore,TxRunner,ReplaySource,Cursor}")
+
+	t.Run("gated off by default (not production-safe)", func(t *testing.T) {
+		// No GOCELL_PROJECTION_PG_JOURNAL_PREVIEW → not wired; a projection declared
+		// in PG mode then fails fast in the bootstrap drain.
+		t.Setenv(envProjectionPGJournalPreview, "")
+		opts, err := projectionRuntimeOptions(shared)
+		require.NoError(t, err)
+		assert.Nil(t, opts, "PG mode must NOT wire the transient-outbox reader by default")
+	})
+
+	t.Run("preview opt-in wires four options", func(t *testing.T) {
+		t.Setenv(envProjectionPGJournalPreview, "true")
+		opts, err := projectionRuntimeOptions(shared)
+		require.NoError(t, err)
+		assert.Len(t, opts, 4,
+			"preview mode wires WithProjection{CheckpointStore,TxRunner,ReplaySource,Cursor}")
+	})
 }

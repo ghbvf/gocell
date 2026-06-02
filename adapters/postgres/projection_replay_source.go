@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -196,14 +197,21 @@ func NewProjectionCursor(src *PGProjectionReplaySource) (*PGProjectionCursor, er
 	return &PGProjectionCursor{src: src}, nil
 }
 
+// cursorPositionTimeout bounds the seq-by-id lookup. The projection.Cursor
+// interface carries no ctx (frozen since PR-01), so Position derives its own
+// deadline-bounded context rather than a bare context.Background() — a DB stall
+// then surfaces as a (transient) timeout error the Coordinator requeues, instead
+// of hanging the projection worker indefinitely (#1368 review F6). The lookup is
+// an indexed primary-key read, so this ceiling is a backstop, not a hot path; a
+// PG-side statement_timeout remains a valid additional defense.
+const cursorPositionTimeout = 5 * time.Second
+
 // Position resolves the entry's monotonic stream position (its outbox_entries.seq)
-// by delegating to the paired replay source. The projection.Cursor interface
-// carries no ctx (frozen since PR-01), so a background context is used for the
-// single indexed lookup; it runs against the pool (no ambient tx), which is sound
-// because the entry's row was committed by its producer in a prior transaction.
-// Because the call cannot be canceled by the caller's ctx, operators should
-// bound it with a PG-side `statement_timeout`; the lookup is an indexed
-// primary-key read, so this is a backstop, not a hot path.
+// by delegating to the paired replay source. The lookup runs against the pool (no
+// ambient tx), which is sound because the entry's row was committed by its
+// producer in a prior transaction, under cursorPositionTimeout.
 func (c *PGProjectionCursor) Position(entry kout.Entry) (int64, error) {
-	return c.src.position(context.Background(), entry.ID())
+	ctx, cancel := context.WithTimeout(context.Background(), cursorPositionTimeout)
+	defer cancel()
+	return c.src.position(ctx, entry.ID())
 }

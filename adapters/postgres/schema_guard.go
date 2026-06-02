@@ -270,6 +270,13 @@ type expectedColumn struct {
 	Column  string
 	Type    string
 	NotNull bool
+	// Identity, when true, requires the column to be GENERATED ALWAYS AS IDENTITY
+	// (pg_attribute.attidentity = 'a'). This is a load-bearing write contract for
+	// outbox_entries.seq: the outbox writer omits seq and relies on auto-assign, and
+	// ALWAYS (not BY DEFAULT) forbids a producer supplying its own position. A future
+	// migration weakening it to a plain/BY-DEFAULT column would pass the type+nullability
+	// checks but silently break the writer / open position injection (#1368 review F5).
+	Identity bool
 }
 
 // expectedPK describes a table's primary key column set.
@@ -365,7 +372,8 @@ var expectedColumns = []expectedColumn{
 	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
 	// seq is GENERATED ALWAYS AS IDENTITY (implicitly NOT NULL) — the monotonic
 	// stream position consumed by the projection ReplaySource/Cursor (047 / #1368).
-	{Table: "outbox_entries", Column: "seq", Type: "bigint", NotNull: true}, // 047 NEW
+	// Identity:true guards the GENERATED ALWAYS write contract (F5).
+	{Table: "outbox_entries", Column: "seq", Type: "bigint", NotNull: true, Identity: true}, // 047 NEW
 	// users (017_users.sql + 022_users_password_version.sql)
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "users", Column: "username", Type: "text", NotNull: true},
@@ -686,7 +694,7 @@ var expectedChecks = []expectedCheck{
 // verifyColumns checks each entry in expectedColumns against pg_attribute.
 func verifyColumns(ctx context.Context, pool *Pool) error {
 	const q = `
-	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull
+	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity
 	  FROM pg_attribute a
 	  JOIN pg_class c ON c.oid = a.attrelid
 	  JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -699,7 +707,8 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 	for _, ec := range expectedColumns {
 		var gotType string
 		var gotNotNull bool
-		err := pool.inner.QueryRow(ctx, q, ec.Table, ec.Column).Scan(&gotType, &gotNotNull)
+		var gotIdentity string // pg_attribute.attidentity: '' none, 'a' ALWAYS, 'd' BY DEFAULT
+		err := pool.inner.QueryRow(ctx, q, ec.Table, ec.Column).Scan(&gotType, &gotNotNull, &gotIdentity)
 		if err != nil {
 			// No row means column is missing.
 			return errcode.New(
@@ -735,6 +744,18 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("column", ec.Column),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got not_null=%v want %v", gotNotNull, ec.NotNull))),
+			)
+		}
+		if ec.Identity && gotIdentity != "a" {
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: column must be GENERATED ALWAYS AS IDENTITY",
+				errcode.WithDetails(
+					errcode.PublicString("dimension", "column_identity"),
+					errcode.PublicString("table", ec.Table),
+					errcode.PublicString("column", ec.Column),
+				),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got attidentity=%q want \"a\" (ALWAYS)", gotIdentity))),
 			)
 		}
 	}

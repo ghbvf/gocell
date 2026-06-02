@@ -189,12 +189,24 @@ func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 			return err
 		}
 		if err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-			return c.applyOne(txCtx, entry, c.apply)
+			// Restore the event's observability + principal into ctx before Apply,
+			// matching the live consumer path (SubscriberWithMiddleware) so a
+			// rebuild's Apply sees the same trace/audit identity as live delivery
+			// (#1368 review F4). RestoreToContext is idempotent and does not strip
+			// the ambient tx carried in txCtx.
+			rctx := entry.Observability().RestoreToContext(txCtx)
+			rctx = entry.Principal().RestoreToContext(rctx)
+			return c.applyOne(rctx, entry, c.apply)
 		}); err != nil {
 			return fmt.Errorf("projection.rebuild[replay]: %w", err)
 		}
-		// Stop at head0; events at positions > head0 are handled by catchup.
-		pos, _ := c.cursor.Position(entry)
+		// Stop at head0; events at positions > head0 are handled by catchup. A
+		// Position error here is unexpected — applyOne resolved this same entry's
+		// position just above — so surface it instead of swallowing it (F8).
+		pos, posErr := c.cursor.Position(entry)
+		if posErr != nil {
+			return fmt.Errorf("projection.rebuild[cutoff]: %w", posErr)
+		}
 		if head0 > 0 && pos >= head0 {
 			return errReplayDone
 		}
