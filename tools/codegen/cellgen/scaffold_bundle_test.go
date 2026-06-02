@@ -131,6 +131,12 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 	if !strings.Contains(string(cellGo), `"ERR_MYHTTPCELL_"`) {
 		t.Errorf("cell.go init() must register uppercased prefix ERR_MYHTTPCELL_; got:\n%s", cellGo)
 	}
+	// Assert the owner arg (module path) is also present, ensuring the full
+	// RegisterPrefix("ERR_MYHTTPCELL_", "<modulepath>") form is emitted.
+	if !strings.Contains(string(cellGo), `"`+spec.ModulePath+`"`) {
+		t.Errorf("cell.go init() must pass module path %q as owner arg to errcode.RegisterPrefix; got:\n%s",
+			spec.ModulePath, cellGo)
+	}
 }
 
 // TestScaffoldCellBundle_Events is a RED test for the --with-events variant:

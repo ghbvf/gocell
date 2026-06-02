@@ -48,6 +48,13 @@ import (
 // (used by errcodeImportNames for unquoted import-path comparison).
 const errcodeImportPath = "github.com/ghbvf/gocell/pkg/errcode"
 
+// errcodeRegisterPrefixHint is the fix hint appended to unregistered-prefix
+// diagnostics. It names both the source edit and the golden regeneration
+// command so a developer does not need to discover the second step after the
+// first CI failure.
+const errcodeRegisterPrefixHint = "(add a RegisterPrefix entry in pkg/errcode/prefix_registry.go, " +
+	"then regenerate: ERRCODE_PREFIX_GOLDEN_UPDATE=1 go test ./pkg/errcode/...)"
+
 // ─── errcode_message_const constants ─────────────────────────────────────────
 
 const ruleMessageConstLiteral01 = "MESSAGE-CONST-LITERAL-01"
@@ -2174,6 +2181,15 @@ func resolveCodeGatedCallee(call *ast.CallExpr, info *types.Info) (codeGatedCall
 //     to "ban every errcode.Code(non-const) conversion" would false-positive on
 //     legitimate parse/compare-side conversions. Accepted residual gap (tracked
 //     for PR-body backlog per .claude/rules/gocell/ai-robust.md Funnel rating).
+//     Tracked as a won't-do / future-Hard ceiling at gh #1508 (data-flow tracing
+//     needed; same family as #851/#893/#1282).
+//   - In-repo cells (module = github.com/ghbvf/gocell) that mint ERR_<CELLID>_
+//     codes must register that prefix in pkg/errcode.gocellPlatformPrefixes — a
+//     cell's OWN init() RegisterPrefix call is NOT visible to this archtest, which
+//     reads only pkg/errcode's init-time registry in the test binary. The
+//     scaffold-generated per-cell init() registration covers EXTERNAL modules
+//     (cross-module runtime collision detection) but does NOT satisfy the in-repo
+//     closed-set; in-repo prefixes go in gocellPlatformPrefixes.
 //   - Upstream: pkg/errcode.RegisteredPrefixes() is the runtime SSOT; the golden
 //     byte-lock (pkg/errcode/testdata/prefix_set.golden) is regenerated/verified
 //     by the errcode package tests. Hard byte-lock with a review-gated
@@ -2357,7 +2373,7 @@ func scanErrcodePrefixOwnershipDiags(
 					Line: line,
 					Message: fmt.Sprintf(
 						"%s code %q prefix not registered "+
-							"(add a RegisterPrefix entry in pkg/errcode/prefix_registry.go)",
+							errcodeRegisterPrefixHint,
 						callee.displayName, codeStr,
 					),
 				})
@@ -2396,7 +2412,7 @@ func scanErrcodePrefixOwnershipDiags(
 				Line: line,
 				Message: fmt.Sprintf(
 					"%s code %q prefix not registered "+
-						"(add a RegisterPrefix entry in pkg/errcode/prefix_registry.go)",
+						errcodeRegisterPrefixHint,
 					callee.displayName, codeStr,
 				),
 			})
@@ -2435,7 +2451,7 @@ func scanErrcodePrefixOwnershipDiags(
 						Line: pos.Line,
 						Message: fmt.Sprintf(
 							"%s = %q prefix not registered "+
-								"(add a RegisterPrefix entry in pkg/errcode/prefix_registry.go)",
+								errcodeRegisterPrefixHint,
 							name.Name, codeStr,
 						),
 					})

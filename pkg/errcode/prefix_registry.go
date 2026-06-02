@@ -57,6 +57,10 @@ type PrefixOwner struct {
 
 // RegisterPrefix registers a code-prefix or whole-code string as owned by owner.
 //
+// It is intended to be called from package init() functions before any test or
+// service logic runs. Calling it after init (e.g. from a request handler) is
+// unsupported and may cause lock contention.
+//
 // prefix must start with "ERR_" (fail-fast otherwise). A trailing underscore
 // denotes a namespace claim ("ERR_AUTH_" owns all ERR_AUTH_* codes); a missing
 // underscore denotes a whole-code claim ("ERR_INTERNAL" owns only that code).
@@ -64,6 +68,14 @@ type PrefixOwner struct {
 // Registering the same (prefix, owner) pair more than once is idempotent.
 // Registering the same prefix with a different owner panics with an *Error
 // whose message names both owners and the conflicting prefix.
+//
+// The panic format args intentionally carry runtime strings (prefix + module
+// path). This is an init-stage programmer-error panic (see panic taxonomy in
+// error-handling.md); these values are non-sensitive identifiers (module path /
+// prefix), not PII, and the panic surfaces only in startup crash logs. This
+// usage is consistent with the MESSAGE-CONST-LITERAL-01 allowlist for
+// errcode.Assertion — Assertion explicitly permits runtime context in its
+// message for programmer-error panics.
 //
 // All panics use the panicregister.Approved funnel (PANIC-REGISTERED-01).
 func RegisterPrefix(prefix, owner string) {

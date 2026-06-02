@@ -13,6 +13,10 @@ import (
 // init registers this cell's error-code prefix so it never collides with the
 // gocell platform or other cells (issue #1091). RegisterPrefix fail-fast panics
 // at startup on a conflicting prefix; declare your codes under this namespace.
+// The second argument is your Go module path (as declared in go.mod).
+// External modules only need this init() call — do NOT touch gocell's
+// gocellPlatformPrefixes or regenerate the platform golden (that is only for
+// the gocell platform itself).
 func init() {
 	errcode.RegisterPrefix("{{.ErrPrefix}}", "{{.ModulePath}}")
 }

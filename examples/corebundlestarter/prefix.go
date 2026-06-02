@@ -10,6 +10,12 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 // modules in the same binary) are detected fail-fast at process startup rather
 // than silently producing ambiguous ownership at runtime.
 //
+// External cell workflow (3 steps):
+//  1. RegisterPrefix in init() — done here.
+//  2. Declare error codes: const ErrStarterXxx errcode.Code = "ERR_STARTER_XXX"
+//     in your errors.go (or equivalent) for every code your cell mints.
+//  3. Use the codes: errcode.New(ErrStarterXxx, "description", ...)
+//
 // The registration call is the teaching artifact here; corebundlestarter does
 // not currently declare any ERR_STARTER_* constants — see #1091.
 func init() {

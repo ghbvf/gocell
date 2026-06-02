@@ -212,6 +212,12 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 	return plan, nil
 }
 
+// cellErrPrefix returns the ERR_<UPPERCELLID>_ namespace prefix for a cell,
+// used in init() RegisterPrefix registrations (issue #1091).
+func cellErrPrefix(spec ScaffoldSpec) string {
+	return "ERR_" + strings.ToUpper(spec.CellID.String()) + "_"
+}
+
 // cellTemplateData wraps ScaffoldSpec with extra template-only fields so that
 // scaffold-cell.tmpl can reference {{.ListenerMarker}} (SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01)
 // and {{.ErrPrefix}} (issue #1091 errcode prefix ownership) without embedding
@@ -229,7 +235,7 @@ func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error
 	cellData := cellTemplateData{
 		ScaffoldSpec:   spec,
 		ListenerMarker: ListenerMarker,
-		ErrPrefix:      "ERR_" + strings.ToUpper(spec.CellID.String()) + "_",
+		ErrPrefix:      cellErrPrefix(spec),
 	}
 	cellGoContent, err := renderTemplate(spec.ModulePath, cellGoTemplate, cellData, true)
 	if err != nil {

@@ -135,6 +135,39 @@ func TestRegisteredPrefixes_SortedSnapshot(t *testing.T) {
 	}
 }
 
+// TestPlatformOwnerFilter verifies that RegisteredPrefixes filtered by the
+// platform owner constant excludes prefixes registered under a different owner.
+// This proves the golden test's platform-owner filter logic works correctly and
+// does not accidentally absorb external module prefixes into the platform set.
+//
+// NOTE: registry-mutating tests must NOT call t.Parallel() — the global registry
+// is shared across all tests in the process.
+func TestPlatformOwnerFilter(t *testing.T) {
+	const nonPlatformPrefix = "ERR_NONPLATFORMTEST_"
+	const nonPlatformOwner = "github.com/other/mod"
+
+	RegisterPrefix(nonPlatformPrefix, nonPlatformOwner)
+
+	const platformOwner = "github.com/ghbvf/gocell"
+	entries := RegisteredPrefixes()
+
+	// The non-platform prefix must NOT appear in the platform-filtered set.
+	for _, e := range entries {
+		if e.Prefix == nonPlatformPrefix && e.Owner == platformOwner {
+			t.Errorf("non-platform prefix %q must not appear in platform-owner filtered set", nonPlatformPrefix)
+		}
+	}
+
+	// The prefix IS registered (different owner) — OwnerOfCode must resolve it.
+	owner, ok := OwnerOfCode(nonPlatformPrefix + "SOMETHING")
+	if !ok {
+		t.Errorf("OwnerOfCode(%q) must find the non-platform registration; got !ok", nonPlatformPrefix+"SOMETHING")
+	}
+	if ok && owner != nonPlatformOwner {
+		t.Errorf("OwnerOfCode returned owner %q, want %q", owner, nonPlatformOwner)
+	}
+}
+
 func TestGocellPrefixSetMatchesGolden(t *testing.T) {
 	entries := RegisteredPrefixes()
 
@@ -173,9 +206,11 @@ func TestGocellPrefixSetMatchesGolden(t *testing.T) {
 
 	goldenBytes, err := os.ReadFile(goldenPath) //nolint:gosec // path is constructed from runtime.Caller, not user input
 	if os.IsNotExist(err) {
-		t.Fatalf("golden file not found at %s — run with ERRCODE_PREFIX_GOLDEN_UPDATE=1 to generate", goldenPath)
+		t.Fatalf("golden file not found at %s — run: ERRCODE_PREFIX_GOLDEN_UPDATE=1 go test ./pkg/errcode/...", goldenPath)
 	}
 	require.NoError(t, err)
 	want := string(goldenBytes)
-	assert.Equal(t, want, got, "prefix registry golden mismatch — if intentional, run with ERRCODE_PREFIX_GOLDEN_UPDATE=1")
+	const goldenMismatchMsg = "prefix registry golden mismatch — " +
+		"if intentional, run: ERRCODE_PREFIX_GOLDEN_UPDATE=1 go test ./pkg/errcode/..."
+	assert.Equal(t, want, got, goldenMismatchMsg)
 }

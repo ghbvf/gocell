@@ -126,7 +126,7 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	cellGoContent, err := renderTemplate(spec.ModulePath, cellGoTemplate, cellTemplateData{
 		ScaffoldSpec:   spec,
 		ListenerMarker: ListenerMarker,
-		ErrPrefix:      "ERR_" + strings.ToUpper(spec.CellID.String()) + "_",
+		ErrPrefix:      cellErrPrefix(spec),
 	}, true)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)
