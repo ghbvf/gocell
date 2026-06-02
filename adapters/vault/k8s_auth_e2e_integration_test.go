@@ -61,6 +61,12 @@ const (
 	k8sTokenAudience = "vault"
 )
 
+// k3sAPIServerReadyTimeout bounds the readiness poll for the k3s apiserver to
+// begin accepting requests after k3s.Run returns (which fires on a log line that
+// can briefly precede write-readiness); site-specific to container cold start,
+// so a file-local const rather than a pkg/testutil/testtime cross-cutting value.
+const k3sAPIServerReadyTimeout = 60 * time.Second
+
 // gocellTransitPolicyHCL grants the capabilities the envelope provider needs:
 // encrypt routes through transit/datakey/plaintext (server-side DEK
 // generation), decrypt through transit/decrypt, plus key read/rotate. Mirrors
@@ -176,7 +182,7 @@ func provisionK8sAuthMaterial(ctx context.Context, t *testing.T, k3sC *k3s.K3sCo
 	require.Eventually(t, func() bool {
 		_, code, execErr := tryKubectl("get", "--raw=/readyz")
 		return execErr == nil && code == 0
-	}, 60*time.Second, time.Second, "k3s apiserver must become ready for requests")
+	}, k3sAPIServerReadyTimeout, time.Second, "k3s apiserver must become ready for requests")
 
 	kubectl("create", "serviceaccount", k8sReviewerSA, "-n", k8sNamespace)
 	kubectl("create", "clusterrolebinding", "vault-auth-delegator",
