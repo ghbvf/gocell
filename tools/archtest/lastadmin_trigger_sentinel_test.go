@@ -15,7 +15,7 @@
 // that was missing (gh #740 / PR #578 DX4 S5 OUT_OF_SCOPE finding).
 //
 // As of PR #1481 (#1340) there are TWO legitimate copies of the sentinel in
-// migrations: 024 (original trigger creation) and 049 (per-tenant trigger
+// migrations: 024 (original trigger creation) and 050 (per-tenant trigger
 // rebuild). The guard is therefore "ALL copies agree with the Go const" rather
 // than "exactly one copy exists".
 //
@@ -190,7 +190,7 @@ const (
 //     as the inverse.
 //
 // Multiple legitimate copies: as of PR #1481 (#1340) migrations 024 (original
-// trigger creation) and 049 (per-tenant trigger rebuild) both carry the sentinel.
+// trigger creation) and 050 (per-tenant trigger rebuild) both carry the sentinel.
 // Both copies are intentional; the guard verifies that ALL copies still agree
 // with the Go const, not that there is only one copy. A future rebuild migration
 // may add further copies without needing to update this archtest, as long as it
@@ -251,7 +251,7 @@ func TestLastadminTriggerSentinelConstSQLMatch01(t *testing.T) {
 	// that prefix (drift check per-match). Bound to the extracted RAISE literal
 	// (not a whole-file substring) so comment/identifier residue cannot mask drift.
 	//
-	// Multiple copies are legitimate: 024 (original) + 049 (per-tenant rebuild,
+	// Multiple copies are legitimate: 024 (original) + 050 (per-tenant rebuild,
 	// PR #1481 / #1340) both carry the sentinel intentionally. A future rebuild
 	// migration may add further copies; the guard fires only when a copy drifts.
 	// ──
@@ -335,11 +335,11 @@ func TestLastadminTriggerSentinelConstSQLMatch01_SelfCheck(t *testing.T) {
 	}
 
 	// Two-copy positive (rebuild semantics): both copies carry the correct sentinel.
-	// This mirrors 024 + 049 co-existence: both must produce 2 matches.
+	// This mirrors 024 + 050 co-existence: both must produce 2 matches.
 	twoCorrect := `-- migration 024
 	RAISE EXCEPTION 'effective_admin_invariant: would leave the system with no effective admin'
 		USING ERRCODE = 'P0001';
-	-- migration 049 per-tenant rebuild
+	-- migration 050 per-tenant rebuild
 	RAISE EXCEPTION 'effective_admin_invariant: would leave the system with no effective admin'
 		USING ERRCODE = 'P0001';`
 	if got := raiseExceptionMessagesWithPrefix(twoCorrect, prefix); len(got) != 2 {

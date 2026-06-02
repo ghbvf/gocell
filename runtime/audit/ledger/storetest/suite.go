@@ -917,10 +917,11 @@ func runQueryTenantIsolation(t *testing.T, factory Factory) {
 		tenant  string
 		wantIDs []string
 	}{
-		{"tenant-a sees only its 2 rows", "tenant-a", []string{"ti-a1", "ti-a2"}},
-		{"tenant-b sees only its 1 row", "tenant-b", []string{"ti-b1"}},
-		// Empty TenantID is "no filter" at the store layer (sees all 4) — tenant
-		// isolation is the handler's job, not this generic predicate's.
+		// A tenant sees its OWN rows + tenant-less system rows (ti-none), never
+		// another tenant's. This is the standard multi-tenant audit semantic.
+		{"tenant-a sees its rows + system, not tenant-b", "tenant-a", []string{"ti-a1", "ti-a2", "ti-none"}},
+		{"tenant-b sees its row + system, not tenant-a", "tenant-b", []string{"ti-b1", "ti-none"}},
+		// Empty TenantID is "no filter" at the store layer (sees all 4).
 		{"empty tenant is no filter (sees all)", "", []string{"ti-a1", "ti-a2", "ti-b1", "ti-none"}},
 	}
 	for _, tc := range cases {

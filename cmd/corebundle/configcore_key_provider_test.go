@@ -3,7 +3,6 @@ package main
 import (
 	"testing"
 
-	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -63,47 +62,8 @@ func TestBuildKeyProviderFromName_LocalAES(t *testing.T) {
 	assert.NotNil(t, kp)
 }
 
-// TestBuildStaleCipherInc_NilRegistryNoop verifies the stale-cipher callback is
-// always non-nil and is a safe silent no-op when no registry is supplied.
-func TestBuildStaleCipherInc_NilRegistryNoop(t *testing.T) {
-	inc, err := buildStaleCipherInc(nil)
-
-	require.NoError(t, err)
-	require.NotNil(t, inc)
-	assert.NotPanics(t, inc, "nil-registry callback must be a safe no-op")
-}
-
-// TestBuildStaleCipherInc_RegistersAndCounts is the stale-cipher registration
-// regression (F3): with a registry the counter must be registered and the
-// returned callback must increment the gocell_config_stale_cipher_total series.
-func TestBuildStaleCipherInc_RegistersAndCounts(t *testing.T) {
-	registry := prom.NewRegistry()
-
-	inc, err := buildStaleCipherInc(registry)
-	require.NoError(t, err)
-	require.NotNil(t, inc)
-
-	inc()
-	inc()
-
-	assert.InDelta(t, 2.0, gatherCounterValue(t, registry, "gocell_config_stale_cipher_total"), 1e-9,
-		"stale-cipher callback must increment the registered counter")
-}
-
-// gatherCounterValue gathers registry and returns the value of the named counter
-// metric family. Fails the test if the family is absent.
-func gatherCounterValue(t *testing.T, registry *prom.Registry, name string) float64 {
-	t.Helper()
-	mfs, err := registry.Gather()
-	require.NoError(t, err)
-	for _, mf := range mfs {
-		if mf.GetName() != name {
-			continue
-		}
-		metrics := mf.GetMetric()
-		require.NotEmpty(t, metrics, "metric family %q has no samples", name)
-		return metrics[0].GetCounter().GetValue()
-	}
-	t.Fatalf("metric family %q not found in registry (counter not registered)", name)
-	return 0
-}
+// Stale-cipher counter coverage moved to
+// runtime/observability/metrics/config_stale_cipher_test.go in #1413 (the counter
+// is now built by configcore via the kernel MetricsProvider, not by a raw
+// prometheus registry here). The former TestBuildStaleCipherInc_* tests +
+// gatherCounterValue helper were removed with buildStaleCipherInc.

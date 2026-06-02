@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -75,32 +76,38 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // Flow:
 //  1. Guard that shared was produced by [NewSharedDeps] (sealed-construction
 //     marker check) and that runtimeOptsFn is non-nil — startup invariants.
-//  2. For each module: nil-guard, call [CellModule.Provide], nil-cell guard,
-//     closed-set identity guard (c.ID() == m.ID(), see below), accumulate cells +
-//     cellOpts + provisional ManagedResources, with LIFO Close(ctx) rollback on
-//     any failure.
+//     1b. Enforce the M12a closed-set bijection (validateClosedSet): the composed
+//     module IDs must equal the assembly's declared cell-id set, fail-fast
+//     before any Provide opens resources.
+//  2. For each module (resolveModuleResult): nil-guard, call [CellModule.Provide],
+//     nil-cell guard, closed-set identity guard (c.ID() == m.ID()), nil-resource
+//     guard; then accumulate cells + cellOpts (module opts + one
+//     bootstrap.WithManagedResource derived per ModuleResult.Resources entry) +
+//     a provisional ManagedResource stack, with LIFO Close(ctx) rollback on any
+//     failure.
 //  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
 //     provisional resources and return.
 //  4. allOpts := runtimeOpts ++ cellOpts.
 //  5. Return &App{clk: shared.Clock, opts: allOpts}.
 //
-// Resource ownership (two channels, distinct phases — see pg-cell-template
-// Chapter 4):
-//   - Steady-state lifecycle: a module registers a resource by returning
-//     bootstrap.WithManagedResource(res) in its opts (2nd return value). Those
-//     opts flow into allOpts, so bootstrap.Run manages health/worker/LIFO-Close
+// Resource ownership (single source — PR #591 / #1420): a module lists every
+// ManagedResource it opened in ModuleResult.Resources and does NOT call
+// bootstrap.WithManagedResource itself. Build derives BOTH channels from that
+// one slice:
+//   - Steady-state lifecycle: Build appends one bootstrap.WithManagedResource(r)
+//     per resource to cellOpts, so bootstrap.Run manages health/worker/LIFO-Close
 //     for the resource during the normal run (phase10 shutdown closes it).
-//   - Pre-Run rollback: the module ALSO returns the same resource in its 3rd
-//     return value ([]ManagedResource). Build accumulates these into a
-//     provisional stack and, if any later step fails before returning the App,
-//     calls Close(ctx) in reverse order (LIFO) so resources opened so far are
-//     released even though bootstrap.Run never starts.
+//   - Pre-Run rollback: Build also appends r to a provisional stack and, if any
+//     later step fails before returning the App, calls Close(ctx) in reverse
+//     order (LIFO) so resources opened so far are released even though
+//     bootstrap.Run never starts.
 //
 // The two channels never double-close: the rollback path fires only on failure
 // (bootstrap.Run does not run), and the WithManagedResource path fires only on
-// success. Build does not itself convert provisional resources into bootstrap
-// options — steady-state registration is the module's responsibility via its
-// opts, so a resource appears at most once in the bootstrap managed set.
+// success. Deriving both from the single Resources slice makes the former
+// double-write divergence (resource in opts but not provisional, or vice versa)
+// structurally impossible — guarded by WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01,
+// which bans WithManagedResource calls inside cellmodules/.
 //
 // Cross-module value handoff (formerly via ModuleExports) has been removed.
 // Cell modules are now fully self-contained; cross-cell communication happens
@@ -151,8 +158,8 @@ func validateBuildInputs(shared *SharedDeps, runtimeOptsFn RuntimeOptionsFunc) e
 // This guard keys on the module's self-reported ID() so it can fail fast before
 // any Provide opens resources. It does NOT see the cell each module constructs;
 // the Build provide loop closes that gap with a post-Provide c.ID() == m.ID()
-// identity guard (F1/cluster C1), so the runtime cell identity is bound to the
-// declaration validated here.
+// identity guard (resolveModuleResult), so the runtime cell identity is bound to
+// the declaration validated here.
 func (b *Builder) validateClosedSet() error {
 	expected := make(map[string]struct{}, len(b.expectedCellIDs))
 	for _, id := range b.expectedCellIDs {
@@ -201,7 +208,9 @@ func (b *Builder) Build(
 	var cells []cell.Cell
 	var cellOpts []bootstrap.Option
 	// provisional holds resources opened so far; closed in reverse order if
-	// any subsequent step fails.
+	// any subsequent step fails. INVARIANT: every entry is non-nil — the loop
+	// below rejects nil/typed-nil resources via validateModuleResources before
+	// appending, so Close() below can never panic on a nil interface.
 	var provisional []kernellifecycle.ManagedResource
 
 	rollback := func() {
@@ -214,40 +223,20 @@ func (b *Builder) Build(
 	}
 
 	for _, m := range b.modules {
-		if m == nil {
-			rollback()
-			return nil, fmt.Errorf("composition.Builder.Build: module list contains nil")
-		}
-		c, mOpts, mRes, err := m.Provide(ctx, shared)
+		res, err := resolveModuleResult(ctx, m, shared)
 		if err != nil {
 			rollback()
-			return nil, fmt.Errorf("composition.Builder.Build: module %q Provide: %w", m.ID(), err)
+			return nil, err
 		}
-		if c == nil {
-			rollback()
-			return nil, fmt.Errorf("composition.Builder.Build: module %q returned nil Cell "+
-				"(use explicit Optional semantics if cell is optional)", m.ID())
-		}
-		// Closed-set identity guard (M12a #1093, F1/cluster C1): validateClosedSet
-		// runs pre-Provide against the module's self-reported ID(), but the cell
-		// identity that actually reaches runtime (metric `cell` label, healthz
-		// probe names) is c.ID() — sourced independently from the cell's metadata,
-		// not bound to m.ID(). A module whose ID is in the closed set could still
-		// construct a cell with an out-of-set ID. Requiring c.ID() == m.ID()
-		// binds the validated declaration to the constructed identity; since
-		// m.ID() ∈ closed set was already proven, this transitively guarantees
-		// c.ID() ∈ closed set. Mirrors K8s runtime.Scheme: registration enumerates
-		// the real object identity, not a wrapper label.
-		if c.ID() != m.ID() {
-			rollback()
-			return nil, fmt.Errorf("composition.Builder.Build: module %q provided a cell whose ID is %q; "+
-				"a module's ID must equal the ID of the cell it constructs — the closed-set guard validates "+
-				"the module ID pre-Provide, so a mismatch would let an out-of-set cell identity reach runtime "+
-				"(metric labels, healthz probes)", m.ID(), c.ID())
-		}
-		cells = append(cells, c)
-		cellOpts = append(cellOpts, mOpts...)
-		provisional = append(provisional, mRes...)
+		cells = append(cells, res.Cell)
+		// Single source: derive BOTH the steady-state WithManagedResource
+		// registration (via managedResourceOpts) AND the pre-Run rollback stack
+		// (provisional) from res.Resources, so the two can never diverge (the
+		// former double-write bug). Modules do not call WithManagedResource
+		// themselves (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
+		cellOpts = append(cellOpts, res.Opts...)
+		cellOpts = append(cellOpts, managedResourceOpts(res.Resources)...)
+		provisional = append(provisional, res.Resources...)
 	}
 
 	runtimeOpts, err := runtimeOptsFn(cells)
@@ -258,4 +247,92 @@ func (b *Builder) Build(
 
 	allOpts := append(runtimeOpts, cellOpts...) //nolint:gocritic // intentional: runtime opts first, then cell opts
 	return &App{clk: shared.Clock, opts: allOpts}, nil
+}
+
+// resolveModuleResult calls one module's Provide and validates the result before
+// it enters either lifecycle channel: the module must be non-nil, must return a
+// non-nil Cell, the constructed cell's ID must equal the module's ID (M12a
+// closed-set identity guard, #1093), and it must not return any nil/typed-nil
+// ManagedResource. Extracted from [Builder.Build] so the per-module loop body
+// stays within the cognitive-complexity budget (same rationale as
+// [managedResourceOpts]); the single returned error lets Build run rollback +
+// return once.
+func resolveModuleResult(ctx context.Context, m CellModule, shared *SharedDeps) (ModuleResult, error) {
+	if m == nil {
+		return ModuleResult{}, fmt.Errorf("composition.Builder.Build: module list contains nil")
+	}
+	res, err := m.Provide(ctx, shared)
+	if err != nil {
+		return ModuleResult{}, fmt.Errorf("composition.Builder.Build: module %q Provide: %w", m.ID(), err)
+	}
+	if res.Cell == nil {
+		return ModuleResult{}, fmt.Errorf("composition.Builder.Build: module %q returned nil Cell "+
+			"(use explicit Optional semantics if cell is optional)", m.ID())
+	}
+	// Closed-set identity guard (M12a #1093): validateClosedSet validated
+	// m.ID() ∈ closed set pre-Provide, but the identity that reaches runtime
+	// (metric `cell` label, healthz probe names) is the cell's own c.ID() —
+	// sourced from cell metadata, independent of m.ID(). Bind them: require
+	// res.Cell.ID() == m.ID() so an in-set module cannot construct an out-of-set
+	// cell. Since m.ID() ∈ closed set was already proven, this transitively
+	// guarantees res.Cell.ID() ∈ closed set. Mirrors K8s runtime.Scheme:
+	// registration enumerates the real object identity, not a wrapper label.
+	if res.Cell.ID() != m.ID() {
+		return ModuleResult{}, fmt.Errorf("composition.Builder.Build: module %q provided a cell whose ID is %q; "+
+			"a module's ID must equal the ID of the cell it constructs — the closed-set guard validates the "+
+			"module ID pre-Provide, so a mismatch would let an out-of-set cell identity reach runtime "+
+			"(metric labels, healthz probes)", m.ID(), res.Cell.ID())
+	}
+	// Reject nil resources BEFORE they enter the provisional rollback stack, so
+	// rollback's Close() can never panic on a nil interface. The steady-state path
+	// (managedResourceOpts → bootstrap.WithManagedResource) fail-fasts a nil
+	// resource only at phase0; doing it here keeps both lifecycle channels
+	// symmetric and fails fast at Build time instead.
+	if err := validateModuleResources(m.ID(), res.Resources); err != nil {
+		return ModuleResult{}, err
+	}
+	return res, nil
+}
+
+// validateModuleResources rejects nil/typed-nil entries in a module's Resources
+// slice. [Builder.Build] calls it on each module's result before the resources
+// enter either lifecycle channel (steady-state opts + provisional rollback
+// stack), guaranteeing the provisional stack holds only non-nil resources so its
+// Close() can never panic. A nil resource is a module wiring bug; surfacing it as
+// a Build-time error keeps the rollback path symmetric with the steady-state path
+// (where bootstrap.WithManagedResource fail-fasts a nil resource at phase0).
+//
+// Extracted from Build so the per-module loop body stays within the
+// cognitive-complexity budget.
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go — Stop runs only hooks that
+// were successfully appended; bad inputs surface before any component starts.
+func validateModuleResources(moduleID string, resources []kernellifecycle.ManagedResource) error {
+	for i, r := range resources {
+		if validation.IsNilInterface(r) {
+			return fmt.Errorf("composition.Builder.Build: module %q returned nil "+
+				"ManagedResource at Resources[%d] (resources must be non-nil)", moduleID, i)
+		}
+	}
+	return nil
+}
+
+// managedResourceOpts derives one bootstrap.WithManagedResource option per
+// resource — the steady-state half of the single-source resource contract. The
+// caller ([Builder.Build]) appends the same resources to its provisional
+// rollback stack, so both lifecycle channels come from the one Resources slice
+// and cannot diverge. Extracted from Build so the per-module loop body stays
+// within the cognitive-complexity budget.
+//
+// Nil entries: ModuleResult.Resources MUST NOT contain nil (see its godoc).
+// [validateModuleResources] rejects any nil/typed-nil resource at Build time
+// before it reaches this function or the rollback stack, so both channels only
+// ever see non-nil resources. bootstrap.WithManagedResource additionally
+// fail-fasts a stray nil at phase0 as defense in depth.
+func managedResourceOpts(resources []kernellifecycle.ManagedResource) []bootstrap.Option {
+	opts := make([]bootstrap.Option, 0, len(resources))
+	for _, r := range resources {
+		opts = append(opts, bootstrap.WithManagedResource(r))
+	}
+	return opts
 }

@@ -89,11 +89,13 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 
 	filters := ledger.AuditFilters{
 		// TenantID is the isolation scope (epic #1337 PR-2a): sourced from the
-		// authenticated principal, never from a request field, so a caller can
-		// only read its own tenant's audit trail. p.TenantID is non-empty for
-		// every JWT caller post-PR-2a (the access token carries tenant_id); the
-		// residual empty case (no tenant claim) is backstopped by DB-layer RLS
-		// (PR-3). This always-set-from-principal step is the isolation boundary.
+		// authenticated principal, never from a request field, so a caller reads
+		// its OWN tenant's audit trail PLUS tenant-less system events (e.g.
+		// bootstrap.auth.fail) — never another tenant's rows (see
+		// ledger.AuditFilters.TenantID). p.TenantID is non-empty for every JWT
+		// caller post-PR-2a (the access token carries tenant_id); the residual
+		// empty case is backstopped by DB-layer RLS (PR-3). This
+		// always-set-from-principal step is the isolation boundary.
 		TenantID:  p.TenantID,
 		EventType: req.EventType,
 		ActorID:   actorID,

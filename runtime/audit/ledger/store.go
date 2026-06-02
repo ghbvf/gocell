@@ -48,12 +48,14 @@ type AuditFilters struct {
 	// caller's own actions.
 	SubjectID string
 
-	// TenantID scopes the query to a single tenant boundary. Empty means no
-	// filter (like the other predicates). The auditquery handler always sets this
-	// from principal.TenantID so a tenant-bearing caller can only ever read its
-	// own tenant's audit trail (epic #1337 PR-2a) — that handler is the isolation
-	// boundary, not this generic store filter. DB-layer RLS (PR-3) is the
-	// defense-in-depth backstop for the residual tenant-less case.
+	// TenantID scopes the query to a tenant boundary. A non-empty value matches
+	// that tenant's rows PLUS tenant-less system/framework rows (tenant_id == "" —
+	// e.g. bootstrap.auth.fail and other pre-auth events that have no principal
+	// tenant), and NEVER another tenant's rows. Empty means no filter (generic
+	// store consumers). The auditquery handler always sets this from
+	// principal.TenantID (epic #1337 PR-2a) — that handler is the isolation
+	// boundary. Standard multi-tenant audit semantics: a tenant admin sees its own
+	// tenant + global/system events. DB-layer RLS (PR-3) is the backstop.
 	TenantID string
 
 	// TraceID filters by exact trace_id. Empty means no filter. This field

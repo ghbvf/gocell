@@ -20,11 +20,14 @@ import (
 // Append here when a new table is introduced by a migration file so that
 // schema_guard documentation stays in sync with the embedded SQL.
 //
-//   - outbox_entries     (001/044)  transactional outbox for event relay
+//   - outbox_entries     (001/044/049)  transactional outbox for event relay
 //                                 + 044_outbox_entries_principal.sql TRUNCATE+rebuild
 //                                   adding principal (jsonb) + occurred_at (timestamptz)
 //                                   NOT NULL columns for the sealed-construction
 //                                   principal-injection wire envelope (#1229).
+//                                 + 049_outbox_entries_seq.sql adding seq BIGINT
+//                                   GENERATED ALWAYS AS IDENTITY + idx_outbox_seq
+//                                   (projection ReplaySource/Cursor position, #1368).
 //   - config_entries     (004)  cell configuration key-value store
 //   - config_versions    (004)  immutable configuration version history
 //   - refresh_tokens     (007)  append-only refresh token lineage
@@ -32,18 +35,18 @@ import (
 //   - users              (017)  accesscore user identities
 //                                 + users_status_chk, users_creation_source_chk (023 CHECK)
 //                                 + effective_admin_invariant_on_users trigger (024)
-//                                 + tenant_id TEXT NOT NULL (049 DROP+CREATE rebuild)
+//                                 + tenant_id TEXT NOT NULL (050 DROP+CREATE rebuild)
 //                                   UNIQUE(tenant_id,username) / UNIQUE(tenant_id,email)
 //                                   replacing global idx_users_username / idx_users_email;
 //                                   support index UNIQUE(tenant_id,id) for role FK.
 //   - sessions           (018)  accesscore session / JTI store
 //                                 + authz_epoch_at_issue restored (026; ADR §A8 — row is SoR, claim was retracted)
 //   - roles              (019)  accesscore role definitions
-//                                 + tenant_id TEXT NOT NULL, PK becomes (tenant_id, id) (049)
+//                                 + tenant_id TEXT NOT NULL, PK becomes (tenant_id, id) (050)
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //                                 + tenant_id TEXT NOT NULL, PK (tenant_id,user_id,role_id),
-//                                   role FK references roles(tenant_id,id) composite (049)
+//                                   role FK references roles(tenant_id,id) composite (050)
 //   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index))  tamper-evident audit ledger (per-namespace hash chain)
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
@@ -274,6 +277,13 @@ type expectedColumn struct {
 	Column  string
 	Type    string
 	NotNull bool
+	// Identity, when true, requires the column to be GENERATED ALWAYS AS IDENTITY
+	// (pg_attribute.attidentity = 'a'). This is a load-bearing write contract for
+	// outbox_entries.seq: the outbox writer omits seq and relies on auto-assign, and
+	// ALWAYS (not BY DEFAULT) forbids a producer supplying its own position. A future
+	// migration weakening it to a plain/BY-DEFAULT column would pass the type+nullability
+	// checks but silently break the writer / open position injection (#1368 review F5).
+	Identity bool
 }
 
 // expectedPK describes a table's primary key column set.
@@ -357,7 +367,7 @@ const queryErrFmt = "query: %v"
 // expectedColumns is the authoritative column-type-nullability registry for
 // the S3F-owned tables (users/sessions/roles/role_assignments), the
 // auditcore-owned audit_entries table (020_audit_ledger.sql), and the
-// outbox_entries relay table (001_create_outbox_entries.sql + 044).
+// outbox_entries relay table (001_create_outbox_entries.sql + 044 + 049).
 var expectedColumns = []expectedColumn{
 	// outbox_entries (001 + subsequent migrations + 044_outbox_entries_principal.sql)
 	// Only the writer-supplied columns are registered; relay-internal columns
@@ -379,10 +389,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
 	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
 	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
-	// users (017_users.sql + 022_users_password_version.sql + 049_accesscore_tenant_id.sql)
-	// 049 drops+recreates the table adding tenant_id TEXT NOT NULL as the second column.
+	// seq is GENERATED ALWAYS AS IDENTITY (implicitly NOT NULL) — the monotonic
+	// stream position consumed by the projection ReplaySource/Cursor (049 / #1368).
+	// Identity:true guards the GENERATED ALWAYS write contract (F5).
+	{Table: "outbox_entries", Column: "seq", Type: "bigint", NotNull: true, Identity: true}, // 049 NEW
+	// users (017_users.sql + 022_users_password_version.sql + 050_accesscore_tenant_id.sql)
+	// 050 drops+recreates the table adding tenant_id TEXT NOT NULL as the second column.
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
-	{Table: "users", Column: "tenant_id", Type: "text", NotNull: true}, // 049 NEW
+	{Table: "users", Column: "tenant_id", Type: "text", NotNull: true}, // 050 NEW
 	{Table: "users", Column: "username", Type: "text", NotNull: true},
 	{Table: "users", Column: "email", Type: "text", NotNull: true},
 	{Table: "users", Column: "password_hash", Type: "text", NotNull: true},
@@ -422,15 +436,15 @@ var expectedColumns = []expectedColumn{
 	// refresh_tokens schema predates schema_guard's requiredColumns coverage.
 	{Table: "refresh_tokens", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
 	// roles (019_roles.sql + 049_accesscore_tenant_id.sql)
-	// 049 drops+recreates the table; PK is now composite (tenant_id, id).
-	{Table: "roles", Column: "tenant_id", Type: "text", NotNull: true}, // 049 NEW
+	// 050 drops+recreates the table; PK is now composite (tenant_id, id).
+	{Table: "roles", Column: "tenant_id", Type: "text", NotNull: true}, // 050 NEW
 	{Table: "roles", Column: "id", Type: "text", NotNull: true},
 	{Table: "roles", Column: "name", Type: "text", NotNull: true},
 	{Table: "roles", Column: "permissions", Type: "jsonb", NotNull: true},
 	{Table: "roles", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 	// role_assignments (019_roles.sql + 049_accesscore_tenant_id.sql)
-	// 049 drops+recreates the table; PK is (tenant_id, user_id, role_id).
-	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 049 NEW
+	// 050 drops+recreates the table; PK is (tenant_id, user_id, role_id).
+	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 050 NEW
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
@@ -438,7 +452,7 @@ var expectedColumns = []expectedColumn{
 	// 043 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
 	// the 12-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
 	// must supply values.
-	// 049 adds trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
+	// 050 adds trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
 	// NOT part of the HMAC chain (observability only).
 	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},
@@ -450,7 +464,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "audit_entries", Column: "tenant_id", Type: "text", NotNull: true},       // 043 NEW
 	{Table: "audit_entries", Column: "session_id", Type: "text", NotNull: true},      // 043 NEW
 	{Table: "audit_entries", Column: "correlation_id", Type: "text", NotNull: true},  // 043 NEW
-	{Table: "audit_entries", Column: "trace_id", Type: "text", NotNull: true},        // 049 NEW
+	{Table: "audit_entries", Column: "trace_id", Type: "text", NotNull: true},        // 050 NEW
 	{Table: "audit_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 043 NEW
 	{Table: "audit_entries", Column: "timestamp", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
@@ -525,9 +539,9 @@ var forbiddenColumns = []requiredColumn{
 var expectedPKs = []expectedPK{
 	{Table: "users", Columns: []string{"id"}},
 	{Table: "sessions", Columns: []string{"id"}},
-	// 049: roles PK is now composite (tenant_id, id) — roles are per-tenant scoped.
+	// 050: roles PK is now composite (tenant_id, id) — roles are per-tenant scoped.
 	{Table: "roles", Columns: []string{"tenant_id", "id"}},
-	// 049: role_assignments PK is now (tenant_id, user_id, role_id).
+	// 050: role_assignments PK is now (tenant_id, user_id, role_id).
 	{Table: "role_assignments", Columns: []string{"tenant_id", "user_id", "role_id"}},
 	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql rebuild)
 	{Table: "audit_entries", Columns: []string{"id"}},
@@ -553,7 +567,7 @@ var expectedDefaults = []expectedDefault{
 	// would make the first SaveOffset fail at write time; asserting it here surfaces
 	// the drift at startup (readyz) instead.
 	{Table: "projection_checkpoints", Column: "owner", Default: "''::text"},
-	// users.password_version (022 → 049 rebuild) — insertUserSQL omits this column
+	// users.password_version (022 → 050 rebuild) — insertUserSQL omits this column
 	// and relies on DEFAULT 0 to satisfy the NOT NULL constraint (migration 033
 	// adds users_password_version_non_negative CHECK >= 0). A dropped default would
 	// cause every new-user Create to fail at write time.
@@ -567,13 +581,19 @@ var expectedDefaults = []expectedDefault{
 // are not key columns). Expression indexes use "(expr)" as a sentinel for any
 // expression-valued key position.
 var expectedIndexes = []expectedIndex{
+	// outbox_entries — projection stream position (049_outbox_entries_seq.sql / #1368).
+	// The relay claim index (idx_outbox_pending*) is intentionally not registered
+	// here (it evolves with the relay state machine, independent of this guard);
+	// idx_outbox_seq is tracked because the projection ReplaySource/Cursor depend
+	// on it for ordered range scans, so a partial migration must fail fast.
+	{Table: "outbox_entries", Name: "idx_outbox_seq", Unique: true, Columns: []string{"seq"}},
 	// users (017_users.sql)
-	// 049: idx_users_username and idx_users_email are now composite
+	// 050: idx_users_username and idx_users_email are now composite
 	// UNIQUE(tenant_id, username) / UNIQUE(tenant_id, email) — same names, still unique.
 	{Table: "users", Name: "idx_users_username", Unique: true, Columns: []string{"tenant_id", "username"}},
 	{Table: "users", Name: "idx_users_email", Unique: true, Columns: []string{"tenant_id", "email"}},
 	{Table: "users", Name: "idx_users_status", Unique: false, Columns: []string{"status"}},
-	// 049: support index for role_assignments FK (tenant_id, user_id) reference.
+	// 050: support index for role_assignments FK (tenant_id, user_id) reference.
 	{Table: "users", Name: "idx_users_tenant_id_id", Unique: true, Columns: []string{"tenant_id", "id"}},
 	// sessions (018_sessions.sql)
 	{Table: "sessions", Name: "idx_sessions_jti", Unique: true, Columns: []string{"jti"}},
@@ -629,7 +649,7 @@ var expectedFKs = []expectedFK{
 		OnDelete:   "c", // CASCADE — migrations/018_sessions.sql
 	},
 	{
-		// 049: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
+		// 050: (tenant_id, user_id) references users(tenant_id, id) via UNIQUE(tenant_id, id)
 		// support index. This enforces same-tenant user membership at the DB layer,
 		// preventing cross-tenant authorization grants. The (tenant_id, user_id)
 		// local column ORDER is the isolation pair — a swap must be rejected (F6).
@@ -642,7 +662,7 @@ var expectedFKs = []expectedFK{
 		OnDelete:   "c", // CASCADE — migrations/049_accesscore_tenant_id.sql
 	},
 	{
-		// 049: (tenant_id, role_id) references roles composite PK (tenant_id, id).
+		// 050: (tenant_id, role_id) references roles composite PK (tenant_id, id).
 		// ON DELETE RESTRICT: cannot delete a role that has active assignments.
 		Table:      "role_assignments",
 		Constraint: "role_assignments_role_id_fkey",
@@ -741,7 +761,7 @@ var expectedChecks = []expectedCheck{
 // verifyColumns checks each entry in expectedColumns against pg_attribute.
 func verifyColumns(ctx context.Context, pool *Pool) error {
 	const q = `
-	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull
+	SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity::text
 	  FROM pg_attribute a
 	  JOIN pg_class c ON c.oid = a.attrelid
 	  JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -754,7 +774,8 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 	for _, ec := range expectedColumns {
 		var gotType string
 		var gotNotNull bool
-		err := pool.inner.QueryRow(ctx, q, ec.Table, ec.Column).Scan(&gotType, &gotNotNull)
+		var gotIdentity string // pg_attribute.attidentity: '' none, 'a' ALWAYS, 'd' BY DEFAULT
+		err := pool.inner.QueryRow(ctx, q, ec.Table, ec.Column).Scan(&gotType, &gotNotNull, &gotIdentity)
 		if err != nil {
 			// No row means column is missing.
 			return errcode.New(
@@ -790,6 +811,18 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("column", ec.Column),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got not_null=%v want %v", gotNotNull, ec.NotNull))),
+			)
+		}
+		if ec.Identity && gotIdentity != "a" {
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: column must be GENERATED ALWAYS AS IDENTITY",
+				errcode.WithDetails(
+					errcode.PublicString("dimension", "column_identity"),
+					errcode.PublicString("table", ec.Table),
+					errcode.PublicString("column", ec.Column),
+				),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got attidentity=%q want \"a\" (ALWAYS)", gotIdentity))),
 			)
 		}
 	}

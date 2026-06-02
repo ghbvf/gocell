@@ -2,6 +2,7 @@ package configcore_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -48,10 +49,36 @@ func TestModule_Provide_MemMode(t *testing.T) {
 	ctx := context.Background()
 	shared := buildMemSharedDeps(t)
 
-	c, _, _, err := configcore.Module().Provide(ctx, shared)
+	res, err := configcore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
-	require.NotNil(t, c)
-	assert.Equal(t, "configcore", c.ID())
+	require.NotNil(t, res.Cell)
+	assert.Equal(t, "configcore", res.Cell.ID())
+}
+
+// errCounterVecProvider is a metrics Provider whose CounterVec always fails,
+// used to exercise the configcore self-built collector error branches (#1413):
+// stale-cipher / eventbus-cache construction failures must propagate out of
+// Provide rather than being swallowed.
+type errCounterVecProvider struct{ kernelmetrics.NopProvider }
+
+func (errCounterVecProvider) CounterVec(kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	return nil, errors.New("counter registration failed")
+}
+
+// TestModule_Provide_CollectorRegistrationError verifies that when the kernel
+// MetricsProvider rejects collector registration, configcore.Provide fail-fasts
+// with a wrapped error (the self-built stale-cipher collector is constructed
+// before the cell, so its failure surfaces first).
+func TestModule_Provide_CollectorRegistrationError(t *testing.T) {
+	ctx := context.Background()
+	shared := buildMemSharedDeps(t)
+	// Swap in a Provider whose CounterVec fails; Provide builds the stale-cipher
+	// and eventbus-cache collectors from shared.MetricsProvider (#1413).
+	shared.MetricsProvider = errCounterVecProvider{}
+
+	_, err := configcore.Module().Provide(ctx, shared)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collector")
 }
 
 // buildMemSharedDeps constructs a memory-mode *composition.SharedDeps for tests.
@@ -80,22 +107,22 @@ func buildMemSharedDeps(t *testing.T) *composition.SharedDeps {
 	require.NoError(t, err)
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                  clk,
-		Topology:               topo,
-		JWTIssuer:              issuer,
-		JWTVerifier:            verifier,
-		MetricsProvider:        kernelmetrics.NopProvider{},
-		EventBus:               eb,
-		ConfigEventCollector:   obmetrics.NoopConfigEventCollector{},
-		EventbusCacheCollector: obmetrics.NoopEventbusCacheCollector{},
-		ConsumerClaimer:        claimer,
-		InternalHMACRing:       ring,
-		PrimaryHTTPAddr:        ":8080",
-		InternalHTTPAddr:       "127.0.0.1:9090",
-		HealthHTTPAddr:         "127.0.0.1:9091",
-		VerboseDisabled:        true,
+		Clock:                clk,
+		Topology:             topo,
+		JWTIssuer:            issuer,
+		JWTVerifier:          verifier,
+		MetricsProvider:      kernelmetrics.NopProvider{},
+		EventBus:             eb,
+		ConfigEventCollector: obmetrics.NoopConfigEventCollector{},
+		ConsumerClaimer:      claimer,
+		InternalHMACRing:     ring,
+		PrimaryHTTPAddr:      ":8080",
+		InternalHTTPAddr:     "127.0.0.1:9090",
+		HealthHTTPAddr:       "127.0.0.1:9091",
+		VerboseDisabled:      true,
 		// ConfigKeyProvider: nil — dev mode uses an explicit NoopTransformer.
-		ConfigStaleCipherInc: func() {},
+		// EventbusCacheCollector / ConfigStaleCipherInc removed (#1413): configcore
+		// self-builds them from MetricsProvider (NopProvider here).
 	})
 	require.NoError(t, err)
 	return shared

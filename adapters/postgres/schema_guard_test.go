@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 43 migrations: 001-033 contiguous, plus 040-049 (intentional gap
+	// Currently 44 migrations: 001-033 contiguous, plus 040-050 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -76,10 +76,13 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 047 adds audit_entries.trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
 	// 048 creates idx_audit_namespace_trace_id CONCURRENTLY (split from 047 per
 	// migrations/README.md rule 1 — large-table indexes must use CONCURRENTLY);
-	// 049 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
-	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered from 047 on merge with #1048).
-	assert.Equal(t, int64(49), v,
-		"expected version should be exactly 49 (current migration max — 049 accesscore_tenant_id)")
+	// 049 adds outbox_entries.seq (BIGINT GENERATED ALWAYS AS IDENTITY) + idx_outbox_seq:
+	// the monotonic stream position for the projection journal ReplaySource/Cursor
+	// (#1368 / W10 PR-04c);
+	// 050 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
+	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered 047→049→050 on merges).
+	assert.Equal(t, int64(50), v,
+		"expected version should be exactly 50 (current migration max — 050 accesscore_tenant_id)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

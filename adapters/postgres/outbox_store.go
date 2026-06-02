@@ -366,6 +366,33 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		return outbox.ClaimedEntry{}, err
 	}
 
+	applyEntryJSONB(&scan, metadataJSON, observabilityJSON, principalJSON)
+
+	entry, err := scan.ToEntry()
+	if err != nil {
+		return outbox.ClaimedEntry{}, fmt.Errorf("outbox store: scanClaimedEntry: ToEntry: %w", err)
+	}
+	return outbox.ClaimedEntry{
+		Entry:    entry,
+		Attempts: attempts,
+		LeaseID:  leaseID.String(),
+	}, nil
+}
+
+// applyEntryJSONB decodes the three JSONB byte slices (business metadata,
+// observability, principal) into scan, applying the per-column oversize guards.
+// It is the single source of the scan-side decode/cap logic shared by the relay
+// claim path (scanClaimedEntry) and the projection journal replay path
+// (projection_replay_source.go) — both reconstruct a kout.Entry from
+// outbox_entries rows and must defend identically against unbounded allocation
+// from a corrupted or maliciously-crafted row (the three columns face the same
+// DoS vector). Each caller owns its own rows.Scan (the column sets differ: the
+// claim query interleaves relay state, the replay query carries the seq
+// position), then hands the raw JSON slices here.
+//
+// metadata is untyped business KV (no Validate()) so its cap is inline; the two
+// identity columns route through the generic decodeOversizeGuardedJSONB funnel.
+func applyEntryJSONB(scan *kout.EntryScan, metadataJSON, observabilityJSON, principalJSON []byte) {
 	if len(metadataJSON) > maxMetadataJSONBytes {
 		// Defensive: reject oversized metadata payloads to prevent unbounded
 		// allocation from a corrupted or maliciously-crafted row — same threat
@@ -398,16 +425,6 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 	); ok {
 		scan.Principal = principal
 	}
-
-	entry, err := scan.ToEntry()
-	if err != nil {
-		return outbox.ClaimedEntry{}, fmt.Errorf("outbox store: scanClaimedEntry: ToEntry: %w", err)
-	}
-	return outbox.ClaimedEntry{
-		Entry:    entry,
-		Attempts: attempts,
-		LeaseID:  leaseID.String(),
-	}, nil
 }
 
 // jsonbDecodeWarnings holds the three drop-reason Warn messages for one

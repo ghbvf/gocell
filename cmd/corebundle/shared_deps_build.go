@@ -24,16 +24,18 @@ type sharedReplayDeps struct {
 }
 
 type sharedMetricsDeps struct {
-	PromStack              promStack
-	ConfigEventCollector   obmetrics.ConfigEventCollector
-	EventbusCacheCollector obmetrics.EventbusCacheCollector
+	PromStack            promStack
+	ConfigEventCollector obmetrics.ConfigEventCollector
 }
 
 // buildSharedMetricsDeps assembles framework-level always-on metric collectors
-// (config events, eventbus cache). Provider-conditional metrics (vault) live
-// in dedicated lazy methods on cmdLocals (initVaultMetricsFactory) so deployments
-// that don't use the corresponding backend don't pollute their scrape footprint
-// with always-zero series.
+// (config events). The eventbus-cache and stale-cipher collectors moved to
+// cellmodules/configcore (#1413) — they are configcore-specific and route
+// through the kernel MetricsProvider, so configcore self-builds them.
+// Provider-conditional metrics (vault) live in dedicated lazy methods on
+// cmdLocals (initVaultMetricsFactory) so deployments that don't use the
+// corresponding backend don't pollute their scrape footprint with always-zero
+// series.
 //
 // Failure here is composition-root fatal (LoadSharedDepsFromEnv returns the
 // error and the process exits); no LIFO rollback needed because every
@@ -47,14 +49,9 @@ func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	if err != nil {
 		return sharedMetricsDeps{}, fmt.Errorf("build config event metrics collector: %w", err)
 	}
-	eventbusCacheCollector, err := obmetrics.NewProviderEventbusCacheCollector(ps.metricProvider)
-	if err != nil {
-		return sharedMetricsDeps{}, fmt.Errorf("build eventbus cache metrics collector: %w", err)
-	}
 	return sharedMetricsDeps{
-		PromStack:              ps,
-		ConfigEventCollector:   configEventCollector,
-		EventbusCacheCollector: eventbusCacheCollector,
+		PromStack:            ps,
+		ConfigEventCollector: configEventCollector,
 	}, nil
 }
 

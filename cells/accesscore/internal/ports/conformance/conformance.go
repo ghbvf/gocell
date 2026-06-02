@@ -1532,8 +1532,21 @@ func conformEffectiveAdminCrossTenant(t *testing.T, factory RoleRepoFactory) {
 	seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, auth.RoleAdmin)
 	ctx := context.Background()
 
+	// CountEffectiveAdmins acquires the per-tenant last-admin advisory lock, so
+	// the PG impl requires an ambient transaction (mem is lenient); call it inside
+	// RunInTx. EffectiveAdminExists is the lock-free read counterpart — no tx.
+	countAdmins := func(tid tenant.TenantID) (int, error) {
+		var n int
+		err := txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+			var e error
+			n, e = roleRepo.CountEffectiveAdmins(txCtx, tid)
+			return e
+		})
+		return n, err
+	}
+
 	// Tenant A has exactly one effective admin.
-	if n, err := roleRepo.CountEffectiveAdmins(ctx, testTenantID); err != nil || n != 1 {
+	if n, err := countAdmins(testTenantID); err != nil || n != 1 {
 		t.Errorf("CountEffectiveAdmins(tenantA): want 1/no error, got %d err=%v", n, err)
 	}
 	if ok, err := roleRepo.EffectiveAdminExists(ctx, testTenantID); err != nil || !ok {
@@ -1541,7 +1554,7 @@ func conformEffectiveAdminCrossTenant(t *testing.T, factory RoleRepoFactory) {
 	}
 
 	// Tenant B must see zero — the tenant-A admin is invisible.
-	if n, err := roleRepo.CountEffectiveAdmins(ctx, testTenantIDOther); err != nil || n != 0 {
+	if n, err := countAdmins(testTenantIDOther); err != nil || n != 0 {
 		t.Errorf("CountEffectiveAdmins(tenantB): want 0/no error, got %d err=%v", n, err)
 	}
 	if ok, err := roleRepo.EffectiveAdminExists(ctx, testTenantIDOther); err != nil || ok {

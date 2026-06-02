@@ -104,15 +104,16 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	locals.redisClient = replay.RedisClient
 	locals.initVaultMetricsFactory()
 
-	// Build configcore key provider + stale-cipher counter callback.
-	// These live in cmd because they import adapters/vault + prometheus which
-	// must not reach runtime/composition or cellmodules/configcore.
+	// Build configcore key provider. It lives in cmd because the vault-transit
+	// path builds adapters/vault.TransitMetrics from a raw prometheus registry
+	// (migrating it into configcore is gated on #885). The stale-cipher counter
+	// moved to cellmodules/configcore in #1413 — it routes through the kernel
+	// MetricsProvider, so configcore self-builds it.
 	cfgProviderName, cfgMasterKey, cfgPrevMasterKey := cellsecrets.LoadConfigCoreKeyProvider()
-	cfgKeyProvider, cfgStaleCipherInc, err := buildConfigCoreKeyProvider(
+	cfgKeyProvider, err := buildKeyProviderFromName(
 		topo.StorageBackend(), adapterMode,
 		cfgProviderName, cfgMasterKey, cfgPrevMasterKey,
 		clk,
-		metricsDeps.PromStack.registry,
 		locals.vaultTransitMetrics,
 	)
 	if err != nil {
@@ -123,26 +124,24 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// platform cell modules). Prometheus adapter types, internalGuard, and
 	// consumerClaimerKind stay in cmdLocals.
 	compShared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                  clk,
-		Topology:               topo,
-		JWTIssuer:              jwt.issuer,
-		JWTVerifier:            jwt.verifier,
-		MetricsProvider:        metricsDeps.PromStack.metricProvider,
-		EventBus:               eb,
-		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
-		EventbusCacheCollector: metricsDeps.EventbusCacheCollector,
-		ConsumerClaimer:        replay.ConsumerClaimer,
-		InternalHMACRing:       guard.ring,
-		PrimaryHTTPAddr:        primaryAddr,
-		InternalHTTPAddr:       internalAddr,
-		HealthHTTPAddr:         healthAddr,
-		HealthLocalOnly:        healthLocalOnly,
-		MetricsToken:           metricsToken,
-		VerboseToken:           verboseToken,
-		VerboseDisabled:        verboseDisabled,
-		ProjectRoot:            os.Getenv("GOCELL_PROJECT_ROOT"),
-		ConfigKeyProvider:      cfgKeyProvider,
-		ConfigStaleCipherInc:   cfgStaleCipherInc,
+		Clock:                clk,
+		Topology:             topo,
+		JWTIssuer:            jwt.issuer,
+		JWTVerifier:          jwt.verifier,
+		MetricsProvider:      metricsDeps.PromStack.metricProvider,
+		EventBus:             eb,
+		ConfigEventCollector: metricsDeps.ConfigEventCollector,
+		ConsumerClaimer:      replay.ConsumerClaimer,
+		InternalHMACRing:     guard.ring,
+		PrimaryHTTPAddr:      primaryAddr,
+		InternalHTTPAddr:     internalAddr,
+		HealthHTTPAddr:       healthAddr,
+		HealthLocalOnly:      healthLocalOnly,
+		MetricsToken:         metricsToken,
+		VerboseToken:         verboseToken,
+		VerboseDisabled:      verboseDisabled,
+		ProjectRoot:          os.Getenv("GOCELL_PROJECT_ROOT"),
+		ConfigKeyProvider:    cfgKeyProvider,
 	})
 	if err != nil {
 		slog.Warn("corebundle: SharedDeps validation failed",

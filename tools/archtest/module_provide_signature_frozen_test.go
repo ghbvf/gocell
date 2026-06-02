@@ -7,19 +7,31 @@
 // The `CellModule.Provide` method in `runtime/composition` MUST have exactly
 // the signature:
 //
-//	Provide(context.Context, *SharedDeps) (cell.Cell, []bootstrap.Option, []lifecycle.ManagedResource, error)
+//	Provide(context.Context, *SharedDeps) (ModuleResult, error)
+//
+// and the `ModuleResult` struct MUST have exactly three exported fields:
+//
+//	type ModuleResult struct {
+//	    Cell      cell.Cell
+//	    Opts      []bootstrap.Option
+//	    Resources []lifecycle.ManagedResource
+//	}
 //
 // No cross-module value-handoff parameter (formerly `in ModuleExports`) and no
-// cross-module value-handoff return (formerly `ModuleExports`) are permitted.
-// Adding either would re-open the in-process Go-handle channel that Wave-1
-// #1423 closed.
+// cross-module value-handoff field/return (formerly `ModuleExports`) are
+// permitted. Adding either would re-open the in-process Go-handle channel that
+// Wave-1 #1423 closed. The single-source `Resources` field (PR #591 / #1420)
+// is the only resource channel: Builder derives BOTH the steady-state
+// `bootstrap.WithManagedResource` registration AND the pre-Run rollback stack
+// from it, so a module cannot diverge the two (the former double-write bug).
 //
-// ## AI-robust rating: Hard (reflect interface method signature)
+// ## AI-robust rating: Hard (reflect interface method signature + struct fields)
 //
-// The archtest uses reflect.TypeOf to inspect the interface method set and
-// pins the exact In/Out type list. Changing the signature changes the reflect
-// shape → test fails immediately. There is no string-anchor or comment
-// allowlist; the rule is form-locked.
+// The archtest uses reflect.TypeOf to inspect (1) the interface method set,
+// pinning the exact In/Out type list, and (2) the ModuleResult struct field
+// set, pinning NumField()==3, the field names, types, and exported-ness.
+// Changing either reflect shape → test fails immediately. There is no
+// string-anchor or comment allowlist; the rule is form-locked.
 //
 // ## Blind spots and reverse self-checks
 //
@@ -35,8 +47,15 @@
 //     so hidden embedding with a shadowed Provide is caught.
 //  3. **Wrong package path**: if a different `CellModule` type in a sibling
 //     package were frozen instead, the archtest would pass vacuously. Mitigation:
-//     the test loads the type via `go/types` package path and asserts the
-//     canonical path suffix matches `/runtime/composition`.
+//     the reflect handle is taken from `composition.CellModule` / `composition.ModuleResult`
+//     directly (canonical import path), so a sibling type cannot be substituted.
+//  4. **Handoff field smuggled into ModuleResult**: a new exported field on
+//     ModuleResult (e.g. `Exports any`) would re-open value handoff without
+//     touching the method signature. `TestModuleProvideSignatureFrozen01_ModuleResultFieldsFrozen`
+//     asserts NumField()==3 and the exact field-name set {Cell,Opts,Resources},
+//     so any extra/renamed field fails. This is the structural successor of the
+//     old Out[]-list freeze (the resource/opts channels moved from positional
+//     returns into ModuleResult fields).
 //
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
@@ -44,10 +63,12 @@
 //   - Frozen method: `Provide`
 //   - Required In[0]: `context.Context`
 //   - Required In[1]: `*runtime/composition.SharedDeps`
-//   - Required Out[0]: `kernel/cell.Cell`
-//   - Required Out[1]: `[]runtime/bootstrap.Option`
-//   - Required Out[2]: `[]kernel/lifecycle.ManagedResource`
-//   - Required Out[3]: `error`
+//   - Required Out[0]: `runtime/composition.ModuleResult`
+//   - Required Out[1]: `error`
+//   - Frozen struct: `github.com/ghbvf/gocell/runtime/composition.ModuleResult`
+//   - Field "Cell": `kernel/cell.Cell`
+//   - Field "Opts": `[]runtime/bootstrap.Option`
+//   - Field "Resources": `[]kernel/lifecycle.ManagedResource`
 //
 // See also: `runtime/composition/cell_module.go` godoc §MODULE-PROVIDE-NO-VALUE-HANDOFF-01.
 package archtest
@@ -71,7 +92,7 @@ const ruleModuleProvideNoValueHandoff01 = "MODULE-PROVIDE-NO-VALUE-HANDOFF-01"
 // TestModuleProvideSignatureFrozen01 reflects over the composition.CellModule
 // interface and asserts that Provide has exactly the expected signature:
 //
-//	Provide(context.Context, *SharedDeps) (cell.Cell, []bootstrap.Option, []lifecycle.ManagedResource, error)
+//	Provide(context.Context, *SharedDeps) (ModuleResult, error)
 //
 // Any deviation — extra parameter, extra return, wrong types in any position —
 // causes an immediate test failure, preventing re-introduction of the
@@ -115,35 +136,72 @@ func TestModuleProvideSignatureFrozen01(t *testing.T) {
 		"%s: Provide In[1] must be *composition.SharedDeps; got %s",
 		ruleModuleProvideNoValueHandoff01, mt.In(1))
 
-	// Assert exactly 4 outputs.
-	require.Equal(t, 4, mt.NumOut(),
-		"%s: Provide must have exactly 4 output values (cell.Cell, []bootstrap.Option, []lifecycle.ManagedResource, error); got %d. "+
+	// Assert exactly 2 outputs (ModuleResult, error). The resource/opts channels
+	// now live as ModuleResult fields (single-source), not positional returns.
+	require.Equal(t, 2, mt.NumOut(),
+		"%s: Provide must have exactly 2 output values (ModuleResult, error); got %d. "+
 			"A ModuleExports or other cross-module handoff return is forbidden.",
 		ruleModuleProvideNoValueHandoff01, mt.NumOut())
 
-	// Assert Out[0] = cell.Cell
-	cellType := reflect.TypeOf((*cell.Cell)(nil)).Elem()
-	assert.Equal(t, cellType, mt.Out(0),
-		"%s: Provide Out[0] must be cell.Cell; got %s",
+	// Assert Out[0] = composition.ModuleResult
+	moduleResultType := reflect.TypeOf(composition.ModuleResult{})
+	assert.Equal(t, moduleResultType, mt.Out(0),
+		"%s: Provide Out[0] must be composition.ModuleResult; got %s",
 		ruleModuleProvideNoValueHandoff01, mt.Out(0))
 
-	// Assert Out[1] = []bootstrap.Option
-	bootstrapOptSliceType := reflect.TypeOf([]bootstrap.Option(nil))
-	assert.Equal(t, bootstrapOptSliceType, mt.Out(1),
-		"%s: Provide Out[1] must be []bootstrap.Option; got %s",
-		ruleModuleProvideNoValueHandoff01, mt.Out(1))
-
-	// Assert Out[2] = []lifecycle.ManagedResource
-	managedResSliceType := reflect.TypeOf([]kernellifecycle.ManagedResource(nil))
-	assert.Equal(t, managedResSliceType, mt.Out(2),
-		"%s: Provide Out[2] must be []lifecycle.ManagedResource; got %s",
-		ruleModuleProvideNoValueHandoff01, mt.Out(2))
-
-	// Assert Out[3] = error
+	// Assert Out[1] = error
 	errType := reflect.TypeOf((*error)(nil)).Elem()
-	assert.Equal(t, errType, mt.Out(3),
-		"%s: Provide Out[3] must be error; got %s",
-		ruleModuleProvideNoValueHandoff01, mt.Out(3))
+	assert.Equal(t, errType, mt.Out(1),
+		"%s: Provide Out[1] must be error; got %s",
+		ruleModuleProvideNoValueHandoff01, mt.Out(1))
+}
+
+// TestModuleProvideSignatureFrozen01_ModuleResultFieldsFrozen verifies blind
+// spot 4: the ModuleResult struct must have exactly three exported fields
+// {Cell, Opts, Resources} with the exact types. An extra field (e.g. a smuggled
+// `Exports any` handoff channel), a rename, or a type change fails immediately.
+func TestModuleProvideSignatureFrozen01_ModuleResultFieldsFrozen(t *testing.T) {
+	t.Parallel()
+
+	rt := reflect.TypeOf(composition.ModuleResult{})
+	require.Equal(t, reflect.Struct, rt.Kind(),
+		"%s: composition.ModuleResult must be a struct; got %s",
+		ruleModuleProvideNoValueHandoff01, rt.Kind())
+
+	// Exactly 3 fields — bans an extra handoff field.
+	require.Equal(t, 3, rt.NumField(),
+		"%s: ModuleResult must have exactly 3 fields {Cell, Opts, Resources}; got %d. "+
+			"A new field (e.g. an Exports handoff channel) is forbidden.",
+		ruleModuleProvideNoValueHandoff01, rt.NumField())
+
+	// Exact field-name set (catches a rename to a handoff-y field).
+	names := map[string]struct{}{}
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		assert.True(t, f.IsExported(),
+			"%s: ModuleResult field %q must be exported", ruleModuleProvideNoValueHandoff01, f.Name)
+		names[f.Name] = struct{}{}
+	}
+	assert.Equal(t, map[string]struct{}{"Cell": {}, "Opts": {}, "Resources": {}}, names,
+		"%s: ModuleResult field-name set must be exactly {Cell, Opts, Resources}",
+		ruleModuleProvideNoValueHandoff01)
+
+	// Exact field types.
+	cellField, ok := rt.FieldByName("Cell")
+	require.True(t, ok, "%s: ModuleResult.Cell must exist", ruleModuleProvideNoValueHandoff01)
+	assert.Equal(t, reflect.TypeOf((*cell.Cell)(nil)).Elem(), cellField.Type,
+		"%s: ModuleResult.Cell must be cell.Cell; got %s", ruleModuleProvideNoValueHandoff01, cellField.Type)
+
+	optsField, ok := rt.FieldByName("Opts")
+	require.True(t, ok, "%s: ModuleResult.Opts must exist", ruleModuleProvideNoValueHandoff01)
+	assert.Equal(t, reflect.TypeOf([]bootstrap.Option(nil)), optsField.Type,
+		"%s: ModuleResult.Opts must be []bootstrap.Option; got %s", ruleModuleProvideNoValueHandoff01, optsField.Type)
+
+	resField, ok := rt.FieldByName("Resources")
+	require.True(t, ok, "%s: ModuleResult.Resources must exist", ruleModuleProvideNoValueHandoff01)
+	assert.Equal(t, reflect.TypeOf([]kernellifecycle.ManagedResource(nil)), resField.Type,
+		"%s: ModuleResult.Resources must be []lifecycle.ManagedResource; got %s",
+		ruleModuleProvideNoValueHandoff01, resField.Type)
 }
 
 // TestModuleProvideSignatureFrozen_ReverseCheck_AliasNotPresent verifies blind

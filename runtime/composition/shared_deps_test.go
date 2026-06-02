@@ -43,9 +43,6 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	cec, err := obmetrics.NewProviderConfigEventCollector(mp)
 	require.NoError(t, err)
 
-	ebc, err := obmetrics.NewProviderEventbusCacheCollector(mp)
-	require.NoError(t, err)
-
 	eb := eventbus.New(clk)
 	claimer := idempotency.NewInMemClaimer(clk)
 	issuer, verifier := buildTestJWTPair(t, clk)
@@ -54,15 +51,14 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	require.NoError(t, err)
 
 	s, err := NewSharedDeps(SharedDeps{
-		Clock:                  clk,
-		Topology:               topo,
-		JWTIssuer:              issuer,
-		JWTVerifier:            verifier,
-		MetricsProvider:        mp,
-		EventBus:               eb,
-		ConfigEventCollector:   cec,
-		EventbusCacheCollector: ebc,
-		ConsumerClaimer:        claimer,
+		Clock:                clk,
+		Topology:             topo,
+		JWTIssuer:            issuer,
+		JWTVerifier:          verifier,
+		MetricsProvider:      mp,
+		EventBus:             eb,
+		ConfigEventCollector: cec,
+		ConsumerClaimer:      claimer,
 	})
 	require.NoError(t, err)
 	return s
@@ -226,10 +222,6 @@ func TestSharedDeps_Validate_MissingFields(t *testing.T) {
 		{
 			name:  "ConfigEventCollector nil",
 			mutFn: func(s *SharedDeps) { s.ConfigEventCollector = nil },
-		},
-		{
-			name:  "EventbusCacheCollector nil",
-			mutFn: func(s *SharedDeps) { s.EventbusCacheCollector = nil },
 		},
 		{
 			name:  "ConsumerClaimer nil",

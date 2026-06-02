@@ -44,6 +44,12 @@ import (
 // outside the metrics.Provider abstraction — adapter-internal idempotent
 // register-or-reuse pattern, originally lifted from cmd/corebundle.
 //
+// Note: as of #1413 there is no production caller — configcore's stale-cipher
+// counter (its sole consumer) migrated to the kernel MetricsProvider. The export
+// is retained as the sanctioned bare-counter helper for future adapter-internal
+// use; its caller-allowlist (METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01) is empty, so
+// a new caller must add its file there with justification.
+//
 // ref: kubernetes component-base/metrics/counter.go (idempotent registration pattern)
 func RegisterOrReuseCounter(reg prom.Registerer, opts prom.CounterOpts) (prom.Counter, error) {
 	c := promwrap.NewCounter(opts)
