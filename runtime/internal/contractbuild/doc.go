@@ -23,12 +23,14 @@
 //   - generated/contracts/**/spec_gen.go — business contracts (contractgen
 //     codegen output).
 //   - this package — framework-owned HTTP infra (health probes, devtools
-//     catalog) and event-tracing derivations.
+//     catalog), event-tracing derivations, and webhook-dispatch subscription
+//     specs.
 //
 // Hand-written ContractSpec{…} composite literals are forbidden under cells/,
 // examples/**/cells/, and runtime/ by archtest NO-MANUAL-CONTRACTSPEC-LITERAL-01
-// (downstream Hard). The two funnels here — NewFrameworkHTTP and
-// NewEventDerivation — are the only legitimate runtime-side construction paths.
+// (downstream Hard). The three funnels here — NewFrameworkHTTP,
+// NewEventDerivation, and NewWebhookDispatch — are the only legitimate
+// runtime-side construction paths.
 //
 // Location: this package lives under runtime/internal/, so the Go compiler
 // itself refuses imports from outside the runtime/ subtree (cells/, examples/,
@@ -68,8 +70,9 @@
 //     unrepresentable. (The literal-ban is archtest-enforced, not a compiler
 //     gate; per the established grading it is the funnel's downstream Hard.)
 //   - Within-runtime construction: open by design for the funnel CALL (any
-//     runtime/ framework infra may call NewFrameworkHTTP / NewEventDerivation —
-//     these are framework-owned infra, not business contracts), while a raw
+//     runtime/ framework infra may call NewFrameworkHTTP / NewEventDerivation /
+//     NewWebhookDispatch — these are framework-owned infra, not business
+//     contracts), while a raw
 //     contractspec.ContractSpec{…} literal inside runtime/ is still caught by
 //     NO-MANUAL-CONTRACTSPEC-LITERAL-01. There is no within-runtime caller
 //     allowlist to Hard-ify (it was retired, see below) — the openness is

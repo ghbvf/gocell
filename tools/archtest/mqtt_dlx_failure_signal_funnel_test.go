@@ -213,6 +213,10 @@ func blockReturnPrecededByFailureSignal(info *types.Info, block *ast.BlockStmt, 
 func scanRouteDeadLetterReturns(p *Pass, f *ast.File, fd *ast.FuncDecl) ([]Diagnostic, int) {
 	var diags []Diagnostic
 	var returnCount int
+	// EachInSubtree[BlockStmt] visits every block at any depth (matches the old
+	// ast.Inspect walk); EachInChildren[ReturnStmt] is depth-1 — correct because
+	// a ReturnStmt is always a direct child of its enclosing block, which is the
+	// "same block" the preceding-signal check requires.
 	scanner.EachInSubtree[ast.BlockStmt](fd.Body, func(block *ast.BlockStmt) {
 		scanner.EachInChildren[ast.ReturnStmt](block, func(ret *ast.ReturnStmt) {
 			returnCount++

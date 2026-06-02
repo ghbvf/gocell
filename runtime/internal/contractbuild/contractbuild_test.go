@@ -247,6 +247,13 @@ func TestNewEventDerivation(t *testing.T) {
 // TestNewWebhookDispatch verifies that NewWebhookDispatch produces the expected
 // ContractSpec from a valid DispatchSpec and rejects invalid input.
 func TestNewWebhookDispatch(t *testing.T) {
+	// All wantErr cases below exercise the first layer (spec.Validate()): a
+	// DispatchSpec has only three required fields and any empty one fails there.
+	// The funnel's second layer (cs.Validate()) is unreachable-as-failure given
+	// the hardcoded valid Kind/Transport and the non-empty ID/Topic derived from
+	// the already-validated ContractID (see NewWebhookDispatch godoc), so there is
+	// no independent layer-2 case to add — unlike NewEventDerivation, whose Kind
+	// comes from caller data and therefore needs a badKind case.
 	t.Parallel()
 	cases := []struct {
 		name    string

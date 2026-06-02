@@ -75,10 +75,19 @@ const webhookDispatchTransport = "amqp"
 // declaration funnel: Topic == spec.ContractID (the producing cell emits to
 // that topic; the dispatcher signs and POSTs each delivered entry).
 //
+// Transport is fixed to "amqp" (webhookDispatchTransport): outbound webhook
+// dispatchers are exclusively broker-consumed, so — unlike NewEventDerivation,
+// which derives Transport from sub.ContractTransport — there is nothing to
+// derive; the constant is the whole truth.
+//
 // Provenance is type- AND content-enforced: the parameter is a typed
 // webhook.DispatchSpec (not loose primitives), validated inside the funnel
-// before deriving, and the derived spec is run through ContractSpec.Validate()
-// (defense in depth). Callers MUST handle the returned error.
+// before deriving, and the derived spec is run through ContractSpec.Validate().
+// That second check is belt-and-suspenders here (Kind/Transport are hardcoded
+// valid and ID/Topic come from the already-validated non-empty ContractID, so it
+// cannot fail today) — kept for parity with NewEventDerivation and so a future
+// change to the hardcoded values still fails closed. Callers MUST handle the
+// returned error.
 func NewWebhookDispatch(spec webhook.DispatchSpec) (contractspec.ContractSpec, error) {
 	if err := spec.Validate(); err != nil {
 		return contractspec.ContractSpec{}, fmt.Errorf("contractbuild: NewWebhookDispatch: dispatch spec invalid: %w", err)
