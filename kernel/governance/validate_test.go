@@ -151,6 +151,7 @@ func validProject() *metadata.ProjectMeta {
 				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
+				Transports:       []string{"http"},
 				Endpoints: metadata.EndpointsMeta{
 					Server:  metadatatest.CellIDAccessCore,
 					Clients: []string{metadatatest.CellIDAuditCore},
@@ -173,6 +174,7 @@ func validProject() *metadata.ProjectMeta {
 				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
+				Transports:       []string{"amqp"},
 				Endpoints: metadata.EndpointsMeta{
 					Publisher: metadatatest.CellIDAccessCore,
 					// accesscore/session-projection subscribes with a projection CU
@@ -191,6 +193,7 @@ func validProject() *metadata.ProjectMeta {
 				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L3",
 				Lifecycle:        "active",
+				Transports:       []string{"internal"},
 				Endpoints: metadata.EndpointsMeta{
 					Provider: metadatatest.CellIDAccessCore,
 					Readers:  []string{metadatatest.CellIDAuditCore},
@@ -2370,6 +2373,183 @@ func TestFMT37(t *testing.T) {
 			}
 			// Pin the Field path for single-finding cases so a branch that fires
 			// with the wrong Field (count + IssueType intact) is caught.
+			if tt.wantField != "" {
+				require.Len(t, got, 1)
+				assert.Equal(t, tt.wantField, got[0].Field)
+			}
+		})
+	}
+}
+
+// --- FMT-39: contract transports validation + kind↔compat matrix ---
+
+func TestFMT39(t *testing.T) {
+	// contractWith returns a ContractMeta with the given kind and transports;
+	// other required fields are filled with valid defaults.
+	contractWith := func(id, kind string, transports []string) *metadata.ContractMeta {
+		c := &metadata.ContractMeta{
+			ID:               id,
+			Kind:             kind,
+			OwnerCell:        metadatatest.CellIDAccessCore,
+			ConsistencyLevel: "L1",
+			Lifecycle:        "active",
+			Transports:       transports,
+			Dir:              "contracts/" + kind + "/test/v1",
+			File:             "contracts/" + kind + "/test/v1/contract.yaml",
+		}
+		switch kind {
+		case "event":
+			c.Endpoints.Publisher = metadatatest.CellIDAccessCore
+			replayable := true
+			c.Replayable = &replayable
+			c.IdempotencyKey = "id"
+			c.DeliverySemantics = "at-least-once"
+		case "http":
+			c.Endpoints.Server = metadatatest.CellIDAccessCore
+			c.Endpoints.HTTP = &metadata.HTTPTransportMeta{
+				Method: "GET", Path: "/api/v1/test", SuccessStatus: 200,
+			}
+		case "grpc":
+			c.Endpoints.Server = metadatatest.CellIDAccessCore
+			c.Endpoints.GRPC = &metadata.GRPCTransportMeta{
+				Service: "test.v1.TestService", Method: "Do",
+				Proto: "contracts/grpc/test/v1/test.proto",
+			}
+		case "projection":
+			c.ConsistencyLevel = "L3"
+			c.Endpoints.Provider = metadatatest.CellIDAccessCore
+			replayable := true
+			c.Replayable = &replayable
+		case "saga":
+			c.ConsistencyLevel = "L3"
+			c.Endpoints.Server = metadatatest.CellIDAccessCore
+		}
+		return c
+	}
+
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+		wantIssue IssueType
+		wantField string
+	}{
+		{
+			name:      "no contracts — vacuous pass",
+			setup:     func(pm *metadata.ProjectMeta) { pm.Contracts = map[string]*metadata.ContractMeta{} },
+			wantCount: 0,
+		},
+		// event + [amqp, mqtt] — valid subset
+		{
+			name: "event with [amqp,mqtt] — valid subset",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.test.v1"] = contractWith("event.test.v1", "event", []string{"amqp", "mqtt"})
+			},
+			wantCount: 0,
+		},
+		// event + [amqp] — valid single-element subset
+		{
+			name: "event with [amqp] — valid",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.test.v1"] = contractWith("event.test.v1", "event", []string{"amqp"})
+			},
+			wantCount: 0,
+		},
+		// event + [kafka] — unknown transport
+		{
+			name: "event with unknown transport [kafka]",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.test.v1"] = contractWith("event.test.v1", "event", []string{"kafka"})
+			},
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "transports[0]",
+		},
+		// http + [amqp] — kind mismatch
+		{
+			name: "http with [amqp] — kind mismatch",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.test.v1"] = contractWith("http.test.v1", "http", []string{"amqp"})
+			},
+			wantCount: 1,
+			wantIssue: IssueMismatch,
+			wantField: "transports",
+		},
+		// http + [http] — valid exact match
+		{
+			name: "http with [http] — valid",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.test.v1"] = contractWith("http.test.v1", "http", []string{"http"})
+			},
+			wantCount: 0,
+		},
+		// duplicate transport
+		{
+			name: "event with duplicate [amqp,amqp]",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.test.v1"] = contractWith("event.test.v1", "event", []string{"amqp", "amqp"})
+			},
+			wantCount: 1,
+			wantIssue: IssueDuplicate,
+			wantField: "transports[1]",
+		},
+		// empty transports
+		{
+			name: "event with nil transports",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.test.v1"] = contractWith("event.test.v1", "event", nil)
+			},
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "transports",
+		},
+		// grpc + [grpc] — valid
+		{
+			name: "grpc with [grpc] — valid",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.test.v1"] = contractWith("grpc.test.v1", "grpc", []string{"grpc"})
+			},
+			wantCount: 0,
+		},
+		// saga + [internal] — valid
+		{
+			name: "saga with [internal] — valid",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["saga.test.v1"] = contractWith("saga.test.v1", "saga", []string{"internal"})
+			},
+			wantCount: 0,
+		},
+		// event + [http] — kind mismatch (http not in allowed subset for event)
+		{
+			name: "event with [http] — kind mismatch",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.test.v1"] = contractWith("event.test.v1", "event", []string{"http"})
+			},
+			wantCount: 1,
+			wantIssue: IssueMismatch,
+		},
+		// projection + [internal] — valid
+		{
+			name: "projection with [internal] — valid",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["projection.test.v1"] = contractWith("projection.test.v1", "projection", []string{"internal"})
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "", clock.Real())
+			got := findByCode(val.validateFMT39(), "FMT-39")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				if tt.wantIssue != "" {
+					assert.Equal(t, tt.wantIssue, r.IssueType)
+				}
+			}
 			if tt.wantField != "" {
 				require.Len(t, got, 1)
 				assert.Equal(t, tt.wantField, got[0].Field)

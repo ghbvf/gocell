@@ -107,6 +107,10 @@ func goldenRuleIDs() []string {
 		// FMT-38: webhook contract-side required fields — inbound→signature+payload;
 		// signature.algorithm==hmac-sha256 (live parity with FMT-04; #1265).
 		"FMT-38",
+		// FMT-39: contract.transports closed-enum validation + kind↔transport
+		// compatibility matrix (event⊆{amqp,mqtt,internal}, command⊆{amqp,internal},
+		// http/grpc/webhook/projection/saga==singleton). Mirrors FMT-37 structurally.
+		"FMT-39",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency

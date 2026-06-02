@@ -1930,6 +1930,152 @@ func (v *Validator) fmt38PayloadFieldChecks(c *metadata.ContractMeta) []Validati
 	)}
 }
 
+// validateFMT39 validates contract.yaml `transports` for every contract in the
+// project. Three orthogonal sub-checks run in declaration order:
+//
+//  1. Non-empty: nil or empty Transports slice → error (parser only defaults
+//     known kinds; unknown kind defaults to nil, indicating a configuration
+//     error caught by FMT-09 before FMT-39, but we guard here too).
+//  2. Known values: every element ∈ metadata.TransportEnum (single source shared
+//     with schema and runtime); unknown value → error.
+//  3. No duplicates: the same transport value must not appear more than once.
+//  4. Kind-compat matrix: each contract kind restricts the accepted transport
+//     set. The matrix uses cellvocab.Transport* consts to avoid bare literals:
+//     - event      ⊆ {amqp, mqtt, internal}
+//     - command    ⊆ {amqp, internal}
+//     - projection ⊆ {internal}
+//     - http       == {http}
+//     - grpc       == {grpc}
+//     - webhook    == {http}
+//     - saga       == {internal}
+//
+// "⊆" means every declared element must be in the allowed set (subset).
+// "==" means the set must equal exactly the singleton (no more, no less).
+//
+// AI-robust: Medium (governance YAML-metadata validate layer; same tier as
+// FMT-36/FMT-37/FMT-38). The transport set is Hard-locked to the schema enum
+// via TestSchemaConstantsMatchSchemaLiterals#transportEnum.
+func (v *Validator) validateFMT39() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		results = append(results, v.validateFMT39ForContract(c)...)
+	}
+	return results
+}
+
+// validateFMT39ForContract validates a single contract's transports field.
+func (v *Validator) validateFMT39ForContract(c *metadata.ContractMeta) []ValidationResult {
+	file := contractFile(c)
+	var results []ValidationResult
+
+	// 1. Non-empty guard.
+	if len(c.Transports) == 0 {
+		results = append(results, v.newError(
+			codeFMT39, IssueRequired,
+			file, "transports",
+			fmt.Sprintf("contract %q has no transports declared; parser defaults per-kind, indicating an unknown or misconfigured kind", c.ID),
+			"declare transports or ensure kind is a known value",
+		))
+		return results
+	}
+
+	// 2. Unknown-value + 3. Duplicate checks.
+	seen := make(map[string]bool, len(c.Transports))
+	for i, t := range c.Transports {
+		field := fmt.Sprintf("transports[%d]", i)
+		if !metadata.IsKnownTransport(t) {
+			results = append(results, v.newError(
+				codeFMT39, IssueInvalid,
+				file, field,
+				fmt.Sprintf("contract %q transports[%d]=%q is not one of %v", c.ID, i, t, metadata.TransportEnum),
+				"use one of the allowed transport values: amqp, mqtt, internal, http, grpc",
+			))
+			continue
+		}
+		if seen[t] {
+			results = append(results, v.newError(
+				codeFMT39, IssueDuplicate,
+				file, field,
+				fmt.Sprintf("contract %q transports[%d]=%q is a duplicate; each transport may appear at most once", c.ID, i, t),
+				"remove the duplicate transport entry",
+			))
+			continue
+		}
+		seen[t] = true
+	}
+	if len(results) > 0 {
+		// Skip compat matrix when basic validation failed to avoid cascading noise.
+		return results
+	}
+
+	// 4. Kind↔transport compatibility matrix.
+	return v.checkFMT39KindCompat(c, file)
+}
+
+// checkFMT39KindCompat enforces the kind↔transport compatibility matrix.
+// "subset" kinds allow any sub-set of the allowed set;
+// "exact" kinds require precisely the named singleton.
+func (v *Validator) checkFMT39KindCompat(c *metadata.ContractMeta, file string) []ValidationResult {
+	kind := cellvocab.ContractKind(c.Kind)
+
+	// Exact-match kinds: transports must equal exactly one singleton.
+	exactSingleton := map[cellvocab.ContractKind]cellvocab.Transport{
+		cellvocab.ContractHTTP:       cellvocab.TransportHTTP,
+		cellvocab.ContractGRPC:       cellvocab.TransportGRPC,
+		cellvocab.ContractWebhook:    cellvocab.TransportHTTP,
+		cellvocab.ContractProjection: cellvocab.TransportInternal,
+		cellvocab.ContractSaga:       cellvocab.TransportInternal,
+	}
+	if want, ok := exactSingleton[kind]; ok {
+		if len(c.Transports) != 1 || c.Transports[0] != string(want) {
+			return []ValidationResult{v.newError(
+				codeFMT39, IssueMismatch,
+				file, "transports",
+				fmt.Sprintf(
+					"contract %q (kind %q) must have transports=[%q] exactly; got %v",
+					c.ID, c.Kind, string(want), c.Transports,
+				),
+				fmt.Sprintf("set transports: [%q] for kind=%q contracts", string(want), c.Kind),
+			)}
+		}
+		return nil
+	}
+
+	// Subset kinds: each element must be in the allowed set.
+	allowedSubsets := map[cellvocab.ContractKind][]cellvocab.Transport{
+		cellvocab.ContractEvent:   {cellvocab.TransportAMQP, cellvocab.TransportMQTT, cellvocab.TransportInternal},
+		cellvocab.ContractCommand: {cellvocab.TransportAMQP, cellvocab.TransportInternal},
+	}
+	allowed, isSubset := allowedSubsets[kind]
+	if !isSubset {
+		// Unknown kind — FMT-09 handles it; skip compat.
+		return nil
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, t := range allowed {
+		allowedSet[string(t)] = true
+	}
+	allowedNames := make([]string, len(allowed))
+	for i, t := range allowed {
+		allowedNames[i] = string(t)
+	}
+	var results []ValidationResult
+	for i, t := range c.Transports {
+		if !allowedSet[t] {
+			results = append(results, v.newError(
+				codeFMT39, IssueMismatch,
+				file, fmt.Sprintf("transports[%d]", i),
+				fmt.Sprintf(
+					"contract %q (kind %q) transport %q is not compatible; allowed: %v",
+					c.ID, c.Kind, t, allowedNames,
+				),
+				fmt.Sprintf("use only compatible transports for kind=%q: %v", c.Kind, allowedNames),
+			))
+		}
+	}
+	return results
+}
+
 // sliceMixesHTTPVisibility reports whether s serves at least one public
 // (/api/*) HTTP contract and at least one internal (/internal/v1) HTTP
 // contract via role=serve usages — the SLICE-HTTP-VISIBILITY-SEGREGATION-01
