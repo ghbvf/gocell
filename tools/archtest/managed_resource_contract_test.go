@@ -68,6 +68,8 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/postgres.OutboxWriter":              "stateless-adapter: writes through ctx-bound transaction",
 	"adapters/postgres.PGCommandQueue":            "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PGOutboxStore":             "subresource-not-owner: storage facade over caller-owned pool",
+	"adapters/postgres.PGProjectionCursor":        "subresource-not-owner: cursor over caller-owned replay source",
+	"adapters/postgres.PGProjectionReplaySource":  "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PGRefreshStore":            "subresource-not-owner: storage facade over caller-owned pool",
 	"adapters/postgres.PoolStats":                 "value-object: pool diagnostic snapshot",
 	"adapters/postgres.ProjectionCheckpointStore": "subresource-not-owner: storage facade over caller-owned pool",
