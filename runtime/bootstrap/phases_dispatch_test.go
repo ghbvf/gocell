@@ -173,7 +173,10 @@ func TestDrainWebhookDispatchers_FailsWhenSubscriberNil(t *testing.T) {
 // an event consumer, so a Subscriber that is present but backed by a nil or
 // zero-value ConsumerBase (the latter passes the bare nil check but
 // IsConstructed()==false) must fail fast, naming the dispatcher — not silently
-// dispatch through an uninitialized ConsumerBase. Mirrors
+// dispatch through an uninitialized ConsumerBase. The guard lives in
+// checkConsumerBaseConfiguredForSubscriptions (called by phase6StartEventRouter),
+// not in drainWebhookDispatchers itself, so these subtests drive
+// phase6StartEventRouter. Mirrors
 // TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast for the dispatcher
 // consumer kind.
 func TestDrainWebhookDispatchers_FailsWhenConsumerBaseMissing(t *testing.T) {

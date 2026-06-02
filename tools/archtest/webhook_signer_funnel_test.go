@@ -33,8 +33,9 @@
 //	  is ineffective. EvaluateConstString folds across const definitions.
 //	  ResolveEnclosingFunc binds the allowance to a go/types FullName — a
 //	  stray func that merely shares the name "Apply" cannot inherit it.
-//	上游 (provenance) — NOT closed; this is a Hard-downstream + open-upstream
-//	  funnel, NOT a closed double-lock. [Headers] is a PUBLIC struct with
+//	上游 (provenance) — NOT closed (low-severity provenance gap; risk analysis
+//	  below). This is a Hard-downstream + open-upstream funnel, NOT a closed
+//	  double-lock. [Headers] is a PUBLIC struct with
 //	  EXPORTED fields and is ALSO the inbound DTO consumed by [Verifier.Verify]
 //	  (the receiver constructs a Headers from request headers), so a caller CAN
 //	  build a `webhook.Headers{Signature: …}` literal and call Apply with a value

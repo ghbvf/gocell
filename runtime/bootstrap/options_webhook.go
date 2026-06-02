@@ -32,7 +32,8 @@ import (
 // secrets by source ID. It serves BOTH directions: inbound webhook receivers
 // (phase5) verify incoming signatures against it, and outbound webhook
 // dispatchers (phase6) resolve each dispatcher's signing secret from it
-// (BuildConsumers → SourceStore.Lookup). A nil or typed-nil value is silently
+// (inbound: BuildRouteGroups → SourceStore.Lookup; outbound: BuildConsumers →
+// SourceStore.Lookup). A nil or typed-nil value is silently
 // ignored; the final nil check happens at the consuming phase — phase5 if any
 // cell declared a receiver, phase6 if any cell declared a dispatcher.
 //
