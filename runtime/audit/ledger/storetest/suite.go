@@ -1022,6 +1022,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		TenantID:      "tenant-alpha",
 		SessionID:     "sess-42",
 		CorrelationID: "corr-xyz-001",
+		TraceID:       "4bf92f3577b34da6a3ce929d0e0e4736",
 		OccurredAt:    occurredAt,
 		Timestamp:     fc.Now(),
 		Payload:       []byte(`{"action":"login"}`),
