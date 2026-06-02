@@ -104,16 +104,23 @@ func (p *SafePolicy) DialContext(ctx context.Context, network, address string) (
 
 	// Hostname: resolve once, vet ALL answers (fail-closed if any is blocked),
 	// then dial the first vetted IP literal. No re-resolution → rebinding-proof.
+	//
+	// A resolution FAILURE (or an empty answer set) is fail-closed at the dial
+	// layer — we refuse to connect to an un-vettable target — but it is a
+	// TRANSIENT delivery error, NOT an SSRF policy block: a DNS hiccup or
+	// propagation delay may resolve on retry, so Classify must Requeue (not
+	// Reject/DLX) it. Conflating "could not resolve" with "resolved to a blocked
+	// address" would permanently dead-letter deliveries on a transient DNS fault.
 	addrs, err := p.resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
+		return nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrWebhookDeliveryFailed,
 			"webhook: dial host resolution failed", err,
 			errcode.WithInternal(
 				errcode.InternalAttr("reason", "resolution_failed"),
 				errcode.InternalAttr("host", host)))
 	}
 	if len(addrs) == 0 {
-		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrWebhookDeliveryFailed,
 			"webhook: dial host resolved to no addresses",
 			errcode.WithInternal(
 				errcode.InternalAttr("reason", "no_addresses"),
@@ -167,6 +174,14 @@ func (p *SafePolicy) ValidateTargetURL(rawURL string) error {
 			"webhook: dispatch target URL is not parseable", err,
 			errcode.WithInternal(errcode.InternalAttr("reason", "unparseable")))
 	}
+	// Reject embedded userinfo (user:pass@host): the HTTP client would emit it as
+	// a Basic-Auth header, and it would otherwise leak into redirect/error logs.
+	// A webhook target's auth belongs in the signed payload / headers, not the URL.
+	if u.User != nil {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
+			"webhook: dispatch target URL must not embed userinfo credentials",
+			errcode.WithInternal(errcode.InternalAttr("reason", "userinfo_not_allowed")))
+	}
 	switch strings.ToLower(u.Scheme) {
 	case "http", "https":
 	default:
@@ -199,7 +214,7 @@ func (p *SafePolicy) ValidateTargetURL(rawURL string) error {
 func (p *SafePolicy) DenyRedirect(_ *http.Request, via []*http.Request) error {
 	from := ""
 	if n := len(via); n > 0 && via[n-1] != nil && via[n-1].URL != nil {
-		from = via[n-1].URL.String()
+		from = via[n-1].URL.Redacted() // mask any userinfo password before it reaches slog
 	}
 	return errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
 		"webhook: redirects are not permitted on outbound delivery",

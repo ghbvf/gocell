@@ -125,3 +125,23 @@ func CompilePasswordResetExempts(entries []string) (func(method, urlPath string)
 		return false
 	}, nil
 }
+
+// CompileIdempotencyExempts compiles a list of "METHOD /path" entries into a
+// request-level predicate used by the idempotency middleware's WithExemptMatcher
+// option. Path segments of the form {xxx} match any single non-empty URL segment
+// (same template semantics as CompilePasswordResetExempts), e.g.
+// "POST /api/v1/access/users/{id}/password".
+//
+// The returned predicate accepts *http.Request and inspects r.Method and
+// r.URL.Path — suitable for WithExemptMatcher.
+//
+// Validation and error aggregation behavior mirrors CompilePasswordResetExempts.
+func CompileIdempotencyExempts(entries []string) (func(*http.Request) bool, error) {
+	inner, err := CompilePasswordResetExempts(entries)
+	if err != nil {
+		return nil, err
+	}
+	return func(r *http.Request) bool {
+		return inner(r.Method, r.URL.Path)
+	}, nil
+}

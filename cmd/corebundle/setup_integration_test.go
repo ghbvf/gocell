@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,10 +30,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -112,10 +113,22 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	multiStore, err := ledger.NewMultiStore(auditStore, bootstrapRaw)
 	require.NoError(t, err)
 
-	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
-		slog.Default(), bootstrapWrapped, clock.Real(),
-	)
-	require.NoError(t, err)
+	// Wave-1 #1423: the bootstrap auth-fail observer no longer writes auditcore's
+	// ledger directly. It emits event.auth.bootstrap-failed.v1 via accesscore's
+	// setup service (RecordBootstrapAuthFail); auditcore subscribes and writes the
+	// bootstrap-namespace ledger. C7: atomic.Pointer eliminates the unsynchronized
+	// late-assignment; Store runs before bootstrap.Run, Load fires post-Init.
+	var acAtomicPtr atomic.Pointer[accesscore.AccessCore]
+	bootstrapAuthObserver := auth.BootstrapAuthFailObserver(func(ctx context.Context, reason string) {
+		ip, _ := ctxkeys.RealIPFrom(ctx)
+		ac := acAtomicPtr.Load()
+		if ac == nil {
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, testtime.D2s)
+		defer cancel()
+		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, ip)
+	})
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
@@ -134,6 +147,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
+	acAtomicPtr.Store(ac)
 	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
@@ -151,6 +165,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		auditcore.WithLedgerProtocol(auditProto),
 		auditcore.WithLedgerStore(auditStore),
 		auditcore.WithQueryStore(multiStore),
+		auditcore.WithBootstrapStore(bootstrapWrapped),
 	)
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "setup-test", DurabilityMode: outbox.DurabilityDemo})
@@ -232,11 +247,21 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(raw), "ERR_AUTH_BOOTSTRAP_FAILED")
 
+		// #1423: the bootstrap auth-fail audit entry is now written asynchronously
+		// (observer emits event.auth.bootstrap-failed.v1 → auditcore subscriber
+		// writes the bootstrap-namespace ledger), so poll until it lands.
+		testwait.External(t, "bootstrap-missing-header-audit", func() bool {
+			es, qerr := multiStore.Query(context.Background(),
+				ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+				query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
+			return qerr == nil && len(es) >= 1
+		}, testtime.EventuallyDefault, testtime.MediumPoll,
+			"401 missing-header path must write a bootstrap.auth.fail ledger entry (async)")
 		entries, err := multiStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
-		require.GreaterOrEqual(t, len(entries), 1, "401 missing-header path must write a bootstrap.auth.fail ledger entry")
+		require.GreaterOrEqual(t, len(entries), 1)
 		var payloadStruct struct {
 			Reason   string `json:"reason"`
 			ClientIP string `json:"clientIp"`
@@ -262,12 +287,20 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 			"setup/admin with wrong Basic Auth password must 401")
 
+		// #1423: async delivery — poll until both failure events have been
+		// consumed and appended to the chain.
+		testwait.External(t, "bootstrap-wrong-creds-audit", func() bool {
+			es, qerr := multiStore.Query(context.Background(),
+				ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+				query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
+			return qerr == nil && len(es) >= 2
+		}, testtime.EventuallyDefault, testtime.MediumPoll,
+			"wrong-credentials path must add a second bootstrap.auth.fail entry (async)")
 		entries, err := multiStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
-		require.GreaterOrEqual(t, len(entries), 2,
-			"wrong-credentials path must add a second bootstrap.auth.fail entry (missing_header from 2a is first)")
+		require.GreaterOrEqual(t, len(entries), 2)
 		// Scan reasons regardless of result ordering — the contract is that BOTH
 		// reasons appear in the chain at this point, not the ordering itself.
 		var seen []string
@@ -420,8 +453,19 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	multiStore, err := ledger.NewMultiStore(auditStore, bootstrapRaw)
 	require.NoError(t, err)
 
-	auditObserver, err := audit.NewBootstrapAuthFailObserver(slog.Default(), bootstrapWrapped, clock.Real())
-	require.NoError(t, err, "build bootstrap audit observer")
+	// Wave-1 #1423: event-based observer (see TestSetupEndpoints_FirstRunFlow).
+	// C7: atomic.Pointer eliminates the unsynchronized late-assignment.
+	var acAtomicPtr2 atomic.Pointer[accesscore.AccessCore]
+	bootstrapObserver := auth.BootstrapAuthFailObserver(func(ctx context.Context, reason string) {
+		ip, _ := ctxkeys.RealIPFrom(ctx)
+		ac := acAtomicPtr2.Load()
+		if ac == nil {
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, testtime.D2s)
+		defer cancel()
+		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, ip)
+	})
 
 	limiter := &setupTestBlockAfterNLimiter{remaining: capacity}
 	bootstrapMW := auth.NewBootstrapMiddleware(
@@ -430,7 +474,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 			Password: []byte(setupTestBootstrapPassword),
 		},
 		limiter,
-		auditObserver,
+		bootstrapObserver,
 	)
 
 	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
@@ -442,6 +486,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
+	acAtomicPtr2.Store(ac)
 	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
@@ -459,6 +504,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		auditcore.WithLedgerProtocol(auditProtocol),
 		auditcore.WithLedgerStore(auditStore),
 		auditcore.WithQueryStore(multiStore),
+		auditcore.WithBootstrapStore(bootstrapWrapped),
 	)
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "ratelimit-test", DurabilityMode: outbox.DurabilityDemo})
@@ -527,15 +573,24 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode, "exhausted limiter must return 429")
 	assert.NotEmpty(t, resp.Header.Get("Retry-After"), "429 response must carry Retry-After header")
 
-	// Audit-chain assertion: the observer is called synchronously in
-	// runtime/auth/bootstrap.go (onAuthFail(r.Context(), reason) at line 107),
-	// before the HTTP response is closed. By the time resp.Body.Close() returns
-	// above, the ledger Append has already completed — no Eventually needed.
-	// Query the MultiStore to mirror the auditquery read path.
+	// #1423: the rate-limited path emits event.auth.bootstrap-failed.v1; auditcore
+	// subscribes and appends to the bootstrap-namespace ledger asynchronously, so
+	// poll until it lands. The two prior (authenticated) requests pass bootstrap
+	// auth and produce no auth-fail event, so exactly one entry is expected.
+	testwait.External(t, "bootstrap-ratelimited-audit", func() bool {
+		es, qe := multiStore.Query(context.Background(),
+			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
+		return qe == nil && len(es) >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll,
+		"rate-limited path must write a bootstrap.auth.fail ledger entry (async)")
 	entries, qerr := multiStore.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
+	// F24: require.Len (exactly 1) is safe here because the test sends a single
+	// rate-limited request. The two prior requests passed Bootstrap auth and
+	// produced no auth-fail event. Serial execution means exactly 1 entry.
 	require.Len(t, entries, 1, "exactly one rate_limited entry expected")
 
 	var payload struct {

@@ -381,6 +381,17 @@ PR-04 触碰 `.claude/skills/*`：无（仅 codegen + metadata），不触发 sk
 
 ## 6. PR-05 — Governance PROJECTION-CONSISTENCY-01 升 Hard (~1000 行)
 
+> **SUPERSEDED (gh #960 delivered 2026-06-02).** 本节的「parser load-time
+> `jsonschema.Validate` + `PROJECTION-CONSISTENCY-PARSE-TIME-01` archtest」方案在
+> 落地时被**否决**：parse-time 校验按 AI-robust 章程是 **Medium** runtime guard（违反
+> 可表达、不覆盖 in-memory `ContractMeta{}` 向量），不构成 Hard。实际交付为
+> **contractgen codegen funnel**：`kind: projection` 契约生成的 `types_gen.go` 携带
+> `const _ = uint(cellvocab.<level> - cellvocab.L3)`，L0/L1/L2 编译期 uint 溢出 →
+> 不可构建（Hard 主门控，codegen:true）；governance rule 留作 codegen:false +
+> in-memory 的 Medium 兜底。无 parser 改动、无 kernel-isolation 放宽、无性能基准（不
+> 在 parse 热路径）、无 schema 改动。权威记录见 ADR `202605261620` §Amendment
+> 2026-06-02 #960。下方原始 Scope/任务保留作历史脉络，不再执行。
+
 ### Scope
 
 | 项 | 路径 | 行数估算 |
@@ -493,7 +504,7 @@ Dependent contracts (governance scan): 全部 kind:projection contract.yaml (ord
 | PROJECTION-APPLY-HOOK-FUNNEL-01 | PR-01 stub / PR-04 green | Hard 下游 + Medium 上游 | callsite 唯一性 |
 | PROJECTION-CHECKPOINT-TX-BOUND-01 | PR-01 stub / PR-02 green | Medium | ambient-tx 形态（SaveOffset 经 TxFromContext，禁裸 db.Exec） |
 | PROJECTION-STATE-PHASE-FROZEN-01 | **PR-00 green** | **Medium** | AST const-set + String-arm 锁（5 成员 enum；Go enum 不可 reflect 成集，AST/golden 锁是天花板） |
-| PROJECTION-CONSISTENCY-PARSE-TIME-01 | PR-05 | Hard 下游 | parser callsite identity |
+| ~~PROJECTION-CONSISTENCY-PARSE-TIME-01~~（否决，gh #960） | ~~PR-05~~ | — | parser-jsonschema 方案被否决；实际交付为 contractgen codegen funnel（生成 `types_gen.go` 编译期 uint overflow，**非 archtest**），见 ADR §Amendment 2026-06-02 |
 | **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | **PR-02** | **Medium** | **SQL 字面量扫 reject owner 写入**（v1 范围；v1.1 启用 claim 时同 PR 删除） |
 
 每个 archtest 必须**同 PR 内**完成「godoc 范围说明 + 反向自检」两件套（AI-robust 章程要求）。

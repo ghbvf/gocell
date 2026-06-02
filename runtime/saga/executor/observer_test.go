@@ -72,6 +72,13 @@ func (o *recordingObserver) ObserveHeartbeatFailure(_ context.Context, _ idutil.
 	o.hbReasons = append(o.hbReasons, reason)
 }
 
+// Coordinator-emitted methods are not invoked by the Executor; no-op stubs keep
+// recordingObserver satisfying the widened Observer interface.
+func (o *recordingObserver) ObserveTick(_ context.Context, _ TickResult)             {}
+func (o *recordingObserver) ObserveDrive(_ context.Context, _ string, _ DriveResult) {}
+func (o *recordingObserver) ObserveLeaderSkip(_ context.Context, _ string, _ LeaderSkipReason) {
+}
+
 func (o *recordingObserver) snapshotOutcomes() []recordedOutcome {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -142,6 +149,13 @@ func (o *blockingObserver) ObserveHeartbeatFailure(_ context.Context, _, _ iduti
 		close(o.hbEntered)
 	}
 	<-o.release
+}
+
+// Coordinator-emitted methods are not exercised by the Executor blocking-path
+// regressions; no-op stubs satisfy the interface.
+func (o *blockingObserver) ObserveTick(_ context.Context, _ TickResult)             {}
+func (o *blockingObserver) ObserveDrive(_ context.Context, _ string, _ DriveResult) {}
+func (o *blockingObserver) ObserveLeaderSkip(_ context.Context, _ string, _ LeaderSkipReason) {
 }
 
 // TestExecute_ObserveOutcome_Succeeded asserts ObserveOutcome fires once with
@@ -300,7 +314,8 @@ func TestExecute_ObserveHeartbeatFailure_StaleLease(t *testing.T) {
 	// at preflight, never invoking the observer for an async tick.
 	hb := &staleAfterFirstHeartbeater{}
 	obs := &recordingObserver{}
-	exec, err := NewExecutor(hb, fc,
+	exec, err := NewExecutor(
+		hb, fc,
 		WithLogger(noopLogger()),
 		WithObserver(obs),
 		WithHeartbeatInterval(testtime.D5s),
@@ -459,7 +474,8 @@ func TestRunWithHeartbeat_StaleLease_ReturnsLeaseLost(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	hb := &staleAfterFirstHeartbeater{} // first call (preflight) ok=true; subsequent stale
-	exec, err := NewExecutor(hb, fc,
+	exec, err := NewExecutor(
+		hb, fc,
 		WithLogger(noopLogger()),
 		WithHeartbeatInterval(testtime.D5s),
 		WithLeaseDuration(testtime.D30s),
@@ -498,7 +514,8 @@ func TestRunWithHeartbeat_PreflightStaleLease_ReturnsLeaseLost(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	hb := &staleHeartbeater{} // always returns ok=false
-	exec, err := NewExecutor(hb, fc,
+	exec, err := NewExecutor(
+		hb, fc,
 		WithLogger(noopLogger()),
 		WithHeartbeatInterval(testtime.D5s),
 		WithLeaseDuration(testtime.D30s),
@@ -535,7 +552,8 @@ func TestRunWithHeartbeat_BlockingObserver_DoesNotStall(t *testing.T) {
 	obs := newBlockingObserver()
 	defer close(obs.release) // unblock observer goroutines on test exit (no leak across tests)
 
-	exec, err := NewExecutor(hb, fc,
+	exec, err := NewExecutor(
+		hb, fc,
 		WithLogger(noopLogger()),
 		WithHeartbeatInterval(testtime.D5s),
 		WithLeaseDuration(testtime.D30s),
@@ -601,11 +619,54 @@ func (panicObserver) ObserveHeartbeatFailure(_ context.Context, _, _ idutil.Safe
 	panic("observe hb boom")
 }
 
+func (panicObserver) ObserveTick(_ context.Context, _ TickResult) { panic("observe tick boom") }
+
+func (panicObserver) ObserveDrive(_ context.Context, _ string, _ DriveResult) {
+	panic("observe drive boom")
+}
+
+func (panicObserver) ObserveLeaderSkip(_ context.Context, _ string, _ LeaderSkipReason) {
+	panic("observe leader-skip boom")
+}
+
+// TestCoordinatorEmittedEnums_FrozenWireValues asserts the wire-stable string
+// values of the Coordinator-emitted label enums. These values are operator-facing
+// (metric labels + slog fields) and are frozen by archtest
+// SAGA-METRIC-LABEL-VALUES-FROZEN-01; this unit test pins them at the source.
+func TestCoordinatorEmittedEnums_FrozenWireValues(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ got, want string }{
+		{string(TickClaimed), "claimed"},
+		{string(TickEmpty), "empty"},
+		{string(TickError), "error"},
+		{string(DriveOK), "ok"},
+		{string(DriveError), "error"},
+		{string(LeaderSkipContended), "contended"},
+		{string(LeaderSkipCtxCanceled), "ctx_canceled"},
+		{string(LeaderSkipBackendError), "backend_error"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("enum wire value = %q, want %q", c.got, c.want)
+		}
+	}
+}
+
+// TestNopObserver_CoordinatorEmitted_DoNotPanic asserts the NopObserver's
+// Coordinator-emitted methods are safe no-ops.
+func TestNopObserver_CoordinatorEmitted_DoNotPanic(t *testing.T) {
+	t.Parallel()
+	var o NopObserver
+	o.ObserveTick(context.Background(), TickClaimed)
+	o.ObserveDrive(context.Background(), "def-x", DriveOK)
+	o.ObserveLeaderSkip(context.Background(), "def-x", LeaderSkipContended)
+}
+
 // TestObserverCall_Timeout_LogsCorrelation asserts the bounded-wait timeout log
-// (callObserverBounded) carries instance_id + lease_id + method so an operator
-// can correlate an observer-deadline breach back to the instance / ClaimPending
-// cycle it occurred under. F1: observer-boundary logs previously carried only
-// method, breaking the "all per-instance saga logs carry lease_id" invariant.
+// (callObserverBounded) carries instance_id and method so an operator can
+// correlate an observer-deadline breach back to the instance. lease_id presence
+// is now structurally enforced by the SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
+// funnel; this test keeps the instance_id+method correlation rationale.
 func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -615,7 +676,8 @@ func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 	buf := sloghelper.NewSyncBuffer()
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	exec, err := NewExecutor(hb, fc,
+	exec, err := NewExecutor(
+		hb, fc,
 		WithLogger(logger),
 		WithHeartbeatInterval(testtime.D5s),
 		WithLeaseDuration(testtime.D30s),
@@ -645,19 +707,18 @@ func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 	if entry["instance_id"] != "test-instance-id" {
 		t.Errorf("timeout log instance_id = %v, want test-instance-id", entry["instance_id"])
 	}
-	if entry["lease_id"] != "lease-timeout-log" {
-		t.Errorf("timeout log lease_id = %v, want lease-timeout-log", entry["lease_id"])
-	}
 	if entry["method"] != "ObserveHeartbeatFailure" {
 		t.Errorf("timeout log method = %v, want ObserveHeartbeatFailure", entry["method"])
 	}
 }
 
 // TestObserverCall_Panic_LogsCorrelation asserts the recoverObserverPanic log
-// carries instance_id + lease_id + method (F1, panic branch). Uses a direct
-// safeObserveOutcome call with a panicking observer — recovery is synchronous,
-// so no clock dance is needed: callObserverBounded returns via <-done only
-// after recoverObserverPanic (deferred LIFO before close(done)) has logged.
+// carries instance_id + method (F1, panic branch). lease_id presence is now
+// structurally enforced by the SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 funnel.
+// Uses a direct safeObserveOutcome call with a panicking observer — recovery
+// is synchronous, so no clock dance is needed: callObserverBounded returns via
+// <-done only after recoverObserverPanic (deferred LIFO before close(done))
+// has logged.
 func TestObserverCall_Panic_LogsCorrelation(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -678,9 +739,6 @@ func TestObserverCall_Panic_LogsCorrelation(t *testing.T) {
 	}
 	if entry["instance_id"] != "test-instance-id" {
 		t.Errorf("panic log instance_id = %v, want test-instance-id", entry["instance_id"])
-	}
-	if entry["lease_id"] != "lease-panic-log" {
-		t.Errorf("panic log lease_id = %v, want lease-panic-log", entry["lease_id"])
 	}
 	if entry["method"] != "ObserveOutcome" {
 		t.Errorf("panic log method = %v, want ObserveOutcome", entry["method"])

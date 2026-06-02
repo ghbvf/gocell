@@ -54,7 +54,13 @@ const (
 	// ErrCellMissingTokenIssuer signals that a Cell was started without a token
 	// issuer dependency that it requires.
 	ErrCellMissingTokenIssuer Code = "ERR_CELL_MISSING_TOKEN_ISSUER"
-	ErrCellInvalidConfig      Code = "ERR_CELL_INVALID_CONFIG"
+	// ErrCellMissingBootstrapStore signals that a Cell was started in durable
+	// mode without the bootstrap-chain ledger store it requires to persist
+	// bootstrap auth-fail events. Surfaced fail-fast at cell.Init() so a
+	// misconfigured production assembly fails at startup rather than deferring
+	// the failure to the first consumed event (Reject → DLX).
+	ErrCellMissingBootstrapStore Code = "ERR_CELL_MISSING_BOOTSTRAP_STORE"
+	ErrCellInvalidConfig         Code = "ERR_CELL_INVALID_CONFIG"
 	// ErrCellPlatformUnsupported signals that a Cell option requested capability
 	// that is not implemented on the current GOOS — distinct from
 	// ErrCellInvalidConfig (configuration mistake) so operators can route
@@ -631,6 +637,17 @@ const (
 	// ErrIdempotencyNoClaimLease signals that Receipt methods were called for a
 	// Claim result that did not acquire a processing lease. Maps to HTTP 409.
 	ErrIdempotencyNoClaimLease Code = "ERR_IDEMPOTENCY_NO_CLAIM_LEASE"
+	// ErrIdempotencyInProgress signals that another request is currently
+	// processing the same idempotency key (ClaimBusy). The client should retry
+	// after the in-flight request completes. Maps to HTTP 409.
+	ErrIdempotencyInProgress Code = "ERR_IDEMPOTENCY_IN_PROGRESS"
+	// ErrIdempotencyKeyReused signals that the same Idempotency-Key was sent with
+	// a different request body (fingerprint mismatch). Per IETF idempotency-key
+	// draft §6 and Stripe's idempotency guide, reusing a key with a different
+	// payload is a client error. Maps to HTTP 409 (KindConflict) because the
+	// errcode Kind set has no KindUnprocessable (422) — 409 is the closest safe
+	// choice that signals a conflict between the stored request and the new one.
+	ErrIdempotencyKeyReused Code = "ERR_IDEMPOTENCY_KEY_REUSED"
 
 	// Metrics error codes (kernel/observability/metrics).
 	//
@@ -783,13 +800,12 @@ const (
 	// refused, 5xx from target). Constructed with KindUnavailable → HTTP 503.
 	// First constructed in PR-5 (dispatcher).
 	ErrWebhookDeliveryFailed Code = "ERR_WEBHOOK_DELIVERY_FAILED"
-	// ErrWebhookDeliveryTimeout signals delivery exceeded its deadline.
-	// Constructed with KindDeadlineExceeded → HTTP 504. First constructed in
-	// PR-5 (dispatcher).
-	ErrWebhookDeliveryTimeout Code = "ERR_WEBHOOK_DELIVERY_TIMEOUT"
 	// ErrWebhookPermanentFailure signals a non-retryable delivery failure
-	// (retry budget exhausted, endpoint disabled). Constructed with KindInternal
-	// → HTTP 500. First constructed in PR-5 (dispatcher).
+	// (bad delivery id / signing failure / a selector that signals no
+	// subscription is configured). Constructed with the Kind appropriate to the
+	// failure — e.g. KindInvalid (HTTP 400). Non-2xx delivery RESPONSES are not
+	// permanent (standard-webhooks aligned: every non-2xx is retried). First
+	// constructed in PR-5 (dispatcher).
 	ErrWebhookPermanentFailure Code = "ERR_WEBHOOK_PERMANENT_FAILURE"
 	// ErrWebhookBodyTooLarge signals the inbound webhook body exceeded the size
 	// limit. Constructed with KindPayloadTooLarge → HTTP 413. First constructed
@@ -798,6 +814,34 @@ const (
 	// ErrWebhookConfigInvalid signals invalid webhook configuration (bad source
 	// ID / delivery ID / empty secret). Constructed with KindInvalid → HTTP 400.
 	ErrWebhookConfigInvalid Code = "ERR_WEBHOOK_CONFIG_INVALID"
+
+	// Reconcile leader-election / epoch-fencing codes (KERNEL-RECONCILE-01 PR-A6).
+	//
+	// ErrReconcileLeaseLost signals that a LeaderElector.RenewLease found the
+	// lease no longer owned by this holder (expired / taken over by a follower).
+	// The reconcile Loop cancels its lease-scoped ctx on this sentinel to
+	// interrupt the in-flight Reconcile. Constructed with KindConflict → HTTP 409
+	// (mirrors ErrDistlockLockLost / ErrSagaStaleLease). It is a control-plane
+	// signal that normally never surfaces at an HTTP boundary.
+	ErrReconcileLeaseLost Code = "ERR_RECONCILE_LEASE_LOST"
+	// ErrFencedWriteStale signals that a FencedRepository.ApplyFenced rejected a
+	// write because the presented epoch is older than the highest epoch the
+	// resource row has already seen (monotonic-epoch fencing CAS, Kleppmann DDIA
+	// §8.4 — NOT the outbox UUID identity-fencing). A zombie leader's late write
+	// must be structurally rejected, not silently applied. Constructed with
+	// KindConflict → HTTP 409 (mirrors ErrSagaStaleLease).
+	ErrFencedWriteStale Code = "ERR_FENCED_WRITE_STALE"
+	// ErrFencedWriterUnbound signals that a FencedWriter with no bound repository
+	// was written through (programmer error: the writer was zero-valued rather
+	// than minted by the Loop from a live lease). Constructed with KindInternal →
+	// HTTP 500 (server-side bug, not an external conflict).
+	ErrFencedWriterUnbound Code = "ERR_FENCED_WRITER_UNBOUND"
+	// ErrReconcileLeaseHeld signals that AcquireLease lost the race: another holder
+	// owns a live lease for this reconcilerID. It is the EXPECTED steady-state
+	// signal a follower sees on every poll, so the Loop logs it at Debug (not Warn).
+	// Constructed with KindConflict → HTTP 409 (control-plane signal; normally
+	// never surfaces at an HTTP boundary).
+	ErrReconcileLeaseHeld Code = "ERR_RECONCILE_LEASE_HELD"
 )
 
 // PublicError is the structured projection shared by HTTP responses, CLI text

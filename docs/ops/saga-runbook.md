@@ -29,6 +29,8 @@ WHERE status IN (2, 3)            -- Running / Compensating
 ORDER BY updated_at ASC;
 ```
 
+**Log 诊断**：每条 per-instance saga 日志（心跳 / drive / 补偿 / leader 选举）均结构性保证携带 `instance_id` + `lease_id` 字段（`SAGA-SLOG-INSTANCE-FIELDS-CALLER-01`）。运维人员可通过 `instance_id=<id>` 过滤结构化日志，关联某卡死实例的 claim / 心跳活动，无需查询数据库。
+
 **处置**：
 
 1. **正常自愈路径（优先）**：lease TTL 过期后，任一存活 Coordinator 的 `ClaimPending` 会自动接管过期 lease 并继续驱动——**无需人工介入**。先确认是否有存活 Coordinator（检查 `saga_coordinator_ready` 探针 / leader 选举日志）。
@@ -119,6 +121,45 @@ GROUP BY definition_id ORDER BY events DESC;
 - 整表归档 / 截断是 **W10 Projection / Replay**（从 `saga_events` replay 任意时点状态）的范畴，独立 wave，当前未实现——在它落地前不要手工 `DELETE` 终态实例的事件（会破坏 replay/forensic 能力）。
 - 短期容量压力：扩 PG 存储 / 调整 retention 策略，不删 saga_events。
 - **告警引导**：无专属增长指标；用 PG 表体积监控（`pg_total_relation_size('saga_events')`）设容量阈值告警，或监控 `saga_instances` 中长期非终态行数（`status IN (1,2,3)` 且 `updated_at` 老化）作为驱动停滞的间接信号。
+
+---
+
+## 场景 4：实例停在 leader-elect skip 不推进 / distlock 后端故障（#1109 指标）
+
+对应告警 `GoCellSagaInstanceStuckSkipping` 与 `GoCellSagaLockAcquireFailures`（`docs/ops/alerting-rules.md`）。仅在 leader-elect 模式（`WithLeaderElect`）且接入真实 metrics Provider 后才会触发——saga 接入生产 cell（PR-09 / #978）前这两条告警沉默。
+
+### 4a：stuck skipping（`GoCellSagaInstanceStuckSkipping`）
+
+**症状**：某 `(cell, definition_id)` 的 `saga_leader_elect_skip_total{reason="contended"}` 持续 >0，而同维度 `saga_drive_total{result="ok"}` ≈ 0——这个 coordinator 一直抢不到 per-instance distlock，实例不被本节点推进。告警按 `definition_id` 分组，故单个 definition 卡住不会被同 cell 其他 definition 的正常 drive 掩盖。
+
+**根因（按概率）**：
+
+1. **正常多副本竞争**：另一个 coordinator 正持锁推进该实例——此时它的 `drive{result="ok"}` 在涨，本告警的 `unless` 条件不成立、不应触发。若触发说明**没有任何**副本在推进。
+2. **stale distlock**：持锁的 coordinator 崩溃/卡死，但 distlock key 尚未过期（TTL = `Config.LeaseDuration`），其它副本只能 skip 到 key 过期。
+3. **distlock 后端分区**：见 4b。
+
+**诊断**：
+
+```sql
+-- 该 definition 的非终态实例是否在 ClaimPending 但无 step 进展（updated_at 老化）
+SELECT id, status, lease_id, updated_at
+FROM saga_instances
+WHERE definition_id = '<definition_id>' AND status IN (1,2,3)
+ORDER BY updated_at ASC LIMIT 20;
+```
+
+- 检查 distlock 后端（Redis）中 `saga:<len>:<def>:<inst>` key 的 TTL；若一个已死副本持有，等其 TTL（≤ `LeaseDuration`）自然过期，或确认该副本进程确实终止后手工删 key。
+- 交叉看 `saga_tick_total{cell}`：若 tick 在涨说明 coordinator loop 存活、只是 skip；若 tick 平坦见场景 1（loop/journal 停滞）。
+
+**处置**：确认无存活副本在推进后，等 distlock TTL 过期（最稳）或在确认死副本后删对应 distlock key；不要在不确定持锁方是否存活时强删（会重新打开双驱动窗口——journal lease_id CAS 仍兜底正确性，但应优先让 TTL 自然收敛）。
+
+### 4b：lock-acquire 失败（`GoCellSagaLockAcquireFailures`）
+
+**症状**：`saga_leader_elect_skip_total{reason="backend_error"}` 持续 >0——`distlock.Locker.Acquire` 返回的不是 contention 超时、也不是 ctx 取消，而是后端 I/O 故障。fail-closed：无法确认 leadership 时本节点一律 skip，**所有**实例停止被该 cell 推进。
+
+**根因**：distlock 后端（Redis）不可达 / 认证失败 / 命令被拒。
+
+**处置**：按 Redis 连接故障处置（网络、ACL、连接池、TLS）。恢复后 skip 自动回落、drive 恢复。该路径下 backend error 文本经 `redaction.RedactAny` 脱敏后入 slog（`reason=backend_error`），用 `instance_id` / `lock_key` 关联具体实例。
 
 ---
 

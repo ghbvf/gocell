@@ -135,3 +135,22 @@ func TestClassify_WrappedPermanentViaErrorf(t *testing.T) {
 	wrapped := fmt.Errorf("operation failed: %w", inner)
 	assert.Equal(t, resultPermanent, classify(wrapped))
 }
+
+// TestRecovery_FencedStaleClassifiedPermanent verifies that ErrFencedWriteStale is
+// classified as resultPermanent (NOT transient). Per fenced.go godoc: stale-epoch
+// write rejected by the fencing CAS is not a retry — a fresh trigger under the new
+// leader re-observes the entity.
+func TestRecovery_FencedStaleClassifiedPermanent(t *testing.T) {
+	t.Parallel()
+	label := classify(ErrFencedWriteStale)
+	assert.Equal(t, resultPermanent, label,
+		"ErrFencedWriteStale must classify as resultPermanent (fencing race, not transient retry)")
+}
+
+// TestRecovery_FencedStaleWrappedClassifiedPermanent verifies the wrapped form.
+func TestRecovery_FencedStaleWrappedClassifiedPermanent(t *testing.T) {
+	t.Parallel()
+	wrapped := fmt.Errorf("reconcile: fenced write (entity=%q epoch=%d): %w", "dev-1", uint64(3), ErrFencedWriteStale)
+	assert.Equal(t, resultPermanent, classify(wrapped),
+		"wrapped ErrFencedWriteStale must also classify as resultPermanent")
+}

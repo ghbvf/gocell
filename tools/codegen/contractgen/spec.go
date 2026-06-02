@@ -13,6 +13,13 @@ type ContractGenSpec struct {
 	// Kind is one of the closed set: "http", "event", "command", "projection",
 	// "webhook", "grpc", "saga".
 	Kind string
+	// ConsistencyLevel is the contract's declared consistency level ("L0".."L4").
+	// Consumed by types.tmpl only for kind=projection, where it drives the
+	// PROJECTION-CONSISTENCY-01 compile-time guard (gh #960):
+	// `const _ = uint(cellvocab.<ConsistencyLevel> - cellvocab.L3)`, which fails
+	// to compile when the level is below L3. buildContractSpec validates that the
+	// value parses (cellvocab.ParseLevel) before it reaches the template.
+	ConsistencyLevel string
 	// SourceFile is the repo-relative path of the contract.yaml that drove
 	// generation, e.g. "examples/todoorder/contracts/http/order/create/v1/contract.yaml".
 	SourceFile string

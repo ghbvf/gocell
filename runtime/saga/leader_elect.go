@@ -17,8 +17,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/distlock"
+	"github.com/ghbvf/gocell/runtime/saga/executor"
+	"github.com/ghbvf/gocell/runtime/saga/internal/sagalog"
 )
 
 // LeaderElectModeLabel is the slog "mode" field value emitted at Start() when
@@ -105,7 +108,15 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 	key := leaderElectLockKey(ci.Instance.DefinitionID, ci.Instance.ID)
 	lock, err := c.locker.Acquire(ctx, key, c.cfg.LeaseDuration)
 	if err != nil {
-		c.logLeaderSkip(ctx, ci, key, err)
+		reason := classifyLeaderSkip(err)
+		c.logLeaderSkip(ctx, ci, key, err, reason)
+		// Best-effort metric: backend_error is the lock-acquire failure rate;
+		// sustained contended with no drives means an instance is stuck skipping
+		// (#1109). definition_id is bounded to the registered set (or
+		// "_unregistered" for IDs not in the registry); instance_id stays in logs.
+		c.safeObserve(ctx, "ObserveLeaderSkip", func() {
+			c.observer.ObserveLeaderSkip(ctx, c.labelDefinitionID(ci.Instance.DefinitionID), reason)
+		})
 		return nil, nil, false
 	}
 	rel := func() {
@@ -115,38 +126,63 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 			// under. They are distinct leases (see package doc) — lease_id is logged
 			// purely for claim-cycle correlation, consistent with every other
 			// per-instance saga log, not because the distlock is fenced by it.
-			c.logger.WarnContext(ctx, "saga: distlock release failed",
-				slog.String("instance_id", string(ci.Instance.ID)),
-				slog.String("definition_id", string(ci.Instance.DefinitionID)),
-				slog.String("lock_key", key),
-				slog.String("lease_id", string(ci.LeaseID)),
-				slog.Any("error", rerr))
+			c.logger.LogAttrs(ctx, slog.LevelWarn, "saga: distlock release failed",
+				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+					slog.String("definition_id", string(ci.Instance.DefinitionID)),
+					slog.String("lock_key", key),
+					slog.Any("error", rerr))...)
 		}
 	}
 	orp := func() { lock.Orphan() }
 	return rel, orp, true
 }
 
-// logLeaderSkip logs an acquireLead miss at the level matching its cause.
-// Contention (ErrLockTimeout — another coordinator holds the lock) and ctx
-// cancellation (normal Stop()/shutdown of the tick loop) are expected
-// operational signals, not faults → Debug. Anything else (backend I/O) → Warn.
-func (c *Coordinator) logLeaderSkip(ctx context.Context, ci journal.ClaimedInstance, key string, err error) {
-	level := slog.LevelWarn
+// classifyLeaderSkip maps an acquireLead error to its typed skip reason. This
+// is the single source feeding both the slog level (via leaderSkipLogLevel) and
+// the saga_leader_elect_skip_total{reason} metric, so log and metric never
+// diverge. Contention (ErrDistlockTimeout) and ctx cancellation are expected;
+// anything else is a distlock backend I/O fault (the lock-acquire failure rate).
+//
+// Add new skip paths only by extending this function (and its downstream
+// consumers leaderSkipLogLevel + acquireLead's safeObserve call) — never by
+// classifying inline at a callsite, or log and metric will drift.
+func classifyLeaderSkip(err error) executor.LeaderSkipReason {
 	var ec *errcode.Error
 	switch {
 	case errors.As(err, &ec) && ec.Code == errcode.ErrDistlockTimeout:
-		level = slog.LevelDebug
+		return executor.LeaderSkipContended
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		level = slog.LevelDebug
+		return executor.LeaderSkipCtxCanceled
+	default:
+		return executor.LeaderSkipBackendError
 	}
+}
+
+// leaderSkipLogLevel derives the slog level from the skip reason: backend I/O
+// faults are operationally interesting (Warn); contention and ctx cancellation
+// are expected operational signals, not faults (Debug).
+func leaderSkipLogLevel(reason executor.LeaderSkipReason) slog.Level {
+	if reason == executor.LeaderSkipBackendError {
+		return slog.LevelWarn
+	}
+	return slog.LevelDebug
+}
+
+// logLeaderSkip logs an acquireLead miss at the level matching its cause.
+func (c *Coordinator) logLeaderSkip(
+	ctx context.Context, ci journal.ClaimedInstance, key string, err error, reason executor.LeaderSkipReason,
+) {
 	// lease_id is the journal fencing token (ci.LeaseID); lock_key is the
 	// distlock identity — distinct leases (see package doc / acquireLead). lease_id
 	// is logged for claim-cycle correlation, uniform with all per-instance logs.
-	c.logger.Log(ctx, level, "saga: leader-elect skip (lock not acquired)",
-		slog.String("instance_id", string(ci.Instance.ID)),
-		slog.String("definition_id", string(ci.Instance.DefinitionID)),
-		slog.String("lock_key", key),
-		slog.String("lease_id", string(ci.LeaseID)),
-		slog.Any("error", err))
+	// The backend_error path can carry a distlock backend error whose text
+	// embeds a Redis DSN/credentials; redact it (defense-in-depth alongside the
+	// slog sink, which also covers contexts where the process-global seal is not
+	// active — unit tests / embedded saga use). Same form as Coordinator.safeObserve.
+	c.logger.LogAttrs(ctx, leaderSkipLogLevel(reason), "saga: leader-elect skip (lock not acquired)",
+		sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
+			slog.String("definition_id", string(ci.Instance.DefinitionID)),
+			slog.String("lock_key", key),
+			slog.String("reason", string(reason)),
+			slog.Any("error", redaction.RedactAny(err)))...)
 }

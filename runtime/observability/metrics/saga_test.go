@@ -11,47 +11,50 @@ import (
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
-// Compile-time check: SagaStepCollector must implement executor.Observer.
-var _ executor.Observer = (*obmetrics.SagaStepCollector)(nil)
+// Compile-time check: SagaCollector must implement executor.Observer.
+var _ executor.Observer = (*obmetrics.SagaCollector)(nil)
 
 // Compile-time check: sagaSpyProvider must implement kernelmetrics.Provider so
 // that any future Provider interface expansion is caught at compile time.
 var _ kernelmetrics.Provider = (*sagaSpyProvider)(nil)
 
-// TestNewSagaStepCollector_RejectsNilProvider asserts fail-fast on nil.
-func TestNewSagaStepCollector_RejectsNilProvider(t *testing.T) {
-	_, err := obmetrics.NewSagaStepCollector(nil, "accesscore")
+// TestNewSagaCollector_RejectsNilProvider asserts fail-fast on nil.
+func TestNewSagaCollector_RejectsNilProvider(t *testing.T) {
+	_, err := obmetrics.NewSagaCollector(nil, "accesscore")
 	if err == nil {
 		t.Fatal("expected error for nil provider")
 	}
 }
 
-// TestNewSagaStepCollector_RejectsEmptyCellID asserts fail-fast on empty cell.
+// TestNewSagaCollector_RejectsEmptyCellID asserts fail-fast on empty cell.
 // SagaCollector is per-cell — no _runtime fallback.
-func TestNewSagaStepCollector_RejectsEmptyCellID(t *testing.T) {
-	_, err := obmetrics.NewSagaStepCollector(kernelmetrics.NopProvider{}, "")
+func TestNewSagaCollector_RejectsEmptyCellID(t *testing.T) {
+	_, err := obmetrics.NewSagaCollector(kernelmetrics.NopProvider{}, "")
 	if err == nil {
 		t.Fatal("expected error for empty cellID")
 	}
 }
 
-// TestNewSagaStepCollector_RegistersThreeCounters asserts the three saga
-// counters are registered (and no others).
-func TestNewSagaStepCollector_RegistersThreeCounters(t *testing.T) {
+// TestNewSagaCollector_RegistersSixCounters asserts the six saga counters
+// (three step-level + three coordinator-level) are registered (and no others).
+func TestNewSagaCollector_RegistersSixCounters(t *testing.T) {
 	p := newSagaSpyProvider()
-	_, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	_, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 
 	wantCounters := []string{
 		"saga_step_outcome_total",
 		"saga_step_retry_total",
 		"saga_heartbeat_failed_total",
+		"saga_tick_total",
+		"saga_drive_total",
+		"saga_leader_elect_skip_total",
 	}
 	for _, name := range wantCounters {
 		if _, ok := p.counterNames[name]; !ok {
-			t.Errorf("SagaStepCollector did not register %q", name)
+			t.Errorf("SagaCollector did not register %q", name)
 		}
 	}
 	if len(p.counterNames) != len(wantCounters) {
@@ -59,13 +62,141 @@ func TestNewSagaStepCollector_RegistersThreeCounters(t *testing.T) {
 			len(p.counterNames), len(wantCounters), p.counterNames)
 	}
 	if len(p.gaugeNames) != 0 {
-		t.Errorf("SagaStepCollector must not register gauges, got %v", p.gaugeNames)
+		t.Errorf("SagaCollector must not register gauges, got %v", p.gaugeNames)
 	}
 }
 
-// TestSagaStepCollector_ObserveOutcome_AllFiveOutcomes verifies wire-stable
+// TestSagaCollector_ObserveTick_AllResults verifies tick result labels for the
+// three TickResult variants.
+func TestSagaCollector_ObserveTick_AllResults(t *testing.T) {
+	cases := []struct {
+		result executor.TickResult
+		want   string
+	}{
+		{executor.TickClaimed, "claimed"},
+		{executor.TickEmpty, "empty"},
+		{executor.TickError, "error"},
+	}
+	p := newSagaSpyProvider()
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
+	if err != nil {
+		t.Fatalf("NewSagaCollector: %v", err)
+	}
+	for _, tc := range cases {
+		c.ObserveTick(context.Background(), tc.result)
+	}
+	ops := p.counterOps["saga_tick_total"]
+	if len(ops) != len(cases) {
+		t.Fatalf("tick counter ops = %d, want %d", len(ops), len(cases))
+	}
+	for i, tc := range cases {
+		if got := ops[i].labels["result"]; got != tc.want {
+			t.Errorf("ops[%d].result = %q, want %q", i, got, tc.want)
+		}
+		if got := ops[i].labels["cell"]; got != "auditcore" {
+			t.Errorf("ops[%d].cell = %q, want auditcore", i, got)
+		}
+		if _, ok := ops[i].labels["definition_id"]; ok {
+			t.Errorf("ops[%d] contains definition_id — tick counter is pre-claim", i)
+		}
+	}
+}
+
+// TestSagaCollector_ObserveDrive_BothResults verifies drive result labels and
+// the definition_id dimension.
+func TestSagaCollector_ObserveDrive_BothResults(t *testing.T) {
+	p := newSagaSpyProvider()
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
+	if err != nil {
+		t.Fatalf("NewSagaCollector: %v", err)
+	}
+	c.ObserveDrive(context.Background(), "def-d", executor.DriveOK)
+	c.ObserveDrive(context.Background(), "def-d", executor.DriveError)
+
+	ops := p.counterOps["saga_drive_total"]
+	if len(ops) != 2 {
+		t.Fatalf("drive counter ops = %d, want 2", len(ops))
+	}
+	if ops[0].labels["result"] != "ok" || ops[1].labels["result"] != "error" {
+		t.Errorf("drive results = (%q,%q), want (ok,error)", ops[0].labels["result"], ops[1].labels["result"])
+	}
+	if ops[0].labels["definition_id"] != "def-d" {
+		t.Errorf("definition_id = %q, want def-d", ops[0].labels["definition_id"])
+	}
+}
+
+// TestSagaCollector_ObserveLeaderSkip_AllReasons verifies leader-skip reason
+// labels for the three LeaderSkipReason variants (backend_error = lock-acquire
+// failure rate per #1109).
+func TestSagaCollector_ObserveLeaderSkip_AllReasons(t *testing.T) {
+	cases := []struct {
+		reason executor.LeaderSkipReason
+		want   string
+	}{
+		{executor.LeaderSkipContended, "contended"},
+		{executor.LeaderSkipCtxCanceled, "ctx_canceled"},
+		{executor.LeaderSkipBackendError, "backend_error"},
+	}
+	p := newSagaSpyProvider()
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
+	if err != nil {
+		t.Fatalf("NewSagaCollector: %v", err)
+	}
+	for _, tc := range cases {
+		c.ObserveLeaderSkip(context.Background(), "def-l", tc.reason)
+	}
+	ops := p.counterOps["saga_leader_elect_skip_total"]
+	if len(ops) != len(cases) {
+		t.Fatalf("leader-skip counter ops = %d, want %d", len(ops), len(cases))
+	}
+	for i, tc := range cases {
+		if got := ops[i].labels["reason"]; got != tc.want {
+			t.Errorf("ops[%d].reason = %q, want %q", i, got, tc.want)
+		}
+		if ops[i].labels["definition_id"] != "def-l" {
+			t.Errorf("ops[%d].definition_id = %q, want def-l", i, ops[i].labels["definition_id"])
+		}
+	}
+}
+
+// TestSagaCollector_LabelSet_TickCounter freezes the tick counter label set.
+func TestSagaCollector_LabelSet_TickCounter(t *testing.T) {
+	p := newSagaSpyProvider()
+	if _, err := obmetrics.NewSagaCollector(p, "configcore"); err != nil {
+		t.Fatalf("NewSagaCollector: %v", err)
+	}
+	if got, want := p.counterLabels["saga_tick_total"], []string{"cell", "result"}; !equalStringSlice(got, want) {
+		t.Errorf("saga_tick_total labels = %v, want %v", got, want)
+	}
+}
+
+// TestSagaCollector_LabelSet_DriveCounter freezes the drive counter label set.
+func TestSagaCollector_LabelSet_DriveCounter(t *testing.T) {
+	p := newSagaSpyProvider()
+	if _, err := obmetrics.NewSagaCollector(p, "configcore"); err != nil {
+		t.Fatalf("NewSagaCollector: %v", err)
+	}
+	if got, want := p.counterLabels["saga_drive_total"], []string{"cell", "definition_id", "result"}; !equalStringSlice(got, want) {
+		t.Errorf("saga_drive_total labels = %v, want %v", got, want)
+	}
+}
+
+// TestSagaCollector_LabelSet_LeaderSkipCounter freezes the leader-skip counter
+// label set.
+func TestSagaCollector_LabelSet_LeaderSkipCounter(t *testing.T) {
+	p := newSagaSpyProvider()
+	if _, err := obmetrics.NewSagaCollector(p, "configcore"); err != nil {
+		t.Fatalf("NewSagaCollector: %v", err)
+	}
+	got := p.counterLabels["saga_leader_elect_skip_total"]
+	if want := []string{"cell", "definition_id", "reason"}; !equalStringSlice(got, want) {
+		t.Errorf("saga_leader_elect_skip_total labels = %v, want %v", got, want)
+	}
+}
+
+// TestSagaCollector_ObserveOutcome_AllFiveOutcomes verifies wire-stable
 // outcome labels for the five Outcome variants.
-func TestSagaStepCollector_ObserveOutcome_AllFiveOutcomes(t *testing.T) {
+func TestSagaCollector_ObserveOutcome_AllFiveOutcomes(t *testing.T) {
 	cases := []struct {
 		outcome executor.Outcome
 		want    string
@@ -78,9 +209,9 @@ func TestSagaStepCollector_ObserveOutcome_AllFiveOutcomes(t *testing.T) {
 	}
 
 	p := newSagaSpyProvider()
-	c, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	for _, tc := range cases {
 		c.ObserveOutcome(context.Background(), idutil.SafeID("inst-x"), idutil.SafeID("lease-x"), "def-x", "step-1", tc.outcome, 1)
@@ -107,14 +238,14 @@ func TestSagaStepCollector_ObserveOutcome_AllFiveOutcomes(t *testing.T) {
 	}
 }
 
-// TestSagaStepCollector_LabelSet_OutcomeCounter freezes the outcome counter
+// TestSagaCollector_LabelSet_OutcomeCounter freezes the outcome counter
 // label set (cell, definition_id, outcome) — guards against accidentally
 // adding step_name (Cartesian explosion).
-func TestSagaStepCollector_LabelSet_OutcomeCounter(t *testing.T) {
+func TestSagaCollector_LabelSet_OutcomeCounter(t *testing.T) {
 	p := newSagaSpyProvider()
-	_, err := obmetrics.NewSagaStepCollector(p, "configcore")
+	_, err := obmetrics.NewSagaCollector(p, "configcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	got := p.counterLabels["saga_step_outcome_total"]
 	want := []string{"cell", "definition_id", "outcome"}
@@ -123,14 +254,14 @@ func TestSagaStepCollector_LabelSet_OutcomeCounter(t *testing.T) {
 	}
 }
 
-// TestSagaStepCollector_LabelSet_RetryCounter freezes the retry counter label
+// TestSagaCollector_LabelSet_RetryCounter freezes the retry counter label
 // set (cell, definition_id, step_name) — guards against adding outcome
 // (would create attempt×outcome miscounting since retry fires before outcome).
-func TestSagaStepCollector_LabelSet_RetryCounter(t *testing.T) {
+func TestSagaCollector_LabelSet_RetryCounter(t *testing.T) {
 	p := newSagaSpyProvider()
-	_, err := obmetrics.NewSagaStepCollector(p, "configcore")
+	_, err := obmetrics.NewSagaCollector(p, "configcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	got := p.counterLabels["saga_step_retry_total"]
 	want := []string{"cell", "definition_id", "step_name"}
@@ -139,13 +270,13 @@ func TestSagaStepCollector_LabelSet_RetryCounter(t *testing.T) {
 	}
 }
 
-// TestSagaStepCollector_LabelSet_HeartbeatCounter freezes the hb counter label
+// TestSagaCollector_LabelSet_HeartbeatCounter freezes the hb counter label
 // set (cell, reason) — heartbeat is an infra signal, not per-step.
-func TestSagaStepCollector_LabelSet_HeartbeatCounter(t *testing.T) {
+func TestSagaCollector_LabelSet_HeartbeatCounter(t *testing.T) {
 	p := newSagaSpyProvider()
-	_, err := obmetrics.NewSagaStepCollector(p, "configcore")
+	_, err := obmetrics.NewSagaCollector(p, "configcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	got := p.counterLabels["saga_heartbeat_failed_total"]
 	want := []string{"cell", "reason"}
@@ -154,13 +285,13 @@ func TestSagaStepCollector_LabelSet_HeartbeatCounter(t *testing.T) {
 	}
 }
 
-// TestSagaStepCollector_ObserveRetry_IncrementsWithStepName verifies retry
+// TestSagaCollector_ObserveRetry_IncrementsWithStepName verifies retry
 // increments include step_name (per-step retry budget tuning needs it).
-func TestSagaStepCollector_ObserveRetry_IncrementsWithStepName(t *testing.T) {
+func TestSagaCollector_ObserveRetry_IncrementsWithStepName(t *testing.T) {
 	p := newSagaSpyProvider()
-	c, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	c.ObserveRetry(context.Background(), idutil.SafeID("inst-y"), idutil.SafeID("lease-y"), "def-y", "step-validate")
 
@@ -176,14 +307,14 @@ func TestSagaStepCollector_ObserveRetry_IncrementsWithStepName(t *testing.T) {
 	}
 }
 
-// TestSagaStepCollector_ObserveHeartbeatFailure_BothReasons verifies both
+// TestSagaCollector_ObserveHeartbeatFailure_BothReasons verifies both
 // reason values (infra_error, stale_lease) are passed through as label
 // values verbatim.
-func TestSagaStepCollector_ObserveHeartbeatFailure_BothReasons(t *testing.T) {
+func TestSagaCollector_ObserveHeartbeatFailure_BothReasons(t *testing.T) {
 	p := newSagaSpyProvider()
-	c, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	c.ObserveHeartbeatFailure(context.Background(), idutil.SafeID("inst-hb"), idutil.SafeID("lease-hb"), executor.HeartbeatFailureInfraError)
 	c.ObserveHeartbeatFailure(context.Background(), idutil.SafeID("inst-hb"), idutil.SafeID("lease-hb"), executor.HeartbeatFailureStaleLease)
@@ -200,22 +331,25 @@ func TestSagaStepCollector_ObserveHeartbeatFailure_BothReasons(t *testing.T) {
 	}
 }
 
-// TestSagaStepCollector_NopObserver_DoesNotPanic verifies that the NopObserver
-// path (used when WithObserver(nil) is passed to the Executor) does not panic.
-// A nil *SagaStepCollector must never reach ObserveOutcome/ObserveRetry/
-// ObserveHeartbeatFailure — callers must use executor.NopObserver instead
-// (see NewSagaStepCollector caller contract).
-func TestSagaStepCollector_NopObserver_DoesNotPanic(t *testing.T) {
-	// NopObserver is the zero-cost "no metrics" path; it must never panic.
+// TestSagaCollector_AllMethods_DoNotPanic verifies that every observe method on
+// a properly constructed (non-nil) *SagaCollector — the six Observer callbacks
+// across the Executor-emitted and Coordinator-emitted groups — executes without
+// panicking. The nil-collector / NopObserver contract (callers must pass
+// executor.NopObserver via WithObserver(nil), never a nil *SagaCollector) is
+// documented on NewSagaCollector; it is not exercised here.
+func TestSagaCollector_AllMethods_DoNotPanic(t *testing.T) {
 	p := newSagaSpyProvider()
-	c, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	// Verify that a properly constructed (non-nil) collector does not panic on all methods.
 	c.ObserveOutcome(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), "d", "s", executor.OutcomeSucceeded, 1)
 	c.ObserveRetry(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), "d", "s")
 	c.ObserveHeartbeatFailure(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), executor.HeartbeatFailureInfraError)
+	c.ObserveTick(context.Background(), executor.TickClaimed)
+	c.ObserveDrive(context.Background(), "d", executor.DriveOK)
+	c.ObserveLeaderSkip(context.Background(), "d", executor.LeaderSkipContended)
 }
 
 // TestOutcomeLabel_UnknownVariant_Panics asserts that outcomeLabel panics when
@@ -224,9 +358,9 @@ func TestSagaStepCollector_NopObserver_DoesNotPanic(t *testing.T) {
 // caller.
 func TestOutcomeLabel_UnknownVariant_Panics(t *testing.T) {
 	p := newSagaSpyProvider()
-	c, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	c, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	// Outcome(99) is not declared in executor and must trigger a panic via
 	// the panicregister.Approved funnel (A-class unreachable state machine branch).
@@ -246,18 +380,35 @@ func TestOutcomeLabel_UnknownVariant_Panics(t *testing.T) {
 	c.ObserveOutcome(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), "def", "step", executor.Outcome(99), 1)
 }
 
-// TestNewSagaStepCollector_NoHistograms freezes the invariant that
-// SagaStepCollector registers only CounterVec metrics (no histograms).
+// TestNewSagaCollector_NoHistograms freezes the invariant that
+// SagaCollector registers only CounterVec metrics (no histograms).
 // Accidentally registering a histogram would change the cardinality discipline
 // and surprise dashboard / alert owners; this test guards against drift.
-func TestNewSagaStepCollector_NoHistograms(t *testing.T) {
+func TestNewSagaCollector_NoHistograms(t *testing.T) {
 	p := newSagaSpyProvider()
-	_, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	_, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err != nil {
-		t.Fatalf("NewSagaStepCollector: %v", err)
+		t.Fatalf("NewSagaCollector: %v", err)
 	}
 	if len(p.histogramNames) != 0 {
-		t.Errorf("SagaStepCollector must not register histograms, got %v", p.histogramNames)
+		t.Errorf("SagaCollector must not register histograms, got %v", p.histogramNames)
+	}
+}
+
+// TestNewSagaCollector_PartialRegistrationFailure_RollsBack verifies the LIFO
+// atomic-registration rollback (#1181 F11): when the 4th counter (saga_tick_total)
+// fails to register, the 3 already-registered counters are torn down via
+// Unregister so the provider retains no orphans.
+func TestNewSagaCollector_PartialRegistrationFailure_RollsBack(t *testing.T) {
+	p := newSagaSpyProvider()
+	p.failOnName = "saga_tick_total" // the 4th counter in NewSagaCollector order
+	_, err := obmetrics.NewSagaCollector(p, "auditcore")
+	if err == nil {
+		t.Fatal("expected a registration error when saga_tick_total fails")
+	}
+	// outcome, retry, hbFail were registered before the tick failure → 3 rolled back.
+	if p.unregisterCount != 3 {
+		t.Errorf("unregisterCount = %d, want 3 (LIFO rollback of the 3 prior counters)", p.unregisterCount)
 	}
 }
 
@@ -277,6 +428,11 @@ type sagaSpyProvider struct {
 	gaugeNames     map[string]struct{}
 	histogramNames map[string]struct{}
 	counterOps     map[string][]sagaSpyRecord
+
+	// failOnName, when non-empty, makes CounterVec return an error for that
+	// metric name — exercises the LIFO rollback in NewSagaCollector.
+	failOnName      string
+	unregisterCount int
 }
 
 func newSagaSpyProvider() *sagaSpyProvider {
@@ -290,6 +446,10 @@ func newSagaSpyProvider() *sagaSpyProvider {
 }
 
 func (p *sagaSpyProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	if opts.Name == p.failOnName {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"sagaSpyProvider: injected registration failure")
+	}
 	p.counterNames[opts.Name] = struct{}{}
 	p.counterLabels[opts.Name] = append([]string(nil), opts.LabelNames...)
 	return &sagaSpyCounterVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
@@ -305,7 +465,10 @@ func (p *sagaSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *sagaSpyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
+func (p *sagaSpyProvider) Unregister(_ kernelmetrics.Collector) error {
+	p.unregisterCount++
+	return nil
+}
 
 type sagaSpyCounterVec struct {
 	parent     *sagaSpyProvider

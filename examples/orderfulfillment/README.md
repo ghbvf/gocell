@@ -159,7 +159,7 @@ To move from demo mode to a durable L3 saga path, wire all of the following in t
 1. Replace `journal.NewMemJournal` with a persistent PG-backed journal (durable saga state survives restarts).
 2. Replace `outbox.DemoTxRunner{}` with a real `persistence.TxRunner` (e.g. `postgres.TxManager`) — compose via `persistence.WrapForCell`.
 3. Replace `outbox.NewNoopEmitter()` with a real `outbox.Emitter` (e.g. relay-backed broker publisher) — compose via `outbox.WrapEmitterForCell`.
-4. Replace the `kernelmetrics.NopProvider{}` passed to `obmetrics.NewSagaStepCollector` with a real Prometheus provider (e.g. from `bootstrap.MetricsProvider()`); in demo mode, saga step metrics are discarded.
+4. Replace the `kernelmetrics.NopProvider{}` passed to `obmetrics.NewSagaCollector` with a real Prometheus provider (e.g. from `bootstrap.MetricsProvider()`); in demo mode, saga metrics are discarded.
 5. Replace `auth.AuthNone{}` + `auth.public: true` with a JWT plan (`auth.NewAuthJWTFromAssembly`) and set `auth.public: false` in both contract YAMLs — see `auth.public` comments in `contracts/http/orderfulfillment/*/v1/contract.yaml`.
 6. Remove the `paymentShouldFail` field from the request schema: it is a demo-only failure-injection hook and must not be exposed on the business API wire in production — drive payment failures from real downstream payment service responses instead.
 
