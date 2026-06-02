@@ -6,31 +6,35 @@ package governance
 // kind=projection must declare consistencyLevel >= L3 (WorkflowEventual).
 //
 // AI-robust evaluation (honest grading — see ADR L3-EXAMPLE-PROJECTION-01):
+// this is a Hard-main-gate + Medium-backstop funnel (same shape as saga's
+// "contractgen builder delegation = Hard 主门控 / governance rule = Medium 兜底",
+// see SAGA-CONTRACT-RETRY-TIMEOUT-01).
 //
-//   - Governance rule (Medium, this file): the real enforcement. `gocell
-//     validate` runs in CI and blocks any projection contract declared at
-//     L0/L1/L2 (or with an empty level for in-memory ProjectMeta fixtures).
-//     This is the same archetype as SLICE-CONSISTENCY-02 (publish→≥L2) — a
-//     validate-time lower-bound guard, which is Medium by the AI-robust
-//     charter (violations need a runtime/validate guard to surface, not a
-//     compile-time / type-system impossibility).
+//   - Hard main gate (contractgen codegen funnel, gh #960): for a codegen=true
+//     projection contract, contractgen emits into types_gen.go a compile-time
+//     guard `const _ = uint(cellvocab.<level> - cellvocab.L3)` (types.tmpl). A
+//     level below L3 makes the subtraction negative and overflows uint at
+//     compile time, so an invalid projection contract cannot exist in a
+//     buildable tree — the violation is unrepresentable, not merely reported.
+//     This is the AI-robust Hard archetype (codegen funnel + compile-error
+//     downstream). NB: the issue's original framing ("parser load-time
+//     jsonschema.Validate") was evaluated and rejected — a parse-time validator
+//     is a runtime guard (Medium), and it does not cover the in-memory vector.
+//
+//   - Medium backstop (governance rule, this file): `gocell validate` runs in
+//     CI and blocks projection contracts the codegen funnel cannot reach —
+//     codegen=false contracts and in-memory ProjectMeta fixtures with Kind==
+//     "projection" and an empty/low ConsistencyLevel that never produced
+//     generated Go. Same archetype as SLICE-CONSISTENCY-02 (publish→≥L2): a
+//     validate-time lower-bound guard, Medium by the AI-robust charter.
 //
 //   - Schema enum (documentation + test layer, NOT a parse-time gate): the
 //     projection if/then block in contract.schema.json restricts
 //     consistencyLevel to ["L3","L4"]. The metadata parser does NOT run
 //     jsonschema.Validate at load time, so this enum is enforced by
 //     contract_schema_test.go (TestProjectionConsistencyLevelSchemaEnum) and
-//     serves as IDE/tooling documentation — it is the single source the
-//     governance rule mirrors, not an independent runtime gate.
-//
-//   - Blind spot covered: in-memory ContractMeta with Kind=="projection" and an
-//     empty/low ConsistencyLevel that never passed through the YAML parser. The
-//     governance rule reports it explicitly so a programmatic fixture cannot
-//     silently declare a projection at L2.
-//
-//   - Hard 化路径：在 metadata parser Load 时运行 jsonschema.Validate 可将
-//     schema enum gate 升级为 parse-time 强制（基础设施已有）。
-//     升级追踪：gh issue（PR #937 review 待开）。
+//     serves as IDE/tooling documentation only — the Hard gate is the codegen
+//     funnel above, not the schema.
 
 import (
 	"fmt"

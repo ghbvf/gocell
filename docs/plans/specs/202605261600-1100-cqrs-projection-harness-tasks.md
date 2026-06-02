@@ -205,6 +205,16 @@
 
 ## PR-05 — PROJECTION-CONSISTENCY-01 升 Hard
 
+> **SUPERSEDED (gh #960 delivered 2026-06-02).** 下方 T-05-1/2/3 描述的「parser
+> load-time `jsonschema.Validate`」方案在落地时被**否决**——parse-time 校验是
+> Medium runtime guard（违反可表达、不覆盖 in-memory 向量），不满足 Hard。实际交付
+> 为 **contractgen codegen funnel**：`kind: projection` 契约的生成 `types_gen.go`
+> 携带 `const _ = uint(cellvocab.<level> - cellvocab.L3)`，L0/L1/L2 编译期 uint 溢出
+> → 无法构建。governance rule 留作 codegen:false + in-memory 的 Medium 兜底。无
+> parser 改动、无 kernel-isolation 放宽、无 `PROJECTION-CONSISTENCY-PARSE-TIME-01`
+> archtest。权威记录见 ADR `202605261620` §Amendment 2026-06-02 #960。下方原始任务
+> 保留作历史脉络，不再执行。
+
 ### T-05-1 parser load-time jsonschema.Validate
 
 - **what**：`kernel/metadata/parser.go` 在 contract load 路径调 `jsonschema.Validate`
