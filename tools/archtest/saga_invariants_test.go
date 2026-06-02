@@ -4660,21 +4660,22 @@ func sagaSlogAttrLiteralGuardedKey(info *types.Info, cl *ast.CompositeLit) (stri
 	if len(cl.Elts) == 0 {
 		return "", false
 	}
-	// Keyed form: a field is given as `Key: <expr>`.
+	// Keyed form: a field is given as `Key: <expr>`. Find the first `Key:` field
+	// whose value is a guarded key via the typed find-first funnel — no
+	// caller-held found/done sentinel (SCANNER-FRAMEWORK-USAGE-02).
 	if _, isKV := cl.Elts[0].(*ast.KeyValueExpr); isKV {
-		var foundKey string
-		var foundOk bool
-		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-			if foundOk {
-				return
+		kv, ok := scanner.FindFirstChild[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) bool {
+			ident, isIdent := kv.Key.(*ast.Ident)
+			if !isIdent || ident.Name != "Key" {
+				return false
 			}
-			ident, ok := kv.Key.(*ast.Ident)
-			if !ok || ident.Name != "Key" {
-				return
-			}
-			foundKey, foundOk = sagaGuardedKeyFromExpr(info, kv.Value)
+			_, guarded := sagaGuardedKeyFromExpr(info, kv.Value)
+			return guarded
 		})
-		return foundKey, foundOk
+		if !ok {
+			return "", false
+		}
+		return sagaGuardedKeyFromExpr(info, kv.Value)
 	}
 	// Unkeyed (positional) form: slog.Attr's first field is Key (string).
 	return sagaGuardedKeyFromExpr(info, cl.Elts[0])

@@ -80,14 +80,18 @@ const webhookDispatchTransport = "amqp"
 // which derives Transport from sub.ContractTransport — there is nothing to
 // derive; the constant is the whole truth.
 //
-// Provenance is type- AND content-enforced: the parameter is a typed
-// webhook.DispatchSpec (not loose primitives), validated inside the funnel
-// before deriving, and the derived spec is run through ContractSpec.Validate().
-// That second check is belt-and-suspenders here (Kind/Transport are hardcoded
-// valid and ID/Topic come from the already-validated non-empty ContractID, so it
+// The funnel validates SHAPE, not value provenance: spec.Validate() runs before
+// deriving and the derived spec passes ContractSpec.Validate(), so the funnel
+// never emits a structurally-invalid spec. But webhook.DispatchSpec has exported
+// fields, so a runtime/ caller can construct one from arbitrary strings — the
+// typed param does NOT prove the values came from cellgen/registry. Real value
+// provenance is the cellgen→RegistrySnapshot.WebhookDispatchers data flow, not a
+// type-system guarantee; a sealed DispatchSpec constructor would Hard-ify it
+// (gh #1532). The second ContractSpec.Validate() is belt-and-suspenders here
+// (Kind/Transport hardcoded valid, ID/Topic from the non-empty ContractID, so it
 // cannot fail today) — kept for parity with NewEventDerivation and so a future
 // change to the hardcoded values still fails closed. Callers MUST handle the
-// returned error.
+// returned error. See doc.go for the full AI-robust grading.
 func NewWebhookDispatch(spec webhook.DispatchSpec) (contractspec.ContractSpec, error) {
 	if err := spec.Validate(); err != nil {
 		return contractspec.ContractSpec{}, fmt.Errorf("contractbuild: NewWebhookDispatch: dispatch spec invalid: %w", err)
@@ -109,20 +113,22 @@ func NewWebhookDispatch(spec webhook.DispatchSpec) (contractspec.ContractSpec, e
 // funnel, NOT a declaration funnel — the spec is derived from the subscription's
 // already-bound contract identity, never fabricated.
 //
-// Provenance is type- AND content-enforced: the parameter is a typed
-// outbox.Subscription (not loose primitives), and the funnel runs
-// sub.Validate() before deriving — so a caller cannot mint an event spec from
-// arbitrary strings, it must supply a fully-populated, valid subscription
-// (Topic / ConsumerGroup / CellID / ContractID / ContractKind / ContractTransport
-// all required). This closes the provenance gap left when the single-file caller
-// allowlist was retired (#1038); the typed parameter is now natural because this
-// package lives in runtime/ and may import kernel/outbox (the former primitive
-// signature was a vestige of the old kernel/contractspec placement).
-//
-// The derived spec is additionally run through ContractSpec.Validate() (defense
+// The funnel validates SHAPE, not value provenance: the parameter is a typed
+// outbox.Subscription (not loose primitives) and the funnel runs sub.Validate()
+// before deriving, plus the derived spec passes ContractSpec.Validate() (defense
 // in depth: e.g. ContractID need not be a valid contract ID just because the
-// subscription validated). Callers MUST handle the returned error — content
-// invariants are funnel-owned, not caller discipline.
+// subscription validated). But outbox.Subscription has exported fields, so a
+// runtime/ caller can construct one from arbitrary strings — the typed param
+// forces values to be wrapped in the named type, it does NOT prove they came
+// from cellgen/registry. Real value provenance is the eventrouter data flow
+// (AddContractHandler fills these from contract-bound registrations), not a
+// type-system guarantee; a sealed Subscription constructor would Hard-ify it
+// (gh #1532). The single-file caller allowlist was retired (#1038 / #1445); the
+// typed parameter is now natural because this package lives in runtime/ and may
+// import kernel/outbox (the former primitive signature was a vestige of the old
+// kernel/contractspec placement). Callers MUST handle the returned error —
+// content shape invariants are funnel-owned, not caller discipline. See doc.go
+// for the full AI-robust grading.
 func NewEventDerivation(sub outbox.Subscription) (contractspec.ContractSpec, error) {
 	if err := sub.Validate(); err != nil {
 		return contractspec.ContractSpec{}, fmt.Errorf("contractbuild: NewEventDerivation: subscription invalid: %w", err)

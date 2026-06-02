@@ -188,10 +188,6 @@ func dlxStmtIsFailureSignal(info *types.Info, stmt ast.Stmt) bool {
 	return fn.FullName() == recordDLXFailureFullName
 }
 
-// scanRouteDeadLetterReturns walks every BlockStmt in routeDeadLetter and, for
-// each ReturnStmt, checks that some earlier statement in the SAME block is a
-// dead-letter outcome metric. Returns diagnostics for silent returns plus the
-// total ReturnStmt count (for the non-vacuous companion).
 // blockReturnPrecededByFailureSignal reports whether some statement preceding
 // ret in the SAME block (by source position) is a dead-letter FAILURE signal.
 // Extracted from the EachInChildren callback so the callback carries no
@@ -210,6 +206,10 @@ func blockReturnPrecededByFailureSignal(info *types.Info, block *ast.BlockStmt, 
 	return false
 }
 
+// scanRouteDeadLetterReturns walks every BlockStmt in routeDeadLetter and, for
+// each ReturnStmt, checks that some earlier statement in the SAME block is a
+// dead-letter outcome metric. Returns diagnostics for silent returns plus the
+// total ReturnStmt count (for the non-vacuous companion).
 func scanRouteDeadLetterReturns(p *Pass, f *ast.File, fd *ast.FuncDecl) ([]Diagnostic, int) {
 	var diags []Diagnostic
 	var returnCount int

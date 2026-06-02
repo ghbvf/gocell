@@ -88,27 +88,32 @@
 //     package-level var assignments with static-literal IDs), so it is not
 //     recoverable by the HTTP middleware layer — a malformed prefix fails the
 //     process at startup with a Go stack trace, by design.
-//   - NewEventDerivation content + provenance: Hard. The parameter is a typed
-//     outbox.Subscription (not loose primitives), and the funnel runs
-//     sub.Validate() before deriving — so a runtime/ caller cannot mint an event
-//     spec from arbitrary strings; it must supply a fully-populated, valid
-//     subscription. The derived spec additionally passes ContractSpec.Validate()
-//     (defense in depth). The former single-file ("only eventrouter") allowlist +
-//     drift guard are RETIRED (the typed-parameter provenance gate replaced
-//     them — #1038 / #1445, the latter closed by this signature). The primitive
-//     signature was a vestige of the old kernel/contractspec placement (which
-//     could not import kernel/outbox); runtime/ placement makes the typed param
-//     natural.
-//   - NewWebhookDispatch content + provenance: Hard/Hard. The parameter is a typed
-//     webhook.DispatchSpec (not loose primitives), and the funnel runs
-//     spec.Validate() before deriving — so a runtime/ caller cannot mint a webhook
-//     dispatch subscription spec from arbitrary strings; it must supply a
-//     fully-populated, valid dispatch spec (ContractID/SourceID/CellID all
-//     required). The derived spec additionally passes ContractSpec.Validate()
-//     (defense in depth). Upstream Hard via runtime/internal/ placement (same
-//     guarantee as NewEventDerivation); downstream Hard via
-//     NO-MANUAL-CONTRACTSPEC-LITERAL-01. Grading: Hard/Hard, same form as
-//     NewEventDerivation.
+//   - NewEventDerivation content: shape-Hard, NOT provenance-Hard. The funnel
+//     runs sub.Validate() before deriving and the derived spec additionally
+//     passes ContractSpec.Validate() (defense in depth), so it never emits a
+//     structurally-invalid spec. But outbox.Subscription has EXPORTED fields — a
+//     runtime/ caller can construct one from arbitrary strings; the typed param
+//     only forces values to be wrapped in the named type, it does NOT verify they
+//     originated from cellgen/registry. Value provenance is a runtime data-flow
+//     property (eventrouter fills these from contract-bound registrations), not a
+//     type-system guarantee. A sealed Subscription constructor would Hard-ify it —
+//     tracked at gh #1532. (The former single-file "only eventrouter" allowlist +
+//     drift guard are RETIRED, #1038 / #1445; the primitive signature was a
+//     vestige of the old kernel/contractspec placement which could not import
+//     kernel/outbox.)
+//   - NewWebhookDispatch content: shape-Hard, NOT provenance-Hard — identical
+//     situation to NewEventDerivation. spec.Validate() + ContractSpec.Validate()
+//     guarantee structural validity (ID/Topic non-empty; Kind/Transport hardcoded
+//     valid), but webhook.DispatchSpec has EXPORTED fields (ContractID/SourceID/
+//     CellID), so a runtime/ caller can fabricate one. Value provenance comes from
+//     the cellgen→RegistrySnapshot.WebhookDispatchers data flow, not the type
+//     system. Sealed-constructor Hard path: gh #1532.
+//
+// The upstream caller-set Hard (runtime/internal/ placement) and downstream
+// literal-ban Hard (NO-MANUAL-CONTRACTSPEC-LITERAL-01) hold uniformly for every
+// funnel here regardless of the content-axis caveat above; #1532 concerns only
+// the content value-provenance axis (same permanent-ceiling family as #851 /
+// #893 / #1282).
 //   - ContractSpec{…} literal ban: downstream Hard (unchanged,
 //     NO-MANUAL-CONTRACTSPEC-LITERAL-01). runtime/internal/contractbuild is the
 //     sanctioned funnel home and is excluded from that scan, analogous to the
