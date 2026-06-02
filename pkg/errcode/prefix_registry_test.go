@@ -138,9 +138,20 @@ func TestRegisteredPrefixes_SortedSnapshot(t *testing.T) {
 func TestGocellPrefixSetMatchesGolden(t *testing.T) {
 	entries := RegisteredPrefixes()
 
+	// Only include platform-owned entries in the golden file. Test-only
+	// prefixes (registered by other tests in the same process using unique
+	// test-only owners) are excluded so the golden stays stable.
+	const platformOwner = "github.com/ghbvf/gocell"
+	var platformEntries []PrefixOwner
+	for _, e := range entries {
+		if e.Owner == platformOwner {
+			platformEntries = append(platformEntries, e)
+		}
+	}
+
 	// Build the canonical multiline representation: one "prefix\towner" per line.
-	lines := make([]string, len(entries))
-	for i, e := range entries {
+	lines := make([]string, len(platformEntries))
+	for i, e := range platformEntries {
 		lines[i] = fmt.Sprintf("%s\t%s", e.Prefix, e.Owner)
 	}
 	sort.Strings(lines)
@@ -160,7 +171,7 @@ func TestGocellPrefixSetMatchesGolden(t *testing.T) {
 		return
 	}
 
-	goldenBytes, err := os.ReadFile(goldenPath)
+	goldenBytes, err := os.ReadFile(goldenPath) //nolint:gosec // path is constructed from runtime.Caller, not user input
 	if os.IsNotExist(err) {
 		t.Fatalf("golden file not found at %s — run with ERRCODE_PREFIX_GOLDEN_UPDATE=1 to generate", goldenPath)
 	}
