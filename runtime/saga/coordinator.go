@@ -41,6 +41,13 @@ const ProbeCoordinatorReady healthz.ProbeName = "saga_coordinator_ready"
 // that this Coordinator runs without distributed leader election.
 const UnsafeModeLabel = "unsafe_no_leader"
 
+// unregisteredDefinitionLabel collapses a DefinitionID that is not in the
+// registry into a bounded sentinel, so saga_drive_total / saga_leader_elect_skip_total
+// definition_id cardinality stays bounded by the compile-time registered set
+// (OpenTelemetry producer-side cardinality discipline; the metrics-provider cap
+// is a tripwire, not the primary bound). Mirrors the "_runtime" cell sentinel.
+const unregisteredDefinitionLabel = "_unregistered"
+
 // ---------------------------------------------------------------------------
 // Coordinator lifecycle state machine
 // ---------------------------------------------------------------------------
@@ -169,11 +176,12 @@ type Coordinator struct {
 	registry   ksaga.Resolver
 
 	// optional with defaults
-	dispatcher Dispatcher   // default NoopDispatcher{}
-	logger     *slog.Logger // default slog.Default()
-	cfg        Config
-	clock      clock.Clock
-	tracer     wrapper.Tracer // default wrapper.NoopTracer{}
+	dispatcher           Dispatcher   // default NoopDispatcher{}
+	logger               *slog.Logger // default slog.Default()
+	cfg                  Config
+	clock                clock.Clock
+	tracer               wrapper.Tracer // default wrapper.NoopTracer{}
+	observerCallDeadline time.Duration  // default executor.DefaultObserverCallDeadline
 
 	// optional leader election (PR-05). nil locker → single-process unsafe
 	// mode. leaderElectNil records a nil locker passed to WithLeaderElect so
@@ -266,17 +274,18 @@ func NewCoordinator(
 	clock.MustHaveClock(clk, "runtime/saga.NewCoordinator")
 
 	c := &Coordinator{
-		journal:    j,
-		txRunner:   tx,
-		outboxEmit: em,
-		registry:   reg,
-		clock:      clk,
-		dispatcher: NoopDispatcher{},
-		logger:     slog.Default(),
-		cfg:        DefaultConfig(),
-		tracer:     wrapper.NoopTracer{},
-		observer:   executor.NopObserver{},
-		readyCh:    make(chan struct{}),
+		journal:              j,
+		txRunner:             tx,
+		outboxEmit:           em,
+		registry:             reg,
+		clock:                clk,
+		dispatcher:           NoopDispatcher{},
+		logger:               slog.Default(),
+		cfg:                  DefaultConfig(),
+		tracer:               wrapper.NoopTracer{},
+		observer:             executor.NopObserver{},
+		observerCallDeadline: executor.DefaultObserverCallDeadline,
+		readyCh:              make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(c)
@@ -294,7 +303,8 @@ func NewCoordinator(
 	// c.journal stores only the JournalCore facet — see the struct doc. observer
 	// / tracer flow from Coordinator-level options into Executor — single tracing
 	// root, single observer fan-out.
-	exec, err := executor.NewExecutor(j, clk,
+	exec, err := executor.NewExecutor(
+		j, clk,
 		executor.WithHeartbeatInterval(c.cfg.HeartbeatInterval),
 		executor.WithLeaseDuration(c.cfg.LeaseDuration),
 		executor.WithObserver(c.observer),
@@ -587,11 +597,14 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 	}
 	claimed, _, err := c.journal.ClaimPending(ctx, c.cfg.ClaimBatchSize, c.cfg.LeaseDuration)
 	if err != nil {
+		c.safeObserve(ctx, "ObserveTick", func() { c.observer.ObserveTick(ctx, executor.TickError) })
 		return fmt.Errorf("ClaimPending: %w", err)
 	}
 	if len(claimed) == 0 {
+		c.safeObserve(ctx, "ObserveTick", func() { c.observer.ObserveTick(ctx, executor.TickEmpty) })
 		return nil
 	}
+	c.safeObserve(ctx, "ObserveTick", func() { c.observer.ObserveTick(ctx, executor.TickClaimed) })
 	for _, ci := range claimed {
 		// Leader-elect gate: in multi-process mode only the holder of the
 		// per-instance distlock drives it; others skip this tick (no-lock →
@@ -610,20 +623,90 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 			definitionID: ci.Instance.DefinitionID,
 			leaseID:      ci.LeaseID,
 		})
-		if err := c.driveOne(ctx, ci); err != nil {
+		driveErr := c.driveOne(ctx, ci)
+		driveResult := executor.DriveOK
+		if driveErr != nil {
+			driveResult = executor.DriveError
 			// Sentinel-aware severity: ErrSagaStaleLease (handoff race) →
 			// Info; ErrSagaNotFound (instance gone) → Warn; default → Warn.
 			// Keeps multi-coordinator deployments from spamming WARN
 			// dashboards on every lease lost during normal handoff.
-			c.logger.LogAttrs(ctx, journalErrLevel(err), "saga: drive failed",
+			c.logger.LogAttrs(ctx, journalErrLevel(driveErr), "saga: drive failed",
 				sagalog.InstanceFields(ci.Instance.ID, ci.LeaseID,
 					slog.String("definition_id", string(ci.Instance.DefinitionID)),
-					slog.Any("error", err))...)
+					slog.Any("error", driveErr))...)
 		}
+		defID := ci.Instance.DefinitionID
+		c.safeObserve(ctx, "ObserveDrive", func() { c.observer.ObserveDrive(ctx, c.labelDefinitionID(defID), driveResult) })
 		c.inflightLocks.Delete(ci.Instance.ID)
 		release()
 	}
 	return nil
+}
+
+// safeObserve runs a Coordinator-emitted Observer call (ObserveTick /
+// ObserveDrive / ObserveLeaderSkip) with two layers of fail-closed protection,
+// symmetric with executor.(*Executor).callObserverBounded (executor/executor.go):
+//
+//  1. Panic recovery: defer recoverObserverPanic so a panicking observer logs
+//     Warn with a redacted payload and execution continues.
+//
+//  2. Bounded wait: the observer call runs on a fresh goroutine; the caller
+//     waits at most c.observerCallDeadline (default
+//     executor.DefaultObserverCallDeadline = 5s) before logging Warn and
+//     returning. This prevents a hung observer from leaking the per-instance
+//     distlock (release() and c.inflightLocks.Delete run AFTER ObserveDrive
+//     returns in tickOnce) and from blocking the shutdown drain.
+//
+// The leaked observer goroutine may continue running indefinitely — bounded
+// only by observer behavior, not by the coordinator (Go cannot kill a
+// goroutine). Memory leaks are bounded by Observer impl quality; the Observer
+// contract reminds implementers MUST NOT block.
+func (c *Coordinator) safeObserve(ctx context.Context, method string, call func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer c.recoverObserverPanic(ctx, method)
+		call()
+	}()
+	timer := c.clock.NewTimerAt(c.clock.Now().Add(c.observerCallDeadline))
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C():
+		c.logger.WarnContext(ctx, "saga coordinator: observer call exceeded deadline; continuing",
+			slog.String("method", method),
+			slog.Duration("deadline", c.observerCallDeadline),
+		)
+	}
+}
+
+// recoverObserverPanic is the shared recover handler for Coordinator-emitted
+// observer calls. The panic payload is redacted through redaction.RedactAny
+// before reaching slog so a panic value carrying user data does not leak into
+// operator logs — same form as executor.recoverObserverPanic (executor.go).
+func (c *Coordinator) recoverObserverPanic(ctx context.Context, method string) {
+	if r := recover(); r != nil {
+		c.logger.WarnContext(ctx, "saga coordinator: observer call panicked, ignoring",
+			slog.String("method", method),
+			slog.Any("panic", redaction.RedactAny(r)))
+	}
+}
+
+// labelDefinitionID maps a DefinitionID to its metric-label form, collapsing
+// any definition not in the registry to unregisteredDefinitionLabel.
+//
+// This bounds the definition_id Prometheus label cardinality to the
+// compile-time registered set so an instance referencing a definition removed
+// in a later deploy (or a corrupted/injected ID) cannot inject an arbitrary
+// high-cardinality label value into saga_drive_total /
+// saga_leader_elect_skip_total (OpenTelemetry producer-side cardinality
+// discipline; the metrics-provider cap is a tripwire, not the primary bound).
+func (c *Coordinator) labelDefinitionID(definitionID idutil.SafeID) string {
+	if _, ok := c.registry.Lookup(definitionID); ok {
+		return string(definitionID)
+	}
+	return unregisteredDefinitionLabel
 }
 
 // ---------------------------------------------------------------------------
@@ -634,7 +717,8 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	// Top-level per-instance span. Child spans (saga.executor.step.run /
 	// saga.executor.step.compensate) are owned by the Executor. Tracer
 	// defaults to NoopTracer so this is zero-allocation in tests.
-	ctx, span := c.tracer.Start(ctx, "saga.coordinator.driveOne",
+	ctx, span := c.tracer.Start(
+		ctx, "saga.coordinator.driveOne",
 		wrapper.Attr{Key: "saga.instance_id", Value: string(ci.Instance.ID)},
 		wrapper.Attr{Key: "saga.definition_id", Value: string(ci.Instance.DefinitionID)},
 		wrapper.Attr{Key: "saga.lease_id", Value: string(ci.LeaseID)},

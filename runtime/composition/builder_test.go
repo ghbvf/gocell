@@ -35,13 +35,13 @@ type fakeCellModule struct {
 
 func (f *fakeCellModule) ID() string { return f.id }
 func (f *fakeCellModule) Provide(
-	_ context.Context, _ *SharedDeps, _ ModuleExports,
-) (cell.Cell, ModuleExports, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	_ context.Context, _ *SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	f.called = true
 	if f.provideErr != nil {
-		return nil, ModuleExports{}, nil, nil, f.provideErr
+		return nil, nil, nil, f.provideErr
 	}
-	return f.cell, ModuleExports{}, f.opts, f.mres, nil
+	return f.cell, f.opts, f.mres, nil
 }
 
 // closedOrder captures the sequence of Close calls for LIFO verification.

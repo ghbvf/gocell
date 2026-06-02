@@ -366,6 +366,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
+	c.setupSvc = setupSvc // stored for RecordBootstrapAuthFail (Wave-1 #1423)
 	c.setupHandler = setup.NewHandler(setupSvc, c.bootstrapAuth)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(setup.SliceMetadata()))
 	return nil

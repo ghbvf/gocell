@@ -10,19 +10,20 @@ in one of two directions:
 | `inbound` | receiver（接收外部回调，HMAC + timestamp + Claimer 三重保护） | `webhook-receive` | 外部 source 推送给我们 |
 | `outbound` | dispatcher（签名后推送，SSRF 防御 + 退避重试） | `webhook-dispatch` | 我们推送给外部 target |
 
-> **Scope note (PR-2 → PR-3 landed)**: 本目录与 cellgen 派生覆盖**契约识别 + 代码生成层**。
+> **Scope note (PR-2 → PR-5 landed)**: 本目录与 cellgen 派生覆盖**契约识别 + 代码生成层**。
 > PR-3（#1158）已落地 receiver 运行时（`runtime/webhook`：`Receiver`、`BuildRouteGroups`、
 > `bootstrap` phase5 drain），`reg.RegisterWebhookReceiver` 方法本体及 HTTP 接收 pipeline
 > 均已实现。kernel 纯计算内核（Signer/Verifier/Source）已在 PR-1（#1251）落地于 `kernel/webhook/`。
+> PR-4（#1159）已落地 SSRF guard（`kernel/webhook.SafePolicy`）。
+> PR-5（#1160）已落地 dispatcher 运行时（`kernel/webhook.Dispatcher` + retry/Classify、
+> `runtime/webhook/dispatch` outbox consumer、bootstrap drain），`reg.RegisterWebhookDispatch`
+> 方法本体已实现。
 >
-> 仍待后续 PR 落地：SSRF guard（PR-4）、dispatcher outbox consumer（PR-5）、
-> healthz/metrics 探针（PR-6，KERNEL-WEBHOOK-01）。
+> 仍待后续 PR 落地：healthz/metrics 探针（PR-6，KERNEL-WEBHOOK-01）。
 >
-> **PR-3 之后的排序约束**：`gocell generate cell` 现可为声明 `contractUsages[role=webhook-receive]`
-> 的 slice 派生 `reg.RegisterWebhookReceiver` 调用（方法本体已存在）。第一个真实 webhook cell
-> demo 在 PR-6 落地。dispatcher 路径（PR-5）落地前，`contractUsages[role=webhook-dispatch]`
-> 的 cellgen 派生仍引用未实现的 `reg.RegisterWebhookDispatch`，会导致编译失败——这是有意的
-> seam 排序，不是缺陷。
+> **PR-5 之后的排序约束**：`gocell generate cell` 现可为声明 `contractUsages[role=webhook-receive]`
+> 或 `contractUsages[role=webhook-dispatch]` 的 slice 派生对应注册调用（两个方法本体均已存在）。
+> 第一个真实 webhook cell demo 在 PR-6 落地。
 >
 > **codegen 零产物语义**：webhook 契约即便 `codegen: true`，contractgen 也**有意产出零
 > per-contract 产物**（注册经 cellgen 字面量，不经 contractgen；见 `generator.go` webhook 分支
@@ -154,7 +155,7 @@ func (c *PaymentCoreCell) Init(ctx context.Context, reg cell.Registrar) error {
 `webhook.ReceiverSpec` / `DispatchSpec` 是 `kernel/webhook` 的纯数据结构；`CellID` 作为字面量
 由 cellgen 从 cell.yaml 注入（observability owner 溯源 cell 元数据，与 `reg.Subscribe` 的位置
 cellID 同源约束）。`reg.RegisterWebhookReceiver` 方法本体已在 PR-3（#1158）落地；
-`reg.RegisterWebhookDispatch` 在 PR-5 落地。
+`reg.RegisterWebhookDispatch` 已在 PR-5（#1160）落地。
 
 ## 静态守卫（archtest）
 

@@ -520,10 +520,14 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"projection.device.inventory.v1": {
-				ID:      "projection.device.inventory.v1",
-				Kind:    "projection",
-				Codegen: true,
-				File:    "contracts/projection/device/inventory/v1/contract.yaml",
+				ID:   "projection.device.inventory.v1",
+				Kind: "projection",
+				// PROJECTION-CONSISTENCY-01 (gh #960): contractgen now requires a
+				// parseable consistency level for projection contracts so the
+				// types_gen.go compile-time guard renders a valid cellvocab ident.
+				ConsistencyLevel: "L3",
+				Codegen:          true,
+				File:             "contracts/projection/device/inventory/v1/contract.yaml",
 			},
 		},
 	}

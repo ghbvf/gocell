@@ -205,6 +205,16 @@
 
 ## PR-05 — PROJECTION-CONSISTENCY-01 升 Hard
 
+> **SUPERSEDED (gh #960 delivered 2026-06-02).** 下方 T-05-1/2/3 描述的「parser
+> load-time `jsonschema.Validate`」方案在落地时被**否决**——parse-time 校验是
+> Medium runtime guard（违反可表达、不覆盖 in-memory 向量），不满足 Hard。实际交付
+> 为 **contractgen codegen funnel**：`kind: projection` 契约的生成 `types_gen.go`
+> 携带 `const _ = uint(cellvocab.<level> - cellvocab.L3)`，L0/L1/L2 编译期 uint 溢出
+> → 无法构建。governance rule 留作 codegen:false + in-memory 的 Medium 兜底。无
+> parser 改动、无 kernel-isolation 放宽、无 `PROJECTION-CONSISTENCY-PARSE-TIME-01`
+> archtest。权威记录见 ADR `202605261620` §Amendment 2026-06-02 #960。下方原始任务
+> 保留作历史脉络，不再执行。
+
 ### T-05-1 parser load-time jsonschema.Validate
 
 - **what**：`kernel/metadata/parser.go` 在 contract load 路径调 `jsonschema.Validate`
@@ -283,7 +293,7 @@
 | **M2 kernel 核心** | PR-01 + PR-02 merged，Coordinator + mem store + PG store + conformance test |
 | **M3 codegen 派生** | PR-04 merged，cellgen `kind: projection` 派生通路打通 |
 | **M4 生命周期完整** | PR-03 merged，rebuild + metrics + readyz 三件套 |
-| **M5 governance Hard** | PR-05 merged，parser load-time validate |
+| **M5 consistency Hard** | PR-05 merged，PROJECTION-CONSISTENCY-01 升 Hard：contractgen codegen funnel（生成 `types_gen.go` 编译期 uint overflow），governance rule 留 Medium 兜底（parser-jsonschema 方案被否决，见 ADR §Amendment 2026-06-02 #960） |
 | **M6 reference** | PR-06 merged，orderprojection 改造为 L3 官方 reference，所有 sub-issues 关闭 |
 
 ### ship 调度落点

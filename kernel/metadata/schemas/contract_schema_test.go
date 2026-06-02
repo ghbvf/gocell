@@ -452,13 +452,17 @@ func TestContractSchemaAuthBoolMatrix(t *testing.T) {
 // schema gate: the contract.schema.json projection if/then block restricts
 // consistencyLevel to ["L3","L4"].
 //
-// AI-robust evaluation: schema enum is a documentation + test-layer constraint;
-// the metadata parser does not run jsonschema.Validate at load time, so the
-// validate-time governance rule PROJECTION-CONSISTENCY-01 is the real enforcement
-// (Medium). This test covers the YAML-parsed path; the governance rule covers
-// in-memory fixtures that bypass the parser.
+// AI-robust evaluation: schema enum is a documentation + test-layer constraint
+// only — the metadata parser does not run jsonschema.Validate at load time. The
+// real Hard gate is the contractgen codegen funnel (gh #960): for codegen=true
+// projection contracts, contractgen emits a compile-time guard
+// `const _ = uint(cellvocab.<level> - cellvocab.L3)` into types_gen.go that
+// fails to compile below L3 (see tools/codegen/contractgen TestProjection*).
+// The governance rule PROJECTION-CONSISTENCY-01 is the Medium backstop for
+// codegen=false contracts and in-memory fixtures that bypass codegen. This test
+// pins the schema enum that documents the same constraint.
 //
-// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, Medium — parser does not validate at load time).
+// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, documentation layer — Hard gate is the contractgen codegen funnel, gh #960).
 func TestProjectionConsistencyLevelSchemaEnum(t *testing.T) {
 	schema := compileContractSchemaForTest(t)
 

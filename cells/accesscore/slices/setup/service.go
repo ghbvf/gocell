@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/audit"
 )
 
 // Password bounds for the setup endpoint:
@@ -349,6 +350,38 @@ func setupRetiredError() error {
 		"first-run admin already provisioned; this endpoint is retired",
 		errcode.WithDetails(errcode.PublicString("nextAction", "login")),
 	)
+}
+
+// validBootstrapAuthFailReasons is the whitelist for RecordBootstrapAuthFail.
+// Keyed by runtime/audit.Reason* constants (the authoritative source); using
+// the constants directly ensures drift is caught at compile time.
+// The BOOTSTRAP-REASON-SET-EQUIVALENCE-01 archtest cross-validates the set
+// against runtime/auth/bootstrap.go inline literals.
+var validBootstrapAuthFailReasons = map[string]struct{}{
+	audit.ReasonMissingHeader:    {},
+	audit.ReasonWrongCredentials: {},
+	audit.ReasonRateLimited:      {},
+}
+
+// RecordBootstrapAuthFail emits event.auth.bootstrap-failed.v1 inside a
+// transaction so the outbox row is persisted atomically with the emitter
+// database write. Called from the accesscore bootstrap observer closure after
+// a 401/429 response is written; errors are logged by the caller and not
+// surfaced to the HTTP response (best-effort audit for non-durable emitters,
+// persistent outbox row for durable mode).
+//
+// reason must be one of "missing_header", "wrong_credentials", "rate_limited".
+// clientIP may be empty when the middleware did not set ctxkeys.RealIP.
+func (s *Service) RecordBootstrapAuthFail(ctx context.Context, reason, clientIP string) error {
+	if _, ok := validBootstrapAuthFailReasons[reason]; !ok {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"setup: RecordBootstrapAuthFail: reason not in whitelist",
+			errcode.WithInternal(errcode.InternalAttr("reason", reason)))
+	}
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicBootstrapAuthFailed,
+			dto.BootstrapAuthFailedEvent{Reason: reason, ClientIP: clientIP})
+	})
 }
 
 func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) error {
