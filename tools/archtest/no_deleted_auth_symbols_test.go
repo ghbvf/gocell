@@ -284,7 +284,6 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 		TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
 		productionScanPatterns,
 	),
-
 		func(p *Pass) []Diagnostic {
 			return scanDeletedAuthSymbolsAgainst(p, authRuntimeImportPath)
 		})
@@ -326,7 +325,6 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/nodeletedauthsymbolsfixture/..."},
 	),
-
 		func(p *Pass) []Diagnostic {
 			return scanDeletedAuthSymbolsAgainst(p, fixtureAuthImportPath)
 		})

@@ -2290,7 +2290,6 @@ func TestSagaJournalHolderSeal_A1_AliasFieldResolvedViaUnalias(t *testing.T) {
 
 	diags := Run(t, Fixture(FixtureOpts{},
 		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/aliasholder"}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -2348,7 +2347,6 @@ func TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged(t *testing.T) {
 
 	diags := Run(t, Fixture(FixtureOpts{},
 		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/funcfieldholder"}),
-
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -3217,7 +3215,6 @@ func TestSagaStatusFanoutCoverageC4(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"./kernel/saga/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -3268,7 +3265,6 @@ func TestSagaStatusFanoutCoverageC5(t *testing.T) {
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"./kernel/saga/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

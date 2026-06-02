@@ -233,7 +233,6 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
 			FixtureOpts{Tests: false},
 			[]string{"./tools/archtest/internal/basesliceredfixture/..."},
 		),
-
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 		},
@@ -292,7 +291,6 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
 			FixtureOpts{Tests: false},
 			[]string{"./tools/archtest/internal/basesliceredfixture/..."},
 		),
-
 		func(p *Pass) []Diagnostic {
 			return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
 		},

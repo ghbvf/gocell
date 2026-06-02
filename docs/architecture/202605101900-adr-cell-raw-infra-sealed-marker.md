@@ -202,7 +202,7 @@ sealed marker 集从 3 扩展为 4：新增 `outbox.CellEmitter`（embed `Emitte
 
 ### A.7 — SEALED-MARKER-NOOP-TRANSPARENCY-01 升级 Medium → Hard
 
-`tools/archtest/sealed_marker_noop_transparency_test.go` 从手工 `sealedMarkerFiles` 文件清单改为 `RunTyped(./kernel/...)` + `pass.Pkg.Scope().Names()` 自动发现 `internalCell*` struct，断言每个有 `Noop() bool`。去掉了"新 sealed marker 文件漏登记则静默跳过"的 Soft 维护点。残留 convention：发现 keys on `internalCell` 前缀；全名无关发现（按 sealed*() marker method）是进一步 Hard 化方向，本 PR 未做。
+`tools/archtest/sealed_marker_noop_transparency_test.go` 从手工 `sealedMarkerFiles` 文件清单改为 `Run(t, Typed(TypedOpts{}, []string{"./kernel/..."}))` + `pass.Pkg.Scope().Names()` 自动发现 `internalCell*` struct，断言每个有 `Noop() bool`。去掉了"新 sealed marker 文件漏登记则静默跳过"的 Soft 维护点。残留 convention：发现 keys on `internalCell` 前缀；全名无关发现（按 sealed*() marker method）是进一步 Hard 化方向，本 PR 未做。
 
 ### 威胁矩阵 / Consequences 一致性
 

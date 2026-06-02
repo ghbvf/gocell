@@ -247,7 +247,6 @@ func TestProjectionReplaySourceConformanceEnroll01_RedFixture(t *testing.T) {
 	enrolledImpls := make(map[string]bool)
 	_ = Run(t, Fixture(FixtureOpts{Tests: true},
 		[]string{"./tools/archtest/internal/projectionreplayenrollfixture/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil

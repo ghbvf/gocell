@@ -167,7 +167,6 @@ func TestOutboxEntrySealedConstruction01_SoleReconstructionSurface(t *testing.T)
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"./kernel/outbox/..."}),
-
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil
