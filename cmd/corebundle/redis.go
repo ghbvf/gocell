@@ -60,6 +60,10 @@ var (
 	}
 )
 
+// requiresDistributedReplay mirrors composition.SharedDeps.requiresDistributedReplay.
+// The copy exists because Redis construction (and AllowUnsafeNoPassword derivation)
+// runs before SharedDeps is built; both must stay in sync — they delegate to the
+// same two Topology methods.
 func requiresDistributedReplay(topo bootstrap.Topology) bool {
 	return topo.RequireProductionControlPlane() && !topo.SinglePodReplayProtection()
 }

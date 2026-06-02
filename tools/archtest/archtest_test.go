@@ -1481,7 +1481,7 @@ func TestLoadModule_IntegrationTagPlumbing(t *testing.T) {
 // that benign comment/blank-line drift does not break CI; any structural
 // growth (extra fields, helpers, init functions) must trip this and force a
 // re-evaluation of V-A8 against its deferred-decision triggers
-// (corebundle subpackage extraction, internalGuard public exposure).
+// (corebundle subpackage extraction).
 // countLines reports the number of lines a Go source file would render as,
 // matching the convention that an empty file is 0 lines and a no-trailing-
 // newline file with content still counts its last line. Extracted so the

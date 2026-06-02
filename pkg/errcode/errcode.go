@@ -454,11 +454,11 @@ const (
 
 	// Control-plane startup configuration errors (cmd/corebundle).
 	//
-	// ErrControlplaneServiceSecretMissing signals that GOCELL_SERVICE_SECRET is
-	// unset in adapter mode "real", so the /internal/v1/* service-token guard
-	// cannot be constructed. Produced by cmd/corebundle.internalGuardFromEnv
-	// and cmd/corebundle.SharedDeps.validateControlPlane; fails the binary at
-	// startup before any listener binds. Never reaches the HTTP layer in
+	// ErrControlplaneServiceSecretMissing signals that the InternalHMACRing field
+	// of composition.SharedDeps is nil, so the /internal/v1/* service-token guard
+	// cannot be constructed. Produced by cmd/corebundle.buildInternalHMACRing and
+	// runtime/composition.SharedDeps.validateInternalListenerGuard; fails the
+	// binary at startup before any listener binds. Never reaches the HTTP layer in
 	// practice.
 	//
 	// Distinct from ErrValidationFailed (user-input validation) so operators
@@ -468,9 +468,9 @@ const (
 	// ErrControlplaneNonceStoreMissing signals that the control-plane
 	// service-token guard was constructed without a replay-safe NonceStore
 	// (either nil or a NoopNonceStore sentinel) while adapter mode is "real".
-	// Produced by cmd/corebundle.SharedDeps.validateControlPlane; fails the
-	// binary at startup. Operators must inject an InMemoryNonceStore (single
-	// pod) or a shared store (multi-pod) before restart.
+	// Produced by runtime/composition.SharedDeps.validateProductionNonceStore;
+	// fails the binary at startup. Operators must inject an InMemoryNonceStore
+	// (single pod) or a shared store (multi-pod) before restart.
 	//
 	// This is the closure of the P1 replay window: a captured valid service
 	// token must not be replayable within its 5-minute validity window.

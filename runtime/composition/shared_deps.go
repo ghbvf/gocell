@@ -119,6 +119,12 @@ type SharedDeps struct {
 	// mode "real" a NoopNonceStore is rejected, and an in-memory store requires
 	// the single-pod acknowledgement. Nil is permitted in dev/test adapter
 	// modes (the Kind checks are real-mode-only); see validateProductionControlPlane.
+	//
+	// Note: although validate() only checks NonceStore in real adapter mode, any
+	// consumer that wires the internal-listener auth chain via
+	// auth.NewAuthServiceToken must supply a non-nil NonceStore — that constructor
+	// fail-fasts on nil regardless of adapter mode. In dev/test supply
+	// auth.NewInMemoryNonceStore(...).
 	NonceStore kauth.NonceStore
 
 	// PrimaryHTTPAddr is the bind address for the public HTTP listener.
@@ -188,15 +194,22 @@ func NewSharedDeps(d SharedDeps) (*SharedDeps, error) {
 }
 
 // validate checks that all required cross-cutting dependencies are present and
-// runs every composition-contract startup guard: health-listener reachability,
-// the always-on internal-listener guard + verbose-endpoint gating, and the
-// production control-plane checks (metrics token, nonce-store kind, claimer
-// kind) that fire in real adapter mode. These checks formerly lived in
-// cmd/corebundle's validateCorebundleDeps and depended on cmd-private types
-// (#1410); reading the now-promoted SharedDeps.NonceStore and the self-reporting
-// ConsumerClaimer.Kind() lets every NewSharedDeps consumer — not just
-// cmd/corebundle — inherit them fail-closed. The only residual cmd-side check is
-// the .env.example sample-token guard (a cmd deployment artifact).
+// runs every composition-contract startup guard. Guards apply in two groups:
+//
+//   - Always-required (every adapter mode): IL1 (InternalHTTPAddr must be set),
+//     IL2 (InternalHMACRing must be set), V1/V2 (verbose endpoint must be
+//     token-gated or explicitly disabled).
+//   - Real-adapter-mode-only: CP1 (VerboseDisabled forbidden), CP3 (MetricsToken
+//     required), CP5 (NonceStore must be set), CP6 (NoopNonceStore rejected),
+//     CP7 (in-memory store rejected for multi-pod), CP8 (distributed claimer
+//     required for multi-pod).
+//
+// These checks formerly lived in cmd/corebundle's validateCorebundleDeps and
+// depended on cmd-private types (#1410); reading the now-promoted
+// SharedDeps.NonceStore and the self-reporting ConsumerClaimer.Kind() lets
+// every NewSharedDeps consumer — not just cmd/corebundle — inherit them
+// fail-closed. The only residual cmd-side check is the .env.example sample-token
+// guard (a cmd deployment artifact).
 func (d *SharedDeps) validate() error {
 	if d == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -251,9 +264,11 @@ func (d *SharedDeps) validate() error {
 
 // requiresDistributedReplay reports whether the topology demands a distributed
 // (multi-pod) replay-defense posture: real adapter mode without the single-pod
-// acknowledgement. It mirrors cmd/corebundle's requiresDistributedReplay so an
-// in-memory nonce store / claimer is rejected when multiple pods share the
-// control plane.
+// acknowledgement.
+//
+// cmd/corebundle/redis.go keeps a parallel free-function copy because Redis
+// construction (and AllowUnsafeNoPassword derivation) runs before SharedDeps is
+// built; both delegate to the same two Topology methods and must stay in sync.
 func (d *SharedDeps) requiresDistributedReplay() bool {
 	return d.Topology.RequireProductionControlPlane() && !d.Topology.SinglePodReplayProtection()
 }
@@ -286,7 +301,7 @@ func (d *SharedDeps) validateInternalListenerGuard() []error {
 	if d.InternalHMACRing == nil {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
 			"SharedDeps.InternalHMACRing must be set to protect /internal/v1/*; "+
-				"build it from GOCELL_SERVICE_SECRET"))
+				"build it via auth.NewHMACKeyRing (cmd/corebundle convention: from GOCELL_SERVICE_SECRET)"))
 	}
 	return errs
 }
@@ -299,9 +314,9 @@ func (d *SharedDeps) validateVerboseEndpoint() []error {
 		if d.VerboseToken != "" {
 			// Both set: VerboseDisabled wins, but it is almost certainly a
 			// misconfiguration. Surface it so operators spot it in startup logs.
-			slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN is set but GOCELL_READYZ_VERBOSE_DISABLED=1 " +
-				"overrides it; the token will not be enforced. Drop one of the two env vars " +
-				"to remove the ambiguity.")
+			slog.Warn("controlplane: verbose endpoint config ambiguity",
+				slog.String("hint", "SharedDeps.VerboseDisabled overrides a non-empty VerboseToken; "+
+					"the token will not be enforced — clear one of the two fields"))
 		}
 		return nil
 	}
@@ -310,7 +325,8 @@ func (d *SharedDeps) validateVerboseEndpoint() []error {
 	}
 	return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
 		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or GOCELL_READYZ_VERBOSE_DISABLED=1 to "+
-			"waive the verbose endpoint) so /readyz?verbose is never anonymous")}
+			"waive the verbose endpoint) so /readyz?verbose is never anonymous "+
+			"(these are SharedDeps.VerboseToken / VerboseDisabled fields; env-var names are cmd/corebundle convention)")}
 }
 
 // validateProductionControlPlane runs the real-adapter-mode gate: token-gated
@@ -322,14 +338,15 @@ func (d *SharedDeps) validateProductionControlPlane() []error {
 	var errs []error
 	if d.VerboseDisabled {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
-			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode \"real\"; "+
+			"SharedDeps.VerboseDisabled must not be set in adapter mode \"real\"; "+
 				"production must keep the token-gated verbose endpoint available for "+
-				"on-call diagnostics"))
+				"on-call diagnostics (cmd/corebundle convention: GOCELL_READYZ_VERBOSE_DISABLED)"))
 	}
 	if d.MetricsToken == "" {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to prevent anonymous "+
-				"/metrics exposure; scrapers must send X-Metrics-Token header"))
+			"SharedDeps.MetricsToken must be set in adapter mode \"real\" to prevent anonymous "+
+				"/metrics exposure; scrapers must send X-Metrics-Token header "+
+				"(cmd/corebundle convention: GOCELL_METRICS_TOKEN)"))
 	}
 	errs = append(errs, d.validateProductionNonceStore()...)
 	if d.requiresDistributedReplay() &&
@@ -337,7 +354,7 @@ func (d *SharedDeps) validateProductionControlPlane() []error {
 		d.ConsumerClaimer.Kind() != idempotency.ClaimerKindDistributed {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
 			"real multi-pod deployments require a Redis-backed outbox idempotency claimer; "+
-				"set GOCELL_REDIS_ADDR or run with GOCELL_SINGLE_POD=1"))
+				"set GOCELL_REDIS_ADDR or GOCELL_SINGLE_POD=1 (cmd/corebundle convention)"))
 	}
 	return errs
 }
@@ -365,9 +382,12 @@ func (d *SharedDeps) validateProductionNonceStore() []error {
 				slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments "+
 					"or configure a distributed NonceStore"))
 			return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-				"in-memory nonce store requires GOCELL_SINGLE_POD=1 (single-pod deployments) "+
-					"or a distributed store (multi-pod); refuse fail-open")}
+				"in-memory nonce store requires single-pod topology (Topology.SinglePodReplayProtection) "+
+					"or a distributed store for multi-pod; refuse fail-open "+
+					"(cmd/corebundle convention: GOCELL_SINGLE_POD=1)")}
 		}
+	default:
+		// NonceStoreKindDistributed (and any future replay-safe kind) is accepted.
 	}
 	return nil
 }

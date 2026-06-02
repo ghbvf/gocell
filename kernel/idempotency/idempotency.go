@@ -101,6 +101,10 @@ const (
 // claimer in a multi-pod deployment without trusting a caller-supplied label
 // (a SharedDeps field the consumer fills in could lie; a method on the claimer
 // itself cannot).
+//
+// Note the deliberate absence of a noop variant (unlike kernel/auth.NonceStoreKind):
+// every Claimer coordinates idempotency. The absence of coordination is expressed
+// by not wiring a Claimer at all, not by a noop implementation.
 type ClaimerKind string
 
 const (

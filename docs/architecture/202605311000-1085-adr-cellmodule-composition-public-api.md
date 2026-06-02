@@ -250,7 +250,7 @@ nonce/claimer-kind 等 control-plane 生产安全校验仍只活在 cmd 私有�
 
 | 关注点 | 迁移前 | 迁移后 |
 |--------|--------|--------|
-| 外部消费者跑 control-plane 校验 | ❌ cmd 私有，够不到（实质 Soft：cmd 手动调，重构可静默丢） | ✅ Hard sealed-marker 门控的 `NewSharedDeps→validate` 路径 |
+| 外部消费者跑 control-plane 校验 | ❌ cmd 私有，够不到（实质 Soft：cmd 手动调，重构可静默丢） | ✅ Hard sealed-marker 门控的 `NewSharedDeps→validate` 路径（上游 Hard / 下游 Medium，见下方残留 Medium 说明） |
 | claimer-distributed 真实性（CP8） | ⚠️ cmd 私有 `consumerClaimerKind`（topology 派生，自身不可绕但外部够不到） | ✅ `Claimer.Kind()` 实现自报，type-system Hard（不可伪造） |
 | nonce-store noop / in-mem-multipod（CP6/CP7） | ⚠️ cmd 私有 introspect `internalGuard.NonceStore()` | ✅ `shared.NonceStore.Kind()` 实现自报，type-system Hard |
 | composition 不 import adapters/prometheus | ✅ | ✅（仅新增 `kernel/auth` import，kernel 层允许） |

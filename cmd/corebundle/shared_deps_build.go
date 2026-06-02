@@ -141,7 +141,7 @@ func adapterInfoForSharedDeps(shared *composition.SharedDeps, locals *cmdLocals)
 	if shared.NonceStore != nil {
 		nonceStoreKind = string(shared.NonceStore.Kind())
 	}
-	var claimerKind string
+	claimerKind := "unknown"
 	if shared.ConsumerClaimer != nil {
 		claimerKind = string(shared.ConsumerClaimer.Kind())
 	}

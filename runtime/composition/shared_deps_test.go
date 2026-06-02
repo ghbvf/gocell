@@ -112,7 +112,7 @@ func buildValidRealModeSharedDeps(t *testing.T) *SharedDeps {
 // fakeDistributedClaimer reports ClaimerKindDistributed while delegating Claim to
 // an embedded in-memory claimer — used to isolate the CP7 nonce-store check from
 // the CP8 claimer check in multi-pod negative tests.
-type fakeDistributedClaimer struct{ idempotency.Claimer }
+type fakeDistributedClaimer struct{ *idempotency.InMemClaimer }
 
 func (fakeDistributedClaimer) Kind() idempotency.ClaimerKind {
 	return idempotency.ClaimerKindDistributed
@@ -120,7 +120,7 @@ func (fakeDistributedClaimer) Kind() idempotency.ClaimerKind {
 
 // fakeDistributedNonceStore reports NonceStoreKindDistributed while delegating to
 // an embedded store — used to isolate the CP8 claimer check from CP6/CP7.
-type fakeDistributedNonceStore struct{ kauth.NonceStore }
+type fakeDistributedNonceStore struct{ *auth.InMemoryNonceStore }
 
 func (fakeDistributedNonceStore) Kind() kauth.NonceStoreKind {
 	return kauth.NonceStoreKindDistributed
@@ -390,7 +390,9 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 			mutate: func(t *testing.T, s *SharedDeps) {
 				s.Topology = realMultiPodTopo(t)
 				// distributed nonce store so only the CP8 claimer check fires.
-				s.NonceStore = fakeDistributedNonceStore{testInMemNonceStore(t, clk)}
+				ns, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
+				require.NoError(t, err)
+				s.NonceStore = fakeDistributedNonceStore{ns}
 			},
 			wantErr: true, errSub: "Redis-backed outbox idempotency claimer",
 		},
@@ -399,9 +401,34 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 			base: buildValidRealModeSharedDeps,
 			mutate: func(t *testing.T, s *SharedDeps) {
 				s.Topology = realMultiPodTopo(t)
-				s.NonceStore = fakeDistributedNonceStore{testInMemNonceStore(t, clk)}
+				ns, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
+				require.NoError(t, err)
+				s.NonceStore = fakeDistributedNonceStore{ns}
 				s.ConsumerClaimer = fakeDistributedClaimer{idempotency.NewInMemClaimer(clk)}
 			},
+		},
+		// --- additional coverage cases ---
+		{
+			name: "V1 both-set warn-but-pass (VerboseDisabled + VerboseToken)",
+			base: buildTestSharedDeps,
+			mutate: func(_ *testing.T, s *SharedDeps) {
+				s.VerboseDisabled = true
+				s.VerboseToken = "tok"
+			},
+		},
+		{
+			name: "CP7-pass real single-pod with in-memory nonce accepted",
+			base: buildValidRealModeSharedDeps,
+			// baseline is already single-pod + in-memory nonce; this case makes it explicit
+		},
+		{
+			name: "nil ConsumerClaimer with real multi-pod fails closed",
+			base: buildValidRealModeSharedDeps,
+			mutate: func(t *testing.T, s *SharedDeps) {
+				s.Topology = realMultiPodTopo(t)
+				s.ConsumerClaimer = nil
+			},
+			wantErr: true, errSub: "ConsumerClaimer",
 		},
 	}
 
