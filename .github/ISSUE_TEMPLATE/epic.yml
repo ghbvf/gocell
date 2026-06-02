@@ -1,7 +1,7 @@
 name: Epic
 description: 跨多 PR 的能力级工作项 — 父 issue，挂子任务 + wave 实施顺序
 title: "[EPIC] <能力级标题>"
-labels: ["epic"]
+labels: ["epic", "backlog"]
 body:
   - type: markdown
     attributes:
