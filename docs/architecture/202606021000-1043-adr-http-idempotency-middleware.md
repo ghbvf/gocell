@@ -321,6 +321,10 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 
 **独立 lease-store + blob-store（两个 Redis key 分开操作）**（被拒绝）：Claim 之后、Record 之前的窗口里，如果 lease-store 和 blob-store 不原子操作，存在"已 done 状态但 blob 为空"的间隙——后续 replay 会拿到空 blob 或 UnmarshalRecordedResponse 失败。Lua 双键原子脚本消除此间隙。
 
+**Opt-in env flag (`GOCELL_HTTP_IDEMPOTENCY_ENABLED`) vs. default-ON when Redis present**（被拒绝）：issue #1469 要求评估这两种激活方式。选择默认启用的核心理由：opt-in env flag 完全复现了 #1469 要修复的问题——"middleware 和 store 存在，但生产中从未连接"。框架机制如果需要额外 env flag 才能激活，实质上仍然是死代码：运维文档落后、env flag 被遗忘、staging 配置与 prod 不同步，都可能导致生产 store 始终缺席。`buildConsumerClaimer` 和 `buildServiceNonceStore` 已经证明了"按拓扑自动派生、Redis 存在即激活"模式在生产中稳定可靠——本 store 遵循相同范式。fail-closed 守卫（`CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01`、`sensitiveResponseHeaders` header 过滤、`shouldRecord` 2xx/3xx 门控）的存在使 default-ON 在安全语义上与 opt-in 等价；opt-in 仅增加额外的运维配置复杂度，无额外安全收益。
+
+**Service / 匿名主体不追踪幂等（有意设计，非 bug）**：`extractIdentity` 仅对 `PrincipalUser` + 非空 `Subject` 的请求激活幂等追踪；`PrincipalService`（service-token 主体）、匿名请求、无 Principal 请求直接 passthrough，不消耗 Claim，不产生 lease。原因：service-to-service 调用应在调用方保证幂等（调用方拥有幂等语义的完整上下文）；强行在 server 端追踪 service 主体的幂等会引入全局唯一 key 设计问题（service 主体无 per-user 身份隔离），且 service 调用方通常已在 outbox / event bus 层获得 consumer-side 幂等保护（`kernel/idempotency.Claimer`）。未来如需支持 service principal 追踪，在 `extractIdentity` 添加 `PrincipalService` 分支即可，不影响现有接口。
+
 ---
 
 ## Implementation Matrix

@@ -78,7 +78,8 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		slog.String("outbox_storage", adapterInfo["outbox_storage"]),
 		slog.String("redis", adapterInfo["redis"]),
 		slog.String("service_token_nonce_store", adapterInfo["service_token_nonce_store"]),
-		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]))
+		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]),
+		slog.String("http_idempotency_store", adapterInfo["http_idempotency_store"]))
 
 	logSinglePodNonceStoreAcknowledgement(compShared, locals)
 

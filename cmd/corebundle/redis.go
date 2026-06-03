@@ -55,6 +55,9 @@ type redisClientResult struct {
 //     key collision with the consumer claimer is impossible because the two
 //     primitives use structurally different key formats — the HTTP store
 //     includes a request-namespace segment that the consumer claimer omits.
+//     See adapters/redis/http_idempotency.go (`_runtime:<tenant>:{key}:resp|lease|fp`)
+//     and adapters/redis/idempotency.go (`_runtime:{eventID}:lease|done`) for the
+//     format details proving no collision.
 const (
 	nonceStoreNamespace           adapterredis.KeyNamespace = "servicetoken-nonce"
 	consumerClaimerNamespace      adapterredis.KeyNamespace = "_runtime"

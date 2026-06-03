@@ -14,7 +14,9 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -30,12 +32,66 @@ import (
 	kauthtest "github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 )
+
+// idemSpyStore wraps a real MemStore and records every namespace+key pair
+// passed to Claim. Used by TestBootstrap_IdempotencyReplay_SecondRequestReplayed
+// to prove that exempt routes never reach Claim at all — i.e. the middleware
+// short-circuits before issuing any store operation.
+//
+// Non-exempt calls are delegated to the underlying MemStore so replay still
+// works in the same app instance.
+type idemSpyStore struct {
+	inner     *idemhttp.MemStore
+	claimKeys []string // accumulated "ns:key" strings, in call order
+}
+
+func newIdemSpyStore(clk clock.Clock) *idemSpyStore {
+	return &idemSpyStore{inner: idemhttp.NewMemStore(clk)}
+}
+
+func (s *idemSpyStore) Claim(
+	ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration,
+) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
+	s.claimKeys = append(s.claimKeys, ns+":"+key)
+	return s.inner.Claim(ctx, ns, key, fingerprint, leaseTTL)
+}
+
+// claimKeyContains returns true if any recorded Claim call's composite key
+// contains the given substring.
+func (s *idemSpyStore) claimKeyContains(sub string) bool {
+	for _, k := range s.claimKeys {
+		if len(k) >= len(sub) {
+			for i := 0; i <= len(k)-len(sub); i++ {
+				if k[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// errStoreUnavailable is the sentinel returned by idemAlwaysErrorStore.Claim
+// to simulate a store outage.
+var errStoreUnavailable = errors.New("store: simulated outage")
+
+// idemAlwaysErrorStore is a Store whose Claim always returns a non-fingerprint
+// error, simulating a complete store outage. Used to verify that the middleware
+// fails closed (500) rather than passing through the request.
+type idemAlwaysErrorStore struct{}
+
+func (s *idemAlwaysErrorStore) Claim(
+	_ context.Context, _, _, _ string, _ time.Duration,
+) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
+	return 0, nil, nil, errStoreUnavailable
+}
 
 // idemTestVerifier is a minimal IntentTokenVerifier for idempotency e2e tests.
 // It always returns a PrincipalUser with Subject "user-1" to satisfy the
@@ -106,16 +162,14 @@ func (c *idemCountingCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 // bootstrapIdemApp builds a minimal bootstrap app with:
 //   - a primary listener (JWT auth, verifier returns Subject:"user-1")
-//   - a MemStore-backed idempotency store
+//   - the provided idempotency store (pass nil to omit WithIdempotencyStore)
 //   - the idemCountingCell
 //
-// Returns the primary listener address, the cell, and a cancel func.
-// The caller is responsible for calling cancel to stop the app.
-func bootstrapIdemApp(t *testing.T) (primaryAddr string, counting *idemCountingCell, cancel context.CancelFunc) {
+// Shutdown is registered via t.Cleanup; callers need not cancel explicitly.
+func bootstrapIdemApp(t *testing.T, store idemhttp.Store) (primaryAddr string, counting *idemCountingCell) {
 	t.Helper()
 
 	clk := clock.Real()
-	memStore := idemhttp.NewMemStore(clk)
 	verifier := &idemTestVerifier{claims: kauth.Claims{Subject: "user-1"}}
 
 	asm := assembly.New(clk, assembly.Config{ID: "test-idem-e2e", DurabilityMode: outbox.DurabilityDemo})
@@ -128,10 +182,8 @@ func bootstrapIdemApp(t *testing.T) (primaryAddr string, counting *idemCountingC
 
 	healthLn := newLocalListener(t)
 
-	b := New(
-		clk,
+	opts := []Option{
 		WithAssembly(asm),
-		WithIdempotencyStore(memStore),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(),
 			[]kauth.ListenerAuth{kauthtest.MustAuthJWT(verifier)},
 			WithListenerNet(primaryLn)),
@@ -142,7 +194,12 @@ func bootstrapIdemApp(t *testing.T) (primaryAddr string, counting *idemCountingC
 			[]kauth.ListenerAuth{kauth.AuthNone{}},
 			WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-	)
+	}
+	if store != nil {
+		opts = append(opts, WithIdempotencyStore(store))
+	}
+
+	b := New(clk, opts...)
 
 	ctx, cancelFn := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -158,7 +215,7 @@ func bootstrapIdemApp(t *testing.T) (primaryAddr string, counting *idemCountingC
 		}
 	})
 
-	return primaryLn.Addr().String(), counting, cancelFn
+	return primaryLn.Addr().String(), counting
 }
 
 // TestBootstrap_IdempotencyReplay_SecondRequestReplayed is the main F12 test:
@@ -166,10 +223,15 @@ func bootstrapIdemApp(t *testing.T) (primaryAddr string, counting *idemCountingC
 // replays the stored response on the second call — proving the middleware is
 // correctly wired via WithIdempotencyStore through the bootstrap stack.
 //
-// HARD verification: a second route declared IdempotencyExempt:true is never
-// recorded — the handler always runs and Idempotency-Replayed is never set.
+// Three assertions strengthen replay semantics beyond status + header:
+//  1. (C1) The replayed response body is byte-equal to the original response body.
+//  2. The handler-call counter stays at 1 on the replayed request.
+//  3. (C2) The exempt route's Idempotency-Key never reaches Store.Claim; the spy
+//     proves the middleware short-circuits before issuing any store operation.
 func TestBootstrap_IdempotencyReplay_SecondRequestReplayed(t *testing.T) {
-	addr, counting, _ := bootstrapIdemApp(t)
+	clk := clock.Real()
+	spy := newIdemSpyStore(clk)
+	addr, counting := bootstrapIdemApp(t, spy)
 
 	makePost := func(path, key string) *http.Response {
 		t.Helper()
@@ -190,7 +252,9 @@ func TestBootstrap_IdempotencyReplay_SecondRequestReplayed(t *testing.T) {
 
 	// First request: handler must execute.
 	resp1 := makePost("/api/v1/orders", "order-key-001")
-	defer closeBody(t, resp1)
+	body1, err := io.ReadAll(resp1.Body)
+	closeBody(t, resp1)
+	require.NoError(t, err, "reading first response body")
 	require.Equal(t, http.StatusCreated, resp1.StatusCode,
 		"first request must return 201")
 	assert.Equal(t, int32(1), counting.handlerCalls.Load(),
@@ -200,13 +264,20 @@ func TestBootstrap_IdempotencyReplay_SecondRequestReplayed(t *testing.T) {
 
 	// Second request with same key: handler must NOT execute; response is replayed.
 	resp2 := makePost("/api/v1/orders", "order-key-001")
-	defer closeBody(t, resp2)
+	body2, err := io.ReadAll(resp2.Body)
+	closeBody(t, resp2)
+	require.NoError(t, err, "reading second response body")
 	require.Equal(t, http.StatusCreated, resp2.StatusCode,
 		"replayed request must return the same status")
 	assert.Equal(t, int32(1), counting.handlerCalls.Load(),
 		"handler must NOT execute again for replayed request")
 	assert.Equal(t, "true", resp2.Header.Get("Idempotency-Replayed"),
 		"replayed response must carry Idempotency-Replayed: true")
+
+	// C1: body equality — a bug that replays the right status but wrong/empty
+	// body would pass the status+header checks but fail here.
+	assert.Equal(t, body1, body2,
+		"replayed response body must be byte-equal to the original response body")
 
 	// ── Exempt route (IdempotencyExempt:true) ────────────────────────────────
 
@@ -228,6 +299,14 @@ func TestBootstrap_IdempotencyReplay_SecondRequestReplayed(t *testing.T) {
 		"exempt handler must execute on every request — no replay")
 	assert.Empty(t, resp4.Header.Get("Idempotency-Replayed"),
 		"Idempotency-Replayed must never be set for exempt route")
+
+	// C2: HARD verification — the exempt route's key must NEVER have reached
+	// Store.Claim. The spy intercepts all Claim calls delegating to the real
+	// MemStore; the exempt matcher short-circuits before any store I/O, so
+	// "bulk-key-001" must be absent from the spy's recorded keys.
+	assert.False(t, spy.claimKeyContains("bulk-key-001"),
+		"exempt route's Idempotency-Key must never reach Store.Claim: "+
+			"the exempt matcher must short-circuit before any store operation")
 }
 
 // TestBootstrap_WithIdempotencyStore_InstallsMiddleware verifies that when
@@ -306,4 +385,42 @@ func TestBootstrap_WithIdempotencyStore_InstallsMiddleware(t *testing.T) {
 		"without an idempotency store, handler must execute on every request")
 	assert.Empty(t, resp2.Header.Get("Idempotency-Replayed"),
 		"Idempotency-Replayed must not be set when no store is configured")
+}
+
+// TestBootstrap_Idempotency_StoreUnavailable_FailClosed verifies the ADR
+// threat-matrix requirement: when Store.Claim returns a non-fingerprint error
+// (store outage, network failure, etc.) the middleware must fail CLOSED —
+// returning HTTP 500 — rather than passing through the request to the handler.
+//
+// Passing through would silently execute a possibly non-idempotent operation
+// without any idempotency protection, which is worse than a visible 500.
+// The fail-closed behavior is documented in Store.Claim godoc:
+//
+//	"On error (err != nil), fail closed: do not run the handler."
+func TestBootstrap_Idempotency_StoreUnavailable_FailClosed(t *testing.T) {
+	// Wire an always-error store so every Claim call simulates a store outage.
+	errStore := &idemAlwaysErrorStore{}
+	addr, counting := bootstrapIdemApp(t, errStore)
+
+	req, err := http.NewRequestWithContext(context.Background(),
+		http.MethodPost,
+		fmt.Sprintf("http://%s/api/v1/orders", addr),
+		bytes.NewBufferString(`{}`))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Idempotency-Key", "fail-closed-key-001")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := testHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	// The middleware must fail closed with 500, not pass through to the handler.
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"store outage must produce 500 (fail-closed), not a passthrough 2xx")
+
+	// The handler must NOT have been invoked — the middleware aborts before
+	// calling next when Claim returns a non-fingerprint error.
+	assert.Equal(t, int32(0), counting.handlerCalls.Load(),
+		"handler must NOT execute when Store.Claim returns an error (fail-closed)")
 }

@@ -121,6 +121,8 @@ type HTTPAuthMeta struct {
 	// PasswordResetExempt, ServiceOwned, Bootstrap, ClientsOnly — any combination
 	// is legal; it does NOT participate in FMT-27 auth-mode mutex.
 	// Emits auth.Route{IdempotencyExempt: true}. See runtime/auth/route.go.
+	// The encoding scheme for the 5-field auth-mode mutex is P-R-S-B-C-I; the
+	// whitelist of 14 legal combos is defined in auth_combo.go LegalAuthComboNames.
 	IdempotencyExempt bool `yaml:"idempotencyExempt,omitempty" json:"idempotencyExempt,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware
 	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as

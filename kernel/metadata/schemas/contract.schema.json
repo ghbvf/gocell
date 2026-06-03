@@ -368,7 +368,7 @@
                       "idempotencyExempt": {
                         "type": "boolean",
                         "default": false,
-                        "description": "If true, the HTTP idempotency middleware never claims/records/replays this route's responses (credential-rotation / change-password). Orthogonal to public/passwordResetExempt/serviceOwned/bootstrap/clientsOnly — any combination is legal. Emits auth.Route{IdempotencyExempt: true}."
+                        "description": "If true, the HTTP idempotency middleware never claims/records/replays this route's responses (credential-rotation / change-password). Orthogonal to public/passwordResetExempt/serviceOwned/bootstrap/clientsOnly — any combination is legal. Emits auth.Route{IdempotencyExempt: true}. Required when the response schema declares any sensitive field (e.g. accessToken, refreshToken); codegen rejects generation without this flag (CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01)."
                       },
                       "responses": {
                         "type": "array",

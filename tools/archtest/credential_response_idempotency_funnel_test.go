@@ -37,7 +37,8 @@
 //     / SAGA-JOURNAL #982 / outbox-provenance #1282 Medium ceilings). A
 //     schemaToWireOutDTOs wrapper could strengthen archtest-Medium coverage but does
 //     not change the tier; it is left as optional defense-in-depth, not separately
-//     tracked.
+//     tracked (permanent won't-do ceiling, same family as #851/#893/#1282 — Go
+//     cannot express must-call coverage).
 //
 // Symbol list (single source — do NOT copy to rule .md files):
 //   - Funnel function:         rejectUnexemptCredentialResponse (credential_response_idempotency_guard.go)
@@ -149,7 +150,7 @@ func TestCredentialIdempotencyFunnel_CallSiteAllowlist(t *testing.T) {
 							Rel:  rel,
 							Line: p.Fset.Position(c.Pos()).Line,
 							Message: credentialIdempotencyFunnelCallee + " called inside " + fn.Name.Name +
-								" — only buildHTTPDTOs (the HTTP Response wire-out path) may call it; " +
+								" — only buildResponseDTOs (the HTTP Response wire-out path) may call it; " +
 								"the Request path must remain exempt (inbound credentials are legitimate) " +
 								"(CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01)",
 						})
