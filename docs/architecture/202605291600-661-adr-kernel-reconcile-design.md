@@ -277,6 +277,14 @@ sink 削为裸 `chan<- Request`（去 client-go workqueue：去重/退避归 Loo
 PR-A3 的 `Loop.Source <-chan Request` 是 Trigger 产出的原始 channel 接缝（A3 测试直接注入 channel，
 A7 Builder 把 Trigger 输出 channel 接进 Loop.Source）。
 
+> **Trigger 受 leader gate（PR-A7 review C1/F2 决议）**：leader-elect 模式下 `Trigger.Start`
+> 在 **per-lease-term**（`runLeaseTerm` 的 leaseCtx）启动，**不**在 `Loop.Start` 无条件启动——
+> 否则 follower 会在赢得 lease 前就消费外部源（ChannelTrigger 抢/缓他人事件）。single-process
+> 模式（always-leader）仍在 `Loop.Start` 启动一次。对标 controller-runtime：source 默认不在赢得
+> leader election 前启动（无 warmup；GoCell 当前不引入 `EnableWarmup` 类 opt-in，YAGNI）。跨 term
+> 复用同一 `triggerCh`（同时仅一个 term 活跃，垂死 term 的 producer goroutine 与下一 term 的短暂
+> 重叠是良性——channel send 并发安全，残留 buffered Request 是幂等 re-reconcile）。
+
 `TickerTrigger` 发**零值 `Request{}` resync 脉冲**（无 entity 上下文的间隔 ticker 只能发空 ID
 脉冲，消费方 `Reconcile` 从中扇出）；其节拍走**注入的 `clock.Clock`**（`clk.NewTicker(interval)`，
 fake clock `Advance` 可确定性测试，不依赖 wall-clock），构造期 `clock.MustHaveClock` +
@@ -352,13 +360,16 @@ func (*Builder) WithInterval(time.Duration) *Builder
 func (*Builder) WithName(string) *Builder
 func (*Builder) WithReconcilerID(string) *Builder
 func (*Builder) WithRenewInterval(time.Duration) *Builder
-func (*Builder) WithStartTimeout(time.Duration) *Builder
-func (*Builder) WithStopTimeout(time.Duration) *Builder
 func (*Builder) Build() (*Loop, error)   // Loop 构造私有化：Builder 是唯一公开入口
 ```
 
-上述 With* 集合是 §3.5 示意列表的忠实超集——每个私有字段均可通过对应 With* 方法触达，
-非投机扩张。`Build()` 缺 reconciler/trigger → err；其余运行时 fail-fast 保留在
+上述 With* 集合覆盖每个**消费方可配置**字段。两个字段刻意 framework-owned、**无** With*
+入口：(1) `logger` 固定走 `slog.Default()`（进程级 sealed 脱敏 sink，per-loop raw logger 会
+绕过 fail-closed redaction）；(2) 控制面 clock 是 sealed real-only（`controlPlaneClock`）。
+注：早期草图的 `WithStartTimeout`/`WithStopTimeout` 是 **no-op**（Loop 启动探针走常量
+`startProbeTimeout`、Stop 走调用方 ctx，二字段从不被读），PR-A7 review 已**删除**——不暴露
+不生效的配置。`Build()` 缺 reconciler/trigger → err；`WithFencedRepo` 不带 `WithLeader` → err
+（fencing 需 leadership epoch 源，否则静默 Epoch 0 = 无 fencing）；其余运行时 fail-fast 保留在
 `Loop.Start.preStartValidate`。
 
 funnel（**已闭环**）：`Loop` 所有配置字段私有化（PR-A7），包外 `reconcile.Loop{field: v}`

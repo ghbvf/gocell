@@ -49,6 +49,7 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"reflect"
 	"strings"
@@ -444,10 +445,17 @@ func TestReconcileTriggerInterfaceFrozen01_ReverseBlindSpot(t *testing.T) {
 //   - Type alias (`type LoopAlias = reconcile.Loop; LoopAlias{}`): under Go
 //     1.23+ gotypesalias=1 this denotes a *types.Alias, so isReconcileLoopType
 //     MUST call types.Unalias before the *types.Named assertion or it slips past
-//     (#1292 r2 F2). Covered by redLoopViaTypeAlias; the RED test's ≥3-hit
+//     (#1292 r2 F2). Covered by redLoopViaTypeAlias; the RED test's ≥5-hit
 //     assertion fails if Unalias regresses.
 //   - Address-of (`&reconcile.Loop{}`): EachInSubtree visits the inner
 //     CompositeLit regardless of the enclosing UnaryExpr, so `&Loop{}` is caught.
+//   - `new(reconcile.Loop)`: a CallExpr whose Fun Ident is "new" (builtin, no
+//     package object in TypesInfo.Uses) and whose sole arg resolves to Loop.
+//     Covered by redLoopViaNew in loop_literal.go.
+//   - `var x reconcile.Loop` (value zero-var): a GenDecl/ValueSpec with explicit
+//     Type resolving to Loop (not a pointer — StarExpr resolves to *Loop which
+//     isReconcileLoopType rejects). `var x *reconcile.Loop` is a nil-pointer holder
+//     and must NOT flag. Covered by redLoopVar in loop_literal.go.
 //   - Reflection construction (`reflect.New(...)`): out of scope, same theoretical
 //     gap accepted by BASESLICE-CTOR-FUNNEL-01.
 //   - Zero-field literal `reconcile.Loop{}`: this is the ONLY externally
@@ -487,9 +495,14 @@ func isReconcileLoopType(info *types.Info, expr ast.Expr, reconcilePkgPath strin
 	return obj.Pkg().Path() == reconcilePkgPath && obj.Name() == "Loop"
 }
 
-// scanReconcileLoopConstruction flags every reconcile.Loop composite literal in
-// p, unless p's package is in allowedPkgPaths (the home package only). Test
+// scanReconcileLoopConstruction flags every zero-value reconcile.Loop construction
+// in p, unless p's package is in allowedPkgPaths (the home package only). Test
 // files are excluded by the caller (Run(t, Production(...)) with Tests:false).
+//
+// Three zero-value construction forms are detected:
+//   - CompositeLit: reconcile.Loop{} (and &reconcile.Loop{}, import-alias, type-alias)
+//   - CallExpr:     new(reconcile.Loop)
+//   - ValueSpec:    var x reconcile.Loop  (value, not pointer)
 func scanReconcileLoopConstruction(p *Pass, reconcilePkgPath string, allowedPkgPaths map[string]bool) []Diagnostic {
 	if p.Pkg != nil && allowedPkgPaths[p.Pkg.Path()] {
 		return nil
@@ -497,6 +510,8 @@ func scanReconcileLoopConstruction(p *Pass, reconcilePkgPath string, allowedPkgP
 	var diags []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
+
+		// Form 1: composite literal reconcile.Loop{} (and &Loop{}, aliases).
 		EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
 			if !isReconcileLoopType(p.TypesInfo, lit.Type, reconcilePkgPath) {
 				return
@@ -505,6 +520,47 @@ func scanReconcileLoopConstruction(p *Pass, reconcilePkgPath string, allowedPkgP
 				Rel:     rel,
 				Line:    p.Fset.Position(lit.Pos()).Line,
 				Message: reconcileLoopLiteralMsg,
+			})
+		})
+
+		// Form 2: new(reconcile.Loop). The builtin new has no package object in
+		// TypesInfo.Uses — checking id.Name == "new" is both necessary and sufficient
+		// (no user-defined function named "new" can exist in Go).
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || id.Name != "new" || len(call.Args) != 1 {
+				return
+			}
+			if !isReconcileLoopType(p.TypesInfo, call.Args[0], reconcilePkgPath) {
+				return
+			}
+			diags = append(diags, Diagnostic{
+				Rel:     rel,
+				Line:    p.Fset.Position(call.Pos()).Line,
+				Message: reconcileLoopLiteralMsg,
+			})
+		})
+
+		// Form 3: var x reconcile.Loop (value zero-var, not pointer).
+		// A `var x *reconcile.Loop` has StarExpr type whose resolved type is
+		// *Loop (pointer), which isReconcileLoopType rejects — so pointer holders
+		// are not flagged. Only the value form is flagged.
+		EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
+			if gd.Tok != token.VAR {
+				return
+			}
+			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+				if vs.Type == nil {
+					return
+				}
+				if !isReconcileLoopType(p.TypesInfo, vs.Type, reconcilePkgPath) {
+					return
+				}
+				diags = append(diags, Diagnostic{
+					Rel:     rel,
+					Line:    p.Fset.Position(vs.Pos()).Line,
+					Message: reconcileLoopLiteralMsg,
+				})
 			})
 		})
 	}
@@ -539,10 +595,11 @@ func TestReconcileBuilderFunnel01(t *testing.T) {
 
 // TestReconcileBuilderFunnel01_RedFixture proves the detector is non-vacuous AND
 // alias-aware. The fixture package (outside the allowlist) composes reconcile.Loop
-// three ways — direct `&reconcile.Loop{}`, import-aliased `&rc.Loop{}`, and Go
-// 1.23 type-alias `&loopTypeAlias{}`. All three must be flagged; the type-alias
-// form in particular only fires when the scanner calls types.Unalias (#1292 r2
-// F2), so the ≥3 assertion is what guards that fix.
+// five ways — direct `&reconcile.Loop{}`, import-aliased `&rc.Loop{}`, Go 1.23
+// type-alias `&loopTypeAlias{}`, `new(reconcile.Loop)`, and `var x reconcile.Loop`.
+// All five must be flagged; the type-alias form in particular only fires when the
+// scanner calls types.Unalias (#1292 r2 F2), so the ≥5 assertion is what guards
+// that fix.
 func TestReconcileBuilderFunnel01_RedFixture(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -567,11 +624,12 @@ func TestReconcileBuilderFunnel01_RedFixture(t *testing.T) {
 			hits++
 		}
 	}
-	const wantForms = 3 // direct + import-alias + type-alias
+	const wantForms = 5 // direct + import-alias + type-alias + new() + var
 	if hits < wantForms {
 		t.Errorf("RECONCILE-BUILDER-FUNNEL-01 RED fixture: scanner found %d hits, "+
-			"want ≥ %d (direct + import-alias + type-alias). A shortfall means the type-alias "+
-			"form slipped past — check that isReconcileLoopType calls types.Unalias.", hits, wantForms)
+			"want ≥ %d (direct + import-alias + type-alias + new() + var). A shortfall means the "+
+			"type-alias form slipped past or new()/var forms are not detected — check that "+
+			"isReconcileLoopType calls types.Unalias.", hits, wantForms)
 	}
 }
 

@@ -36,6 +36,7 @@ func RunLeaderConformance(t *testing.T, newElector ElectorFactory) {
 	t.Run("HandoffBumpsEpoch", func(t *testing.T) { confHandoffBumpsEpoch(t, newElector) })
 	t.Run("ReacquireAfterReleaseBumpsEpoch", func(t *testing.T) { confReacquireAfterReleaseBumps(t, newElector) })
 	t.Run("RenewAfterTakeoverIsLost", func(t *testing.T) { confRenewAfterTakeoverIsLost(t, newElector) })
+	t.Run("ReleaseAfterTakeoverIsNoop", func(t *testing.T) { confReleaseAfterTakeoverIsNoop(t, newElector) })
 }
 
 // confReacquireAfterReleaseBumps pins the fencing contract for a SAME-holder
@@ -143,6 +144,35 @@ func confRenewAfterTakeoverIsLost(t *testing.T, newElector ElectorFactory) {
 	if err := a.RenewLease(ctx, tokA); !errors.Is(err, reconcile.ErrReconcileLeaseLost) {
 		t.Fatalf("renew after takeover must report ErrReconcileLeaseLost (drives lost-lease ctx cancel); got %v", err)
 	}
+}
+
+// confReleaseAfterTakeoverIsNoop pins fencing safety: a stale holder releasing its
+// OLD token AFTER another holder has taken over must NOT free the new holder's
+// lease. Otherwise a laggard's delayed ReleaseLease could hand the lease to a third
+// contender while the legitimate holder still believes it leads (split-brain).
+func confReleaseAfterTakeoverIsNoop(t *testing.T, newElector ElectorFactory) {
+	ctx := context.Background()
+	const rid = "conf-release-after-takeover"
+	a, b, c := newElector("holder-A"), newElector("holder-B"), newElector("holder-C")
+
+	tokA, err := a.AcquireLease(ctx, rid)
+	mustNoErr(t, err, "acquire A")
+	mustNoErr(t, a.ReleaseLease(ctx, tokA), "A releases")
+
+	tokB, err := b.AcquireLease(ctx, rid)
+	mustNoErr(t, err, "B takes over")
+	defer func() { _ = b.ReleaseLease(ctx, tokB) }()
+
+	// Stale release: A releases its OLD token AGAIN, now that B owns the lease.
+	// Must be a no-op (not an error, and must not free B's lease).
+	mustNoErr(t, a.ReleaseLease(ctx, tokA), "stale release by old holder must be a no-op")
+
+	// C must still be locked out — B's lease was NOT freed by A's stale release.
+	if _, err := c.AcquireLease(ctx, rid); !errors.Is(err, reconcile.ErrLeaseHeld) {
+		t.Fatalf("stale release by old holder must NOT free the new holder's lease; C got err=%v", err)
+	}
+	// And B must still hold (its renew succeeds).
+	mustNoErr(t, b.RenewLease(ctx, tokB), "new holder must still hold after a stale release")
 }
 
 // RunFencingConformance is the real-failure-injection: a zombie old leader's write
@@ -272,12 +302,17 @@ const (
 	confBackoffMax    = confShortInterval * 10 // panic-recovery backoff cap (TEST-TIME-LITERAL-01)
 )
 
-// confStop stops l with a bounded drain budget so a hung Loop fails the test
-// fast instead of blocking the goroutine forever.
-func confStop(l *reconcile.Loop) {
+// confStop stops l with a bounded drain budget and FAILS the test if the drain
+// does not complete in time. Discarding the Stop error would mask a stuck drain
+// (leaked goroutines / hung reconcile) as a false green — the goleak guard is a
+// backstop, but a timed-out Stop is a direct contract violation worth a failure.
+func confStop(t *testing.T, l *reconcile.Loop) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), confEventualWait)
 	defer cancel()
-	_ = l.Stop(ctx)
+	if err := l.Stop(ctx); err != nil {
+		t.Errorf("Loop.Stop: drain did not complete within %s: %v", confEventualWait, err)
+	}
 }
 
 // RunConformance runs the Loop scheduling conformance suite.
@@ -347,7 +382,7 @@ func confBasicReconcile(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	submit(reconcile.Request{EntityID: "basic-entity-1"})
 
@@ -388,7 +423,7 @@ func confRequeueAfter(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	submit(reconcile.Request{EntityID: "requeue-entity-1"})
 
@@ -422,7 +457,7 @@ func confPermanentError(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	submit(reconcile.Request{EntityID: "perm-entity-1"})
 
@@ -475,7 +510,7 @@ func confPanicRecovery(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	submit(reconcile.Request{EntityID: "panic-entity-1"})
 
@@ -546,7 +581,7 @@ func confMaxConcurrentCrossEntity(t *testing.T, w Wiring) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start cross-entity")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	for i := 0; i < workers; i++ {
 		submit(reconcile.Request{EntityID: string(rune('A' + i))})
@@ -613,7 +648,7 @@ func confMaxConcurrentSameEntity(t *testing.T, w Wiring) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start same-entity")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	submit(reconcile.Request{EntityID: "same-entity"})
 	submit(reconcile.Request{EntityID: "same-entity"})
@@ -672,7 +707,7 @@ func confLeaderFlow(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	submit(reconcile.Request{EntityID: "leader-entity-1"})
 
@@ -732,7 +767,7 @@ func confFencing(t *testing.T, newHarness HarnessFactory) {
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mustNoErr(t, l.Start(ownerCtx), "Start")
-	defer confStop(l)
+	defer confStop(t, l)
 
 	submit(reconcile.Request{EntityID: "fence-entity-1"})
 

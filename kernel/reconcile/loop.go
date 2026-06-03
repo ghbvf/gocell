@@ -215,10 +215,10 @@ type Loop struct {
 	// maxConcurrentReconciles bounds concurrent reconciles across distinct
 	// EntityIDs; defaults to defaultMaxConcurrentReconciles via applyDefaults.
 	maxConcurrentReconciles int
-	// startTimeout / stopTimeout integrate with a lifecycle hook.
-	startTimeout time.Duration
-	stopTimeout  time.Duration
-	// logger defaults to slog.Default() via applyDefaults.
+	// logger defaults to slog.Default() via applyDefaults. There is no WithLogger
+	// Builder option by design: all logging routes through the process-global
+	// sealed slog sink (runtime/observability/logging) for fail-closed redaction —
+	// a per-loop raw logger would bypass it. See builder.go / observability.md.
 	logger *slog.Logger
 	// metrics holds optional pre-bound instruments (nil-safe).
 	metrics Metrics
@@ -341,26 +341,24 @@ func (l *Loop) start(ownerCtx context.Context) error {
 
 	runCtx, cancel := context.WithCancel(ownerCtx)
 
-	// Start the Trigger (if wired) so it begins sending Requests into triggerCh.
-	// This must happen before spawnActive so feedFromSource finds source populated.
-	if l.trigger != nil {
-		if err := l.trigger.Start(runCtx, l.triggerCh); err != nil {
-			cancel()
-			return fmt.Errorf("reconcile: trigger start failed: %w", err)
-		}
-	}
-
 	ready := make(chan struct{})
 	var readyOnce sync.Once
 	var wg sync.WaitGroup
 
 	if l.leader == nil {
-		// Single-process mode: spawn the active work directly under runCtx (the A3
-		// behavior, preserved verbatim — always leader, Epoch 0, no fencing).
+		// Single-process mode: always-leader. Start the Trigger under runCtx (it
+		// always holds "leadership"), then spawn the active work directly (the A3
+		// behavior — Epoch 0, no fencing).
+		if err := l.startTrigger(runCtx); err != nil {
+			cancel()
+			return err
+		}
 		l.spawnActive(runCtx, &wg, &readyOnce, ready)
 	} else {
-		// Leader-elect mode: one manager goroutine acquires/renews the lease and
-		// runs the active work under a per-term lease-scoped ctx.
+		// Leader-elect mode: a manager goroutine acquires/renews the lease and runs
+		// the active work AND the Trigger under a per-term lease-scoped ctx — so a
+		// FOLLOWER never starts the Trigger and never consumes its external source
+		// before winning the lease (see startTrigger / runLeaseTerm).
 		wg.Add(1)
 		go l.leaderManage(runCtx, gen, &wg, &readyOnce, ready)
 	}
@@ -394,6 +392,30 @@ func (l *Loop) start(ownerCtx context.Context) error {
 			slog.String("loop", l.name),
 			slog.String("reconciler", l.reconcilerID),
 			slog.Bool("leader_elect", l.leader != nil))
+	}
+	return nil
+}
+
+// startTrigger starts the wired Trigger (if any) so it feeds Requests into
+// triggerCh under ctx. It is leader-gated by its caller: single-process mode
+// passes runCtx (always-leader); leader-elect mode's runLeaseTerm passes the
+// lease-scoped ctx, so a FOLLOWER never starts the Trigger and thus never
+// consumes its external source until it wins the lease (controller-runtime
+// default: sources do not run before winning leader election; no warmup). No-op
+// when no Trigger is wired.
+//
+// The Trigger spawns its own ctx-bound goroutine (not tracked by the Loop's
+// WaitGroup, per the Trigger contract); it exits when ctx is canceled (lease
+// loss / shutdown). Across lease terms the same triggerCh is reused — only one
+// term is active at a time, so a brief overlap between a dying term's Trigger
+// goroutine and the next term's is benign: channel sends are concurrent-safe and
+// a stale buffered Request is a harmless idempotent re-reconcile.
+func (l *Loop) startTrigger(ctx context.Context) error {
+	if l.trigger == nil {
+		return nil
+	}
+	if err := l.trigger.Start(ctx, l.triggerCh); err != nil {
+		return fmt.Errorf("reconcile: trigger start failed: %w", err)
 	}
 	return nil
 }
@@ -490,7 +512,19 @@ func (l *Loop) runLeaseTerm(runCtx context.Context, gen uint64, token LeaseToken
 	// termReady is a throwaway per-term probe; Start's probe was already fired by leaderManage.
 	l.spawnActive(leaseCtx, &leaseWG, &termReadyOnce, termReady)
 
-	l.renewLoop(leaseCtx, leaseCancel, token)
+	// Start the Trigger under the lease-scoped ctx: only the active holder consumes
+	// the external source. On a start error, relinquish this term (skip renew, fall
+	// through to teardown + release) so a healthy replica can take over.
+	if err := l.startTrigger(leaseCtx); err != nil {
+		l.logger.Warn("reconcile: trigger start failed; relinquishing lease term",
+			slog.String("loop", l.name),
+			slog.String("reconciler", l.reconcilerID),
+			slog.Uint64("epoch", token.Epoch),
+			slog.Any("error", redaction.RedactError(err)))
+		leaseCancel()
+	} else {
+		l.renewLoop(leaseCtx, leaseCancel, token)
+	}
 
 	leaseCancel()  // interrupt in-flight Reconcile the instant the lease is gone
 	leaseWG.Wait() // drain this term's workers / feeder / delaying queue

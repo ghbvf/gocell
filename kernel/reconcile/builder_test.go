@@ -17,6 +17,27 @@ type realTrigger struct{}
 
 func (realTrigger) Start(_ context.Context, _ chan<- Request) error { return nil }
 
+// ptrTrigger / stubLeader / stubFencedRepo are pointer-receiver stubs used ONLY
+// to construct typed-nil interface values for Builder boundary tests
+// (a typed-nil pointer in an interface is != nil but IsNilInterface-true).
+type ptrTrigger struct{}
+
+func (*ptrTrigger) Start(_ context.Context, _ chan<- Request) error { return nil }
+
+type stubLeader struct{}
+
+func (*stubLeader) AcquireLease(_ context.Context, _ string) (LeaseToken, error) {
+	return LeaseToken{}, nil
+}
+func (*stubLeader) ReleaseLease(_ context.Context, _ LeaseToken) error { return nil }
+func (*stubLeader) RenewLease(_ context.Context, _ LeaseToken) error   { return nil }
+
+type stubFencedRepo struct{}
+
+func (*stubFencedRepo) ApplyFenced(_ context.Context, _ string, _ uint64, _ any) (bool, error) {
+	return true, nil
+}
+
 // builderExplicitInterval is the explicit interval used by the
 // interval_explicit_unchanged case (TEST-TIME-LITERAL-01: package-level const).
 const builderExplicitInterval = 7 * time.Second
@@ -172,8 +193,6 @@ const (
 	builderTestInterval      = 5 * time.Second
 	builderTestBaseDelay     = 10 * time.Millisecond
 	builderTestMaxDelay      = 30 * time.Second
-	builderTestStartTimeout  = 2 * time.Second
-	builderTestStopTimeout   = 4 * time.Second
 	builderTestRenewInterval = 3 * time.Second
 )
 
@@ -190,8 +209,6 @@ func TestBuilder_WithOptionsThreadThrough(t *testing.T) {
 		WithBackoff(builderTestBaseDelay, builderTestMaxDelay).
 		WithName("myloop").
 		WithReconcilerID("myreconciler").
-		WithStartTimeout(builderTestStartTimeout).
-		WithStopTimeout(builderTestStopTimeout).
 		WithRenewInterval(builderTestRenewInterval).
 		Build()
 	require.NoError(t, err)
@@ -202,11 +219,54 @@ func TestBuilder_WithOptionsThreadThrough(t *testing.T) {
 	assert.Equal(t, builderTestMaxDelay, loop.maxDelay)
 	assert.Equal(t, "myloop", loop.name)
 	assert.Equal(t, "myreconciler", loop.reconcilerID)
-	assert.Equal(t, builderTestStartTimeout, loop.startTimeout)
-	assert.Equal(t, builderTestStopTimeout, loop.stopTimeout)
 	assert.Equal(t, builderTestRenewInterval, loop.renewInterval)
 	// reconciler is a func type — compare by nil-ness and type identity, not ==
 	assert.NotNil(t, loop.reconciler, "reconciler must be wired into the loop")
+}
+
+// TestBuilder_TypedNilDependencyBoundaries locks the typed-nil interface
+// boundaries the funnel must reject: Build rejects a typed-nil Trigger and a
+// FencedRepo-without-Leader (F1); Start (preStartValidate) rejects a typed-nil
+// Leader / FencedRepo that passes Build as a non-nil interface.
+func TestBuilder_TypedNilDependencyBoundaries(t *testing.T) {
+	t.Parallel()
+	rec := funcReconciler(func(_ context.Context, _ Request) (Result, error) { return Result{}, nil })
+
+	t.Run("typed-nil Trigger → Build error", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(rec).WithTrigger((*ptrTrigger)(nil)).Build()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Trigger")
+	})
+
+	t.Run("FencedRepo without Leader → Build error", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(rec).WithTrigger(realTrigger{}).WithFencedRepo(&stubFencedRepo{}).Build()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "WithLeader")
+	})
+
+	t.Run("typed-nil Leader → Start error", func(t *testing.T) {
+		t.Parallel()
+		loop, err := New(rec).WithTrigger(realTrigger{}).WithLeader((*stubLeader)(nil)).Build()
+		require.NoError(t, err) // typed-nil leader is a non-nil interface; Build passes
+		err = loop.Start(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "typed-nil")
+	})
+
+	t.Run("typed-nil FencedRepo → Start error", func(t *testing.T) {
+		t.Parallel()
+		loop, err := New(rec).
+			WithTrigger(realTrigger{}).
+			WithLeader(&stubLeader{}).
+			WithFencedRepo((*stubFencedRepo)(nil)).
+			Build()
+		require.NoError(t, err) // typed-nil fencedRepo + real leader: F1 sees it IsNilInterface, Build passes
+		err = loop.Start(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "typed-nil")
+	})
 }
 
 func TestBuilder_WithMetricsThreadsThrough(t *testing.T) {

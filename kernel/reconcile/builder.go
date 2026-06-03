@@ -18,6 +18,9 @@ import (
 // Missing-required validation in Build:
 //   - reconciler must be non-nil (validation.IsNilInterface guard).
 //   - trigger must be provided (missing trigger → Loop never gets work).
+//   - a FencedRepo requires a Leader: fencing is only meaningful with a
+//     leadership epoch source; WithFencedRepo without WithLeader would silently
+//     bind Epoch 0 (no fencing), so Build rejects it.
 //
 // All other runtime fail-fasts (typed-nil Leader/FencedRepo, backoff inversion,
 // reconcilerID charset) are preserved in preStartValidate (Loop.Start) —
@@ -27,6 +30,13 @@ import (
 // startup probe, lease renew) uses a sealed real-only clock (see
 // Loop.controlPlaneClock); Reconciler implementations source their own domain
 // clock.
+//
+// There is no WithLogger option by design either: the Loop logs through
+// slog.Default(), which every production entry point seals to the redacting
+// process-global sink (runtime/observability/logging). A per-loop raw logger
+// would bypass that fail-closed redaction. (So the With* set is the faithful
+// superset of every CONSUMER-configurable field — logger and the control-plane
+// clock are deliberately framework-owned, not Builder inputs.)
 //
 // ref: kubernetes-sigs/controller-runtime pkg/builder/controller.go
 // (TypedBuilder.Build — fields unexported, fluent With* return *Builder,
@@ -43,8 +53,6 @@ type Builder struct {
 	maxConcurrentReconciles int
 	baseDelay               time.Duration
 	maxDelay                time.Duration
-	startTimeout            time.Duration
-	stopTimeout             time.Duration
 	renewInterval           time.Duration
 }
 
@@ -127,24 +135,15 @@ func (b *Builder) WithRenewInterval(d time.Duration) *Builder {
 	return b
 }
 
-// WithStartTimeout sets the timeout for the Loop startup probe.
-func (b *Builder) WithStartTimeout(d time.Duration) *Builder {
-	b.startTimeout = d
-	return b
-}
-
-// WithStopTimeout sets the drain budget for Loop.Stop.
-func (b *Builder) WithStopTimeout(d time.Duration) *Builder {
-	b.stopTimeout = d
-	return b
-}
-
 // Build validates the Builder configuration and constructs a *Loop.
 //
 // Required fields:
 //   - Reconciler (set via New): must be non-nil (validation.IsNilInterface guard).
 //   - Trigger (set via WithTrigger): must be provided; a Loop with no Trigger
 //     never receives external work and cannot converge toward desired state.
+//   - FencedRepo requires a Leader: fencing needs a leadership epoch source, so
+//     WithFencedRepo without WithLeader is rejected (it would silently bind
+//     Epoch 0 = no fencing).
 //
 // All other validations (reconcilerID charset, backoff ordering, typed-nil
 // Leader/FencedRepo) run at Loop.Start via preStartValidate.
@@ -160,6 +159,11 @@ func (b *Builder) Build() (*Loop, error) {
 		return nil, fmt.Errorf(
 			"reconcile: Builder requires a Trigger (a Loop with no trigger never receives work); " +
 				"use WithTrigger")
+	}
+	if !validation.IsNilInterface(b.fencedRepo) && validation.IsNilInterface(b.leader) {
+		return nil, fmt.Errorf(
+			"reconcile: WithFencedRepo requires WithLeader (fencing needs a leadership epoch source; " +
+				"without a Leader the writer binds Epoch 0 = no fencing)")
 	}
 
 	triggerCh := make(chan Request, queueBuffer)
@@ -177,8 +181,6 @@ func (b *Builder) Build() (*Loop, error) {
 		maxConcurrentReconciles: b.maxConcurrentReconciles,
 		baseDelay:               b.baseDelay,
 		maxDelay:                b.maxDelay,
-		startTimeout:            b.startTimeout,
-		stopTimeout:             b.stopTimeout,
 		renewInterval:           b.renewInterval,
 	}, nil
 }
