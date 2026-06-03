@@ -67,39 +67,58 @@ func findFuncDeclNamed(file *ast.File, name string) *ast.FuncDecl {
 	return found
 }
 
-// collectResolveCellLabelBodyViolations freezes the membership funnel body:
-// ResolveCellLabel must (a) read ctxkeys.CellIDFrom, (b) index the `valid`
-// closed set (`valid[v]`), and (c) return the zero CellLabel{} on a miss.
-// Dropping (b) would let any ctx cell id reach the metric unvalidated — the
-// exact regression this rule exists to stop.
+// collectResolveCellLabelBodyViolations freezes the membership funnel body by
+// CONTROL-FLOW LINKAGE, not mere presence: ResolveCellLabel must (a) read
+// ctxkeys.CellIDFrom, and (b) contain an if-stmt whose `valid` closed-set
+// membership check GATES a return of the zero CellLabel{} sentinel. Checking
+// that `valid[...]` and `CellLabel{}` each appear *somewhere* is insufficient —
+// a discarded membership result (`_ = valid[v]`) plus an unrelated `CellLabel{}`
+// return would pass a presence check yet still let an out-of-set cell id reach
+// the metric. The membership-miss branch must be the one that degrades to the
+// sentinel; that linkage is the exact regression this rule exists to stop.
 func collectResolveCellLabelBodyViolations(fn *ast.FuncDecl, label string) []string {
-	var readsCtxCellID, hasMembership, returnsEmptyLit bool
+	var readsCtxCellID, membershipGatesSentinel bool
 	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(v *ast.CallExpr) {
 		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
 			readsCtxCellID = true
 		}
 	})
-	scanner.EachInSubtree[ast.IndexExpr](fn.Body, func(v *ast.IndexExpr) {
-		if id, ok := v.X.(*ast.Ident); ok && id.Name == "valid" {
-			hasMembership = true
+	// An if-stmt whose Init/Cond indexes `valid` AND whose body returns the zero
+	// CellLabel{} — i.e. the membership check controls the sentinel return.
+	scanner.EachInSubtree[ast.IfStmt](fn.Body, func(ifs *ast.IfStmt) {
+		if membershipGatesSentinel {
+			return
 		}
-	})
-	scanner.EachInSubtree[ast.CompositeLit](fn.Body, func(v *ast.CompositeLit) {
-		if id, ok := v.Type.(*ast.Ident); ok && id.Name == "CellLabel" && len(v.Elts) == 0 {
-			returnsEmptyLit = true
+		indexesValid := false
+		for _, n := range []ast.Node{ifs.Init, ifs.Cond} {
+			if n == nil {
+				continue
+			}
+			scanner.EachInSubtree[ast.IndexExpr](n, func(ix *ast.IndexExpr) {
+				if id, ok := ix.X.(*ast.Ident); ok && id.Name == "valid" {
+					indexesValid = true
+				}
+			})
 		}
+		if !indexesValid {
+			return
+		}
+		scanner.EachInSubtree[ast.CompositeLit](ifs.Body, func(cl *ast.CompositeLit) {
+			if id, ok := cl.Type.(*ast.Ident); ok && id.Name == "CellLabel" && len(cl.Elts) == 0 {
+				membershipGatesSentinel = true
+			}
+		})
 	})
+
 	var viol []string
 	if !readsCtxCellID {
 		viol = append(viol, label+": ResolveCellLabel must read ctxkeys.CellIDFrom")
 	}
-	if !hasMembership {
-		viol = append(viol, label+": ResolveCellLabel must index the `valid` closed set (membership check "+
-			"`valid[v]`); dropping it would emit any ctx cell id unvalidated")
-	}
-	if !returnsEmptyLit {
-		viol = append(viol, label+": ResolveCellLabel must return the zero CellLabel{} on a membership miss "+
-			"(it renders as the sentinel via String())")
+	if !membershipGatesSentinel {
+		viol = append(viol, label+": ResolveCellLabel's `valid` closed-set membership check must GATE the zero "+
+			"CellLabel{} sentinel return — an if-stmt that indexes `valid` and whose body returns CellLabel{}. A "+
+			"membership check whose result does not control the sentinel return would let an out-of-set cell id "+
+			"reach the metric (it renders as the sentinel via String()).")
 	}
 	return viol
 }
@@ -180,6 +199,22 @@ func ResolveCellLabel(ctx context.Context, valid map[string]struct{}) CellLabel 
 	v, ok := ctxkeys.CellIDFrom(ctx)
 	if !ok || v == "" { return CellLabel{v: "fallback"} }
 	if _, member := valid[v]; !member { return CellLabel{v: "fallback"} }
+	return CellLabel{v: v}
+}`,
+			wantViolations: true,
+		},
+		{
+			// The presence-vs-linkage gap (F5): membership IS indexed and the zero
+			// CellLabel{} IS returned, but the membership result is DISCARDED and the
+			// sentinel return is gated on the ctx check, not membership — so an
+			// out-of-set v still reaches the metric. A presence-only check passes
+			// this; the linkage check must reject it.
+			name: "red_membership_not_gating_sentinel",
+			src: `package fixture
+func ResolveCellLabel(ctx context.Context, valid map[string]struct{}) CellLabel {
+	v, ok := ctxkeys.CellIDFrom(ctx)
+	_ = valid[v]
+	if !ok || v == "" { return CellLabel{} }
 	return CellLabel{v: v}
 }`,
 			wantViolations: true,

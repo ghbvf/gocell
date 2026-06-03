@@ -45,6 +45,46 @@ const (
 	ruleHTTPMetricsLabelBodyLimitCtxSource01 = "HTTP-METRICS-LABEL-BODYLIMIT-CTXSOURCE-01"
 )
 
+// resolvedCellLabelVar returns the name of the variable assigned from
+// metrics.ResolveCellLabel(...) within body (e.g. "cell" for
+// `cell := metrics.ResolveCellLabel(ctx, valid)`), or "" when the result is not
+// bound to a single variable (e.g. passed inline).
+func resolvedCellLabelVar(body ast.Node) string {
+	var name string
+	scanner.EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
+		if name != "" || len(as.Rhs) != 1 || len(as.Lhs) != 1 {
+			return
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || !isSelectorCall(call, "metrics", "ResolveCellLabel") {
+			return
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			name = id.Name
+		}
+	})
+	return name
+}
+
+// argIsResolvedCellLabel reports whether expr is the cell label produced by the
+// metrics.ResolveCellLabel funnel — either the bound variable labelVar (AST
+// data-flow linkage to the assignment, no type info required) or an inline
+// metrics.ResolveCellLabel(...) call. This binds the collector's cell argument
+// to the funnel RESULT rather than matching a hardcoded identifier name: a
+// regression that calls ResolveCellLabel but passes some OTHER value to the
+// collector now fails here. (The sealed metrics.CellLabel type already makes a
+// raw-string label a compile error; this asserts the funnel result specifically
+// reaches the write point.)
+func argIsResolvedCellLabel(expr ast.Expr, labelVar string) bool {
+	if id, ok := expr.(*ast.Ident); ok {
+		return labelVar != "" && id.Name == labelVar
+	}
+	if call, ok := expr.(*ast.CallExpr); ok {
+		return isSelectorCall(call, "metrics", "ResolveCellLabel")
+	}
+	return false
+}
+
 // TestHTTPMetricsLabelCellIDCtxSource01 enforces (post-M12b) that metricsWithClock
 // resolves the cell label through the sealed metrics.ResolveCellLabel funnel and
 // feeds the resulting CellLabel to collector.RecordRequest — and no longer reads
@@ -71,6 +111,9 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 	// reqVarName binds the *http.Request formal so the arg0 check asserts
 	// `<req>.Context()` rather than any-ident.Context().
 	reqVarName := requestParamName(fn.Body)
+	// resolvedVar binds RecordRequest's cell arg to the metrics.ResolveCellLabel
+	// assignment (AST data-flow linkage) instead of a hardcoded `cell` name match.
+	resolvedVar := resolvedCellLabelVar(metricsPath.Body)
 
 	var (
 		callsResolveCellLabel bool
@@ -90,10 +133,8 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 			if len(v.Args) > 0 && isRequestContextCall(v.Args[0], reqVarName) {
 				recordUsesReqCtxArg = true
 			}
-			if len(v.Args) > 1 {
-				if id, ok := v.Args[1].(*ast.Ident); ok && id.Name == "cell" {
-					recordUsesCellArg = true
-				}
+			if len(v.Args) > 1 && argIsResolvedCellLabel(v.Args[1], resolvedVar) {
+				recordUsesCellArg = true
 			}
 		}
 	})
@@ -111,7 +152,8 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		"%s: %s — middleware.Metrics must resolve the cell label through the sealed metrics.ResolveCellLabel funnel",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 	assert.Truef(t, recordUsesCellArg,
-		"%s: %s — collector.RecordRequest arg1 must be the `cell` CellLabel from metrics.ResolveCellLabel",
+		"%s: %s — collector.RecordRequest arg1 must be the CellLabel bound from metrics.ResolveCellLabel "+
+			"(data-flow linkage to the funnel result, not just any value)",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 	assert.Truef(t, recordUsesReqCtxArg,
 		"%s: %s — collector.RecordRequest arg0 must be the request ctx (%s.Context())",
@@ -437,6 +479,8 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	helperFn := findHTTPMetricsFuncDecl(t, file, "recordBodyLimitRejection")
+	// Bind RecordBodyLimitRejection's cell arg to the ResolveCellLabel assignment.
+	resolvedVar := resolvedCellLabelVar(helperFn.Body)
 
 	var (
 		callsResolveCellLabel bool
@@ -469,10 +513,8 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 					recordBLRArg0IsCtx = true
 				}
 			}
-			if len(v.Args) > 1 {
-				if id, ok := v.Args[1].(*ast.Ident); ok && id.Name == "cell" {
-					recordBLRArg1IsCell = true
-				}
+			if len(v.Args) > 1 && argIsResolvedCellLabel(v.Args[1], resolvedVar) {
+				recordBLRArg1IsCell = true
 			}
 			if len(v.Args) > 2 {
 				if _, ok := v.Args[2].(*ast.Ident); ok {
@@ -498,7 +540,8 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 		"%s: %s — RecordBodyLimitRejection arg[0] must be an identifier (the ctx variable)",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, recordBLRArg1IsCell,
-		"%s: %s — RecordBodyLimitRejection arg[1] must be the `cell` CellLabel from metrics.ResolveCellLabel",
+		"%s: %s — RecordBodyLimitRejection arg[1] must be the CellLabel bound from metrics.ResolveCellLabel "+
+			"(data-flow linkage to the funnel result, not just any value)",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, recordBLRArg2IsIdent,
 		"%s: %s — RecordBodyLimitRejection arg[2] must be an identifier (the route variable)",

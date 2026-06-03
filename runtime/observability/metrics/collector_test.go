@@ -16,7 +16,9 @@ import (
 
 // testLabel constructs a CellLabel for white-box tests by routing the id
 // through the sole ResolveCellLabel funnel, preserving the sealed-construction
-// guarantee. An empty id yields the RuntimeCellSentinel label.
+// guarantee. An empty id yields the RuntimeCellSentinel via its real miss path
+// (no ctx cell); use testLabel("") for the framework sentinel rather than
+// testLabel(RuntimeCellSentinel), which would synthesize it as a member hit.
 func testLabel(id string) CellLabel {
 	if id == "" {
 		return ResolveCellLabel(context.Background(), nil)

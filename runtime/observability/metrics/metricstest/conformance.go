@@ -24,19 +24,34 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// Label builds a [metrics.CellLabel] for conformance assertions by routing a
-// cell id through the sole [metrics.ResolveCellLabel] funnel (ctx-injected cell
-// + singleton allow-set). The suite therefore constructs no CellLabel out of
-// band, so the sealed-construction guarantee stays intact even in test code. An
-// empty id resolves to the RuntimeCellSentinel label.
+// Label builds a [metrics.CellLabel] for a genuine closed-set MEMBER by routing
+// a cell id through the sole [metrics.ResolveCellLabel] funnel (ctx-injected cell
+// + singleton allow-set in which id IS a member). The suite therefore constructs
+// no CellLabel out of band, so the sealed-construction guarantee stays intact
+// even in test code.
+//
+// Do NOT call Label(RuntimeCellSentinel) to obtain the framework sentinel: that
+// resolves the sentinel string via the membership-HIT path (id placed in the
+// allow-set), which never happens in production. Use [RuntimeLabel] instead so
+// the sentinel is produced via its real miss-path provenance.
 func Label(id string) metrics.CellLabel {
 	if id == "" {
-		return metrics.ResolveCellLabel(context.Background(), nil)
+		return RuntimeLabel()
 	}
 	return metrics.ResolveCellLabel(
 		ctxkeys.WithCellID(context.Background(), id),
 		map[string]struct{}{id: {}},
 	)
+}
+
+// RuntimeLabel returns the framework sentinel CellLabel via its real production
+// provenance — the [metrics.ResolveCellLabel] MISS path (no owning cell id in
+// ctx) — rather than passing RuntimeCellSentinel through [Label] as if it were a
+// closed-set member. Tests asserting the framework / unmatched / out-of-set path
+// must use this so the sentinel's construction mirrors production (an absent or
+// out-of-set cell degraded by the funnel), not a synthetic member hit.
+func RuntimeLabel() metrics.CellLabel {
+	return metrics.ResolveCellLabel(context.Background(), nil)
 }
 
 // RequestKey mirrors metrics.RequestKey for harness observation without
@@ -199,7 +214,7 @@ func conformBodyLimitRejectionNoSideEffect(t *testing.T, h CollectorHarness) {
 	col, obs := h.New(t)
 
 	ctx := context.Background()
-	col.RecordBodyLimitRejection(ctx, Label("_runtime"), "unmatched")
+	col.RecordBodyLimitRejection(ctx, RuntimeLabel(), "unmatched")
 
 	// The request counter for the same (cell, route) tuple must remain zero.
 	// RequestKey has Method and Status in addition; check that no request was

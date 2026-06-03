@@ -106,13 +106,19 @@ reg.Subscription(spec).
     Register()
 ```
 
-`Subscription(spec)` returns a `*SubscriptionDraft` whose ONLY method is
-`CellID(id) *SubscriptionBuilder`; the terminal `Register() error` lives only on
-`*SubscriptionBuilder`. There is therefore **no path to `Register` that skips
+`Subscription(spec)` returns a `*subscriptionDraft` whose ONLY method is
+`CellID(id) *subscriptionBuilder`; the terminal `Register() error` lives only on
+`*subscriptionBuilder`. There is therefore **no path to `Register` that skips
 `CellID`** — omitting it is a compile error, the same HARD guarantee the
-positional 4th parameter gives codegen. Both builder struct's fields are
-unexported, so an external package cannot fabricate a `*SubscriptionBuilder`
-without going through `CellID`. `Register` defaults `consumerGroup` to `cellID`
+positional 4th parameter gives codegen. Both step types are themselves
+**unexported** (sealed construction, same shape as `kernel/outbox.Entry` /
+`runtime/observability/metrics.CellLabel`): an external package can chain methods
+on the value `Subscription` returns but can neither name nor zero-value-construct
+either type, so it cannot fabricate a `*subscriptionBuilder` and reach `Register`
+without going through `CellID` (#1087 F1: unexporting the *fields* alone was
+insufficient — an exported builder type is still zero-value constructible, so the
+*types* are unexported to make the upstream Hard real). `Register` defaults
+`consumerGroup` to `cellID`
 when unset (the common `consumerGroup == cellID` case, cellgen-consistent) and
 delegates to the **same** `RegistryRecorder.Subscribe` validation funnel — the
 builder adds no validation of its own, so the positional and fluent forms are two
@@ -162,15 +168,17 @@ Invariants in `tools/archtest/subscription_invariants_test.go`:
 | `SUBSCRIPTION-FIELDS-FROZEN-01` | `outbox.Subscription` field set | Adding/renaming fields without reviewing this ADR + codegen templates |
 | `SUBSCRIPTION-OBSERVABILITY-NO-FALLBACK-01` | `ObservabilityID()` body shape | Re-introducing `if CellID == "" { return ConsumerGroup }` |
 | `REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01` (prong 1: positional signature) | `Registry.Subscribe` signature + `Registrar.Subscription` return type | Demoting cellID from positional to a SubscriptionOption (Soft) |
-| `REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01` (prong 2: builder shape, #1087) | `SubscriptionDraft` / `SubscriptionBuilder` method-set + return types | Collapsing the two-type builder into one type with an optional CellID (demotes the compile-time red line to runtime fail-fast) |
+| `REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01` (prong 2: builder shape + field-set, #1087) | `subscriptionDraft` / `subscriptionBuilder` method-set + return types + frozen field set | Collapsing the two-type builder into one type with an optional CellID, OR embedding a type that promotes `Register` onto the draft (both demote the compile-time red line to runtime fail-fast) |
 
 They are Medium-档 (AST scan over kernel/cell source), complementary to the HARD
 compile-time gate — if an AI session circumvents the Hard gate (e.g. by rewriting
 the templates or collapsing the builder) the archtest catches the demotion. Prong
-2's load-bearing assertion: `SubscriptionDraft` exposes exactly `{CellID}` (no
-`Register`) and `CellID` returns `*SubscriptionBuilder`, so the only door to the
-terminal `Register` is through `CellID` — freezing this shape keeps "missing
-CellID is unreachable" a frozen invariant. (Note: the invariant was renamed from
+2's load-bearing assertion: `subscriptionDraft` exposes exactly `{CellID}` (no
+`Register`) and `CellID` returns `*subscriptionBuilder`; the companion field-set
+freeze additionally bans embedded fields (which could promote `Register` onto the
+draft and reopen the missing-CellID path that the method-set scan alone cannot
+see). The only door to the terminal `Register` is through `CellID` — freezing
+this shape keeps "missing CellID is unreachable" a frozen invariant. (Note: the invariant was renamed from
 `REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01` when prong 2 was added — the positional
 signature is now one prong of the broader mandatory-CellID rule.)
 
