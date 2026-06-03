@@ -1,0 +1,28 @@
+id: http.sample.idempotencyexempt.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/sample/idempotency-exempt
+    successStatus: 201
+    auth:
+      passwordResetExempt: true
+      idempotencyExempt: true
+    noContent: false
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

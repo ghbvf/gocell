@@ -365,6 +365,11 @@
                         "default": false,
                         "description": "If true, contractgen generates a single-arg NewHandler(svc Service) constructor and emits auth.Route without a Policy field. Authorization is provided solely by Contract.Clients caller-cell allowlist (auth.Mount auto-injects RequireCallerCell guard when Clients is non-empty). Mutually exclusive with public, bootstrap, passwordResetExempt, and serviceOwned. Requires endpoints.clients to be non-empty and path matching /internal/v1 or /internal/v1/...; FMT-28 enforces this cross-field shape."
                       },
+                      "idempotencyExempt": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true, the HTTP idempotency middleware never claims/records/replays this route's responses (credential-rotation / change-password). Orthogonal to public/passwordResetExempt/serviceOwned/bootstrap/clientsOnly — any combination is legal. Emits auth.Route{IdempotencyExempt: true}."
+                      },
                       "responses": {
                         "type": "array",
                         "description": "HTTP status codes injected by listener-mounted middleware (e.g. bootstrap auth 401, rate limiter 429). CH-04 governance treats these as declared without requiring handler AST emission.",

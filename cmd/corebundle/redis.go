@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
 )
 
 const (
@@ -26,28 +27,38 @@ const (
 )
 
 type (
-	redisNonceStoreFactory      func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error)
-	redisConsumerClaimerFactory func(*adapterredis.Client) (idempotency.Claimer, error)
-	redisClientFactory          func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
+	redisNonceStoreFactory           func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error)
+	redisConsumerClaimerFactory      func(*adapterredis.Client) (idempotency.Claimer, error)
+	redisClientFactory               func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
+	redisHTTPIdempotencyStoreFactory func(*adapterredis.Client, adapterredis.KeyNamespace) (idemhttp.Store, error)
 )
 
 type redisClientResult struct {
 	Client *adapterredis.Client
 }
 
-// nonceStoreNamespace and consumerClaimerNamespace are the KeyNamespace
-// values composition root passes into the shared Redis primitives.
+// nonceStoreNamespace, consumerClaimerNamespace, and
+// httpIdempotencyStoreNamespace are the KeyNamespace values composition root
+// passes into the shared Redis primitives.
 //
 //   - servicetoken-nonce: the NonceStore is a single global store for the
 //     internal listener's service-token replay protection — namespace
 //     names the role directly so wire keys read as
 //     "servicetoken-nonce:<nonce>".
-//   - _runtime: the IdempotencyClaimer is shared across all consumers; the
-//     "_runtime" sentinel mirrors the HTTP metrics convention for shared
-//     framework infrastructure where no cell context applies.
+//   - _runtime (consumer claimer): the IdempotencyClaimer is shared across
+//     all consumers; the "_runtime" sentinel mirrors the HTTP metrics
+//     convention for shared framework infrastructure where no cell context
+//     applies.
+//   - _runtime (HTTP idempotency store): the HTTP replay store is also a
+//     shared-infra primitive with no per-cell context. The same sentinel
+//     value is reused intentionally (cf. observability §Redis Key Namespace):
+//     key collision with the consumer claimer is impossible because the two
+//     primitives use structurally different key formats — the HTTP store
+//     includes a request-namespace segment that the consumer claimer omits.
 const (
-	nonceStoreNamespace      adapterredis.KeyNamespace = "servicetoken-nonce"
-	consumerClaimerNamespace adapterredis.KeyNamespace = "_runtime"
+	nonceStoreNamespace           adapterredis.KeyNamespace = "servicetoken-nonce"
+	consumerClaimerNamespace      adapterredis.KeyNamespace = "_runtime"
+	httpIdempotencyStoreNamespace adapterredis.KeyNamespace = "_runtime"
 )
 
 var (
@@ -57,6 +68,11 @@ var (
 	}
 	newRedisIdempotencyClaimer redisConsumerClaimerFactory = func(client *adapterredis.Client) (idempotency.Claimer, error) {
 		return adapterredis.NewIdempotencyClaimer(client, consumerClaimerNamespace)
+	}
+	newRedisHTTPIdempotencyStore redisHTTPIdempotencyStoreFactory = func(
+		client *adapterredis.Client, ns adapterredis.KeyNamespace,
+	) (idemhttp.Store, error) {
+		return adapterredis.NewHTTPIdempotencyStore(client, ns)
 	}
 )
 
@@ -200,4 +216,21 @@ func buildConsumerClaimer(
 		return claimer, consumerClaimerKindDistributed, nil
 	}
 	return idempotency.NewInMemClaimer(clk), consumerClaimerKindInMemory, nil
+}
+
+// buildHTTPIdempotencyStore constructs the Redis-backed HTTP idempotency replay
+// store when a Redis client is available, or returns (nil, nil) when client is
+// nil (memory / single-pod mode has no cross-pod replay need).
+//
+// The caller in defaultRuntimeOptions checks for a nil return before calling
+// bootstrap.WithIdempotencyStore to avoid the typed-nil rejection at phase0.
+func buildHTTPIdempotencyStore(client *adapterredis.Client) (idemhttp.Store, error) {
+	if client == nil {
+		return nil, nil //nolint:nilnil // by design: nil means "not configured"; caller checks before wiring
+	}
+	store, err := newRedisHTTPIdempotencyStore(client, httpIdempotencyStoreNamespace)
+	if err != nil {
+		return nil, fmt.Errorf("build Redis HTTP idempotency store: %w", err)
+	}
+	return store, nil
 }

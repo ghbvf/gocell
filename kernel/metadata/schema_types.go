@@ -73,10 +73,11 @@ type HTTPOwnershipMeta struct {
 // HTTPAuthMeta carries route-level authentication override flags for contractgen.
 // These map to generated auth.Route wiring and handler constructor shape.
 //
-// Mutex among the 5 bool fields is enforced by metadata.AuthComboLegal (the
+// Mutex among the 5 core bool fields is enforced by metadata.AuthComboLegal (the
 // single oracle shared by contract.schema.json if/then rules and governance
-// validateFMT27). When adding a new bool field, see auth_combo.go for the
-// checklist of files to update in lockstep.
+// validateFMT27). IdempotencyExempt is orthogonal to the mutex — any combination
+// with the 5 core fields is legal. When adding a new bool field, see auth_combo.go
+// for the checklist of files to update in lockstep.
 //
 // ref: kubernetes-sigs/controller-tools markers/registry.go (declarative auth metadata)
 type HTTPAuthMeta struct {
@@ -114,6 +115,13 @@ type HTTPAuthMeta struct {
 	// /internal/v1/...) where caller-cell identity is verifiable via the
 	// service token.
 	ClientsOnly bool `yaml:"clientsOnly,omitempty" json:"clientsOnly,omitempty"`
+	// IdempotencyExempt, when true, instructs the HTTP idempotency middleware to
+	// never claim/record/replay this route's responses (credential-rotation /
+	// change-password whose body returns tokens). Orthogonal to Public,
+	// PasswordResetExempt, ServiceOwned, Bootstrap, ClientsOnly — any combination
+	// is legal; it does NOT participate in FMT-27 auth-mode mutex.
+	// Emits auth.Route{IdempotencyExempt: true}. See runtime/auth/route.go.
+	IdempotencyExempt bool `yaml:"idempotencyExempt,omitempty" json:"idempotencyExempt,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware
 	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as
 	// declared without requiring handler AST emission.

@@ -278,6 +278,62 @@ func TestContractSchemaAllowsAuthClientsOnly(t *testing.T) {
 		"contract with auth.clientsOnly:true must pass strict validation")
 }
 
+// TestContractSchemaAllowsIdempotencyExempt verifies that idempotencyExempt is
+// orthogonal: it can appear alone, combined with public, or combined with
+// passwordResetExempt — none of these combinations must trigger the FMT-27
+// mutex rules that guard the 5 core auth-mode flags.
+func TestContractSchemaAllowsIdempotencyExempt(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	cases := []struct {
+		name string
+		auth string
+	}{
+		{
+			"idempotencyExempt alone",
+			`"idempotencyExempt": true`,
+		},
+		{
+			"idempotencyExempt with public",
+			`"public": true, "idempotencyExempt": true`,
+		},
+		{
+			"idempotencyExempt with passwordResetExempt",
+			`"passwordResetExempt": true, "idempotencyExempt": true`,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var contractDoc any
+			doc := fmt.Sprintf(`{
+				"id": "http.test.idempotencyexempt.v1",
+				"kind": "http",
+				"consistencyLevel": "L1",
+				"lifecycle": "active",
+				"endpoints": {
+					"server": "testcell",
+					"clients": ["edge-bff"],
+					"http": {
+						"method": "POST",
+						"path": "/api/v1/sample/test",
+						"successStatus": 200,
+						"noContent": false,
+						"auth": {
+							%s
+						}
+					}
+				}
+			}`, tc.auth)
+			require.NoError(t, json.Unmarshal([]byte(doc), &contractDoc))
+			assert.NoError(t, schema.Validate(contractDoc),
+				"auth combination %q must be valid (idempotencyExempt is orthogonal to FMT-27 mutex)", tc.name)
+		})
+	}
+}
+
 // TestContractSchemaOwnershipRequired verifies the schema if/then rule:
 // when auth.serviceOwned=true the ownership block is required; when
 // auth.serviceOwned=false or absent the ownership block is optional.
@@ -384,15 +440,20 @@ func TestContractSchemaOwnershipRequired(t *testing.T) {
 	}
 }
 
-// TestContractSchemaAuthBoolMatrix enumerates all 32 combinations of the
-// 5 auth bool fields and asserts schema validation matches metadata.AuthComboLegal
+// TestContractSchemaAuthBoolMatrix enumerates all 64 combinations of the
+// 6 auth bool fields and asserts schema validation matches metadata.AuthComboLegal
 // (the single oracle shared with kernel/governance/rules_fmt.go validateFMT27).
 //
 // Every contract document explicitly declares every bool field (true or false)
 // to guard the "explicit false vs omission" semantic: under the original
-// not/required mutex implementation, declaring 5 keys would trigger the
-// key-presence rules and reject all 32 cases. Under the if/then const:true
+// not/required mutex implementation, declaring all keys would trigger the
+// key-presence rules and reject all cases. Under the if/then const:true
 // implementation, only the value-true conflicts are rejected.
+//
+// idempotencyExempt is orthogonal — it does not participate in FMT-27 mutex,
+// so every combination with idempotencyExempt true/false shares legality with
+// the corresponding 5-field combo. The matrix doubles to 64 but legal count
+// doubles to 14 (7 × 2).
 //
 // INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
 func TestContractSchemaAuthBoolMatrix(t *testing.T) {
@@ -427,11 +488,15 @@ func TestContractSchemaAuthBoolMatrix(t *testing.T) {
 							"passwordResetExempt": %t,
 							"serviceOwned": %t,
 							"bootstrap": %t,
-							"clientsOnly": %t
+							"clientsOnly": %t,
+							"idempotencyExempt": %t
 						}%s
 					}
 				}
-			}`, auth.Public, auth.PasswordResetExempt, auth.ServiceOwned, auth.Bootstrap, auth.ClientsOnly, ownershipFragment)
+			}`,
+				auth.Public, auth.PasswordResetExempt, auth.ServiceOwned,
+				auth.Bootstrap, auth.ClientsOnly, auth.IdempotencyExempt,
+				ownershipFragment)
 
 			var contractDoc any
 			require.NoError(t, json.Unmarshal([]byte(doc), &contractDoc))

@@ -215,20 +215,9 @@ func buildHTTPDTOs(
 
 	// Response DTO.
 	if contract.SchemaRefs.Response != "" {
-		respPath := filepath.Join(contractDir, contract.SchemaRefs.Response)
-		respSchema, err := Parse(rootDir, respPath)
+		respDTOs, err := buildResponseDTOs(rootDir, contract, contractDir)
 		if err != nil {
-			return nil, fmt.Errorf("contractgen build: %q response schema: %w", contract.ID, err)
-		}
-		// Wire-out funnel: audit-domain responses must not project Principal
-		// credentials (AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01). Request path above
-		// is intentionally exempt (inbound password/token fields are legitimate).
-		if err := rejectSensitiveAuditWireFields(contract.ID, "response", respSchema); err != nil {
-			return nil, fmt.Errorf("contractgen build: %w", err)
-		}
-		respDTOs, err := schemaToDTOs("Response", respSchema)
-		if err != nil {
-			return nil, fmt.Errorf("contractgen build: %q response DTOs: %w", contract.ID, err)
+			return nil, err
 		}
 		allDTOs = append(allDTOs, respDTOs...)
 	}
@@ -258,6 +247,39 @@ func buildHTTPDTOs(
 		return nil, fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
 	}
 	return merged, nil
+}
+
+// buildResponseDTOs loads and validates the response schema for an HTTP contract,
+// applies both wire-out guards (audit-domain and credential-idempotency), and
+// converts the schema to DTOSpecs. Extracted from buildHTTPDTOs to keep that
+// function's cognitive complexity within the project limit of 15.
+func buildResponseDTOs(rootDir string, contract *metadata.ContractMeta, contractDir string) ([]DTOSpec, error) {
+	respPath := filepath.Join(contractDir, contract.SchemaRefs.Response)
+	respSchema, err := Parse(rootDir, respPath)
+	if err != nil {
+		return nil, fmt.Errorf("contractgen build: %q response schema: %w", contract.ID, err)
+	}
+	// Wire-out funnel A: audit-domain responses must not project Principal
+	// credentials (AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01). Request path is
+	// intentionally exempt (inbound password/token fields are legitimate).
+	if err := rejectSensitiveAuditWireFields(contract.ID, "response", respSchema); err != nil {
+		return nil, fmt.Errorf("contractgen build: %w", err)
+	}
+	// Wire-out funnel B: any HTTP response carrying a sensitive key (per
+	// pkg/redaction.IsSensitiveKey) must declare idempotencyExempt: true so the
+	// idempotency store does not record+replay credentials into Redis.
+	// Exempt when contract.Endpoints.HTTP is nil (occurs only in unit tests that
+	// exercise schema parsing without a full contract; production path always has
+	// HTTP set because buildHTTPSpec gates on http != nil).
+	idempotencyExempt := contract.Endpoints.HTTP != nil && contract.Endpoints.HTTP.Auth.IdempotencyExempt
+	if err := rejectUnexemptCredentialResponse(contract.ID, idempotencyExempt, respSchema); err != nil {
+		return nil, fmt.Errorf("contractgen build: %w", err)
+	}
+	respDTOs, err := schemaToDTOs("Response", respSchema)
+	if err != nil {
+		return nil, fmt.Errorf("contractgen build: %q response DTOs: %w", contract.ID, err)
+	}
+	return respDTOs, nil
 }
 
 // hasDTONamed reports whether dtos contains a DTOSpec with the given name.
@@ -326,6 +348,7 @@ func buildHTTPEndpointSpec(
 		AuthBootstrap:           http.Auth.Bootstrap,
 		AuthClientsOnly:         http.Auth.ClientsOnly,
 		AuthServiceOwned:        http.Auth.ServiceOwned,
+		AuthIdempotencyExempt:   http.Auth.IdempotencyExempt,
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams

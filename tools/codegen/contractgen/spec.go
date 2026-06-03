@@ -225,6 +225,12 @@ type httpEndpointSpec struct {
 	// AuthPasswordResetExempt. Mutually exclusive with AuthPublic, AuthBootstrap,
 	// and AuthClientsOnly.
 	AuthServiceOwned bool
+	// AuthIdempotencyExempt is true when contract.yaml endpoints.http.auth.idempotencyExempt
+	// is set. Orthogonal to all other auth flags; emits auth.Route{IdempotencyExempt: true}
+	// additively alongside whatever other auth flags are set. The idempotency middleware
+	// skips claim/record/replay for this route (credential-rotation / change-password
+	// whose body returns tokens).
+	AuthIdempotencyExempt bool
 }
 
 // IsPagination reports whether this endpoint uses the canonical cursor+limit

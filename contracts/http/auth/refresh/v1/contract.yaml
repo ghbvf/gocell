@@ -13,6 +13,7 @@ endpoints:
     successStatus: 200
     auth:
       public: true
+      idempotencyExempt: true
     noContent: false
     responses:
       400:

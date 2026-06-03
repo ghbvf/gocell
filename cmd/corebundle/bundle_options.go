@@ -133,6 +133,21 @@ func defaultRuntimeOptions(
 		return nil, fmt.Errorf("projection harness wiring: %w", err)
 	}
 	opts = append(opts, projOpts...)
+	// HTTP idempotency replay store: wired when Redis is present (default-ON,
+	// no env toggle). When Redis is absent (memory/single-pod mode) the store
+	// is nil and WithIdempotencyStore is intentionally not called — single-pod
+	// deployments have no cross-pod replay need and the middleware is safely
+	// inactive. Mirrors the buildConsumerClaimer / buildServiceNonceStore
+	// topology pattern.
+	if locals.redisClient != nil {
+		idemStore, err := buildHTTPIdempotencyStore(locals.redisClient)
+		if err != nil {
+			return nil, fmt.Errorf("http idempotency store wiring: %w", err)
+		}
+		if idemStore != nil {
+			opts = append(opts, bootstrap.WithIdempotencyStore(idemStore))
+		}
+	}
 	if shared.PrimaryHTTPAddr != "" {
 		primaryAuth, err := auth.NewAuthJWTFromAssembly(asm)
 		if err != nil {
