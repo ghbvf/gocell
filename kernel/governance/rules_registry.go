@@ -140,6 +140,9 @@ var allRules = []Rule{
 	{Code: codeSAGACONTRACTRETRYTIMEOUT01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTRETRYTIMEOUT01},
 	{Code: codeSAGACELLLEVELL3DECLARE01, Phase: PhaseBase, Detect: (*Validator).validateSAGACELLLEVELL3DECLARE01},
 
+	// COMMAND — command contract format (rules_command.go)
+	{Code: codeCOMMANDCONTRACTSCHEMAREF01, Phase: PhaseBase, Detect: (*Validator).validateCOMMANDCONTRACTSCHEMAREF01},
+
 	// -------------------------------------------------------------------------
 	// PhaseStrict — run only with `gocell validate --strict`
 	// -------------------------------------------------------------------------
