@@ -274,9 +274,9 @@ func TestBuildReplayDependencies_RealSinglePodUsesInMemory(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, auth.ServiceTokenNonceTTL, inMemoryNonceStore.MaxAge())
 
-	claimer, kind, err := buildConsumerClaimer(topo, nil, clock.Real())
+	claimer, err := buildConsumerClaimer(topo, nil, clock.Real())
 	require.NoError(t, err)
-	assert.Equal(t, consumerClaimerKindInMemory, kind)
+	assert.Equal(t, idempotency.ClaimerKindInMemory, claimer.Kind())
 	assert.IsType(t, &idempotency.InMemClaimer{}, claimer)
 }
 
@@ -307,11 +307,10 @@ func TestBuildServiceNonceStore_DistributedFactoryErrorWrapped(t *testing.T) {
 func TestBuildConsumerClaimer_RealMultiPodRequiresRedisClient(t *testing.T) {
 	topo := mkTopo("real", "postgres", false)
 
-	claimer, kind, err := buildConsumerClaimer(topo, nil, clock.Real())
+	claimer, err := buildConsumerClaimer(topo, nil, clock.Real())
 
 	require.Error(t, err)
 	assert.Nil(t, claimer)
-	assert.Equal(t, consumerClaimerKindUnknown, kind)
 	assertErrCode(t, err, errcode.ErrControlplaneClaimerNotDistributed)
 }
 
@@ -319,7 +318,7 @@ func TestBuildConsumerClaimer_RealMultiPodRequiresRedisClient(t *testing.T) {
 // error-first path through buildConsumerClaimer: when the Redis claimer
 // factory returns an error (e.g., NewIdempotencyClaimer rejecting an
 // invalid namespace or nil client), the wrapper produces nil claimer +
-// consumerClaimerKindUnknown + a wrap message containing the original
+// nil claimer + a wrap message containing the original
 // error. Mirrors TestBuildServiceNonceStore_DistributedFactoryErrorWrapped.
 func TestBuildConsumerClaimer_DistributedFactoryErrorWrapped(t *testing.T) {
 	topo := mkTopo("real", "postgres", false)
@@ -327,11 +326,10 @@ func TestBuildConsumerClaimer_DistributedFactoryErrorWrapped(t *testing.T) {
 		return nil, errRedisTestFactory
 	})
 
-	claimer, kind, err := buildConsumerClaimer(topo, new(adapterredis.Client), clock.Real())
+	claimer, err := buildConsumerClaimer(topo, new(adapterredis.Client), clock.Real())
 
 	require.Error(t, err)
 	assert.Nil(t, claimer)
-	assert.Equal(t, consumerClaimerKindUnknown, kind)
 	assert.ErrorIs(t, err, errRedisTestFactory)
 	assert.Contains(t, err.Error(), "build Redis idempotency claimer")
 }
@@ -359,10 +357,10 @@ func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStore
 	assert.Equal(t, auth.ServiceTokenNonceTTL, gotNonceTTL)
 	assert.Equal(t, kauth.NonceStoreKindDistributed, nonceStore.Kind())
 
-	claimer, kind, err := buildConsumerClaimer(topo, client, clock.Real())
+	claimer, err := buildConsumerClaimer(topo, client, clock.Real())
 	require.NoError(t, err)
 	assert.Same(t, client, gotClaimerClient)
-	assert.Equal(t, consumerClaimerKindDistributed, kind)
+	assert.Equal(t, idempotency.ClaimerKindDistributed, claimer.Kind())
 	assert.IsType(t, fakeDistributedClaimer{}, claimer)
 }
 
@@ -411,4 +409,8 @@ func (fakeDistributedClaimer) Claim(
 	context.Context, string, time.Duration, time.Duration,
 ) (idempotency.ClaimState, idempotency.Receipt, error) {
 	return idempotency.ClaimDone, idempotency.NonAcquiredReceipt(), nil
+}
+
+func (fakeDistributedClaimer) Kind() idempotency.ClaimerKind {
+	return idempotency.ClaimerKindDistributed
 }

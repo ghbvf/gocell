@@ -610,19 +610,6 @@ func captureSlogInfoLines(t *testing.T) (*bytes.Buffer, func()) {
 	return &buf, func() { slog.SetDefault(prev) }
 }
 
-// guardWithStore builds a test internalGuard backed by the supplied NonceStore,
-// keeping the ring/middleware fields populated to mirror production wiring.
-func guardWithStore(t *testing.T, store kauth.NonceStore) *internalGuard {
-	t.Helper()
-	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
-	require.NoError(t, err)
-	return &internalGuard{
-		ring:       ring,
-		nonceStore: store,
-		mw:         func(h http.Handler) http.Handler { return h },
-	}
-}
-
 // TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo
 // verifies that the positive-path Info signal fires when the operator opted
 // into single-pod replay protection (GOCELL_SINGLE_POD=1) on real mode with
@@ -631,15 +618,14 @@ func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t 
 	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	shared := &composition.SharedDeps{
-		Topology: mkTopo("real", "", true),
+		Topology:   mkTopo("real", "", true),
+		NonceStore: store,
 	}
-	guard := guardWithStore(t, store)
-	locals := &cmdLocals{internalGuard: guard}
 
 	buf, restore := captureSlogInfoLines(t)
 	t.Cleanup(restore)
 
-	logSinglePodNonceStoreAcknowledgement(shared, locals)
+	logSinglePodNonceStoreAcknowledgement(shared)
 
 	out := buf.String()
 	require.NotEmpty(t, out, "expected an Info log line; got empty buffer")
@@ -653,7 +639,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t 
 
 // TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog asserts
 // that the Info signal stays silent on every other configuration: dev mode,
-// distributed nonce store, multi-pod, or a nil InternalGuard. This protects
+// distributed nonce store, multi-pod, or a nil NonceStore. This protects
 // against accidentally turning the acknowledgement into noise on the dev path.
 func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testing.T) {
 	inMemStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
@@ -662,42 +648,31 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 	cases := []struct {
 		name   string
 		shared *composition.SharedDeps
-		locals *cmdLocals
 	}{
 		{
 			name: "dev mode (single-pod ack ignored)",
 			shared: &composition.SharedDeps{
-				Topology: mkTopo("", "", true),
+				Topology:   mkTopo("", "", true),
+				NonceStore: inMemStore,
 			},
-			locals: &cmdLocals{internalGuard: guardWithStore(t, inMemStore)},
 		},
 		{
 			name: "real mode without GOCELL_SINGLE_POD (multi-pod path; validateCorebundleDeps would reject upstream)",
 			shared: &composition.SharedDeps{
-				Topology: mkTopo("real", "", false),
+				Topology:   mkTopo("real", "", false),
+				NonceStore: inMemStore,
 			},
-			locals: &cmdLocals{internalGuard: guardWithStore(t, inMemStore)},
 		},
 		{
-			name: "nil internal guard",
+			name: "nil nonce store",
 			shared: &composition.SharedDeps{
-				Topology: mkTopo("real", "", true),
+				Topology:   mkTopo("real", "", true),
+				NonceStore: nil,
 			},
-			locals: &cmdLocals{internalGuard: nil},
 		},
 		{
 			name:   "nil shared",
 			shared: nil,
-			locals: &cmdLocals{},
-		},
-		{
-			// internalGuard is non-nil but nonceStore is nil. Exercises the
-			// ns == nil branch in logSinglePodNonceStoreAcknowledgement — must stay silent.
-			name: "non-nil guard with nil nonce store",
-			shared: &composition.SharedDeps{
-				Topology: mkTopo("real", "", true),
-			},
-			locals: &cmdLocals{internalGuard: guardWithStore(t, nil)},
 		},
 	}
 
@@ -706,7 +681,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 			buf, restore := captureSlogInfoLines(t)
 			t.Cleanup(restore)
 
-			logSinglePodNonceStoreAcknowledgement(tc.shared, tc.locals)
+			logSinglePodNonceStoreAcknowledgement(tc.shared)
 
 			assert.False(t,
 				strings.Contains(buf.String(), "in-memory nonce store acknowledged for single-pod"),

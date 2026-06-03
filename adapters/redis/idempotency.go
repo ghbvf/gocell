@@ -157,6 +157,13 @@ return 0
 // CROSSSLOT failures. Keys containing `{` or `}` likewise destabilize the
 // hashtag boundary. Both inputs are rejected at the entry rather than left
 // to surface as obscure runtime errors.
+// Kind reports the distributed classification: this claimer coordinates
+// idempotency across replicas via shared Redis state, so it is safe for
+// multi-pod deployments.
+func (c *IdempotencyClaimer) Kind() idempotency.ClaimerKind {
+	return idempotency.ClaimerKindDistributed
+}
+
 func (c *IdempotencyClaimer) Claim(
 	ctx context.Context, key string, leaseTTL, doneTTL time.Duration,
 ) (idempotency.ClaimState, idempotency.Receipt, error) {

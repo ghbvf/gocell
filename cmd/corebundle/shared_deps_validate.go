@@ -1,132 +1,36 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"log/slog"
-
-	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
-// validateCorebundleDeps runs cmd-side production validation that depends on
-// cmd-private types (nonce store kind, claimer kind, internal guard,
-// control-plane token checks). Called after composition.SharedDeps.Validate()
-// in LoadSharedDepsFromEnv. Health-listener reachability moved to
-// composition.SharedDeps.validate() (#1085 follow-up): it reads only public
-// fields, so every composition consumer inherits it.
+// validateCorebundleDeps runs the residual cmd-deployment-contract validation
+// that does NOT belong to the portable composition contract: it rejects the
+// .env.example sample verbose token in adapter mode "real". Every other
+// control-plane production check — verbose/metrics tokens, the internal-listener
+// guard (InternalHTTPAddr + InternalHMACRing), nonce-store kind, and claimer
+// kind — moved into composition.SharedDeps.validate (#1410), so external
+// composition consumers inherit them fail-closed via NewSharedDeps and no longer
+// depend on any cmd-private type.
+//
+// SampleVerbosePlaceholder is a cmd/corebundle .env.example artifact, not a
+// portable contract — an external consumer mints its own placeholders — so this
+// single check stays in cmd.
 //
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
-// validates all fields before any component is constructed.
-func validateCorebundleDeps(shared *composition.SharedDeps, locals *cmdLocals) error {
+// deployment-specific validation lives with the composition root.
+func validateCorebundleDeps(shared *composition.SharedDeps) error {
 	if shared == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "SharedDeps: nil receiver")
 	}
-	errs := validateVerboseEndpoint(shared)
-	errs = append(errs, validateInternalListenerGuard(shared, locals)...)
-	errs = append(errs, validateControlPlane(shared, locals)...)
-	return errors.Join(errs...)
-}
-
-// validateVerboseEndpoint enforces that every adapter mode either configures
-// a verbose token or explicitly waives the endpoint. The previous dev-mode
-// fallback (unset env var => verbose open) was removed in PR-A35 so a
-// forgotten GOCELL_READYZ_VERBOSE_TOKEN in dev cannot silently expose cell
-// topology to anyone who can reach the port.
-func validateVerboseEndpoint(shared *composition.SharedDeps) []error {
-	if shared.VerboseDisabled {
-		// Both set is not a hard validation failure — VerboseDisabled
-		// wins, Handler will serve the plain aggregate body regardless of
-		// the token. But it is almost certainly a misconfiguration: the
-		// operator either wanted token-gated access (drop the DISABLED
-		// flag) or wanted to waive verbose entirely (unset the TOKEN).
-		// Surface it as a Warn so operators can spot it in startup logs.
-		if shared.VerboseToken != "" {
-			slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN is set but GOCELL_READYZ_VERBOSE_DISABLED=1 overrides it; " +
-				"the token will not be enforced. Drop one of the two env vars to remove the ambiguity.")
-		}
-		return nil
+	if shared.Topology.RequireProductionControlPlane() && shared.VerboseToken == SampleVerbosePlaceholder {
+		return errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenSample,
+			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder; "+
+				"a production deploy must mint its own high-entropy secret",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("placeholder=%q", SampleVerbosePlaceholder))))
 	}
-	if shared.VerboseToken != "" {
-		return nil
-	}
-	return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
-		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or "+
-			"GOCELL_READYZ_VERBOSE_DISABLED=1 to waive the verbose endpoint) "+
-			"so /readyz?verbose is never anonymous")}
-}
-
-// validateControlPlane collects errors for the production control-plane gate
-// (tokens + guard required whenever real keys are in use).
-func validateControlPlane(shared *composition.SharedDeps, locals *cmdLocals) []error {
-	if !shared.Topology.RequireProductionControlPlane() {
-		return nil
-	}
-	var errs []error
-	// The unconditional /readyz?verbose invariant is now enforced by
-	// validateVerboseEndpoint in every mode. Production additionally forbids
-	// waiving the endpoint: a "real" deployment that still sets
-	// GOCELL_READYZ_VERBOSE_DISABLED=1 is almost certainly a misconfiguration
-	// and would leave operators without a token-gated diagnostic path.
-	if shared.VerboseDisabled {
-		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
-			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode "+
-				"\"real\"; production must keep the token-gated verbose endpoint "+
-				"available for on-call diagnostics"))
-	}
-	if shared.VerboseToken == SampleVerbosePlaceholder {
-		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenSample,
-			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder; a production deploy must mint its own high-entropy secret",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("placeholder=%q", SampleVerbosePlaceholder)))))
-	}
-	if shared.MetricsToken == "" {
-		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to "+
-				"prevent anonymous /metrics exposure; scrapers must send "+
-				"X-Metrics-Token header"))
-	}
-	if locals.internalGuard == nil {
-		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
-			"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*"))
-	} else if ns := locals.internalGuard.NonceStore(); ns == nil {
-		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-			"internalGuard.nonceStore is nil; guard constructed without WithServiceTokenNonceStore"))
-	} else if kind := ns.Kind(); kind == kauth.NonceStoreKindNoop {
-		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-			"control-plane NonceStore must be a replay-safe implementation in "+
-				"adapter mode \"real\"; NoopNonceStore detected — inject "+
-				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
-				"via WithServiceTokenNonceStore"))
-	} else if kind == kauth.NonceStoreKindInMemory &&
-		!shared.Topology.SinglePodReplayProtection() &&
-		shared.Topology.RequireProductionControlPlane() {
-		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
-			slog.String("nonce_store_kind", string(kind)),
-			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments or configure a distributed NonceStore"))
-		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-			"in-memory nonce store requires GOCELL_SINGLE_POD=1 "+
-				"(single-pod deployments) or a distributed store via "+
-				"WithServiceTokenNonceStore (multi-pod); refuse fail-open"))
-	}
-	if requiresDistributedReplay(shared.Topology) && locals.consumerClaimerKind != consumerClaimerKindDistributed {
-		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
-			"ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED: real multi-pod "+
-				"deployments require Redis-backed outbox idempotency claimer; "+
-				"set GOCELL_REDIS_ADDR or run with GOCELL_SINGLE_POD=1"))
-	}
-	return errs
-}
-
-func validateInternalListenerGuard(shared *composition.SharedDeps, locals *cmdLocals) []error {
-	if shared.InternalHTTPAddr == "" {
-		return []error{errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"SharedDeps.InternalHTTPAddr must be set; the internal listener is always enabled and protected by GOCELL_SERVICE_SECRET")}
-	}
-	if locals.internalGuard != nil {
-		return nil
-	}
-	return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
-		"SharedDeps.InternalGuard must be set to protect /internal/v1/*; set GOCELL_SERVICE_SECRET")}
+	return nil
 }

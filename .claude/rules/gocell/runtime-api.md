@@ -227,7 +227,9 @@ Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含�
 
 ### `/internal/v1/*` 服务令牌防重放（PR-A25）
 
-internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth.NonceStore`。`cmd/corebundle.internalGuardFromEnv` 默认构造 `auth.InMemoryNonceStore(ttl = ServiceTokenMaxAge + 30s)`。real 模式启动时 `SharedDeps.Validate` 会拒绝 `NonceStoreKindNoop`（返回 `ERR_CONTROLPLANE_NONCE_STORE_MISSING`）。多 pod 部署须注入分布式实现（例如 Redis）；in-memory 仅保证单 pod 防重放。
+internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth.NonceStore`。`cmd/corebundle.buildServiceNonceStore` 默认构造 `auth.InMemoryNonceStore(ttl = ServiceTokenMaxAge + 30s)`（多 pod real 模式改构造 Redis-backed store），喂进 `composition.SharedDeps.NonceStore`。real 模式启动时 `composition.SharedDeps.validate`（经 `NewSharedDeps`）会拒绝 `NonceStoreKindNoop`（返回 `ERR_CONTROLPLANE_NONCE_STORE_MISSING`）+ 拒绝多 pod 下的 in-memory store；外部 composition 消费者同样 fail-closed（#1410——原 cmd 私有 `internalGuardFromEnv` 已 dissolve 为 `buildInternalHMACRing`，control-plane 校验前移进 composition）。多 pod 部署须注入分布式实现（例如 Redis）；in-memory 仅保证单 pod 防重放。
+
+**双重校验闭环（#1410 review F1）**：`SharedDeps.validate` 校验的是**声明的** `SharedDeps.NonceStore`，但真正守 `/internal/v1/*` 的 store 是调用方 `RuntimeOptionsFunc` 放进 listener auth plan 的那个——二者本可不一致（opaque callback 另造 store 绕过校验）。`composition.Builder.Build` 因此把 trusted `SharedDeps.Topology` 经 `bootstrap.WithControlPlaneTopology` 注入 bootstrap，**bootstrap phase0**（`validateAuthServiceTokenPlan`）对 listener 实际持有的 `AuthServiceToken.Store.Kind()` 按 topology 复核（in-memory 多 pod 拒、未知 kind fail-closed 拒），对齐 fx `ValidateApp`「校验实际构造图，非平行声明」。accept/reject 单源为 `kernel/auth.NonceStoreKind.ReplaySafe(requireDistributed)`——composition 配置期与 bootstrap 使用期共用同一谓词，不会漂移。该 bootstrap 复核是 **Medium**（runtime guard）：真正 type-system Hard（让「internal listener 只能用 `SharedDeps.NonceStore`」编译期不可绕）不可达，与 #851/#893/#1282 同族 Go 可见性天花板（won't-do，跟踪 gh #1552；细节见 ADR `202605311000-1085` §Amendment 2026-06-04）。
 
 ### FinalizeAuth 生命周期
 

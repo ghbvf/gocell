@@ -84,6 +84,15 @@ type Bootstrap struct {
 	assemblyID           string
 	configWatcherFactory func(string, clock.Clock, ...config.WatcherOption) (*config.Watcher, error)
 
+	// controlPlaneTopology is the resolved deployment Topology, injected by
+	// composition.Builder.Build (WithControlPlaneTopology) from its trusted
+	// SharedDeps.Topology. phase0 uses it to validate that the listener
+	// service-token guard's actual NonceStore is replay-safe for the topology
+	// (#1410 review F1). The zero value (legacy/hand-written bootstraps that never
+	// inject it, or dev mode) makes RequireProductionControlPlane() false, so the
+	// topology-dependent replay check is a no-op — identical to prior behavior.
+	controlPlaneTopology Topology
+
 	// --- grpc: listener declarations (server lifecycle owned by adapters/grpc,
 	// injected via the GRPCServer interface; see grpc_listener.go) ---
 	grpcListenerConfigs []grpcListenerConfig

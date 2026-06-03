@@ -22,6 +22,19 @@ import (
 // Compile-time interface check for the new Claimer.
 var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 
+// TestIdempotencyClaimer_Kind_ReportsDistributed pins this Redis-backed claimer's
+// self-reported kind. The interface check above only proves it *has* a Kind()
+// method; composition-root control-plane validation (CP8) trusts the *value* it
+// returns to admit a claimer into real multi-pod deployments. Kind() is an
+// implementation self-report, not a type-system guarantee, so this return-value
+// assertion — together with the in-memory counterpart in
+// kernel/idempotency/idempotency_test.go — is what actually backs that trust.
+func TestIdempotencyClaimer_Kind_ReportsDistributed(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := mustNewIdempotencyClaimerFromCmdable(t, mock)
+	assert.Equal(t, idempotency.ClaimerKindDistributed, claimer.Kind())
+}
+
 // TestIdempotencyClaimer_RejectsInvalidKey ensures Claim refuses keys that
 // would silently break Redis Cluster slot colocation: empty keys yield an
 // empty hashtag `{}` which Redis treats as no hashtag (CROSSSLOT risk on

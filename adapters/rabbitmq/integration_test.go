@@ -429,6 +429,8 @@ func (n *noopClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (id
 	return idempotency.ClaimAcquired, &noopReceipt{}, nil
 }
 
+func (n *noopClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
+
 type noopReceipt struct{}
 
 func (n *noopReceipt) Commit(_ context.Context) error                  { return nil }

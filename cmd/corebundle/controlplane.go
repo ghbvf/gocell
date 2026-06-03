@@ -1,61 +1,34 @@
-// controlplane.go: 内部控制平面端点守卫（/internal/v1/* service token middleware）。
+// controlplane.go: 内部控制平面端点 HMAC 密钥环构造（/internal/v1/* service token）。
 package main
 
 import (
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// internalGuard is the resolved /internal/v1/* service-token guard plus the
-// dependencies the guard was built from. Holding the NonceStore and ring
-// alongside the middleware closure lets SharedDeps.Validate introspect the
-// guard at startup — a plain middleware func would be an opaque black box,
-// forcing validation to a shallow "is it nil?" check that cannot detect a
-// guard that was installed without replay protection.
-//
-// Fields are package-private; external consumers use Middleware / NonceStore
-// to project out exactly what they need.
-type internalGuard struct {
-	ring       *auth.HMACKeyRing
-	nonceStore kauth.NonceStore
-	mw         func(http.Handler) http.Handler
-}
-
-// Middleware returns the assembled service-token middleware ready for the
-// internal listener's router chain.
-func (g *internalGuard) Middleware() func(http.Handler) http.Handler { return g.mw }
-
-// NonceStore exposes the backing replay-defense store. Startup validation
-// inspects Kind() to reject NonceStoreKindNoop in adapter mode "real".
-func (g *internalGuard) NonceStore() kauth.NonceStore { return g.nonceStore }
-
-// internalGuardFromEnv builds an internalGuard for /internal/v1/* from
-// GOCELL_SERVICE_SECRET (and optionally GOCELL_SERVICE_SECRET_PREVIOUS).
+// buildInternalHMACRing builds the /internal/v1/* service-token HMAC key ring
+// from GOCELL_SERVICE_SECRET (and optionally GOCELL_SERVICE_SECRET_PREVIOUS).
 //
 // GOCELL_SERVICE_SECRET is required in all adapter modes (SEC-FAIL-CLOSED).
 // A missing secret returns ErrControlplaneServiceSecretMissing regardless of
 // the adapterMode parameter — there is no dev-mode silent bypass.
 //
-// The guard always wires a replay-defense NonceStore when installed. A
-// single-process InMemoryNonceStore is used by default; multi-pod
-// deployments must replace it with a shared implementation (e.g. Redis)
-// before horizontally scaling — SharedDeps.Validate checks Kind() at
-// startup but cannot know the topology, so the operator is responsible for
-// matching store class to pod count.
+// The ring + the NonceStore (built separately in buildServiceNonceStore) are the
+// two components of the internal-listener service-token guard. Both are placed
+// on composition.SharedDeps (InternalHMACRing + NonceStore) so that the
+// composition-contract control-plane validation can introspect NonceStore.Kind()
+// at startup and reject a NoopNonceStore / single-process store in a multi-pod
+// real deployment — see runtime/composition.SharedDeps.validateProductionControlPlane.
 //
 // ref: Kubernetes kube-apiserver service-account verification — require key
 // material before installing an authentication guard.
 // ref: gorilla/securecookie — replay protection defaults on, not opt-in.
-func internalGuardFromEnv(adapterMode string, store kauth.NonceStore, clk clock.Clock) (*internalGuard, error) {
+func buildInternalHMACRing(adapterMode string) (*auth.HMACKeyRing, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
@@ -76,15 +49,6 @@ func internalGuardFromEnv(adapterMode string, store kauth.NonceStore, clk clock.
 	if err != nil {
 		return nil, fmt.Errorf("build service HMAC key ring: %w", err)
 	}
-	if store == nil {
-		var err error
-		store, err = auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
-		if err != nil {
-			return nil, fmt.Errorf("build service token nonce store: %w", err)
-		}
-	}
-	mw := auth.ServiceTokenMiddleware(ring, clk, auth.WithServiceTokenNonceStore(store))
-	slog.Info("controlplane guard installed",
-		slog.String("nonce_store_kind", string(store.Kind())))
-	return &internalGuard{ring: ring, nonceStore: store, mw: mw}, nil
+	slog.Info("controlplane: service-token HMAC ring built for /internal/v1/*")
+	return ring, nil
 }
