@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"testing"
 )
@@ -43,7 +44,7 @@ func TestNewAuthOperator(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewAuthOperator(%q) unexpected error: %v", tc.name, err)
 			}
-			if string(got.Username) != string(tc.username) || string(got.Password) != string(tc.password) {
+			if !bytes.Equal(got.Username, tc.username) || !bytes.Equal(got.Password, tc.password) {
 				t.Errorf("NewAuthOperator credentials not preserved: got %q/%q", got.Username, got.Password)
 			}
 			if got.Limiter == nil {

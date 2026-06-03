@@ -33,6 +33,26 @@ const (
 	internalListenerPositionMinFmt = internalListenerPositionFmt + " got=%d min=%d"
 )
 
+// validateAuthPlans runs every phase0 AuthPlan-chain validator in order. Grouped
+// into one helper so phase0ValidateOptions stays under its cyclomatic-complexity
+// budget as new per-kind validators are added.
+func (b *Bootstrap) validateAuthPlans() error {
+	validators := []func() error{
+		b.validateAuthJWTFromAssemblyPlans,
+		b.validateAuthPlanMTLSBindings,
+		b.validateAuthChainJWTSingleton,
+		b.validateAuthNoneExclusive,
+		b.validateAuthServiceTokenPlans,
+		b.validateAuthOperatorPlans,
+	}
+	for _, v := range validators {
+		if err := v(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // validateAuthJWTFromAssemblyPlans catches malformed AuthJWTFromAssembly
 // literals at phase0, then enforces the single-assembly invariant when
 // WithAssembly is present. This prevents nil/typed-nil panics, rejected
@@ -273,42 +293,60 @@ func validateAuthServiceTokenPlan(
 //     validateAuthNoneExclusive.
 func (b *Bootstrap) validateAuthOperatorPlans() error {
 	for ref, cfg := range b.listenerConfigs {
-		seen := 0
-		for i, plan := range cfg.authChain {
-			p, ok := plan.(auth.AuthOperator)
-			if !ok {
-				continue
-			}
-			seen++
-			if seen > 1 {
-				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					"at most one AuthOperator plan allowed in authChain",
-					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
-			}
-			if ref != cell.AdminListener {
-				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					"AuthOperator may only be used on cell.AdminListener; operator credentials "+
-						"are the admin control-plane gate, not a cell→cell or public scheme",
-					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), i))))
-			}
-			if len(p.Username) == 0 || len(p.Password) == 0 {
-				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					"AuthOperator requires non-empty operator credentials; construct it with auth.NewAuthOperator(...)",
-					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), i))))
-			}
-			if validation.IsNilInterface(p.Limiter) {
-				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					"AuthOperator Limiter must not be nil; construct it with auth.NewAuthOperator(...)",
-					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), i))))
-			}
+		if err := validateAuthOperatorChain(ref, cfg.authChain); err != nil {
+			return err
 		}
-		if ref == cell.AdminListener && seen == 0 {
-			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"cell.AdminListener requires an AuthOperator plan; the operator control-plane must be "+
-					"authenticated (loopback isolation alone is not sufficient). Wire "+
-					"bootstrap.WithListener(cell.AdminListener, addr, []kauth.ListenerAuth{<auth.NewAuthOperator(...)>})",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+	}
+	return nil
+}
+
+// validateAuthOperatorChain validates one listener's chain: at most one
+// AuthOperator, each well-formed and only on AdminListener, and AdminListener
+// must carry one.
+func validateAuthOperatorChain(ref cell.ListenerRef, chain []auth.ListenerAuth) error {
+	seen := 0
+	for i, plan := range chain {
+		p, ok := plan.(auth.AuthOperator)
+		if !ok {
+			continue
 		}
+		seen++
+		if err := validateAuthOperatorPlan(ref, i, seen, p); err != nil {
+			return err
+		}
+	}
+	if ref == cell.AdminListener && seen == 0 {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"cell.AdminListener requires an AuthOperator plan; the operator control-plane must be "+
+				"authenticated (loopback isolation alone is not sufficient). Wire "+
+				"bootstrap.WithListener(cell.AdminListener, addr, []kauth.ListenerAuth{<auth.NewAuthOperator(...)>})",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+	}
+	return nil
+}
+
+// validateAuthOperatorPlan validates a single AuthOperator at a chain position.
+func validateAuthOperatorPlan(ref cell.ListenerRef, position, seen int, p auth.AuthOperator) error {
+	if seen > 1 {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"at most one AuthOperator plan allowed in authChain",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+	}
+	if ref != cell.AdminListener {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"AuthOperator may only be used on cell.AdminListener; operator credentials "+
+				"are the admin control-plane gate, not a cell→cell or public scheme",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), position))))
+	}
+	if len(p.Username) == 0 || len(p.Password) == 0 {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"AuthOperator requires non-empty operator credentials; construct it with auth.NewAuthOperator(...)",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), position))))
+	}
+	if validation.IsNilInterface(p.Limiter) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"AuthOperator Limiter must not be nil; construct it with auth.NewAuthOperator(...)",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), position))))
 	}
 	return nil
 }
