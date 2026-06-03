@@ -210,6 +210,10 @@ func loadPackagesWithMode(ctx context.Context, root string, includeDeps bool, pa
 		Context: ctx,
 		Mode:    packageLoadMode(includeDeps),
 		Dir:     root,
+		// GOWORK=off keeps metricschema loading go.work-agnostic (module mode),
+		// uniform with the repo's other packages.Config loaders. Enforced by
+		// archtest PACKAGES-CONFIG-GOWORK-OFF-01.
+		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	roots, err := packages.Load(cfg, patterns...)
 	if err != nil {

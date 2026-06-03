@@ -9,6 +9,10 @@
 # to conventional mode. The equivalence is machine-guarded by
 # kernel/metadata/locator_equivalence_test.go.
 #
+# Fail-closed: with explicit `includes:`, if a kind's patterns match zero files,
+# `gocell validate` FAILS (hard error) — so deleting the last file of a kind
+# requires removing the corresponding `includes:` entry from this manifest.
+#
 # go.work-style extension point: when a future module is added (Plan D /
 # docs/plans/product-roadmap/202604300950-plan-d-go-workspace-multimodule-migration.md),
 # append a second `modules:` entry alongside the new go.work `use` directive.

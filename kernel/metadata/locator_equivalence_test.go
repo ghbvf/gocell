@@ -83,6 +83,25 @@ func TestLocator_RealTreeConventionalManifestEquivalence(t *testing.T) {
 		t.Fatal("vacuous guard: conventional mode discovered no examples/ source; " +
 			"the equivalence assertion would not catch a manifest that drops the examples subtree")
 	}
+	// CellID-dimension anti-vacuity: summariseSources compares "kind:path:cellID",
+	// so the DeepEqual would still pass if BOTH modes derived an empty CellID for
+	// examples cells. Assert at least one examples/ SourceCell carries a non-empty
+	// CellID, proving the manifest-mode CellID derivation (matchCellPath via
+	// stripBase) is actually exercised and non-trivial.
+	examplesCellWithID := false
+	for _, s := range convSrc {
+		if s.Kind == SourceCell && strings.HasPrefix(s.Path, "examples/") {
+			if s.CellID == "" {
+				t.Errorf("anti-vacuity: conventional cell source under examples/ has empty CellID: %s", s.Path)
+			} else {
+				examplesCellWithID = true
+			}
+		}
+	}
+	if !examplesCellWithID {
+		t.Fatal("anti-vacuity: no examples/ SourceCell with a non-empty CellID; " +
+			"CellID-dimension equivalence is not proven")
+	}
 
 	if !reflect.DeepEqual(conv, man) {
 		onlyConv := difference(conv, man)

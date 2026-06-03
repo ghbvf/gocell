@@ -13,6 +13,10 @@ source hack/lib/util.sh
 source hack/lib/modules.sh
 
 # (a) Assert go.work exists and parses as a valid workspace.
+# The `go work edit -json` call here is an explicit fast-fail "exists + parseable"
+# guard that runs before module enumeration; gocell::modules::dirs() also calls it
+# later, but keeping this early check surfaces parse errors immediately with a
+# clear error message rather than inside the enumeration helper.
 gocell::log::status "Checking go.work exists and is valid"
 if [[ ! -f go.work ]]; then
     gocell::log::error "go.work not found in repo root"
@@ -24,6 +28,8 @@ if ! go work edit -json >/dev/null; then
 fi
 
 # (b) go.work sync drift check: run go work sync, then assert no diff on go.work.
+# Note: go.work.sum is intentionally NOT checked here — it is gitignored because
+# cross-module sums are path-dependent; a single-module workspace produces none.
 gocell::log::status "Running go work sync (drift check)"
 go work sync
 if ! git diff --exit-code -- go.work; then

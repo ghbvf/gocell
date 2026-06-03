@@ -780,6 +780,12 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,
 		Dir:  filepath.Join(root, cellDir),
+		// GOWORK=off keeps loading go.work-agnostic (module mode), uniform with
+		// the repo's other packages.Config loaders. Today this loads a subdir of
+		// the root module — fine under workspace mode — but stays correct if
+		// cells/ ever splits into its own module. Enforced by archtest
+		// PACKAGES-CONFIG-GOWORK-OFF-01.
+		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
@@ -975,6 +981,9 @@ func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.
 		Tests:      true,
 		Dir:        root,
 		BuildFlags: []string{"-tags=integration,e2e,examples_smoke"},
+		// GOWORK=off: uniform go.work-agnostic loading (see loadCellImports).
+		// Enforced by archtest PACKAGES-CONFIG-GOWORK-OFF-01.
+		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {

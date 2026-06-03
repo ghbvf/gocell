@@ -48,9 +48,12 @@ to what conventional auto-detection would find. An equivalence test
 diverge, CI fails.
 
 **Fail-closed caveat**: if the last top-level file of a kind is removed (e.g. all
-`assemblies/*/assembly.yaml` are deleted), the manifest's `includes:` entry must
-be updated. Conventional mode would discover zero matches silently; manifest mode
-makes the scope explicit and therefore visible to reviewers.
+`assemblies/*/assembly.yaml` are deleted), `gocell validate` **fails with an
+error** — manifest mode is fail-closed on zero matches for explicitly-declared
+`includes:` patterns (error is roughly: "manifest module include patterns for
+kind=<kind> matched zero files"). You must remove the corresponding `includes:`
+entry from `.gocell/manifest.yaml` to reflect the intentional removal; the
+manifest will not silently produce an empty set.
 
 ## How to add a future module
 
@@ -67,6 +70,12 @@ calls `go work edit -json` and extracts `.Use[].DiskPath`. Adding `use ./newmod`
 to `go.work` is sufficient for the new module to be picked up automatically;
 `hack/lib/modules.sh` must not be edited to hardcode module paths.
 
+After running `go work sync` with a second module, a local `go.work.sum` may be
+generated. It is gitignored by design: cross-module sums are path-dependent on
+the developer's local checkout and must not be committed. The CI drift check in
+`hack/verify-workspace.sh` watches only `go.work`, not `go.work.sum`
+(intentional).
+
 ## CI traversal chain
 
 ```
@@ -78,6 +87,10 @@ make verify
 
 `make verify` uses a glob-discovery model: adding `hack/verify-workspace.sh` is
 sufficient — no change to the driver script is needed.
+
+`hack/verify-workspace.sh` runs `go build ./...` per module. Once multiple large
+modules exist and CI budget is a concern, `VERIFY_SKIP=workspace make verify`
+skips this gate (the standard make-verify skip mechanism).
 
 ## Reference
 

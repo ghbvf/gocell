@@ -3,6 +3,7 @@ package depgraph
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -45,6 +46,14 @@ func Load(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
 		Mode:  loadMode,
 		Tests: opts.IncludeTests,
 		Dir:   opts.Dir,
+		// GOWORK=off forces module mode. depgraph loads standalone modules
+		// (the testdata/synth fixture, or any caller-supplied Dir) that are not
+		// in the repo-root go.work `use` set; workspace mode would reject them
+		// ("directory ... does not contain modules listed in go.work").
+		// append(os.Environ(), …) wins last, overriding any inherited GOWORK.
+		// Same guard as tools/archtest/internal/typeseval; enforced by archtest
+		// PACKAGES-CONFIG-GOWORK-OFF-01.
+		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	if len(opts.BuildTags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(opts.BuildTags, ",")}

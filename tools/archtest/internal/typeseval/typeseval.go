@@ -119,6 +119,10 @@ func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string)
 		// only ever analyzes the single root module plus those self-contained
 		// fixtures, so it must stay go.work-agnostic: module mode loads the root
 		// module and each fixture identically to the pre-go.work world.
+		// append(os.Environ(), "GOWORK=off") is last-value-wins on the supported
+		// CI runners, so it overrides any inherited GOWORK. This guard is shared
+		// by every repo packages.Config loader, enforced by archtest
+		// PACKAGES-CONFIG-GOWORK-OFF-01.
 		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	if len(tags) > 0 {

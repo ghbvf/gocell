@@ -1,6 +1,7 @@
 package depgraph_test
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -44,6 +45,10 @@ func loadSynthPackages(t *testing.T, includeTests bool) []*packages.Package {
 		Mode:  packages.NeedName | packages.NeedImports | packages.NeedModule,
 		Dir:   dir,
 		Tests: includeTests,
+		// GOWORK=off: testdata/synth is a standalone module not in the repo
+		// go.work `use` set; workspace mode would reject it. Mirrors
+		// depgraph.Load; enforced by archtest PACKAGES-CONFIG-GOWORK-OFF-01.
+		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
