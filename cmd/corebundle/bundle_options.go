@@ -146,19 +146,26 @@ func defaultRuntimeOptions(
 		if err != nil {
 			return nil, fmt.Errorf("http idempotency store wiring: %w", err)
 		}
-		if idemStore != nil {
-			opts = append(opts, bootstrap.WithIdempotencyStore(idemStore))
-			// Capability-level readiness: a bare PING (redis_ready) cannot detect
-			// an ACL that permits PING but denies EVAL/SET, yet default-on
-			// idempotency depends on the Claim/Record Lua scripts. Register a
-			// probe that runs a real EVAL when the store supports it (the redis
-			// store does; the in-memory test store does not).
-			if rc, ok := idemStore.(interface {
-				ReadyCheck(context.Context) error
-			}); ok {
-				opts = append(opts, bootstrap.WithHealthChecker(
-					adapterredis.ProbeHTTPIdempotencyStoreReady, rc.ReadyCheck))
-			}
+		// Fail-closed: Redis is present, so idempotency is default-on and MUST be
+		// wired. A nil store here (factory returned nil without error) would
+		// silently leave idempotency inactive in production — refuse to start
+		// rather than fail open. The (nil,nil) factory return is reserved for the
+		// nil-client (memory/single-pod) path, which this branch already excludes.
+		if idemStore == nil {
+			return nil, fmt.Errorf("http idempotency store wiring: Redis is configured but the " +
+				"store factory returned nil; refusing to start with idempotency silently disabled (fail-closed)")
+		}
+		opts = append(opts, bootstrap.WithIdempotencyStore(idemStore))
+		// Capability-level readiness: a bare PING (redis_ready) cannot detect an
+		// ACL that permits PING but denies EVAL/SET, yet default-on idempotency
+		// depends on the Claim/Record Lua scripts. Register a probe that runs a
+		// real EVAL when the store supports it (the redis store does; the
+		// in-memory test store does not).
+		if rc, ok := idemStore.(interface {
+			ReadyCheck(context.Context) error
+		}); ok {
+			opts = append(opts, bootstrap.WithHealthChecker(
+				adapterredis.ProbeHTTPIdempotencyStoreReady, rc.ReadyCheck))
 		}
 	}
 	if shared.PrimaryHTTPAddr != "" {

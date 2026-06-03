@@ -133,6 +133,7 @@ const (
 	codeCH04 RuleCode = "CH-04"
 	codeCH05 RuleCode = "CH-05"
 	codeCH06 RuleCode = "CH-06"
+	codeCH07 RuleCode = "CH-07"
 
 	// DEP — dependency-graph checks (depcheck.go). Registered in allRules with
 	// Phase: PhaseDep (run by `gocell validate`).

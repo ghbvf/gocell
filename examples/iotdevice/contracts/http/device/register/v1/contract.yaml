@@ -12,6 +12,8 @@ endpoints:
     path: /api/v1/devices
     auth:
       public: true
+      responses:
+        - 409
     successStatus: 201
     noContent: false
     responses:

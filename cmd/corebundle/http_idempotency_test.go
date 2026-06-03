@@ -132,9 +132,39 @@ func TestDefaultRuntimeOptions_WithRedisAddsIdempotencyOption(t *testing.T) {
 	optsWithRedis, err := defaultRuntimeOptions(shared, locals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
 	require.NoError(t, err)
 
-	// Adding Redis adds TWO options in total over the base:
+	// Adding Redis adds THREE options in total over the base:
 	//   1. bootstrap.WithManagedResource (Redis client close, from runtimeBaseOptions)
 	//   2. bootstrap.WithIdempotencyStore (new in this PR)
+	//   3. bootstrap.WithHealthChecker (http_idempotency_store_ready — MemStore here
+	//      does not implement ReadyCheck, so this is NOT appended in this test;
+	//      hence +2). The probe wiring is covered by the redis-store ReadyCheck unit
+	//      tests in adapters/redis.
 	assert.Len(t, optsWithRedis, len(optsBase)+2,
-		"adding Redis must append exactly two extra options: WithManagedResource + WithIdempotencyStore")
+		"adding Redis must append WithManagedResource + WithIdempotencyStore (MemStore has no ReadyCheck)")
+}
+
+// TestDefaultRuntimeOptions_RedisPresentButNilStore_FailsClosed verifies the
+// F1 fail-closed guard (#1537 review): when Redis is configured but the store
+// factory returns (nil, nil), defaultRuntimeOptions must REFUSE to start rather
+// than silently leave default-on idempotency inactive.
+func TestDefaultRuntimeOptions_RedisPresentButNilStore_FailsClosed(t *testing.T) {
+	shared, locals := buildTestSharedDepsAndLocals(t)
+	shared.InternalHTTPAddr = "127.0.0.1:0"
+	locals.internalGuard = newTestInternalGuard(t)
+	shared.InternalHMACRing = locals.internalGuard.ring
+	asm, cb := buildIdemTestAsm(t, shared)
+
+	// Simulate a fail-open factory: non-nil client but nil store, nil error.
+	orig := newRedisHTTPIdempotencyStore
+	newRedisHTTPIdempotencyStore = func(_ *adapterredis.Client, _ adapterredis.KeyNamespace) (idemhttp.Store, error) {
+		return nil, nil //nolint:nilnil // deliberately exercise the fail-open return the guard must reject
+	}
+	t.Cleanup(func() { newRedisHTTPIdempotencyStore = orig })
+
+	locals.redisClient = new(adapterredis.Client)
+	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client))
+
+	_, err := defaultRuntimeOptions(shared, locals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
+	require.Error(t, err, "Redis present + nil store must fail-closed, not silently skip idempotency")
+	assert.Contains(t, err.Error(), "fail-closed")
 }

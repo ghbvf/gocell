@@ -66,7 +66,7 @@ func goldenRuleIDs() []string {
 		"CONTRACT-ENDPOINT-TEST-MAPPING-01",
 
 		// CH — contract-health (contracthealth.go + rules_http.go)
-		"CH-01", "CH-02", "CH-03", "CH-04", "CH-05", "CH-06",
+		"CH-01", "CH-02", "CH-03", "CH-04", "CH-05", "CH-06", "CH-07",
 
 		// CONTRACT-CONSISTENCY-EMIT — http trigger ↔ outbox emit alignment
 		// (rules_misc_consistency.go)

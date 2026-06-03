@@ -224,10 +224,15 @@ exempt 路由的 passthrough 在 method-gate 之前、body read 之前执行（`
 > `endpoints.http.idempotency.exempt`（`HTTPIdempotencyMeta`，sibling of `HTTPAuthMeta`）。
 > 它**不再**折入 `HTTPAuthMetaBoolFields` reflect-freeze 矩阵：auth-combo 空间回退 2^6→2^5
 > （whitelist 14→7），因为「跳过幂等录制」是 middleware 行为而非 auth mode（F7）。同时新增
-> **F4**：default-on 后中间件可发的 409（ClaimBusy / ErrIdempotencyKeyReused）经
-> `HTTPTransportMeta.IdempotencyFrameworkStatuses()` 从 method+exempt **单源派生**为
-> framework-injected 声明状态（折入 governance `declaredErrorStatuses` 并集，与 401/429 同
-> 通道），使非豁免 mutating 路由的契约声明面系统性包含 409 且不可漂移（派生而非逐契约手写）。
+> **F4**：default-on 后中间件可发的 409（ClaimBusy / ErrIdempotencyKeyReused）由 governance
+> rule **CH-07** 强制——任何非豁免 mutating（POST/PUT/PATCH/DELETE）http 契约必须在
+> `auth.responses`（listener-middleware-injected 状态列表，已含非 auth 的 rate-limit 429）声明
+> 409，缺失则 `gocell check contract-health` 失败。所需状态集是
+> `HTTPTransportMeta.IdempotencyFrameworkStatuses()`（method + idempotency.exempt）**单源派生**
+> 的 oracle，CH-07 据此判定且不可漂移；未来 mutating 路由被强制声明或显式 exempt。已给 **17**
+> 个非豁免 mutating 契约补 409（手工枚举只覆盖 9 个，CH-07 捕获另 8 个——印证机器规则优于人列）。
+> 注：曾尝试把 409 折入 governance `declaredErrorStatuses` 并集，但那使 CH-07 自身 vacuous（且对
+> CH-04 无效——handler 不发 409），已回退；声明面由 CH-07 + 显式 `auth.responses` 承载。
 > 下方三件套的字段路径已按 F7 迁移更新。
 
 PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `AuthRouteMeta` →

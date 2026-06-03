@@ -178,4 +178,5 @@ var allRules = []Rule{
 	{Code: codeCH04, Phase: PhaseHealth, Detect: (*Validator).checkCH04},
 	{Code: codeCH05, Phase: PhaseHealth, Detect: (*Validator).checkCH05},
 	{Code: codeCH06, Phase: PhaseHealth, Detect: (*Validator).checkCH06},
+	{Code: codeCH07, Phase: PhaseHealth, Detect: (*Validator).checkCH07},
 }

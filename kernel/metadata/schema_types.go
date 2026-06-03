@@ -53,10 +53,16 @@ type HTTPIdempotencyMeta struct {
 // HTTPAuthMeta.Responses (401/429). When idempotency is default-on, a mutating
 // route (POST/PUT/PATCH/DELETE) that is not Idempotency.Exempt can return 409 on
 // an in-flight key (ClaimBusy) or a reused key with a mismatched body
-// fingerprint (ErrIdempotencyKeyReused). This is the single-source derivation for
-// the 409 declaration surface (#1469 review F4): the 409 is never hand-declared
-// per contract — it is computed from method + exempt so it cannot drift out of
-// sync with the middleware. Returns nil for GET/HEAD and exempt routes.
+// fingerprint (ErrIdempotencyKeyReused). Returns nil for GET/HEAD and exempt
+// routes.
+//
+// This is the single-source oracle for the CH-07 governance rule (#1537 review
+// F4): CH-07 requires every contract this returns a non-empty set for to declare
+// those statuses in auth.responses, so the declaration surface cannot drift from
+// the middleware and a future mutating route is forced to declare 409 or set
+// idempotency.exempt. The 409 is NOT folded into declaredErrorStatuses (that
+// would make CH-07 vacuous and has no effect on CH-04, which checks
+// handler-emitted statuses — the middleware emits 409, not the handler).
 func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 	if h == nil || h.Idempotency.Exempt {
 		return nil
@@ -158,9 +164,13 @@ type HTTPAuthMeta struct {
 	// /internal/v1/...) where caller-cell identity is verifiable via the
 	// service token.
 	ClientsOnly bool `yaml:"clientsOnly,omitempty" json:"clientsOnly,omitempty"`
-	// Responses lists HTTP status codes injected by listener-mounted middleware
-	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as
-	// declared without requiring handler AST emission.
+	// Responses lists HTTP status codes injected by listener-mounted middleware,
+	// NOT emitted by the handler/adapter — so they are declared here (no typed
+	// response struct) rather than in the responses map. Despite the "auth" name,
+	// this list already spans non-auth middleware: bootstrap auth 401, rate limiter
+	// 429, and HTTP-idempotency 409 (ClaimBusy / key-reused, required on non-exempt
+	// mutating routes by governance rule CH-07). CH-04 treats these as declared
+	// without requiring handler AST emission.
 	Responses []int `yaml:"responses,omitempty" json:"responses,omitempty"`
 }
 
