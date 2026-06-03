@@ -47,8 +47,7 @@ import (
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //                                 + tenant_id TEXT NOT NULL, PK (tenant_id,user_id,role_id),
 //                                   role FK references roles(tenant_id,id) composite (050)
-//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index)
-//                          + 051 (tenant keyset index)) tamper-evident audit ledger (per-namespace hash chain)
+//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index)) tamper-evident audit ledger (per-namespace hash chain)
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
 //                                   session_id / correlation_id / occurred_at) for
@@ -616,14 +615,14 @@ var expectedIndexes = []expectedIndex{
 	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true, Columns: []string{"namespace", "event_id"}},
 	// 048_audit_entries_trace_id_index.sql: (namespace, trace_id) — leading column matters for filter pushdown
 	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false, Columns: []string{"namespace", "trace_id"}},
-	// 051_audit_entries_tenant_index.sql: tenant-aware keyset pagination (namespace, tenant_id, timestamp DESC, id ASC)
-	// supports auditquery tenant-scoped reads (PR-2a AuditFilters.TenantID predicate).
-	// Columns excludes sort direction; DESC/ASC are not verified by schema_guard
-	// (consistent with idx_audit_namespace_ts_id above — direction is intentional omission).
-	{
-		Table: "audit_entries", Name: "idx_audit_namespace_tenant_ts_id",
-		Unique: false, Columns: []string{"namespace", "tenant_id", "timestamp", "id"},
-	},
+	// NOTE: no tenant-leading index here. auditquery's tenant predicate is the
+	// disjunction (tenant_id = '' OR tenant_id = $X) — system rows + own tenant —
+	// which a (namespace, tenant_id, …) index cannot serve as a single ordered
+	// keyset scan (the OR breaks the leading-equality requirement). The existing
+	// idx_audit_namespace_ts_id already satisfies the ORDER BY (namespace equality
+	// + ts/id keyset) with tenant_id applied as an in-scan filter. A tenant-leading
+	// index becomes worthwhile under PR-3 (#1341), where RLS rewrites the predicate
+	// to pure tenant_id = current_setting equality. See audit_ledger_store.Query.
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false, Columns: []string{"status"}},
 	// 030_commands.sql partial indexes — Columns lists only key columns, not WHERE predicate columns

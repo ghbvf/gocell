@@ -416,6 +416,13 @@ FROM audit_entries WHERE namespace = `, ns)
 	// 403 gate); empty = no filter (generic store consumers / tenant-less
 	// callers). DB-layer RLS (PR-3) is the defense-in-depth backstop.
 	// See ledger.AuditFilters.TenantID.
+	//
+	// Index note: this OR disjunction is served by idx_audit_namespace_ts_id
+	// (namespace equality + the ts/id keyset, ORDER BY satisfied without a sort)
+	// with tenant_id applied as an in-scan filter. A (namespace, tenant_id, …)
+	// tenant-leading index cannot serve the OR as a single ordered scan, so none
+	// is defined; it is deferred to PR-3, where RLS rewrites this to pure
+	// tenant_id equality (see adapters/postgres/schema_guard.go expectedIndexes).
 	if filters.TenantID != "" {
 		b.AppendParam(`AND (tenant_id = '' OR tenant_id = `, filters.TenantID).Append(`)`)
 	}

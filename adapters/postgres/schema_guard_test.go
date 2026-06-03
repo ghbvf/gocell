@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 45 migrations: 001-033 contiguous, plus 040-051 (intentional gap
+	// Currently 44 migrations: 001-033 contiguous, plus 040-050 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -80,11 +80,9 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// the monotonic stream position for the projection journal ReplaySource/Cursor
 	// (#1368 / W10 PR-04c);
 	// 050 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
-	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered 047→049→050 on merges);
-	// 051 adds idx_audit_namespace_tenant_ts_id CONCURRENTLY for tenant-scoped keyset pagination
-	// on audit_entries (PR-2a AuditFilters.TenantID predicate support).
-	assert.Equal(t, int64(51), v,
-		"expected version should be exactly 51 (current migration max — 051 audit_entries_tenant_index)")
+	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered 047→049→050 on merges).
+	assert.Equal(t, int64(50), v,
+		"expected version should be exactly 50 (current migration max — 050 accesscore_tenant_id)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

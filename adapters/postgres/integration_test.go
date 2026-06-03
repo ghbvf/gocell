@@ -1314,6 +1314,67 @@ func TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_UpFailClosed(t *tes
 	assert.Equal(t, int64(50), migDetail.Value(), "migration detail value must be 50")
 }
 
+// TestMigrator_ForwardRebuild_Migration050_DeclaredTargets pins migration 050's
+// forward-rebuild target set to {users, roles, role_assignments}. The runtime
+// fail-closed tests can only isolate users and roles by seeding (role_assignments
+// has FKs to both users and roles, so it cannot be populated alone); this test
+// guards every declared target against annotation drift — if a
+// `-- +gocell forward-rebuild target=<table>` line is dropped or renamed, the set
+// changes and this fails.
+func TestMigrator_ForwardRebuild_Migration050_DeclaredTargets(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Empty DB → every migration is pending; collectPendingForwardRebuilds parses
+	// the +gocell annotations from each pending migration's Up section.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_targets")
+	require.NoError(t, err)
+
+	pending, err := migrator.collectPendingForwardRebuilds(ctx)
+	require.NoError(t, err)
+
+	got := pending[50]
+	require.NotEmpty(t, got, "migration 050 must declare forward-rebuild targets")
+	assert.ElementsMatch(t, []string{"users", "roles", "role_assignments"}, got,
+		"migration 050 forward-rebuild targets must be exactly {users, roles, role_assignments}")
+}
+
+// TestMigrator_ForwardRebuild_Migration050_PopulatedRoles_UpFailClosed verifies
+// the gate fires for the roles target specifically: with roles non-empty (users
+// and role_assignments empty) and no permit, Up() must refuse, and the error must
+// name target=roles. This protects the `target=roles` annotation at runtime —
+// dropping it would let a populated roles table be silently destroyed.
+func TestMigrator_ForwardRebuild_Migration050_PopulatedRoles_UpFailClosed(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply through 049 so roles exists (migration 019) but 050 is still pending.
+	mfs049 := migrationsUpToFS(t, 49)
+	prep, err := NewMigrator(pool, mfs049, "schema_migrations_050_roles_failclosed")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 049 must succeed")
+
+	// Seed roles only (users + role_assignments stay empty). roles has no FK, so it
+	// can be populated in isolation — making roles the sole dangerous target.
+	_, execErr := pool.DB().Exec(ctx, `INSERT INTO roles (id, name) VALUES ('viewer', 'Viewer')`)
+	require.NoError(t, execErr, "must be able to insert a row into pre-050 roles table")
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_roles_failclosed")
+	require.NoError(t, err)
+
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when migration 050 target roles has rows")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(50), migDetail.Value(), "migration detail value must be 50")
+	tgtDetail, ok := ec.FindAttr("target")
+	require.True(t, ok, "error must have a public detail keyed 'target'")
+	assert.Equal(t, "roles", tgtDetail.Value(), "target detail must name the roles table")
+}
+
 // TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_WithPermit verifies
 // that ForwardRebuild with permit 50 succeeds when users has rows (and sessions
 // is empty — see godoc), rebuilds the schema, and the sessions FK is restored.

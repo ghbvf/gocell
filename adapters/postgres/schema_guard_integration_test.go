@@ -1137,18 +1137,16 @@ func TestMigration050_UpDownUpIdempotency(t *testing.T) {
 	downPermit, dpErr := AllowDestructiveDown("050 up-down-up idempotency test")
 	require.NoError(t, dpErr)
 
-	// Down rolls back the most-recently-applied migration (051 first, then 050 on
-	// the second call, etc.). We call Down until we're at version 049 so 050 is
-	// the next pending migration for the second Up pass.
+	// Down rolls back the most-recently-applied migration. With 050 as the highest
+	// migration, a single Down rolls it back to version 049, so 050 is the next
+	// pending migration for the second Up pass.
 	m2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
 	require.NoError(t, err)
 
-	// Roll back migration 051 (the tenant index — CONCURRENTLY, no data loss).
-	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 051 must succeed")
 	// Roll back migration 050 (the destructive users/roles/role_assignments rebuild).
 	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 050 must succeed")
 
-	// Second Up pass: from version 049 → applies 050 (empty tables → no permit) + 051.
+	// Second Up pass: from version 049 → re-applies 050 (empty tables → no permit).
 	m3, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
 	require.NoError(t, err)
 	require.NoError(t, m3.Up(ctx),
