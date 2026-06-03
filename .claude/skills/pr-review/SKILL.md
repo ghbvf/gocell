@@ -116,7 +116,7 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 
 ## 阶段 6：贴 PR 评论
 
-把阶段 5 的五块汇总浓缩进 `.github/project-template/pr-comment.md` 的 `<!-- pm:pr-review -->` 模板（根因簇数 / Finding 总数及 P·Cx 分布 / Top findings / 修复分流 / 总体结论 + footer），贴到 PR：
+把阶段 5 的五块**完整**写进 `.github/project-template/pr-comment.md` 的 `<!-- pm:pr-review -->` 模板（**评论即 review 结果，不做有损浓缩**：每条 Finding 带 `file:line`，证据/建议/根因/方案种子入 `<details>` 供 `/fix` 无损提取），贴到 PR：
 
 ```bash
 gh pr comment <N> --body-file <填好的 pm:pr-review 模板>

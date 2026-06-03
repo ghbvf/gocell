@@ -157,7 +157,7 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
    修哪些（默认修 Cx1/Cx2 IN_SCOPE）。
 2. 对 Cx1/Cx2 IN_SCOPE findings 派发 `developer` agent 执行 `/fix <finding>`；Cx3/Cx4 和 OUT_OF_SCOPE 收集到阶段 9。
 3. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
-   - `gh pr comment <PR#>` 贴 ship 评论（reviewer 数 / findings 表 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex）→ 把 `gh pr comment` 返回的评论 URL **回显给用户**。
+   - `gh pr comment <PR#>` 贴 ship 评论：**每条 finding 带 `file:line`，证据/建议入 `<details>`（评论即 review 结果，无损——供 codex / `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex → 把 `gh pr comment` 返回的评论 URL **回显给用户**。
    - `gh pr edit` 切 `pr-status/needs-codex`（移除 `pr-status/in-progress`）。
 
 > ship 到此结束（内置审 + 修）。codex 外部 review 后，续修走 `/fix <PR#>`。
