@@ -13,6 +13,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
+// testTenantID is the canonical test tenant UUID used across all corebundle
+// integration tests. Matches cells/accesscore/cell_test.go:testTenantID and
+// tests/integration/l2atomicity canonical tenant.
+const testTenantID = "00000000-0000-0000-0000-000000000001"
+
 // buildAccessCoreMemOptions returns the explicit option set that replaces the
 // removed accesscore.WithInMemoryDefaults(). WithMemBundle wires the
 // (UserRepository, RoleRepository, SetupLock, store-paired TxRunner)

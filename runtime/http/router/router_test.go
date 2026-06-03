@@ -2133,6 +2133,66 @@ func TestWithIdempotency_MiddlewareRunsAfterAuth(t *testing.T) {
 		"replayed response must carry Idempotency-Replayed: true header")
 }
 
+// routerRecordingIdempotencyObserver records every RequestState the idempotency
+// middleware emits. Used to prove WithIdempotencyMetrics(obs) is threaded through
+// buildMux into the constructed middleware (idemhttp.WithMetrics), not silently
+// dropped.
+type routerRecordingIdempotencyObserver struct {
+	states []idemhttp.RequestState
+}
+
+func (o *routerRecordingIdempotencyObserver) ObserveRequest(_ context.Context, s idemhttp.RequestState) {
+	o.states = append(o.states, s)
+}
+
+// TestWithIdempotencyMetrics_ObserverReceivesStatesThroughRouter verifies the
+// end-to-end wiring: WithIdempotencyMetrics(obs) must reach the idempotency
+// middleware constructed inside buildMux (router.go: idemhttp.WithMetrics(
+// r.idempotencyMetrics)) so the observer records the real terminal states. Two
+// identical requests through the full router chain emit [StateAcquired] then
+// [StateReplayed]. Without the option being threaded through, obs.states stays
+// empty and the test fails.
+func TestWithIdempotencyMetrics_ObserverReceivesStatesThroughRouter(t *testing.T) {
+	clk := clock.Real()
+	memStore := idemhttp.NewMemStore(clk)
+	obs := &routerRecordingIdempotencyObserver{}
+
+	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1"}}
+	rtr := mustNew(clk,
+		WithAuthMiddleware(verifier),
+		WithIdempotency(memStore),
+		WithIdempotencyMetrics(obs),
+	)
+	mustMountRoute(rtr, auth.Route{
+		Contract: testHTTPContract(http.MethodPost, "/api/v1/orders"),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"order":"1"}`))
+		}),
+	})
+	require.NoError(t, rtr.FinalizeAuth())
+
+	makeReq := func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/orders", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("Idempotency-Key", "order-metrics-001")
+		rtr.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	// First request: fresh claim → StateAcquired emitted through the router chain.
+	makeReq()
+	require.Equal(t, []idemhttp.RequestState{idemhttp.StateAcquired}, obs.states,
+		"first request through router must emit StateAcquired via WithIdempotencyMetrics")
+
+	// Second identical request: cached replay → StateReplayed appended, proving
+	// the observer is wired into the middleware buildMux constructs.
+	makeReq()
+	require.Equal(t,
+		[]idemhttp.RequestState{idemhttp.StateAcquired, idemhttp.StateReplayed},
+		obs.states,
+		"second identical request must emit StateReplayed, proving WithIdempotencyMetrics reaches the middleware")
+}
+
 // ---------------------------------------------------------------------------
 // Idempotency-exempt matcher tests (C2)
 // ---------------------------------------------------------------------------

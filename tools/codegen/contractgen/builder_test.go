@@ -1,6 +1,7 @@
 package contractgen
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -549,12 +550,18 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_GRPCKind_PlaceholderInterface verifies that a kind=grpc
+// TestBuildContractSpec_GRPCKind_ProtoTypedInterface verifies that a kind=grpc
 // contract projects endpoints.grpc into spec.GRPC with the derived Go interface
-// name ("Server") + the proto method name, leaving HTTP/event fields nil, and
-// resolves the generated package path/name kind-generically.
-func TestBuildContractSpec_GRPCKind_PlaceholderInterface(t *testing.T) {
+// name ("Server") + the proto method name, resolves the proto-typed fields from
+// the .proto go_package option + rpc declaration, leaves HTTP/event fields nil,
+// and resolves the generated package path/name kind-generically. Uses the
+// committed synth_grpc_minimal fixture as the root so the proto resolves.
+func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	t.Parallel()
+	root, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
+	if err != nil {
+		t.Fatalf("abs fixture root: %v", err)
+	}
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"grpc.device.command.v1": {
@@ -573,7 +580,7 @@ func TestBuildContractSpec_GRPCKind_PlaceholderInterface(t *testing.T) {
 			},
 		},
 	}
-	spec, err := buildContractSpec("", p, "grpc.device.command.v1")
+	spec, err := buildContractSpec(root, p, "grpc.device.command.v1")
 	if err != nil {
 		t.Fatalf("buildContractSpec should not error for kind=grpc, got: %v", err)
 	}
@@ -601,11 +608,52 @@ func TestBuildContractSpec_GRPCKind_PlaceholderInterface(t *testing.T) {
 	if spec.GRPC.ProtoPath != "contracts/grpc/device/command/v1/device_command.proto" {
 		t.Errorf("spec.GRPC.ProtoPath = %q", spec.GRPC.ProtoPath)
 	}
+	if spec.GRPC.ProtoImportPath != "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1" {
+		t.Errorf("spec.GRPC.ProtoImportPath = %q", spec.GRPC.ProtoImportPath)
+	}
+	if spec.GRPC.ProtoAlias != "commandv1" {
+		t.Errorf("spec.GRPC.ProtoAlias = %q, want %q", spec.GRPC.ProtoAlias, "commandv1")
+	}
+	if spec.GRPC.RequestType != "IssueCommandRequest" || spec.GRPC.ResponseType != "IssueCommandResponse" {
+		t.Errorf("spec.GRPC req/resp = %q/%q", spec.GRPC.RequestType, spec.GRPC.ResponseType)
+	}
 	if spec.PackageName != "command" {
 		t.Errorf("spec.PackageName = %q, want %q", spec.PackageName, "command")
 	}
 	if spec.PackagePath != "generated/contracts/grpc/device/command/v1" {
 		t.Errorf("spec.PackagePath = %q, want %q", spec.PackagePath, "generated/contracts/grpc/device/command/v1")
+	}
+}
+
+// TestValidateGRPCProtoPath covers the shared proto-path guard, including the
+// filepath.IsLocal traversal check that HasPrefix alone does not catch.
+func TestValidateGRPCProtoPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		proto   string
+		wantErr string // substring; "" means expect success
+	}{
+		{"ok", "contracts/grpc/device/command/v1/device_command.proto", ""},
+		{"empty", "", "requires proto"},
+		{"wrong prefix", "contracts/http/x.proto", "must be rooted under"},
+		{"control char", "contracts/grpc/x\n.proto", "control character"},
+		{"traversal escape above root", "contracts/grpc/../../../etc/passwd", "local path"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateGRPCProtoPath("grpc.test.v1", tc.proto)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
@@ -631,7 +679,7 @@ func TestBuildContractSpec_GRPCKind_MissingEndpoint(t *testing.T) {
 
 // TestBuildContractSpec_GRPCKind_NonUnaryRejected verifies the PR-10 deferral:
 // a non-unary streamingType is rejected rather than emitting a misleading unary
-// []byte placeholder.
+// signature.
 func TestBuildContractSpec_GRPCKind_NonUnaryRejected(t *testing.T) {
 	t.Parallel()
 	for _, st := range []string{"server-stream", "client-stream", "bidi"} {

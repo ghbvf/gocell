@@ -5,7 +5,7 @@ package bootstrap
 //
 // runtime/bootstrap auto-wires several metric collector families at startup
 // (HTTP requests, event-router subscriptions, outbox rejects, projection
-// metrics). They all share the same control flow: skip when no real provider is
+// metrics, HTTP idempotency decisions). They all share the same control flow: skip when no real provider is
 // configured, construct the collector exactly once and cache it, and treat a
 // registration conflict as a startup-fatal error — never a slog.Warn-then-degrade
 // that silently drops the metric family.
@@ -15,7 +15,7 @@ package bootstrap
 // co-author transcribed a wrong description of the HTTP collector into the
 // projection path, warn-degrading instead of failing fast, so the second
 // projection silently lost its metrics. autoWireCachedCollector is the single
-// source that makes the four call sites byte-identical in their skip/cache/
+// source that makes the five call sites byte-identical in their skip/cache/
 // fail-fast behavior; the BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01 archtest keeps
 // every collector construction routed through it.
 
@@ -47,13 +47,13 @@ import (
 //   - cache must be non-nil (pass &b.someField); a nil cache is a programmer
 //     error and panics at the *cache deref.
 //   - T is constrained to comparable so *cache can be tested against the zero
-//     value. Both pointer types and pointer-backed interfaces (the four current
+//     value. Both pointer types and pointer-backed interfaces (the five current
 //     callers) satisfy it; comparing against the nil zero value never panics
 //     (a nil-interface zero differs in dynamic type from any populated value, so
 //     the comparison short-circuits before any value compare).
 //   - construct must return a non-nil value on success. A typed-nil interface
 //     (non-nil interface wrapping a nil pointer) would compare unequal to the
-//     zero value and be cached as if populated; none of the four collector
+//     zero value and be cached as if populated; none of the five collector
 //     constructors do this.
 //
 // conflictMsg is the actionable, per-collector message (everything before the

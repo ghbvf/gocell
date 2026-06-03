@@ -303,6 +303,15 @@ metrics:
         - status
         - cell
       file: runtime/bootstrap/phases_http.go
+    - name: idempotency_requests_total
+      fqName: gocell_idempotency_requests_total
+      namespace: gocell
+      type: counter
+      help: Total HTTP idempotency decisions, labeled by terminal state (acquired = fresh claim processed; replayed = cached response served; busy = in-flight lease 409; store_error = Claim-path failure 500 (Record/Release failures are logged only, not counted here); oversize = response too large to record; key_reused = same key, different body 409). acquired counts every fresh claim; oversize is a sub-event of acquired. cell is the owning RouteGroup cell or _runtime for framework paths.
+      labels:
+        - cell
+        - state
+      file: runtime/observability/metrics/idempotency.go
     - name: outbox_batch_size
       fqName: gocell_outbox_batch_size
       namespace: gocell

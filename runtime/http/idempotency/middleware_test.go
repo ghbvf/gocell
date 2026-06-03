@@ -16,7 +16,7 @@ import (
 )
 
 // testHandler returns a fixed status+body and sets Content-Type + X-Test headers.
-func testHandler(status int, body string) http.Handler { //nolint:unparam // parameter kept for test readability
+func testHandler(status int, body string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("X-Test", "yes")
@@ -836,6 +836,322 @@ func TestMiddleware_ExemptMatcher_NilMatcher_AllRoutesTracked(t *testing.T) {
 	}
 	if callCount != 1 {
 		t.Errorf("nil exempt matcher must not affect replay; callCount=%d, want 1", callCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithMetrics / MetricsObserver tests
+// ---------------------------------------------------------------------------
+
+// recordingObserver is a simple in-test MetricsObserver that collects every
+// RequestState emitted on the hot path. It is intentionally minimal: no
+// synchronization (tests are single-goroutine), no deduplication.
+type recordingObserver struct{ states []RequestState }
+
+func (r *recordingObserver) ObserveRequest(_ context.Context, s RequestState) {
+	r.states = append(r.states, s)
+}
+
+// TestMiddleware_Metrics_Acquired verifies that a fresh POST with a recorded
+// 2xx response emits exactly [StateAcquired].
+func TestMiddleware_Metrics_Acquired(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	r := requestWithUserCtx("POST", "/resources", "key-acquired", "t1", "user-1")
+	rr := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 201 {
+		t.Fatalf("code: got %d, want 201", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateAcquired {
+		t.Errorf("states: got %v, want [StateAcquired]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_Replayed verifies that the second identical POST emits
+// [StateReplayed].
+func TestMiddleware_Metrics_Replayed(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	r := requestWithUserCtx("POST", "/resources", "key-replay", "t1", "user-2")
+
+	// First call — acquired.
+	rr1 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr1, r)
+	obs.states = obs.states[:0] // reset after first call
+
+	// Second call — must be replayed.
+	rr2 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr2, r)
+
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("expected replay on second call")
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateReplayed {
+		t.Errorf("states: got %v, want [StateReplayed]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_Busy verifies that a ClaimBusy (in-flight lease)
+// emits [StateBusy].
+func TestMiddleware_Metrics_Busy(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	ctx := context.Background()
+	// Pre-seed a lease to simulate in-flight request.
+	_, _, _, err := ms.Claim(ctx, "t1", "user-busy\x00POST\x00/\x00key-busy", "", idempotency.DefaultLeaseTTL)
+	if err != nil {
+		t.Fatalf("pre-seed claim: %v", err)
+	}
+
+	r := requestWithUserCtx("POST", "/", "key-busy", "t1", "user-busy")
+	rr := httptest.NewRecorder()
+	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
+
+	if rr.Code != 409 {
+		t.Fatalf("code: got %d, want 409", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateBusy {
+		t.Errorf("states: got %v, want [StateBusy]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_StoreError verifies that a Store.Claim error (not a
+// fingerprint mismatch) emits [StateStoreError].
+func TestMiddleware_Metrics_StoreError(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	obs := &recordingObserver{}
+	mw := Middleware(clk, failingStore{}, WithMetrics(obs))
+
+	r := requestWithUserCtx("POST", "/", "key-store-err", "t1", "user-3")
+	rr := httptest.NewRecorder()
+	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
+
+	if rr.Code != 500 {
+		t.Fatalf("code: got %d, want 500", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateStoreError {
+		t.Errorf("states: got %v, want [StateStoreError]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_Oversize verifies that an oversized response emits
+// both StateAcquired (on initial claim) and StateOversize (on body overflow),
+// in that order.
+func TestMiddleware_Metrics_Oversize(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMaxBodyBytes(5), WithMetrics(obs))
+
+	bigBody := strings.Repeat("x", 100)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, bigBody)
+	})
+
+	r := requestWithUserCtx("POST", "/big", "key-oversize", "t1", "user-4")
+	rr := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Fatalf("code: got %d, want 200", rr.Code)
+	}
+	if len(obs.states) != 2 {
+		t.Fatalf("states count: got %d, want 2; states=%v", len(obs.states), obs.states)
+	}
+	if obs.states[0] != StateAcquired {
+		t.Errorf("states[0]: got %v, want StateAcquired", obs.states[0])
+	}
+	if obs.states[1] != StateOversize {
+		t.Errorf("states[1]: got %v, want StateOversize", obs.states[1])
+	}
+}
+
+// fingerprintMismatchStore is a store that returns ErrFingerprintMismatch on
+// the first Claim call after a seed, simulating key reuse with a different body.
+type fingerprintMismatchStore struct{}
+
+func (fingerprintMismatchStore) Claim(
+	_ context.Context, _, _, _ string, _ time.Duration,
+) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
+	return 0, nil, nil, ErrFingerprintMismatch
+}
+
+// TestMiddleware_Metrics_KeyReused verifies that a fingerprint mismatch
+// (same Idempotency-Key, different body) emits [StateKeyReused].
+func TestMiddleware_Metrics_KeyReused(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	obs := &recordingObserver{}
+	mw := Middleware(clk, fingerprintMismatchStore{}, WithMetrics(obs))
+
+	r := requestWithUserCtx("POST", "/", "key-reused", "t1", "user-5")
+	rr := httptest.NewRecorder()
+	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
+
+	if rr.Code != 409 {
+		t.Fatalf("code: got %d, want 409", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
+		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_KeyReused_RealMemStore exercises the real MemStore
+// fingerprint-comparison path end-to-end: the same Idempotency-Key presented
+// with a DIFFERENT request body returns 409 and emits [StateKeyReused] — proving
+// the emit is wired to the actual fingerprint mismatch, not only the fake store.
+func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	mkReq := func(body string) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(body))
+		r.Header.Set("Idempotency-Key", "key-fp")
+		ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+			Kind:     auth.PrincipalUser,
+			Subject:  "user-fp",
+			TenantID: "t1",
+		})
+		return r.WithContext(ctx)
+	}
+
+	// First request records a response under fingerprint(body="AAA").
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq("AAA"))
+	if len(obs.states) != 1 || obs.states[0] != StateAcquired {
+		t.Fatalf("first request states: got %v, want [StateAcquired]", obs.states)
+	}
+	obs.states = obs.states[:0]
+
+	// Same key, DIFFERENT body → real fingerprint mismatch → 409 + key_reused.
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq("BBB"))
+	if rr2.Code != 409 {
+		t.Fatalf("code: got %d, want 409", rr2.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
+		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
+	}
+}
+
+// panickingObserver is a MetricsObserver whose ObserveRequest always panics.
+// It models a faulty composition-root-supplied collector; the middleware must
+// isolate the panic (observability.SafeObserve) so idempotency correctness is
+// never affected.
+type panickingObserver struct{}
+
+func (panickingObserver) ObserveRequest(context.Context, RequestState) {
+	panic("boom from metrics observer")
+}
+
+// TestMiddleware_Metrics_PanickingObserver_DoesNotAffectRequest verifies that a
+// panic inside the MetricsObserver hot-path hook is isolated and does not change
+// the idempotency outcome. The panic fires on the StateAcquired branch (emitted
+// BEFORE the handler runs); without SafeObserve it would escape the middleware,
+// skip the handler, and leak the acquired lease so the second request 409s on a
+// stuck in-flight claim instead of replaying. With the fix the acquired request
+// still runs the handler and records its response, and the second identical
+// request replays.
+func TestMiddleware_Metrics_PanickingObserver_DoesNotAffectRequest(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms, WithMetrics(panickingObserver{}))
+
+	calls := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	// First request: observer panics on StateAcquired but must not escape.
+	r1 := requestWithUserCtx("POST", "/resources", "key-panic-obs", "t1", "user-panic-obs")
+	rr1 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr1, r1)
+	if rr1.Code != 201 {
+		t.Fatalf("first request code: got %d, want 201 (panic must be isolated)", rr1.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls after first request: got %d, want 1", calls)
+	}
+
+	// Second identical request: response must replay — proving the panicking
+	// observer did not corrupt the claim/record path on the first request.
+	r2 := requestWithUserCtx("POST", "/resources", "key-panic-obs", "t1", "user-panic-obs")
+	rr2 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr2, r2)
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("second request must replay despite observer panic; code=%d", rr2.Code)
+	}
+	if calls != 1 {
+		t.Errorf("handler must NOT run again on replay; calls=%d, want 1", calls)
+	}
+}
+
+// TestMiddleware_Metrics_NilObserver_NoopAndNoPanic verifies that with no
+// observer wired (WithMetrics not called), requests succeed and nothing panics.
+func TestMiddleware_Metrics_NilObserver_NoopAndNoPanic(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	// No WithMetrics option — nil observer must be safe.
+	mw := Middleware(clk, ms)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	r := requestWithUserCtx("POST", "/", "key-noop", "t1", "user-6")
+	rr := httptest.NewRecorder()
+	// Must not panic.
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+}
+
+// TestMiddleware_Metrics_WithNilArg_NoopAndNoPanic verifies that explicitly
+// passing nil to WithMetrics is a safe noop — no panic, no state recorded.
+func TestMiddleware_Metrics_WithNilArg_NoopAndNoPanic(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	// WithMetrics(nil) must be a safe noop (typed-nil check).
+	mw := Middleware(clk, ms, WithMetrics(nil))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+	})
+
+	r := requestWithUserCtx("POST", "/", "key-nil-obs", "t1", "user-7")
+	rr := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 201 {
+		t.Errorf("code: got %d, want 201", rr.Code)
 	}
 }
 

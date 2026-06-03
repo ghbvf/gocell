@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
@@ -47,7 +48,9 @@ func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
 	repo := &PGUserRepo{db: pgexec.New(nil)}
 
 	// pool is nil; assertAmbientTx fires before any DB call, so nothing dereferences pool.
-	_, err := repo.GetByIDForUpdate(context.Background(), "some-id")
+	// Use a canonical test tenant — the ambient-tx guard fires before any tenant validation.
+	tid, _ := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	_, err := repo.GetByIDForUpdate(context.Background(), tid, "some-id")
 	require.Error(t, err, "GetByIDForUpdate must error without ambient tx")
 
 	var ec *errcode.Error
@@ -64,7 +67,8 @@ func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
 	repo := &PGUserRepo{db: pgexec.New(nil)}
 
 	// pool is nil; assertAmbientTx fires before any DB call, so nothing dereferences pool.
-	_, err := repo.GetByUsernameForUpdate(context.Background(), "alice")
+	tid, _ := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	_, err := repo.GetByUsernameForUpdate(context.Background(), tid, "alice")
 	require.Error(t, err, "GetByUsernameForUpdate must error without ambient tx")
 
 	var ec *errcode.Error
@@ -81,7 +85,8 @@ func TestBumpAuthzEpoch_NoAmbientTx(t *testing.T) {
 	repo := &PGUserRepo{db: pgexec.New(nil)}
 
 	// pool is nil; assertAmbientTx fires before any DB call, so nothing dereferences pool.
-	_, err := repo.BumpAuthzEpoch(context.Background(), "usr-test-001", credentialfence.Mint())
+	tid, _ := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	_, err := repo.BumpAuthzEpoch(context.Background(), tid, "usr-test-001", credentialfence.Mint())
 	require.Error(t, err, "BumpAuthzEpoch must error without ambient tx")
 
 	var ec *errcode.Error

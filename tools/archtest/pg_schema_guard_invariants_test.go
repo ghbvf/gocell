@@ -77,22 +77,27 @@ func isAtLeastMigration017(filename string) bool {
 // INVARIANT: MIGRATION-FORWARD-REBUILD-ANNOTATION-01 (Medium AI-robust)
 //
 // Every migration Up section that contains a whole-table destructive operation
-// (TRUNCATE or DROP TABLE, after stripping line comments) MUST carry exactly
-// one annotation of the form:
+// (TRUNCATE or DROP TABLE [IF EXISTS] <table>, after stripping line comments)
+// MUST carry at least one annotation of the form:
 //
 //	-- +gocell forward-rebuild target=<table_name>
 //
-// in the original (un-stripped) Up text. The annotation acts as the
-// machine-readable contract between the SQL file and the Go phase0 permit
-// gate: phase0 parses pending migrations, extracts forward-rebuild targets,
-// and fails-closed if no matching ForwardRebuildPermit is provided by the
-// caller. This archtest is the regression guard that the annotation is present
-// and syntactically valid (target is a legal identifier) — it does NOT test
-// the runtime gate itself.
+// in the original (un-stripped) Up text, AND every destructively-touched table
+// must have a corresponding annotation (destroyed ⊆ annotated). A migration
+// that rebuilds multiple tables uses one annotation line per table.
+//
+// The annotation acts as the machine-readable contract between the SQL file and
+// the Go phase0 permit gate: phase0 parses pending migrations, extracts
+// forward-rebuild targets via forwardRebuildTargets (FindAllSubmatch), and
+// fails-closed if no matching ForwardRebuildPermit is provided for a non-empty
+// target table. This archtest is the regression guard that the annotation is
+// present and covers every destructively-touched table — it does NOT test the
+// runtime gate itself.
 //
 // AI-robust: Medium — SQL text regex, caught at test time. The runtime gate
 // (Go phase0 permit check) is the Hard backstop; this archtest ensures the
-// annotation is always present so phase0 has something to act on.
+// annotation set is always present and complete so phase0 has something to act
+// on.
 //
 // Blind spot: destructive token inside a quoted string literal is not
 // stripped (no such case in the corpus today) — documented, not enforced.
@@ -117,10 +122,23 @@ func isAtLeastMigration017(filename string) bool {
 // so the archtest regex stays in sync with the runtime gate in migrator.go.
 var forwardRebuildAnnotationRE = regexp.MustCompile(postgres.ForwardRebuildAnnotationPattern)
 
+// dropTableRE extracts the table name from a DROP TABLE [IF EXISTS] statement.
+// Used to build the set of destructively-touched tables in the Up section.
+// Matches DROP TABLE and DROP TABLE IF EXISTS, case-insensitive.
+var dropTableRE = regexp.MustCompile(`(?i)DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)`)
+
+// truncateTableRE extracts the table name from a TRUNCATE statement.
+// Used to build the set of destructively-touched tables in the Up section.
+// Matches TRUNCATE [TABLE] <name>, case-insensitive.
+var truncateTableRE = regexp.MustCompile(`(?i)TRUNCATE\s+(?:TABLE\s+)?(\w+)`)
+
 // TestArchtest_MigrationForwardRebuildAnnotation asserts that every migration
 // whose Up section contains TRUNCATE or DROP TABLE (after stripping line
-// comments) carries exactly one -- +gocell forward-rebuild target=<table>
-// annotation in the raw Up text.
+// comments) carries at least one -- +gocell forward-rebuild target=<table>
+// annotation per destructively-touched table in the raw Up text.
+//
+// The rule is: destroyed_tables ⊆ annotated_targets. A migration that rebuilds
+// N tables must have at least N annotation lines — one per table.
 //
 // Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01.
 func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
@@ -130,40 +148,58 @@ func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 		content := string(cc.Bytes)
 		rawUp := upSectionOf(content)
 
-		// Detect whole-table destructive ops in the stripped Up section only.
+		// Build the set of destructively-touched tables from the stripped Up section.
 		strippedUp := stripSQLLineComments(rawUp)
-		upperStripped := strings.ToUpper(strippedUp)
-		isWholeTableDestructive := strings.Contains(upperStripped, "TRUNCATE") ||
-			strings.Contains(upperStripped, "DROP TABLE")
-		if !isWholeTableDestructive {
+		destroyedTables := map[string]struct{}{}
+		for _, m := range dropTableRE.FindAllStringSubmatch(strippedUp, -1) {
+			destroyedTables[strings.ToLower(m[1])] = struct{}{}
+		}
+		for _, m := range truncateTableRE.FindAllStringSubmatch(strippedUp, -1) {
+			destroyedTables[strings.ToLower(m[1])] = struct{}{}
+		}
+		if len(destroyedTables) == 0 {
 			return
 		}
 
-		// Check raw (un-stripped) Up section for the annotation.
-		matches := forwardRebuildAnnotationRE.FindAllStringSubmatch(rawUp, -1)
-		if len(matches) == 0 {
-			assert.Fail(
-				t,
-				"forward (Up) section destroys a whole table but lacks the +gocell forward-rebuild annotation",
+		// Build the set of annotated targets from the raw (un-stripped) Up section.
+		annotatedTargets := map[string]struct{}{}
+		for _, m := range forwardRebuildAnnotationRE.FindAllStringSubmatch(rawUp, -1) {
+			annotatedTargets[strings.ToLower(m[1])] = struct{}{}
+		}
+
+		if len(annotatedTargets) == 0 {
+			assert.Fail(t,
+				"forward (Up) section destroys whole tables but lacks the +gocell forward-rebuild annotation",
 				"file: %s\n"+
 					"  Up section contains TRUNCATE / DROP TABLE but no "+
 					"'-- +gocell forward-rebuild target=<table>' annotation.\n"+
-					"  Add exactly one annotation at the top of the -- +goose Up section, e.g.:\n"+
+					"  Add one annotation line per rebuilt table at the top of the -- +goose Up section, e.g.:\n"+
 					"    -- +gocell forward-rebuild target=audit_entries\n"+
-					"  The Go phase0 gate (ForwardRebuildPermit) uses this annotation to fail-closed\n"+
+					"  For multiple tables add one line per table.\n"+
+					"  The Go phase0 gate (ForwardRebuildPermit) uses these annotations to fail-closed\n"+
 					"  when no matching permit is provided by the caller.\n"+
 					"  Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01",
 				cc.Rel,
 			)
 			return
 		}
-		if len(matches) > 1 {
-			assert.Fail(
-				t,
-				"forward (Up) section has more than one +gocell forward-rebuild annotation",
-				"file: %s has %d annotations; expected exactly one per migration.\n"+
-					"Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01",
-				cc.Rel, len(matches),
+
+		// Assert: every destructively-touched table has a corresponding annotation.
+		var missing []string
+		for tbl := range destroyedTables {
+			if _, ok := annotatedTargets[tbl]; !ok {
+				missing = append(missing, tbl)
+			}
+		}
+		if len(missing) > 0 {
+			assert.Fail(t,
+				"forward (Up) section destroys tables that are missing +gocell forward-rebuild annotations",
+				"file: %s\n"+
+					"  The following table(s) are destroyed (TRUNCATE / DROP TABLE) but have no\n"+
+					"  corresponding '-- +gocell forward-rebuild target=<table>' annotation: %v\n"+
+					"  Add one annotation line per missing table at the top of the -- +goose Up section.\n"+
+					"  Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01",
+				cc.Rel, missing,
 			)
 		}
 	})

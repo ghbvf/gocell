@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -24,7 +25,7 @@ import (
 // adminprovision bootstrap idempotency, not by the at-least-one
 // invariant).
 type EffectiveAdminCounterImpl interface {
-	CountEffectiveAdmins(ctx context.Context) (int, error)
+	CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error)
 }
 
 // EffectiveAdminCounter is the sealed dependency required by
@@ -54,8 +55,8 @@ type internalEffectiveAdminCounter struct {
 	impl EffectiveAdminCounterImpl
 }
 
-func (i internalEffectiveAdminCounter) CountEffectiveAdmins(ctx context.Context) (int, error) {
-	return i.impl.CountEffectiveAdmins(ctx)
+func (i internalEffectiveAdminCounter) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
+	return i.impl.CountEffectiveAdmins(ctx, t)
 }
 
 func (internalEffectiveAdminCounter) sealedEffectiveAdminCounter() {}
@@ -122,11 +123,11 @@ func NewLastAdminGuard(counter EffectiveAdminCounter) (*LastAdminGuard, error) {
 // ErrAuthLastAdminProtected. The counter error is propagated unchanged so
 // infrastructure faults do not get conflated with the fail-closed protection
 // path. Caller's job to wrap with context (`fmt.Errorf("…: %w", err)`).
-func (g *LastAdminGuard) CheckRemove(ctx context.Context, _ string, userIsActiveAdmin bool) error {
+func (g *LastAdminGuard) CheckRemove(ctx context.Context, t tenant.TenantID, _ string, userIsActiveAdmin bool) error {
 	if !userIsActiveAdmin {
 		return nil
 	}
-	n, err := g.counter.CountEffectiveAdmins(ctx)
+	n, err := g.counter.CountEffectiveAdmins(ctx, t)
 	if err != nil {
 		return err
 	}

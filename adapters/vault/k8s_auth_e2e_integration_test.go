@@ -24,6 +24,7 @@ import (
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -179,7 +180,7 @@ func provisionK8sAuthMaterial(ctx context.Context, t *testing.T, k3sC *k3s.K3sCo
 	// briefly precede the apiserver accepting write requests; poll a read before
 	// the first create so a startup-window blip surfaces as a clear timeout, not
 	// a spurious create failure.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "k3s-apiserver-ready", func() bool {
 		_, code, execErr := tryKubectl("get", "--raw=/readyz")
 		return execErr == nil && code == 0
 	}, k3sAPIServerReadyTimeout, time.Second, "k3s apiserver must become ready for requests")

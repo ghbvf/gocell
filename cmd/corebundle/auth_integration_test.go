@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -366,6 +367,80 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	internalAddr := internalLn.Addr().String()
 	waitForHealthy(t, healthLn.Addr().String())
 
+	// Seed a target user so that rbacassign.Assign/Revoke can derive the tenant
+	// via GetByID (Option B, PR-2a). Without a real user in the store the
+	// service returns ERR_AUTH_USER_NOT_FOUND before reaching role logic, which
+	// would defeat the intent of the guard-passes subtests below.
+	//
+	// Steps:
+	//  1. Create a bootstrap admin (no JWT required — Basic Auth).
+	//  2. Login as that admin to obtain a valid JWT with a live session.
+	//  3. Create a regular user with the admin JWT; capture the server-assigned
+	//     UUID. The internal subtests use this UUID as "userId".
+	const guardAdminUsername = "guard-admin"
+	const guardAdminPassword = "GuardAdminPass!1"
+	// 1. Setup admin.
+	adminSetupBody, _ := json.Marshal(map[string]string{
+		"username": guardAdminUsername,
+		"email":    "guard-admin@test.local",
+		"password": guardAdminPassword,
+	})
+	setupReq, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/api/v1/access/setup/admin", addr),
+		bytes.NewReader(adminSetupBody))
+	setupReq.SetBasicAuth("guard-test-operator", "guard-test-op-pass!")
+	setupReq.Header.Set("Content-Type", "application/json")
+	setupReq.Header.Set("X-Tenant-ID", testTenantID)
+	setupResp, err := testHTTPClient.Do(setupReq)
+	require.NoError(t, err)
+	setupResp.Body.Close()
+	require.Equal(t, http.StatusCreated, setupResp.StatusCode, "guard test: admin setup must succeed")
+
+	// 2. Login to get a valid access token with a live session + tenant claim.
+	loginBody, _ := json.Marshal(map[string]string{
+		"username": guardAdminUsername,
+		"password": guardAdminPassword,
+	})
+	loginReq, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr),
+		bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginReq.Header.Set("X-Tenant-ID", testTenantID)
+	loginResp, err := testHTTPClient.Do(loginReq)
+	require.NoError(t, err)
+	var loginResult struct {
+		Data struct {
+			AccessToken string `json:"accessToken"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(loginResp.Body).Decode(&loginResult))
+	loginResp.Body.Close()
+	require.Equal(t, http.StatusCreated, loginResp.StatusCode, "guard test: admin login must succeed")
+	require.NotEmpty(t, loginResult.Data.AccessToken, "guard test: login must return an access token")
+
+	// 3. Create a regular user as the admin; capture the assigned UUID so the
+	//    internal assign/revoke subtests can reference a real user in the store.
+	createUserBody, _ := json.Marshal(map[string]string{
+		"username": "guard-target-user",
+		"email":    "guard-target@test.local",
+		"password": "TargetPass!99",
+	})
+	createReq, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/api/v1/access/users", addr),
+		bytes.NewReader(createUserBody))
+	createReq.Header.Set("Authorization", "Bearer "+loginResult.Data.AccessToken)
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set("X-Tenant-ID", testTenantID)
+	createResp, err := testHTTPClient.Do(createReq)
+	require.NoError(t, err)
+	var createResult struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(createResp.Body).Decode(&createResult))
+	createResp.Body.Close()
+	require.Equal(t, http.StatusCreated, createResp.StatusCode, "guard test: user creation must succeed")
+	require.NotEmpty(t, createResult.Data.ID, "guard test: created user must have a non-empty ID")
+	seedUserID := createResult.Data.ID
+
 	// PR-A14a primary isolation: primary listener must 404 any /internal/v1/*
 	// request — those routes never reach the public mux.
 	t.Run("primary_404s_internal_prefix", func(t *testing.T) {
@@ -389,9 +464,9 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	})
 
 	// Internal listener + service token → guard passes → policy passes →
-	// handler returns 404 ERR_AUTH_ROLE_NOT_FOUND (role not seeded).
+	// handler returns 404 ERR_AUTH_ROLE_NOT_FOUND (user exists, role not seeded).
 	t.Run("internal_assign_service_token_policy_passes_to_handler", func(t *testing.T) {
-		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
+		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent"}`, seedUserID))
 		// Spec: 4-part token — callerCell="accesscore" is the identity claim.
 		token := auth.GenerateServiceToken(ring, "accesscore",
 			http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
@@ -417,7 +492,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// Internal listener + service token → guard passes → policy passes →
 	// handler returns 200 (idempotent revoke of unassigned role).
 	t.Run("internal_revoke_service_token_policy_passes_to_handler", func(t *testing.T) {
-		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
+		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent"}`, seedUserID))
 		// Spec: 4-part token — callerCell="accesscore".
 		token := auth.GenerateServiceToken(ring, "accesscore",
 			http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
@@ -451,7 +526,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		require.NotEmpty(t, token)
 
 		doReq := func() (int, string) {
-			body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
+			body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent"}`, seedUserID))
 			req, err := http.NewRequest(http.MethodPost,
 				fmt.Sprintf("http://%s/internal/v1/access/roles/revoke", internalAddr), body)
 			require.NoError(t, err)

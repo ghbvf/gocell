@@ -9,9 +9,14 @@
 // contract. PR-A5 (#1166) refined scheduling: it added the shared heap-based
 // delaying queue (F6, one waitingLoop goroutine) + dirty/processing dedup (F5,
 // coalescing in-flight triggers into a single re-run) + per-entity exponential
-// backoff (5ms..1000s, no jitter). PR-A7 will privatize the Loop constructor
-// behind a Builder, wiring a Trigger's output into the Loop's queue; see the
-// design ADR for the staged plan.
+// backoff (5ms..1000s, no jitter). PR-A7 (#1168) privatized the Loop constructor
+// behind a Builder DSL: reconcile.New(r).With*().Build() is the sole public
+// construction entry; all Loop config fields are unexported (Hard upstream funnel);
+// a Trigger is required by Build; defaulting runs through a single applyDefaults()
+// funnel at Start with no lazy getter methods. The Builder is a pure wiring layer:
+// it injects config and validates required deps and introduces NO scheduling logic
+// (all scheduling lives in Loop, transplanted from runtime/command.SweeperLifecycle
+// in PR-A3).
 //
 // # When to use
 //
@@ -30,7 +35,7 @@
 //
 // # Three-piece minimal core
 //
-// A consumer implements Reconciler and, once PR-A3 lands, wires a Loop. The
+// A consumer implements Reconciler and wires a Loop via reconcile.New(r).With*().Build(). The
 // whole public surface a consumer must learn at PR-A2 is:
 //
 //	Reconciler  — Reconcile(ctx, Request) (Result, error)
@@ -56,11 +61,10 @@
 //	ChannelTrigger— forwards Requests from an external <-chan (e.g. an outbox
 //	                consumer waking specific entities)
 //
-// The Loop's Source field is the seam a Trigger feeds; the Builder (PR-A7) wires
-// a Trigger's output channel into it. Until PR-A7 lands there is no direct
-// Trigger→Loop wiring entry point — a Trigger is exercised standalone (tests /
-// prototypes) by calling Start with a channel; the Builder's .WithTrigger(t)
-// DSL will own production wiring.
+// The Loop's source field is the seam a Trigger feeds; the Builder (PR-A7)
+// wires the Trigger's output channel into it via WithTrigger(t).Build().
+// The Builder's .WithTrigger(t) DSL owns production wiring — a Trigger is
+// required by Build(), ensuring every Loop has a work source.
 //
 // # Reconciler implementation pattern
 //

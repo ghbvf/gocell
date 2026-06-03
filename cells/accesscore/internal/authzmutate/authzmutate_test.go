@@ -14,9 +14,25 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+// testTenantCtx returns a context carrying the canonical test tenant ID.
+func testTenantCtx() context.Context {
+	return ctxkeys.WithTenantID(context.Background(), "00000000-0000-0000-0000-000000000001")
+}
+
+// testTenantID is the canonical test tenant UUID used in all authzmutate tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("authzmutate_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 func newTestMutator(t testing.TB, store *mem.Store, sessionStore session.Store) *authzmutate.Mutator {
 	t.Helper()
@@ -46,7 +62,7 @@ func seedUser(t testing.TB, store *mem.Store, userID string, status domain.UserS
 		UpdatedAt:    time.Now(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.UserRepository().Create(context.Background(), u))
+	require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, u))
 }
 
 func TestNew_NilDeps(t *testing.T) {
@@ -74,7 +90,7 @@ func TestApplyInTx_NilMutation(t *testing.T) {
 
 	ctx := context.Background()
 	err := store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
-		return m.ApplyInTx(ctx, txCtx, "usr-1", nil, time.Now())
+		return m.ApplyInTx(ctx, txCtx, testTenantID, "usr-1", nil, time.Now())
 	})
 	require.Error(t, err)
 	var ce *errcode.Error
@@ -89,7 +105,7 @@ func TestApplyInTx_EmptyUserID(t *testing.T) {
 
 	ctx := context.Background()
 	err := store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
-		return m.ApplyInTx(ctx, txCtx, "", authzmutate.LockUser{}, time.Now())
+		return m.ApplyInTx(ctx, txCtx, testTenantID, "", authzmutate.LockUser{}, time.Now())
 	})
 	require.Error(t, err)
 	var ce *errcode.Error
@@ -178,9 +194,9 @@ func TestApply_AllMutations(t *testing.T) {
 			initialEpoch := u.AuthzEpoch()
 
 			// Apply mutation inside a caller-provided RunInTx (ApplyInTx contract).
-			ctx := context.Background()
+			ctx := testTenantCtx()
 			err = store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
-				return mutator.ApplyInTx(ctx, txCtx, "usr-1", tt.mutation, now.Add(time.Second))
+				return mutator.ApplyInTx(ctx, txCtx, testTenantID, "usr-1", tt.mutation, now.Add(time.Second))
 			})
 			require.NoError(t, err)
 
@@ -219,7 +235,7 @@ func TestApplyInTx_UserNotFound(t *testing.T) {
 
 	ctx := context.Background()
 	err := store.TxRunner().RunInTx(ctx, func(txCtx context.Context) error {
-		return m.ApplyInTx(ctx, txCtx, "usr-nonexistent", authzmutate.LockUser{}, time.Now())
+		return m.ApplyInTx(ctx, txCtx, testTenantID, "usr-nonexistent", authzmutate.LockUser{}, time.Now())
 	})
 	require.Error(t, err)
 	var ce *errcode.Error

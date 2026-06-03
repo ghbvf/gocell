@@ -318,8 +318,19 @@ func contentFingerprint(e *Entry) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// tenantMatches mirrors the PG store's tenant predicate: a non-empty filter
+// tenant matches its OWN tenant's rows PLUS tenant-less system/framework rows
+// (entryTenant == "" — e.g. bootstrap.auth.fail), never another tenant's rows.
+// An empty filter tenant matches everything (no filter). See AuditFilters.TenantID.
+func tenantMatches(entryTenant, filterTenant string) bool {
+	return filterTenant == "" || entryTenant == filterTenant || entryTenant == ""
+}
+
 // matchesFilters reports whether e matches all non-zero filter predicates.
 func matchesFilters(e *Entry, f AuditFilters) bool {
+	if !tenantMatches(e.TenantID, f.TenantID) {
+		return false
+	}
 	if f.EventType != "" && e.EventType != f.EventType {
 		return false
 	}

@@ -191,6 +191,13 @@ metrics:
         - status
         - cell
       file: runtime/bootstrap/phases_http.go
+    - name: idempotency_requests_total
+      type: counter
+      help: Total HTTP idempotency decisions, labeled by terminal state (acquired = fresh claim processed; replayed = cached response served; busy = in-flight lease 409; store_error = Claim-path failure 500 (Record/Release failures are logged only, not counted here); oversize = response too large to record; key_reused = same key, different body 409). acquired counts every fresh claim; oversize is a sub-event of acquired. cell is the owning RouteGroup cell or _runtime for framework paths.
+      labels:
+        - cell
+        - state
+      file: runtime/observability/metrics/idempotency.go
     - name: mqtt_consume_duration_seconds
       type: histogram
       help: 'End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'

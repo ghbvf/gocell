@@ -87,7 +87,8 @@ func TestExternalImportSurface_NoInternalTypes(t *testing.T) {
 		t.Fatalf("UserRoles: unexpected %+v", roles)
 	}
 
-	inv := accesscoretest.NewCredentialInvalidator(t,
+	inv := accesscoretest.NewCredentialInvalidator(
+		t,
 		accesscoretest.WithInvalidatorFixture(fix),
 	)
 	if inv == nil {
@@ -104,7 +105,8 @@ func TestExternalImportSurface_NoInternalTypes(t *testing.T) {
 	//nolint:staticcheck // QF1011: typed gate against internal-type leak
 	var _ accesscoretest.BuildIdentityManageOption = accesscoretest.WithIdentityInvalidator(inv)
 
-	svc, _, rec := accesscoretest.BuildIdentityManageService(t,
+	svc, _, rec := accesscoretest.BuildIdentityManageService(
+		t,
 		accesscoretest.WithIdentityFixture(fix),
 		accesscoretest.WithIdentityInvalidator(inv),
 	)
@@ -121,7 +123,8 @@ func TestExternalImportSurface_NoInternalTypes(t *testing.T) {
 	})
 	_, _ = g.GetEntry(ctx, "plain")
 
-	cfgSvc := accesscoretest.BuildConfigReceiveService(t,
+	cfgSvc := accesscoretest.BuildConfigReceiveService(
+		t,
 		accesscoretest.WithConfigReceiveConfigGetter(g),
 	)
 	if cfgSvc == nil {

@@ -4660,20 +4660,22 @@ func sagaSlogAttrLiteralGuardedKey(info *types.Info, cl *ast.CompositeLit) (stri
 	if len(cl.Elts) == 0 {
 		return "", false
 	}
-	// Keyed form: a field is given as `Key: <expr>`.
+	// Keyed form: a field is given as `Key: <expr>`. Find the first `Key:` field
+	// whose value is a guarded key via the typed find-first funnel — no
+	// caller-held found/done sentinel (SCANNER-FRAMEWORK-USAGE-02).
 	if _, isKV := cl.Elts[0].(*ast.KeyValueExpr); isKV {
-		for _, elt := range cl.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
+		kv, ok := scanner.FindFirstChild[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) bool {
+			ident, isIdent := kv.Key.(*ast.Ident)
+			if !isIdent || ident.Name != "Key" {
+				return false
 			}
-			ident, ok := kv.Key.(*ast.Ident)
-			if !ok || ident.Name != "Key" {
-				continue
-			}
-			return sagaGuardedKeyFromExpr(info, kv.Value)
+			_, guarded := sagaGuardedKeyFromExpr(info, kv.Value)
+			return guarded
+		})
+		if !ok {
+			return "", false
 		}
-		return "", false
+		return sagaGuardedKeyFromExpr(info, kv.Value)
 	}
 	// Unkeyed (positional) form: slog.Attr's first field is Key (string).
 	return sagaGuardedKeyFromExpr(info, cl.Elts[0])
@@ -5348,11 +5350,7 @@ func scanSagaEnumLabelAssignments(p *Pass) []Diagnostic {
 			if gd.Tok != token.VAR {
 				return
 			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 				for i, val := range vs.Values {
 					// Determine the type of the LHS.  For `var x EnumType = expr`,
 					// the type is recorded on the Ident in vs.Names[i].
@@ -5386,7 +5384,7 @@ func scanSagaEnumLabelAssignments(p *Pass) []Diagnostic {
 							"an arbitrary value into the frozen set (SAGA-METRIC-LABEL-VALUES-FROZEN-01 assignment guard)",
 					})
 				}
-			}
+			})
 		})
 		// Walk AssignStmt nodes (x = expr or x := expr).
 		EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {

@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -196,7 +197,9 @@ func TestBuildIdentityManageServiceSmoke(t *testing.T) {
 	require.NoError(t, fix.SeedAssignment(ctx, "usr-admin", "admin"))
 
 	// Use admin context (actorFromContext requires a non-empty subject).
-	adminCtx := auth.TestContext("usr-admin", []string{"admin"})
+	// Inject DefaultFixtureTenantID so tenant-scoped repo operations succeed.
+	adminCtx := ctxkeys.WithTenantID(auth.TestContext("usr-admin", []string{"admin"}),
+		accesscoretest.DefaultFixtureTenantID.String())
 
 	created, err := svc.Create(adminCtx, identitymanage.CreateInput{
 		Username: "newuser",
@@ -332,7 +335,9 @@ func TestBuildIdentityManageService_AllOptions(t *testing.T) {
 		PasswordHash: "$2a$04$dummy",
 	}))
 
-	adminCtx := auth.TestContext("usr-admin", []string{"admin"})
+	// Inject DefaultFixtureTenantID so tenant-scoped repo operations succeed.
+	adminCtx := ctxkeys.WithTenantID(auth.TestContext("usr-admin", []string{"admin"}),
+		accesscoretest.DefaultFixtureTenantID.String())
 
 	// Lock bob → mapStatusFromDomain Locked branch via GetUser.
 	require.NoError(t, svc.Lock(adminCtx, "usr-bob"))

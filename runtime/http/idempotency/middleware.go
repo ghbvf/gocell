@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -120,6 +121,7 @@ type middlewareConfig struct {
 	leaseTTL      time.Duration
 	doneTTL       time.Duration
 	exemptMatcher func(*http.Request) bool
+	metrics       MetricsObserver
 }
 
 func defaultConfig() middlewareConfig {
@@ -196,6 +198,37 @@ func WithExemptMatcher(fn func(*http.Request) bool) Option {
 	return func(c *middlewareConfig) {
 		c.exemptMatcher = fn
 	}
+}
+
+// WithMetrics installs an optional MetricsObserver that records one
+// idempotency_requests_total{cell,state} increment per terminal idempotency
+// decision. Metrics are best-effort: a nil/typed-nil observer is not stored
+// and emission is skipped — idempotency correctness never depends on it.
+func WithMetrics(obs MetricsObserver) Option {
+	return func(c *middlewareConfig) {
+		if validation.IsNilInterface(obs) {
+			return
+		}
+		c.metrics = obs
+	}
+}
+
+// observeState emits one metric observation for the terminal idempotency
+// decision. It is a no-op when no MetricsObserver was wired (metrics optional).
+//
+// The observer is supplied by the composition root and runs on the request hot
+// path; a panic inside it must never change the idempotency outcome (a panic
+// here on the StateAcquired branch, for example, would skip the handler and leak
+// the just-acquired lease). observability.SafeObserve isolates any such panic —
+// observability is best-effort by design — mirroring the body-limit / HTTP
+// metrics middleware hooks.
+func (c middlewareConfig) observeState(ctx context.Context, state RequestState) {
+	if c.metrics == nil {
+		return
+	}
+	observability.SafeObserve(slog.Default(), func() {
+		c.metrics.ObserveRequest(ctx, state)
+	})
 }
 
 // Middleware returns an HTTP middleware that enforces per-(tenant,user,key)
@@ -346,6 +379,7 @@ func handleWithIdempotency(
 				"subject", p.Subject,
 				"tenant_id", ns,
 			)
+			cfg.observeState(ctx, StateKeyReused)
 			httputil.WriteError(ctx, w, errcode.New(
 				errcode.KindConflict,
 				errcode.ErrIdempotencyKeyReused,
@@ -359,6 +393,7 @@ func handleWithIdempotency(
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateStoreError)
 		httputil.WriteError(ctx, w, errcode.New(
 			errcode.KindInternal,
 			errcode.ErrInternal,
@@ -374,6 +409,7 @@ func handleWithIdempotency(
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateReplayed)
 		replayResponse(w, rec)
 
 	case idempotency.ClaimBusy:
@@ -382,6 +418,7 @@ func handleWithIdempotency(
 			"subject", p.Subject,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateBusy)
 		// Use a small fixed hint (retryAfterHintSeconds) rather than the full
 		// leaseTTL (300 s default) so clients retry soon without a long wait.
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterHintSeconds))
@@ -392,6 +429,7 @@ func handleWithIdempotency(
 		))
 
 	default: // ClaimAcquired
+		cfg.observeState(ctx, StateAcquired)
 		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns)
 	}
 }
@@ -514,6 +552,7 @@ func recordOrRelease(
 			"idempotency_key_hash", keyHash,
 			"tenant_id", ns,
 		)
+		cfg.observeState(ctx, StateOversize)
 	}
 }
 

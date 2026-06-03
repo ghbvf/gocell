@@ -91,6 +91,8 @@ import (
 	"go/token"
 	"go/types"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -292,22 +294,33 @@ func cellIDProvenance(info *types.Info, body ast.Node, argExpr ast.Expr) (fromSe
 	// Pass 2: inspect every assignment whose LHS is the cell-label object, and
 	// classify its RHS as the sentinel init or a ctx-derived value assignment.
 	EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
-		for i, lhs := range as.Lhs {
-			id, isIdent := lhs.(*ast.Ident)
-			if !isIdent || info.ObjectOf(id) != argObj || i >= len(as.Rhs) {
-				continue
+		// Use EachInChildren[ast.Ident] to avoid for-range over []ast.Expr + type assertion.
+		// Filter to Lhs idents only (Lhs items appear before Rhs[0] in source).
+		scanner.EachInChildren[ast.Ident](as, func(id *ast.Ident) {
+			if info.ObjectOf(id) != argObj {
+				return
 			}
-			rhs := as.Rhs[i]
-			if pkg, name, ok := ResolvePackageRef(info, rhs); ok &&
-				pkg == grpcMetricsPkgPath && name == grpcMetricsSentinelName {
-				fromSentinel = true
+			// Only process Lhs idents (those that appear before the first Rhs expr).
+			if len(as.Rhs) > 0 && id.Pos() >= as.Rhs[0].Pos() {
+				return
 			}
-			if rid, ok := rhs.(*ast.Ident); ok {
-				if obj := info.ObjectOf(rid); obj != nil && ctxValueObjs[obj] {
-					fromCtx = true
+			// Find the matching Rhs by index (using position to identify the Lhs slot).
+			for i, lhsExpr := range as.Lhs {
+				if lhsExpr.Pos() != id.Pos() || i >= len(as.Rhs) {
+					continue
+				}
+				rhs := as.Rhs[i]
+				if pkg, name, ok := ResolvePackageRef(info, rhs); ok &&
+					pkg == grpcMetricsPkgPath && name == grpcMetricsSentinelName {
+					fromSentinel = true
+				}
+				if rid, ok := rhs.(*ast.Ident); ok {
+					if obj := info.ObjectOf(rid); obj != nil && ctxValueObjs[obj] {
+						fromCtx = true
+					}
 				}
 			}
-		}
+		})
 	})
 	return fromSentinel, fromCtx
 }

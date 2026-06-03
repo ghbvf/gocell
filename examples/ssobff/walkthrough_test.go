@@ -45,7 +45,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-const walkthroughServiceSecret = "walkthrough-service-token-secret-32b"
+const (
+	walkthroughServiceSecret = "walkthrough-service-token-secret-32b"
+	// ssobffTestTenantID is the canonical test tenant UUID threaded through all
+	// pre-auth endpoints (setup/admin, sessions/login, setup/status) in the
+	// ssobff walkthrough. X-Tenant-ID is mandatory on these endpoints (PR-2a).
+	ssobffTestTenantID = "00000000-0000-0000-0000-000000000001"
+)
 
 var walkthroughHTTPClient = &http.Client{Timeout: testtime.D1s}
 
@@ -232,6 +238,9 @@ func postWalkthroughJSON(t *testing.T, rawURL string, body string) *http.Respons
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, rawURL, strings.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
+	// X-Tenant-ID is required on pre-auth endpoints (setup/admin, sessions/login).
+	// All current callers of postWalkthroughJSON target sessions/login (PR-2a).
+	req.Header.Set("X-Tenant-ID", ssobffTestTenantID)
 	return doWalkthroughRequest(t, req)
 }
 
@@ -239,6 +248,8 @@ func postWalkthroughJSON(t *testing.T, rawURL string, body string) *http.Respons
 // ssobffBootstrap{Username,Password} as Basic Auth, creating the demo admin.
 // The closed contract (ADR §D1) guarantees the request is rejected with 401
 // without Basic Auth — Step 0 of the walkthrough.
+//
+// X-Tenant-ID is required on the setup/admin endpoint (PR-2a).
 func provisionAdmin(t *testing.T, base, username, email, password string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"username":%q,"email":%q,"password":%q}`, username, email, password)
@@ -246,6 +257,7 @@ func provisionAdmin(t *testing.T, base, username, email, password string) {
 		base+"/api/v1/access/setup/admin", strings.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", ssobffTestTenantID)
 	req.SetBasicAuth(ssobffBootstrapUsername, ssobffBootstrapPassword)
 
 	resp := doWalkthroughRequest(t, req)
@@ -582,6 +594,7 @@ func TestWalkthrough(t *testing.T) {
 			strings.NewReader(`{"username":"unused","email":"unused@local","password":"unused"}`))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", ssobffTestTenantID)
 		req.SetBasicAuth(ssobffBootstrapUsername, "wrong-password-walkthrough")
 		failResp := doWalkthroughRequest(t, req)
 		require.Equal(t, http.StatusUnauthorized, failResp.StatusCode,
