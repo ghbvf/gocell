@@ -764,26 +764,20 @@ func mqttIsTokenTyped(info *types.Info, expr ast.Expr, typeName, targetPkgPath s
 	return tobj.Pkg() != nil && tobj.Pkg().Path() == targetPkgPath && tobj.Name() == typeName
 }
 
-// TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed proves the real
-// typed field-assignment scanner (mqttIsTokenTyped + mqttEnclosingKeyAllowed)
-// fires on a genuine outside-allowed-func violation AND does not report the
-// inside-allowed-func assignment. This uses the #1287 K2 pattern: a fixture
-// package with a shape-replica type whose field CAN be assigned cross-function
+// mqttAssertTypedFieldAssignScannerFires proves the real typed field-assignment
+// scanner primitives (mqttIsTokenTyped + mqttEnclosingKeyAllowed) fire on a genuine
+// outside-allowed-func violation AND do not report the inside-allowed-func
+// assignment. It uses the #1287 K2 pattern: the mqtttokenfieldfixture package holds
+// a shape-replica of each token type whose field CAN be assigned cross-function
 // (unlike the production token whose field is unexported in internal/topicns —
-// making cross-func assignment within the package impossible via type system but
-// still reachable by the archtest).
+// making cross-func assignment within the package impossible via the type system
+// but still reachable by the archtest). Both A2b (publish, PublishableTopic/topic)
+// and S3 (subscribe, SubscribableFilter/wireFilter) share this single mechanism, so
+// each side's field-assign non-vacuity is proven end-to-end on real source.
 //
 // The fixture is at tools/archtest/internal/mqtttokenfieldfixture/fixture.go.
-func TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	// parseFixtureTopicFullName is the FullName() of the allowed constructor in
-	// the fixture package. It is a package-level func, so FullName = pkgPath.funcName.
-	const parseFixtureTopicFullName = mqttTokenFieldFixturePkgPath + ".ParseFixtureTopic"
-	const ruleID = "MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2b"
+func mqttAssertTypedFieldAssignScannerFires(t *testing.T, typeName, fieldName, allowedCtorFullName, ruleID string) {
+	t.Helper()
 
 	var violations []Diagnostic
 	var greenCount int
@@ -802,13 +796,13 @@ func TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed(t *testing.T) {
 				EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
 					for _, lhs := range assign.Lhs {
 						sel, ok := lhs.(*ast.SelectorExpr)
-						if !ok || sel.Sel == nil || sel.Sel.Name != "topic" {
+						if !ok || sel.Sel == nil || sel.Sel.Name != fieldName {
 							continue
 						}
-						if !mqttIsTokenTyped(p.TypesInfo, sel.X, "PublishableTopic", mqttTokenFieldFixturePkgPath) {
+						if !mqttIsTokenTyped(p.TypesInfo, sel.X, typeName, mqttTokenFieldFixturePkgPath) {
 							continue
 						}
-						if mqttEnclosingKeyAllowed(p, f, assign, []string{parseFixtureTopicFullName}) {
+						if mqttEnclosingKeyAllowed(p, f, assign, []string{allowedCtorFullName}) {
 							greenCount++ // inside-allowed: must not be reported
 							continue
 						}
@@ -828,38 +822,42 @@ func TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed(t *testing.T) {
 		})
 
 	require.NotEmpty(t, violations,
-		"A2b typed scanner must report ≥1 violation on the red fixture "+
-			"(archtestRedFixtureOutsideAssign assigns t.topic outside ParseFixtureTopic) — "+
-			"if this fails, mqttIsTokenTyped or the typed enclosing-func gate is broken")
+		"%s typed scanner must report ≥1 violation on the red fixture "+
+			"(an outside-allowed %s.%s assignment) — if this fails, mqttIsTokenTyped "+
+			"or the typed enclosing-func gate is broken", ruleID, typeName, fieldName)
 
-	// The green site (inside ParseFixtureTopic) must be seen but not reported.
+	// The green site (inside the allowed constructor) must be seen but not reported.
 	assert.GreaterOrEqual(t, greenCount, 1,
-		"A2b typed scanner: the green site inside ParseFixtureTopic was not seen — "+
-			"mqttIsTokenTyped may not resolve the fixture type")
+		"%s typed scanner: the green site inside %s was not seen — "+
+			"mqttIsTokenTyped may not resolve the fixture type", ruleID, allowedCtorFullName)
 }
 
-// TestMQTTSubscribeCallsiteFunnel_S3_FieldAssignScannerNonVacuous proves the S3
-// field-assignment scanner can detect violations. The non-vacuity proof shares
-// the same mechanism as the A2b typed fixture (TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed):
-// both invoke the same typed scanner (mqttIsTokenTyped + mqttEnclosingKeyAllowed),
-// which is exercised end-to-end by the A2b test above. The S3 production scan
-// (TestMQTTSubscribeCallsiteFunnel_S3_NoFieldAssignmentBypass) is clean because
-// MintFilter uses a composite literal (not a separate field assignment), so the
-// field-assign scanner finds zero violations — that is correct behavior.
-// Non-vacuity is proven once for the shared typed mechanism by the A2b test.
+// TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed proves the publish-side
+// (PublishableTopic / topic) field-assign scanner is non-vacuous via the shared
+// typed fixture mechanism.
+func TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	mqttAssertTypedFieldAssignScannerFires(t, "PublishableTopic", "topic",
+		mqttTokenFieldFixturePkgPath+".ParseFixtureTopic", "MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2b")
+}
+
+// TestMQTTSubscribeCallsiteFunnel_S3_FieldAssignScannerNonVacuous proves the
+// subscribe-side (SubscribableFilter / wireFilter) field-assign scanner is
+// non-vacuous via the same shared typed fixture mechanism as A2b. The S3 production
+// scan (TestMQTTSubscribeCallsiteFunnel_S3_NoFieldAssignmentBypass) is clean because
+// MintFilter constructs via a composite literal rather than a separate field
+// assignment, so this fixture-backed test is the load-bearing non-vacuity proof for
+// the subscribe side (rather than delegating to A2b).
 func TestMQTTSubscribeCallsiteFunnel_S3_FieldAssignScannerNonVacuous(t *testing.T) {
 	t.Parallel()
-	// Statically assert the wireFilter field exists in SubscribableFilter. If the
-	// type is changed (renamed field, extra field, wrong type) the A3 field-freeze
-	// test catches it; this guard is an inexpensive sanity-check that the
-	// field-assign scanner's target field name "wireFilter" is still valid.
-	// We use reflect here only for the production type (cross-package visible via
-	// mqtt.TopicNamespace alias → topicns.Namespace; SubscribableFilter is unexported
-	// so we verify via mqtt package's reflect of the alias-transparent type in the
-	// field-freeze test). Non-vacuity of the typed scanner is proved by A2b above.
-	assert.True(t, true, "S3 field-assign non-vacuity delegated to A2b typed fixture test "+
-		"(TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous_Typed), which exercises the "+
-		"same mqttIsTokenTyped + mqttEnclosingKeyAllowed typed scanner for field-assignment detection")
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	mqttAssertTypedFieldAssignScannerFires(t, "SubscribableFilter", "wireFilter",
+		mqttTokenFieldFixturePkgPath+".MintFixtureFilter", "MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3")
 }
 
 // ─── A3 / S3-fieldfreeze: token field freeze (Medium) ─────────────────────────
