@@ -101,11 +101,7 @@ func buildKindSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	case "projection":
 		return validateProjectionLevel(contract.ID, contract.ConsistencyLevel)
 	case "command":
-		// command is in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but does not
-		// yet have a dedicated generator. buildContractSpec accepts it so that
-		// generateOneContract can emit types_gen.go + iface_gen.go (shared scaffolding)
-		// without hard-failing. No spec/handler/subscription file is emitted.
-		// When a full generator is added, add the corresponding case here.
+		return buildCommandSpec(spec, rootDir, contract, contractDir)
 	case "webhook":
 		// webhook: recognized, zero artifacts by design — registration uses
 		// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
@@ -681,6 +677,96 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 		DeliverySemantics: contract.DeliverySemantics,
 	}
 	return nil
+}
+
+// buildCommandSpec projects a kind=command contract into spec.Command and
+// appends Request + Response DTOs to spec.DTOs. It is the codegen Hard half of
+// COMMAND-CONTRACT-SCHEMA-REF-01 (governance Medium兜底 is in Batch C):
+// both schemaRefs.request and schemaRefs.response must be non-empty.
+//
+// When neither schemaRef is set the spec is accepted with spec.Command == nil,
+// preserving backward-compatibility with "stub" command contracts that predate
+// the full generator. generateOneContract gates command_gen.go emission on
+// spec.Command != nil.
+func buildCommandSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {
+	reqRef := strings.TrimSpace(contract.SchemaRefs.Request)
+	respRef := strings.TrimSpace(contract.SchemaRefs.Response)
+
+	// Fail-closed: if only one schemaRef is provided, reject (partial schema is
+	// ambiguous — caller probably forgot the other ref).
+	if reqRef == "" && respRef == "" {
+		// No schema refs — "stub" contract accepted without Command spec.
+		return nil
+	}
+	if reqRef == "" {
+		return fmt.Errorf("contractgen build: command contract %q has schemaRefs.response but missing schemaRefs.request "+
+			"(COMMAND-CONTRACT-SCHEMA-REF-01: both request and response must be declared)", contract.ID)
+	}
+	if respRef == "" {
+		return fmt.Errorf("contractgen build: command contract %q has schemaRefs.request but missing schemaRefs.response "+
+			"(COMMAND-CONTRACT-SCHEMA-REF-01: both request and response must be declared)", contract.ID)
+	}
+
+	dtos, err := buildCommandDTOs(rootDir, contract, contractDir, reqRef, respRef)
+	if err != nil {
+		return err
+	}
+	spec.DTOs = dtos
+
+	domainLast := domainLastSegment(contract.ID)
+	spec.Command = &CommandSpec{
+		DispatchID:     contract.ID,
+		HandlerMethod:  "Handle" + goPascalCase(domainLast),
+		RequestGoType:  "Request",
+		ResponseGoType: "Response",
+	}
+	return nil
+}
+
+// buildCommandDTOs loads request and response schemas for a kind=command contract
+// and returns the flattened DTOSpec slice (Request + Response + any nested types).
+// Extracted from buildCommandSpec to keep cognitive complexity ≤ 15.
+func buildCommandDTOs(rootDir string, contract *metadata.ContractMeta, contractDir, reqRef, respRef string) ([]DTOSpec, error) {
+	var allDTOs []DTOSpec
+
+	// Request DTO.
+	reqPath := filepath.Join(contractDir, reqRef)
+	reqSchema, err := Parse(rootDir, reqPath)
+	if err != nil {
+		return nil, fmt.Errorf("contractgen build: %q command request schema: %w", contract.ID, err)
+	}
+	reqDTOs, err := schemaToDTOs("Request", reqSchema)
+	if err != nil {
+		return nil, fmt.Errorf("contractgen build: %q command request DTOs: %w", contract.ID, err)
+	}
+	allDTOs = append(allDTOs, reqDTOs...)
+
+	// Response DTO.
+	respPath := filepath.Join(contractDir, respRef)
+	respSchema, err := Parse(rootDir, respPath)
+	if err != nil {
+		return nil, fmt.Errorf("contractgen build: %q command response schema: %w", contract.ID, err)
+	}
+	respDTOs, err := schemaToDTOs("Response", respSchema)
+	if err != nil {
+		return nil, fmt.Errorf("contractgen build: %q command response DTOs: %w", contract.ID, err)
+	}
+	allDTOs = append(allDTOs, respDTOs...)
+
+	// Ensure stubs exist — command_gen.go always references *Request and *Response.
+	if !hasDTONamed(allDTOs, "Request") {
+		allDTOs = append([]DTOSpec{{
+			Name: "Request",
+			Doc:  contract.ID + ".request",
+		}}, allDTOs...)
+	}
+	if !hasDTONamed(allDTOs, "Response") {
+		allDTOs = append(allDTOs, DTOSpec{
+			Name: "Response",
+			Doc:  contract.ID + ".response",
+		})
+	}
+	return allDTOs, nil
 }
 
 // buildSagaSpec projects a kind=saga contract's saga block into spec.Saga and

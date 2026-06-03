@@ -178,12 +178,6 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		return nil
 	}
 
-	// For kind=command: only types_gen.go + iface_gen.go are emitted; full
-	// generator is pending.
-	if spec.Kind == "command" {
-		slog.Warn("contractgen: kind in closed set but no full generator yet; only types/iface emitted",
-			"contractID", contractID, "kind", spec.Kind)
-	}
 	// For kind=projection, types_gen.go + iface_gen.go IS the complete product by
 	// design: NewProjectionRequest is generated on the event-contract side, and
 	// cellgen derives reg.RegisterProjection from event-subscribe CUs.
@@ -193,6 +187,15 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 			"contractID", contractID)
 	}
 
+	// For kind=command without schemaRefs (stub contract): no artifacts emitted.
+	// The full generator requires both schemaRefs.request and schemaRefs.response;
+	// buildCommandSpec returns spec.Command == nil when neither is set.
+	if spec.Kind == "command" && spec.Command == nil {
+		slog.Debug("contractgen: command contract has no schemaRefs; no artifacts emitted (stub form)",
+			"contractID", contractID)
+		return nil
+	}
+
 	// types_gen.go — always generated.
 	typesPath := filepath.Join(pkgDir, "types_gen.go")
 	errPfxTypes := "contractgen generate: render types " + contractID
@@ -200,11 +203,15 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		return err
 	}
 
-	// iface_gen.go — always generated.
-	ifacePath := filepath.Join(pkgDir, "iface_gen.go")
-	errPfxIface := "contractgen generate: render iface " + contractID
-	if err := renderWriteContract(root, "iface.tmpl", spec, ifacePath, opts, res, errPfxIface); err != nil {
-		return err
+	// iface_gen.go — generated for all kinds except command (Handler lives in
+	// command_gen.go; emitting iface_gen.go would create a duplicate Service
+	// interface conflict).
+	if spec.Kind != "command" {
+		ifacePath := filepath.Join(pkgDir, "iface_gen.go")
+		errPfxIface := "contractgen generate: render iface " + contractID
+		if err := renderWriteContract(root, "iface.tmpl", spec, ifacePath, opts, res, errPfxIface); err != nil {
+			return err
+		}
 	}
 
 	// handler_gen.go — only for kind=http.
@@ -242,6 +249,16 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		sagaPath := filepath.Join(pkgDir, "saga_gen.go")
 		errPfxSaga := "contractgen generate: render saga " + contractID
 		if err := renderWriteContract(root, "saga.tmpl", spec, sagaPath, opts, res, errPfxSaga); err != nil {
+			return err
+		}
+	}
+
+	// command_gen.go — only for kind=command with a full CommandSpec
+	// (DispatchID + typed Handler interface + Register + Dispatch).
+	if spec.Kind == "command" && spec.Command != nil {
+		commandPath := filepath.Join(pkgDir, "command_gen.go")
+		errPfxCommand := "contractgen generate: render command " + contractID
+		if err := renderWriteContract(root, "command.tmpl", spec, commandPath, opts, res, errPfxCommand); err != nil {
 			return err
 		}
 	}
@@ -317,6 +334,13 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 		return nil, nil
 	}
 
+	// For kind=command without schemaRefs (stub contract): no artifacts emitted.
+	if spec.Kind == "command" && spec.Command == nil {
+		slog.Debug("contractgen: command contract has no schemaRefs; no artifacts emitted (stub form)",
+			"contractID", contractID)
+		return nil, nil
+	}
+
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))
 
 	var out []CodegenArtifact
@@ -338,22 +362,26 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 	}
 	out = append(out, CodegenArtifact{Path: typesRel, Content: typesContent})
 
-	// iface_gen.go
-	ifacePath := filepath.Join(pkgDir, "iface_gen.go")
-	ifaceContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-		TemplateName: "iface.tmpl",
-		Templates:    templates,
-		Data:         spec,
-		Filename:     ifacePath,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("contractgen render artifacts: %q iface: %w", contractID, err)
+	// iface_gen.go — generated for all kinds except command (Handler lives in
+	// command_gen.go; emitting iface_gen.go for command would create a duplicate
+	// Service interface conflict in the generated package).
+	if spec.Kind != "command" {
+		ifacePath := filepath.Join(pkgDir, "iface_gen.go")
+		ifaceContent, err := codegen.Render(modulePath, codegen.RenderOptions{
+			TemplateName: "iface.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     ifacePath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q iface: %w", contractID, err)
+		}
+		ifaceRel, err := relFromRoot(root, ifacePath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: ifaceRel, Content: ifaceContent})
 	}
-	ifaceRel, err := relFromRoot(root, ifacePath)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, CodegenArtifact{Path: ifaceRel, Content: ifaceContent})
 
 	// handler_gen.go — only for kind=http.
 	if spec.Kind == "http" {
@@ -442,6 +470,25 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 			return nil, err
 		}
 		out = append(out, CodegenArtifact{Path: sagaRel, Content: sagaContent})
+	}
+
+	// command_gen.go — only for kind=command with a full CommandSpec.
+	if spec.Kind == "command" && spec.Command != nil {
+		commandPath := filepath.Join(pkgDir, "command_gen.go")
+		commandContent, err := codegen.Render(modulePath, codegen.RenderOptions{
+			TemplateName: "command.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     commandPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q command: %w", contractID, err)
+		}
+		commandRel, err := relFromRoot(root, commandPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: commandRel, Content: commandContent})
 	}
 
 	return out, nil
