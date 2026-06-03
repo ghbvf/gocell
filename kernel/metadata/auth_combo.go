@@ -2,12 +2,12 @@ package metadata
 
 // HTTPAuthMetaBoolFields is the count of bool fields on HTTPAuthMeta. It is the
 // authoritative source of the matrix size used by IterateAuthBoolCombos
-// (1 << HTTPAuthMetaBoolFields = 64 currently). TestHTTPAuthMetaFieldCount in
+// (1 << HTTPAuthMetaBoolFields = 32 currently). TestHTTPAuthMetaFieldCount in
 // auth_combo_test.go reflects on HTTPAuthMeta and fails CI when the actual
-// bool field count drifts from this constant — adding a 7th bool field forces
+// bool field count drifts from this constant — adding a 6th bool field forces
 // every consumer (IterateAuthBoolCombos, AuthComboLegal, the whitelist in
 // TestAuthComboLegal_AgainstWhitelist) to be updated together.
-const HTTPAuthMetaBoolFields = 6
+const HTTPAuthMetaBoolFields = 5
 
 // AuthComboMatrixSize is the size of the auth bool combination space
 // (2 ** HTTPAuthMetaBoolFields). Tests iterate from 0 to this value.
@@ -15,7 +15,7 @@ const AuthComboMatrixSize = 1 << HTTPAuthMetaBoolFields
 
 // LegalAuthComboNames is the hand-maintained extensional statement of FMT-27
 // auth bool mutex semantics (encoded by encodeAuthCombo). AuthComboLegal is
-// the algorithmic (intensional) statement; the two must agree on all 64 combos
+// the algorithmic (intensional) statement; the two must agree on all 32 combos
 // — TestAuthComboLegal_AgainstWhitelist enforces parity between them.
 //
 // Matrix tests at the schema and governance layers consume this whitelist
@@ -24,35 +24,32 @@ const AuthComboMatrixSize = 1 << HTTPAuthMetaBoolFields
 // dual-form by intent: the algorithm runs in production, the whitelist
 // audits the algorithm.
 //
-// 14 legal combinations (out of 64):
+// 7 legal combinations (out of 32):
 //
-//	"p-r-s-b-c-i"  default authenticated route (all flags off)
-//	"p-r-s-b-c-I"  default authenticated + idempotencyExempt
-//	"P-r-s-b-c-i"  public only
-//	"P-r-s-b-c-I"  public + idempotencyExempt
-//	"p-R-s-b-c-i"  passwordResetExempt only
-//	"p-R-s-b-c-I"  passwordResetExempt + idempotencyExempt
-//	"p-r-S-b-c-i"  serviceOwned only
-//	"p-r-S-b-c-I"  serviceOwned + idempotencyExempt
-//	"p-r-s-B-c-i"  bootstrap only
-//	"p-r-s-B-c-I"  bootstrap + idempotencyExempt
-//	"p-r-s-b-C-i"  clientsOnly only
-//	"p-r-s-b-C-I"  clientsOnly + idempotencyExempt
-//	"p-R-S-b-c-i"  serviceOwned + passwordResetExempt
-//	"p-R-S-b-c-I"  serviceOwned + passwordResetExempt + idempotencyExempt
+//	"p-r-s-b-c"  default authenticated route (all flags off)
+//	"P-r-s-b-c"  public only
+//	"p-R-s-b-c"  passwordResetExempt only
+//	"p-r-S-b-c"  serviceOwned only
+//	"p-r-s-B-c"  bootstrap only
+//	"p-r-s-b-C"  clientsOnly only
+//	"p-R-S-b-c"  serviceOwned + passwordResetExempt
+//
+// HTTP-idempotency exemption is NOT part of this matrix — it moved to the sibling
+// endpoints.http.idempotency block (#1469 review F7), so the auth-combo space is
+// back to 2^5 = 32 with 7 legal combos.
 //
 // When a rule evolves (e.g. allowing a new pair to coexist), update both this
 // whitelist AND AuthComboLegal in the same change; CI fails otherwise.
 //
 // INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
 var LegalAuthComboNames = map[string]struct{}{
-	"p-r-s-b-c-i": {}, "p-r-s-b-c-I": {},
-	"P-r-s-b-c-i": {}, "P-r-s-b-c-I": {},
-	"p-R-s-b-c-i": {}, "p-R-s-b-c-I": {},
-	"p-r-S-b-c-i": {}, "p-r-S-b-c-I": {},
-	"p-r-s-B-c-i": {}, "p-r-s-B-c-I": {},
-	"p-r-s-b-C-i": {}, "p-r-s-b-C-I": {},
-	"p-R-S-b-c-i": {}, "p-R-S-b-c-I": {},
+	"p-r-s-b-c": {},
+	"P-r-s-b-c": {},
+	"p-R-s-b-c": {},
+	"p-r-S-b-c": {},
+	"p-r-s-B-c": {},
+	"p-r-s-b-C": {},
+	"p-R-S-b-c": {},
 }
 
 // AuthComboLegal returns true iff the bool combination on auth is permitted by
@@ -95,7 +92,7 @@ func AuthComboLegal(auth HTTPAuthMeta) bool {
 	return true
 }
 
-// IterateAuthBoolCombos enumerates all 2 ** HTTPAuthMetaBoolFields (= 64 today)
+// IterateAuthBoolCombos enumerates all 2 ** HTTPAuthMetaBoolFields (= 32 today)
 // combinations of HTTPAuthMeta's bool fields. Named-field struct literals are
 // used here for readability — Go does NOT report a compile error when a new
 // field is added to HTTPAuthMeta, so the safety net is a separate reflect-based
@@ -108,8 +105,8 @@ func AuthComboLegal(auth HTTPAuthMeta) bool {
 // mutex-governed flag and does not participate in FMT-27 semantics.
 //
 // name encodes each field as one character: uppercase = true, lowercase = false.
-// Order P-R-S-B-C-I: Public / PasswordResetExempt (R) / ServiceOwned / Bootstrap /
-// ClientsOnly / IdempotencyExempt (I). Example: "P-r-s-b-c-i" = Public:true, all others false.
+// Order P-R-S-B-C: Public / PasswordResetExempt (R) / ServiceOwned / Bootstrap /
+// ClientsOnly. Example: "P-r-s-b-c" = Public:true, all others false.
 func IterateAuthBoolCombos(fn func(auth HTTPAuthMeta, name string)) {
 	for bits := 0; bits < AuthComboMatrixSize; bits++ {
 		auth := HTTPAuthMeta{
@@ -118,7 +115,6 @@ func IterateAuthBoolCombos(fn func(auth HTTPAuthMeta, name string)) {
 			ServiceOwned:        bits&0x04 != 0,
 			Bootstrap:           bits&0x08 != 0,
 			ClientsOnly:         bits&0x10 != 0,
-			IdempotencyExempt:   bits&0x20 != 0,
 		}
 		fn(auth, encodeAuthCombo(auth))
 	}
@@ -141,7 +137,5 @@ func encodeAuthCombo(auth HTTPAuthMeta) string {
 		letter(auth.Bootstrap, 'B', 'b'),
 		'-',
 		letter(auth.ClientsOnly, 'C', 'c'),
-		'-',
-		letter(auth.IdempotencyExempt, 'I', 'i'),
 	})
 }

@@ -6,11 +6,12 @@ import (
 )
 
 // httpAuthMetaTotalFields is the expected total field count on HTTPAuthMeta:
-// 6 bool (Public/PasswordResetExempt/ServiceOwned/Bootstrap/ClientsOnly/IdempotencyExempt) +
-// 1 []int (Responses) = 7. Increment together with HTTPAuthMetaBoolFields when
+// 5 bool (Public/PasswordResetExempt/ServiceOwned/Bootstrap/ClientsOnly) +
+// 1 []int (Responses) = 6. Increment together with HTTPAuthMetaBoolFields when
 // adding new fields and update IterateAuthBoolCombos / AuthComboLegal / the
-// legalNames whitelist below in the same change.
-const httpAuthMetaTotalFields = 7
+// legalNames whitelist below in the same change. (HTTP-idempotency exemption is
+// NOT here — it lives on the sibling HTTPIdempotencyMeta, #1469 review F7.)
+const httpAuthMetaTotalFields = 6
 
 // TestHTTPAuthMetaFieldCount is the static safeguard for IterateAuthBoolCombos.
 // Go's named-field struct literals do not produce a compile error when fields

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/auth"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -146,6 +148,17 @@ func defaultRuntimeOptions(
 		}
 		if idemStore != nil {
 			opts = append(opts, bootstrap.WithIdempotencyStore(idemStore))
+			// Capability-level readiness: a bare PING (redis_ready) cannot detect
+			// an ACL that permits PING but denies EVAL/SET, yet default-on
+			// idempotency depends on the Claim/Record Lua scripts. Register a
+			// probe that runs a real EVAL when the store supports it (the redis
+			// store does; the in-memory test store does not).
+			if rc, ok := idemStore.(interface {
+				ReadyCheck(context.Context) error
+			}); ok {
+				opts = append(opts, bootstrap.WithHealthChecker(
+					adapterredis.ProbeHTTPIdempotencyStoreReady, rc.ReadyCheck))
+			}
 		}
 	}
 	if shared.PrimaryHTTPAddr != "" {

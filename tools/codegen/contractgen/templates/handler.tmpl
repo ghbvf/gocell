@@ -312,7 +312,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 		Policy: h.policy,
 {{- end}}
 {{- /* orthogonal to the auth-mode chain above — emitted additively */}}
-{{- if .Endpoint.AuthIdempotencyExempt}}
+{{- if .Endpoint.IdempotencyExempt}}
 		IdempotencyExempt: true,
 {{- end}}
 	})

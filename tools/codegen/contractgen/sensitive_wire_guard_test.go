@@ -169,7 +169,7 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 				SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
 				Endpoints: metadata.EndpointsMeta{
 					HTTP: &metadata.HTTPTransportMeta{
-						Auth: metadata.HTTPAuthMeta{IdempotencyExempt: tc.idempotencyExempt},
+						Idempotency: metadata.HTTPIdempotencyMeta{Exempt: tc.idempotencyExempt},
 					},
 				},
 			}

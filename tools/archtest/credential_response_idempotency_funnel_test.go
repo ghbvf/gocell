@@ -4,7 +4,7 @@
 // (tools/codegen/contractgen/credential_response_idempotency_guard.go). The funnel
 // rejects, at generation time, any kind:http contract whose response schema declares
 // a pkg/redaction sensitive-key field at any nesting depth AND whose
-// endpoints.http.auth.idempotencyExempt is NOT true — so a credential-bearing
+// endpoints.http.idempotency.exempt is NOT true — so a credential-bearing
 // response (e.g. accessToken / refreshToken under "data") can never reach the HTTP
 // idempotency store (Redis, 24h TTL) without an explicit opt-out (issue #1469).
 //
@@ -13,7 +13,7 @@
 // change-password), replay-eligible recording would persist live tokens that must
 // never be read back — a P0 credential-leakage vector. The three affected contracts
 // (http.auth.login.v1, http.auth.refresh.v1, http.auth.user.change-password.v1) already
-// declare idempotencyExempt: true in their contract.yaml; this funnel ensures that any
+// declare idempotency.exempt: true in their contract.yaml; this funnel ensures that any
 // future credential-returning route cannot be silently omitted.
 //
 // Symmetric to AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (which prevents audit-domain
@@ -55,7 +55,7 @@
 //     — fails this check immediately. The guard is an unexported package-internal
 //     func, so there is no cross-package alias / dot-import vector.
 //   - A2 (scope completeness): every kind:http contract in production whose response
-//     schema is known to carry a sensitive key must declare idempotencyExempt: true.
+//     schema is known to carry a sensitive key must declare idempotency.exempt: true.
 //     This check enumerates the three currently-known such contracts and asserts they
 //     carry the flag. It is NOT a full schema-walk of all contracts at archtest time
 //     (that would re-implement the generator); instead it asserts the known set is
@@ -112,7 +112,7 @@ var credentialIdempotencyFunnelAllowedCallers = map[string]bool{
 
 // credentialIdempotencyFlaggedContracts is the known closed set of contracts
 // whose response schema carries sensitive keys and that therefore MUST declare
-// idempotencyExempt: true. A2 asserts that this set has not silently lost the
+// idempotency.exempt: true. A2 asserts that this set has not silently lost the
 // flag. This is NOT an assertion that it is the complete set of all such
 // contracts (the funnel handles that at generation time).
 var credentialIdempotencyFlaggedContracts = []string{
@@ -220,16 +220,16 @@ type credentialIdempotencyContractMeta struct {
 	ID        string `yaml:"id"`
 	Endpoints struct {
 		HTTP *struct {
-			Auth struct {
-				IdempotencyExempt bool `yaml:"idempotencyExempt"`
-			} `yaml:"auth"`
+			Idempotency struct {
+				Exempt bool `yaml:"exempt"`
+			} `yaml:"idempotency"`
 		} `yaml:"http"`
 	} `yaml:"endpoints"`
 }
 
 // TestCredentialIdempotencyFunnel_FlaggedContractsAreExempt is A2: each of the
 // known credential-returning contracts must declare
-// endpoints.http.auth.idempotencyExempt: true in its contract.yaml. This is a
+// endpoints.http.idempotency.exempt: true in its contract.yaml. This is a
 // regression guard — if someone removes the flag from a known contract the
 // funnel would catch it at generation time, but this archtest makes the failure
 // visible earlier and more explicitly.
@@ -258,7 +258,7 @@ func TestCredentialIdempotencyFunnel_FlaggedContractsAreExempt(t *testing.T) {
 		}
 		for _, flagged := range credentialIdempotencyFlaggedContracts {
 			if c.ID == flagged {
-				exempt := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.Auth.IdempotencyExempt
+				exempt := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.Idempotency.Exempt
 				found[c.ID] = exempt
 			}
 		}
@@ -275,9 +275,9 @@ func TestCredentialIdempotencyFunnel_FlaggedContractsAreExempt(t *testing.T) {
 		}
 		if !exempt {
 			t.Errorf("CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01: contract %q response carries credentials "+
-				"but endpoints.http.auth.idempotencyExempt is not true — "+
+				"but endpoints.http.idempotency.exempt is not true — "+
 				"this route's responses would be recorded by the idempotency store (Redis 24h TTL), "+
-				"persisting live tokens; set idempotencyExempt: true in its contract.yaml",
+				"persisting live tokens; set idempotency.exempt: true in its contract.yaml",
 				contractID)
 		}
 	}

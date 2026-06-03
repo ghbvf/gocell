@@ -11,7 +11,7 @@ import (
 //
 // Summary: for any kind:http contract whose response schema declares a sensitive
 // key (per pkg/redaction.IsSensitiveKey) at any depth, the contract MUST set
-// endpoints.http.auth.idempotencyExempt: true. Without the exemption the HTTP
+// endpoints.http.idempotency.exempt: true. Without the exemption the HTTP
 // idempotency store would record+replay a credential-bearing response into Redis
 // (24h TTL), persisting live tokens that must never be replay-eligible (issue
 // #1469). This guard rejects the schema at generation time so the leaking handler
@@ -28,7 +28,7 @@ import (
 // response field is safe. A nil resp (e.g. 204 noContent) is always safe.
 //
 // Error messages name the contract, the offending field path, and the fix
-// ("set endpoints.http.auth.idempotencyExempt: true") so authors can act
+// ("set endpoints.http.idempotency.exempt: true") so authors can act
 // immediately without consulting documentation.
 func rejectUnexemptCredentialResponse(contractID string, idempotencyExempt bool, resp *Schema) error {
 	if idempotencyExempt {
@@ -43,7 +43,7 @@ func rejectUnexemptCredentialResponse(contractID string, idempotencyExempt bool,
 			"contract %q response schema declares sensitive-key field %q at %s: "+
 				"this response is eligible for idempotency-store recording (Redis, 24h TTL), "+
 				"which would persist live credentials — "+
-				"set endpoints.http.auth.idempotencyExempt: true to opt this route out "+
+				"set endpoints.http.idempotency.exempt: true to opt this route out "+
 				"(CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01)",
 			contractID, key, fieldPath)
 	})

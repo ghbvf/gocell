@@ -25,6 +25,48 @@ type HTTPTransportMeta struct {
 	// Ownership declares object-level authorization subject/resource paths.
 	// Required when auth.serviceOwned=true (governance FMT-32 enforces presence).
 	Ownership *HTTPOwnershipMeta `yaml:"ownership,omitempty" json:"ownership,omitempty"`
+	// Idempotency declares route-level HTTP-idempotency behavior. It is a
+	// first-class sibling of Auth (not folded into the auth-mode mutex matrix):
+	// idempotency is a middleware concern, not an authentication mode (#1469
+	// review F7). Omit for default idempotent-eligible routes.
+	Idempotency HTTPIdempotencyMeta `yaml:"idempotency,omitempty" json:"idempotency,omitempty"`
+}
+
+// HTTPIdempotencyMeta carries route-level HTTP-idempotency behavior, orthogonal
+// to authentication. It is a first-class sibling of HTTPAuthMeta rather than a
+// folded-in auth flag (#1469 review F7): idempotency is a middleware concern, so
+// it does not participate in the FMT-27 auth-mode mutex matrix. Keeping it out of
+// HTTPAuthMeta also keeps the auth-combo space at 2^5 instead of 2^6.
+type HTTPIdempotencyMeta struct {
+	// Exempt, when true, instructs the HTTP idempotency middleware to never
+	// claim/record/replay this route's responses (credential-rotation /
+	// change-password whose body returns tokens). The generated handler emits
+	// auth.Route{IdempotencyExempt: true} (see runtime/auth/route.go).
+	// Mandatory for any route whose response schema carries a
+	// pkg/redaction.IsSensitiveKey field — codegen rejects generation without it
+	// (CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01).
+	Exempt bool `yaml:"exempt,omitempty" json:"exempt,omitempty"`
+}
+
+// IdempotencyFrameworkStatuses returns the HTTP status codes the idempotency
+// middleware can emit for this route as a framework-injected set, analogous to
+// HTTPAuthMeta.Responses (401/429). When idempotency is default-on, a mutating
+// route (POST/PUT/PATCH/DELETE) that is not Idempotency.Exempt can return 409 on
+// an in-flight key (ClaimBusy) or a reused key with a mismatched body
+// fingerprint (ErrIdempotencyKeyReused). This is the single-source derivation for
+// the 409 declaration surface (#1469 review F4): the 409 is never hand-declared
+// per contract — it is computed from method + exempt so it cannot drift out of
+// sync with the middleware. Returns nil for GET/HEAD and exempt routes.
+func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
+	if h == nil || h.Idempotency.Exempt {
+		return nil
+	}
+	switch h.Method {
+	case "POST", "PUT", "PATCH", "DELETE":
+		return []int{409}
+	default:
+		return nil
+	}
 }
 
 // GRPCTransportMeta holds transport-level details for gRPC contracts. It mirrors
@@ -73,11 +115,12 @@ type HTTPOwnershipMeta struct {
 // HTTPAuthMeta carries route-level authentication override flags for contractgen.
 // These map to generated auth.Route wiring and handler constructor shape.
 //
-// Mutex among the 5 core bool fields is enforced by metadata.AuthComboLegal (the
+// Mutex among the 5 bool fields is enforced by metadata.AuthComboLegal (the
 // single oracle shared by contract.schema.json if/then rules and governance
-// validateFMT27). IdempotencyExempt is orthogonal to the mutex — any combination
-// with the 5 core fields is legal. When adding a new bool field, see auth_combo.go
-// for the checklist of files to update in lockstep.
+// validateFMT27). HTTP-idempotency behavior is NOT an auth mode — it lives on the
+// sibling HTTPIdempotencyMeta (endpoints.http.idempotency), so HTTPAuthMeta holds
+// exactly the 5 auth-mode flags and the auth-combo matrix stays 2^5. When adding a
+// new bool field, see auth_combo.go for the checklist of files to update in lockstep.
 //
 // ref: kubernetes-sigs/controller-tools markers/registry.go (declarative auth metadata)
 type HTTPAuthMeta struct {
@@ -115,15 +158,6 @@ type HTTPAuthMeta struct {
 	// /internal/v1/...) where caller-cell identity is verifiable via the
 	// service token.
 	ClientsOnly bool `yaml:"clientsOnly,omitempty" json:"clientsOnly,omitempty"`
-	// IdempotencyExempt, when true, instructs the HTTP idempotency middleware to
-	// never claim/record/replay this route's responses (credential-rotation /
-	// change-password whose body returns tokens). Orthogonal to Public,
-	// PasswordResetExempt, ServiceOwned, Bootstrap, ClientsOnly — any combination
-	// is legal; it does NOT participate in FMT-27 auth-mode mutex.
-	// Emits auth.Route{IdempotencyExempt: true}. See runtime/auth/route.go.
-	// The encoding scheme for the 5-field auth-mode mutex is P-R-S-B-C-I; the
-	// whitelist of 14 legal combos is defined in auth_combo.go LegalAuthComboNames.
-	IdempotencyExempt bool `yaml:"idempotencyExempt,omitempty" json:"idempotencyExempt,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware
 	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as
 	// declared without requiring handler AST emission.

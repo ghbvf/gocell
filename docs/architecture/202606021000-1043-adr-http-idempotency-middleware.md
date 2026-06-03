@@ -218,25 +218,36 @@ exempt 路由的 passthrough 在 method-gate 之前、body read 之前执行（`
 > **Amendment 2026-06-03（gh #1469）**：原 §"⚠️ 收口前置"所述两处缺口，已在 production
 > wiring（`cmd/corebundle` 接通 store）**同一 PR** 内收口。本节按 ai-robust「ADR amendment
 > 落地必查：矛盾段同 PR 重写，不留两套真理源」重写为收口后形态。
+>
+> **Amendment 2026-06-04（gh #1537 review F4+F7）**：幂等豁免标志从 auth 块迁为 **一等
+> endpoint 关注点**——contract.yaml 由 `endpoints.http.auth.idempotencyExempt` 改为
+> `endpoints.http.idempotency.exempt`（`HTTPIdempotencyMeta`，sibling of `HTTPAuthMeta`）。
+> 它**不再**折入 `HTTPAuthMetaBoolFields` reflect-freeze 矩阵：auth-combo 空间回退 2^6→2^5
+> （whitelist 14→7），因为「跳过幂等录制」是 middleware 行为而非 auth mode（F7）。同时新增
+> **F4**：default-on 后中间件可发的 409（ClaimBusy / ErrIdempotencyKeyReused）经
+> `HTTPTransportMeta.IdempotencyFrameworkStatuses()` 从 method+exempt **单源派生**为
+> framework-injected 声明状态（折入 governance `declaredErrorStatuses` 并集，与 401/429 同
+> 通道），使非豁免 mutating 路由的契约声明面系统性包含 409 且不可漂移（派生而非逐契约手写）。
+> 下方三件套的字段路径已按 F7 迁移更新。
 
 PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `AuthRouteMeta` →
 `mergeIdempotencyExemptMatcher` → `WithExemptMatcher`）。gh #1469 在接通生产 store 的同一 PR
 内补齐了使「敏感 body 路由不会被录制」真正成立的三件套：
 
-1. **codegen 入口**：`contractgen` 增 `endpoints.http.auth.idempotencyExempt` 字段
-   （`HTTPAuthMeta.IdempotencyExempt` → `httpEndpointSpec.AuthIdempotencyExempt` → handler
-   模板 emit `auth.Route{IdempotencyExempt: true}`）。该 flag 与 FMT-27 auth-mode mutex **正交**
-   （任意组合合法，不参与 mutex 矩阵语义，但仍折入 `HTTPAuthMetaBoolFields` reflect-freeze
-   矩阵以保 Hard 守卫，whitelist 7→14）。contract.yaml 现可声明豁免。
+1. **codegen 入口**：`contractgen` 读 `endpoints.http.idempotency.exempt` 字段
+   （`HTTPIdempotencyMeta.Exempt` → `httpEndpointSpec.IdempotencyExempt` → handler
+   模板 emit `auth.Route{IdempotencyExempt: true}`）。它是 `HTTPAuthMeta` 的 sibling，不参与 FMT-27 auth-mode mutex 矩阵
+   （F7 迁移后矩阵回退 2^5、whitelist 7；不再折入 `HTTPAuthMetaBoolFields`）。contract.yaml 经
+   `idempotency: { exempt: true }` 声明豁免。
 2. **应用到全部凭据响应路由**：`login` / `refresh` / `change-password`（200/201 响应 body 含
-   `accessToken` / `refreshToken`）均声明 `idempotencyExempt: true` 并 regenerate。
+   `accessToken` / `refreshToken`）均声明 `idempotency.exempt: true` 并 regenerate。
    `change-password` 是唯一今天就处于风险的路由（已认证，middleware 会激活）；`login` /
    `refresh` 是 public（identity-gate 本不激活），声明豁免是 defense-in-depth + 与下方守卫的
    覆盖一致性。
 3. **fail-closed 生成期守卫**（`CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01`，
    `tools/codegen/contractgen/credential_response_idempotency_guard.go` + 同名 archtest）：任何
    `kind: http` 契约的 response schema 在任意深度声明命中 `pkg/redaction.IsSensitiveKey` 的字段、
-   且 `auth.idempotencyExempt != true` → **生成期拒绝**。这把「未来新增的凭据响应路由必须豁免」
+   且 `idempotency.exempt != true` → **生成期拒绝**。这把「未来新增的凭据响应路由必须豁免」
    从开发者纪律升为机器强制——store 默认启用对未来路由永久 fail-closed。AI-robust 评级（单源
    活在该 archtest godoc）：**上游 Hard**（schema 命中即生成期拒；hand-edit `handler_gen.go` 删
    `IdempotencyExempt: true` → `gocell verify generated` golden-drift CI 红）+ **下游 Medium 天花板**
@@ -276,6 +287,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 | 威胁 | 缓解措施 | 状态 |
 |------|---------|------|
 | **Replay 攻击**（攻击者用他人的 `Idempotency-Key` 触发 replay）| namespace = `(tenantID, userID)`，key 中含 `subject + "\x00" + method + "\x00" + path + "\x00" + header`；A 用户的幂等键不会与 B 用户碰撞，跨用户 replay 在 Claim 阶段因 namespace 不匹配而取不到 | ✅ |
+| **回放跳过当前授权再校验**（同主体在权限被回收后仍能 replay 旧响应；对标 Envoy ext_authz 把"后续 filter 改变路由缓存绕过授权"列为提权风险）| **非提权 by-design**：(1) 回放只命中**同一已认证主体本人**的已录响应——key 含 `subject + tenant`，跨主体回放结构上不可能（见上行）；非 `PrincipalUser` 主体在 `extractIdentity` passthrough（service-token 不缓存）；凭据路由 `idempotencyExempt` 不缓存。(2) 回放返回的是该主体**先前在授权状态下已执行**操作的已录响应，**不重新执行任何副作用**；对一个已成功的幂等键在回放时再跑 route Policy，会让同一 key 后续转 403，**违反 IETF Idempotency-Key 语义**（同 key 必返回原响应）——因此"回放不再校验授权"是正确行为而非缺陷。Envoy 的路由缓存以 route 为键、与主体无关，故其绕过模型不迁移到这里（本实现以 principal 为键）。**残留面**：同主体在 24h TTL 内重收自己授权撤销前的旧响应体，bounded by per-principal key + TTL，非越权 | ✅ (by-design) |
 | **Cache poisoning**（伪造 response 污染 replay 缓存）| 只有原始请求者本人的成功响应被 Record；`httpRecordScript` token-guard 防止 stale-lease 的 Record 提交伪造 blob；`RecordedResponse` sealed 防止包外构造伪造结构 | ✅ |
 | **Thundering herd / 并发重复**（同 key 多个飞行请求）| `ClaimBusy` 即时 409，lease 在 `ClaimAcquired` 时原子 SET NX；Lua 脚本原子性防止两个请求同时 Claim 成功 | ✅ |
 | **Oversized body 无界 buffer**（超大响应体耗尽内存）| 256 KiB cap（`defaultMaxBodyBytes`，可调 `WithMaxBodyBytes`）；超限跳过 Record，响应正常 stream 给客户端，不占用 replay 存储 | ✅ |
@@ -287,7 +299,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 | **4xx 响应被缓存为永久回放**（参数错误的 response 被 Record）| `shouldRecord` 仅对 2xx/3xx 记录；4xx/5xx 走 Release 路径，客户端可修正参数后重试 | ✅ |
 | **同一 key + 不同 endpoint mis-replay**（相同 header 值跨端点错误 replay）| method + path 包含在 key 组成中（`subject + "\x00" + method + "\x00" + path + "\x00" + header`）；不同 endpoint 的 Claim 使用不同 key，结构上无法碰撞 | ✅ |
 | **同一 key + 不同 body mis-replay**（相同 key + 不同请求体绕过指纹检测）| `Store.Claim` 接受 `fingerprint = hex(sha256(body))`；后续不匹配指纹的 Claim 返回 `ErrFingerprintMismatch` → 409 `ErrIdempotencyKeyReused`；攻击者无法用不同 body 劫持已有 replay | ✅ |
-| **敏感响应体持久化到 replay store**（session cookie / credential 被 store）| **header 维度 ✅**：`sensitiveResponseHeaders`（Set-Cookie、Authorization 等）在 `filterSensitiveHeaders` 中剔除，RecordedResponse 只存安全可重放的 header。**body 维度 ✅（gh #1469 收口）**：`filterSensitiveHeaders` 只过滤 header，body 维度防护由三层组成——(1) `endpoints.http.auth.idempotencyExempt` codegen 入口落地；(2) 全部凭据响应路由（`login` / `refresh` / `change-password`）声明豁免，exempt 路由 response **永不写入 store**；(3) fail-closed 守卫 `CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01`——response schema 含 `IsSensitiveKey` 字段而未豁免的契约生成期被拒，未来凭据路由无法 fail-open。详见下方 §"敏感 body route 豁免（✅ 已收口，gh #1469）"。 | ✅ |
+| **敏感响应体持久化到 replay store**（session cookie / credential 被 store）| **header 维度 ✅**：`sensitiveResponseHeaders`（Set-Cookie、Authorization 等）在 `filterSensitiveHeaders` 中剔除，RecordedResponse 只存安全可重放的 header。**body 维度 ✅（gh #1469 收口）**：`filterSensitiveHeaders` 只过滤 header，body 维度防护由三层组成——(1) `endpoints.http.idempotency.exempt` codegen 入口落地；(2) 全部凭据响应路由（`login` / `refresh` / `change-password`）声明豁免，exempt 路由 response **永不写入 store**；(3) fail-closed 守卫 `CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01`——response schema 含 `IsSensitiveKey` 字段而未豁免的契约生成期被拒，未来凭据路由无法 fail-open。详见下方 §"敏感 body route 豁免（✅ 已收口，gh #1469）"。 | ✅ |
 
 ---
 

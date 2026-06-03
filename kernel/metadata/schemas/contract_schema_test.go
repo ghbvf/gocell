@@ -278,29 +278,20 @@ func TestContractSchemaAllowsAuthClientsOnly(t *testing.T) {
 		"contract with auth.clientsOnly:true must pass strict validation")
 }
 
-// TestContractSchemaAllowsIdempotencyExempt verifies that idempotencyExempt is
-// orthogonal: it can appear alone, combined with public, or combined with
-// passwordResetExempt — none of these combinations must trigger the FMT-27
-// mutex rules that guard the 5 core auth-mode flags.
+// TestContractSchemaAllowsIdempotencyExempt verifies that
+// endpoints.http.idempotency.exempt is a first-class sibling of auth (#1469
+// review F7): it can appear alone or alongside any auth mode without triggering
+// the FMT-27 mutex rules that guard the 5 core auth-mode flags.
 func TestContractSchemaAllowsIdempotencyExempt(t *testing.T) {
 	schema := compileContractSchemaForTest(t)
 
 	cases := []struct {
-		name string
-		auth string
+		name  string
+		extra string // extra sibling block under http, alongside idempotency
 	}{
-		{
-			"idempotencyExempt alone",
-			`"idempotencyExempt": true`,
-		},
-		{
-			"idempotencyExempt with public",
-			`"public": true, "idempotencyExempt": true`,
-		},
-		{
-			"idempotencyExempt with passwordResetExempt",
-			`"passwordResetExempt": true, "idempotencyExempt": true`,
-		},
+		{"idempotency.exempt alone", ""},
+		{"idempotency.exempt with auth.public", `, "auth": {"public": true}`},
+		{"idempotency.exempt with auth.passwordResetExempt", `, "auth": {"passwordResetExempt": true}`},
 	}
 
 	for _, tc := range cases {
@@ -321,15 +312,13 @@ func TestContractSchemaAllowsIdempotencyExempt(t *testing.T) {
 						"path": "/api/v1/sample/test",
 						"successStatus": 200,
 						"noContent": false,
-						"auth": {
-							%s
-						}
+						"idempotency": {"exempt": true}%s
 					}
 				}
-			}`, tc.auth)
+			}`, tc.extra)
 			require.NoError(t, json.Unmarshal([]byte(doc), &contractDoc))
 			assert.NoError(t, schema.Validate(contractDoc),
-				"auth combination %q must be valid (idempotencyExempt is orthogonal to FMT-27 mutex)", tc.name)
+				"idempotency.exempt is orthogonal to FMT-27 auth mutex: %q must be valid", tc.name)
 		})
 	}
 }
@@ -450,10 +439,9 @@ func TestContractSchemaOwnershipRequired(t *testing.T) {
 // key-presence rules and reject all cases. Under the if/then const:true
 // implementation, only the value-true conflicts are rejected.
 //
-// idempotencyExempt is orthogonal — it does not participate in FMT-27 mutex,
-// so every combination with idempotencyExempt true/false shares legality with
-// the corresponding 5-field combo. The matrix doubles to 64 but legal count
-// doubles to 14 (7 × 2).
+// HTTP-idempotency exemption is NOT part of this matrix — it moved to the
+// sibling endpoints.http.idempotency block (#1469 review F7), so the matrix is
+// 2^5 = 32 with 7 legal combos.
 //
 // INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
 func TestContractSchemaAuthBoolMatrix(t *testing.T) {
@@ -488,14 +476,13 @@ func TestContractSchemaAuthBoolMatrix(t *testing.T) {
 							"passwordResetExempt": %t,
 							"serviceOwned": %t,
 							"bootstrap": %t,
-							"clientsOnly": %t,
-							"idempotencyExempt": %t
+							"clientsOnly": %t
 						}%s
 					}
 				}
 			}`,
 				auth.Public, auth.PasswordResetExempt, auth.ServiceOwned,
-				auth.Bootstrap, auth.ClientsOnly, auth.IdempotencyExempt,
+				auth.Bootstrap, auth.ClientsOnly,
 				ownershipFragment)
 
 			var contractDoc any

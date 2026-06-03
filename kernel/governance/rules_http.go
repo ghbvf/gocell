@@ -259,10 +259,17 @@ func (v *Validator) dynamicWriteFindings(c *metadata.ContractMeta, relHandler st
 }
 
 // declaredErrorStatuses returns the union of 4xx/5xx status codes declared in
-// the contract's responses map and in auth.responses. The dual source allows
-// middleware-injected codes (e.g. bootstrap auth 401, rate limiter 429) to be
-// declared under auth.responses without requiring handler AST emission (CH-04
-// double-source rule).
+// the contract's responses map, in auth.responses, and the framework-injected
+// idempotency statuses derived from endpoints.http.idempotency. The multi-source
+// union allows middleware-injected codes (e.g. bootstrap auth 401, rate limiter
+// 429, idempotency 409) to be declared without requiring handler AST emission
+// (CH-04 multi-source rule).
+//
+// The idempotency 409 (ClaimBusy / ErrIdempotencyKeyReused) is DERIVED, not
+// hand-declared per contract: HTTPTransportMeta.IdempotencyFrameworkStatuses()
+// computes it from method + idempotency.exempt so the declaration surface for a
+// default-on idempotency deployment cannot drift out of sync with the middleware
+// (#1469 review F4).
 func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 	out := make(map[int]struct{})
 	if c.Endpoints.HTTP == nil {
@@ -274,6 +281,11 @@ func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 		}
 	}
 	for _, status := range c.Endpoints.HTTP.Auth.Responses {
+		if status >= 400 {
+			out[status] = struct{}{}
+		}
+	}
+	for _, status := range c.Endpoints.HTTP.IdempotencyFrameworkStatuses() {
 		if status >= 400 {
 			out[status] = struct{}{}
 		}

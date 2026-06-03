@@ -1543,3 +1543,37 @@ func intToStr(i int) string { // local helper avoids strconv import noise.
 	}
 	return string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
 }
+
+// TestDeclaredErrorStatuses_FoldsIdempotency409 locks Change B (#1469 review F4):
+// the framework-injected idempotency 409 joins the declared-status union for
+// mutating non-exempt routes, alongside responses[] and auth.responses; exempt
+// routes do not declare it.
+func TestDeclaredErrorStatuses_FoldsIdempotency409(t *testing.T) {
+	mutating := &metadata.ContractMeta{
+		Endpoints: metadata.EndpointsMeta{
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:    "POST",
+				Responses: map[int]metadata.HTTPResponseMeta{400: {Description: "Bad Request"}},
+				Auth:      metadata.HTTPAuthMeta{Responses: []int{401}},
+			},
+		},
+	}
+	got := declaredErrorStatuses(mutating)
+	for _, want := range []int{400, 401, 409} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("declaredErrorStatuses missing %d (responses ∪ auth.responses ∪ idempotency 409)", want)
+		}
+	}
+
+	exempt := &metadata.ContractMeta{
+		Endpoints: metadata.EndpointsMeta{
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:      "POST",
+				Idempotency: metadata.HTTPIdempotencyMeta{Exempt: true},
+			},
+		},
+	}
+	if _, ok := declaredErrorStatuses(exempt)[409]; ok {
+		t.Error("exempt mutating route must not declare the framework idempotency 409")
+	}
+}

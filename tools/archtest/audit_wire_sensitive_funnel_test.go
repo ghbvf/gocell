@@ -143,7 +143,7 @@ func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
 							Rel:  rel,
 							Line: p.Fset.Position(c.Pos()).Line,
 							Message: auditFunnelCallee + " called inside " + fn.Name.Name +
-								" — only the wire-out paths {buildHTTPDTOs, buildEventSpec} may call it " +
+								" — only the wire-out paths {buildResponseDTOs, buildEventSpec} may call it " +
 								"(Request path must stay exempt)",
 						})
 						return

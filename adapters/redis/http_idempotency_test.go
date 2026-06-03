@@ -259,6 +259,22 @@ func TestHTTPIdempotencyStore_Claim_EvalError(t *testing.T) {
 	assert.Nil(t, receipt)
 }
 
+func TestHTTPIdempotencyStore_ReadyCheck_OK(t *testing.T) {
+	store := mustNewHTTPIdempotencyStoreFromCmdable(t, newHTTPClaimerMock())
+	require.NoError(t, store.ReadyCheck(context.Background()),
+		"ReadyCheck must succeed when the store can run a Lua EVAL")
+}
+
+func TestHTTPIdempotencyStore_ReadyCheck_EvalDenied(t *testing.T) {
+	mock := newHTTPClaimerMock()
+	mock.evalErr = errMock // simulate ACL-denied EVAL / write
+	store := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
+
+	err := store.ReadyCheck(context.Background())
+	require.Error(t, err, "ReadyCheck must surface EVAL/write denial (not pass like a bare PING)")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
+}
+
 // =============================================================================
 // Via public constructor (integration smoke)
 // =============================================================================

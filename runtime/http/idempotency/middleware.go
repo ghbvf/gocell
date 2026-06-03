@@ -404,6 +404,14 @@ func handleWithIdempotency(
 
 	switch state {
 	case idempotency.ClaimDone:
+		// Replay returns this principal's own previously-recorded response WITHOUT
+		// re-running the route Policy. This is by-design and not an authz bypass:
+		// the cache key includes subject+tenant (cross-principal replay is
+		// structurally impossible — see buildNamespaceKey), and the recorded
+		// response is from an operation this same principal already performed while
+		// authorized. Re-checking authz on replay would let a previously-succeeded
+		// key later return 403, violating Idempotency-Key semantics (same key →
+		// same response). See ADR 202606021000-1043 威胁矩阵 row "回放跳过当前授权再校验".
 		slog.DebugContext(ctx, "idempotency: replay hit",
 			"idempotency_key_hash", keyHash,
 			"subject", p.Subject,

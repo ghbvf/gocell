@@ -266,12 +266,12 @@ func buildResponseDTOs(rootDir string, contract *metadata.ContractMeta, contract
 		return nil, fmt.Errorf("contractgen build: %w", err)
 	}
 	// Wire-out funnel B: any HTTP response carrying a sensitive key (per
-	// pkg/redaction.IsSensitiveKey) must declare idempotencyExempt: true so the
+	// pkg/redaction.IsSensitiveKey) must declare idempotency.exempt: true so the
 	// idempotency store does not record+replay credentials into Redis.
 	// Exempt when contract.Endpoints.HTTP is nil (occurs only in unit tests that
 	// exercise schema parsing without a full contract; production path always has
 	// HTTP set because buildHTTPSpec gates on http != nil).
-	idempotencyExempt := contract.Endpoints.HTTP != nil && contract.Endpoints.HTTP.Auth.IdempotencyExempt
+	idempotencyExempt := contract.Endpoints.HTTP != nil && contract.Endpoints.HTTP.Idempotency.Exempt
 	if err := rejectUnexemptCredentialResponse(contract.ID, idempotencyExempt, respSchema); err != nil {
 		return nil, fmt.Errorf("contractgen build: %w", err)
 	}
@@ -348,7 +348,7 @@ func buildHTTPEndpointSpec(
 		AuthBootstrap:           http.Auth.Bootstrap,
 		AuthClientsOnly:         http.Auth.ClientsOnly,
 		AuthServiceOwned:        http.Auth.ServiceOwned,
-		AuthIdempotencyExempt:   http.Auth.IdempotencyExempt,
+		IdempotencyExempt:       http.Idempotency.Exempt,
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams

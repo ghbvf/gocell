@@ -7,7 +7,7 @@
 // The HTTP idempotency store records+replays responses keyed on the
 // Idempotency-Key request header (24h TTL in Redis). Any HTTP contract whose
 // response schema carries a sensitive key (per pkg/redaction.IsSensitiveKey)
-// at any depth MUST declare endpoints.http.auth.idempotencyExempt: true; without
+// at any depth MUST declare endpoints.http.idempotency.exempt: true; without
 // it, a credential-bearing response (e.g. accessToken / refreshToken under
 // "data") would be replay-eligible and the idempotency store would persist tokens
 // into Redis — a credential-leakage vector (issue #1469).
@@ -76,13 +76,13 @@ func TestCredentialResponseIdempotencyGuard_NegativeNonVacuity(t *testing.T) {
 			}
 			err := rejectUnexemptCredentialResponse("http.auth.synth.v1", false, resp)
 			if err == nil {
-				t.Fatalf("expected guard to reject response with %q field when idempotencyExempt=false, got nil", tc.key)
+				t.Fatalf("expected guard to reject response with %q field when idempotency.exempt=false, got nil", tc.key)
 			}
 			if !strings.Contains(err.Error(), tc.wantSub) {
 				t.Errorf("error %q must mention offending field %q", err.Error(), tc.wantSub)
 			}
-			if !strings.Contains(err.Error(), "idempotencyExempt") {
-				t.Errorf("error %q must mention the fix (idempotencyExempt)", err.Error())
+			if !strings.Contains(err.Error(), "idempotency.exempt") {
+				t.Errorf("error %q must mention the fix (idempotency.exempt)", err.Error())
 			}
 		})
 	}
@@ -218,21 +218,21 @@ func TestCredentialResponseIdempotencyGuard_Integration_NonExemptRejectsCredenti
 		SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
 		Endpoints: metadata.EndpointsMeta{
 			HTTP: &metadata.HTTPTransportMeta{
-				Auth: metadata.HTTPAuthMeta{IdempotencyExempt: false},
+				Idempotency: metadata.HTTPIdempotencyMeta{Exempt: false},
 			},
 		},
 	}
 	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
 	if err == nil {
-		t.Fatal("expected buildHTTPDTOs to reject credential response without idempotencyExempt, got nil error")
+		t.Fatal("expected buildHTTPDTOs to reject credential response without idempotency.exempt, got nil error")
 	}
-	if !strings.Contains(err.Error(), "idempotencyExempt") {
-		t.Errorf("error %q must mention idempotencyExempt fix", err.Error())
+	if !strings.Contains(err.Error(), "idempotency.exempt") {
+		t.Errorf("error %q must mention idempotency.exempt fix", err.Error())
 	}
 }
 
 // TestCredentialResponseIdempotencyGuard_Integration_ExemptPasses verifies that
-// setting auth.idempotencyExempt: true suppresses the guard in buildHTTPDTOs.
+// setting idempotency.exempt: true suppresses the guard in buildHTTPDTOs.
 //
 // INVARIANT: CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01 (integration positive).
 func TestCredentialResponseIdempotencyGuard_Integration_ExemptPasses(t *testing.T) {
@@ -246,13 +246,13 @@ func TestCredentialResponseIdempotencyGuard_Integration_ExemptPasses(t *testing.
 		SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
 		Endpoints: metadata.EndpointsMeta{
 			HTTP: &metadata.HTTPTransportMeta{
-				Auth: metadata.HTTPAuthMeta{IdempotencyExempt: true},
+				Idempotency: metadata.HTTPIdempotencyMeta{Exempt: true},
 			},
 		},
 	}
 	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
 	if err != nil {
-		t.Fatalf("idempotencyExempt=true must suppress the credential guard in buildHTTPDTOs, got: %v", err)
+		t.Fatalf("idempotency.exempt=true must suppress the credential guard in buildHTTPDTOs, got: %v", err)
 	}
 }
 
@@ -285,13 +285,13 @@ func TestCredentialResponseIdempotencyGuard_Integration_NestedCredentialRejected
 		SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
 		Endpoints: metadata.EndpointsMeta{
 			HTTP: &metadata.HTTPTransportMeta{
-				Auth: metadata.HTTPAuthMeta{IdempotencyExempt: false},
+				Idempotency: metadata.HTTPIdempotencyMeta{Exempt: false},
 			},
 		},
 	}
 	_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
 	if err == nil {
-		t.Fatal("nested credential response without idempotencyExempt must be rejected")
+		t.Fatal("nested credential response without idempotency.exempt must be rejected")
 	}
 	if !strings.Contains(err.Error(), "accessToken") && !strings.Contains(err.Error(), "refreshToken") {
 		t.Errorf("error %q must name the offending field", err.Error())
