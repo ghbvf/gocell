@@ -386,11 +386,7 @@ func TestStart_LeaderElect_EmitsLeaderElectMode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator not ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 	// Wait for the start log line to be flushed.
 	testwait.External(t, "start-log-flushed",
 		func() bool { return strings.Contains(buf.String(), LeaderElectModeLabel) },
@@ -402,11 +398,7 @@ func TestStart_LeaderElect_EmitsLeaderElectMode(t *testing.T) {
 	if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("Stop: %v", err)
 	}
-	select {
-	case <-done:
-	case <-time.After(testtime.D3s):
-		t.Error("coordinator goroutine did not exit")
-	}
+	_ = testwait.Deterministic(t, done, "start-goroutine-exit")
 
 	logs := buf.String()
 	if !strings.Contains(logs, LeaderElectModeLabel) {
@@ -737,22 +729,14 @@ func TestStop_OrphansInflightLockOnShutdown(t *testing.T) {
 	defer cancel()
 	startDone := make(chan error, 1)
 	go func() { startDone <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator not ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	testwait.External(t, "tickers-registered",
 		func() bool { return clk.PendingTickers() >= 1 },
 		testtime.D2s, testtime.D1ms)
 	clk.Advance(leaderElectCfg().PollInterval) // fire a tick → claim + wedge
 
-	select {
-	case <-stepEntered:
-	case <-time.After(testtime.D2s):
-		t.Fatal("wedged step did not start")
-	}
+	testwait.Deterministic(t, stepEntered, "step-entered")
 	if len(fd.Snapshot()) != 1 {
 		t.Fatalf("distlock not held while drive in-flight; snapshot=%v", fd.Snapshot())
 	}
@@ -805,11 +789,7 @@ func TestStop_OrphansInflightLockOnShutdown(t *testing.T) {
 	// Cleanup: unblock the step + cancel so goroutines drain (goleak TestMain).
 	close(stepBlockCh)
 	cancel()
-	select {
-	case <-startDone:
-	case <-time.After(testtime.D3s):
-		t.Error("coordinator goroutine did not exit after unblocking step")
-	}
+	_ = testwait.Deterministic(t, startDone, "start-goroutine-exit")
 }
 
 // TestStop_OrphansBeforeCancel_CooperativeStepNoRelease asserts the F2 ordering
@@ -867,22 +847,14 @@ func TestStop_OrphansBeforeCancel_CooperativeStepNoRelease(t *testing.T) {
 	defer cancel()
 	startDone := make(chan error, 1)
 	go func() { startDone <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator not ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	testwait.External(t, "tickers-registered",
 		func() bool { return clk.PendingTickers() >= 1 },
 		testtime.D2s, testtime.D1ms)
 	clk.Advance(leaderElectCfg().PollInterval) // fire a tick → claim + drive
 
-	select {
-	case <-stepEntered:
-	case <-time.After(testtime.D2s):
-		t.Fatal("cooperative step did not start")
-	}
+	testwait.Deterministic(t, stepEntered, "step-entered")
 	if len(fd.Snapshot()) != 1 {
 		t.Fatalf("distlock not held while drive in-flight; snapshot=%v", fd.Snapshot())
 	}
@@ -903,11 +875,7 @@ func TestStop_OrphansBeforeCancel_CooperativeStepNoRelease(t *testing.T) {
 
 	// Cleanup: cancel so the (already-canceled) coordinator goroutines drain.
 	cancel()
-	select {
-	case <-startDone:
-	case <-time.After(testtime.D3s):
-		t.Error("coordinator goroutine did not exit after cancel")
-	}
+	_ = testwait.Deterministic(t, startDone, "start-goroutine-exit")
 }
 
 // TestTickOnce_NormalCompletion_ReleasesNotOrphans asserts that when a step

@@ -1,6 +1,6 @@
 module fixturetest/clock_positional_injection/struct_field_violates
 
-go 1.25.10
+go 1.25.11
 
 // Pin to the worktree's kernel/clock so the fixture uses the canonical
 // clock.Clock type for the typed predicate in sub-check C.
