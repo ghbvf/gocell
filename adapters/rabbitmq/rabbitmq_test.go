@@ -2522,6 +2522,8 @@ func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (
 	return c.state, c.receipt, c.err
 }
 
+func (c *mockClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
+
 var _ idempotency.Claimer = (*mockClaimer)(nil)
 
 // --- ConsumerBase with Claimer tests ---
@@ -2671,6 +2673,8 @@ func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration)
 	r := c.responses[len(c.responses)-1]
 	return r.state, r.receipt, r.err
 }
+
+func (c *sequenceClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
 
 var _ idempotency.Claimer = (*sequenceClaimer)(nil)
 

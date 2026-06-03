@@ -47,6 +47,8 @@ func (f *fakeFailingClaimer) Claim(
 	return 0, nil, f.err
 }
 
+func (f *fakeFailingClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
+
 // newTestSubscriber opens a connection to the shared broker and constructs a
 // Subscriber with the given collector.
 func newTestSubscriber(t *testing.T, addr string, collector SubscriberCollector) (*Subscriber, *Connection) {

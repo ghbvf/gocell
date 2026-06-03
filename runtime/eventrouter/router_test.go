@@ -546,6 +546,8 @@ func (routerTestClaimer) Claim(
 	return idempotency.ClaimAcquired, routerTestReceipt{}, nil
 }
 
+func (routerTestClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
+
 type routerTestReceipt struct{}
 
 func (routerTestReceipt) Commit(context.Context) error                { return nil }

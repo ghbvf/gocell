@@ -42,6 +42,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
@@ -394,10 +395,9 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, err)
 	internalNonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	internalGuardForHarness := &internalGuard{
-		ring:       internalRing,
-		nonceStore: internalNonceStore,
-		mw:         func(h http.Handler) http.Handler { return h },
+	internalSharedForHarness := &composition.SharedDeps{
+		InternalHMACRing: internalRing,
+		NonceStore:       internalNonceStore,
 	}
 
 	privKey, pubKey := keystest.MustGenerateKeyPair()
@@ -469,7 +469,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(ln)),
 		func() bootstrap.Option {
-			chain, chainErr := buildInternalAuthChain(internalGuardForHarness)
+			chain, chainErr := buildInternalAuthChain(internalSharedForHarness)
 			require.NoError(t, chainErr)
 			return bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
 				chain,

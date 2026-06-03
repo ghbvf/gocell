@@ -488,10 +488,11 @@ func TestBuildContractSpec_CommandKind_Skips(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"command.device.provision.v1": {
-				ID:      "command.device.provision.v1",
-				Kind:    "command",
-				Codegen: true,
-				File:    "contracts/command/device/provision/v1/contract.yaml",
+				ID:         "command.device.provision.v1",
+				Kind:       "command",
+				Codegen:    true,
+				Transports: []string{"amqp"}, // mirrors parser defaultTransportsForKind("command")
+				File:       "contracts/command/device/provision/v1/contract.yaml",
 			},
 		},
 	}
@@ -528,6 +529,7 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 				// types_gen.go compile-time guard renders a valid cellvocab ident.
 				ConsistencyLevel: "L3",
 				Codegen:          true,
+				Transports:       []string{"internal"}, // mirrors parser defaultTransportsForKind("projection")
 				File:             "contracts/projection/device/inventory/v1/contract.yaml",
 			},
 		},
@@ -565,10 +567,11 @@ func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"grpc.device.command.v1": {
-				ID:      "grpc.device.command.v1",
-				Kind:    "grpc",
-				Codegen: true,
-				File:    "contracts/grpc/device/command/v1/contract.yaml",
+				ID:         "grpc.device.command.v1",
+				Kind:       "grpc",
+				Codegen:    true,
+				Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
+				File:       "contracts/grpc/device/command/v1/contract.yaml",
 				Endpoints: metadata.EndpointsMeta{
 					Server: "devicecell",
 					GRPC: &metadata.GRPCTransportMeta{
@@ -664,10 +667,11 @@ func TestBuildContractSpec_GRPCKind_MissingEndpoint(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"grpc.device.command.v1": {
-				ID:      "grpc.device.command.v1",
-				Kind:    "grpc",
-				Codegen: true,
-				File:    "contracts/grpc/device/command/v1/contract.yaml",
+				ID:         "grpc.device.command.v1",
+				Kind:       "grpc",
+				Codegen:    true,
+				Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
+				File:       "contracts/grpc/device/command/v1/contract.yaml",
 			},
 		},
 	}
@@ -688,10 +692,11 @@ func TestBuildContractSpec_GRPCKind_NonUnaryRejected(t *testing.T) {
 			p := &metadata.ProjectMeta{
 				Contracts: map[string]*metadata.ContractMeta{
 					"grpc.device.watch.v1": {
-						ID:      "grpc.device.watch.v1",
-						Kind:    "grpc",
-						Codegen: true,
-						File:    "contracts/grpc/device/watch/v1/contract.yaml",
+						ID:         "grpc.device.watch.v1",
+						Kind:       "grpc",
+						Codegen:    true,
+						Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
+						File:       "contracts/grpc/device/watch/v1/contract.yaml",
 						Endpoints: metadata.EndpointsMeta{
 							Server: "devicecell",
 							GRPC: &metadata.GRPCTransportMeta{
@@ -749,10 +754,11 @@ func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
 			p := &metadata.ProjectMeta{
 				Contracts: map[string]*metadata.ContractMeta{
 					"grpc.device.command.v1": {
-						ID:      "grpc.device.command.v1",
-						Kind:    "grpc",
-						Codegen: true,
-						File:    "contracts/grpc/device/command/v1/contract.yaml",
+						ID:         "grpc.device.command.v1",
+						Kind:       "grpc",
+						Codegen:    true,
+						Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
+						File:       "contracts/grpc/device/command/v1/contract.yaml",
 						Endpoints: metadata.EndpointsMeta{
 							Server: "devicecell",
 							GRPC:   &grpc,
@@ -876,6 +882,7 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
 		Codegen:          trueCodegen,
+		Transports:       []string{"http"}, // mirrors parser defaultTransportsForKind("http")
 		Endpoints: metadata.EndpointsMeta{
 			Server:  metadatatest.CellIDAccessCore,
 			Clients: []string{metadatatest.CellIDEdgeBFF},

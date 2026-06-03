@@ -170,10 +170,24 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 }
 
 // validateAuthServiceTokenPlans catches malformed AuthServiceToken literals at
-// phase0. The public constructor already enforces these invariants, but direct
-// struct literals can otherwise reach phase5 and fail inside HTTP middleware
-// assembly rather than at the option boundary.
+// phase0. The public constructor already enforces the nil/noop/ring invariants,
+// but direct struct literals can otherwise reach phase5 and fail inside HTTP
+// middleware assembly rather than at the option boundary.
+//
+// It additionally closes the #1410 review F1 loop: composition validates the
+// declared SharedDeps.NonceStore.Kind(), but the store that ACTUALLY guards
+// /internal/v1/* is whatever the caller's RuntimeOptionsFunc put in this auth
+// plan. When composition injects the deployment Topology (WithControlPlaneTopology),
+// the real auth-plan store is validated here against it — in real adapter mode an
+// in-memory store is rejected for multi-pod and unrecognized kinds are rejected
+// fail-closed — mirroring fx.ValidateApp (validate the constructed graph, not a
+// parallel declaration).
 func (b *Bootstrap) validateAuthServiceTokenPlans() error {
+	// Topology-dependent replay-safety applies only in real adapter mode and only
+	// when composition injected the topology; requireDistributed narrows it to
+	// multi-pod. The always-on nil/noop/ring checks run regardless of topology.
+	enforceReplaySafe := b.controlPlaneTopology.RequireProductionControlPlane()
+	requireDistributed := b.controlPlaneTopology.RequiresDistributedReplay()
 	for ref, cfg := range b.listenerConfigs {
 		seen := 0
 		for i, plan := range cfg.authChain {
@@ -187,7 +201,7 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 					"at most one AuthServiceToken plan allowed in authChain",
 					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
 			}
-			if err := validateAuthServiceTokenPlan(ref.String(), i, p); err != nil {
+			if err := validateAuthServiceTokenPlan(ref.String(), i, p, enforceReplaySafe, requireDistributed); err != nil {
 				return err
 			}
 		}
@@ -195,7 +209,12 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 	return nil
 }
 
-func validateAuthServiceTokenPlan(listener string, position int, p auth.AuthServiceToken) error {
+func validateAuthServiceTokenPlan(
+	listener string,
+	position int,
+	p auth.AuthServiceToken,
+	enforceReplaySafe, requireDistributed bool,
+) error {
 	if validation.IsNilInterface(p.Store) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"AuthServiceToken Store must not be nil; construct it with auth.NewAuthServiceToken(store, ring)",
@@ -210,6 +229,21 @@ func validateAuthServiceTokenPlan(listener string, position int, p auth.AuthServ
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"AuthServiceToken Store must not be NonceStoreKindNoop; service-token guards require replay protection",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, listener, position))))
+	}
+	// Topology-dependent replay-safety (#1410 review F1): in real adapter mode the
+	// store that actually guards the listener must be replay-safe for the
+	// deployment topology — in-memory rejected for multi-pod, unrecognized kinds
+	// rejected fail-closed. Single-sourced with composition via
+	// NonceStoreKind.ReplaySafe. (Noop is already rejected above, unconditionally.)
+	if enforceReplaySafe && !p.Store.Kind().ReplaySafe(requireDistributed) {
+		return errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"internal-listener service-token guard NonceStore is not replay-safe for this topology "+
+				"in adapter mode \"real\"; a distributed store is required for multi-pod (an in-memory "+
+				"store needs single-pod acknowledgement) and unrecognized kinds are refused fail-open. "+
+				"Build the auth plan from the validated SharedDeps.NonceStore",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+				internalListenerPositionFmt+" kind=%q requireDistributed=%t",
+				listener, position, p.Store.Kind(), requireDistributed))))
 	}
 	if got := len(p.Ring.Current()); got < auth.MinHMACKeyBytes {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,

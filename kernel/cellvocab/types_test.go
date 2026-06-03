@@ -147,24 +147,19 @@ func TestParseCellTypeInvalid(t *testing.T) {
 // ParseContractKind
 // ---------------------------------------------------------------------------
 
+// TestParseContractKindRoundTrip asserts ParseContractKind round-trips every
+// member of the canonical AllContractKinds() set, so the typed consts, the
+// slice, the schema enum (byte-locked elsewhere), and the parser cannot drift
+// apart. Driving from AllContractKinds() means a new kind added to the const
+// set automatically appears here without a manual update (previously the test
+// covered 6 of 7 kinds, omitting ContractWebhook).
 func TestParseContractKindRoundTrip(t *testing.T) {
-	tests := []struct {
-		input string
-		want  cellvocab.ContractKind
-	}{
-		{"http", cellvocab.ContractHTTP},
-		{"event", cellvocab.ContractEvent},
-		{"command", cellvocab.ContractCommand},
-		{"projection", cellvocab.ContractProjection},
-		{"grpc", cellvocab.ContractGRPC},
-		{"saga", cellvocab.ContractSaga},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := cellvocab.ParseContractKind(tt.input)
+	for _, want := range cellvocab.AllContractKinds() {
+		t.Run(string(want), func(t *testing.T) {
+			got, err := cellvocab.ParseContractKind(string(want))
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-			assert.Equal(t, tt.input, string(got))
+			assert.Equal(t, want, got)
+			assert.Equal(t, string(want), string(got))
 		})
 	}
 }
@@ -273,6 +268,44 @@ func TestParseContractLifecycleInvalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := cellvocab.ParseContractLifecycle(tt.input)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ParseTransport
+// ---------------------------------------------------------------------------
+
+// TestParseTransportRoundTrip asserts ParseTransport round-trips every member of
+// the canonical AllTransports() set, so the typed consts, the slice, the schema
+// enum (byte-locked elsewhere), and the parser cannot drift apart.
+func TestParseTransportRoundTrip(t *testing.T) {
+	for _, want := range cellvocab.AllTransports() {
+		t.Run(string(want), func(t *testing.T) {
+			got, err := cellvocab.ParseTransport(string(want))
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			assert.Equal(t, string(want), string(got))
+		})
+	}
+}
+
+func TestParseTransportInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"uppercase", "AMQP"},
+		{"unknown", "kafka"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := cellvocab.ParseTransport(tt.input)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))

@@ -177,7 +177,8 @@ additions).
 - `CELL-INIT-CONTRACTUSAGE-01` (`cell_init_test.go`):
   `TestKernelCell_RegistryDefinedHere` renamed to
   `TestKernelCell_RegistrarDefinedHere`; type-name lookup uses `"Registrar"`.
-- `REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01`
+- `REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01` (renamed from
+  `...-POSITIONAL-01` when the #1087 builder prong was added)
   (`subscription_invariants_test.go`): interface lookup name updated to
   `Registrar`.
 - `ASSEMBLYREF-METHOD-SET-01` (`assembly_invariants_test.go`): source path

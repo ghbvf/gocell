@@ -59,11 +59,41 @@
 //     contracts/webhook/README.md troubleshooting section (same resolution as
 //     the subscribe path).
 //
+// # Observability
+//
+// Metrics are auto-wired by bootstrap: when WithMetricsProvider is configured,
+// phase5 injects the shared kwh.Metrics collector into each Receiver (recording
+// webhook_signature_failures_total and webhook_idempotency_hits_total) and
+// phase6 into each Dispatcher (webhook_deliveries_total and
+// webhook_delivery_duration_seconds). A nil/NopProvider leaves the zero
+// kwh.Metrics, which records as a no-op — callers do nothing. See
+// kernel/webhook/metrics.go.
+//
+// # Listener auth: dedicated WebhookListener (HMAC at the application layer)
+//
+// BuildRouteGroups mounts each receiver on cell.WebhookListener — a dedicated
+// listener, NOT PrimaryListener. Inbound webhooks authenticate at the
+// application layer via HMAC signature verification inside the Receiver, so the
+// composition root configures the webhook listener with an auth.AuthNone{} chain:
+//
+//	bootstrap.WithListener(cell.WebhookListener, ":8090",
+//	    []auth.ListenerAuth{auth.AuthNone{}})
+//
+// Mounting on PrimaryListener would be wrong: that listener typically carries a
+// JWT auth chain that would 401 an HMAC-signed (non-JWT) webhook POST before it
+// ever reached the verifier. Keeping the webhook path on its own listener (the
+// canonical pattern in .claude/rules/gocell/runtime-api.md §"单 listener 单 auth
+// scheme") gives it its own port and HMAC-only auth without a Public carve-out on
+// the business listener. If a webhook RouteGroup names a listener the assembly
+// did not declare, bootstrap fail-fasts at startup with an actionable message
+// (runtime/bootstrap phase5: "add WithListener(webhook,...)").
+//
 // # Deferred capabilities
 //
-// Metrics and healthz probes are deferred to PR-6 (KERNEL-WEBHOOK-01).
-// Per-contract Claimer TTL configuration is also deferred (the 24h done-TTL is
-// a fixed constant today — see receiver.go).
+// Healthz probes were evaluated and dropped (vacuous/synonymous with the
+// adapter _ready probes under today's immutable source store; tracked for when
+// the store becomes runtime-mutable). Per-contract Claimer TTL configuration is
+// deferred (the 24h done-TTL is a fixed constant today — see receiver.go).
 //
 // # References
 //

@@ -133,6 +133,18 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 		return nil, fmt.Errorf("HMAC key ring: %w", err)
 	}
 
+	// NonceStore: in-memory replay-defense store for /internal/v1/* service
+	// tokens. It lives on SharedDeps (alongside InternalHMACRing) so the same
+	// validated instance backs the internal-listener auth plan in
+	// starterRuntimeOptions — the runtime store and the control-plane-validated
+	// store are one, not two. Building a separate store in the RuntimeOptionsFunc
+	// would decouple what validate() introspects from what actually guards the
+	// listener (mirrors cmd/corebundle; #1410 review F5).
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
+	if err != nil {
+		return nil, fmt.Errorf("nonce store: %w", err)
+	}
+
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                clk,
 		Topology:             topo,
@@ -143,6 +155,7 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 		ConfigEventCollector: cfgEventCollector,
 		ConsumerClaimer:      claimer,
 		InternalHMACRing:     ring,
+		NonceStore:           nonceStore,
 		PrimaryHTTPAddr:      starterPrimaryAddr,
 		InternalHTTPAddr:     starterInternalAddr,
 		HealthHTTPAddr:       starterHealthAddr,
@@ -216,12 +229,11 @@ func buildStarterBootstrapOpts(
 		return nil, fmt.Errorf("primary listener auth: %w", err)
 	}
 
-	// Internal listener: HMAC service token with in-memory nonce store.
-	internalNonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, shared.Clock)
-	if err != nil {
-		return nil, fmt.Errorf("internal nonce store: %w", err)
-	}
-	svcTokenAuth, err := kauth.NewAuthServiceToken(internalNonceStore, shared.InternalHMACRing)
+	// Internal listener: HMAC service token reusing the SharedDeps nonce store
+	// (the same validated instance built in buildStarterMemSharedDeps, not a fresh
+	// one) so the runtime auth plan and the control-plane-validated store cannot
+	// diverge (#1410 review F5).
+	svcTokenAuth, err := kauth.NewAuthServiceToken(shared.NonceStore, shared.InternalHMACRing)
 	if err != nil {
 		return nil, fmt.Errorf("internal listener auth: %w", err)
 	}

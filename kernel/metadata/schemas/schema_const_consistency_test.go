@@ -119,6 +119,23 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 			got, want)
 	})
 
+	// contract.schema.json transports.items.enum is byte-locked to
+	// cellvocab.AllTransports(). The schema enum, governance FMT-39, and runtime
+	// metadata.IsKnownTransport all derive from the same ordered slice, so drift
+	// in either direction is caught here at test time.
+	t.Run("contract.schema.json#transportEnum", func(t *testing.T) {
+		t.Parallel()
+		got := readSchemaStringSlice(t, "contract.schema.json",
+			[]string{"properties", "transports", "items", "enum"})
+		want := make([]string, 0, len(cellvocab.AllTransports()))
+		for _, tr := range cellvocab.AllTransports() {
+			want = append(want, string(tr))
+		}
+		require.True(t, reflect.DeepEqual(want, got),
+			"schemas/contract.schema.json transports.items.enum drifted from cellvocab.AllTransports: schema=%v want=%v",
+			got, want)
+	})
+
 	// slice.schema.json contractUsages role enum is byte-locked to
 	// cellvocab.AllContractRoles(). Drift means schema validation and governance
 	// accept different role strings.

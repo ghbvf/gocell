@@ -93,6 +93,34 @@ const (
 	NonceStoreKindDistributed NonceStoreKind = "distributed"
 )
 
+// ReplaySafe reports whether a nonce store of this kind provides adequate
+// service-token replay defense for the given topology requirement.
+// requireDistributed is true for real multi-pod deployments, where a
+// single-process (in-memory) store cannot coordinate replay defense across pods.
+//
+// This is the single source of truth for "which NonceStoreKind is replay-safe".
+// Both composition.SharedDeps.validateProductionNonceStore (config-time, on the
+// declared SharedDeps.NonceStore, with rich diagnostics) and runtime/bootstrap's
+// phase0 auth-plan check (on the store that ACTUALLY guards the listener) gate on
+// this one predicate so the two enforcement points cannot drift. The noop
+// sentinel and any unrecognized kind are never replay-safe — fail-closed
+// (#1410 review F2/F1).
+func (k NonceStoreKind) ReplaySafe(requireDistributed bool) bool {
+	switch k {
+	case NonceStoreKindDistributed:
+		// Coordinates replay defense across pods; safe for any topology.
+		return true
+	case NonceStoreKindInMemory:
+		// Single-process state: sufficient only when the deployment is not
+		// multi-pod (single-pod acknowledged via Topology.SinglePodReplayProtection).
+		return !requireDistributed
+	default:
+		// NonceStoreKindNoop (no replay defense) and any unrecognized kind
+		// (cannot be proven safe) are rejected fail-closed.
+		return false
+	}
+}
+
 // NonceStore tracks nonces for replay prevention. This is the kernel projection
 // of runtime/auth.NonceStore; runtime/auth.InMemoryNonceStore and
 // runtime/auth.NoopNonceStore satisfy it structurally.

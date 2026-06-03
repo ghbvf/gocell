@@ -17,10 +17,9 @@ import (
 )
 
 type sharedReplayDeps struct {
-	RedisClient         *adapterredis.Client
-	NonceStore          kauth.NonceStore
-	ConsumerClaimer     idempotency.Claimer
-	ConsumerClaimerKind consumerClaimerKind
+	RedisClient     *adapterredis.Client
+	NonceStore      kauth.NonceStore
+	ConsumerClaimer idempotency.Claimer
 }
 
 type sharedMetricsDeps struct {
@@ -72,17 +71,16 @@ func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology, clk clo
 	if err != nil {
 		return sharedReplayDeps{}, err
 	}
-	claimer, claimerKind, err := buildConsumerClaimer(topo, redisClient, clk)
+	claimer, err := buildConsumerClaimer(topo, redisClient, clk)
 	if err != nil {
 		return sharedReplayDeps{}, err
 	}
 
 	loaded = true
 	return sharedReplayDeps{
-		RedisClient:         redisClient,
-		NonceStore:          nonceStore,
-		ConsumerClaimer:     claimer,
-		ConsumerClaimerKind: claimerKind,
+		RedisClient:     redisClient,
+		NonceStore:      nonceStore,
+		ConsumerClaimer: claimer,
 	}, nil
 }
 
@@ -140,12 +138,12 @@ func adapterInfoForSharedDeps(shared *composition.SharedDeps, locals *cmdLocals)
 		redisState = "configured"
 	}
 	nonceStoreKind := string(kauth.NonceStoreKindNoop)
-	if locals.internalGuard != nil && locals.internalGuard.NonceStore() != nil {
-		nonceStoreKind = string(locals.internalGuard.NonceStore().Kind())
+	if shared.NonceStore != nil {
+		nonceStoreKind = string(shared.NonceStore.Kind())
 	}
-	claimerKind := string(locals.consumerClaimerKind)
-	if claimerKind == "" {
-		claimerKind = string(consumerClaimerKindUnknown)
+	claimerKind := "unknown"
+	if shared.ConsumerClaimer != nil {
+		claimerKind = string(shared.ConsumerClaimer.Kind())
 	}
 	// HTTP idempotency store is wired default-ON when Redis is present
 	// (no env toggle); the gate in defaultRuntimeOptions is locals.redisClient != nil,

@@ -64,7 +64,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 
-	guard, err := internalGuardFromEnv(adapterMode, replay.NonceStore, clk)
+	internalRing, err := buildInternalHMACRing(adapterMode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -90,16 +90,16 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	}
 
 	// Build cmdLocals for cmd-private wiring (prometheus adapter types,
-	// vault-metrics factory, internalGuard, consumerClaimerKind, etc.).
-	// locals must be built before the configcore key-provider so that
-	// locals.vaultTransitMetrics (the once-guarded factory) is available.
+	// vault-metrics factory, pool MR, metrics handler). locals must be built
+	// before the configcore key-provider so that locals.vaultTransitMetrics
+	// (the once-guarded factory) is available. The internal-listener guard
+	// components (HMAC ring + NonceStore) now live on composition.SharedDeps,
+	// not here — control-plane validation introspects them from SharedDeps (#1410).
 	locals := &cmdLocals{
-		registry:            metricsDeps.PromStack.registry,
-		hookObserver:        metricsDeps.PromStack.hookObserver,
-		metricProvider:      metricsDeps.PromStack.metricProvider,
-		internalGuard:       guard,
-		consumerClaimerKind: replay.ConsumerClaimerKind,
-		metricsHandler:      metricsHandler,
+		registry:       metricsDeps.PromStack.registry,
+		hookObserver:   metricsDeps.PromStack.hookObserver,
+		metricProvider: metricsDeps.PromStack.metricProvider,
+		metricsHandler: metricsHandler,
 	}
 	locals.redisClient = replay.RedisClient
 	locals.initVaultMetricsFactory()
@@ -121,8 +121,11 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	}
 
 	// Build composition.SharedDeps (public, interface-only fields consumed by
-	// platform cell modules). Prometheus adapter types, internalGuard, and
-	// consumerClaimerKind stay in cmdLocals.
+	// platform cell modules). The control-plane production checks (verbose /
+	// metrics tokens, internal-listener guard, nonce-store kind, claimer kind)
+	// now run inside NewSharedDeps → validate (#1410), reading the promoted
+	// InternalHMACRing + NonceStore + the self-reporting ConsumerClaimer.Kind().
+	// Prometheus adapter types stay in cmdLocals.
 	compShared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                clk,
 		Topology:             topo,
@@ -132,7 +135,8 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		EventBus:             eb,
 		ConfigEventCollector: metricsDeps.ConfigEventCollector,
 		ConsumerClaimer:      replay.ConsumerClaimer,
-		InternalHMACRing:     guard.ring,
+		InternalHMACRing:     internalRing,
+		NonceStore:           replay.NonceStore,
 		PrimaryHTTPAddr:      primaryAddr,
 		InternalHTTPAddr:     internalAddr,
 		HealthHTTPAddr:       healthAddr,
@@ -150,9 +154,10 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		return nil, nil, err
 	}
 
-	// Cmd-side production validation (nonce store kind, claimer kind, health
-	// reachability, control-plane tokens) that depends on cmd-private types.
-	if err := validateCorebundleDeps(compShared, locals); err != nil {
+	// Residual cmd-deployment-contract check: reject the .env.example sample
+	// verbose token in real mode (a cmd artifact, not a portable composition
+	// contract). All other control-plane checks moved into NewSharedDeps (#1410).
+	if err := validateCorebundleDeps(compShared); err != nil {
 		slog.Warn("corebundle: cmd-side validation failed",
 			slog.String("requested_mode", adapterMode),
 			slog.String("effective_mode", topo.AdapterInfo()["mode"]))

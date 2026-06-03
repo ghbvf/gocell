@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/observability"
@@ -32,14 +31,19 @@ const DefaultBodyLimit int64 = 1 << 20
 //
 // collector=nil disables only the body-limit fast-path rejection counter
 // (RecordBodyLimitRejection); it does not affect streaming 413 accounting.
-func BodyLimit(maxBytes int64, collector metrics.Collector) func(http.Handler) http.Handler {
+//
+// validCellIDs is the assembly's closed cell-id set (M12b #1093), threaded in by
+// the router; the rejection's cell label is resolved through the sealed
+// metrics.ResolveCellLabel funnel, so an out-of-set cell degrades to the
+// RuntimeCellSentinel exactly like the Metrics middleware.
+func BodyLimit(maxBytes int64, collector metrics.Collector, validCellIDs map[string]struct{}) func(http.Handler) http.Handler {
 	if maxBytes <= 0 {
 		maxBytes = DefaultBodyLimit
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength > maxBytes {
-				recordBodyLimitRejection(collector, r)
+				recordBodyLimitRejection(collector, r, validCellIDs)
 				writeBodyTooLarge(r.Context(), w)
 				return
 			}
@@ -49,21 +53,19 @@ func BodyLimit(maxBytes int64, collector metrics.Collector) func(http.Handler) h
 	}
 }
 
-// recordBodyLimitRejection extracts cell and route from the request context and
-// calls collector.RecordBodyLimitRejection. It is a no-op when collector is nil.
-// Complexity extracted here to keep BodyLimit's cognitive complexity ≤ 15.
-func recordBodyLimitRejection(collector metrics.Collector, r *http.Request) {
+// recordBodyLimitRejection resolves the cell label through the sealed
+// metrics.ResolveCellLabel funnel and calls collector.RecordBodyLimitRejection.
+// It is a no-op when collector is nil. Complexity extracted here to keep
+// BodyLimit's cognitive complexity ≤ 15.
+func recordBodyLimitRejection(collector metrics.Collector, r *http.Request, validCellIDs map[string]struct{}) {
 	if collector == nil {
 		return
 	}
 	ctx := r.Context()
-	cellID := metrics.RuntimeCellSentinel
-	if v, ok := ctxkeys.CellIDFrom(ctx); ok && v != "" {
-		cellID = v
-	}
+	cell := metrics.ResolveCellLabel(ctx, validCellIDs)
 	route := RouteFor(ctx, r.Method, r.URL.Path)
 	observability.SafeObserve(slog.Default(), func() {
-		collector.RecordBodyLimitRejection(ctx, cellID, route)
+		collector.RecordBodyLimitRejection(ctx, cell, route)
 	})
 }
 

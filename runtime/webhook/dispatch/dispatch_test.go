@@ -52,7 +52,7 @@ func TestBuildConsumers_HappyPath(t *testing.T) {
 	reqs := []cell.WebhookDispatchRequest{
 		dispatchReq("webhook.shopify.orders.v1", "shopify", "ordercore"),
 	}
-	consumers, err := BuildConsumers(testClock(), reqs, store, kwh.NewSafePolicy())
+	consumers, err := BuildConsumers(testClock(), reqs, store, kwh.NewSafePolicy(), kwh.Metrics{})
 	require.NoError(t, err)
 	require.Len(t, consumers, 1)
 
@@ -71,20 +71,20 @@ func TestBuildConsumers_HappyPath(t *testing.T) {
 
 func TestBuildConsumers_Empty(t *testing.T) {
 	t.Parallel()
-	consumers, err := BuildConsumers(testClock(), nil, testStore(t, "s"), kwh.NewSafePolicy())
+	consumers, err := BuildConsumers(testClock(), nil, testStore(t, "s"), kwh.NewSafePolicy(), kwh.Metrics{})
 	require.NoError(t, err)
 	assert.Empty(t, consumers)
 }
 
 func TestBuildConsumers_NilStore(t *testing.T) {
 	t.Parallel()
-	_, err := BuildConsumers(testClock(), nil, nil, kwh.NewSafePolicy())
+	_, err := BuildConsumers(testClock(), nil, nil, kwh.NewSafePolicy(), kwh.Metrics{})
 	requireWebhookConfigErr(t, err)
 }
 
 func TestBuildConsumers_NilPolicy(t *testing.T) {
 	t.Parallel()
-	_, err := BuildConsumers(testClock(), nil, testStore(t, "s"), nil)
+	_, err := BuildConsumers(testClock(), nil, testStore(t, "s"), nil, kwh.Metrics{})
 	requireWebhookConfigErr(t, err)
 }
 
@@ -92,7 +92,7 @@ func TestBuildConsumers_UnregisteredSource(t *testing.T) {
 	t.Parallel()
 	store := testStore(t, "shopify")
 	reqs := []cell.WebhookDispatchRequest{dispatchReq("webhook.x.v1", "stripe", "c")} // "stripe" not registered
-	_, err := BuildConsumers(testClock(), reqs, store, kwh.NewSafePolicy())
+	_, err := BuildConsumers(testClock(), reqs, store, kwh.NewSafePolicy(), kwh.Metrics{})
 	requireWebhookConfigErr(t, err)
 }
 
@@ -103,7 +103,7 @@ func TestBuildConsumers_NilSelector(t *testing.T) {
 		Spec:     kwh.DispatchSpec{ContractID: "webhook.x.v1", SourceID: "shopify", CellID: "c"},
 		Selector: nil,
 	}
-	_, err := BuildConsumers(testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy())
+	_, err := BuildConsumers(testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy(), kwh.Metrics{})
 	requireWebhookConfigErr(t, err)
 }
 
@@ -111,7 +111,7 @@ func TestBuildConsumers_InvalidSpec(t *testing.T) {
 	t.Parallel()
 	store := testStore(t, "shopify")
 	req := dispatchReq("", "shopify", "c") // empty ContractID → spec invalid
-	_, err := BuildConsumers(testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy())
+	_, err := BuildConsumers(testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy(), kwh.Metrics{})
 	requireWebhookConfigErr(t, err)
 }
 

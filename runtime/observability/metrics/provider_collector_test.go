@@ -7,6 +7,7 @@ import (
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/observability/metrics/metricstest"
 )
 
 func TestProviderCollector_RejectsNilProvider(t *testing.T) {
@@ -22,8 +23,8 @@ func TestProviderCollector_NopProviderNoPanic(t *testing.T) {
 	}
 	// Recording through the Nop provider must not panic.
 	ctx := context.Background()
-	c.RecordRequest(ctx, "dev", "GET", "/api/v1/users", 200, 0.05)
-	c.RecordRequest(ctx, "dev", "POST", "/api/v1/users", 201, 0.12)
+	c.RecordRequest(ctx, metricstest.Label("dev"), "GET", "/api/v1/users", 200, 0.05)
+	c.RecordRequest(ctx, metricstest.Label("dev"), "POST", "/api/v1/users", 201, 0.12)
 }
 
 func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
@@ -32,7 +33,7 @@ func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest(context.Background(), "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest(context.Background(), metricstest.Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 1 {
@@ -69,7 +70,7 @@ func TestProviderCollector_ForwardsCallerCtx(t *testing.T) {
 
 	want := "sentinel-ctx-value"
 	ctx := context.WithValue(context.Background(), ctxKey{}, want)
-	c.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest(ctx, metricstest.Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
 
 	assertForwardedCtx := func(label string, ops []spyOp) {
 		if len(ops) != 1 {
@@ -94,7 +95,7 @@ func TestProviderCollector_RecordBodyLimitRejection_NopProviderNoPanic(t *testin
 	}
 	// Must not panic.
 	ctx := context.Background()
-	c.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
+	c.RecordBodyLimitRejection(ctx, metricstest.Label("accesscore"), "/api/v1/upload")
 }
 
 func TestProviderCollector_RecordBodyLimitRejection_EmitsLabels(t *testing.T) {
@@ -103,7 +104,7 @@ func TestProviderCollector_RecordBodyLimitRejection_EmitsLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordBodyLimitRejection(context.Background(), "configcore", "/api/v1/config")
+	c.RecordBodyLimitRejection(context.Background(), metricstest.Label("configcore"), "/api/v1/config")
 
 	ops := p.counterOps["http_request_body_limit_rejections_total"]
 	if len(ops) != 1 {
@@ -130,9 +131,9 @@ func TestProviderCollector_PerCallCellLabel(t *testing.T) {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
 	ctx := context.Background()
-	c.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
-	c.RecordRequest(ctx, "auditcore", "GET", "/api/v1/audit", 200, 0.02)
-	c.RecordRequest(ctx, "_runtime", "GET", "/healthz", 200, 0.001)
+	c.RecordRequest(ctx, metricstest.Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest(ctx, metricstest.Label("auditcore"), "GET", "/api/v1/audit", 200, 0.02)
+	c.RecordRequest(ctx, metricstest.RuntimeLabel(), "GET", "/healthz", 200, 0.001)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 3 {

@@ -4,13 +4,9 @@ import (
 	"context"
 	"testing"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
@@ -45,9 +41,9 @@ func TestCompositionSharedDeps_NewSharedDeps_MemoryTopology(t *testing.T) {
 }
 
 // TestValidateCorebundleDeps_VerboseEndpoint is a focused table-driven test for
-// the verbose endpoint invariant — validateCorebundleDeps must reject any
+// the verbose endpoint invariant — composition.SharedDeps.validate rejects any
 // SharedDeps that has no verbose token and has not explicitly waived the
-// endpoint.
+// endpoint. The sample-placeholder CP2 check (cmd-only) is also covered here.
 func TestValidateCorebundleDeps_VerboseEndpoint(t *testing.T) {
 	prodTopo := mkTopo("real", "postgres", true)
 	devTopo := mkTopo("", "memory", false)
@@ -72,25 +68,13 @@ func TestValidateCorebundleDeps_VerboseEndpoint(t *testing.T) {
 			wantErr:      false,
 		},
 		{
-			name:         "dev mode with neither token nor disabled is rejected",
-			topo:         devTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = false },
-			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN must be set",
-		},
-		{
 			name:         "prod mode with token is valid",
 			topo:         prodTopo,
 			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = "unit-test-verbose"; d.VerboseDisabled = false },
 			wantErr:      false,
 		},
 		{
-			name:         "prod mode cannot waive verbose via VerboseDisabled",
-			topo:         prodTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = true },
-			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
-		},
-		{
-			name:         "prod mode rejects the .env.example sample verbose token",
+			name:         "prod mode rejects the .env.example sample verbose token (CP2)",
 			topo:         prodTopo,
 			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = SampleVerbosePlaceholder; d.VerboseDisabled = false },
 			wantErr:      true, wantSubstr: "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE",
@@ -105,9 +89,9 @@ func TestValidateCorebundleDeps_VerboseEndpoint(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			shared, locals := newValidatedSharedDepsAndLocals(t, tc.topo)
+			shared, _ := newValidatedSharedDepsAndLocals(t, tc.topo)
 			tc.mutateShared(shared)
-			err := validateCorebundleDeps(shared, locals)
+			err := validateCorebundleDeps(shared)
 			if !tc.wantErr {
 				assert.NoError(t, err)
 				return
@@ -116,58 +100,6 @@ func TestValidateCorebundleDeps_VerboseEndpoint(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantSubstr)
 		})
 	}
-}
-
-func TestValidateCorebundleDeps_InternalListenerRequiresAddrAndGuard(t *testing.T) {
-	tests := []struct {
-		name string
-		topo bootstrap.Topology
-	}{
-		{name: "dev", topo: mkTopo("", "memory", false)},
-		{name: "real", topo: mkTopo("real", "postgres", true)},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			shared, locals := newValidatedSharedDepsAndLocals(t, tc.topo)
-
-			shared.InternalHTTPAddr = ""
-			err := validateCorebundleDeps(shared, locals)
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "InternalHTTPAddr")
-			assert.Contains(t, err.Error(), "must be set")
-
-			shared2, locals2 := newValidatedSharedDepsAndLocals(t, tc.topo)
-			shared2.InternalHTTPAddr = "127.0.0.1:9090"
-			locals2.internalGuard = nil
-
-			err = validateCorebundleDeps(shared2, locals2)
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "/internal/v1/*")
-			assert.NotContains(t, err.Error(), "clear GOCELL_HTTP_INTERNAL_ADDR")
-		})
-	}
-}
-
-func TestValidateCorebundleDeps_RealMultiPodInMemoryNonceStore_LogsWarnAndErrors(t *testing.T) {
-	topo := mkTopo("real", "postgres", false)
-	shared, locals := newValidatedSharedDepsAndLocals(t, topo)
-
-	buf, restore := captureSlogWarnLines(t)
-	t.Cleanup(restore)
-
-	err := validateCorebundleDeps(shared, locals)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GOCELL_SINGLE_POD=1")
-	out := buf.String()
-	assert.Contains(t, out, "in-memory nonce store rejected")
-	assert.Contains(t, out, "multi-pod")
-	assert.Contains(t, out, "nonce_store_kind")
-	assert.Contains(t, out, string(kauth.NonceStoreKindInMemory))
-	assert.Contains(t, out, "GOCELL_SINGLE_POD=1")
 }
 
 func TestLoadSharedDepsFromEnv_RealModeAllowsDefaultLoopbackHealthWithLocalOnlyWaiver(t *testing.T) {
@@ -191,37 +123,4 @@ func TestLoadSharedDepsFromEnv_RealModeAllowsDefaultLoopbackHealthWithLocalOnlyW
 	require.NoError(t, err)
 	assert.Equal(t, "127.0.0.1:9091", compShared.HealthHTTPAddr)
 	assert.True(t, compShared.HealthLocalOnly)
-}
-
-type validateDistributedNonceStore struct{}
-
-func (validateDistributedNonceStore) Kind() kauth.NonceStoreKind {
-	return kauth.NonceStoreKindDistributed
-}
-
-func (validateDistributedNonceStore) CheckAndMark(context.Context, string) error {
-	return nil
-}
-
-func TestValidateCorebundleDeps_RealMultiPodRejectsInMemoryClaimerCode(t *testing.T) {
-	topo := mkTopo("real", "postgres", false)
-	shared, locals := newValidatedSharedDepsAndLocals(t, topo)
-	// Use a distributed nonce store so we only test the claimer check.
-	locals.internalGuard = &internalGuard{
-		ring:       locals.internalGuard.ring,
-		nonceStore: validateDistributedNonceStore{},
-		mw:         locals.internalGuard.mw,
-	}
-	locals.consumerClaimerKind = consumerClaimerKindInMemory
-
-	err := validateCorebundleDeps(shared, locals)
-
-	require.Error(t, err)
-	leaves := errutil.FlattenJoined(err)
-	require.Len(t, leaves, 1)
-
-	var ec *errcode.Error
-	require.ErrorAs(t, leaves[0], &ec)
-	assert.Equal(t, errcode.ErrControlplaneClaimerNotDistributed, ec.Code)
-	assert.Contains(t, ec.Error(), "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED")
 }

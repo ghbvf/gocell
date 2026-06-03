@@ -3,9 +3,11 @@ package composition
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -110,6 +112,21 @@ type SharedDeps struct {
 	// coupling to the cmd-private type.
 	InternalHMACRing *auth.HMACKeyRing
 
+	// NonceStore is the replay-defense store backing the /internal/v1/*
+	// service-token guard. Promoted from cmd/corebundle's private internalGuard
+	// struct (alongside InternalHMACRing) so that production control-plane
+	// validation can introspect Kind() at the composition boundary: in adapter
+	// mode "real" a NoopNonceStore is rejected, and an in-memory store requires
+	// the single-pod acknowledgement. Nil is permitted in dev/test adapter
+	// modes (the Kind checks are real-mode-only); see validateProductionControlPlane.
+	//
+	// Note: although validate() only checks NonceStore in real adapter mode, any
+	// consumer that wires the internal-listener auth chain via
+	// auth.NewAuthServiceToken must supply a non-nil NonceStore — that constructor
+	// fail-fasts on nil regardless of adapter mode. In dev/test supply
+	// auth.NewInMemoryNonceStore(...).
+	NonceStore kauth.NonceStore
+
 	// PrimaryHTTPAddr is the bind address for the public HTTP listener.
 	PrimaryHTTPAddr string
 
@@ -177,11 +194,22 @@ func NewSharedDeps(d SharedDeps) (*SharedDeps, error) {
 }
 
 // validate checks that all required cross-cutting dependencies are present and
-// runs the topology-derivable startup guards that depend only on public
-// SharedDeps fields (health-listener reachability). It omits the
-// production-control-plane checks that depend on cmd-private types (nonce store
-// kind, claimer kind, internal guard, verbose-endpoint token) — those stay in
-// cmd/corebundle's validateCorebundleDeps.
+// runs every composition-contract startup guard. Guards apply in two groups:
+//
+//   - Always-required (every adapter mode): IL1 (InternalHTTPAddr must be set),
+//     IL2 (InternalHMACRing must be set), V1/V2 (verbose endpoint must be
+//     token-gated or explicitly disabled).
+//   - Real-adapter-mode-only: CP1 (VerboseDisabled forbidden), CP3 (MetricsToken
+//     required), CP5 (NonceStore must be set), CP6 (NoopNonceStore rejected),
+//     CP7 (in-memory store rejected for multi-pod), CP8 (distributed claimer
+//     required for multi-pod).
+//
+// These checks formerly lived in cmd/corebundle's validateCorebundleDeps and
+// depended on cmd-private types (#1410); reading the now-promoted
+// SharedDeps.NonceStore and the self-reporting ConsumerClaimer.Kind() lets
+// every NewSharedDeps consumer — not just cmd/corebundle — inherit them
+// fail-closed. The only residual cmd-side check is the .env.example sample-token
+// guard (a cmd deployment artifact).
 func (d *SharedDeps) validate() error {
 	if d == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -229,8 +257,160 @@ func (d *SharedDeps) validate() error {
 	}
 
 	errs = append(errs, d.validateHealthReachability()...)
+	errs = append(errs, d.validateControlPlane()...)
 
 	return errors.Join(errs...)
+}
+
+// requiresDistributedReplay reports whether the topology demands a distributed
+// (multi-pod) replay-defense posture: real adapter mode without the single-pod
+// acknowledgement. It delegates to bootstrap.Topology.RequiresDistributedReplay
+// (the single source); cmd/corebundle/redis.go's pre-SharedDeps copy delegates to
+// the same method, so the rule lives in exactly one place rather than three.
+func (d *SharedDeps) requiresDistributedReplay() bool {
+	return d.Topology.RequiresDistributedReplay()
+}
+
+// validateControlPlane runs the control-plane production guards promoted from
+// cmd/corebundle (#1410). The internal-listener guard and verbose-endpoint
+// gating apply in every adapter mode; the token / nonce-store-kind / claimer-kind
+// checks apply only in real adapter mode.
+func (d *SharedDeps) validateControlPlane() []error {
+	var errs []error
+	errs = append(errs, d.validateInternalListenerGuard()...)
+	errs = append(errs, d.validateVerboseEndpoint()...)
+	if d.Topology.RequireProductionControlPlane() {
+		errs = append(errs, d.validateProductionControlPlane()...)
+	}
+	return errs
+}
+
+// validateInternalListenerGuard enforces that the always-enabled internal
+// listener has a bind address and a service-token HMAC ring in every adapter
+// mode (IL1 / IL2). The internal listener protects /internal/v1/* and is never
+// optional.
+func (d *SharedDeps) validateInternalListenerGuard() []error {
+	var errs []error
+	if d.InternalHTTPAddr == "" {
+		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"SharedDeps.InternalHTTPAddr must be set; the internal listener is always "+
+				"enabled and protected by the service-token HMAC ring"))
+	}
+	if d.InternalHMACRing == nil {
+		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
+			"SharedDeps.InternalHMACRing must be set to protect /internal/v1/*; "+
+				"build it via auth.NewHMACKeyRing (cmd/corebundle convention: from GOCELL_SERVICE_SECRET)"))
+	}
+	return errs
+}
+
+// validateVerboseEndpoint enforces that every adapter mode either configures a
+// verbose token or explicitly waives the endpoint (V1 / V2), so a forgotten
+// GOCELL_READYZ_VERBOSE_TOKEN never silently exposes cell topology.
+func (d *SharedDeps) validateVerboseEndpoint() []error {
+	if d.VerboseDisabled {
+		if d.VerboseToken != "" {
+			// Both set: VerboseDisabled wins, but it is almost certainly a
+			// misconfiguration. Surface it so operators spot it in startup logs.
+			slog.Warn("controlplane: verbose endpoint config ambiguity",
+				slog.String("hint", "SharedDeps.VerboseDisabled overrides a non-empty VerboseToken; "+
+					"the token will not be enforced — clear one of the two fields"))
+		}
+		return nil
+	}
+	if d.VerboseToken != "" {
+		return nil
+	}
+	return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
+		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or GOCELL_READYZ_VERBOSE_DISABLED=1 to "+
+			"waive the verbose endpoint) so /readyz?verbose is never anonymous "+
+			"(these are SharedDeps.VerboseToken / VerboseDisabled fields; env-var names are cmd/corebundle convention)")}
+}
+
+// validateProductionControlPlane runs the real-adapter-mode gate: token-gated
+// verbose + metrics endpoints (CP1 / CP3), a replay-safe nonce store of the
+// right kind (CP5 / CP6 / CP7), and a distributed outbox idempotency claimer for
+// multi-pod deployments (CP8). It is only invoked when
+// Topology.RequireProductionControlPlane() is true.
+func (d *SharedDeps) validateProductionControlPlane() []error {
+	var errs []error
+	if d.VerboseDisabled {
+		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
+			"SharedDeps.VerboseDisabled must not be set in adapter mode \"real\"; "+
+				"production must keep the token-gated verbose endpoint available for "+
+				"on-call diagnostics (cmd/corebundle convention: GOCELL_READYZ_VERBOSE_DISABLED)"))
+	}
+	if d.MetricsToken == "" {
+		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"SharedDeps.MetricsToken must be set in adapter mode \"real\" to prevent anonymous "+
+				"/metrics exposure; scrapers must send X-Metrics-Token header "+
+				"(cmd/corebundle convention: GOCELL_METRICS_TOKEN)"))
+	}
+	errs = append(errs, d.validateProductionNonceStore()...)
+	if d.requiresDistributedReplay() &&
+		!validation.IsNilInterface(d.ConsumerClaimer) &&
+		d.ConsumerClaimer.Kind() != idempotency.ClaimerKindDistributed {
+		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
+			"SharedDeps.ConsumerClaimer must report Kind() == ClaimerKindDistributed in real "+
+				"multi-pod deployments; a single-process claimer cannot coordinate outbox "+
+				"idempotency across pods. Inject a distributed (e.g. Redis-backed) claimer, or "+
+				"acknowledge single-pod topology (cmd/corebundle convention: set GOCELL_REDIS_ADDR "+
+				"for a distributed claimer, or GOCELL_SINGLE_POD=1)"))
+	}
+	return errs
+}
+
+// validateProductionNonceStore enforces the service-token replay-defense store
+// kind in real adapter mode: present (CP5), not the no-op sentinel (CP6), not
+// single-process in-memory for a multi-pod deployment (CP7), and — fail-closed —
+// not an unrecognized kind (#1410 review F2).
+//
+// The accept/reject decision is single-sourced through
+// kauth.NonceStoreKind.ReplaySafe — the SAME predicate runtime/bootstrap's phase0
+// auth-plan check gates on (#1410 review F1), so the config-time check (this, on
+// the declared SharedDeps.NonceStore) and the usage-time check (bootstrap, on the
+// store that actually guards the listener) can never drift on "which kinds are
+// safe". The switch below only chooses the diagnostic message for WHY an unsafe
+// store was rejected; it does not re-decide safety.
+func (d *SharedDeps) validateProductionNonceStore() []error {
+	if validation.IsNilInterface(d.NonceStore) {
+		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"SharedDeps.NonceStore must be set in adapter mode \"real\" to protect "+
+				"/internal/v1/* against replay; inject an InMemoryNonceStore (single pod) "+
+				"or a shared store (multi-pod)")}
+	}
+	kind := d.NonceStore.Kind()
+	if kind.ReplaySafe(d.requiresDistributedReplay()) {
+		return nil
+	}
+	switch kind {
+	case kauth.NonceStoreKindNoop:
+		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"control-plane NonceStore must be a replay-safe implementation in adapter mode "+
+				"\"real\"; NoopNonceStore detected — inject InMemoryNonceStore (single pod) "+
+				"or a shared store (multi-pod)")}
+	case kauth.NonceStoreKindInMemory:
+		// ReplaySafe(requireDistributed=false) is true, so reaching here means the
+		// topology requires distributed replay (multi-pod).
+		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
+			slog.String("nonce_store_kind", string(kauth.NonceStoreKindInMemory)),
+			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments "+
+				"or configure a distributed NonceStore"))
+		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"in-memory nonce store requires single-pod topology (Topology.SinglePodReplayProtection) "+
+				"or a distributed store for multi-pod; refuse fail-open "+
+				"(cmd/corebundle convention: GOCELL_SINGLE_POD=1)")}
+	default:
+		// Fail-closed: an unrecognized NonceStoreKind cannot be proven replay-safe.
+		slog.Warn("controlplane: unrecognized nonce store kind rejected in adapter mode real",
+			slog.String("nonce_store_kind", string(kind)),
+			slog.String("hint", "use an in-memory (single-pod) or distributed nonce store; "+
+				"a new replay-safe kind must be added to kauth.NonceStoreKind.ReplaySafe"))
+		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"control-plane NonceStore reports an unrecognized kind in adapter mode \"real\"; "+
+				"only in-memory (single-pod) or distributed (any topology) replay-safe stores "+
+				"are accepted — refuse fail-open")}
+	}
 }
 
 // validateHealthReachability rejects a loopback-only health-listener bind address

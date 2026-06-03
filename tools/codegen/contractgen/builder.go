@@ -52,6 +52,7 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		PackagePath:                             pkgPath,
 		ContractID:                              contractID,
 		Kind:                                    contract.Kind,
+		Transports:                              contract.Transports,
 		ConsistencyLevel:                        contract.ConsistencyLevel,
 		SourceFile:                              contract.File,
 		PanicReasonPolicyNil:                    kebab + "-policy-nil",
@@ -61,6 +62,19 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		PanicReasonClientsOnlySchemaCompileFailed:  kebab + "-clients-only-schema-compile-failed",
 		PanicReasonServiceOwnedSchemaCompileFailed: kebab + "-service-owned-schema-compile-failed",
 		PanicReasonStandardSchemaCompileFailed:     kebab + "-standard-schema-compile-failed",
+	}
+
+	// Fail closed on empty transports before any kind-specific template can
+	// index into Transports[0] and panic. The parser sets default transports for
+	// all known kinds (defaultTransportsForKind); nil/empty only occurs for an
+	// unknown kind whose governance rule FMT-39 was not run (e.g. direct codegen
+	// invocation bypassing gocell validate). Catching it here makes the error
+	// self-explaining rather than an index-out-of-range template panic.
+	if len(contract.Transports) == 0 {
+		return nil, fmt.Errorf(
+			"contractgen build: contract %q has empty transports (parser defaults per kind; "+
+				"an unknown kind yields none — governance FMT-39 should have rejected this)",
+			contractID)
 	}
 
 	contractDir := filepath.Dir(contract.File)

@@ -275,3 +275,39 @@ metrics:
         - cell
         - result
       file: runtime/observability/metrics/saga.go
+    - name: webhook_deliveries_total
+      type: counter
+      help: Total outbound webhook deliveries by outcome.
+      labels:
+        - result
+        - source
+      file: kernel/webhook/metrics.go
+    - name: webhook_delivery_duration_seconds
+      type: histogram
+      help: Outbound webhook delivery wall-clock duration in seconds.
+      labels:
+        - source
+      buckets:
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+        - "30"
+      file: kernel/webhook/metrics.go
+    - name: webhook_idempotency_hits_total
+      type: counter
+      help: Total inbound webhook duplicate deliveries deduplicated by the idempotency claimer.
+      labels:
+        - source
+      file: kernel/webhook/metrics.go
+    - name: webhook_signature_failures_total
+      type: counter
+      help: Total inbound webhook signature-verification failures by reason.
+      labels:
+        - source
+        - reason
+      file: kernel/webhook/metrics.go

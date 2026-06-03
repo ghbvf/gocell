@@ -81,7 +81,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]),
 		slog.String("http_idempotency_store", adapterInfo["http_idempotency_store"]))
 
-	logSinglePodNonceStoreAcknowledgement(compShared, locals)
+	logSinglePodNonceStoreAcknowledgement(compShared)
 
 	// runtimeOptsFunc stays in cmd: auth construction is AUTH-PLAN-04-allowlisted
 	// to cmd/.
@@ -182,12 +182,9 @@ func logAssemblyMaturity(cells []cell.Cell) {
 // logSinglePodNonceStoreAcknowledgement emits a positive-path Info log when
 // the deployment is real-mode + single-pod + InMemory NonceStore, making the
 // operator's explicit single-pod replay-protection choice visible at startup.
-func logSinglePodNonceStoreAcknowledgement(shared *composition.SharedDeps, locals *cmdLocals) {
-	if shared == nil || locals == nil || locals.internalGuard == nil {
-		return
-	}
-	ns := locals.internalGuard.NonceStore()
-	if ns == nil || ns.Kind() != kauth.NonceStoreKindInMemory {
+func logSinglePodNonceStoreAcknowledgement(shared *composition.SharedDeps) {
+	if shared == nil || shared.NonceStore == nil ||
+		shared.NonceStore.Kind() != kauth.NonceStoreKindInMemory {
 		return
 	}
 	if !shared.Topology.RequireProductionControlPlane() ||
@@ -195,6 +192,6 @@ func logSinglePodNonceStoreAcknowledgement(shared *composition.SharedDeps, local
 		return
 	}
 	slog.Info("controlplane: in-memory nonce store acknowledged for single-pod deployment",
-		slog.String("nonce_store_kind", string(ns.Kind())),
+		slog.String("nonce_store_kind", string(shared.NonceStore.Kind())),
 		slog.String("note", "GOCELL_SINGLE_POD=1 set; multi-pod deployments must inject a distributed NonceStore via WithServiceTokenNonceStore"))
 }

@@ -173,6 +173,8 @@ type flakyCommitOnceClaimer struct {
 	commitAttempts atomic.Int32
 }
 
+func (c *flakyCommitOnceClaimer) Kind() idempotency.ClaimerKind { return c.inner.Kind() }
+
 func (c *flakyCommitOnceClaimer) Claim(
 	ctx context.Context, key string, leaseTTL, doneTTL time.Duration,
 ) (idempotency.ClaimState, idempotency.Receipt, error) {

@@ -31,14 +31,6 @@ type cmdLocals struct {
 	// composition.SharedDeps.MetricsProvider as the interface value.
 	metricProvider *promadapter.MetricProvider
 
-	// internalGuard is the service-token guard protecting /internal/v1/*.
-	// Its NonceStore and ring are exposed via composition.SharedDeps.InternalHMACRing
-	// (ring only); the NonceStore is accessible for validateControlPlane via this field.
-	internalGuard *internalGuard
-
-	// consumerClaimerKind is corebundle-local metadata for validateControlPlane.
-	consumerClaimerKind consumerClaimerKind
-
 	// poolMR is the postgres pool as a ManagedResource, registered first by
 	// runtimeBaseOptions for LIFO last-close.
 	poolMR kernellifecycle.ManagedResource

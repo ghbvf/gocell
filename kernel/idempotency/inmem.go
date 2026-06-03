@@ -61,6 +61,11 @@ func NewInMemClaimer(clk clock.Clock) *InMemClaimer {
 	}
 }
 
+// Kind reports the in-memory classification: this claimer coordinates
+// idempotency within a single process only and must not back a multi-pod
+// deployment.
+func (c *InMemClaimer) Kind() ClaimerKind { return ClaimerKindInMemory }
+
 // Claim acquires a processing lease. See Claimer.Claim for semantics.
 func (c *InMemClaimer) Claim(_ context.Context, key string, leaseTTL, doneTTL time.Duration) (ClaimState, Receipt, error) {
 	c.mu.Lock()

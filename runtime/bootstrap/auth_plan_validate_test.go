@@ -5,6 +5,7 @@ package bootstrap
 // validateAuthPlanMTLSBindings. Uses package bootstrap for white-box access.
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -354,13 +355,45 @@ func TestValidateAuthNoneExclusive(t *testing.T) {
 	}
 }
 
+// applyDistributedNonceStore reports NonceStoreKindDistributed (the cross-pod
+// replay-safe kind). Used to exercise the multi-pod accept path.
+type applyDistributedNonceStore struct{}
+
+func (s *applyDistributedNonceStore) CheckAndMark(_ context.Context, _ string) error { return nil }
+func (s *applyDistributedNonceStore) Kind() auth.NonceStoreKind {
+	return auth.NonceStoreKindDistributed
+}
+
+// applyUnknownNonceStore reports an unrecognized kind, exercising the fail-closed
+// default branch of the replay-safe check (#1410 review F1/F2).
+type applyUnknownNonceStore struct{}
+
+func (s *applyUnknownNonceStore) CheckAndMark(_ context.Context, _ string) error { return nil }
+func (s *applyUnknownNonceStore) Kind() auth.NonceStoreKind {
+	return auth.NonceStoreKind("totally-bogus-kind")
+}
+
+// realTopo builds a real adapter-mode topology with the given single-pod flag.
+func realTopo(t *testing.T, singlePod bool) Topology {
+	t.Helper()
+	topo, err := NewTopology("real", "postgres", singlePod)
+	require.NoError(t, err)
+	return topo
+}
+
 func TestValidateAuthServiceTokenPlans(t *testing.T) {
 	t.Parallel()
 
 	validPlan := authtest.MustAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{})
+	distributedPlan := authtest.MustAuthServiceToken(&applyDistributedNonceStore{}, &applyStubHMACKeyring{})
+	unknownPlan := authtest.MustAuthServiceToken(&applyUnknownNonceStore{}, &applyStubHMACKeyring{})
 
 	tests := []struct {
-		name    string
+		name string
+		// topo is the control-plane topology injected via WithControlPlaneTopology.
+		// The zero value (dev mode) skips the topology-dependent replay check, so
+		// existing cases keep their prior behavior.
+		topo    Topology
 		chain   []auth.ListenerAuth
 		wantErr string
 	}{
@@ -401,12 +434,49 @@ func TestValidateAuthServiceTokenPlans(t *testing.T) {
 			},
 			wantErr: "NonceStoreKindNoop",
 		},
+		// --- #1410 review F1: topology-dependent replay-safety on the ACTUAL plan store ---
+		{
+			name:    "real multi-pod rejects in-memory store (F1 loop closed)",
+			topo:    realTopo(t, false),
+			chain:   []auth.ListenerAuth{validPlan}, // applyStubNonceStore == in_memory
+			wantErr: "not replay-safe",
+		},
+		{
+			name:  "real single-pod accepts in-memory store",
+			topo:  realTopo(t, true),
+			chain: []auth.ListenerAuth{validPlan},
+		},
+		{
+			name:  "real multi-pod accepts distributed store",
+			topo:  realTopo(t, false),
+			chain: []auth.ListenerAuth{distributedPlan},
+		},
+		{
+			name:    "real multi-pod rejects unknown kind fail-closed",
+			topo:    realTopo(t, false),
+			chain:   []auth.ListenerAuth{unknownPlan},
+			wantErr: "not replay-safe",
+		},
+		{
+			name:    "real single-pod rejects unknown kind fail-closed",
+			topo:    realTopo(t, true),
+			chain:   []auth.ListenerAuth{unknownPlan},
+			wantErr: "not replay-safe",
+		},
+		{
+			// Zero Topology is dev mode (RequireProductionControlPlane is false),
+			// so the topology-dependent replay check is skipped and in-memory passes.
+			name:  "dev mode skips replay check (in-memory accepted)",
+			topo:  Topology{},
+			chain: []auth.ListenerAuth{validPlan},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := bootstrapWithListener(cell.InternalListener, tc.chain, nil)
+			b.controlPlaneTopology = tc.topo
 
 			err := b.validateAuthServiceTokenPlans()
 			if tc.wantErr == "" {

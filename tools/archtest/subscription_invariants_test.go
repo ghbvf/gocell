@@ -1,7 +1,7 @@
 // invariants:
 //   - INVARIANT: SUBSCRIPTION-FIELDS-FROZEN-01
 //   - INVARIANT: SUBSCRIPTION-OBSERVABILITY-NO-FALLBACK-01
-//   - INVARIANT: REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01
+//   - INVARIANT: REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01
 //
 // Package archtest — subscription identity invariants.
 //
@@ -17,16 +17,21 @@
 //
 // AI-robust layering:
 //
-//   - HARD (compile-time): Registry.Subscribe(spec, handler, consumerGroup,
-//     cellID, opts...) requires cellID as a positional parameter. Omission
-//     is a compile failure at the call site, and so is misuse of cellID as
-//     a SubscriptionOption.
-//   - MEDIUM (this file): three AST/typeseval invariants pin the
-//     Subscription field set, the absence of an ObservabilityID fallback,
-//     and the Subscribe method signature shape. They are the safety net
-//     for an AI session that tries to re-introduce the historical
-//     "CellID==\"\" → fallback to ConsumerGroup" behavior or to add a
-//     WithSubscriptionCellID option that would relax the Hard contract.
+//   - HARD (compile-time): cellID is mandatory in BOTH registration forms.
+//     (a) Positional Registry.Subscribe(spec, handler, consumerGroup, cellID,
+//     opts...) — codegen's form; omitting cellID is a compile failure, and so
+//     is misuse of cellID as a SubscriptionOption.
+//     (b) Fluent Registry.Subscription(spec).CellID(id)… — the hand-written
+//     form; the terminal Register lives only on *subscriptionBuilder, which is
+//     reachable only by calling CellID on the *subscriptionDraft, so skipping
+//     CellID leaves no path to Register (compile failure).
+//   - MEDIUM (this file): AST invariants pin the Subscription field set, the
+//     absence of an ObservabilityID fallback, the positional Subscribe signature
+//     shape, AND the two-type builder method-set / return-type shape that keeps
+//     the missing-CellID path unreachable. They are the safety net for an AI
+//     session that tries to re-introduce the historical "CellID==\"\" → fallback
+//     to ConsumerGroup" behavior, add a WithSubscriptionCellID option, or
+//     collapse the builder to a single type with an optional CellID.
 //
 // RED-fixture self-checks (K#07 follow-up, gh #658):
 //
@@ -480,7 +485,7 @@ func (s Subscription) ObservabilityID() string { return s.ConsumerGroup }`,
 }
 
 // ---------------------------------------------------------------------------
-// REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01
+// REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01 (prong 1: positional signature)
 // ---------------------------------------------------------------------------
 
 // collectSubscribeSignatureViolations verifies the FuncType describes
@@ -551,11 +556,14 @@ func collectSubscribeSignatureViolations(fset *token.FileSet, ft *ast.FuncType, 
 	return violations
 }
 
-// TestRegistrySubscribeCellIDPositional enforces
-// REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01: the kernel/cell.Registrar.Subscribe
+// TestRegistrySubscribeCellIDPositional enforces prong 1 of
+// REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01: the kernel/cell.Registrar.Subscribe
 // method must declare cellID as the 4th positional string parameter (after
 // spec, handler, consumerGroup), and SubscriptionOption may only appear as
-// the final variadic parameter.
+// the final variadic parameter. It also pins that the fluent entry point
+// Registrar.Subscription returns *subscriptionDraft — the draft type whose only
+// method (CellID) is the sole door to the terminal Register (see prong 2,
+// TestRegistrySubscribeCellIDMandatory_BuilderShape).
 //
 // This is the AI-HARD compile-time gate's safety net: changing cellID from
 // positional `cellID string` to an option (`WithSubscriptionCellID(...)`)
@@ -581,8 +589,9 @@ func TestRegistrySubscribeCellIDPositional(t *testing.T) {
 	}
 
 	var (
-		foundInterface bool
-		foundMethod    bool
+		foundInterface    bool
+		foundMethod       bool
+		foundSubscription bool
 	)
 	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "Registrar" {
@@ -597,18 +606,29 @@ func TestRegistrySubscribeCellIDPositional(t *testing.T) {
 			if len(m.Names) == 0 {
 				continue
 			}
+			ft, ok := m.Type.(*ast.FuncType)
+			if !ok {
+				continue
+			}
 			for _, name := range m.Names {
-				if name.Name != "Subscribe" {
-					continue
-				}
-				foundMethod = true
-				ft, ok := m.Type.(*ast.FuncType)
-				if !ok {
-					t.Errorf("REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01: Subscribe method type is not a func")
-					return
-				}
-				for _, v := range collectSubscribeSignatureViolations(fset, ft, "kernel/cell/registry.go") {
-					t.Errorf("REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01: %s", v)
+				switch name.Name {
+				case "Subscribe":
+					foundMethod = true
+					for _, v := range collectSubscribeSignatureViolations(fset, ft, "kernel/cell/registry.go") {
+						t.Errorf("REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01: %s", v)
+					}
+				case "Subscription":
+					foundSubscription = true
+					// The fluent entry point must return *subscriptionDraft — the
+					// draft whose only method (CellID) gates the terminal Register.
+					// Returning the builder (or anything else) directly would let a
+					// caller reach Register without CellID.
+					if ft.Results == nil || len(ft.Results.List) != 1 ||
+						!isPtrIdent(ft.Results.List[0].Type, "subscriptionDraft") {
+						t.Errorf("REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01: Registrar.Subscription must return " +
+							"*subscriptionDraft (the CellID-gated draft); a different return type would let a " +
+							"caller reach Register without naming the cell")
+					}
 				}
 			}
 		}
@@ -618,6 +638,9 @@ func TestRegistrySubscribeCellIDPositional(t *testing.T) {
 	}
 	if !foundMethod {
 		t.Fatalf("Subscribe method not found on Registrar interface in kernel/cell/registry.go")
+	}
+	if !foundSubscription {
+		t.Fatalf("Subscription method not found on Registrar interface in kernel/cell/registry.go")
 	}
 }
 
@@ -653,7 +676,7 @@ func subscribeFuncTypeFromSrc(t *testing.T, src string) (*ast.FuncType, *token.F
 }
 
 // TestRegistrySubscribeCellIDPositional_DetectorFixtures is the RED-fixture
-// self-check for REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01. It drives
+// self-check for REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01. It drives
 // collectSubscribeSignatureViolations against synthetic interface declarations
 // so a regression that stops detecting a demoted cellID positional fails here.
 func TestRegistrySubscribeCellIDPositional_DetectorFixtures(t *testing.T) {
@@ -738,4 +761,405 @@ type Registrar interface {
 func isIdent(expr ast.Expr, name string) bool {
 	id, ok := expr.(*ast.Ident)
 	return ok && id.Name == name
+}
+
+func isPtrIdent(expr ast.Expr, name string) bool {
+	star, ok := expr.(*ast.StarExpr)
+	return ok && isIdent(star.X, name)
+}
+
+// ---------------------------------------------------------------------------
+// REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01 (prong 2: builder type-state shape)
+// ---------------------------------------------------------------------------
+
+const (
+	subDraftType   = "subscriptionDraft"
+	subBuilderType = "subscriptionBuilder"
+)
+
+// receiverBaseName returns the (pointer-stripped) named receiver type of a
+// method declaration, e.g. "subscriptionDraft" for `func (d *subscriptionDraft)`.
+func receiverBaseName(fd *ast.FuncDecl) (string, bool) {
+	if fd.Recv == nil || len(fd.Recv.List) != 1 {
+		return "", false
+	}
+	t := fd.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	id, ok := t.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return id.Name, true
+}
+
+// firstResultType returns the first result type expression of a method, or nil
+// when the method declares no results.
+func firstResultType(fd *ast.FuncDecl) ast.Expr {
+	if fd.Type.Results == nil || len(fd.Type.Results.List) == 0 {
+		return nil
+	}
+	return fd.Type.Results.List[0].Type
+}
+
+// diffMethodSet reports a violation per missing or unexpected method, freezing
+// receiver typeName's method set to exactly want.
+func diffMethodSet(label, typeName string, got map[string]ast.Expr, want []string) []string {
+	wantSet := make(map[string]struct{}, len(want))
+	for _, w := range want {
+		wantSet[w] = struct{}{}
+	}
+	var v []string
+	for name := range got {
+		if _, ok := wantSet[name]; !ok {
+			v = append(v, fmt.Sprintf("%s: %s has unexpected method %q (method set frozen to %v)",
+				label, typeName, name, want))
+		}
+	}
+	for _, w := range want {
+		if _, ok := got[w]; !ok {
+			v = append(v, fmt.Sprintf("%s: %s missing required method %q (method set frozen to %v)",
+				label, typeName, w, want))
+		}
+	}
+	return v
+}
+
+// collectSubscriptionBuilderShapeViolations freezes the two-type type-state
+// builder so the missing-CellID path stays unreachable at compile time:
+//
+//   - subscriptionDraft exposes EXACTLY {CellID} (no Register), and CellID
+//     returns *subscriptionBuilder — the sole door to the terminal Register.
+//   - subscriptionBuilder exposes EXACTLY {ConsumerGroup, Handler, SliceID,
+//     Register}, and Register returns error.
+//
+// Collapsing the two types into one (optional-CellID regression), giving the
+// draft a Register, or changing CellID's return type would each surface here.
+func collectSubscriptionBuilderShapeViolations(_ *token.FileSet, f *ast.File, label string) []string {
+	draft := map[string]ast.Expr{}
+	builder := map[string]ast.Expr{}
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		name, ok := receiverBaseName(fd)
+		if !ok {
+			return
+		}
+		switch name {
+		case subDraftType:
+			draft[fd.Name.Name] = firstResultType(fd)
+		case subBuilderType:
+			builder[fd.Name.Name] = firstResultType(fd)
+		}
+	})
+
+	var v []string
+	v = append(v, diffMethodSet(label, subDraftType, draft, []string{"CellID"})...)
+	v = append(v, diffMethodSet(label, subBuilderType, builder,
+		[]string{"ConsumerGroup", "Handler", "SliceID", "Register"})...)
+
+	// CellID must return *subscriptionBuilder (the only path to Register).
+	if rt, ok := draft["CellID"]; ok && !isPtrIdent(rt, subBuilderType) {
+		v = append(v, fmt.Sprintf("%s: %s.CellID must return *%s (the sole path to the terminal Register); "+
+			"a different return type would open or sever the type-state gate", label, subDraftType, subBuilderType))
+	}
+	// Register must return error.
+	if rt, ok := builder["Register"]; ok && !isIdent(rt, "error") {
+		v = append(v, fmt.Sprintf("%s: %s.Register must return error", label, subBuilderType))
+	}
+	return v
+}
+
+// TestRegistrySubscribeCellIDMandatory_BuilderShape enforces prong 2 of
+// REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01: the hand-written fluent builder keeps
+// CellID a compile-time red line by construction. subscriptionDraft has exactly
+// one method (CellID → *subscriptionBuilder) and no Register; subscriptionBuilder
+// owns the terminal Register. Freezing both method sets prevents an AI session
+// from collapsing the builder to a single type with an optional CellID, which
+// would demote the contract from compile-time to runtime fail-fast.
+//
+// Detector blind spots (vs scanner.EachInSubtree[ast.FuncDecl] + AST receiver
+// resolution): the collector keys on the receiver's pointer-stripped *ast.Ident
+// name, so a value receiver `func (b subscriptionBuilder)` is also counted
+// (covered — receiverBaseName strips no Star but matches the Ident); an embedded
+// method promoted from another type would NOT be seen (Go AST has no embedded
+// method decl in this file — the builder embeds nothing, asserted by the
+// FIELDS-FROZEN sibling pattern not applying here). The RED fixtures below cover
+// the collapse / extra-method / return-type regressions.
+func TestRegistrySubscribeCellIDMandatory_BuilderShape(t *testing.T) {
+	root := findModuleRoot(t)
+	path := filepath.Join(root, "kernel", "cell", "subscription_builder.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	for _, v := range collectSubscriptionBuilderShapeViolations(fset, f, "kernel/cell/subscription_builder.go") {
+		t.Errorf("REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01: %s", v)
+	}
+}
+
+// TestRegistrySubscribeCellIDMandatory_BuilderShape_DetectorFixtures is the
+// RED-fixture self-check for prong 2. It drives
+// collectSubscriptionBuilderShapeViolations against synthetic builder
+// declarations so a regression that stops detecting a collapsed/leaky builder
+// shape fails here.
+func TestRegistrySubscribeCellIDMandatory_BuilderShape_DetectorFixtures(t *testing.T) {
+	t.Parallel()
+	const greenBuilder = `
+func (b *subscriptionBuilder) ConsumerGroup(g string) *subscriptionBuilder { return b }
+func (b *subscriptionBuilder) Handler(h Handler) *subscriptionBuilder { return b }
+func (b *subscriptionBuilder) SliceID(s string) *subscriptionBuilder { return b }
+func (b *subscriptionBuilder) Register() error { return nil }
+`
+	cases := []struct {
+		name           string
+		src            string
+		wantViolations bool
+	}{
+		{
+			name: "green_canonical",
+			src: `package fixture
+type subscriptionDraft struct{}
+type subscriptionBuilder struct{}
+func (d *subscriptionDraft) CellID(id string) *subscriptionBuilder { return nil }` + greenBuilder,
+		},
+		{
+			// All methods collapsed onto one type with an optional CellID — the
+			// regression the prong exists to stop. Draft missing → CellID missing
+			// on Draft AND an unexpected CellID on Builder.
+			name: "red_collapsed_single_type",
+			src: `package fixture
+type subscriptionBuilder struct{}
+func (b *subscriptionBuilder) CellID(id string) *subscriptionBuilder { return b }` + greenBuilder,
+			wantViolations: true,
+		},
+		{
+			name: "red_draft_has_register",
+			src: `package fixture
+type subscriptionDraft struct{}
+type subscriptionBuilder struct{}
+func (d *subscriptionDraft) CellID(id string) *subscriptionBuilder { return nil }
+func (d *subscriptionDraft) Register() error { return nil }` + greenBuilder,
+			wantViolations: true,
+		},
+		{
+			name: "red_cellid_returns_draft",
+			src: `package fixture
+type subscriptionDraft struct{}
+type subscriptionBuilder struct{}
+func (d *subscriptionDraft) CellID(id string) *subscriptionDraft { return d }` + greenBuilder,
+			wantViolations: true,
+		},
+		{
+			name: "red_builder_missing_register",
+			src: `package fixture
+type subscriptionDraft struct{}
+type subscriptionBuilder struct{}
+func (d *subscriptionDraft) CellID(id string) *subscriptionBuilder { return nil }
+func (b *subscriptionBuilder) ConsumerGroup(g string) *subscriptionBuilder { return b }
+func (b *subscriptionBuilder) Handler(h Handler) *subscriptionBuilder { return b }
+func (b *subscriptionBuilder) SliceID(s string) *subscriptionBuilder { return b }`,
+			wantViolations: true,
+		},
+		{
+			name: "red_draft_extra_method",
+			src: `package fixture
+type subscriptionDraft struct{}
+type subscriptionBuilder struct{}
+func (d *subscriptionDraft) CellID(id string) *subscriptionBuilder { return nil }
+func (d *subscriptionDraft) Sneak() error { return nil }` + greenBuilder,
+			wantViolations: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f, fset := parseSubscriptionFixtureSrc(t, tc.src)
+			violations := collectSubscriptionBuilderShapeViolations(fset, f, "fixture.go")
+			if got := len(violations) > 0; got != tc.wantViolations {
+				t.Errorf("violations non-empty = %v (%v), want %v", got, violations, tc.wantViolations)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01 (prong 2: builder field-set freeze)
+// ---------------------------------------------------------------------------
+
+// subscriptionStepFieldSets is the frozen field set of each sealed step type.
+// The recorder back-reference + contract spec + the accumulated subscription
+// fields are the ENTIRE legitimate state; anything else is drift.
+var subscriptionStepFieldSets = map[string][]string{
+	subDraftType:   {"reg", "spec"},
+	subBuilderType: {"reg", "spec", "cellID", "consumerGroup", "sliceID", "handler"},
+}
+
+// diffStringSet returns one message per missing or unexpected member, freezing
+// got to exactly want.
+func diffStringSet(got, want []string) []string {
+	wantSet := make(map[string]struct{}, len(want))
+	for _, w := range want {
+		wantSet[w] = struct{}{}
+	}
+	gotSet := make(map[string]struct{}, len(got))
+	for _, g := range got {
+		gotSet[g] = struct{}{}
+	}
+	var msgs []string
+	for g := range gotSet {
+		if _, ok := wantSet[g]; !ok {
+			msgs = append(msgs, fmt.Sprintf("unexpected field %q", g))
+		}
+	}
+	for _, w := range want {
+		if _, ok := gotSet[w]; !ok {
+			msgs = append(msgs, fmt.Sprintf("missing field %q", w))
+		}
+	}
+	return msgs
+}
+
+// collectSubscriptionBuilderFieldViolations freezes the two step-type struct
+// field sets and forbids embedded (unnamed) fields. This closes the
+// embedded-promotion blind spot that the method-set freeze
+// (collectSubscriptionBuilderShapeViolations) cannot see: an embedded type that
+// PROMOTES a Register method onto subscriptionDraft has no FuncDecl with a draft
+// receiver in this file, so the method-set scan misses it — but it appears here
+// as an unnamed field and is rejected, keeping the missing-CellID path
+// unreachable.
+//
+// Detector blind spots (vs scanner.EachInSubtree[ast.TypeSpec] + struct field
+// AST): field TYPES are not inspected (only names + embedded-ness), which is
+// sufficient — promotion requires an embedded (unnamed) field regardless of its
+// type, and a renamed/extra/missing named field is caught by the set diff. The
+// RED fixtures below cover embed / extra-field / missing-field regressions.
+func collectSubscriptionBuilderFieldViolations(f *ast.File, label string) []string {
+	got := map[string][]string{}
+	embedded := map[string]bool{}
+	seen := map[string]bool{}
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		name := ts.Name.Name
+		if name != subDraftType && name != subBuilderType {
+			return
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			return
+		}
+		seen[name] = true
+		if st.Fields == nil {
+			return
+		}
+		for _, fld := range st.Fields.List {
+			if len(fld.Names) == 0 {
+				embedded[name] = true
+				continue
+			}
+			for _, n := range fld.Names {
+				got[name] = append(got[name], n.Name)
+			}
+		}
+	})
+
+	var viol []string
+	for _, typeName := range []string{subDraftType, subBuilderType} {
+		if !seen[typeName] {
+			viol = append(viol, fmt.Sprintf("%s: struct %s not found (field-set freeze)", label, typeName))
+			continue
+		}
+		if embedded[typeName] {
+			viol = append(viol, fmt.Sprintf("%s: %s must not embed any type — an embedded field can promote a "+
+				"method (e.g. Register) onto the step type and reopen the missing-CellID path", label, typeName))
+		}
+		for _, m := range diffStringSet(got[typeName], subscriptionStepFieldSets[typeName]) {
+			viol = append(viol, fmt.Sprintf("%s: %s field set frozen to %v — %s", label, typeName,
+				subscriptionStepFieldSets[typeName], m))
+		}
+	}
+	return viol
+}
+
+// TestRegistrySubscribeCellIDMandatory_BuilderFields enforces prong 2 on the
+// FIELD axis: the two sealed step types expose exactly their legitimate fields
+// and embed nothing. Method-set freezing alone cannot see an embedded type that
+// promotes Register onto the draft; freezing the field sets — and banning
+// embedded fields outright — keeps the missing-CellID path unexpressible.
+func TestRegistrySubscribeCellIDMandatory_BuilderFields(t *testing.T) {
+	root := findModuleRoot(t)
+	path := filepath.Join(root, "kernel", "cell", "subscription_builder.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	for _, v := range collectSubscriptionBuilderFieldViolations(f, "kernel/cell/subscription_builder.go") {
+		t.Errorf("REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01: %s", v)
+	}
+}
+
+// TestRegistrySubscribeCellIDMandatory_BuilderFields_DetectorFixtures is the
+// RED-fixture self-check for the field-freeze collector: a regression that stops
+// detecting an embed / extra-field / missing-field drift fails here.
+func TestRegistrySubscribeCellIDMandatory_BuilderFields_DetectorFixtures(t *testing.T) {
+	t.Parallel()
+	const greenBuilderStruct = `
+type subscriptionBuilder struct {
+	reg *RegistryRecorder
+	spec contractspec.ContractSpec
+	cellID string
+	consumerGroup string
+	sliceID string
+	handler outbox.EntryHandler
+}`
+	cases := []struct {
+		name           string
+		src            string
+		wantViolations bool
+	}{
+		{
+			name: "green_canonical",
+			src: `package fixture
+type subscriptionDraft struct { reg *RegistryRecorder; spec contractspec.ContractSpec }` + greenBuilderStruct,
+		},
+		{
+			// Embedded type on the draft can promote a Register method — the exact
+			// blind spot the method-set freeze cannot see.
+			name: "red_draft_embeds_type",
+			src: `package fixture
+type subscriptionDraft struct { *RegistryRecorder; spec contractspec.ContractSpec }` + greenBuilderStruct,
+			wantViolations: true,
+		},
+		{
+			name: "red_builder_extra_field",
+			src: `package fixture
+type subscriptionDraft struct { reg *RegistryRecorder; spec contractspec.ContractSpec }
+type subscriptionBuilder struct {
+	reg *RegistryRecorder
+	spec contractspec.ContractSpec
+	cellID string
+	consumerGroup string
+	sliceID string
+	handler outbox.EntryHandler
+	sneak string
+}`,
+			wantViolations: true,
+		},
+		{
+			name: "red_draft_missing_field",
+			src: `package fixture
+type subscriptionDraft struct { reg *RegistryRecorder }` + greenBuilderStruct,
+			wantViolations: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f, _ := parseSubscriptionFixtureSrc(t, tc.src)
+			viol := collectSubscriptionBuilderFieldViolations(f, "fixture.go")
+			if got := len(viol) > 0; got != tc.wantViolations {
+				t.Errorf("violations non-empty = %v (%v), want %v", got, viol, tc.wantViolations)
+			}
+		})
+	}
 }

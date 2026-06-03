@@ -82,8 +82,6 @@ func buildIdemTestAsm(t *testing.T, shared *composition.SharedDeps) (*assembly.C
 func TestDefaultRuntimeOptions_NoRedisNoIdempotencyOption(t *testing.T) {
 	shared, locals := buildTestSharedDepsAndLocals(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
-	locals.internalGuard = newTestInternalGuard(t)
-	shared.InternalHMACRing = locals.internalGuard.ring
 	asm, cb := buildIdemTestAsm(t, shared)
 
 	// Override factory to prevent any accidental call.
@@ -109,8 +107,6 @@ func TestDefaultRuntimeOptions_NoRedisNoIdempotencyOption(t *testing.T) {
 func TestDefaultRuntimeOptions_WithRedisAddsIdempotencyOption(t *testing.T) {
 	shared, locals := buildTestSharedDepsAndLocals(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
-	locals.internalGuard = newTestInternalGuard(t)
-	shared.InternalHMACRing = locals.internalGuard.ring
 	asm, cb := buildIdemTestAsm(t, shared)
 
 	// Override factory to inject a MemStore without a real Redis connection.
@@ -150,8 +146,6 @@ func TestDefaultRuntimeOptions_WithRedisAddsIdempotencyOption(t *testing.T) {
 func TestDefaultRuntimeOptions_RedisPresentButNilStore_FailsClosed(t *testing.T) {
 	shared, locals := buildTestSharedDepsAndLocals(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
-	locals.internalGuard = newTestInternalGuard(t)
-	shared.InternalHMACRing = locals.internalGuard.ring
 	asm, cb := buildIdemTestAsm(t, shared)
 
 	// Simulate a fail-open factory: non-nil client but nil store, nil error.

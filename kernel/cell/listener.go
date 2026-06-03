@@ -40,4 +40,13 @@ var (
 	InternalListener = ListenerRef{"internal"}
 	// HealthListener is the dedicated listener for /healthz, /readyz, /metrics.
 	HealthListener = ListenerRef{"health"}
+	// WebhookListener is the dedicated listener for inbound webhook receive
+	// endpoints. Inbound webhooks authenticate at the application layer via HMAC
+	// signature verification inside the receiver (kernel/webhook), NOT via a
+	// transport auth chain — so its WithListener auth chain is auth.AuthNone{}.
+	// It is kept off PrimaryListener precisely because PrimaryListener typically
+	// carries a JWT chain that would 401 an HMAC-signed (non-JWT) webhook before
+	// it ever reaches the verifier. See .claude/rules/gocell/runtime-api.md
+	// §"单 listener 单 auth scheme".
+	WebhookListener = ListenerRef{"webhook"}
 )

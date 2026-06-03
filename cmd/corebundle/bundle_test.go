@@ -21,7 +21,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -31,22 +30,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
-
-// newTestInternalGuard constructs an internalGuard backed by an
-// InMemoryNonceStore so prod-topology validation paths see a
-// replay-safe store (NonceStoreKindInMemory) rather than a Noop.
-func newTestInternalGuard(t *testing.T) *internalGuard {
-	t.Helper()
-	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
-	require.NoError(t, err)
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
-	require.NoError(t, err)
-	return &internalGuard{
-		ring:       ring,
-		nonceStore: store,
-		mw:         func(h http.Handler) http.Handler { return h },
-	}
-}
 
 // promStackToLocals creates a minimal *cmdLocals from a promStack for tests
 // that call buildAssembly / runtimeBaseOptions / defaultRuntimeOptions
@@ -87,7 +70,10 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 	configEventCollector, err := obmetrics.NewProviderConfigEventCollector(ps.metricProvider)
 	require.NoError(t, err)
 
-	guard := newTestInternalGuard(t)
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	require.NoError(t, err)
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
 		Clock:                clock.Real(),
@@ -98,7 +84,8 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 		EventBus:             eb,
 		ConfigEventCollector: configEventCollector,
 		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
-		InternalHMACRing:     guard.ring,
+		InternalHMACRing:     ring,
+		NonceStore:           nonceStore,
 		InternalHTTPAddr:     "127.0.0.1:9090",
 		HealthHTTPAddr:       "127.0.0.1:9091",
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
@@ -108,11 +95,9 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 	require.NoError(t, err)
 
 	locals := &cmdLocals{
-		registry:            ps.registry,
-		hookObserver:        ps.hookObserver,
-		metricProvider:      ps.metricProvider,
-		internalGuard:       guard,
-		consumerClaimerKind: consumerClaimerKindInMemory,
+		registry:       ps.registry,
+		hookObserver:   ps.hookObserver,
+		metricProvider: ps.metricProvider,
 	}
 	locals.initVaultMetricsFactory()
 
@@ -141,7 +126,10 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 	configEventCollector, err := obmetrics.NewProviderConfigEventCollector(ps.metricProvider)
 	require.NoError(t, err)
 
-	guard := newTestInternalGuard(t)
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	require.NoError(t, err)
 
 	shared := &composition.SharedDeps{
 		Clock:                clock.Real(),
@@ -152,7 +140,8 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 		EventBus:             eventbus.New(clock.Real()),
 		ConfigEventCollector: configEventCollector,
 		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
-		InternalHMACRing:     guard.ring,
+		InternalHMACRing:     ring,
+		NonceStore:           nonceStore,
 		InternalHTTPAddr:     "127.0.0.1:9090",
 		HealthHTTPAddr:       ":9091",
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
@@ -165,11 +154,9 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 	}
 
 	locals := &cmdLocals{
-		registry:            ps.registry,
-		hookObserver:        ps.hookObserver,
-		metricProvider:      ps.metricProvider,
-		internalGuard:       guard,
-		consumerClaimerKind: consumerClaimerKindInMemory,
+		registry:       ps.registry,
+		hookObserver:   ps.hookObserver,
+		metricProvider: ps.metricProvider,
 	}
 	locals.initVaultMetricsFactory()
 
@@ -201,31 +188,37 @@ var _ kernellifecycle.ManagedResource = (*fakeManagedResource)(nil)
 // buildInternalAuthChain coverage
 // ---------------------------------------------------------------------------
 
-// TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken verifies that
-// a guard produces an AuthServiceToken plan in the chain.
-func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
-	guard := newTestInternalGuard(t)
-	chain, err := buildInternalAuthChain(guard)
+// TestBuildInternalAuthChain_NonNilSharedDeps_ReturnsServiceToken verifies that
+// a SharedDeps with ring + nonce store produces an AuthServiceToken plan in the chain.
+func TestBuildInternalAuthChain_NonNilSharedDeps_ReturnsServiceToken(t *testing.T) {
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
 	require.NoError(t, err)
-	require.Len(t, chain, 1, "guard must produce a 1-plan chain")
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	require.NoError(t, err)
+	shared := &composition.SharedDeps{
+		InternalHMACRing: ring,
+		NonceStore:       nonceStore,
+	}
+	chain, err := buildInternalAuthChain(shared)
+	require.NoError(t, err)
+	require.Len(t, chain, 1, "shared deps must produce a 1-plan chain")
 	_, ok := chain[0].(kauth.AuthServiceToken)
 	assert.True(t, ok, "plan must be kauth.AuthServiceToken; got %T", chain[0])
 }
 
 // TestBuildInternalAuthChain_NoopNonceStoreRejected verifies that
-// buildInternalAuthChain returns an error when the guard's NonceStore has
+// buildInternalAuthChain returns an error when the SharedDeps' NonceStore has
 // Kind() == NonceStoreKindNoop. kauth.NewAuthServiceToken enforces replay
 // protection is not silently disabled.
 func TestBuildInternalAuthChain_NoopNonceStoreRejected(t *testing.T) {
 	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
 	require.NoError(t, err)
-	guardWithNoop := &internalGuard{
-		ring:       ring,
-		nonceStore: auth.NewNoopNonceStore(),
-		mw:         func(h http.Handler) http.Handler { return h },
+	shared := &composition.SharedDeps{
+		InternalHMACRing: ring,
+		NonceStore:       auth.NewNoopNonceStore(),
 	}
 
-	_, err = buildInternalAuthChain(guardWithNoop)
+	_, err = buildInternalAuthChain(shared)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "build internal auth chain",
 		"error must be wrapped with build-site context")
@@ -290,8 +283,6 @@ func TestBuildConsumerBase_NilSharedDepsErrors(t *testing.T) {
 func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared, locals := buildTestSharedDepsAndLocals(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
-	locals.internalGuard = newTestInternalGuard(t)
-	shared.InternalHMACRing = locals.internalGuard.ring
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo})
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
@@ -336,27 +327,28 @@ func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
 
 	assert.Equal(t, "not-configured", info["redis"])
 	assert.Equal(t, string(kauth.NonceStoreKindInMemory), info["service_token_nonce_store"])
-	assert.Equal(t, string(consumerClaimerKindInMemory), info["outbox_consumer_claimer"])
+	assert.Equal(t, string(idempotency.ClaimerKindInMemory), info["outbox_consumer_claimer"])
 
 	locals.redisClient = new(adapterredis.Client)
-	locals.consumerClaimerKind = consumerClaimerKindDistributed
+	// Replace ConsumerClaimer with a distributed fake to drive the distributed path.
+	shared.ConsumerClaimer = fakeDistributedClaimer{}
 
 	info = adapterInfoForSharedDeps(shared, locals)
 
 	assert.Equal(t, "configured", info["redis"])
-	assert.Equal(t, string(consumerClaimerKindDistributed), info["outbox_consumer_claimer"])
+	assert.Equal(t, string(idempotency.ClaimerKindDistributed), info["outbox_consumer_claimer"])
 }
 
 // ---------------------------------------------------------------------------
-// validateCorebundleDeps / SharedDeps.Validate coverage
+// validateCorebundleDeps coverage (cmd-only residual: CP2 sample-placeholder check)
 // ---------------------------------------------------------------------------
 
-// TestCorebundleDepsValidate covers every invariant enforced by validateCorebundleDeps.
-// Each case takes a baseline that passes and mutates one field to verify the
-// validation surfaces that specific failure with the expected error.
+// TestCorebundleDepsValidate covers the residual validateCorebundleDeps invariants:
+// nil shared, the .env.example sample-placeholder CP2 check, and a happy case.
+// All other control-plane checks (verbose/metrics tokens, guard, nonce store,
+// claimer kind) moved to composition.SharedDeps.validate and are tested in
+// runtime/composition/shared_deps_test.go.
 func TestCorebundleDepsValidate(t *testing.T) {
-	// SinglePodReplayProtection=true acknowledges in-memory replay defense scope
-	// for single-pod deployments (mirrors GOCELL_SINGLE_POD=1).
 	prodTopo := mkTopo("real", "postgres", true)
 	devTopo := mkTopo("", "memory", false)
 
@@ -364,142 +356,70 @@ func TestCorebundleDepsValidate(t *testing.T) {
 		name         string
 		topo         bootstrap.Topology
 		mutateShared func(*composition.SharedDeps)
-		mutateLocals func(*cmdLocals)
 		wantErr      bool
-		wantSubstr   string
+		wantErrCode  errcode.Code
 	}{
 		{
-			name: "prod baseline is valid", topo: prodTopo,
-			mutateShared: func(*composition.SharedDeps) {}, mutateLocals: func(*cmdLocals) {}, wantErr: false,
+			name:         "nil shared returns error",
+			topo:         devTopo,
+			mutateShared: nil, // handled specially below
+			wantErr:      true,
+			wantErrCode:  errcode.ErrValidationFailed,
 		},
 		{
-			name: "dev baseline is valid", topo: devTopo,
-			mutateShared: func(*composition.SharedDeps) {}, mutateLocals: func(*cmdLocals) {}, wantErr: false,
-		},
-		{
-			name:         "prod missing verbose token",
+			name:         "prod happy case — non-sample token",
 			topo:         prodTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = "" },
-			mutateLocals: func(*cmdLocals) {},
-			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
-		},
-		{
-			name:         "dev missing verbose token",
-			topo:         devTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = "" },
-			mutateLocals: func(*cmdLocals) {},
-			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
-		},
-		{
-			name:         "dev with verbose disabled flag is valid",
-			topo:         devTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = true },
-			mutateLocals: func(*cmdLocals) {},
+			mutateShared: func(*composition.SharedDeps) {}, // already has non-sample token
 			wantErr:      false,
 		},
 		{
-			name:         "prod with verbose disabled flag is rejected",
-			topo:         prodTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseDisabled = true },
-			mutateLocals: func(*cmdLocals) {},
-			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
-		},
-		{
-			name:         "prod missing metrics token",
-			topo:         prodTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.MetricsToken = "" },
-			mutateLocals: func(*cmdLocals) {},
-			wantErr:      true, wantSubstr: "GOCELL_METRICS_TOKEN",
-		},
-		{
-			name:         "prod missing internal guard",
-			topo:         prodTopo,
+			name:         "dev happy case — non-sample token",
+			topo:         devTopo,
 			mutateShared: func(*composition.SharedDeps) {},
-			mutateLocals: func(l *cmdLocals) { l.internalGuard = nil },
-			wantErr:      true, wantSubstr: "GOCELL_SERVICE_SECRET",
+			wantErr:      false,
 		},
 		{
-			name:         "real multi-pod with in-memory claimer rejected",
-			topo:         mkTopo("real", "postgres", false),
-			mutateShared: func(*composition.SharedDeps) {},
-			mutateLocals: func(l *cmdLocals) { l.consumerClaimerKind = consumerClaimerKindInMemory },
-			wantErr:      true, wantSubstr: "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED",
-		},
-		{
-			name:         "prod guard with noop nonce store rejected",
-			topo:         prodTopo,
-			mutateShared: func(*composition.SharedDeps) {},
-			mutateLocals: func(l *cmdLocals) {
-				noopRing, _ := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
-				l.internalGuard = &internalGuard{
-					ring:       noopRing,
-					nonceStore: auth.NewNoopNonceStore(),
-					mw:         func(h http.Handler) http.Handler { return h },
-				}
+			name: "prod rejects .env.example sample verbose token (CP2)",
+			topo: prodTopo,
+			mutateShared: func(d *composition.SharedDeps) {
+				d.VerboseToken = SampleVerbosePlaceholder
 			},
-			wantErr: true, wantSubstr: "NoopNonceStore detected",
+			wantErr:     true,
+			wantErrCode: errcode.ErrControlplaneVerboseTokenSample,
 		},
 		{
-			name:         "real mode + in_memory + single_pod=false → error",
-			topo:         mkTopo("real", "postgres", false),
-			mutateShared: func(*composition.SharedDeps) {},
-			mutateLocals: func(*cmdLocals) {
-				// guard already has InMemoryNonceStore from newTestInternalGuard;
-				// topology lacks SinglePodReplayProtection so Validate rejects.
+			name: "dev permits sample verbose token (out-of-the-box demo path)",
+			topo: devTopo,
+			mutateShared: func(d *composition.SharedDeps) {
+				d.VerboseToken = SampleVerbosePlaceholder
 			},
-			wantErr: true, wantSubstr: "GOCELL_SINGLE_POD=1",
-		},
-		{
-			name:         "real mode + in_memory + single_pod=true → ok",
-			topo:         mkTopo("real", "postgres", true),
-			mutateShared: func(*composition.SharedDeps) {},
-			mutateLocals: func(*cmdLocals) {},
-			wantErr:      false,
-		},
-		{
-			name:         "prod rejects the .env.example sample verbose token",
-			topo:         prodTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = SampleVerbosePlaceholder },
-			mutateLocals: func(*cmdLocals) {},
-			wantErr:      true, wantSubstr: "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE",
-		},
-		{
-			name:         "dev permits the sample verbose token (out-of-the-box demo path)",
-			topo:         devTopo,
-			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = SampleVerbosePlaceholder },
-			mutateLocals: func(*cmdLocals) {},
-			wantErr:      false,
+			wantErr: false,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			shared, locals := newValidatedSharedDepsAndLocals(t, tc.topo)
-			tc.mutateShared(shared)
-			tc.mutateLocals(locals)
+			if tc.mutateShared == nil {
+				// nil-shared case
+				err := validateCorebundleDeps(nil)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "nil receiver")
+				return
+			}
 
-			err := validateCorebundleDeps(shared, locals)
+			shared, _ := newValidatedSharedDepsAndLocals(t, tc.topo)
+			tc.mutateShared(shared)
+
+			err := validateCorebundleDeps(shared)
 			if !tc.wantErr {
 				assert.NoError(t, err)
 				return
 			}
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantSubstr, "error must mention the offending field")
-			// Every joined error must be an *errcode.Error so callers can
-			// classify startup failures uniformly.
-			allowedCodes := map[errcode.Code]struct{}{
-				errcode.ErrValidationFailed:                  {},
-				errcode.ErrControlplaneServiceSecretMissing:  {},
-				errcode.ErrControlplaneNonceStoreMissing:     {},
-				errcode.ErrControlplaneVerboseTokenMissing:   {},
-				errcode.ErrControlplaneVerboseTokenSample:    {},
-				errcode.ErrControlplaneClaimerNotDistributed: {},
-			}
-			for _, sub := range errutil.FlattenJoined(err) {
+			if tc.wantErrCode != "" {
 				var ec *errcode.Error
-				require.ErrorAs(t, sub, &ec, "joined error %v must be *errcode.Error", sub)
-				_, ok := allowedCodes[ec.Code]
-				assert.True(t, ok, "unexpected error code %q from validateCorebundleDeps", ec.Code)
+				require.ErrorAs(t, err, &ec)
+				assert.Equal(t, tc.wantErrCode, ec.Code)
 			}
 		})
 	}
@@ -507,10 +427,7 @@ func TestCorebundleDepsValidate(t *testing.T) {
 
 // TestCorebundleDepsValidate_NilSharedDeps covers the defensive nil-shared case.
 func TestCorebundleDepsValidate_NilSharedDeps(t *testing.T) {
-	ps, err := buildPromStack()
-	require.NoError(t, err)
-	locals := promStackToLocals(ps)
-	err = validateCorebundleDeps(nil, locals)
+	err := validateCorebundleDeps(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil receiver")
 }

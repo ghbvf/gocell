@@ -10,19 +10,33 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/ctxkeys"
 )
+
+// testLabel constructs a CellLabel for white-box tests by routing the id
+// through the sole ResolveCellLabel funnel, preserving the sealed-construction
+// guarantee. An empty id yields the RuntimeCellSentinel via its real miss path
+// (no ctx cell); use testLabel("") for the framework sentinel rather than
+// testLabel(RuntimeCellSentinel), which would synthesize it as a member hit.
+func testLabel(id string) CellLabel {
+	if id == "" {
+		return ResolveCellLabel(context.Background(), nil)
+	}
+	return ResolveCellLabel(ctxkeys.WithCellID(context.Background(), id), map[string]struct{}{id: {}})
+}
 
 func TestInMemoryCollector_Handler(t *testing.T) {
 	ctx := context.Background()
 	c := NewInMemoryCollector()
-	c.RecordRequest(ctx, "auditcore", http.MethodPost, "/z", 500, 0.004)
-	c.RecordRequest(ctx, "accesscore", http.MethodPost, "/api", 201, 0.1)
-	c.RecordRequest(ctx, "accesscore", http.MethodGet, "/api", 200, 0.05)
-	c.RecordRequest(ctx, "accesscore", http.MethodGet, "/api", 200, 0.03)
-	c.RecordRequest(ctx, "accesscore", http.MethodGet, "/admin", 404, 0.002)
-	c.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
-	c.RecordBodyLimitRejection(ctx, "configcore", "/api/v1/config")
-	c.RecordBodyLimitRejection(ctx, "configcore", "/api/v1/config")
+	c.RecordRequest(ctx, testLabel("auditcore"), http.MethodPost, "/z", 500, 0.004)
+	c.RecordRequest(ctx, testLabel("accesscore"), http.MethodPost, "/api", 201, 0.1)
+	c.RecordRequest(ctx, testLabel("accesscore"), http.MethodGet, "/api", 200, 0.05)
+	c.RecordRequest(ctx, testLabel("accesscore"), http.MethodGet, "/api", 200, 0.03)
+	c.RecordRequest(ctx, testLabel("accesscore"), http.MethodGet, "/admin", 404, 0.002)
+	c.RecordBodyLimitRejection(ctx, testLabel("accesscore"), "/api/v1/upload")
+	c.RecordBodyLimitRejection(ctx, testLabel("configcore"), "/api/v1/config")
+	c.RecordBodyLimitRejection(ctx, testLabel("configcore"), "/api/v1/config")
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -68,8 +82,8 @@ func TestInMemoryCollector_Handler(t *testing.T) {
 func TestInMemoryCollector_Snapshot(t *testing.T) {
 	ctx := context.Background()
 	c := NewInMemoryCollector()
-	c.RecordRequest(ctx, "accesscore", "GET", "/a", 200, 0.001)
-	c.RecordRequest(ctx, "accesscore", "GET", "/a", 200, 0.002)
+	c.RecordRequest(ctx, testLabel("accesscore"), "GET", "/a", 200, 0.001)
+	c.RecordRequest(ctx, testLabel("accesscore"), "GET", "/a", 200, 0.002)
 
 	snap := c.Snapshot()
 	key := RequestKey{Cell: "accesscore", Method: "GET", Route: "/a", Status: 200}
@@ -80,8 +94,8 @@ func TestInMemoryCollector_Snapshot(t *testing.T) {
 func TestInMemoryCollector_PerCellSeparation(t *testing.T) {
 	ctx := context.Background()
 	c := NewInMemoryCollector()
-	c.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.001)
-	c.RecordRequest(ctx, "auditcore", "GET", "/api/v1/sessions", 200, 0.002)
+	c.RecordRequest(ctx, testLabel("accesscore"), "GET", "/api/v1/sessions", 200, 0.001)
+	c.RecordRequest(ctx, testLabel("auditcore"), "GET", "/api/v1/sessions", 200, 0.002)
 
 	snap := c.Snapshot()
 	assert.Equal(t, int64(1), snap.RequestCounts[RequestKey{
@@ -96,9 +110,9 @@ func TestInMemoryCollector_RecordBodyLimitRejection(t *testing.T) {
 	ctx := context.Background()
 	c := NewInMemoryCollector()
 
-	c.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
-	c.RecordBodyLimitRejection(ctx, "accesscore", "/api/v1/upload")
-	c.RecordBodyLimitRejection(ctx, "configcore", "/api/v1/config")
+	c.RecordBodyLimitRejection(ctx, testLabel("accesscore"), "/api/v1/upload")
+	c.RecordBodyLimitRejection(ctx, testLabel("accesscore"), "/api/v1/upload")
+	c.RecordBodyLimitRejection(ctx, testLabel("configcore"), "/api/v1/config")
 
 	snap := c.Snapshot()
 	assert.Equal(t, int64(2), snap.BodyLimitRejections[BodyLimitRejectionKey{
@@ -115,7 +129,7 @@ func TestInMemoryCollector_RecordBodyLimitRejection_NoSideEffectOnRequest(t *tes
 	ctx := context.Background()
 	c := NewInMemoryCollector()
 
-	c.RecordBodyLimitRejection(ctx, "_runtime", "unmatched")
+	c.RecordBodyLimitRejection(ctx, testLabel(""), "unmatched")
 
 	snap := c.Snapshot()
 	// RecordRequest map must remain empty.

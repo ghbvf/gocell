@@ -70,6 +70,13 @@ func copyContractSlice(src []*metadata.ContractMeta) []*metadata.ContractMeta {
 
 func deepCopyContract(c *metadata.ContractMeta) *metadata.ContractMeta {
 	cp := *c
+	// Deep copy mutable top-level slices so a returned ContractMeta cannot
+	// alias-mutate the registry's backing entry. Transports (#1389) and Triggers
+	// are both yaml-sourced []string on ContractMeta and shared the same miss —
+	// the shallow `cp := *c` above copies only the slice header, leaving the
+	// backing array shared. append([]string(nil), …) preserves a nil source as nil.
+	cp.Transports = append([]string(nil), c.Transports...)
+	cp.Triggers = append([]string(nil), c.Triggers...)
 	// Deep copy mutable Endpoints slices.
 	cp.Endpoints.Clients = append([]string(nil), c.Endpoints.Clients...)
 	cp.Endpoints.ActorSubscribers = append([]string(nil), c.Endpoints.ActorSubscribers...)

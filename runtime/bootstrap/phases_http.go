@@ -310,9 +310,18 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // applyListenerAuthChain extracts verifier options and non-JWT middleware;
 // the JWT verifier is installed via router.WithAuthMiddleware so the router
 // can build matcher-aware AuthMiddleware after FinalizeAuth.
-func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
-	opts := make([]router.Option, 0, len(b.routerOpts)+7)
+func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
+	opts := make([]router.Option, 0, len(b.routerOpts)+8)
 	opts = append(opts, b.routerOpts...)
+
+	// M12b (#1093): thread the assembly's closed cell-id set into every
+	// listener's router so the Metrics / BodyLimit middleware validates the
+	// request cell label against it at the metric write point (out-of-set →
+	// _runtime sentinel, via the sealed metrics.ResolveCellLabel funnel). The set
+	// is the same s.asm.CellIDs() that phase5CollectRouteGroups uses to annotate
+	// RouteGroup ownership, so the runtime defense and the build-time closed set
+	// share one source.
+	opts = append(opts, router.WithCellIDClosedSet(s.asm.CellIDs()))
 
 	// R2: auto-wire HTTP metrics collector when a Provider is configured.
 	var err error
@@ -487,7 +496,11 @@ func (b *Bootstrap) phase5DrainWebhookReceivers(s *phaseState) ([]cell.RouteGrou
 			"bootstrap: webhook receivers declared but no claimer configured; "+
 				"add WithWebhookClaimer to bootstrap options")
 	}
-	groups, err := runtimewebhook.BuildRouteGroups(b.clock, reqs, b.webhookSourceStore, b.webhookClaimer)
+	rec, err := b.autoWireWebhookMetricsCollector()
+	if err != nil {
+		return nil, err
+	}
+	groups, err := runtimewebhook.BuildRouteGroups(b.clock, reqs, b.webhookSourceStore, b.webhookClaimer, rec)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: build webhook route groups: %w", err)
 	}

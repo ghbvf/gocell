@@ -100,6 +100,8 @@ func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (
 	return c.state, c.receipt, c.err
 }
 
+func (c *fakeClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
+
 var _ idempotency.Claimer = (*fakeClaimer)(nil)
 
 func testConsumerBase(t *testing.T) *ConsumerBase {
@@ -134,6 +136,8 @@ func (s *signalingClaimer) Claim(
 	return s.inner.Claim(ctx, key, leaseTTL, renewInterval)
 }
 
+func (s *signalingClaimer) Kind() idempotency.ClaimerKind { return s.inner.Kind() }
+
 var _ idempotency.Claimer = (*signalingClaimer)(nil)
 
 type claimOutcome struct {
@@ -162,6 +166,8 @@ func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration)
 	o := c.outcomes[len(c.outcomes)-1]
 	return o.state, o.receipt, o.err
 }
+
+func (c *sequenceClaimer) Kind() idempotency.ClaimerKind { return idempotency.ClaimerKindInMemory }
 
 var _ idempotency.Claimer = (*sequenceClaimer)(nil)
 

@@ -87,12 +87,12 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 // http_request_duration_seconds, labeled identically. Status is stringified
 // once per call because Provider.CounterVec/HistogramVec expect string
 // labels uniformly (avoids adapter-specific type conversions).
-func (c *providerCollector) RecordRequest(ctx context.Context, cellID, method, route string, status int, durationSeconds float64) {
+func (c *providerCollector) RecordRequest(ctx context.Context, cell CellLabel, method, route string, status int, durationSeconds float64) {
 	labels := kernelmetrics.Labels{
 		"method": method,
 		"route":  route,
 		"status": strconv.Itoa(status),
-		"cell":   cellID,
+		"cell":   cell.String(),
 	}
 	c.requests.With(labels).Inc(ctx)
 	c.duration.With(labels).Observe(ctx, durationSeconds)
@@ -100,9 +100,9 @@ func (c *providerCollector) RecordRequest(ctx context.Context, cellID, method, r
 
 // RecordBodyLimitRejection emits an increment on
 // http_request_body_limit_rejections_total labeled by cell and route.
-func (c *providerCollector) RecordBodyLimitRejection(ctx context.Context, cellID, route string) {
+func (c *providerCollector) RecordBodyLimitRejection(ctx context.Context, cell CellLabel, route string) {
 	c.bodyLimitRejections.With(kernelmetrics.Labels{
-		"cell":  cellID,
+		"cell":  cell.String(),
 		"route": route,
 	}).Inc(ctx)
 }

@@ -19,7 +19,7 @@ func requestKey(cell, method, route string, status int) metrics.RequestKey {
 
 func TestMetrics_RecordsMetrics(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Recorder(Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Recorder(Metrics(c, clock.Real(), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	})))
 
@@ -36,7 +36,7 @@ func TestMetrics_RecordsMetrics(t *testing.T) {
 
 func TestMetrics_DefaultStatus200(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Recorder(Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Recorder(Metrics(c, clock.Real(), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})))
 
@@ -54,7 +54,7 @@ func TestMetrics_PanicRecordsStatus500(t *testing.T) {
 	panicHandler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		panic("boom")
 	})
-	handler := Recorder(Metrics(c, clock.Real())(Recovery(panicHandler)))
+	handler := Recorder(Metrics(c, clock.Real(), nil)(Recovery(panicHandler)))
 
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
 	rec := httptest.NewRecorder()
@@ -69,7 +69,7 @@ func TestMetrics_PanicRecordsStatus500(t *testing.T) {
 
 func TestMetrics_Standalone(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Metrics(c, clock.Real(), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 
@@ -96,7 +96,7 @@ func TestMetrics_RouteResolverFallback(t *testing.T) {
 		assert.Equal(t, "/api/v1/access/users/42", path)
 		return "/api/v1/access/users/{id}", true
 	})
-	handler := Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Metrics(c, clock.Real(), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 
@@ -116,7 +116,7 @@ func TestMetrics_RouteResolverFallback(t *testing.T) {
 
 func TestMetrics_MultipleRequests(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Recorder(Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Recorder(Metrics(c, clock.Real(), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
 
@@ -147,7 +147,7 @@ func TestMetrics_ReadsCellIDFromContext(t *testing.T) {
 					return "", false
 				}
 			}),
-			Metrics(c, clock.Real()),
+			Metrics(c, clock.Real(), map[string]struct{}{"accesscore": {}, "auditcore": {}}),
 		},
 		func(mux *http.ServeMux) {
 			mux.Handle("GET /api/v1/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -199,7 +199,7 @@ func TestMetrics_RoutePatternCollapse(t *testing.T) {
 				}
 				return "", false
 			}),
-			Metrics(c, clock.Real()),
+			Metrics(c, clock.Real(), map[string]struct{}{"test-cell": {}}),
 		},
 		func(mux *http.ServeMux) {
 			mux.Handle("GET /api/v1/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -228,7 +228,7 @@ func TestMetrics_UnmatchedRouteUsesSentinel(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	handler := buildTestServer(
-		[]func(http.Handler) http.Handler{Recorder, Metrics(c, clock.Real())},
+		[]func(http.Handler) http.Handler{Recorder, Metrics(c, clock.Real(), nil)},
 		func(mux *http.ServeMux) {
 			mux.Handle("GET /exists", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -254,7 +254,7 @@ func TestMetrics_StaticRoute(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	handler := buildTestServer(
-		[]func(http.Handler) http.Handler{Recorder, Metrics(c, clock.Real())},
+		[]func(http.Handler) http.Handler{Recorder, Metrics(c, clock.Real(), nil)},
 		func(mux *http.ServeMux) {
 			mux.Handle("GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -283,7 +283,7 @@ func TestMetrics_NestedRoutes(t *testing.T) {
 				}
 				return "", false
 			}),
-			Metrics(c, clock.Real()),
+			Metrics(c, clock.Real(), map[string]struct{}{"test-cell": {}}),
 		},
 		func(mux *http.ServeMux) {
 			// stdlib ServeMux uses fully-qualified patterns; nesting collapses

@@ -56,6 +56,19 @@ func (t Topology) StorageBackend() string { return t.storageBackend }
 // in-memory replay protection (GOCELL_SINGLE_POD=1).
 func (t Topology) SinglePodReplayProtection() bool { return t.singlePodReplayProtection }
 
+// RequiresDistributedReplay reports whether the topology demands a distributed
+// (cross-pod) replay-defense posture for the /internal/v1/* service-token guard:
+// real adapter mode without the single-pod acknowledgement. In this posture an
+// in-memory (single-process) NonceStore is insufficient — only a distributed
+// store coordinates replay defense across pods.
+//
+// This is the single source for the predicate previously copied into
+// composition.SharedDeps.requiresDistributedReplay and cmd/corebundle/redis.go;
+// both now delegate here so the rule lives in exactly one place.
+func (t Topology) RequiresDistributedReplay() bool {
+	return t.RequireProductionControlPlane() && !t.singlePodReplayProtection
+}
+
 // NewTopology validates an adapter-mode / storage-backend / single-pod
 // combination and returns the sealed Topology. An empty storageBackend is
 // normalized to "memory" (the dev default). The postgres+non-real coupling and

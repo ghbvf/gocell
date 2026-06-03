@@ -90,7 +90,6 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T)
 		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo", RenderedMetaLiteral: "&metadata.CellMeta{}",
 		Subscriptions: []SubscriptionGenSpec{{
 			ContractID:          "event.foo.bar.v1",
-			Transport:           "amqp",
 			SliceID:             "subs",
 			HandlerExpr:         "c.svc.HandleBar",
 			SubscriptionPackage: "github.com/ghbvf/gocell/generated/contracts/event/foo/bar/v1",

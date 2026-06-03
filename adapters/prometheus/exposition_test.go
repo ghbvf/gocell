@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	runtimemetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/observability/metrics/metricstest"
 )
 
 // Integration-style tests that drive runtime / kernel collectors through
@@ -71,8 +72,8 @@ func TestPrometheusExposition_HTTPCollector_FamiliesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest(context.Background(), "testcell", "GET", "/api/v1/users", 200, 0.15)
-	c.RecordRequest(context.Background(), "testcell", "POST", "/api/v1/users", 201, 0.05)
+	c.RecordRequest(context.Background(), metricstest.Label("testcell"), "GET", "/api/v1/users", 200, 0.15)
+	c.RecordRequest(context.Background(), metricstest.Label("testcell"), "POST", "/api/v1/users", 201, 0.05)
 
 	body := expose(t, reg)
 

@@ -100,9 +100,6 @@ type RouteSliceMount struct {
 type SubscriptionGenSpec struct {
 	// ContractID is the full event contract id, e.g. "event.config.entry-upserted.v1".
 	ContractID string
-	// Transport is the event transport (default "amqp" — the current GoCell
-	// convention; future contracts may override per kind).
-	Transport string
 	// SliceID identifies the slice owning the handler — used for
 	// cell.WithSubscriptionSliceID().
 	SliceID string

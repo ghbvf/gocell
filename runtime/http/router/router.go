@@ -136,6 +136,28 @@ func WithBodyLimit(maxBytes int64) Option {
 	}
 }
 
+// WithCellIDClosedSet injects the assembly's closed cell-id set (the
+// assembly.yaml cells list) so the Metrics / BodyLimit middleware can validate
+// the request's cell label against it at the metric write point (M12b #1093):
+// an out-of-set cell id degrades to metrics.RuntimeCellSentinel instead of
+// polluting the platform SLO series, via the sealed metrics.ResolveCellLabel
+// funnel.
+//
+// This is an accumulating builder-style option, not a wiring dependency: an
+// empty/nil set is a legitimate "no assembly to filter against" state
+// (standalone router / tests) under which every cell degrades to the sentinel.
+// Bootstrap always supplies s.asm.CellIDs() in production. A copy is taken so a
+// later mutation of the caller's slice cannot widen the set after build.
+func WithCellIDClosedSet(cellIDs []string) Option {
+	return func(r *Router) {
+		set := make(map[string]struct{}, len(cellIDs))
+		for _, id := range cellIDs {
+			set[id] = struct{}{}
+		}
+		r.cellIDClosedSet = set
+	}
+}
+
 // WithClientErrorLogSampling sets the deterministic sample rate for 4xx logs on
 // contract-bound requests. Values less than one log every 4xx.
 func WithClientErrorLogSampling(every int) Option {
@@ -427,6 +449,7 @@ type Router struct {
 	authMetrics                 *auth.AuthMetrics
 	securityHeadersOpts         []middleware.SecurityHeadersOption
 	bodyLimit                   int64
+	cellIDClosedSet             map[string]struct{}
 	clientErrorLogSamplingEvery int
 	trustedProxies              []string
 	// defaultMiddleware are installed AFTER early-responders and BEFORE
@@ -686,7 +709,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	}
 	r.use(middleware.AccessLog(r.clock))
 	if r.metricsCollector != nil {
-		r.use(middleware.Metrics(r.metricsCollector, r.clock))
+		r.use(middleware.Metrics(r.metricsCollector, r.clock, r.cellIDClosedSet))
 	}
 	r.use(
 		middleware.Recovery,
@@ -728,7 +751,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	if r.authVerifier != nil {
 		r.use(auth.AuthMiddleware(r.clock, r.authVerifier, r.buildAuthOpts()...))
 	}
-	r.use(middleware.BodyLimit(r.bodyLimit, r.metricsCollector))
+	r.use(middleware.BodyLimit(r.bodyLimit, r.metricsCollector, r.cellIDClosedSet))
 	if r.idempotencyStore != nil {
 		// lazyIdempotencyExempt reads the compiled exempt matcher lazily so
 		// FinalizeAuth (which runs AFTER buildMux) can compile the set from

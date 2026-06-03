@@ -84,6 +84,15 @@ type Bootstrap struct {
 	assemblyID           string
 	configWatcherFactory func(string, clock.Clock, ...config.WatcherOption) (*config.Watcher, error)
 
+	// controlPlaneTopology is the resolved deployment Topology, injected by
+	// composition.Builder.Build (WithControlPlaneTopology) from its trusted
+	// SharedDeps.Topology. phase0 uses it to validate that the listener
+	// service-token guard's actual NonceStore is replay-safe for the topology
+	// (#1410 review F1). The zero value (legacy/hand-written bootstraps that never
+	// inject it, or dev mode) makes RequireProductionControlPlane() false, so the
+	// topology-dependent replay check is a no-op — identical to prior behavior.
+	controlPlaneTopology Topology
+
 	// --- grpc: listener declarations (server lifecycle owned by adapters/grpc,
 	// injected via the GRPCServer interface; see grpc_listener.go) ---
 	grpcListenerConfigs []grpcListenerConfig
@@ -183,6 +192,14 @@ type Bootstrap struct {
 	// ranges, no loopback) — phase6 builds it when any cell registers a webhook
 	// dispatcher. The dispatcher reuses webhookSourceStore for signing secrets.
 	webhookSSRFPolicy *kwh.SafePolicy
+
+	// webhookMetrics is the single shared kwh.Metrics collector registered once
+	// (cached here) so the receiver (phase5) and dispatcher (phase6) record to
+	// the same fixed-name instruments instead of re-registering the metric
+	// family. The zero value means "not wired" (no provider / NopProvider) and
+	// records as a no-op. Wired by autoWireWebhookMetricsCollector, mirroring
+	// httpCollector / eventRouterCollector / outboxRejectCollector / projectionMetrics.
+	webhookMetrics kwh.Metrics
 
 	// --- projection: L3 CQRS projection harness dependencies ---
 	// Injected via WithProjectionCheckpointStore / WithProjectionTxRunner /
@@ -297,7 +314,7 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 	if ref.IsZero() {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, or cell.HealthListener")
+			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, cell.HealthListener, or cell.WebhookListener")
 	}
 	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
 	// slices are behaviorally identical to nil — both produce an

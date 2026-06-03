@@ -91,6 +91,7 @@ func TestBuildContractSpecProjectionLowLevelAccepted(t *testing.T) {
 			ConsistencyLevel: level,
 			Lifecycle:        "active",
 			Codegen:          true,
+			Transports:       []string{"internal"}, // mirrors parser defaultTransportsForKind("projection")
 			Endpoints:        metadata.EndpointsMeta{Provider: "ordercell", Readers: []string{"edge-bff"}},
 			File:             "examples/todoorder/contracts/projection/order/status-summary/v1/contract.yaml",
 		}
@@ -170,6 +171,7 @@ func TestBuildContractSpecProjectionInvalidLevel(t *testing.T) {
 			ConsistencyLevel: level,
 			Lifecycle:        "active",
 			Codegen:          true,
+			Transports:       []string{"internal"}, // mirrors parser defaultTransportsForKind("projection")
 			Endpoints: metadata.EndpointsMeta{
 				Provider: "ordercell",
 				Readers:  []string{"edge-bff"},

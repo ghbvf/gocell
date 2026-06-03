@@ -16,3 +16,17 @@ var spec = contractspec.ContractSpec{
 	Transport: "amqp",
 	Topic:     "event.device-registered.v1",
 }
+
+// transports is the unexported backing slice for the Transports() accessor.
+// Keeping it private makes the copy-returning accessor the only read path, so
+// importers cannot alias-mutate the contract truth source.
+var transports = []string{"amqp", "mqtt"}
+
+// Transports returns a copy of the full set of wire transports this contract is
+// sanctioned to bind to (contract.yaml transports:). The primary (Transports()[0])
+// is the spec's Transport above; additional members are alternate sanctioned
+// bindings. Exposed so out-of-band subscribers reference the contract truth
+// source instead of hand-writing a transport string. Returns a fresh slice each
+// call so callers cannot mutate the truth source. Emitted only for
+// multi-transport contracts.
+func Transports() []string { return append([]string(nil), transports...) }

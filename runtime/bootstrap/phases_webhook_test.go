@@ -22,10 +22,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -298,7 +300,9 @@ func TestPhase5DrainWebhookReceivers_HappyPath_ProducesGroups(t *testing.T) {
 	require.Len(t, groups, 1, "must produce one group per receiver")
 
 	g := groups[0]
-	assert.Equal(t, cell.PrimaryListener, g.Listener, "webhook groups must target PrimaryListener")
+	assert.Equal(t, cell.WebhookListener, g.Listener,
+		"webhook groups must target the dedicated WebhookListener, not PrimaryListener "+
+			"(HMAC auth happens at the app layer; a JWT chain on PrimaryListener would 401 first)")
 	assert.Equal(t, whTestPathPattern, g.Prefix, "group Prefix must equal PathPattern")
 	assert.Equal(t, whTestCellID, g.CellID, "group CellID must match spec.CellID")
 	require.NotNil(t, g.Register, "Register func must not be nil")
@@ -370,6 +374,160 @@ func TestPhase5DrainWebhookReceivers_EndToEnd(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, rec.Code,
 			"forged HMAC at %s must return 401", whTestPathPattern)
 	})
+}
+
+// TestPhase5_WebhookListener_IsolatedFromPrimary is the F6a regression: a
+// webhook receiver mounts on the dedicated cell.WebhookListener router and is
+// ABSENT from the cell.PrimaryListener router. In a real assembly PrimaryListener
+// carries a JWT auth chain that would 401 an HMAC-signed (non-JWT) webhook before
+// the verifier; routing the webhook onto its own AuthNone listener is what makes
+// it reachable. The proof here is routing isolation: a valid signed request hits
+// the WebhookListener router with 200, while the SAME path on the PrimaryListener
+// router is 404 (the route was never mounted there, so no PrimaryListener auth
+// chain can ever see it).
+func TestPhase5_WebhookListener_IsolatedFromPrimary(t *testing.T) {
+	clk := clockmock.New(whFixedNow)
+	src := whTestSource(t)
+	store := whTestStore(t)
+	claimer := idempotency.NewInMemClaimer(clk)
+
+	wc := newWebhookCell(whTestSpec(), noopWebhookHandler)
+	s := buildPhaseStateWithWebhookCells(t, wc)
+
+	b := New(clk,
+		// PrimaryListener stands in for the business listener; in production it
+		// carries a JWT chain. WebhookListener carries AuthNone (HMAC is the auth).
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.WebhookListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+	b.webhookSourceStore = store
+	b.webhookClaimer = claimer
+
+	groups, err := b.phase5DrainWebhookReceivers(s)
+	require.NoError(t, err, "phase5DrainWebhookReceivers")
+	require.Len(t, groups, 1)
+
+	routers, err := b.phase5BuildPerListenerRouters(s)
+	require.NoError(t, err, "phase5BuildPerListenerRouters")
+	require.NoError(t, b.phase5MountRouteGroups(routers, groups), "phase5MountRouteGroups")
+
+	// Build a valid signed request for whTestPathPattern.
+	signer, err := kwh.NewHMACSigner(src)
+	require.NoError(t, err, "NewHMACSigner")
+	body := []byte(`{"event":"isolation-test"}`)
+	did, err := kwh.NewDeliveryID("isolation-001")
+	require.NoError(t, err, "NewDeliveryID")
+	headers, err := signer.Sign(body, whFixedNow, did)
+	require.NoError(t, err, "Sign")
+	newReq := func() *http.Request {
+		req := httptest.NewRequest(http.MethodPost, whTestPathPattern, bytes.NewReader(body))
+		req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
+		req.Header.Set("X-Timestamp", headers.Timestamp)
+		req.Header.Set("X-Signature", headers.Signature)
+		return req
+	}
+
+	// Reachable on the WebhookListener router.
+	whRec := httptest.NewRecorder()
+	routers[cell.WebhookListener].Handler().ServeHTTP(whRec, newReq())
+	assert.Equal(t, http.StatusOK, whRec.Code,
+		"signed webhook must reach the verifier on WebhookListener (200)")
+
+	// Absent from the PrimaryListener router — a JWT chain there can never see it.
+	primRec := httptest.NewRecorder()
+	routers[cell.PrimaryListener].Handler().ServeHTTP(primRec, newReq())
+	assert.Equal(t, http.StatusNotFound, primRec.Code,
+		"webhook path must NOT be mounted on PrimaryListener (404) — proves listener isolation")
+}
+
+// TestPhase5MountRouteGroups_FailsWhenWebhookListenerUndeclared asserts the
+// bootstrap safety net: if a webhook RouteGroup names WebhookListener but the
+// assembly never declared it via WithListener, mounting fail-fasts with an
+// actionable message (this is the Hard upstream guard backing F6a — a forgotten
+// WithListener(WebhookListener,...) is a startup error, not a silent 404).
+func TestPhase5MountRouteGroups_FailsWhenWebhookListenerUndeclared(t *testing.T) {
+	clk := clockmock.New(whFixedNow)
+	wc := newWebhookCell(whTestSpec(), noopWebhookHandler)
+	s := buildPhaseStateWithWebhookCells(t, wc)
+
+	// Only PrimaryListener declared — WebhookListener intentionally missing.
+	b := New(clk, WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
+	b.webhookSourceStore = whTestStore(t)
+	b.webhookClaimer = idempotency.NewInMemClaimer(clk)
+
+	groups, err := b.phase5DrainWebhookReceivers(s)
+	require.NoError(t, err)
+	routers, err := b.phase5BuildPerListenerRouters(s)
+	require.NoError(t, err)
+
+	err = b.phase5MountRouteGroups(routers, groups)
+	require.Error(t, err, "missing WebhookListener must fail-fast at mount")
+	assert.Contains(t, err.Error(), "webhook",
+		"error must name the undeclared webhook listener")
+}
+
+// TestAutoWireWebhookMetricsCollector_RealProvider_OnceAndShared is the F4
+// regression: with a REAL metrics provider, autoWireWebhookMetricsCollector
+// registers the four webhook instruments EXACTLY once and returns the SAME cached
+// collector to every caller. phase5 (receiver, phases_http.go) and phase6
+// (dispatcher, phases_events.go) each call it; the cache is what guarantees one
+// instrument set serves both sides rather than a duplicate registration (which a
+// real Prometheus provider would reject). Before this test the autowire had no
+// real-provider coverage — the existing webhook tests injected a zero/fake
+// Metrics directly and never exercised RegisterMetrics through the bootstrap path.
+func TestAutoWireWebhookMetricsCollector_RealProvider_OnceAndShared(t *testing.T) {
+	spy := &registrationSpy{}
+	b := New(clockmock.New(whFixedNow), WithMetricsProvider(spy))
+
+	// First wire — the phase5 (receiver) side.
+	m1, err := b.autoWireWebhookMetricsCollector()
+	require.NoError(t, err, "first auto-wire must succeed")
+	// Second wire — the phase6 (dispatcher) side — returns the cached collector.
+	_, err = b.autoWireWebhookMetricsCollector()
+	require.NoError(t, err, "second auto-wire must succeed")
+
+	// "Same cached instance" is proven by registration happening exactly ONCE
+	// across the two wire calls (below): RegisterMetrics ran a single time, so
+	// both phases received the one cached b.webhookMetrics. (kwh.Metrics is not
+	// runtime-comparable once populated — its instrument fields can wrap slice-
+	// bearing nop types — so this is asserted via the registration count, not ==.)
+	// Registered exactly once despite two wire calls.
+	count := func(names []string, want string) int {
+		n := 0
+		for _, x := range names {
+			if x == want {
+				n++
+			}
+		}
+		return n
+	}
+	cnts := spy.counters()
+	for _, name := range []string{
+		"webhook_deliveries_total",
+		"webhook_signature_failures_total",
+		"webhook_idempotency_hits_total",
+	} {
+		assert.Equalf(t, 1, count(cnts, name),
+			"%s must be registered exactly once across both auto-wire calls (got %v)", name, cnts)
+	}
+	assert.Equal(t, 1, count(spy.histograms(), "webhook_delivery_duration_seconds"),
+		"delivery duration histogram must be registered exactly once")
+
+	// The wired collector is a real (non-zero) recorder: a record call exercises
+	// a live instrument rather than the disabled no-op zero value.
+	m1.RecordIdempotencyHit(context.Background(), whTestSourceID)
+}
+
+// TestAutoWireWebhookMetricsCollector_NopProvider_NoWire confirms the disabled
+// path: with no real provider (NopProvider default), auto-wire returns the zero
+// no-op collector and registers nothing.
+func TestAutoWireWebhookMetricsCollector_NopProvider_NoWire(t *testing.T) {
+	b := New(clockmock.New(whFixedNow))
+	b.metricsProvider = kernelmetrics.NopProvider{}
+
+	m, err := b.autoWireWebhookMetricsCollector()
+	require.NoError(t, err)
+	assert.Equal(t, kwh.Metrics{}, m, "NopProvider must yield the zero (no-op) collector")
 }
 
 // ---------------------------------------------------------------------------
