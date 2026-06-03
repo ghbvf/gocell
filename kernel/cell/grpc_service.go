@@ -16,8 +16,8 @@ package cell
 // makes naming func(grpc.ServiceRegistrar) impossible. The archtest
 // GRPC-CELL-REGISTRAR-LAYER-01 reflect-locks this field to stay untyped any;
 // the kernel⊥grpc import-ban itself is enforced by depguard + kernel_internal_dag_test.go.
-// Sealing the field (permanent-ceiling won't-do) is tracked as a gh issue in the
-// archtest godoc — same family as #851/#893/#1282.
+// Sealing the field (permanent-ceiling won't-do) is tracked as gh #1582 —
+// same family as #851/#893/#1282.
 //
 // ref: zeromicro/go-zero zrpc/internal/rpcserver.go — RegisterFn func(*grpc.Server) (Form B precedent)
 // ref: go-kratos/kratos transport/grpc/server.go — pb.RegisterXxxServer before Start

@@ -27,7 +27,7 @@
 //
 // This is the same permanent ceiling family as SPAN-SETATTR-HOLDER-SEAL (#851),
 // HEALTHZ-HOLDER-SEAL (#893), and CTXKEYS-PRINCIPAL-WRITE-CALLER (#1282).
-// Tracked as a permanent-ceiling won't-do at gh issue (see GRPCServiceSpec godoc).
+// Tracked as a permanent-ceiling won't-do at gh #1582.
 //
 // # What this archtest DOES assert (A1 only)
 //
