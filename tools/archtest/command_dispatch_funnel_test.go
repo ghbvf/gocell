@@ -65,7 +65,7 @@ const commandRegistryTypeName = "Registry"
 //     "only these packages may call an exported method on *Registry"; the ideal
 //     Hard form would move the methods behind an internal/ wrap so only generated/
 //     packages import the sealed internal type. That is a deliberate won't-do:
-//     gh #TBD-command-registry-internal-seal — same permanent ceiling documented
+//     gh #1575 (won't-do tracker) — same permanent ceiling documented
 //     for OUTBOX-RECONSTRUCTION-CALLER-01 / SPAN-SETATTR-HOLDER-SEAL (#851) /
 //     HEALTHZ-HOLDER-SEAL (#893) / #1282. The downstream archtest is the
 //     enforcement backstop; the ceiling is documented, not silently accepted.

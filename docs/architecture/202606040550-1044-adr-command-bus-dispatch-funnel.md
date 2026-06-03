@@ -52,7 +52,7 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 
 **闭环论证**：codegen-Hard 上游（typed funnel 不可手写，D1/D2）+ caller-allowlist-Hard 下游（raw `RegisterHandler` 在生成码外被调即 CI 红，D3）= 业务**既不能手写 typed funnel、也不能在 funnel 外用 raw registry** → 达成立项门「Hard 双向锁」。
 
-**Medium 半边的 Hard 化路径（won't-do-now）**：把 `RegisterHandler`/`LookupHandler` 收进 `runtime/command/internal/` wrap 包使包外不可 import——但 `generated/` 与业务 cell 跨包，Go 包可见性无法表达「仅某几个生成包可调某导出符号」，与 #1282 family 同永久天花板。追踪：开 gh issue（archtest godoc 点名），维持 Medium 为 Go 下天花板。
+**Medium 半边的 Hard 化路径（won't-do-now）**：把 `RegisterHandler`/`LookupHandler` 收进 `runtime/command/internal/` wrap 包使包外不可 import——但 `generated/` 与业务 cell 跨包，Go 包可见性无法表达「仅某几个生成包可调某导出符号」，与 #1282 family 同永久天花板。追踪：**gh #1575**（won't-do tracker，archtest godoc 点名），维持 Medium 为 Go 下天花板。
 
 ---
 
