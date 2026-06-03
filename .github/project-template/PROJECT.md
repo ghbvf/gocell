@@ -109,7 +109,7 @@
 |------|------|------|--------|
 | **Status** | single-select | Backlog / Ready / In progress / In review / Done | 人（Project 内置 workflow + 手动） |
 | **Estimate** | single-select | Cx1 / Cx2 / Cx3 / Cx4 | 人 / 评级时 |
-| **Wave** | single-select | Wave 1 / Wave 2 / … | 自动化（epic 子任务拓扑排序结果） |
+| **Wave** | single-select | Wave 1 / 2 / 3 / 4（**仅 4 档**） | 自动化（epic OPEN 子任务**滚动**排序：已完成不动、未完成重排 Wave 1-4、超窗 >W4 不入字段。算法见 `issues` Part A） |
 | **Parent issue** | built-in | 自动派生（原生 sub-issue） | GitHub |
 | **Sub-issues progress** | built-in | 自动派生（子 issue close 比例） | GitHub |
 

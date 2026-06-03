@@ -1,6 +1,6 @@
 ---
 name: issues
-description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 拓扑排序 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /fix 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
+description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 滚动排序：OPEN 重排、已完成不动、超窗不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /fix 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
 argument-hint: "<epic #N | #issue（非epic→状态核查）| create-issue | edit-labels | pr-status | comment> [...]"
 allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 ---
@@ -42,33 +42,37 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 
 > **并行分析**：子任务 ≥4 或描述模糊 / 跨 3+ 包时，按子任务分组并行派 `Agent(Explore)` 核实各自的状态 / 归属 / `Blocked-by`，汇总后再排 wave；单条直接主 agent 读。
 
-## A2. 建 blocked-by DAG + wave 拓扑排序
+## A2. 建 blocked-by DAG + wave 滚动排序（Wave 1-4 有界）
 
-**算法**（拓扑分层 / longest-path layering，作用域 = epic 子任务）：
+**滚动 + 有界算法**（每次更新 epic 都重跑；longest-path layering，作用域 = epic 的 **OPEN** 子任务）：
 
-1. 节点 = OPEN 子任务；有向边 `blocker → dependent`（来自 `Blocked-by`）。
-2. 检测环：若有环，AskUserQuestion 让用户裁定断哪条边（不静默）。
-3. **wave 分层**（longest-path layering，`v` = 某子任务节点）：
-   - `wave(v) = 1` 若 v 无 blocker；
-   - `wave(v) = 1 + max(wave(b) for b in blockers(v))` 否则。
-   - 即每个子任务落在「所有前置都在更早 wave」的最早 wave。
-4. **wave 内排序**：按 `pri`（p0>p1>p2>p3）→ `Cx`（小先）→ issue 号。
-5. 输出每个子任务的 `(wave, 序)`。
+1. **节点 = OPEN 子任务**；CLOSED（已完成）子任务**排除**——不参与排序、不动其 Wave 字段（见 A3）。
+2. 有向边 `blocker → dependent`（来自 `Blocked-by`），**仅当 blocker 也 OPEN**；blocker 已 close = 依赖已满足 → 删该边。**这是「滚动」的来源**：前置完成后 dependent 自动前移到更早 wave。
+3. 检测环：若有环，AskUserQuestion 让用户裁定断哪条边（不静默）。
+4. **wave 分层**（longest-path layering，`v` = OPEN 节点）：
+   - `wave(v) = 1` 若 v 无 OPEN blocker；
+   - `wave(v) = 1 + max(wave(b) for b in OPEN blockers(v))` 否则。
+5. **有界 cap = Wave 4**：`wave(v) > 4` 的节点标记 **超窗**——不落 Project Wave 字段（A3 清空/不写）。Project Wave 只有 1-4 四档。
+6. **wave 内排序**：按 `pri`（p0>p1>p2>p3）→ `Cx`（小先）→ issue 号。
+7. 输出每个 OPEN 子任务的 `(wave, 序)` 或「超窗」。
 
-呈现给用户的 dry-run 表：
+呈现给用户的 dry-run 表（只列 OPEN；超窗与已完成单列）：
 
 ```
 Wave 1: #aaa(P1/Cx1) #bbb(P2/Cx2)
 Wave 2: #ccc(P1/Cx2, blocked-by #aaa)
-Wave 3: #ddd(P2/Cx3, blocked-by #ccc)
+Wave 3: #ddd(P2/Cx3)
+Wave 4: #eee(P2/Cx2)
+超窗(>W4，不写字段): #fff(依赖链 >4)
+已完成(不动): #ggg #hhh
 ```
 
-## A3. 写 Project v2 Wave 字段（单源真值）
+## A3. 写 Project v2 Wave 字段（单源真值，滚动）
 
-> Wave 字段是 epic 子任务排序的**机器单源**；epic body 段是派生视图。写前确认字段 / option / item 合法。
+> Wave 字段是 epic 子任务排序的**机器单源**；epic body 段是派生视图。**只写 OPEN 子任务的 Wave 1-4**；CLOSED 不动；超窗清空。写前确认字段 / option / item 合法。
 
 ```bash
-# 发现 Wave 字段 id + option id（single-select）
+# 发现 Wave 字段 id + option id（single-select；固定 Wave 1-4 四档）
 gh project field-list 3 --owner ghbvf --format json \
   | python3 -c "import sys,json;[print(f['id'],f['name'],[ (o['id'],o['name']) for o in f.get('options',[])]) for f in json.load(sys.stdin)['fields'] if f['name']=='Wave']"
 
@@ -76,25 +80,34 @@ gh project field-list 3 --owner ghbvf --format json \
 gh project item-list 3 --owner ghbvf --format json \
   | python3 -c "import sys,json;[print(i['id'],i['content'].get('number')) for i in json.load(sys.stdin)['items'] if i.get('content')]"
 
-# 写 Wave（对每个子任务）
+# 写 Wave（仅 wave ∈ 1-4 的 OPEN 子任务）
 gh project item-edit --project-id PVT_kwHOBjsrB84BYQ3m \
   --id <ITEM_ID> --field-id <WAVE_FIELD_ID> --single-select-option-id <WAVE_N_OPTION_ID>
+
+# 超窗（wave>4）的 OPEN 子任务：清空 Wave 字段（防滚动后残留旧值）
+gh project item-edit --project-id PVT_kwHOBjsrB84BYQ3m \
+  --id <ITEM_ID> --field-id <WAVE_FIELD_ID> --clear
 ```
 
-**写入门（人工核对，非机器门）**：每条写入前确认 `WAVE_N_OPTION_ID` 在 field-list 输出的 option 集中、
-`ITEM_ID` 在 item-list（属本 project）。option 缺某 wave 档时先在 Project UI 加，再写。子任务未入 project
-（无 item）时先 `gh project item-add 3 --owner ghbvf --url <issue-url>`。
+**滚动写入规则**：
+- **OPEN 且 wave ∈ [1,4]** → 写对应 Wave option。
+- **OPEN 且 wave > 4（超窗）** → `--clear`（清旧值），不占 Wave 1-4。
+- **CLOSED（已完成）** → **完全不动**（不写、不清；保留其历史 Wave 值）。
+
+**写入门（人工核对，非机器门）**：每条写入前确认 `WAVE_N_OPTION_ID`（N∈1-4）在 field-list 输出的 option 集中、
+`ITEM_ID` 在 item-list（属本 project）。Wave 字段固定 4 档；缺档先在 Project UI 补齐 Wave 1-4 再写。子任务未入
+project（无 item）时先 `gh project item-add 3 --owner ghbvf --url <issue-url>`。
 
 ## A4. 回填 epic body 实施顺序段 + 回评
 
 ```bash
-# epic body 的「实施顺序」段重生成（派生视图）
+# epic body 的「实施顺序」段重生成（派生视图：仅 OPEN 的 Wave 1-4 + 超窗/已完成注记）
 gh issue edit <epic#> --body "$(...更新 ## 实施顺序 段...)"
 
 # 回评通知（一行 + 标记）
 gh issue comment <epic#> --body "$(cat <<'C'
 <!-- pm:epic-wave -->
-🌊 wave 实施顺序已更新（共 N wave，M 子任务）。Wave 字段 = 单源，详见 Project #3 / 本 issue body 实施顺序段。
+🌊 Wave 滚动更新：OPEN 重排 Wave 1-4，已完成不动，超窗(>W4)暂不入字段。Wave 字段 = 单源，详见 Project #3 / 本 issue body 实施顺序段。
 C
 )"
 ```
