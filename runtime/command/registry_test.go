@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
-	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 // fakeHandler is a local stand-in for the handler types that generated
@@ -152,7 +151,7 @@ func TestRegistry_SafeIDValidateGateway(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		id   idutil.SafeID
+		id   CommandID
 	}{
 		{"empty", ""},
 		{"space in id", "has space"},
@@ -186,7 +185,7 @@ func TestRegistry_Concurrency(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			id := CommandID("command.concurrent-" + idutil.SafeID(string(rune('a'+i%26))+"-cmd.v1"))
+			id := CommandID("command.concurrent-" + string(rune('a'+i%26)) + "-cmd.v1")
 			// Ignore errors — some goroutines may register the same letter-bucket
 			// twice (i%26 collision), which is expected to return ErrConflict.
 			_ = r.RegisterHandler(id, &fakeHandler{})
