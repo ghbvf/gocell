@@ -58,7 +58,6 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -66,6 +65,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleBootstrapReasonSetEquivalence01 = "BOOTSTRAP-REASON-SET-EQUIVALENCE-01"
@@ -184,16 +185,11 @@ func TestBootstrapReasonSetEquivalence01(t *testing.T) {
 func extractSetupWhitelistKeys(p *Pass) []string {
 	var keys []string
 	for _, f := range p.Files {
-		for _, decl := range f.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.VAR {
-				continue
+		scanner.EachInChildren[ast.GenDecl](f, func(gen *ast.GenDecl) {
+			if gen.Tok != token.VAR {
+				return
 			}
-			for _, spec := range gen.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			scanner.EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
 				for i, name := range vs.Names {
 					if name.Name != setupWhitelistVarName || i >= len(vs.Values) {
 						continue
@@ -202,19 +198,15 @@ func extractSetupWhitelistKeys(p *Pass) []string {
 					if !ok {
 						continue
 					}
-					for _, elt := range cl.Elts {
-						kv, ok := elt.(*ast.KeyValueExpr)
-						if !ok {
-							continue
-						}
+					scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 						if tv, ok := p.TypesInfo.Types[kv.Key]; ok &&
 							tv.Value != nil && tv.Value.Kind() == constant.String {
 							keys = append(keys, constant.StringVal(tv.Value))
 						}
-					}
+					})
 				}
-			}
-		}
+			})
+		})
 	}
 	return keys
 }
@@ -223,23 +215,17 @@ func extractSetupWhitelistKeys(p *Pass) []string {
 // whose path ends with the given suffix. Returns "" if not found.
 func findFileWithSuffix(t *testing.T, root, suffix string) string {
 	t.Helper()
-	// Normalize suffix separator.
-	suffix = filepath.FromSlash(suffix)
-	var found string
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, suffix) {
-			found = path
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	return found
+	// Normalize suffix to slash form and strip any leading slash so it matches
+	// the module-relative paths returned by scanner.Scope.Files().
+	suffixSlash := strings.TrimPrefix(filepath.ToSlash(suffix), "/")
+	scope := scanner.ModuleScope(root, scanner.MatchRels(func(rel string) bool {
+		return strings.HasSuffix(filepath.ToSlash(rel), suffixSlash)
+	}))
+	files, err := scope.Files()
+	if err != nil || len(files) == 0 {
+		return ""
+	}
+	return files[0]
 }
 
 // extractBootstrapGoLiterals parses runtime/auth/bootstrap.go and returns all
@@ -258,21 +244,16 @@ func extractBootstrapGoLiterals(t *testing.T, moduleRoot string) []string {
 	require.NoError(t, err, "%s: parse %s", ruleBootstrapReasonSetEquivalence01, bootstrapFile)
 
 	var reasons []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		lit, ok := n.(*ast.BasicLit)
-		if !ok {
-			return true
-		}
+	scanner.EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
 		if lit.Kind != token.STRING {
-			return true
+			return
 		}
 		// Unquote the string literal.
 		val := strings.Trim(lit.Value, `"`)
 		if !isBootstrapReasonCandidate(val) {
-			return true
+			return
 		}
 		reasons = append(reasons, val)
-		return true
 	})
 
 	// De-duplicate (same literal may appear in godoc + return).
@@ -357,16 +338,14 @@ func limit() {
 		require.NoError(t, err)
 
 		var found []string
-		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
+		scanner.EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
+			if lit.Kind != token.STRING {
+				return
 			}
 			val := strings.Trim(lit.Value, `"`)
 			if isBootstrapReasonCandidate(val) {
 				found = append(found, val)
 			}
-			return true
 		})
 		sort.Strings(found)
 		want := []string{"missing_header", "rate_limited", "wrong_credentials"}
@@ -388,16 +367,14 @@ func check() (string, bool) {
 		require.NoError(t, err)
 
 		var found []string
-		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
+		scanner.EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
+			if lit.Kind != token.STRING {
+				return
 			}
 			val := strings.Trim(lit.Value, `"`)
 			if isBootstrapReasonCandidate(val) {
 				found = append(found, val)
 			}
-			return true
 		})
 		// The scanner DOES find the const declaration literal ("missing_header" on
 		// the right-hand side of the const decl), but NOT the ident reference in

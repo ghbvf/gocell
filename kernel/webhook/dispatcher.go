@@ -188,7 +188,7 @@ func (d *Dispatcher) prepare(ctx context.Context, entry outbox.Entry) (*http.Req
 	}
 	req.Header.Set("Content-Type", "application/json")
 	headers.Apply(req.Header) // SOLE sanctioned signature-header writer.
-	return req, outbox.HandleResult{}
+	return req, outbox.Ack()
 }
 
 // mapDisposition converts a [Classify] disposition to an [outbox.HandleResult].

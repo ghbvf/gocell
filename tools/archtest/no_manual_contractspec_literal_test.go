@@ -44,14 +44,18 @@
 //     (archtest fails CI), the typed funnels are the only surviving form.
 //   - NewFrameworkHTTP upstream: Hard — runtime/internal/ placement; non-runtime
 //     callers are a compile error. Content Hard via frameworkHTTPIDPrefix panic.
-//   - NewEventDerivation upstream + provenance: Hard — same runtime/internal/
-//     placement, plus the parameter is a typed outbox.Subscription validated
-//     inside the funnel (a runtime/ caller cannot mint a spec from loose
-//     primitives; it must supply a valid subscription). The former single-file
-//     caller allowlist (eventDerivationAllowedCaller) + drift guard are RETIRED
-//     (#1038): the typed-parameter provenance gate replaced them (#1445 closed
-//     by that signature). See runtime/internal/contractbuild/doc.go for the
-//     single-source grading.
+//   - NewEventDerivation upstream: caller-set Hard — same runtime/internal/
+//     placement (non-runtime callers are a compile error). Content is shape-Hard,
+//     NOT provenance-Hard: sub.Validate() inside the funnel guarantees the spec is
+//     never structurally invalid, but outbox.Subscription has exported fields so a
+//     runtime/ caller can fabricate one from arbitrary strings — the typed param
+//     forces shape, it does NOT type-enforce value provenance. Real provenance is
+//     the eventrouter data flow, Hard-ifiable only by a sealed Subscription
+//     constructor (gh #1532). The former single-file caller allowlist
+//     (eventDerivationAllowedCaller) + drift guard are RETIRED (#1038 / #1445):
+//     the typed parameter became natural once the funnel moved to runtime/ (it may
+//     now import kernel/outbox) — that signature is a shape gate, not a provenance
+//     gate. See runtime/internal/contractbuild/doc.go for the single-source grading.
 //
 // Aligns with the "typed function call as Hard funnel for unbounded
 // operations" charter pattern (PANIC-REGISTERED-01 same path).

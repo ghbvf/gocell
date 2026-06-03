@@ -40,6 +40,7 @@ ERR_ORDER_	github.com/ghbvf/gocell
 ERR_OUTBOX_	github.com/ghbvf/gocell
 ERR_PAGE_	github.com/ghbvf/gocell
 ERR_PG_	github.com/ghbvf/gocell
+ERR_PROJECTION_	github.com/ghbvf/gocell
 ERR_RATE_LIMITED	github.com/ghbvf/gocell
 ERR_READYZ_	github.com/ghbvf/gocell
 ERR_RECONCILE_	github.com/ghbvf/gocell
