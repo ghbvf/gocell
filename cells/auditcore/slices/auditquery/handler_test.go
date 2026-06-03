@@ -380,46 +380,71 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	}
 }
 
-// TestHandler_RegisterRoutes_TenantBearing_FailClosed proves the audit query
-// endpoint fails closed for any tenant-bearing caller (#1339 F2). Until
-// tenant-scoped audit filtering lands (epic #1337 PR-2: AuditFilters.TenantID +
-// tenant-scoped WHERE), a request whose principal carries a non-empty TenantID
-// must be REJECTED (403) rather than silently served un-isolated, cross-tenant
-// results. Denial is independent of admin role / actorId — fail-closed for
-// everyone tenant-bearing.
-func TestHandler_RegisterRoutes_TenantBearing_FailClosed(t *testing.T) {
+// TestHandler_RegisterRoutes_TenantScoped proves the audit query endpoint is
+// tenant-scoped (epic #1337 PR-2a): a tenant-bearing caller now SUCCEEDS (200)
+// but sees only its own tenant's audit rows. This replaced the PR-1 (#1339 F2)
+// blanket 403 fail-closed gate. The List adapter sets AuditFilters.TenantID from
+// the authenticated principal and the store applies a mandatory tenant scope, so
+// admin-ness widens the actor axis but never the tenant axis.
+func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
+	const (
+		tenantA = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+		tenantB = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+	)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Two rows for usr-1 (one per tenant) + one tenant-A row for usr-2.
+	for _, e := range []*ledger.Entry{
+		{
+			ID: "ts-a1", EventID: "evt-ts-a1", EventType: "event.test.v1",
+			ActorID: "usr-1", TenantID: tenantA, Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "ts-b1", EventID: "evt-ts-b1", EventType: "event.test.v1",
+			ActorID: "usr-1", TenantID: tenantB, Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+		{
+			ID: "ts-a2", EventID: "evt-ts-a2", EventType: "event.test.v1",
+			ActorID: "usr-2", TenantID: tenantA, Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
+		},
+	} {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
 	mux := http.NewServeMux()
 	require.NoError(t, h.RegisterRoutes(mux))
 
-	const tenantUUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
-	for _, tc := range []struct {
-		name  string
-		roles []string
-	}{
-		{"non_admin_tenant_bearing", []string{"viewer"}},
-		{"admin_tenant_bearing", []string{"admin"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := &auth.Principal{
-				Kind:       auth.PrincipalUser,
-				Subject:    "usr-1",
-				Roles:      tc.roles,
-				TenantID:   tenantUUID,
-				AuthMethod: "test",
-			}
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).
-				WithContext(auth.WithPrincipal(context.Background(), p))
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusForbidden, w.Code,
-				"tenant-bearing audit query must fail closed until PR-2 tenant filtering lands")
-		})
-	}
+	t.Run("non_admin_self_scoped_to_own_tenant", func(t *testing.T) {
+		// usr-1 in tenant-A, self-query: sees its tenant-A row, NOT its tenant-B row.
+		p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "usr-1", Roles: []string{"viewer"}, TenantID: tenantA, AuthMethod: "test"}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).
+			WithContext(auth.WithPrincipal(context.Background(), p))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		body := w.Body.String()
+		assert.Contains(t, body, "evt-ts-a1", "caller must see its own tenant's row")
+		assert.NotContains(t, body, "evt-ts-b1", "caller must NOT see its other-tenant row")
+	})
+
+	t.Run("admin_global_actor_but_tenant_scoped", func(t *testing.T) {
+		// admin in tenant-A: global actor scope (sees usr-1 AND usr-2) but ONLY
+		// tenant-A rows — admin widens the actor axis, never the tenant axis.
+		p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{"admin"}, TenantID: tenantA, AuthMethod: "test"}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil).
+			WithContext(auth.WithPrincipal(context.Background(), p))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		body := w.Body.String()
+		assert.Contains(t, body, "evt-ts-a1", "admin sees tenant-A usr-1 row")
+		assert.Contains(t, body, "evt-ts-a2", "admin sees tenant-A usr-2 row (global actor scope)")
+		assert.NotContains(t, body, "evt-ts-b1", "admin must NOT see the other tenant's row")
+	})
 }
 
 // Trust boundary tests (#27q).

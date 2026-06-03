@@ -30,9 +30,14 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// testTenantIDStr is the string form of the canonical test tenant UUID, used
+// in CreateAdminInput.TenantID (which is a string, not tenant.TenantID).
+const testTenantIDStr = "00000000-0000-0000-0000-000000000001"
 
 type noopTxRunner struct{}
 
@@ -186,7 +191,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 func TestService_Status_NoAdmin_ReturnsFalse(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	svc := newService(t, store.UserRepository(), store.RoleRepository(), nil)
-	out, err := svc.Status(context.Background())
+	out, err := svc.Status(context.Background(), testTenantID)
 	require.NoError(t, err)
 	assert.False(t, out.HasAdmin)
 }
@@ -198,7 +203,7 @@ func TestService_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 	seedAdmin(t, userRepo, roleRepo)
 
 	svc := newService(t, userRepo, roleRepo, nil)
-	out, err := svc.Status(context.Background())
+	out, err := svc.Status(context.Background(), testTenantID)
 	require.NoError(t, err)
 	assert.True(t, out.HasAdmin)
 }
@@ -213,6 +218,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, w)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -225,7 +231,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.NoError(t, parseErr, "user ID must be a valid UUID")
 
 	// Verify admin role assigned
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 
@@ -252,12 +258,14 @@ func TestService_CreateAdmin_WithSetupLock_AcquiresInsideTxBeforeEmit(t *testing
 	events := []string{}
 	w := &stubWriter{onWrite: func() { events = append(events, "emit") }}
 	lock := &recordingSetupLock{requireTxMarker: true, events: &events}
-	svc := newService(t, userRepo, roleRepo, w,
+	svc := newService(
+		t, userRepo, roleRepo, w,
 		setup.WithTxManager(persistence.WrapForCell(markerTxRunner{})),
 		setup.WithSetupLock(lock),
 	)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -280,6 +288,7 @@ func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *test
 	svc := newService(t, userRepo, roleRepo, w, setup.WithSetupLock(lock))
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -290,12 +299,12 @@ func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *test
 	assert.Contains(t, err.Error(), "setup: acquire setup lock")
 	assert.Empty(t, w.entries, "lock failure must happen before outbox emit")
 
-	_, userErr := userRepo.GetByUsername(context.Background(), "root")
+	_, userErr := userRepo.GetByUsername(context.Background(), testTenantID, "root")
 	require.Error(t, userErr, "lock failure must happen before user creation")
 	var ec *errcode.Error
 	require.ErrorAs(t, userErr, &ec)
 	assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
-	cnt, countErr := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	cnt, countErr := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, countErr)
 	assert.Equal(t, 0, cnt, "lock failure must not assign admin role")
 }
@@ -317,6 +326,7 @@ func TestService_CreateAdmin_NilSetupLockOptionIgnored_PriorLockWins(t *testing.
 	svc := newService(t, userRepo, roleRepo, w, setup.WithSetupLock(nil))
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -324,7 +334,7 @@ func TestService_CreateAdmin_NilSetupLockOptionIgnored_PriorLockWins(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.Len(t, w.entries, 1)
-	cnt, countErr := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	cnt, countErr := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, countErr)
 	assert.Equal(t, 1, cnt)
 }
@@ -344,7 +354,8 @@ func TestNewService_NilSetupLock_ReturnsErrcode(t *testing.T) {
 		clock.Real(),
 	)
 	require.NoError(t, err)
-	_, err = setup.NewService(clock.Real(), prov, discardLogger(),
+	_, err = setup.NewService(
+		clock.Real(), prov, discardLogger(),
 		setup.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		// No WithSetupLock — triggers the mandatory-dep fail-fast.
 	)
@@ -364,6 +375,7 @@ func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, w)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -383,9 +395,9 @@ func TestService_CreateAdmin_BlankField_Returns400(t *testing.T) {
 		name string
 		in   setup.CreateAdminInput
 	}{
-		{"blank username", setup.CreateAdminInput{Username: "", Email: "e@x", Password: "p"}},
-		{"blank email", setup.CreateAdminInput{Username: "u", Email: "", Password: "p"}},
-		{"blank password", setup.CreateAdminInput{Username: "u", Email: "e@x", Password: ""}},
+		{"blank username", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "", Email: "e@x", Password: "p"}},
+		{"blank email", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "u", Email: "", Password: "p"}},
+		{"blank password", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "u", Email: "e@x", Password: ""}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -413,6 +425,7 @@ func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+				TenantID: testTenantIDStr,
 				Username: "root",
 				Email:    "root@local",
 				Password: tc.password,
@@ -434,11 +447,13 @@ func TestService_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 	}{
 		{
 			name: "username too long",
-			in:   setup.CreateAdminInput{Username: strings.Repeat("u", 129), Email: "root@local", Password: "SecretPass!23"},
+			in: setup.CreateAdminInput{
+				TenantID: testTenantIDStr, Username: strings.Repeat("u", 129), Email: "root@local", Password: "SecretPass!23",
+			},
 		},
 		{
 			name: "email too long",
-			in:   setup.CreateAdminInput{Username: "root", Email: strings.Repeat("e", 257), Password: "SecretPass!23"},
+			in:   setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "root", Email: strings.Repeat("e", 257), Password: "SecretPass!23"},
 		},
 	}
 	for _, tc := range tests {
@@ -460,6 +475,7 @@ func TestService_CreateAdmin_EmitterFailure_Propagates(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, w)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -476,6 +492,7 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 	svc := newService(t, userRepo, roleRepo, nil)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -567,6 +584,7 @@ func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing
 			defer done.Done()
 			start.Wait()
 			out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+				TenantID: testTenantIDStr,
 				Username: "root" + strconv.Itoa(i),
 				Email:    "root" + strconv.Itoa(i) + "@local",
 				Password: "SecretPass!23",
@@ -596,7 +614,7 @@ func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing
 	assert.Equal(t, 1, successes, "exactly one goroutine must create the admin")
 	assert.Equal(t, workers-1, retired, "all other goroutines must see ErrSetupAlreadyInitialized")
 
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt, "final admin count must be exactly 1 (S4.0 invariant)")
 }
@@ -618,6 +636,7 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 
 	start := time.Now()
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -641,12 +660,13 @@ func TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover(t *test
 	existing, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	existing.ID = "usr-existing-prior"
-	require.NoError(t, userRepo.Create(context.Background(), existing))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, existing))
 
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -661,7 +681,7 @@ func TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover(t *test
 	require.NoError(t, err)
 	assert.Equal(t, "$2a$10$oldhash00000000000000000000000000000000000000000000000", refreshed.PasswordHash,
 		"existing user hash must be untouched")
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt, "duplicate username must not be promoted to admin")
 }
@@ -675,9 +695,13 @@ func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
 		name string
 		in   setup.CreateAdminInput
 	}{
-		{"newline in email", setup.CreateAdminInput{Username: "root", Email: "root@local\n", Password: "SecretPass!23"}},
-		{"tab in username", setup.CreateAdminInput{Username: "ro\tot", Email: "root@local", Password: "SecretPass!23"}},
-		{"cr in email", setup.CreateAdminInput{Username: "root", Email: "root\r@local", Password: "SecretPass!23"}},
+		{"newline in email", setup.CreateAdminInput{
+			TenantID: testTenantIDStr, Username: "root", Email: "root@local\n", Password: "SecretPass!23",
+		}},
+		{"tab in username", setup.CreateAdminInput{
+			TenantID: testTenantIDStr, Username: "ro\tot", Email: "root@local", Password: "SecretPass!23",
+		}},
+		{"cr in email", setup.CreateAdminInput{TenantID: testTenantIDStr, Username: "root", Email: "root\r@local", Password: "SecretPass!23"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -703,6 +727,7 @@ func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testi
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -732,9 +757,9 @@ func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleR
 	u, err := domain.NewUser("existing", "existing@local", "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-seed"
-	require.NoError(t, userRepo.Create(context.Background(), u))
-	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}))
-	_, err = roleRepo.AssignToUser(context.Background(), u.ID, auth.RoleAdmin)
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
+	require.NoError(t, roleRepo.Create(context.Background(), testTenantID, &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}))
+	_, err = roleRepo.AssignToUser(context.Background(), testTenantID, u.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 }
 
@@ -743,31 +768,42 @@ type countErrRoleRepo struct {
 	err error
 }
 
-func (r *countErrRoleRepo) Create(_ context.Context, _ *domain.Role) error { return nil }
-func (r *countErrRoleRepo) AssignToUser(_ context.Context, _, _ string) (bool, error) {
-	return true, nil
+func (r *countErrRoleRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.Role) error {
+	return nil
 }
-func (r *countErrRoleRepo) CountByRole(_ context.Context, _ string) (int, error) { return 0, r.err }
-func (r *countErrRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Role, error) {
-	return nil, nil
-}
-func (r *countErrRoleRepo) RemoveFromUser(_ context.Context, _, _ string) error { return nil }
-func (r *countErrRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _, _ string) (bool, error) {
+
+func (r *countErrRoleRepo) AssignToUser(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
 	return true, nil
 }
 
-func (r *countErrRoleRepo) GetByID(_ context.Context, _ string) (*domain.Role, error) {
+func (r *countErrRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ string) (int, error) {
+	return 0, r.err
+}
+
+func (r *countErrRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
+	return nil, nil
+}
+
+func (r *countErrRoleRepo) RemoveFromUser(_ context.Context, _ tenant.TenantID, _, _ string) error {
+	return nil
+}
+
+func (r *countErrRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
+	return true, nil
+}
+
+func (r *countErrRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, _ string) (*domain.Role, error) {
 	return &domain.Role{ID: auth.RoleAdmin}, nil
 }
 
-func (r *countErrRoleRepo) ListByUserID(_ context.Context, _ string, _ query.ListParams) ([]*domain.Role, error) {
+func (r *countErrRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }
 
 // CountEffectiveAdmins is the S4.0 invariant counter; setup tests exercise
 // CountByRole (bootstrap idempotency) only, so this stub is intentionally
 // unused.
-func (r *countErrRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) {
+func (r *countErrRoleRepo) CountEffectiveAdmins(_ context.Context, _ tenant.TenantID) (int, error) {
 	panic("countErrRoleRepo.CountEffectiveAdmins: unused in setup tests")
 }
 
@@ -776,7 +812,7 @@ func (r *countErrRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) 
 // (provisioner.Status routes through it) by making the underlying read
 // surface return r.err. The provisioner.Status implementation now calls
 // EffectiveAdminExists, so we route the same err through this method.
-func (r *countErrRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) {
+func (r *countErrRoleRepo) EffectiveAdminExists(_ context.Context, _ tenant.TenantID) (bool, error) {
 	return false, r.err
 }
 
@@ -810,6 +846,7 @@ func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *
 	svc := newService(t, userRepo, roleRepo, w)
 
 	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
 		Username: "newadmin",
 		Email:    "newadmin@local",
 		Password: "SecretPass!23",

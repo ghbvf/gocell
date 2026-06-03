@@ -70,7 +70,7 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 	initialUser := mustBuildUser(t, userID, 1)
 	initialUser.Username = "race-epoch-user"
 	initialUser.Email = "race@epoch.test"
-	require.NoError(t, userRepo.Create(context.Background(), initialUser))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, initialUser))
 
 	// Seed an active session with AuthzEpochAtIssue=1 — matches user.epoch=1.
 	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
@@ -140,7 +140,7 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 
 	// Bump the epoch directly (test-only; funnel not needed here — see package
 	// godoc for rationale).
-	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID, credentialfence.Mint())
+	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), testTenantID, userID, credentialfence.Mint())
 	require.NoError(t, err, "BumpAuthzEpoch must succeed")
 	require.Equal(t, int64(2), newEpoch, "bump from epoch=1 must yield epoch=2")
 

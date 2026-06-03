@@ -63,11 +63,12 @@
 // pkg/httputil.WriteError(err) and derives the response status from
 // errcode.Kind. For event contracts the signature is
 // `Handle{Topic}(ctx, *Payload) error`. For grpc contracts the signature is
-// the PLACEHOLDER `{Method}(ctx, []byte) ([]byte, error)` on a `Server`
-// interface — request/response stay []byte (no proto dependency) until PR 6
-// wires the proto-generated message types. types_gen.go carries no DTOs for
-// grpc (proto is the schema, deferred); GRPC-CODEGEN-NO-PROTO-DEP-01
-// (grpc_no_proto_dep_test.go) locks the no-proto/grpc-import property. For
+// `{Method}(ctx, *pb.{Request}) (*pb.{Response}, error)` on a `Server`
+// interface — the proto-generated message types + import path are resolved from
+// the .proto go_package option + rpc declaration (readProtoTypeInfo). types_gen.go
+// carries no DTOs for grpc (proto is the schema); GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01
+// (grpc_proto_registry_test.go) locks that the emitted import path comes only
+// from the proto, not a hand-written literal. For
 // kind=saga, iface_gen.go is intentionally empty (just the package clause) —
 // the typed business interface is the Impl interface emitted in saga_gen.go,
 // not a Service here.

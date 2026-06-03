@@ -42,9 +42,10 @@ type ContractGenSpec struct {
 	// Impl interface + BuildDefinition/Register); the step output DTOs it
 	// references are emitted into DTOs (rendered by types.tmpl) like any kind.
 	Saga *SagaSpec
-	// GRPC is non-nil when Kind == "grpc". It drives the placeholder server
-	// interface emitted into iface_gen.go. Request/response are []byte until
-	// PR 6 wires the proto-generated message types.
+	// GRPC is non-nil when Kind == "grpc". It drives the server interface emitted
+	// into iface_gen.go; the proto-generated message types + import path are
+	// resolved from the .proto go_package option + rpc declaration
+	// (readProtoTypeInfo).
 	GRPC *GRPCEndpointSpec
 	// RequestSchemaJSON is the raw JSON content of the request schema file,
 	// compacted to a single line (no extra whitespace).
@@ -353,7 +354,7 @@ type RetryPolicySpec struct {
 	MaxIntervalExpr  string
 }
 
-// GRPCEndpointSpec holds gRPC-specific endpoint information for the placeholder
+// GRPCEndpointSpec holds gRPC-specific endpoint information for the
 // server-interface generator. It mirrors EventEndpointSpec's role: the builder
 // projects metadata.GRPCTransportMeta into this codegen-local value type, and
 // iface.tmpl reads it to emit the server interface.
@@ -363,9 +364,13 @@ type RetryPolicySpec struct {
 // definition because the codegen IR carries Go-identifier-shaped fields
 // (InterfaceName, MethodName) the runtime descriptor has no use for.
 //
-// Until PR 6 the request/response are []byte placeholders (no proto dependency);
-// the GRPC-CODEGEN-NO-PROTO-DEP-01 invariant locks that no protobuf/grpc import
-// reaches the rendered stub.
+// The proto-typed fields (ProtoImportPath / ProtoAlias / RequestType /
+// ResponseType) are resolved by buildGRPCSpec from the .proto file's go_package
+// option + rpc declaration (readProtoTypeInfo) — the proto is the single source
+// of the import + message-type identity emitted into the stub. buildGRPCSpec is
+// the only constructor of this struct; GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01
+// locks both that single write site (C1) and that the rendered import equals
+// the proto oracle (C3).
 type GRPCEndpointSpec struct {
 	// InterfaceName is the Go identifier for the generated server interface,
 	// e.g. "Server". Held as a field (not a literal in the template) so the
@@ -378,12 +383,22 @@ type GRPCEndpointSpec struct {
 	// endpoints.grpc.service, e.g. "device.command.v1.DeviceCommandService".
 	// Rendered into the interface doc comment only (no code dependency).
 	ServiceFQN string
-	// StreamingType is the declared streaming pattern (always unary/empty in
-	// PR 2 — buildGRPCSpec rejects non-unary; PR 10 lifts the restriction).
+	// StreamingType is the declared streaming pattern (always unary/empty —
+	// buildGRPCSpec rejects non-unary; PR 10 lifts the restriction).
 	StreamingType string
 	// ProtoPath is the contracts-relative .proto path from endpoints.grpc.proto.
-	// Rendered into the interface doc comment only; the file is not read.
+	// Rendered into the interface doc comment; also resolved + read by buildGRPCSpec.
 	ProtoPath string
+	// ProtoImportPath is the Go import path of the proto-generated package, read
+	// from the .proto go_package option. Single source for the import literal in
+	// iface.tmpl (no hand-written string).
+	ProtoImportPath string
+	// ProtoAlias is the import alias from go_package (after ';'), e.g. "commandv1".
+	ProtoAlias string
+	// RequestType is the proto request message simple name, e.g. "IssueCommandRequest".
+	RequestType string
+	// ResponseType is the proto response message simple name.
+	ResponseType string
 }
 
 // ParamSpec describes a single HTTP path or query parameter.

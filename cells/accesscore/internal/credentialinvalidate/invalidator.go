@@ -35,6 +35,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -52,8 +53,13 @@ import (
 // local interface (the pre-#1196 sessionrefresh.invalidatorApplier form)
 // would resolve Apply via the caller package, hiding the callsite from the
 // callsite-level scan and creating a Soft channel. Keep the interface here.
+//
+// tid is the tenant that scopes the mutation; callers must provide it
+// explicitly (PR-2a philosophy: no implicit ctx-read inside the funnel).
+// Passing an empty or invalid TenantID returns an error (fail-closed;
+// repo methods require a valid tenant).
 type Applier interface {
-	Apply(ctx context.Context, subjectID string, event session.CredentialEvent) error
+	Apply(ctx context.Context, tid tenant.TenantID, subjectID string, event session.CredentialEvent) error
 }
 
 // Compile-time check: *Invalidator implements Applier.
@@ -96,7 +102,15 @@ func New(users ports.UserRepository, sessions session.Store, refreshStore refres
 // All three operations commit atomically when the surrounding tx commits.
 // Order is defined only for short-circuit predictability; correctness does not
 // depend on the order.
-func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event session.CredentialEvent) error {
+//
+// tid is the tenant that scopes the BumpAuthzEpoch write. Callers must provide
+// it explicitly; the funnel no longer reads tenant from the context (PR-2a:
+// non-JWT callers such as rbacassign/service-token and the refresh-reuse
+// cascade have no tenant in ctx, which previously caused 500 errors).
+func (i *Invalidator) Apply(txCtx context.Context, tid tenant.TenantID, subjectID string, event session.CredentialEvent) error {
+	if err := tid.Validate(); err != nil {
+		return fmt.Errorf("credentialinvalidate: invalid tenant: %w", err)
+	}
 	slog.DebugContext(txCtx, "credentialinvalidate: apply",
 		slog.String("subject_id", subjectID),
 		slog.String("event", event.String()))
@@ -109,7 +123,7 @@ func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event sessi
 	// New epoch value is intentionally discarded: sessionvalidate re-reads
 	// authz_epoch from the DB on every request, so the caller does not need
 	// the bumped value here. The DB row is the single source of truth.
-	if _, err := i.users.BumpAuthzEpoch(txCtx, subjectID, tok); err != nil {
+	if _, err := i.users.BumpAuthzEpoch(txCtx, tid, subjectID, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: bump authz_epoch: %w", err)
 	}
 	if err := i.sessions.RevokeForSubject(txCtx, subjectID, event, tok); err != nil {

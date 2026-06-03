@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -31,6 +32,11 @@ import (
 	sessionpkg "github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+// testAdminCtx returns an admin auth context with the canonical test tenant injected.
+func testAdminCtx() context.Context {
+	return ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{"admin"}), "00000000-0000-0000-0000-000000000001")
+}
 
 func newIdentityRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
@@ -156,7 +162,7 @@ func createUserForContractTest(t *testing.T, handler http.Handler, contract *con
 	body := `{"username":"alice","email":"a@b.com","password":"` + testPassword + `"}`
 	req := httptest.NewRequest(contract.HTTP.Method, contract.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	contract.ValidateHTTPResponseRecorder(t, recorder)
@@ -225,7 +231,7 @@ func TestHttpAuthUserCreateV1Serve(t *testing.T) {
 	body := strings.NewReader(`{"username":"alice","email":"a@b.com","password":"` + testPassword + `"}`)
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, body)
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	c.ValidateHTTPResponseRecorder(t, recorder)
@@ -241,7 +247,7 @@ func TestHttpAuthUserGetV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
@@ -258,7 +264,7 @@ func TestHttpAuthUserUpdateV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"email":"new@b.com"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -277,7 +283,7 @@ func TestHttpAuthUserPatchV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"name":"Bob"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -302,7 +308,7 @@ func TestHttpAuthUserDeleteV1Serve(t *testing.T) {
 	userID := createUserForContractTest(t, handler, createContract)
 	deletePath := strings.Replace(deleteContract.HTTP.Path, "{id}", userID, 1)
 	req := httptest.NewRequest(deleteContract.HTTP.Method, deletePath, nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	deleteContract.ValidateHTTPResponseRecorder(t, recorder)
@@ -320,7 +326,7 @@ func TestHttpAuthUserLockV1Serve(t *testing.T) {
 	// Lock request body must be {} — generated handler calls DecodeJSONStrict.
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
@@ -338,7 +344,7 @@ func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
 	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, strings.NewReader("{}"))
 	lockReq.Header.Set("Content-Type", "application/json")
-	lockReq = lockReq.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	lockReq = lockReq.WithContext(testAdminCtx())
 	handler.ServeHTTP(httptest.NewRecorder(), lockReq)
 
 	// Unlock — body must be {} with Content-Type.
@@ -346,7 +352,7 @@ func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
@@ -385,7 +391,7 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 	// Generated handler calls DecodeJSONStrict — body must be {} with Content-Type.
 	req := httptest.NewRequest(lockContract.HTTP.Method, lockPath, strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	lockContract.ValidateHTTPResponseRecorder(t, rec)
 
@@ -411,7 +417,7 @@ func TestEventUserUpdatedV1Publish(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(updateContract.HTTP.Method, path, strings.NewReader(`{"email":"updated@b.com"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	updateContract.ValidateHTTPResponseRecorder(t, rec)
 
@@ -435,7 +441,7 @@ func TestEventUserDeletedV1Publish(t *testing.T) {
 	deletePath := strings.Replace(deleteContract.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(deleteContract.HTTP.Method, deletePath, nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	deleteContract.ValidateHTTPResponseRecorder(t, rec)
 
@@ -461,7 +467,7 @@ func TestEventUserUnlockedV1Publish(t *testing.T) {
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
 	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, strings.NewReader("{}"))
 	lockReq.Header.Set("Content-Type", "application/json")
-	lockReq = lockReq.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	lockReq = lockReq.WithContext(testAdminCtx())
 	handler.ServeHTTP(httptest.NewRecorder(), lockReq)
 	writer.entries = nil // reset after lock event
 
@@ -470,7 +476,7 @@ func TestEventUserUnlockedV1Publish(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(unlockContract.HTTP.Method, unlockPath, strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	handler.ServeHTTP(rec, req)
 	unlockContract.ValidateHTTPResponseRecorder(t, rec)
 
@@ -549,7 +555,7 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 	body := `{"oldPassword":"` + testPassword + `","newPassword":"brand-new-P@ss"}`
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(testAdminCtx())
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)

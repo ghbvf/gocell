@@ -176,7 +176,8 @@ func NewService(
 // which intentionally bypasses the outer transaction (PR#395 detached-context
 // invariant).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthRefreshInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
 	); err != nil {
 		return dto.TokenPair{}, err
@@ -290,6 +291,14 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	// sid claim as the original login. AuthzEpoch / password-reset state is
 	// re-evaluated per refresh via the user lookup above; the session row
 	// itself is not rotated.
+	//
+	// Tenant derivation (#1337 PR-2 stopgap): the refresh endpoint is Public
+	// (no JWT), so there is no pre-auth ctx tenant. Derive the tenant from the
+	// user row returned by fetchUserForRefresh (GetByID by-PK carve-out).
+	// user.TenantID was stamped at Create time and is the authoritative source.
+	// PR-3 will carry tenant in the refresh token / session row for true RLS
+	// isolation; at that point this derivation moves to the store layer.
+	refreshTenantID := user.TenantID
 	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
@@ -297,6 +306,7 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 		UserID:                sess.SubjectID,
 		SessionID:             sess.ID,
 		PasswordResetRequired: passwordResetRequired,
+		TenantID:              refreshTenantID,
 	})
 	if err != nil {
 		s.logger.Error("session-refresh: token issuance failed",
@@ -377,10 +387,27 @@ func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessi
 		panic(panicregister.Approved("sessionrefresh-reuse-empty-subject",
 			errcode.Assertion("sessionrefresh.handleReuseDetected: refresh.Store violated contract — returned ErrReused with empty SubjectID")))
 	}
+	// Derive the tenant from the user row. The refresh endpoint is Public (no
+	// JWT), so there is no pre-auth ctx tenant. GetByID is the by-PK
+	// tenant-deriving carve-out (#1337 PR-2a); it returns the row regardless of
+	// tenant and the TenantID stamped at Create time is the authoritative source.
+	// On any error (user not found, infra outage) fail-closed to 401: the reuse
+	// attack is confirmed regardless, and surfacing a different status code would
+	// leak side-channel information.
+	userForTenant, err := s.userRepo.GetByID(outerCtx, subjectID)
+	if err != nil {
+		s.logger.Error("session-refresh: reuse cascade: failed to fetch user for tenant derivation (fail-closed to 401)",
+			slog.Any("error", err),
+			slog.String("stage", stage),
+			slog.String("subject_id", subjectID),
+			slog.String("session_id", sessionID))
+		return authRefreshRejected()
+	}
+	reuseTenantID := userForTenant.TenantID
 	detachedCtx, cancel := ctxutil.WithDetachedTimeout(outerCtx, reuseCascadeTimeout)
 	defer cancel()
 	if applyErr := s.txRunner.RunInTx(detachedCtx, func(txCtx context.Context) error {
-		return s.invalidator.Apply(txCtx, subjectID, session.CredentialEventRefreshReuse)
+		return s.invalidator.Apply(txCtx, reuseTenantID, subjectID, session.CredentialEventRefreshReuse)
 	}); applyErr != nil {
 		// Reuse has already been identified as an attack — the wire response
 		// must be uniform 401 regardless of whether the cascade infrastructure
