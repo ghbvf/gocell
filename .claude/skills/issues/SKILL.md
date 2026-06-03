@@ -88,7 +88,7 @@ C
 )"
 ```
 
-## A 沟通规则
+## A5. 沟通规则
 
 - 环检测命中 / wave option 缺档 / 子任务未入 project：停下 AskUserQuestion。
 - DAG 排序结果先 dry-run 呈现，确认后再写 Project（写 live 状态）。
