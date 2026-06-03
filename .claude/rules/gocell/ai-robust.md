@@ -73,11 +73,11 @@ archtest CI 入口、本地触发方式（`make verify` / `hack/verify-archtest.
 涉及"新增/修改约束 enforcement 机制"的 finding 必须显式给 AI-robust 评级：
 
 - **Hard**：保留；符号清单 / archtest ID / ADR ref 写进该 archtest 的 package godoc，**不写入本文件**；仅当属现有范本描述不了的全新机制形态，才更新 §Hard 范本目录
-- **Medium**：保留；若有低成本升 Hard 的路径，用 gh issue 跟踪，入口见 GitHub Issues（schema 见 `.github/PROJECT.md`）
+- **Medium**：保留；若有低成本升 Hard 的路径，用 gh issue 跟踪，入口见 GitHub Issues（schema 见 `.github/project-template/PROJECT.md`）
 - **Soft**：
   - 新引入 → 直接 reject，要求改 ≥ Medium
   - 既有 Soft 的补丁 → 优先讨论"升级到 Hard/Medium"，而非在 Soft 层打补丁
-  - 允许暂留时，必须同步开 gh issue 跟踪升级，入口见 GitHub Issues（schema 见 `.github/PROJECT.md`）；不能 silent carryover
+  - 允许暂留时，必须同步开 gh issue 跟踪升级，入口见 GitHub Issues（schema 见 `.github/project-template/PROJECT.md`）；不能 silent carryover
 
 ### Funnel 双向锁评级
 
@@ -86,7 +86,7 @@ archtest CI 入口、本地触发方式（`make verify` / `hack/verify-archtest.
 - **下游 Hard**：禁止某 method 在 funnel 外被调（caller allowlist，由 archtest 锁定调用点身份）。
 - **上游 Hard**：保证某 callsite **必然**经过 funnel——典型形态 = sealed interface + 字段私有化（包外不可表达跳过）。
 
-Soft 上游 + Hard 下游不算闭环 funnel，按 Soft 处理。允许 Medium 上游（archtest caller allowlist）+ Hard 下游的过渡形态，但**必须同步开 gh issue 跟踪显式 Hard 化任务**，入口见 GitHub Issues（schema 见 `.github/PROJECT.md`）；并在 funnel 自身的 godoc / 测试注释中点名该 issue 号，让审查者能直接追到升级路径。
+Soft 上游 + Hard 下游不算闭环 funnel，按 Soft 处理。允许 Medium 上游（archtest caller allowlist）+ Hard 下游的过渡形态，但**必须同步开 gh issue 跟踪显式 Hard 化任务**，入口见 GitHub Issues（schema 见 `.github/project-template/PROJECT.md`）；并在 funnel 自身的 godoc / 测试注释中点名该 issue 号，让审查者能直接追到升级路径。
 
 ### ADR amendment 落地必查
 

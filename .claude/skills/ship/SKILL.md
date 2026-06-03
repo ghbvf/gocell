@@ -126,18 +126,18 @@ golangci-lint run ./...   # 0 issues 才进阶段 6
 
 ```bash
 git -C worktrees/<wt> push -u origin <branch>   # dangerouslyDisableSandbox: true
-gh pr create --title "..." --body "..."
-gh pr edit <PR#> --add-label pr-status/in-progress   # 进入 ship→codex→fix 流程（见 .github/PROJECT.md §5）
+gh pr create --title "..." --body-file <填好的 pull_request_template.md>
+gh pr edit <PR#> --add-label pr-status/in-progress   # 进入 ship→codex→fix 流程（见 .github/project-template/PROJECT.md §5）
 ```
 
-PR body 包含：Summary、`Refs: <ID>`、`ref: framework file`、Test plan checklist。
+PR body 结构单源 = `.github/project-template/pull_request_template.md`（Summary / Refs / Test plan）；读模版填占位（`Refs: Closes #<ID>` + `ref: framework file`），不在技能内重述结构。本仓 PR 全程 CLI 创建，必须 `--body-file` 读填好的模版。
 
 ---
 
 ## 阶段 7：Review（内置 reviewer）
 
 > ship 的 review 是 ship→codex→fix 流程里的**内置首审**（6 维 reviewer）；codex 外部 review 由你在外部跑，
-> 续修走 `/fix <PR#>`（见 `.github/PROJECT.md` §5）。ship 单独使用只做内置审。
+> 续修走 `/fix <PR#>`（见 `.github/project-template/PROJECT.md` §5）。ship 单独使用只做内置审。
 
 **L1/L2**：1 个 `reviewer` agent（GoCell 六维度）。
 
@@ -169,10 +169,10 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 1. **呈现内置 review findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。L3 用 AskUserQuestion 与用户确认
    修哪些（默认修 Cx1/Cx2 IN_SCOPE）。
 2. 对 Cx1/Cx2 IN_SCOPE findings 派发 `developer` agent 执行 `/fix <finding>`；Cx3/Cx4 和 OUT_OF_SCOPE 收集到阶段 9。
-3. **收尾**（按 `pm-issue` §4 评论格式，**评论必留**）：
+3. **收尾**（按 `.github/project-template/pr-comment.md` 的 ship 模板，**评论必留**）：
 
    ```bash
-   gh pr comment <PR#> --body "$(...含 <!-- pm:ship --> 标记：reviewer 数 / findings 表 / 已修 Cx1-Cx2 / 遗留 Cx3-Cx4 / OUT_OF_SCOPE / 下一步=待 codex...)"
+   gh pr comment <PR#> --body-file <填好的 pr-comment.md ship 模板>   # <!-- pm:ship -->：reviewer 数 / findings 表 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex
    gh pr edit <PR#> --add-label pr-status/needs-codex --remove-label pr-status/in-progress
    ```
 

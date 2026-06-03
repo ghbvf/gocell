@@ -7,7 +7,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 # 问题诊断与修复
 
-> `gh` 命令均 `dangerouslyDisableSandbox: true`；创建/查询前 `gh auth status`；`gh issue create` 经 §沟通规则闸门。真源 = GitHub Issues + Project v2 #3；label / 评级 rubric（P + Cx）见 `.github/PROJECT.md`；issue/PR/label/评论原子操作规范见 `pm-issue`。
+> `gh` 命令均 `dangerouslyDisableSandbox: true`；创建/查询前 `gh auth status`；`gh issue create` 经 §沟通规则闸门。真源 = GitHub Issues + Project v2 #3；label / 评级 rubric（P + Cx）见 `.github/project-template/PROJECT.md`；issue/PR/label/评论原子操作规范见 `issues`（Part B）。
 
 ---
 
@@ -69,7 +69,7 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 
 ### 2.3 复杂度分级
 
-**必须对问题做复杂度判定**，决定后续方案形态（方案数见 3.1）。**Cx1-4 定义单源在 `.github/PROJECT.md` §3.2**（= 改动量/实现风险，本技能不复制）。
+**必须对问题做复杂度判定**，决定后续方案形态（方案数见 3.1）。**Cx1-4 定义单源在 `.github/project-template/PROJECT.md` §3.2**（= 改动量/实现风险，本技能不复制）。
 
 > Cx1 表示"容易修"，不代表"不重要"。IN_SCOPE/OUT_OF_SCOPE 由文件归属（阶段 2.4）决定，与 Cx 等级无关——Cx1 也可以是 IN_SCOPE 且必须修。
 
@@ -258,10 +258,10 @@ go test ./kernel/...                            # 改了 kernel 时
 **步骤 2: GitHub 收尾（按输入类型，无 issue 查找）**
 
 - **输入是 issue 号 + 已修** → `gh issue close <N> --reason completed --comment "Fixed in PR #<NNN>"`（自动；N 即输入，不查找）。
-- **输入是 PR 号 + 修完** → 按 `pm-issue` §4 贴 fix 评论（含 `<!-- pm:fix -->`：findings triage + 修复结果 + 遗留）+ `gh pr edit` 切 `pr-status/ready`（全清）或 `pr-review/changes-requested`（仍有 Cx3/Cx4 或 OUT_OF_SCOPE 遗留）。
-- **未修 / 待办 finding**（OUT_OF_SCOPE / `/fix` 派生）→ §沟通规则闸门输出 `gh issue create --label backlog --label pri-pX --label area-XX --label type-XX ...` 建议命令（确认后跑，留 open；body 按 `.github/ISSUE_TEMPLATE/backlog.yml` 填 现状/修复方向/Files/Source，条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
+- **输入是 PR 号 + 修完** → 按 `.github/project-template/pr-comment.md` 的 fix 模板贴评论（含 `<!-- pm:fix -->`：findings triage + 修复结果 + 遗留）+ `gh pr edit` 切 `pr-status/ready`（全清）或 `pr-review/changes-requested`（仍有 Cx3/Cx4 或 OUT_OF_SCOPE 遗留）。
+- **未修 / 待办 finding**（OUT_OF_SCOPE / `/fix` 派生）→ §沟通规则闸门输出 `gh issue create --label backlog --label pri-pX --label area-XX --label type-XX ...` 建议命令（确认后跑，留 open；body 按 `.github/project-template/backlog.md` 填 现状/修复方向/Files/Source，条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
-Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认（漏贴 `pri-pX` 会被 `auto-label-priority.yml` 贴 `pri-missing`）。完成后 **TaskUpdate → completed**。
+Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。完成后 **TaskUpdate → completed**。
 
 ---
 
@@ -281,6 +281,5 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 - 无法定位问题代码
 - 测试失败且 4 轮回退后仍无法修正
 - 修复过程中发现新问题超出原始 scope
-- Cx3/Cx4 用户追加了 `--auto` 参数（矛盾，需确认意图）
-- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题，即 4.8 步骤 2 的未修/待办行）：先输出建议命令 + body 草稿，再用 AskUserQuestion 询问"是否帮你 run 此命令？"。用户拒绝 → 留命令在最终报告供用户手工 run，/fix 不自动 create
+- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题）：先反思确认问题是否PR相关，Cx1问题搭车修，如真实OUT_OF_SCOPE先输出建议命令 + body 草稿，再create issues。
 - pri-p0 红线升级（incident-driven 或安全 CVE）

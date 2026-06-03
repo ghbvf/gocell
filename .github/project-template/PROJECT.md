@@ -3,7 +3,7 @@
 > **唯一真源 = GitHub Issues + [Project v2 #3](https://github.com/users/ghbvf/projects/3)**。
 > 不再有 `docs/backlog/` markdown 副本。所有 backlog 条目、epic、状态、优先级、评级活在 GitHub。
 >
-> 本文件是 label 体系 / Project v2 字段 / 评级 rubric 的单源参考，由 issue 模版、`/pm-issue`、`/pm-epic`、`/fix` 引用。
+> 本文件是 label 体系 / Project v2 字段 / 评级 rubric 的单源参考。
 
 ---
 
@@ -11,17 +11,16 @@
 
 | 维度 | 载体 | 写入方 |
 |------|------|--------|
-| 条目内容 / 状态描述 | GitHub Issue body | 人 / `/fix` / `/pm-issue` |
-| 领域 / 类型 / 优先级 | Issue label（area / type / pri） | 模版 dropdown（pri 自动）+ CLI 追加（area/type） |
-| 进度状态 / 复杂度 / wave | Project v2 字段（Status / Estimate / Wave） | Project UI / `/pm-epic` |
-| 父子关系 | GitHub 原生 sub-issue | 人 / `/pm-epic` |
+| 条目内容 / 状态描述 | GitHub Issue body | 人 / 自动化 |
+| 领域 / 类型 / 优先级 | Issue label（area / type / pri） | CLI 显式 `--label` |
+| 进度状态 / 复杂度 / wave | Project v2 字段（Status / Estimate / Wave） | Project UI / 自动化 |
+| 父子关系 | GitHub 原生 sub-issue | 人 / 自动化 |
 
-**新建条目**：
-- Web UI：`Backlog item` 模版（Priority dropdown 自动贴 `pri-pX`）→ 建后 `gh issue edit <N> --add-label area-XX --add-label type-XX`
-- CLI：`gh issue create --label backlog --label pri-pX --label area-XX --label type-XX --title "..." --body "..."`
-  （漏贴 `pri-pX` 会被 `auto-label-priority.yml` workflow 贴 `pri-missing` 哨兵）
+> 本仓 issue/PR 全程经 `gh` CLI / 技能创建，body 读 `.github/project-template/` 下对应模版（`--body-file`）。
 
-**新建 epic**：`Epic` 模版（`epic` label）；子任务用 GitHub 原生 sub-issue 关联。
+**新建 backlog**：`gh issue create --label backlog --label pri-pX --label area-XX --label type-XX --title "[<ID>] ..." --body-file <填好的 backlog.md>`。pri/area/type 必须显式贴（取值见 §2/§3）。
+
+**新建 epic**：`gh issue create --label epic --label backlog --label pri-pX --label area-XX --title "[EPIC] ..." --body-file <填好的 epic.md>`；子任务用 GitHub 原生 sub-issue 关联。
 
 ---
 
@@ -45,10 +44,9 @@
 `type-feat`（新功能）/ `type-bug`（缺陷）/ `type-refactor`（重构）/ `type-arch-opt`（架构优化）/
 `type-doc`（文档）/ `type-test`（测试）/ `type-debt`（技术债）/ `type-fu`（PR follow-up）
 
-### 2.3 pri-XX（优先级，1 个，模版自动贴）
+### 2.3 pri-XX（优先级，1 个，CLI 显式贴）
 
-`pri-p0` / `pri-p1` / `pri-p2` / `pri-p3`（语义见 §3 rubric）。
-`pri-missing` = 哨兵（CLI 漏贴 priority 时 workflow 自动贴，需补评）。
+`pri-p0` / `pri-p1` / `pri-p2` / `pri-p3`（语义见 §3 rubric）。建 issue 时必须显式 `--label pri-pX`。
 
 ### 2.4 工具 / 标记 label
 
@@ -73,7 +71,7 @@
 
 ## 3. 评级 rubric（P + Cx，**单源在此**）
 
-> `/fix` 与 `/pm-*` 评级**引用本节**，不在技能内复制 rubric。
+> P + Cx 评级 rubric 的**单源在此节**；评级处直接引用，不复制。
 
 ### 3.1 P 严重程度
 
@@ -111,7 +109,7 @@
 |------|------|------|--------|
 | **Status** | single-select | Backlog / Ready / In progress / In review / Done | 人（Project 内置 workflow + 手动） |
 | **Estimate** | single-select | Cx1 / Cx2 / Cx3 / Cx4 | 人 / 评级时 |
-| **Wave** | single-select | Wave 1 / Wave 2 / … | `/pm-epic`（epic 子任务拓扑排序结果） |
+| **Wave** | single-select | Wave 1 / Wave 2 / … | 自动化（epic 子任务拓扑排序结果） |
 | **Parent issue** | built-in | 自动派生（原生 sub-issue） | GitHub |
 | **Sub-issues progress** | built-in | 自动派生（子 issue close 比例） | GitHub |
 
@@ -138,7 +136,8 @@
   → 切 pr-status/ready（全清）或 pr-review/changes-requested（仍有遗留）
 ```
 
-> pr-status 流转 + **每次 ship/fix 都贴评论留痕**是 SKILL.md 约定（无 CI 机器门），由 `/ship` `/fix` 自律执行。
+> 不变式：PR 始终恰好一个 `pr-status/*`（切换时同步移除旧态）；每次 ship/fix 阶段结束都贴评论留痕（约定，无 CI 机器门），标记按来源不编 round 号（1 次 ship + N 次 fix）。
+> 评论格式模板单源 = `.github/project-template/pr-comment.md`。
 
 ---
 
@@ -154,9 +153,6 @@ gh issue list --label backlog --label area-eventing --state open
 
 # 按类型
 gh issue list --label backlog --label type-bug --state open
-
-# 漏评级哨兵
-gh issue list --label pri-missing --state open
 
 # epic
 gh issue list --label epic --state open
