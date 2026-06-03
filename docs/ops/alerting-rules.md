@@ -810,10 +810,11 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 
 ### GoCellIdempotencyKeyReused
 
-`key_reused`（同 Idempotency-Key 不同 body）非零通常是客户端 bug，持续偏高可能是重放尝试——安全相关，任何持续速率都应人工确认。
+`key_reused`（同 Idempotency-Key 不同 body）非零通常是客户端 bug，持续偏高可能是重放尝试——安全相关。下面的告警在速率 > 0.05/sec（≈ 3/min）持续 15min 时触发（info）；低于该阈值的零星 key_reused **不**触发告警，需结合 slog `idempotency_key_hash` 与下方调试查询人工确认。
 
 ```yaml
-# 任何非零 key_reused 速率都告警（info）；> 0.05/sec（≈ 3/min）升级排查。
+# key_reused 速率 > 0.05/sec（≈ 3/min）持续 15min 告警（info）。安全相关——更低的
+# 零星速率不在此告警，用下方调试查询 + slog idempotency_key_hash 人工确认。
 - alert: GoCellIdempotencyKeyReused
   expr: sum(rate(gocell_idempotency_requests_total{state="key_reused"}[15m])) > 0.05
   for: 15m
@@ -837,6 +838,10 @@ sum(rate(gocell_idempotency_requests_total{state="oversize"}[5m]))
 
 # store error 率（Claim 路径 500；Record/Release 失败仅 slog，不在此 metric）
 sum by (cell) (rate(gocell_idempotency_requests_total{state="store_error"}[5m]))
+
+# key_reused 率（任意非零，含低于告警阈值的零星事件）：按 cell 拆分定位来源，
+# 再用 slog idempotency_key_hash 关联具体请求。
+sum by (cell) (rate(gocell_idempotency_requests_total{state="key_reused"}[5m]))
 ```
 
 ---

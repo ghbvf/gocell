@@ -1057,6 +1057,60 @@ func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
 	}
 }
 
+// panickingObserver is a MetricsObserver whose ObserveRequest always panics.
+// It models a faulty composition-root-supplied collector; the middleware must
+// isolate the panic (observability.SafeObserve) so idempotency correctness is
+// never affected.
+type panickingObserver struct{}
+
+func (panickingObserver) ObserveRequest(context.Context, RequestState) {
+	panic("boom from metrics observer")
+}
+
+// TestMiddleware_Metrics_PanickingObserver_DoesNotAffectRequest verifies that a
+// panic inside the MetricsObserver hot-path hook is isolated and does not change
+// the idempotency outcome. The panic fires on the StateAcquired branch (emitted
+// BEFORE the handler runs); without SafeObserve it would escape the middleware,
+// skip the handler, and leak the acquired lease so the second request 409s on a
+// stuck in-flight claim instead of replaying. With the fix the acquired request
+// still runs the handler and records its response, and the second identical
+// request replays.
+func TestMiddleware_Metrics_PanickingObserver_DoesNotAffectRequest(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms, WithMetrics(panickingObserver{}))
+
+	calls := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	// First request: observer panics on StateAcquired but must not escape.
+	r1 := requestWithUserCtx("POST", "/resources", "key-panic-obs", "t1", "user-panic-obs")
+	rr1 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr1, r1)
+	if rr1.Code != 201 {
+		t.Fatalf("first request code: got %d, want 201 (panic must be isolated)", rr1.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls after first request: got %d, want 1", calls)
+	}
+
+	// Second identical request: response must replay — proving the panicking
+	// observer did not corrupt the claim/record path on the first request.
+	r2 := requestWithUserCtx("POST", "/resources", "key-panic-obs", "t1", "user-panic-obs")
+	rr2 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr2, r2)
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("second request must replay despite observer panic; code=%d", rr2.Code)
+	}
+	if calls != 1 {
+		t.Errorf("handler must NOT run again on replay; calls=%d, want 1", calls)
+	}
+}
+
 // TestMiddleware_Metrics_NilObserver_NoopAndNoPanic verifies that with no
 // observer wired (WithMetrics not called), requests succeed and nothing panics.
 func TestMiddleware_Metrics_NilObserver_NoopAndNoPanic(t *testing.T) {

@@ -59,8 +59,12 @@ const (
 )
 
 // MetricsObserver is the best-effort sink for per-request idempotency metrics.
-// The HTTP idempotency Middleware calls ObserveRequest exactly once per
-// terminal idempotency decision with the corresponding RequestState. The
+// The HTTP idempotency Middleware calls ObserveRequest once per idempotency
+// state event with the corresponding RequestState. Most requests emit a single
+// event; an acquired request whose response is oversize emits two — StateAcquired
+// at claim time, then StateOversize when the body overflows (see RequestState for
+// the acquired ⊇ oversize relationship). The other five states are mutually
+// exclusive and emit once each. The
 // interface lives in this producer package (not in runtime/observability/metrics)
 // so the middleware never imports the metrics package — mirroring the
 // executor.Observer placement that lets runtime/observability/metrics.SagaCollector

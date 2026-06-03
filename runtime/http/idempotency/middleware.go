@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -214,10 +215,20 @@ func WithMetrics(obs MetricsObserver) Option {
 
 // observeState emits one metric observation for the terminal idempotency
 // decision. It is a no-op when no MetricsObserver was wired (metrics optional).
+//
+// The observer is supplied by the composition root and runs on the request hot
+// path; a panic inside it must never change the idempotency outcome (a panic
+// here on the StateAcquired branch, for example, would skip the handler and leak
+// the just-acquired lease). observability.SafeObserve isolates any such panic —
+// observability is best-effort by design — mirroring the body-limit / HTTP
+// metrics middleware hooks.
 func (c middlewareConfig) observeState(ctx context.Context, state RequestState) {
-	if c.metrics != nil {
-		c.metrics.ObserveRequest(ctx, state)
+	if c.metrics == nil {
+		return
 	}
+	observability.SafeObserve(slog.Default(), func() {
+		c.metrics.ObserveRequest(ctx, state)
+	})
 }
 
 // Middleware returns an HTTP middleware that enforces per-(tenant,user,key)
