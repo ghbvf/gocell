@@ -195,9 +195,12 @@ func IsKnownGRPCStreamingType(s string) bool {
 // `transports[]`. It is the string projection of cellvocab.AllTransports() (the
 // typed single source); ordering matches that slice and, in lockstep, the
 // schemas/contract.schema.json transports enum (byte-locked by
-// TestSchemaConstantsMatchSchemaLiterals#transportEnum). Consumed by governance
-// FMT-39 and runtime kernel/contractspec.Validate, so schema, governance, and
-// runtime never drift on the accepted transport set.
+// TestSchemaConstantsMatchSchemaLiterals#transportEnum). Membership is enforced
+// at the DECLARATION layer only — governance FMT-39 (via IsKnownTransport) plus
+// the schema enum. Runtime kernel/contractspec.Validate deliberately does NOT
+// re-check transport membership (a production ContractSpec.Transport is trusted
+// as codegen/contractbuild-derived; declaration-layer enforcement, see ADR #1389
+// D6), so schema and governance — not the runtime value type — own this set.
 var TransportEnum = transportEnumStrings()
 
 func transportEnumStrings() []string {
@@ -211,9 +214,10 @@ func transportEnumStrings() []string {
 
 // IsKnownTransport reports whether s is one of TransportEnum (the closed set of
 // wire transports GoCell sanctions). The empty string is NOT a member; callers
-// that allow an omitted transport must guard the empty case separately (the
-// parser defaults an omitted contract.yaml `transports:` per kind before
-// validation, so a populated ContractMeta.Transports never carries empties).
+// that allow an omitted transport must guard the empty case separately. The
+// parser defaults an OMITTED contract.yaml `transports:` per kind; an explicitly
+// present-but-empty declaration (null / []) is left empty on purpose so
+// governance FMT-39's non-empty guard flags it rather than silently defaulting.
 func IsKnownTransport(s string) bool {
 	for _, v := range TransportEnum {
 		if s == v {

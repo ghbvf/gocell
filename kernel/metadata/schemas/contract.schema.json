@@ -19,7 +19,9 @@
     },
     "transports": {
       "type": "array",
-      "description": "Sanctioned wire transports for this contract. Each value must be a known Transport; the first entry is the primary transport used by generated ContractSpec. Optional — omitting the key is valid and means the default transport for the kind applies.",
+      "description": "Sanctioned wire transports for this contract. Each value must be a known Transport; the first entry is the primary transport used by generated ContractSpec. Optional — omitting the key is valid and means the default transport for the kind applies. When the key IS present it must be a non-empty array of unique values: an explicitly empty `transports:` is a malformed declaration (governance FMT-39 flags it), not a request for the default.",
+      "minItems": 1,
+      "uniqueItems": true,
       "items": {
         "type": "string",
         "enum": ["amqp", "mqtt", "internal", "http", "grpc"]

@@ -292,9 +292,10 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 
 // TestRender_Event_Transports verifies the spec.tmpl transport derivation (#1389):
 // the generated ContractSpec.Transport is always the primary (Transports[0]), and
-// the exported `var Transports` set is emitted ONLY for multi-transport contracts.
-// This locks the {{if gt (len .Transports) 1}} branch in contractgen's own tests
-// (the real device-registered regen is the integration witness; this is the unit).
+// the Transports() copy-returning accessor (+ its unexported backing slice) is
+// emitted ONLY for multi-transport contracts. This locks the
+// {{if gt (len .Transports) 1}} branch in contractgen's own tests (the real
+// device-registered regen is the integration witness; this is the unit).
 //
 // Derivation lock (NOT a hardcoded primary): both cases drive a NON-amqp primary
 // (mqtt) precisely so the assertions distinguish `index .Transports 0` derivation
@@ -326,7 +327,7 @@ func TestRender_Event_Transports(t *testing.T) {
 		return string(out)
 	}
 
-	t.Run("single transport: primary derives transports[0], no Transports var", func(t *testing.T) {
+	t.Run("single transport: primary derives transports[0], no Transports accessor", func(t *testing.T) {
 		out := renderSpec(t, []string{"mqtt"})
 		if !strings.Contains(out, `Transport: "mqtt"`) {
 			t.Errorf("expected primary Transport \"mqtt\" (transports[0]), got:\n%s", out)
@@ -334,19 +335,31 @@ func TestRender_Event_Transports(t *testing.T) {
 		if strings.Contains(out, `Transport: "amqp"`) {
 			t.Errorf("primary must derive transports[0]=mqtt, not a hardcoded \"amqp\", got:\n%s", out)
 		}
-		if strings.Contains(out, "var Transports") {
-			t.Errorf("single-transport contract must NOT emit a Transports var, got:\n%s", out)
+		if strings.Contains(out, "Transports") {
+			t.Errorf("single-transport contract must NOT emit a Transports accessor/var, got:\n%s", out)
 		}
 	})
 
-	t.Run("multi transport: primary is transports[0] + exported set in declared order", func(t *testing.T) {
+	t.Run("multi transport: primary is transports[0] + copy-returning accessor in declared order", func(t *testing.T) {
 		// mqtt FIRST so the primary is provably transports[0], not a hardcoded amqp.
 		out := renderSpec(t, []string{"mqtt", "amqp"})
 		if !strings.Contains(out, `Transport: "mqtt"`) {
 			t.Errorf("expected primary Transport \"mqtt\" (transports[0]), got:\n%s", out)
 		}
-		if !strings.Contains(out, `var Transports = []string{"mqtt", "amqp"}`) {
-			t.Errorf("expected exported Transports set in declared order, got:\n%s", out)
+		// Unexported backing slice (declared order) — the only mutable holder.
+		if !strings.Contains(out, `var transports = []string{"mqtt", "amqp"}`) {
+			t.Errorf("expected unexported backing slice in declared order, got:\n%s", out)
+		}
+		// Exported accessor returns a fresh copy so importers cannot mutate truth source.
+		if !strings.Contains(out, `func Transports() []string`) {
+			t.Errorf("expected exported Transports() accessor, got:\n%s", out)
+		}
+		if !strings.Contains(out, `return append([]string(nil), transports...)`) {
+			t.Errorf("Transports() must return a copy (append([]string(nil), …)), got:\n%s", out)
+		}
+		// No exported MUTABLE var (the holder must be the unexported backing slice).
+		if strings.Contains(out, `var Transports =`) {
+			t.Errorf("must NOT expose a mutable exported var Transports, got:\n%s", out)
 		}
 	})
 }

@@ -40,8 +40,9 @@ type ContractSpec struct {
 	// projection. It is the PRIMARY transport — codegen derives it as the first
 	// element of the contract's `transports:` set (transports[0]); a
 	// multi-transport contract (e.g. event over [amqp, mqtt]) exposes the full
-	// sanctioned set via the generated package's `Transports` var, while this
-	// field carries the primary the production binding routes over. Membership in
+	// sanctioned set via the generated package's `Transports()` accessor (which
+	// returns a copy so the truth source cannot be aliased), while this field
+	// carries the primary the production binding routes over. Membership in
 	// cellvocab.AllTransports() is governed at the declaration layer (FMT-39 +
 	// schema enum), not at runtime — see Validate.
 	Transport string

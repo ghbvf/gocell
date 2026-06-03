@@ -40,18 +40,19 @@ func (noopSettlement) Release(context.Context) error { return nil }
 
 // mqttTransportFromContract returns the mqtt transport ONLY if the
 // device-registered contract sanctions it, reading the codegen-derived truth
-// source deviceregistered.Transports (generated from contract.yaml transports:).
+// source deviceregistered.Transports() (generated from contract.yaml transports:).
 // It fails the smoke if mqtt is ever dropped from the set — so the verifier's
 // MQTT delivery channel is bound to the contract, not a hand-written literal (#1389).
 func mqttTransportFromContract(t *testing.T) string {
 	t.Helper()
-	for _, tr := range deviceregistered.Transports {
+	sanctioned := deviceregistered.Transports()
+	for _, tr := range sanctioned {
 		if tr == string(cellvocab.TransportMQTT) {
 			return tr
 		}
 	}
 	t.Fatalf("event.device-registered.v1 does not sanction the mqtt transport; Transports=%v",
-		deviceregistered.Transports)
+		sanctioned)
 	return ""
 }
 
@@ -212,7 +213,7 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 		ContractKind:  "event",
 		// ContractTransport is derived from the contract truth source (#1389): the
 		// device-registered contract now declares transports: [amqp, mqtt], so the
-		// generated package exposes deviceregistered.Transports. mqttTransportFromContract
+		// generated package exposes deviceregistered.Transports(). mqttTransportFromContract
 		// fails the smoke if mqtt is ever removed from that set — the verifier's MQTT
 		// delivery channel is no longer a hand-written string but a contract-sanctioned
 		// transport. (Per-binding runtime transport selection — a production cell

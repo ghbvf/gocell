@@ -277,12 +277,18 @@ func (p *Parser) parseContract(fsys fs.FS, src MetadataSource, pm *ProjectMeta) 
 	if m.OwnerCell == "" {
 		m.OwnerCell = m.ProviderEndpoint()
 	}
-	// transports default derivation (#1389): an omitted `transports:` is
+	// transports default derivation (#1389): an OMITTED `transports:` key is
 	// defaulted per kind so every existing contract stays byte-identical and the
 	// generated ContractSpec.Transport primary is unchanged. Only contracts that
 	// explicitly declare a multi-transport set (today: device-registered) differ.
 	// Mirrors k8s SetDefaults_Service (if Protocol == "" → ProtocolTCP).
-	if m.Transports == nil {
+	//
+	// An EXPLICIT present-but-empty `transports:` (null / [] ) is deliberately
+	// NOT defaulted — it stays nil/empty so governance FMT-39's non-empty guard
+	// flags the malformed declaration instead of the default silently masking it.
+	// The yaml-key probe (same funnel as `codegen` above) distinguishes "omitted"
+	// (default) from "explicitly empty" (diagnose).
+	if m.Transports == nil && !contractYAMLHasKey(node, "transports") {
 		m.Transports = defaultTransportsForKind(m.Kind)
 	}
 	// Contract directory is derived uniformly from the source path (works

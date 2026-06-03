@@ -52,13 +52,13 @@ GoCell 的 transport 在 #1389 之前是「每 kind 一个硬编码 wire 协议�
 
 ### D5 — contractgen 统一从 `transports[0]` 派生 primary + 多值时 emit set
 
-`ContractGenSpec.Transports` 透传 `ContractMeta.Transports`；模板**统一**渲染 `Transport: {{printf "%q" (index .Transports 0)}}`（`spec.tmpl` 事件 + `handler.tmpl` HTTP），消除「每 kind 一个硬编码 transport 字面量」的旧形态——"generated Transport == transports[0]" 无 kind special-case。对**多值**契约（`len > 1`），`spec.tmpl` 额外 emit 导出 `var Transports = []string{...}`（声明序），供 out-of-band 订阅者引用契约真值源而非手写 transport 字符串。
+`ContractGenSpec.Transports` 透传 `ContractMeta.Transports`；模板**统一**渲染 `Transport: {{printf "%q" (index .Transports 0)}}`（`spec.tmpl` 事件 + `handler.tmpl` HTTP），消除「每 kind 一个硬编码 transport 字面量」的旧形态——"generated Transport == transports[0]" 无 kind special-case。对**多值**契约（`len > 1`），`spec.tmpl` 额外 emit 一个**未导出 backing slice `var transports` + 导出 `func Transports() []string`**（返回 `append([]string(nil), transports...)` copy，声明序），供 out-of-band 订阅者引用契约真值源而非手写 transport 字符串。accessor 返回 copy 而非导出可变 var——见 §Amendment 2026-06-04（review round-2 F3）。
 
 同时**删 cellgen 死字段** `SubscriptionGenSpec.Transport`（硬编码 "amqp"，cell.tmpl 不引用——订阅 transport 实际来自契约侧生成的 `NewSubscription`，已隐含 `transports[0]`）；删除后全仓 codegen 重生成字节不变，证明该字段确为死代码。
 
 ### D6 — `contractspec.ContractSpec.Transport` 文档化为「派生 primary」，运行时**不**做成员校验
 
-运行时 `kernel/contractspec.ContractSpec.Transport` godoc 改写为「PRIMARY transport = codegen 派生的 transports[0]；多值集经生成包的 `Transports` var 暴露」。**刻意不在 `Validate()` 加成员校验**（P1-C 决议）：
+运行时 `kernel/contractspec.ContractSpec.Transport` godoc 改写为「PRIMARY transport = codegen 派生的 transports[0]；多值集经生成包的 `Transports()` accessor 暴露（返回 copy）」。**刻意不在 `Validate()` 加成员校验**（P1-C 决议）：
 
 - 成员闭集在**契约声明层**已由 FMT-39 + schema enum 强制；生产 `ContractSpec` 只从 codegen（`Transport` = 已校验的 `transports[0]`）或 `contractbuild` funnel 到达运行时——运行时再校验是冗余。
 - 运行时成员校验会**破坏 65 个测试夹具**：它们用描述性 transport label（如 `"inmem"` / `"memory"`）做 in-mem 通道标记，不在 sanctioned 闭集内。`contractspec` 保持 dependency-light 运行时值类型。
@@ -67,8 +67,8 @@ GoCell 的 transport 在 #1389 之前是「每 kind 一个硬编码 wire 协议�
 
 `device-registered` 契约声明 `transports: [amqp, mqtt]` 后，生成包暴露 `deviceregistered.Transports`。smoke 删 `ContractTransport: "mqtt"` 字面量，改 `ContractTransport: mqttTransportFromContract(t)`——后者遍历 `deviceregistered.Transports` 找 `cellvocab.TransportMQTT`，**不在集合则 `t.Fatalf`**。由此 verifier 的 MQTT 投递通道 Hard-绑定到契约真值：
 
-- **编译期**：若契约去掉多值 transport，生成的 `var Transports` 消失 → smoke 引用 `deviceregistered.Transports` 编译失败。
-- **运行期**：若 `Transports` 集合里没有 mqtt → `mqttTransportFromContract` fail。
+- **编译期**：若契约去掉多值 transport，生成的 `Transports()` accessor 消失 → smoke 调用 `deviceregistered.Transports()` 编译失败。
+- **运行期**：若 `Transports()` 集合里没有 mqtt → `mqttTransportFromContract` fail。
 
 ## P2.5 决议：不新增 `TRANSPORT-SEALED-FUNNEL-01` archtest（已被既有 Hard 封闭）
 
@@ -122,9 +122,31 @@ GoCell 的 transport 在 #1389 之前是「每 kind 一个硬编码 wire 协议�
 
 **per-binding 运行时 transport 选路**：当前 #1389 让 transport 成为契约声明层的**多值真值源**，但运行时一个契约仍只按 primary（`transports[0]`）单路绑定。「一个生产 cell 把某契约**路由到** mqtt 而非 primary amqp」的 per-binding 运行时选路**未**落地（smoke 注释亦点明）——它需要订阅/发布侧按 binding 选 transport 的运行时机制（broker 多路 + cell 声明哪条 binding 用哪个 transport）。该工作 defer，backlog **gh #1548** 跟踪（smoke 注释亦点名该 issue 号）。本 ADR 落地后，`device-registered` 的 `[amqp, mqtt]` 多值已被契约 / codegen / governance 三层识别，primary 仍是 amqp，mqtt 是 sanctioned 但运行时尚未自动选路的 alternate。
 
+## Amendment 2026-06-04（review round-2，F1–F5）
+
+第二轮 review 发现 transport 真值源的两类弱点——**可变性**（mutable truth source）与**声明层 omit/explicit-empty 边界不硬**——并修复。逐项：
+
+| F | 位置 | 问题 | 修复 |
+|---|------|------|------|
+| F1 | `kernel/metadata/parser.go` | 显式 `transports:` null / `[]` 被当成省略并按 kind 默认化，绕过 FMT-39 空声明诊断 | 仅当 key **省略**（`contractYAMLHasKey` false，同 `codegen` 键 funnel）才默认；显式空保持 nil/空 → FMT-39 非空守卫 fail-closed。mutation-verified |
+| F2 | `kernel/registry/contract.go` | `deepCopyContract` 漏拷 `Transports`（且同类 `Triggers` 亦漏）→ caller alias 改 registry 内部元数据 | 两个 top-level `[]string` 均 `append([]string(nil), …)` clone。mutation-verified |
+| F3 | `tools/codegen/contractgen/templates/spec.tmpl` | 生成包导出**可变** `var Transports = []string{...}`，任意 importer 可改写进程级 truth source | 改为未导出 backing `var transports` + 导出 `func Transports() []string` 返回 copy（对标 Go `slices.Clone` / k8s `sets.List`，本仓用同源 `append([]string(nil), …)` 避免额外 import） |
+| F4 | `kernel/metadata/schemas/contract.schema.json` | `transports` 缺 `minItems`/`uniqueItems`，standalone schema 校验不能提前发现空数组/重复 | 加 `minItems: 1` + `uniqueItems: true`（byte-lock test 只读 enum 数组，不受影响） |
+| F5 | `kernel/metadata/contract_constraints.go` | `TransportEnum` godoc 谎称 runtime `contractspec.Validate` 消费它（D6 已明确 runtime 不做成员校验） | 注释更正为「声明层 FMT-39 + schema 专属；runtime 刻意不 re-check」 |
+
+### 威胁矩阵增补 + 重评
+
+| # | 威胁 | 缓解 | 残留 |
+|---|------|------|------|
+| **T6** | importer 改写生成包导出可变 truth source（`deviceregistered.Transports[0]="evil"` 污染进程内全部消费方） | **F3**：导出面只剩 `Transports()` accessor，每次返回 fresh copy；mutable holder 是未导出 `transports`（包外不可寻址） | 包**内**仍可改 `transports`（generated package 自身无业务逻辑，不构成实际向量）；render_test 锁 accessor 形态 |
+| **T7** | 显式空 `transports:` 被默认化静默掩盖（fail-open） | **F1**：omit→default / explicit-empty→保持空→FMT-39 fail-closed；**F4** schema `minItems:1` 提前在 IDE 拦 | 无（governance + schema 双层 fail-closed） |
+| **T8** | registry 返回的 `ContractMeta` 被 caller alias-改 `Transports`/`Triggers` 污染 registry | **F2**：`deepCopyContract` clone 两个 top-level slice | 无 |
+
+T6 把原「exported mutable var」从**潜在污染向量**降级为 generated-package-internal-only（实际不可达业务）；T7/T8 把原 fail-open / alias 漏洞转为 fail-closed / isolated。原威胁矩阵 T1–T5 不变（无格子从 ✅ 退化）。round-2 无新增 archtest——F1/F2 由 mutation-verified 单测守，F3 由 render_test 形态锁 + golden 守，F4 由 schema + byte-lock 守，F5 是注释订正。
+
 ## 参考
 
-- 对标：k8s `core/v1.Protocol +enum`（闭集 transport）+ `SetDefaults_Service`（per-kind 默认）；asyncapi/spec `channel.servers`（transport 集合）。
+- 对标：k8s `core/v1.Protocol +enum`（闭集 transport）+ `SetDefaults_Service`（per-kind 默认）；asyncapi/spec `channel.servers`（transport 集合）；Go `slices.Clone` / k8s `sets.Set.List`（copy-on-read，F3 对标）。
 - 既有守卫：`tools/archtest/no_manual_contractspec_literal_test.go`（`NO-MANUAL-CONTRACTSPEC-LITERAL-01`）；`kernel/metadata/schemas/schema_const_consistency_test.go`（transportEnum 字节锁）。
 - 契约扇出闭环：`.claude/rules/gocell/contract-fanout.md`（contract.yaml payload/endpoint 变更触发 implementation matrix）。
 - AI-robust 章程：`.claude/rules/gocell/ai-robust.md`（Hard 范本目录 / Soft 严禁立项 / funnel 双向锁评级）。
