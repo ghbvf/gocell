@@ -87,6 +87,13 @@ GoCell's `IdempotencyClaimer` uses two KEYS per Lua script (`{key}:lease` and
 slot is computed only over the business key portion — both keys colocate on
 the same slot for any topology.
 
+GoCell's `HTTPIdempotencyStore` (`adapters/redis/http_idempotency.go`) uses
+three KEYS per Lua script (`{key}:lease`, `{key}:resp`, and `{key}:fp`).
+All three share the same `{key}` hashtag, so the CRC16 slot is computed only
+over the business key portion — all three keys colocate on the same slot for
+any cluster topology, making every multi-key `EVAL` cluster-safe by the same
+model as `IdempotencyClaimer`.
+
 If you add new multi-key operations to this adapter, audit them for
 cluster-safety. The archtest gate `IDEMPOTENCY-LUA-HASHTAG-01` (in
 `tools/archtest/`) statically checks the existing claimer key construction;

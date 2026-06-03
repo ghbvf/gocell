@@ -72,6 +72,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 		Handler:             http.HandlerFunc(h.handle),
 		Policy:              h.policy,
 		PasswordResetExempt: true,
+		IdempotencyExempt:   true,
 	})
 }
 

@@ -1677,3 +1677,71 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildHTTPEndpointSpec_IdempotencyExempt_FieldPropagated verifies that
+// contract.yaml endpoints.http.idempotency.exempt:true is correctly propagated
+// to httpEndpointSpec.IdempotencyExempt, and that it is orthogonal to the FMT-27
+// auth mutex (a sibling of auth, not an auth flag — #1469 review F7).
+func TestBuildHTTPEndpointSpec_IdempotencyExempt_FieldPropagated(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name         string
+		auth         metadata.HTTPAuthMeta
+		wantPublic   bool
+		wantPRExempt bool
+	}{
+		{
+			name:       "idempotency.exempt alone",
+			auth:       metadata.HTTPAuthMeta{},
+			wantPublic: false, wantPRExempt: false,
+		},
+		{
+			name:       "idempotency.exempt with public",
+			auth:       metadata.HTTPAuthMeta{Public: true},
+			wantPublic: true, wantPRExempt: false,
+		},
+		{
+			name:         "idempotency.exempt with passwordResetExempt",
+			auth:         metadata.HTTPAuthMeta{PasswordResetExempt: true},
+			wantPublic:   false,
+			wantPRExempt: true,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			contract := &metadata.ContractMeta{
+				ID:   "http.test.idempotency.v1",
+				Kind: "http",
+				Endpoints: metadata.EndpointsMeta{
+					Server: metadatatest.CellIDAccessCore,
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/sample/test",
+						SuccessStatus: 200,
+						Auth:          tc.auth,
+						Idempotency:   metadata.HTTPIdempotencyMeta{Exempt: true},
+						Responses: map[int]metadata.HTTPResponseMeta{
+							400: {Description: "Bad Request"},
+						},
+					},
+				},
+			}
+			http := contract.Endpoints.HTTP
+			spec, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			if err != nil {
+				t.Fatalf("expected idempotency.exempt combo to build without error, got: %v", err)
+			}
+			if !spec.IdempotencyExempt {
+				t.Errorf("IdempotencyExempt must be true when contract declares idempotency.exempt:true")
+			}
+			if spec.AuthPublic != tc.wantPublic {
+				t.Errorf("AuthPublic: got %v, want %v", spec.AuthPublic, tc.wantPublic)
+			}
+			if spec.AuthPasswordResetExempt != tc.wantPRExempt {
+				t.Errorf("AuthPasswordResetExempt: got %v, want %v", spec.AuthPasswordResetExempt, tc.wantPRExempt)
+			}
+		})
+	}
+}

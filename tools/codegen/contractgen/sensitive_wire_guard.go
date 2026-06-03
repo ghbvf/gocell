@@ -64,6 +64,46 @@ func rejectSensitiveAuditWireFields(contractID, wireRole string, s *Schema) erro
 	return walkAuditWireSensitive(contractID, wireRole, "$", s)
 }
 
+// walkSchemaSensitiveKeys recurses s (Properties + array Items) and calls
+// visit(fieldPath, key) for every property whose name matches
+// redaction.IsSensitiveKey, at any nesting depth. path is a JSON-pointer-ish
+// breadcrumb ("$", "$.properties.data.items…") passed to visit for diagnostic
+// context. The walk is fail-closed: it inspects every entry in
+// s.Properties, not only those listed in PropertyOrder, so a future parser
+// change that diverges the two cannot silently skip a field.
+//
+// This is the shared tree-walk used by both the audit-domain sensitive-field
+// guard (rejectSensitiveAuditWireFields) and the credential-response idempotency
+// guard (rejectUnexemptCredentialResponse). Extracting it eliminates copy-paste
+// and ensures both guards evolve together.
+func walkSchemaSensitiveKeys(s *Schema, path string, visit func(fieldPath, key string)) {
+	if s == nil {
+		return
+	}
+	checked := make(map[string]bool, len(s.Properties))
+	walk := func(name string, sub *Schema) {
+		if checked[name] {
+			return
+		}
+		checked[name] = true
+		fieldPath := path + ".properties." + name
+		if redaction.IsSensitiveKey(name) {
+			visit(fieldPath, name)
+			return // do not recurse into a sensitive node; the visit already reported it
+		}
+		walkSchemaSensitiveKeys(sub, fieldPath, visit)
+	}
+	// PropertyOrder first for deterministic ordering.
+	for _, name := range s.PropertyOrder {
+		walk(name, s.Properties[name])
+	}
+	// Fail-closed fallback for any property not in PropertyOrder.
+	for name, sub := range s.Properties {
+		walk(name, sub)
+	}
+	walkSchemaSensitiveKeys(s.Items, path+".items", visit)
+}
+
 // walkAuditWireSensitive recurses the schema tree (Properties + array Items),
 // fail-closed: it checks every declared property name, not only those listed in
 // PropertyOrder, so a future parser change that diverges the two cannot open a
@@ -71,36 +111,16 @@ func rejectSensitiveAuditWireFields(contractID, wireRole string, s *Schema) erro
 // included in the error so deep-schema rejections are locatable without a manual
 // grep.
 func walkAuditWireSensitive(contractID, wireRole, path string, s *Schema) error {
-	if s == nil {
-		return nil
-	}
-	checked := make(map[string]bool, len(s.Properties))
-	check := func(name string, sub *Schema) error {
-		if checked[name] {
-			return nil
+	var firstErr error
+	walkSchemaSensitiveKeys(s, path, func(fieldPath, name string) {
+		if firstErr != nil {
+			return
 		}
-		checked[name] = true
-		fieldPath := path + ".properties." + name
-		if redaction.IsSensitiveKey(name) {
-			return fmt.Errorf(
-				"contract %q %s schema declares sensitive-key field %q at %s: "+
-					"audit wire-out schemas must not project Principal credentials "+
-					"(AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01)",
-				contractID, wireRole, name, fieldPath)
-		}
-		return walkAuditWireSensitive(contractID, wireRole, fieldPath, sub)
-	}
-	// PropertyOrder first for deterministic error ordering.
-	for _, name := range s.PropertyOrder {
-		if err := check(name, s.Properties[name]); err != nil {
-			return err
-		}
-	}
-	// Fail-closed fallback for any property not enumerated in PropertyOrder.
-	for name, sub := range s.Properties {
-		if err := check(name, sub); err != nil {
-			return err
-		}
-	}
-	return walkAuditWireSensitive(contractID, wireRole, path+".items", s.Items)
+		firstErr = fmt.Errorf(
+			"contract %q %s schema declares sensitive-key field %q at %s: "+
+				"audit wire-out schemas must not project Principal credentials "+
+				"(AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01)",
+			contractID, wireRole, name, fieldPath)
+	})
+	return firstErr
 }

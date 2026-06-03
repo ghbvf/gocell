@@ -753,6 +753,10 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		{"http.sample.passwordresetexempt.v1", "synth_http_auth_modes_passwordresetexempt"},
 		{"http.sample.clientsonly.v1", "synth_http_auth_modes_clientsonly"},
 		{"http.sample.serviceowned.v1", "synth_http_auth_modes_serviceowned"},
+		// idempotencyexempt: passwordResetExempt+idempotencyExempt proves ADDITIVE emission.
+		// The generated RegisterRoutes must emit BOTH PasswordResetExempt:true and
+		// IdempotencyExempt:true (additive, not alternative) — golden byte-locks this.
+		{"http.sample.idempotencyexempt.v1", "synth_http_auth_modes_idempotencyexempt"},
 	}
 
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}

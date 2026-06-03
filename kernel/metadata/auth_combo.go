@@ -34,6 +34,10 @@ const AuthComboMatrixSize = 1 << HTTPAuthMetaBoolFields
 //	"p-r-s-b-C"  clientsOnly only
 //	"p-R-S-b-c"  serviceOwned + passwordResetExempt
 //
+// HTTP-idempotency exemption is NOT part of this matrix — it moved to the sibling
+// endpoints.http.idempotency block (#1469 review F7), so the auth-combo space is
+// back to 2^5 = 32 with 7 legal combos.
+//
 // When a rule evolves (e.g. allowing a new pair to coexist), update both this
 // whitelist AND AuthComboLegal in the same change; CI fails otherwise.
 //

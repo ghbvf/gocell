@@ -249,3 +249,54 @@ func TestSchemaRefsEmpty(t *testing.T) {
 	_, got := schemaRoundTrip(t, sr)
 	assert.Equal(t, sr, got, "empty SchemaRefs round-trip should preserve zero value")
 }
+
+// TestIdempotencyFrameworkStatuses verifies the single-source derivation of the
+// framework-injected 409 (#1469 review F4): mutating non-exempt routes declare
+// 409; exempt routes and non-mutating methods declare nothing. The 409 is never
+// hand-written per contract, so the declaration surface cannot drift from the
+// idempotency middleware behavior.
+func TestIdempotencyFrameworkStatuses(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		exempt bool
+		want   []int
+	}{
+		{"POST non-exempt → 409", "POST", false, []int{409}},
+		{"PUT non-exempt → 409", "PUT", false, []int{409}},
+		{"PATCH non-exempt → 409", "PATCH", false, []int{409}},
+		{"DELETE non-exempt → 409", "DELETE", false, []int{409}},
+		{"GET non-exempt → none", "GET", false, nil},
+		{"HEAD non-exempt → none", "HEAD", false, nil},
+		{"POST exempt → none", "POST", true, nil},
+		{"DELETE exempt → none", "DELETE", true, nil},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			h := &HTTPTransportMeta{
+				Method:      tc.method,
+				Idempotency: HTTPIdempotencyMeta{Exempt: tc.exempt},
+			}
+			assert.Equal(t, tc.want, h.IdempotencyFrameworkStatuses())
+		})
+	}
+
+	// nil receiver is safe (governance may call on an absent HTTP block).
+	var nilHTTP *HTTPTransportMeta
+	assert.Nil(t, nilHTTP.IdempotencyFrameworkStatuses())
+}
+
+// TestHTTPIdempotencyMeta_RoundTrip verifies the idempotency block is a sibling
+// of auth under endpoints.http and survives YAML round-trip (#1469 review F7).
+func TestHTTPIdempotencyMeta_RoundTrip(t *testing.T) {
+	in := HTTPTransportMeta{
+		Method:      "POST",
+		Path:        "/api/v1/sample/test",
+		Auth:        HTTPAuthMeta{Public: true},
+		Idempotency: HTTPIdempotencyMeta{Exempt: true},
+	}
+	data, got := schemaRoundTrip(t, in)
+	assert.Equal(t, in, got, "HTTPTransportMeta round-trip must preserve idempotency.exempt")
+	assert.Contains(t, string(data), "idempotency:", "idempotency must serialize as a sibling of auth")
+}

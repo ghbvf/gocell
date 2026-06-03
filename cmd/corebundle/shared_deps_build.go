@@ -145,8 +145,16 @@ func adapterInfoForSharedDeps(shared *composition.SharedDeps, locals *cmdLocals)
 	if shared.ConsumerClaimer != nil {
 		claimerKind = string(shared.ConsumerClaimer.Kind())
 	}
+	// HTTP idempotency store is wired default-ON when Redis is present
+	// (no env toggle); the gate in defaultRuntimeOptions is locals.redisClient != nil,
+	// which is the same condition as redisState above.
+	httpIdempotencyStore := "inactive"
+	if locals.redisClient != nil {
+		httpIdempotencyStore = "redis-backed"
+	}
 	info["redis"] = redisState
 	info["service_token_nonce_store"] = nonceStoreKind
 	info["outbox_consumer_claimer"] = claimerKind
+	info["http_idempotency_store"] = httpIdempotencyStore
 	return info
 }

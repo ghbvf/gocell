@@ -260,9 +260,15 @@ func (v *Validator) dynamicWriteFindings(c *metadata.ContractMeta, relHandler st
 
 // declaredErrorStatuses returns the union of 4xx/5xx status codes declared in
 // the contract's responses map and in auth.responses. The dual source allows
-// middleware-injected codes (e.g. bootstrap auth 401, rate limiter 429) to be
-// declared under auth.responses without requiring handler AST emission (CH-04
-// double-source rule).
+// middleware-injected codes (e.g. bootstrap auth 401, rate limiter 429,
+// idempotency 409) to be declared under auth.responses without requiring handler
+// AST emission (CH-04 double-source rule).
+//
+// Note: the framework-injected idempotency 409 is NOT folded in here — that would
+// make the IDEMPOTENCY-409-DECLARED rule vacuous. Instead each non-exempt mutating
+// contract must explicitly declare 409 (in responses or auth.responses), and the
+// rule enforces it against HTTPTransportMeta.IdempotencyFrameworkStatuses() as the
+// single-source oracle (#1537 review F4).
 func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 	out := make(map[int]struct{})
 	if c.Endpoints.HTTP == nil {
@@ -279,6 +285,53 @@ func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 		}
 	}
 	return out
+}
+
+// checkCH07 enforces that every non-exempt mutating HTTP contract declares the
+// framework-injected idempotency status(es) it can return to clients. With HTTP
+// idempotency default-on in production (#1469), a POST/PUT/PATCH/DELETE route
+// that is not endpoints.http.idempotency.exempt can return 409 (in-flight key /
+// key reused with a different body) from the listener-mounted middleware. The
+// contract surface must declare it so clients can anticipate it.
+//
+// The required status set is the SINGLE-SOURCE derivation
+// HTTPTransportMeta.IdempotencyFrameworkStatuses() (method + idempotency.exempt) —
+// the 409 is never re-derived ad hoc here, so the declaration requirement cannot
+// drift from middleware behavior. A future mutating route is forced to declare it
+// (or opt out via idempotency.exempt) rather than silently omitting it (#1537
+// review F4). Declaration goes in auth.responses (the listener-middleware-injected
+// status list that already holds the non-auth rate-limit 429), NOT the responses
+// map — the 409 is middleware-injected, not adapter-emitted, so it must not
+// generate a typed business-response struct.
+//
+// INVARIANT: CH-07 (idempotency framework-status declaration completeness).
+func (v *Validator) checkCH07() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "http" || c.Endpoints.HTTP == nil {
+			continue
+		}
+		required := c.Endpoints.HTTP.IdempotencyFrameworkStatuses()
+		if len(required) == 0 {
+			continue
+		}
+		declared := declaredErrorStatuses(c)
+		for _, status := range required {
+			if _, ok := declared[status]; ok {
+				continue
+			}
+			results = append(results, v.newError(
+				codeCH07, IssueRequired,
+				contractFile(c), "endpoints.http.auth.responses",
+				fmt.Sprintf("%s: non-exempt mutating route can return idempotency %d "+
+					"(in-flight key / key reused) but the contract does not declare it", c.ID, status),
+				fmt.Sprintf("add %d to endpoints.http.auth.responses (listener-middleware-injected statuses), "+
+					"or set endpoints.http.idempotency.exempt: true if this route must not be idempotency-tracked",
+					status),
+			))
+		}
+	}
+	return results
 }
 
 // buildAlignmentFindings compares handler-observed codes vs contract-declared

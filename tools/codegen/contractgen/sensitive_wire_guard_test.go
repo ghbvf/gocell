@@ -110,11 +110,12 @@ func flatObject(fields string) string {
 // INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (behavioral funnel test).
 func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 	cases := []struct {
-		name       string
-		contractID string
-		respBody   string
-		wantErr    bool
-		wantSub    string // substring the error must mention
+		name              string
+		contractID        string
+		respBody          string
+		idempotencyExempt bool // set true for non-audit contracts whose response carries a sensitive key
+		wantErr           bool
+		wantSub           string // substring the error must mention
 	}{
 		{
 			name:       "audit_response_nested_sessionId_rejected",
@@ -145,10 +146,15 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name:       "non_audit_response_sessionId_ok",
-			contractID: "http.auth.login.v1",
-			respBody:   flatObject(`"sessionId":{"type":"string"}`),
-			wantErr:    false,
+			// Non-audit auth contracts may legitimately return sessionId (the
+			// caller's own session resource id). idempotencyExempt: true is set
+			// here as required by CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01
+			// — the real http.auth.login.v1 contract already carries this flag.
+			name:              "non_audit_response_sessionId_ok",
+			contractID:        "http.auth.login.v1",
+			respBody:          flatObject(`"sessionId":{"type":"string"}`),
+			idempotencyExempt: true,
+			wantErr:           false,
 		},
 	}
 
@@ -161,6 +167,11 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 				ID:         tc.contractID,
 				Kind:       "http",
 				SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
+				Endpoints: metadata.EndpointsMeta{
+					HTTP: &metadata.HTTPTransportMeta{
+						Idempotency: metadata.HTTPIdempotencyMeta{Exempt: tc.idempotencyExempt},
+					},
+				},
 			}
 			_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
 

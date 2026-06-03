@@ -22,6 +22,7 @@ endpoints:
       serviceOwned: true
       passwordResetExempt: true
       responses:
+        - 409
         - 503
     ownership:
       subjectPath: ctx.subjectID

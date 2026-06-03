@@ -28,8 +28,9 @@
 // Two sub-checks:
 //
 //   - A1 (call-site allowlist + role coverage): in production contractgen
-//     files, every call to rejectSensitiveAuditWireFields is inside buildHTTPDTOs
-//     (the Response path) or buildEventSpec (the Payload + Headers paths), never
+//     files, every call to rejectSensitiveAuditWireFields is inside
+//     buildResponseDTOs (the HTTP Response wire-out helper extracted from
+//     buildHTTPDTOs) or buildEventSpec (the Payload + Headers paths), never
 //     the exempt Request path. Coverage is keyed on the funnel's 2nd arg
 //     (wireRole): {response, payload, headers} must each be guarded by a call, so
 //     the funnel cannot be silently dropped from any single wire-out surface —
@@ -51,13 +52,15 @@
 //     role (e.g. a variable) would make coverage unverifiable, so A1 flags any
 //     funnel call whose 2nd arg is not a string literal as a violation rather
 //     than silently skipping it — the funnel's 3 production call sites all pass
-//     literals ("response" / "payload" / "headers").
+//     literals ("response" in buildResponseDTOs / "payload" + "headers" in
+//     buildEventSpec).
 //   - A1 scope excludes _test.go (DirsScope default) and generated/ — the
 //     behavioral test and the fallback unit test call the funnel directly and
 //     must not be mistaken for production call sites.
 //   - A1 locks where the funnel IS called, not "every wire-out schemaToDTOs is
-//     funnel-guarded". The remaining unguarded schemaToDTOs caller is
-//     buildSagaSpec's saga step output — but it cannot carry an audit wire
+//     funnel-guarded". The remaining unguarded schemaToDTOs callers are
+//     buildSagaSpec's saga step output and the Request path in buildHTTPDTOs
+//     (exempt by design) — but saga step outputs cannot carry an audit wire
 //     surface unnoticed: a kind:saga (or any new-kind) contract owned by
 //     auditcore would have an id that misses the http.audit./event.audit. prefix
 //     gate, so A2 fails until isAuditWireContract is extended (at which point the
@@ -89,11 +92,14 @@ import (
 const auditFunnelCallee = "rejectSensitiveAuditWireFields"
 
 // auditFunnelAllowedCallers is the closed set of contractgen functions allowed
-// to invoke the funnel — the two wire-out (non-Request) DTO build paths.
-// buildEventSpec hosts both the Payload and the Headers calls.
+// to invoke the funnel — the wire-out (non-Request) DTO build paths.
+// buildResponseDTOs is the HTTP Response helper extracted from buildHTTPDTOs to
+// keep cognitive complexity within the project limit; it is called exclusively
+// from buildHTTPDTOs's response branch. buildEventSpec hosts both the Payload
+// and Headers calls.
 var auditFunnelAllowedCallers = map[string]bool{
-	"buildHTTPDTOs":  true, // HTTP Response schema path
-	"buildEventSpec": true, // event Payload + Headers schema paths
+	"buildResponseDTOs": true, // HTTP Response schema path (extracted from buildHTTPDTOs)
+	"buildEventSpec":    true, // event Payload + Headers schema paths
 }
 
 // auditFunnelRequiredRoles is the closed set of wire-out roles (the funnel's
@@ -108,9 +114,9 @@ var auditFunnelRequiredRoles = map[string]bool{
 }
 
 // TestAuditWireFunnel_CallSiteAllowlistAndCoverage is A1: every funnel call in
-// production contractgen sits inside {buildHTTPDTOs, buildEventSpec} (never the
-// Request path), and every required wire-out role {response, payload, headers}
-// is covered by such a call.
+// production contractgen sits inside {buildResponseDTOs, buildEventSpec} (never
+// the Request path), and every required wire-out role {response, payload,
+// headers} is covered by such a call.
 //
 // INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (A1 call-site lock).
 func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
@@ -137,7 +143,7 @@ func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
 							Rel:  rel,
 							Line: p.Fset.Position(c.Pos()).Line,
 							Message: auditFunnelCallee + " called inside " + fn.Name.Name +
-								" — only the wire-out paths {buildHTTPDTOs, buildEventSpec} may call it " +
+								" — only the wire-out paths {buildResponseDTOs, buildEventSpec} may call it " +
 								"(Request path must stay exempt)",
 						})
 						return

@@ -289,6 +289,7 @@ func goldenProbeNames() []string {
 		"adapters/postgres.ProbeIndexesValidReady=postgres_indexes_valid_ready",
 		"adapters/postgres.ProbeReady=postgres_ready",
 		"adapters/rabbitmq.ProbeReady=rabbitmq_ready",
+		"adapters/redis.ProbeHTTPIdempotencyStoreReady=http_idempotency_store_ready",
 		"adapters/redis.ProbeReady=redis_ready",
 		"adapters/s3.ProbeReady=s3_ready",
 		"adapters/vault.ProbeReady=vault_transit_ready",

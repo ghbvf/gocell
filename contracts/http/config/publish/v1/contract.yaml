@@ -20,6 +20,7 @@ endpoints:
     successStatus: 201
     auth:
       responses:
+        - 409
         - 503
     noContent: false
     responses:

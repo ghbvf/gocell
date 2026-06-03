@@ -1,26 +1,28 @@
-id: http.order.create.v1
+id: http.sample.idempotencyexempt.v1
 kind: http
-ownerCell: ordercell
-consistencyLevel: L2
+ownerCell: testcell
+consistencyLevel: L1
 lifecycle: active
+codegen: true
 endpoints:
-  server: ordercell
+  server: testcell
   clients:
     - edge-bff
   http:
     method: POST
-    path: /api/v1/orders/
+    path: /api/v1/sample/idempotency-exempt
     successStatus: 201
     auth:
-      responses:
-        - 409
+      passwordResetExempt: true
+    idempotency:
+      exempt: true
     noContent: false
     responses:
       400:
-        description: "Bad request — malformed JSON body or oversized payload"
+        description: Bad Request
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
-      413:
-        description: "Payload Too Large — request body exceeds the size limit"
+      500:
+        description: Internal Server Error
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

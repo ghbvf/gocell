@@ -30,7 +30,13 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 ## Redis (required for real multi-pod deployments)
 
-`cmd/corebundle` uses Redis as the shared coordination backend for real multi-pod deployments. When `GOCELL_ADAPTER_MODE=real` and `GOCELL_SINGLE_POD` is not set, **either** `GOCELL_REDIS_ADDR` (standalone) **or** `GOCELL_REDIS_CLUSTER_ADDRS` (Redis Cluster) is required at startup. The same Redis client backs both service-token nonce replay protection and outbox idempotency claiming, so missing Redis fails fast before any listener binds. Sentinel mode is supported by the adapter but not yet wired into corebundle env loading (see backlog `B2-A-33`).
+`cmd/corebundle` uses Redis as the shared coordination backend for real multi-pod deployments. When `GOCELL_ADAPTER_MODE=real` and `GOCELL_SINGLE_POD` is not set, **either** `GOCELL_REDIS_ADDR` (standalone) **or** `GOCELL_REDIS_CLUSTER_ADDRS` (Redis Cluster) is required at startup. The same Redis client backs three consumers, so missing Redis fails fast before any listener binds:
+
+1. **Service-token nonce replay protection** (`servicetoken-nonce` namespace): prevents captured service tokens from being replayed within `auth.ServiceTokenNonceTTL` (~5 min 30 sec).
+2. **Outbox idempotency claiming** (`_runtime` namespace): distributed `Claim/Commit/Release` fencing for event consumer deduplication across pods.
+3. **HTTP idempotency replay store** (`_runtime` namespace, key-space `<tenantID>:{<key>}:lease` / `:resp` / `:fp`): records response blobs for `Idempotency-Key` header replay (≤ 256 KiB per unique request, 24h TTL). **Memory model**: plan Redis memory for `peak_QPS × 86400s × avg_response_size` (24h TTL window at peak request rate times average recorded response size). Activated default-ON when Redis is present; inactive in single-pod / memory mode where no cross-pod replay is needed.
+
+Sentinel mode is supported by the adapter but not yet wired into corebundle env loading (see backlog `B2-A-33`).
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|

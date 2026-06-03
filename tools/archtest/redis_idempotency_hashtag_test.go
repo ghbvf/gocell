@@ -161,11 +161,17 @@ func stringLit(expr ast.Expr) (string, bool) {
 }
 
 // TestHTTPIdempotency_LuaHashtag verifies the production code in
-// adapters/redis/http_idempotency.go assigns respKey / leaseKey by calling
-// `KeyNamespace(<ns>).applyHashtag(<keyParam>, "<role>")`. This is the
+// adapters/redis/http_idempotency.go assigns respKey / leaseKey / fpKey by
+// calling `KeyNamespace(<ns>).applyHashtag(<keyParam>, "<role>")`. This is the
 // type-conversion chain form (KeyNamespace(ns).applyHashtag) rather than the
 // struct-field chain form (<receiver>.ns.applyHashtag) used by idempotency.go.
 // Both forms are covered under IDEMPOTENCY-LUA-HASHTAG-01.
+//
+// All three keys passed to the multi-key Lua EVAL (KEYS = {respKey, leaseKey,
+// fpKey}) MUST carry the same {key} hash-tag so Redis Cluster colocates them on
+// one slot — a CROSSSLOT error otherwise breaks Claim at runtime. fpKey (the
+// fingerprint key, added with the same-key reuse guard) is the third KEY and is
+// locked here so a future regression that drops its hash-tag fails CI.
 //
 // The check is structural over the AST so renaming `key` to `businessKey`
 // would still pass, but reverting to a non-hashtag expression like
@@ -180,6 +186,7 @@ func TestHTTPIdempotency_LuaHashtag(t *testing.T) {
 
 	leaseOK := false
 	respOK := false
+	fpOK := false
 
 	scanner.EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
 		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
@@ -198,6 +205,10 @@ func TestHTTPIdempotency_LuaHashtag(t *testing.T) {
 			if isTypeConvApplyHashtagCall(assign.Rhs[0], "resp") {
 				respOK = true
 			}
+		case "fpKey":
+			if isTypeConvApplyHashtagCall(assign.Rhs[0], "fp") {
+				fpOK = true
+			}
 		}
 	})
 
@@ -209,6 +220,10 @@ func TestHTTPIdempotency_LuaHashtag(t *testing.T) {
 		"adapters/redis/http_idempotency.go: respKey must be derived from "+
 			"KeyNamespace(<ns>).applyHashtag(key, \"resp\") so the namespace+hashtag "+
 			"derivation stays single-source (Redis Cluster slot colocation)")
+	assert.True(t, fpOK,
+		"adapters/redis/http_idempotency.go: fpKey must be derived from "+
+			"KeyNamespace(<ns>).applyHashtag(key, \"fp\") so all three Lua KEYS "+
+			"({respKey, leaseKey, fpKey}) colocate on one Redis Cluster slot")
 }
 
 // isTypeConvApplyHashtagCall checks whether expr is a method call of the shape

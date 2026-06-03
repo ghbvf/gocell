@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
@@ -85,6 +86,37 @@ func newHTTPIdempotencyStoreFromCmdable(rdb cmdable, ns KeyNamespace) (*HTTPIdem
 			"redis http idempotency store: cmdable is nil")
 	}
 	return &HTTPIdempotencyStore{rdb: rdb, ns: ns}, nil
+}
+
+// ProbeHTTPIdempotencyStoreReady is the ops-contract readiness probe name for
+// the HTTP idempotency replay store. healthz.ProbeName-typed, funneled by
+// PROBENAME-SEALED-FUNNEL-01. Its failure domain is distinct from redis_ready
+// (bare PING on the shared client): this probe exercises the EVAL + write
+// command family the Claim/Record Lua scripts depend on, so a Redis ACL that
+// permits PING but denies EVAL/SET surfaces at /readyz instead of at the first
+// mutating request once idempotency is default-on (gh #1469).
+const ProbeHTTPIdempotencyStoreReady healthz.ProbeName = "http_idempotency_store_ready"
+
+// readyCheckScript exercises the same EVAL + SET-with-PX command family used by
+// claimRespScript / httpRecordScript. A read-only PING (the redis_ready probe)
+// cannot detect an ACL that allows PING but denies EVAL or write commands — the
+// exact gap this probe closes. The probe key is namespaced + hashtag-wrapped
+// like every store key and auto-expires after 1 ms, leaving no residue.
+const readyCheckScript = `return redis.call('SET', KEYS[1], '1', 'PX', tonumber(ARGV[1]))`
+
+// ReadyCheck is the readiness-probe body wired via bootstrap.WithHealthChecker
+// under ProbeHTTPIdempotencyStoreReady. It runs a minimal Lua EVAL that writes a
+// short-lived probe key, proving both EVAL capability and write permission in
+// the store's namespace. Returns nil when the store can serve Claim/Record;
+// returns a structured error (→ /readyz degraded) when EVAL or SET is denied or
+// Redis is unreachable.
+func (s *HTTPIdempotencyStore) ReadyCheck(ctx context.Context) error {
+	probeKey := s.ns.applyHashtag("readyz", "probe")
+	if _, err := s.rdb.Eval(ctx, readyCheckScript, []string{probeKey}, "1").Result(); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
+			"redis http idempotency store: readiness EVAL failed", err)
+	}
+	return nil
 }
 
 // claimRespScript is the Lua script for atomic Claim. KEYS[1] is the resp-key

@@ -1543,3 +1543,52 @@ func intToStr(i int) string { // local helper avoids strconv import noise.
 	}
 	return string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
 }
+
+// TestDeclaredErrorStatuses_FoldsIdempotency409 locks Change B (#1469 review F4):
+// CH-07 (#1537 review F4): non-exempt mutating routes must declare the
+// framework-injected idempotency 409; exempt routes / non-mutating methods /
+// already-declared routes must not be flagged.
+func ch07Contract(method string, exempt bool, authResponses []int) *metadata.ContractMeta {
+	return &metadata.ContractMeta{
+		ID:   "http.test.ch07.v1",
+		Kind: "http",
+		Endpoints: metadata.EndpointsMeta{
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:      method,
+				Responses:   map[int]metadata.HTTPResponseMeta{400: {Description: "Bad Request", SchemaRef: "x"}},
+				Auth:        metadata.HTTPAuthMeta{Responses: authResponses},
+				Idempotency: metadata.HTTPIdempotencyMeta{Exempt: exempt},
+			},
+		},
+		File: "contracts/http/test/ch07/v1/contract.yaml",
+	}
+}
+
+func runCH07(t *testing.T, c *metadata.ContractMeta) []ValidationResult {
+	t.Helper()
+	project := &metadata.ProjectMeta{Contracts: map[string]*metadata.ContractMeta{c.ID: c}}
+	return NewValidator(project, "", clock.Real()).checkCH07()
+}
+
+func TestCheckCH07_MutatingNonExemptMissing409_Fails(t *testing.T) {
+	results := runCH07(t, ch07Contract("POST", false, nil))
+	require.Len(t, results, 1, "non-exempt mutating route missing 409 must produce one CH-07 finding")
+	assert.Equal(t, codeCH07, results[0].Code)
+	assert.Equal(t, SeverityError, results[0].Severity)
+	assert.Contains(t, results[0].Message, "409")
+}
+
+func TestCheckCH07_Declared409_Passes(t *testing.T) {
+	assert.Empty(t, runCH07(t, ch07Contract("POST", false, []int{409})),
+		"declaring 409 in auth.responses must satisfy CH-07")
+}
+
+func TestCheckCH07_Exempt_Passes(t *testing.T) {
+	assert.Empty(t, runCH07(t, ch07Contract("POST", true, nil)),
+		"idempotency.exempt route must not require a 409 declaration")
+}
+
+func TestCheckCH07_NonMutating_Passes(t *testing.T) {
+	assert.Empty(t, runCH07(t, ch07Contract("GET", false, nil)),
+		"GET is not idempotency-tracked; no 409 required")
+}

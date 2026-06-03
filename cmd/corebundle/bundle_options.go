@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/auth"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -133,6 +135,39 @@ func defaultRuntimeOptions(
 		return nil, fmt.Errorf("projection harness wiring: %w", err)
 	}
 	opts = append(opts, projOpts...)
+	// HTTP idempotency replay store: wired when Redis is present (default-ON,
+	// no env toggle). When Redis is absent (memory/single-pod mode) the store
+	// is nil and WithIdempotencyStore is intentionally not called — single-pod
+	// deployments have no cross-pod replay need and the middleware is safely
+	// inactive. Mirrors the buildConsumerClaimer / buildServiceNonceStore
+	// topology pattern.
+	if locals.redisClient != nil {
+		idemStore, err := buildHTTPIdempotencyStore(locals.redisClient)
+		if err != nil {
+			return nil, fmt.Errorf("http idempotency store wiring: %w", err)
+		}
+		// Fail-closed: Redis is present, so idempotency is default-on and MUST be
+		// wired. A nil store here (factory returned nil without error) would
+		// silently leave idempotency inactive in production — refuse to start
+		// rather than fail open. The (nil,nil) factory return is reserved for the
+		// nil-client (memory/single-pod) path, which this branch already excludes.
+		if idemStore == nil {
+			return nil, fmt.Errorf("http idempotency store wiring: Redis is configured but the " +
+				"store factory returned nil; refusing to start with idempotency silently disabled (fail-closed)")
+		}
+		opts = append(opts, bootstrap.WithIdempotencyStore(idemStore))
+		// Capability-level readiness: a bare PING (redis_ready) cannot detect an
+		// ACL that permits PING but denies EVAL/SET, yet default-on idempotency
+		// depends on the Claim/Record Lua scripts. Register a probe that runs a
+		// real EVAL when the store supports it (the redis store does; the
+		// in-memory test store does not).
+		if rc, ok := idemStore.(interface {
+			ReadyCheck(context.Context) error
+		}); ok {
+			opts = append(opts, bootstrap.WithHealthChecker(
+				adapterredis.ProbeHTTPIdempotencyStoreReady, rc.ReadyCheck))
+		}
+	}
 	if shared.PrimaryHTTPAddr != "" {
 		primaryAuth, err := auth.NewAuthJWTFromAssembly(asm)
 		if err != nil {
