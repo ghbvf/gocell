@@ -115,7 +115,7 @@ WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
 3. **复杂度汇总** — 按根因簇 + 按 Finding 两套：`Cx1: N / Cx2: N / Cx3: N / Cx4: N`
 4. **修复分流** — Cx1/Cx2 簇 → `/fix`；Cx3/Cx4 簇 → "需人工决策" + 三级方案种子（最小/彻底/重构）。若 PR body（阶段 4 已取）含 GitHub closing keyword（`close[sd]?` / `fix(e[sd])?` / `resolve[sd]?` / `refs`，大小写不敏感）后跟 `#<N>`，分流条目附 `← issue #<N>`
 5. **总体结论** — `通过 / 需修复 / 需讨论` + 一句话理由
-
+6. PR编号；Worktree文件夹；AI Agent会话ID
 输出前自检：① 每个根因簇都 Read 过代表文件？② 根因到了根本层（不停在症状）？③ 系统性判定有 Grep 证据？— 任一不通过 → 补做。
 
 ---

@@ -578,7 +578,8 @@ if err != nil { /* handle */ }
 **Trust assumption**: trace header propagation assumes a trusted-upstream
 deployment (service-to-service behind a gateway or mesh). Public-facing edges
 should sanitize or ignore inbound trace headers at the gateway layer. See
-`TRUST-POLICY-01` in `docs/backlog.md` for the planned public-endpoint strategy.
+the `TRUST-POLICY-01` backlog issue (GitHub Issues / Project v2 #3) for the
+planned public-endpoint strategy.
 
 Framework-emitted consumer logs pick up these fields when the process uses
 GoCell's context-aware slog handler. This branch does not make plain slog JSON
