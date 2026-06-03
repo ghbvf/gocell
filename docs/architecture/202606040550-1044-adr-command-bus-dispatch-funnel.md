@@ -1,0 +1,89 @@
+# ADR: Command Bus — dispatch funnel + handler registry（同步核心 PR-1）
+
+- 日期：2026-06-04
+- 状态：Accepted
+- 范围：framework-capability-roadmap **W3**（Command Bus）/ issue #1044 **PR-1**（同步核心）。前置 D1 W0 outbox wire envelope、D2 W2 HTTP idempotency 均已落地。
+- 关联：`docs/plans/framework-capability-gaps/202605131500-004-capability-gap-analysis.md` 缺口 4 / `…/202605162100-005-framework-capability-roadmap-plan.md` W3
+- 对标：Watermill `components/cqrs/{command_bus,command_processor}.go`（ref 见 §6）
+
+> **真值边界**：本 ADR 是 command-bus 设计决策的概念单源。各 enforcement 的符号清单 / 盲区 / 反向自检活在对应 archtest 的 package godoc（`tools/archtest/command_dispatch_funnel_test.go`）与 governance 实现（`kernel/governance/rules_command.go`），本文件只汇总决策 + 评级矩阵，不复制。PR-1 只交付**同步核心**；④ async outbox 桥 / ⑤ idempotency 桥落地时 **amend 本 ADR**（§5 演进路径 + §4 评级矩阵逐行重评）。
+
+---
+
+## 1. 上下文与问题
+
+`kernel/cellvocab.ContractCommand = "command"` 这个 contract kind 早已在闭集中，`runtime/command` 却只有 `SweeperLifecycle`（L4 设备命令超时生命周期），`kernel/command` 是 L4 设备队列状态机——**两者都不是 dispatcher**。CQRS 写侧（命令 → 单一 handler → 响应）无框架支持，业务只能手撕。004 缺口 4「Command Bus 半空壳」/ 005 W3 要求补齐：`Dispatcher` + handler registry + codegen `kind:command` 派生 typed Command/Handler + 与 outbox/idempotency 协同，**立项门 = funnel 双向锁（上游 codegen Hard + 下游 callsite Hard）**。
+
+PR-1 交付其中的**同步 in-process 核心**：codegen 派生 typed `Handler`/`Register`/`Dispatch` + sealed `runtime/command.Registry` + funnel 双向锁 archtest + governance 校验。异步（写 command outbox、relay 触发）与 idempotency 桥拆为 #1044 子 issue。
+
+---
+
+## 2. 决策 D1–D7
+
+| # | 决策 | enforcement 载体 | AI-robust 档位 |
+|---|------|-----------------|---------------|
+| **D1** | **每契约单态化 codegen 自由函数**，非泛型方法。issue 字面 `Dispatcher.Dispatch[C,R](ctx,cmd)(R,err)` **Go 不可表达**（方法不能有类型参数）。改为 `command.tmpl` 为每个 `kind:command` 契约生成单态 `Dispatch(ctx, reg, *Request)(*Response, error)` + `Register(reg, h Handler)`，完全对标 saga `BuildDefinition(impl Impl)`。 | `command.tmpl` → `command_gen.go` golden（`synth_command_command_gen_go.golden`）；`COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` | **上游 Hard**（codegen funnel + golden 字节锁） |
+| **D2** | **typed Handler 仅活在生成码**：typed `Handler` interface / `Register` / `Dispatch` 只在 `generated/contracts/command/**`（CLAUDE.md 禁手编 `generated/`）。业务要 type-safe 派发**必须**写 `contract.yaml`(kind:command,codegen:true) 跑 `gocell generate contract`——即 funnel。裸写 typed 命令 handler 不可表达。 | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（生产包外无手写 look-alike trio 声明） | **上游 Hard / 下游 Medium**（见 §4） |
+| **D3** | **sealed Registry，异构 handler 装箱 `any`**：`runtime/command.Registry` 私有 `map[CommandID]any` + RWMutex。一个 registry 持有多个 typed Handler（每契约不同 Handler 类型），Go 异构 typed map **无法去 `any`/erasure**——同 saga 持 untyped `*Definition`。`RegisterHandler`/`LookupHandler` 收口写/读。 | `runtime/command/registry.go`（unexported 字段，包外不可构造/读写）；`COMMAND-DISPATCH-REGISTER-CALLER-01` | **下游 Hard / 上游 Medium**（见 §4） |
+| **D4** | **同步 type-assert，不用 JSON round-trip**：生成 `Dispatch` 把 boxed handler 断言回 typed `Handler` 后直调。零序列化、in-process 惯用。saga 用 JSON 是因跨异步 step 边界；PR-1 同步不跨边界。JSON 统一性留 ④ 异步。 | 生成码形态（golden 锁） | 形态由 golden 锁（上游 Hard） |
+| **D5** | **「编译期注册唯一性」= sole-emitter funnel + runtime KindConflict**。issue ③ 字面「编译期 Handler 注册唯一性」中**「编译期阻止第二次 runtime `Register` 调用」Go 不可表达**（运行时多次调用无法编译期拦）。落地 = (a) 编译期：typed `Register` 唯一来源（sole-emitter）；(b) 运行时：`RegisterHandler` 第二次同 id → `KindConflict`（对标 Watermill `DuplicateCommandHandlerError`）。 | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（a）+ `Registry.RegisterHandler` runtime guard（b） | a 上游 Hard / b runtime guard（Medium） |
+| **D6** | **codegen fail-closed，无 stub 降级**：`kind:command,codegen:true` 缺 request **或** response schemaRef → `buildCommandSpec` 硬错（不静默生成空包）。governance `COMMAND-CONTRACT-SCHEMA-REF-01` 在 validate 期并行兜底。 | `contractgen.buildCommandSpec`（codegen Hard 半边）+ `COMMAND-CONTRACT-SCHEMA-REF-01`（governance Medium 兜底） | **codegen 上游 Hard + governance Medium**（同 saga step-schema-ref 范式） |
+| **D7** | **layer = `runtime/command`**：dispatcher 核心入 `runtime/command`（已有 SweeperLifecycle），依赖 `kernel/+pkg/`，不依赖 cells/adapters。生成码在 `generated/contracts/command/**` import `runtime/command`（`generated/` 可 import 任意层，无环）。 | 分层依赖规则（`go-standards.md`）+ build | 结构性（build 守） |
+
+---
+
+## 3. 拒绝的备选
+
+- **运行时泛型自由函数** `command.Dispatch[C,R](ctx, reg, cmd)` + reflect/type-assert registry：**拒**——业务可手写 typed handler 调泛型 dispatch，**defeats 上游 Hard**（typed funnel 不再是生成码独占）。D1/D2 的单态化 codegen 是立项门必需。
+- **无 registry，直接传 typed handler** `Dispatch(ctx, h Handler, req)`：更简、更 Hard（纯类型系统，无 `any`、无 Medium caller-allowlist），但**违背 issue ③「handler registry + 注册唯一性」**，且 ④ async（relay 只有 command id + payload，需按 id 查 handler）必然重新引入 registry——churn。registry-by-command-id 是 command bus 的**标准结构**（对标 Watermill `CommandProcessor.AddHandlers` 按 command 类型注册单一 handler），同步亦然，故 PR-1 即建。
+- **`registration struct{ handler any }` wrapper 作「未来字段 seam」**：**拒**——预设未来需求；PR-1 用 `map[CommandID]any` 直存，④/⑤ 真需字段时再引入 struct（不预设、抽象前提到位再建）。
+- **新增 `ERR_COMMAND_` 前缀 / code**：**拒**——`ERR_COMMAND_` 已注册、`ErrCommandNotFound` 已存在，复用之 + `ErrConflict`/`ErrInternal`/`ErrValidationFailed`，零 errcode 扇出。
+
+---
+
+## 4. Funnel 双向锁评级矩阵（诚实记录 Go 天花板）
+
+issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 invariant 的 Hard 半边合成**；它们对称的另一半是 **Go 语言天花板**（非疏漏），与 `OUTBOX-RECONSTRUCTION-CALLER-01` / SPAN-SETATTR-HOLDER-SEAL(#851) / HEALTHZ-HOLDER-SEAL(#893) / outbox principal-write(#1282) 同族永久天花板。
+
+| Invariant | 语句 | 上游 | 下游 |
+|-----------|------|------|------|
+| `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` | typed Handler/Register/Dispatch 仅由 `command.tmpl` 派生（生产包外无手写 look-alike trio 声明） | **Hard**（codegen funnel + golden regenerate-and-diff 字节锁；`command.tmpl` 单一 emitter） | Medium（AST/types 声明扫描 + 反向 synth fixture） |
+| `COMMAND-DISPATCH-REGISTER-CALLER-01` | `(*command.Registry).RegisterHandler`/`LookupHandler` 调用方 ⊆ `generated/contracts/command/**` + `runtime/command` 自测 | Medium（Go 无 friend-package：「仅生成码可调」不可编译期表达；archtest caller-allowlist 兜底） | **Hard**（`ResolveMethodCall` 按 pkg path + receiver type 绑定 callee，alias/同名异型不匹配） |
+
+**闭环论证**：codegen-Hard 上游（typed funnel 不可手写，D1/D2）+ caller-allowlist-Hard 下游（raw `RegisterHandler` 在生成码外被调即 CI 红，D3）= 业务**既不能手写 typed funnel、也不能在 funnel 外用 raw registry** → 达成立项门「Hard 双向锁」。
+
+**Medium 半边的 Hard 化路径（won't-do-now）**：把 `RegisterHandler`/`LookupHandler` 收进 `runtime/command/internal/` wrap 包使包外不可 import——但 `generated/` 与业务 cell 跨包，Go 包可见性无法表达「仅某几个生成包可调某导出符号」，与 #1282 family 同永久天花板。追踪：开 gh issue（archtest godoc 点名），维持 Medium 为 Go 下天花板。
+
+---
+
+## 5. 演进路径（④/⑤ 落地时 amend 本 ADR）
+
+PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 funnel 为后续保持**前向兼容的 seam**（不预设字段，需要时加）：
+
+- **④ async outbox 桥（#1044 子 issue）**：`DispatchAsync[C]` 写 `outbox.Entry`（携带 command kind——触及 sealed `Entry` wire envelope 或 topic 约定，触发 contract-fanout 5 载体）；relay 消费按 command id `LookupHandler` → 触发 handler。此时 JSON marshal 在 outbox 边界发生（D4 的同步 type-assert 不变，异步路径独立 marshal）。
+- **⑤ idempotency 桥（#1044 子 issue）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` Claimer 两阶段）。
+- **command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level（命令跨 L1 同步..L4 设备；现有 active L4 device-command 不能被锁 L3 误伤）。
+- **真实 handler 端到端接线（#1044 子 issue）**：PR-1 funnel 由 unit test 假 handler + golden 证，未经真实 cell 接线（devicecell enqueue adapter + bootstrap `Registry`）。
+
+amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：④ 引入的 sealed `Entry` 修改若改变某格评级，显式列补偿。
+
+---
+
+## 6. 对标（Watermill cqrs）
+
+`ref: watermill components/cqrs/command_bus.go` + `command_processor.go`：
+
+- `CommandProcessor.AddHandlers` 强制**一 command 类型 ↔ 一 handler** 映射，重复注册返回 `DuplicateCommandHandlerError`（"command handler for command %s already exists"）→ 印证 D3/D5 的 `RegisterHandler`→`KindConflict`。
+- 路由按 command 身份（Watermill 用反射 `Marshaler.Name(command)`；GoCell 用**显式 codegen `DispatchID`**——更 Hard，无反射）。
+- Watermill `CommandBus.Send` 是 broker-async（发 topic）= GoCell ④ `DispatchAsync`；GoCell 的**同步 in-process `Dispatch` 是 GoCell 特化的 fast-path**，Watermill 无对应（broker-first）。registry-by-command-id 是 command bus 标准结构，同步亦适用。
+
+---
+
+## 7. Enforcement 索引（导航，单源在各载体 godoc）
+
+| 载体 | ID / 名 | 文件 |
+|------|---------|------|
+| archtest | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` | `tools/archtest/command_dispatch_funnel_test.go` |
+| governance | `COMMAND-CONTRACT-SCHEMA-REF-01` | `kernel/governance/rules_command.go` |
+| codegen | `kind:command` 生成器 + golden | `tools/codegen/contractgen/{builder,generator}.go` + `templates/command.tmpl` |
+| runtime | sealed `Registry` | `runtime/command/registry.go` |
