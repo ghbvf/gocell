@@ -133,7 +133,7 @@ func TestProviderCollector_PerCallCellLabel(t *testing.T) {
 	ctx := context.Background()
 	c.RecordRequest(ctx, metricstest.Label("accesscore"), "GET", "/api/v1/sessions", 200, 0.01)
 	c.RecordRequest(ctx, metricstest.Label("auditcore"), "GET", "/api/v1/audit", 200, 0.02)
-	c.RecordRequest(ctx, metricstest.Label("_runtime"), "GET", "/healthz", 200, 0.001)
+	c.RecordRequest(ctx, metricstest.RuntimeLabel(), "GET", "/healthz", 200, 0.001)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 3 {

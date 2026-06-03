@@ -129,7 +129,7 @@ func TestInMemoryCollector_RecordBodyLimitRejection_NoSideEffectOnRequest(t *tes
 	ctx := context.Background()
 	c := NewInMemoryCollector()
 
-	c.RecordBodyLimitRejection(ctx, testLabel("_runtime"), "unmatched")
+	c.RecordBodyLimitRejection(ctx, testLabel(""), "unmatched")
 
 	snap := c.Snapshot()
 	// RecordRequest map must remain empty.
