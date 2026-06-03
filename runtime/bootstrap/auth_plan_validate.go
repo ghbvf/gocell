@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/cell"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -251,6 +252,63 @@ func validateAuthServiceTokenPlan(
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
 				internalListenerPositionMinFmt,
 				listener, position, got, auth.MinHMACKeyBytes))))
+	}
+	return nil
+}
+
+// validateAuthOperatorPlans enforces the AuthOperator (operator control-plane)
+// invariants at phase0:
+//   - AuthOperator may appear only on cell.AdminListener — operator credentials
+//     are the admin-plane gate; they have no meaning on the public or
+//     internal/cell→cell listeners.
+//   - At most one AuthOperator per chain.
+//   - A struct-literal AuthOperator must carry non-empty credentials and a
+//     non-nil limiter. The NewAuthOperator constructor already enforces this,
+//     but a direct struct literal would otherwise reach phase5 and fail inside
+//     HTTP middleware assembly rather than at the option boundary.
+//   - cell.AdminListener MUST carry an AuthOperator: the admin plane is
+//     authenticated by operator credentials (loopback isolation alone is not
+//     sufficient — defense in depth). An AuthNone-only AdminListener is rejected
+//     here; the AuthNone+guard mix is separately rejected by
+//     validateAuthNoneExclusive.
+func (b *Bootstrap) validateAuthOperatorPlans() error {
+	for ref, cfg := range b.listenerConfigs {
+		seen := 0
+		for i, plan := range cfg.authChain {
+			p, ok := plan.(auth.AuthOperator)
+			if !ok {
+				continue
+			}
+			seen++
+			if seen > 1 {
+				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+					"at most one AuthOperator plan allowed in authChain",
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+			}
+			if ref != cell.AdminListener {
+				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+					"AuthOperator may only be used on cell.AdminListener; operator credentials "+
+						"are the admin control-plane gate, not a cell→cell or public scheme",
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), i))))
+			}
+			if len(p.Username) == 0 || len(p.Password) == 0 {
+				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+					"AuthOperator requires non-empty operator credentials; construct it with auth.NewAuthOperator(...)",
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), i))))
+			}
+			if validation.IsNilInterface(p.Limiter) {
+				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+					"AuthOperator Limiter must not be nil; construct it with auth.NewAuthOperator(...)",
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalListenerPositionFmt, ref.String(), i))))
+			}
+		}
+		if ref == cell.AdminListener && seen == 0 {
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"cell.AdminListener requires an AuthOperator plan; the operator control-plane must be "+
+					"authenticated (loopback isolation alone is not sufficient). Wire "+
+					"bootstrap.WithListener(cell.AdminListener, addr, []kauth.ListenerAuth{<auth.NewAuthOperator(...)>})",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
+		}
 	}
 	return nil
 }

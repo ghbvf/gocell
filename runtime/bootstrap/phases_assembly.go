@@ -66,6 +66,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateAuthServiceTokenPlans(); err != nil {
 		return err
 	}
+	if err := b.validateAuthOperatorPlans(); err != nil {
+		return err
+	}
 	// PR-A14b: validate declarative listener configs last — other option
 	// errors (nil checkers, nil resources, mutual exclusion) are option-level
 	// mistakes and should surface before HTTP-layout errors.
