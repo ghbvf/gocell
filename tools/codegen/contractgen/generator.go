@@ -187,15 +187,6 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 			"contractID", contractID)
 	}
 
-	// For kind=command without schemaRefs (stub contract): no artifacts emitted.
-	// The full generator requires both schemaRefs.request and schemaRefs.response;
-	// buildCommandSpec returns spec.Command == nil when neither is set.
-	if spec.Kind == "command" && spec.Command == nil {
-		slog.Debug("contractgen: command contract has no schemaRefs; no artifacts emitted (stub form)",
-			"contractID", contractID)
-		return nil
-	}
-
 	// types_gen.go — always generated.
 	typesPath := filepath.Join(pkgDir, "types_gen.go")
 	errPfxTypes := "contractgen generate: render types " + contractID
@@ -253,9 +244,10 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		}
 	}
 
-	// command_gen.go — only for kind=command with a full CommandSpec
-	// (DispatchID + typed Handler interface + Register + Dispatch).
-	if spec.Kind == "command" && spec.Command != nil {
+	// command_gen.go — only for kind=command (DispatchID + typed Handler interface
+	// + Register + Dispatch). buildCommandSpec guarantees spec.Command is non-nil
+	// for any command that builds (it errors otherwise), so no nil guard here.
+	if spec.Kind == "command" {
 		commandPath := filepath.Join(pkgDir, "command_gen.go")
 		errPfxCommand := "contractgen generate: render command " + contractID
 		if err := renderWriteContract(root, "command.tmpl", spec, commandPath, opts, res, errPfxCommand); err != nil {
@@ -330,13 +322,6 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 	// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
 	if spec.Kind == "webhook" {
 		slog.Debug("contractgen: webhook contract emits zero artifacts by design; wiring derives via cellgen from slice.yaml",
-			"contractID", contractID)
-		return nil, nil
-	}
-
-	// For kind=command without schemaRefs (stub contract): no artifacts emitted.
-	if spec.Kind == "command" && spec.Command == nil {
-		slog.Debug("contractgen: command contract has no schemaRefs; no artifacts emitted (stub form)",
 			"contractID", contractID)
 		return nil, nil
 	}
@@ -472,8 +457,9 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 		out = append(out, CodegenArtifact{Path: sagaRel, Content: sagaContent})
 	}
 
-	// command_gen.go — only for kind=command with a full CommandSpec.
-	if spec.Kind == "command" && spec.Command != nil {
+	// command_gen.go — only for kind=command (buildCommandSpec guarantees
+	// spec.Command is non-nil for any command that builds).
+	if spec.Kind == "command" {
 		commandPath := filepath.Join(pkgDir, "command_gen.go")
 		commandContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 			TemplateName: "command.tmpl",

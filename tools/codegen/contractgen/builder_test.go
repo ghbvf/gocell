@@ -479,42 +479,6 @@ func TestBuildQueryParams_BoundaryValues(t *testing.T) {
 
 // --- buildContractSpec tests ---
 
-// TestBuildContractSpec_CommandKind_Skips documents the graceful-skip path for
-// kind=command (and kind=projection): buildContractSpec returns a valid spec with
-// no error and no HTTP/event-specific fields populated. generateOneContract will
-// only emit types_gen.go + iface_gen.go for these kinds.
-func TestBuildContractSpec_CommandKind_Skips(t *testing.T) {
-	t.Parallel()
-	p := &metadata.ProjectMeta{
-		Contracts: map[string]*metadata.ContractMeta{
-			"command.device.provision.v1": {
-				ID:         "command.device.provision.v1",
-				Kind:       "command",
-				Codegen:    true,
-				Transports: []string{"amqp"}, // mirrors parser defaultTransportsForKind("command")
-				File:       "contracts/command/device/provision/v1/contract.yaml",
-			},
-		},
-	}
-	spec, err := buildContractSpec("", p, "command.device.provision.v1")
-	if err != nil {
-		t.Fatalf("buildContractSpec should not error for kind=command, got: %v", err)
-	}
-	if spec == nil {
-		t.Fatal("expected non-nil spec")
-	}
-	if spec.Kind != "command" {
-		t.Errorf("spec.Kind = %q, want %q", spec.Kind, "command")
-	}
-	// No HTTP or event-specific fields are populated for command kind.
-	if spec.Endpoint != nil {
-		t.Errorf("spec.Endpoint should be nil for kind=command, got non-nil")
-	}
-	if spec.Event != nil {
-		t.Errorf("spec.Event should be nil for kind=command, got non-nil")
-	}
-}
-
 // TestBuildContractSpec_ProjectionKind_Skips mirrors the command test for
 // kind=projection.
 func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {

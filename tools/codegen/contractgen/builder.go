@@ -692,19 +692,16 @@ func buildCommandSpec(spec *ContractGenSpec, rootDir string, contract *metadata.
 	reqRef := strings.TrimSpace(contract.SchemaRefs.Request)
 	respRef := strings.TrimSpace(contract.SchemaRefs.Response)
 
-	// Fail-closed: if only one schemaRef is provided, reject (partial schema is
-	// ambiguous — caller probably forgot the other ref).
-	if reqRef == "" && respRef == "" {
-		// No schema refs — "stub" contract accepted without Command spec.
-		return nil
-	}
-	if reqRef == "" {
-		return fmt.Errorf("contractgen build: command contract %q has schemaRefs.response but missing schemaRefs.request "+
-			"(COMMAND-CONTRACT-SCHEMA-REF-01: both request and response must be declared)", contract.ID)
-	}
-	if respRef == "" {
-		return fmt.Errorf("contractgen build: command contract %q has schemaRefs.request but missing schemaRefs.response "+
-			"(COMMAND-CONTRACT-SCHEMA-REF-01: both request and response must be declared)", contract.ID)
+	// Fail-closed (the codegen Hard half of COMMAND-CONTRACT-SCHEMA-REF-01): a
+	// codegen command MUST declare BOTH request and response schemas — they are the
+	// typed Handler signature (*Request) (*Response, error). Missing either (or
+	// both) is a misconfiguration, NOT a "stub" to silently skip: the governance
+	// rule flags it at validate-time and contractgen rejects it here so a refs-less
+	// command can never half-generate (no static no-op / silent degradation).
+	if reqRef == "" || respRef == "" {
+		return fmt.Errorf("contractgen build: command contract %q must declare both schemaRefs.request and "+
+			"schemaRefs.response (COMMAND-CONTRACT-SCHEMA-REF-01); got request=%q response=%q",
+			contract.ID, contract.SchemaRefs.Request, contract.SchemaRefs.Response)
 	}
 
 	dtos, err := buildCommandDTOs(rootDir, contract, contractDir, reqRef, respRef)

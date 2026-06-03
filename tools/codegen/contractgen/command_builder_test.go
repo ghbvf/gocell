@@ -2,11 +2,10 @@ package contractgen
 
 // command_builder_test.go — builder tests for kind=command full generator (Batch B, #1044).
 // Covers: spec.Command population, fail-closed schemaRef guards, DTO emission.
-// The pre-existing TestBuildContractSpec_CommandKind_Skips (builder_test.go) and
-// TestBuildContractSpec_CommandKind_GracefulSkip (render_test.go) tested the old
-// graceful-skip stub; they remain in place (their assertions now also pass under
-// the full generator: Command is nil when no schemaRefs are provided, and the spec
-// is still accepted without error — see TestBuildCommandSpec_NoSchemaRefs below).
+// The old graceful-skip stub tests (TestBuildContractSpec_CommandKind_Skips /
+// _GracefulSkip) were deleted with the full generator: a codegen command with
+// missing/absent schemaRefs is now rejected (fail-closed), not silently stubbed —
+// see TestBuildCommandSpec_NoSchemaRefs / _MissingRequestSchemaRef / _MissingResponseSchemaRef.
 
 import (
 	"path/filepath"
@@ -142,10 +141,12 @@ func TestBuildCommandSpec_MissingResponseSchemaRef(t *testing.T) {
 	}
 }
 
-// TestBuildCommandSpec_NoSchemaRefs verifies that a kind=command contract with
-// no schemaRefs at all still builds successfully (spec.Command is nil — the
-// contract is accepted but no typed funnel is generated). This preserves
-// backward-compatibility with the prior graceful-skip behavior.
+// TestBuildCommandSpec_NoSchemaRefs verifies that a codegen kind=command contract
+// with NO schemaRefs at all is REJECTED (fail-closed) — not silently accepted as a
+// "stub". A codegen command must declare both request and response schemas; missing
+// both is a misconfiguration, caught here (codegen Hard half of
+// COMMAND-CONTRACT-SCHEMA-REF-01) as well as by the governance rule at validate-time.
+// There is no static-no-op/graceful-skip path.
 func TestBuildCommandSpec_NoSchemaRefs(t *testing.T) {
 	t.Parallel()
 	p := &metadata.ProjectMeta{
@@ -156,20 +157,13 @@ func TestBuildCommandSpec_NoSchemaRefs(t *testing.T) {
 				Codegen:    true,
 				Transports: []string{"internal"},
 				File:       "contracts/command/device/provision/v1/contract.yaml",
-				// No SchemaRefs — old "stub" form, still valid.
+				// No SchemaRefs — must be rejected, not stubbed.
 			},
 		},
 	}
-	spec, err := buildContractSpec("", p, "command.device.provision.v1")
-	if err != nil {
-		t.Fatalf("buildContractSpec with no schemaRefs should succeed: %v", err)
-	}
-	if spec == nil {
-		t.Fatal("expected non-nil spec")
-	}
-	// Command is nil because no schemaRefs are present — types/iface not generated.
-	if spec.Command != nil {
-		t.Errorf("spec.Command should be nil when no schemaRefs provided, got: %+v", spec.Command)
+	_, err := buildContractSpec("", p, "command.device.provision.v1")
+	if err == nil {
+		t.Fatal("expected error for a codegen command with no schemaRefs, got nil")
 	}
 }
 
