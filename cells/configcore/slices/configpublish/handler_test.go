@@ -25,15 +25,24 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// adminCtx returns a request context carrying an admin subject + role for
-// authorized handler tests. Mirrors the identitymanage handler test pattern.
+// testPublishTenantStr is the test TenantID string for configpublish tests.
+const testPublishTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// testPublishTenant is the typed TenantID for direct repo seeding calls.
+var testPublishTenant = tenant.TenantID(testPublishTenantStr)
+
+// adminCtx returns a request context carrying an admin subject + role AND a
+// valid TenantID for authorized handler tests. configpublish.Service.Publish
+// and Rollback both call tenant.FromContext(ctx), so a tenant is required.
 func adminCtx() context.Context {
-	return auth.TestContext("test-admin", []string{"admin"})
+	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testPublishTenantStr)
 }
 
 // withAdmin clones req with the admin auth context attached.
@@ -133,7 +142,7 @@ func seedForPublish(t *testing.T, repo *mem.ConfigRepository) {
 	const key = "app.name"
 	const value = "v1"
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -221,7 +230,7 @@ func TestHandler_HandleRollback_RequiresAdminRole(t *testing.T) {
 func TestHandler_HandlePublish_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -246,7 +255,7 @@ func TestHandler_HandlePublish_SensitiveRedacted(t *testing.T) {
 func TestHandler_HandlePublish_NonSensitiveVisible(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-plain", Key: "app.name", Value: "gocell", Sensitive: false,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -327,7 +336,7 @@ func TestHandler_HandleRollback_VersionNotFound(t *testing.T) {
 func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -458,7 +467,7 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 
 func seedForService(repo *mem.ConfigRepository, key, value string) {
 	now := time.Now()
-	_ = repo.Create(context.Background(), &domain.ConfigEntry{
+	_ = repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	})
@@ -476,7 +485,9 @@ type fakeConfigRepoForRollback struct {
 	rollbackErr error
 }
 
-func (f *fakeConfigRepoForRollback) UpdateForRollback(_ context.Context, _ string, _ int, _ string, _ bool) (*domain.ConfigEntry, error) {
+func (f *fakeConfigRepoForRollback) UpdateForRollback(
+	_ context.Context, _ tenant.TenantID, _ string, _ int, _ string, _ bool,
+) (*domain.ConfigEntry, error) {
 	return nil, f.rollbackErr
 }
 
@@ -500,8 +511,8 @@ func seedForRollbackAdapter(repo *mem.ConfigRepository, key, value string) {
 		ID: "cfg-rollback", Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	_ = repo.Create(context.Background(), entry)
-	_ = repo.PublishVersion(context.Background(), &domain.ConfigVersion{
+	_ = repo.Create(context.Background(), testPublishTenant, entry)
+	_ = repo.PublishVersion(context.Background(), testPublishTenant, &domain.ConfigVersion{
 		ID: "ver-1", ConfigID: entry.ID, Version: 1, Value: value, PublishedAt: &now,
 	})
 }
@@ -543,7 +554,7 @@ type fakeConfigRepoForPublish struct {
 	getByKeyErr error
 }
 
-func (f *fakeConfigRepoForPublish) GetByKey(_ context.Context, _ string) (*domain.ConfigEntry, error) {
+func (f *fakeConfigRepoForPublish) GetByKey(_ context.Context, _ tenant.TenantID, _ string) (*domain.ConfigEntry, error) {
 	return nil, f.getByKeyErr
 }
 

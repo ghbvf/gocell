@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -98,7 +99,7 @@ func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path,
 		strings.NewReader(`{"key":"my-flag","enabled":false,"rolloutPercentage":0,"description":"test"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testFlagTenantStr))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -136,7 +137,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path,
 		strings.NewReader(`{"enabled":true,"rolloutPercentage":50,"description":"updated","expectedVersion":1}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testFlagTenantStr))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -150,7 +151,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 		recBad := httptest.NewRecorder()
 		reqBad := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(bad))
 		reqBad.Header.Set("Content-Type", "application/json")
-		reqBad = reqBad.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+		reqBad = reqBad.WithContext(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testFlagTenantStr))
 		mux.ServeHTTP(recBad, reqBad)
 		assert.Equal(t, http.StatusBadRequest, recBad.Code,
 			"PUT with out-of-range rolloutPercentage must 400; body %q got %s",
@@ -180,7 +181,7 @@ func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path,
 		strings.NewReader(`{"enabled":true,"expectedVersion":1}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testFlagTenantStr))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -201,11 +202,11 @@ func TestHttpConfigFlagsDeleteV1Serve(t *testing.T) {
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "del-flag") + "?expectedVersion=1"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, http.NoBody)
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testFlagTenantStr))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body)
 }
 
 func testAdminCtx() context.Context {
-	return auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})
+	return ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testFlagTenantStr)
 }

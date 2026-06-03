@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -124,11 +125,14 @@ func scanFlagRow(row RowScanner) (*domain.FeatureFlag, error) {
 	return &f, nil
 }
 
-// Create inserts a new feature flag. All 8 columns are written.
-func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) error {
+// Create inserts a new feature flag. All 8 columns are written plus tenant_id.
+func (r *FlagRepository) Create(ctx context.Context, t tenant.TenantID, flag *domain.FeatureFlag) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	const sql = `INSERT INTO feature_flags
-		(` + flagColumns + `)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		(tenant_id, ` + flagColumns + `)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 
 	now := r.clock.Now()
 	if flag.CreatedAt.IsZero() {
@@ -146,7 +150,7 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 		return err
 	}
 	if _, err = db.Exec(ctx, sql,
-		flag.ID, flag.Key, flag.Enabled, flag.RolloutPercentage,
+		string(t), flag.ID, flag.Key, flag.Enabled, flag.RolloutPercentage,
 		flag.Description, flag.Version, flag.CreatedAt, flag.UpdatedAt,
 	); err != nil {
 		if cancelErr := ctxcancel.Wrap(err, "Create", "key="+flag.Key); cancelErr != nil {
@@ -163,9 +167,12 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 }
 
 // GetByKey retrieves a feature flag by key.
-func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.FeatureFlag, error) {
-	const sql = `SELECT ` + flagColumns + ` FROM feature_flags WHERE key = $1`
-	return r.scanFlagOrMapError(ctx, r.resolveDB(ctx).QueryRow(ctx, sql, key), "GetByKey", key)
+func (r *FlagRepository) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
+	const sql = `SELECT ` + flagColumns + ` FROM feature_flags WHERE tenant_id = $1 AND key = $2`
+	return r.scanFlagOrMapError(ctx, r.resolveDB(ctx).QueryRow(ctx, sql, string(t), key), "GetByKey", key)
 }
 
 // Update atomically sets enabled, rollout_percentage, description, and
@@ -177,24 +184,27 @@ func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.Feat
 //   - exists → ErrVersionConflict (409)
 //   - not found → ErrFlagNotFound (404)
 func (r *FlagRepository) Update(
-	ctx context.Context, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
+	ctx context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
 ) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, rollout_percentage=$2, description=$3, version=version+1, updated_at=now()
-		WHERE key=$4 AND version=$5
+		WHERE key=$4 AND version=$5 AND tenant_id=$6
 		RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, enabled, rolloutPercentage, description, key, expectedVersion))
+	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, enabled, rolloutPercentage, description, key, expectedVersion, string(t)))
 	if scanErr != nil {
 		if cancelErr := ctxcancel.Wrap(scanErr, "Update", "key="+key); cancelErr != nil {
 			return nil, cancelErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
-			return nil, r.resolveUpdateConflict(ctx, "Update", key)
+			return nil, r.resolveUpdateConflict(ctx, t, "Update", key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: Update scan error key=%s", key))),
@@ -206,9 +216,12 @@ func (r *FlagRepository) Update(
 
 // List retrieves feature flags with keyset cursor pagination.
 // Requires composite index: CREATE INDEX idx_feature_flags_key_id ON feature_flags (key ASC, id ASC).
-func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
+func (r *FlagRepository) List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	b := pgquery.NewBuilder()
-	b.Append("SELECT " + flagColumns + " FROM feature_flags WHERE 1=1")
+	b.AppendParam("SELECT "+flagColumns+" FROM feature_flags WHERE tenant_id = ", string(t))
 
 	if err := pgquery.AppendKeyset(b, params); err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo: keyset build failed", err)
@@ -246,20 +259,23 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 // CAS flow: rowsAffected==0 → probe GetByKey:
 //   - exists → ErrVersionConflict (409)
 //   - not found → ErrFlagNotFound (404)
-func (r *FlagRepository) Delete(ctx context.Context, key string, expectedVersion int) (*domain.FeatureFlag, error) {
-	const sql = `DELETE FROM feature_flags WHERE key=$1 AND version=$2 RETURNING ` + flagColumns
+func (r *FlagRepository) Delete(ctx context.Context, t tenant.TenantID, key string, expectedVersion int) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
+	const sql = `DELETE FROM feature_flags WHERE key=$1 AND version=$2 AND tenant_id=$3 RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, key, expectedVersion))
+	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, key, expectedVersion, string(t)))
 	if scanErr != nil {
 		if cancelErr := ctxcancel.Wrap(scanErr, "Delete", "key="+key); cancelErr != nil {
 			return nil, cancelErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
-			return nil, r.resolveUpdateConflict(ctx, "Delete", key)
+			return nil, r.resolveUpdateConflict(ctx, t, "Delete", key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: Delete scan error key=%s", key))),
@@ -282,23 +298,28 @@ func (r *FlagRepository) Delete(ctx context.Context, key string, expectedVersion
 // CAS flow: rowsAffected==0 → probe GetByKey:
 //   - exists → ErrVersionConflict (409)
 //   - not found → ErrFlagNotFound (404)
-func (r *FlagRepository) Toggle(ctx context.Context, key string, expectedVersion int, enabled bool) (*domain.FeatureFlag, error) {
+func (r *FlagRepository) Toggle(
+	ctx context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool,
+) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, version=version+1, updated_at=now()
-		WHERE key=$2 AND version=$3
+		WHERE key=$2 AND version=$3 AND tenant_id=$4
 		RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, enabled, key, expectedVersion))
+	flag, scanErr := scanFlagRow(db.QueryRow(ctx, sql, enabled, key, expectedVersion, string(t)))
 	if scanErr != nil {
 		if cancelErr := ctxcancel.Wrap(scanErr, "Toggle", "key="+key); cancelErr != nil {
 			return nil, cancelErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
-			return nil, r.resolveUpdateConflict(ctx, "Toggle", key)
+			return nil, r.resolveUpdateConflict(ctx, t, "Toggle", key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: Toggle scan error key=%s", key))),
@@ -318,8 +339,8 @@ func (r *FlagRepository) Toggle(ctx context.Context, key string, expectedVersion
 //
 // ref: docs/reviews/PR-464 round-2 P1.2 (Kratos/Watermill/etcd: probe failure
 // must not collapse into business not-found).
-func (r *FlagRepository) resolveUpdateConflict(ctx context.Context, op, key string) error {
-	_, probeErr := r.GetByKey(ctx, key)
+func (r *FlagRepository) resolveUpdateConflict(ctx context.Context, t tenant.TenantID, op, key string) error {
+	_, probeErr := r.GetByKey(ctx, t, key)
 	if probeErr != nil {
 		notFound, infraErr := classifyProbeFailure(probeErr, errcode.ErrFlagNotFound, op, key, "feature_flag")
 		if !notFound {

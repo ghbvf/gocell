@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -94,6 +95,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		return nil, err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-write: create: tenant: %w", err)
+	}
+
 	now := s.clock.Now()
 	entry := &domain.ConfigEntry{
 		ID:        "cfg" + "-" + uuid.NewString(),
@@ -106,7 +112,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Create(txCtx, entry); err != nil {
+		if err := s.repo.Create(txCtx, t, entry); err != nil {
 			return fmt.Errorf("config-write: create: %w", err)
 		}
 		return s.publishUpserted(txCtx, entry, actor)
@@ -143,10 +149,15 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 		return nil, err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-write: update: tenant: %w", err)
+	}
+
 	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.repo.Update(txCtx, input.Key, input.ExpectedVersion, input.Value)
+		updated, err = s.repo.Update(txCtx, t, input.Key, input.ExpectedVersion, input.Value)
 		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
@@ -174,8 +185,13 @@ func (s *Service) Delete(ctx context.Context, key string, expectedVersion int) e
 		return err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("config-write: delete: tenant: %w", err)
+	}
+
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		deleted, err := s.repo.Delete(txCtx, key, expectedVersion)
+		deleted, err := s.repo.Delete(txCtx, t, key, expectedVersion)
 		if err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}

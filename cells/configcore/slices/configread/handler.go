@@ -2,6 +2,7 @@ package configread
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -10,6 +11,7 @@ import (
 	configlist "github.com/ghbvf/gocell/generated/contracts/http/config/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -18,7 +20,11 @@ type GetAdapter struct{ S *Service }
 
 // Get implements configget.Service. Key comes from path param, already decoded by handler_gen.
 func (a GetAdapter) Get(ctx context.Context, req *configget.Request) (configget.GetResponseObject, error) {
-	entry, err := a.S.GetByKey(ctx, req.Key)
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-read: get: tenant: %w", err)
+	}
+	entry, err := a.S.GetByKey(ctx, t, req.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -30,11 +36,15 @@ type ListAdapter struct{ S *Service }
 
 // List implements configlist.Service. ParsePageParams is called by handler_gen.
 func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (configlist.ListResponseObject, error) {
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-read: list: tenant: %w", err)
+	}
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
 		Limit:  int(req.Limit),
 	}
-	result, err := a.S.List(ctx, pageReq)
+	result, err := a.S.List(ctx, t, pageReq)
 	if err != nil {
 		return nil, err
 	}

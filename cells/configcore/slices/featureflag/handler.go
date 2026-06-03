@@ -2,6 +2,7 @@ package featureflag
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -10,6 +11,7 @@ import (
 	flagslist "github.com/ghbvf/gocell/generated/contracts/http/config/flags/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -59,7 +61,11 @@ type GetAdapter struct{ S *Service }
 
 // Get implements flagsget.Service. Key comes from path param, already decoded by handler_gen.
 func (a GetAdapter) Get(ctx context.Context, req *flagsget.Request) (flagsget.GetResponseObject, error) {
-	flag, err := a.S.GetByKey(ctx, req.Key)
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("feature-flag: get: tenant: %w", err)
+	}
+	flag, err := a.S.GetByKey(ctx, t, req.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +77,15 @@ type ListAdapter struct{ S *Service }
 
 // List implements flagslist.Service.
 func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (flagslist.ListResponseObject, error) {
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("feature-flag: list: tenant: %w", err)
+	}
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
 		Limit:  int(req.Limit),
 	}
-	result, err := a.S.List(ctx, pageReq)
+	result, err := a.S.List(ctx, t, pageReq)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +105,11 @@ type EvaluateAdapter struct{ S *Service }
 
 // Evaluate implements evaluate.Service. Key from path, Subject from body (decoded by handler_gen).
 func (a EvaluateAdapter) Evaluate(ctx context.Context, req *evaluate.Request) (evaluate.EvaluateResponseObject, error) {
-	result, err := a.S.Evaluate(ctx, req.Key, req.Subject)
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("feature-flag: evaluate: tenant: %w", err)
+	}
+	result, err := a.S.Evaluate(ctx, t, req.Key, req.Subject)
 	if err != nil {
 		return nil, err
 	}

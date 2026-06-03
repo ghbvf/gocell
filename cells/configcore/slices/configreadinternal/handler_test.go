@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -99,7 +100,7 @@ func TestHandler_InternalGet_WrongCaller_403(t *testing.T) {
 func TestHandler_InternalGet_Found(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), tenant.SystemTenantID, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "app.name", Value: "gocell", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -130,7 +131,7 @@ func TestHandler_InternalGet_NotFound(t *testing.T) {
 func TestHandler_InternalGet_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), tenant.SystemTenantID, &domain.ConfigEntry{
 		ID: "cfg-s1", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))

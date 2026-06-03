@@ -19,20 +19,30 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// testFlagHandlerTenantStr is the test TenantID string for featureflag handler tests.
+const testFlagHandlerTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// testFlagHandlerTenant is the typed TenantID for direct repo seeding.
+var testFlagHandlerTenant = tenant.TenantID(testFlagHandlerTenantStr)
 
 var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
 
 const flagsBasePath = "/api/v1/flags"
 
-// asAdminFlag attaches an admin Principal to req so it satisfies the
-// auth.AnyRole(RoleAdmin) policy applied by RegisterRoutes.
+// asAdminFlag attaches an admin Principal AND a valid TenantID to req so it
+// satisfies the auth.AnyRole(RoleAdmin) policy AND the featureflag handler's
+// tenant.FromContext call.
 func asAdminFlag(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{auth.RoleAdmin}), testFlagHandlerTenantStr)
+	return req.WithContext(ctx)
 }
 
 func TestToFeatureFlagResponse_NilInput(t *testing.T) {
@@ -124,7 +134,7 @@ func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCo
 func TestHandler_HandleList(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
+	require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{
 		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: true,
 		Description: "Dark mode toggle", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
@@ -154,7 +164,7 @@ func TestHandler_HandleList(t *testing.T) {
 func TestHandler_HandleGet_Found(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
+	require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{
 		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: true,
 		Description: "Dark mode toggle", Version: 3,
 		CreatedAt: now, UpdatedAt: now,
@@ -197,7 +207,7 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 
 func TestHandler_HandleEvaluate_OK(t *testing.T) {
 	handler, repo := setupHandler()
-	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
+	require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{
 		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: true,
 	}))
 
@@ -281,7 +291,7 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	handler, repo := setupHandler()
 	keys := []string{"flag-a", "flag-b", "flag-c", "flag-d", "flag-e", "flag-f", "flag-g"}
 	for _, k := range keys {
-		require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
+		require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{
 			ID: "ff-" + k, Key: k, Type: domain.FlagBoolean, Enabled: true,
 		}))
 	}

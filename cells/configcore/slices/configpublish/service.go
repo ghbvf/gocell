@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -104,9 +105,14 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		return nil, err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: publish: tenant: %w", err)
+	}
+
 	var version *domain.ConfigVersion
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		entry, err := s.repo.GetByKey(txCtx, key)
+		entry, err := s.repo.GetByKey(txCtx, t, key)
 		if err != nil {
 			return fmt.Errorf("config-publish: publish: %w", err)
 		}
@@ -121,7 +127,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 			PublishedAt: &now,
 		}
 
-		if err := s.repo.PublishVersion(txCtx, version); err != nil {
+		if err := s.repo.PublishVersion(txCtx, t, version); err != nil {
 			return fmt.Errorf("config-publish: publish version: %w", err)
 		}
 		return outbox.Emit(txCtx, s.clock, s.emitter, domain.TopicConfigVersionPublished, domain.ConfigVersionPublishedEvent{
@@ -163,10 +169,15 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int, e
 		return nil, err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback: tenant: %w", err)
+	}
+
 	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.rollbackInTx(txCtx, key, targetVersion, expectedVersion, actor)
+		updated, err = s.rollbackInTx(txCtx, t, key, targetVersion, expectedVersion, actor)
 		return err
 	}); err != nil {
 		return nil, err
@@ -181,14 +192,14 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int, e
 // resolve current entry, fetch target version snapshot, atomic UPDATE...RETURNING,
 // dual emit (entry-upserted + rollback). Caller MUST invoke inside runInTx.
 func (s *Service) rollbackInTx(
-	txCtx context.Context, key string, targetVersion int, expectedVersion int, actor string,
+	txCtx context.Context, t tenant.TenantID, key string, targetVersion int, expectedVersion int, actor string,
 ) (*domain.ConfigEntry, error) {
-	entry, err := s.repo.GetByKey(txCtx, key)
+	entry, err := s.repo.GetByKey(txCtx, t, key)
 	if err != nil {
 		return nil, fmt.Errorf("config-publish: rollback: %w", err)
 	}
 
-	ver, err := s.repo.GetVersion(txCtx, entry.ID, targetVersion)
+	ver, err := s.repo.GetVersion(txCtx, t, entry.ID, targetVersion)
 	if err != nil {
 		return nil, fmt.Errorf("config-publish: rollback: version not found: %w", err)
 	}
@@ -197,7 +208,7 @@ func (s *Service) rollbackInTx(
 	// The repo handles version=version+1 and updated_at=now() internally.
 	// expectedVersion is the CAS guard: returns ErrVersionConflict if a concurrent
 	// write changed the entry between GetByKey and now.
-	updated, err := s.repo.UpdateForRollback(txCtx, key, expectedVersion, ver.Value, ver.Sensitive)
+	updated, err := s.repo.UpdateForRollback(txCtx, t, key, expectedVersion, ver.Value, ver.Sensitive)
 	if err != nil {
 		return nil, fmt.Errorf("config-publish: rollback update: %w", err)
 	}

@@ -20,18 +20,28 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// testReadTenantStr is the test TenantID for configread handler tests.
+const testReadTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// testReadTenant is the typed TenantID for direct repo seeding.
+var testReadTenant = tenant.TenantID(testReadTenantStr)
+
 const configBasePath = "/api/v1/config"
 
-// asAdmin attaches an admin Principal to req so it satisfies the
-// auth.AnyRole(RoleAdmin) policy applied by RegisterRoutes.
+// asAdmin attaches an admin Principal AND a valid TenantID to req so it
+// satisfies the auth.AnyRole(RoleAdmin) policy AND configread handler's
+// tenant.FromContext call.
 func asAdmin(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{auth.RoleAdmin}), testReadTenantStr)
+	return req.WithContext(ctx)
 }
 
 // setupHandler wires the slice handler onto a celltest mux via RegisterRoutes —
@@ -55,7 +65,7 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 func TestHandler_HandleGet_Found(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "app.name", Value: "gocell", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -94,11 +104,11 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 func TestHandler_HandleList_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "k1", Value: "v1", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-2", Key: "k2", Value: "v2", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -151,7 +161,7 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	now := time.Now()
 	keys := []string{"key-a", "key-b", "key-c", "key-d", "key-e", "key-f", "key-g"}
 	for i, k := range keys {
-		require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 			ID: "cfg-" + k, Key: k, Value: "v" + k, Version: 1,
 			CreatedAt: now.Add(time.Duration(i) * time.Second),
 			UpdatedAt: now.Add(time.Duration(i) * time.Second),
@@ -235,7 +245,7 @@ func TestHandler_HandleList_InvalidCursor(t *testing.T) {
 func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-s1", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -257,7 +267,7 @@ func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
 func TestHandler_HandleGet_NonSensitiveVisible(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-n1", Key: "app.name", Value: "gocell", Sensitive: false,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -278,11 +288,11 @@ func TestHandler_HandleGet_NonSensitiveVisible(t *testing.T) {
 func TestHandler_HandleList_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "app.name", Value: "gocell", Sensitive: false,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-2", Key: "api.key", Value: "sk-secret-key-123", Sensitive: true,
 		Version: 1, CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second),
 	}))

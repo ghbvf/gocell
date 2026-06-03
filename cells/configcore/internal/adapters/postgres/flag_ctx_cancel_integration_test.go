@@ -54,13 +54,13 @@ func TestFlagWrite_CtxCancel_PGTxRollback(t *testing.T) {
 	// A real PG txMgr detects the cancelled context and does not commit,
 	// returning context.Canceled.
 	err := txMgr.RunInTx(cancelledCtx, func(txCtx context.Context) error {
-		return repo.Create(txCtx, flag)
+		return repo.Create(txCtx, integrationTestTenantA, flag)
 	})
 	require.Error(t, err, "RunInTx with cancelled ctx must return error")
 	assert.ErrorIs(t, err, context.Canceled, "error must be context.Canceled")
 
 	// Verify the row was NOT inserted — the transaction must have been rolled back.
-	_, getErr := repo.GetByKey(ctx, key)
+	_, getErr := repo.GetByKey(ctx, integrationTestTenantA, key)
 	require.Error(t, getErr, "flag must not exist in PG after cancelled tx rollback")
 }
 
@@ -89,7 +89,7 @@ func TestFlagWrite_UpdateCtxCancel_PGTxRollback(t *testing.T) {
 
 	// Insert the flag successfully first.
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		return repo.Create(txCtx, flag)
+		return repo.Create(txCtx, integrationTestTenantA, flag)
 	}))
 
 	// Attempt Update with a pre-cancelled context.
@@ -97,14 +97,14 @@ func TestFlagWrite_UpdateCtxCancel_PGTxRollback(t *testing.T) {
 	cancel()
 
 	err := txMgr.RunInTx(cancelledCtx, func(txCtx context.Context) error {
-		_, err := repo.Update(txCtx, key, 1, true, 50, "should not apply")
+		_, err := repo.Update(txCtx, integrationTestTenantA, key, 1, true, 50, "should not apply")
 		return err
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 
 	// Verify the original values are intact.
-	got, getErr := repo.GetByKey(ctx, key)
+	got, getErr := repo.GetByKey(ctx, integrationTestTenantA, key)
 	require.NoError(t, getErr)
 	assert.False(t, got.Enabled, "enabled must not have changed after rollback")
 	assert.Equal(t, "original", got.Description, "description must not have changed after rollback")
@@ -136,7 +136,7 @@ func TestFlagWrite_DeleteCtxCancel_PGTxRollback(t *testing.T) {
 
 	// Insert the flag successfully first.
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		return repo.Create(txCtx, flag)
+		return repo.Create(txCtx, integrationTestTenantA, flag)
 	}))
 
 	// Attempt Delete with a pre-cancelled context.
@@ -144,14 +144,14 @@ func TestFlagWrite_DeleteCtxCancel_PGTxRollback(t *testing.T) {
 	cancel()
 
 	err := txMgr.RunInTx(cancelledCtx, func(txCtx context.Context) error {
-		_, err := repo.Delete(txCtx, key, 1)
+		_, err := repo.Delete(txCtx, integrationTestTenantA, key, 1)
 		return err
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 
 	// Verify the flag still exists.
-	got, getErr := repo.GetByKey(ctx, key)
+	got, getErr := repo.GetByKey(ctx, integrationTestTenantA, key)
 	require.NoError(t, getErr, "flag must still exist after cancelled Delete rollback")
 	assert.Equal(t, key, got.Key)
 }
@@ -178,13 +178,13 @@ func TestFlagWrite_TxRollback_OnRepoError(t *testing.T) {
 
 	// Insert the flag.
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		return repo.Create(txCtx, flag)
+		return repo.Create(txCtx, integrationTestTenantA, flag)
 	}))
 
 	// Simulate an error after the update (e.g. outbox write failure).
 	simulatedErr := context.DeadlineExceeded
 	err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		if _, err := repo.Update(txCtx, key, 1, true, 75, "should rollback"); err != nil {
+		if _, err := repo.Update(txCtx, integrationTestTenantA, key, 1, true, 75, "should rollback"); err != nil {
 			return err
 		}
 		return simulatedErr
@@ -193,7 +193,7 @@ func TestFlagWrite_TxRollback_OnRepoError(t *testing.T) {
 	assert.ErrorIs(t, err, simulatedErr)
 
 	// The Update must have been rolled back.
-	got, getErr := repo.GetByKey(ctx, key)
+	got, getErr := repo.GetByKey(ctx, integrationTestTenantA, key)
 	require.NoError(t, getErr)
 	assert.False(t, got.Enabled, "enabled must not have changed after tx rollback")
 	assert.Equal(t, 1, got.Version, "version must not have been incremented after tx rollback")

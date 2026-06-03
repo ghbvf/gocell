@@ -50,7 +50,7 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(txRunner)))
 	require.NoError(t, err)
 
-	_, err = svc.Create(context.Background(), CreateInput{
+	_, err = svc.Create(flagSvcCtx(), CreateInput{
 		Key:         "cancel-flag",
 		Description: "ctx cancel test",
 	})
@@ -60,7 +60,7 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 	assert.Equal(t, 1, txRunner.calls, "RunInTx must be called exactly once")
 
 	// Verify rollback side-effect: repo must NOT have the flag.
-	_, repoErr := repo.GetByKey(context.Background(), "cancel-flag")
+	_, repoErr := repo.GetByKey(context.Background(), testFlagTenant, "cancel-flag")
 	require.Error(t, repoErr, "repo must not have the flag after rollback")
 	var ecErr *errcode.Error
 	require.ErrorAs(t, repoErr, &ecErr)
@@ -75,7 +75,7 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	// Seed a flag so Toggle reaches the RunInTx call.
 	seedSvc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
-	_, err = seedSvc.Create(context.Background(), CreateInput{Key: "toggle-cancel"})
+	_, err = seedSvc.Create(flagSvcCtx(), CreateInput{Key: "toggle-cancel"})
 	require.NoError(t, err)
 
 	// Now create a service with the canceling tx runner.
@@ -83,12 +83,12 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(cancelTx)))
 	require.NoError(t, err)
 
-	_, err = svc.Toggle(context.Background(), "toggle-cancel", 1, true)
+	_, err = svc.Toggle(flagSvcCtx(), "toggle-cancel", 1, true)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 
 	// Verify rollback: Toggle must not have changed the flag state.
-	got, getErr := repo.GetByKey(context.Background(), "toggle-cancel")
+	got, getErr := repo.GetByKey(context.Background(), testFlagTenant, "toggle-cancel")
 	require.NoError(t, getErr)
 	assert.False(t, got.Enabled, "Toggle rollback must not change enabled state")
 }
@@ -99,7 +99,7 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	seedSvc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
-	_, err = seedSvc.Create(context.Background(), CreateInput{
+	_, err = seedSvc.Create(flagSvcCtx(), CreateInput{
 		Key:         "update-cancel",
 		Description: "original",
 	})
@@ -109,7 +109,7 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(cancelTx)))
 	require.NoError(t, err)
 
-	_, err = svc.Update(context.Background(), UpdateInput{
+	_, err = svc.Update(flagSvcCtx(), UpdateInput{
 		Key:         "update-cancel",
 		Enabled:     true,
 		Description: "should not apply",
@@ -118,7 +118,7 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 
 	// Verify rollback: description must be the original value.
-	got, getErr := repo.GetByKey(context.Background(), "update-cancel")
+	got, getErr := repo.GetByKey(context.Background(), testFlagTenant, "update-cancel")
 	require.NoError(t, getErr)
 	assert.Equal(t, "original", got.Description, "Update rollback must not change description")
 	assert.False(t, got.Enabled, "Update rollback must not change enabled state")
@@ -130,19 +130,19 @@ func TestFlagWrite_Delete_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	seedSvc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
-	_, err = seedSvc.Create(context.Background(), CreateInput{Key: "delete-cancel"})
+	_, err = seedSvc.Create(flagSvcCtx(), CreateInput{Key: "delete-cancel"})
 	require.NoError(t, err)
 
 	cancelTx := &cancellingTxRunner{}
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(cancelTx)))
 	require.NoError(t, err)
 
-	err = svc.Delete(context.Background(), "delete-cancel", 1)
+	err = svc.Delete(flagSvcCtx(), "delete-cancel", 1)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 
 	// Verify rollback: flag must still exist.
-	_, getErr := repo.GetByKey(context.Background(), "delete-cancel")
+	_, getErr := repo.GetByKey(context.Background(), testFlagTenant, "delete-cancel")
 	require.NoError(t, getErr, "Delete rollback must leave the flag in the repo")
 }
 

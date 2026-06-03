@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -25,10 +26,19 @@ const (
 )
 
 // ConfigRepository is an in-memory implementation of ports.ConfigRepository.
+//
+// # Tenancy (#1337 PR-2b)
+//
+// Every data method takes a mandatory tenant.TenantID positional parameter and
+// scopes all reads/writes to the tenant's inner map. Cross-tenant rows are
+// structurally unreachable — they live in a different inner map — so the
+// existing not-found error path fires naturally for any mismatched access.
+// RepoReady is the only tenant-less method (schema-existence probe, not a data
+// read; carve-out in archtest TENANT-REPO-PARAM-FUNNEL-01).
 type ConfigRepository struct {
 	mu       sync.RWMutex
-	entries  map[string]*domain.ConfigEntry     // key -> entry
-	versions map[string][]*domain.ConfigVersion // configID -> versions
+	entries  map[tenant.TenantID]map[string]*domain.ConfigEntry     // tenant -> key -> entry
+	versions map[tenant.TenantID]map[string][]*domain.ConfigVersion // tenant -> configID -> versions
 	clock    clock.Clock
 }
 
@@ -37,30 +47,65 @@ type ConfigRepository struct {
 func NewConfigRepository(clk clock.Clock) *ConfigRepository {
 	clock.MustHaveClock(clk, "mem.NewConfigRepository")
 	return &ConfigRepository{
-		entries:  make(map[string]*domain.ConfigEntry),
-		versions: make(map[string][]*domain.ConfigVersion),
+		entries:  make(map[tenant.TenantID]map[string]*domain.ConfigEntry),
+		versions: make(map[tenant.TenantID]map[string][]*domain.ConfigVersion),
 		clock:    clk,
 	}
 }
 
-func (r *ConfigRepository) Create(_ context.Context, entry *domain.ConfigEntry) error {
+// tenantEntries lazily creates and returns the inner entries map for t.
+// Caller must hold mu (write lock).
+func (r *ConfigRepository) tenantEntries(t tenant.TenantID) map[string]*domain.ConfigEntry {
+	m, ok := r.entries[t]
+	if !ok {
+		m = make(map[string]*domain.ConfigEntry)
+		r.entries[t] = m
+	}
+	return m
+}
+
+// tenantVersions lazily creates and returns the inner versions map for t.
+// Caller must hold mu (write lock).
+func (r *ConfigRepository) tenantVersions(t tenant.TenantID) map[string][]*domain.ConfigVersion {
+	m, ok := r.versions[t]
+	if !ok {
+		m = make(map[string][]*domain.ConfigVersion)
+		r.versions[t] = m
+	}
+	return m
+}
+
+func (r *ConfigRepository) Create(_ context.Context, t tenant.TenantID, entry *domain.ConfigEntry) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.entries[entry.Key]; exists {
+	te := r.tenantEntries(t)
+	if _, exists := te[entry.Key]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrConfigDuplicate, "config key already exists",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, entry.Key))))
 	}
 	clone := *entry
-	r.entries[entry.Key] = &clone
+	te[entry.Key] = &clone
 	return nil
 }
 
-func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.ConfigEntry, error) {
+//nolint:dupl // mirrors FlagRepository.GetByKey; typed differences (ConfigEntry vs FeatureFlag, distinct codes) preclude shared helper
+func (r *ConfigRepository) GetByKey(_ context.Context, t tenant.TenantID, key string) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	entry, ok := r.entries[key]
+	te, ok := r.entries[t]
+	if !ok {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
+	}
+	entry, ok := te[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
@@ -69,11 +114,18 @@ func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.Conf
 	return &clone, nil
 }
 
-func (r *ConfigRepository) Update(_ context.Context, key string, expectedVersion int, value string) (*domain.ConfigEntry, error) {
+//nolint:dupl // mirrors FlagRepository.Toggle; typed differences (ConfigEntry vs FeatureFlag, distinct fields) preclude shared helper
+func (r *ConfigRepository) Update(
+	_ context.Context, t tenant.TenantID, key string, expectedVersion int, value string,
+) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing, ok := r.entries[key]
+	te := r.tenantEntries(t)
+	existing, ok := te[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
@@ -90,12 +142,16 @@ func (r *ConfigRepository) Update(_ context.Context, key string, expectedVersion
 }
 
 func (r *ConfigRepository) UpdateForRollback(
-	_ context.Context, key string, expectedVersion int, value string, sensitive bool,
+	_ context.Context, t tenant.TenantID, key string, expectedVersion int, value string, sensitive bool,
 ) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing, ok := r.entries[key]
+	te := r.tenantEntries(t)
+	existing, ok := te[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
@@ -111,11 +167,15 @@ func (r *ConfigRepository) UpdateForRollback(
 	return &clone, nil
 }
 
-func (r *ConfigRepository) Delete(_ context.Context, key string, expectedVersion int) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) Delete(_ context.Context, t tenant.TenantID, key string, expectedVersion int) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing, ok := r.entries[key]
+	te := r.tenantEntries(t)
+	existing, ok := te[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
@@ -124,19 +184,23 @@ func (r *ConfigRepository) Delete(_ context.Context, key string, expectedVersion
 		return nil, cas.CheckVersionMatch(0, "config_entry", key)
 	}
 	clone := *existing
-	delete(r.entries, key)
+	delete(te, key)
 	return &clone, nil
 }
 
 // List returns config entries sorted and paginated according to params.
 // It applies keyset cursor filtering and returns up to FetchLimit() rows
 // for N+1 hasMore detection.
-func (r *ConfigRepository) List(_ context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
+func (r *ConfigRepository) List(_ context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	all := make([]*domain.ConfigEntry, 0, len(r.entries))
-	for _, e := range r.entries {
+	te := r.entries[t] // nil-safe: ranging over nil map is a no-op
+	all := make([]*domain.ConfigEntry, 0, len(te))
+	for _, e := range te {
 		clone := *e
 		all = append(all, &clone)
 	}
@@ -189,12 +253,16 @@ func configFieldValue(e *domain.ConfigEntry, field string) any {
 	}
 }
 
-func (r *ConfigRepository) PublishVersion(_ context.Context, version *domain.ConfigVersion) error {
+func (r *ConfigRepository) PublishVersion(_ context.Context, t tenant.TenantID, version *domain.ConfigVersion) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	tv := r.tenantVersions(t)
 	clone := *version
-	r.versions[version.ConfigID] = append(r.versions[version.ConfigID], &clone)
+	tv[version.ConfigID] = append(tv[version.ConfigID], &clone)
 	return nil
 }
 
@@ -204,12 +272,15 @@ func (r *ConfigRepository) RepoReady(_ context.Context) error {
 	return nil
 }
 
-func (r *ConfigRepository) GetVersion(_ context.Context, configID string, version int) (*domain.ConfigVersion, error) {
+func (r *ConfigRepository) GetVersion(_ context.Context, t tenant.TenantID, configID string, version int) (*domain.ConfigVersion, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	versions := r.versions[configID]
-	for _, v := range versions {
+	tv := r.versions[t] // nil-safe: ranging over nil map is a no-op
+	for _, v := range tv[configID] {
 		if v.Version == version {
 			clone := *v
 			return &clone, nil

@@ -14,7 +14,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// testFlagSvcTenant is the TenantID used for featureflag service tests.
+// featureflag.Service.GetByKey / List / Evaluate take an explicit tenant.TenantID
+// param (not derived from ctx); this constant provides a consistent test value.
+var testFlagSvcTenant = tenant.SystemTenantID
 
 func newTestService() (*Service, *mem.FlagRepository) {
 	repo := mem.NewFlagRepository(clock.Real())
@@ -41,7 +47,7 @@ func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 
 func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, pct int) {
 	t.Helper()
-	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
+	require.NoError(t, repo.Create(context.Background(), testFlagSvcTenant, &domain.FeatureFlag{
 		ID: "flag-" + key, Key: key, Type: flagType,
 		Enabled: true, RolloutPercentage: pct,
 	}))
@@ -65,7 +71,7 @@ func TestService_GetByKey(t *testing.T) {
 				seedFlag(t, repo, tt.key, domain.FlagBoolean, 0)
 			}
 
-			flag, err := svc.GetByKey(context.Background(), tt.key)
+			flag, err := svc.GetByKey(context.Background(), testFlagSvcTenant, tt.key)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -81,7 +87,7 @@ func TestService_List(t *testing.T) {
 	seedFlag(t, repo, "f1", domain.FlagBoolean, 0)
 	seedFlag(t, repo, "f2", domain.FlagPercentage, 50)
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 50})
+	result, err := svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Limit: 50})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -93,7 +99,7 @@ func TestService_List_FirstPage(t *testing.T) {
 		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, 0)
 	}
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 3})
+	result, err := svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -106,11 +112,11 @@ func TestService_List_WithCursor(t *testing.T) {
 		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, 0)
 	}
 
-	page1, err := svc.List(context.Background(), query.PageParams{Limit: 3})
+	page1, err := svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
-	page2, err := svc.List(context.Background(), query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 2)
 	assert.NotEqual(t, page1.Items[0].ID, page2.Items[0].ID)
@@ -119,7 +125,7 @@ func TestService_List_WithCursor(t *testing.T) {
 func TestService_List_InvalidCursor(t *testing.T) {
 	svc, _ := newTestService()
 
-	_, err := svc.List(context.Background(), query.PageParams{Cursor: "garbage"})
+	_, err := svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Cursor: "garbage"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -144,7 +150,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	token, err := codec.Encode(cur)
 	require.NoError(t, err)
 
-	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
+	_, err = svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -168,7 +174,7 @@ func TestService_List_ContextMismatch(t *testing.T) {
 	token, err := codec.Encode(cur)
 	require.NoError(t, err)
 
-	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
+	_, err = svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -183,7 +189,7 @@ func TestService_List_LastPage(t *testing.T) {
 	seedFlag(t, repo, "flag-a", domain.FlagBoolean, 0)
 	seedFlag(t, repo, "flag-b", domain.FlagBoolean, 0)
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
+	result, err := svc.List(context.Background(), testFlagSvcTenant, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -193,7 +199,7 @@ func TestService_List_LastPage(t *testing.T) {
 func TestService_List_Empty(t *testing.T) {
 	svc, _ := newTestService()
 
-	result, err := svc.List(context.Background(), query.PageParams{})
+	result, err := svc.List(context.Background(), testFlagSvcTenant, query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)
@@ -212,7 +218,7 @@ func TestService_Evaluate(t *testing.T) {
 			name:    "boolean enabled",
 			flagKey: "feat", subject: "user-1",
 			setup: func(repo *mem.FlagRepository) {
-				_ = repo.Create(context.Background(), &domain.FeatureFlag{
+				_ = repo.Create(context.Background(), testFlagSvcTenant, &domain.FeatureFlag{
 					ID: "f1", Key: "feat", Type: domain.FlagBoolean, Enabled: true,
 				})
 			},
@@ -237,7 +243,7 @@ func TestService_Evaluate(t *testing.T) {
 			svc, repo := newTestService()
 			tt.setup(repo)
 
-			result, err := svc.Evaluate(context.Background(), tt.flagKey, tt.subject)
+			result, err := svc.Evaluate(context.Background(), testFlagSvcTenant, tt.flagKey, tt.subject)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {

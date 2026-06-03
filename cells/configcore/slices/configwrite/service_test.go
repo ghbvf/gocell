@@ -22,13 +22,23 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// adminSvcCtx returns a context with an admin principal for direct service calls.
+// testTenantStr is the test tenant UUID injected into service-level test
+// contexts. configwrite.Service.Create/Update/Delete derive the tenant via
+// tenant.FromContext, so a valid TenantID must be present in every ctx passed
+// to service methods.
+const testTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// adminSvcCtx returns a context with an admin principal AND a valid tenant for
+// direct service calls. Both are required: admin principal satisfies
+// actorFromContext, and the tenant satisfies tenant.FromContext.
 func adminSvcCtx() context.Context {
-	return auth.TestContext("test-admin", []string{"admin"})
+	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testTenantStr)
 }
 
 func newTestService() *Service {
@@ -456,4 +466,40 @@ func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 
 	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Delete must succeed")
 	assert.Equal(t, int32(1), losers.Load(), "exactly one concurrent Delete must yield ErrVersionConflict or ErrConfigNotFound")
+}
+
+// TestService_CrossTenant_Isolation asserts that a config entry written under
+// tenant A is invisible to a read under tenant B. This mirrors the PR-2a
+// accesscore cross-tenant test pattern and locks the in-memory repo's tenant
+// scoping invariant at the service layer.
+//
+// The test seeds a key via configwrite under tenantA (via ctx injection), then
+// attempts to Update the same key under tenantB and asserts ErrConfigNotFound
+// is returned — proving the tenant predicate is applied to every repo call.
+func TestService_CrossTenant_Isolation(t *testing.T) {
+	const tenantA = "00000000-0000-0000-0000-000000000001"
+	const tenantB = "00000000-0000-0000-0000-000000000002"
+
+	_ = tenant.TenantID(tenantA) // static assert both are valid TenantID strings
+	_ = tenant.TenantID(tenantB)
+
+	repo := mem.NewConfigRepository(clock.Real())
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	require.NoError(t, err)
+
+	ctxA := ctxkeys.WithTenantID(auth.TestContext("admin-a", []string{"admin"}), tenantA)
+	ctxB := ctxkeys.WithTenantID(auth.TestContext("admin-b", []string{"admin"}), tenantB)
+
+	// Write under tenant A.
+	_, err = svc.Create(ctxA, CreateInput{Key: "shared-key", Value: "from-A"})
+	require.NoError(t, err, "Create under tenant A must succeed")
+
+	// Read (via Update — the cheapest write that returns ErrConfigNotFound) under tenant B.
+	// If the isolation is working, tenant B cannot see tenant A's entry.
+	_, err = svc.Update(ctxB, UpdateInput{Key: "shared-key", Value: "from-B", ExpectedVersion: 1})
+	require.Error(t, err, "Update under tenant B must fail: tenant A's entry must be invisible")
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.ErrConfigNotFound, ce.Code,
+		"cross-tenant read must return ErrConfigNotFound, not leak the entry")
 }

@@ -15,7 +15,9 @@ import (
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/flags/update/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -40,20 +42,22 @@ type fakeFlagRepoErr struct {
 	deleteErr error
 }
 
-func (f *fakeFlagRepoErr) Update(_ context.Context, _ string, _ int, _ bool, _ int, _ string) (*domain.FeatureFlag, error) {
+func (f *fakeFlagRepoErr) Update(
+	_ context.Context, _ tenant.TenantID, _ string, _ int, _ bool, _ int, _ string,
+) (*domain.FeatureFlag, error) {
 	return nil, f.updateErr
 }
 
-func (f *fakeFlagRepoErr) Toggle(_ context.Context, _ string, _ int, _ bool) (*domain.FeatureFlag, error) {
+func (f *fakeFlagRepoErr) Toggle(_ context.Context, _ tenant.TenantID, _ string, _ int, _ bool) (*domain.FeatureFlag, error) {
 	return nil, f.toggleErr
 }
 
-func (f *fakeFlagRepoErr) Delete(_ context.Context, _ string, _ int) (*domain.FeatureFlag, error) {
+func (f *fakeFlagRepoErr) Delete(_ context.Context, _ tenant.TenantID, _ string, _ int) (*domain.FeatureFlag, error) {
 	return nil, f.deleteErr
 }
 
 func adminCtx() context.Context {
-	return auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin})
+	return ctxkeys.WithTenantID(auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin}), testFlagTenantStr)
 }
 
 func newFlagAdapters(t *testing.T, updateErr, toggleErr, deleteErr error) (UpdateAdapter, ToggleAdapter, FlagDeleteAdapter) {

@@ -40,6 +40,15 @@ const (
 // Watermill window/2 heuristic: worst-case tombstone staleness = 1.5×TTL.
 const gcSweepDivisor = 2
 
+// cacheKey is the composite map key for the version-tracking cache.
+// Keying by (tenant, key) prevents cross-tenant version collisions: two tenants
+// with the same config key track independent version sequences. An empty tenant
+// field ("") is a legitimate distinct bucket for tenant-less system events.
+type cacheKey struct {
+	tenant string
+	key    string
+}
+
 // cacheEntry tracks the highest version seen for a config key plus a presence
 // flag indicating whether the key is currently active (present=true) or
 // tombstoned by a delete event (present=false).
@@ -63,8 +72,8 @@ type cacheEntry struct {
 	deletedAt time.Time // non-zero only for tombstones (present=false)
 }
 
-// Cache tracks the latest known version and presence for each config key
-// observed from events.
+// Cache tracks the latest known version and presence for each (tenant, config key)
+// pair observed from events.
 // It does NOT store values — subscribers must refetch via GET /api/v1/config/{key}.
 //
 // Tombstone TTL GC: sweepTombstones removes tombstone entries whose age since
@@ -72,19 +81,20 @@ type cacheEntry struct {
 // monotonic-version guard for live keys is fully preserved.
 type Cache struct {
 	mu             sync.RWMutex
-	entries        map[string]cacheEntry
+	entries        map[cacheKey]cacheEntry
 	clk            clock.Clock
 	tombstoneTTL   time.Duration
 	cacheCollector obmetrics.EventbusCacheCollector
 }
 
-// GetVersion returns the last known version for a key and whether the entry is
-// currently active (present=true).  present=false means the key was deleted
-// (tombstoned); the version returned is the tombstone version.
-func (c *Cache) GetVersion(key string) (version int, present bool) {
+// GetVersion returns the last known version for a (tenantID, key) pair and
+// whether the entry is currently active (present=true). present=false means
+// the key was deleted (tombstoned); the version returned is the tombstone
+// version. An empty tenantID looks up the tenant-less ("") bucket.
+func (c *Cache) GetVersion(tenantID, key string) (version int, present bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	e, ok := c.entries[key]
+	e, ok := c.entries[cacheKey{tenant: tenantID, key: key}]
 	if !ok {
 		return 0, false
 	}
@@ -119,6 +129,12 @@ func (c *Cache) sweepTombstones(ctx context.Context, now time.Time) {
 			c.cacheCollector.RecordTombstoneEvicted(ctx, cacheCellID, cacheSliceID)
 		}
 	}
+}
+
+// tenantFromEntry extracts the tenant string from the outbox entry's principal.
+// An empty TenantID (tenant-less system event) is a legitimate distinct bucket ("").
+func tenantFromEntry(entry outbox.Entry) string {
+	return string(entry.Principal().TenantID)
 }
 
 // Service consumes config change events and maintains a local version-tracking cache.
@@ -176,7 +192,7 @@ func NewService(clk clock.Clock, logger *slog.Logger, opts ...Option) (*Service,
 	clock.MustHaveClock(clk, "configsubscribe.NewService")
 	s := &Service{
 		cache: &Cache{
-			entries:        make(map[string]cacheEntry),
+			entries:        make(map[cacheKey]cacheEntry),
 			clk:            clk,
 			tombstoneTTL:   0, // will be normalized below
 			cacheCollector: obmetrics.NoopEventbusCacheCollector{},
@@ -341,8 +357,9 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err)))
 	}
 
+	ck := cacheKey{tenant: tenantFromEntry(entry), key: event.Key}
 	s.cache.mu.Lock()
-	known := s.cache.entries[event.Key]
+	known := s.cache.entries[ck]
 	if event.Version <= known.version {
 		s.cache.mu.Unlock()
 		s.logger.Debug("config-subscribe: stale or replayed entry-upserted ignored",
@@ -352,7 +369,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 		return outbox.Ack()
 	}
-	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: true}
+	s.cache.entries[ck] = cacheEntry{version: event.Version, present: true}
 	s.cache.mu.Unlock()
 	s.logger.Debug("config-subscribe: cache updated",
 		slog.String("key", event.Key),
@@ -385,8 +402,9 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err)))
 	}
 
+	ck := cacheKey{tenant: tenantFromEntry(entry), key: event.Key}
 	s.cache.mu.Lock()
-	known, exists := s.cache.entries[event.Key]
+	known, exists := s.cache.entries[ck]
 	// Stale-delete guard: drop if the delete predates known state, or if it is
 	// replaying the same tombstone that was already accepted.
 	// A same-version delete is still accepted when the known entry is present:
@@ -400,7 +418,7 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 		return outbox.Ack()
 	}
-	s.cache.entries[event.Key] = cacheEntry{
+	s.cache.entries[ck] = cacheEntry{
 		version:   event.Version,
 		present:   false,
 		deletedAt: s.cache.clk.Now(),

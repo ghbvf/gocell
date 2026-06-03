@@ -16,7 +16,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// Note: testTenantA is declared in config_repo_test.go (same package).
 
 // newFlagRepositoryFromDBTX is a test-only constructor that bypasses the
 // Session layer, allowing unit tests to inject a mockDB directly.
@@ -43,12 +46,13 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 			CreatedAt:         now,
 			UpdatedAt:         now,
 		}
-		err := repo.Create(context.Background(), flag)
+		err := repo.Create(context.Background(), testTenantA, flag)
 		require.NoError(t, err)
 		require.Len(t, db.execCalls, 1)
 		assert.Contains(t, db.execCalls[0].sql, "INSERT INTO feature_flags")
-		assert.Equal(t, "flg-1", db.execCalls[0].args[0])
-		assert.Equal(t, "dark-mode", db.execCalls[0].args[1])
+		// arg[0] is tenant_id; arg[1] is id; arg[2] is key
+		assert.Equal(t, "flg-1", db.execCalls[0].args[1])
+		assert.Equal(t, "dark-mode", db.execCalls[0].args[2])
 	})
 
 	t.Run("GetByKey", func(t *testing.T) {
@@ -59,7 +63,7 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		flag, err := repo.GetByKey(context.Background(), "dark-mode")
+		flag, err := repo.GetByKey(context.Background(), testTenantA, "dark-mode")
 		require.NoError(t, err)
 		assert.Equal(t, "flg-1", flag.ID)
 		assert.Equal(t, "dark-mode", flag.Key)
@@ -77,7 +81,7 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 		}
 		repo := &FlagRepository{db: db, clock: clock.Real()}
 
-		got, err := repo.Update(context.Background(), "dark-mode", 1, true, 50, "updated desc")
+		got, err := repo.Update(context.Background(), testTenantA, "dark-mode", 1, true, 50, "updated desc")
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.Contains(t, db.queryRowSQL, "UPDATE feature_flags")
@@ -97,7 +101,7 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 		}
 		repo := &FlagRepository{db: db, clock: clock.Real()}
 
-		got, err := repo.Delete(context.Background(), "dark-mode", 1)
+		got, err := repo.Delete(context.Background(), testTenantA, "dark-mode", 1)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.Contains(t, db.queryRowSQL, "DELETE FROM feature_flags")
@@ -120,7 +124,7 @@ func TestFlagRepo_Toggle_OnlyAffectsEnabledColumn(t *testing.T) {
 	}
 	repo := &FlagRepository{db: capDB, clock: clock.Real()}
 
-	flag, err := repo.Toggle(context.Background(), "dark-mode", 1, true)
+	flag, err := repo.Toggle(context.Background(), testTenantA, "dark-mode", 1, true)
 	require.NoError(t, err)
 	require.NotNil(t, flag)
 	// Verify the SQL only touches enabled, version, updated_at — not rollout_percentage or description.
@@ -179,7 +183,7 @@ func TestFlagRepo_List_Paginated(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	flags, err := repo.List(context.Background(), params)
+	flags, err := repo.List(context.Background(), testTenantA, params)
 	require.NoError(t, err)
 	require.Len(t, flags, 2)
 	assert.Equal(t, "a.flag", flags[0].Key)
@@ -221,7 +225,7 @@ func TestFlagRepo_Toggle_Concurrent_NoLost(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			enabled := idx%2 == 0
-			flag, err := repo.Toggle(context.Background(), "dark-mode", 1, enabled)
+			flag, err := repo.Toggle(context.Background(), testTenantA, "dark-mode", 1, enabled)
 			if err == nil {
 				mu.Lock()
 				results[idx] = flag
@@ -249,7 +253,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.GetByKey(context.Background(), "missing")
+		_, err := repo.GetByKey(context.Background(), testTenantA, "missing")
 		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 
@@ -259,7 +263,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.GetByKey(context.Background(), "missing")
+		_, err := repo.GetByKey(context.Background(), testTenantA, "missing")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -272,7 +276,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.Toggle(context.Background(), "missing", 1, true)
+		_, err := repo.Toggle(context.Background(), testTenantA, "missing", 1, true)
 		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 
@@ -282,7 +286,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.Update(context.Background(), "missing", 1, false, 0, "")
+		_, err := repo.Update(context.Background(), testTenantA, "missing", 1, false, 0, "")
 		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 
@@ -292,7 +296,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		_, err := repo.Delete(context.Background(), "missing", 1)
+		_, err := repo.Delete(context.Background(), testTenantA, "missing", 1)
 		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 }
@@ -307,7 +311,7 @@ func TestFlagRepo_Create_PublicMessageDoesNotLeakKey(t *testing.T) {
 	}
 	repo := newFlagRepositoryFromDBTX(db)
 
-	err := repo.Create(context.Background(), &domain.FeatureFlag{
+	err := repo.Create(context.Background(), testTenantA, &domain.FeatureFlag{
 		ID:  "f-1",
 		Key: "user_secret_flag_key",
 	})
@@ -331,7 +335,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Create", func(t *testing.T) {
 		repo := NewFlagRepository(session, clock.Real())
-		err := repo.Create(context.Background(), &domain.FeatureFlag{Key: "k"})
+		err := repo.Create(context.Background(), testTenantA, &domain.FeatureFlag{Key: "k"})
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -340,7 +344,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Update", func(t *testing.T) {
 		repo := NewFlagRepository(session, clock.Real())
-		_, err := repo.Update(context.Background(), "k", 1, false, 0, "")
+		_, err := repo.Update(context.Background(), testTenantA, "k", 1, false, 0, "")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -349,7 +353,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Delete", func(t *testing.T) {
 		repo := NewFlagRepository(session, clock.Real())
-		_, err := repo.Delete(context.Background(), "k", 1)
+		_, err := repo.Delete(context.Background(), testTenantA, "k", 1)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -358,11 +362,63 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Toggle", func(t *testing.T) {
 		repo := NewFlagRepository(session, clock.Real())
-		_, err := repo.Toggle(context.Background(), "k", 1, true)
+		_, err := repo.Toggle(context.Background(), testTenantA, "k", 1, true)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
 		assert.Equal(t, errcode.ErrAdapterPGNoTx, ec.Code)
+	})
+}
+
+// TestFlagRepository_EmptyTenant_ReturnsValidationError verifies that every
+// data method on FlagRepository rejects an empty/zero tenant.TenantID with
+// ErrValidationFailed before issuing any DB call.
+func TestFlagRepository_EmptyTenant_ReturnsValidationError(t *testing.T) {
+	zero := tenant.TenantID("") // intentionally invalid
+
+	assertValidation := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+			"empty tenant must return ErrValidationFailed before any DB interaction")
+	}
+
+	t.Run("Create", func(t *testing.T) {
+		repo := newFlagRepositoryFromDBTX(&mockDB{})
+		err := repo.Create(context.Background(), zero, &domain.FeatureFlag{Key: "k"})
+		assertValidation(t, err)
+	})
+
+	t.Run("GetByKey", func(t *testing.T) {
+		repo := newFlagRepositoryFromDBTX(&mockDB{})
+		_, err := repo.GetByKey(context.Background(), zero, "k")
+		assertValidation(t, err)
+	})
+
+	t.Run("Update", func(t *testing.T) {
+		repo := newFlagRepositoryFromDBTX(&mockDB{})
+		_, err := repo.Update(context.Background(), zero, "k", 1, false, 0, "")
+		assertValidation(t, err)
+	})
+
+	t.Run("Delete", func(t *testing.T) {
+		repo := newFlagRepositoryFromDBTX(&mockDB{})
+		_, err := repo.Delete(context.Background(), zero, "k", 1)
+		assertValidation(t, err)
+	})
+
+	t.Run("List", func(t *testing.T) {
+		repo := newFlagRepositoryFromDBTX(&mockDB{})
+		_, err := repo.List(context.Background(), zero, query.ListParams{Limit: 10})
+		assertValidation(t, err)
+	})
+
+	t.Run("Toggle", func(t *testing.T) {
+		repo := newFlagRepositoryFromDBTX(&mockDB{})
+		_, err := repo.Toggle(context.Background(), zero, "k", 1, true)
+		assertValidation(t, err)
 	})
 }
 
