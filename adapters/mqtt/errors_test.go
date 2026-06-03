@@ -380,3 +380,22 @@ func hasInternalDetailKey(ds []errcode.InternalDetail, key string) bool {
 	}
 	return false
 }
+
+// TestTopicErrorCodeWireStringsPreserved asserts that the four topic-namespace
+// error codes re-exported from adapters/mqtt/internal/topicns keep their wire
+// strings after the type-seal refactor (#1247). Ops/alerting rules depend on
+// these exact string values.
+func TestTopicErrorCodeWireStringsPreserved(t *testing.T) {
+	t.Parallel()
+	cases := map[errcode.Code]string{
+		ErrAdapterMQTTInvalidTopicNamespace:  "ERR_ADAPTER_MQTT_INVALID_TOPIC_NAMESPACE",
+		ErrAdapterMQTTTopicOutsideNamespace:  "ERR_ADAPTER_MQTT_TOPIC_OUTSIDE_NAMESPACE",
+		ErrAdapterMQTTInvalidPublishTopic:    "ERR_ADAPTER_MQTT_INVALID_PUBLISH_TOPIC",
+		ErrAdapterMQTTInvalidSubscribeFilter: "ERR_ADAPTER_MQTT_INVALID_SUBSCRIBE_FILTER",
+	}
+	for got, want := range cases {
+		if string(got) != want {
+			t.Errorf("error code wire string drifted: got %q, want %q", got, want)
+		}
+	}
+}
