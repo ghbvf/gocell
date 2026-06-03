@@ -32,16 +32,21 @@
 //  3. runtime/internal/contractbuild.NewEventDerivation — tracing/observability
 //     projection of a validated outbox.Subscription; returns (ContractSpec,
 //     error) with sub.Validate() + ContractSpec.Validate() embedded inside the
-//     funnel (content + provenance: Hard). Upstream Hard via the same
-//     runtime/internal/ placement; provenance is type-enforced (the typed
-//     Subscription parameter replaced the retired single-caller allowlist). See
-//     contractbuild/doc.go grading.
+//     funnel (shape-Hard, NOT provenance-Hard). Upstream caller-set Hard via the
+//     runtime/internal/ placement; the typed Subscription parameter forces shape
+//     but does NOT type-enforce value provenance (outbox.Subscription has exported
+//     fields — a runtime/ caller can fabricate one), so provenance is a runtime
+//     data-flow property (eventrouter), Hard-ifiable only by a sealed Subscription
+//     constructor (gh #1532). See contractbuild/doc.go grading.
 //  4. runtime/internal/contractbuild.NewWebhookDispatch — derivation of the
 //     event-kind subscription spec from a validated webhook.DispatchSpec; returns
 //     (ContractSpec, error) with spec.Validate() + ContractSpec.Validate()
-//     embedded inside the funnel. Upstream Hard via runtime/internal/ placement
-//     (compiler refuses imports from outside runtime/); provenance type-enforced
-//     (typed webhook.DispatchSpec parameter, not loose primitives). See
+//     embedded inside the funnel (shape-Hard, NOT provenance-Hard). Upstream
+//     caller-set Hard via runtime/internal/ placement (compiler refuses imports
+//     from outside runtime/); the typed webhook.DispatchSpec parameter forces
+//     shape but does NOT type-enforce value provenance (exported fields), so
+//     provenance is a runtime data-flow property (cellgen→RegistrySnapshot),
+//     Hard-ifiable only by a sealed DispatchSpec constructor (gh #1532). See
 //     contractbuild/doc.go grading.
 //
 // Three archtest gates enforce this invariant:
