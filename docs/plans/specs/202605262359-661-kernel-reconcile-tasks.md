@@ -292,12 +292,12 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 
 - [ ] **T30** [PR-A7] `kernel/reconcile/builder.go`：
   - `func New(reconciler Reconciler) *Builder`
-  - `WithTrigger / WithLeader / WithConcurrency / WithBackoff / WithMetrics / WithStartTimeout / WithStopTimeout`
+  - `WithTrigger / WithLeader / WithFencedRepo / WithConcurrency / WithBackoff / WithMetrics / WithInterval / WithName / WithReconcilerID / WithRenewInterval`
   - `Build() (*Loop, error)`（私有化 Loop 构造）
   - 估算：250 LoC
 - [ ] **T31** [PR-A7] `kernel/reconcile/reconciletest/conformance.go`：
-  - `type ReconcilerFactory func(*testing.T) (Reconciler, Trigger, LeaderElector, cleanup)`
-  - `RunConformance(t, factory)` 跑遍：basic Reconcile / RequeueAfter / PermanentError / panic recovery / leader 流转 / MaxConcurrentReconciles
+  - `type HarnessFactory func(t *testing.T) Wiring`（`Wiring{NewTrigger, Leader, Fenced, Cleanup}`）+ `type Features struct { Leader, Fencing bool }`
+  - `RunConformance(t, newHarness, features)` 跑遍：basic Reconcile / RequeueAfter / PermanentError / panic recovery / MaxConcurrentReconciles（cross-entity + same-entity）/ leader 流转 / fencing
   - 估算：400 LoC
 - [ ] **T32** [PR-A7] `kernel/reconcile/reconciletest/fake.go`：
   - `FakeLeaderElector` / `FakeTrigger` / `FakeReconciler`
