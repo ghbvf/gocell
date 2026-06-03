@@ -1481,3 +1481,38 @@ endpoints:
 		})
 	}
 }
+
+// TestDefaultTransportsForKind asserts the exact per-kind default transport
+// mapping introduced by PR #1389 (ADR D3: omitted `transports:` defaults per
+// kind so all existing contracts derive a byte-identical ContractSpec.Transport
+// primary). A future edit that changes any default — e.g. projection → amqp —
+// will fail here even if FMT-39 and golden regen remain green, ensuring the
+// backward-compatibility guarantee is explicit and machine-checked.
+func TestDefaultTransportsForKind(t *testing.T) {
+	tests := []struct {
+		kind string
+		want []string
+	}{
+		// message-passing kinds → amqp (pre-#1389 hardcoded wire protocol)
+		{"event", []string{"amqp"}},
+		{"command", []string{"amqp"}},
+		// synchronous HTTP kinds → http
+		{"http", []string{"http"}},
+		{"webhook", []string{"http"}},
+		// binary RPC → grpc
+		{"grpc", []string{"grpc"}},
+		// read-side / orchestrated kinds have no wire transport of their own
+		{"projection", []string{"internal"}},
+		{"saga", []string{"internal"}},
+		// unknown/garbage kind → nil (governance FMT-39 flags the empty set)
+		{"", nil},
+		{"unknown", nil},
+		{"garbage-kind-xyz", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			got := DefaultTransportsForKind(tt.kind)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
