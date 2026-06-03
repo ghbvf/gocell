@@ -16,6 +16,7 @@ import (
 	"github.com/pressly/goose/v3/lock"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -150,13 +151,27 @@ type Migrator struct {
 // Migration files must follow the goose annotated format with -- +goose Up
 // and -- +goose Down sections.
 //
-// The tableName parameter controls the tracking table name (default:
-// "schema_migrations"). It must be a valid SQL identifier
-// ([a-zA-Z_][a-zA-Z0-9_]*) to prevent SQL injection.
-func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error) {
-	if tableName == "" {
-		tableName = "schema_migrations"
+// ns identifies the migration lineage; the goose tracking table is derived as
+// schema_migrations_<namespace> (see trackingTableFor). Passing a typed
+// migration.Namespace — not a free table-name string — makes "track migrations
+// in the bare global schema_migrations table" (the #1089 / R3 collision
+// footgun) unexpressible by construction. ns must be valid (fail-fast).
+func NewMigrator(p *Pool, migrations fs.FS, ns migration.Namespace) (*Migrator, error) {
+	if err := ns.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, ErrAdapterPGMigrate,
+			"postgres: invalid migration namespace", err)
 	}
+	return newMigratorForTable(p, migrations, trackingTableFor(ns))
+}
+
+// newMigratorForTable builds a Migrator against an explicit goose tracking table.
+// It is the unexported construction core; the only production caller is
+// NewMigrator, which derives the table from a migration.Namespace via
+// trackingTableFor (so the exported surface never accepts a free table string —
+// the #1089 / R3 seal). In-package tests call it directly to provision isolated
+// per-test tracking tables. The non-test caller allowlist (= NewMigrator only)
+// is held by archtest MIGRATION-TRACKING-TABLE-DERIVED-01.
+func newMigratorForTable(p *Pool, migrations fs.FS, tableName string) (*Migrator, error) {
 	if err := validateIdentifier(tableName); err != nil {
 		return nil, err
 	}

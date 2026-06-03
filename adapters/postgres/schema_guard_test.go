@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
 )
 
 // errDirFile implements fs.File and fs.ReadDirFile, returning error from ReadDir.
@@ -155,17 +156,19 @@ func TestExpectedVersion_SyntheticFS(t *testing.T) {
 // TestVerifyExpectedVersion — unit tests for the validation guard
 // ---------------------------------------------------------------------------
 
-// TestVerifyExpectedVersion_InvalidTableName verifies that an invalid SQL
-// identifier in the tableName argument is rejected before any DB interaction.
-func TestVerifyExpectedVersion_InvalidTableName(t *testing.T) {
+// TestVerifyExpectedVersion_InvalidNamespace verifies that an invalid
+// migration.Namespace is rejected before any DB interaction. The exported API
+// takes a typed Namespace (not a free table string), so the table can never be
+// invalid for a valid namespace — the only fail path is an invalid namespace.
+func TestVerifyExpectedVersion_InvalidNamespace(t *testing.T) {
 	tests := []struct {
-		name      string
-		tableName string
+		name string
+		ns   migration.Namespace
 	}{
-		{name: "semicolon injection", tableName: "schema_migrations; DROP TABLE users"},
-		{name: "dash in name", tableName: "schema-migrations"},
-		{name: "space in name", tableName: "schema migrations"},
-		{name: "leading digit", tableName: "1_schema_migrations"},
+		{name: "empty", ns: migration.Namespace("")},
+		{name: "dash conversion-literal escape", ns: migration.Namespace("schema-migrations")},
+		{name: "space", ns: migration.Namespace("schema migrations")},
+		{name: "leading digit", ns: migration.Namespace("1pay")},
 	}
 
 	fsys := fstest.MapFS{
@@ -174,14 +177,29 @@ func TestVerifyExpectedVersion_InvalidTableName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// VerifyExpectedVersion validates tableName before opening any DB connection.
-			err := VerifyExpectedVersion(context.Background(), nil, fsys, tc.tableName)
-			require.Error(t, err, "invalid tableName should return error")
+			// ns.Validate runs before opening any DB connection (pool=nil proves it).
+			err := VerifyExpectedVersion(context.Background(), nil, fsys, tc.ns)
+			require.Error(t, err, "invalid namespace should return error")
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec, "error should be an errcode.Error")
-			assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
-				"error code should be ErrValidationFailed")
+			assert.Equal(t, ErrAdapterPGSchemaMismatch, ec.Code)
 		})
+	}
+}
+
+// TestVerifyExpectedVersionForTable_InvalidTableName verifies the unexported
+// in-package escape hatch still rejects an invalid table identifier (production
+// reaches it only via VerifyExpectedVersion's trackingTableFor(ns)).
+func TestVerifyExpectedVersionForTable_InvalidTableName(t *testing.T) {
+	fsys := fstest.MapFS{
+		"001_create.sql": &fstest.MapFile{Data: []byte("-- +goose Up")},
+	}
+	for _, tbl := range []string{"schema_migrations; DROP TABLE users", "schema-migrations", "1_schema_migrations"} {
+		err := verifyExpectedVersionForTable(context.Background(), nil, fsys, tbl)
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 	}
 }
 
@@ -247,9 +265,9 @@ func TestVerifyExpectedVersion_ExpectedVersionError(t *testing.T) {
 	sentinel := errors.New("disk I/O error")
 	fsys := readDirErrFS{err: sentinel}
 
-	// Valid table name → passes validateIdentifier, then fails at ExpectedVersion.
-	// pool=nil is intentional: we must NOT reach stdlib.OpenDBFromPool.
-	err := VerifyExpectedVersion(context.Background(), nil, fsys)
+	// Valid namespace → passes ns.Validate + table validateIdentifier, then fails
+	// at ExpectedVersion. pool=nil is intentional: we must NOT reach stdlib.OpenDBFromPool.
+	err := VerifyExpectedVersion(context.Background(), nil, fsys, migration.PlatformNamespace)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "schema_guard: compute expected version",
 		"error must include context prefix")

@@ -39,7 +39,7 @@ var sharedPG = pgclone.New("gocell_adapters_postgres_test_template",
 		if err != nil {
 			return fmt.Errorf("load migrations fs: %w", err)
 		}
-		migrator, err := NewMigrator(pool, fsys, "schema_migrations")
+		migrator, err := newMigratorForTable(pool, fsys, "schema_migrations")
 		if err != nil {
 			return fmt.Errorf("new migrator: %w", err)
 		}

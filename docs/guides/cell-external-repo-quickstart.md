@@ -144,6 +144,44 @@ modules:
 
 `gocell validate --root=.` 会聚合两个 module 的 cell/slice/contract。预期退出码 0，输出末尾包含 `No issues found.` 或仅 advisory warnings。
 
+### 6. Migrations（per-namespace，M8 #1089）
+
+外部 Cell module 自带数据库 migration 时，**不**共享平台的全局版本空间——每个 namespace 独立追踪，互不撞号。
+
+**写法约定**：
+
+- migration 文件用 goose-native `NNN_desc.sql` 命名（自己的 `001..N` 序列），**不要**在文件名里加 namespace 前缀。`platform_001_x.sql` 这类前缀会让 goose 的版本解析器（`NumericComponent` = `ParseInt(strings.Cut(name,"_")[0])`）失败；namespace 活在**追踪表名**里，不在文件名里。由 archtest `MIGRATION-FILENAME-GOOSE-PARSEABLE-01` 守。
+- 用 `embed.FS` 嵌入自己的 `migrations/*.sql`。
+- 经 `composition.WithMigrations(ns, fs)` 注册，`ns` 是 `pkg/migration.Namespace`（`migration.ParseNamespace("yourcell")`，小写标识符，长度 ≤ 45）。
+- 该 namespace 的 migration 追踪在独立的 `schema_migrations_<namespace>` 表；平台自身是保留 namespace `"platform"`（追踪表 `schema_migrations_platform`），外部 module **不可**注册 `"platform"`。
+
+```go
+//go:embed migrations/*.sql
+var paymentMigrations embed.FS
+
+paymentNS, err := migration.ParseNamespace("payment")
+if err != nil { return err }
+paymentFS, err := fs.Sub(paymentMigrations, "migrations")
+if err != nil { return err }
+
+builder := composition.New(cellIDs...).
+    With(platformModules..., paymentcell.Module()).
+    WithMigrations(paymentNS, paymentFS)
+```
+
+**执行桥**：`composition.Build()` 本身**不**跑 migration（cell 启动前 schema 必须已就位，且 `runtime/` 不依赖 `adapters/`）。在 composition root（可同时 import 两层）里，于 `Build` **之前**把注册的 migration set drain 进 `adapters/postgres.MigrationSet` 并应用——`NewMigrationSetWithPlatform` 已把平台 namespace 排在最前（platform-first 顺序保证：外部 cell 的 migration 可以 FK 平台表）：
+
+```go
+set, err := adapterpg.NewMigrationSetWithPlatform() // seeds "platform" first
+if err != nil { return err }
+for _, r := range builder.Migrations() {
+    if err := set.Add(r.Namespace, r.FS); err != nil { return err }
+}
+if err := set.ApplyAll(ctx, pool); err != nil { return err } // or set.VerifyAll(ctx, pool) in prod
+
+app, err := builder.Build(ctx, shared, runtimeOpts)
+```
+
 ## 已知限制（M1 范围）
 
 | 限制 | 影响 | 解锁条件 |

@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/audit"
@@ -562,7 +563,7 @@ func newSSOBFFPool(ctx context.Context, databaseURL string) (*adapterpg.Pool, er
 		_ = pool.Close(ctx)
 		return nil, fmt.Errorf("ssobff: get migrations FS: %w", err)
 	}
-	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, migration.PlatformNamespace)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, fmt.Errorf("ssobff: create migrator: %w", err)

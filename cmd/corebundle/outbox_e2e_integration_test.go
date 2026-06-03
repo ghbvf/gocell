@@ -56,6 +56,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -148,7 +149,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	migrationPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
 	require.NoError(t, err, "create migration PG pool")
-	migrator, err := adapterpg.NewMigrator(migrationPool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(migrationPool, testAdapterMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
 	_ = migrationPool.Close(ctx)
@@ -471,7 +472,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	migrationPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
 	require.NoError(t, err, "create migration PG pool")
-	migrator, err := adapterpg.NewMigrator(migrationPool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(migrationPool, testAdapterMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
 	_ = migrationPool.Close(ctx)
