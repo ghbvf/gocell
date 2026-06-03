@@ -41,9 +41,11 @@
 //     verify step, which RETURNS a typed SignatureFailureReason — the type system
 //     already constrains the value, and the cross-package callsite would require a
 //     separate scan of runtime/webhook. The residual hole (a SignatureFailureReason("x")
-//     conversion at a RecordSignatureFailure callsite) is a bounded blind spot: the
-//     value-set freeze (A1) still catches any new declared const, and there is one
-//     production caller (receiver.go ServeHTTP) passing a verify-derived typed value.
+//     conversion at a RecordSignatureFailure callsite) is a bounded blind spot, and is
+//     closed by a reverse self-check: TestWebhookMetricLabelValuesFrozen01_NoReasonConversion
+//     asserts zero SignatureFailureReason(...) conversions exist in production
+//     kernel/webhook + runtime/webhook (the value-set freeze A1 catches new declared
+//     consts; the conversion form is forbidden outright).
 //
 //   - The test runs only on the kernel/webhook package Pass (filtered by path).
 //
@@ -247,6 +249,81 @@ func TestWebhookMetricLabelValuesFrozen01_NegativeControl(t *testing.T) {
 		t.Fatalf("WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01 negative control: the frozen want-set compared "+
 			"against itself produced a non-empty diff — the comparison has a bug: %s", diff)
 	}
+}
+
+// scanSignatureFailureReasonConversions flags any production conversion
+// expression `SignatureFailureReason(x)` (kernel/webhook) — the documented
+// blind spot of the recordDelivery-only callsite guard. The receive-side reason
+// flows from runtime/webhook's verify() as a typed value and is only ever a
+// declared ReasonX const; a conversion would be the bypass that introduces a
+// label value outside the frozen set without touching the const declarations.
+// The reverse self-check asserts production code contains zero such conversions.
+func scanSignatureFailureReasonConversions(p *Pass) []Diagnostic {
+	info := p.TypesInfo
+	if info == nil {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		rel := p.Rel(file)
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			if len(call.Args) != 1 {
+				return
+			}
+			var obj types.Object
+			switch fn := call.Fun.(type) {
+			case *ast.Ident:
+				obj = info.ObjectOf(fn)
+			case *ast.SelectorExpr:
+				obj = info.ObjectOf(fn.Sel)
+			default:
+				return
+			}
+			tn, ok := obj.(*types.TypeName)
+			if !ok || tn.Name() != "SignatureFailureReason" || tn.Pkg() == nil {
+				return
+			}
+			if tn.Pkg().Path() != PlatformModulePath+"/kernel/webhook" {
+				return
+			}
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: p.Fset.Position(call.Pos()).Line,
+				Message: "SignatureFailureReason(...) conversion in production — pass a declared " +
+					"ReasonX const (the value-set freeze caps that set), never a conversion that could " +
+					"introduce an off-set label value (WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01 blind-spot self-check)",
+			})
+		})
+	}
+	return diags
+}
+
+// TestWebhookMetricLabelValuesFrozen01_NoReasonConversion is the blind-spot
+// reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): the recordDelivery
+// callsite guard does not cover RecordSignatureFailure (cross-package, exported),
+// so a `SignatureFailureReason("x")` conversion would bypass it. This test proves
+// that form does not appear in production kernel/webhook or runtime/webhook.
+func TestWebhookMetricLabelValuesFrozen01_NoReasonConversion(t *testing.T) {
+	t.Parallel()
+	const (
+		kernelWebhookPkg  = PlatformModulePath + "/kernel/webhook"
+		runtimeWebhookPkg = PlatformModulePath + "/runtime/webhook"
+	)
+	var allDiags []Diagnostic
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		if p.Pkg.Path() != kernelWebhookPkg && p.Pkg.Path() != runtimeWebhookPkg {
+			return nil
+		}
+		allDiags = append(allDiags, scanSignatureFailureReasonConversions(p)...)
+		return nil
+	})
+	Report(t, "WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01", allDiags)
 }
 
 // TestWebhookMetricLabelValuesFrozen01_CallsiteGuard_Fixtures proves the callsite
