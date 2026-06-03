@@ -2,9 +2,9 @@
 // (L3 CQRS harness reference): reg.RegisterProjection drives HandleOrderCreated
 // (apply) and ResetOrderStatus (onReset) via the framework projection.Coordinator.
 // This slice serves the summary query endpoint on the PrimaryListener (/api/v1).
-// Rebuild is framework-owned (Coordinator.Rebuild), triggerable via the internal
-// control-plane endpoint POST /internal/v1/{cell}/projection/{name}/rebuild; the
-// separate orderprojectionrebuild slice has been removed.
+// Rebuild is framework-owned (Coordinator.Rebuild), triggerable via the operator
+// control-plane endpoint POST /admin/v1/projection/{cell}/{name}/rebuild on the
+// AdminListener (#1505); the separate orderprojectionrebuild slice has been removed.
 package orderprojection
 
 import (

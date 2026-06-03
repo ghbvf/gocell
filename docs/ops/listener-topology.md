@@ -10,12 +10,21 @@ route leaks between ports, no string-based auth dispatch.
                         ┌───────────────────────────────────────────┐
 Internet / Edge         │              primary  :8080               │
      ──────────────────▶│  /api/v1/*   (JWT AuthMiddleware)         │
-                        │  404 on /internal/v1/* (hard-blocked)     │
+                        │  404 on /internal/v1/* and /admin/v1/*    │
+                        │       (hard-blocked, port isolation)      │
                         └───────────────────────────────────────────┘
 
                         ┌───────────────────────────────────────────┐
 Internal Network        │             internal  127.0.0.1:9090      │
  (VPC / pod-local) ────▶│  /internal/v1/*   (ServiceToken / mTLS)   │
+                        │  cell→cell; caller-cell allowlist         │
+                        │  404 on all other paths                   │
+                        └───────────────────────────────────────────┘
+
+                        ┌───────────────────────────────────────────┐
+Operator / Pipeline     │       admin  127.0.0.1:9093 (optional)    │
+ (loopback) ───────────▶│  /admin/v1/*   (AuthOperator basic-auth)  │
+                        │  operator→system; no caller-cell allowlist│
                         │  404 on all other paths                   │
                         └───────────────────────────────────────────┘
 
@@ -261,9 +270,13 @@ when an admin endpoint is wired.
 - **Auth**: an `auth.AuthOperator` operator-credential gate — HTTP Basic Auth over
   env credentials `GOCELL_OPERATOR_ADMIN_USERNAME` / `GOCELL_OPERATOR_ADMIN_PASSWORD`,
   with a per-IP rate limiter and constant-time comparison. There is **no
-  caller-cell allowlist** (operators have no caller cell). Loopback isolation
-  **plus** operator credentials are a defense-in-depth pair. The credentials are
-  separate from the per-cell `/api/v{N}/{cell}/setup/admin` bootstrap credentials
+  caller-cell allowlist** (operators have no caller cell). The **enforced** gate is
+  the operator credentials; a loopback bind is a recommended deployment posture
+  layered on top (defense in depth), **not framework-enforced** — a non-loopback
+  admin bind is a documented misconfiguration window, symmetric to the internal
+  listener's and tracked under the same backlog **#626**
+  (`BOOTSTRAP-INTERNAL-LOCAL-ONLY-FAIL-FAST-01`). The credentials are separate from
+  the per-cell `/api/v{N}/{cell}/setup/admin` bootstrap credentials
   (`GOCELL_BOOTSTRAP_ADMIN_*`).
 - **Affinity (enforced at startup, both directions)**: an `/admin/v1/*` path must
   be mounted on `AdminListener`, and `AdminListener` must carry only `/admin/v1/*`

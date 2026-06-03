@@ -237,3 +237,20 @@ func TestInternalPrefixIsolationResponder(t *testing.T) {
 			"primary handler must 404 on %q (PR-A14b isolation, RES-5 middleware-based)", p)
 	}
 }
+
+// TestAdminPrefixIsolationResponder verifies the admin counterpart (#1505):
+// /admin/v1/* probes to the primary listener 404 before auth, so the public port
+// never reveals operator endpoints (symmetric with the internal isolation).
+func TestAdminPrefixIsolationResponder(t *testing.T) {
+	rtr, err := NewForListener(clock.Real(), kcell.PrimaryListener,
+		AdminPrefixIsolationResponder())
+	require.NoError(t, err)
+
+	for _, p := range []string{"/admin/v1", "/admin/v1/", "/admin/v1/projection/ordercell/orders/rebuild"} {
+		req := httptest.NewRequest(http.MethodPost, p, nil)
+		rec := httptest.NewRecorder()
+		rtr.Handler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code,
+			"primary handler must 404 on %q (admin port-level isolation, #1505)", p)
+	}
+}

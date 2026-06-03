@@ -60,8 +60,11 @@ Add `AdminListener = ListenerRef{"admin"}` to the closed `ListenerRef` set in
 `kernel/cell/listener.go` (the file's godoc already named this as the reserved
 extension). It is **optional** (declared only when an admin endpoint is wired —
 like Internal/Webhook), bound to loopback by convention (`127.0.0.1:9093`
-default). Loopback network isolation **plus** operator credentials form a
-defense-in-depth pair.
+default). The **enforced** gate is the operator credentials (`AuthOperator`);
+the loopback bind is a **recommended deployment posture** layered on top, not a
+framework-enforced invariant — a non-loopback admin bind is a documented
+misconfiguration window, symmetric to the internal listener's (see §Residual).
+The composition root chooses the bind address.
 
 ### D2 — `auth.AuthOperator` (operator-credential ListenerAuth, kernel-projection idiom)
 
@@ -148,7 +151,7 @@ cell ever declares an `/admin/v1/*` contract, that is a separate concern.
 
 | # | Threat | Mechanism | Rating |
 |---|---|---|---|
-| 1 | **Unauthenticated operator access** to the admin plane | `AuthOperator` HTTP Basic Auth (env credentials) + loopback bind (defense in depth); `AdminListener`-requires-`AuthOperator` phase0 guard rejects an admin listener with no operator gate | Hard (sealed plan) + Medium (phase0) |
+| 1 | **Unauthenticated operator access** to the admin plane | `AuthOperator` HTTP Basic Auth (env credentials) is the **enforced** gate; `AdminListener`-requires-`AuthOperator` phase0 guard rejects an admin listener with no operator gate. A loopback bind is a recommended (not framework-enforced) defense-in-depth layer — see Residual | Hard (sealed plan) + Medium (phase0) |
 | 2 | **Operator credential brute-force** | per-IP token-bucket rate limiter (required by `NewAuthOperator`; nil limiter rejected at construction) + constant-time compare (`subtle.ConstantTimeCompare`) + uniform 401 (no username/password oracle) | Medium |
 | 3 | **Admin endpoint leaks onto the public listener** | bidirectional `verifyListenerRouteAffinity`: an admin path on a non-admin listener fails fast; the primary listener already 404s non-primary control-plane prefixes (port-level isolation) | Medium |
 | 4 | **Operator credentials accepted on the wrong (public/internal) listener** | `AuthOperator`-only-on-`AdminListener` phase0 guard | Medium |
@@ -158,6 +161,19 @@ cell ever declares an `/admin/v1/*` contract, that is a separate concern.
 **Residual / accepted.** Operator authority is coarse (one shared credential pair
 gates the whole admin plane). Per-operator identity/RBAC is out of scope (§1) and
 a future concern; the loopback bind bounds the reachable surface in the interim.
+
+**Loopback bind is not framework-enforced (deferred, symmetric to the internal
+listener).** Like the internal listener (`docs/ops/listener-topology.md`
+§"Deployment Recommendations" → backlog `BOOTSTRAP-INTERNAL-LOCAL-ONLY-FAIL-FAST-01`),
+the framework does not currently reject / warn on a non-loopback admin bind: the
+phase7 non-loopback warning only fires for an unauthenticated (`AuthNone`/empty)
+chain, and `AuthOperator` makes the admin chain "auth-flavored". An operator who
+binds the admin port off-loopback silently drops the loopback layer (operator
+credentials still gate it). The symmetric admin non-loopback fail-fast/warn is
+deferred to the existing backlog **gh #626**
+(`BOOTSTRAP-INTERNAL-LOCAL-ONLY-FAIL-FAST-01`), whose fix — a non-loopback
+control-plane bind guard — covers both the internal and admin listeners (same
+posture and upgrade path).
 
 ## 5. Consequences
 

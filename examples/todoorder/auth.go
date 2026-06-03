@@ -81,6 +81,9 @@ func newOperatorAuthFromEnv() (kauth.AuthOperator, bool, error) {
 		return kauth.AuthOperator{}, false, nil
 	}
 	limiter := ratelimit.New(ratelimit.Config{Rate: 1, Burst: 5}, clock.Real())
+	// onAuthFail is nil in this demo. Production consumers should pass a non-nil
+	// observer to route operator auth failures (401/429) to an audit log for
+	// brute-force visibility (see runtime/auth.BootstrapAuthFailObserver).
 	plan, err := kauth.NewAuthOperator([]byte(username), []byte(password), limiter, nil)
 	if err != nil {
 		return kauth.AuthOperator{}, false, fmt.Errorf("build operator admin auth: %w", err)

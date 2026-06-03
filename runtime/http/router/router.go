@@ -541,6 +541,10 @@ func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler
 // to avoid changing call-site references throughout this file.
 const internalPathPrefix = cellvocab.InternalPathPrefix
 
+// adminPathPrefix aliases cellvocab.AdminPathPrefix for the admin-prefix
+// isolation responder (#1505), mirroring internalPathPrefix.
+const adminPathPrefix = cellvocab.AdminPathPrefix
+
 // New creates a Router with default middleware and optional configuration.
 // It returns an error when configuration is invalid.
 //
@@ -1400,6 +1404,23 @@ func InternalPrefixIsolationResponder() Option {
 	predicate := func(r *http.Request) bool {
 		p := r.URL.Path
 		return strings.HasPrefix(p, internalPathPrefix) || p == bare
+	}
+	return WithEarlyResponder(predicate, not404Handler)
+}
+
+// AdminPrefixIsolationResponder returns a router.Option that 404s any request
+// whose path starts with /admin/v1 (or equals the bare path) BEFORE any auth or
+// policy middleware runs. Bootstrap installs this on the primary listener (the
+// admin symmetric counterpart of InternalPrefixIsolationResponder, #1505) so the
+// primary listener never reveals that /admin/v1/* operator endpoints exist — an
+// undeclared admin-path probe to the public port 404s like an unknown path,
+// rather than 401-ing through the JWT chain. The real admin endpoints live on the
+// loopback AdminListener; this responder is the public-port isolation contract.
+func AdminPrefixIsolationResponder() Option {
+	bare := strings.TrimSuffix(adminPathPrefix, "/")
+	predicate := func(r *http.Request) bool {
+		p := r.URL.Path
+		return strings.HasPrefix(p, adminPathPrefix) || p == bare
 	}
 	return WithEarlyResponder(predicate, not404Handler)
 }

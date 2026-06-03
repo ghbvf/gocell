@@ -343,12 +343,16 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		return nil, err
 	}
 
-	// Primary listener: install the /internal/v1/* 404 isolation as an
-	// early-responder middleware so the contract runs BEFORE auth and does
-	// NOT require a JWT public-matcher exemption nor a policy-coverage
-	// whitelist. PR-258 RES-5 narrowing.
+	// Primary listener: install the /internal/v1/* and /admin/v1/* 404 isolation
+	// as early-responder middleware so the contract runs BEFORE auth and does NOT
+	// require a JWT public-matcher exemption nor a policy-coverage whitelist.
+	// PR-258 RES-5 narrowing; admin counterpart added in #1505 so an undeclared
+	// /admin/v1/* probe to the public port 404s (symmetric with /internal/v1/*)
+	// instead of 401-ing through the JWT chain.
 	if ref == cell.PrimaryListener {
-		opts = append(opts, router.InternalPrefixIsolationResponder())
+		opts = append(opts,
+			router.InternalPrefixIsolationResponder(),
+			router.AdminPrefixIsolationResponder())
 	}
 
 	// Apply the listener's AuthPlan chain: extract non-JWT middleware and
