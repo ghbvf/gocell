@@ -24,17 +24,63 @@ import (
 
 // ErrFingerprintMismatch is returned by Store.Claim when the same
 // Idempotency-Key is presented again with a different request body fingerprint.
-// The middleware converts this sentinel into a 409 (KindConflict) response with
-// code ErrIdempotencyKeyReused.
+// The middleware converts this sentinel into a 422 (KindUnprocessable) response
+// with code ErrIdempotencyKeyReused, optionally enriched with the names of the
+// top-level request fields that differ (per-field diff).
 //
-// Implementations MUST return this exact error (or wrap it with %w) so callers
-// can use errors.Is for detection.
+// Implementations MUST return a *FingerprintMismatchError (which wraps this
+// sentinel) so callers can use errors.Is for detection AND errors.As to recover
+// the stored fingerprint blob for diffing.
 var ErrFingerprintMismatch = errcode.New(
-	errcode.KindConflict,
+	errcode.KindUnprocessable,
 	errcode.ErrIdempotencyKeyReused,
 	// msgFingerprintMismatch must be a const literal per MESSAGE-CONST-LITERAL-01.
 	"idempotency key reused with a different request body",
 )
+
+// FingerprintMismatchError wraps ErrFingerprintMismatch and carries the stored
+// canonical fingerprint blob recorded for the original request, so the
+// middleware can compute a per-field diff naming the top-level fields that
+// changed. Stored holds ONLY per-field hashes (hex sha256), never raw request
+// values — echoing a stored request value is structurally impossible because raw
+// values are never persisted.
+type FingerprintMismatchError struct {
+	// Stored is the canonical fingerprint blob (see computeFingerprint) recorded
+	// for the original Claim. Opaque to the Store; parsed only by the middleware.
+	Stored string
+}
+
+func (e *FingerprintMismatchError) Error() string { return ErrFingerprintMismatch.Error() }
+
+// Unwrap returns the ErrFingerprintMismatch sentinel so errors.Is keeps working.
+func (e *FingerprintMismatchError) Unwrap() error { return ErrFingerprintMismatch }
+
+// errInProgress is the 409 ClaimBusy sentinel (an in-flight lease exists for the
+// key). It is the single source for the 409 leg of FrameworkStatuses and is the
+// error the middleware busy branch writes verbatim.
+var errInProgress = errcode.New(
+	errcode.KindConflict,
+	errcode.ErrIdempotencyInProgress,
+	msgInProgress,
+)
+
+// FrameworkStatuses returns the client-facing HTTP status codes the idempotency
+// middleware injects on a mutating, non-exempt route: 409 (ClaimBusy, in-flight
+// key) and 422 (key reused with a different request body). Both are derived from
+// the actual sentinels the middleware emits, so this set cannot drift from
+// runtime behavior.
+//
+// It is the single source the kernel/metadata oracle
+// HTTPTransportMeta.IdempotencyFrameworkStatuses() is bound to by archtest
+// IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01. The kernel oracle re-declares the
+// set as an integer literal because kernel/ must not import runtime/ (layering);
+// the archtest forbids the two from diverging.
+func FrameworkStatuses() []int {
+	return []int{
+		errInProgress.Status(),          // 409 — ClaimBusy (in-flight key)
+		ErrFingerprintMismatch.Status(), // 422 — key reused with a different body
+	}
+}
 
 // Store is the HTTP-layer idempotency backend. Implementations live in
 // adapters/ (e.g., adapters/redis).

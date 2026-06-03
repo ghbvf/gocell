@@ -251,10 +251,11 @@ func TestSchemaRefsEmpty(t *testing.T) {
 }
 
 // TestIdempotencyFrameworkStatuses verifies the single-source derivation of the
-// framework-injected 409 (#1469 review F4): mutating non-exempt routes declare
-// 409; exempt routes and non-mutating methods declare nothing. The 409 is never
-// hand-written per contract, so the declaration surface cannot drift from the
-// idempotency middleware behavior.
+// framework-injected {409, 422} set (#1469/#1450 review F4): mutating non-exempt
+// routes declare 409 (ClaimBusy) + 422 (key-reused); exempt routes and
+// non-mutating methods declare nothing. The set is never hand-written per
+// contract, so the declaration surface cannot drift from the idempotency
+// middleware behavior (bound to idemhttp.FrameworkStatuses() by archtest).
 func TestIdempotencyFrameworkStatuses(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -262,10 +263,10 @@ func TestIdempotencyFrameworkStatuses(t *testing.T) {
 		exempt bool
 		want   []int
 	}{
-		{"POST non-exempt → 409", "POST", false, []int{409}},
-		{"PUT non-exempt → 409", "PUT", false, []int{409}},
-		{"PATCH non-exempt → 409", "PATCH", false, []int{409}},
-		{"DELETE non-exempt → 409", "DELETE", false, []int{409}},
+		{"POST non-exempt → 409,422", "POST", false, []int{409, 422}},
+		{"PUT non-exempt → 409,422", "PUT", false, []int{409, 422}},
+		{"PATCH non-exempt → 409,422", "PATCH", false, []int{409, 422}},
+		{"DELETE non-exempt → 409,422", "DELETE", false, []int{409, 422}},
 		{"GET non-exempt → none", "GET", false, nil},
 		{"HEAD non-exempt → none", "HEAD", false, nil},
 		{"POST exempt → none", "POST", true, nil},

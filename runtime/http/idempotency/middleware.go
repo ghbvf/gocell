@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 	"unicode"
@@ -70,6 +72,12 @@ const (
 	// is presented with a different request body (fingerprint mismatch).
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgKeyReused = "idempotency key reused with a different request body"
+
+	// maxMismatchedFields caps the number of differing field names reported in
+	// the 422 key-reused response details, bounding response size when a request
+	// body has many top-level fields. When the diff exceeds this, the names are
+	// truncated and a mismatchedFieldsTruncated=true detail is added.
+	maxMismatchedFields = 20
 
 	// retryAfterHintSeconds is the Retry-After header value sent on 409
 	// ClaimBusy responses. A small hint (5 s) is better than the full lease
@@ -380,11 +388,7 @@ func handleWithIdempotency(
 				"tenant_id", ns,
 			)
 			cfg.observeState(ctx, StateKeyReused)
-			httputil.WriteError(ctx, w, errcode.New(
-				errcode.KindConflict,
-				errcode.ErrIdempotencyKeyReused,
-				msgKeyReused,
-			))
+			httputil.WriteError(ctx, w, keyReusedError(err, fingerprint))
 			return
 		}
 		slog.ErrorContext(ctx, "idempotency: store claim failed",
@@ -430,11 +434,7 @@ func handleWithIdempotency(
 		// Use a small fixed hint (retryAfterHintSeconds) rather than the full
 		// leaseTTL (300 s default) so clients retry soon without a long wait.
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterHintSeconds))
-		httputil.WriteError(ctx, w, errcode.New(
-			errcode.KindConflict,
-			errcode.ErrIdempotencyInProgress,
-			msgInProgress,
-		))
+		httputil.WriteError(ctx, w, errInProgress)
 
 	default: // ClaimAcquired
 		cfg.observeState(ctx, StateAcquired)
@@ -585,10 +585,137 @@ func shouldRecord(status int) bool {
 	return status >= 200 && status < 400
 }
 
-// computeFingerprint returns hex(sha256(body)). An empty body produces the
-// sha256 of the empty byte slice (deterministic).
+// fingerprintBlob is the canonical fingerprint persisted by the Store as an
+// opaque string. Body is hex(sha256(rawBody)) — the match decision is exact
+// equality of the whole blob, so Body preserves byte-exact match semantics
+// (reordered keys or whitespace change Body and therefore mismatch). Fields maps
+// each top-level JSON field name to hex(sha256(canonicalValue)) and exists ONLY
+// to drive the per-field diff on mismatch; it holds hashes, never raw values.
+type fingerprintBlob struct {
+	Body   string            `json:"b"`
+	Fields map[string]string `json:"f,omitempty"`
+}
+
+// computeFingerprint returns the canonical fingerprint blob (JSON-encoded) for a
+// request body. json.Marshal sorts map keys, so the encoding is deterministic.
+// For a non-JSON-object body, Fields is nil (no per-field diff is available) and
+// only Body participates.
 func computeFingerprint(body []byte) string {
-	sum := sha256.Sum256(body)
+	blob := fingerprintBlob{Body: hashHex(body), Fields: fieldHashes(body)}
+	encoded, err := json.Marshal(blob)
+	if err != nil {
+		// Unreachable for string + map[string]string, but fall back to the bare
+		// body hash so Claim always has a stable, non-empty key.
+		return hashHex(body)
+	}
+	return string(encoded)
+}
+
+// parseFingerprint decodes a fingerprint blob produced by computeFingerprint. A
+// parse failure degrades to an empty blob, which yields an empty per-field diff
+// (the base 422 is still returned) rather than an error.
+func parseFingerprint(s string) fingerprintBlob {
+	var blob fingerprintBlob
+	if err := json.Unmarshal([]byte(s), &blob); err != nil {
+		return fingerprintBlob{}
+	}
+	return blob
+}
+
+// fieldHashes returns {topLevelField: hex(sha256(canonicalValue))} for a JSON
+// object body, or nil when body is not a JSON object. Only top-level fields are
+// hashed (Stripe-param granularity); a changed nested value surfaces as a change
+// to its top-level parent.
+func fieldHashes(body []byte) map[string]string {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil // not a JSON object — no per-field diff available
+	}
+	out := make(map[string]string, len(top))
+	for k, raw := range top {
+		out[k] = canonicalValueHash(raw)
+	}
+	return out
+}
+
+// canonicalValueHash hashes a field value after canonicalizing it (json.Marshal
+// of the decoded value sorts nested keys and normalizes whitespace), so values
+// that are semantically equal but textually different hash identically. On a
+// decode/encode failure it falls back to hashing the raw bytes.
+func canonicalValueHash(raw json.RawMessage) string {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return hashHex(raw)
+	}
+	canon, err := json.Marshal(v)
+	if err != nil {
+		return hashHex(raw)
+	}
+	return hashHex(canon)
+}
+
+// diffFields returns the sorted top-level field names whose hash differs between
+// the stored and incoming fingerprint blobs (changed, added, or removed). It
+// returns names only — never values, which are not present in either blob.
+func diffFields(storedBlob, incomingBlob string) []string {
+	stored := parseFingerprint(storedBlob).Fields
+	incoming := parseFingerprint(incomingBlob).Fields
+	seen := make(map[string]struct{}, len(incoming))
+	var diff []string
+	for k, h := range incoming {
+		seen[k] = struct{}{}
+		if stored[k] != h {
+			diff = append(diff, k)
+		}
+	}
+	for k := range stored {
+		if _, ok := seen[k]; !ok {
+			diff = append(diff, k)
+		}
+	}
+	sort.Strings(diff)
+	return diff
+}
+
+// keyReusedError builds the 422 response for a fingerprint mismatch, enriched
+// with the names of the top-level request fields that differ (per-field diff).
+// err is the *FingerprintMismatchError from Store.Claim; incoming is the current
+// request's fingerprint blob.
+func keyReusedError(err error, incoming string) *errcode.Error {
+	return errcode.New(errcode.KindUnprocessable, errcode.ErrIdempotencyKeyReused,
+		msgKeyReused, keyReusedDetailOpts(err, incoming)...)
+}
+
+// keyReusedDetailOpts derives the per-field diff details. It returns nil (no
+// details) when the stored blob is unavailable or the diff is empty (e.g. body
+// differs only by key order / whitespace, or a non-JSON-object body).
+func keyReusedDetailOpts(err error, incoming string) []errcode.Option {
+	var fpErr *FingerprintMismatchError
+	if !errors.As(err, &fpErr) {
+		return nil
+	}
+	fields := diffFields(fpErr.Stored, incoming)
+	if len(fields) == 0 {
+		return nil
+	}
+	truncated := false
+	if len(fields) > maxMismatchedFields {
+		fields = fields[:maxMismatchedFields]
+		truncated = true
+	}
+	details := make([]errcode.PublicDetail, 0, len(fields)+1)
+	for _, f := range fields {
+		details = append(details, errcode.PublicString("mismatchedField", f))
+	}
+	if truncated {
+		details = append(details, errcode.PublicBool("mismatchedFieldsTruncated", true))
+	}
+	return []errcode.Option{errcode.WithDetails(details...)}
+}
+
+// hashHex returns hex(sha256(b)).
+func hashHex(b []byte) string {
+	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 

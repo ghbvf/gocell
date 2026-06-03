@@ -2,6 +2,7 @@ package idempotency
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -1009,8 +1010,8 @@ func TestMiddleware_Metrics_KeyReused(t *testing.T) {
 	rr := httptest.NewRecorder()
 	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
 
-	if rr.Code != 409 {
-		t.Fatalf("code: got %d, want 409", rr.Code)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code: got %d, want 422", rr.Code)
 	}
 	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
 		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
@@ -1019,7 +1020,7 @@ func TestMiddleware_Metrics_KeyReused(t *testing.T) {
 
 // TestMiddleware_Metrics_KeyReused_RealMemStore exercises the real MemStore
 // fingerprint-comparison path end-to-end: the same Idempotency-Key presented
-// with a DIFFERENT request body returns 409 and emits [StateKeyReused] — proving
+// with a DIFFERENT request body returns 422 and emits [StateKeyReused] — proving
 // the emit is wired to the actual fingerprint mismatch, not only the fake store.
 func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
 	clk := clockmock.New(time.Now())
@@ -1046,14 +1047,119 @@ func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
 	}
 	obs.states = obs.states[:0]
 
-	// Same key, DIFFERENT body → real fingerprint mismatch → 409 + key_reused.
+	// Same key, DIFFERENT body → real fingerprint mismatch → 422 + key_reused.
 	rr2 := httptest.NewRecorder()
 	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq("BBB"))
-	if rr2.Code != 409 {
-		t.Fatalf("code: got %d, want 409", rr2.Code)
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code: got %d, want 422", rr2.Code)
 	}
 	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
 		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
+	}
+}
+
+// TestMiddleware_KeyReused_PerFieldDiff verifies the Stripe-style per-field diff:
+// a fingerprint mismatch returns 422 whose details name exactly the top-level
+// fields that changed (sorted), and NO field value leaks into the response.
+func TestMiddleware_KeyReused_PerFieldDiff(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	mkReq := func(body string) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(body))
+		r.Header.Set("Idempotency-Key", "key-diff")
+		ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+			Kind: auth.PrincipalUser, Subject: "user-d", TenantID: "t1",
+		})
+		return r.WithContext(ctx)
+	}
+
+	// First request establishes the stored fingerprint (distinctive values so a
+	// privacy leak would be unmistakable).
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq(`{"amount":"AMT-AAA","currency":"usd","note":"NOTE-AAA"}`))
+	if rr1.Code != 201 {
+		t.Fatalf("first request code: got %d, want 201", rr1.Code)
+	}
+
+	// Same key, amount + note changed; currency unchanged → diff = [amount, note].
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq(`{"amount":"AMT-BBB","currency":"usd","note":"NOTE-BBB"}`))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := strings.Join(mismatchedFieldsFromBody(t, rr2.Body.Bytes()), ","); got != "amount,note" {
+		t.Errorf("mismatched fields: got %q, want %q", got, "amount,note")
+	}
+	// Privacy: no field VALUE may appear in the response (only field NAMES).
+	body := rr2.Body.String()
+	for _, leak := range []string{"AMT-AAA", "AMT-BBB", "NOTE-AAA", "NOTE-BBB"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response leaked field value %q: %s", leak, body)
+		}
+	}
+}
+
+// mismatchedFieldsFromBody extracts the "mismatchedField" detail values from a
+// 422 error envelope body, in wire order.
+func mismatchedFieldsFromBody(t *testing.T, raw []byte) []string {
+	t.Helper()
+	var env struct {
+		Error struct {
+			Details []struct {
+				Key   string          `json:"key"`
+				Value json.RawMessage `json:"value"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("decode error envelope: %v (body=%s)", err, raw)
+	}
+	var fields []string
+	for _, d := range env.Error.Details {
+		if d.Key != "mismatchedField" {
+			continue
+		}
+		var v string
+		if err := json.Unmarshal(d.Value, &v); err != nil {
+			t.Fatalf("mismatchedField value not a string: %v", err)
+		}
+		fields = append(fields, v)
+	}
+	return fields
+}
+
+// TestComputeFingerprintAndDiff exercises the canonical fingerprint + per-field
+// diff helpers directly (white-box).
+func TestComputeFingerprintAndDiff(t *testing.T) {
+	base := computeFingerprint([]byte(`{"x":1,"y":2,"z":3}`))
+
+	// Deterministic: identical body → identical blob.
+	if base != computeFingerprint([]byte(`{"x":1,"y":2,"z":3}`)) {
+		t.Fatal("computeFingerprint is not deterministic")
+	}
+
+	// Changed value → that field in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":9,"z":3}`))), ","); got != "y" {
+		t.Errorf("changed-field diff: got %q, want %q", got, "y")
+	}
+	// Removed field → in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":2}`))), ","); got != "z" {
+		t.Errorf("removed-field diff: got %q, want %q", got, "z")
+	}
+	// Added field → in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":2,"z":3,"w":4}`))), ","); got != "w" {
+		t.Errorf("added-field diff: got %q, want %q", got, "w")
+	}
+	// Key order / whitespace only → fields identical → empty diff (the middleware
+	// then falls back to the plain "request body differs" 422).
+	if got := diffFields(base, computeFingerprint([]byte(`{ "z":3, "y":2, "x":1 }`))); len(got) != 0 {
+		t.Errorf("order-only diff: got %v, want []", got)
+	}
+	// Non-JSON-object body → nil Fields (no per-field diff available).
+	if fp := parseFingerprint(computeFingerprint([]byte("not json"))); fp.Fields != nil {
+		t.Errorf("non-object body Fields: got %v, want nil", fp.Fields)
 	}
 }
 

@@ -52,7 +52,7 @@ const (
 	StateOversize RequestState = "oversize"
 
 	// StateKeyReused is recorded when the same Idempotency-Key is presented with
-	// a different request body (fingerprint mismatch → 409 ErrIdempotencyKeyReused).
+	// a different request body (fingerprint mismatch → 422 ErrIdempotencyKeyReused).
 	// It is security-relevant: a sustained rate can indicate a client bug or a
 	// replay attempt.
 	StateKeyReused RequestState = "key_reused"

@@ -23,6 +23,13 @@ const (
 	KindPermissionDenied
 	KindNotFound
 	KindConflict
+	// KindUnprocessable maps to HTTP 422 (Unprocessable Content): the request is
+	// syntactically valid but semantically unprocessable in the current resource
+	// state — e.g. an Idempotency-Key reused with a different request body (per
+	// IETF idempotency-key draft §2.7). Placed next to KindConflict for 4xx
+	// grouping; the iota value is not load-bearing (Kind is never serialized and
+	// has no golden — only the Kind→status mapping matters).
+	KindUnprocessable
 	KindGone
 	KindPayloadTooLarge
 	KindRateLimited
@@ -45,6 +52,8 @@ func (k Kind) Status() int {
 		return http.StatusNotFound
 	case KindConflict:
 		return http.StatusConflict
+	case KindUnprocessable:
+		return http.StatusUnprocessableEntity
 	case KindGone:
 		return http.StatusGone
 	case KindPayloadTooLarge:
