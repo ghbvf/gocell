@@ -2,7 +2,6 @@
 
 > 何时贴 / 留痕约定 / 标记规则见 `PROJECT.md` §5；P + Cx 评级见 §3。
 > **footer 必填**（每个模板末尾那行）：AI 按当前身份自填 `<Claude Code|Codex>`、PR 号、head 分支（不跑 shell/env）。
-> 贴完后 `gh pr comment` 原生返回新评论 URL（含 `#issuecomment-<id>`）——技能把该 URL 回显到当前窗口，作为权威留痕锚点。
 
 > **评论即 review 结果，无损（关键约定）**：评论是 `/fix <PR#>` 提取 findings 的**唯一来源**。
 > 每条 Finding **必带 `file:line`**（fix 据此定位，不重新 review），根因 + 证据 + 建议 + 三级方案种子写进 `<details>`（人看摘要、fix 读详表，两不丢）。

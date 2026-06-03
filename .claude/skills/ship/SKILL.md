@@ -13,8 +13,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 > **多沟通原则（默认多问、有歧义即停）**：L2/L3 在创建 worktree（阶段 3）**之前**必须完整呈现「方案方向
 > （阶段 1）+ 改动计划（阶段 2）」并经 AskUserQuestion 确认——不在未对齐时就开工。实施中（阶段 5）surface
-> 阶段性进度与 blocker；阶段 7→8 之间呈现内置 review findings 表再决定修哪些。任何方案歧义 / 范围不清 / 取舍
-> 没把握 → 停下问，不默默假设。
+> 阶段性进度与 blocker；阶段 7→8 呈现内置 review findings 表，**Cx1/Cx2 IN_SCOPE 自动修**，仅 Cx3/Cx4 / 归属-取舍
+> 不清才停下问。任何方案歧义 / 范围不清 / 取舍没把握 → 停下问，不默默假设。
 
 剥离 `--level=` flag 后，剩余参数匹配 `^#?[0-9]+$` 时视为 issue 号，先 `gh issue view <N> --json title,body,labels,state` 拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。`state != "OPEN"`（CLOSED / MERGED 等）或 `gh issue view` 失败均用 AskUserQuestion 让用户裁定是否继续。
 
@@ -153,11 +153,10 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 
 ## 阶段 8：Fix（内置审 findings）+ 收尾
 
-1. **呈现内置 review findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。L3 用 AskUserQuestion 与用户确认
-   修哪些（默认修 Cx1/Cx2 IN_SCOPE）。
-2. 对 Cx1/Cx2 IN_SCOPE findings 派发 `developer` agent 执行 `/fix <finding>`；Cx3/Cx4 和 OUT_OF_SCOPE 收集到阶段 9。
+1. **呈现内置 review findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。
+2. **Cx1/Cx2 IN_SCOPE findings 自动修**（派 `developer` agent 执行 `/fix <finding>`，**不逐条问**，对齐 `fix` 的 [AUTO-FIX]）；Cx3/Cx4 与 OUT_OF_SCOPE 收集到阶段 9。**仅当**归属不清 / 取舍没把握 / 有 Cx3+ 需现在做时才 AskUserQuestion。
 3. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
-   - `gh pr comment <PR#>` 贴 ship 评论：**每条 finding 带 `file:line`，证据/建议入 `<details>`（评论即 review 结果，无损——供 codex / `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex → 把 `gh pr comment` 返回的评论 URL **回显给用户**。
+   - `gh pr comment <PR#>` 贴 ship 评论：**每条 finding 带 `file:line`，证据/建议入 `<details>`（评论即 review 结果，无损——供 codex / `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex。
    - `gh pr edit` 切 `pr-status/needs-codex`（移除 `pr-status/in-progress`）。
 
 > ship 到此结束（内置审 + 修）。codex 外部 review 后，续修走 `/fix <PR#>`。

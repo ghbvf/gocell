@@ -122,7 +122,7 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
 ```
 
-`gh pr comment` 成功时把新评论 URL（含 `#issuecomment-<id>`）打到 stdout——把该 URL **回显到当前窗口**给用户，作为权威留痕锚点（无需额外命令）；贴失败则报错退出，不静默跳过。footer 由 AI 按当前运行身份自填：`PR #<N> · Generated with <Claude Code|Codex> · branch <PR head 分支>`。
+贴失败则报错退出，不静默跳过。footer 由 AI 按当前运行身份自填：`PR #<N> · Generated with <Claude Code|Codex> · branch <PR head 分支>`。
 
 ---
 
@@ -138,4 +138,4 @@ gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
 2. 分级处理：`diff < 200` 主 agent 自审不派发；`diff ≥ 200` 按行数派 2/3/6 个 reviewer agent（覆盖三档）
 3. 无 worktree 自动创建 `worktrees/review-pr<N>`；既有 worktree 复用，不重建
 4. 主 agent 输出含 Read/Grep 证据 + 根因簇视图先于 Finding 详表；维度名内部一致
-5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer），并把 `gh pr comment` 返回的评论 URL 回显给用户
+5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer + 每条 finding 的 file:line）

@@ -40,7 +40,7 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
    ```
 4. **汇总子 issues**：`gh api repos/ghbvf/gocell/issues/<epic#>/sub_issues --jq '.[]|{number,title,state}'`（含新关联）；对每个 OPEN 子任务读 label（area/type/pri）+ body 的 `Blocked-by: #NNN`（多行/逗号分隔，无声明=无前置）。
 
-> **并行分析**：子任务 ≥4 或描述模糊 / 跨 3+ 包时，按子任务分组并行派 `Agent(Explore)` 核实各自的状态 / 归属 / `Blocked-by`，汇总后再排 wave；单条直接主 agent 读。
+> 子任务跨 3+ 包或描述模糊时，用 `Agent(Explore)` 核实归属 / 状态 / `Blocked-by` 再汇总（**wave 内实施顺序的并行分析在 A2 第 6 步，见下**）。
 
 ## A2. 建 blocked-by DAG + wave 滚动排序（Wave 1-4 有界）
 
@@ -53,8 +53,8 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
    - `wave(v) = 1` 若 v 无 OPEN blocker；
    - `wave(v) = 1 + max(wave(b) for b in OPEN blockers(v))` 否则。
 5. **有界 cap = Wave 4**：`wave(v) > 4` 的节点标记 **超窗**——不落 Project Wave 字段（A3 清空/不写）。Project Wave 只有 1-4 四档。
-6. **wave 内排序**：按 `pri`（p0>p1>p2>p3）→ `Cx`（小先）→ issue 号。
-7. 输出每个 OPEN 子任务的 `(wave, 序)` 或「超窗」。
+6. **wave 内排序 = 对每个 Wave 内任务并行分析，确认实施顺序**：跨 wave 顺序已由依赖锁定；wave 内无硬 `Blocked-by`，顺序是自由度。对每个 Wave（成员 ≥2）**并行**派 `Agent(Explore)` 分析其中每个任务的 scope / 触碰文件 / 产出↔消费 / 风险，主 agent 汇总后定该 wave 实施顺序：**基础性产出**（被同 wave 他者隐式消费）先 → **同文件任务相邻**防写冲突 → 默认 `pri`(p0>p1>p2>p3) → `Cx`(小先) → issue#。单任务 wave 跳过分析。
+7. 输出每个 OPEN 子任务的 `(wave, wave 内序)` 或「超窗」。
 
 呈现给用户的 dry-run 表（只列 OPEN；超窗与已完成单列）：
 
@@ -172,7 +172,7 @@ gh pr edit <N> --add-label pr-review/changes-requested
 gh pr comment <N> --body-file <填好的 pr-comment.md 模板>
 ```
 
-`gh pr comment` 成功返回新评论 URL（含 `#issuecomment-<id>`）——**回显给用户**作为权威留痕锚点。footer 由 AI 自填（PR# / Generated with Claude Code|Codex / head 分支）。
+footer 由 AI 自填（PR# / Generated with Claude Code|Codex / head 分支）。
 
 ## B5. 沟通规则
 
