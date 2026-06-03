@@ -443,6 +443,44 @@ func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
 	assert.False(t, present, "request_id field must be absent when not in ctx")
 }
 
+// TestService_Query_CursorContextMismatch_TenantID is the tenantId sibling of
+// TestService_Query_CursorContextMismatch_SubjectID: it locks that tenantId
+// participates in the cursor-scope fingerprint (#1337 PR-2a review U4).
+// A cursor minted under TenantID="tenant-A" must be rejected when replayed
+// under TenantID="tenant-B" (cross-tenant cursor replay). Without tenantId in
+// the fingerprint, both queries would share a QueryContext and the cross-tenant
+// replay would silently succeed — this test would then fail.
+func TestService_Query_CursorContextMismatch_TenantID(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+			ID:        fmt.Sprintf("ae-%02d", i),
+			EventID:   fmt.Sprintf("evt-%02d", i),
+			EventType: "event.test.v1",
+			ActorID:   "actor-x",
+			Timestamp: base.Add(time.Duration(i) * time.Hour),
+			Payload:   []byte("{}"),
+		}))
+	}
+
+	tenantA := ledger.AuditFilters{TenantID: "tenant-A"}
+	page1, err := svc.Query(context.Background(), tenantA, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	tenantB := ledger.AuditFilters{TenantID: "tenant-B"}
+	_, err = svc.Query(context.Background(), tenantB, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	reasonAttr, ok := ecErr.FindAttr("reason")
+	require.True(t, ok)
+	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+}
+
 // TestService_Query_SubsecondFilterContext verifies that From/To are not part of
 // the cursor scope fingerprint. Changing From between pages does not invalidate
 // the cursor — time-range filters narrow store results but do not define the

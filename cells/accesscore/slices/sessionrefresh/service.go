@@ -299,6 +299,18 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	// PR-3 will carry tenant in the refresh token / session row for true RLS
 	// isolation; at that point this derivation moves to the store layer.
 	refreshTenantID := user.TenantID
+	// Defense-in-depth: validate the derived tenant before using it (#1337
+	// PR-2a review U5). user.TenantID is normally stamped at Create time
+	// and should always be a canonical UUID; a missing or malformed value
+	// here would indicate a data integrity issue in the user row. Fail
+	// closed to authRefreshRejected (the same envelope as every other
+	// refresh rejection) to avoid leaking information about the failure.
+	if err := refreshTenantID.Validate(); err != nil {
+		s.logger.Error("session-refresh: invalid tenant derived from user row (fail-closed)",
+			slog.Any("error", err),
+			slog.String("subject_id", sess.SubjectID))
+		return dto.TokenPair{}, authRefreshRejected()
+	}
 	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
@@ -404,6 +416,17 @@ func (s *Service) handleReuseDetected(outerCtx context.Context, subjectID, sessi
 		return authRefreshRejected()
 	}
 	reuseTenantID := userForTenant.TenantID
+	// Defense-in-depth: validate the derived tenant before using it (#1337
+	// PR-2a review U5). Fail closed to authRefreshRejected — the reuse
+	// attack is confirmed regardless of cascade health; surfacing a
+	// different code would leak side-channel info.
+	if err := reuseTenantID.Validate(); err != nil {
+		s.logger.Error("session-refresh: reuse cascade: invalid tenant derived from user row (fail-closed)",
+			slog.Any("error", err),
+			slog.String("stage", stage),
+			slog.String("subject_id", subjectID))
+		return authRefreshRejected()
+	}
 	detachedCtx, cancel := ctxutil.WithDetachedTimeout(outerCtx, reuseCascadeTimeout)
 	defer cancel()
 	if applyErr := s.txRunner.RunInTx(detachedCtx, func(txCtx context.Context) error {

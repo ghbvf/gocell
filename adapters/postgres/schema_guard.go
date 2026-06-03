@@ -47,7 +47,7 @@ import (
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //                                 + tenant_id TEXT NOT NULL, PK (tenant_id,user_id,role_id),
 //                                   role FK references roles(tenant_id,id) composite (050)
-//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index))  tamper-evident audit ledger (per-namespace hash chain)
+//   - audit_entries      (020/043 + 047 (trace_id col) + 048 (trace_id index)) tamper-evident audit ledger (per-namespace hash chain)
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
 //                                   session_id / correlation_id / occurred_at) for
@@ -435,14 +435,14 @@ var expectedColumns = []expectedColumn{
 	// Only the S4d-introduced column is registered here; the rest of the
 	// refresh_tokens schema predates schema_guard's requiredColumns coverage.
 	{Table: "refresh_tokens", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
-	// roles (019_roles.sql + 049_accesscore_tenant_id.sql)
+	// roles (019_roles.sql + 050_accesscore_tenant_id.sql)
 	// 050 drops+recreates the table; PK is now composite (tenant_id, id).
 	{Table: "roles", Column: "tenant_id", Type: "text", NotNull: true}, // 050 NEW
 	{Table: "roles", Column: "id", Type: "text", NotNull: true},
 	{Table: "roles", Column: "name", Type: "text", NotNull: true},
 	{Table: "roles", Column: "permissions", Type: "jsonb", NotNull: true},
 	{Table: "roles", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
-	// role_assignments (019_roles.sql + 049_accesscore_tenant_id.sql)
+	// role_assignments (019_roles.sql + 050_accesscore_tenant_id.sql)
 	// 050 drops+recreates the table; PK is (tenant_id, user_id, role_id).
 	{Table: "role_assignments", Column: "tenant_id", Type: "text", NotNull: true}, // 050 NEW
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
@@ -452,7 +452,7 @@ var expectedColumns = []expectedColumn{
 	// 043 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
 	// the 12-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
 	// must supply values.
-	// 050 adds trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
+	// 047 adds trace_id (TEXT NOT NULL) for OTel correlation (#1048 Batch C);
 	// NOT part of the HMAC chain (observability only).
 	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},
@@ -464,7 +464,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "audit_entries", Column: "tenant_id", Type: "text", NotNull: true},       // 043 NEW
 	{Table: "audit_entries", Column: "session_id", Type: "text", NotNull: true},      // 043 NEW
 	{Table: "audit_entries", Column: "correlation_id", Type: "text", NotNull: true},  // 043 NEW
-	{Table: "audit_entries", Column: "trace_id", Type: "text", NotNull: true},        // 050 NEW
+	{Table: "audit_entries", Column: "trace_id", Type: "text", NotNull: true},        // 047 NEW
 	{Table: "audit_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 043 NEW
 	{Table: "audit_entries", Column: "timestamp", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
@@ -615,6 +615,14 @@ var expectedIndexes = []expectedIndex{
 	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true, Columns: []string{"namespace", "event_id"}},
 	// 048_audit_entries_trace_id_index.sql: (namespace, trace_id) — leading column matters for filter pushdown
 	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false, Columns: []string{"namespace", "trace_id"}},
+	// NOTE: no tenant-leading index here. auditquery's tenant predicate is the
+	// disjunction (tenant_id = '' OR tenant_id = $X) — system rows + own tenant —
+	// which a (namespace, tenant_id, …) index cannot serve as a single ordered
+	// keyset scan (the OR breaks the leading-equality requirement). The existing
+	// idx_audit_namespace_ts_id already satisfies the ORDER BY (namespace equality
+	// + ts/id keyset) with tenant_id applied as an in-scan filter. A tenant-leading
+	// index becomes worthwhile under PR-3 (#1341), where RLS rewrites the predicate
+	// to pure tenant_id = current_setting equality. See audit_ledger_store.Query.
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false, Columns: []string{"status"}},
 	// 030_commands.sql partial indexes — Columns lists only key columns, not WHERE predicate columns

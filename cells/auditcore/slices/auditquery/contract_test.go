@@ -105,7 +105,7 @@ func TestHttpAuditListV1Serve(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auditTestCtx("usr-1", nil))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
@@ -225,7 +225,7 @@ func TestHttpAuditListV1Serve_Empty(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auditTestCtx("usr-1", nil))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 

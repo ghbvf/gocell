@@ -49,6 +49,24 @@ func newHandlerStore(t testing.TB) *ledger.MemStore {
 	return store
 }
 
+// auditQueryTestTenant is a canonical tenant UUID for handler tests. auditquery
+// fail-closes on an empty principal tenant (epic #1337 PR-2a, F1), so every
+// handler test that expects to reach the query path must carry a tenant.
+const auditQueryTestTenant = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
+// auditTestCtx builds a tenant-bearing principal context for handler tests.
+// auth.TestContext alone leaves TenantID empty, which the F1 isolation guard now
+// rejects; the empty-tenant rejection itself is covered by TestList_EmptyTenant_Forbidden.
+func auditTestCtx(subject string, roles []string) context.Context {
+	return auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    subject,
+		Roles:      append([]string(nil), roles...),
+		TenantID:   auditQueryTestTenant,
+		AuthMethod: "test",
+	})
+}
+
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
@@ -90,7 +108,7 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
 			// Inject auth context so the handler doesn't reject with 401.
-			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
+			req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -115,7 +133,7 @@ func TestHandleQuery_InvalidLimit(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=abc", nil)
-	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
+	req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -134,7 +152,7 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 	// limit ceiling now produces the canonical ERR_PAGE_SIZE_EXCEEDED envelope
 	// shared with every other paginated endpoint.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=501", nil)
-	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
+	req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -170,7 +188,7 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		// Self-access: subject matches actorId in data.
-		req = req.WithContext(auth.TestContext("usr-1", nil))
+		req = req.WithContext(auditTestCtx("usr-1", nil))
 		mux.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -230,7 +248,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?cursor="+tc.cursor, nil)
-			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
+			req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -258,7 +276,7 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-1", nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auditTestCtx("usr-1", nil))
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -294,7 +312,7 @@ func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-2", nil)
-	req = req.WithContext(auth.TestContext("usr-2", nil))
+	req = req.WithContext(auditTestCtx("usr-2", nil))
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -306,6 +324,33 @@ func TestAuditEntryResponse_SensitivePayload_Redacted(t *testing.T) {
 // TestHandler_RegisterRoutes_AuthzNegative validates that RegisterRoutes installs
 // the auditQueryPolicy so unauthenticated and cross-user requests are rejected at
 // the route layer, not inside the business handler.
+// TestList_EmptyTenant_Forbidden (epic #1337 PR-2a, F1): an authenticated
+// principal with no tenant must be rejected with 403 rather than degrade to the
+// store's "empty TenantID = no filter = all tenants" cross-tenant read — the
+// fail-open vector the second-round review flagged P0.
+func TestList_EmptyTenant_Forbidden(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	// auth.TestContext leaves TenantID empty — the exact fail-open vector.
+	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"empty-tenant principal must be 403 (tenant isolation fail-closed); body=%s", w.Body.String())
+	var resp struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ERR_AUTH_FORBIDDEN", resp.Error.Code)
+}
+
 func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
@@ -372,7 +417,7 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, url, nil)
 			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+				req = req.WithContext(auditTestCtx(tc.subject, tc.roles))
 			}
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -592,7 +637,7 @@ func TestHandleQuery_SubjectFilter(t *testing.T) {
 	// alice-subject rows (se-1, se-3), regardless of differing actors.
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?subjectId=alice", nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(auditTestCtx("admin-user", []string{"admin"}))
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -645,7 +690,7 @@ func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?subjectId=victim", nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil)) // non-admin
+	req = req.WithContext(auditTestCtx("usr-1", nil)) // non-admin
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -700,7 +745,7 @@ func TestHandleQuery_TraceIDFilter_Admin(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=trace-abc", nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(auditTestCtx("admin-user", []string{"admin"}))
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -750,7 +795,7 @@ func TestHandleQuery_TraceIDFilter_EmptyParam(t *testing.T) {
 	// ?traceId= (empty value) must behave as no filter → all rows for the actor.
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-ep&traceId=", nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(auditTestCtx("admin-user", []string{"admin"}))
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -800,7 +845,7 @@ func TestHandleQuery_TraceIDFilter_NonAdminScopedToActorSelf(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?traceId=trace-abc", nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil)) // non-admin
+	req = req.WithContext(auditTestCtx("usr-1", nil)) // non-admin
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -836,9 +881,9 @@ func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCas
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
 	switch {
 	case tc.injectEmptyAuth:
-		req = req.WithContext(auth.TestContext("", tc.roles))
+		req = req.WithContext(auditTestCtx("", tc.roles))
 	case tc.subject != "":
-		req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+		req = req.WithContext(auditTestCtx(tc.subject, tc.roles))
 	}
 	mux.ServeHTTP(w, req)
 

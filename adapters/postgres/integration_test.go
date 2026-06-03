@@ -1225,4 +1225,262 @@ func TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_WithPermit(t *test
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Migration 050 gate three-way integration tests (U8)
+// ---------------------------------------------------------------------------
+
+// TestMigrator_ForwardRebuild_Migration050_EmptyTable_Up verifies that a fresh DB
+// (users/roles/role_assignments empty or absent) can run Up() through migration
+// 050 without any permit — the empty-table path is always safe.
+func TestMigrator_ForwardRebuild_Migration050_EmptyTable_Up(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply all migrations from scratch: all rebuild targets are empty/missing →
+	// Up() must succeed without any permit.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_empty")
+	require.NoError(t, err)
+
+	require.NoError(t, migrator.Up(ctx),
+		"Up() must succeed on a fresh DB (users/roles/role_assignments empty after earlier migrations)")
+
+	// Verify 050's tenant_id column was added to users.
+	var tenantIDExists bool
+	err = pool.DB().QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'users' AND column_name = 'tenant_id'
+		)`).Scan(&tenantIDExists)
+	require.NoError(t, err)
+	assert.True(t, tenantIDExists, "users must have tenant_id column after migration 050")
+
+	// Verify composite PK on roles is (tenant_id, id).
+	var rolesPKCols []string
+	rows, err := pool.DB().Query(ctx, `
+		SELECT a.attname
+		  FROM pg_constraint co
+		  JOIN pg_class c ON c.oid = co.conrelid
+		  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(co.conkey)
+		 WHERE c.relname = 'roles' AND co.contype = 'p'
+		 ORDER BY array_position(co.conkey, a.attnum)`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var col string
+		require.NoError(t, rows.Scan(&col))
+		rolesPKCols = append(rolesPKCols, col)
+	}
+	rows.Close()
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"tenant_id", "id"}, rolesPKCols,
+		"roles PK must be composite (tenant_id, id) after migration 050")
+}
+
+// TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_UpFailClosed verifies
+// that Up() refuses fail-closed when users has rows and migration 050 is pending
+// (no permit supplied).
+func TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_UpFailClosed(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 049 so users table exists (from migration 017)
+	// but migration 050 is still pending.
+	mfs049 := migrationsUpToFS(t, 49)
+	prep, err := NewMigrator(pool, mfs049, "schema_migrations_050_failclosed_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 049 must succeed")
+
+	// Insert a row into users to make migration 050's users target dangerous.
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO users
+			(id, username, email, password_hash, creation_source,
+			 status, authz_epoch, created_at, updated_at)
+		VALUES
+			(gen_random_uuid(), 'alice', 'alice@example.com', '$2a$12$dummy',
+			 'identity', 'active', 1, now(), now())
+	`)
+	require.NoError(t, execErr, "must be able to insert a row into pre-050 users table")
+
+	// Up() without permits: must fail-closed because users has rows.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_failclosed_prep")
+	require.NoError(t, err)
+
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when migration 050 target users has rows")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(50), migDetail.Value(), "migration detail value must be 50")
+}
+
+// TestMigrator_ForwardRebuild_Migration050_DeclaredTargets pins migration 050's
+// forward-rebuild target set to {users, roles, role_assignments}. The runtime
+// fail-closed tests can only isolate users and roles by seeding (role_assignments
+// has FKs to both users and roles, so it cannot be populated alone); this test
+// guards every declared target against annotation drift — if a
+// `-- +gocell forward-rebuild target=<table>` line is dropped or renamed, the set
+// changes and this fails.
+func TestMigrator_ForwardRebuild_Migration050_DeclaredTargets(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Empty DB → every migration is pending; collectPendingForwardRebuilds parses
+	// the +gocell annotations from each pending migration's Up section.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_targets")
+	require.NoError(t, err)
+
+	pending, err := migrator.collectPendingForwardRebuilds(ctx)
+	require.NoError(t, err)
+
+	got := pending[50]
+	require.NotEmpty(t, got, "migration 050 must declare forward-rebuild targets")
+	assert.ElementsMatch(t, []string{"users", "roles", "role_assignments"}, got,
+		"migration 050 forward-rebuild targets must be exactly {users, roles, role_assignments}")
+}
+
+// TestMigrator_ForwardRebuild_Migration050_PopulatedRoles_UpFailClosed verifies
+// the gate fires for the roles target specifically: with roles non-empty (users
+// and role_assignments empty) and no permit, Up() must refuse, and the error must
+// name target=roles. This protects the `target=roles` annotation at runtime —
+// dropping it would let a populated roles table be silently destroyed.
+func TestMigrator_ForwardRebuild_Migration050_PopulatedRoles_UpFailClosed(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply through 049 so roles exists (migration 019) but 050 is still pending.
+	mfs049 := migrationsUpToFS(t, 49)
+	prep, err := NewMigrator(pool, mfs049, "schema_migrations_050_roles_failclosed")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 049 must succeed")
+
+	// Seed roles only (users + role_assignments stay empty). roles has no FK, so it
+	// can be populated in isolation — making roles the sole dangerous target.
+	_, execErr := pool.DB().Exec(ctx, `INSERT INTO roles (id, name) VALUES ('viewer', 'Viewer')`)
+	require.NoError(t, execErr, "must be able to insert a row into pre-050 roles table")
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_roles_failclosed")
+	require.NoError(t, err)
+
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when migration 050 target roles has rows")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(50), migDetail.Value(), "migration detail value must be 50")
+	tgtDetail, ok := ec.FindAttr("target")
+	require.True(t, ok, "error must have a public detail keyed 'target'")
+	assert.Equal(t, "roles", tgtDetail.Value(), "target detail must name the roles table")
+}
+
+// TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_WithPermit verifies
+// that ForwardRebuild with permit 50 succeeds when users has rows (and sessions
+// is empty — see godoc), rebuilds the schema, and the sessions FK is restored.
+//
+// Behavior on rebuild (per migration 050 SQL):
+//   - DROP TABLE users CASCADE removes the sessions_subject_id_fkey FK and any
+//     existing user rows. The sessions table itself is kept.
+//   - The rebuild creates fresh users/roles/role_assignments with tenant_id.
+//   - The sessions FK (sessions_subject_id_fkey) is re-added at the end of the Up
+//     block via ALTER TABLE sessions ADD CONSTRAINT sessions_subject_id_fkey ...
+//
+// FK re-add constraint: the ALTER TABLE ADD CONSTRAINT step validates all existing
+// rows in sessions. If sessions contains rows whose subject_id references a
+// now-deleted user UUID, the FK addition fails with a FK violation (23503). In
+// production this means: sessions must be drained before running migration 050
+// (same drain discipline as migration 044 for outbox_entries). In dev: start
+// fresh (drop + migrate from 001 up).
+//
+// This test keeps sessions empty to validate the core rebuild path cleanly.
+// The pre-requisite that sessions must be drained is documented in
+// docs/ops/migration-050-accesscore-tenant-rebuild.md.
+func TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_WithPermit(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 049.
+	mfs049 := migrationsUpToFS(t, 49)
+	prep, err := NewMigrator(pool, mfs049, "schema_migrations_050_permit_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 049 must succeed")
+
+	// Seed only a user row so that 050 is "dangerous" for the users target.
+	// NOTE: we deliberately do NOT seed sessions here — the FK re-add at the end
+	// of migration 050's Up block validates all existing sessions rows. A session
+	// row referencing a now-deleted user UUID would cause a 23503 FK violation,
+	// causing the migration to fail. Production runbook: drain sessions before
+	// applying migration 050 (see docs/ops/migration-050-accesscore-tenant-rebuild.md).
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO users
+			(id, username, email, password_hash, creation_source,
+			 status, authz_epoch, created_at, updated_at)
+		VALUES
+			(gen_random_uuid(), 'bob', 'bob@example.com', '$2a$12$dummy',
+			 'identity', 'active', 1, now(), now())
+	`)
+	require.NoError(t, execErr, "must be able to insert a row into pre-050 users table")
+
+	// ForwardRebuild with permit 50 must succeed. The users target has rows;
+	// roles and role_assignments are empty so only one permit is needed.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_permit_prep")
+	require.NoError(t, err)
+
+	permit50 := mustAllowForwardRebuild(t, 50, "050 accesscore tenant rebuild integration test")
+	require.NoError(t, migrator.ForwardRebuild(ctx, permit50),
+		"ForwardRebuild with permit 50 must succeed when only users has rows (sessions empty)")
+
+	// Post-rebuild assertions:
+
+	// 1. users.tenant_id column exists.
+	var tenantIDExists bool
+	err = pool.DB().QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'users' AND column_name = 'tenant_id'
+		)`).Scan(&tenantIDExists)
+	require.NoError(t, err)
+	assert.True(t, tenantIDExists, "users must have tenant_id column after ForwardRebuild with permit 50")
+
+	// 2. users data is destroyed (DROP TABLE users CASCADE clears all rows).
+	var userCount int64
+	err = pool.DB().QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&userCount)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), userCount, "users must be empty after DROP+CREATE rebuild by migration 050")
+
+	// 3. sessions FK is restored by migration 050's ALTER TABLE sessions ADD CONSTRAINT step.
+	var fkExists bool
+	err = pool.DB().QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.table_constraints
+			WHERE constraint_name = 'sessions_subject_id_fkey'
+			  AND table_name = 'sessions'
+			  AND constraint_type = 'FOREIGN KEY'
+		)`).Scan(&fkExists)
+	require.NoError(t, err)
+	assert.True(t, fkExists,
+		"sessions_subject_id_fkey must be re-added by migration 050 ALTER TABLE step")
+
+	// 4. roles and role_assignments were recreated with correct composite PKs.
+	var rolesPKCols []string
+	rows, err := pool.DB().Query(ctx, `
+		SELECT a.attname
+		  FROM pg_constraint co
+		  JOIN pg_class c ON c.oid = co.conrelid
+		  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(co.conkey)
+		 WHERE c.relname = 'roles' AND co.contype = 'p'
+		 ORDER BY array_position(co.conkey, a.attnum)`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var col string
+		require.NoError(t, rows.Scan(&col))
+		rolesPKCols = append(rolesPKCols, col)
+	}
+	rows.Close()
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"tenant_id", "id"}, rolesPKCols,
+		"roles PK must be composite (tenant_id, id) after migration 050")
+}
+
 // Target: adapters/postgres coverage >= 80%

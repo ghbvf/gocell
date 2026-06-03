@@ -465,7 +465,7 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auditCellTestCtx("usr-1", nil))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -595,7 +595,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			require.NoError(t, r.FinalizeAuth())
 
 			rec := httptest.NewRecorder()
-			ctx := auth.TestContext("admin-user", []string{"admin"})
+			ctx := auditCellTestCtx("admin-user", []string{"admin"})
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?cursor=garbage-token", nil).WithContext(ctx)
 			r.ServeHTTP(rec, req)
 
@@ -738,4 +738,17 @@ func mustNewRouter(t *testing.T) *router.Router {
 		t.Fatalf("router.New: %v", err)
 	}
 	return r
+}
+
+// auditCellTestCtx builds a tenant-bearing principal context for cell wiring
+// tests. auditquery fail-closes on an empty principal tenant (epic #1337 PR-2a,
+// F1), so a wiring test driving /api/v1/audit/entries must carry a tenant.
+func auditCellTestCtx(subject string, roles []string) context.Context {
+	return auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    subject,
+		Roles:      append([]string(nil), roles...),
+		TenantID:   "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+		AuthMethod: "test",
+	})
 }

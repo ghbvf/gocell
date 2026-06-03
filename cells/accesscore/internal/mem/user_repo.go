@@ -171,9 +171,12 @@ func (r *UserRepository) GetByUsername(ctx context.Context, t tenant.TenantID, u
 }
 
 // GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
-// semantics. t is accepted for interface compliance; the lookup is by global
-// UUID PK (tenant-deriving), so no tenant predicate. The mem store serializes
-// via store.mu held in RunInTx — for details see UserRepository lock contract.
+// semantics. The lookup is tenant-scoped (NOT the GetByID carve-out): callers
+// are post-auth and carry a tenant, so the for-update read must reject a
+// cross-tenant row (mirrors PG selectUserByIDForUpdateSQL's WHERE tenant_id
+// predicate). Cross-tenant rows found via the global by-PK index are collapsed
+// to ErrAuthUserNotFound. The mem store serializes via store.mu held in RunInTx
+// — for details see UserRepository lock contract.
 func (r *UserRepository) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)

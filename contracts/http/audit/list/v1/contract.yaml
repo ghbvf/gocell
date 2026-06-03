@@ -66,7 +66,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks admin role, or a tenant-bearing caller (tenant-scoped audit query not yet supported; epic #1337 PR-2)"
+        description: "Forbidden — authenticated but lacks the admin role for a cross-user query, or the principal carries no tenant (a tenant-scoped audit read requires a tenant; epic #1337 PR-2a)"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

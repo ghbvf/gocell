@@ -70,6 +70,18 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	if !ok || p.Subject == "" {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
+	// Tenant isolation fail-closed (epic #1337 PR-2a, F1): a tenant-scoped audit
+	// read REQUIRES a concrete tenant. An authenticated principal with an empty
+	// TenantID cannot establish an isolation scope; rather than fall through to
+	// the store's "empty TenantID = no filter = all tenants" semantics (a
+	// cross-tenant read), reject here. Post-PR-2a every access token carries
+	// tenant_id (login requires it; sessionmint stamps it), so this only triggers
+	// for malformed/legacy tokens — never the normal path. This is the isolation
+	// boundary; canonical-UUID form is already enforced by the JWT authenticator.
+	if p.TenantID == "" {
+		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"audit query requires a tenant-scoped principal")
+	}
 	subject := p.Subject
 
 	actorID := req.ActorID
@@ -92,10 +104,10 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		// authenticated principal, never from a request field, so a caller reads
 		// its OWN tenant's audit trail PLUS tenant-less system events (e.g.
 		// bootstrap.auth.fail) — never another tenant's rows (see
-		// ledger.AuditFilters.TenantID). p.TenantID is non-empty for every JWT
-		// caller post-PR-2a (the access token carries tenant_id); the residual
-		// empty case is backstopped by DB-layer RLS (PR-3). This
-		// always-set-from-principal step is the isolation boundary.
+		// ledger.AuditFilters.TenantID). p.TenantID is guaranteed non-empty here
+		// (the empty case is rejected above — F1); DB-layer RLS (PR-3) is
+		// defense-in-depth for the non-empty path. This always-set-from-principal
+		// step is the isolation boundary.
 		TenantID:  p.TenantID,
 		EventType: req.EventType,
 		ActorID:   actorID,
@@ -188,8 +200,9 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // returned row already belongs to the caller's own tenant. A per-row tenantId
 // field would therefore be redundant (a constant equal to the caller's own
 // tenant), so it is omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate
-// and retired the appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). DB-layer
-// RLS (PR-3) is the defense-in-depth backstop.
+// and retired the appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). A principal
+// with an empty tenant is rejected at the List boundary (F1), so the read path is
+// never tenant-unscoped; DB-layer RLS (PR-3) is defense-in-depth.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond
