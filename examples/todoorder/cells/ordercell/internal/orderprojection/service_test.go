@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
+	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
@@ -30,6 +31,28 @@ func makeCreatedEntry(t *testing.T, id, status string) outbox.Entry {
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
 	return outboxtest.NewEntry("event.order-created.v1", b)
+}
+
+func makeStatusChangedEntry(t *testing.T, id, newStatus string) outbox.Entry {
+	t.Helper()
+	// oldStatus is schema-required but not consumed by the projection (only
+	// newStatus feeds the latest sub-view); a fixed value keeps the payload valid.
+	payload := orderstatuschanged.Payload{ID: id, OldStatus: "pending", NewStatus: newStatus}
+	b, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return outboxtest.NewEntry("event.order-status-changed.v1", b)
+}
+
+// statusOf returns the status bucket containing orderID in the summary, or "".
+func statusOf(s Summary, orderID string) string {
+	for _, b := range s.Statuses {
+		for _, id := range b.OrderIDs {
+			if id == orderID {
+				return b.Status
+			}
+		}
+	}
+	return ""
 }
 
 // TestHandleOrderCreated_ApplySuccess verifies that a valid order-created event
@@ -128,8 +151,80 @@ func TestHandleOrderCreated_MissingStatus_PermanentError(t *testing.T) {
 	assert.Equal(t, int64(0), summary.TotalOrders)
 }
 
-// TestResetOrderStatus_ClearsReadModel verifies that ResetOrderStatus clears
-// byStatus and orderAt.
+// TestHandleOrderStatusChanged_ApplySuccess verifies a status transition moves
+// the order from its created bucket to the transitioned bucket (composition:
+// latest wins over created).
+func TestHandleOrderStatusChanged_ApplySuccess(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	require.NoError(t, svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-1", "pending")))
+	assert.Equal(t, "pending", statusOf(svc.Query(ctx), "order-1"))
+
+	require.NoError(t, svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "confirmed")))
+
+	summary := svc.Query(ctx)
+	assert.Equal(t, int64(1), summary.TotalOrders, "transition must not create a second order")
+	assert.Equal(t, "confirmed", statusOf(summary, "order-1"), "latest transition wins over created status")
+}
+
+// TestHandleOrderStatusChanged_DecodeError_PermanentError verifies an
+// undecodable payload returns a permanent error and leaves the model unchanged.
+func TestHandleOrderStatusChanged_DecodeError_PermanentError(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	err := svc.HandleOrderStatusChanged(ctx, outboxtest.NewEntry("event.order-status-changed.v1", []byte("not-json")))
+	require.Error(t, err)
+	var pe *outbox.PermanentError
+	assert.True(t, errors.As(err, &pe), "expected permanent error, got %T: %v", err, err)
+	assert.Equal(t, int64(0), svc.Query(ctx).TotalOrders)
+}
+
+// TestHandleOrderStatusChanged_MissingID_PermanentError verifies a payload with
+// empty id returns a permanent error.
+func TestHandleOrderStatusChanged_MissingID_PermanentError(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	err := svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "", "confirmed"))
+	require.Error(t, err)
+	var pe *outbox.PermanentError
+	assert.True(t, errors.As(err, &pe), "expected permanent error")
+}
+
+// TestHandleOrderStatusChanged_MissingNewStatus_PermanentError verifies a
+// payload with empty newStatus returns a permanent error.
+func TestHandleOrderStatusChanged_MissingNewStatus_PermanentError(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	err := svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", ""))
+	require.Error(t, err)
+	var pe *outbox.PermanentError
+	assert.True(t, errors.As(err, &pe), "expected permanent error")
+}
+
+// TestResetTransition_ClearsTransitionViewOnly verifies ResetTransition clears
+// the latest sub-view but leaves the created sub-view intact (disjoint reset):
+// after the reset the order reverts to its created status, not absent.
+func TestResetTransition_ClearsTransitionViewOnly(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	require.NoError(t, svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-2", "pending")))
+	require.NoError(t, svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-2", "confirmed")))
+	require.Equal(t, "confirmed", statusOf(svc.Query(ctx), "order-2"))
+
+	require.NoError(t, svc.ResetTransition(ctx))
+
+	after := svc.Query(ctx)
+	assert.Equal(t, int64(1), after.TotalOrders, "created sub-view survives a transition reset")
+	assert.Equal(t, "pending", statusOf(after, "order-2"), "order reverts to created status after transition reset")
+}
+
+// TestResetOrderStatus_ClearsReadModel verifies that ResetOrderStatus clears the
+// created sub-view (Query returns an empty model when no transitions remain).
 func TestResetOrderStatus_ClearsReadModel(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

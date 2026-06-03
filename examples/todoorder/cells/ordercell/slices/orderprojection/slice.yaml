@@ -9,6 +9,11 @@ contractUsages:
     handler: HandleOrderCreated
     projection: order_status
     onReset: ResetOrderStatus
+  - contract: event.order-status-changed.v1
+    role: subscribe
+    handler: HandleOrderStatusChanged
+    projection: order_transition
+    onReset: ResetTransition
   - contract: projection.order.status-summary.v1
     role: provide
   - contract: http.order.projection-summary.v1
@@ -19,6 +24,7 @@ verify:
     - unit.orderprojection.service
   contract:
     - contract.event.order-created.v1.subscribe
+    - contract.event.order-status-changed.v1.subscribe
     - contract.projection.order.status-summary.v1.provide
     - contract.http.order.projection-summary.v1.serve
 

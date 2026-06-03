@@ -1,5 +1,5 @@
 id: J-orderprojection
-goal: "Create an order, observe the L3 status-summary read model reflect it via async (in-process best-effort) event consumption driven by the framework projection.Coordinator harness (single-stream, reg.RegisterProjection)"
+goal: "Create and confirm an order, observe the L3 status-summary read model reflect both the creation and the status transition. Two independent single-stream projections (order_status from event.order-created.v1, order_transition from event.order-status-changed.v1) are registered via reg.RegisterProjection and composed at query time (latest transition wins); the framework projection.Coordinator harness drives each."
 lifecycle: active
 owner:
   team: examples
@@ -10,15 +10,19 @@ contracts:
   - http.order.create.v1
   - http.order.confirm.v1
   - event.order-created.v1
+  - event.order-status-changed.v1
   - projection.order.status-summary.v1
   - http.order.projection-summary.v1
 passCriteria:
-  - text: "PATCH /api/v1/orders/{id}/status confirms a pending order over HTTP (auto smoke of the order lifecycle surface; order-status-changed.v1 is draft and not consumed by the single-stream projection)"
+  - text: "PATCH /api/v1/orders/{id}/status confirms a pending order over HTTP and publishes event.order-status-changed.v1 via the L2 outbox path (auto smoke of the order lifecycle command surface)"
     mode: auto
     checkRef: journey.J-orderprojection.http-confirm
+  - text: "The order_transition projection consumes event.order-status-changed.v1 and moves the order from its created status bucket to the transitioned bucket in the composed status-summary read model"
+    mode: auto
+    checkRef: journey.J-orderprojection.status-transition-projection
   - text: "POST /api/v1/orders creates an order and publishes event.order-created.v1 via the L2 outbox path"
     mode: manual
-  - text: "GET /api/v1/orders/projection/summary reflects the created order in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort via the framework projection.Coordinator)"
+  - text: "GET /api/v1/orders/projection/summary reflects both the created order and its later status transition in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort via the framework projection.Coordinator)"
     mode: manual
-  - text: "Framework-owned rebuild (Coordinator.Rebuild, triggerable via the internal control-plane endpoint POST /internal/v1/ordercell/projection/order_status/rebuild — caller cell controlplane) calls ResetOrderStatus then replays event.order-created.v1 from MemReplaySource to reconstruct a byte-identical projection snapshot (rebuild idempotence)"
+  - text: "Framework-owned rebuild (Coordinator.Rebuild, triggerable per projection via the internal control-plane endpoints POST /internal/v1/ordercell/projection/{order_status,order_transition}/rebuild — caller cell controlplane) resets and replays ONE projection's own stream from MemReplaySource without disturbing the other's disjoint sub-view (the per-spec replay filter skips foreign streams), reconstructing a byte-identical composed snapshot (rebuild idempotence + disjoint reset)"
     mode: manual

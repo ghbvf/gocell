@@ -187,6 +187,18 @@ var errReplayDone = errors.New("projection.rebuild: replay reached head0")
 // Each event is applied via applyOne in its own tx (exactly-once skip + pos<1
 // guard apply). Stops at head0 (catchup picks up from there).
 //
+// Per-spec replay filtering (#1482): the bootstrap-wired ReplaySource is a
+// single whole-journal source shared by every projection Coordinator (kernel
+// contract: one source serves all projections), so a rebuild interleaves every
+// cell's event streams. The business Apply runs ONLY for entries whose routing
+// topic matches this projection's subscribed spec — mirroring live topic-routed
+// delivery, so the Apply never sees a foreign stream and needs no defensive
+// topic check. Foreign entries are NOT applied but DO advance the checkpoint
+// (advanceOffsetPastForeign): catchupPhase compares the checkpoint against the
+// whole-journal Head, so skipping the checkpoint on a trailing foreign entry
+// would leave catchup unable to terminate. Filtering thus gates the Apply, not
+// the checkpoint.
+//
 // v1: replay is bounded only by Close()/process shutdown (no max-entries /
 // max-duration). The triggering request's deadline does NOT bound it — the
 // rebuild ctx is derived via context.WithoutCancel, which strips the parent
@@ -204,7 +216,12 @@ func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 			// the ambient tx carried in txCtx.
 			rctx := entry.Observability().RestoreToContext(txCtx)
 			rctx = entry.Principal().RestoreToContext(rctx)
-			return c.applyOne(rctx, entry, c.apply)
+			// Per-spec replay filter (#1482): apply only this projection's stream;
+			// advance the checkpoint past foreign streams without applying.
+			if entry.RoutingTopic() == c.spec.Topic {
+				return c.applyOne(rctx, entry, c.apply)
+			}
+			return c.advanceOffsetPastForeign(rctx, entry)
 		}); err != nil {
 			return fmt.Errorf("projection.rebuild[replay]: %w", err)
 		}
@@ -224,6 +241,39 @@ func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 		return nil
 	}
 	return err
+}
+
+// advanceOffsetPastForeign advances the projection checkpoint past a replayed
+// entry that does NOT belong to this projection's subscribed topic, WITHOUT
+// invoking the business Apply or touching the replay-lag metrics.
+//
+// Rationale: see replayPhase. The whole-journal ReplaySource interleaves every
+// cell's streams; a projection must skip foreign streams (live delivery is
+// topic-routed and never delivers them) yet still record journal progress so
+// catchupPhase — which compares the checkpoint against the whole-journal Head —
+// can terminate even when the last journal entry belongs to another stream.
+// The 1-based and exactly-once (pos <= current) guards mirror applyOne so a
+// foreign skip can never move the checkpoint backward or past a bad cursor.
+func (c *Coordinator) advanceOffsetPastForeign(ctx context.Context, entry outbox.Entry) error {
+	current, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
+	if err != nil {
+		return fmt.Errorf("projection.replay[foreign-load]: %w", err)
+	}
+	pos, err := c.cursor.Position(entry)
+	if err != nil {
+		return fmt.Errorf("projection.replay[foreign-cursor]: %w", err)
+	}
+	if pos < 1 {
+		return outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.replay: cursor returned a non-positive position; Cursor must honor the 1-based invariant"))
+	}
+	if pos <= current {
+		return nil
+	}
+	if err := c.store.SaveOffset(ctx, c.cellID, c.projectionID, pos); err != nil {
+		return fmt.Errorf("projection.replay[foreign-save]: %w", err)
+	}
+	return nil
 }
 
 // catchupPhase waits until the checkpoint has caught up to the current head.

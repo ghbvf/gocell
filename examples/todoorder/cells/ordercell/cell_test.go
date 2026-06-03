@@ -14,10 +14,14 @@ import (
 
 	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	orderprojection "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
+	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
+	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
@@ -347,6 +351,43 @@ func TestOrderCell_RouteConfirmOrder(t *testing.T) {
 // passCriteria journey.J-orderprojection.http-confirm (VERIFY-06).
 func TestJOrderprojectionHttpConfirm(t *testing.T) {
 	TestOrderCell_RouteConfirmOrder(t)
+}
+
+// TestJOrderprojectionStatusTransitionProjection is the auto checkRef for
+// J-orderprojection passCriteria journey.J-orderprojection.status-transition-projection
+// (VERIFY-06). It drives the order_transition projection's HandleOrderStatusChanged
+// directly — deterministic, since demo-mode NoopWriter skips live event delivery —
+// and asserts a created→confirmed transition moves the order between status
+// buckets in the composed status-summary read model (#1482).
+func TestJOrderprojectionStatusTransitionProjection(t *testing.T) {
+	svc, err := orderprojection.NewService()
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	createdPayload, err := json.Marshal(ordercreated.Payload{ID: "order-X", Item: "widget", Status: "pending"})
+	require.NoError(t, err)
+	require.NoError(t, svc.HandleOrderCreated(ctx, outboxtest.NewEntry("event.order-created.v1", createdPayload)))
+	require.Equal(t, "pending", projectionStatusOf(svc.Query(ctx), "order-X"),
+		"order-X is pending after creation")
+
+	changedPayload, err := json.Marshal(orderstatuschanged.Payload{ID: "order-X", OldStatus: "pending", NewStatus: "confirmed"})
+	require.NoError(t, err)
+	require.NoError(t, svc.HandleOrderStatusChanged(ctx, outboxtest.NewEntry("event.order-status-changed.v1", changedPayload)))
+	assert.Equal(t, "confirmed", projectionStatusOf(svc.Query(ctx), "order-X"),
+		"consuming order-status-changed.v1 must move the order to its new status bucket")
+}
+
+// projectionStatusOf returns the status bucket containing orderID in the
+// composed summary, or "" if absent.
+func projectionStatusOf(s orderprojection.Summary, orderID string) string {
+	for _, b := range s.Statuses {
+		for _, id := range b.OrderIDs {
+			if id == orderID {
+				return b.Status
+			}
+		}
+	}
+	return ""
 }
 
 func TestOrderCell_RouteListOrders(t *testing.T) {

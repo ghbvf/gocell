@@ -89,7 +89,10 @@ func makeReplayWithEntries(t *testing.T, n int) (*MemReplaySource, *MemCursor) {
 		t.Fatalf("NewMemCursor() error = %v", err)
 	}
 	for i := 0; i < n; i++ {
-		entry := mustNewTestEntry(t, clk, "topic.v1")
+		// Seed with the same topic the Coordinator subscribes to (minimalSpec.Topic)
+		// so the per-spec replay filter (#1482) treats every seeded entry as
+		// own-stream and applies it.
+		entry := mustNewTestEntry(t, clk, testEventTopic)
 		src.Append(entry)
 	}
 	return src, cur
@@ -149,6 +152,62 @@ func TestRebuild_ColdFull(t *testing.T) {
 	}
 	if c.Phase() != PhaseLive {
 		t.Errorf("Phase = %v, want PhaseLive", c.Phase())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_PerSpecTopicFilter — #1482 per-spec replay filter
+// ---------------------------------------------------------------------------
+
+// TestRebuild_PerSpecTopicFilter verifies the #1482 per-spec replay filter: a
+// rebuild over a whole-journal source that interleaves foreign streams must
+// invoke the business Apply ONLY for entries whose routing topic matches the
+// subscribed spec.Topic, while the checkpoint still advances past foreign
+// entries so catchup can reach the whole-journal head (even when the trailing
+// journal entry belongs to another stream).
+func TestRebuild_PerSpecTopicFilter(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	src := NewMemReplaySource()
+	cur, err := NewMemCursor(src)
+	if err != nil {
+		t.Fatalf("NewMemCursor: %v", err)
+	}
+
+	// Interleave own-stream (testEventTopic) and foreign-stream entries. Positions
+	// are assigned by insertion index (1..4); the LAST entry is foreign to prove
+	// the checkpoint advances to head over a trailing foreign entry.
+	const foreignTopic = "other.stream.v1"
+	src.Append(mustNewTestEntry(t, clk, testEventTopic)) // pos 1 — own
+	src.Append(mustNewTestEntry(t, clk, foreignTopic))   // pos 2 — foreign
+	src.Append(mustNewTestEntry(t, clk, testEventTopic)) // pos 3 — own
+	src.Append(mustNewTestEntry(t, clk, foreignTopic))   // pos 4 — foreign
+
+	store := NewMemCheckpointStore()
+	var applied int32
+	apply := func(_ context.Context, e outbox.Entry) error {
+		atomic.AddInt32(&applied, 1)
+		if e.RoutingTopic() != testEventTopic {
+			t.Errorf("business Apply called with foreign topic %q; per-spec filter must gate it out", e.RoutingTopic())
+		}
+		return nil
+	}
+
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, store: store, cursor: cur, replay: src})
+	subscribeWithDefaults(t, c, apply)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitForPhase(t, c, PhaseLive)
+
+	if got := atomic.LoadInt32(&applied); got != 2 {
+		t.Errorf("apply count = %d, want 2 (only own-stream entries reach the business Apply)", got)
+	}
+	head, _ := src.Head(context.Background())
+	cp, _ := store.LoadOffset(context.Background(), "testcell", "p1")
+	if cp != head {
+		t.Errorf("checkpoint = %d, want %d (head — checkpoint advances past foreign entries)", cp, head)
 	}
 }
 

@@ -243,8 +243,6 @@ func TestMemReplaySource_PositionConsistency(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // mustNewTestEntry creates a minimal outbox.Entry for replay tests.
-//
-//nolint:unparam // eventType="topic.v1" in current callers; param kept for future tests
 func mustNewTestEntry(t *testing.T, clk *clockmock.FakeClock, eventType string) outbox.Entry {
 	t.Helper()
 	e, err := outbox.NewEntry(clk, context.Background(), eventType, []byte(`{}`))

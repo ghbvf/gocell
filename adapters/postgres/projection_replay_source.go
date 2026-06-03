@@ -90,16 +90,22 @@ func (s *PGProjectionReplaySource) Head(ctx context.Context) (int64, error) {
 // entries already passed to fn are NOT retried. ctx cancellation is honored
 // between rows (pgx aborts the streaming query when ctx is done).
 //
-// # Whole-journal delivery — no per-spec topic filter (v1)
+// # Whole-journal delivery — per-spec filtering lives in the Coordinator
 //
 // Replay delivers the ENTIRE outbox journal regardless of topic/event type; it
 // is not filtered to a single projection's subscribed stream. This matches the
 // kernel contract (one shared ReplaySource serves every projection Coordinator)
-// and MemReplaySource. The rebuild path (Coordinator.replayPhase) therefore hands
-// every journal entry to the business Apply, so a projection whose journal mixes
-// heterogeneous streams must tolerate (ignore) events it did not subscribe to
-// during a rebuild — live delivery is already topic-filtered by the EventRouter.
-// Per-spec replay filtering is the deferred #1482 follow-up.
+// and MemReplaySource. Per-spec apply filtering (#1482) is applied one layer up
+// in Coordinator.replayPhase: the rebuild hands every journal entry to the
+// Coordinator, which invokes the business Apply ONLY for entries whose routing
+// topic matches the projection's subscribed spec (foreign streams advance the
+// checkpoint without applying). The business Apply therefore never sees a
+// foreign stream and needs no defensive topic check. Pushing the topic filter
+// further down into the SQL (WHERE topic = $1) is a future efficiency
+// optimization for the PG source only — it is NOT required for correctness and
+// is deferred while the PG journal-backed reader stays gated off by default
+// (preview-only; not durably sound until the retained projection journal #1504
+// lands), so SQL-level pruning would optimize a path not yet production-active.
 func (s *PGProjectionReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(kout.Entry) error) error {
 	rows, err := s.db.Query(ctx, replayScanSQL, fromOffset)
 	if err != nil {

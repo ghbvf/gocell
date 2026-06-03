@@ -18,6 +18,7 @@ var sliceMeta = &metadata.SliceMeta{
 	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.order-created.v1", Role: "subscribe", Handler: "HandleOrderCreated", Projection: "order_status", OnReset: "ResetOrderStatus"},
+		{Contract: "event.order-status-changed.v1", Role: "subscribe", Handler: "HandleOrderStatusChanged", Projection: "order_transition", OnReset: "ResetTransition"},
 		{Contract: "projection.order.status-summary.v1", Role: "provide"},
 		{Contract: "http.order.projection-summary.v1", Role: "serve"},
 	},
@@ -27,6 +28,7 @@ var sliceMeta = &metadata.SliceMeta{
 		},
 		Contract: []string{
 			"contract.event.order-created.v1.subscribe",
+			"contract.event.order-status-changed.v1.subscribe",
 			"contract.projection.order.status-summary.v1.provide",
 			"contract.http.order.projection-summary.v1.serve",
 		},
