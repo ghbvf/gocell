@@ -77,12 +77,12 @@ func TestServiceRegistrar_Register_BufconnRoundTrip(t *testing.T) {
 
 	// Serve on bufconn.
 	lis := bufconn.Listen(registrarBufSize)
-	defer lis.Close()
+	defer func() { _ = lis.Close() }()
 	go func() { _ = srv.Serve(lis) }()
 	defer srv.GracefulStop()
 
 	cc := dialBufconn(t, lis)
-	defer cc.Close()
+	defer func() { _ = cc.Close() }()
 
 	ctx := context.Background()
 	resp, err := grpc_health_v1.NewHealthClient(cc).Check(ctx, &grpc_health_v1.HealthCheckRequest{})

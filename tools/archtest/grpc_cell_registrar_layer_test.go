@@ -39,7 +39,7 @@
 // # Blind spots (per AI-robust §载体决策原则 "强制盲区自检")
 //
 //   - reflect.TypeOf cannot observe the runtime dynamic type stored in the field;
-//     the type-assert behaviour is covered by registrar_test.go (cases 5/6).
+//     the type-assert behavior is covered by registrar_test.go (cases 5/6).
 //   - This archtest does NOT verify kernel⊥grpc directly — that is handled by the
 //     existing depguard + kernel_internal_dag_test.go gate (see above); duplication
 //     would be a Soft override of a Hard gate, which ai-robust.md prohibits.

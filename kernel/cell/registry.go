@@ -279,6 +279,25 @@ type Registrar interface {
 	// invoked only when at least one changed key matches a prefix. An empty
 	// string inside prefixes is a programming error and panics.
 	OnConfigReload(prefixes []string, fn func(context.Context, ConfigChangeEvent) error)
+
+	// GRPCService records a gRPC service declaration (GAP-1 PR-7 [#1150]).
+	// The spec is validated and accumulated during Init; bootstrap drains
+	// RegistrySnapshot.GRPCServices in phase7b — after binding listeners but
+	// before calling grpcServeAll — so services are reachable from the first
+	// accepted connection.
+	//
+	// spec.Register holds a func(grpc.ServiceRegistrar) callback (stored as any
+	// because kernel/ must not import grpc). The runtime/grpc layer type-asserts
+	// and invokes it. A nil Register fails Validate; a wrong dynamic type panics
+	// via panicregister.Approved("grpc-registrar-bad-register-fn", …) in
+	// runtime/grpc.ServiceRegistrar.Register.
+	//
+	// Returns a non-nil error when:
+	//   - spec.Validate() fails (empty ContractID / CellID / zero Listener / nil Register)
+	//   - the ContractID has already been registered by this cell (dedup by ContractID)
+	//
+	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
+	GRPCService(spec GRPCServiceSpec) error
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +631,12 @@ type RegistrySnapshot struct {
 	// projection.Coordinator per request and calls Coordinator.Subscribe — same
 	// write-side-accumulate / read-side-drain split as Subscriptions.
 	Projections []ProjectionRequest
+
+	// GRPCServices are the gRPC service declarations accumulated via
+	// reg.GRPCService(...) during Init (GAP-1 PR-7 [#1150]). bootstrap drains
+	// them in phase7b — after binding gRPC listeners but before grpcServeAll —
+	// routing each spec to the listener identified by spec.Listener.
+	GRPCServices []GRPCServiceSpec
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +663,8 @@ type RegistryRecorder struct {
 	webhookDispatchers []WebhookDispatchRequest
 	projections        []ProjectionRequest
 	projectionIDs      map[string]struct{}
+	grpcServices       []GRPCServiceSpec
+	grpcServiceIDs     map[string]struct{}
 
 	finalized bool
 }
@@ -659,11 +686,12 @@ func NewRegistryRecorder(cfg map[string]any, mode outbox.DurabilityMode) *Regist
 // logger. Provided for testing so log output can be captured.
 func NewRegistryRecorderWithLogger(cfg map[string]any, mode outbox.DurabilityMode, log *slog.Logger) *RegistryRecorder {
 	return &RegistryRecorder{
-		cfg:           cfg,
-		mode:          mode,
-		log:           log,
-		probeNames:    make(map[healthz.ProbeName]struct{}),
-		projectionIDs: make(map[string]struct{}),
+		cfg:            cfg,
+		mode:           mode,
+		log:            log,
+		probeNames:     make(map[healthz.ProbeName]struct{}),
+		projectionIDs:  make(map[string]struct{}),
+		grpcServiceIDs: make(map[string]struct{}),
 	}
 }
 
@@ -840,6 +868,26 @@ func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
 	return nil
 }
 
+// GRPCService validates and appends a GRPCServiceSpec (record-only — see
+// Registrar.GRPCService godoc). Mirrors RegisterProjection: validate →
+// dedup-by-ContractID → append.
+func (r *RegistryRecorder) GRPCService(spec GRPCServiceSpec) error {
+	r.mustNotBeFinalized("GRPCService")
+
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	if _, dup := r.grpcServiceIDs[spec.ContractID]; dup {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry GRPCService: duplicate ContractID; each gRPC service must have a "+
+				"unique ContractID within its cell (ContractID="+spec.ContractID+")")
+	}
+
+	r.grpcServiceIDs[spec.ContractID] = struct{}{}
+	r.grpcServices = append(r.grpcServices, spec)
+	return nil
+}
+
 // RegisterReadiness accumulates a probe under the typed name. First-wins
 // duplicate semantics match the runtime aggregator: a second registration
 // with the same name returns [healthz.ErrDuplicateProbe] and is not stored.
@@ -947,6 +995,9 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	projs := make([]ProjectionRequest, len(r.projections))
 	copy(projs, r.projections)
 
+	grpcSvcs := make([]GRPCServiceSpec, len(r.grpcServices))
+	copy(grpcSvcs, r.grpcServices)
+
 	return RegistrySnapshot{
 		RouteGroups:        rgs,
 		Subscriptions:      subs,
@@ -956,6 +1007,7 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 		WebhookReceivers:   whRecv,
 		WebhookDispatchers: whDisp,
 		Projections:        projs,
+		GRPCServices:       grpcSvcs,
 	}
 }
 

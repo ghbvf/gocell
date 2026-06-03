@@ -26,9 +26,9 @@ import (
 
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/kernel/assembly"
-	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -73,12 +73,19 @@ func grpcBufDial(t *testing.T, lis *bufconn.Listener) *grpc.ClientConn {
 	return cc
 }
 
+// newGRPCDrainCell constructs a grpcDrainCell with a properly initialized BaseCell.
+func newGRPCDrainCell(t *testing.T, id string, ref cell.ListenerRef, registerFn func(grpc.ServiceRegistrar)) *grpcDrainCell {
+	t.Helper()
+	base := cell.MustNewBaseCell(&metadata.CellMeta{ID: id})
+	return &grpcDrainCell{BaseCell: base, id: id, ref: ref, registerFn: registerFn}
+}
+
 // drainTestAssembly builds a CoreAssembly containing one stub cell that
 // registers a GRPCServiceSpec targeting the given listener ref.
 func drainTestAssembly(t *testing.T, id string, ref cell.ListenerRef, registerFn func(grpc.ServiceRegistrar)) *assembly.CoreAssembly {
 	t.Helper()
 	asm := assembly.New(clock.Real(), assembly.Config{ID: id, DurabilityMode: outbox.DurabilityDemo})
-	c := &grpcDrainCell{id: id, ref: ref, registerFn: registerFn}
+	c := newGRPCDrainCell(t, id, ref, registerFn)
 	require.NoError(t, asm.Register(c))
 	return asm
 }
@@ -110,7 +117,7 @@ func TestGRPCDrain_HappyPath(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	cc := grpcBufDial(t, lis)
-	defer cc.Close()
+	defer func() { _ = cc.Close() }()
 
 	// Wait for health to be SERVING (proves service was registered before Serve).
 	testwait.External(t, "grpc-drain-serving", func() bool {
@@ -191,11 +198,9 @@ func TestGRPCDrain_CellIDMismatch_FailFast(t *testing.T) {
 	const cellID = "grpc-cellid-mismatch"
 	lis := bufconn.Listen(grpcTestBufSize)
 	// The cell registers a spec with a different CellID than the snapshot key.
-	asm := drainTestAssembly(t, cellID, cell.PrimaryListener, func(r grpc.ServiceRegistrar) {})
-	// Patch the cell so its spec has a mismatched CellID.
-	c := &grpcDrainCell{id: cellID, ref: cell.PrimaryListener, overrideCellID: "wrong-cell"}
+	base := cell.MustNewBaseCell(&metadata.CellMeta{ID: cellID})
+	c := &grpcDrainCell{BaseCell: base, id: cellID, ref: cell.PrimaryListener, overrideCellID: "wrong-cell"}
 	asm2 := assembly.New(clock.Real(), assembly.Config{ID: cellID + "2", DurabilityMode: outbox.DurabilityDemo})
-	// We use a different approach: use a cell that registers the spec with wrong CellID.
 	require.NoError(t, asm2.Register(c))
 
 	srv := buildDrainAdapterServer(t)
@@ -223,14 +228,17 @@ func TestGRPCDrain_CellIDMismatch_FailFast(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type grpcDrainCell struct {
-	cell.BaseCell
+	*cell.BaseCell
 	id             string
 	ref            cell.ListenerRef
 	registerFn     func(grpc.ServiceRegistrar)
 	overrideCellID string // non-empty → use this CellID in the spec (mismatch test)
 }
 
-func (c *grpcDrainCell) Init(_ context.Context, reg cell.Registrar) error {
+func (c *grpcDrainCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	cellID := c.id
 	if c.overrideCellID != "" {
 		cellID = c.overrideCellID

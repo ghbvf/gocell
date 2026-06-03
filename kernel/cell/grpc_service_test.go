@@ -109,7 +109,7 @@ func TestRegistryRecorder_GRPCService_DuplicateContractID(t *testing.T) {
 func TestRegistryRecorder_GRPCService_ValidateError(t *testing.T) {
 	t.Parallel()
 	r := cell.NewRegistryRecorder(nil, outbox.DurabilityDemo)
-	spec := validGRPCSpec("")  // empty ContractID → Validate fails
+	spec := validGRPCSpec("") // empty ContractID → Validate fails
 	err := r.GRPCService(spec)
 	require.Error(t, err)
 }
