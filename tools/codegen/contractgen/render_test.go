@@ -351,6 +351,50 @@ func TestRender_Event_Transports(t *testing.T) {
 	})
 }
 
+// TestRender_HTTP_Transport locks the handler.tmpl transport derivation (#1389):
+// the generated contractSpec.Transport must derive from Transports[0], not be
+// a hardcoded "http" literal in the template.
+//
+// Derivation lock (NOT a hardcoded primary): the HTTP spec is built with a
+// NON-"http" primary (mqtt) by directly overwriting spec.Transports after
+// buildContractSpec. This bypasses governance FMT-39, which is fine here — the
+// point is a pure render derivation lock. A regression that hardcodes
+// Transport: "http" in handler.tmpl would produce Transport: "http" even though
+// Transports[0]="mqtt", causing the assertion below to fail.
+//
+// Mutation check: if handler.tmpl said `Transport: "http"` hardcoded, the
+// rendered output would contain `Transport: "http"` not `Transport: "mqtt"`,
+// and strings.Contains(out, `Transport: "mqtt"`) would be false — test fails.
+func TestRender_HTTP_Transport(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["http.order.create.v1"].Codegen = true
+
+	spec, err := buildContractSpec(root, p, "http.order.create.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	// Inject a non-"http" primary transport directly on the spec to prove the
+	// template derives Transport from Transports[0], not from a hardcoded "http".
+	spec.Transports = []string{"mqtt"}
+
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "handler.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		t.Fatalf("Render handler.tmpl: %v", err)
+	}
+	got := string(out)
+
+	if !strings.Contains(got, `Transport: "mqtt"`) {
+		t.Errorf("expected primary Transport \"mqtt\" (transports[0]) in contractSpec block, got:\n%s", got)
+	}
+	if strings.Contains(got, `Transport: "http"`) {
+		t.Errorf("Transport must derive transports[0]=mqtt, not a hardcoded \"http\", got:\n%s", got)
+	}
+}
+
 // TestRender_ExternalModulePath proves modulePath flows through contractgen
 // rendering: rendering the subscription template (which imports framework
 // kernel packages) under an EXTERNAL module path produces valid Go, and the
@@ -424,9 +468,10 @@ func TestBuildContractSpec_MissingHTTPEndpoint(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"http.foo.bar.v1": {
-				ID:      "http.foo.bar.v1",
-				Kind:    "http",
-				Codegen: true,
+				ID:         "http.foo.bar.v1",
+				Kind:       "http",
+				Codegen:    true,
+				Transports: []string{"http"}, // mirrors parser defaultTransportsForKind("http")
 				// No HTTP endpoint.
 			},
 		},
@@ -443,9 +488,10 @@ func TestBuildContractSpec_MissingPayloadRef(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"event.foo.bar.v1": {
-				ID:      "event.foo.bar.v1",
-				Kind:    "event",
-				Codegen: true,
+				ID:         "event.foo.bar.v1",
+				Kind:       "event",
+				Codegen:    true,
+				Transports: []string{"amqp"}, // mirrors parser defaultTransportsForKind("event")
 				// No schemaRefs.
 			},
 		},
@@ -457,6 +503,34 @@ func TestBuildContractSpec_MissingPayloadRef(t *testing.T) {
 	}
 }
 
+// TestBuildContractSpec_EmptyTransports verifies that buildContractSpec returns
+// a clear error when contract.Transports is nil/empty rather than panicking
+// inside a template at `index .Transports 0`. This covers the codegen path that
+// does NOT run governance FMT-39 (e.g. direct generate invocation).
+func TestBuildContractSpec_EmptyTransports(t *testing.T) {
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.synth.emptytransports.v1": {
+				ID:         "http.synth.emptytransports.v1",
+				Kind:       "http",
+				Codegen:    true,
+				Transports: nil, // simulate unknown kind / missing parser default
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := buildContractSpec(root, p, "http.synth.emptytransports.v1")
+	if err == nil {
+		t.Fatal("expected error for empty transports, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty transports") {
+		t.Errorf("error should mention 'empty transports', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "FMT-39") {
+		t.Errorf("error should reference governance rule FMT-39, got: %v", err)
+	}
+}
+
 // TestBuildContractSpec_CommandKind_GracefulSkip verifies that kind=command is
 // accepted without error. command and projection are in the closed set but do not
 // yet have full generators — only types_gen.go + iface_gen.go are emitted.
@@ -464,9 +538,10 @@ func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"command.foo.bar.v1": {
-				ID:      "command.foo.bar.v1",
-				Kind:    "command",
-				Codegen: true,
+				ID:         "command.foo.bar.v1",
+				Kind:       "command",
+				Codegen:    true,
+				Transports: []string{"amqp"}, // mirrors parser defaultTransportsForKind("command")
 			},
 		},
 	}

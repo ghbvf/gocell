@@ -851,9 +851,10 @@ func TestGenerate_PropagatesBuildSpecError_C5(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"http.test.c5.v1": {
-				ID:      "http.test.c5.v1",
-				Kind:    "http",
-				Codegen: true,
+				ID:         "http.test.c5.v1",
+				Kind:       "http",
+				Codegen:    true,
+				Transports: []string{"http"}, // mirrors parser defaultTransportsForKind("http")
 				Endpoints: metadata.EndpointsMeta{
 					Server: metadatatest.CellIDTestCell,
 					HTTP: &metadata.HTTPTransportMeta{
