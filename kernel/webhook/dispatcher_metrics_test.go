@@ -73,15 +73,28 @@ func TestDispatcher_Handle_RecordsResultMetric(t *testing.T) {
 	}
 }
 
+// dispatchTransportTimeout is the per-attempt delivery timeout used by the
+// transport-error test: short enough that the client aborts the request while
+// the server handler is still blocked, forcing a transport fault.
+const dispatchTransportTimeout = 10 * time.Millisecond
+
 // TestDispatcher_Handle_TransportError_RecordsTransportResult asserts a transport
 // fault (timeout, no HTTP response) records result=transport_error and a
 // duration sample (the time spent before the failure).
 func TestDispatcher_Handle_TransportError_RecordsTransportResult(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(200 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
+	// The handler parks on a channel the test closes at teardown: the client's
+	// short delivery timeout fires first (forcing the transport fault) while the
+	// server goroutine stays blocked, and `defer close(done)` runs before
+	// `defer srv.Close()` (LIFO) so Close never waits on a stuck handler. This is
+	// deterministic with no wall-clock sleep (blocking on r.Context().Done() does
+	// NOT work — the HTTP/1.1 server does not cancel the request context promptly
+	// on a client timeout, which deadlocks srv.Close).
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-done
 	}))
 	defer srv.Close()
+	defer close(done)
 
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
@@ -89,7 +102,7 @@ func TestDispatcher_Handle_TransportError_RecordsTransportResult(t *testing.T) {
 
 	d, err := NewDispatcher(clockmock.New(time.Unix(dispatchTestTS, 0)),
 		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL),
-		WithMetrics(m, "stripe"), WithDeliveryTimeout(10*time.Millisecond))
+		WithMetrics(m, "stripe"), WithDeliveryTimeout(dispatchTransportTimeout))
 	require.NoError(t, err)
 
 	res := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
