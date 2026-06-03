@@ -143,6 +143,13 @@ type Bootstrap struct {
 	shutdownMet        *metricsmiddleware.ShutdownCollector
 	shutdownMetricsErr error
 
+	// idempotencyCollector is cached after first construction so every listener
+	// router shares the same collector and avoids re-registering the fixed-name
+	// idempotency_requests_total family (a 2nd listener would otherwise hit a
+	// duplicate-name conflict). Mirrors httpCollector; wired by
+	// autoWireIdempotencyMetricsCollector.
+	idempotencyCollector *metricsmiddleware.IdempotencyCollector
+
 	// outboxRejectCollector is cached after first construction so multiple
 	// ConsumerBase wirings share the same collector and avoid double-registering
 	// outbox_consumer_rejected_total. PendingDepth is per-cell and wired
