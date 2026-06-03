@@ -113,7 +113,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	// Simulate lag: remove entries for versions > 3 so VerifyExpectedVersion sees
 	// actual < expected and returns a schema mismatch error.
 	_, execErr := pool.DB().Exec(ctx,
-		"DELETE FROM schema_migrations WHERE version_id > 3")
+		"DELETE FROM schema_migrations_platform WHERE version_id > 3")
 	require.NoError(t, execErr, "deleting version records must succeed")
 
 	// Schema verification now lives in verifyPGPreconditions (provisionPostgres).
