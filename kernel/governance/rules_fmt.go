@@ -1955,6 +1955,12 @@ func (v *Validator) fmt38PayloadFieldChecks(c *metadata.ContractMeta) []Validati
 // AI-robust: Medium (governance YAML-metadata validate layer; same tier as
 // FMT-36/FMT-37/FMT-38). The transport set is Hard-locked to the schema enum
 // via TestSchemaConstantsMatchSchemaLiterals#transportEnum.
+//
+// No dedicated TRANSPORT-SEALED-FUNNEL-01 archtest — the transport→ContractSpec
+// surface is already sealed by NO-MANUAL-CONTRACTSPEC-LITERAL-01 + codegen
+// golden; see ADR
+// docs/architecture/202606040210-1389-adr-mqtt-transports-multi-value-truth-source.md
+// §P2.5.
 func (v *Validator) validateFMT39() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -1973,8 +1979,8 @@ func (v *Validator) validateFMT39ForContract(c *metadata.ContractMeta) []Validat
 		results = append(results, v.newError(
 			codeFMT39, IssueRequired,
 			file, "transports",
-			fmt.Sprintf("contract %q has no transports declared; parser defaults per-kind, indicating an unknown or misconfigured kind", c.ID),
-			"declare transports or ensure kind is a known value",
+			fmt.Sprintf("contract %q (kind %q) has no transports declared; check that kind is a known value", c.ID, c.Kind),
+			"add transports: [amqp] to contract.yaml (event/command→amqp, http/webhook→http, grpc→grpc, projection/saga→internal)",
 		))
 		return results
 	}
@@ -1988,7 +1994,7 @@ func (v *Validator) validateFMT39ForContract(c *metadata.ContractMeta) []Validat
 				codeFMT39, IssueInvalid,
 				file, field,
 				fmt.Sprintf("contract %q transports[%d]=%q is not one of %v", c.ID, i, t, metadata.TransportEnum),
-				"use one of the allowed transport values: amqp, mqtt, internal, http, grpc",
+				fmt.Sprintf("use one of the allowed transport values: %s", strings.Join(metadata.TransportEnum, ", ")),
 			))
 			continue
 		}
@@ -2013,8 +2019,17 @@ func (v *Validator) validateFMT39ForContract(c *metadata.ContractMeta) []Validat
 }
 
 // checkFMT39KindCompat enforces the kind↔transport compatibility matrix.
-// "subset" kinds allow any sub-set of the allowed set;
-// "exact" kinds require precisely the named singleton.
+//
+// "exact" kinds (http/webhook→http, grpc→grpc, projection/saga→internal) must
+// equal exactly the named singleton because their transport is physically
+// determined by the kind's protocol — there is no wire transport of their own
+// that could differ.
+//
+// "subset" kinds (event, command) may use any sub-set of the allowed set
+// because they can run over multiple brokers simultaneously.
+//
+// Note: command excludes mqtt deliberately — commands are request-response;
+// mqtt is fire-and-forget/QoS-pub-sub, not suited for request-response.
 func (v *Validator) checkFMT39KindCompat(c *metadata.ContractMeta, file string) []ValidationResult {
 	kind := cellvocab.ContractKind(c.Kind)
 
@@ -2035,7 +2050,7 @@ func (v *Validator) checkFMT39KindCompat(c *metadata.ContractMeta, file string) 
 					"contract %q (kind %q) must have transports=[%q] exactly; got %v",
 					c.ID, c.Kind, string(want), c.Transports,
 				),
-				fmt.Sprintf("set transports: [%q] for kind=%q contracts", string(want), c.Kind),
+				fmt.Sprintf("set transports: [%s] for kind=%s contracts", string(want), c.Kind),
 			)}
 		}
 		return nil
@@ -2069,7 +2084,7 @@ func (v *Validator) checkFMT39KindCompat(c *metadata.ContractMeta, file string) 
 					"contract %q (kind %q) transport %q is not compatible; allowed: %v",
 					c.ID, c.Kind, t, allowedNames,
 				),
-				fmt.Sprintf("use only compatible transports for kind=%q: %v", c.Kind, allowedNames),
+				fmt.Sprintf("use only compatible transports for kind=%q: %s", c.Kind, strings.Join(allowedNames, ", ")),
 			))
 		}
 	}

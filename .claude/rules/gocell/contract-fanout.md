@@ -13,6 +13,7 @@
 - errcode 新 Kind / Category / Sentinel
 - errcode 新 `ERR_` 前缀命名空间：必须在同一 PR 内调用 `errcode.RegisterPrefix` 并重新生成 `pkg/errcode/testdata/prefix_set.golden`（`ERRCODE_PREFIX_GOLDEN_UPDATE=1`），由 `ERRCODE-PREFIX-OWNERSHIP-01` archtest 守卫
 - saga.Status 新常量 / journal.EventKind 新 Kind（扇出载体 = readyz 状态表 / conformance 终态覆盖 / alerting kind legend / TerminalEventKind 映射，由 archtest `SAGA-STATUS-FANOUT-COVERAGE-01` 机器守卫）
+- contract.yaml `transports:` 字段变化（新增/修改 transport 值）：触发 FMT-39 校验（membership ∈ `metadata.TransportEnum` + 无重复 + kind↔transport compat matrix），由 `validateFMT39` governance rule 守卫
 
 > 不触发：纯内部 helper 签名、未导出类型、CLI flag、observability label 调整。
 

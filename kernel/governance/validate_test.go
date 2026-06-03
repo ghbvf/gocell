@@ -2536,6 +2536,41 @@ func TestFMT39(t *testing.T) {
 			},
 			wantCount: 0,
 		},
+		// webhook + [http] — valid exact singleton
+		{
+			name: "webhook with [http] — valid exact singleton",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["webhook.test.v1"] = contractWith("webhook.test.v1", "webhook", []string{"http"})
+			},
+			wantCount: 0,
+		},
+		// webhook + [amqp] — invalid kind mismatch
+		{
+			name: "webhook with [amqp] — kind mismatch",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["webhook.test.v1"] = contractWith("webhook.test.v1", "webhook", []string{"amqp"})
+			},
+			wantCount: 1,
+			wantIssue: IssueMismatch,
+			wantField: "transports",
+		},
+		// command + [amqp] — valid subset
+		{
+			name: "command with [amqp] — valid subset",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["command.test.v1"] = contractWith("command.test.v1", "command", []string{"amqp"})
+			},
+			wantCount: 0,
+		},
+		// command + [grpc] — invalid (grpc not in command allowed subset)
+		{
+			name: "command with [grpc] — kind mismatch",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["command.test.v1"] = contractWith("command.test.v1", "command", []string{"grpc"})
+			},
+			wantCount: 1,
+			wantIssue: IssueMismatch,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
