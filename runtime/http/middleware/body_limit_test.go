@@ -19,7 +19,7 @@ import (
 )
 
 func TestBodyLimit_UnderLimit(t *testing.T) {
-	handler := BodyLimit(1024, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(1024, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
 		assert.Equal(t, "hello", string(body))
@@ -35,7 +35,7 @@ func TestBodyLimit_UnderLimit(t *testing.T) {
 }
 
 func TestBodyLimit_ExactContentLengthOverLimit(t *testing.T) {
-	handler := BodyLimit(10, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(10, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
 
@@ -57,7 +57,7 @@ func TestBodyLimit_ExactContentLengthOverLimit(t *testing.T) {
 
 func TestBodyLimit_MaxBytesReaderTriggered(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	handler := BodyLimit(10, mc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(10, mc, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := io.ReadAll(r.Body)
 		// MaxBytesReader returns an error when body exceeds limit
 		assert.Error(t, err)
@@ -79,7 +79,7 @@ func TestBodyLimit_MaxBytesReaderTriggered(t *testing.T) {
 }
 
 func TestBodyLimit_DefaultLimit(t *testing.T) {
-	handler := BodyLimit(0, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(0, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -95,7 +95,7 @@ func TestBodyLimit_DefaultLimit(t *testing.T) {
 // fast-path rejection increments the body-limit rejection counter.
 func TestBodyLimit_RecordsRejectionMetric(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	handler := BodyLimit(10, mc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(10, mc, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not run when body limit rejects")
 	}))
 
@@ -121,7 +121,7 @@ func TestBodyLimit_RecordsRejectionMetric(t *testing.T) {
 // TestBodyLimit_NilCollector_NoRejectionCounted verifies that passing nil
 // collector does not panic and no counter is incremented.
 func TestBodyLimit_NilCollector_NoRejectionCounted(t *testing.T) {
-	handler := BodyLimit(10, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(10, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not run")
 	}))
 
@@ -139,7 +139,7 @@ func TestBodyLimit_NilCollector_NoRejectionCounted(t *testing.T) {
 // requests do not increment the body-limit rejection counter.
 func TestBodyLimit_UnderLimit_NoRejectionCounted(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	handler := BodyLimit(1024, mc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(1024, mc, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -161,7 +161,7 @@ func TestBodyLimit_UnderLimit_NoRejectionCounted(t *testing.T) {
 // oversized bodies on random paths must not be able to inflate label space.
 func TestBodyLimit_UnmatchedRoutesDoNotExpandCardinality(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	handler := BodyLimit(10, mc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BodyLimit(10, mc, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not run when body limit rejects")
 	}))
 
@@ -204,7 +204,7 @@ func TestBodyLimit_StreamingOverrun_Via_HttputilWriteError(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := BodyLimit(10, nil)(frameworkLikeHandler)
+	handler := BodyLimit(10, nil, nil)(frameworkLikeHandler)
 
 	// Send a body larger than the limit, without a matching Content-Length
 	// (so the fast-path does not trigger — only MaxBytesReader kicks in).
@@ -231,7 +231,8 @@ func TestBodyLimit_StreamingOverrun_Via_HttputilWriteError(t *testing.T) {
 // ctxkeys.CellIDFrom for the cell label when a cell ID is present in ctx.
 func TestBodyLimit_CellFromContext(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	handler := BodyLimit(10, mc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	const cellID = "mycell"
+	handler := BodyLimit(10, mc, map[string]struct{}{cellID: {}})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not run")
 	}))
 
@@ -240,7 +241,6 @@ func TestBodyLimit_CellFromContext(t *testing.T) {
 	req.ContentLength = 20
 
 	// Simulate CellAttribution having written the cell into ctx.
-	const cellID = "mycell"
 	req = req.WithContext(ctxkeys.WithCellID(req.Context(), cellID))
 
 	rec := httptest.NewRecorder()

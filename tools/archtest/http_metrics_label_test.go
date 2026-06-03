@@ -4,7 +4,6 @@ package archtest
 //   - INVARIANT: HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01
 //   - INVARIANT: HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01
 //   - INVARIANT: HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01
-//   - INVARIANT: HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01
 //   - INVARIANT: HTTP-METRICS-LABEL-ROUTER-ATTRIBUTION-01
 //   - INVARIANT: HTTP-METRICS-LABEL-BODYLIMIT-CTXSOURCE-01
 //
@@ -12,6 +11,17 @@ package archtest
 // contract (D1, 2026-05-04): cell identity is a router-root request
 // attribution concern, not a metrics collector constructor field and not a
 // RouteGroup handler-middleware side effect.
+//
+// M12b (#1093) update: the per-request cell-label resolution (ctxkeys.CellIDFrom
+// read + RuntimeCellSentinel fallback) was pulled OUT of the two write points
+// (metricsWithClock / recordBodyLimitRejection) INTO the sealed
+// metrics.ResolveCellLabel funnel, which additionally validates the cell id
+// against the assembly closed set. The CTXSOURCE / BODYLIMIT-CTXSOURCE
+// invariants below now assert each write point routes through that funnel and no
+// longer reads ctxkeys.CellIDFrom inline; the relocated ctx-read + sentinel +
+// closed-set membership invariants live in cell_id_closed_set_test.go
+// (CELL-ID-CLOSED-SET-01), which also subsumes the former
+// HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01.
 
 import (
 	"go/ast"
@@ -35,6 +45,54 @@ const (
 	ruleHTTPMetricsLabelBodyLimitCtxSource01 = "HTTP-METRICS-LABEL-BODYLIMIT-CTXSOURCE-01"
 )
 
+// resolvedCellLabelVar returns the name of the variable assigned from
+// metrics.ResolveCellLabel(...) within body (e.g. "cell" for
+// `cell := metrics.ResolveCellLabel(ctx, valid)`), or "" when the result is not
+// bound to a single variable (e.g. passed inline).
+func resolvedCellLabelVar(body ast.Node) string {
+	var name string
+	scanner.EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
+		if name != "" || len(as.Rhs) != 1 || len(as.Lhs) != 1 {
+			return
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || !isSelectorCall(call, "metrics", "ResolveCellLabel") {
+			return
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			name = id.Name
+		}
+	})
+	return name
+}
+
+// argIsResolvedCellLabel reports whether expr is the cell label produced by the
+// metrics.ResolveCellLabel funnel — either the bound variable labelVar (AST
+// data-flow linkage to the assignment, no type info required) or an inline
+// metrics.ResolveCellLabel(...) call. This binds the collector's cell argument
+// to the funnel RESULT rather than matching a hardcoded identifier name: a
+// regression that calls ResolveCellLabel but passes some OTHER value to the
+// collector now fails here. (The sealed metrics.CellLabel type already makes a
+// raw-string label a compile error; this asserts the funnel result specifically
+// reaches the write point.)
+func argIsResolvedCellLabel(expr ast.Expr, labelVar string) bool {
+	if id, ok := expr.(*ast.Ident); ok {
+		return labelVar != "" && id.Name == labelVar
+	}
+	if call, ok := expr.(*ast.CallExpr); ok {
+		return isSelectorCall(call, "metrics", "ResolveCellLabel")
+	}
+	return false
+}
+
+// TestHTTPMetricsLabelCellIDCtxSource01 enforces (post-M12b) that metricsWithClock
+// resolves the cell label through the sealed metrics.ResolveCellLabel funnel and
+// feeds the resulting CellLabel to collector.RecordRequest — and no longer reads
+// ctxkeys.CellIDFrom inline (that read, plus the sentinel fallback and the
+// closed-set membership check, relocated into ResolveCellLabel; see
+// CELL-ID-CLOSED-SET-01). RecordRequest can no longer be called with a raw
+// string cell label — the sealed CellLabel type makes that a compile error — so
+// this archtest's job is to lock that the write point routes through the funnel.
 func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 	root := findModuleRoot(t)
 	target := filepath.Join(root, "runtime", "http", "middleware", "metrics.go")
@@ -50,76 +108,61 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		"%s: %s — metricsWithClock must record HTTP metrics through collector.RecordRequest",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 
-	oldStateHelper := "with" + "Cell" + "IDState"
-	var callsOldState bool
-	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == oldStateHelper {
-			callsOldState = true
-		}
-	})
-
-	// reqVarName is the *http.Request parameter of the handler funcLit (which
-	// encloses the SafeObserve closure that actually calls RecordRequest), bound
-	// to the formal param list so the arg0 check below asserts `<req>.Context()`
-	// rather than any-ident.Context() (ai-robust: bind to FuncDecl formal).
+	// reqVarName binds the *http.Request formal so the arg0 check asserts
+	// `<req>.Context()` rather than any-ident.Context().
 	reqVarName := requestParamName(fn.Body)
+	// resolvedVar binds RecordRequest's cell arg to the metrics.ResolveCellLabel
+	// assignment (AST data-flow linkage) instead of a hardcoded `cell` name match.
+	resolvedVar := resolvedCellLabelVar(metricsPath.Body)
 
 	var (
-		readsCtxCellID      bool
-		usesRuntimeSentinel bool
-		recordUsesCellIDArg bool
-		recordUsesReqCtxArg bool
-		ctxCellIDPos        token.Pos
-		runtimeSentinelPos  token.Pos
-		recordRequestPos    token.Pos
+		callsResolveCellLabel bool
+		recordUsesCellArg     bool
+		recordUsesReqCtxArg   bool
+		resolveCellLabelPos   token.Pos
+		recordRequestPos      token.Pos
 	)
 	scanner.EachInSubtree[ast.CallExpr](metricsPath.Body, func(v *ast.CallExpr) {
-		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
-			readsCtxCellID = true
-			rememberFirstPos(&ctxCellIDPos, v.Pos())
+		if isSelectorCall(v, "metrics", "ResolveCellLabel") {
+			callsResolveCellLabel = true
+			rememberFirstPos(&resolveCellLabelPos, v.Pos())
 		}
 		if isSelectorCall(v, "collector", "RecordRequest") {
 			recordRequestPos = v.Pos()
-			// Arg 0 is the ctx (METRICS-CTX-FUNNEL-01 ctx-bearing signature);
-			// the ctx-derived cellID label is arg 1.
+			// arg0 is the request ctx; arg1 is the CellLabel from ResolveCellLabel.
 			if len(v.Args) > 0 && isRequestContextCall(v.Args[0], reqVarName) {
 				recordUsesReqCtxArg = true
 			}
-			if len(v.Args) > 1 {
-				if id, ok := v.Args[1].(*ast.Ident); ok && id.Name == "cellID" {
-					recordUsesCellIDArg = true
-				}
+			if len(v.Args) > 1 && argIsResolvedCellLabel(v.Args[1], resolvedVar) {
+				recordUsesCellArg = true
 			}
 		}
 	})
-	scanner.EachInSubtree[ast.SelectorExpr](metricsPath.Body, func(v *ast.SelectorExpr) {
-		if isRuntimeCellSentinelRef(v) {
-			usesRuntimeSentinel = true
-			rememberFirstPos(&runtimeSentinelPos, v.Pos())
+
+	// The ctx read + sentinel relocated INTO metrics.ResolveCellLabel; the write
+	// point must not read ctxkeys.CellIDFrom inline anymore.
+	var inlineCtxRead bool
+	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(v *ast.CallExpr) {
+		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
+			inlineCtxRead = true
 		}
 	})
 
-	assert.Truef(t, readsCtxCellID,
-		"%s: %s — middleware.Metrics must read cell labels from kernel/ctxkeys.CellIDFrom",
+	assert.Truef(t, callsResolveCellLabel,
+		"%s: %s — middleware.Metrics must resolve the cell label through the sealed metrics.ResolveCellLabel funnel",
 		rel, ruleHTTPMetricsLabelCtxSource01)
-	assert.Truef(t, usesRuntimeSentinel,
-		"%s: %s — middleware.Metrics must default missing cell context to metrics.RuntimeCellSentinel in the RecordRequest path",
-		rel, ruleHTTPMetricsLabelRuntimeSentinel)
-	assert.Truef(t, recordUsesCellIDArg,
-		"%s: %s — collector.RecordRequest must receive the ctx-derived cellID variable, not a constructor/config value",
+	assert.Truef(t, recordUsesCellArg,
+		"%s: %s — collector.RecordRequest arg1 must be the CellLabel bound from metrics.ResolveCellLabel "+
+			"(data-flow linkage to the funnel result, not just any value)",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 	assert.Truef(t, recordUsesReqCtxArg,
-		"%s: %s — collector.RecordRequest arg0 must be the request ctx (%s.Context()), not "+
-			"context.Background()/TODO; the ctx-bearing funnel carries cell attribution + exemplar/baggage",
+		"%s: %s — collector.RecordRequest arg0 must be the request ctx (%s.Context())",
 		rel, ruleHTTPMetricsLabelCtxSource01, reqVarName)
-	assert.Truef(t, ctxCellIDPos.IsValid() && recordRequestPos.IsValid() && ctxCellIDPos < recordRequestPos,
-		"%s: %s — ctxkeys.CellIDFrom must feed the metrics path before collector.RecordRequest",
+	assert.Truef(t, resolveCellLabelPos.IsValid() && recordRequestPos.IsValid() && resolveCellLabelPos < recordRequestPos,
+		"%s: %s — metrics.ResolveCellLabel must feed the metrics path before collector.RecordRequest",
 		rel, ruleHTTPMetricsLabelCtxSource01)
-	assert.Truef(t, runtimeSentinelPos.IsValid() && recordRequestPos.IsValid() && runtimeSentinelPos < recordRequestPos,
-		"%s: %s — metrics.RuntimeCellSentinel must be the fallback before collector.RecordRequest",
-		rel, ruleHTTPMetricsLabelRuntimeSentinel)
-	assert.Falsef(t, callsOldState,
-		"%s: %s — old mutable cell helper is deleted; cell attribution must happen at router root",
+	assert.Falsef(t, inlineCtxRead,
+		"%s: %s — cell resolution moved into metrics.ResolveCellLabel; metricsWithClock must not read ctxkeys.CellIDFrom inline",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 }
 
@@ -405,48 +448,27 @@ func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
 	return false
 }
 
-// TestHTTPMetricsLabelBodyLimitCtxSource01 enforces that the body-limit
-// rejection recording helper (recordBodyLimitRejection in body_limit.go):
+// TestHTTPMetricsLabelBodyLimitCtxSource01 enforces (post-M12b) that the
+// body-limit rejection helper (recordBodyLimitRejection in body_limit.go):
 //
-//  1. Reads the cell label from ctxkeys.CellIDFrom.
-//  2. Falls back to metrics.RuntimeCellSentinel when the ctx key is absent.
-//  3. Calls collector.RecordBodyLimitRejection AFTER the CellIDFrom read.
-//  4. Derives the route label via RouteFor (not a bare string literal or URL path).
-//  5. Passes ctx (derived from r.Context()) as the first argument to
-//     RecordBodyLimitRejection so OTel exemplar/baggage correlation is preserved.
-//  6. Passes a named route variable (not a bare RouteFor call expression) as
-//     the third argument to RecordBodyLimitRejection.
+//  1. Resolves the cell label through the sealed metrics.ResolveCellLabel funnel
+//     (the inline ctxkeys.CellIDFrom read + sentinel fallback relocated into it).
+//  2. Calls collector.RecordBodyLimitRejection AFTER ResolveCellLabel, with the
+//     resolved `cell` CellLabel as arg[1].
+//  3. Derives the route label via RouteFor.
+//  4. Passes ctx (an identifier, bound from r.Context()) as arg[0] and a named
+//     route variable as arg[2] (OTel exemplar/baggage + low-cardinality route).
+//  5. Does NOT read ctxkeys.CellIDFrom inline (relocated to the funnel).
 //
-// AI-robust rating: Medium (AST form check + position ordering; Hard path =
-// sealed collector interface that forces routing through a typed funnel,
-// tracked in gh #1398).
+// AI-robust rating: Medium (AST form check + position ordering). The downstream
+// "label must be validated" guarantee is now type-system Hard (sealed CellLabel —
+// a raw string cannot reach RecordBodyLimitRejection); this archtest locks that
+// the helper routes through the funnel rather than constructing a CellLabel
+// itself. The relocated ctx-read + sentinel + membership invariants are in
+// CELL-ID-CLOSED-SET-01.
 //
-// # Covered forms (reverse self-tests assert these are the only forms present)
-//
-//   - ctxkeys.CellIDFrom appears in the helper body before RecordBodyLimitRejection.
-//   - metrics.RuntimeCellSentinel appears in the helper body before RecordBodyLimitRejection.
-//   - RouteFor is called in the helper body (route is not a bare literal or URL path).
-//   - RecordBodyLimitRejection arg[0] is an *ast.Ident (ctx variable, not a call expr
-//     such as context.Background() or r.Context() directly).
-//   - RecordBodyLimitRejection arg[2] is an *ast.Ident (route variable, not a bare
-//     RouteFor call expression inlined into the argument).
-//
-// # Blind spots (forms not locked by this archtest)
-//
-//   - B1. The archtest does not trace function-value fields: collector is a
-//     parameter, not a struct field, so pointer-chasing is unnecessary.
-//   - B2. The archtest does not verify that the ctx identifier was initialized
-//     from r.Context() vs some other source (e.g. context.Background()). This
-//     is partially mitigated by the AST check that arg[0] is an identifier (not
-//     a call expression), combined with the naming convention enforced by the
-//     reverse self-check on BodyLimit's outer body.
-//   - B3. The archtest does not verify that the route variable was produced by
-//     RouteFor (not e.g. a constant). It only asserts RouteFor is called
-//     somewhere in the helper body and that the call-site arg[2] is an ident.
-//
-// Reverse self-check: asserts the old shape (inline ctxkeys read without
-// SafeObserve) does not appear in body_limit.go production code, and that
-// BodyLimit's outer function does not bypass the helper.
+// Reverse self-check: BodyLimit's outer function must delegate to the helper and
+// not resolve the cell label itself.
 func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 	root := findModuleRoot(t)
 	target := filepath.Join(root, "runtime", "http", "middleware", "body_limit.go")
@@ -456,43 +478,44 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 	file, err := parser.ParseFile(fset, target, nil, parser.SkipObjectResolution)
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
-	// Find the recordBodyLimitRejection helper function.
 	helperFn := findHTTPMetricsFuncDecl(t, file, "recordBodyLimitRejection")
+	// Bind RecordBodyLimitRejection's cell arg to the ResolveCellLabel assignment.
+	resolvedVar := resolvedCellLabelVar(helperFn.Body)
 
 	var (
-		readsCellIDFrom      bool
-		usesRuntimeSentinel  bool
-		callsRecordBLR       bool
-		callsRouteFor        bool
-		recordBLRArg0IsCtx   bool // arg[0] is an identifier (ctx var, not a call expr)
-		recordBLRArg2IsIdent bool // arg[2] is an identifier (route var, not inline call)
-		ctxCellIDPos         token.Pos
-		runtimeSentinelPos   token.Pos
-		recordBLRPos         token.Pos
+		callsResolveCellLabel bool
+		readsCellIDFromInline bool
+		callsRecordBLR        bool
+		callsRouteFor         bool
+		recordBLRArg0IsCtx    bool // arg[0] is an identifier (ctx var)
+		recordBLRArg1IsCell   bool // arg[1] is the `cell` CellLabel ident
+		recordBLRArg2IsIdent  bool // arg[2] is an identifier (route var)
+		resolveCellLabelPos   token.Pos
+		recordBLRPos          token.Pos
 	)
 
 	scanner.EachInSubtree[ast.CallExpr](helperFn.Body, func(v *ast.CallExpr) {
 		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
-			readsCellIDFrom = true
-			rememberFirstPos(&ctxCellIDPos, v.Pos())
+			readsCellIDFromInline = true
 		}
-		if isIdent(v.Fun, "RouteFor") || isSelectorCall(v, "middleware", "RouteFor") {
-			callsRouteFor = true
+		if isSelectorCall(v, "metrics", "ResolveCellLabel") {
+			callsResolveCellLabel = true
+			rememberFirstPos(&resolveCellLabelPos, v.Pos())
 		}
-		// RouteFor may also be called as a plain identifier in the same package.
 		if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "RouteFor" {
 			callsRouteFor = true
 		}
 		if isSelectorCall(v, "collector", "RecordBodyLimitRejection") {
 			callsRecordBLR = true
 			rememberFirstPos(&recordBLRPos, v.Pos())
-			// arg[0]: must be an identifier (the ctx variable, not a call expr).
 			if len(v.Args) > 0 {
 				if _, ok := v.Args[0].(*ast.Ident); ok {
 					recordBLRArg0IsCtx = true
 				}
 			}
-			// arg[2]: must be an identifier (the route variable, not an inline call).
+			if len(v.Args) > 1 && argIsResolvedCellLabel(v.Args[1], resolvedVar) {
+				recordBLRArg1IsCell = true
+			}
 			if len(v.Args) > 2 {
 				if _, ok := v.Args[2].(*ast.Ident); ok {
 					recordBLRArg2IsIdent = true
@@ -500,18 +523,12 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 			}
 		}
 	})
-	scanner.EachInSubtree[ast.SelectorExpr](helperFn.Body, func(v *ast.SelectorExpr) {
-		if isRuntimeCellSentinelRef(v) {
-			usesRuntimeSentinel = true
-			rememberFirstPos(&runtimeSentinelPos, v.Pos())
-		}
-	})
 
-	assert.Truef(t, readsCellIDFrom,
-		"%s: %s — recordBodyLimitRejection must read cell label from ctxkeys.CellIDFrom",
+	assert.Truef(t, callsResolveCellLabel,
+		"%s: %s — recordBodyLimitRejection must resolve the cell label through metrics.ResolveCellLabel",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
-	assert.Truef(t, usesRuntimeSentinel,
-		"%s: %s — recordBodyLimitRejection must fall back to metrics.RuntimeCellSentinel when ctx key is absent",
+	assert.Falsef(t, readsCellIDFromInline,
+		"%s: %s — cell resolution moved into metrics.ResolveCellLabel; recordBodyLimitRejection must not read ctxkeys.CellIDFrom inline",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, callsRecordBLR,
 		"%s: %s — recordBodyLimitRejection must call collector.RecordBodyLimitRejection",
@@ -520,33 +537,30 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 		"%s: %s — recordBodyLimitRejection must derive route via RouteFor (not a bare literal or URL path)",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, recordBLRArg0IsCtx,
-		"%s: %s — RecordBodyLimitRejection arg[0] must be an identifier (the ctx variable), "+
-			"not a call expression such as r.Context() or context.Background() directly; "+
-			"ctx must be extracted before the SafeObserve closure so the ctx is bound at "+
-			"the outer scope (OTel exemplar/baggage correlation preserved)",
+		"%s: %s — RecordBodyLimitRejection arg[0] must be an identifier (the ctx variable)",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, recordBLRArg1IsCell,
+		"%s: %s — RecordBodyLimitRejection arg[1] must be the CellLabel bound from metrics.ResolveCellLabel "+
+			"(data-flow linkage to the funnel result, not just any value)",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, recordBLRArg2IsIdent,
-		"%s: %s — RecordBodyLimitRejection arg[2] must be an identifier (the route variable), "+
-			"not an inline RouteFor call expression",
+		"%s: %s — RecordBodyLimitRejection arg[2] must be an identifier (the route variable)",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
-	assert.Truef(t, ctxCellIDPos.IsValid() && recordBLRPos.IsValid() && ctxCellIDPos < recordBLRPos,
-		"%s: %s — ctxkeys.CellIDFrom must be called before collector.RecordBodyLimitRejection",
-		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
-	assert.Truef(t, runtimeSentinelPos.IsValid() && recordBLRPos.IsValid() && runtimeSentinelPos < recordBLRPos,
-		"%s: %s — metrics.RuntimeCellSentinel fallback must appear before collector.RecordBodyLimitRejection",
+	assert.Truef(t, resolveCellLabelPos.IsValid() && recordBLRPos.IsValid() && resolveCellLabelPos < recordBLRPos,
+		"%s: %s — metrics.ResolveCellLabel must be called before collector.RecordBodyLimitRejection",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 
-	// Reverse self-check: the BodyLimit outer function must NOT contain a
-	// direct ctxkeys.CellIDFrom call (it must delegate to the helper).
+	// Reverse self-check: the BodyLimit outer function must delegate cell
+	// resolution to the helper, not resolve it itself.
 	bodyLimitFn := findHTTPMetricsFuncDecl(t, file, "BodyLimit")
-	var outerCellIDFromCalls int
+	var outerResolveCalls int
 	scanner.EachInSubtree[ast.CallExpr](bodyLimitFn.Body, func(v *ast.CallExpr) {
-		if isSelectorCall(v, "ctxkeys", "CellIDFrom") {
-			outerCellIDFromCalls++
+		if isSelectorCall(v, "metrics", "ResolveCellLabel") {
+			outerResolveCalls++
 		}
 	})
-	assert.Zerof(t, outerCellIDFromCalls,
-		"%s: %s — BodyLimit must delegate cell resolution to recordBodyLimitRejection, not call ctxkeys.CellIDFrom directly",
+	assert.Zerof(t, outerResolveCalls,
+		"%s: %s — BodyLimit must delegate cell resolution to recordBodyLimitRejection",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 }
 
@@ -554,14 +568,4 @@ func rememberFirstPos(dst *token.Pos, pos token.Pos) {
 	if !dst.IsValid() || pos < *dst {
 		*dst = pos
 	}
-}
-
-// isRuntimeCellSentinelRef reports whether sel is a reference to the
-// single-source sentinel metrics.RuntimeCellSentinel ("_runtime"). The HTTP
-// middleware used to declare a local sentinel constant of its own; that was
-// deleted in favor of reading the transport-neutral
-// runtime/observability/metrics.RuntimeCellSentinel, so the fallback now appears
-// as a qualified selector rather than a bare ident.
-func isRuntimeCellSentinelRef(sel *ast.SelectorExpr) bool {
-	return selectorQualifier(sel.X) == "metrics" && sel.Sel != nil && sel.Sel.Name == "RuntimeCellSentinel"
 }

@@ -217,7 +217,7 @@ cells/accesscore/cell.yaml + slices/*/slice.yaml
   │     ├─ MESSAGE-CONST-LITERAL-01
   │     ├─ DETAILS-SLOG-ATTR-01
   │     ├─ OUTBOX-* (lease CAS / service nil-check / HandleResult factory)
-  │     ├─ REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01
+  │     ├─ REGISTRY-SUBSCRIBE-CELLID-MANDATORY-01
   │     ├─ REDIS-KEY-NAMESPACE-01
   │     └─ ROUTER-ATTRIBUTION / RUNTIME-SENTINEL
   ├─ tools/generatedverify (golden drift)

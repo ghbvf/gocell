@@ -102,6 +102,7 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 	rtr, err := router.NewForListener(
 		clock.Real(), cell.PrimaryListener,
 		router.WithMetricsCollector(mc),
+		router.WithCellIDClosedSet([]string{"accesscore", "auditcore"}),
 	)
 	require.NoError(t, err)
 
@@ -196,6 +197,93 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 			assert.NotEqualf(t, forbidden, key.Cell,
 				"cell label %q must not appear in metrics snapshot (regression to global cellID derivation)", forbidden)
 		}
+	}
+}
+
+// TestPhase5_BootstrapDerivedClosedSet_DegradesOutOfSetCell pins the F8 gap:
+// the M12b closed set must come from the assembly via buildListenerRouterOpts
+// (router.WithCellIDClosedSet(s.asm.CellIDs())), NOT a hand-injected option, and
+// an out-of-set cell id reaching the metric write point must DEGRADE to the
+// _runtime sentinel. The sibling TestPhase5MountRouteGroups_PerCellMetricsLabel
+// hand-injects WithCellIDClosedSet and only covers in-set propagation; this
+// drives the real bootstrap derivation and exercises the out-of-set degradation
+// branch end-to-end.
+func TestPhase5_BootstrapDerivedClosedSet_DegradesOutOfSetCell(t *testing.T) {
+	t.Parallel()
+
+	// Assembly closed set = {accesscore} only. "rogue" is deliberately NOT a
+	// member (simulating a cell id that slipped past the M12a build gate).
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "f8-test", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("accesscore")))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	_, s := newPhaseState()
+	s.asm = asm
+
+	// Inject the collector via routerOpts and set NO metricsProvider, so the
+	// ONLY thing buildListenerRouterOpts adds beyond the collector is
+	// WithCellIDClosedSet(s.asm.CellIDs()) — proving the derivation rather than a
+	// hand-injected closed set.
+	mc := metrics.NewInMemoryCollector()
+	b := New(clock.Real(), WithRouterOptions(router.WithMetricsCollector(mc)))
+
+	opts, err := b.buildListenerRouterOpts(s, cell.PrimaryListener, listenerConfig{})
+	require.NoError(t, err)
+
+	rtr, err := router.NewForListener(clock.Real(), cell.PrimaryListener, opts...)
+	require.NoError(t, err)
+
+	groups := []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/access",
+			CellID:   "accesscore", // in the assembly closed set
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/sessions", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/rogue",
+			CellID:   "rogue", // NOT in the assembly closed set → must degrade
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/x", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+	}
+	require.NoError(t, b.phase5MountRouteGroups(map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: rtr,
+	}, groups))
+
+	for _, p := range []string{"/api/v1/access/sessions", "/api/v1/rogue/x"} {
+		rec := httptest.NewRecorder()
+		rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		require.Equalf(t, http.StatusOK, rec.Code, "%s must reach the handler", p)
+	}
+
+	snap := mc.Snapshot()
+	// In-set cell records under its own id.
+	assert.Equalf(t, int64(1), snap.RequestCounts[metrics.RequestKey{
+		Cell: "accesscore", Method: http.MethodGet, Route: "/api/v1/access/sessions", Status: http.StatusOK,
+	}], "in-set cell must record cell=accesscore; snapshot=%v", snap.RequestCounts)
+
+	// Out-of-set cell DEGRADES to the sentinel (M12b runtime defense, closed set
+	// derived from s.asm.CellIDs() by buildListenerRouterOpts).
+	assert.Equalf(t, int64(1), snap.RequestCounts[metrics.RequestKey{
+		Cell: "_runtime", Method: http.MethodGet, Route: "/api/v1/rogue/x", Status: http.StatusOK,
+	}], "out-of-set cell must degrade to _runtime; snapshot=%v", snap.RequestCounts)
+
+	// The rogue cell id must NEVER appear as a metric label.
+	for key := range snap.RequestCounts {
+		assert.NotEqualf(t, "rogue", key.Cell,
+			"out-of-set cell id 'rogue' must not leak into metrics (M12b must degrade it); snapshot=%v", snap.RequestCounts)
 	}
 }
 

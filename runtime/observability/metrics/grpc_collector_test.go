@@ -24,9 +24,9 @@ func (histErrProvider) HistogramVec(kernelmetrics.HistogramOpts) (kernelmetrics.
 
 func TestInMemoryGRPCCollector(t *testing.T) {
 	c := NewInMemoryGRPCCollector()
-	c.RecordRPC(context.Background(), "_runtime", "/pkg.Svc/Do", "OK", 0.01)
-	c.RecordRPC(context.Background(), "_runtime", "/pkg.Svc/Do", "OK", 0.02)
-	c.RecordRPC(context.Background(), "_runtime", "/pkg.Svc/Do", "Internal", 0.03)
+	c.RecordRPC(context.Background(), testLabel(""), "/pkg.Svc/Do", "OK", 0.01)
+	c.RecordRPC(context.Background(), testLabel(""), "/pkg.Svc/Do", "OK", 0.02)
+	c.RecordRPC(context.Background(), testLabel(""), "/pkg.Svc/Do", "Internal", 0.03)
 
 	if got := c.Count("_runtime", "/pkg.Svc/Do", "OK"); got != 2 {
 		t.Fatalf("OK count = %d, want 2", got)
@@ -52,7 +52,7 @@ func TestNewGRPCProviderCollector(t *testing.T) {
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		c.RecordRPC(context.Background(), RuntimeCellSentinel, "/pkg.Svc/Do", "OK", 0.01)
+		c.RecordRPC(context.Background(), testLabel(""), "/pkg.Svc/Do", "OK", 0.01)
 	})
 
 	t.Run("counter registration error surfaces", func(t *testing.T) {

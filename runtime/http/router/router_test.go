@@ -213,7 +213,7 @@ func TestRouteGroup(t *testing.T) {
 func TestMountRouteGroup_CellAttribution_PrefixRejectsAnd405(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
-	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter), WithCellIDClosedSet([]string{"accesscore"}))
 
 	err := r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -317,7 +317,7 @@ func TestMountRouteGroup_CellOwnership_DuplicatePathTemplateSameCellAllowed(t *t
 
 func TestMountRouteGroup_CellAttribution_MethodNotAllowedUsesPathOwnership(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(clock.Real(), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithCellIDClosedSet([]string{"devicecell"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -345,7 +345,7 @@ func TestMountRouteGroup_CellAttribution_MethodNotAllowedUsesPathOwnership(t *te
 func TestMountRouteGroup_CellAttribution_StaticPathBeatsGenericTemplate(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
-	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter), WithCellIDClosedSet([]string{"accesscore", "genericcore"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -385,7 +385,7 @@ func TestMountRouteGroup_CellAttribution_StaticPathBeatsGenericTemplate(t *testi
 func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1"}}
-	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithAuthMiddleware(verifier), WithCellIDClosedSet([]string{"accesscore"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -417,7 +417,7 @@ func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
 func TestMountRouteGroup_CellAttribution_CircuitBreakerReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")}
-	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithCircuitBreaker(breaker))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithCircuitBreaker(breaker), WithCellIDClosedSet([]string{"auditcore"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -444,7 +444,7 @@ func TestMountRouteGroup_CellAttribution_CircuitBreakerReject(t *testing.T) {
 
 func TestMountRouteGroup_CellAttribution_BodyLimitReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithBodyLimit(4))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithBodyLimit(4), WithCellIDClosedSet([]string{"configcore"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -479,7 +479,7 @@ func TestMountRouteGroup_CellAttribution_BodyLimitReject(t *testing.T) {
 
 func TestMountRouteGroup_CellAttribution_EmptyPrefixNestedRoutes(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(clock.Real(), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithCellIDClosedSet([]string{"devicecell"}))
 
 	err := r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -517,7 +517,7 @@ func TestMountRouteGroup_CellAttribution_EmptyPrefixNestedRoutes(t *testing.T) {
 func TestMountRouteGroup_CellAttribution_LongestPrefixWins(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
-	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter), WithCellIDClosedSet([]string{"accesscore", "configcore"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -556,7 +556,7 @@ func TestMountRouteGroup_CellAttribution_LongestPrefixWins(t *testing.T) {
 
 func TestMountRouteGroup_CellAttribution_RawMountPrefix(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(clock.Real(), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithCellIDClosedSet([]string{"mountcell"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -1975,6 +1975,7 @@ func TestRouter_RejectPath_RouteLabelConsistent(t *testing.T) {
 		WithMetricsCollector(mc),
 		WithTracer(spy),
 		WithAuthMiddleware(verifier),
+		WithCellIDClosedSet([]string{"rejectcell"}),
 	)
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
@@ -2029,7 +2030,7 @@ func TestRouter_RejectPath_RouteLabelConsistent(t *testing.T) {
 // prefix as the route label instead of falling back to "unmatched".
 func TestMountRouteGroup_NonServeMuxHandler_RouteLabelDegrades(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(clock.Real(), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithCellIDClosedSet([]string{"legacycell"}))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
