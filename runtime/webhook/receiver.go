@@ -168,6 +168,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		slog.WarnContext(ctx, "webhook receiver: signature verification failed",
 			slog.String("source_id", r.spec.SourceID),
 			slog.String("contract_id", r.spec.ContractID),
+			slog.String("reason", string(reason)),
 			slog.Any("error", err))
 		httputil.WriteError(ctx, w, err)
 		return

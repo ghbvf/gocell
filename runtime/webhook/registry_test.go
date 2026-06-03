@@ -40,9 +40,10 @@ func TestBuildRouteGroups_HappyPath(t *testing.T) {
 
 	g := groups[0]
 
-	// Listener must be PrimaryListener.
-	if g.Listener != cell.PrimaryListener {
-		t.Errorf("Listener = %v, want PrimaryListener", g.Listener)
+	// Listener must be the dedicated WebhookListener (HMAC-at-app-layer; kept off
+	// PrimaryListener so a JWT chain cannot 401 the HMAC-signed request).
+	if g.Listener != cell.WebhookListener {
+		t.Errorf("Listener = %v, want WebhookListener", g.Listener)
 	}
 	// Prefix must match PathPattern.
 	if g.Prefix != testPathPattern {
@@ -140,6 +141,35 @@ func TestBuildRouteGroups_InvalidSpec(t *testing.T) {
 	_, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{})
 	if err == nil {
 		t.Fatal("expected error for invalid spec")
+	}
+}
+
+// TestBuildRouteGroups_InvalidSourceID is the runtime-side startup fail-fast
+// regression for the C1/F1 finding: a non-empty but metric-label-unsafe SourceID
+// (containing '=' or '|') must be rejected at BuildRouteGroups (construction)
+// time — NewReceiver → spec.Validate() → SourceID.Validate() — rather than
+// slipping through to panic at first signature-failure record via
+// MustValidateLabels in a request goroutine.
+func TestBuildRouteGroups_InvalidSourceID(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+	claimer := idempotency.NewInMemClaimer(clk)
+
+	for _, bad := range []string{"bad=source", "bad|source"} {
+		t.Run(bad, func(t *testing.T) {
+			spec := testSpec()
+			spec.SourceID = bad
+			reqs := []cell.WebhookReceiverRequest{
+				{
+					Spec:    spec,
+					Handler: func(_ context.Context, _ kwh.Delivery) error { return nil },
+				},
+			}
+			if _, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{}); err == nil {
+				t.Fatalf("expected startup error for label-unsafe SourceID %q", bad)
+			}
+		})
 	}
 }
 

@@ -298,7 +298,7 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 	if ref.IsZero() {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, or cell.HealthListener")
+			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, cell.HealthListener, or cell.WebhookListener")
 	}
 	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
 	// slices are behaviorally identical to nil — both produce an

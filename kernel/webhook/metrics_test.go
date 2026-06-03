@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -15,8 +16,8 @@ func TestRegisterWebhookMetrics_WiresFour(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterMetrics: %v", err)
 	}
-	if m.Deliveries == nil || m.DeliveryDuration == nil ||
-		m.SignatureFailures == nil || m.IdempotencyHits == nil {
+	if m.deliveries == nil || m.deliveryDuration == nil ||
+		m.signatureFailures == nil || m.idempotencyHits == nil {
 		t.Fatalf("RegisterMetrics left a nil instrument: %+v", m)
 	}
 	wantLabels := map[string][]string{
@@ -133,6 +134,29 @@ func TestWebhookMetrics_PreflightClean(t *testing.T) {
 	}
 }
 
+// TestWebhookMetrics_DeliveryDurationBucketsFrozen asserts the EXACT bucket
+// boundaries RegisterMetrics registers for webhook_delivery_duration_seconds
+// (F5). These buckets are an operational contract — dashboards, SLO burn-rate
+// rules, and histogram_quantile() recording rules pin to these le boundaries, so
+// an accidental edit (a dropped 30s tail, a reordered split) would silently break
+// latency panels. The assertion is against the registered slice (what the
+// provider received), not just the package var, so it also catches a future
+// refactor that passes a different slice to HistogramVec. Compared against an
+// independent hardcoded golden (anti-tautology): update both in the same PR if
+// the bucket contract intentionally changes, alongside the dashboards/alerts.
+func TestWebhookMetrics_DeliveryDurationBucketsFrozen(t *testing.T) {
+	p := newRecordingProvider()
+	if _, err := RegisterMetrics(p); err != nil {
+		t.Fatalf("RegisterMetrics: %v", err)
+	}
+	want := []float64{.05, .1, .25, .5, 1, 2.5, 5, 10, 30}
+	got := p.bucketsOf("webhook_delivery_duration_seconds")
+	if !slices.Equal(got, want) {
+		t.Errorf("webhook_delivery_duration_seconds buckets = %v, want %v "+
+			"(ops contract: update dashboards/alerts + this golden together)", got, want)
+	}
+}
+
 // --- recordingProvider: in-memory metrics.Provider spy for webhook tests. ---
 
 // recordingProvider embeds NopProvider so the unused GaugeVec / Unregister
@@ -158,9 +182,22 @@ func (p *recordingProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelme
 }
 
 func (p *recordingProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
-	v := &recordingHistogramVec{labels: append([]string(nil), opts.LabelNames...), obs: map[string]int64{}}
+	v := &recordingHistogramVec{
+		labels:  append([]string(nil), opts.LabelNames...),
+		buckets: append([]float64(nil), opts.Buckets...),
+		obs:     map[string]int64{},
+	}
 	p.histograms[opts.Name] = v
 	return v, nil
+}
+
+// bucketsOf returns the exact bucket boundaries RegisterMetrics passed to the
+// provider for the named histogram (the registered ops contract), or nil.
+func (p *recordingProvider) bucketsOf(name string) []float64 {
+	if h, ok := p.histograms[name]; ok {
+		return h.buckets
+	}
+	return nil
 }
 
 func (p *recordingProvider) labelsOf(name string) []string {
@@ -209,8 +246,9 @@ func (c *recordingCounter) Inc(_ context.Context)            { c.vec.obs[c.key]+
 func (c *recordingCounter) Add(_ context.Context, n float64) { c.vec.obs[c.key] += int64(n) }
 
 type recordingHistogramVec struct {
-	labels []string
-	obs    map[string]int64
+	labels  []string
+	buckets []float64
+	obs     map[string]int64
 }
 
 func (v *recordingHistogramVec) Registered() bool { return true }

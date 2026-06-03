@@ -63,6 +63,12 @@ func (s *registrationSpy) counters() []string {
 	return append([]string(nil), s.counterNames...)
 }
 
+func (s *registrationSpy) histograms() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.histogramNames...)
+}
+
 // TestBootstrap_DefaultAssembly_WiresMetricsProvider is the regression
 // test for the F1 finding: before the fix, WithMetricsProvider only
 // populated Bootstrap.metricsProvider while the default assembly.New()

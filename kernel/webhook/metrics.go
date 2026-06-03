@@ -109,16 +109,27 @@ var webhookDeliveryDurationBuckets = []float64{.05, .1, .25, .5, 1, 2.5, 5, 10, 
 // Build via RegisterMetrics at the composition root (bootstrap auto-wire) and
 // inject into both the Dispatcher (dispatch side) and the runtime Receiver
 // (receive side); one instance serves both, the instrument sets are disjoint.
+//
+// The instrument fields are intentionally UNEXPORTED. This seals the upstream of
+// the WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01 funnel: outside kernel/webhook the
+// only metric-write surface is the record* methods below (recordDelivery /
+// observeDeliveryDuration / RecordSignatureFailure / RecordIdempotencyHit), which
+// take the sealed typed label enums — there is no `m.Deliveries.With(Labels{...})`
+// escape hatch for a holder to write an off-set label value. Within the package a
+// new struct cannot be populated except by RegisterMetrics (the sole constructor),
+// and the WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01 callsite guard locks the
+// `.With(...)` calls to the record* method bodies. See
+// tools/archtest/webhook_metric_label_values_frozen_test.go.
 type Metrics struct {
-	// Deliveries counts outbound delivery outcomes, labels {result, source}.
-	Deliveries kernelmetrics.CounterVec
-	// DeliveryDuration observes outbound delivery wall-clock seconds, labels {source}.
-	DeliveryDuration kernelmetrics.HistogramVec
-	// SignatureFailures counts inbound signature-verification failures, labels {source, reason}.
-	SignatureFailures kernelmetrics.CounterVec
-	// IdempotencyHits counts inbound duplicate deliveries (claim already done /
+	// deliveries counts outbound delivery outcomes, labels {result, source}.
+	deliveries kernelmetrics.CounterVec
+	// deliveryDuration observes outbound delivery wall-clock seconds, labels {source}.
+	deliveryDuration kernelmetrics.HistogramVec
+	// signatureFailures counts inbound signature-verification failures, labels {source, reason}.
+	signatureFailures kernelmetrics.CounterVec
+	// idempotencyHits counts inbound duplicate deliveries (claim already done /
 	// in-flight), labels {source}.
-	IdempotencyHits kernelmetrics.CounterVec
+	idempotencyHits kernelmetrics.CounterVec
 }
 
 // errRegisterMetricFmt is the format string for metric registration errors.
@@ -164,10 +175,10 @@ func RegisterMetrics(p kernelmetrics.Provider) (Metrics, error) {
 		return Metrics{}, fmt.Errorf(errRegisterMetricFmt, metricWebhookIdempotencyHits, err)
 	}
 	m := Metrics{
-		Deliveries:        deliveries,
-		DeliveryDuration:  duration,
-		SignatureFailures: sigFailures,
-		IdempotencyHits:   idempotencyHits,
+		deliveries:        deliveries,
+		deliveryDuration:  duration,
+		signatureFailures: sigFailures,
+		idempotencyHits:   idempotencyHits,
 	}
 	// Validate the label sets at registration time (fail-fast). A label-set
 	// mismatch on a just-registered vec would otherwise panic at first record
@@ -192,17 +203,17 @@ func (m Metrics) preflight() (err error) {
 			err = fmt.Errorf("webhook: metrics label set invalid: %w", redacted)
 		}
 	}()
-	if m.Deliveries != nil {
-		_ = m.Deliveries.With(kernelmetrics.Labels{labelResult: string(deliverySuccess), labelSource: "_preflight"})
+	if m.deliveries != nil {
+		_ = m.deliveries.With(kernelmetrics.Labels{labelResult: string(deliverySuccess), labelSource: "_preflight"})
 	}
-	if m.DeliveryDuration != nil {
-		_ = m.DeliveryDuration.With(kernelmetrics.Labels{labelSource: "_preflight"})
+	if m.deliveryDuration != nil {
+		_ = m.deliveryDuration.With(kernelmetrics.Labels{labelSource: "_preflight"})
 	}
-	if m.SignatureFailures != nil {
-		_ = m.SignatureFailures.With(kernelmetrics.Labels{labelSource: "_preflight", labelReason: string(ReasonBadSignature)})
+	if m.signatureFailures != nil {
+		_ = m.signatureFailures.With(kernelmetrics.Labels{labelSource: "_preflight", labelReason: string(ReasonBadSignature)})
 	}
-	if m.IdempotencyHits != nil {
-		_ = m.IdempotencyHits.With(kernelmetrics.Labels{labelSource: "_preflight"})
+	if m.idempotencyHits != nil {
+		_ = m.idempotencyHits.With(kernelmetrics.Labels{labelSource: "_preflight"})
 	}
 	return nil
 }
@@ -212,36 +223,36 @@ func (m Metrics) preflight() (err error) {
 // callsite guard (WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01) additionally bans any
 // caller passing a value that is not one of the declared delivery* consts.
 func (m Metrics) recordDelivery(ctx context.Context, source string, result webhookDeliveryResult) {
-	if m.Deliveries == nil {
+	if m.deliveries == nil {
 		return
 	}
-	m.Deliveries.With(kernelmetrics.Labels{labelResult: string(result), labelSource: source}).Inc(ctx)
+	m.deliveries.With(kernelmetrics.Labels{labelResult: string(result), labelSource: source}).Inc(ctx)
 }
 
 // observeDeliveryDuration records webhook_delivery_duration_seconds{source} when wired.
 func (m Metrics) observeDeliveryDuration(ctx context.Context, source string, seconds float64) {
-	if m.DeliveryDuration == nil {
+	if m.deliveryDuration == nil {
 		return
 	}
-	m.DeliveryDuration.With(kernelmetrics.Labels{labelSource: source}).Observe(ctx, seconds)
+	m.deliveryDuration.With(kernelmetrics.Labels{labelSource: source}).Observe(ctx, seconds)
 }
 
 // RecordSignatureFailure increments webhook_signature_failures_total{source, reason}
 // when wired. Called by the runtime Receiver after a verification failure with
 // the typed reason its verify step classified.
 func (m Metrics) RecordSignatureFailure(ctx context.Context, source string, reason SignatureFailureReason) {
-	if m.SignatureFailures == nil {
+	if m.signatureFailures == nil {
 		return
 	}
-	m.SignatureFailures.With(kernelmetrics.Labels{labelSource: source, labelReason: string(reason)}).Inc(ctx)
+	m.signatureFailures.With(kernelmetrics.Labels{labelSource: source, labelReason: string(reason)}).Inc(ctx)
 }
 
 // RecordIdempotencyHit increments webhook_idempotency_hits_total{source} when
 // wired. Called by the runtime Receiver when a delivery is a known duplicate
 // (claim already done or in-flight).
 func (m Metrics) RecordIdempotencyHit(ctx context.Context, source string) {
-	if m.IdempotencyHits == nil {
+	if m.idempotencyHits == nil {
 		return
 	}
-	m.IdempotencyHits.With(kernelmetrics.Labels{labelSource: source}).Inc(ctx)
+	m.idempotencyHits.With(kernelmetrics.Labels{labelSource: source}).Inc(ctx)
 }

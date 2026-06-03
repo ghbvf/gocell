@@ -166,20 +166,27 @@ func (s DispatchSpec) Validate() error {
 // offending field is named in the message itself, no runtime data leaks.
 // When contractID is non-empty (i.e. the error comes from SourceID or CellID
 // validation), it is included in the details to pinpoint which spec failed.
+//
+// SourceID is validated through the typed [SourceID.Validate] rather than a bare
+// empty-check: it is the {source} label on every webhook metric, so a
+// label-unsafe value (containing '=' or '|', or otherwise off the
+// [a-z][a-z0-9_-]* shape) must fail here at spec validation — which NewReceiver /
+// NewDispatcher run at construction (startup) — instead of slipping through to
+// panic at first record via MustValidateLabels in a request/worker goroutine.
 func validateSpecFields(contractID, sourceID, cellID string) error {
-	switch {
-	case contractID == "":
+	if contractID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
 			"webhook: spec requires a non-empty ContractID")
-	case sourceID == "":
-		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
-			"webhook: spec requires a non-empty SourceID",
+	}
+	if err := SourceID(sourceID).Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"webhook: spec SourceID invalid", err,
 			errcode.WithDetails(errcode.PublicString("contractID", contractID)))
-	case cellID == "":
+	}
+	if cellID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
 			"webhook: spec requires a non-empty CellID",
 			errcode.WithDetails(errcode.PublicString("contractID", contractID)))
-	default:
-		return nil
 	}
+	return nil
 }

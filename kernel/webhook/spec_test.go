@@ -149,6 +149,42 @@ func TestDispatchSpecValidate_MissingFields(t *testing.T) {
 	}
 }
 
+// TestSpecValidate_InvalidSourceID asserts that a non-empty SourceID that is not
+// metric-label-safe (off the [a-z][a-z0-9_-]* shape, or over the length budget)
+// fails Validate() for BOTH spec kinds. This is the startup fail-fast that
+// prevents a request/worker-time MustValidateLabels panic when the SourceID
+// reaches a metric {source} label (regression for the C1/F1 finding): the label
+// separators '=' and '|' are the panic triggers; uppercase / leading digit /
+// over-length are rejected by the shared SourceID validator.
+func TestSpecValidate_InvalidSourceID(t *testing.T) {
+	badSources := []struct {
+		name   string
+		source string
+	}{
+		{"equals separator", "bad=source"},
+		{"pipe separator", "bad|source"},
+		{"uppercase", "Stripe"},
+		{"leading digit", "1stripe"},
+		{"space", "bad source"},
+		{"over length budget", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	}
+	for _, bs := range badSources {
+		t.Run("receiver/"+bs.name, func(t *testing.T) {
+			s := validReceiverSpecExt()
+			s.SourceID = bs.source
+			requireWebhookConfigInvalid(t, s.Validate())
+		})
+		t.Run("dispatch/"+bs.name, func(t *testing.T) {
+			s := webhook.DispatchSpec{
+				ContractID: "webhook.shopify.dispatch.v1",
+				SourceID:   bs.source,
+				CellID:     "ordercore",
+			}
+			requireWebhookConfigInvalid(t, s.Validate())
+		})
+	}
+}
+
 // TestReceiverSpec_ZeroValueIsInvalid asserts that the zero value of ReceiverSpec
 // fails Validate() — all three fields are required.
 func TestReceiverSpec_ZeroValueIsInvalid(t *testing.T) {

@@ -69,15 +69,24 @@
 // kwh.Metrics, which records as a no-op — callers do nothing. See
 // kernel/webhook/metrics.go.
 //
-// # Known gap: listener auth (KERNEL-WEBHOOK-01 follow-up)
+// # Listener auth: dedicated WebhookListener (HMAC at the application layer)
 //
-// BuildRouteGroups mounts the receiver on cell.PrimaryListener WITHOUT a Public
-// marker. In any assembly whose PrimaryListener carries a JWT auth chain, an
-// external webhook POST (which carries an HMAC signature, not a JWT) is rejected
-// by the JWT middleware with 401 before reaching the HMAC verifier. A runnable
-// deployment therefore needs the webhook path marked Public or a dedicated
-// webhook ListenerRef (see .claude/rules/gocell/runtime-api.md §"单 listener 单
-// auth scheme"). Tracked as a KERNEL-WEBHOOK-01 follow-up; out of PR-6 scope.
+// BuildRouteGroups mounts each receiver on cell.WebhookListener — a dedicated
+// listener, NOT PrimaryListener. Inbound webhooks authenticate at the
+// application layer via HMAC signature verification inside the Receiver, so the
+// composition root configures the webhook listener with an auth.AuthNone{} chain:
+//
+//	bootstrap.WithListener(cell.WebhookListener, ":8090",
+//	    []auth.ListenerAuth{auth.AuthNone{}})
+//
+// Mounting on PrimaryListener would be wrong: that listener typically carries a
+// JWT auth chain that would 401 an HMAC-signed (non-JWT) webhook POST before it
+// ever reached the verifier. Keeping the webhook path on its own listener (the
+// canonical pattern in .claude/rules/gocell/runtime-api.md §"单 listener 单 auth
+// scheme") gives it its own port and HMAC-only auth without a Public carve-out on
+// the business listener. If a webhook RouteGroup names a listener the assembly
+// did not declare, bootstrap fail-fasts at startup with an actionable message
+// (runtime/bootstrap phase5: "add WithListener(webhook,...)").
 //
 // # Deferred capabilities
 //

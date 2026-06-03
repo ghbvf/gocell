@@ -89,8 +89,16 @@ func buildRouteGroup(
 	// Prefix carries the full path pattern for cell ownership attribution.
 	// Register mounts at "/" so the adapter composes
 	// joinPrefix(Prefix, "/") = Prefix — no double-prefix.
+	//
+	// Listener is the dedicated cell.WebhookListener (NOT PrimaryListener):
+	// inbound webhooks authenticate via HMAC inside the Receiver, so the listener
+	// auth chain is auth.AuthNone{}. Mounting on PrimaryListener (which typically
+	// carries a JWT chain) would 401 an HMAC-signed request before it reached the
+	// verifier. The composition root MUST configure
+	// WithListener(cell.WebhookListener, addr, []auth.ListenerAuth{auth.AuthNone{}});
+	// bootstrap fail-fasts if a webhook RouteGroup names an unconfigured listener.
 	return cell.RouteGroup{
-		Listener: cell.PrimaryListener,
+		Listener: cell.WebhookListener,
 		Prefix:   pattern,
 		CellID:   req.Spec.CellID,
 		Register: func(mux cell.RouteMux) error {

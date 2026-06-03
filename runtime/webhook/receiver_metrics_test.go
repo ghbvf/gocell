@@ -75,16 +75,24 @@ func TestReceiver_RecordsSignatureFailureReason(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sig := &fakeCounterVec{obs: map[string]int{}}
-			m := kwh.Metrics{SignatureFailures: sig}
+			// The Metrics instrument fields are sealed (unexported) — the only way
+			// to build a recording Metrics is RegisterMetrics over a Provider
+			// (WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01 upstream seal). The test drives
+			// the real constructor and reads back from the fake provider.
+			p := newFakeProvider()
+			m, err := kwh.RegisterMetrics(p)
+			if err != nil {
+				t.Fatalf("RegisterMetrics: %v", err)
+			}
 			recv, req := tc.build(t, m)
 
 			recv.ServeHTTP(httptest.NewRecorder(), req)
 
-			got := sig.value(kernelmetrics.Labels{"source": testSourceID, "reason": tc.wantReason})
+			got := p.counterValue("webhook_signature_failures_total",
+				kernelmetrics.Labels{"source": testSourceID, "reason": tc.wantReason})
 			if got != 1 {
 				t.Errorf("signature_failures{reason=%q} = %d, want 1 (recorded keys: %v)",
-					tc.wantReason, got, sig.keys())
+					tc.wantReason, got, p.counters["webhook_signature_failures_total"].keys())
 			}
 		})
 	}
@@ -94,8 +102,11 @@ func TestReceiver_RecordsSignatureFailureReason(t *testing.T) {
 // ClaimBusy) records webhook_idempotency_hits_total{source}.
 func TestReceiver_RecordsIdempotencyHit(t *testing.T) {
 	for _, state := range []idempotency.ClaimState{idempotency.ClaimDone, idempotency.ClaimBusy} {
-		idem := &fakeCounterVec{obs: map[string]int{}}
-		m := kwh.Metrics{IdempotencyHits: idem}
+		p := newFakeProvider()
+		m, err := kwh.RegisterMetrics(p)
+		if err != nil {
+			t.Fatalf("RegisterMetrics: %v", err)
+		}
 		clk := clockmock.New(fixedNow)
 		verifier, err := kwh.NewHMACVerifier(clk, kwh.WithTolerance(testTolerance*time.Second))
 		if err != nil {
@@ -110,7 +121,7 @@ func TestReceiver_RecordsIdempotencyHit(t *testing.T) {
 
 		recv.ServeHTTP(httptest.NewRecorder(), signedRequest(t, []byte(`{"k":"v"}`), "d1"))
 
-		if got := idem.value(kernelmetrics.Labels{"source": testSourceID}); got != 1 {
+		if got := p.counterValue("webhook_idempotency_hits_total", kernelmetrics.Labels{"source": testSourceID}); got != 1 {
 			t.Errorf("state %v: idempotency_hits{source} = %d, want 1", state, got)
 		}
 	}
@@ -177,3 +188,36 @@ func labelKey(l kernelmetrics.Labels) string {
 }
 
 var _ kernelmetrics.CounterVec = (*fakeCounterVec)(nil)
+
+// --- fakeProvider: minimal recording Provider for the sealed-Metrics path. ---
+//
+// The kwh.Metrics instrument fields are unexported (WEBHOOK-METRIC-LABEL-VALUES-
+// FROZEN-01 upstream seal), so external tests can no longer inject a fake vec via
+// a struct literal. They must build a Metrics through the real RegisterMetrics
+// constructor over a Provider; fakeProvider returns recording fakeCounterVecs
+// keyed by metric name and leaves histograms to the embedded NopProvider.
+type fakeProvider struct {
+	kernelmetrics.NopProvider
+	counters map[string]*fakeCounterVec
+}
+
+func newFakeProvider() *fakeProvider {
+	return &fakeProvider{counters: map[string]*fakeCounterVec{}}
+}
+
+func (p *fakeProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	v := &fakeCounterVec{obs: map[string]int{}}
+	p.counters[opts.Name] = v
+	return v, nil
+}
+
+// counterValue returns the recorded count for name+labels, or -1 if the metric
+// was never registered.
+func (p *fakeProvider) counterValue(name string, l kernelmetrics.Labels) int {
+	if v, ok := p.counters[name]; ok {
+		return v.value(l)
+	}
+	return -1
+}
+
+var _ kernelmetrics.Provider = (*fakeProvider)(nil)
