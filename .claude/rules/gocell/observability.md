@@ -296,6 +296,26 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 
 完整盲区清单 + 反向自检活在各 archtest 的 package godoc；本节只做导航。
 
+## HTTP Idempotency `state` Label
+
+`idempotency_requests_total{cell,state}`（#1460）记录每次 HTTP 幂等决策的终态，使 replay 命中 / busy 409 / store error / oversize / key-reused 在 dashboard 可分、可告警（此前只在 slog 可见，重放被计入 `http_requests_total` 时与正常请求不可区分）。
+
+- **`state` 值集冻结**为 `{acquired, replayed, busy, store_error, oversize, key_reused}`（单源 = `runtime/http/idempotency/metrics.go` 的 `RequestState` typed const）：
+  - `acquired` = 新 claim 成功（ClaimAcquired，handler 执行），是已处理请求的分母。
+  - `replayed` = 缓存响应回放（ClaimDone）。
+  - `busy` = 在途 lease 冲突（ClaimBusy → 409 Retry-After）。
+  - `store_error` = `Store.Claim` 非指纹错误（→ 500）。**仅指 Claim 路径失败**；Record/Release 失败（响应已下发、仅缓存写失败的罕见 store 故障）刻意留 slog.Error，不计 state。
+  - `oversize` = 响应体超限不录（响应仍正常下发）。
+  - `key_reused` = 同 key 不同 body 指纹不匹配（→ 409 ErrIdempotencyKeyReused），安全相关（客户端 bug / 重放）。
+- **`acquired` ⊇ `oversize`**：同一 oversize 请求先计 `acquired`（claim 时）再计 `oversize`（录入时），刻意如此——`oversize/acquired` = 不可缓存率。其余 5 个 state 互斥、各计一次。
+- **`cell` label** 复用 `http_requests_total{cell}` 同款语义：collector 从 `kernel/ctxkeys.CellID`（router root `CellAttribution` 注入）读取，缺失回退 `RuntimeCellSentinel`（`_runtime`）；业务取值天然 ∈ assembly closed-set（#1093 在 `composition.Builder` 已守），不需新 enforcement。注册经 bootstrap `autoWireIdempotencyMetricsCollector` → 共享 `autoWireCachedCollector` funnel（`BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01` 守），与 HTTP collector 同纪律（construct-once / cache / 冲突 startup-fatal）。
+
+| Archtest ID | 摘要 | 评级（双向锁分轴） |
+|---|---|---|
+| `IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01` | A1 按 sealed `RequestState` 类型枚举 const 值集 vs golden（6 值）；A2 type-aware callsite + assignment guard 禁内联字面量 / `RequestState("x")` 转换 / 跨包 laundered const 达到 metric label，扫 producer + collector 两包 | **下游 Hard**（A2 type-aware，alias/转换/foreign-const 不可绕过、form 唯一）+ **上游 Medium**（A1 archtest 见证；Go 无法表达「只有这 6 个 RequestState 值」。Hard 路径 = enroll metricschema golden 字节锁，**共享 gh #1416**，届时 A1 退役） |
+
+完整盲区清单（含 raw-map `Labels{"state":"x"}` bypass，与 saga `string(reason)` 同源已知盲区）+ 反向自检（RED/GREEN fixtures + negative control）活在 `tools/archtest/idempotency_metric_label_frozen_test.go` 的 package godoc；本节只做导航。
+
 ## Audit Payload Redaction
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：

@@ -2305,22 +2305,13 @@ func TestErrcodePrefixOwnership01(t *testing.T) {
 // Code variables are acceptable — the definition site is already checked by
 // Target B or pre-existed before this rule.
 func isRuntimeAssembledCodeArg(expr ast.Expr) bool {
-	var found bool
-	ast.Inspect(expr, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		switch n.(type) {
-		case *ast.CallExpr: // type conversion errcode.Code(...) or func call
-			found = true
-			return false
-		case *ast.BinaryExpr: // string concatenation "ERR_" + x
-			found = true
-			return false
-		}
+	// Check for type conversion errcode.Code(...) or func call.
+	if _, ok := scanner.FindFirstInSubtree[ast.CallExpr](expr, func(*ast.CallExpr) bool { return true }); ok {
 		return true
-	})
-	return found
+	}
+	// Check for string concatenation "ERR_" + x.
+	_, ok := scanner.FindFirstInSubtree[ast.BinaryExpr](expr, func(*ast.BinaryExpr) bool { return true })
+	return ok
 }
 
 // scanErrcodePrefixOwnershipDiags is the unit-testable core of the

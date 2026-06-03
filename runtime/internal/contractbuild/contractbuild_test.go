@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
 
@@ -243,11 +244,97 @@ func TestNewEventDerivation(t *testing.T) {
 	}
 }
 
+// TestNewWebhookDispatch verifies that NewWebhookDispatch produces the expected
+// ContractSpec from a valid DispatchSpec and rejects invalid input.
+func TestNewWebhookDispatch(t *testing.T) {
+	// All wantErr cases below exercise the first layer (spec.Validate()): a
+	// DispatchSpec has only three required fields and any empty one fails there.
+	// The funnel's second layer (cs.Validate()) is unreachable-as-failure given
+	// the hardcoded valid Kind/Transport and the non-empty ID/Topic derived from
+	// the already-validated ContractID (see NewWebhookDispatch godoc), so there is
+	// no independent layer-2 case to add — unlike NewEventDerivation, whose Kind
+	// comes from caller data and therefore needs a badKind case.
+	t.Parallel()
+	cases := []struct {
+		name    string
+		spec    webhook.DispatchSpec
+		wantErr bool
+		want    contractspec.ContractSpec
+	}{
+		{
+			name: "valid dispatch spec",
+			spec: webhook.DispatchSpec{
+				ContractID: "event.webhook.foo.v1",
+				SourceID:   "src",
+				CellID:     "mycell",
+			},
+			wantErr: false,
+			want: contractspec.ContractSpec{
+				ID:        "event.webhook.foo.v1",
+				Kind:      cellvocab.ContractEvent,
+				Transport: "amqp",
+				Topic:     "event.webhook.foo.v1",
+			},
+		},
+		{
+			name: "invalid dispatch spec — empty ContractID",
+			spec: webhook.DispatchSpec{
+				ContractID: "",
+				SourceID:   "src",
+				CellID:     "mycell",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid dispatch spec — empty SourceID",
+			spec: webhook.DispatchSpec{
+				ContractID: "event.webhook.foo.v1",
+				SourceID:   "",
+				CellID:     "mycell",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid dispatch spec — empty CellID",
+			spec: webhook.DispatchSpec{
+				ContractID: "event.webhook.foo.v1",
+				SourceID:   "src",
+				CellID:     "",
+			},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := contractbuild.NewWebhookDispatch(tc.spec)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (spec=%+v)", got)
+				}
+				// On error the returned spec must be zero (fail-closed contract).
+				assertSpecEqual(t, got, contractspec.ContractSpec{})
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertSpecEqual(t, got, tc.want)
+			if err := got.Validate(); err != nil {
+				t.Errorf("Validate() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 // TestNewEventDerivation_Invalid verifies the funnel rejects malformed input by
 // returning a wrapped error (NOT panic). Two validation layers are exercised:
-// (a) sub.Validate() — the provenance gate, rejecting a non-validated
-// Subscription; (b) the derived ContractSpec.Validate() — defense in depth when
-// a Subscription validates but its contract identity is not a valid spec.
+// (a) sub.Validate() — the shape gate, rejecting a structurally-invalid
+// Subscription (it does NOT gate value provenance — exported fields let a caller
+// fabricate a valid-shaped sub; see contractbuild.go); (b) the derived
+// ContractSpec.Validate() — defense in depth when a Subscription validates but
+// its contract identity is not a valid spec.
 func TestNewEventDerivation_Invalid(t *testing.T) {
 	t.Parallel()
 	missingTopic := validEventSub()
@@ -261,18 +348,18 @@ func TestNewEventDerivation_Invalid(t *testing.T) {
 		name    string
 		sub     outbox.Subscription
 		wantMsg string
-		// subLayer asserts the error came from sub.Validate (provenance gate)
+		// subLayer asserts the error came from sub.Validate (shape gate)
 		// rather than the derived spec.Validate (defense in depth).
 		subLayer bool
 	}{
 		{
-			name:     "subscription missing topic — provenance gate",
+			name:     "subscription missing topic — shape gate",
 			sub:      missingTopic,
 			wantMsg:  "Topic must not be empty",
 			subLayer: true,
 		},
 		{
-			name:     "subscription missing contractID — provenance gate",
+			name:     "subscription missing contractID — shape gate",
 			sub:      missingContractID,
 			wantMsg:  "ContractID must not be empty",
 			subLayer: true,

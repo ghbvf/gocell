@@ -40,19 +40,14 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
-
-// dispatchTransport is the broker transport for webhook-dispatch subscriptions.
-// The dispatcher consumes outbound-intent entries from the outbox broker, same
-// as any event subscription.
-const dispatchTransport = "amqp"
 
 // Consumer is a built outbound-webhook dispatcher paired with the subscription
 // identity needed to register it on the event router via AddContractHandler.
@@ -171,13 +166,12 @@ func buildConsumer(
 	if err != nil {
 		return Consumer{}, err
 	}
+	cs, err := contractbuild.NewWebhookDispatch(spec)
+	if err != nil {
+		return Consumer{}, err
+	}
 	c := Consumer{
-		Spec: contractspec.ContractSpec{
-			ID:        spec.ContractID,
-			Kind:      cellvocab.ContractEvent,
-			Transport: dispatchTransport,
-			Topic:     spec.ContractID,
-		},
+		Spec:          cs,
 		Handler:       dispatcher.Handle,
 		ConsumerGroup: spec.CellID,
 		CellID:        spec.CellID,

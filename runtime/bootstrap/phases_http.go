@@ -330,6 +330,19 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		return nil, err
 	}
 
+	// Auto-wire the idempotency metrics collector — not gated on
+	// WithIdempotencyStore, mirroring the HTTP collector. The metric family is
+	// REGISTERED whenever a real Provider is configured (so it has a HELP line in
+	// /metrics), but its counter SERIES are only emitted when an idempotency
+	// store is also wired: buildMux constructs the idempotency middleware only
+	// then, and the observer is unused otherwise. So a Provider-configured
+	// assembly without idempotency shows idempotency_requests_total in HELP with
+	// no time series until the first idempotent request flows.
+	opts, err = b.autoWireIdempotencyMetricsCollector(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	// Primary listener: install the /internal/v1/* 404 isolation as an
 	// early-responder middleware so the contract runs BEFORE auth and does
 	// NOT require a JWT public-matcher exemption nor a policy-coverage
@@ -396,6 +409,34 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 		return opts, nil
 	}
 	return append(opts, router.WithMetricsCollector(collector)), nil
+}
+
+// autoWireIdempotencyMetricsCollector adds a router.WithIdempotencyMetrics
+// option when b.metricsProvider is a real (non-Nop) provider. When no provider
+// is set, the opts slice is returned unchanged.
+//
+// Like autoWireHTTPMetricsCollector, the collector is created ONCE and cached in
+// b.idempotencyCollector via the shared autoWireCachedCollector funnel so every
+// listener router reuses the same instrument rather than re-registering the
+// fixed-name idempotency_requests_total family (the second listener would
+// otherwise hit a duplicate-registration error). There is no warn-then-degrade
+// path: a registration conflict is startup-fatal.
+//
+// ref: runtime/observability/metrics.NewIdempotencyCollector — provider-neutral
+// collector that records idempotency_requests_total{cell,state}; the cell label
+// is derived per-record from request context.
+func (b *Bootstrap) autoWireIdempotencyMetricsCollector(opts []router.Option) ([]router.Option, error) {
+	collector, wired, err := autoWireCachedCollector(b, &b.idempotencyCollector,
+		metricsmiddleware.NewIdempotencyCollector,
+		"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the idempotency collector; "+
+			"do not also pass router.WithIdempotencyMetrics via WithRouterOptions. Remove one side")
+	if err != nil {
+		return nil, err
+	}
+	if !wired {
+		return opts, nil
+	}
+	return append(opts, router.WithIdempotencyMetrics(collector)), nil
 }
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics

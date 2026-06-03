@@ -5,9 +5,9 @@
 //
 // # What this guards
 //
-// runtime/bootstrap auto-wires four metric collector families at startup
+// runtime/bootstrap auto-wires five metric collector families at startup
 // (HTTP requests, event-router subscriptions, outbox rejects, projection
-// metrics). Each share the SAME discipline: skip on nil/Nop provider →
+// metrics, HTTP idempotency decisions). Each share the SAME discipline: skip on nil/Nop provider →
 // construct ONCE → cache → and — critically — return a startup-fatal error on a
 // registration conflict, NEVER a slog.Warn-then-degrade that silently drops the
 // metric family. That discipline used to live as four hand-copied control-flow
@@ -17,16 +17,16 @@
 // silently lost its metrics — and NOTHING mechanical caught it.
 //
 // The fix collapses the four blocks into one generic single source,
-// runtime/bootstrap.autoWireCachedCollector[T], which all four callers route
+// runtime/bootstrap.autoWireCachedCollector[T], which all five callers route
 // through. This archtest is the machine backstop that keeps it single-source.
 // It enforces TWO bound checks, not a loose "ancestor exists" check:
 //
-//  1. CONSTRUCT-ARG POSITION BIND. Each of the four metric-collector
+//  1. CONSTRUCT-ARG POSITION BIND. Each of the five metric-collector
 //     CONSTRUCTORS may only be referenced (called, or passed as a function
 //     value) from WITHIN the construct ARGUMENT (the 3rd positional arg) of a
 //     call to autoWireCachedCollector — either AS that argument (the direct
-//     function value form: event/outbox/projection) or nested inside it (the
-//     FuncLit form: HTTP, which needs an extra config arg). A reference in any
+//     function value form: event/outbox/projection/idempotency) or nested inside
+//     it (the FuncLit form: HTTP, which needs an extra config arg). A reference in any
 //     OTHER argument slot (e.g. buried in the conflictMsg string expression) is
 //     NOT routed through the helper's skip/cache/fail-fast and is reported. The
 //     earlier "any autoWireCachedCollector ancestor" check let such other-arg
@@ -54,7 +54,7 @@
 //     info.Uses (not a name-string anchor). It is archtest-bound, not a type
 //     system gate, hence Medium not Hard.
 //   - Upstream: MEDIUM, and this is a GO-LANGUAGE CEILING, not a deferred TODO.
-//     Hard upstream would require the four constructors to be uncallable except
+//     Hard upstream would require the five constructors to be uncallable except
 //     from autoWireCachedCollector. They cannot be: the constructors are
 //     EXPORTED across package boundaries (runtime/observability/metrics and
 //     kernel/projection are distinct packages from runtime/bootstrap), so Go
@@ -88,17 +88,17 @@
 //     is CLOSED by a reverse self-check below: bootstrap is forbidden from
 //     dot-importing either funneled package (autoWireFunneledPkgs), keeping the
 //     bare-ident form unrepresentable.
-//   - Raw ad-hoc collector construction that bypasses the four named constructors
+//   - Raw ad-hoc collector construction that bypasses the five named constructors
 //     entirely (e.g. calling b.metricsProvider.GaugeVec/CounterVec/HistogramVec
 //     directly in bootstrap to assemble a private collector) is OUT of this
-//     funnel's scope — it is the four constructors' own concern. Documented as a
+//     funnel's scope — it is the five constructors' own concern. Documented as a
 //     known gap; bootstrap does not do this today.
 //   - Scope is the runtime/bootstrap package only (where the single-source funnel
 //     lives). The same constructors called from other production packages are not
 //     this rule's concern (today there are none outside bootstrap).
 //   - The anti-vacuity guard below (every constructor symbol must be referenced
 //     ≥1× inside bootstrap) is the reverse self-check: it proves the scanner
-//     actually resolves the real references (not a vacuous pass) AND that the four
+//     actually resolves the real references (not a vacuous pass) AND that the five
 //     callers still route a live reference — a constructor that stops being
 //     referenced means a caller was deleted or stopped using the funnel.
 package archtest
@@ -114,6 +114,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const autoWireBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
@@ -136,6 +138,7 @@ var autoWireCtorSymbols = map[[2]string]string{
 	{autoWireRuntimeMetricsPkgPath, "NewProviderCollector"}:     "metricsmiddleware.NewProviderCollector",
 	{autoWireRuntimeMetricsPkgPath, "NewEventRouterCollector"}:  "metricsmiddleware.NewEventRouterCollector",
 	{autoWireRuntimeMetricsPkgPath, "NewOutboxRejectCollector"}: "metricsmiddleware.NewOutboxRejectCollector",
+	{autoWireRuntimeMetricsPkgPath, "NewIdempotencyCollector"}:  "metricsmiddleware.NewIdempotencyCollector",
 	{autoWireProjectionPkgPath, "RegisterMetrics"}:              "projection.RegisterMetrics",
 }
 
@@ -307,58 +310,77 @@ func scanAutoWireCollectorFunnel(
 	var d []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		// ancestors holds the AST path from the file root down to (but not
-		// including) the node currently being visited. Push after the check, pop
-		// on the post-visit nil callback — every non-nil node returns true so each
-		// push has a matching pop.
-		var ancestors []ast.Node
-		ast.Inspect(file, func(n ast.Node) bool {
-			if n == nil {
-				ancestors = ancestors[:len(ancestors)-1]
-				return true
+
+		// Pass 1: collect the position ranges of every autoWireHelper call's
+		// construct argument. This replaces the ancestors-stack containment check
+		// in the original ast.Inspect approach — position range membership is
+		// semantically equivalent to "the selector is inside the construct arg of
+		// some ancestor helper call".
+		var constructArgRanges []posRange
+		scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			if !isAutoWireHelperCall(p.TypesInfo, call, helperName) {
+				return
 			}
-			switch node := n.(type) {
-			case *ast.SelectorExpr:
-				if symbol, matched := autoWireCtorSymbolIn(p.TypesInfo, node, ctorSymbols); matched {
-					if observed != nil {
-						observed[symbol] = true
-					}
-					if !ctorRoutesThroughConstructArg(p.TypesInfo, node, ancestors, helperName) {
-						pos := p.Fset.Position(node.Pos())
-						d = append(d, Diagnostic{
-							Rel:  rel,
-							Line: pos.Line,
-							Message: fmt.Sprintf(
-								"BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01: %s in %s is referenced outside the construct "+
-									"argument of %s. Every bootstrap metric-collector construction MUST route through the "+
-									"single-source helper so the skip/cache/fail-fast discipline cannot be re-implemented "+
-									"inline (the #1399 warn-then-degrade regression). Pass the constructor as the construct "+
-									"argument (or invoke it inside that single-return construct FuncLit); do not reference it "+
-									"elsewhere. Correct form: `autoWireCachedCollector(b, &b.myCollector, %s, \"...conflict msg...\")`.",
-								symbol, enclosingFuncOrScope(file, node.Pos()), helperName, symbol),
-						})
-					}
-				}
-			case *ast.CallExpr:
-				if isAutoWireHelperCall(p.TypesInfo, node, helperName) {
-					if msg, bad := constructFuncLitPassthroughViolation(p.TypesInfo, node, ctorSymbols); bad {
-						pos := p.Fset.Position(node.Args[autoWireConstructArgIndex].Pos())
-						d = append(d, Diagnostic{
-							Rel:  rel,
-							Line: pos.Line,
-							Message: fmt.Sprintf(
-								"BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01: construct FuncLit in %s %s The helper owns the "+
-									"skip/cache/fail-fast; the construct closure may ONLY construct — body must be exactly "+
-									"`return <constructor>(...)`. A multi-statement body can register + swallow the conflict "+
-									"error + return nil, silently degrading the metric family (the #1399 regression "+
-									"re-introduced through the funnel).",
-								enclosingFuncOrScope(file, node.Pos()), msg),
-						})
-					}
+			if len(call.Args) <= autoWireConstructArgIndex {
+				return
+			}
+			arg := call.Args[autoWireConstructArgIndex]
+			constructArgRanges = append(constructArgRanges, posRange{lo: arg.Pos(), hi: arg.End()})
+		})
+
+		// Pass 2: check every constructor SelectorExpr reference.
+		scanner.EachInSubtree[ast.SelectorExpr](file, func(node *ast.SelectorExpr) {
+			symbol, matched := autoWireCtorSymbolIn(p.TypesInfo, node, ctorSymbols)
+			if !matched {
+				return
+			}
+			if observed != nil {
+				observed[symbol] = true
+			}
+			// Check whether node falls within any helper's construct argument range.
+			routed := false
+			for _, r := range constructArgRanges {
+				if r.lo <= node.Pos() && node.End() <= r.hi {
+					routed = true
+					break
 				}
 			}
-			ancestors = append(ancestors, n)
-			return true
+			if !routed {
+				pos := p.Fset.Position(node.Pos())
+				d = append(d, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01: %s in %s is referenced outside the construct "+
+							"argument of %s. Every bootstrap metric-collector construction MUST route through the "+
+							"single-source helper so the skip/cache/fail-fast discipline cannot be re-implemented "+
+							"inline (the #1399 warn-then-degrade regression). Pass the constructor as the construct "+
+							"argument (or invoke it inside that single-return construct FuncLit); do not reference it "+
+							"elsewhere. Correct form: `autoWireCachedCollector(b, &b.myCollector, %s, \"...conflict msg...\")`.",
+						symbol, enclosingFuncOrScope(file, node.Pos()), helperName, symbol),
+				})
+			}
+		})
+
+		// Pass 3: check every helper call's construct argument FuncLit body.
+		scanner.EachInSubtree[ast.CallExpr](file, func(node *ast.CallExpr) {
+			if !isAutoWireHelperCall(p.TypesInfo, node, helperName) {
+				return
+			}
+			if msg, bad := constructFuncLitPassthroughViolation(p.TypesInfo, node, ctorSymbols); bad {
+				pos := p.Fset.Position(node.Args[autoWireConstructArgIndex].Pos())
+				d = append(d, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01: construct FuncLit in %s %s The helper owns the "+
+							"skip/cache/fail-fast; the construct closure may ONLY construct — body must be exactly "+
+							"`return <constructor>(...)`. A multi-statement body can register + swallow the conflict "+
+							"error + return nil, silently degrading the metric family (the #1399 regression "+
+							"re-introduced through the funnel).",
+						enclosingFuncOrScope(file, node.Pos()), msg),
+				})
+			}
 		})
 	}
 	return d
@@ -373,29 +395,6 @@ func autoWireCtorSymbolIn(info *types.Info, sel *ast.SelectorExpr, syms map[[2]s
 	}
 	sym, found := syms[[2]string{pkgPath, name}]
 	return sym, found
-}
-
-// ctorRoutesThroughConstructArg reports whether sel lies within the construct
-// argument (autoWireConstructArgIndex) of some ancestor helperName call —
-// resolved via info.Uses on the call's Fun ident (not a name-string anchor).
-// Containment is by source position range, so it covers both the direct-funcval
-// form (sel == construct arg) and the FuncLit form (sel nested inside it). A
-// reference in any other argument slot is NOT considered routed.
-func ctorRoutesThroughConstructArg(info *types.Info, sel *ast.SelectorExpr, ancestors []ast.Node, helperName string) bool {
-	for _, n := range ancestors {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || !isAutoWireHelperCall(info, call, helperName) {
-			continue
-		}
-		if len(call.Args) <= autoWireConstructArgIndex {
-			continue
-		}
-		arg := call.Args[autoWireConstructArgIndex]
-		if arg.Pos() <= sel.Pos() && sel.End() <= arg.End() {
-			return true
-		}
-	}
-	return false
 }
 
 // isAutoWireHelperCall reports whether call invokes the unqualified helperName

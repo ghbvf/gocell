@@ -84,6 +84,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
@@ -299,10 +300,9 @@ func TestProjectionSerialDeliveryEnforcement01_GuardOnDrainPath(t *testing.T) {
 				if p.Rel(f) != serialGuardCallsiteRel {
 					continue
 				}
-				for _, decl := range f.Decls {
-					fn, ok := decl.(*ast.FuncDecl)
-					if !ok || fn.Name == nil || fn.Name.Name != serialGuardDrainFunc || fn.Body == nil {
-						continue
+				scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+					if fn.Name == nil || fn.Name.Name != serialGuardDrainFunc || fn.Body == nil {
+						return
 					}
 					drainSeen = true
 					EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
@@ -318,7 +318,7 @@ func TestProjectionSerialDeliveryEnforcement01_GuardOnDrainPath(t *testing.T) {
 							guardCalled = true
 						}
 					})
-				}
+				})
 			}
 			return nil
 		})
@@ -360,11 +360,7 @@ func TestProjectionSerialDeliveryEnforcement01_ReverseBlindSpot_NoTypeSwitch(t *
 					continue
 				}
 				EachInSubtree[ast.TypeSwitchStmt](f, func(sw *ast.TypeSwitchStmt) {
-					ast.Inspect(sw, func(n ast.Node) bool {
-						cc, ok := n.(*ast.CaseClause)
-						if !ok {
-							return true
-						}
+					scanner.EachInSubtree[ast.CaseClause](sw, func(cc *ast.CaseClause) {
 						for _, te := range cc.List {
 							pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, te)
 							if ok && pkgPath == serialGuarantorPkgPath && name == serialGuarantorTypeName {
@@ -379,7 +375,6 @@ func TestProjectionSerialDeliveryEnforcement01_ReverseBlindSpot_NoTypeSwitch(t *
 								})
 							}
 						}
-						return true
 					})
 				})
 			}

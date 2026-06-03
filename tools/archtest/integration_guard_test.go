@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -65,19 +64,21 @@ import (
 // gh #1466, not this PR's scope.
 func TestVaultContainerStartersFailFast(t *testing.T) {
 	root := findModuleRoot(t)
-	dir := filepath.Join(root, "adapters", "vault")
-	entries, err := os.ReadDir(dir)
+	scope := scanner.DirsScope(root, []string{"adapters/vault"},
+		scanner.IncludeTests(),
+		scanner.MatchRels(func(rel string) bool {
+			return strings.HasSuffix(filepath.Base(rel), "_test.go")
+		}),
+	)
+	testFiles, err := scope.Files()
 	require.NoError(t, err)
 
 	fset := token.NewFileSet()
 	var starters int
 	var skipCalls []string
 	var blindSpots []string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-		file, perr := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, 0)
+	for _, filePath := range testFiles {
+		file, perr := parser.ParseFile(fset, filePath, nil, 0)
 		require.NoError(t, perr)
 		// Scan blind-spot forms before the alias-empty skip below: a dot-import
 		// blanks the alias map, which would otherwise drop the file at the continue

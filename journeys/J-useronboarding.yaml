@@ -30,7 +30,7 @@ passCriteria:
   # (identitymanage.Service / rbacassign.Service constructors require internal
   # credentialinvalidate.Invalidator) and have no Docker-free load-bearing seam
   # reachable from tests/integration/. They will be promoted back to mode: auto
-  # by JOURNEY-USERONBOARDING-AUTO-EXPANSION-01 (docs/backlog/cap-14-tooling.md)
+  # by JOURNEY-USERONBOARDING-AUTO-EXPANSION-01 (GitHub Issues, label area-tooling)
   # once either (a) cmd/corebundle is extracted to a library package and a
   # tests/testutil/corebundle/ harness becomes importable, or (b)
   # tests/integration/l2atomicity/ adds a J-useronboarding testcontainers e2e

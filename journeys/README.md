@@ -56,4 +56,4 @@ mode:manual 非合法理由：
 
 ## 现有 journey 一览
 
-见 `journeys/status-board.yaml`。每条 lifecycle / state / 修复路径见 `docs/backlog/cap-14-tooling.md` 中 `JOURNEY-*` 系列条目。
+见 `journeys/status-board.yaml`。每条 lifecycle / state / 修复路径见 GitHub Issues（label `area-tooling`）中 `JOURNEY-*` 系列条目。

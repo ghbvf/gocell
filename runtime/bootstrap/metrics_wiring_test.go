@@ -267,6 +267,84 @@ func TestAutoWireHTTPMetricsCollector_Conflict(t *testing.T) {
 		"error must include 'WithRouterOptions' hint; got: %v", autoErr)
 }
 
+// --- autoWireIdempotencyMetricsCollector tests (#1460) ---
+
+// TestBootstrap_MetricsProvider_AutoWiresIdempotencyCollector verifies that when
+// a non-Nop Provider is injected, autoWireIdempotencyMetricsCollector adds a
+// router.WithIdempotencyMetrics option that registers idempotency_requests_total
+// and caches the collector on b.idempotencyCollector.
+func TestBootstrap_MetricsProvider_AutoWiresIdempotencyCollector(t *testing.T) {
+	spy := &registrationSpy{}
+	b := New(clock.Real(), WithMetricsProvider(spy))
+
+	opts, err := b.autoWireIdempotencyMetricsCollector(nil)
+	require.NoError(t, err, "autoWireIdempotencyMetricsCollector must succeed with a valid provider")
+	require.Len(t, opts, 1, "must add exactly one router.Option (WithIdempotencyMetrics)")
+	require.NotNil(t, b.idempotencyCollector, "autoWire must cache collector on b.idempotencyCollector")
+
+	counters := spy.counters()
+	assert.True(t, slices.Contains(counters, "idempotency_requests_total"),
+		"idempotency_requests_total must be registered; got counters %v", counters)
+}
+
+// TestBootstrap_MetricsProvider_AutoWiresIdempotencyCollector_Cached verifies the
+// collector is constructed ONCE and reused across listeners (the duplicate-name
+// registration the second listener would otherwise hit). A second call returns
+// the same cached pointer and registers no additional counter.
+func TestBootstrap_MetricsProvider_AutoWiresIdempotencyCollector_Cached(t *testing.T) {
+	spy := &registrationSpy{}
+	b := New(clock.Real(), WithMetricsProvider(spy))
+
+	_, err := b.autoWireIdempotencyMetricsCollector(nil)
+	require.NoError(t, err)
+	first := b.idempotencyCollector
+	require.NotNil(t, first)
+
+	_, err = b.autoWireIdempotencyMetricsCollector(nil)
+	require.NoError(t, err)
+	assert.Same(t, first, b.idempotencyCollector,
+		"second autoWire must reuse the cached collector, not re-register")
+
+	count := 0
+	for _, c := range spy.counters() {
+		if c == "idempotency_requests_total" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "idempotency_requests_total must be registered exactly once")
+}
+
+// TestBootstrap_NoMetricsProvider_NoIdempotencyAutoWire verifies that with the
+// default NopProvider, autoWireIdempotencyMetricsCollector returns the input
+// opts unchanged and registers nothing.
+func TestBootstrap_NoMetricsProvider_NoIdempotencyAutoWire(t *testing.T) {
+	b := New(clock.Real()) // NopProvider default
+
+	opts, err := b.autoWireIdempotencyMetricsCollector([]router.Option{})
+	require.NoError(t, err, "no-op path must not return an error")
+	assert.Len(t, opts, 0, "NopProvider must not add any router options")
+	assert.Nil(t, b.idempotencyCollector, "NopProvider must not construct a collector")
+}
+
+// TestAutoWireIdempotencyMetricsCollector_Conflict verifies that a registration
+// error on idempotency_requests_total propagates as a startup-fatal conflict
+// error (never a warn-then-degrade), carrying the actionable WithRouterOptions
+// hint — matching the shared autoWireCachedCollector funnel discipline.
+func TestAutoWireIdempotencyMetricsCollector_Conflict(t *testing.T) {
+	conflict := &alwaysFailCounterProvider{
+		triggerName: "idempotency_requests_total",
+	}
+
+	b := New(clock.Real(), WithMetricsProvider(conflict))
+
+	_, autoErr := b.autoWireIdempotencyMetricsCollector(nil)
+	require.Error(t, autoErr, "registration error must propagate as a conflict error")
+	assert.Contains(t, autoErr.Error(), "metrics auto-wire conflict",
+		"error must mention 'metrics auto-wire conflict'; got: %v", autoErr)
+	assert.Contains(t, autoErr.Error(), "WithRouterOptions",
+		"error must include 'WithRouterOptions' hint; got: %v", autoErr)
+}
+
 // alwaysFailCounterProvider is a test-only metrics.Provider that returns an
 // error whenever triggerName is registered, simulating a duplicate-name
 // rejection from a real metrics backend.

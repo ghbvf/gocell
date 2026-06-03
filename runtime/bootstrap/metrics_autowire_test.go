@@ -1,9 +1,9 @@
 package bootstrap
 
 // metrics_autowire_test.go — direct unit tests for the single-source metric
-// auto-wire helper autoWireCachedCollector[T]. The four bootstrap auto-wire
-// functions (HTTP / event-router / outbox-reject / projection) all route
-// through this helper, so pinning its skip/cache/fail-fast contract here is the
+// auto-wire helper autoWireCachedCollector[T]. The five bootstrap auto-wire
+// functions (HTTP / event-router / outbox-reject / projection / idempotency) all
+// route through this helper, so pinning its skip/cache/fail-fast contract here is the
 // single-source guarantee that #1399's warn-then-degrade regression cannot recur.
 
 import (
