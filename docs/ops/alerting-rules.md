@@ -1014,6 +1014,86 @@ specified series).
 
 ---
 
+## Webhook（KERNEL-WEBHOOK-01 PR-6）
+
+四个指标：`gocell_webhook_deliveries_total{result,source}`（发端投递结果）/
+`gocell_webhook_delivery_duration_seconds{source}`（发端时延）/
+`gocell_webhook_signature_failures_total{source,reason}`（收端验签失败）/
+`gocell_webhook_idempotency_hits_total{source}`（收端重复投递去重）。`result` 值集
+`{success, client_error, server_error, transport_error, blocked}`（冻结于
+`WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01`）；`reason` 值集
+`{missing_header, invalid_header, unknown_source, bad_signature, timestamp_expired}`。
+
+### WebhookDeliveryServerErrorRate
+
+下游 5xx 持续高比率 = 目标端点过载/故障（可重试，但持续高表示对端不可用）。
+
+```yaml
+- alert: GoCellWebhookDeliveryServerErrorRate
+  expr: |
+    sum by (source) (rate(gocell_webhook_deliveries_total{result="server_error"}[5m]))
+      / sum by (source) (rate(gocell_webhook_deliveries_total[5m])) > 0.2
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Webhook delivery 5xx rate high (source={{ $labels.source }})"
+    description: |
+      >20% of webhook deliveries to source={{ $labels.source }} returned 5xx over
+      10m. The dispatcher requeues these (standard-webhooks aligned), but a
+      sustained high ratio means the target endpoint is degraded. The result label
+      separates this from client_error (endpoint misconfiguration).
+```
+
+### WebhookDeliveryClientErrorRate
+
+4xx 持续高比率 = 端点配置/认证错误（与 5xx 区分是 status-aware result label 的核心价值）。
+
+```yaml
+- alert: GoCellWebhookDeliveryClientErrorRate
+  expr: |
+    sum by (source) (rate(gocell_webhook_deliveries_total{result="client_error"}[5m]))
+      / sum by (source) (rate(gocell_webhook_deliveries_total[5m])) > 0.2
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Webhook delivery 4xx rate high (source={{ $labels.source }})"
+    description: |
+      >20% of webhook deliveries to source={{ $labels.source }} returned 4xx over
+      10m — likely a target endpoint misconfiguration (auth, path, payload schema),
+      NOT a transient outage. Unlike server_error these keep failing on retry.
+```
+
+### WebhookSignatureFailureSpike
+
+验签失败速率突增 = 安全信号（密钥轮换错配、replay、或源未注册）。
+
+```yaml
+- alert: GoCellWebhookSignatureFailureSpike
+  expr: |
+    sum by (source, reason) (rate(gocell_webhook_signature_failures_total[5m])) > 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Webhook signature failures (source={{ $labels.source }} reason={{ $labels.reason }})"
+    description: |
+      Sustained webhook signature-verification failures. reason distinguishes
+      missing_header / invalid_header / unknown_source / bad_signature /
+      timestamp_expired. A bad_signature or timestamp_expired spike is a
+      key-rotation misconfiguration or replay signal; unknown_source means the
+      configured sourceID has no registered secret (server-side only — the wire
+      401 is uniform to avoid an enumeration oracle).
+```
+
+> **超时与时延分位**：`gocell_webhook_delivery_duration_seconds` 的最大 bucket（30s）等于
+> 默认 delivery timeout，故超时样本（`result=transport_error`，约 30s）钉在最后一个
+> bucket，`histogram_quantile` p99 在超时率高时会饱和在 30s。运维应将
+> `rate(...{result="transport_error"})` 计数器与 duration 分位联合判读，而非只看 p99。
+
+---
+
 ## 注意事项
 
 1. **fqName 单前缀**：所有规则中的指标名已包含 `gocell_` 前缀。若部署时 Prometheus

@@ -35,6 +35,17 @@ func TestReceiver_RecordsSignatureFailureReason(t *testing.T) {
 			},
 		},
 		{
+			name:       "invalid_header",
+			wantReason: "invalid_header",
+			build: func(t *testing.T, m kwh.Metrics) (*rtwh.Receiver, *http.Request) {
+				req := signedRequest(t, []byte(`{"k":"v"}`), "d1")
+				// Non-integer timestamp → verifier.validateTimestamp →
+				// ErrWebhookInvalidHeader → ReasonInvalidHeader (runs before HMAC).
+				req.Header.Set("X-Timestamp", "not-a-number")
+				return newMetricReceiver(t, testStore(t), fixedNow, m), req
+			},
+		},
+		{
 			name:       "bad_signature",
 			wantReason: "bad_signature",
 			build: func(t *testing.T, m kwh.Metrics) (*rtwh.Receiver, *http.Request) {

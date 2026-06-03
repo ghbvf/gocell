@@ -42,7 +42,7 @@ func buildIntegrationServer(t *testing.T, handler kwh.WebhookReceiveHandler) (*h
 		},
 	}
 
-	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestIntegration_BodyTooLarge_Returns413(t *testing.T) {
 	claimer := idempotency.NewInMemClaimer(clk)
 
 	reqs := []cell.WebhookReceiverRequest{{Spec: spec, Handler: func(_ context.Context, _ kwh.Delivery) error { return nil }}}
-	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestIntegration_TimestampExpired_Returns401(t *testing.T) {
 
 	spec := testSpec()
 	reqs := []cell.WebhookReceiverRequest{{Spec: spec, Handler: func(_ context.Context, _ kwh.Delivery) error { return nil }}}
-	groups, err := rtwh.BuildRouteGroups(laterClk, reqs, store, claimer)
+	groups, err := rtwh.BuildRouteGroups(laterClk, reqs, store, claimer, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestIntegration_ConcurrentDelivery_Returns409(t *testing.T) {
 
 	spec := testSpec()
 	reqs := []cell.WebhookReceiverRequest{{Spec: spec, Handler: func(_ context.Context, _ kwh.Delivery) error { return nil }}}
-	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, fakeCl)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, fakeCl, kwh.Metrics{})
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}

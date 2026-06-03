@@ -98,8 +98,9 @@ func autoWireCachedCollector[T comparable](
 // could panic on a non-comparable dynamic type).
 func (b *Bootstrap) autoWireWebhookMetricsCollector() (kwh.Metrics, error) {
 	m, _, err := autoWireCachedCollector(b, &b.webhookMetrics, kwh.RegisterMetrics,
-		"bootstrap: webhook metrics auto-wire conflict: WithMetricsProvider constructs the webhook collector; "+
-			"do not also register webhook_deliveries_total manually on the same provider. Remove one side")
+		"bootstrap: webhook metrics auto-wire conflict: WithMetricsProvider constructs the webhook collector "+
+			"(webhook_deliveries_total / _delivery_duration_seconds / _signature_failures_total / "+
+			"_idempotency_hits_total); do not also register any of these manually on the same provider. Remove one side")
 	if err != nil {
 		return kwh.Metrics{}, err
 	}

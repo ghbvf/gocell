@@ -127,6 +127,7 @@ const autoWireHelperName = "autoWireCachedCollector"
 const (
 	autoWireRuntimeMetricsPkgPath = PlatformModulePath + "/runtime/observability/metrics"
 	autoWireProjectionPkgPath     = PlatformModulePath + "/kernel/projection"
+	autoWireWebhookPkgPath        = PlatformModulePath + "/kernel/webhook"
 )
 
 // autoWireCtorSymbols maps each {pkgPath, funcName} metric-collector constructor
@@ -137,6 +138,7 @@ var autoWireCtorSymbols = map[[2]string]string{
 	{autoWireRuntimeMetricsPkgPath, "NewEventRouterCollector"}:  "metricsmiddleware.NewEventRouterCollector",
 	{autoWireRuntimeMetricsPkgPath, "NewOutboxRejectCollector"}: "metricsmiddleware.NewOutboxRejectCollector",
 	{autoWireProjectionPkgPath, "RegisterMetrics"}:              "projection.RegisterMetrics",
+	{autoWireWebhookPkgPath, "RegisterMetrics"}:                 "webhook.RegisterMetrics",
 }
 
 // autoWireFunneledPkgs is the set of packages whose collector constructors the
@@ -146,6 +148,7 @@ var autoWireCtorSymbols = map[[2]string]string{
 var autoWireFunneledPkgs = map[string]struct{}{
 	autoWireRuntimeMetricsPkgPath: {},
 	autoWireProjectionPkgPath:     {},
+	autoWireWebhookPkgPath:        {},
 }
 
 // autoWireConstructArgIndex is the positional index of the construct argument in

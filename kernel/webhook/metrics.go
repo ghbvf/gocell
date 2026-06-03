@@ -163,12 +163,20 @@ func RegisterMetrics(p kernelmetrics.Provider) (Metrics, error) {
 	if err != nil {
 		return Metrics{}, fmt.Errorf(errRegisterMetricFmt, metricWebhookIdempotencyHits, err)
 	}
-	return Metrics{
+	m := Metrics{
 		Deliveries:        deliveries,
 		DeliveryDuration:  duration,
 		SignatureFailures: sigFailures,
 		IdempotencyHits:   idempotencyHits,
-	}, nil
+	}
+	// Validate the label sets at registration time (fail-fast). A label-set
+	// mismatch on a just-registered vec would otherwise panic at first record
+	// in a worker goroutine; catching it here turns it into a startup error.
+	// preflight uses a placeholder source, so no runtime data is needed.
+	if err := m.preflight(); err != nil {
+		return Metrics{}, err
+	}
+	return m, nil
 }
 
 // preflight probes each non-nil instrument's With() with a representative label

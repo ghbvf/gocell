@@ -59,11 +59,32 @@
 //     contracts/webhook/README.md troubleshooting section (same resolution as
 //     the subscribe path).
 //
+// # Observability
+//
+// Metrics are auto-wired by bootstrap: when WithMetricsProvider is configured,
+// phase5 injects the shared kwh.Metrics collector into each Receiver (recording
+// webhook_signature_failures_total and webhook_idempotency_hits_total) and
+// phase6 into each Dispatcher (webhook_deliveries_total and
+// webhook_delivery_duration_seconds). A nil/NopProvider leaves the zero
+// kwh.Metrics, which records as a no-op — callers do nothing. See
+// kernel/webhook/metrics.go.
+//
+// # Known gap: listener auth (KERNEL-WEBHOOK-01 follow-up)
+//
+// BuildRouteGroups mounts the receiver on cell.PrimaryListener WITHOUT a Public
+// marker. In any assembly whose PrimaryListener carries a JWT auth chain, an
+// external webhook POST (which carries an HMAC signature, not a JWT) is rejected
+// by the JWT middleware with 401 before reaching the HMAC verifier. A runnable
+// deployment therefore needs the webhook path marked Public or a dedicated
+// webhook ListenerRef (see .claude/rules/gocell/runtime-api.md §"单 listener 单
+// auth scheme"). Tracked as a KERNEL-WEBHOOK-01 follow-up; out of PR-6 scope.
+//
 // # Deferred capabilities
 //
-// Metrics and healthz probes are deferred to PR-6 (KERNEL-WEBHOOK-01).
-// Per-contract Claimer TTL configuration is also deferred (the 24h done-TTL is
-// a fixed constant today — see receiver.go).
+// Healthz probes were evaluated and dropped (vacuous/synonymous with the
+// adapter _ready probes under today's immutable source store; tracked for when
+// the store becomes runtime-mutable). Per-contract Claimer TTL configuration is
+// deferred (the 24h done-TTL is a fixed constant today — see receiver.go).
 //
 // # References
 //
