@@ -113,17 +113,34 @@ func TestNewFrameworkHTTP(t *testing.T) {
 			// a non-empty Clients allowlist (ContractSpec.validateHTTP invariant), so
 			// the variadic clients carry the caller-cell allowlist into the spec.
 			name:    "internal endpoint with caller-cell allowlist",
-			id:      "http.framework.projection.rebuild.v1",
+			id:      "http.framework.example.control.v1",
 			method:  "POST",
-			path:    "/internal/v1/{cell}/projection/{name}/rebuild",
+			path:    "/internal/v1/example/control",
 			clients: []string{"controlplane"},
+			want: contractspec.ContractSpec{
+				ID:        "http.framework.example.control.v1",
+				Kind:      cellvocab.ContractHTTP,
+				Transport: "http",
+				Method:    "POST",
+				Path:      "/internal/v1/example/control",
+				Clients:   []string{"controlplane"},
+			},
+		},
+		{
+			// Admin control-plane framework endpoint (#1505 projection rebuild): an
+			// /admin/v1/* path is an ordinary non-internal path, so it carries NO
+			// Clients (validateHTTP forbids Clients on non-internal paths). Auth is
+			// the AdminListener operator-credential gate, not a caller-cell allowlist.
+			name:   "admin endpoint without caller-cell allowlist",
+			id:     "http.framework.projection.rebuild.v1",
+			method: "POST",
+			path:   "/admin/v1/projection/{cell}/{name}/rebuild",
 			want: contractspec.ContractSpec{
 				ID:        "http.framework.projection.rebuild.v1",
 				Kind:      cellvocab.ContractHTTP,
 				Transport: "http",
 				Method:    "POST",
-				Path:      "/internal/v1/{cell}/projection/{name}/rebuild",
-				Clients:   []string{"controlplane"},
+				Path:      "/admin/v1/projection/{cell}/{name}/rebuild",
 			},
 		},
 	}

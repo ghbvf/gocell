@@ -33,6 +33,7 @@ Kubelet / Prometheus    │              health  :9091                │
 | primary  | `:8080`             | `GOCELL_HTTP_PRIMARY_ADDR` |
 | internal | `127.0.0.1:9090`    | `GOCELL_HTTP_INTERNAL_ADDR` |
 | health   | `127.0.0.1:9091` local/dev default; use `:9091` for PodIP/Service probes | `GOCELL_HTTP_HEALTH_ADDR` |
+| admin    | `127.0.0.1:9093` (loopback; operator control-plane, optional — declared only when an admin endpoint is wired) | composition-root supplied (e.g. `127.0.0.1:9093` in the todoorder demo) |
 
 For full variable reference see `docs/ops/env-vars.md`.
 
@@ -249,6 +250,42 @@ rather than role-based policies:
 
 The `health` listener is reserved for framework-owned endpoints (`/healthz`,
 `/readyz`, `/metrics`). Cells must not declare routes on `cell.HealthListener`.
+
+### Admin Listener (operator control-plane, #1505)
+
+`cell.AdminListener` (`/admin/v1/*`) carries **operator→system** control-plane
+endpoints (an administrator or deployment pipeline triggers them) — distinct from
+the `internal` listener's **cell→cell** model. It is **optional**: declared only
+when an admin endpoint is wired.
+
+- **Auth**: an `auth.AuthOperator` operator-credential gate — HTTP Basic Auth over
+  env credentials `GOCELL_OPERATOR_ADMIN_USERNAME` / `GOCELL_OPERATOR_ADMIN_PASSWORD`,
+  with a per-IP rate limiter and constant-time comparison. There is **no
+  caller-cell allowlist** (operators have no caller cell). Loopback isolation
+  **plus** operator credentials are a defense-in-depth pair. The credentials are
+  separate from the per-cell `/api/v{N}/{cell}/setup/admin` bootstrap credentials
+  (`GOCELL_BOOTSTRAP_ADMIN_*`).
+- **Affinity (enforced at startup, both directions)**: an `/admin/v1/*` path must
+  be mounted on `AdminListener`, and `AdminListener` must carry only `/admin/v1/*`
+  paths. `AdminListener` must carry an `AuthOperator` (loopback alone is
+  insufficient); `AuthOperator` may appear only on `AdminListener` — all four are
+  bootstrap phase0 / router fail-fast checks.
+- **Wiring**:
+
+  ```go
+  bootstrap.WithListener(cell.AdminListener, "127.0.0.1:9093",
+      []kauth.ListenerAuth{operatorAuth}) // operatorAuth = kauth.NewAuthOperator(...)
+  ```
+
+- **Endpoints today**: `POST /admin/v1/projection/{cell}/{name}/rebuild`
+  (framework-owned; migrated from `/internal/v1/{cell}/projection/{name}/rebuild`
+  by #1505). An ops tool / deployment pipeline presents the operator Basic Auth
+  credentials to trigger a projection rebuild — `202` admitted (async) / `409`
+  already running / `404` unknown cell/projection.
+
+Design rationale + threat matrix:
+`docs/architecture/202606041200-1505-adr-operator-control-plane-auth.md` (and the
+projection lifecycle ADR `202605261620-...` §Amendment 2026-06-04).
 
 ## Deployment Boundaries
 
