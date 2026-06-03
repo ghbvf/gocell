@@ -295,6 +295,16 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 // the exported `var Transports` set is emitted ONLY for multi-transport contracts.
 // This locks the {{if gt (len .Transports) 1}} branch in contractgen's own tests
 // (the real device-registered regen is the integration witness; this is the unit).
+//
+// Derivation lock (NOT a hardcoded primary): both cases drive a NON-amqp primary
+// (mqtt) precisely so the assertions distinguish `index .Transports 0` derivation
+// from a hardcoded `Transport: "amqp"` literal. A template regression to a fixed
+// transport string fails here even though the device-registered golden (amqp
+// primary) would not catch it — the golden locks regen consistency, this locks
+// that the primary tracks transports[0]. See the #1389 ADR for why this unit
+// derivation lock supersedes a redundant TRANSPORT-SEALED-FUNNEL archtest (the
+// transport→ContractSpec surface is already sealed by codegen-golden +
+// NO-MANUAL-CONTRACTSPEC-LITERAL-01).
 func TestRender_Event_Transports(t *testing.T) {
 	root := repoRoot(t)
 	renderSpec := func(t *testing.T, transports []string) string {
@@ -316,23 +326,27 @@ func TestRender_Event_Transports(t *testing.T) {
 		return string(out)
 	}
 
-	t.Run("single transport: primary only, no Transports var", func(t *testing.T) {
-		out := renderSpec(t, []string{"amqp"})
-		if !strings.Contains(out, `Transport: "amqp"`) {
-			t.Errorf("expected primary Transport \"amqp\", got:\n%s", out)
+	t.Run("single transport: primary derives transports[0], no Transports var", func(t *testing.T) {
+		out := renderSpec(t, []string{"mqtt"})
+		if !strings.Contains(out, `Transport: "mqtt"`) {
+			t.Errorf("expected primary Transport \"mqtt\" (transports[0]), got:\n%s", out)
+		}
+		if strings.Contains(out, `Transport: "amqp"`) {
+			t.Errorf("primary must derive transports[0]=mqtt, not a hardcoded \"amqp\", got:\n%s", out)
 		}
 		if strings.Contains(out, "var Transports") {
 			t.Errorf("single-transport contract must NOT emit a Transports var, got:\n%s", out)
 		}
 	})
 
-	t.Run("multi transport: primary + exported Transports set", func(t *testing.T) {
-		out := renderSpec(t, []string{"amqp", "mqtt"})
-		if !strings.Contains(out, `Transport: "amqp"`) {
-			t.Errorf("expected primary Transport \"amqp\" (transports[0]), got:\n%s", out)
+	t.Run("multi transport: primary is transports[0] + exported set in declared order", func(t *testing.T) {
+		// mqtt FIRST so the primary is provably transports[0], not a hardcoded amqp.
+		out := renderSpec(t, []string{"mqtt", "amqp"})
+		if !strings.Contains(out, `Transport: "mqtt"`) {
+			t.Errorf("expected primary Transport \"mqtt\" (transports[0]), got:\n%s", out)
 		}
-		if !strings.Contains(out, `var Transports = []string{"amqp", "mqtt"}`) {
-			t.Errorf("expected exported Transports set, got:\n%s", out)
+		if !strings.Contains(out, `var Transports = []string{"mqtt", "amqp"}`) {
+			t.Errorf("expected exported Transports set in declared order, got:\n%s", out)
 		}
 	})
 }
