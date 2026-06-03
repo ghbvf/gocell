@@ -124,7 +124,7 @@ gh pr create --title "..." --body-file <填好的 pull_request_template.md>
 gh pr edit <PR#> --add-label pr-status/in-progress   # 进入 ship→codex→fix 流程（见 .github/project-template/PROJECT.md §5）
 ```
 
-PR body 结构单源 = `.github/project-template/pull_request_template.md`（Summary / Refs / Test plan）；读模版填占位（`Refs: Closes #<ID>` + `ref: framework file`），不在技能内重述结构。本仓 PR 全程 CLI 创建，必须 `--body-file` 读填好的模版。
+PR body 结构单源 = `.github/project-template/pull_request_template.md`；读模版填占位（`Refs: Closes #<ID>` + `ref: framework file`），不在技能内重述结构。本仓 PR 全程 CLI 创建，必须 `--body-file` 读填好的模版。
 
 ---
 

@@ -122,7 +122,7 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
 ```
 
-`gh pr comment` 成功时把新评论 URL（含 `#issuecomment-<id>`）打到 stdout——把该 URL **回显到当前窗口**给用户，作为权威留痕锚点（无需额外命令）。footer 由 AI 自填：`PR #<N> · Generated with Claude Code · branch <PR head 分支>`。
+`gh pr comment` 成功时把新评论 URL（含 `#issuecomment-<id>`）打到 stdout——把该 URL **回显到当前窗口**给用户，作为权威留痕锚点（无需额外命令）；贴失败则报错退出，不静默跳过。footer 由 AI 按当前运行身份自填：`PR #<N> · Generated with <Claude Code|Codex> · branch <PR head 分支>`。
 
 ---
 
