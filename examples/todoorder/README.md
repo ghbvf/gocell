@@ -186,14 +186,24 @@ The loop has four parts, all inside `ordercell`:
 
 > **Demo mode — NoopWriter does not deliver events to the projection**: `run.go`
 > uses `outbox.NoopWriter{}`, so events are validated then discarded; there is
-> no in-process fan-out. In demo mode, `PATCH confirm` does not update the
-> projection, so `GET /projection/summary` always returns an empty statuses
-> array. The outputs below reflect **durable mode** (real broker + relay) or
-> the unit tests in `orderprojection/service_test.go`. For the projection
-> closed-loop runtime validation, see that test file.
+> no in-process fan-out. The HTTP commands themselves still work in demo mode —
+> `POST /orders` returns `201` and `PATCH .../status` returns `200` — but because
+> the published events are discarded, `GET /projection/summary` returns an empty
+> statuses array (the projection is never fed). The summary/rebuild outputs below
+> reflect **durable mode** (real broker + relay) or the unit/lifecycle tests in
+> `orderprojection/{service,lifecycle}_test.go` (the projection closed-loop is
+> validated there).
+>
+> **Readyz probes** — each of the two projections registers framework-owned probes
+> derived from its `projectionID`: `ordercell_projection_order_status_ready` /
+> `_lag` and `ordercell_projection_order_transition_ready` / `_lag` (names are
+> cellgen-derived from `(cellID, projectionID)`, so they are self-documenting and
+> need no hand-maintained inventory).
 
 ```bash
-# Confirm an order (PATCH) → publishes order-status-changed (durable mode only)
+# Confirm an order (PATCH) — returns 200 in BOTH demo and durable mode; only the
+# downstream projection update (via the published order-status-changed event)
+# requires durable wiring.
 curl -X PATCH -H "Authorization: Bearer $TODOORDER_TOKEN" \
   -H "Content-Type: application/json" -d '{"status":"confirmed"}' \
   http://localhost:8082/api/v1/orders/{id}/status

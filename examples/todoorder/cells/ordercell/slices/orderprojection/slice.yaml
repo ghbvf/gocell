@@ -13,7 +13,7 @@ contractUsages:
     role: subscribe
     handler: HandleOrderStatusChanged
     projection: order_transition
-    onReset: ResetTransition
+    onReset: ResetOrderTransition
   - contract: projection.order.status-summary.v1
     role: provide
   - contract: http.order.projection-summary.v1

@@ -856,10 +856,17 @@ documented contract + regression test): archtest
 the topic gate; `replayPhase`/`advanceOffsetPastForeign` godoc + this amendment
 are the contract; `TestRebuild_PerSpecTopicFilter` (kernel) +
 `TestOrderProjection_FanInLifecycle` (example) are the regression tests. Rating:
-**downstream Hard** (framework owns the replay loop + AST form-uniqueness →
-business code has no path to apply a foreign stream during rebuild) / **upstream
-Medium** (archtest guards the gate's presence; Go cannot compile-time force the
-function to keep it — the #851 / #893 / #1282 framework-owned ceiling family). The
+**Medium** (single archtest, not a type-system double-lock). The gate is
+NAME-ANCHORED AST containment — the `applyOne` CallExpr must sit inside the
+`entry.RoutingTopic() == c.spec.Topic` IfStmt body (token.Pos containment +
+structural-name gate form), the same dominance-lite shape as the Medium
+`CHANGEPASSWORD-INACTIVE-GATE-01`; it is NOT typed callsite-uniqueness and NOT
+CFG dominance, so it is not Hard. (Business code being unable to reach the rebuild
+apply at all is incidental Go visibility — `applyOne` is private — not what this
+rule enforces; the rule enforces that the FRAMEWORK keeps the gate.) Hard path
+(won't-do now, over-engineering for one call site): `TypesInfo.ObjectOf` typed
+resolution of `applyOne` à la `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 + CFG/SSA dominance
+— the #851 / #893 / #1282 / CHANGEPASSWORD-#1212 ceiling family. The
 disjoint-sub-view discipline in the example is guarded by its own unit/cell tests
 (a single reference, not a cross-cutting constraint), so it is not in the
 AI-robust archtest scope.
@@ -883,5 +890,15 @@ AI-robust archtest scope.
 - **Row 6** (GAP-8 boundary): unchanged — no new framework constraint on the
   business read-model schema; the disjoint-sub-view composition is business code.
 - **Row 7** (multi-pod boundary): unchanged (v1 single-pod).
+- **Row 8 (NEW — introduced by #1482)** — *whole-journal replay interleaving /
+  catchup termination*: because one whole-journal ReplaySource feeds every
+  Coordinator, a rebuild sees foreign streams interleaved with its own, and a
+  trailing foreign entry (another stream's event at the highest journal position)
+  must not strand catchup. **Discharged** by `advanceOffsetPastForeign`: foreign
+  entries advance the checkpoint (without applying) so `catchupPhase`'s
+  `checkpoint >= Head` comparison still reaches Head; covered by
+  `TestRebuild_PerSpecTopicFilter` (trailing-foreign case) +
+  `TestAdvanceOffsetPastForeign_ErrorBranches`. This is a v1 row that did not exist
+  before per-spec filtering; it is ✅, not ⚠️/❌.
 
-No row flips to ⚠️/❌.
+No row flips to ⚠️/❌; the one new row (Row 8) lands ✅.

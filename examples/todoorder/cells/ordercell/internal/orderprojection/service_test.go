@@ -205,10 +205,10 @@ func TestHandleOrderStatusChanged_MissingNewStatus_PermanentError(t *testing.T) 
 	assert.True(t, errors.As(err, &pe), "expected permanent error")
 }
 
-// TestResetTransition_ClearsTransitionViewOnly verifies ResetTransition clears
-// the latest sub-view but leaves the created sub-view intact (disjoint reset):
-// after the reset the order reverts to its created status, not absent.
-func TestResetTransition_ClearsTransitionViewOnly(t *testing.T) {
+// TestResetOrderTransition_ClearsTransitionViewOnly verifies ResetOrderTransition
+// clears the latest sub-view but leaves the created sub-view intact (disjoint
+// reset): after the reset the order reverts to its created status, not absent.
+func TestResetOrderTransition_ClearsTransitionViewOnly(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
@@ -216,11 +216,35 @@ func TestResetTransition_ClearsTransitionViewOnly(t *testing.T) {
 	require.NoError(t, svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-2", "confirmed")))
 	require.Equal(t, "confirmed", statusOf(svc.Query(ctx), "order-2"))
 
-	require.NoError(t, svc.ResetTransition(ctx))
+	require.NoError(t, svc.ResetOrderTransition(ctx))
 
 	after := svc.Query(ctx)
 	assert.Equal(t, int64(1), after.TotalOrders, "created sub-view survives a transition reset")
 	assert.Equal(t, "pending", statusOf(after, "order-2"), "order reverts to created status after transition reset")
+}
+
+// TestQuery_TransitionBeforeCreation verifies the eventual-consistency scenario
+// where an order-status-changed event is processed before its order-created
+// event (independent projections). The order must appear via the latest sub-view
+// even before creation, and the composed status must remain the transition value
+// (latest wins over created) once the creation event arrives.
+func TestQuery_TransitionBeforeCreation(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	// Transition arrives first — order-9 appears only via latest sub-view.
+	require.NoError(t, svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-9", "shipped")))
+
+	mid := svc.Query(ctx)
+	assert.Equal(t, int64(1), mid.TotalOrders, "order visible via latest before creation event")
+	assert.Equal(t, "shipped", statusOf(mid, "order-9"), "transition status shown before creation")
+
+	// Creation event arrives with an earlier-snapshot status — latest must win.
+	require.NoError(t, svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-9", "pending")))
+
+	after := svc.Query(ctx)
+	assert.Equal(t, int64(1), after.TotalOrders, "still one order after creation event arrives")
+	assert.Equal(t, "shipped", statusOf(after, "order-9"), "latest (shipped) wins over created (pending)")
 }
 
 // TestResetOrderStatus_ClearsReadModel verifies that ResetOrderStatus clears the
@@ -288,7 +312,9 @@ func TestQuery_TotalOrders(t *testing.T) {
 	assert.Equal(t, int64(2), summary.TotalOrders)
 }
 
-// TestConcurrency_HandleAndQuery_NoDataRace exercises the RW mutex under parallel calls.
+// TestConcurrency_HandleAndQuery_NoDataRace exercises the RW mutex under parallel
+// calls: HandleOrderCreated, HandleOrderStatusChanged (latest sub-view write), and
+// Query all run concurrently to ensure no data race on either sub-view.
 func TestConcurrency_HandleAndQuery_NoDataRace(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -301,6 +327,14 @@ func TestConcurrency_HandleAndQuery_NoDataRace(t *testing.T) {
 			defer wg.Done()
 			id := "order-" + strconv.Itoa(i)
 			_ = svc.HandleOrderCreated(ctx, makeCreatedEntry(t, id, "pending"))
+		}(i)
+	}
+	for i := range 10 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := "order-" + strconv.Itoa(i)
+			_ = svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, id, "confirmed"))
 		}(i)
 	}
 	for range 5 {

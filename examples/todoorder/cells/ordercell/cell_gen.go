@@ -73,7 +73,7 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registrar) error {
 	}
 
 	if err := reg.RegisterProjection(proj1.NewProjectionRequest(
-		c.projectionSvc.HandleOrderStatusChanged, "order_transition", "ordercell", "orderprojection", c.projectionSvc.ResetTransition,
+		c.projectionSvc.HandleOrderStatusChanged, "order_transition", "ordercell", "orderprojection", c.projectionSvc.ResetOrderTransition,
 	)); err != nil {
 		return fmt.Errorf("ordercell: projection order_transition: %w", err)
 	}

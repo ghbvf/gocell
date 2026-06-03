@@ -305,29 +305,43 @@ func (c *Coordinator) buildHandler(apply Apply) outbox.EntryHandler {
 	}
 }
 
-// applyOne is the inner per-event logic: load checkpoint, compare position,
-// call Apply, advance checkpoint, and update lastApplied metrics.
-// It runs inside a transaction provided by the caller (buildHandler's RunInTx).
-func (c *Coordinator) applyOne(ctx context.Context, entry outbox.Entry, apply Apply) error {
+// resolvePosition loads the checkpoint and resolves the entry's cursor position,
+// enforcing the two guards every replay step shares: the Cursor 1-based invariant
+// (cursor.go #2) and the exactly-once skip (pos <= checkpoint). It is the SINGLE
+// SOURCE of those guards for both applyOne (own-stream apply) and
+// advanceOffsetPastForeign (foreign-stream checkpoint advance), so the two cannot
+// drift if a guard is later changed. proceed is true only when the position is
+// new (> checkpoint) and must be committed; a false proceed with nil err means
+// the entry was already reflected (a no-op skip).
+func (c *Coordinator) resolvePosition(ctx context.Context, entry outbox.Entry) (pos int64, proceed bool, err error) {
 	current, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
 	if err != nil {
-		return fmt.Errorf("projection.applyOne[load]: %w", err)
+		return 0, false, fmt.Errorf("projection.position[load]: %w", err)
 	}
-
-	pos, err := c.cursor.Position(entry)
+	pos, err = c.cursor.Position(entry)
 	if err != nil {
-		return fmt.Errorf("projection.applyOne[cursor]: %w", err)
+		return 0, false, fmt.Errorf("projection.position[cursor]: %w", err)
 	}
-
 	// Enforce the Cursor 1-based invariant (cursor.go #2) at the trust boundary.
 	if pos < 1 {
-		return outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.applyOne: cursor returned a non-positive position; Cursor must honor the 1-based invariant"))
+		return 0, false, outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.position: cursor returned a non-positive position; Cursor must honor the 1-based invariant"))
 	}
-
 	// Exactly-once: skip events already reflected in the checkpoint.
 	if pos <= current {
-		return nil
+		return pos, false, nil
+	}
+	return pos, true, nil
+}
+
+// applyOne is the inner per-event logic for an OWN-stream entry: resolve the
+// position (1-based + exactly-once guards via resolvePosition), call Apply,
+// advance the checkpoint, and update lastApplied lag metrics. It runs inside a
+// transaction provided by the caller (buildHandler's RunInTx / replayPhase).
+func (c *Coordinator) applyOne(ctx context.Context, entry outbox.Entry, apply Apply) error {
+	pos, proceed, err := c.resolvePosition(ctx, entry)
+	if err != nil || !proceed {
+		return err
 	}
 
 	if err := apply(ctx, entry); err != nil {

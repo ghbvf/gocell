@@ -9,7 +9,7 @@
 //   - order_status      consumes event.order-created.v1        → HandleOrderCreated
 //     (owns the created sub-view; onReset = ResetOrderStatus)
 //   - order_transition  consumes event.order-status-changed.v1 → HandleOrderStatusChanged
-//     (owns the transition sub-view; onReset = ResetTransition)
+//     (owns the transition sub-view; onReset = ResetOrderTransition)
 //
 // Each projection owns a DISJOINT region of the store (created vs latest) and
 // has its own checkpoint + onReset, so rebuilding one never clears the other's
@@ -191,6 +191,9 @@ func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Ent
 	// Defensive schema-required field validation: id and newStatus are required by
 	// the order-status-changed.v1 payload schema and are the fields consumed by this
 	// projection. A missing field is a permanent producer-side violation.
+	// Note: oldStatus is schema-required but deliberately NOT validated or consumed
+	// here — only newStatus feeds the latest sub-view, so a missing oldStatus does
+	// not corrupt the projection.
 	if payload.ID == "" {
 		s.logger.Error("orderprojection: order-status-changed payload missing id",
 			slog.String("entry_id", entry.ID()))
@@ -227,9 +230,9 @@ func (s *Service) ResetOrderStatus(_ context.Context) error {
 	return nil
 }
 
-// ResetTransition implements cell.ProjectionResetHook for the order_transition
+// ResetOrderTransition implements cell.ProjectionResetHook for the order_transition
 // projection. It clears ONLY the latest sub-view, symmetric to ResetOrderStatus.
-func (s *Service) ResetTransition(_ context.Context) error {
+func (s *Service) ResetOrderTransition(_ context.Context) error {
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
 	s.store.latest = make(map[string]string)
@@ -241,6 +244,10 @@ func (s *Service) ResetTransition(_ context.Context) error {
 // transition (latest) if one exists, else its created status. Statuses are
 // sorted alphabetically and order IDs within each bucket are sorted, so a
 // rebuild produces a byte-identical snapshot.
+//
+// TotalOrders counts the union created ∪ latest; under eventual consistency an
+// order observed only via a transition (latest) before its creation (created)
+// still contributes to TotalOrders — the two independent projections converge.
 func (s *Service) Query(_ context.Context) Summary {
 	s.store.mu.RLock()
 	defer s.store.mu.RUnlock()

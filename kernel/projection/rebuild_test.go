@@ -4,6 +4,7 @@ package projection
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -167,6 +168,15 @@ func TestRebuild_ColdFull(t *testing.T) {
 // journal entry belongs to another stream).
 func TestRebuild_PerSpecTopicFilter(t *testing.T) {
 	t.Parallel()
+	// Guard the implicit cross-file contract this test relies on: the seeded
+	// own-stream entries use testEventTopic and the Coordinator subscribes via
+	// minimalSpec, so their topics MUST agree — otherwise the per-spec filter
+	// would treat EVERY entry as foreign and the apply-count assertion below would
+	// fail with a misleading "got 0" instead of pointing at the topic drift.
+	if got := minimalSpec("projection.p1.v1").Topic; got != testEventTopic {
+		t.Fatalf("test invariant broken: minimalSpec topic %q != testEventTopic %q; "+
+			"realign the seed topics with the subscribed spec", got, testEventTopic)
+	}
 	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
 	cur, err := NewMemCursor(src)
@@ -208,6 +218,91 @@ func TestRebuild_PerSpecTopicFilter(t *testing.T) {
 	cp, _ := store.LoadOffset(context.Background(), "testcell", "p1")
 	if cp != head {
 		t.Errorf("checkpoint = %d, want %d (head — checkpoint advances past foreign entries)", cp, head)
+	}
+}
+
+// TestAdvanceOffsetPastForeign_ErrorBranches covers the foreign-stream
+// checkpoint-advance error paths (#1482): a load/cursor failure or 1-based
+// violation surfaces via the shared resolvePosition, a SaveOffset failure
+// surfaces as projection.rebuild[foreign-save], and an already-applied position
+// is a silent no-op skip.
+func TestAdvanceOffsetPastForeign_ErrorBranches(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	entry := mustNewTestEntry(t, clk, "other.stream.v1")
+
+	tests := []struct {
+		name      string
+		store     CheckpointStore
+		cursor    Cursor
+		wantErr   bool
+		wantPerm  bool
+		errSubstr string
+	}{
+		{
+			name:      "LoadOffset error",
+			store:     &seededStore{offsets: map[string]int64{}, loadErr: errors.New("load boom")},
+			cursor:    &fakeCursor{pos: 5},
+			wantErr:   true,
+			errSubstr: "projection.position[load]",
+		},
+		{
+			name:      "Position error",
+			store:     NewMemCheckpointStore(),
+			cursor:    &fakeCursor{pos: 5, err: errors.New("cursor boom")},
+			wantErr:   true,
+			errSubstr: "projection.position[cursor]",
+		},
+		{
+			name:      "non-positive position is a permanent error",
+			store:     NewMemCheckpointStore(),
+			cursor:    &fakeCursor{pos: 0},
+			wantErr:   true,
+			wantPerm:  true,
+			errSubstr: "projection.position",
+		},
+		{
+			name:      "SaveOffset error",
+			store:     &errSaveStore{currentOffset: 0, saveErr: errors.New("save boom")},
+			cursor:    &fakeCursor{pos: 5},
+			wantErr:   true,
+			errSubstr: "projection.rebuild[foreign-save]",
+		},
+		{
+			name:    "already-applied position is a no-op skip",
+			store:   newSeededStore("testcell", "p1", 5),
+			cursor:  &fakeCursor{pos: 5}, // pos <= current(5) → skip, no SaveOffset
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newCoordinatorFull(t, coordinatorFullParams{
+				clk: clk, store: tc.store, cursor: tc.cursor, replay: NewMemReplaySource(),
+			})
+			err := c.advanceOffsetPastForeign(context.Background(), entry)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.errSubstr)
+			}
+			if tc.wantPerm {
+				var pe *outbox.PermanentError
+				if !errors.As(err, &pe) {
+					t.Errorf("expected *outbox.PermanentError, got %T", err)
+				}
+			}
+		})
 	}
 }
 

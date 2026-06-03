@@ -252,26 +252,22 @@ func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 // topic-routed and never delivers them) yet still record journal progress so
 // catchupPhase — which compares the checkpoint against the whole-journal Head —
 // can terminate even when the last journal entry belongs to another stream.
-// The 1-based and exactly-once (pos <= current) guards mirror applyOne so a
-// foreign skip can never move the checkpoint backward or past a bad cursor.
+// The 1-based and exactly-once (pos <= current) guards are shared with applyOne
+// via resolvePosition so a foreign skip can never move the checkpoint backward
+// or past a bad cursor, and the two paths cannot drift.
+//
+// Ops note (lag-gauge blind spot): foreign entries deliberately do NOT update
+// projection_event_replay_lag_seconds (lag is an own-stream apply signal). On a
+// journal dominated by foreign streams the lag gauge can therefore stay flat for
+// stretches of a rebuild even though work is progressing — the checkpoint and
+// pending_events still move; watch those for rebuild progress, not lag.
 func (c *Coordinator) advanceOffsetPastForeign(ctx context.Context, entry outbox.Entry) error {
-	current, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
-	if err != nil {
-		return fmt.Errorf("projection.replay[foreign-load]: %w", err)
-	}
-	pos, err := c.cursor.Position(entry)
-	if err != nil {
-		return fmt.Errorf("projection.replay[foreign-cursor]: %w", err)
-	}
-	if pos < 1 {
-		return outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.replay: cursor returned a non-positive position; Cursor must honor the 1-based invariant"))
-	}
-	if pos <= current {
-		return nil
+	pos, proceed, err := c.resolvePosition(ctx, entry)
+	if err != nil || !proceed {
+		return err
 	}
 	if err := c.store.SaveOffset(ctx, c.cellID, c.projectionID, pos); err != nil {
-		return fmt.Errorf("projection.replay[foreign-save]: %w", err)
+		return fmt.Errorf("projection.rebuild[foreign-save]: %w", err)
 	}
 	return nil
 }

@@ -18,19 +18,25 @@
 // reintroduce cross-stream contamination during rebuild; this rule reds the
 // moment the gate is removed or the applyOne call escapes it.
 //
-// AI-robust: downstream Hard / upstream Medium (the #851 / #893 / #1282
-// framework-owned ceiling family).
-//   - Downstream Hard: the framework owns the rebuild replay loop; business
-//     code has NO path to apply a foreign-stream entry during rebuild because
-//     the applyOne call is structurally enclosed by the topic gate and the
-//     gate form is asserted here. The only apply reach from replayPhase is the
-//     gated one.
-//   - Upstream Medium: this archtest asserts the gate's PRESENCE + the applyOne
-//     callsite's enclosure, but Go cannot compile-time force replayPhase to keep
-//     the gate. A token.Pos enclosure + AST form check is the Go-reachable
-//     ceiling for "this call sits behind that condition"; full CFG/SSA dominance
-//     is the path to Hard and is over-engineering for a single framework call
-//     site (analogous to CHANGEPASSWORD-INACTIVE-GATE-01's #1212 note).
+// AI-robust: Medium (NOT a double-locked funnel — the gate is enforced by a
+// single archtest, not by the type system).
+//   - The enforcement is NAME-ANCHORED AST containment: the applyOne CallExpr
+//     must sit inside the `entry.RoutingTopic() == c.spec.Topic` IfStmt body
+//     (token.Pos containment + structural-name gate form). This mirrors the
+//     Medium CHANGEPASSWORD-INACTIVE-GATE-01 dominance-lite shape — it is NOT
+//     typed callsite-uniqueness (no TypesInfo.ObjectOf) and NOT control-flow
+//     dominance, so it does not reach Hard.
+//   - Note the trivial part that is NOT what this rule buys: business code
+//     cannot reach the rebuild apply at all, but only because applyOne is a
+//     private kernel method (ordinary Go visibility) — that is incidental, not
+//     the invariant. The invariant this rule actually enforces is "the
+//     FRAMEWORK's replayPhase keeps the topic gate around applyOne", and a
+//     name-anchored AST gate is a Medium guard for it.
+//   - Hard path (won't-do now): resolve applyOne via TypesInfo.ObjectOf to the
+//     Coordinator method (typed callsite-uniqueness, à la
+//     SAGA-STEP-RUN-OUTSIDE-TX-01 A1) AND verify CFG/SSA dominance of the gate
+//     over the call. That is over-engineering for a single framework call site;
+//     same ceiling family as #851 / #893 / #1282 / CHANGEPASSWORD #1212.
 //
 // Blind-spot inventory (tools: archtest.Run(t, Typed(...)) +
 // scanner.EachInChildren/EachInSubtree + FindFirstInSubtree; name-anchored, not
@@ -48,7 +54,11 @@
 //   - Cross-function extraction: moving the applyOne call into a helper called
 //     from replayPhase would drop the applyOne CallExpr from replayPhase's
 //     subtree → sawApply anti-vacuity fatal (the rule cannot silently pass). The
-//     helper would then itself need its own gate review.
+//     helper would then itself need its own gate review. This blind spot is
+//     MACHINE-VERIFIED, not just documented: the crossfn fixture below extracts
+//     applyOne into a helper, and the self-check asserts the detector reports
+//     sawApply=false for it (the exact signal the production scan turns into a
+//     t.Fatal).
 //
 //   - Enclosure is token.Pos containment of the applyOne call within a
 //     topic-gate IfStmt.Body, not full control-flow dominance. A gate whose
@@ -58,9 +68,10 @@
 //     ceiling family).
 //
 // Self-check: TestProjectionReplayPerSpecFilter_01_NegativeFixture loads the
-// green (gated) and red (ungated) fixtures under
-// tools/archtest/testdata/projection_replay_filter_{green,red} and asserts the
-// detector stays silent on green and fires on red.
+// green (gated), red (ungated), and crossfn (applyOne extracted to a helper)
+// fixtures under tools/archtest/testdata/projection_replay_filter_{green,red,crossfn}
+// and asserts the detector stays silent on green, fires on red, and reports
+// sawApply=false on crossfn (the anti-vacuity signal).
 package archtest
 
 import (
@@ -129,23 +140,28 @@ func TestProjectionReplayPerSpecFilter_01(t *testing.T) {
 }
 
 // TestProjectionReplayPerSpecFilter_01_NegativeFixture verifies the detector
-// stays silent on the gated (green) fixture and fires on the ungated (red) one.
+// stays silent on the gated (green) fixture, fires on the ungated (red) one, and
+// reports sawApply=false on the crossfn fixture (applyOne extracted into a helper
+// — the anti-vacuity signal that, in the production scan, is turned into a
+// t.Fatal). This machine-verifies the cross-function-extraction blind spot.
 func TestProjectionReplayPerSpecFilter_01_NegativeFixture(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		path           string
 		wantViolations bool
+		wantSawApply   bool
 	}{
-		{path: "./tools/archtest/testdata/projection_replay_filter_green", wantViolations: false},
-		{path: "./tools/archtest/testdata/projection_replay_filter_red", wantViolations: true},
+		{path: "./tools/archtest/testdata/projection_replay_filter_green", wantViolations: false, wantSawApply: true},
+		{path: "./tools/archtest/testdata/projection_replay_filter_red", wantViolations: true, wantSawApply: true},
+		{path: "./tools/archtest/testdata/projection_replay_filter_crossfn", wantViolations: false, wantSawApply: false},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.path, func(t *testing.T) {
 			t.Parallel()
-			var sawTarget bool
+			var sawTarget, sawApply bool
 			diags := Run(t, Typed(TypedOpts{}, []string{tc.path}),
 				func(p *Pass) []Diagnostic {
 					if p.Fset == nil {
@@ -154,8 +170,12 @@ func TestProjectionReplayPerSpecFilter_01_NegativeFixture(t *testing.T) {
 					var d []Diagnostic
 					for _, file := range p.Files {
 						rel := p.Rel(file)
-						fileDiags, found, _, _ := perSpecFilterScan(p.Fset, file, rel)
+						if strings.HasSuffix(rel, "_test.go") {
+							continue
+						}
+						fileDiags, found, apply, _ := perSpecFilterScan(p.Fset, file, rel)
 						sawTarget = sawTarget || found
+						sawApply = sawApply || apply
 						d = append(d, fileDiags...)
 					}
 					return d
@@ -164,6 +184,11 @@ func TestProjectionReplayPerSpecFilter_01_NegativeFixture(t *testing.T) {
 			if !sawTarget {
 				t.Fatalf("%s: fixture %q has no %s function — fixture broken",
 					rulePerSpecReplayFilter01, tc.path, psfTargetFunc)
+			}
+			if sawApply != tc.wantSawApply {
+				t.Errorf("%s: fixture %q sawApply = %v, want %v "+
+					"(crossfn must report false — proves the detector sees no direct applyOne in replayPhase)",
+					rulePerSpecReplayFilter01, tc.path, sawApply, tc.wantSawApply)
 			}
 			if tc.wantViolations && len(diags) == 0 {
 				t.Errorf("%s: fixture %q expected ≥1 diagnostic, got 0 — detector broken",

@@ -168,10 +168,10 @@ func TestOrderProjection_FanInLifecycle(t *testing.T) {
 		eventSpec(topicOrderCreated, topicOrderCreated),
 		svc.HandleOrderCreated, svc.ResetOrderStatus)
 
-	_, transitionHandler := newProjectionCoord(t, "order_transition",
+	transitionCoord, transitionHandler := newProjectionCoord(t, "order_transition",
 		checkpointStore, replaySource, cursor,
 		eventSpec(topicOrderStatusChanged, topicOrderStatusChanged),
-		svc.HandleOrderStatusChanged, svc.ResetTransition)
+		svc.HandleOrderStatusChanged, svc.ResetOrderTransition)
 
 	// -- Phase 1: cold-start live delivery (both streams) --
 	eCreatedA := appendCreated(t, replaySource, "order-A", "pending")
@@ -215,6 +215,25 @@ func TestOrderProjection_FanInLifecycle(t *testing.T) {
 		"order-A's transition must SURVIVE a order_status rebuild (disjoint reset + per-spec filter)")
 	assert.Equal(t, "pending", currentStatusOf(after, "order-B"),
 		"order-B remains pending after rebuild")
+
+	// -- Phase 3 (reverse direction): rebuild ONLY order_transition. Its onReset
+	// clears the transition (latest) sub-view; replay re-applies the
+	// order-status-changed entry and SKIPS the foreign order-created entries. The
+	// created sub-view is untouched, so order-B (created-only, never transitioned)
+	// must still be pending and order-A still confirmed. This proves disjoint
+	// reset holds in BOTH directions. --
+	require.NoError(t, transitionCoord.Rebuild(ctx))
+	testwait.External(t, "orderprojection-rebuild-order_transition",
+		func() bool { return transitionCoord.Phase() == projection.PhaseLive },
+		testtime.EventuallyLong, testtime.FastPoll, "phase != PhaseLive")
+
+	afterReverse := svc.Query(ctx)
+	assert.Equal(t, before.TotalOrders, afterReverse.TotalOrders,
+		"rebuilding order_transition must not change order count")
+	assert.Equal(t, "pending", currentStatusOf(afterReverse, "order-B"),
+		"order-B's created sub-view must SURVIVE a order_transition rebuild (disjoint reset)")
+	assert.Equal(t, "confirmed", currentStatusOf(afterReverse, "order-A"),
+		"order-A's transition is rebuilt from its own stream")
 	_ = eCreatedA
 	_ = eCreatedB
 }
