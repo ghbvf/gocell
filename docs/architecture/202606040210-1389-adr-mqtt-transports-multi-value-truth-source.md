@@ -120,7 +120,7 @@ GoCell 的 transport 在 #1389 之前是「每 kind 一个硬编码 wire 协议�
 
 ## 演进 / 后续工作（backlog）
 
-**per-binding 运行时 transport 选路**：当前 #1389 让 transport 成为契约声明层的**多值真值源**，但运行时一个契约仍只按 primary（`transports[0]`）单路绑定。「一个生产 cell 把某契约**路由到** mqtt 而非 primary amqp」的 per-binding 运行时选路**未**落地（smoke 注释亦点明）——它需要订阅/发布侧按 binding 选 transport 的运行时机制（broker 多路 + cell 声明哪条 binding 用哪个 transport）。该工作 defer，开 backlog 条目跟踪（见 PR body）。本 ADR 落地后，`device-registered` 的 `[amqp, mqtt]` 多值已被契约 / codegen / governance 三层识别，primary 仍是 amqp，mqtt 是 sanctioned 但运行时尚未自动选路的 alternate。
+**per-binding 运行时 transport 选路**：当前 #1389 让 transport 成为契约声明层的**多值真值源**，但运行时一个契约仍只按 primary（`transports[0]`）单路绑定。「一个生产 cell 把某契约**路由到** mqtt 而非 primary amqp」的 per-binding 运行时选路**未**落地（smoke 注释亦点明）——它需要订阅/发布侧按 binding 选 transport 的运行时机制（broker 多路 + cell 声明哪条 binding 用哪个 transport）。该工作 defer，backlog **gh #1548** 跟踪（smoke 注释亦点名该 issue 号）。本 ADR 落地后，`device-registered` 的 `[amqp, mqtt]` 多值已被契约 / codegen / governance 三层识别，primary 仍是 amqp，mqtt 是 sanctioned 但运行时尚未自动选路的 alternate。
 
 ## 参考
 

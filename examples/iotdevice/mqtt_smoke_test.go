@@ -217,7 +217,7 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 		// delivery channel is no longer a hand-written string but a contract-sanctioned
 		// transport. (Per-binding runtime transport selection — a production cell
 		// routing this contract over mqtt rather than the primary amqp — is deferred,
-		// tracked as a backlog item.)
+		// tracked as backlog gh #1548.)
 		ContractTransport: mqttTransportFromContract(t),
 	}
 	received := make(chan outbox.Entry, 1)
