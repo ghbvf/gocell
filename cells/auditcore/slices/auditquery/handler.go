@@ -17,13 +17,18 @@ import (
 )
 
 // auditQueryPolicy permits the request when:
-//   - the caller is NOT tenant-bearing (p.TenantID == ""); a tenant-bearing
-//     caller is rejected 403 outright (#1339 F2) because this endpoint has no
-//     tenant isolation yet (epic #1337 PR-2), AND
 //   - actorId query param is empty. List scopes non-admin callers to self and
-//     treats admin callers as global queries.
+//     treats admin callers as tenant-wide queries.
 //   - OR actorId equals authenticated subject (self-access)
 //   - OR subject has the "admin" role
+//
+// Tenant isolation (epic #1337 PR-2a): every query is tenant-scoped. The List
+// adapter always sets AuditFilters.TenantID from the authenticated principal and
+// the store filters by it, so a caller can only ever read its own tenant's audit
+// trail (admin-ness widens the actor axis, never the tenant axis). This handler
+// is the isolation boundary — it replaced the PR-1 (#1339 F2) blanket 403
+// fail-closed gate that rejected every tenant-bearing caller outright because no
+// tenant-scoped read path existed yet.
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
@@ -34,17 +39,6 @@ func auditQueryPolicy(r *http.Request) error {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
-	}
-	// Tenant-bearing fail-closed (#1339 F2): this endpoint performs NO tenant
-	// isolation yet (no AuditFilters.TenantID, no tenant-scoped WHERE — landing
-	// in epic #1337 PR-2). Serving a tenant-bearing caller un-isolated results
-	// would leak cross-tenant audit rows, so deny outright until PR-2 adds real
-	// filtering. Denial is independent of admin role / actorId — fail-closed for
-	// every tenant-bearing request.
-	if p.TenantID != "" {
-		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
-			"tenant-scoped audit query is not yet supported",
-			errcode.WithInternal(errcode.InternalAttr("_", "tenant-bearing audit query rejected; tenant-scoped filtering lands in epic #1337 PR-2")))
 	}
 	actorID := r.URL.Query().Get("actorId")
 	if actorID == "" || actorID == p.Subject {
@@ -94,6 +88,15 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 
 	filters := ledger.AuditFilters{
+		// TenantID is the isolation scope (epic #1337 PR-2a): sourced from the
+		// authenticated principal, never from a request field, so a caller reads
+		// its OWN tenant's audit trail PLUS tenant-less system events (e.g.
+		// bootstrap.auth.fail) — never another tenant's rows (see
+		// ledger.AuditFilters.TenantID). p.TenantID is non-empty for every JWT
+		// caller post-PR-2a (the access token carries tenant_id); the residual
+		// empty case is backstopped by DB-layer RLS (PR-3). This
+		// always-set-from-principal step is the isolation boundary.
+		TenantID:  p.TenantID,
 		EventType: req.EventType,
 		ActorID:   actorID,
 		SubjectID: req.SubjectID,
@@ -179,17 +182,14 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // backstop: it rejects any sensitive-key field in an audit wire-out schema at
 // generation time, so SessionID cannot re-enter ResponseDataItem via schema.
 //
-// TenantID is not exposed, and — critically — this is NOT a tenant-isolation
-// security guarantee (#1289, INV-SINGLE-TENANT-ONLY). As of multi-tenancy PR-1
-// (#1339) the auth bridge DOES write principal.TenantID from the JWT tenant_id
-// claim, so the audit column is no longer guaranteed empty — but this endpoint
-// has no tenant-scoped READ path (no AuditFilters.TenantID, no tenant-scoped
-// WHERE), so auditQueryPolicy fails closed: a tenant-bearing caller is rejected
-// 403 rather than served un-isolated cross-tenant rows (#1339 F2). Real multi-tenant
-// isolation — AuditFilters.TenantID + a tenant-scoped WHERE + tenantId exposure —
-// lands in PR-2/PR-12 of epic #1337. Until then the appender carries the
-// INV-SINGLE-TENANT-ONLY tripwire (cells/auditcore/internal/appender) that fires
-// loudly when a non-empty tenant reaches audit persistence.
+// TenantID is deliberately NOT exposed per-row. This is no longer a fail-open
+// gap: as of epic #1337 PR-2a the read path IS tenant-scoped — the List adapter
+// always sets AuditFilters.TenantID from the authenticated principal, so every
+// returned row already belongs to the caller's own tenant. A per-row tenantId
+// field would therefore be redundant (a constant equal to the caller's own
+// tenant), so it is omitted. This replaced the PR-1 (#1339 F2) blanket 403 gate
+// and retired the appender's INV-SINGLE-TENANT-ONLY tripwire (#1289). DB-layer
+// RLS (PR-3) is the defense-in-depth backstop.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

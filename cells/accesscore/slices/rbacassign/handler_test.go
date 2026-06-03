@@ -19,13 +19,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 	t.Helper()
 	store := mem.NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	})
@@ -35,9 +34,13 @@ func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 	u1, u1Err := domain.NewUser("usr-1", "usr-1@test.local", "$2a$12$hash", time.Now())
 	require.NoError(t, u1Err)
 	u1.ID = "usr-1"
-	require.NoError(t, store.UserRepository().Create(context.Background(), u1))
-	_, err := store.RoleRepository().AssignToUser(context.Background(), "usr-1", "admin")
+	require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, u1))
+	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-1", "admin")
 	require.NoError(t, err)
+	// Option B: Assign/Revoke derive the tenant from the target user (GetByID),
+	// so seed the roster of users the handler tests operate on (idempotent — usr-1
+	// above is skipped).
+	seedTestUserRoster(t, store)
 
 	svc := mustNewService(t, store.RoleRepository(), store.UserRepository(), testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
@@ -54,11 +57,15 @@ func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 // (service_test.go) that operates on the store returned by setupHandler.
 func seedActiveAdminInStore(t *testing.T, store *mem.Store, userID string) {
 	t.Helper()
-	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
-	require.NoError(t, err)
-	u.ID = userID
-	require.NoError(t, store.UserRepository().Create(context.Background(), u))
-	_, err = store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
+	// Idempotent on the user row: setupHandler pre-seeds a roster, so the user
+	// may already exist; only the admin-role assignment is unconditional.
+	if _, gerr := store.UserRepository().GetByID(context.Background(), userID); gerr != nil {
+		u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
+		require.NoError(t, err)
+		u.ID = userID
+		require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, u))
+	}
+	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, userID, "admin")
 	require.NoError(t, err)
 }
 
@@ -74,7 +81,7 @@ func TestHandler_Assign(t *testing.T) {
 			// Spec: accesscore caller (PrincipalService, CallerCellID=accesscore) → 201
 			name:       "accesscore caller assigns role returns 201",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -93,7 +100,7 @@ func TestHandler_Assign(t *testing.T) {
 		{
 			name:       "non-admin returns 403",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestContext("usr-2", []string{"viewer"}) },
+			ctx:        func() context.Context { return testAuthUserCtx("usr-2", []string{"viewer"}) },
 			wantStatus: http.StatusForbidden,
 		},
 		{
@@ -105,33 +112,33 @@ func TestHandler_Assign(t *testing.T) {
 		{
 			name:       "invalid body returns 400",
 			body:       `{bad json`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty userId returns 400",
 			body:       `{"userId":"","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "role not found returns 404",
 			body:       `{"userId":"usr-2","roleId":"nonexistent"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusNotFound,
 		},
 		{
 			// Spec: caller='configcore' not in allowlist → 403
 			name:       "configcore caller not in allowlist returns 403",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("configcore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("configcore") },
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			// Spec: empty callerCellID → 403
 			name:       "empty caller returns 403",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("") },
+			ctx:        func() context.Context { return testAuthServiceCtx("") },
 			wantStatus: http.StatusForbidden,
 		},
 	}
@@ -170,7 +177,7 @@ func TestHandler_Revoke(t *testing.T) {
 				seedActiveAdminInStore(t, s, "usr-2")
 			},
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -189,37 +196,37 @@ func TestHandler_Revoke(t *testing.T) {
 		{
 			name:       "revoke last admin returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "invalid body returns 400",
 			body:       `{bad json`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty userId returns 400",
 			body:       `{"userId":"","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty roleId returns 400",
 			body:       `{"userId":"usr-1","roleId":""}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "non-admin returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestContext("usr-2", []string{"viewer"}) },
+			ctx:        func() context.Context { return testAuthUserCtx("usr-2", []string{"viewer"}) },
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "non-allowlisted caller returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			ctx:        func() context.Context { return auth.TestServiceContext("configcore") },
+			ctx:        func() context.Context { return testAuthServiceCtx("configcore") },
 			wantStatus: http.StatusForbidden,
 		},
 		{

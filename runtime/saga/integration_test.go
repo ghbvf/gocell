@@ -150,11 +150,7 @@ func startCoord(t *testing.T, c *Coordinator) context.CancelFunc {
 	go func() { done <- c.Start(ctx) }()
 
 	// Wait until the coordinator's ready channel is closed.
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator did not become ready within 2s")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	// Wait for tickLoop to register its ticker with the FakeClock. readyCh is
 	// closed before the goroutine is launched, so there is a brief window where
@@ -172,11 +168,7 @@ func startCoord(t *testing.T, c *Coordinator) context.CancelFunc {
 		if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("cleanup Stop: %v", err)
 		}
-		select {
-		case <-done:
-		case <-time.After(testtime.D3s):
-			t.Error("coordinator goroutine did not exit within 3s after Stop")
-		}
+		_ = testwait.Deterministic(t, done, "coordinator-goroutine-exit")
 	})
 
 	return cancel
@@ -466,16 +458,8 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	go func() { done1 <- c1.Start(ctx1) }()
 	go func() { done2 <- c2.Start(ctx2) }()
 
-	select {
-	case <-c1.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("c1 not ready")
-	}
-	select {
-	case <-c2.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("c2 not ready")
-	}
+	testwait.Deterministic(t, c1.Ready(), "c1-ready")
+	testwait.Deterministic(t, c2.Ready(), "c2-ready")
 
 	// Wait for both coordinators' tickLoop tickers to register (1 ticker per coordinator).
 	testwait.External(t, "both-coordinator-tickers-registered",
@@ -613,12 +597,7 @@ func startCoordinatorForResume(
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		cancel()
-		t.Fatalf("%s not ready", name)
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 	testwait.External(t, "coordinator-tickers-registered",
 		func() bool { return clk.PendingTickers() >= 1 },
 		testtime.D2s, testtime.D1ms)
@@ -637,11 +616,7 @@ func stopCoordinatorAndWait(t *testing.T, c *Coordinator, h resumeCoordinatorHan
 	if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("%s Stop: %v", name, err)
 	}
-	select {
-	case <-h.done:
-	case <-time.After(testtime.D3s):
-		t.Errorf("%s goroutine did not exit", name)
-	}
+	_ = testwait.Deterministic(t, h.done, "coordinator-goroutine-exit")
 }
 
 // assertResumeJournal validates the post-resume journal contents (3 events:
@@ -733,11 +708,7 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- c.Start(ctx) }()
-	select {
-	case <-c.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("coordinator not ready")
-	}
+	testwait.Deterministic(t, c.Ready(), "coordinator-ready")
 
 	// Wait for tickLoop ticker to be registered with the FakeClock.
 	testwait.External(t, "coordinator-tickers-registered",
@@ -808,11 +779,7 @@ func stopCoordinator(t *testing.T, c *Coordinator, cancel context.CancelFunc, do
 	if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("Stop: %v", err)
 	}
-	select {
-	case <-done:
-	case <-time.After(testtime.D3s):
-		t.Error("coordinator goroutine did not exit")
-	}
+	_ = testwait.Deterministic(t, done, "coordinator-goroutine-exit")
 }
 
 // stopTwoCoordinators stops two coordinators concurrently and waits for both goroutines.
@@ -830,16 +797,8 @@ func stopTwoCoordinators(t *testing.T, c1, c2 *Coordinator,
 	if err := c2.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("c2 Stop: %v", err)
 	}
-	select {
-	case <-done1:
-	case <-time.After(testtime.D3s):
-		t.Error("c1 goroutine did not exit")
-	}
-	select {
-	case <-done2:
-	case <-time.After(testtime.D3s):
-		t.Error("c2 goroutine did not exit")
-	}
+	_ = testwait.Deterministic(t, done1, "c1-goroutine-exit")
+	_ = testwait.Deterministic(t, done2, "c2-goroutine-exit")
 }
 
 // ---------------------------------------------------------------------------
@@ -987,11 +946,7 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	driveErrCh := claimOneAsync(t, c1, memJ, "phase2")
 
 	// Wait until compensation walk has started (step1.Compensate signaled).
-	select {
-	case <-compensationStarted:
-	case <-time.After(testtime.D2s):
-		t.Fatal("compensation walk did not start within 2s")
-	}
+	testwait.Deterministic(t, compensationStarted, "compensation-walk-started")
 
 	// Arm the stale flag. Wait for the heartbeat ticker to be registered with
 	// the FakeClock (the goroutine in RunWithHeartbeat runs concurrently), then
@@ -1036,13 +991,8 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 // pre-condition: instance in StatusCompensating with non-terminal last event.
 func assertPhase2LeaseLost(t *testing.T, j *journal.MemJournal, instID idutil.SafeID, driveErrCh <-chan error) {
 	t.Helper()
-	select {
-	case driveErr := <-driveErrCh:
-		if driveErr != nil {
-			t.Fatalf("driveOne phase2 should return nil on lease-lost, got: %v", driveErr)
-		}
-	case <-time.After(testtime.D2s):
-		t.Fatal("driveOne phase2 did not return within 2s after lease-lost")
+	if driveErr := testwait.Deterministic(t, driveErrCh, "drive-phase2-returned"); driveErr != nil {
+		t.Fatalf("driveOne phase2 should return nil on lease-lost, got: %v", driveErr)
 	}
 
 	evs, err := j.Load(context.Background(), instID)

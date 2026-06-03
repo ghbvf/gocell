@@ -40,7 +40,8 @@ func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (dele
 		// user-owned; fail closed rather than leak a revoke op to a
 		// non-user caller.
 		return deletegen.Delete401ErrorResponse{Body: *errcode.New(
-			errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject")}, nil
+			errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject",
+		)}, nil
 	}
 	callerUserID := p.Subject
 

@@ -21,6 +21,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// withTestTenantHeader adds the canonical test tenant ID as X-Tenant-ID header.
+// The setup handler derives the tenant from this header (#1337 PR-2).
+func withTestTenantHeader(req *http.Request) *http.Request {
+	req.Header.Set("X-Tenant-ID", testTenantIDStr)
+	return req
+}
+
 // testAllowAllLimiter satisfies auth.BootstrapRateLimiter for tests that
 // focus on Basic Auth semantics. The authtest helper lives under
 // runtime/internal/authtest (Go internal/ rule refuses cells/ imports at
@@ -57,7 +64,7 @@ func newHandlerFresh(t *testing.T) http.Handler {
 func TestHandler_Status_FreshSystem_ReturnsFalse(t *testing.T) {
 	h := newHandlerFresh(t)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, setupStatusPath, nil)
+	req := withTestTenantHeader(httptest.NewRequest(http.MethodGet, setupStatusPath, nil))
 
 	h.ServeHTTP(w, req)
 
@@ -78,7 +85,7 @@ func TestHandler_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, setupStatusPath, nil)
+	req := withTestTenantHeader(httptest.NewRequest(http.MethodGet, setupStatusPath, nil))
 	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -95,7 +102,7 @@ func TestHandler_CreateAdmin_FreshSystem_Returns201(t *testing.T) {
 	h := newHandlerFresh(t)
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req := withTestTenantHeader(httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -122,7 +129,7 @@ func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
 	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req := withTestTenantHeader(httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -235,7 +242,7 @@ func TestHandler_CreateAdmin_DuplicateIdentityUser_Returns409(t *testing.T) {
 	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req := withTestTenantHeader(httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -250,7 +257,7 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-existing"
-	require.NoError(t, userRepo.Create(context.Background(), u))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
 }
 
 // newHandlerWithBootstrapCreds creates a handler mux whose admin endpoint is
@@ -334,7 +341,7 @@ func TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201(t *testi
 
 	// The body creates 'alice' — completely different from the env credentials.
 	body := `{"username":"alice","email":"alice@example.com","password":"AlicePass!99"}`
-	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req := withTestTenantHeader(httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	// Authenticate with env credentials (op:opSecret123), not alice's credentials.
 	req.SetBasicAuth(envUser, envPass)

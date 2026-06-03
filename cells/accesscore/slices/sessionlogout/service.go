@@ -97,7 +97,8 @@ func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) er
 // session enumeration (IDOR). SubjectID is immutable post-create, so there
 // is no TOCTOU window between the Get and the Revoke.
 func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) error {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthLogoutInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthLogoutInvalidInput,
 		validation.F("id", sessionID),
 	); err != nil {
 		return err

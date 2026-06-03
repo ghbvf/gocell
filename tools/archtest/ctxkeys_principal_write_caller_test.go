@@ -95,13 +95,14 @@ const ctxkeysPkgPath = "github.com/ghbvf/gocell/pkg/ctxkeys"
 //
 // WithTenantID gained its producer writer (runtime/auth/middleware.go) with the
 // multi-tenancy epic (#1337 PR-1): injectPrincipalCtxKeys now writes the JWT
-// "tenant_id" claim. This lifts the former ctx-write half of
+// "tenant_id" claim. This lifted the former ctx-write half of
 // INV-SINGLE-TENANT-ONLY (#1289) — the single-writer entry was a deliberate
 // placeholder for exactly this moment, not an oversight. The persistence-reach
-// tripwire in cells/auditcore/internal/appender (a non-empty principal.TenantID
-// reaching audit persistence logs Error) intentionally REMAINS until PR-2 wires
-// tenant-scoped audit query filtering; on develop the gocell issuer emits no
-// tenant_id claim, so ctx tenant stays empty and the tripwire is dead.
+// tripwire in cells/auditcore/internal/appender was RETIRED in PR-2a (#1340)
+// once tenant-scoped audit query filtering landed (AuditFilters.TenantID, set by
+// the auditquery handler from the authenticated principal): a non-empty
+// principal.TenantID now flows cleanly to audit persistence and is isolated at
+// query time, so the write-time alarm is no longer needed.
 // See ADR 202605281200-1042 §Amendment 2026-05-30.
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {

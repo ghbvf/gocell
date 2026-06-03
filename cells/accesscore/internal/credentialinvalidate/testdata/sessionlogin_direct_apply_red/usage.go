@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -25,6 +26,6 @@ import (
 // the upstream allowlist (sessionlogin). This is the pattern the archtest
 // bans — login-time cascade is never the right shape; epoch must be
 // snapshotted onto the new session row instead (ADR §A8).
-func badApply(ctx context.Context, inv *credentialinvalidate.Invalidator, userID string) error {
-	return inv.Apply(ctx, userID, session.CredentialEventLock)
+func badApply(ctx context.Context, inv *credentialinvalidate.Invalidator, someTenant tenant.TenantID, userID string) error {
+	return inv.Apply(ctx, someTenant, userID, session.CredentialEventLock)
 }

@@ -180,6 +180,17 @@ func (r memTxRunner) runLocked(ctx context.Context, fn func(context.Context) err
 // cross-repo invariants without leaking storage details across the repo
 // boundary.
 //
+// # Tenancy layout (#1337 PR-2)
+//
+// To mirror the PG schema (tenant-scoped unique indices), the following maps
+// use tenant-scoped keys:
+//
+//   - usersByID: global UUID PK (not tenant-scoped — mirrors PG users.id PK)
+//   - byName: [tenantID][username] → *User (composite unique per tenant)
+//   - byEmail: [tenantID][email]   → *User (composite unique per tenant)
+//   - userRoles: [tenantID][userID] → set of roleIDs (per-tenant assignments)
+//   - roles: [tenantID][roleID] → *Role (per-tenant role definitions)
+//
 // TxRunner is the source of the Store-paired TxRunner that delivers full
 // FOR-UPDATE-until-commit serialization. Wiring a different TxRunner (e.g.
 // outbox.DemoTxRunner, or a PG tx manager in corebundle's mixed-topology e2e)
@@ -188,11 +199,11 @@ func (r memTxRunner) runLocked(ctx context.Context, fn func(context.Context) err
 // Store-TxRunner path. mem never hard-fails on the pairing (#501).
 type Store struct {
 	mu        sync.Mutex
-	usersByID map[string]*domain.User
-	byName    map[string]*domain.User
-	byEmail   map[string]*domain.User        // mirrors PG users.email UNIQUE constraint
-	userRoles map[string]map[string]struct{} // userID -> set of roleIDs
-	roles     map[string]*domain.Role
+	usersByID map[string]*domain.User                   // id → User (global PK, tenant-deriving)
+	byName    map[string]map[string]*domain.User        // tenantID → username → User
+	byEmail   map[string]map[string]*domain.User        // tenantID → email    → User
+	userRoles map[string]map[string]map[string]struct{} // tenantID → userID   → set of roleIDs
+	roles     map[string]map[string]*domain.Role        // tenantID → roleID   → Role
 	clock     clock.Clock
 }
 
@@ -218,12 +229,59 @@ func NewStore(clk clock.Clock) *Store {
 	clock.MustHaveClock(clk, "mem.NewStore")
 	return &Store{
 		usersByID: make(map[string]*domain.User),
-		byName:    make(map[string]*domain.User),
-		byEmail:   make(map[string]*domain.User),
-		userRoles: make(map[string]map[string]struct{}),
-		roles:     make(map[string]*domain.Role),
+		byName:    make(map[string]map[string]*domain.User),
+		byEmail:   make(map[string]map[string]*domain.User),
+		userRoles: make(map[string]map[string]map[string]struct{}),
+		roles:     make(map[string]map[string]*domain.Role),
 		clock:     clk,
 	}
+}
+
+// tenantRoles returns the role map for a tenant (lazy init). Caller must hold store.mu.
+func (s *Store) tenantRoles(tenantID string) map[string]*domain.Role {
+	if s.roles[tenantID] == nil {
+		s.roles[tenantID] = make(map[string]*domain.Role)
+	}
+	return s.roles[tenantID]
+}
+
+// tenantUserRoles returns the userID→roleSet map for a tenant (lazy init). Caller must hold store.mu.
+func (s *Store) tenantUserRoles(tenantID string) map[string]map[string]struct{} {
+	if s.userRoles[tenantID] == nil {
+		s.userRoles[tenantID] = make(map[string]map[string]struct{})
+	}
+	return s.userRoles[tenantID]
+}
+
+// tenantByName returns the username→User map for a tenant (lazy init). Caller must hold store.mu.
+func (s *Store) tenantByName(tenantID string) map[string]*domain.User {
+	if s.byName[tenantID] == nil {
+		s.byName[tenantID] = make(map[string]*domain.User)
+	}
+	return s.byName[tenantID]
+}
+
+// tenantByEmail returns the email→User map for a tenant (lazy init). Caller must hold store.mu.
+func (s *Store) tenantByEmail(tenantID string) map[string]*domain.User {
+	if s.byEmail[tenantID] == nil {
+		s.byEmail[tenantID] = make(map[string]*domain.User)
+	}
+	return s.byEmail[tenantID]
+}
+
+// userByIDInTenant is the tenant-scoped by-global-PK lookup used by every
+// tenant-scoped write method. It mirrors the PG `WHERE tenant_id = $N AND id = $1`
+// predicate: a user present in the global usersByID index but belonging to a
+// different tenant is reported as absent (ok=false), so cross-tenant access
+// collapses to the method's own not-found path. The GetByID carve-out
+// (tenant-deriving by global PK) intentionally does NOT use this. Caller must
+// hold store.mu.
+func (s *Store) userByIDInTenant(userID, tenantID string) (*domain.User, bool) {
+	u, ok := s.usersByID[userID]
+	if !ok || string(u.TenantID) != tenantID {
+		return nil, false
+	}
+	return u, true
 }
 
 // UserRepository returns the UserRepository view of s. All instances returned

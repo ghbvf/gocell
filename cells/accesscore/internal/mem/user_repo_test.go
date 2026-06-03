@@ -28,7 +28,7 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	user.SetPasswordResetRequired(true, time.Now())
 	user.CreationSource = domain.UserSourceSetup
 
-	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, repo.Create(ctx, testTenantID, user))
 
 	// GetByID should preserve the flag.
 	got, err := repo.GetByID(ctx, "usr-test-001")
@@ -37,13 +37,13 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	assert.Equal(t, domain.UserSourceSetup, got.CreationSource, "GetByID must preserve CreationSource")
 
 	// GetByUsername should preserve the flag.
-	got2, err := repo.GetByUsername(ctx, "testuser")
+	got2, err := repo.GetByUsername(ctx, testTenantID, "testuser")
 	require.NoError(t, err)
 	assert.True(t, got2.PasswordResetRequired(), "GetByUsername must preserve PasswordResetRequired")
 	assert.Equal(t, domain.UserSourceSetup, got2.CreationSource, "GetByUsername must preserve CreationSource")
 
 	// UpdatePasswordResetFlag should persist changes to the flag.
-	require.NoError(t, repo.UpdatePasswordResetFlag(ctx, got.ID, false, time.Now()))
+	require.NoError(t, repo.UpdatePasswordResetFlag(ctx, testTenantID, got.ID, false, time.Now()))
 
 	got3, err := repo.GetByID(ctx, "usr-test-001")
 	require.NoError(t, err)
@@ -58,9 +58,9 @@ func TestUserRepo_UpdatePassword_Match(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-alice"
 	user.PasswordVersion = 0
-	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, repo.Create(ctx, testTenantID, user))
 
-	newPV, err := repo.UpdatePassword(ctx, "usr-alice", "$2a$12$newhash", false, 0)
+	newPV, err := repo.UpdatePassword(ctx, testTenantID, "usr-alice", "$2a$12$newhash", false, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), newPV, "new password_version must be 1")
 
@@ -79,10 +79,10 @@ func TestUserRepo_UpdatePassword_VersionMismatch(t *testing.T) {
 	require.NoError(t, err)
 	user.ID = "usr-bob"
 	user.PasswordVersion = 0
-	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, repo.Create(ctx, testTenantID, user))
 
 	// Provide stale version — should return ErrVersionConflict (KindConflict).
-	_, err = repo.UpdatePassword(ctx, "usr-bob", "$2a$12$newhash", false, 99)
+	_, err = repo.UpdatePassword(ctx, testTenantID, "usr-bob", "$2a$12$newhash", false, 99)
 	require.Error(t, err)
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
@@ -100,7 +100,7 @@ func TestUserRepo_UpdatePassword_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := NewStore(clock.Real()).UserRepository()
 
-	_, err := repo.UpdatePassword(ctx, "usr-nonexistent", "$2a$12$newhash", false, 0)
+	_, err := repo.UpdatePassword(ctx, testTenantID, "usr-nonexistent", "$2a$12$newhash", false, 0)
 	errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	var ce *errcode.Error
 	require.True(t, errors.As(err, &ce))
@@ -116,10 +116,10 @@ func TestUserRepo_UpdatePassword_ResetRequiredFlag(t *testing.T) {
 	user.ID = "usr-carol"
 	user.PasswordVersion = 0
 	user.SetPasswordResetRequired(true, time.Now())
-	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, repo.Create(ctx, testTenantID, user))
 
 	// UpdatePassword with resetRequired=false must clear the flag.
-	_, err = repo.UpdatePassword(ctx, "usr-carol", "$2a$12$newhash", false, 0)
+	_, err = repo.UpdatePassword(ctx, testTenantID, "usr-carol", "$2a$12$newhash", false, 0)
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, "usr-carol")
@@ -138,15 +138,15 @@ func TestUserRepo_BumpAuthzEpoch_IncrementsAndReturns(t *testing.T) {
 	user, err := domain.NewUser("epoch_user", "epoch@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-epoch-001"
-	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, repo.Create(ctx, testTenantID, user))
 
 	// First bump: 1 → 2 (initial epoch is 1 per S4d design).
-	epoch1, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001", credentialfence.Mint())
+	epoch1, err := repo.BumpAuthzEpoch(ctx, testTenantID, "usr-epoch-001", credentialfence.Mint())
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), epoch1, "first BumpAuthzEpoch must return 2 (initial=1)")
 
 	// Second bump: 2 → 3.
-	epoch2, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001", credentialfence.Mint())
+	epoch2, err := repo.BumpAuthzEpoch(ctx, testTenantID, "usr-epoch-001", credentialfence.Mint())
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), epoch2, "second BumpAuthzEpoch must return 3")
 
@@ -160,7 +160,7 @@ func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := NewStore(clock.Real()).UserRepository()
 
-	_, err := repo.BumpAuthzEpoch(ctx, "usr-nonexistent", credentialfence.Mint())
+	_, err := repo.BumpAuthzEpoch(ctx, testTenantID, "usr-nonexistent", credentialfence.Mint())
 	errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	var ce *errcode.Error
 	require.True(t, errors.As(err, &ce))
@@ -174,7 +174,7 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 	user, err := domain.NewUser("concurrent_epoch", "concurrent@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-concurrent-001"
-	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, repo.Create(ctx, testTenantID, user))
 
 	const goroutines = 100
 	var wg sync.WaitGroup
@@ -182,7 +182,7 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			_, _ = repo.BumpAuthzEpoch(ctx, "usr-concurrent-001", credentialfence.Mint())
+			_, _ = repo.BumpAuthzEpoch(ctx, testTenantID, "usr-concurrent-001", credentialfence.Mint())
 		}()
 	}
 	wg.Wait()
@@ -216,16 +216,16 @@ func TestGetByIDForUpdate_NoMemTx_StillFunctional(t *testing.T) {
 	user, err := domain.NewUser("forupdate", "forupdate@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-forupdate-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	// Call WITHOUT a mem-tx sentinel → must succeed (per-call store.mu lock).
-	got, err := repo.GetByIDForUpdate(context.Background(), "usr-forupdate-001")
+	got, err := repo.GetByIDForUpdate(context.Background(), testTenantID, "usr-forupdate-001")
 	require.NoError(t, err, "GetByIDForUpdate must stay functional outside a mem tx (foreign TxRunner topology)")
 	require.NotNil(t, got)
 	assert.Equal(t, "usr-forupdate-001", got.ID)
 
 	// Absent row → domain NotFound (not an infra error).
-	_, err = repo.GetByIDForUpdate(context.Background(), "nope")
+	_, err = repo.GetByIDForUpdate(context.Background(), testTenantID, "nope")
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
 	assert.Equal(t, errcode.KindNotFound, ce.Kind)
@@ -240,12 +240,12 @@ func TestGetByIDForUpdate_InsideRunInTx(t *testing.T) {
 	user, err := domain.NewUser("intx", "intx@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-intx-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	// Call INSIDE RunInTx → must succeed.
 	var got *domain.User
 	txErr := store.TxRunner().RunInTx(context.Background(), func(ctx context.Context) error {
-		got, err = repo.GetByIDForUpdate(ctx, "usr-intx-001")
+		got, err = repo.GetByIDForUpdate(ctx, testTenantID, "usr-intx-001")
 		return err
 	})
 	require.NoError(t, txErr)
@@ -263,15 +263,15 @@ func TestGetByUsernameForUpdate_NoMemTx_StillFunctional(t *testing.T) {
 	user, err := domain.NewUser("forupdate-un", "forupdate-un@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-forupdate-un-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	// Call WITHOUT a mem-tx sentinel → must succeed.
-	got, err := repo.GetByUsernameForUpdate(context.Background(), "forupdate-un")
+	got, err := repo.GetByUsernameForUpdate(context.Background(), testTenantID, "forupdate-un")
 	require.NoError(t, err, "GetByUsernameForUpdate must stay functional outside a mem tx")
 	require.NotNil(t, got)
 	assert.Equal(t, "usr-forupdate-un-001", got.ID)
 
-	_, err = repo.GetByUsernameForUpdate(context.Background(), "absent")
+	_, err = repo.GetByUsernameForUpdate(context.Background(), testTenantID, "absent")
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
 	assert.Equal(t, errcode.KindNotFound, ce.Kind)
@@ -286,12 +286,12 @@ func TestGetByUsernameForUpdate_InsideRunInTx(t *testing.T) {
 	user, err := domain.NewUser("intx-un", "intx-un@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-intx-un-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	// Call INSIDE RunInTx → must succeed.
 	var got *domain.User
 	txErr := store.TxRunner().RunInTx(context.Background(), func(ctx context.Context) error {
-		got, err = repo.GetByUsernameForUpdate(ctx, "intx-un")
+		got, err = repo.GetByUsernameForUpdate(ctx, testTenantID, "intx-un")
 		return err
 	})
 	require.NoError(t, txErr)
@@ -308,10 +308,10 @@ func TestGetByIDForUpdate_Standalone(t *testing.T) {
 	user, err := domain.NewUser("withctx", "withctx@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-withctx-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	// GetByIDForUpdate must succeed on the standalone per-call lock path.
-	got, err := repo.GetByIDForUpdate(context.Background(), "usr-withctx-001")
+	got, err := repo.GetByIDForUpdate(context.Background(), testTenantID, "usr-withctx-001")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "usr-withctx-001", got.ID)
@@ -336,16 +336,16 @@ func TestRunInTx_BumpAuthzEpoch_InsideTx(t *testing.T) {
 	user, err := domain.NewUser("epoch-intx", "epoch-intx@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-epoch-intx-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	var newEpoch int64
 	txErr := store.TxRunner().RunInTx(context.Background(), func(txCtx context.Context) error {
 		// GetByUsernameForUpdate + BumpAuthzEpoch both inside tx — must not deadlock.
-		_, err := repo.GetByUsernameForUpdate(txCtx, "epoch-intx")
+		_, err := repo.GetByUsernameForUpdate(txCtx, testTenantID, "epoch-intx")
 		if err != nil {
 			return err
 		}
-		newEpoch, err = repo.BumpAuthzEpoch(txCtx, "usr-epoch-intx-001", credentialfence.Mint())
+		newEpoch, err = repo.BumpAuthzEpoch(txCtx, testTenantID, "usr-epoch-intx-001", credentialfence.Mint())
 		return err
 	})
 	require.NoError(t, txErr)
@@ -376,7 +376,7 @@ func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
 	user, err := domain.NewUser("serial-user", "serial@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-serial-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	// tx-1 signals that it has locked and is sleeping.
 	locked := make(chan struct{})
@@ -386,8 +386,8 @@ func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
 	// tx-1: hold the lock, bump epoch to 2, then signal.
 	go func() {
 		_ = store.TxRunner().RunInTx(context.Background(), func(txCtx context.Context) error {
-			_, _ = repo.BumpAuthzEpoch(txCtx, "usr-serial-001", credentialfence.Mint()) // epoch: 1 → 2
-			close(locked)                                                               // signal: lock held, proceed
+			_, _ = repo.BumpAuthzEpoch(txCtx, testTenantID, "usr-serial-001", credentialfence.Mint()) // epoch: 1 → 2
+			close(locked)                                                                             // signal: lock held, proceed
 			// Hold the lock for a short duration to let tx-2 start blocking.
 			time.Sleep(testtime.D20ms) //archtest:allow:test-sleep hold lock so tx-2 blocks (serialization proof)
 			return nil
@@ -399,7 +399,7 @@ func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
 	<-locked
 
 	// tx-2 (outside RunInTx) calls BumpAuthzEpoch — must block until tx-1 releases.
-	epoch2, err := repo.BumpAuthzEpoch(context.Background(), "usr-serial-001", credentialfence.Mint())
+	epoch2, err := repo.BumpAuthzEpoch(context.Background(), testTenantID, "usr-serial-001", credentialfence.Mint())
 	<-done // tx-1 must have finished before us or concurrently with us
 
 	require.NoError(t, err)
@@ -419,17 +419,17 @@ func TestRunInTx_NoDeadlock_GetByUsernameForUpdateAndBump(t *testing.T) {
 	user, err := domain.NewUser("nodeadlock", "nodeadlock@example.com", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-nodeadlock-001"
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	done := make(chan error, 1)
 	go func() {
 		err := store.TxRunner().RunInTx(context.Background(), func(txCtx context.Context) error {
 			// Mimic loginInTx: ForUpdate read then subsequent write.
-			_, err := repo.GetByUsernameForUpdate(txCtx, "nodeadlock")
+			_, err := repo.GetByUsernameForUpdate(txCtx, testTenantID, "nodeadlock")
 			if err != nil {
 				return err
 			}
-			_, err = repo.BumpAuthzEpoch(txCtx, "usr-nodeadlock-001", credentialfence.Mint())
+			_, err = repo.BumpAuthzEpoch(txCtx, testTenantID, "usr-nodeadlock-001", credentialfence.Mint())
 			return err
 		})
 		done <- err

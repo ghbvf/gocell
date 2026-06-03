@@ -49,23 +49,25 @@ import (
 // Adding/removing methods OR changing any signature here is a contract change
 // that must be paired with an ADR amendment (ADR 202605222309).
 var expectedUserRepoMethodSignatures = map[string]string{
-	"BumpAuthzEpoch":   "(ctx context.Context, userID string, tok credentialfence.FenceToken) (newEpoch int64, err error)",
-	"Create":           "(ctx context.Context, user *domain.User) error",
-	"Delete":           "(ctx context.Context, id string) error",
+	"BumpAuthzEpoch": "(ctx context.Context, t tenant.TenantID, userID string," +
+		" tok credentialfence.FenceToken) (newEpoch int64, err error)",
+	"Create":           "(ctx context.Context, t tenant.TenantID, user *domain.User) error",
+	"Delete":           "(ctx context.Context, t tenant.TenantID, id string) error",
 	"GetByID":          "(ctx context.Context, id string) (*domain.User, error)",
-	"GetByIDForUpdate": "(ctx context.Context, id string) (*domain.User, error)",
-	"GetByUsername":    "(ctx context.Context, username string) (*domain.User, error)",
-	"GetByUsernameForUpdate": "(ctx context.Context, username string)" +
+	"GetByIDForUpdate": "(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)",
+	"GetByIDInTenant":  "(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)",
+	"GetByUsername":    "(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)",
+	"GetByUsernameForUpdate": "(ctx context.Context, t tenant.TenantID, username string)" +
 		" (*domain.User, error)",
-	"UpdateLockState": "(ctx context.Context, userID string, status domain.UserStatus," +
-		" now time.Time) error",
-	"UpdateLockoutFields": "(ctx context.Context, user *domain.User) error",
-	"UpdatePassword": "(ctx context.Context, userID string, newHash string," +
+	"UpdateLockState": "(ctx context.Context, t tenant.TenantID, userID string," +
+		" status domain.UserStatus, now time.Time) error",
+	"UpdateLockoutFields": "(ctx context.Context, t tenant.TenantID, user *domain.User) error",
+	"UpdatePassword": "(ctx context.Context, t tenant.TenantID, userID string, newHash string," +
 		" resetRequired bool, expectedPasswordVersion int64)" +
 		" (newVersion int64, err error)",
-	"UpdatePasswordResetFlag": "(ctx context.Context, userID string, required bool," +
-		" now time.Time) error",
-	"UpdateProfile": "(ctx context.Context, userID string," +
+	"UpdatePasswordResetFlag": "(ctx context.Context, t tenant.TenantID, userID string," +
+		" required bool, now time.Time) error",
+	"UpdateProfile": "(ctx context.Context, t tenant.TenantID, userID string," +
 		" name, email *domain.NonEmpty, now time.Time) (*domain.User, error)",
 }
 

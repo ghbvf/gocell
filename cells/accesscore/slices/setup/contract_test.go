@@ -19,8 +19,18 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+// testTenantID is the canonical test tenant UUID used in setup_test.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("setup_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
@@ -38,6 +48,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), nil)
 	h := setup.NewHandler(svc, testPassthroughAuth)
 	req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
+	req.Header.Set("X-Tenant-ID", testTenantIDStr)
 	rec := httptest.NewRecorder()
 	newHandlerMux(t, h).ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -53,6 +64,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 		h := setup.NewHandler(svc, testPassthroughAuth)
 
 		req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
+		req.Header.Set("X-Tenant-ID", testTenantIDStr)
 		rec := httptest.NewRecorder()
 		newHandlerMux(t, h).ServeHTTP(rec, req)
 
@@ -91,11 +103,14 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"username":"root","email":"root@local","password":"`+strings.Repeat("界", 8)+`"}`))
 
 	// Real-handler produced 201 payload must satisfy the response schema.
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), &stubWriter{})
+	// Shared store: role repo needs to see the user created by user repo (F4).
+	cs201 := mem.NewStore(clock.Real())
+	svc := newService(t, cs201.UserRepository(), cs201.RoleRepository(), &stubWriter{})
 	h := setup.NewHandler(svc, testPassthroughAuth)
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", testTenantIDStr)
 	rec := httptest.NewRecorder()
 	newHandlerMux(t, h).ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -128,6 +143,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantIDStr)
 		rec := httptest.NewRecorder()
 		newHandlerMux(t, h).ServeHTTP(rec, req)
 
@@ -143,12 +159,13 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		existing, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 		require.NoError(t, err)
 		existing.ID = "usr-prior"
-		require.NoError(t, userRepo.Create(context.Background(), existing))
+		require.NoError(t, userRepo.Create(context.Background(), testTenantID, existing))
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
 		h := setup.NewHandler(svc, testPassthroughAuth)
 
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantIDStr)
 		rec := httptest.NewRecorder()
 		newHandlerMux(t, h).ServeHTTP(rec, req)
 
@@ -170,6 +187,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantIDStr)
 		rec := httptest.NewRecorder()
 		newHandlerMux(t, h).ServeHTTP(rec, req)
 
@@ -229,9 +247,14 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
 
 	w := &stubWriter{}
-	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), w)
+	// Use a single shared mem.Store so user and role repos share the same in-memory
+	// state — required by the F4 user-in-tenant check (role repo needs to see the
+	// user that was just created by the user repo).
+	sharedStore := mem.NewStore(clock.Real())
+	svc := newService(t, sharedStore.UserRepository(), sharedStore.RoleRepository(), w)
 
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: "00000000-0000-0000-0000-000000000001",
 		Username: "root",
 		Email:    "root@local",
 		Password: "SecretPass!23",
@@ -254,7 +277,7 @@ func seedContractIdentityUser(t *testing.T, userRepo *mem.UserRepository, userna
 	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-existing"
-	require.NoError(t, userRepo.Create(context.Background(), u))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
 }
 
 func requireErrorCode(t *testing.T, body []byte, code errcode.Code) {

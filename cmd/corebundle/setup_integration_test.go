@@ -237,6 +237,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantID)
 		// Intentionally no SetBasicAuth.
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
@@ -280,6 +281,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantID)
 		req.SetBasicAuth(setupTestBootstrapUsername, "wrong-password-not-the-real-one")
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
@@ -325,6 +327,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantID)
 		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
@@ -350,6 +353,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantID)
 		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
@@ -362,8 +366,13 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	})
 
 	// 4. Status now reports hasAdmin=true.
+	// X-Tenant-ID required: the admin was created under testTenantID; without
+	// the header the handler returns hasAdmin:false (non-enumerable fail-soft).
 	t.Run("status_after_returns_true", func(t *testing.T) {
-		resp, err := setupHTTPClient.Get(base + "/api/v1/access/setup/status")
+		req, err := http.NewRequest(http.MethodGet, base+"/api/v1/access/setup/status", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Tenant-ID", testTenantID)
+		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		var body struct {
@@ -379,8 +388,12 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	//    round-trip and role assignment both succeeded.
 	t.Run("created_admin_can_login", func(t *testing.T) {
 		payload := `{"username":"root","password":"` + password + `"}`
-		resp, err := setupHTTPClient.Post(base+"/api/v1/access/sessions/login",
-			"application/json", strings.NewReader(payload))
+		loginReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			base+"/api/v1/access/sessions/login", strings.NewReader(payload))
+		require.NoError(t, err)
+		loginReq.Header.Set("Content-Type", "application/json")
+		loginReq.Header.Set("X-Tenant-ID", testTenantID)
+		resp, err := setupHTTPClient.Do(loginReq)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusCreated, resp.StatusCode, "setup-created admin must be able to login")
@@ -554,6 +567,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 			base+"/api/v1/access/setup/admin", strings.NewReader(`{"username":"op","email":"op@x","password":"Pass!1234"}`))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantID)
 		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
@@ -565,6 +579,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		base+"/api/v1/access/setup/admin", strings.NewReader(`{"username":"op","email":"op@x","password":"Pass!1234"}`))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", testTenantID)
 	req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 	resp, err := setupHTTPClient.Do(req)
 	require.NoError(t, err)

@@ -5,20 +5,28 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // RoleRepository persists and retrieves Role entities and user-role assignments.
+//
+// Tenancy (#1337 PR-2): roles are per-tenant — every method takes a mandatory
+// tenant.TenantID positional parameter immediately after ctx ("in tenant T,
+// do X"). There is no by-PK tenant-deriving carve-out here (unlike
+// UserRepository.GetByID): a role id is unique only within a tenant, so even a
+// by-id read must be tenant-scoped. Implementations apply `AND tenant_id = $N`
+// (PG) / tenant filtering (mem) and reject an invalid tenant via tenant.Validate.
 type RoleRepository interface {
-	GetByID(ctx context.Context, id string) (*domain.Role, error)
-	GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error)
-	Create(ctx context.Context, role *domain.Role) error
+	GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error)
+	GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error)
+	Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error
 	// AssignToUser assigns the role to the user. Idempotent.
 	// Returns changed=true when the user did not previously hold the role
 	// (a real state transition occurred); changed=false when the user already
 	// held it (no-op). Callers gate outbox emission on changed so that no-ops
 	// do not publish false role-change facts.
-	AssignToUser(ctx context.Context, userID, roleID string) (changed bool, err error)
-	RemoveFromUser(ctx context.Context, userID, roleID string) error
+	AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (changed bool, err error)
+	RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error
 	// RemoveFromUserIfNotLast removes a role assignment with admin-scoped
 	// last-effective-admin protection (ADR-admin-invariant §3.2, S4.0):
 	//   - When roleID == auth.RoleAdmin, atomically check that another
@@ -36,27 +44,27 @@ type RoleRepository interface {
 	// actually held the role and it was removed; changed=false when the user
 	// did not hold the role (no-op) OR when removal was refused. Callers gate
 	// outbox emission on changed.
-	RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (changed bool, err error)
+	RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (changed bool, err error)
 	// CountByRole counts all role_assignments rows for roleID, regardless of
 	// user status. Used by adminprovision bootstrap idempotency where a
 	// locked/suspended admin still counts as "an admin exists" (so we don't
 	// re-create one). DO NOT use for the last-admin invariant — that is
 	// CountEffectiveAdmins (status filter required).
-	CountByRole(ctx context.Context, roleID string) (int, error)
+	CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error)
 	// CountEffectiveAdmins returns the number of users who are simultaneously
 	// status='active' AND hold the admin role. This is the canonical invariant
 	// counter consumed by domain.LastAdminGuard via the EffectiveAdminCounter
 	// sealed interface. Implementations must filter by user status (NOT just
 	// count role_assignments) so a locked/suspended admin is excluded.
-	CountEffectiveAdmins(ctx context.Context) (int, error)
+	CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error)
 	// EffectiveAdminExists is the lock-free read counterpart to
 	// CountEffectiveAdmins. Used by setup-retirement and provisioner.Status
 	// fast-path checks where eventual consistency is acceptable and acquiring
 	// the advisory lock is overkill (these reads happen outside any tx and
 	// are not part of the at-least-one invariant decision). Returns true when
 	// at least one user satisfies status='active' AND holds the admin role.
-	EffectiveAdminExists(ctx context.Context) (bool, error)
+	EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error)
 	// ListByUserID returns a paginated list of roles assigned to userID,
 	// sorted and filtered per params.
-	ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error)
+	ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error)
 }

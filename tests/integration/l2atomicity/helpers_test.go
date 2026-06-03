@@ -21,6 +21,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// l2TestTenantID is the canonical test tenant UUID for all l2atomicity
+// integration tests. Matches the tenant seeded in testmain_test.go (roles)
+// and the canonical GoCell test tenant used in cell_test.go.
+const l2TestTenantID = "00000000-0000-0000-0000-000000000001"
+
 // Internal API paths for rbacassign endpoints. Shared by assignRole /
 // revokeRole and the failure-injection variants in
 // rbacassign_atomicity_failureproof_e2e_test.go. Lives here (helpers_test.go)
@@ -46,7 +51,10 @@ type loginResult struct {
 func httpLogin(t *testing.T, base, username, password string) loginResult {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-	resp, err := httpClient.Post(base+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/sessions/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", l2TestTenantID)
+	resp, err := httpClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -81,7 +89,10 @@ func httpLogin(t *testing.T, base, username, password string) loginResult {
 func httpLoginExpect401Raw(t *testing.T, base, username, password string) []byte {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-	resp, err := httpClient.Post(base+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/sessions/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", l2TestTenantID)
+	resp, err := httpClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	raw, readErr := io.ReadAll(resp.Body)

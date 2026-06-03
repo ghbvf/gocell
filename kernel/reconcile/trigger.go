@@ -32,6 +32,12 @@ import (
 //     return is kept for source.Source parity and future triggers (e.g. one that
 //     dials a broker) that can fail at startup.
 //
+// The Loop's internal WaitGroup does NOT track the producer goroutine started
+// from a Trigger; it is solely the Trigger's responsibility to exit on
+// ctx.Done(). A Trigger that leaks a goroutine after ctx cancellation cannot be
+// detected by Loop.Stop's drain. The two built-in triggers (TickerTrigger,
+// ChannelTrigger) and the reconciletest.FakeTrigger comply with this contract.
+//
 // INVARIANT: RECONCILE-TRIGGER-INTERFACE-FROZEN-01 — the method set is frozen to
 // exactly Start(context.Context, chan<- Request) error.
 //

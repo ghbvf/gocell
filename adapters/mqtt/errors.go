@@ -14,6 +14,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 
+	"github.com/ghbvf/gocell/adapters/mqtt/internal/topicns"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -33,18 +34,20 @@ const (
 
 	// ErrAdapterMQTTInvalidTopicNamespace signals a topic namespace prefix that
 	// fails validation.
-	ErrAdapterMQTTInvalidTopicNamespace errcode.Code = "ERR_ADAPTER_MQTT_INVALID_TOPIC_NAMESPACE"
+	// Re-exported from adapters/mqtt/internal/topicns, where the value is defined
+	// alongside the validation funnel (avoids a circular import).
+	ErrAdapterMQTTInvalidTopicNamespace errcode.Code = topicns.ErrInvalidNamespace
 
 	// ErrAdapterMQTTTopicOutsideNamespace signals that a publish or subscribe
 	// topic/filter does not fall within the declared TopicNamespace.
-	ErrAdapterMQTTTopicOutsideNamespace errcode.Code = "ERR_ADAPTER_MQTT_TOPIC_OUTSIDE_NAMESPACE"
+	ErrAdapterMQTTTopicOutsideNamespace errcode.Code = topicns.ErrTopicOutsideNamespace
 
 	// ErrAdapterMQTTInvalidPublishTopic signals that a publish topic is malformed
 	// under MQTT v5 rules: empty topic name, or a topic containing +/# wildcards.
 	// Subscribe filters use ErrAdapterMQTTInvalidSubscribeFilter because wildcard
 	// placement is legal-but-constrained there; publish topics are a distinct
 	// failure domain and must never reuse the subscribe-filter code.
-	ErrAdapterMQTTInvalidPublishTopic errcode.Code = "ERR_ADAPTER_MQTT_INVALID_PUBLISH_TOPIC"
+	ErrAdapterMQTTInvalidPublishTopic errcode.Code = topicns.ErrInvalidPublishTopic
 
 	// ErrAdapterMQTTConnect signals a transient connection failure (network
 	// timeout, server unavailable, quota exceeded). autopaho will retry.
@@ -86,7 +89,7 @@ const (
 	// from ErrAdapterMQTTInvalidTopicNamespace which means the namespace prefix
 	// itself is malformed, and ErrAdapterMQTTTopicOutsideNamespace which means
 	// the filter's non-wildcard head falls outside the declared namespace.
-	ErrAdapterMQTTInvalidSubscribeFilter errcode.Code = "ERR_ADAPTER_MQTT_INVALID_SUBSCRIBE_FILTER"
+	ErrAdapterMQTTInvalidSubscribeFilter errcode.Code = topicns.ErrInvalidSubscribeFilter
 
 	// ErrAdapterMQTTPubAckTimeout signals that no PUBACK was received within
 	// the configured PublishTimeout budget. The broker may have received the

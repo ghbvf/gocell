@@ -74,6 +74,7 @@ func TestL2Atomicity_sessionlogin_RollsBack(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/sessions/login",
 		bytes.NewReader(loginBody))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", l2TestTenantID)
 	resp, err := httpClient.Do(req)
 	require.NoError(t, err)
 	_, _ = io.Copy(io.Discard, resp.Body)

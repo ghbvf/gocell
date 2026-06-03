@@ -12,6 +12,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/adapters/mqtt/internal/topicns"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
@@ -157,7 +158,7 @@ type mqttRoute struct {
 	// disambiguating multiple consumer-group ($share) subscriptions of the same
 	// topic on one connection (which the broker delivers as group-blind topics).
 	subID    int
-	filter   subscribableFilter
+	filter   topicns.SubscribableFilter
 	dispatch func(pb *paho.Publish)
 }
 
@@ -574,7 +575,7 @@ type publishOpts struct {
 }
 
 // Publish sends a single MQTT PUBLISH packet via the underlying autopaho
-// ConnectionManager. The publishableTopic argument carries a topic that has
+// ConnectionManager. The topicns.PublishableTopic argument carries a topic that has
 // already been validated against the caller's TopicNamespace (constructor:
 // TopicNamespace.Mint). Internally this method calls c.cm.Publish — the
 // MQTT-PUBLISH-CALLSITE-FUNNEL-01 archtest locks this as the only callsite of
@@ -588,7 +589,9 @@ type publishOpts struct {
 //
 // The caller is responsible for setting any per-publish timeout via the ctx
 // (the Publisher derives a child ctx from Config.PublishTimeout).
-func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []byte, opts publishOpts) (*paho.PublishResponse, error) {
+func (c *Connection) Publish(
+	ctx context.Context, t topicns.PublishableTopic, payload []byte, opts publishOpts,
+) (*paho.PublishResponse, error) {
 	c.mu.RLock()
 	closed := c.closed
 	c.mu.RUnlock()
@@ -600,7 +603,7 @@ func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []
 			"mqtt: publish canceled by caller context", err)
 	}
 	return c.cm.Publish(ctx, &paho.Publish{
-		Topic:   t.topic,
+		Topic:   t.String(),
 		QoS:     opts.QoS,
 		Retain:  opts.Retain,
 		Payload: payload,
@@ -673,7 +676,7 @@ func subscriptionID(pb *paho.Publish) int {
 // (*Connection).Subscribe (initial subscribe) and resubscribeAll (reconnect
 // recovery) route through here so the cm.Subscribe literal lives in exactly one
 // function body — keeping the MQTT subscribe callsite funnel single-site.
-// It sends a SUBSCRIBE for f.wireFilter at the requested QoS and inspects the
+// It sends a SUBSCRIBE for f.String() at the requested QoS and inspects the
 // returned SUBACK reasons: any reason byte >= 0x80 is mapped via
 // classifySubackReason into an errcode error. It does NOT touch the route
 // registry (callers own registration).
@@ -683,7 +686,7 @@ func subscriptionID(pb *paho.Publish) int {
 // subscribeReasonTransport for a wire-level Subscribe failure, or
 // subscribeReasonSubackReject for a SUBACK reason byte >= 0x80. The returned
 // reason is meaningless when err is nil.
-func (c *Connection) sendSubscribe(ctx context.Context, f subscribableFilter, qos byte, subID int) (SubscribeFailureReason, error) {
+func (c *Connection) sendSubscribe(ctx context.Context, f topicns.SubscribableFilter, qos byte, subID int) (SubscribeFailureReason, error) {
 	// subIDCopy: paho reads SubscriptionIdentifier (*int) during packet encode,
 	// which happens synchronously inside cm.Subscribe, so a pointer to this local
 	// is safe. The sub-id (>= 1) lets the broker tag every delivered PUBLISH so
@@ -691,7 +694,7 @@ func (c *Connection) sendSubscribe(ctx context.Context, f subscribableFilter, qo
 	subIDCopy := subID
 	suback, err := c.cm.Subscribe(ctx, &paho.Subscribe{
 		Properties:    &paho.SubscribeProperties{SubscriptionIdentifier: &subIDCopy},
-		Subscriptions: []paho.SubscribeOptions{{Topic: f.wireFilter, QoS: qos}},
+		Subscriptions: []paho.SubscribeOptions{{Topic: f.String(), QoS: qos}},
 	})
 	if err != nil {
 		return subscribeReasonTransport, errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTSubscribe,
@@ -723,8 +726,8 @@ func subackError(suback *paho.Suback) error {
 }
 
 // Subscribe registers a route and sends a SUBSCRIBE for the (already validated)
-// subscribableFilter. It is the public entry for the receive path. The
-// subscribableFilter argument carries a filter that has already been validated
+// topicns.SubscribableFilter. It is the public entry for the receive path. The
+// topicns.SubscribableFilter argument carries a filter that has already been validated
 // against the caller's TopicNamespace via TopicNamespace.MintFilter.
 //
 // On success it returns a cancel closure that deregisters the route and sends an
@@ -740,7 +743,7 @@ func subackError(suback *paho.Suback) error {
 // ctx is captured into the route's dispatch closure and passed to the handler on
 // each delivery; callers should pass a ctx whose cancellation should stop
 // handler dispatch.
-func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos byte, h receiveHandler) (cancel func(), err error) {
+func (c *Connection) Subscribe(ctx context.Context, f topicns.SubscribableFilter, qos byte, h receiveHandler) (cancel func(), err error) {
 	c.mu.RLock()
 	closed := c.closed
 	c.mu.RUnlock()
@@ -763,7 +766,7 @@ func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos by
 	c.registerRoute(route)
 
 	if reason, subErr := c.sendSubscribe(ctx, f, qos, subID); subErr != nil {
-		c.deregisterRoute(f.wireFilter)
+		c.deregisterRoute(f.String())
 		c.collector.RecordSubscribeFailure(ctx, reason)
 		return nil, subErr
 	}
@@ -771,7 +774,7 @@ func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos by
 	var cancelOnce sync.Once
 	cancel = func() {
 		cancelOnce.Do(func() {
-			c.deregisterRoute(f.wireFilter)
+			c.deregisterRoute(f.String())
 			// UNSUBSCRIBE on a cancellation-detached ctx: the captured ctx is the
 			// subscription ctx, already canceled by the time Close / StopIntake
 			// invokes this cancel (closeCh → subCancel), so passing it directly
@@ -781,7 +784,7 @@ func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos by
 			// rationale as resubscribeAll's detached ctx).
 			unsubCtx := context.WithoutCancel(ctx)
 			if _, unsubErr := c.cm.Unsubscribe(unsubCtx, &paho.Unsubscribe{
-				Topics: []string{f.wireFilter},
+				Topics: []string{f.String()},
 			}); unsubErr != nil {
 				slog.Warn("mqtt: unsubscribe on cancel failed",
 					slog.String("client_id", c.cfg.ClientID.String()),
@@ -815,7 +818,7 @@ func (c *Connection) deregisterRoute(wireFilter string) {
 	c.subMu.Lock()
 	defer c.subMu.Unlock()
 	for i := range c.routes {
-		if c.routes[i].filter.wireFilter == wireFilter {
+		if c.routes[i].filter.String() == wireFilter {
 			c.routes = append(c.routes[:i], c.routes[i+1:]...)
 			return
 		}
@@ -918,7 +921,7 @@ func (c *Connection) unsubscribeAll(ctx context.Context) {
 	c.subMu.Lock()
 	filters := make([]string, 0, len(c.routes))
 	for i := range c.routes {
-		filters = append(filters, c.routes[i].filter.wireFilter)
+		filters = append(filters, c.routes[i].filter.String())
 	}
 	c.routes = nil
 	c.subMu.Unlock()
