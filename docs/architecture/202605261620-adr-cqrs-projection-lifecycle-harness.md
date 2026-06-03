@@ -841,6 +841,6 @@ not won't-do. The two are not conflated.
 
 No row flips. This amendment only reclassifies the *upgrade prospect* of two
 already-Medium enforcement mechanisms from "pending Hard-ization" to "permanently
-Medium (won't-do)". Both archtests remain active and CI fail-closed; the §6
-threat discharges they back are unchanged. The move is `pending → unreachable`,
-not `✅ → ⚠️/❌`.
+Medium (won't-do)". Both archtests remain active and CI fail-closed; their
+allowlists, implementations, and enforcement behavior are unchanged, as are the §6
+threat discharges they back. The move is `pending → unreachable`, not `✅ → ⚠️/❌`.

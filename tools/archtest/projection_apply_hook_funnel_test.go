@@ -181,11 +181,15 @@ func isProjectionApplyHookAllowed(rel, _ string) bool {
 
 // TestProjectionApplyHookFunnel01 enforces PROJECTION-APPLY-HOOK-FUNNEL-01:
 // Coordinator.Subscribe must only be called from the kernel/projection package
-// itself, from _test.go files, or from cellgen-generated files. Any other
-// production callsite is a violation.
+// itself, from _test.go files, or from the single bootstrap projection drain
+// (runtime/bootstrap/phases_projection.go). Any other production callsite is a
+// violation.
 //
-// PR-01 status: genuinely-green (zero external callsites). The rule actively
-// guards against hand-written callsites before PR-04 cellgen lands.
+// PR-04a status: genuinely-green active guard. The only production callsite is
+// runtime/bootstrap/phases_projection.go; any other fires. (Under Option A no
+// cellgen-generated file is a sanctioned Subscribe callsite — generated cell_gen.go
+// emits the record-only reg.RegisterProjection instead, guarded by
+// PROJECTION-REGISTER-FUNNEL-01.)
 //
 // # Blind spots (forms ResolveMethodCall cannot see)
 //
