@@ -255,11 +255,11 @@ go test ./kernel/...                            # 改了 kernel 时
 1. `git add` 修复涉及的代码文件
 2. 按 4.1 的关联模式执行 commit → push → PR
 
-**步骤 2: GitHub 收尾（按输入类型，无 issue 查找）**
+**步骤 2: GitHub 收尾（按输入类型，无 issue 查找；命令形态见 `issues` Part B）**
 
-- **输入是 issue 号 + 已修** → `gh issue close <N> --reason completed --comment "Fixed in PR #<NNN>"`（自动；N 即输入，不查找）。
-- **输入是 PR 号 + 修完** → 按 `.github/project-template/pr-comment.md` 的 fix 模板贴评论（含 `<!-- pm:fix -->`：findings triage + 修复结果 + 遗留）+ `gh pr edit` 切 `pr-status/ready`（全清）或 `pr-review/changes-requested`（仍有 Cx3/Cx4 或 OUT_OF_SCOPE 遗留）。
-- **未修 / 待办 finding**（OUT_OF_SCOPE / `/fix` 派生）→ §沟通规则闸门输出 `gh issue create --label backlog --label pri-pX --label area-XX --label type-XX ...` 建议命令（确认后跑，留 open；body 按 `.github/project-template/backlog.md` 填 现状/修复方向/Files/Source，条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
+- **输入是 issue 号 + 已修** → 关闭该 issue（`gh issue close`，reason completed，comment 引用 `PR #<NNN>`；N 即输入，不查找）。
+- **输入是 PR 号 + 修完** → 贴 fix 评论（`.github/project-template/pr-comment.md` 的 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留，含 footer）→ 把 `gh pr comment` 返回的评论 URL **回显给用户**；再 `gh pr edit` 切 `pr-status/ready`（全清）或 `pr-review/changes-requested`（仍有 Cx3/Cx4 或 OUT_OF_SCOPE 遗留）。
+- **未修 / 待办 finding**（OUT_OF_SCOPE / `/fix` 派生）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX`；body 按 `.github/project-template/backlog.md` 填 现状/修复方向/Files/Source，条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
 Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。完成后 **TaskUpdate → completed**。
 

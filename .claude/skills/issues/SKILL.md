@@ -1,16 +1,27 @@
 ---
 name: issues
-description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 拓扑排序 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 ship/fix 共用）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论时使用。"
-argument-hint: "<epic #N | create-issue | edit-labels | pr-status | comment> [...]"
+description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 拓扑排序 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /fix 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
+argument-hint: "<epic #N | #issue（非epic→状态核查）| create-issue | edit-labels | pr-status | comment> [...]"
 allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 # issues — 项目管理单源（Epic/Wave + Issue/PR/Label/评论）
 
 > 真源 = GitHub Issues + Project v2 #3。**内容/结构 + 治理全在 `.github/project-template/`**：issue body → `backlog.md`/`epic.md`，PR body → `pull_request_template.md`，PR 评论 → `pr-comment.md`，label/字段/评级/流程 → `PROJECT.md`（索引见 `README.md`）。本技能只负责编排，不复制模版内容。
-> 本技能分两部分：**Part A** epic 拆解 + wave 调度；**Part B** issue/PR 原子操作（建/改/label/状态/评论的 `gh` 编排）。
+> 输入分派：**`epic #N` / 带 `epic` label 的 issue** → Part A（拆解 + wave 调度）；**普通 issue 号（无 `epic` label）** → 下方「非 epic issue 状态核查」；**动词**（create / edit / pr-status / comment）→ Part B 原子操作。
 > 所有 `gh` 命令用 `dangerouslyDisableSandbox: true`；写入前 `gh auth status`；create 前先 search 查重（幂等）。
 > 仓库：`ghbvf/gocell`。Project v2：`--owner ghbvf --number 3`（title `gocell`）。
+
+---
+
+## 非 epic issue 状态核查（查代码判状态，只判不修）
+
+输入普通 issue 号（无 `epic` label）时，不排 wave，而是查代码判断该 issue 是否仍成立：
+
+1. `gh issue view <N> --json title,body,labels` 读问题描述 + body 的 Files。
+2. 按 Files / 关键字 Read/Grep 定位代码；跨 3+ 文件时并行派 `Agent(Explore)` 核查。
+3. 判状态（**只判不修**）：**存在** / **已修复**（给证据：哪行 / 哪 PR）/ **已变更**（形态变化）/ **无法确认**。
+4. 输出状态 + 证据 + 建议：需修 → 建议 `/fix #<N>`；已修复 / 过期 → 建议 Part B 关闭（`gh issue close --reason ...`）。
 
 ---
 
@@ -29,7 +40,7 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
    ```
 4. **汇总子 issues**：`gh api repos/ghbvf/gocell/issues/<epic#>/sub_issues --jq '.[]|{number,title,state}'`（含新关联）；对每个 OPEN 子任务读 label（area/type/pri）+ body 的 `Blocked-by: #NNN`（多行/逗号分隔，无声明=无前置）。
 
-> 子任务跨 3+ 包或描述模糊时，用 `Agent(Explore)` 并行核实归属/依赖再汇总。
+> **并行分析**：子任务 ≥4 或描述模糊 / 跨 3+ 包时，按子任务分组并行派 `Agent(Explore)` 核实各自的状态 / 归属 / `Blocked-by`，汇总后再排 wave；单条直接主 agent 读。
 
 ## A2. 建 blocked-by DAG + wave 拓扑排序
 
@@ -98,7 +109,7 @@ C
 
 # Part B — Issue / PR / Label / 评论
 
-> issue/PR 的 `gh` 编排。body 骨架见 `.github/project-template/` 的 `backlog.md` / `epic.md` / `pull_request_template.md`；PR 评论格式见 `pr-comment.md`；label / 字段 / 评级 rubric 见 `PROJECT.md`。本部分不复制模版内容。
+> issue/PR 的 `gh` 编排，是 issue/PR/label/评论**固定 gh 命令形态的单源**——ship/fix/pr-review 引用本部分，不重印命令。body 骨架见 `.github/project-template/` 的 `backlog.md` / `epic.md` / `pull_request_template.md`；PR 评论格式见 `pr-comment.md`；label / 字段 / 评级 rubric 见 `PROJECT.md`。本部分不复制模版内容。
 
 ## B1. 新建 backlog issue
 
@@ -142,11 +153,13 @@ gh pr edit <N> --add-label pr-review/changes-requested
 
 ## B4. PR 评论（编排）
 
-留痕约定 / 标记规则见 `.github/project-template/PROJECT.md` §5；评论格式模板见 `.github/project-template/pr-comment.md`。本节只给命令：
+留痕约定 / 标记规则见 `.github/project-template/PROJECT.md` §5；评论格式（`pm:ship` / `pm:fix` / `pm:pr-review` 三模板 + footer）见 `.github/project-template/pr-comment.md`。本节只给命令：
 
 ```bash
-gh pr comment <N> --body-file <填好的 pr-comment.md ship/fix 模板>
+gh pr comment <N> --body-file <填好的 pr-comment.md 模板>
 ```
+
+`gh pr comment` 成功返回新评论 URL（含 `#issuecomment-<id>`）——**回显给用户**作为权威留痕锚点。footer 由 AI 自填（PR# / Generated with Claude Code|Codex / head 分支）。
 
 ## B5. 沟通规则
 
