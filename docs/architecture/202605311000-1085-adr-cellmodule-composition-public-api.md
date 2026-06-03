@@ -271,3 +271,19 @@ nonce/claimer-kind 等 control-plane 生产安全校验仍只活在 cmd 私有�
 **参考**：archtest 全绿（`MODULE-PROVIDE-NO-VALUE-HANDOFF-01` 只冻结 `ModuleResult` 字段，
 不冻结 `SharedDeps` 字段，加 `NonceStore` 不触发）；`runtime/composition/shared_deps_test.go`
 `TestSharedDeps_Validate_ControlPlane` table-driven 覆盖 V1/V2/CP1/CP3/CP5/CP6/CP7/CP8/IL1/IL2。
+
+### Amendment 2026-06-04（#1410 review F1 — runtimeOptsFn bypass 闭环）
+
+**问题**：上文 control-plane 校验读的是**声明的** `SharedDeps.NonceStore.Kind()`，但真正守 `/internal/v1/*` 的 store 由调用方 `RuntimeOptionsFunc`（opaque callback）放进 listener auth plan——二者可不一致。`SharedDeps.NonceStore` 是合法 distributed store 而 `RuntimeOptionsFunc` 用另一个 single-process in-memory store 构造 `AuthServiceToken` 时，原校验放行（fail-open 边界）。这是「校验平行声明字段，非实际供给图」的反模式，与 fx `ValidateApp`（dry-run 实际 wiring）背离。
+
+**修复**：在**实际使用点**复核——
+
+1. `composition.Builder.Build` 把 trusted `SharedDeps.Topology`（sealed，调用方不可伪造）经新 option `bootstrap.WithControlPlaneTopology` 注入 bootstrap（append 进 `cellOpts`，排在 `runtimeOpts` 之后 → 调用方无法覆盖）。
+2. bootstrap phase0 `validateAuthServiceTokenPlan` 对 listener 实际持有的 `AuthServiceToken.Store.Kind()` 按注入 topology 复核（in-memory 多 pod 拒、未知 kind fail-closed 拒、noop 一直拒）。
+3. accept/reject 单源 = `kernel/auth.NonceStoreKind.ReplaySafe(requireDistributed)`，composition 配置期与 bootstrap 使用期共读同一谓词，杜绝「哪些 kind 算 safe」漂移；`Topology.RequiresDistributedReplay()` 单源化原 composition + cmd/redis 的并行副本。
+
+**威胁矩阵补格**：「外部消费者跑 control-plane 校验」一行此前的隐含主张（外部 fail-closed）现真正闭环——既校验声明字段（composition），也校验实际 plan store（bootstrap）。
+
+**AI-robust 评级（B）**：bootstrap-side 复核是 **Medium**（runtime guard / archtest 不参与；phase0 fail-closed）。真正 type-system Hard——让「internal listener auth plan 只能由 `SharedDeps.NonceStore` 构造」编译期不可绕（即 C「`NewAuthServiceToken` internal-path sealing」）——**不可达**：Go 无法表达「只有某几个包能调某导出构造器」，且 `kernel/auth` 不可 import composition（分层），与 #851/#893/#1282 同族永久天花板。C 能做到的最强形态（archtest caller-allowlist）与本 Medium 同档、覆盖更窄，故不做；**won't-do 跟踪 gh #1552**。
+
+**覆盖**：`kernel/auth.TestNonceStoreKind_ReplaySafe`（谓词真值表）/ `runtime/bootstrap.TestValidateAuthServiceTokenPlans`（usage-time 复核，real 多 pod in-mem/unknown 拒、single-pod in-mem 收、distributed 收、dev skip）/ `runtime/composition.TestBuilder_InjectsControlPlaneTopology_RejectsDivergentInternalStore`（端到端：distributed SharedDeps.NonceStore + 另造 in-mem auth plan → App.Run phase0 拒）。

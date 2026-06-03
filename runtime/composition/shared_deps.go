@@ -264,13 +264,11 @@ func (d *SharedDeps) validate() error {
 
 // requiresDistributedReplay reports whether the topology demands a distributed
 // (multi-pod) replay-defense posture: real adapter mode without the single-pod
-// acknowledgement.
-//
-// cmd/corebundle/redis.go keeps a parallel free-function copy because Redis
-// construction (and AllowUnsafeNoPassword derivation) runs before SharedDeps is
-// built; both delegate to the same two Topology methods and must stay in sync.
+// acknowledgement. It delegates to bootstrap.Topology.RequiresDistributedReplay
+// (the single source); cmd/corebundle/redis.go's pre-SharedDeps copy delegates to
+// the same method, so the rule lives in exactly one place rather than three.
 func (d *SharedDeps) requiresDistributedReplay() bool {
-	return d.Topology.RequireProductionControlPlane() && !d.Topology.SinglePodReplayProtection()
+	return d.Topology.RequiresDistributedReplay()
 }
 
 // validateControlPlane runs the control-plane production guards promoted from
@@ -367,14 +365,13 @@ func (d *SharedDeps) validateProductionControlPlane() []error {
 // single-process in-memory for a multi-pod deployment (CP7), and — fail-closed —
 // not an unrecognized kind (#1410 review F2).
 //
-// The switch is exhaustive over the kauth.NonceStoreKind closed set with a
-// fail-closed default: distributed is the only always-safe kind, in-memory is
-// accepted only single-pod, noop is always rejected, and any other (bogus or
-// future-but-unverified) kind is rejected rather than waved through. The earlier
-// form accepted everything not noop/in-memory via a permissive default, so a
-// store reporting an unknown kind passed validation in real multi-pod mode —
-// fail-open. A genuinely new replay-safe kind must be added as an explicit case
-// here (and, for multi-pod, accepted only if it coordinates across pods).
+// The accept/reject decision is single-sourced through
+// kauth.NonceStoreKind.ReplaySafe — the SAME predicate runtime/bootstrap's phase0
+// auth-plan check gates on (#1410 review F1), so the config-time check (this, on
+// the declared SharedDeps.NonceStore) and the usage-time check (bootstrap, on the
+// store that actually guards the listener) can never drift on "which kinds are
+// safe". The switch below only chooses the diagnostic message for WHY an unsafe
+// store was rejected; it does not re-decide safety.
 func (d *SharedDeps) validateProductionNonceStore() []error {
 	if validation.IsNilInterface(d.NonceStore) {
 		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
@@ -382,35 +379,33 @@ func (d *SharedDeps) validateProductionNonceStore() []error {
 				"/internal/v1/* against replay; inject an InMemoryNonceStore (single pod) "+
 				"or a shared store (multi-pod)")}
 	}
-	switch d.NonceStore.Kind() {
-	case kauth.NonceStoreKindDistributed:
-		// The only replay-safe kind for any topology; always accepted.
+	kind := d.NonceStore.Kind()
+	if kind.ReplaySafe(d.requiresDistributedReplay()) {
 		return nil
-	case kauth.NonceStoreKindInMemory:
-		if d.requiresDistributedReplay() {
-			slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
-				slog.String("nonce_store_kind", string(kauth.NonceStoreKindInMemory)),
-				slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments "+
-					"or configure a distributed NonceStore"))
-			return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-				"in-memory nonce store requires single-pod topology (Topology.SinglePodReplayProtection) "+
-					"or a distributed store for multi-pod; refuse fail-open "+
-					"(cmd/corebundle convention: GOCELL_SINGLE_POD=1)")}
-		}
-		// Single-pod in-memory is an accepted replay-safe posture.
-		return nil
+	}
+	switch kind {
 	case kauth.NonceStoreKindNoop:
 		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
 			"control-plane NonceStore must be a replay-safe implementation in adapter mode "+
 				"\"real\"; NoopNonceStore detected — inject InMemoryNonceStore (single pod) "+
 				"or a shared store (multi-pod)")}
+	case kauth.NonceStoreKindInMemory:
+		// ReplaySafe(requireDistributed=false) is true, so reaching here means the
+		// topology requires distributed replay (multi-pod).
+		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
+			slog.String("nonce_store_kind", string(kauth.NonceStoreKindInMemory)),
+			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments "+
+				"or configure a distributed NonceStore"))
+		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"in-memory nonce store requires single-pod topology (Topology.SinglePodReplayProtection) "+
+				"or a distributed store for multi-pod; refuse fail-open "+
+				"(cmd/corebundle convention: GOCELL_SINGLE_POD=1)")}
 	default:
-		// Fail-closed: an unrecognized NonceStoreKind cannot be proven replay-safe,
-		// so real adapter mode rejects it instead of waving it through.
+		// Fail-closed: an unrecognized NonceStoreKind cannot be proven replay-safe.
 		slog.Warn("controlplane: unrecognized nonce store kind rejected in adapter mode real",
-			slog.String("nonce_store_kind", string(d.NonceStore.Kind())),
+			slog.String("nonce_store_kind", string(kind)),
 			slog.String("hint", "use an in-memory (single-pod) or distributed nonce store; "+
-				"a new replay-safe kind must be added to validateProductionNonceStore"))
+				"a new replay-safe kind must be added to kauth.NonceStoreKind.ReplaySafe"))
 		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
 			"control-plane NonceStore reports an unrecognized kind in adapter mode \"real\"; "+
 				"only in-memory (single-pod) or distributed (any topology) replay-safe stores "+

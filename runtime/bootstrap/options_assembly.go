@@ -3,7 +3,7 @@ package bootstrap
 // options_assembly.go — With* option functions covering config loading and
 // CoreAssembly construction.
 //
-// Covers: WithConfig, WithAssembly, WithAssemblyID.
+// Covers: WithConfig, WithAssembly, WithAssemblyID, WithControlPlaneTopology.
 //
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 
@@ -39,5 +39,26 @@ func WithAssembly(asm *assembly.CoreAssembly) Option {
 func WithAssemblyID(id string) Option {
 	return func(b *Bootstrap) {
 		b.assemblyID = id
+	}
+}
+
+// WithControlPlaneTopology supplies the resolved deployment Topology so phase0
+// can validate that the listener service-token guard's actual NonceStore is
+// replay-safe for the topology (#1410 review F1): an in-memory store is rejected
+// for real multi-pod deployments, and an unrecognized kind is rejected
+// fail-closed. composition.Builder.Build injects this from its trusted
+// SharedDeps.Topology so the store that ACTUALLY guards /internal/v1/* — not just
+// the declared SharedDeps.NonceStore — is checked at the real usage point
+// (mirrors fx.ValidateApp: validate the constructed graph, not a parallel field).
+//
+// Topology is a sealed value type (NewTopology / TopologyFromEnv only), so a
+// caller cannot forge a permissive value via a struct literal. Omitting this
+// option leaves the zero Topology (RequireProductionControlPlane()==false), which
+// skips the topology-dependent replay check — identical to prior behavior for
+// hand-written bootstraps. The always-on nil/noop/ring service-token checks
+// (validateAuthServiceTokenPlan) run regardless.
+func WithControlPlaneTopology(topo Topology) Option {
+	return func(b *Bootstrap) {
+		b.controlPlaneTopology = topo
 	}
 }

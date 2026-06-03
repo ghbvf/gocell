@@ -128,10 +128,14 @@ func TestBuilder_HappyPath_SingleSourceResourceContract(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
-	// Build derived exactly one WithManagedResource opt from the single
-	// Resources entry — the module supplied no opts of its own.
-	assert.Len(t, app.opts, 1,
-		"Builder derives one WithManagedResource opt from ModuleResult.Resources (single source)")
+	// Build derived exactly one WithManagedResource opt from the single Resources
+	// entry — the module supplied no opts of its own — plus the one framework
+	// opt Build always injects (WithControlPlaneTopology, #1410 review F1). Two
+	// total: 1 resource-derived + 1 framework. A double-write of the resource
+	// (the bug this test guards) would make it 3.
+	assert.Len(t, app.opts, 2,
+		"Builder derives one WithManagedResource opt from ModuleResult.Resources (single source) "+
+			"plus the always-injected WithControlPlaneTopology framework opt")
 	// Success path never rolls back.
 	assert.Empty(t, order.calls, "no resource may be Closed on the success path")
 }

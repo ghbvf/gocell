@@ -60,14 +60,6 @@ var (
 	}
 )
 
-// requiresDistributedReplay mirrors composition.SharedDeps.requiresDistributedReplay.
-// The copy exists because Redis construction (and AllowUnsafeNoPassword derivation)
-// runs before SharedDeps is built; both must stay in sync — they delegate to the
-// same two Topology methods.
-func requiresDistributedReplay(topo bootstrap.Topology) bool {
-	return topo.RequireProductionControlPlane() && !topo.SinglePodReplayProtection()
-}
-
 func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool, error) {
 	addr := os.Getenv(envRedisAddr)
 	clusterRaw := os.Getenv(envRedisClusterAddrs)
@@ -90,12 +82,12 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 			Mode:                  adapterredis.ModeCluster,
 			ClusterAddrs:          clusterAddrs,
 			Password:              os.Getenv(envRedisPassword),
-			AllowUnsafeNoPassword: !requiresDistributedReplay(topo),
+			AllowUnsafeNoPassword: !topo.RequiresDistributedReplay(),
 		}, true, nil
 	}
 
 	if addr == "" {
-		if requiresDistributedReplay(topo) {
+		if topo.RequiresDistributedReplay() {
 			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set "+
 					"in adapter mode \"real\" unless GOCELL_SINGLE_POD=1; "+
@@ -120,7 +112,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 		Addr:                  addr,
 		Password:              os.Getenv(envRedisPassword),
 		DB:                    db,
-		AllowUnsafeNoPassword: !requiresDistributedReplay(topo),
+		AllowUnsafeNoPassword: !topo.RequiresDistributedReplay(),
 	}, true, nil
 }
 
@@ -163,7 +155,7 @@ func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (redisClient
 }
 
 func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock) (kauth.NonceStore, error) {
-	if requiresDistributedReplay(topo) {
+	if topo.RequiresDistributedReplay() {
 		if client == nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
 				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set for distributed service-token nonce protection")
@@ -184,7 +176,7 @@ func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client
 func buildConsumerClaimer(
 	topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock,
 ) (idempotency.Claimer, error) {
-	if requiresDistributedReplay(topo) {
+	if topo.RequiresDistributedReplay() {
 		if client == nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
 				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set for distributed outbox idempotency in real multi-pod deployments")
