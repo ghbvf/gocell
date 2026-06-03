@@ -1110,3 +1110,72 @@ func TestVerifyExpectedShape_DetectsWrongFKLocalColumns(t *testing.T) {
 	assert.Contains(t, ec.Error(), "local columns",
 		"must surface the local-column drift specifically (not just a ref-column mismatch)")
 }
+
+// ---------------------------------------------------------------------------
+// Migration 050 up-down-up idempotency and DestructiveDownPermit rejection (U12)
+// ---------------------------------------------------------------------------
+
+// TestMigration050_UpDownUpIdempotency verifies that running migration 050 Up,
+// then Down (with a DestructiveDownPermit), then Up again leaves the schema in
+// the expected post-050 shape — i.e., users/roles/role_assignments have tenant_id
+// and the sessions FK is present. This ensures the Down + Up cycle is safe for
+// dev-reset workflows.
+func TestMigration050_UpDownUpIdempotency(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// First Up pass: apply all migrations (tables are empty, no permit needed).
+	m1, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	require.NoError(t, err)
+	require.NoError(t, m1.Up(ctx), "initial Up() through all migrations must succeed")
+
+	// Verify post-050 shape is correct before Down.
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"VerifyExpectedShape must pass after initial Up()")
+
+	// Down: requires an explicit DestructiveDownPermit.
+	downPermit, dpErr := AllowDestructiveDown("050 up-down-up idempotency test")
+	require.NoError(t, dpErr)
+
+	// Down rolls back the most-recently-applied migration (051 first, then 050 on
+	// the second call, etc.). We call Down until we're at version 049 so 050 is
+	// the next pending migration for the second Up pass.
+	m2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	require.NoError(t, err)
+
+	// Roll back migration 051 (the tenant index — CONCURRENTLY, no data loss).
+	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 051 must succeed")
+	// Roll back migration 050 (the destructive users/roles/role_assignments rebuild).
+	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 050 must succeed")
+
+	// Second Up pass: from version 049 → applies 050 (empty tables → no permit) + 051.
+	m3, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	require.NoError(t, err)
+	require.NoError(t, m3.Up(ctx),
+		"second Up() (after Down through 050) must succeed (empty tables, no permit needed)")
+
+	// VerifyExpectedShape must pass after the second Up pass.
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"VerifyExpectedShape must pass after up-down-up cycle through migration 050")
+}
+
+// TestMigration050_DestructiveDownPermitRejection verifies that Migrator.Down
+// returns an error when no DestructiveDownPermit is supplied (nil permit), i.e.,
+// the typed-permit gate is enforced for migration 050's destructive Down block.
+func TestMigration050_DestructiveDownPermitRejection(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply all migrations.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_downpermit")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must succeed on a fresh DB")
+
+	// Attempt Down without a permit: must be rejected.
+	downErr := migrator.Down(ctx, nil)
+	require.Error(t, downErr, "Down() without a permit must return an error")
+	var ec *errcode.Error
+	require.True(t, errors.As(downErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"error code must be ErrValidationFailed for a missing permit")
+}
