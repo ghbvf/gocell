@@ -321,12 +321,14 @@ func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef,
 		return nil, err
 	}
 
-	// Auto-wire the idempotency metrics collector when a Provider is configured.
-	// Unconditional (not gated on WithIdempotencyStore), mirroring the HTTP
-	// collector: the router consumes the observer only when an idempotency store
-	// is also wired (buildMux constructs the idempotency middleware only then),
-	// so a router without idempotency leaves idempotency_requests_total
-	// registered but never observed (no exported series).
+	// Auto-wire the idempotency metrics collector — not gated on
+	// WithIdempotencyStore, mirroring the HTTP collector. The metric family is
+	// REGISTERED whenever a real Provider is configured (so it has a HELP line in
+	// /metrics), but its counter SERIES are only emitted when an idempotency
+	// store is also wired: buildMux constructs the idempotency middleware only
+	// then, and the observer is unused otherwise. So a Provider-configured
+	// assembly without idempotency shows idempotency_requests_total in HELP with
+	// no time series until the first idempotent request flows.
 	opts, err = b.autoWireIdempotencyMetricsCollector(opts)
 	if err != nil {
 		return nil, err

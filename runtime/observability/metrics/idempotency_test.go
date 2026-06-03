@@ -81,7 +81,9 @@ func TestIdempotencyCollector_ObserveRequest_AllSixStates(t *testing.T) {
 		t.Fatalf("NewIdempotencyCollector: %v", err)
 	}
 
-	ctx := context.Background()
+	// A cell-bearing ctx lets each state path also assert the cell label is
+	// emitted alongside state (the two labels are resolved independently).
+	ctx := ctxkeys.WithCellID(context.Background(), "accesscore")
 	for _, tc := range cases {
 		c.ObserveRequest(ctx, tc.state)
 	}
@@ -93,6 +95,9 @@ func TestIdempotencyCollector_ObserveRequest_AllSixStates(t *testing.T) {
 	for i, tc := range cases {
 		if got := ops[i].labels["state"]; got != tc.want {
 			t.Errorf("ops[%d] state = %q, want %q", i, got, tc.want)
+		}
+		if got := ops[i].labels["cell"]; got != "accesscore" {
+			t.Errorf("ops[%d] cell = %q, want accesscore", i, got)
 		}
 	}
 }

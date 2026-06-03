@@ -544,7 +544,7 @@ func New(clk clock.Clock, opts ...Option) (*Router, error) {
 //
 //	ListenerContext → RequestID → RealIP → Recorder → CellAttribution → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
-//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
+//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → [Idempotency] → handlers
 //
 // ref: go-kratos/kratos app.go WithServer + errgroup (adopted)
 // ref: net/http.ServeMux (one ServeMux per listener)
@@ -654,7 +654,7 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //
 //	ListenerContext → RequestID → RealIP → Recorder → CellAttribution → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
-//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
+//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → [Idempotency] → handlers
 func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	// Lazy public predicate so Tracing/RequestID honor public routes declared
 	// later via auth.Mount / FinalizeAuth.

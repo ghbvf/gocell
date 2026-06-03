@@ -39,8 +39,10 @@ import (
 // count, well within the metrics provider cap of 2000. No per-request or
 // per-key dimension is exposed (keys are SHA-256 hashed for logs only).
 //
-// Caller contract: use NopObserver (via WithObserver(nil)) for explicit
-// disable; never pass a nil *IdempotencyCollector — ObserveRequest will panic.
+// Caller contract: to disable metric emission, pass nil to the middleware's
+// idempotency.WithMetrics option — it silently skips a nil/typed-nil observer,
+// so the middleware runs unmetered. Never pass a nil *IdempotencyCollector to
+// ObserveRequest directly — it will dereference a nil CounterVec and panic.
 type IdempotencyCollector struct {
 	requests kernelmetrics.CounterVec // idempotency_requests_total{cell,state}
 }
@@ -67,9 +69,11 @@ func NewIdempotencyCollector(p kernelmetrics.Provider) (*IdempotencyCollector, e
 		Name: "idempotency_requests_total",
 		Help: "Total HTTP idempotency decisions, labeled by terminal state " +
 			"(acquired = fresh claim processed; replayed = cached response served; " +
-			"busy = in-flight lease 409; store_error = Claim failure 500; " +
+			"busy = in-flight lease 409; store_error = Claim-path failure 500 " +
+			"(Record/Release failures are logged only, not counted here); " +
 			"oversize = response too large to record; " +
 			"key_reused = same key, different body 409). " +
+			"acquired counts every fresh claim; oversize is a sub-event of acquired. " +
 			"cell is the owning RouteGroup cell or _runtime for framework paths.",
 		LabelNames: []string{"cell", "state"},
 	})

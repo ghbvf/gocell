@@ -778,6 +778,69 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 
 ---
 
+## HTTP 幂等 (#1460)
+
+`idempotency_requests_total{cell,state}` 由 HTTP idempotency 中间件（`runtime/http/idempotency`）经 `obmetrics.IdempotencyCollector` 发射，bootstrap 在配置了真实 metrics `Provider` 时自动接线。`cell` 是归属 RouteGroup 的 cell（框架路径为 `_runtime`）。`state` 取值冻结为 6 个终态（archtest `IDEMPOTENCY-REQUESTS-STATE-LABEL-VALUES-FROZEN-01` 守）：
+
+- `acquired`：新 claim（已处理请求分母，claim 时计，不是其余 state 之和）
+- `replayed`：缓存响应回放
+- `busy`：在途 lease 冲突 → 409
+- `store_error`：Claim 路径失败 → 500
+- `oversize`：响应超限不录（`acquired` 的子事件）
+- `key_reused`：同 key 不同 body → 409（安全相关）
+
+> 仅当配置真实 `Provider` 且某 listener 接线了 idempotency store 时才会有时间序列；无 store 时该 metric 仅出现在 `/metrics` HELP，无序列。
+
+### GoCellIdempotencyReplayStorm
+
+`busy` 速率持续偏高表示客户端重试风暴或在途请求卡死（同 key 并发争用 lease）。
+
+```yaml
+# rate() 返回每秒事件数；`> 1` 在 busy 平滑速率超过 1/sec（≈ 60/min）时触发。
+# 按 (target_busy_per_min)/60 调参（如 6/min → > 0.1）。默认过滤业务 cell。
+- alert: GoCellIdempotencyReplayStorm
+  expr: sum(rate(gocell_idempotency_requests_total{state="busy",cell!="_runtime"}[5m])) > 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "HTTP idempotency busy (in-flight lease) spike"
+    description: "ClaimBusy 409 速率 >1/sec（≈ 60/min）持续 5min。客户端重试风暴或在途请求卡死。排查在途 handler 时延与客户端重试退避。"
+```
+
+### GoCellIdempotencyKeyReused
+
+`key_reused`（同 Idempotency-Key 不同 body）非零通常是客户端 bug，持续偏高可能是重放尝试——安全相关，任何持续速率都应人工确认。
+
+```yaml
+# 任何非零 key_reused 速率都告警（info）；> 0.05/sec（≈ 3/min）升级排查。
+- alert: GoCellIdempotencyKeyReused
+  expr: sum(rate(gocell_idempotency_requests_total{state="key_reused"}[15m])) > 0.05
+  for: 15m
+  labels:
+    severity: info
+  annotations:
+    summary: "Idempotency key reused with different body"
+    description: "同 key 不同 body 指纹不匹配 409 速率 >0.05/sec（≈ 3/min）持续 15min。客户端 bug 或重放尝试，结合 slog idempotency_key_hash 关联请求来源。"
+```
+
+### 调试查询
+
+```promql
+# 重放命中率（缓存有效性）：replayed / (acquired + replayed)
+sum(rate(gocell_idempotency_requests_total{state="replayed"}[5m]))
+  / sum(rate(gocell_idempotency_requests_total{state=~"acquired|replayed"}[5m]))
+
+# 不可缓存率（响应过大未录）：oversize / acquired
+sum(rate(gocell_idempotency_requests_total{state="oversize"}[5m]))
+  / sum(rate(gocell_idempotency_requests_total{state="acquired"}[5m]))
+
+# store error 率（Claim 路径 500；Record/Release 失败仅 slog，不在此 metric）
+sum by (cell) (rate(gocell_idempotency_requests_total{state="store_error"}[5m]))
+```
+
+---
+
 ## Auth 账户自动锁定
 
 `auth_account_lockout_total{reason}` 由 `runtime/auth.AccountLockoutMetrics` 在 accesscore sessionlogin 路径发射，`reason` 取值：

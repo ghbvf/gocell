@@ -37,8 +37,14 @@ func caller(ctx context.Context, r idem.RequestState) {
 	y := classifyLike(true) // non-constant RHS — allowed
 	stateSink(ctx, y)       // non-constant var at callsite — allowed
 
-	// var initialised from a declared const — allowed.
+	// var initialised from a declared const — allowed (explicit + inferred + :=).
 	var z idem.RequestState = idem.StateOversize
+	stateSink(ctx, z)
+	var z2 = idem.StateStoreError // inferred-type declared const — allowed
+	stateSink(ctx, z2)
+	w := idem.StateBusy // short var decl declared const — allowed
+	stateSink(ctx, w)
+	z = idem.StateAcquired // reassignment to declared const — allowed
 	stateSink(ctx, z)
 
 	// Documented blind spot: string(state) carries a non-constant arg of a

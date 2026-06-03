@@ -346,18 +346,8 @@ func scanIdemStateAssignments(p *Pass) []Diagnostic {
 					if i >= len(vs.Names) {
 						continue
 					}
-					lhsTV, ok := info.Types[vs.Names[i]]
-					if !ok {
-						if vs.Type == nil {
-							continue
-						}
-						lhsTV, ok = info.Types[vs.Type]
-						if !ok {
-							continue
-						}
-					}
-					if idemStateTypeName(lhsTV.Type) == "" {
-						continue
+					if idemStateTypeName(idemLHSType(info, vs.Names[i])) == "" {
+						continue // LHS is not RequestState (covers explicit + inferred type)
 					}
 					if idemStateConstViolation(info, val) == "" {
 						continue
@@ -371,12 +361,8 @@ func scanIdemStateAssignments(p *Pass) []Diagnostic {
 				if i >= len(as.Lhs) {
 					continue
 				}
-				lhsTV, ok := info.Types[as.Lhs[i]]
-				if !ok {
-					continue
-				}
-				if idemStateTypeName(lhsTV.Type) == "" {
-					continue
+				if idemStateTypeName(idemLHSType(info, as.Lhs[i])) == "" {
+					continue // LHS is not RequestState (covers `=` use and `:=` define)
 				}
 				if idemStateConstViolation(info, rhs) == "" {
 					continue
@@ -386,6 +372,26 @@ func scanIdemStateAssignments(p *Pass) []Diagnostic {
 		})
 	}
 	return diags
+}
+
+// idemLHSType resolves the go/types type of an assignment/declaration LHS
+// expression. For a bare identifier it uses info.ObjectOf — which covers BOTH a
+// defining ident (`var y = …` / `y := …`, whose type is recorded in info.Defs,
+// NOT info.Types) and a re-assigned use (`y = …`, in info.Uses). This is the
+// difference that closes the inferred-type var-relay bypass
+// (`var y = RequestState("x")`): info.Types[name] is absent for definitions, so
+// the earlier lookup silently skipped them. Non-ident LHS (selector/index) fall
+// back to info.Types. Returns nil if unresolved.
+func idemLHSType(info *types.Info, lhs ast.Expr) types.Type {
+	if id, ok := lhs.(*ast.Ident); ok {
+		if obj := info.ObjectOf(id); obj != nil {
+			return obj.Type()
+		}
+	}
+	if tv, ok := info.Types[lhs]; ok {
+		return tv.Type
+	}
+	return nil
 }
 
 // idemStateAssignDiag builds the shared assignment-guard diagnostic.
@@ -465,7 +471,7 @@ func TestIdempotencyStateLabelValuesFrozen01_CallsiteGuard_Fixtures(t *testing.T
 	}{
 		{"red_literal", 2},       // inline literal plus a RequestState conversion
 		{"red_foreign_const", 1}, // RequestState const declared outside the producer pkg
-		{"red_var_relay", 1},     // RequestState var initialized from an inline literal
+		{"red_var_relay", 3},     // explicit-var, inferred-var, and short-var-decl forms
 		{"green", 0},
 	}
 	for _, c := range cases {

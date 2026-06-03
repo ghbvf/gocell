@@ -16,7 +16,7 @@ import (
 )
 
 // testHandler returns a fixed status+body and sets Content-Type + X-Test headers.
-func testHandler(status int, body string) http.Handler { //nolint:unparam // parameter kept for test readability
+func testHandler(status int, body string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("X-Test", "yes")
@@ -1011,6 +1011,46 @@ func TestMiddleware_Metrics_KeyReused(t *testing.T) {
 
 	if rr.Code != 409 {
 		t.Fatalf("code: got %d, want 409", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
+		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_KeyReused_RealMemStore exercises the real MemStore
+// fingerprint-comparison path end-to-end: the same Idempotency-Key presented
+// with a DIFFERENT request body returns 409 and emits [StateKeyReused] — proving
+// the emit is wired to the actual fingerprint mismatch, not only the fake store.
+func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	mkReq := func(body string) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(body))
+		r.Header.Set("Idempotency-Key", "key-fp")
+		ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+			Kind:     auth.PrincipalUser,
+			Subject:  "user-fp",
+			TenantID: "t1",
+		})
+		return r.WithContext(ctx)
+	}
+
+	// First request records a response under fingerprint(body="AAA").
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq("AAA"))
+	if len(obs.states) != 1 || obs.states[0] != StateAcquired {
+		t.Fatalf("first request states: got %v, want [StateAcquired]", obs.states)
+	}
+	obs.states = obs.states[:0]
+
+	// Same key, DIFFERENT body → real fingerprint mismatch → 409 + key_reused.
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq("BBB"))
+	if rr2.Code != 409 {
+		t.Fatalf("code: got %d, want 409", rr2.Code)
 	}
 	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
 		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
