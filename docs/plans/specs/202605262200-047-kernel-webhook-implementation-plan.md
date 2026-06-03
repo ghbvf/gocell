@@ -481,3 +481,32 @@ make verify
 - `specs/516-webhook-dual-capability/data-model.md` — 5 实体 + 2 状态机
 - `specs/516-webhook-dual-capability/contracts/webhook-contract.md` — webhook contract kind schema 草图
 - `specs/516-webhook-dual-capability/analyze-report.md` — 跨制品一致性分析（含 Medium/Low findings）
+
+## Closeout（PR-6 落地，#1161）
+
+6 个 PR 全部合入。PR-6（observability + healthz + closeout）相对原 §3 PR-6 计划有经两轮激进自审 + 开源对标的实质偏离，逐条记录如下。
+
+### 交付内容
+
+| 项 | 状态 | 载体 |
+|----|------|------|
+| 4 个 OTel metrics | ✅ | `kernel/webhook/metrics.go`：`webhook_deliveries_total{result,source}` / `webhook_delivery_duration_seconds{source}` / `webhook_signature_failures_total{source,reason}` / `webhook_idempotency_hits_total{source}`。收集器在 kernel（镜像 `kernel/reconcile`），`Dispatcher.Handle`（发端，status-aware）+ runtime `Receiver.ServeHTTP`（收端）记录；bootstrap `autoWireWebhookMetricsCollector` 经 `autoWireCachedCollector` funnel 单源接线 phase5+phase6 |
+| `WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01` archtest | ✅ Medium | 双 sealed 枚举（`webhookDeliveryResult` 5 值 + `SignatureFailureReason` 5 值）按 TYPE 冻结 + `recordDelivery` callsite guard；Hard 路径并入 metricschema golden #1416 |
+| `WEBHOOK-IDEMPOTENCY-CLAIMER-01` archtest | ✅ Medium | type-keyed data-flow：`claimed.rcpt` 必须溯源自 `idempotency.Claimer.Claim`（object identity + method resolution，rename-proof）。**与计划假设的 `gocell:"required"` tag 形态不同**——receiver 用构造器 nil-guard；本规则锁 substance（claim 做真实幂等工作），与 PIPELINE-01 锁 ordering 正交 |
+| backlog `KERNEL-WEBHOOK-01` | ✅ | EPIC #831 关闭；follow-up issues 见下 |
+
+### 相对计划的偏离（激进自审 + 开源对标）
+
+- **healthz probes 全删**（计划列为 in-scope）：`webhook_receiver_ready`/`webhook_dispatcher_ready` 在当前架构 vacuous/synonymous（依赖已被 `redis_ready`/`postgres_ready`/`rabbitmq_ready` 覆盖，source store 启动期 eager 校验且运行时不可变），违反 observability.md「禁止同义/vacuous probe」。carve 到 follow-up（store 变运行时可变时加 `webhook_source_store_ready`）。
+- **result label status-aware 5 值**（非计划隐含的 disposition 折叠）：开源对标 Alertmanager（clientError/serverError 分）/ K8s admission（error_type）/ Convoy（Discarded）均保留 status 维度，折叠 4xx/5xx 丢 SLO 信号。值集 `{success, client_error, server_error, transport_error, blocked}`，时延 buckets 到 30s（standard-webhooks 超时量级）。
+- **不做 auditcore webhook 二次 redaction**（计划「若适用」行）：auditcore 已对所有订阅事件 payload 在 auditquery 出口统一 `RedactPayload`，webhook 敏感 key 已在 PR-1 入 pattern——无需额外工作。
+- **examples 真实 demo carve 到 follow-up**：webhook receiver `buildRouteGroup` 硬编 `cell.PrimaryListener`（JWT-gated）且未标 `Public`，故真实 assembly 中 webhook 路径被 JWT 拦截——可运行的真实 demo 需 webhook 专属 listener 或 Public 标记，属 PR-3 运行时范围而非 PR-6。cellgen→drain→RouteGroup→Router→signed-200 全链路已由 `TestPhase5DrainWebhookReceivers_EndToEnd`（真实链 + 合成 cell）+ cellgen golden fixtures 覆盖。
+
+### Follow-up issues（实施期开）
+
+1. Ed25519 / Vault Transit KMS 签名（pri-p3）
+2. Source secret 持久化 configcore/vault（pri-p2）
+3. Circuit-breaker 全状态机（pri-p3）
+4. Per-contract Claim TTL 配置（pri-p2，`receiver.go` 固定 24h doneTTL < provider 重试窗口）
+5. `webhook_source_store_ready` probe（pri-p3，store 变运行时可变时开）
+6. examples webhook demo（receive + dispatch）+ webhook listener auth 接线（pri-p2，含 PrimaryListener-JWT gap）
