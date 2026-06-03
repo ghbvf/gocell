@@ -353,6 +353,15 @@ func (m AuthRouteMeta) IsInternal() bool {
 	return metadata.IsInternalHTTPPath(m.Path)
 }
 
+// IsAdmin reports whether this route lives on the admin listener
+// (operator control-plane, /admin/v1/*). Delegates to metadata.IsAdminHTTPPath
+// so the bare "/admin/v1" root and the trailing-slash form share one predicate;
+// the runtime router's listener-route affinity check uses it to keep admin
+// routes off the primary/internal listeners and vice versa (mirrors IsInternal).
+func (m AuthRouteMeta) IsAdmin() bool {
+	return metadata.IsAdminHTTPPath(m.Path)
+}
+
 // AuthRouteDeclarer is implemented by aggregators that want to receive the
 // auth metadata a slice declares alongside a route.
 type AuthRouteDeclarer interface {

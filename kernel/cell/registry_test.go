@@ -19,6 +19,39 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// TestAuthRouteMeta_ListenerAffinity pins the path-prefix predicates that the
+// runtime router's listener-route affinity check delegates to: IsInternal
+// (/internal/v1/*) and IsAdmin (/admin/v1/*) are mutually exclusive and each is
+// false for the public surface.
+func TestAuthRouteMeta_ListenerAffinity(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path         string
+		wantInternal bool
+		wantAdmin    bool
+	}{
+		{"/api/v1/access/sessions", false, false},
+		{"/internal/v1/access/rbac", true, false},
+		{"/internal/v1", true, false},
+		{"/admin/v1/projection/ordercell/orders/rebuild", false, true},
+		{"/admin/v1", false, true},
+		{"/adminx/v1/foo", false, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			m := AuthRouteMeta{Method: http.MethodPost, Path: tc.path}
+			if got := m.IsInternal(); got != tc.wantInternal {
+				t.Errorf("IsInternal(%q) = %v, want %v", tc.path, got, tc.wantInternal)
+			}
+			if got := m.IsAdmin(); got != tc.wantAdmin {
+				t.Errorf("IsAdmin(%q) = %v, want %v", tc.path, got, tc.wantAdmin)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
