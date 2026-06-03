@@ -333,30 +333,43 @@ func TestBuildPermitMap(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// [F8·Cx2·关键] TestForwardRebuildTarget_UpSectionOnly
+// [F8·Cx2·关键] TestForwardRebuildTargets_UpSectionOnly
 // ---------------------------------------------------------------------------
 
-// TestForwardRebuildTarget_UpSectionOnly verifies that forwardRebuildTarget
+// TestForwardRebuildTargets_UpSectionOnly verifies that forwardRebuildTargets
 // only scans the Up section and is not tricked by:
 //   - an annotation in the Down section (must not match)
 //   - a literal "-- +goose Down" substring appearing inside Up-section prose
 //     (must not truncate the scan — fail-open guard fixed by line-anchored RE).
-func TestForwardRebuildTarget_UpSectionOnly(t *testing.T) {
+//   - multiple annotation lines (multi-target rebuild) — all must be returned.
+func TestForwardRebuildTargets_UpSectionOnly(t *testing.T) {
 	tests := []struct {
-		name       string
-		sqlContent string
-		wantTarget string
-		wantOK     bool
+		name        string
+		sqlContent  string
+		wantTargets []string
+		wantOK      bool
 	}{
 		{
-			name: "annotation in Up section returns target",
+			name: "single annotation in Up section returns one target",
 			sqlContent: "-- +goose Up\n" +
 				"-- +gocell forward-rebuild target=my_table\n" +
 				"SELECT 1;\n" +
 				"-- +goose Down\n" +
 				"SELECT 2;\n",
-			wantTarget: "my_table",
-			wantOK:     true,
+			wantTargets: []string{"my_table"},
+			wantOK:      true,
+		},
+		{
+			name: "multiple annotations in Up section returns all targets",
+			sqlContent: "-- +goose Up\n" +
+				"-- +gocell forward-rebuild target=table_a\n" +
+				"-- +gocell forward-rebuild target=table_b\n" +
+				"-- +gocell forward-rebuild target=table_c\n" +
+				"SELECT 1;\n" +
+				"-- +goose Down\n" +
+				"SELECT 2;\n",
+			wantTargets: []string{"table_a", "table_b", "table_c"},
+			wantOK:      true,
 		},
 		{
 			name: "annotation only in Down section is ignored",
@@ -365,8 +378,8 @@ func TestForwardRebuildTarget_UpSectionOnly(t *testing.T) {
 				"-- +goose Down\n" +
 				"-- +gocell forward-rebuild target=down_table\n" +
 				"SELECT 2;\n",
-			wantTarget: "",
-			wantOK:     false,
+			wantTargets: nil,
+			wantOK:      false,
 		},
 		{
 			// Fail-open regression: two non-marker "+goose Down" prose forms (line-prefix and word-boundary) in Up-section
@@ -381,17 +394,30 @@ func TestForwardRebuildTarget_UpSectionOnly(t *testing.T) {
 				"SELECT 1;\n" +
 				"-- +goose Down\n" +
 				"SELECT 2;\n",
-			wantTarget: "real_target",
-			wantOK:     true,
+			wantTargets: []string{"real_target"},
+			wantOK:      true,
 		},
 		{
-			name: "no annotation returns empty and false",
+			name: "no annotation returns nil and false",
 			sqlContent: "-- +goose Up\n" +
 				"SELECT 1;\n" +
 				"-- +goose Down\n" +
 				"SELECT 2;\n",
-			wantTarget: "",
-			wantOK:     false,
+			wantTargets: nil,
+			wantOK:      false,
+		},
+		{
+			// Multi-target migration: annotations before Down marker, Down-section annotation ignored.
+			name: "multi-target Up with Down-section annotation — Down annotation excluded",
+			sqlContent: "-- +goose Up\n" +
+				"-- +gocell forward-rebuild target=alpha\n" +
+				"-- +gocell forward-rebuild target=beta\n" +
+				"SELECT 1;\n" +
+				"-- +goose Down\n" +
+				"-- +gocell forward-rebuild target=should_be_ignored\n" +
+				"SELECT 2;\n",
+			wantTargets: []string{"alpha", "beta"},
+			wantOK:      true,
 		},
 	}
 
@@ -404,10 +430,10 @@ func TestForwardRebuildTarget_UpSectionOnly(t *testing.T) {
 			m := &Migrator{migrations: mfs}
 			src := &goose.Source{Path: fileName, Version: 1}
 
-			target, ok, err := m.forwardRebuildTarget(src)
+			targets, ok, err := m.forwardRebuildTargets(src)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantOK, ok)
-			assert.Equal(t, tt.wantTarget, target)
+			assert.Equal(t, tt.wantTargets, targets)
 		})
 	}
 }

@@ -2,6 +2,7 @@ package sessionrefresh
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	refreshgen "github.com/ghbvf/gocell/generated/contracts/http/auth/refresh/v1"
@@ -67,7 +68,15 @@ func NewHandler(svc *Service) *Handler {
 	}
 }
 
+// ServeHTTP allows Handler to be used directly as an http.Handler in tests.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.refreshH.ServeHTTP(w, r)
+}
+
 // RegisterRoutes mounts the refresh contract handler on mux.
+// The refresh endpoint is Public (no JWT required). Tenant is derived from the
+// refreshed user's TenantID field (#1337 PR-2 stopgap; PR-3 will carry tenant
+// in the session/refresh row for true RLS isolation).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	return h.refreshH.RegisterRoutes(mux)
 }

@@ -444,14 +444,16 @@ func TestHandleEvent_TraceIDFromEnvelope(t *testing.T) {
 		"CorrelationID must survive full Append lifecycle (GetBySeq round-trip)")
 }
 
-// TestHandleEvent_SingleTenantInvariantTripwire pins #1289 (option A,
-// INV-SINGLE-TENANT-ONLY): develop has no tenant producer (the auth middleware
-// never writes ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01), so a
-// non-empty principal.TenantID reaching the appender means multi-tenancy (epic
-// #1296) landed without wiring tenant-scoped audit filtering — a security-
-// relevant gap. The appender must trip loudly (Error log) but MUST NOT drop the
-// audit record (compliance: never lose evidence). RED until the tripwire lands.
-func TestHandleEvent_SingleTenantInvariantTripwire(t *testing.T) {
+// TestHandleEvent_TenantIDPersistedCleanly pins the epic #1337 PR-2a closure of
+// #1289: tenant-scoped audit isolation now lands at the QUERY layer
+// (AuditFilters.TenantID mandatory scope), so a non-empty principal.TenantID is
+// no longer a security gap — it flows cleanly through the appender. The
+// INV-SINGLE-TENANT-ONLY tripwire (formerly an Error-level alarm) is RETIRED:
+// the appender persists tenant_id and emits NO tripwire log, because cross-tenant
+// reads are prevented downstream by the tenant-scoped query, not by an upstream
+// write-time alarm. The audit record is still appended (compliance evidence is
+// never dropped).
+func TestHandleEvent_TenantIDPersistedCleanly(t *testing.T) {
 	p := newTestProtocol(t)
 	inner, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
@@ -463,28 +465,26 @@ func TestHandleEvent_SingleTenantInvariantTripwire(t *testing.T) {
 	svc, buf := newServiceWithLogBuf(t, spec, cap, p, fc)
 
 	entry, err := outbox.EntryScan{
-		ID:         "evt-tenant-tripwire",
+		ID:         "evt-tenant-persist",
 		EventType:  "event.user.created.v1",
 		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
 		CreatedAt:  epoch,
 		OccurredAt: epoch,
-		Principal:  outbox.PrincipalMetadata{TenantID: idutil.SafeID("tenant-leaked")},
+		Principal:  outbox.PrincipalMetadata{TenantID: idutil.SafeID("tenant-a")},
 	}.ToEntry()
 	require.NoError(t, err)
 
 	result := svc.HandleEvent(context.Background(), entry)
-	// Record is NOT dropped — compliance evidence must survive the tripwire.
 	require.Equal(t, outbox.DispositionAck, result.Disposition,
-		"tripwire must not Reject: audit evidence is never dropped")
-	require.Len(t, cap.appended, 1, "audit record must still be appended")
-	assert.Equal(t, "tenant-leaked", cap.appended[0].TenantID)
+		"tenant-bearing event must be appended, never dropped")
+	require.Len(t, cap.appended, 1, "audit record must be appended")
+	assert.Equal(t, "tenant-a", cap.appended[0].TenantID,
+		"principal.TenantID must persist to the audit row for query-time isolation")
 
-	// The invariant violation is logged at Error level for alerting.
+	// The retired tripwire must NOT fire: tenant now flows cleanly.
 	logs := buf.String()
-	assert.Contains(t, logs, "INV-SINGLE-TENANT-ONLY",
-		"non-empty principal.TenantID must trip the single-tenant invariant log")
-	assert.Contains(t, logs, `"level":"ERROR"`,
-		"the tripwire must log at Error level")
+	assert.NotContains(t, logs, "INV-SINGLE-TENANT-ONLY",
+		"the single-tenant tripwire is retired (PR-2a); tenant flows cleanly, no alarm")
 }
 
 // recordingEmitter captures every Emit call. Implements outbox.Emitter.

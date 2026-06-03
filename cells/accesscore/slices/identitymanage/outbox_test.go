@@ -41,9 +41,9 @@ func (s *stubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
 
 type stubTxRunner struct{ calls int }
 
-func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	s.calls++
-	return fn(context.Background())
+	return fn(ctx)
 }
 
 // outboxStubIssuer is a minimal TokenIssuer stub used by outbox tests that do
@@ -53,7 +53,7 @@ var outboxStubIssuer TokenIssuer = &stubTokenIssuer{}
 // --- additional handler tests ---
 
 func withAdmin(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	return req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 }
 
 func TestHandler_UpdatePUT(t *testing.T) {
@@ -228,7 +228,7 @@ func TestService_Lock_WithOutbox(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = svc.Lock(auth.TestContext("test-admin", []string{"admin"}), user.ID)
+	err = svc.Lock(withTenant(auth.TestContext("test-admin", []string{"admin"})), user.ID)
 	require.NoError(t, err)
 
 	// One for create, one for lock
@@ -238,25 +238,25 @@ func TestService_Lock_WithOutbox(t *testing.T) {
 
 func TestService_Lock_EmptyID(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.Lock(auth.TestContext("test-admin", []string{"admin"}), "")
+	err := svc.Lock(withTenant(auth.TestContext("test-admin", []string{"admin"})), "")
 	assert.Error(t, err)
 }
 
 func TestService_Unlock_EmptyID(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.Unlock(auth.TestContext("test-admin", []string{"admin"}), "")
+	err := svc.Unlock(withTenant(auth.TestContext("test-admin", []string{"admin"})), "")
 	assert.Error(t, err)
 }
 
 func TestService_Delete_EmptyID(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "")
+	err := svc.Delete(withTenant(auth.TestContext("test-admin", []string{"admin"})), "")
 	assert.Error(t, err)
 }
 
 func TestService_Update_EmptyID(t *testing.T) {
 	svc := newTestService(t)
-	_, err := svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{})
+	_, err := svc.Update(withTenant(auth.TestContext("test-admin", []string{"admin"})), UpdateInput{})
 	assert.Error(t, err)
 }
 
@@ -314,7 +314,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 		WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
-	err = svcLock.Lock(auth.TestContext("test-admin", []string{"admin"}), user.ID)
+	err = svcLock.Lock(withTenant(auth.TestContext("test-admin", []string{"admin"})), user.ID)
 	require.Error(t, err, "Lock must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }

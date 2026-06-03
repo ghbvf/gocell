@@ -23,6 +23,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
@@ -63,6 +67,30 @@ const (
 // usernames across conformance fixtures (no real mailbox; uniqueness comes
 // from the username/UUID prefix).
 const exampleEmailDomain = "@example.com"
+
+// testTenantID is the canonical test tenant UUID used by all conformance
+// sub-tests. It scopes every repo read/write to the same tenant partition,
+// mirroring production callers that derive it from context.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic(panicregister.Approved("conformance-test-tenant-id",
+			errcode.Assertion("conformance: invalid testTenantID: %v", err)))
+	}
+	return t
+}()
+
+// testTenantIDOther is a second canonical tenant UUID used by the cross-tenant
+// isolation sub-test (CrossTenant_Isolation) to assert that rows created under
+// testTenantID are invisible to reads/writes scoped to a different tenant.
+var testTenantIDOther = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000002")
+	if err != nil {
+		panic(panicregister.Approved("conformance-test-tenant-id-other",
+			errcode.Assertion("conformance: invalid testTenantIDOther: %v", err)))
+	}
+	return t
+}()
 
 // UserRepoFactory constructs a fresh ports.UserRepository, its paired
 // persistence.TxRunner, and a cleanup func for use in a single test sub-case.
@@ -133,6 +161,9 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	})
 	t.Run("NotFound_PropagatesErrAuthUserNotFound", func(t *testing.T) {
 		conformNotFoundPropagates(t, factory)
+	})
+	t.Run("CrossTenant_Isolation", func(t *testing.T) {
+		conformCrossTenantIsolation(t, factory, features)
 	})
 	t.Run("Concurrent_NoDeadlock", func(t *testing.T) {
 		conformConcurrentNoDeadlock(t, factory)
@@ -209,9 +240,19 @@ func nePtr(s string) *domain.NonEmpty {
 	return &n
 }
 
-// seedActive creates and persists an active user inside a RunInTx call.
-// It uses unique IDs so parallel sub-tests don't collide.
+// seedActive creates and persists an active user (in testTenantID) inside a
+// RunInTx call. It uses unique IDs so parallel sub-tests don't collide.
 func seedActive(t *testing.T, txRunner persistence.TxRunner, repo ports.UserRepository, id, username string) *domain.User {
+	t.Helper()
+	return seedActiveInTenant(t, txRunner, repo, testTenantID, id, username)
+}
+
+// seedActiveInTenant is seedActive scoped to an explicit tenant — used by the
+// cross-tenant isolation sub-test to stage a row in one tenant and probe it
+// from another.
+func seedActiveInTenant(
+	t *testing.T, txRunner persistence.TxRunner, repo ports.UserRepository, tid tenant.TenantID, id, username string,
+) *domain.User {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // test helper, not real credentials
@@ -226,12 +267,12 @@ func seedActive(t *testing.T, txRunner persistence.TxRunner, repo ports.UserRepo
 		UpdatedAt:    now,
 	})
 	if err != nil {
-		t.Fatalf("seedActive: ReconstituteUser: %v", err)
+		t.Fatalf("seedActiveInTenant: ReconstituteUser: %v", err)
 	}
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
-		return repo.Create(ctx, u)
+		return repo.Create(ctx, tid, u)
 	}); err != nil {
-		t.Fatalf("seedActive: Create: %v", err)
+		t.Fatalf("seedActiveInTenant: Create: %v", err)
 	}
 	return u
 }
@@ -269,7 +310,7 @@ func conformGetByIDForUpdateNoTx(t *testing.T, factory UserRepoFactory, features
 
 	u := seedActive(t, txRunner, repo, uuid.NewString(), "noTxID_"+uuid.NewString())
 
-	_, err := repo.GetByIDForUpdate(context.Background(), u.ID)
+	_, err := repo.GetByIDForUpdate(context.Background(), testTenantID, u.ID)
 	if features.RequiresAmbientTx {
 		if err == nil {
 			t.Fatal("GetByIDForUpdate_NoTx: PG must return error when no ambient tx, got nil")
@@ -293,7 +334,7 @@ func conformGetByIDForUpdateWithTx(t *testing.T, factory UserRepoFactory) {
 	var got *domain.User
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		got, err = repo.GetByIDForUpdate(ctx, u.ID)
+		got, err = repo.GetByIDForUpdate(ctx, testTenantID, u.ID)
 		return err
 	}); err != nil {
 		t.Fatalf("GetByIDForUpdate_WithTx: RunInTx: %v", err)
@@ -320,7 +361,7 @@ func conformGetByUsernameForUpdateNoTx(t *testing.T, factory UserRepoFactory, fe
 
 	u := seedActive(t, txRunner, repo, uuid.NewString(), "noTxUN_"+uuid.NewString())
 
-	_, err := repo.GetByUsernameForUpdate(context.Background(), u.Username)
+	_, err := repo.GetByUsernameForUpdate(context.Background(), testTenantID, u.Username)
 	if features.RequiresAmbientTx {
 		if err == nil {
 			t.Fatal("GetByUsernameForUpdate_NoTx: PG must return error when no ambient tx, got nil")
@@ -344,7 +385,7 @@ func conformGetByUsernameForUpdateWithTx(t *testing.T, factory UserRepoFactory) 
 	var got *domain.User
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		got, err = repo.GetByUsernameForUpdate(ctx, u.Username)
+		got, err = repo.GetByUsernameForUpdate(ctx, testTenantID, u.Username)
 		return err
 	}); err != nil {
 		t.Fatalf("GetByUsernameForUpdate_WithTx: RunInTx: %v", err)
@@ -367,7 +408,7 @@ func conformUpdatePasswordSucceeds(t *testing.T, factory UserRepoFactory) {
 	initialVersion := u.PasswordVersion // 0
 
 	newVersion, err := repo.UpdatePassword(
-		context.Background(), u.ID, "$2a$12$newhash", false, initialVersion,
+		context.Background(), testTenantID, u.ID, "$2a$12$newhash", false, initialVersion,
 	)
 	if err != nil {
 		t.Fatalf("UpdatePassword_Succeeds: %v", err)
@@ -389,13 +430,13 @@ func conformUpdatePasswordInactiveRejected(t *testing.T, factory UserRepoFactory
 	u := seedActive(t, txRunner, repo, uuid.NewString(), "pwdInactive_"+uuid.NewString())
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusSuspended, now); err != nil {
+	if err := repo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusSuspended, now); err != nil {
 		t.Fatalf("UpdatePassword_InactiveRejected: UpdateLockState: %v", err)
 	}
 
 	// expectedPV matches (0) — the status guard must fire BEFORE the version
 	// guard, so the result is ErrAuthUserNotActive, not a CAS conflict.
-	_, err := repo.UpdatePassword(context.Background(), u.ID, "$2a$12$newhashafterfreeze", false, u.PasswordVersion)
+	_, err := repo.UpdatePassword(context.Background(), testTenantID, u.ID, "$2a$12$newhashafterfreeze", false, u.PasswordVersion)
 	var ec *errcode.Error
 	if !errors.As(err, &ec) || ec.Code != errcode.ErrAuthUserNotActive {
 		t.Fatalf("UpdatePassword_InactiveRejected: want ErrAuthUserNotActive, got %v", err)
@@ -426,12 +467,12 @@ func conformUpdatePasswordCASConflict(t *testing.T, factory UserRepoFactory, fea
 
 	if !features.SupportsCASConflict {
 		// mem: first update bumps 0→1, second with stale version=0 must conflict.
-		_, err1 := repo.UpdatePassword(context.Background(), u.ID, "$2a$12$hash1", false, 0)
+		_, err1 := repo.UpdatePassword(context.Background(), testTenantID, u.ID, "$2a$12$hash1", false, 0)
 		if err1 != nil {
 			t.Fatalf("UpdatePassword_CASConflict/mem: first update failed: %v", err1)
 		}
 
-		_, err2 := repo.UpdatePassword(context.Background(), u.ID, "$2a$12$hash2", false, 0)
+		_, err2 := repo.UpdatePassword(context.Background(), testTenantID, u.ID, "$2a$12$hash2", false, 0)
 		if err2 == nil {
 			t.Fatal("UpdatePassword_CASConflict/mem: second update with stale version must fail")
 		}
@@ -454,7 +495,7 @@ func conformUpdatePasswordCASConflict(t *testing.T, factory UserRepoFactory, fea
 		go func(idx int) {
 			defer wg.Done()
 			nv, err := repo.UpdatePassword(
-				context.Background(), u.ID,
+				context.Background(), testTenantID, u.ID,
 				fmt.Sprintf("$2a$12$concurrent%d", idx), false,
 				0, // both read stale version=0
 			)
@@ -494,7 +535,7 @@ func conformBumpAuthzEpochSucceeds(t *testing.T, factory UserRepoFactory) {
 	var newEpoch int64
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		newEpoch, err = repo.BumpAuthzEpoch(ctx, u.ID, credentialfence.Mint())
+		newEpoch, err = repo.BumpAuthzEpoch(ctx, testTenantID, u.ID, credentialfence.Mint())
 		return err
 	}); err != nil {
 		t.Fatalf("BumpAuthzEpoch_Succeeds: %v", err)
@@ -520,7 +561,7 @@ func conformBumpAuthzEpochNilFenceToken(t *testing.T, factory UserRepoFactory) {
 	func() {
 		defer func() { recovered = recover() }()
 		// nil FenceToken is intentional — exercising the MustHave guard.
-		_, _ = repo.BumpAuthzEpoch(context.Background(), "usr-nil-token", nil)
+		_, _ = repo.BumpAuthzEpoch(context.Background(), testTenantID, "usr-nil-token", nil)
 	}()
 
 	if recovered == nil {
@@ -553,7 +594,7 @@ func conformBumpAuthzEpochMonotonic(t *testing.T, factory UserRepoFactory) {
 	var epoch1 int64
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		epoch1, err = repo.BumpAuthzEpoch(ctx, u.ID, credentialfence.Mint())
+		epoch1, err = repo.BumpAuthzEpoch(ctx, testTenantID, u.ID, credentialfence.Mint())
 		return err
 	}); err != nil {
 		t.Fatalf("BumpAuthzEpoch_MonotonicIncrement: first bump: %v", err)
@@ -562,7 +603,7 @@ func conformBumpAuthzEpochMonotonic(t *testing.T, factory UserRepoFactory) {
 	var epoch2 int64
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		epoch2, err = repo.BumpAuthzEpoch(ctx, u.ID, credentialfence.Mint())
+		epoch2, err = repo.BumpAuthzEpoch(ctx, testTenantID, u.ID, credentialfence.Mint())
 		return err
 	}); err != nil {
 		t.Fatalf("BumpAuthzEpoch_MonotonicIncrement: second bump: %v", err)
@@ -589,12 +630,114 @@ func conformNotFoundPropagates(t *testing.T, factory UserRepoFactory) {
 		t.Errorf("NotFound: GetByID must return ErrAuthUserNotFound, got %v", err)
 	}
 
-	_, err = repo.GetByUsername(context.Background(), "nobody_"+phantom)
+	_, err = repo.GetByUsername(context.Background(), testTenantID, "nobody_"+phantom)
 	if err == nil {
 		t.Fatal("NotFound: GetByUsername on unknown username must return error, got nil")
 	}
 	if !isErrAuthUserNotFound(err) {
 		t.Errorf("NotFound: GetByUsername must return ErrAuthUserNotFound, got %v", err)
+	}
+}
+
+// conformCrossTenantIsolation asserts the #1337 PR-2a T2.6 acceptance
+// ("跨租户查询返回空"): a user created under tenant A is invisible to
+// tenant-scoped reads/writes issued under a different tenant B, while remaining
+// visible under its own tenant. This is the behavioral backstop for the mem
+// tenant-membership guard and the PG `WHERE tenant_id = $N` predicate.
+//
+// GetByID is intentionally EXCLUDED: it is the by-global-UUID-PK tenant-deriving
+// carve-out (returns the row regardless of tenant, by design — sessionrefresh
+// has no pre-auth tenant); DB-layer RLS is its cross-tenant backstop in PR-3.
+func conformCrossTenantIsolation(t *testing.T, factory UserRepoFactory, features Features) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	id := uuid.NewString()
+	username := "xtenant_" + uuid.NewString()
+	seedActiveInTenant(t, txRunner, repo, testTenantID, id, username)
+	ctx := context.Background()
+
+	// by-attribute read under tenant B → not found.
+	if _, err := repo.GetByUsername(ctx, testTenantIDOther, username); !isErrAuthUserNotFound(err) {
+		t.Fatalf("GetByUsername cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+
+	// narrow-write methods under tenant B → not found (predicate rejects the row).
+	conformCrossTenantWriteProbes(t, repo, id, username)
+
+	// for-update reads + BumpAuthzEpoch under tenant B → not found. Gate on ambient tx (PG).
+	probeForUpdate := func(ctx context.Context) error {
+		if _, err := repo.GetByIDForUpdate(ctx, testTenantIDOther, id); !isErrAuthUserNotFound(err) {
+			return fmt.Errorf("GetByIDForUpdate cross-tenant: want ErrAuthUserNotFound, got %w", err)
+		}
+		if _, err := repo.GetByUsernameForUpdate(ctx, testTenantIDOther, username); !isErrAuthUserNotFound(err) {
+			return fmt.Errorf("GetByUsernameForUpdate cross-tenant: want ErrAuthUserNotFound, got %w", err)
+		}
+		// BumpAuthzEpoch cross-tenant: tenant predicate must prevent the bump.
+		if _, err := repo.BumpAuthzEpoch(ctx, testTenantIDOther, id, credentialfence.Mint()); !isErrAuthUserNotFound(err) {
+			return fmt.Errorf("BumpAuthzEpoch cross-tenant: want ErrAuthUserNotFound, got %w", err)
+		}
+		return nil
+	}
+	if features.RequiresAmbientTx {
+		if err := txRunner.RunInTx(ctx, probeForUpdate); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := probeForUpdate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sanity: the row IS visible under its own tenant, so the rejections above
+	// are genuinely tenant-scoped and not a seeding artifact.
+	if _, err := repo.GetByUsername(ctx, testTenantID, username); err != nil {
+		t.Fatalf("GetByUsername same-tenant: want success, got %v", err)
+	}
+}
+
+// conformCrossTenantWriteProbes asserts that the non-tx-gated narrow-write
+// methods (UpdateProfile / UpdateLockState / UpdatePassword / UpdatePasswordResetFlag /
+// UpdateLockoutFields) return ErrAuthUserNotFound when called under the wrong
+// tenant. Extracted from conformCrossTenantIsolation to keep that function
+// within the cognitive-complexity budget (≤15).
+func conformCrossTenantWriteProbes(t *testing.T, repo ports.UserRepository, id, username string) {
+	t.Helper()
+	ctx := context.Background()
+	// UpdateProfile cross-tenant.
+	if _, err := repo.UpdateProfile(ctx, testTenantIDOther, id, nePtr("hijack"), nil, time.Now().UTC()); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdateProfile cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdateLockState cross-tenant.
+	if err := repo.UpdateLockState(ctx, testTenantIDOther, id, domain.StatusLocked, time.Now().UTC()); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdateLockState cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdatePassword cross-tenant: stale version (0) is fine — tenant predicate fires first.
+	if _, err := repo.UpdatePassword(ctx, testTenantIDOther, id, "$2a$12$xthash", false, 0); !isErrAuthUserNotFound(err) { //nolint:lll // line length
+		t.Fatalf("UpdatePassword cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdatePasswordResetFlag cross-tenant.
+	if err := repo.UpdatePasswordResetFlag(ctx, testTenantIDOther, id, true, time.Now().UTC()); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdatePasswordResetFlag cross-tenant: want ErrAuthUserNotFound, got %v", err)
+	}
+	// UpdateLockoutFields cross-tenant: build a minimal domain.User with the seeded id.
+	crossTenantUser, reconErr := domain.ReconstituteUser(
+		domain.ReconstituteUserParams{ //nolint:gosec // G101: test constant, not real credentials
+			ID:           id,
+			Username:     username,
+			Email:        username + exampleEmailDomain,
+			PasswordHash: "$2a$12$conformancefakehash",
+			Status:       domain.StatusActive,
+			Source:       domain.UserSourceIdentity,
+			AuthzEpoch:   1,
+			CreatedAt:    time.Now().UTC(),
+			UpdatedAt:    time.Now().UTC(),
+		},
+	)
+	if reconErr != nil {
+		t.Fatalf("conformCrossTenantWriteProbes: ReconstituteUser: %v", reconErr)
+	}
+	if err := repo.UpdateLockoutFields(ctx, testTenantIDOther, crossTenantUser); !isErrAuthUserNotFound(err) {
+		t.Fatalf("UpdateLockoutFields cross-tenant: want ErrAuthUserNotFound, got %v", err)
 	}
 }
 
@@ -635,10 +778,10 @@ func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 				_, err = repo.GetByID(ctx, u.ID)
 			case 1:
 				// Intentionally stale version — conflict is expected (and tolerated below).
-				_, err = repo.UpdatePassword(ctx, u.ID, "$2a$12$concurrent", false, 0)
+				_, err = repo.UpdatePassword(ctx, testTenantID, u.ID, "$2a$12$concurrent", false, 0)
 			case 2:
 				err = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-					_, e := repo.BumpAuthzEpoch(txCtx, u.ID, credentialfence.Mint())
+					_, e := repo.BumpAuthzEpoch(txCtx, testTenantID, u.ID, credentialfence.Mint())
 					return e
 				})
 			}
@@ -717,7 +860,7 @@ func conformUpdateLockoutFieldsSucceeds(t *testing.T, factory UserRepoFactory) {
 		t.Fatalf("UpdateLockoutFields_Succeeds: ReconstituteUser: %v", err)
 	}
 
-	if err := repo.UpdateLockoutFields(context.Background(), updated); err != nil {
+	if err := repo.UpdateLockoutFields(context.Background(), testTenantID, updated); err != nil {
 		t.Fatalf("UpdateLockoutFields_Succeeds: UpdateLockoutFields: %v", err)
 	}
 
@@ -780,7 +923,7 @@ func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) e
 		t.Fatalf("UpdateLockoutFields_NotFound: ReconstituteUser: %v", err)
 	}
 
-	err = repo.UpdateLockoutFields(context.Background(), ghost)
+	err = repo.UpdateLockoutFields(context.Background(), testTenantID, ghost)
 	if err == nil {
 		t.Fatal("UpdateLockoutFields_NotFound: must return error for non-existent user, got nil")
 	}
@@ -812,7 +955,7 @@ func conformGetByIDForUpdateLockContention(t *testing.T, factory UserRepoFactory
 		ctx, cancel := context.WithTimeout(context.Background(), holderTimeout)
 		defer cancel()
 		_ = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-			_, err := repo.GetByIDForUpdate(txCtx, u.ID)
+			_, err := repo.GetByIDForUpdate(txCtx, testTenantID, u.ID)
 			if err != nil {
 				t.Errorf("holder GetByIDForUpdate: %v", err)
 				return err
@@ -835,7 +978,7 @@ func conformGetByIDForUpdateLockContention(t *testing.T, factory UserRepoFactory
 		ctx, cancel := context.WithTimeout(context.Background(), holderTimeout)
 		defer cancel()
 		contenderErr = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-			_, err := repo.GetByIDForUpdate(txCtx, u.ID)
+			_, err := repo.GetByIDForUpdate(txCtx, testTenantID, u.ID)
 			return err
 		})
 		close(contenderDone)
@@ -846,7 +989,8 @@ func conformGetByIDForUpdateLockContention(t *testing.T, factory UserRepoFactory
 	case <-contenderDone:
 		t.Errorf(
 			"GetByIDForUpdate_LockContention: contender returned in %v without holder release; "+
-				"expected to block on lock", time.Since(contenderStart))
+				"expected to block on lock", time.Since(contenderStart),
+		)
 	case <-time.After(quickGracePeriod):
 		// Expected: contender is still blocked waiting for holder.
 	}
@@ -886,7 +1030,7 @@ func conformUpdateProfileSucceeds(t *testing.T, factory UserRepoFactory) {
 	newEmail := newName + exampleEmailDomain
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	updated, err := repo.UpdateProfile(context.Background(), u.ID, nePtr(newName), nePtr(newEmail), now)
+	updated, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nePtr(newName), nePtr(newEmail), now)
 	if err != nil {
 		t.Fatalf("UpdateProfile_Succeeds: UpdateProfile: %v", err)
 	}
@@ -942,7 +1086,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	// Update name only; email pointer is nil.
 	newName := "only_name_changed_" + uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if _, err := repo.UpdateProfile(context.Background(), u.ID, nePtr(newName), nil, now); err != nil {
+	if _, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nePtr(newName), nil, now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: name-only: %v", err)
 	}
 	got, err := repo.GetByID(context.Background(), u.ID)
@@ -959,7 +1103,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 
 	// Update email only; name pointer is nil.
 	newEmail := "only_email_" + uuid.NewString() + exampleEmailDomain
-	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, nePtr(newEmail), now); err != nil {
+	if _, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nil, nePtr(newEmail), now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: email-only: %v", err)
 	}
 	got, err = repo.GetByID(context.Background(), u.ID)
@@ -979,7 +1123,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	// Both nil: no-op. Username and email must stay at current values.
 	currentName := newName // last set value
 	currentEmail := newEmail
-	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, nil, now); err != nil {
+	if _, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nil, nil, now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: nil+nil must not error: %v", err)
 	}
 	got, err = repo.GetByID(context.Background(), u.ID)
@@ -1005,7 +1149,7 @@ func conformUpdateProfileNotFound(t *testing.T, factory UserRepoFactory) error {
 	phantom := uuid.NewString()
 	ghostName := "ghost_" + phantom
 	ghostEmail := ghostName + exampleEmailDomain
-	_, err := repo.UpdateProfile(context.Background(), phantom, nePtr(ghostName), nePtr(ghostEmail),
+	_, err := repo.UpdateProfile(context.Background(), testTenantID, phantom, nePtr(ghostName), nePtr(ghostEmail),
 		time.Now().UTC().Truncate(time.Millisecond))
 	if err == nil {
 		t.Fatal("UpdateProfile_NotFound: must return error for non-existent user, got nil")
@@ -1025,7 +1169,7 @@ func conformUpdateProfileDuplicateUsername(t *testing.T, factory UserRepoFactory
 	b := seedActive(t, txRunner, repo, uuid.NewString(), "dup_b_"+uuid.NewString())
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	_, err := repo.UpdateProfile(context.Background(), a.ID, nePtr(b.Username), nil, now)
+	_, err := repo.UpdateProfile(context.Background(), testTenantID, a.ID, nePtr(b.Username), nil, now)
 	if err == nil {
 		t.Fatal("UpdateProfile_DuplicateUsername: rename to existing username must error, got nil")
 	}
@@ -1043,7 +1187,7 @@ func conformUpdateProfileDuplicateEmail(t *testing.T, factory UserRepoFactory) e
 	b := seedActive(t, txRunner, repo, uuid.NewString(), "dupe_b_"+uuid.NewString())
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	_, err := repo.UpdateProfile(context.Background(), a.ID, nil, nePtr(b.Email), now)
+	_, err := repo.UpdateProfile(context.Background(), testTenantID, a.ID, nil, nePtr(b.Email), now)
 	if err == nil {
 		t.Fatal("UpdateProfile_DuplicateEmail: change to existing email must error, got nil")
 	}
@@ -1064,7 +1208,7 @@ func conformUpdateProfileSameValuesNoOp(t *testing.T, factory UserRepoFactory) {
 	originalEmail := u.Email
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	updated, err := repo.UpdateProfile(context.Background(), u.ID, nePtr(originalName), nePtr(originalEmail), now)
+	updated, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nePtr(originalName), nePtr(originalEmail), now)
 	if err != nil {
 		t.Fatalf("UpdateProfile_SameValuesNoOp: same-values PATCH must succeed: %v", err)
 	}
@@ -1091,7 +1235,7 @@ func conformUpdateLockStateSucceeds(t *testing.T, factory UserRepoFactory) {
 	initialEpoch := u.AuthzEpoch()
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusLocked, now); err != nil {
+	if err := repo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusLocked, now); err != nil {
 		t.Fatalf("UpdateLockState_Succeeds: UpdateLockState: %v", err)
 	}
 
@@ -1149,12 +1293,12 @@ func conformUpdateLockStateActivateClearsLockout(t *testing.T, factory UserRepoF
 	if err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: ReconstituteUser: %v", err)
 	}
-	if err := repo.UpdateLockoutFields(context.Background(), withLockout); err != nil {
+	if err := repo.UpdateLockoutFields(context.Background(), testTenantID, withLockout); err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: seed UpdateLockoutFields: %v", err)
 	}
 
 	// Move the user to StatusLocked (no auto-zero on Lock).
-	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusLocked, now); err != nil {
+	if err := repo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusLocked, now); err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: UpdateLockState(Locked): %v", err)
 	}
 	mid, err := repo.GetByID(context.Background(), u.ID)
@@ -1168,7 +1312,7 @@ func conformUpdateLockStateActivateClearsLockout(t *testing.T, factory UserRepoF
 
 	// Now Activate — column-level invariant zeros the three lockout columns.
 	now2 := now.Add(time.Second)
-	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusActive, now2); err != nil {
+	if err := repo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusActive, now2); err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: UpdateLockState(Active): %v", err)
 	}
 	got, err := repo.GetByID(context.Background(), u.ID)
@@ -1206,7 +1350,7 @@ func conformUpdatePasswordResetFlagSucceeds(t *testing.T, factory UserRepoFactor
 	initialEpoch := u.AuthzEpoch()
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if err := repo.UpdatePasswordResetFlag(context.Background(), u.ID, true, now); err != nil {
+	if err := repo.UpdatePasswordResetFlag(context.Background(), testTenantID, u.ID, true, now); err != nil {
 		t.Fatalf("UpdatePasswordResetFlag_Succeeds: set true: %v", err)
 	}
 	got, err := repo.GetByID(context.Background(), u.ID)
@@ -1232,7 +1376,7 @@ func conformUpdatePasswordResetFlagSucceeds(t *testing.T, factory UserRepoFactor
 
 	// Toggle off — same isolation.
 	now2 := now.Add(time.Second)
-	if err := repo.UpdatePasswordResetFlag(context.Background(), u.ID, false, now2); err != nil {
+	if err := repo.UpdatePasswordResetFlag(context.Background(), testTenantID, u.ID, false, now2); err != nil {
 		t.Fatalf("UpdatePasswordResetFlag_Succeeds: set false: %v", err)
 	}
 	got, err = repo.GetByID(context.Background(), u.ID)
@@ -1254,7 +1398,7 @@ func conformUpdateLockStateNotFound(t *testing.T, factory UserRepoFactory) error
 	repo, _, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	err := repo.UpdateLockState(context.Background(), uuid.NewString(), domain.StatusLocked, time.Now().UTC())
+	err := repo.UpdateLockState(context.Background(), testTenantID, uuid.NewString(), domain.StatusLocked, time.Now().UTC())
 	if err == nil {
 		t.Fatal("UpdateLockState_NotFound: must return error for non-existent user, got nil")
 	}
@@ -1271,9 +1415,223 @@ func conformUpdatePasswordResetFlagNotFound(t *testing.T, factory UserRepoFactor
 	repo, _, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	err := repo.UpdatePasswordResetFlag(context.Background(), uuid.NewString(), true, time.Now().UTC())
+	err := repo.UpdatePasswordResetFlag(context.Background(), testTenantID, uuid.NewString(), true, time.Now().UTC())
 	if err == nil {
 		t.Fatal("UpdatePasswordResetFlag_NotFound: must return error for non-existent user, got nil")
 	}
 	return err
+}
+
+// ─── RoleRepository conformance ───────────────────────────────────────────────
+
+// RoleRepoFactory constructs a fresh ports.RoleRepository, a matching
+// ports.UserRepository (needed to seed users across tenants), a shared
+// persistence.TxRunner, and a cleanup func. Called once per sub-test.
+type RoleRepoFactory func(t *testing.T) (
+	roleRepo ports.RoleRepository,
+	userRepo ports.UserRepository,
+	txRunner persistence.TxRunner,
+	cleanup func(),
+)
+
+// RunRoleRepoConformance executes the RoleRepository contract acceptance suite.
+// All implementations (mem, PG) must call this from a _test.go in their package.
+//
+// Tenancy (#1337 PR-2a, review F5): every RoleRepository method takes a mandatory
+// tenant.TenantID, so the suite asserts cross-tenant isolation across the read
+// (GetByID/GetByUserID), list (ListByUserID), count (CountByRole) and last-admin
+// (CountEffectiveAdmins/EffectiveAdminExists) surfaces — not just the AssignToUser
+// write path. The last-admin per-tenant assertion is the security-critical one: a
+// tenant must never count another tenant's effective admins.
+func RunRoleRepoConformance(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	t.Run("AssignToUser_CrossTenant_RejectsUser", func(t *testing.T) {
+		conformRoleAssignCrossTenantUser(t, factory)
+	})
+	t.Run("Reads_CrossTenant_Invisible", func(t *testing.T) {
+		conformRoleReadsCrossTenant(t, factory)
+	})
+	t.Run("EffectiveAdmin_CrossTenant_PerTenant", func(t *testing.T) {
+		conformEffectiveAdminCrossTenant(t, factory)
+	})
+	t.Run("InvalidTenant_Rejected", func(t *testing.T) {
+		conformRoleInvalidTenantRejected(t, factory)
+	})
+}
+
+// conformRoleInvalidTenantRejected (F4): every tenant-scoped read method must
+// reject an invalid (empty/zero) tenant via tenant.Validate rather than silently
+// reading with a bad key — closes the mem/PG drift where one backend validated
+// and the other did not (mem ListByUserID previously bypassed the guard).
+func conformRoleInvalidTenantRejected(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, _, _, cleanup := factory(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+	var invalid tenant.TenantID // zero value — empty, rejected by Validate
+	sort := []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}
+	if _, err := roleRepo.GetByID(ctx, invalid, "any"); err == nil {
+		t.Error("GetByID(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.GetByUserID(ctx, invalid, "any"); err == nil {
+		t.Error("GetByUserID(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.ListByUserID(ctx, invalid, "any", query.ListParams{Limit: 10, Sort: sort}); err == nil {
+		t.Error("ListByUserID(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.CountByRole(ctx, invalid, auth.RoleAdmin); err == nil {
+		t.Error("CountByRole(invalidTenant): want error, got nil")
+	}
+	if _, err := roleRepo.EffectiveAdminExists(ctx, invalid); err == nil {
+		t.Error("EffectiveAdminExists(invalidTenant): want error, got nil")
+	}
+}
+
+// seedRoleAssignment creates role roleID in tenant tid and assigns it to an
+// active user (seeded in the same tenant), returning the user id. Shared by the
+// RoleRepository cross-tenant read/count sub-tests.
+func seedRoleAssignment(
+	t *testing.T,
+	roleRepo ports.RoleRepository, userRepo ports.UserRepository, txRunner persistence.TxRunner,
+	tid tenant.TenantID, roleID string,
+) string {
+	t.Helper()
+	user := seedActiveInTenant(t, txRunner, userRepo, tid, uuid.NewString(), "role_seed_"+uuid.NewString())
+	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
+		return roleRepo.Create(ctx, tid, &domain.Role{ID: roleID, Name: roleID})
+	}); err != nil {
+		t.Fatalf("seedRoleAssignment: create role %q in tenant %q: %v", roleID, tid, err)
+	}
+	if _, err := roleRepo.AssignToUser(context.Background(), tid, user.ID, roleID); err != nil {
+		t.Fatalf("seedRoleAssignment: assign role %q to user in tenant %q: %v", roleID, tid, err)
+	}
+	return user.ID
+}
+
+// conformRoleReadsCrossTenant (F5): a role + assignment created in tenant A must
+// be invisible to GetByID/GetByUserID/ListByUserID/CountByRole scoped to tenant
+// B, while remaining visible from tenant A.
+func conformRoleReadsCrossTenant(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	roleID := "role_reads_" + uuid.NewString()
+	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+	ctx := context.Background()
+	listParams := query.ListParams{Limit: 50, Sort: []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}}
+
+	// Tenant B (testTenantIDOther) must see nothing.
+	if got, err := roleRepo.GetByUserID(ctx, testTenantIDOther, userID); err != nil || len(got) != 0 {
+		t.Errorf("GetByUserID(tenantB): want 0 roles/no error, got %d roles err=%v", len(got), err)
+	}
+	if got, err := roleRepo.ListByUserID(ctx, testTenantIDOther, userID, listParams); err != nil || len(got) != 0 {
+		t.Errorf("ListByUserID(tenantB): want 0 roles/no error, got %d roles err=%v", len(got), err)
+	}
+	if n, err := roleRepo.CountByRole(ctx, testTenantIDOther, roleID); err != nil || n != 0 {
+		t.Errorf("CountByRole(tenantB): want 0/no error, got %d err=%v", n, err)
+	}
+	if r, err := roleRepo.GetByID(ctx, testTenantIDOther, roleID); err == nil && r != nil {
+		t.Errorf("GetByID(tenantB): tenant-A role must not be visible, got %+v", r)
+	}
+
+	// Tenant A (testTenantID) still sees the role + assignment.
+	if got, err := roleRepo.GetByUserID(ctx, testTenantID, userID); err != nil || len(got) != 1 {
+		t.Fatalf("GetByUserID(tenantA): want 1 role/no error, got %d roles err=%v", len(got), err)
+	}
+	if n, err := roleRepo.CountByRole(ctx, testTenantID, roleID); err != nil || n != 1 {
+		t.Errorf("CountByRole(tenantA): want 1/no error, got %d err=%v", n, err)
+	}
+	if got, err := roleRepo.ListByUserID(ctx, testTenantID, userID, listParams); err != nil || len(got) != 1 {
+		t.Errorf("ListByUserID(tenantA): want 1 role/no error, got %d roles err=%v", len(got), err)
+	}
+}
+
+// conformEffectiveAdminCrossTenant (F5): the last-admin invariant counters must
+// be per-tenant. An effective admin seeded in tenant A must NOT be counted by
+// CountEffectiveAdmins/EffectiveAdminExists scoped to tenant B — otherwise a
+// tenant could be blocked from (or wrongly allowed) removing its last admin
+// because another tenant happens to have one.
+func conformEffectiveAdminCrossTenant(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, auth.RoleAdmin)
+	ctx := context.Background()
+
+	// CountEffectiveAdmins acquires the per-tenant last-admin advisory lock, so
+	// the PG impl requires an ambient transaction (mem is lenient); call it inside
+	// RunInTx. EffectiveAdminExists is the lock-free read counterpart — no tx.
+	countAdmins := func(tid tenant.TenantID) (int, error) {
+		var n int
+		err := txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+			var e error
+			n, e = roleRepo.CountEffectiveAdmins(txCtx, tid)
+			return e
+		})
+		return n, err
+	}
+
+	// Tenant A has exactly one effective admin.
+	if n, err := countAdmins(testTenantID); err != nil || n != 1 {
+		t.Errorf("CountEffectiveAdmins(tenantA): want 1/no error, got %d err=%v", n, err)
+	}
+	if ok, err := roleRepo.EffectiveAdminExists(ctx, testTenantID); err != nil || !ok {
+		t.Errorf("EffectiveAdminExists(tenantA): want true/no error, got %v err=%v", ok, err)
+	}
+
+	// Tenant B must see zero — the tenant-A admin is invisible.
+	if n, err := countAdmins(testTenantIDOther); err != nil || n != 0 {
+		t.Errorf("CountEffectiveAdmins(tenantB): want 0/no error, got %d err=%v", n, err)
+	}
+	if ok, err := roleRepo.EffectiveAdminExists(ctx, testTenantIDOther); err != nil || ok {
+		t.Errorf("EffectiveAdminExists(tenantB): want false/no error, got %v err=%v", ok, err)
+	}
+}
+
+// conformRoleAssignCrossTenantUser (F4): assigning a role (which exists in
+// testTenantID) to a user that lives in testTenantIDOther must return
+// ErrAuthUserNotFound — the same error as "user not found", so the caller
+// cannot enumerate cross-tenant user existence.
+func conformRoleAssignCrossTenantUser(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	// Seed a role in tenant A (testTenantID).
+	roleID := "role_xten_" + uuid.NewString()
+	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
+		return roleRepo.Create(ctx, testTenantID, &domain.Role{ID: roleID, Name: roleID})
+	}); err != nil {
+		t.Fatalf("conformRoleAssignCrossTenantUser: seed role: %v", err)
+	}
+
+	// Seed a user in tenant B (testTenantIDOther).
+	userB := seedActiveInTenant(t, txRunner, userRepo, testTenantIDOther, uuid.NewString(), "xten_user_"+uuid.NewString())
+
+	// Attempt to assign the tenant-A role to the tenant-B user (cross-tenant write).
+	_, err := roleRepo.AssignToUser(context.Background(), testTenantID, userB.ID, roleID)
+	if err == nil {
+		t.Fatal("AssignToUser_CrossTenant: must return error for user from different tenant, got nil")
+	}
+	if !isErrAuthUserNotFound(err) {
+		t.Errorf("AssignToUser_CrossTenant: want ErrAuthUserNotFound, got %v", err)
+	}
+
+	// Sanity: assigning to a user in the SAME tenant must still succeed.
+	userA := seedActiveInTenant(t, txRunner, userRepo, testTenantID, uuid.NewString(), "xten_usera_"+uuid.NewString())
+	changed, err := roleRepo.AssignToUser(context.Background(), testTenantID, userA.ID, roleID)
+	if err != nil {
+		t.Fatalf("AssignToUser_CrossTenant: same-tenant assign must succeed, got %v", err)
+	}
+	if !changed {
+		t.Error("AssignToUser_CrossTenant: same-tenant first assign must return changed=true")
+	}
 }

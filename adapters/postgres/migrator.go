@@ -259,10 +259,15 @@ func (m *Migrator) checkNoInvalidIndexes(ctx context.Context) error {
 }
 
 // ForwardRebuildAnnotationPattern is the single-source regex shared by the
-// runtime permit gate (forwardRebuildTarget) and the archtest
+// runtime permit gate (forwardRebuildTargets) and the archtest
 // MIGRATION-FORWARD-REBUILD-ANNOTATION-01
 // (tools/archtest/pg_schema_guard_invariants_test.go). Exporting it as one const
 // keeps the Go gate and the CI archtest from drifting.
+//
+// Each annotation line names exactly ONE table. A migration that rebuilds
+// multiple tables uses multiple annotation lines — one per table. The Go phase0
+// gate scans all matching lines with FindAllSubmatch and gates each target
+// independently.
 //
 // WARNING: changing this pattern is a wire-format change to the migration
 // annotation. Every existing `-- +gocell forward-rebuild target=…` line in
@@ -270,12 +275,13 @@ func (m *Migrator) checkNoInvalidIndexes(ctx context.Context) error {
 // rebuilds silently stop being gated.
 const ForwardRebuildAnnotationPattern = `(?m)^\s*--\s*\+gocell\s+forward-rebuild\s+target=([a-zA-Z_][a-zA-Z0-9_]*)\s*$`
 
-// forwardRebuildAnnotationRE matches the per-migration declaration that marks a
-// forward-rebuild and names the table whose row-count gates the permit.
+// forwardRebuildAnnotationRE matches each `-- +gocell forward-rebuild target=<table>`
+// annotation line in the Up section of a migration. FindAllSubmatch returns one
+// entry per annotation line, supporting migrations that rebuild multiple tables.
 var forwardRebuildAnnotationRE = regexp.MustCompile(ForwardRebuildAnnotationPattern)
 
 // gooseDownMarkerRE line-anchors the pressly/goose Down section directive so the
-// Up-section scan in forwardRebuildTarget cannot be truncated by a literal
+// Up-section scan in forwardRebuildTargets cannot be truncated by a literal
 // "-- +goose Down" appearing inside Up-section prose (fail-open guard).
 var gooseDownMarkerRE = regexp.MustCompile(`(?m)^\s*-- \+goose Down\s*$`)
 
@@ -300,9 +306,13 @@ func (m *Migrator) gatePendingRebuilds(ctx context.Context, permits []ForwardReb
 	}
 
 	// Fail-closed: every pending rebuild whose target table holds rows needs a permit.
-	for version, target := range pending {
-		if err := m.requirePermitIfDangerous(ctx, version, target, permitByNum); err != nil {
-			return err
+	// A migration with multiple targets requires each populated target to be covered
+	// by the same permit (one permit per migration number, not per table).
+	for version, targets := range pending {
+		for _, target := range targets {
+			if err := m.requirePermitIfDangerous(ctx, version, target, permitByNum); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -330,25 +340,27 @@ func buildPermitMap(permits []ForwardRebuildPermit) (map[int64]ForwardRebuildPer
 	return permitByNum, nil
 }
 
-// collectPendingForwardRebuilds returns the version→target map of pending
-// migrations (version > current DB version) that carry the
-// `-- +gocell forward-rebuild target=<table>` annotation.
-func (m *Migrator) collectPendingForwardRebuilds(ctx context.Context) (map[int64]string, error) {
+// collectPendingForwardRebuilds returns the version→targets map of pending
+// migrations (version > current DB version) that carry at least one
+// `-- +gocell forward-rebuild target=<table>` annotation. Each migration may
+// name multiple targets; each target must be independently permitted if its
+// table is non-empty.
+func (m *Migrator) collectPendingForwardRebuilds(ctx context.Context) (map[int64][]string, error) {
 	current, _, err := m.provider.GetVersions(ctx)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: read migration version", err)
 	}
-	pending := map[int64]string{}
+	pending := map[int64][]string{}
 	for _, src := range m.provider.ListSources() {
 		if src.Version <= current {
 			continue
 		}
-		target, ok, perr := m.forwardRebuildTarget(src)
+		targets, ok, perr := m.forwardRebuildTargets(src)
 		if perr != nil {
 			return nil, perr
 		}
 		if ok {
-			pending[src.Version] = target
+			pending[src.Version] = targets
 		}
 	}
 	return pending, nil
@@ -386,14 +398,18 @@ func (m *Migrator) requirePermitIfDangerous(
 				version, version))))
 }
 
-// forwardRebuildTarget reads the migration source and extracts the
-// `-- +gocell forward-rebuild target=<table>` annotation from the Up section
-// only. The Down section is excluded so an annotation accidentally placed there
-// does not affect the permit gate.
-func (m *Migrator) forwardRebuildTarget(src *goose.Source) (string, bool, error) {
+// forwardRebuildTargets reads the migration source and extracts all
+// `-- +gocell forward-rebuild target=<table>` annotations from the Up section
+// only. The Down section is excluded so annotations accidentally placed there
+// do not affect the permit gate.
+//
+// A migration that rebuilds multiple tables uses one annotation line per table;
+// this function returns all annotated targets. Returns (nil, false, nil) when
+// no annotation is found.
+func (m *Migrator) forwardRebuildTargets(src *goose.Source) ([]string, bool, error) {
 	data, err := fs.ReadFile(m.migrations, src.Path)
 	if err != nil {
-		return "", false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate,
+		return nil, false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate,
 			"postgres: read migration source for rebuild gate", err)
 	}
 	// Restrict scan to the Up section: content before the goose Down marker.
@@ -406,11 +422,15 @@ func (m *Migrator) forwardRebuildTarget(src *goose.Source) (string, bool, error)
 	if loc := gooseDownMarkerRE.FindIndex(data); loc != nil {
 		up = data[:loc[0]]
 	}
-	mch := forwardRebuildAnnotationRE.FindSubmatch(up)
-	if mch == nil {
-		return "", false, nil
+	all := forwardRebuildAnnotationRE.FindAllSubmatch(up, -1)
+	if len(all) == 0 {
+		return nil, false, nil
 	}
-	return string(mch[1]), true, nil
+	targets := make([]string, len(all))
+	for i, mch := range all {
+		targets[i] = string(mch[1])
+	}
+	return targets, true, nil
 }
 
 // tableHasRows reports whether table exists and holds at least one row. A

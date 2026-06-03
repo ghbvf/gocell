@@ -131,12 +131,12 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash(), time.Now())
 	require.NoError(t, err)
 	alice.ID = "usr-alice-integration"
-	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
+	require.NoError(t, roleRepo.Create(ctx, testTenantID, &domain.Role{
 		ID: auth.RoleAdmin, Name: auth.RoleAdmin,
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	}))
-	require.NoError(t, userRepo.Create(ctx, alice))
-	_, err = roleRepo.AssignToUser(ctx, alice.ID, auth.RoleAdmin)
+	require.NoError(t, userRepo.Create(ctx, testTenantID, alice))
+	_, err = roleRepo.AssignToUser(ctx, testTenantID, alice.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	intClock := storetest.NewFakeClock(time.Now())
@@ -205,6 +205,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", body)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", string(testTenantID))
 	r.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusCreated, rec.Code,
@@ -340,7 +341,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 // and runtime/eventbus packages. Here we test the application-layer contract: that
 // rbacassign produces the right outbox entry and the consumer handles it correctly.
 func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
-	ctx := context.Background()
+	ctx := withTenant(context.Background())
 
 	// Shared repos (simulates cell's single repo wiring).
 	store := mem.NewStore(clock.Real())
@@ -350,9 +351,9 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	refreshStore := testutil.RealRefreshStore(t)
 
 	// Seed "member" role.
-	roleRepo.SeedRole(&domain.Role{ID: "member", Name: "member"})
+	roleRepo.SeedRole(testTenantID, &domain.Role{ID: "member", Name: "member"})
 	// Seed "admin" role so bob doesn't become the last admin.
-	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	roleRepo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 
 	// Seed bob so userRepo.BumpAuthzEpoch (called via invalidator funnel)
 	// can find the row.
@@ -370,11 +371,11 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 		UpdatedAt:       bobNow,
 	})
 	require.NoError(t, bobErr)
-	require.NoError(t, userRepo.Create(ctx, bobUser))
+	require.NoError(t, userRepo.Create(ctx, testTenantID, bobUser))
 
 	// Assign bob and carol to "member" so last-holder guard doesn't block.
-	_, _ = roleRepo.AssignToUser(ctx, "usr-bob", "member")
-	_, _ = roleRepo.AssignToUser(ctx, "usr-carol", "member")
+	_, _ = roleRepo.AssignToUser(ctx, testTenantID, "usr-bob", "member")
+	_, _ = roleRepo.AssignToUser(ctx, testTenantID, "usr-carol", "member")
 
 	// Give bob an active session.
 	bobSession := &session.Session{
@@ -397,7 +398,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	stubWriter := &rbacStubOutboxWriter{}
 	stubTx := &rbacStubTxRunner{}
 	assignSvc, err := rbacassign.NewService(
-		clock.Real(), roleRepo, invalidator, slog.Default(),
+		clock.Real(), roleRepo, userRepo, invalidator, slog.Default(),
 		rbacassign.WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, stubWriter))),
 		rbacassign.WithTxManager(persistence.WrapForCell(stubTx)),
 	)
@@ -470,10 +471,12 @@ func (w *rbacStubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
 }
 
 // rbacStubTxRunner executes fn directly (no real transaction), simulating in-memory behaviour.
+// The parent context must be forwarded so that tenant and other ctx-values
+// (including ctxkeys.TenantID written by withTenant) are visible inside fn.
 type rbacStubTxRunner struct{}
 
-func (rbacStubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
+func (rbacStubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
 // Compile-time proof these tests hit the real slices (not stubs).

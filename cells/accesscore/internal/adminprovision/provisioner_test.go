@@ -19,9 +19,19 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
+
+// testTenantID is the canonical test tenant UUID used in adminprovision tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("adminprovision_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
 
 // errStubUnused surfaces accidental calls to fake-repo stub methods that the
 // test does not exercise — better than returning (nil, nil), which triggers
@@ -43,6 +53,7 @@ func fixedUUID(ids ...string) adminprovision.UUIDGenerator {
 
 func stdInput() adminprovision.ProvisionInput {
 	return adminprovision.ProvisionInput{
+		TenantID:     testTenantID,
 		Username:     "admin",
 		Email:        "admin@local",
 		PasswordHash: []byte("$2a$10$stubhash0000000000000000000000000000000000000000"),
@@ -112,13 +123,14 @@ func TestEnsure_DuplicateUsername_Returns409(t *testing.T) {
 	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$identityhash", time.Now())
 	require.NoError(t, err)
 	existing.ID = "usr-existing"
-	require.NoError(t, userRepo.Create(context.Background(), existing))
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, existing))
 
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("y"))
 
 	// Use setup source (no bootstrap source), no admin role yet.
 	in := adminprovision.ProvisionInput{
+		TenantID:     testTenantID,
 		Username:     "admin",
 		Email:        "admin@local",
 		PasswordHash: []byte("$2a$10$newhash000000000000000000000000000000000000000000"),
@@ -145,6 +157,7 @@ func TestEnsure_RaceDetected_ReturnsRaceSkipped(t *testing.T) {
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("z"))
 
 	in := adminprovision.ProvisionInput{
+		TenantID:     testTenantID,
 		Username:     "admin",
 		Email:        "admin@local",
 		PasswordHash: []byte("$2a$10$hash"),
@@ -159,7 +172,7 @@ func TestEnsure_RaceDetected_ReturnsRaceSkipped(t *testing.T) {
 
 func TestProvisioner_Status_NoAdmin_ReturnsFalse(t *testing.T) {
 	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), fixedUUID("x"))
-	has, err := p.Status(context.Background())
+	has, err := p.Status(context.Background(), testTenantID)
 	require.NoError(t, err)
 	assert.False(t, has)
 }
@@ -170,7 +183,7 @@ func TestProvisioner_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo, "usr-seed")
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-	has, err := p.Status(context.Background())
+	has, err := p.Status(context.Background(), testTenantID)
 	require.NoError(t, err)
 	assert.True(t, has)
 }
@@ -182,7 +195,7 @@ func TestProvisioner_Status_InfraError_Surfaced(t *testing.T) {
 	// the Status hot path.
 	roleRepo := &errRoleRepo{existsErr: errors.New("boom")}
 	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
-	_, err := p.Status(context.Background())
+	_, err := p.Status(context.Background(), testTenantID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "effective-admin-exists")
 	assert.ErrorContains(t, err, "boom")
@@ -191,8 +204,10 @@ func TestProvisioner_Status_InfraError_Surfaced(t *testing.T) {
 // --- Ensure ---------------------------------------------------------------
 
 func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// Shared store: role repo needs to see users created by user repo (F4).
+	sharedStore := mem.NewStore(clock.Real())
+	userRepo := sharedStore.UserRepository()
+	roleRepo := sharedStore.RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("00000000-0000-4000-8000-000000000001"))
 
 	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
@@ -204,7 +219,7 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 	assert.True(t, user.PasswordResetRequired())
 	assert.Equal(t, domain.UserSourceSetup, user.CreationSource)
 	// Role assigned
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 }
@@ -270,11 +285,13 @@ func TestProvisioner_Ensure_RoleCreateNonDuplicateError_Surfaced(t *testing.T) {
 
 func TestProvisioner_Ensure_RoleCreateDuplicate_Tolerated(t *testing.T) {
 	// Admin role already exists (but no users assigned yet).
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// Shared store: role repo needs to see the user created by user repo (F4).
+	sharedStore := mem.NewStore(clock.Real())
+	roleRepo := sharedStore.RoleRepository()
 	role := &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}
-	require.NoError(t, roleRepo.Create(context.Background(), role))
+	require.NoError(t, roleRepo.Create(context.Background(), testTenantID, role))
 
-	p := newProvisioner(t, mem.NewStore(clock.Real()).UserRepository(), roleRepo, fixedUUID("x"))
+	p := newProvisioner(t, sharedStore.UserRepository(), roleRepo, fixedUUID("x"))
 	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeCreated, outcome)
@@ -305,7 +322,7 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 		name string
 		in   adminprovision.ProvisionInput
 	}{
-		{"missing hash", adminprovision.ProvisionInput{Username: "u", Email: "u@x"}},
+		{"missing hash", adminprovision.ProvisionInput{TenantID: testTenantID, Username: "u", Email: "u@x"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -319,16 +336,18 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 // --- Compensate -----------------------------------------------------------
 
 func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	// Shared store: role repo needs to see the user created by user repo (F4).
+	sharedStore := mem.NewStore(clock.Real())
+	userRepo := sharedStore.UserRepository()
+	roleRepo := sharedStore.RoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("zzz"))
 	user, _, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
-	p.Compensate(context.Background(), user.ID)
+	p.Compensate(context.Background(), testTenantID, user.ID)
 
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt, "role assignment removed")
 	_, err = userRepo.GetByID(context.Background(), user.ID)
@@ -340,7 +359,7 @@ func TestProvisioner_Compensate_ToleratesErrorsLogOnly(t *testing.T) {
 	roleRepo := &errRoleRepo{removeErr: errors.New("remove failed")}
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
 	// Must not panic / return error.
-	p.Compensate(context.Background(), "usr-phantom")
+	p.Compensate(context.Background(), testTenantID, "usr-phantom")
 }
 
 // --- test helpers ---------------------------------------------------------
@@ -361,9 +380,9 @@ func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleR
 	u, err := domain.NewUser("seedadmin", "seed@local", "$2a$10$hash000000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	u.ID = id
-	require.NoError(t, userRepo.Create(context.Background(), u))
-	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}))
-	_, err = roleRepo.AssignToUser(context.Background(), u.ID, auth.RoleAdmin)
+	require.NoError(t, userRepo.Create(context.Background(), testTenantID, u))
+	require.NoError(t, roleRepo.Create(context.Background(), testTenantID, &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}))
+	_, err = roleRepo.AssignToUser(context.Background(), testTenantID, u.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 }
 
@@ -373,57 +392,65 @@ type countingUserRepo struct {
 	creates int
 }
 
-func (c *countingUserRepo) Create(ctx context.Context, u *domain.User) error {
+func (c *countingUserRepo) Create(ctx context.Context, t tenant.TenantID, u *domain.User) error {
 	c.creates++
-	return c.UserRepository.Create(ctx, u)
+	return c.UserRepository.Create(ctx, t, u)
 }
 
 // duplicateUserRepo always rejects Create with ErrAuthUserDuplicate.
 type duplicateUserRepo struct{}
 
-func (r *duplicateUserRepo) Create(ctx context.Context, u *domain.User) error {
+func (r *duplicateUserRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "duplicate")
 }
 
-func (r *duplicateUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+func (r *duplicateUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error) {
 	return nil, errors.New("not expected on race path")
 }
 
-func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+func (r *duplicateUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, username string) (*domain.User, error) {
 	u, _ := domain.NewUser(username, username+"@x", "$2a$10$hashold", time.Now())
 	u.ID = "usr-orphan"
 	return u, nil
 }
 
-func (r *duplicateUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+func (r *duplicateUserRepo) UpdateProfile(
+	_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time,
+) (*domain.User, error) {
 	return nil, errStubUnused
 }
 
-func (r *duplicateUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+func (r *duplicateUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
 
-func (r *duplicateUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+func (r *duplicateUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
 	return nil
 }
-func (r *duplicateUserRepo) Delete(ctx context.Context, id string) error { return nil }
-func (r *duplicateUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+
+func (r *duplicateUserRepo) Delete(_ context.Context, _ tenant.TenantID, _ string) error { return nil }
+
+func (r *duplicateUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }
 
-func (r *duplicateUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
+func (r *duplicateUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
 }
 
-func (r *duplicateUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *duplicateUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("duplicateUserRepo.GetByIDInTenant: unexpected call")
+}
+
+func (r *duplicateUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("duplicateUserRepo.GetByIDForUpdate: unexpected call")
 }
 
-func (r *duplicateUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *duplicateUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("duplicateUserRepo.GetByUsernameForUpdate: unexpected call")
 }
 
-func (r *duplicateUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+func (r *duplicateUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	panic("duplicateUserRepo.UpdateLockoutFields: unexpected call")
 }
 
@@ -435,13 +462,16 @@ type scriptedRoleRepo struct {
 	assignCalled bool
 }
 
-func (r *scriptedRoleRepo) Create(ctx context.Context, role *domain.Role) error { return nil }
-func (r *scriptedRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
+func (r *scriptedRoleRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.Role) error {
+	return nil
+}
+
+func (r *scriptedRoleRepo) AssignToUser(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
 	r.assignCalled = true
 	return true, nil
 }
 
-func (r *scriptedRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
+func (r *scriptedRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ string) (int, error) {
 	if r.i >= len(r.counts) {
 		return r.counts[len(r.counts)-1], nil
 	}
@@ -450,23 +480,23 @@ func (r *scriptedRoleRepo) CountByRole(ctx context.Context, roleID string) (int,
 	return v, nil
 }
 
-func (r *scriptedRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
+func (r *scriptedRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
 	return nil, nil
 }
 
-func (r *scriptedRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
+func (r *scriptedRoleRepo) RemoveFromUser(_ context.Context, _ tenant.TenantID, _, _ string) error {
 	return nil
 }
 
-func (r *scriptedRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
+func (r *scriptedRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
 	return true, nil
 }
 
-func (r *scriptedRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
+func (r *scriptedRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, id string) (*domain.Role, error) {
 	return &domain.Role{ID: id}, nil
 }
 
-func (r *scriptedRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
+func (r *scriptedRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }
 
@@ -474,7 +504,7 @@ func (r *scriptedRoleRepo) ListByUserID(ctx context.Context, userID string, para
 // added it). The adminprovision tests exercise CountByRole semantics only;
 // the bootstrap provisioner does not consult CountEffectiveAdmins. Panicking
 // here makes any accidental usage in a future test obvious.
-func (r *scriptedRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) {
+func (r *scriptedRoleRepo) CountEffectiveAdmins(_ context.Context, _ tenant.TenantID) (int, error) {
 	panic("scriptedRoleRepo.CountEffectiveAdmins: unused in adminprovision tests")
 }
 
@@ -486,7 +516,7 @@ func (r *scriptedRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) 
 // recountErrRoleRepo, which drives recount via its own CountByRole override)
 // see a default "no effective admin" answer so Status passes and Ensure
 // proceeds to the createAdminUser path.
-func (r *scriptedRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) {
+func (r *scriptedRoleRepo) EffectiveAdminExists(_ context.Context, _ tenant.TenantID) (bool, error) {
 	if len(r.counts) == 0 {
 		return false, nil
 	}
@@ -507,36 +537,39 @@ type errRoleRepo struct {
 	removeErr error
 }
 
-func (r *errRoleRepo) Create(ctx context.Context, role *domain.Role) error { return r.createErr }
-func (r *errRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
+func (r *errRoleRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.Role) error {
+	return r.createErr
+}
+
+func (r *errRoleRepo) AssignToUser(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
 	return false, r.assignErr
 }
 
-func (r *errRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
+func (r *errRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ string) (int, error) {
 	return 0, r.countErr
 }
 
-func (r *errRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
+func (r *errRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
 	return nil, nil
 }
 
-func (r *errRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
+func (r *errRoleRepo) RemoveFromUser(_ context.Context, _ tenant.TenantID, _, _ string) error {
 	return r.removeErr
 }
 
-func (r *errRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
+func (r *errRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
 	return true, nil
 }
 
-func (r *errRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
+func (r *errRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, id string) (*domain.Role, error) {
 	return &domain.Role{ID: id}, nil
 }
 
-func (r *errRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
+func (r *errRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }
 
-func (r *errRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) {
+func (r *errRoleRepo) CountEffectiveAdmins(_ context.Context, _ tenant.TenantID) (int, error) {
 	panic("errRoleRepo.CountEffectiveAdmins: unused in adminprovision tests")
 }
 
@@ -544,7 +577,7 @@ func (r *errRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error) {
 // countErr so legacy tests that fail-injected via countErr continue to drive
 // the same Status-surface error path (Status now routes through this method
 // instead of CountByRole, S4.0 follow-up).
-func (r *errRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) {
+func (r *errRoleRepo) EffectiveAdminExists(_ context.Context, _ tenant.TenantID) (bool, error) {
 	if r.existsErr != nil {
 		return false, r.existsErr
 	}
@@ -564,7 +597,7 @@ type recountErrRoleRepo struct {
 	called     int
 }
 
-func (r *recountErrRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
+func (r *recountErrRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ string) (int, error) {
 	r.called++
 	_ = r.firstCount // retained field, no longer on the hot path
 	return 0, r.recountErr
@@ -576,43 +609,56 @@ type errUserRepo struct {
 	deleteErr error
 }
 
-func (r *errUserRepo) Create(ctx context.Context, u *domain.User) error { return r.createErr }
-func (r *errUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+func (r *errUserRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
+	return r.createErr
+}
+
+func (r *errUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error) {
 	return nil, errors.New("not seeded")
 }
 
-func (r *errUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+func (r *errUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	return nil, errors.New("not seeded")
 }
 
-func (r *errUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+func (r *errUserRepo) UpdateProfile(
+	_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time,
+) (*domain.User, error) {
 	return nil, errStubUnused
 }
 
-func (r *errUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+func (r *errUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
 
-func (r *errUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+func (r *errUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
 	return nil
 }
-func (r *errUserRepo) Delete(ctx context.Context, id string) error { return r.deleteErr }
-func (r *errUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+
+func (r *errUserRepo) Delete(_ context.Context, _ tenant.TenantID, _ string) error {
+	return r.deleteErr
+}
+
+func (r *errUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }
 
-func (r *errUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
+func (r *errUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
 }
 
-func (r *errUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *errUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	panic("errUserRepo.GetByIDInTenant: unexpected call")
+}
+
+func (r *errUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("errUserRepo.GetByIDForUpdate: unexpected call")
 }
 
-func (r *errUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+func (r *errUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
 	panic("errUserRepo.GetByUsernameForUpdate: unexpected call")
 }
 
-func (r *errUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+func (r *errUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	panic("errUserRepo.UpdateLockoutFields: unexpected call")
 }

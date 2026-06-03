@@ -70,7 +70,7 @@ func seedInactiveUser(t *testing.T, repo *mem.UserRepository, username, password
 		UpdatedAt:    time.Now(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, repo.Create(context.Background(), u))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, u))
 	return u
 }
 
@@ -109,15 +109,15 @@ func TestLogin_ErrorPathUniformity(t *testing.T) {
 	}{
 		{
 			name:  "missing user",
-			input: LoginInput{Username: "ghost-no-exist", Password: "any-pass"},
+			input: LoginInput{TenantID: testTenantIDStr, Username: "ghost-no-exist", Password: "any-pass"},
 		},
 		{
 			name:  "bad password",
-			input: LoginInput{Username: "active-uniform", Password: "wrong-pass"},
+			input: LoginInput{TenantID: testTenantIDStr, Username: "active-uniform", Password: "wrong-pass"},
 		},
 		{
 			name:  "inactive (locked) user",
-			input: LoginInput{Username: "locked-uniform", Password: "correct-pass"},
+			input: LoginInput{TenantID: testTenantIDStr, Username: "locked-uniform", Password: "correct-pass"},
 		},
 	}
 
@@ -166,6 +166,7 @@ func TestLogin_InactivePath_BcryptExecuted(t *testing.T) {
 	seedInactiveUser(t, userRepo, "locked-bcrypt-spy", "some-pass", domain.StatusLocked)
 
 	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr,
 		Username: "locked-bcrypt-spy",
 		Password: "some-pass",
 	})
@@ -189,6 +190,7 @@ func TestLogin_MissingUser_BcryptExecuted(t *testing.T) {
 	svc, _ := newTestServiceWithComparer(t, cmp)
 
 	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr,
 		Username: "no-such-user",
 		Password: "any-pass",
 	})
@@ -212,6 +214,7 @@ func TestLogin_InactivePath_NoPublic403(t *testing.T) {
 	seedInactiveUser(t, userRepo, "suspended-403-check", "pass", domain.StatusSuspended)
 
 	_, err := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr,
 		Username: "suspended-403-check",
 		Password: "pass",
 	})
@@ -279,6 +282,7 @@ func TestLogin_InactiveInTx_NoPublic403(t *testing.T) {
 	)
 
 	_, loginErr := svc.Login(context.Background(), LoginInput{
+		TenantID: testTenantIDStr,
 		Username: "race-active",
 		Password: "correct",
 	})

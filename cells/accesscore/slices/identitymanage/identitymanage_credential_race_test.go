@@ -77,7 +77,8 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 	// is itself race-SAFE (no live lease → per-call lock; no more concurrent
 	// map writes) but only Store.TxRunner() gives cross-method atomicity. See
 	// ADR docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
-	svc, err := NewService(clock.Real(), userRepo, inv, slog.Default(),
+	svc, err := NewService(
+		clock.Real(), userRepo, inv, slog.Default(),
 		inertRoleRepo(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(persistence.WrapForCell(memStore.TxRunner())),
@@ -86,7 +87,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 
 	// Create a user with a known initial password.
 	const initialPassword = "InitialPass!Race01"
-	adminCtx := auth.TestContext("test-admin", []string{"admin"})
+	adminCtx := withTenant(auth.TestContext("test-admin", []string{"admin"}))
 	user, err := svc.Create(adminCtx, CreateInput{
 		Username: "race-user-" + uuid.NewString()[:8],
 		Email:    "race@test.local",
@@ -115,7 +116,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 		opIdx := i
 		go func() {
 			defer wg.Done()
-			opCtx := auth.TestContext("test-admin", []string{"admin"})
+			opCtx := withTenant(auth.TestContext("test-admin", []string{"admin"}))
 			var callErr error
 			if opIdx%2 == 0 {
 				// ChangePassword: old=initial, new=something unique.
@@ -181,7 +182,8 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	// under store.mu), which the epoch-positive terminal assertion needs.
 	// simpleTxRunner is race-safe since PR fix/238 (per-call lock) but does
 	// not serialize across methods. ADR 202605171846-adr-mem-tx-lock-ownership.
-	svc, err := NewService(clock.Real(), userRepo, inv, slog.Default(),
+	svc, err := NewService(
+		clock.Real(), userRepo, inv, slog.Default(),
 		inertRoleRepo(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(persistence.WrapForCell(memStore.TxRunner())),
@@ -189,7 +191,7 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	require.NoError(t, err)
 
 	const pwd = "EpochTest!Mono01" //nolint:gosec // test fixture password, not a credential
-	adminCtx := auth.TestContext("test-admin", []string{"admin"})
+	adminCtx := withTenant(auth.TestContext("test-admin", []string{"admin"}))
 	user, err := svc.Create(adminCtx, CreateInput{
 		Username: "epoch-test-" + uuid.NewString()[:8],
 		Email:    "epoch@test.local",
@@ -207,7 +209,7 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			opCtx := auth.TestContext("test-admin", []string{"admin"})
+			opCtx := withTenant(auth.TestContext("test-admin", []string{"admin"}))
 			if _, callErr := svc.ChangePassword(opCtx, ChangePasswordInput{
 				UserID:      userID,
 				OldPassword: pwd,

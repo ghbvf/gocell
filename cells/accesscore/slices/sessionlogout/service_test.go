@@ -263,7 +263,8 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
-		outbox.WithLogger(slog.Default()))
+		outbox.WithLogger(slog.Default()),
+	)
 	require.NoError(t, err)
 	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(noopTxRunner{})))

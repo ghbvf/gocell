@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -60,7 +61,15 @@ func ValidUserSource(s UserSource) bool {
 // Wave 2). This makes "mutate authz state without epoch-bump+revoke"
 // unrepresentable across the package boundary.
 type User struct {
-	ID              string
+	ID string
+	// TenantID is the tenant isolation boundary this user belongs to. It is
+	// populated by the repository on READ (PG scanUser / mem store) from the
+	// users.tenant_id column. It is the source for the by-PK tenant-deriving
+	// path: rbacassign (a tenant-less service-token caller) reads the target
+	// user via GetByID and derives the assignment tenant from this field
+	// (#1337 PR-2a Model A, Option B). Empty only for users reconstituted by
+	// pre-tenancy test fixtures that do not set it.
+	TenantID        tenant.TenantID
 	Username        string
 	Email           string
 	PasswordHash    string
@@ -207,7 +216,8 @@ func (u *User) ResetFailedLogins() {
 // now is the wall-clock instant provided by the caller's clock.Clock.
 // Returns an errcode.Error if any required field is empty.
 func NewUser(username, email, passwordHash string, now time.Time) (*User, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthInvalidInput,
 		validation.F("username", username),
 		validation.F("email", email),
 		validation.F("passwordHash", passwordHash),
@@ -243,6 +253,7 @@ func NewUser(username, email, passwordHash string, now time.Time) (*User, error)
 // so the storage boundary and the aggregate read in the same direction.
 type ReconstituteUserParams struct {
 	ID              string
+	TenantID        tenant.TenantID
 	Username        string
 	Email           string
 	PasswordHash    string
@@ -274,7 +285,8 @@ type ReconstituteUserParams struct {
 // non-empty; Status and Source must be ValidUserStatus / ValidUserSource;
 // AuthzEpoch must be > 0 (the unset sentinel 0 is rejected per S4d invariant).
 func ReconstituteUser(p ReconstituteUserParams) (*User, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthInvalidInput,
 		validation.F("id", p.ID),
 		validation.F("username", p.Username),
 		validation.F("email", p.Email),
@@ -302,6 +314,7 @@ func ReconstituteUser(p ReconstituteUserParams) (*User, error) {
 	}
 	return &User{
 		ID:              p.ID,
+		TenantID:        p.TenantID,
 		Username:        p.Username,
 		Email:           p.Email,
 		PasswordHash:    p.PasswordHash,

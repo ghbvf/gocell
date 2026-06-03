@@ -2,23 +2,45 @@ package sessionlogin
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	logingen "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
+
+// headerTenantID is the HTTP header name that carries the tenant identifier
+// on the public login endpoint (pre-auth, so no JWT claim is available).
+// Callers must set X-Tenant-ID to the canonical UUID of the tenant.
+const headerTenantID = "X-Tenant-ID"
+
+// loginTenantCtxKey is the unexported context key used by the tenantMiddleware
+// to ferry the X-Tenant-ID header value into the generated handler's ctx.
+type loginTenantCtxKey struct{}
+
+// tenantFromLoginCtx reads the tenant ID string stored by tenantMiddleware.
+// Returns "" if not set.
+func tenantFromLoginCtx(ctx context.Context) string {
+	v, _ := ctx.Value(loginTenantCtxKey{}).(string)
+	return v
+}
 
 // LoginAdapter implements logingen.Service for http.auth.login.v1.
 // It adapts the slice-internal Service (Login takes LoginInput) to the
-// generated interface (Login takes *logingen.Request).
+// generated interface (Login takes *logingen.Request). The tenant ID is
+// carried via ctx (injected by the wrapping Handler.ServeHTTP middleware
+// from the X-Tenant-ID HTTP header).
 type LoginAdapter struct{ S *Service }
 
 // Login implements logingen.Service. The generated handler already validates
-// and decodes username+password from the request body.
+// and decodes username+password from the request body; the tenant comes from
+// ctx (set by Handler.ServeHTTP from X-Tenant-ID header).
 func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (logingen.LoginResponseObject, error) {
 	pair, err := a.S.Login(ctx, LoginInput{
 		Username: req.Username,
 		Password: req.Password,
+		TenantID: tenantFromLoginCtx(ctx),
 	})
 	if err != nil {
 		return nil, err
@@ -42,6 +64,8 @@ func toLoginResponseData(p dto.TokenPair) *logingen.ResponseData {
 
 // Handler is the route handler for the sessionlogin slice.
 // The generated handler emits Public:true so no JWT is required for this route.
+// Handler wraps the generated logingen.Handler to inject the X-Tenant-ID header
+// value into ctx before dispatching to LoginAdapter.Login.
 type Handler struct {
 	loginH *logingen.Handler
 }
@@ -55,6 +79,23 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes mounts the login contract handler on mux.
+// The route is wrapped with a thin middleware that reads X-Tenant-ID from the
+// HTTP request headers and stores it in ctx under loginTenantCtxKey so
+// LoginAdapter.Login can retrieve it without access to the raw request.
+//
+// cellmw.NewHeaderInjectMux is used instead of a local wrapper struct so that
+// DeclareHTTPContract (which names contractspec.ContractSpec) stays in
+// runtime/ — cells/ must not import kernel/contractspec directly
+// (archtest CELLS-NO-CONTRACTSPEC-IMPORT-01).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
-	return h.loginH.RegisterRoutes(mux)
+	return h.loginH.RegisterRoutes(cellmw.NewHeaderInjectMux(mux, injectLoginTenant))
+}
+
+// injectLoginTenant is the per-request middleware that reads X-Tenant-ID from
+// the HTTP header and stores it in ctx under loginTenantCtxKey.
+func injectLoginTenant(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), loginTenantCtxKey{}, r.Header.Get(headerTenantID))
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

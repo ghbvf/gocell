@@ -11,9 +11,15 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
+
+// tenantCtx returns context.Background() with the canonical test tenant injected.
+func tenantCtx() context.Context {
+	return ctxkeys.WithTenantID(context.Background(), "00000000-0000-0000-0000-000000000001")
+}
 
 func newTestCodec(t *testing.T) *query.CursorCodec {
 	t.Helper()
@@ -58,15 +64,16 @@ func TestService_HasRole(t *testing.T) {
 		{
 			name: "has role",
 			setup: func(r *mem.RoleRepository) {
-				r.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				r.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+				// SeedUserRoleAssignment bypasses F4 user-in-tenant check.
+				r.SeedUserRoleAssignment(testTenantID, "usr-1", "admin")
 			},
 			userID: "usr-1", roleName: "admin", want: true,
 		},
 		{
 			name: "does not have role",
 			setup: func(r *mem.RoleRepository) {
-				r.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+				r.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 			},
 			userID: "usr-2", roleName: "admin", want: false,
 		},
@@ -83,7 +90,7 @@ func TestService_HasRole(t *testing.T) {
 			svc, repo := newTestService(t)
 			tt.setup(repo)
 
-			has, err := svc.HasRole(context.Background(), tt.userID, tt.roleName)
+			has, err := svc.HasRole(tenantCtx(), tt.userID, tt.roleName)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -96,20 +103,21 @@ func TestService_HasRole(t *testing.T) {
 
 func TestService_ListRoles(t *testing.T) {
 	svc, repo := newTestService(t)
-	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-	repo.SeedRole(&domain.Role{ID: "operator", Name: "operator"})
-	repo.SeedRole(&domain.Role{ID: "viewer", Name: "viewer"})
-	_, _ = repo.AssignToUser(context.Background(), "usr-1", "admin")
-	_, _ = repo.AssignToUser(context.Background(), "usr-1", "operator")
-	_, _ = repo.AssignToUser(context.Background(), "usr-1", "viewer")
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedRole(testTenantID, &domain.Role{ID: "operator", Name: "operator"})
+	repo.SeedRole(testTenantID, &domain.Role{ID: "viewer", Name: "viewer"})
+	// SeedUserRoleAssignment bypasses F4 user-in-tenant check.
+	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "admin")
+	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "operator")
+	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "viewer")
 
-	result, err := svc.ListRoles(context.Background(), "usr-1", query.PageParams{Limit: 2})
+	result, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.True(t, result.HasMore)
 	require.NotEmpty(t, result.NextCursor)
 
-	next, err := svc.ListRoles(context.Background(), "usr-1", query.PageParams{
+	next, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{
 		Limit:  2,
 		Cursor: result.NextCursor,
 	})
@@ -121,16 +129,16 @@ func TestService_ListRoles(t *testing.T) {
 
 func TestService_ListRolesEmptyInput(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.ListRoles(context.Background(), "", query.PageParams{})
+	_, err := svc.ListRoles(tenantCtx(), "", query.PageParams{})
 	assert.Error(t, err)
 }
 
 func TestService_ListRoles_ProdMode_BadCursor_ReturnsError(t *testing.T) {
 	svc, repo := newTestServiceWithMode(t, query.RunModeProd)
-	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-	_, _ = repo.AssignToUser(context.Background(), "usr-1", "admin")
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "admin")
 
-	_, err := svc.ListRoles(context.Background(), "usr-1", query.PageParams{
+	_, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{
 		Limit:  50,
 		Cursor: "not-a-valid-cursor",
 	})
