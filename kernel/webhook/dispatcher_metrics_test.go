@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/stretchr/testify/require"
 )
 
 // TestDispatcher_Handle_RecordsResultMetric asserts Handle records

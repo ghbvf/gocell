@@ -128,7 +128,10 @@ func cellSnapshotsHaveDispatchers(s *phaseState) bool {
 // CellID drift check mirrors drainCellSubscriptions. Empty collection is a
 // no-op. A non-empty collection requires webhookSourceStore (for signing
 // secrets); the SSRF policy defaults to kwh.NewSafePolicy when unset.
-func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventrouter.Router) error {
+// collectWebhookDispatchRequests gathers all WebhookDispatchRequest entries from
+// cell snapshots, fail-fasting on a CellID drift (codegen defect). Extracted from
+// drainWebhookDispatchers to keep that function's cognitive complexity bounded.
+func (b *Bootstrap) collectWebhookDispatchRequests(s *phaseState) ([]cell.WebhookDispatchRequest, error) {
 	var reqs []cell.WebhookDispatchRequest
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
@@ -137,13 +140,21 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 		}
 		for _, req := range snap.WebhookDispatchers {
 			if req.Spec.CellID != id {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"bootstrap: cell %s webhook dispatcher drift: declared CellID=%q but snapshot owner=%q"+
 						" (codegen should inject cellID from cell metadata; check cellgen + contractgen templates)",
 					id, req.Spec.CellID, id)
 			}
 			reqs = append(reqs, req)
 		}
+	}
+	return reqs, nil
+}
+
+func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventrouter.Router) error {
+	reqs, err := b.collectWebhookDispatchRequests(s)
+	if err != nil {
+		return err
 	}
 	if len(reqs) == 0 {
 		return nil

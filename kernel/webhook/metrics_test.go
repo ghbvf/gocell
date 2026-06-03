@@ -135,7 +135,11 @@ func TestWebhookMetrics_PreflightClean(t *testing.T) {
 
 // --- recordingProvider: in-memory metrics.Provider spy for webhook tests. ---
 
+// recordingProvider embeds NopProvider so the unused GaugeVec / Unregister
+// methods are inherited (webhook metrics have no gauges); it overrides only the
+// CounterVec / HistogramVec it needs to record.
 type recordingProvider struct {
+	kernelmetrics.NopProvider
 	counters   map[string]*recordingCounterVec
 	histograms map[string]*recordingHistogramVec
 }
@@ -158,12 +162,6 @@ func (p *recordingProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kern
 	p.histograms[opts.Name] = v
 	return v, nil
 }
-
-func (p *recordingProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
-	return nil, nil
-}
-
-func (p *recordingProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 func (p *recordingProvider) labelsOf(name string) []string {
 	if c, ok := p.counters[name]; ok {
