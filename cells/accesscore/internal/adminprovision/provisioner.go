@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -40,7 +41,9 @@ const (
 // PasswordHash is pre-hashed by the caller (bcrypt). Provisioner never sees
 // plaintext. A duplicate username returns 409 ErrAuthUserDuplicate; the caller
 // must use a unique username (setup path enforces this at HTTP layer).
+// TenantID identifies the tenant for which the admin is being provisioned.
 type ProvisionInput struct {
+	TenantID     tenant.TenantID
 	Username     string
 	Email        string
 	PasswordHash []byte
@@ -127,8 +130,8 @@ func NewProvisioner(
 //
 // Infrastructure errors bubble up unchanged so callers can distinguish a
 // known "no effective admin" from a transient RoleRepo outage.
-func (p *Provisioner) Status(ctx context.Context) (bool, error) {
-	exists, err := p.roleRepo.EffectiveAdminExists(ctx)
+func (p *Provisioner) Status(ctx context.Context, t tenant.TenantID) (bool, error) {
+	exists, err := p.roleRepo.EffectiveAdminExists(ctx, t)
 	if err != nil {
 		return false, fmt.Errorf("adminprovision: effective-admin-exists: %w", err)
 	}
@@ -147,12 +150,16 @@ func (p *Provisioner) Status(ctx context.Context) (bool, error) {
 //     (username conflict, operator must use a different username).
 //  4. AssignToUser(user, admin) — idempotent per port contract.
 func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
+	if err := in.TenantID.Validate(); err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"adminprovision: TenantID is required", err)
+	}
 	if len(in.PasswordHash) == 0 {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: PasswordHash is required")
 	}
 
 	// 1. Fast path.
-	exists, err := p.Status(ctx)
+	exists, err := p.Status(ctx, in.TenantID)
 	if err != nil {
 		return ProvisionResult{Outcome: OutcomeUnknown}, err
 	}
@@ -162,8 +169,8 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 		return ProvisionResult{Outcome: OutcomeAlreadyExists}, nil
 	}
 
-	// 2. Ensure admin role.
-	if err := p.ensureAdminRole(ctx); err != nil {
+	// 2. Ensure admin role within this tenant.
+	if err := p.ensureAdminRole(ctx, in.TenantID); err != nil {
 		return ProvisionResult{Outcome: OutcomeUnknown}, err
 	}
 
@@ -174,7 +181,7 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 	}
 
 	// 4. Assign admin role (idempotent).
-	if _, err := p.roleRepo.AssignToUser(ctx, result.User.ID, auth.RoleAdmin); err != nil {
+	if _, err := p.roleRepo.AssignToUser(ctx, in.TenantID, result.User.ID, auth.RoleAdmin); err != nil {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: assign admin role: %w", err)
 	}
 
@@ -184,14 +191,14 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 // Compensate best-effort removes the admin role assignment and user row after
 // a post-Ensure side effect (e.g., credfile write) fails. Errors are logged,
 // not returned: the operator's immediate concern is the outer failure.
-func (p *Provisioner) Compensate(ctx context.Context, userID string) {
-	if err := p.roleRepo.RemoveFromUser(ctx, userID, auth.RoleAdmin); err != nil {
+func (p *Provisioner) Compensate(ctx context.Context, t tenant.TenantID, userID string) {
+	if err := p.roleRepo.RemoveFromUser(ctx, t, userID, auth.RoleAdmin); err != nil {
 		p.logger.Error("admin provision compensate: unassign role failed",
 			slog.String("event", "admin_provision_compensate"),
 			slog.String("user_id", userID),
 			slog.Any("error", err))
 	}
-	if err := p.userRepo.Delete(ctx, userID); err != nil {
+	if err := p.userRepo.Delete(ctx, t, userID); err != nil {
 		p.logger.Error("admin provision compensate: delete user failed",
 			slog.String("event", "admin_provision_compensate"),
 			slog.String("user_id", userID),
@@ -203,7 +210,7 @@ func (p *Provisioner) Compensate(ctx context.Context, userID string) {
 		slog.String("user_id", userID))
 }
 
-func (p *Provisioner) ensureAdminRole(ctx context.Context) error {
+func (p *Provisioner) ensureAdminRole(ctx context.Context, t tenant.TenantID) error {
 	adminRole := &domain.Role{
 		ID:   auth.RoleAdmin,
 		Name: auth.RoleAdmin,
@@ -211,7 +218,7 @@ func (p *Provisioner) ensureAdminRole(ctx context.Context) error {
 			{Resource: "*", Action: "*"},
 		},
 	}
-	if err := p.roleRepo.Create(ctx, adminRole); err != nil {
+	if err := p.roleRepo.Create(ctx, t, adminRole); err != nil {
 		var ecErr *errcode.Error
 		if !errors.As(err, &ecErr) || ecErr.Code != errcode.ErrAuthRoleDuplicate {
 			return fmt.Errorf("adminprovision: ensure admin role: %w", err)
@@ -240,7 +247,7 @@ func (p *Provisioner) createAdminUser(ctx context.Context, in ProvisionInput) (P
 		user.SetPasswordResetRequired(true, now)
 	}
 
-	createErr := p.userRepo.Create(ctx, user)
+	createErr := p.userRepo.Create(ctx, in.TenantID, user)
 	if createErr == nil {
 		return ProvisionResult{User: user, Outcome: OutcomeCreated}, nil
 	}
@@ -251,7 +258,7 @@ func (p *Provisioner) createAdminUser(ctx context.Context, in ProvisionInput) (P
 	}
 
 	// Duplicate — distinguish race vs true conflict.
-	recount, err := p.roleRepo.CountByRole(ctx, auth.RoleAdmin)
+	recount, err := p.roleRepo.CountByRole(ctx, in.TenantID, auth.RoleAdmin)
 	if err != nil {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: recount after duplicate user: %w", err)
 	}

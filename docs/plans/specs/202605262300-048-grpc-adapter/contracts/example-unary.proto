@@ -5,7 +5,7 @@ syntax = "proto3";
 
 package device.command.v1;
 
-option go_package = "github.com/gocell/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
 
 service DeviceCommandService {
   // IssueCommand pushes a state change to a device.

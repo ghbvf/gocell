@@ -221,6 +221,7 @@ func TestSetupEndpoints_FirstRunFlow_PG(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/setup/admin", strings.NewReader(body))
 		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantID)
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
@@ -253,6 +254,7 @@ WHERE event_type = $1`,
 		req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/setup/admin", strings.NewReader(body))
 		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tenant-ID", testTenantID)
 		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
@@ -267,8 +269,13 @@ WHERE event_type = $1`,
 	})
 
 	// 3. Status: hasAdmin=true (count(admin) > 0 from PG).
+	// X-Tenant-ID required: the admin was created under testTenantID; without
+	// the header the handler has no tenant context and returns hasAdmin=false.
 	t.Run("status_after_returns_true", func(t *testing.T) {
-		resp, err := setupHTTPClient.Get(h.base + "/api/v1/access/setup/status")
+		req, err := http.NewRequest(http.MethodGet, h.base+"/api/v1/access/setup/status", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Tenant-ID", testTenantID)
+		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -290,6 +297,7 @@ func TestSetupEndpoints_FirstRunFlow_PG_OutboxFailureRollsBack(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/setup/admin", strings.NewReader(body))
 	req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", testTenantID)
 	resp, err := setupHTTPClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -355,13 +363,11 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, migrator.Up(ctx))
 	require.NoError(t, adapterpg.VerifyExpectedShape(ctx, pool))
 
-	// Migration 019 creates the `roles` table but only seeds the "admin" role
-	// (via the adminprovision setup flow). RBAC tests assigning non-admin
-	// roles need the role row to exist or AssignToUser fails with FK
-	// violation → ErrAuthRoleNotFound (404). Seed "editor" so S4b RBAC tests
-	// have a non-admin role to assign and revoke.
+	// Migration 047 rebuilt roles with composite PK (tenant_id, id). Seed the
+	// "editor" role for the test tenant so S4b RBAC tests have a non-admin role
+	// to assign and revoke without FK violations.
 	_, err = pool.DB().Exec(ctx,
-		`INSERT INTO roles (id, name) VALUES ('editor', 'editor') ON CONFLICT (id) DO NOTHING`)
+		`INSERT INTO roles (tenant_id, id, name) VALUES ('00000000-0000-0000-0000-000000000001', 'editor', 'editor') ON CONFLICT (tenant_id, id) DO NOTHING`)
 	require.NoError(t, err, "seed editor role")
 
 	txMgr := adapterpg.NewTxManager(pool)
@@ -510,6 +516,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/setup/admin", bytes.NewReader(adminBody))
 	req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", testTenantID)
 	resp, err := setupHTTPClient.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
@@ -528,7 +535,10 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 func sessionPGLogin(t *testing.T, base, username, password string) (accessToken, refreshToken, sessionID string) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-	resp, err := setupHTTPClient.Post(base+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
+	loginReq, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/sessions/login", bytes.NewReader(body))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginReq.Header.Set("X-Tenant-ID", testTenantID)
+	resp, err := setupHTTPClient.Do(loginReq)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "login must return 201")
@@ -674,7 +684,10 @@ func TestSessionLogin_OutboxFailureRollsBackPGRows(t *testing.T) {
 	// Attempt login with correct credentials — outbox Write will fail inside the
 	// tx, so the whole tx (session + refresh_token rows) must roll back.
 	body, _ := json.Marshal(map[string]string{"username": sessionPGAdminUsername, "password": sessionPGAdminPassword})
-	resp, loginErr := setupHTTPClient.Post(h.base+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
+	loginReq, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/sessions/login", bytes.NewReader(body))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginReq.Header.Set("X-Tenant-ID", testTenantID)
+	resp, loginErr := setupHTTPClient.Do(loginReq)
 	require.NoError(t, loginErr)
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)

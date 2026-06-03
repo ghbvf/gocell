@@ -38,7 +38,7 @@ func TestLeaseInvalidatedAfterTxReturn(t *testing.T) {
 		t.Fatalf("NewUser: %v", err)
 	}
 	seed.ID = "usr-escape-001"
-	if err := repo.Create(context.Background(), seed); err != nil {
+	if err := repo.Create(context.Background(), testTenantID, seed); err != nil {
 		t.Fatalf("seed Create: %v", err)
 	}
 
@@ -72,7 +72,7 @@ func TestLeaseInvalidatedAfterTxReturn(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, e := repo.BumpAuthzEpoch(escaped, seed.ID, credentialfence.Mint())
+			_, e := repo.BumpAuthzEpoch(escaped, testTenantID, seed.ID, credentialfence.Mint())
 			errs <- e
 		}()
 	}

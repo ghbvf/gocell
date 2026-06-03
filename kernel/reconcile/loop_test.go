@@ -134,7 +134,7 @@ func stopCtx(t *testing.T) (context.Context, context.CancelFunc) {
 
 func TestLoop_NilReconcilerFailsStart(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	l := &Loop{ReconcilerID: "rc"}
+	l := &Loop{reconcilerID: "rc"}
 	err := l.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-nil Reconciler")
@@ -143,7 +143,7 @@ func TestLoop_NilReconcilerFailsStart(t *testing.T) {
 
 func TestLoop_ReconcilerNotReadyFailsStart(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	l := &Loop{ReconcilerID: "rc", Reconciler: notReadyReconciler{}}
+	l := &Loop{reconcilerID: "rc", reconciler: notReadyReconciler{}}
 	err := l.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not ready")
@@ -156,9 +156,9 @@ func TestLoop_BadMetricLabelsFailsStart(t *testing.T) {
 	bad, err := p.CounterVec(kernelmetrics.CounterOpts{Name: metricReconcileTotal, LabelNames: []string{"wrong"}})
 	require.NoError(t, err)
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
-		Metrics:      Metrics{Total: bad},
+		reconcilerID: "rc",
+		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
+		metrics:      Metrics{Total: bad},
 	}
 	err = l.Start(context.Background())
 	require.Error(t, err)
@@ -173,9 +173,9 @@ func TestLoop_BadMetricLabelsFailsStart(t *testing.T) {
 func TestLoop_StartStopGraceful(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
-		Interval:     testtime.D1h,
+		reconcilerID: "rc",
+		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
+		interval:     testtime.D1h,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -192,10 +192,10 @@ func TestLoop_OwnerCtxCancelDrainsWithoutStop(t *testing.T) {
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
-		Interval:     testtime.D1h,
-		Metrics:      m,
+		reconcilerID: "rc",
+		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
+		interval:     testtime.D1h,
+		metrics:      m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	require.NoError(t, l.Start(ownerCtx))
@@ -223,9 +223,9 @@ func TestLoop_OwnerCtxCancelDrainsWithoutStop(t *testing.T) {
 func TestLoop_OwnerCtxCanceledBeforeStart(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
-		Interval:     testtime.D1h,
+		reconcilerID: "rc",
+		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
+		interval:     testtime.D1h,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	ownerCancel() // cancel BEFORE Start — awaitProbe's pre-check path must fire
@@ -238,7 +238,7 @@ func TestLoop_StopTimeoutReturnsDeadline(t *testing.T) {
 	rec := newBlockingReconciler()
 	rec.ignoreCtx = true // simulate a reconcile stuck mid-work, not yet checking ctx
 	src := make(chan Request)
-	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: testtime.D1h}
+	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: testtime.D1h}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -265,7 +265,7 @@ func TestLoop_MaxConcurrencyRespected(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := newBlockingReconciler()
 	src := make(chan Request)
-	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, MaxConcurrentReconciles: 2, Interval: testtime.D1h}
+	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, maxConcurrentReconciles: 2, interval: testtime.D1h}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -310,7 +310,7 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
-	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, MaxConcurrentReconciles: 4, Interval: testtime.D1h, Metrics: m}
+	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, maxConcurrentReconciles: 4, interval: testtime.D1h, metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
 	// Register the deterministic signal BEFORE Start so no skip increment is
@@ -369,7 +369,7 @@ func TestLoop_PanicRecoveredAndOtherEntitiesUnaffected(t *testing.T) {
 	// Register the transient-counter signal before Start so no increment is missed.
 	panicTransient := p.signalWhenCounterReaches(
 		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}, 1)
-	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: testtime.D1h, Metrics: m}
+	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: testtime.D1h, metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -405,7 +405,7 @@ func TestLoop_PermanentNotRequeued_TransientRequeued(t *testing.T) {
 	transLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}
 	permLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultPermanent)}
 	transientThrice := p.signalWhenCounterReaches(transLabels, 3)
-	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: shortRequeue, Metrics: m}
+	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: shortRequeue, metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -438,7 +438,7 @@ func TestLoop_RecordsSuccessMetrics(t *testing.T) {
 	// Register the deterministic signal before Start so no increment is missed.
 	successLabels := kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}
 	successSig := p.signalWhenCounterReaches(successLabels, 1)
-	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: testtime.D1h, Metrics: m}
+	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: testtime.D1h, metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -474,10 +474,10 @@ func TestLoop_OwnerCtxCanceledBeforeStartResetsLeader(t *testing.T) {
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
-		Interval:     testtime.D1h,
-		Metrics:      m,
+		reconcilerID: "rc",
+		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
+		interval:     testtime.D1h,
+		metrics:      m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	ownerCancel() // cancel BEFORE Start — awaitProbe pre-check fires
@@ -507,7 +507,7 @@ func TestLoop_StopRetryableAfterTimeout(t *testing.T) {
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
-	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: testtime.D1h, Metrics: m}
+	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: testtime.D1h, metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -584,8 +584,8 @@ func TestValidateReconcilerID(t *testing.T) {
 func TestLoop_BadReconcilerIDFailsStart(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
-		ReconcilerID: "Bad-ID",
-		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
+		reconcilerID: "Bad-ID",
+		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
 	}
 	err := l.Start(context.Background())
 	require.Error(t, err)
@@ -636,12 +636,12 @@ func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
 	require.NoError(t, err)
 	// shortRequeue keeps periodic resync from re-triggering during the test.
 	l := &Loop{
-		ReconcilerID:            "rc",
-		Reconciler:              rec,
-		Source:                  src,
-		MaxConcurrentReconciles: 4,
-		Interval:                testtime.D1h,
-		Metrics:                 m,
+		reconcilerID:            "rc",
+		reconciler:              rec,
+		source:                  src,
+		maxConcurrentReconciles: 4,
+		interval:                testtime.D1h,
+		metrics:                 m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -708,12 +708,13 @@ func TestLoop_F5_LostWakeupStress(t *testing.T) {
 		return Result{RequeueAfter: testtime.D1h}, nil
 	})
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   rec,
-		Source:       make(chan Request),
-		Interval:     testtime.D1h,
-		Metrics:      m,
+		reconcilerID: "rc",
+		reconciler:   rec,
+		source:       make(chan Request),
+		interval:     testtime.D1h,
+		metrics:      m,
 	}
+	l.applyDefaults() // ensure logger set for direct process() calls
 
 	// White-box: initialize the F5 maps the way Start does, then drive process()
 	// directly (no worker pool) to stress its critical sections in isolation.
@@ -856,7 +857,8 @@ func TestCancelPending_RemovesFromHeapAndPending(t *testing.T) {
 // cancel, would re-reconcile a dead-lettered entity when it fired.
 func TestDispatchResult_PermanentCancelsPendingNotRequeue(t *testing.T) {
 	t.Parallel()
-	l := &Loop{ReconcilerID: "rc"}
+	l := &Loop{reconcilerID: "rc"}
+	l.applyDefaults() // ensure logger is set for direct internal method calls
 	addCh := make(chan waitingItem, 1)
 	cancelCh := make(chan string, 1)
 	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
@@ -877,7 +879,7 @@ func TestDispatchResult_PermanentCancelsPendingNotRequeue(t *testing.T) {
 // result enqueues a requeue (addCh) and does NOT cancel.
 func TestDispatchResult_SuccessEnqueuesNotCancel(t *testing.T) {
 	t.Parallel()
-	l := &Loop{ReconcilerID: "rc", Interval: testtime.D1h}
+	l := &Loop{reconcilerID: "rc", interval: testtime.D1h}
 	addCh := make(chan waitingItem, 1)
 	cancelCh := make(chan string, 1)
 	backoff := newEntityBackoff(defaultBackoffBase, defaultBackoffMax)
@@ -894,10 +896,10 @@ func TestDispatchResult_SuccessEnqueuesNotCancel(t *testing.T) {
 func TestLoop_BaseDelayExceedsMaxDelayFailsStart(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
-		BaseDelay:    testtime.D1h,
-		MaxDelay:     shortRequeue,
+		reconcilerID: "rc",
+		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
+		baseDelay:    testtime.D1h,
+		maxDelay:     shortRequeue,
 	}
 	err := l.Start(context.Background())
 	require.Error(t, err)
@@ -922,15 +924,15 @@ func TestLoop_TransientExponentialBackoff(t *testing.T) {
 
 	src := make(chan Request)
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler: funcReconciler(func(_ context.Context, _ Request) (Result, error) {
+		reconcilerID: "rc",
+		reconciler: funcReconciler(func(_ context.Context, _ Request) (Result, error) {
 			return Result{}, fmt.Errorf("transient blip")
 		}),
-		Source:    src,
-		Interval:  testtime.D1h,
-		BaseDelay: testtime.D1ms, // shrink base for test speed
-		MaxDelay:  shortRequeue,  // cap so test completes quickly
-		Metrics:   m,
+		source:    src,
+		interval:  testtime.D1h,
+		baseDelay: testtime.D1ms, // shrink base for test speed
+		maxDelay:  shortRequeue,  // cap so test completes quickly
+		metrics:   m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -981,13 +983,13 @@ func TestLoop_SuccessForgetsBackoff(t *testing.T) {
 
 	src := make(chan Request)
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   rec,
-		Source:       src,
-		Interval:     testtime.D1h,
-		BaseDelay:    testtime.D1ms, // tiny base so test completes quickly
-		MaxDelay:     shortRequeue,
-		Metrics:      m,
+		reconcilerID: "rc",
+		reconciler:   rec,
+		source:       src,
+		interval:     testtime.D1h,
+		baseDelay:    testtime.D1ms, // tiny base so test completes quickly
+		maxDelay:     shortRequeue,
+		metrics:      m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -1037,14 +1039,14 @@ func TestLoop_SharedWaitingLoopNoLeak(t *testing.T) {
 	}
 
 	l := &Loop{
-		ReconcilerID:            "rc",
-		Reconciler:              rec,
-		Source:                  src,
-		MaxConcurrentReconciles: 4,
-		Interval:                testtime.D1h,
-		BaseDelay:               testtime.D1h, // long delay → many items pending in heap at Stop
-		MaxDelay:                testtime.D1h,
-		Metrics:                 m,
+		reconcilerID:            "rc",
+		reconciler:              rec,
+		source:                  src,
+		maxConcurrentReconciles: 4,
+		interval:                testtime.D1h,
+		baseDelay:               testtime.D1h, // long delay → many items pending in heap at Stop
+		maxDelay:                testtime.D1h,
+		metrics:                 m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -1084,14 +1086,14 @@ func TestLoop_StopCleansEntityMaps(t *testing.T) {
 		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 1)
 
 	l := &Loop{
-		ReconcilerID:            "rc",
-		Reconciler:              rec,
-		Source:                  src,
-		MaxConcurrentReconciles: 4,
-		Interval:                testtime.D1h,
-		BaseDelay:               testtime.D1h,
-		MaxDelay:                testtime.D1h,
-		Metrics:                 m,
+		reconcilerID:            "rc",
+		reconciler:              rec,
+		source:                  src,
+		maxConcurrentReconciles: 4,
+		interval:                testtime.D1h,
+		baseDelay:               testtime.D1h,
+		maxDelay:                testtime.D1h,
+		metrics:                 m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -1143,14 +1145,14 @@ func TestLoop_ResyncSentinelIsolation(t *testing.T) {
 	src <- Request{EntityID: "real"} // real entity
 
 	l := &Loop{
-		ReconcilerID:            "rc",
-		Reconciler:              rec,
-		Source:                  src,
-		MaxConcurrentReconciles: 2,
-		Interval:                testtime.D1h,
-		BaseDelay:               testtime.D1h, // no spurious retries
-		MaxDelay:                testtime.D1h,
-		Metrics:                 m,
+		reconcilerID:            "rc",
+		reconciler:              rec,
+		source:                  src,
+		maxConcurrentReconciles: 2,
+		interval:                testtime.D1h,
+		baseDelay:               testtime.D1h, // no spurious retries
+		maxDelay:                testtime.D1h,
+		metrics:                 m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -1200,11 +1202,11 @@ func TestLoop_SuccessRequeueAfterPositive(t *testing.T) {
 	src <- Request{EntityID: "requeue-after-entity"}
 
 	l := &Loop{
-		ReconcilerID: "rc",
-		Reconciler:   rec,
-		Source:       src,
-		Interval:     testtime.D1h,
-		Metrics:      m,
+		reconcilerID: "rc",
+		reconciler:   rec,
+		source:       src,
+		interval:     testtime.D1h,
+		metrics:      m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()

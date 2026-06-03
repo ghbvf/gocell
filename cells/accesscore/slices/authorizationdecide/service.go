@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -35,16 +36,21 @@ func NewService(roleRepo ports.RoleRepository, logger *slog.Logger) (*Service, e
 }
 
 // Authorize checks whether the subject has a role granting the action on the
-// resource.
+// resource within the caller's tenant.
 func (s *Service) Authorize(ctx context.Context, subject, resource, action string) (bool, error) {
-	roles, err := s.roleRepo.GetByUserID(ctx, subject)
+	tid, err := tenant.FromContext(ctx)
+	if err != nil {
+		return false, fmt.Errorf("authorization-decide: tenant: %w", err)
+	}
+	roles, err := s.roleRepo.GetByUserID(ctx, tid, subject)
 	if err != nil {
 		return false, fmt.Errorf("authorization-decide: get roles: %w", err)
 	}
 
 	for _, role := range roles {
 		if role.HasPermission(resource, action) {
-			s.logger.Debug("authorization granted",
+			s.logger.Debug(
+				"authorization granted",
 				slog.String("subject", subject),
 				slog.String("resource", resource),
 				slog.String("action", action),

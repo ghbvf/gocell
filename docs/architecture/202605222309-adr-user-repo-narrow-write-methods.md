@@ -122,3 +122,69 @@ A future caller may legitimately need to transition a user to `StatusActive` wit
 - PR #490 / PR #585 — prior narrow-method introductions (`UpdatePassword` + `UpdateLockoutFields`)
 - `tools/archtest/cell_iface_isp_invariants_test.go` — sibling pattern `CELL-IFACE-ISP-METHODSETS-01` (parameterized `loadInterfaceType` helper)
 - `tools/archtest/userrepo_method_set_frozen_test.go` — this ADR's enforcement artifact
+
+---
+
+## §Amendment 2026-06-03 — PR-2a tenant positional param (#1481 / #1340)
+
+**EPIC**: #1337 multi-tenancy, PR-2a accesscore repo isolation.
+
+### Changes to the method set
+
+Every `UserRepository` method now carries a mandatory `tenant.TenantID` positional
+parameter immediately after `ctx` — leaking tenant to the type system makes
+"calling a write method without a tenant" a compile error (Hard, type system).
+
+**Single carve-out retained**: `GetByID(ctx, id)` remains tenant-less. Its sole
+caller (`sessionrefresh`) holds no pre-auth tenant source until PR-3 lands the
+refresh-token tenant carrier + PG RLS `SET LOCAL app.tenant_id`. Tenant isolation
+for this path is enforced at the DB layer by PR-3 RLS. The carve-out is
+allowlisted by archtest `TENANT-REPO-CALLSITE-FUNNEL-01`.
+
+**New method added**: `GetByIDInTenant(ctx, t, id)` — fetches a user by primary
+key and asserts it belongs to tenant `t`. Returns `ErrAuthUserNotFound` for both
+absent rows and cross-tenant rows (no existence leak). Used on admin / post-auth
+paths (`identitymanage` user-detail, `lockUserAndRevokeSessions`) that already
+hold a tenant context; those paths must NOT use the tenant-less `GetByID` carve-out.
+
+### Updated method set (13 methods)
+
+```
+BumpAuthzEpoch(ctx, t, userID, tok)
+Create(ctx, t, user)
+Delete(ctx, t, id)
+GetByID(ctx, id)                       ← tenant-less carve-out (unchanged)
+GetByIDForUpdate(ctx, t, id)
+GetByIDInTenant(ctx, t, id)            ← NEW
+GetByUsername(ctx, t, username)
+GetByUsernameForUpdate(ctx, t, username)
+UpdateLockState(ctx, t, userID, status, now)
+UpdateLockoutFields(ctx, t, user)
+UpdatePassword(ctx, t, userID, newHash, resetRequired, expectedPasswordVersion)
+UpdatePasswordResetFlag(ctx, t, userID, required, now)
+UpdateProfile(ctx, t, userID, name, email, now)
+```
+
+### Threat matrix re-evaluation
+
+| Threat (original §4) | Post-amendment | Notes |
+|---|---|---|
+| Silent password rotation via generic `Update` | ✅ Hard — unchanged | Narrow methods still hold |
+| Activate-without-lockout-reset race | ✅ Hard — unchanged | `UpdateLockState` SQL CASE WHEN unchanged |
+| Empty-string name/email in PATCH | ✅ Hard — unchanged | `*domain.NonEmpty` funnel unchanged |
+| Generic `Update(*User)` regression | 🛡️ Medium archtest — unchanged | `USERREPO-METHOD-SET-FROZEN-01` golden updated to 13 methods |
+| In-memory shadow mutation drift | ✅ Hard — unchanged | `UpdateProfile` returns `*User` from persisted row |
+| **NEW**: Cross-tenant data read via username/write methods | ✅ Hard — typed `tenant.TenantID` position param; omitting it = compile error; `GetByID` carve-out allowlisted by `TENANT-REPO-CALLSITE-FUNNEL-01` | PR-2a enforcement; RLS backstop in PR-3 |
+| **NEW**: Admin path using tenant-less `GetByID` to leak existence | ✅ Hard — `GetByIDInTenant` added for admin paths; `TENANT-REPO-CALLSITE-FUNNEL-01` archtest blocks new callers of `GetByID` outside allowlist | Existence leak closed at interface layer |
+
+### Enforcement artifacts updated in this PR
+
+- `tools/archtest/userrepo_method_set_frozen_test.go` — `expectedUserRepoMethodSignatures` golden updated from 12 to 13 entries; all methods gained `t tenant.TenantID` param except `GetByID`; `GetByIDInTenant` added.
+- `tools/archtest/tenant_repo_param_funnel_test.go` — new archtest `TENANT-REPO-PARAM-FUNNEL-01` + `TENANT-REPO-CALLSITE-FUNNEL-01` (see `.claude/rules/gocell/tenancy.md`).
+
+### Sessions table / session.Store
+
+Session repo `tenant.TenantID` typed param and refresh-token tenant carrier are
+**deferred to PR-3** (refresh path has no pre-auth tenant source until PR-3 RLS
+`SET LOCAL app.tenant_id` lands). The `sessionrefresh` / `sessionvalidate`
+callers of `GetByID` are therefore still correct for this PR.

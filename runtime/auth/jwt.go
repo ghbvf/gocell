@@ -436,6 +436,13 @@ type IssueOptions struct {
 	// JTI is the JWT ID ("jti" claim). When non-empty it is written into the
 	// token payload. Empty string omits the claim.
 	JTI string
+	// TenantID is the tenant isolation boundary ("tenant_id" claim). When
+	// non-empty it is written into the token payload so that the verifier can
+	// extract it into ctxkeys.TenantID for every downstream service call.
+	// Empty string omits the claim (single-tenant / pre-tenant paths).
+	// The caller is responsible for passing a canonical UUID string; the issuer
+	// trusts its caller and does not re-validate.
+	TenantID string
 }
 
 // Issue creates a signed JWT token for the given subject and options.
@@ -489,6 +496,9 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	}
 	if opts.JTI != "" {
 		claims["jti"] = opts.JTI
+	}
+	if opts.TenantID != "" {
+		claims["tenant_id"] = opts.TenantID
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = i.keys.SigningKeyID()

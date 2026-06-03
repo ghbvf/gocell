@@ -22,6 +22,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// tenantCtx is declared in contract_test.go (same package)
+
 // rbacFakeTxRunner is a test-only pass-through TxRunner (no real transaction).
 type rbacFakeTxRunner struct{}
 
@@ -57,7 +59,7 @@ func mustNewService(
 	t.Helper()
 	inv := newTestInvalidator(t, userRepo, sessionStore)
 	opts = append([]Option{WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{}))}, opts...)
-	svc, err := NewService(clock.Real(), roleRepo, inv, logger, opts...)
+	svc, err := NewService(clock.Real(), roleRepo, userRepo, inv, logger, opts...)
 	require.NoError(t, err)
 	return svc
 }
@@ -69,14 +71,15 @@ func mustNewService(
 func newTestService(t testing.TB) (*Service, *mem.Store, *session.MemStore) {
 	t.Helper()
 	store := mem.NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{
 		ID:   "admin",
 		Name: "admin",
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
 	})
-	store.RoleRepository().SeedRole(&domain.Role{ID: "editor", Name: "editor"})
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "editor", Name: "editor"})
+	seedTestUserRoster(t, store)
 	sessionStore := testutil.RealSessionRepo(t)
 	return mustNewService(t, store.RoleRepository(), store.UserRepository(), sessionStore, slog.Default()), store, sessionStore
 }
@@ -87,10 +90,32 @@ func newTestService(t testing.TB) (*Service, *mem.Store, *session.MemStore) {
 // user record results in CountEffectiveAdmins == 0 and revoke rejection.
 func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 	t.Helper()
+	// Idempotent: a roster pre-seed (seedTestUserRoster) plus explicit per-test
+	// seeds (assignActiveAdmin, table-case setups) can both target the same user;
+	// skip if already present so the second Create does not hit ErrAuthUserDuplicate.
+	if _, err := store.UserRepository().GetByID(context.Background(), userID); err == nil {
+		return
+	}
 	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
 	require.NoError(t, err)
 	u.ID = userID
-	require.NoError(t, store.UserRepository().Create(context.Background(), u))
+	require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, u))
+}
+
+// seedTestUserRoster idempotently seeds the standard active users that rbacassign
+// tests assign/revoke roles to. Option B (#1337 PR-2a) derives the assignment
+// tenant from the TARGET user via GetByID, so every Assign/Revoke target must
+// exist; seeding the roster in the test-service constructors keeps individual
+// tests free of user-existence boilerplate. Roster users hold no role, so they
+// are invisible to the effective-admin count until a test assigns admin.
+func seedTestUserRoster(t testing.TB, store *mem.Store) {
+	t.Helper()
+	for _, id := range []string{
+		"usr-1", "usr-2", "usr-3", "usr-noop", "usr-active", "usr-locked",
+		"alice", "bob", "carol", "u1",
+	} {
+		seedActiveUser(t, store, id)
+	}
 }
 
 // assignActiveAdmin seeds an active user AND assigns the admin role. Use
@@ -98,7 +123,7 @@ func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 func assignActiveAdmin(t testing.TB, store *mem.Store, userID string) {
 	t.Helper()
 	seedActiveUser(t, store, userID)
-	_, err := store.RoleRepository().AssignToUser(context.Background(), userID, "admin")
+	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, userID, "admin")
 	require.NoError(t, err)
 }
 
@@ -107,7 +132,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	sessionStore := testutil.RealSessionRepo(t)
 	inv := newTestInvalidator(t, store.UserRepository(), sessionStore)
 	// No WithTxManager — must fail.
-	_, err := NewService(clock.Real(), store.RoleRepository(), inv, slog.Default())
+	_, err := NewService(clock.Real(), store.RoleRepository(), store.UserRepository(), inv, slog.Default())
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -117,7 +142,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 
 func TestNewService_InvalidatorRequired(t *testing.T) {
 	store := mem.NewStore(clock.Real())
-	_, err := NewService(clock.Real(), store.RoleRepository(), nil, slog.Default(),
+	_, err := NewService(clock.Real(), store.RoleRepository(), store.UserRepository(), nil, slog.Default(),
 		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
 	require.Error(t, err)
 	var ec *errcode.Error
@@ -130,7 +155,7 @@ func TestNewService_InvalidatorRequired(t *testing.T) {
 // list for userID.
 func assertRoleAssigned(t *testing.T, store *mem.Store, userID, roleID string) {
 	t.Helper()
-	roles, _ := store.RoleRepository().GetByUserID(context.Background(), userID)
+	roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, userID)
 	for _, r := range roles {
 		if r.ID == roleID {
 			return
@@ -141,12 +166,13 @@ func assertRoleAssigned(t *testing.T, store *mem.Store, userID, roleID string) {
 
 func TestService_Assign(t *testing.T) {
 	tests := []struct {
-		name     string
-		setup    func(*testing.T, *mem.Store)
-		userID   string
-		roleID   string
-		wantErr  bool
-		wantCode errcode.Code
+		name         string
+		setup        func(*testing.T, *mem.Store)
+		userID       string
+		roleID       string
+		skipUserSeed bool // skips automatic seedActiveUser; user will be absent
+		wantErr      bool
+		wantCode     errcode.Code
 	}{
 		{
 			name:    "assign role to user",
@@ -159,7 +185,7 @@ func TestService_Assign(t *testing.T) {
 			userID: "usr-1",
 			roleID: "admin",
 			setup: func(t *testing.T, s *mem.Store) {
-				_, err := s.RoleRepository().AssignToUser(context.Background(), "usr-1", "admin")
+				_, err := s.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-1", "admin")
 				require.NoError(t, err)
 			},
 			wantErr: false,
@@ -179,22 +205,40 @@ func TestService_Assign(t *testing.T) {
 			wantCode: errcode.ErrAuthRBACInvalidInput,
 		},
 		{
-			name:     "role not found returns error",
-			userID:   "usr-1",
+			name:   "role not found returns error",
+			userID: "usr-1",
+			setup: func(t *testing.T, s *mem.Store) {
+				seedActiveUser(t, s, "usr-1")
+			},
 			roleID:   "nonexistent",
 			wantErr:  true,
 			wantCode: errcode.ErrAuthRoleNotFound,
+		},
+		{
+			name:         "user not in roster returns ErrAuthUserNotFound",
+			userID:       "ghost-not-in-roster",
+			roleID:       "admin",
+			skipUserSeed: true,
+			wantErr:      true,
+			wantCode:     errcode.ErrAuthUserNotFound,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, store, _ := newTestService(t)
+			// Option B: Assign derives the tenant from the target user, so the
+			// user must exist. Seed it for non-validation cases (empty userID
+			// cases fail at input validation before the GetByID lookup).
+			// skipUserSeed=true tests the absent-user path explicitly.
+			if tc.userID != "" && !tc.skipUserSeed {
+				seedActiveUser(t, store, tc.userID)
+			}
 			if tc.setup != nil {
 				tc.setup(t, store)
 			}
 
-			err := svc.Assign(context.Background(), tc.userID, tc.roleID)
+			err := svc.Assign(tenantCtx(), tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				assertRoleAssigned(t, store, tc.userID, tc.roleID)
@@ -247,7 +291,7 @@ func TestService_Revoke(t *testing.T) {
 				assignActiveAdmin(t, s, "usr-1")
 				assignActiveAdmin(t, s, "usr-2")
 				// Lock usr-2 — now usr-1 is the sole effective admin.
-				require.NoError(t, s.UserRepository().UpdateLockState(context.Background(), "usr-2", domain.StatusLocked, time.Now()))
+				require.NoError(t, s.UserRepository().UpdateLockState(context.Background(), testTenantID, "usr-2", domain.StatusLocked, time.Now()))
 			},
 			wantErr:  true,
 			wantCode: errcode.ErrAuthLastAdminProtected,
@@ -262,7 +306,9 @@ func TestService_Revoke(t *testing.T) {
 			setup: func(t *testing.T, s *mem.Store) {
 				assignActiveAdmin(t, s, "usr-active")
 				assignActiveAdmin(t, s, "usr-locked")
-				require.NoError(t, s.UserRepository().UpdateLockState(context.Background(), "usr-locked", domain.StatusLocked, time.Now()))
+				require.NoError(t, s.UserRepository().UpdateLockState(
+					context.Background(), testTenantID, "usr-locked", domain.StatusLocked, time.Now(),
+				))
 			},
 			wantErr: false,
 		},
@@ -274,7 +320,7 @@ func TestService_Revoke(t *testing.T) {
 			roleID: "editor",
 			setup: func(t *testing.T, s *mem.Store) {
 				seedActiveUser(t, s, "usr-1")
-				_, err := s.RoleRepository().AssignToUser(context.Background(), "usr-1", "editor")
+				_, err := s.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-1", "editor")
 				require.NoError(t, err)
 			},
 			wantErr: false,
@@ -304,15 +350,20 @@ func TestService_Revoke(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, store, _ := newTestService(t)
+			// Option B: Revoke derives the tenant from the target user (GetByID),
+			// so the user must exist. Seed it for non-validation cases.
+			if tc.userID != "" {
+				seedActiveUser(t, store, tc.userID)
+			}
 			if tc.setup != nil {
 				tc.setup(t, store)
 			}
 
-			err := svc.Revoke(context.Background(), tc.userID, tc.roleID)
+			err := svc.Revoke(tenantCtx(), tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				// Verify removal persisted.
-				roles, _ := store.RoleRepository().GetByUserID(context.Background(), tc.userID)
+				roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, tc.userID)
 				for _, r := range roles {
 					assert.NotEqual(t, tc.roleID, r.ID, "role %s should not be assigned to user %s after revoke", tc.roleID, tc.userID)
 				}
@@ -331,7 +382,7 @@ func TestService_Revoke(t *testing.T) {
 // active sessions atomically with the role removal.
 func TestRevoke_CallsFunnel_InvalidatesSessions(t *testing.T) {
 	svc, store, sessionStore := newTestService(t)
-	ctx := context.Background()
+	ctx := tenantCtx()
 
 	// Two active admins so the effective-admin guard passes when revoking usr-1.
 	assignActiveAdmin(t, store, "usr-1")
@@ -350,8 +401,9 @@ func TestRevoke_CallsFunnel_InvalidatesSessions(t *testing.T) {
 // credential invalidation funnel (HIGH-3 decision: granting a role is additive
 // and is not a credential-security event).
 func TestAssign_DoesNotInvalidateSessions(t *testing.T) {
-	svc, _, sessionStore := newTestService(t)
-	ctx := context.Background()
+	svc, store, sessionStore := newTestService(t)
+	ctx := tenantCtx()
+	seedActiveUser(t, store, "usr-2") // Option B: Assign derives tenant from the target user
 
 	sess := &session.Session{ID: "sess-2", SubjectID: "usr-2", JTI: "jti-sess-2", AuthzEpochAtIssue: 1}
 	require.NoError(t, sessionStore.Create(ctx, sess))
@@ -367,7 +419,7 @@ func TestAssign_DoesNotInvalidateSessions(t *testing.T) {
 // hold the role) does not trigger credential invalidation.
 func TestRevoke_NoOp_DoesNotCallFunnel(t *testing.T) {
 	svc, _, sessionStore := newTestService(t)
-	ctx := context.Background()
+	ctx := tenantCtx()
 
 	sess := &session.Session{ID: "sess-noop-r", SubjectID: "usr-noop", JTI: "jti-noop-r", AuthzEpochAtIssue: 1}
 	require.NoError(t, sessionStore.Create(ctx, sess))
@@ -384,10 +436,10 @@ func TestRevoke_NoOp_DoesNotCallFunnel(t *testing.T) {
 // does not emit an outbox entry. The session must also not be revoked.
 func TestAssign_NoOp_DoesNotEmit(t *testing.T) {
 	svc, store, sessionStore := newTestService(t)
-	ctx := context.Background()
+	ctx := tenantCtx()
 
 	// Pre-assign role so the second Assign is a no-op.
-	_, err := store.RoleRepository().AssignToUser(ctx, "usr-3", "admin")
+	_, err := store.RoleRepository().AssignToUser(ctx, testTenantID, "usr-3", "admin")
 	require.NoError(t, err)
 
 	sess := &session.Session{ID: "sess-noop-a", SubjectID: "usr-3", JTI: "jti-noop-a", AuthzEpochAtIssue: 1}
@@ -412,7 +464,7 @@ func (failingSessionStore) RevokeForSubject(_ context.Context, _ string, _ sessi
 
 func TestRevoke_FunnelFail_ReturnsError(t *testing.T) {
 	store := mem.NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 	// Two active admins so the effective-admin guard passes when revoking usr-1.
 	assignActiveAdmin(t, store, "usr-1")
 	assignActiveAdmin(t, store, "usr-2")
@@ -421,11 +473,11 @@ func TestRevoke_FunnelFail_ReturnsError(t *testing.T) {
 	failSession := failingSessionStore{Store: realSession}
 	inv, err := credentialinvalidate.New(store.UserRepository(), failSession, testutil.RealRefreshStore(t))
 	require.NoError(t, err)
-	svc, err := NewService(clock.Real(), store.RoleRepository(), inv, slog.Default(),
+	svc, err := NewService(clock.Real(), store.RoleRepository(), store.UserRepository(), inv, slog.Default(),
 		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
 	require.NoError(t, err)
 
-	err = svc.Revoke(context.Background(), "usr-1", "admin")
+	err = svc.Revoke(tenantCtx(), "usr-1", "admin")
 	require.Error(t, err, "Revoke must fail-closed when credential invalidation fails")
 	assert.Contains(t, err.Error(), "invalidate credentials")
 }

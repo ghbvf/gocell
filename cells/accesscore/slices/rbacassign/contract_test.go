@@ -21,14 +21,42 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
+// testTenantID is the canonical test tenant UUID used in rbacassign tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("rbacassign_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+const testTenantIDStr = "00000000-0000-0000-0000-000000000001"
+
+// testAuthServiceCtx wraps auth.TestServiceContext with the canonical test tenant.
+func testAuthServiceCtx(callerCell string) context.Context {
+	return ctxkeys.WithTenantID(auth.TestServiceContext(callerCell), testTenantIDStr)
+}
+
+// testAuthUserCtx wraps auth.TestContext with the canonical test tenant.
+func testAuthUserCtx(userID string, roles []string) context.Context {
+	return ctxkeys.WithTenantID(auth.TestContext(userID, roles), testTenantIDStr)
+}
+
+// tenantCtx returns context.Background() with the canonical test tenant.
+func tenantCtx() context.Context {
+	return ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+}
+
 func newContractHandler(t *testing.T) http.Handler {
 	t.Helper()
 	store := mem.NewStore(clock.Real())
-	store.RoleRepository().SeedRole(&domain.Role{
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	})
@@ -38,10 +66,13 @@ func newContractHandler(t *testing.T) http.Handler {
 		cu, cuErr := domain.NewUser(uid, uid+"@test.local", "$2a$12$hash", time.Now())
 		require.NoError(t, cuErr)
 		cu.ID = uid
-		require.NoError(t, store.UserRepository().Create(context.Background(), cu))
-		_, err := store.RoleRepository().AssignToUser(context.Background(), uid, "admin")
+		require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, cu))
+		_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, uid, "admin")
 		require.NoError(t, err)
 	}
+	// Option B: Assign/Revoke derive tenant from the target user — seed the
+	// roster (usr-2, alice, ...) the contract tests operate on.
+	seedTestUserRoster(t, store)
 
 	svc := mustNewService(t, store.RoleRepository(), store.UserRepository(), testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
@@ -68,7 +99,7 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-2","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestServiceContext("accesscore"))
+	req = req.WithContext(testAuthServiceCtx("accesscore"))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -93,7 +124,7 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-seed","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestServiceContext("accesscore"))
+	req = req.WithContext(testAuthServiceCtx("accesscore"))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -115,7 +146,7 @@ func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc, _, _ := newDurableTestService(t, ow, tx)
 
-	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
+	require.NoError(t, svc.Assign(tenantCtx(), "alice", "admin"))
 
 	require.Len(t, ow.Entries, 1, "Assign must emit exactly one outbox entry")
 	entry := ow.Entries[0]
@@ -150,7 +181,7 @@ func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
 	assignActiveAdmin(t, store, "alice")
 	assignActiveAdmin(t, store, "bob")
 
-	require.NoError(t, svc.Revoke(context.Background(), "alice", "admin"))
+	require.NoError(t, svc.Revoke(tenantCtx(), "alice", "admin"))
 
 	require.Len(t, ow.Entries, 1, "Revoke must emit exactly one outbox entry")
 	entry := ow.Entries[0]

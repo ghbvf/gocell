@@ -12,12 +12,14 @@ package noncanonical_applier_interface_red
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // LocalApplier is the regression pattern: identical signature to
-// credentialinvalidate.Applier.Apply, declared in a non-canonical package.
+// credentialinvalidate.Applier.Apply (including the tid tenant.TenantID
+// positional param added in PR-2a), declared in a non-canonical package.
 // The archtest must flag it.
 type LocalApplier interface {
-	Apply(ctx context.Context, subjectID string, event session.CredentialEvent) error
+	Apply(ctx context.Context, tid tenant.TenantID, subjectID string, event session.CredentialEvent) error
 }

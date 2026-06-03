@@ -24,7 +24,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -33,6 +35,20 @@ import (
 )
 
 const invalidUUID = "not-a-uuid-string"
+
+// testTenantID is the canonical test tenant UUID used in identitymanage tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("identitymanage_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// withTenant injects the canonical test tenant into a context.
+func withTenant(ctx context.Context) context.Context {
+	return ctxkeys.WithTenantID(ctx, "00000000-0000-0000-0000-000000000001")
+}
 
 func newHandlerIdentityRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
@@ -106,7 +122,7 @@ const identityPrefix = "/api/v1/access/users"
 // adminCtx returns a context carrying admin credentials for test requests.
 func adminCtx() func(*http.Request) *http.Request {
 	return func(req *http.Request) *http.Request {
-		return req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+		return req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	}
 }
 
@@ -326,7 +342,7 @@ func TestHandler(t *testing.T) {
 			}
 			req.Header.Set("Content-Type", "application/json")
 			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+				req = req.WithContext(withTenant(auth.TestContext(tc.subject, tc.roles)))
 			}
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
@@ -362,7 +378,7 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPut, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@b.com","extra":"y"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(created.Data.ID, nil)) // self-access
+	req = req.WithContext(withTenant(auth.TestContext(created.Data.ID, nil))) // self-access
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -392,7 +408,7 @@ func TestHandler_PatchRejectsUnknownFields(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@f.com","extra":"ignored"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(created.Data.ID, nil)) // self-access
+	req = req.WithContext(withTenant(auth.TestContext(created.Data.ID, nil))) // self-access
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "PATCH must reject unknown fields to match additionalProperties:false")
 }
@@ -421,7 +437,7 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 	// Get (self-access).
 	w = httptest.NewRecorder()
 	getReq := httptest.NewRequest(http.MethodGet, identityPrefix+"/"+id, nil)
-	getReq = getReq.WithContext(auth.TestContext(id, nil))
+	getReq = getReq.WithContext(withTenant(auth.TestContext(id, nil)))
 	r.ServeHTTP(w, getReq)
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -488,7 +504,7 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+id, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			req = req.WithContext(auth.TestContext(id, nil)) // self-access
+			req = req.WithContext(withTenant(auth.TestContext(id, nil))) // self-access
 			r.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCode != "" {
@@ -511,7 +527,7 @@ func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username string)
 	user, err := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = id
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 }
 
 func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
@@ -527,7 +543,7 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-self")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testutil.TestID("usr-self"), nil)) // self-access
+	req = req.WithContext(withTenant(auth.TestContext(testutil.TestID("usr-self"), nil))) // self-access
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -550,7 +566,7 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-target")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -565,7 +581,7 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-victim")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testutil.TestID("usr-stranger"), []string{"viewer"})) // not self, not admin
+	req = req.WithContext(withTenant(auth.TestContext(testutil.TestID("usr-stranger"), []string{"viewer"}))) // not self, not admin
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -577,7 +593,7 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 // branch can be exercised deterministically (PR464 P1.3).
 type fakeRepoVersionConflict struct{ *mem.UserRepository }
 
-func (*fakeRepoVersionConflict) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+func (*fakeRepoVersionConflict) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, errcode.New(errcode.KindConflict, errcode.ErrVersionConflict,
 		"concurrent update detected; reload and retry")
 }
@@ -600,7 +616,7 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 		UpdatedAt:    now,
 	})
 	require.NoError(t, reconErr)
-	require.NoError(t, repo.Create(context.Background(), u409))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, u409))
 
 	handlerSessionStore := testutil.RealSessionRepo(t)
 	handlerRefreshStore := newHandlerIdentityRefreshStore()
@@ -610,7 +626,7 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 	require.NoError(t, err)
 
 	resp, err := ChangePasswordAdapter{S: svc}.ChangePassword(
-		context.Background(),
+		withTenant(auth.TestContext(userID, nil)),
 		&changepassgen.Request{ID: userID, OldPassword: "oldpass12", NewPassword: "newpass12"},
 	)
 	require.NoError(t, err, "adapter must convert ErrVersionConflict to typed 409, not passthrough")
@@ -626,7 +642,7 @@ func TestHandler_ChangePassword_BadJSON(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-badjson")+"/password", strings.NewReader(`{bad json`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testutil.TestID("usr-badjson"), nil)) // self
+	req = req.WithContext(withTenant(auth.TestContext(testutil.TestID("usr-badjson"), nil))) // self
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -642,7 +658,7 @@ func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"flagged","email":"f@g.com","password":"pass1234","requirePasswordReset":true}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
@@ -786,7 +802,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"patchy","email":"p@y.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
@@ -802,7 +818,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"requirePasswordReset":true}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -811,7 +827,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"requirePasswordReset":"yes"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	req = req.WithContext(withTenant(auth.TestContext("admin-user", []string{"admin"})))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
@@ -842,7 +858,7 @@ func TestChangePasswordAdapter_UserNotActive_Returns403(t *testing.T) {
 		UpdatedAt:    time.Now(),
 	})
 	require.NoError(t, userErr)
-	require.NoError(t, repo.Create(context.Background(), user))
+	require.NoError(t, repo.Create(context.Background(), testTenantID, user))
 
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerIdentityRefreshStore()
@@ -852,7 +868,7 @@ func TestChangePasswordAdapter_UserNotActive_Returns403(t *testing.T) {
 	require.NoError(t, err)
 
 	resp, adapterErr := ChangePasswordAdapter{S: svc}.ChangePassword(
-		context.Background(),
+		withTenant(auth.TestContext(userID, nil)),
 		&changepassgen.Request{ID: userID, OldPassword: "oldpass12", NewPassword: "newpass12"},
 	)
 	require.NoError(t, adapterErr, "adapter must convert ErrAuthUserNotActive to typed 403, not passthrough")
