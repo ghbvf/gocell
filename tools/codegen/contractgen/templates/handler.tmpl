@@ -149,7 +149,7 @@ import (
 var contractSpec = contractspec.ContractSpec{
 	ID:        "{{.ContractID}}",
 	Kind:      cellvocab.ContractHTTP,
-	Transport: "http",
+	Transport: {{printf "%q" (index .Transports 0)}},
 	Method:    "{{.Endpoint.Method}}",
 	Path:      "{{.Endpoint.Path}}",
 {{- if .Endpoint.Clients}}

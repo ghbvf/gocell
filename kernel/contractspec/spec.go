@@ -35,8 +35,16 @@ type ContractSpec struct {
 	// ContractProjection | ContractWebhook | ContractGRPC | ContractSaga.
 	Kind cellvocab.ContractKind
 
-	// Transport names the wire protocol: "http" for Kind=="http", "grpc" for
-	// Kind=="grpc", "amqp" / "internal" / ... for event/command/projection.
+	// Transport names the wire protocol the binding uses: "http" for Kind=="http",
+	// "grpc" for Kind=="grpc", "amqp" / "mqtt" / "internal" for event/command/
+	// projection. It is the PRIMARY transport — codegen derives it as the first
+	// element of the contract's `transports:` set (transports[0]); a
+	// multi-transport contract (e.g. event over [amqp, mqtt]) exposes the full
+	// sanctioned set via the generated package's `Transports()` accessor (which
+	// returns a copy so the truth source cannot be aliased), while this field
+	// carries the primary the production binding routes over. Membership in
+	// cellvocab.AllTransports() is governed at the declaration layer (FMT-39 +
+	// schema enum), not at runtime — see Validate.
 	Transport string
 
 	// HTTP-specific fields; required when Kind == "http", rejected otherwise.
@@ -88,6 +96,13 @@ func (s ContractSpec) Validate() error {
 	if strings.TrimSpace(s.Transport) == "" {
 		return fmt.Errorf("contractspec.ContractSpec: Transport must not be empty")
 	}
+	// Note: Transport membership in the sanctioned closed set is enforced at the
+	// CONTRACT-DECLARATION layer (governance FMT-39 + the schema transports enum,
+	// byte-locked to cellvocab.AllTransports), not here. Production ContractSpecs
+	// reach this point only from codegen (Transport = the validated transports[0])
+	// or contractbuild, so a runtime membership check would be redundant — and it
+	// would reject test harnesses that use a descriptive transport label (e.g.
+	// "inmem"). contractspec stays the dependency-light runtime value type.
 
 	// Cross-field exclusivity for the grpc transport block: the GRPC subtree is
 	// the only field group introduced after the original http/event split, so

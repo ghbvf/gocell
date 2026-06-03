@@ -356,7 +356,6 @@ func buildSubscriptionSpecFromCU(
 	}
 	return SubscriptionGenSpec{
 		ContractID:    cu.Contract,
-		Transport:     "amqp",
 		SliceID:       sliceID,
 		HandlerExpr:   "c." + fieldName + "." + cu.Handler,
 		ConsumerGroup: cu.Group,

@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
@@ -183,6 +184,42 @@ const GRPCProtoPathPrefix = "contracts/grpc/"
 // optional but constrained to the enum once present).
 func IsKnownGRPCStreamingType(s string) bool {
 	for _, v := range GRPCStreamingTypeEnum {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// TransportEnum lists the canonical wire transports accepted for contract.yaml
+// `transports[]`. It is the string projection of cellvocab.AllTransports() (the
+// typed single source); ordering matches that slice and, in lockstep, the
+// schemas/contract.schema.json transports enum (byte-locked by
+// TestSchemaConstantsMatchSchemaLiterals#transportEnum). Membership is enforced
+// at the DECLARATION layer only — governance FMT-39 (via IsKnownTransport) plus
+// the schema enum. Runtime kernel/contractspec.Validate deliberately does NOT
+// re-check transport membership (a production ContractSpec.Transport is trusted
+// as codegen/contractbuild-derived; declaration-layer enforcement, see ADR #1389
+// D6), so schema and governance — not the runtime value type — own this set.
+var TransportEnum = transportEnumStrings()
+
+func transportEnumStrings() []string {
+	all := cellvocab.AllTransports()
+	out := make([]string, len(all))
+	for i, t := range all {
+		out[i] = string(t)
+	}
+	return out
+}
+
+// IsKnownTransport reports whether s is one of TransportEnum (the closed set of
+// wire transports GoCell sanctions). The empty string is NOT a member; callers
+// that allow an omitted transport must guard the empty case separately. The
+// parser defaults an OMITTED contract.yaml `transports:` per kind; an explicitly
+// present-but-empty declaration (null / []) is left empty on purpose so
+// governance FMT-39's non-empty guard flags it rather than silently defaulting.
+func IsKnownTransport(s string) bool {
+	for _, v := range TransportEnum {
 		if s == v {
 			return true
 		}

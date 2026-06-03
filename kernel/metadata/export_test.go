@@ -19,3 +19,10 @@ var ExportedDeriveWebhookEndpoints = deriveWebhookEndpoints
 // validateProjectionUniqueness function for use in package metadata_test test
 // files (added by PR-04 projection/onReset metadata layer).
 var ExportedValidateProjectionUniqueness = validateProjectionUniqueness
+
+// DefaultTransportsForKind exposes the unexported defaultTransportsForKind
+// function for use in package metadata_test test files (added by PR #1389
+// per-kind default transport derivation). Tests assert the byte-identical
+// compatibility guarantee: changing a default breaks this test even if FMT-39
+// and golden regen remain green.
+var DefaultTransportsForKind = defaultTransportsForKind

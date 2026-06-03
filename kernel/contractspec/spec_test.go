@@ -56,6 +56,10 @@ func TestContractSpec_EventSpec_Validate(t *testing.T) {
 			ID: "event.session.revoked.v1", Kind: cellvocab.ContractEvent, Transport: "amqp",
 			Topic: "session.revoked.v1",
 		}, false},
+		{"happy — event mqtt primary transport", contractspec.ContractSpec{
+			ID: "event.device-registered.v1", Kind: cellvocab.ContractEvent, Transport: "mqtt",
+			Topic: "event.device-registered.v1",
+		}, false},
 		{"event kind requires topic", contractspec.ContractSpec{ID: "a", Kind: cellvocab.ContractEvent, Transport: "amqp"}, true},
 		{"event spec with http fields rejected", contractspec.ContractSpec{
 			ID: "a", Kind: cellvocab.ContractEvent, Transport: "amqp", Topic: "t", Method: "POST",

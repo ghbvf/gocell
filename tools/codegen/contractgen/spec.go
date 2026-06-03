@@ -13,6 +13,15 @@ type ContractGenSpec struct {
 	// Kind is one of the closed set: "http", "event", "command", "projection",
 	// "webhook", "grpc", "saga".
 	Kind string
+	// Transports is the non-empty, parser-derived set of sanctioned wire
+	// transports for this contract (#1389). The generated ContractSpec.Transport
+	// is the primary, Transports[0]; templates render it uniformly across kinds
+	// (spec.tmpl for events, handler.tmpl for http) so "generated Transport ==
+	// transports[0]" has no kind special-case. For a multi-transport contract
+	// (len > 1, e.g. an event over [amqp, mqtt]) spec.tmpl additionally emits an
+	// exported `Transports` var so out-of-band subscribers reference the contract
+	// truth source instead of hand-writing a transport string.
+	Transports []string
 	// ConsistencyLevel is the contract's declared consistency level ("L0".."L4").
 	// Consumed by types.tmpl only for kind=projection, where it drives the
 	// PROJECTION-CONSISTENCY-01 compile-time guard (gh #960):

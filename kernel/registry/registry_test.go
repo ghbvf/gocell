@@ -629,6 +629,41 @@ func TestContractRegistry_Get_DeepCopy(t *testing.T) {
 	assert.NotEqual(t, "MUTATED", original.Endpoints.Clients[0])
 }
 
+// TestContractRegistry_Get_DeepCopy_TopLevelSlices locks that Get() deep-copies
+// the two top-level []string fields on ContractMeta — Transports (#1389) and
+// Triggers — so a caller mutating the returned copy cannot alias-corrupt the
+// registry's backing entry. Before the F2 fix deepCopyContract cloned only the
+// Endpoints slices, leaving these two sharing their backing array via `cp := *c`.
+func TestContractRegistry_Get_DeepCopy_TopLevelSlices(t *testing.T) {
+	proj := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"event-thing-v1": {
+				ID:         "event-thing-v1",
+				Kind:       "event",
+				OwnerCell:  metadatatest.CellIDAccessCore,
+				Transports: []string{"amqp", "mqtt"},
+				Triggers:   []string{"event.thing.v1"},
+				Endpoints:  metadata.EndpointsMeta{Publisher: metadatatest.CellIDAccessCore},
+			},
+		},
+	}
+	reg := registry.NewContractRegistry(proj)
+
+	got := reg.Get("event-thing-v1")
+	require.NotNil(t, got)
+	require.Equal(t, []string{"amqp", "mqtt"}, got.Transports)
+	require.Equal(t, []string{"event.thing.v1"}, got.Triggers)
+
+	// Mutate the returned copy's top-level slices.
+	got.Transports[0] = "MUTATED"
+	got.Triggers[0] = "MUTATED"
+
+	// Registry's backing entry must be unchanged.
+	fresh := reg.Get("event-thing-v1")
+	assert.Equal(t, "amqp", fresh.Transports[0], "Transports must be deep-copied, not aliased")
+	assert.Equal(t, "event.thing.v1", fresh.Triggers[0], "Triggers must be deep-copied, not aliased")
+}
+
 func TestContractRegistry_ByKind_DeepCopy(t *testing.T) {
 	reg := registry.NewContractRegistry(testProject())
 	got := reg.ByKind("http")

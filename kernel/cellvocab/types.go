@@ -56,6 +56,27 @@ const (
 	RoleWebhookDispatch ContractRole = "webhook-dispatch"
 )
 
+// Transport names the wire protocol a contract binds to. A contract declares a
+// non-empty SET of sanctioned transports via contract.yaml `transports:`
+// (defaulted per-kind by the parser when omitted); contractgen derives the
+// generated ContractSpec.Transport as the primary (transports[0]). This typed
+// const set is the SINGLE SOURCE for the contract.schema.json transports enum
+// (byte-locked by TestSchemaConstantsMatchSchemaLiterals#transportEnum),
+// governance FMT-39, and runtime metadata.IsKnownTransport. Unlike AsyncAPI's
+// open `protocol` string, GoCell's transport set is closed: a platform-owned
+// kernel fails fast on an unknown transport rather than discovering it at
+// runtime (mirrors k8s core/v1 Protocol +enum).
+// ref: kubernetes/api core/v1/types.go (Protocol +enum); asyncapi/spec server.protocol.
+type Transport string
+
+const (
+	TransportAMQP     Transport = "amqp"
+	TransportMQTT     Transport = "mqtt"
+	TransportInternal Transport = "internal"
+	TransportHTTP     Transport = "http"
+	TransportGRPC     Transport = "grpc"
+)
+
 // WebhookDirection is the flow direction of a kind=webhook contract: inbound
 // (external → cell, receiver-side) or outbound (cell → external, dispatcher-side).
 // Single source shared by kernel/metadata (parser webhook derivation) and
@@ -103,6 +124,26 @@ func AllContractKinds() []ContractKind {
 func AllContractRoles() []ContractRole {
 	out := make([]ContractRole, len(allContractRoles))
 	copy(out, allContractRoles)
+	return out
+}
+
+// allTransports is the canonical ordered set of Transport values. SINGLE SOURCE
+// for the contract.schema.json transports enum (byte-locked by
+// TestSchemaConstantsMatchSchemaLiterals#transportEnum), metadata.TransportEnum
+// (governance FMT-39 + runtime IsKnownTransport), and the per-kind default
+// derivation in the parser. Order matches the schema enum; do not reorder
+// without updating the schema in lockstep. ParseTransport round-trips every
+// member (asserted in the cellvocab round-trip test).
+var allTransports = []Transport{
+	TransportAMQP, TransportMQTT, TransportInternal, TransportHTTP, TransportGRPC,
+}
+
+// AllTransports returns a copy of the canonical ordered Transport set. The
+// schema transports enum and metadata.TransportEnum derive from this slice so
+// the accepted transport set has one source of truth.
+func AllTransports() []Transport {
+	out := make([]Transport, len(allTransports))
+	copy(out, allTransports)
 	return out
 }
 
@@ -188,6 +229,27 @@ func ParseContractRole(s string) (ContractRole, error) {
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract role",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
+	}
+}
+
+// ParseTransport parses a string into a Transport.
+// Returns errcode.ErrValidationFailed for unrecognized input.
+func ParseTransport(s string) (Transport, error) {
+	switch s {
+	case "amqp":
+		return TransportAMQP, nil
+	case "mqtt":
+		return TransportMQTT, nil
+	case "internal":
+		return TransportInternal, nil
+	case "http":
+		return TransportHTTP, nil
+	case "grpc":
+		return TransportGRPC, nil
+	default:
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid transport",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
 	}
 }
