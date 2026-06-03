@@ -496,7 +496,11 @@ func (b *Bootstrap) phase5DrainWebhookReceivers(s *phaseState) ([]cell.RouteGrou
 			"bootstrap: webhook receivers declared but no claimer configured; "+
 				"add WithWebhookClaimer to bootstrap options")
 	}
-	groups, err := runtimewebhook.BuildRouteGroups(b.clock, reqs, b.webhookSourceStore, b.webhookClaimer)
+	rec, err := b.autoWireWebhookMetricsCollector()
+	if err != nil {
+		return nil, err
+	}
+	groups, err := runtimewebhook.BuildRouteGroups(b.clock, reqs, b.webhookSourceStore, b.webhookClaimer, rec)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: build webhook route groups: %w", err)
 	}

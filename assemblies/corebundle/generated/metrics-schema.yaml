@@ -578,3 +578,47 @@ metrics:
       help: Number of successful Vault token renewals.
       labels: []
       file: adapters/vault/transit_metrics.go
+    - name: webhook_deliveries_total
+      fqName: gocell_webhook_deliveries_total
+      namespace: gocell
+      type: counter
+      help: Total outbound webhook deliveries by outcome.
+      labels:
+        - result
+        - source
+      file: kernel/webhook/metrics.go
+    - name: webhook_delivery_duration_seconds
+      fqName: gocell_webhook_delivery_duration_seconds
+      namespace: gocell
+      type: histogram
+      help: Outbound webhook delivery wall-clock duration in seconds.
+      labels:
+        - source
+      buckets:
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+        - "30"
+      file: kernel/webhook/metrics.go
+    - name: webhook_idempotency_hits_total
+      fqName: gocell_webhook_idempotency_hits_total
+      namespace: gocell
+      type: counter
+      help: Total inbound webhook duplicate deliveries deduplicated by the idempotency claimer.
+      labels:
+        - source
+      file: kernel/webhook/metrics.go
+    - name: webhook_signature_failures_total
+      fqName: gocell_webhook_signature_failures_total
+      namespace: gocell
+      type: counter
+      help: Total inbound webhook signature-verification failures by reason.
+      labels:
+        - source
+        - reason
+      file: kernel/webhook/metrics.go

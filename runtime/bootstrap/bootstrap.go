@@ -193,6 +193,14 @@ type Bootstrap struct {
 	// dispatcher. The dispatcher reuses webhookSourceStore for signing secrets.
 	webhookSSRFPolicy *kwh.SafePolicy
 
+	// webhookMetrics is the single shared kwh.Metrics collector registered once
+	// (cached here) so the receiver (phase5) and dispatcher (phase6) record to
+	// the same fixed-name instruments instead of re-registering the metric
+	// family. The zero value means "not wired" (no provider / NopProvider) and
+	// records as a no-op. Wired by autoWireWebhookMetricsCollector, mirroring
+	// httpCollector / eventRouterCollector / outboxRejectCollector / projectionMetrics.
+	webhookMetrics kwh.Metrics
+
 	// --- projection: L3 CQRS projection harness dependencies ---
 	// Injected via WithProjectionCheckpointStore / WithProjectionTxRunner /
 	// WithProjectionReplaySource / WithProjectionCursor. nil means "not
@@ -306,7 +314,7 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 	if ref.IsZero() {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, or cell.HealthListener")
+			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, cell.HealthListener, or cell.WebhookListener")
 	}
 	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
 	// slices are behaviorally identical to nil — both produce an

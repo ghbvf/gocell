@@ -39,6 +39,12 @@ func TestListenerRef(t *testing.T) {
 			wantString: "health",
 			wantIsZero: false,
 		},
+		{
+			name:       "WebhookListener",
+			ref:        cell.WebhookListener,
+			wantString: "webhook",
+			wantIsZero: false,
+		},
 	}
 
 	for _, tc := range tests {
