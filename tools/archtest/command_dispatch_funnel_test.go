@@ -193,12 +193,16 @@ func TestCommandDispatchRegisterCaller01(t *testing.T) {
 //
 //   - Files under generated/contracts/command/** (the codegen output namespace).
 //   - Files under runtime/command/ (the package that defines the Registry type;
-//     its own tests and implementation are naturally allowed).
-//   - _test.go files anywhere (tests legitimately wire registries in fixtures).
+//     its own implementation AND tests — runtime/command/*_test.go — are allowed
+//     because that prefix matches both .go and _test.go).
+//
+// NOTE: there is deliberately NO blanket "_test.go anywhere" exemption. A test
+// file under cells/ or examples/ that calls the raw RegisterHandler/LookupHandler
+// directly (rather than the generated Register/Dispatch) is flagged — tests are
+// expected to drive the funnel through the generated functions, same as
+// production code. (The reverse RED fixtures live under tools/archtest/internal/**
+// as build-tagged .go files loaded by a separate Fixture scan, not here.)
 func isCommandRegistryCaller(rel string) bool {
-	if strings.HasSuffix(rel, "_test.go") {
-		return true
-	}
 	if strings.HasPrefix(rel, commandGeneratedPrefix) {
 		return true
 	}
@@ -389,12 +393,15 @@ func TestCommandGenFunnelSoleEmitter01(t *testing.T) {
 			return nil
 		}
 
-		// Only scan cells/ and examples/ production files; the generated/ packages
-		// are excluded by Production() scope, and runtime/command is the defining
-		// package (naturally excluded from "hand-written cell" check).
+		// Scan the hand-written cell-authoring layers — cells/, examples/, and
+		// cellmodules/ (the composition-root layer, which may import all layers and
+		// could otherwise host a hand-written look-alike funnel undetected). The
+		// generated/ packages are excluded by Production() scope, and runtime/command
+		// is the defining package (naturally excluded from the "hand-written" check).
 		pkgPath := p.Pkg.Path()
 		if !strings.HasPrefix(pkgPath, PlatformModulePath+"/cells/") &&
-			!strings.HasPrefix(pkgPath, PlatformModulePath+"/examples/") {
+			!strings.HasPrefix(pkgPath, PlatformModulePath+"/examples/") &&
+			!strings.HasPrefix(pkgPath, PlatformModulePath+"/cellmodules/") {
 			return nil
 		}
 

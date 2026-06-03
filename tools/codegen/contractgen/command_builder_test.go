@@ -9,10 +9,27 @@ package contractgen
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
+
+// requireSchemaRefError asserts err is a non-nil COMMAND-CONTRACT-SCHEMA-REF-01
+// fail-closed error mentioning the missing field, so the tests pin the error
+// semantics (not just non-nil) — they align with the governance rule code.
+func requireSchemaRefError(t *testing.T, err error, wantField string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected fail-closed error mentioning %q, got nil", wantField)
+	}
+	if !strings.Contains(err.Error(), "COMMAND-CONTRACT-SCHEMA-REF-01") {
+		t.Errorf("error must cite COMMAND-CONTRACT-SCHEMA-REF-01; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), wantField) {
+		t.Errorf("error must mention %q; got: %v", wantField, err)
+	}
+}
 
 // TestBuildCommandSpec_FullSpec verifies that kind=command with both
 // schemaRefs.request and schemaRefs.response produces a fully-populated
@@ -111,9 +128,7 @@ func TestBuildCommandSpec_MissingRequestSchemaRef(t *testing.T) {
 		},
 	}
 	_, err := buildContractSpec("", p, "command.device.provision.v1")
-	if err == nil {
-		t.Fatal("expected error for missing schemaRefs.request, got nil")
-	}
+	requireSchemaRefError(t, err, "schemaRefs.request")
 }
 
 // TestBuildCommandSpec_MissingResponseSchemaRef verifies that a kind=command
@@ -136,9 +151,7 @@ func TestBuildCommandSpec_MissingResponseSchemaRef(t *testing.T) {
 		},
 	}
 	_, err := buildContractSpec("", p, "command.device.provision.v1")
-	if err == nil {
-		t.Fatal("expected error for missing schemaRefs.response, got nil")
-	}
+	requireSchemaRefError(t, err, "schemaRefs.response")
 }
 
 // TestBuildCommandSpec_NoSchemaRefs verifies that a codegen kind=command contract
@@ -162,9 +175,8 @@ func TestBuildCommandSpec_NoSchemaRefs(t *testing.T) {
 		},
 	}
 	_, err := buildContractSpec("", p, "command.device.provision.v1")
-	if err == nil {
-		t.Fatal("expected error for a codegen command with no schemaRefs, got nil")
-	}
+	// Both refs missing — the single combined guard fires, citing request.
+	requireSchemaRefError(t, err, "schemaRefs.request")
 }
 
 // TestBuildCommandSpec_HandlerMethodDerivation tests domainLastSegment +

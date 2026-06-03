@@ -681,13 +681,13 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 
 // buildCommandSpec projects a kind=command contract into spec.Command and
 // appends Request + Response DTOs to spec.DTOs. It is the codegen Hard half of
-// COMMAND-CONTRACT-SCHEMA-REF-01 (governance Medium兜底 is in Batch C):
+// COMMAND-CONTRACT-SCHEMA-REF-01 (the governance Medium 兜底 is rules_command.go):
 // both schemaRefs.request and schemaRefs.response must be non-empty.
 //
-// When neither schemaRef is set the spec is accepted with spec.Command == nil,
-// preserving backward-compatibility with "stub" command contracts that predate
-// the full generator. generateOneContract gates command_gen.go emission on
-// spec.Command != nil.
+// Fail-closed: missing either ref (or both) returns an error — there is no
+// "stub" / graceful-skip path. A codegen command always emits a full funnel
+// (spec.Command is non-nil whenever buildCommandSpec returns nil), so
+// generateOneContract emits command_gen.go unconditionally for kind=command.
 func buildCommandSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {
 	reqRef := strings.TrimSpace(contract.SchemaRefs.Request)
 	respRef := strings.TrimSpace(contract.SchemaRefs.Response)

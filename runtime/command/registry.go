@@ -16,6 +16,11 @@ import (
 //   - Generated code can declare `const DispatchID idutil.SafeID = "..."` and
 //     pass it directly to RegisterHandler/LookupHandler without a conversion
 //     expression (优雅简洁 — the SafeID.Validate guard is the real key guard).
+//
+// Because it is an alias, CommandID and idutil.SafeID are interchangeable at the
+// type level — the type system does NOT distinguish "a command registry key" from
+// any other SafeID. The funnel boundary (only generated code registers/dispatches)
+// is enforced by archtest COMMAND-DISPATCH-REGISTER-CALLER-01, not by the type.
 type CommandID = idutil.SafeID
 
 // Registry is the sealed in-process command dispatcher core. It maps each
@@ -25,9 +30,8 @@ type CommandID = idutil.SafeID
 // Sealed-construction rationale: mu and handlers are unexported, so business
 // packages holding a *Registry can mutate it only via RegisterHandler and read
 // it only via LookupHandler. Both methods are intended to be called exclusively
-// from generated command code; a caller-allowlist archtest
-// COMMAND-DISPATCH-REGISTER-CALLER-01 (landing in a sibling batch, Batch E)
-// will enforce that at the call-site level.
+// from generated command code; the caller-allowlist archtest
+// COMMAND-DISPATCH-REGISTER-CALLER-01 enforces that at the call-site level.
 //
 // The registry stores handlers boxed as any because Go cannot express a
 // heterogeneous map keyed by string with value type "one of many generated
@@ -63,6 +67,10 @@ func NewRegistry() *Registry {
 //
 // Thread-safe (acquires mu.Lock).
 func (r *Registry) RegisterHandler(id CommandID, handler any) error {
+	// The `id == ""` check is NOT redundant with Validate(): idutil.SafeID treats
+	// the empty string as VALID (zero/absent semantic), but an empty command id is
+	// a registration bug here — every command has a non-empty DispatchID. Do not
+	// "simplify" this guard away.
 	if err := id.Validate(); err != nil || id == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command registry: invalid command id",
