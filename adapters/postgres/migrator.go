@@ -248,7 +248,10 @@ func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermi
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
 	}
 	if len(results) == 0 {
-		slog.InfoContext(ctx, "postgres: migrations already up to date", "applied", 0)
+		// tracking_table = schema_migrations_<namespace>, so a MigrationSet.ApplyAll
+		// over multiple namespaces stays attributable in the log stream.
+		slog.InfoContext(ctx, "postgres: migrations already up to date",
+			"tracking_table", m.tableName, "applied", 0)
 		return nil
 	}
 	var finalVersion int64
@@ -258,6 +261,7 @@ func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermi
 		}
 	}
 	slog.InfoContext(ctx, "postgres: migrations applied",
+		"tracking_table", m.tableName,
 		"applied", len(results),
 		"final_version", finalVersion)
 	return nil

@@ -69,6 +69,13 @@ func TestBuilder_Build_RejectsBadMigration(t *testing.T) {
 			wantSub: "invalid migration namespace",
 		},
 		{
+			name: "reserved platform namespace rejected at Build",
+			apply: func(b *Builder) *Builder {
+				return b.WithMigrations(migration.PlatformNamespace, stubMigrationFS())
+			},
+			wantSub: "reserved for platform",
+		},
+		{
 			name: "nil fs",
 			apply: func(b *Builder) *Builder {
 				ns, _ := migration.ParseNamespace("payment")

@@ -71,6 +71,33 @@ func TestMigrationSet_ApplyAll_IndependentNamespaceTables(t *testing.T) {
 	require.NoError(t, set.ApplyAll(ctx, pool), "re-apply must be a no-op")
 }
 
+// TestMigrationSet_VerifyAll_FailsWhenNamespaceUnapplied covers the failure path:
+// VerifyAll over a namespace whose migrations have NOT been applied must fail,
+// and the error must name the offending namespace (F3 — attributable VerifyAll).
+func TestMigrationSet_VerifyAll_FailsWhenNamespaceUnapplied(t *testing.T) {
+	ctx := context.Background()
+	pool := emptyPool(t)
+
+	ext, err := migration.ParseNamespace("extunapplied")
+	require.NoError(t, err)
+
+	// Apply ONLY platform.
+	platformOnly, err := NewMigrationSetWithPlatform()
+	require.NoError(t, err)
+	require.NoError(t, platformOnly.ApplyAll(ctx, pool))
+
+	// VerifyAll over platform + an unapplied external namespace must fail and
+	// the wrapped error must name the offending namespace.
+	full, err := NewMigrationSetWithPlatform()
+	require.NoError(t, err)
+	require.NoError(t, full.Add(ext, extWidgetsFS()))
+
+	err = full.VerifyAll(ctx, pool)
+	require.Error(t, err, "VerifyAll must fail when an external namespace is unapplied")
+	assert.Contains(t, err.Error(), "extunapplied",
+		"VerifyAll error must name the unapplied namespace (F3)")
+}
+
 func tableExists(ctx context.Context, t *testing.T, pool *Pool, table string) bool {
 	t.Helper()
 	var exists bool

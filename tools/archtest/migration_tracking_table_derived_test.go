@@ -35,10 +35,14 @@ var migrationTableHelpers = map[string]struct{}{
 // hatch. Tests (which legitimately pass literal tables to the helpers) are out of
 // scope via Production{Tests:false}.
 //
-// Blind spot: a production caller that assigns trackingTableFor(ns) to a local
-// var and then passes the var would be flagged (the canonical form inlines the
-// call, which both production sites do). Tightening to data-flow tracking is not
-// worth the brittleness at Medium; the inline form is the package idiom.
+// Blind spot (false-positive direction): a production caller that assigns
+// trackingTableFor(ns) to a local var and then passes the var would be reported
+// as a violation even though it is legitimate — the rule only accepts a direct
+// inlined trackingTableFor(...) call in the table-name slot. Both production
+// sites inline the call (migrator.go NewMigrator, schema_guard.go
+// VerifyExpectedVersion), which is the package idiom, so the rule does not
+// misfire today. Tightening to data-flow tracking is not worth the brittleness
+// at Medium.
 //
 // ref: adapters/postgres/migrator.go newMigratorForTable / NewMigrator
 // ref: adapters/postgres/schema_guard.go verifyExpectedVersionForTable / VerifyExpectedVersion

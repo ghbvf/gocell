@@ -121,6 +121,13 @@ func (s *MigrationSet) Namespaces() []migration.Namespace {
 // platform-only break-glass operation via Migrator.ForwardRebuild, and Up's
 // fail-closed gate still refuses an unpermitted populated rebuild. Idempotent:
 // already-applied namespaces are no-ops.
+//
+// Fails fast on the first namespace error; subsequent namespaces are NOT
+// attempted. This is intentional with platform-first ordering: if platform
+// migrations fail, external namespaces that FK platform tables must not proceed.
+// An external namespace whose migration is a forward-rebuild of a populated
+// table must be applied directly via NewMigrator(pool, fs, ns).ForwardRebuild
+// (with a permit), not through ApplyAll's plain Up.
 func (s *MigrationSet) ApplyAll(ctx context.Context, pool *Pool) error {
 	for _, e := range s.entries {
 		if err := applyNamespace(ctx, pool, e); err != nil {
@@ -156,7 +163,9 @@ func applyNamespace(ctx context.Context, pool *Pool, e migrationSetEntry) (retEr
 func (s *MigrationSet) VerifyAll(ctx context.Context, pool *Pool) error {
 	for _, e := range s.entries {
 		if err := VerifyExpectedVersion(ctx, pool, e.fsys, e.ns); err != nil {
-			return err
+			// Carry the namespace so a multi-namespace VerifyAll failure is
+			// attributable (mirrors applyNamespace's wrapping in ApplyAll).
+			return fmt.Errorf("postgres: verify schema for namespace %q: %w", e.ns, err)
 		}
 	}
 	return nil

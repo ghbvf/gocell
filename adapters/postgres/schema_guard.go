@@ -180,10 +180,17 @@ func verifyExpectedVersionForTable(ctx context.Context, pool *Pool, fsys fs.FS, 
 	if actual != expected {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaMismatch,
 			"schema version mismatch",
-			errcode.WithDetails(errcode.PublicInt("db", actual), errcode.PublicInt("binary", expected)))
+			errcode.WithDetails(
+				errcode.PublicString("trackingTable", tbl),
+				errcode.PublicInt("db", actual),
+				errcode.PublicInt("binary", expected)))
 	}
 
-	slog.Info("schema_guard: schema version matched",
+	// Carry the tracking table (schema_migrations_<namespace>) so a VerifyAll
+	// over multiple namespaces is attributable in slog; use the request ctx so
+	// the entry keeps its correlation fields.
+	slog.InfoContext(ctx, "schema_guard: schema version matched",
+		slog.String("tracking_table", tbl),
 		slog.Int64("version", actual))
 	return nil
 }
