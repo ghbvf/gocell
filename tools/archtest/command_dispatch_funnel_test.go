@@ -429,7 +429,7 @@ func TestCommandGenFunnelSoleEmitter01(t *testing.T) {
 						if !ok {
 							continue
 						}
-						if isHandlerLikeInterface(p.TypesInfo, iface) {
+						if isHandlerLikeInterface(iface) {
 							hasHandlerInterface = true
 							pos := p.Fset.Position(ts.Pos())
 							handlerInterfacePos = append(handlerInterfacePos,
@@ -480,7 +480,7 @@ func TestCommandGenFunnelSoleEmitter01(t *testing.T) {
 // isHandlerLikeInterface reports whether iface has at least one exported method
 // whose name starts with "Handle" and whose result list has the shape
 // (*SomeType, error) — the generated Handler interface pattern.
-func isHandlerLikeInterface(info *types.Info, iface *ast.InterfaceType) bool {
+func isHandlerLikeInterface(iface *ast.InterfaceType) bool {
 	if iface.Methods == nil {
 		return false
 	}
@@ -609,7 +609,7 @@ func TestCommandGenFunnelSoleEmitter01_RedFixture(t *testing.T) {
 							if !ok {
 								continue
 							}
-							if isHandlerLikeInterface(p.TypesInfo, iface) {
+							if isHandlerLikeInterface(iface) {
 								hasHandlerInterface = true
 							}
 						}
