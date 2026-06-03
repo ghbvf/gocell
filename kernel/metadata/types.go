@@ -247,7 +247,7 @@ type ContractMeta struct {
 	Transports       []string `yaml:"transports,omitempty"`
 	OwnerCell        string   `yaml:"ownerCell"`
 	ConsistencyLevel string   `yaml:"consistencyLevel"`
-	Lifecycle        string `yaml:"lifecycle"` // draft|active|deprecated
+	Lifecycle        string   `yaml:"lifecycle"` // draft|active|deprecated
 	// Triggers lists the outbox event topics emitted by this contract's owner
 	// cell when the HTTP handler succeeds. Required for L2+ HTTP contracts.
 	// Each value MUST be a string literal or named constant (dto.TopicX /
