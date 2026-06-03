@@ -122,14 +122,6 @@ func TestExpectedVersion_SyntheticFS(t *testing.T) {
 			wantMax: 1,
 		},
 		{
-			name: "files without numeric prefix are ignored",
-			files: map[string][]byte{
-				"create_foo.sql":    []byte("-- up"),
-				"002_something.sql": []byte("-- up"),
-			},
-			wantMax: 2,
-		},
-		{
 			name: "subdirectory entries are skipped",
 			files: map[string][]byte{
 				"subdir/nested.sql": []byte("-- up"),
@@ -239,19 +231,34 @@ func TestExpectedVersion_ReadDirError(t *testing.T) {
 	assert.ErrorIs(t, err, sentinel, "original error must be wrapped")
 }
 
-// TestExpectedVersion_OverflowVersionIgnored verifies that a migration file
-// with a numeric prefix too large for int64 is silently skipped (ParseInt
-// overflow → parseErr != nil → continue).
-func TestExpectedVersion_OverflowVersionIgnored(t *testing.T) {
-	// 99999999999999999999 overflows int64.
-	fsys := fstest.MapFS{
-		"99999999999999999999_too_big.sql": &fstest.MapFile{Data: []byte("-- up")},
-		"003_normal.sql":                   &fstest.MapFile{Data: []byte("-- up")},
+// TestExpectedVersion_RejectsNonGooseParseable verifies the STRICT behavior
+// (#1089 / codex C2): a top-level .sql whose name goose cannot derive a version
+// from is rejected fail-fast (naming the file), NOT silently skipped — so a
+// malformed/misnamed external-cell migration cannot vanish from ExpectedVersion
+// (and thus VerifyAll) while goose's collector also ignores it.
+func TestExpectedVersion_RejectsNonGooseParseable(t *testing.T) {
+	tests := []struct {
+		name    string
+		badFile string
+	}{
+		{name: "no numeric prefix", badFile: "create_foo.sql"},
+		{name: "namespace-prefixed", badFile: "payment_001.sql"},
+		{name: "int64 overflow prefix", badFile: "99999999999999999999_too_big.sql"},
 	}
-	v, err := ExpectedVersion(fsys)
-	require.NoError(t, err)
-	assert.Equal(t, int64(3), v,
-		"overflow version must be skipped; normal max must be returned")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				tc.badFile:       &fstest.MapFile{Data: []byte("-- up")},
+				"003_normal.sql": &fstest.MapFile{Data: []byte("-- up")},
+			}
+			_, err := ExpectedVersion(fsys)
+			require.Error(t, err, "malformed migration filename must be rejected, not skipped")
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, ErrAdapterPGSchemaMismatch, ec.Code)
+			assert.Contains(t, err.Error(), tc.badFile, "error must name the offending file")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

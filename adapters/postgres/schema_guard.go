@@ -97,13 +97,26 @@ func ExpectedVersion(fsys fs.FS) (int64, error) {
 		if !strings.HasSuffix(name, ".sql") {
 			continue
 		}
+		// STRICT (#1089 / codex C2): a top-level .sql whose name goose cannot
+		// derive a version from is NOT silently skipped. Silent-skip is a
+		// fail-open — goose's own collector would also ignore the file, so a
+		// malformed/misnamed (e.g. namespace-prefixed) external-cell migration
+		// would vanish from BOTH ExpectedVersion and apply, and VerifyAll would
+		// pass against a DB missing it. Fail fast and name the file. cf. Flyway
+		// `validate`, Django (app,name) explicit migration records.
 		m := migrationVersionRe.FindStringSubmatch(name)
 		if m == nil {
-			continue
+			return 0, errcode.New(errcode.KindInvalid, ErrAdapterPGSchemaMismatch,
+				"schema_guard: migration filename has no leading NNN_ version prefix; must be goose-native NNN_desc.sql",
+				errcode.WithInternal(errcode.InternalAttr("file", name)))
 		}
 		v, parseErr := strconv.ParseInt(m[1], 10, 64)
 		if parseErr != nil {
-			continue
+			return 0, errcode.New(errcode.KindInvalid, ErrAdapterPGSchemaMismatch,
+				"schema_guard: migration filename version prefix is not a parseable int64",
+				errcode.WithInternal(
+					errcode.InternalAttr("file", name),
+					errcode.InternalAttr("parse_error", parseErr.Error())))
 		}
 		if v > max {
 			max = v

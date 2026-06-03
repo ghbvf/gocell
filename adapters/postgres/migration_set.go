@@ -38,9 +38,12 @@ var PlatformTrackingTable = trackingTableFor(migration.PlatformNamespace)
 // independent, applied in registration order.
 //
 // ref: pressly/goose v3 Provider.WithTableName — per-table version counter.
+//
+// The zero value (MigrationSet{}) is usable: Add appends to a nil slice and
+// dedups by scanning entries, so there is no nil-map hazard for a caller who
+// constructs MigrationSet{} directly instead of via NewMigrationSet.
 type MigrationSet struct {
 	entries []migrationSetEntry
-	seen    map[migration.Namespace]struct{}
 }
 
 type migrationSetEntry struct {
@@ -49,9 +52,10 @@ type migrationSetEntry struct {
 }
 
 // NewMigrationSet returns an empty MigrationSet. Use NewMigrationSetWithPlatform
-// for the common case (platform + external namespaces).
+// for the common case (platform + external namespaces). The zero value is also
+// usable (see MigrationSet docs), so this is a convenience, not a requirement.
 func NewMigrationSet() *MigrationSet {
-	return &MigrationSet{seen: map[migration.Namespace]struct{}{}}
+	return &MigrationSet{}
 }
 
 // NewMigrationSetWithPlatform returns a MigrationSet pre-seeded with the
@@ -95,12 +99,20 @@ func (s *MigrationSet) addNamespace(ns migration.Namespace, fsys fs.FS) error {
 			"postgres: migration set entry requires a non-nil fs.FS",
 			errcode.WithDetails(errcode.PublicString("namespace", ns.String())))
 	}
-	if _, dup := s.seen[ns]; dup {
-		return errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
-			"postgres: duplicate migration namespace",
-			errcode.WithDetails(errcode.PublicString("namespace", ns.String())))
+	// Strict fail-fast at registration (#1089 / codex C2): reject a namespace
+	// whose FS carries a non-goose-parseable .sql now, naming the namespace, so
+	// a malformed external-cell migration never silently vanishes at apply/verify.
+	if _, err := ExpectedVersion(fsys); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrAdapterPGMigrate,
+			fmt.Sprintf("postgres: migration set namespace %q has a malformed migration file", ns), err)
 	}
-	s.seen[ns] = struct{}{}
+	for _, e := range s.entries {
+		if e.ns == ns {
+			return errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+				"postgres: duplicate migration namespace",
+				errcode.WithDetails(errcode.PublicString("namespace", ns.String())))
+		}
+	}
 	s.entries = append(s.entries, migrationSetEntry{ns: ns, fsys: fsys})
 	return nil
 }

@@ -98,6 +98,32 @@ func TestMigrationSet_VerifyAll_FailsWhenNamespaceUnapplied(t *testing.T) {
 		"VerifyAll error must name the unapplied namespace (F3)")
 }
 
+// TestMigrator_RejectsLegacyPlatformTrackingTable covers the #1089 transition
+// guard (codex C3): applying the platform set against a DB that still carries
+// the pre-rename `schema_migrations` table (without `schema_migrations_platform`)
+// must fail fast with a clear rename message, not silently re-apply everything
+// at version 0.
+func TestMigrator_RejectsLegacyPlatformTrackingTable(t *testing.T) {
+	ctx := context.Background()
+	pool := emptyPool(t)
+
+	// Simulate a DB migrated under the pre-#1089 scheme.
+	_, err := pool.DB().Exec(ctx,
+		`CREATE TABLE schema_migrations (id BIGSERIAL PRIMARY KEY, version_id BIGINT NOT NULL, `+
+			`is_applied BOOLEAN NOT NULL, tstamp TIMESTAMP DEFAULT now())`)
+	require.NoError(t, err)
+
+	fsys, err := MigrationsFS()
+	require.NoError(t, err)
+	m, err := NewMigrator(pool, fsys, migration.PlatformNamespace)
+	require.NoError(t, err)
+	defer func() { _ = m.Close() }()
+
+	err = m.Up(ctx)
+	require.Error(t, err, "Up against a legacy schema_migrations (no platform table) must fail fast")
+	assert.Contains(t, err.Error(), "renamed", "error must explain the #1089 rename + recovery")
+}
+
 func tableExists(ctx context.Context, t *testing.T, pool *Pool, table string) bool {
 	t.Helper()
 	var exists bool

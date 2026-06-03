@@ -237,6 +237,15 @@ func (m *Migrator) ForwardRebuild(ctx context.Context, permits ...ForwardRebuild
 }
 
 func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermit) error {
+	// Strict precheck (#1089 / codex C2): reject a migration FS that carries a
+	// non-goose-parseable .sql before applying, so a malformed/misnamed file
+	// fails fast (naming it) instead of being silently skipped by goose.
+	if _, err := ExpectedVersion(m.migrations); err != nil {
+		return err
+	}
+	if err := m.checkNoLegacyPlatformTable(ctx); err != nil {
+		return err
+	}
 	if err := m.checkNoInvalidIndexes(ctx); err != nil {
 		return err
 	}
@@ -265,6 +274,52 @@ func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermi
 		"applied", len(results),
 		"final_version", finalVersion)
 	return nil
+}
+
+// legacyPlatformTrackingTable is the pre-#1089 goose tracking table name for the
+// platform migration set, renamed to PlatformTrackingTable
+// (schema_migrations_platform). It is referenced only by the transition guard.
+const legacyPlatformTrackingTable = "schema_migrations"
+
+// checkNoLegacyPlatformTable fails fast when applying the platform migration set
+// (m.tableName == PlatformTrackingTable) against a database that still carries
+// the pre-#1089 `schema_migrations` tracking table but NOT the renamed
+// `schema_migrations_platform`. In that state goose would treat the platform
+// lineage as version 0 and re-apply every migration against an already-populated
+// schema — a confusing cascade of "already exists" errors. Pre-v1.0 there is no
+// production database and ephemeral test DBs are recreated fresh each run, so
+// this only guards a developer's long-lived local DB; the message tells them how
+// to recover. Non-platform namespaces and fresh DBs are a no-op.
+//
+// codex C3 minimal方案 (fail-fast detect legacy table); the project's accepted
+// transition policy is "recreate the ephemeral DB" (#1089 decision #3).
+func (m *Migrator) checkNoLegacyPlatformTable(ctx context.Context) error {
+	if m.tableName != PlatformTrackingTable {
+		return nil
+	}
+	var legacyExists bool
+	if err := m.pool.DB().QueryRow(ctx,
+		`SELECT to_regclass($1) IS NOT NULL`, legacyPlatformTrackingTable).Scan(&legacyExists); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate,
+			"postgres: probe legacy tracking table", err)
+	}
+	if !legacyExists {
+		return nil
+	}
+	var newExists bool
+	if err := m.pool.DB().QueryRow(ctx,
+		`SELECT to_regclass($1) IS NOT NULL`, m.tableName).Scan(&newExists); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate,
+			"postgres: probe platform tracking table", err)
+	}
+	if newExists {
+		return nil // both present — already transitioned / coexisting; not this guard's concern
+	}
+	return errcode.New(errcode.KindInternal, ErrAdapterPGMigrate,
+		"postgres: legacy goose tracking table \"schema_migrations\" present without "+
+			"\"schema_migrations_platform\" — the platform tracking table was renamed (#1089). "+
+			"Recreate the ephemeral database, or run "+
+			"`ALTER TABLE schema_migrations RENAME TO schema_migrations_platform`.")
 }
 
 // checkNoInvalidIndexes returns an error if any INVALID indexes are present.
@@ -412,6 +467,7 @@ func (m *Migrator) requirePermitIfDangerous(
 	permit, ok := permitByNum[version]
 	if ok {
 		slog.InfoContext(ctx, "postgres: forward-rebuild authorized",
+			"tracking_table", m.tableName,
 			"migration", version,
 			"target", target,
 			"reason", permit.Reason())
@@ -506,7 +562,8 @@ func (m *Migrator) Down(ctx context.Context, permit DestructiveDownPermit) error
 		}
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: rollback migration", err)
 	}
-	slog.InfoContext(ctx, "postgres: migration rolled back", "reason", permit.Reason())
+	slog.InfoContext(ctx, "postgres: migration rolled back",
+		"tracking_table", m.tableName, "reason", permit.Reason())
 	return nil
 }
 

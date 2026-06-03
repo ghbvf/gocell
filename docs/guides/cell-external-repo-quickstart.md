@@ -150,7 +150,7 @@ modules:
 
 **写法约定**：
 
-- migration 文件用 goose-native `NNN_desc.sql` 命名（自己的 `001..N` 序列），**不要**在文件名里加 namespace 前缀。`platform_001_x.sql` 这类前缀会让 goose 的版本解析器（`NumericComponent` = `ParseInt(strings.Cut(name,"_")[0])`）失败；namespace 活在**追踪表名**里，不在文件名里。由 archtest `MIGRATION-FILENAME-GOOSE-PARSEABLE-01` 守。
+- migration 文件用 goose-native `NNN_desc.sql` 命名（自己的 `001..N` 序列），**不要**在文件名里加 namespace 前缀。`platform_001_x.sql` 这类前缀会让 goose 的版本解析器（`NumericComponent` = `ParseInt(strings.Cut(name,"_")[0])`）失败；namespace 活在**追踪表名**里，不在文件名里。⚠️ **非 `NNN_` 前缀的 `.sql` 会被 goose 静默跳过、不被应用**（goose 默认非严格收集），所以务必遵守该命名。平台自身的 migration 由 archtest `MIGRATION-FILENAME-GOOSE-PARSEABLE-01` 守，但该规则**只扫 `adapters/postgres/migrations/`**——外部仓库目前不在其覆盖内，需自行遵守约定（随 M3 archtest library #1302 迁入外部规则集后可机器守）。
 - 用 `embed.FS` 嵌入自己的 `migrations/*.sql`。
 - 经 `composition.WithMigrations(ns, fs)` 注册，`ns` 是 `pkg/migration.Namespace`（`migration.ParseNamespace("yourcell")`，小写标识符，长度 ≤ 45）。
 - 该 namespace 的 migration 追踪在独立的 `schema_migrations_<namespace>` 表；平台自身是保留 namespace `"platform"`（追踪表 `schema_migrations_platform`），外部 module **不可**注册 `"platform"`。

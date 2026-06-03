@@ -32,6 +32,13 @@ var migrationFilenameRe = regexp.MustCompile(`^[0-9]{3}_[a-z][a-z0-9_]*\.sql$`)
 // composition.WithMigrations(namespace, fs) — the namespace partitions the
 // tracking table, not the filename.
 //
+// SCOPE: this rule scans ONLY adapters/postgres/migrations/ (the platform set).
+// External Cell modules in their own repos are NOT covered here — they obtain
+// the equivalent guard by enrolling this rule into the M3 archtest library
+// (RunStandardCellRules, #1302); until then external repos rely on the
+// documented convention (a non-NNN_ .sql is silently skipped by goose, never
+// applied). The quickstart "Migrations" section states this explicitly.
+//
 // AI-robust 评级：Medium (permanent ceiling) — a filename is an on-disk artifact
 // the Go type system cannot express. This is a value-level scan of every real
 // .sql migration (no comment-anchor / name-convention escape; the regex mirrors

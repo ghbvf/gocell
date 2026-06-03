@@ -278,17 +278,13 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 		if err != nil {
 			return fooCoreModuleResult{}, fmt.Errorf("foocore: %w", err)
 		}
-		// foocore ships its own migration set under its own namespace; the goose
-		// tracking table is schema_migrations_foocore (derived from the typed
-		// migration.Namespace — NewMigrator/VerifyExpectedVersion no longer take a
-		// free table string). See docs/guides/cell-external-repo-quickstart.md.
-		fooNS, err := migration.ParseNamespace("foocore")
-		if err != nil {
-			return fooCoreModuleResult{}, fmt.Errorf("foocore migration namespace: %w", err)
-		}
-		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, foocorecell.MigrationsFS(), fooNS); schemaErr != nil {
-			return fooCoreModuleResult{}, fmt.Errorf("foocore PG schema guard: %w", schemaErr)
-		}
+		// foocore ships its own migration set under its own namespace
+		// (migration.ParseNamespace("foocore") → goose tracking table
+		// schema_migrations_foocore). Applying + verifying that namespace is an
+		// ops / bootstrap concern, NOT a cellmodule one: register the set via
+		// composition.WithMigrations(ns, fs) and apply/verify it
+		// (adapters/postgres.MigrationSet.ApplyAll / VerifyAll) BEFORE Build —
+		// see docs/guides/cell-external-repo-quickstart.md "Migrations".
 		txMgr := cfg.pg.TxManager()
 		outboxWriter := cfg.pg.OutboxWriter()
 

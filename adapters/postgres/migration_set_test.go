@@ -72,6 +72,34 @@ func TestMigrationSet_Add(t *testing.T) {
 		s := NewMigrationSet()
 		require.Error(t, s.Add(migration.Namespace("acme-payment"), fakeMigrationsFS()))
 	})
+
+	t.Run("malformed migration file rejected at registration", func(t *testing.T) {
+		t.Parallel()
+		// A namespace FS carrying a non-goose-parseable .sql is rejected fail-fast
+		// at Add, naming the namespace + file (#1089 / codex C2 strict validation).
+		badFS := fstest.MapFS{
+			"notamigration.sql": &fstest.MapFile{Data: []byte("-- up")},
+		}
+		ns, err := migration.ParseNamespace("payment")
+		require.NoError(t, err)
+		addErr := NewMigrationSet().Add(ns, badFS)
+		require.Error(t, addErr, "malformed .sql must be rejected at Add")
+		assert.Contains(t, addErr.Error(), "payment", "error must name the namespace")
+		assert.Contains(t, addErr.Error(), "notamigration.sql", "error must name the offending file")
+	})
+}
+
+func TestMigrationSet_ZeroValueAddNoPanic(t *testing.T) {
+	t.Parallel()
+	// A caller that constructs MigrationSet{} directly (not via NewMigrationSet)
+	// must not panic on Add — regression for the nil-map write (F7).
+	var s MigrationSet
+	ns, err := migration.ParseNamespace("payment")
+	require.NoError(t, err)
+	require.NoError(t, s.Add(ns, fakeMigrationsFS()))
+	assert.Equal(t, []migration.Namespace{ns}, s.Namespaces())
+	// dedup still works on the zero-value path.
+	require.Error(t, s.Add(ns, fakeMigrationsFS()), "duplicate must be rejected even for zero-value set")
 }
 
 func TestNewMigrationSetWithPlatform_SeedsPlatformFirst(t *testing.T) {
