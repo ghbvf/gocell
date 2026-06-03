@@ -140,8 +140,8 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 	}
 	// Framework projection rebuild control-plane endpoint (opt-in via
 	// WithProjectionRebuildEndpoint). phase0 (validateProjectionRebuildEndpoint)
-	// guaranteed the InternalListener exists when callers are set.
-	if len(b.projectionRebuildCallers) > 0 {
+	// guaranteed the AdminListener exists when enabled.
+	if b.projectionRebuildEnabled {
 		groups = append(groups, b.projectionRebuildRouteGroup())
 	}
 	for _, id := range s.asm.CellIDs() {

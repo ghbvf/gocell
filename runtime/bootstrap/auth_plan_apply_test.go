@@ -126,6 +126,9 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 	resolvedPlan := authtest.MustAuthJWTFromAssembly(asm)
 	resolvedPlan.SetResolved(verifier)
 
+	operatorPlan, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cret"), allowAllLimiter{}, nil)
+	require.NoError(t, err)
+
 	ref := cell.PrimaryListener
 
 	tests := []struct {
@@ -179,6 +182,13 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 			wantDescribe:      "service-token",
 		},
 		{
+			name:              "AuthOperator",
+			chain:             []kauth.ListenerAuth{operatorPlan},
+			wantMWCount:       1,
+			wantAuthInstalled: false,
+			wantDescribe:      "operator",
+		},
+		{
 			name: "MultiPlan_MTLSAndServiceToken",
 			chain: []kauth.ListenerAuth{
 				kauth.AuthMTLS{},
@@ -206,6 +216,49 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 				"auth middleware installation")
 		})
 	}
+}
+
+// ─── TestApplyListenerAuthChain_Operator ──────────────────────────────────────
+
+// TestApplyListenerAuthChain_Operator asserts the AuthOperator plan installs the
+// operator-credential gate: the returned middleware rejects requests without (or
+// with wrong) HTTP Basic Auth credentials with 401 and passes correct ones
+// through to the handler. This is the listener-level gate that protects the
+// migrated /admin/v1/* projection rebuild endpoint (#1505).
+func TestApplyListenerAuthChain_Operator(t *testing.T) {
+	t.Parallel()
+
+	op, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cret"), allowAllLimiter{}, nil)
+	require.NoError(t, err)
+
+	b := newMinimalBootstrap()
+	mws, routerOpts, describe, err := b.applyListenerAuthChain(cell.AdminListener, []kauth.ListenerAuth{op})
+	require.NoError(t, err)
+	require.Len(t, mws, 1, "AuthOperator must install exactly one listener middleware")
+	assert.Empty(t, routerOpts, "AuthOperator installs a listener middleware, not router auth options")
+	assert.Equal(t, "operator", describe)
+
+	// Wrap a 200 handler with the operator gate.
+	guarded := mws[0](http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	do := func(setAuth func(*http.Request)) int {
+		req := httptest.NewRequest(http.MethodPost, "/admin/v1/projection/ordercell/orders/rebuild", nil)
+		if setAuth != nil {
+			setAuth(req)
+		}
+		rec := httptest.NewRecorder()
+		guarded.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	assert.Equal(t, http.StatusUnauthorized, do(nil),
+		"no Basic Auth → 401")
+	assert.Equal(t, http.StatusUnauthorized, do(func(r *http.Request) { r.SetBasicAuth("ops", "wrong") }),
+		"wrong password → 401")
+	assert.Equal(t, http.StatusOK, do(func(r *http.Request) { r.SetBasicAuth("ops", "s3cret") }),
+		"correct operator credentials → 200")
 }
 
 // ─── TestVerboseTokenMiddleware_QueryParamBoundary ────────────────────────────

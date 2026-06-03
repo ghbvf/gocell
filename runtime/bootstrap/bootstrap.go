@@ -230,12 +230,13 @@ type Bootstrap struct {
 	// state). Do NOT add concurrent writers after phase6.
 	projectionRebuilds map[string]rebuildController
 
-	// projectionRebuildCallers is the caller-cell allowlist for the framework
-	// projection rebuild endpoint, set by WithProjectionRebuildEndpoint. Non-empty
-	// = opt-in: phase5 mounts POST /internal/v1/{cell}/projection/{name}/rebuild on
-	// the InternalListener with a RequireCallerCell guard over these IDs. Empty =
+	// projectionRebuildEnabled opts in the framework projection rebuild
+	// control-plane endpoint, set by WithProjectionRebuildEndpoint. true =
+	// phase5 mounts POST /admin/v1/projection/{cell}/{name}/rebuild on the
+	// AdminListener, gated by the listener's operator-credential auth chain
+	// (AuthOperator) — operator→system, no caller-cell allowlist. false =
 	// endpoint not mounted (rebuild remains programmatic-only).
-	projectionRebuildCallers []string
+	projectionRebuildEnabled bool
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.

@@ -7,6 +7,7 @@ import (
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
+	"github.com/ghbvf/gocell/adapters/ratelimit"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -15,6 +16,8 @@ const (
 	todoorderServiceSecretEnv = "GOCELL_TODOORDER_SERVICE_SECRET"
 	jwtIssuerEnv              = "GOCELL_JWT_ISSUER"
 	jwtAudienceEnv            = "GOCELL_JWT_AUDIENCE"
+	operatorAdminUsernameEnv  = "GOCELL_OPERATOR_ADMIN_USERNAME"
+	operatorAdminPasswordEnv  = "GOCELL_OPERATOR_ADMIN_PASSWORD"
 )
 
 func newJWTVerifierFromEnv() (*auth.JWTVerifier, error) {
@@ -59,4 +62,28 @@ func newInternalAuthChainFromEnv() ([]kauth.ListenerAuth, error) {
 		return nil, fmt.Errorf("build internal auth chain: %w", err)
 	}
 	return []kauth.ListenerAuth{plan}, nil
+}
+
+// newOperatorAuthFromEnv builds the AdminListener operator-credential auth plan
+// (AuthOperator) from GOCELL_OPERATOR_ADMIN_USERNAME / _PASSWORD. operator→system
+// admin control-plane credentials, separate from the cell→cell internal listener
+// (service token) and the public JWT listener.
+//
+// When either env var is unset the operator control-plane is left unconfigured
+// (ok=false) so the demo still starts out of the box without exposing an admin
+// port; the projection rebuild endpoint then stays programmatic-only (mirrors
+// the readyz-verbose opt-in in run.go). When set, the plan is gated by a per-IP
+// token-bucket rate limiter (defeats credential brute-force).
+func newOperatorAuthFromEnv() (kauth.AuthOperator, bool, error) {
+	username := strings.TrimSpace(os.Getenv(operatorAdminUsernameEnv))
+	password := os.Getenv(operatorAdminPasswordEnv) // not trimmed — passwords may contain whitespace
+	if username == "" || password == "" {
+		return kauth.AuthOperator{}, false, nil
+	}
+	limiter := ratelimit.New(ratelimit.Config{Rate: 1, Burst: 5}, clock.Real())
+	plan, err := kauth.NewAuthOperator([]byte(username), []byte(password), limiter, nil)
+	if err != nil {
+		return kauth.AuthOperator{}, false, fmt.Errorf("build operator admin auth: %w", err)
+	}
+	return plan, true, nil
 }

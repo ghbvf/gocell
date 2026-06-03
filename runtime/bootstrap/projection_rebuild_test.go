@@ -16,7 +16,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // fakeRebuildController is a test double for the unexported rebuildController so
@@ -54,31 +53,32 @@ var _ cell.RouteMux = serveMuxRouteMux{}
 
 // mountRebuildEndpoint wires b's rebuild RouteGroup onto a fresh ServeMux via the
 // real production projectionRebuildRouteGroup().Register, asserting the group
-// targets the InternalListener.
+// targets the AdminListener. The RouteGroup carries no operator-credential
+// middleware (that is the listener-level AuthOperator chain, applied by
+// bootstrap, not by the RouteGroup) — these handler tests exercise the
+// 202/409/404/500 logic directly; the operator gate is tested via the
+// apply-switch (TestApplyListenerAuthChain_Operator) and runtime/auth.
 func mountRebuildEndpoint(t *testing.T, b *Bootstrap) *http.ServeMux {
 	t.Helper()
 	rg := b.projectionRebuildRouteGroup()
-	require.Equal(t, cell.InternalListener, rg.Listener, "rebuild endpoint must mount on the InternalListener")
+	require.Equal(t, cell.AdminListener, rg.Listener, "rebuild endpoint must mount on the AdminListener")
 	mux := http.NewServeMux()
 	require.NoError(t, rg.Register(serveMuxRouteMux{mux}))
 	return mux
 }
 
-// rebuildBootstrap returns a Bootstrap with the rebuild endpoint opted in for
-// caller "controlplane" and the given registry contents.
+// rebuildBootstrap returns a Bootstrap with the rebuild endpoint opted in and the
+// given registry contents.
 func rebuildBootstrap(reg map[string]rebuildController) *Bootstrap {
-	b := New(clock.Real(), WithProjectionRebuildEndpoint("controlplane"))
+	b := New(clock.Real(), WithProjectionRebuildEndpoint())
 	b.projectionRebuilds = reg
 	return b
 }
 
-// doRebuild issues a POST to the mux as the given caller cell (empty = no service
-// principal) and returns the recorder.
-func doRebuild(mux *http.ServeMux, caller, cellID, projID string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/internal/v1/"+cellID+"/projection/"+projID+"/rebuild", nil)
-	if caller != "" {
-		req = req.WithContext(auth.TestServiceContext(caller))
-	}
+// doRebuild issues a POST to the migrated admin path and returns the recorder.
+// operator→system: no caller-cell principal.
+func doRebuild(mux *http.ServeMux, cellID, projID string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/projection/"+cellID+"/"+projID+"/rebuild", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
@@ -92,7 +92,7 @@ func TestProjectionRebuild_202(t *testing.T) {
 	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
-	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
+	rec := doRebuild(mux, "ordercell", "order_status")
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	assert.Equal(t, 1, fake.rebuildCalls)
@@ -110,7 +110,7 @@ func TestProjectionRebuild_409(t *testing.T) {
 	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
-	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
+	rec := doRebuild(mux, "ordercell", "order_status")
 
 	require.Equal(t, http.StatusConflict, rec.Code)
 }
@@ -134,7 +134,7 @@ func TestProjectionRebuild_404(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rec := doRebuild(mux, "controlplane", tc.cell, tc.proj)
+			rec := doRebuild(mux, tc.cell, tc.proj)
 			require.Equal(t, http.StatusNotFound, rec.Code)
 			assert.Contains(t, rec.Body.String(), "ERR_PROJECTION_NOT_FOUND")
 		})
@@ -154,7 +154,7 @@ func TestProjectionRebuild_DegradedSnapshotStill202(t *testing.T) {
 	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
-	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
+	rec := doRebuild(mux, "ordercell", "order_status")
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	var got projectionRebuildResponse
@@ -173,7 +173,7 @@ func TestProjectionRebuild_UnexpectedRebuildError500(t *testing.T) {
 	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
 	mux := mountRebuildEndpoint(t, b)
 
-	rec := doRebuild(mux, "controlplane", "ordercell", "order_status")
+	rec := doRebuild(mux, "ordercell", "order_status")
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 }
@@ -186,7 +186,7 @@ func TestProjectionRebuild_LongPathParamClamped(t *testing.T) {
 	mux := mountRebuildEndpoint(t, b)
 
 	longName := strings.Repeat("a", 200)
-	rec := doRebuild(mux, "controlplane", "ordercell", longName)
+	rec := doRebuild(mux, "ordercell", longName)
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	// The full 200-char value must NOT appear verbatim — it is clamped to 64.
@@ -194,27 +194,8 @@ func TestProjectionRebuild_LongPathParamClamped(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), strings.Repeat("a", maxPathParamReport))
 }
 
-// TestProjectionRebuild_CallerCellAllowlist asserts the auto-injected
-// RequireCallerCell guard (from ContractSpec.Clients) rejects a caller that is
-// not in the allowlist with 403, and admits the allowlisted caller.
-func TestProjectionRebuild_CallerCellAllowlist(t *testing.T) {
-	t.Parallel()
-	fake := &fakeRebuildController{snap: projection.Snapshot{Phase: projection.PhaseLive}}
-	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
-	mux := mountRebuildEndpoint(t, b)
-
-	// Caller not in the allowlist → 403 (and the handler never runs).
-	rec := doRebuild(mux, "evilcell", "ordercell", "order_status")
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	assert.Equal(t, 0, fake.rebuildCalls, "denied caller must not reach the rebuild handler")
-
-	// Allowlisted caller → admitted.
-	rec = doRebuild(mux, "controlplane", "ordercell", "order_status")
-	require.Equal(t, http.StatusAccepted, rec.Code)
-}
-
 // TestValidateProjectionRebuildEndpoint covers the phase0 fail-fast: opting into
-// the endpoint requires an InternalListener; a no-caller opt-in is a no-op.
+// the endpoint requires an AdminListener; not opting in is a no-op.
 func TestValidateProjectionRebuildEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -224,19 +205,33 @@ func TestValidateProjectionRebuildEndpoint(t *testing.T) {
 		require.NoError(t, b.validateProjectionRebuildEndpoint())
 	})
 
-	t.Run("opted in without InternalListener → error", func(t *testing.T) {
+	t.Run("opted in without AdminListener → error", func(t *testing.T) {
 		t.Parallel()
-		b := New(clock.Real(), WithProjectionRebuildEndpoint("controlplane"))
+		b := New(clock.Real(), WithProjectionRebuildEndpoint())
 		err := b.validateProjectionRebuildEndpoint()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "InternalListener")
+		assert.Contains(t, err.Error(), "AdminListener")
 	})
 
-	t.Run("opted in with InternalListener → ok", func(t *testing.T) {
+	t.Run("opted in with AdminListener → ok", func(t *testing.T) {
 		t.Parallel()
 		b := New(clock.Real(),
-			WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
-			WithProjectionRebuildEndpoint("controlplane"))
+			WithListener(cell.AdminListener, "127.0.0.1:0", []kauth.ListenerAuth{newTestOperatorAuth(t)}),
+			WithProjectionRebuildEndpoint())
 		require.NoError(t, b.validateProjectionRebuildEndpoint())
 	})
 }
+
+// newTestOperatorAuth builds a valid AuthOperator for listener-config tests.
+func newTestOperatorAuth(t *testing.T) kauth.AuthOperator {
+	t.Helper()
+	op, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cret"), allowAllLimiter{}, nil)
+	require.NoError(t, err)
+	return op
+}
+
+// allowAllLimiter is a permissive OperatorRateLimiter for tests that only need a
+// valid (non-nil) limiter.
+type allowAllLimiter struct{}
+
+func (allowAllLimiter) Allow(string) bool { return true }
