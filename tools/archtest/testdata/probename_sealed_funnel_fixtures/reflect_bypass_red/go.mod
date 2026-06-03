@@ -1,6 +1,6 @@
 module fixturetest/probename_sealed_funnel/reflect_bypass_red
 
-go 1.25.10
+go 1.25.11
 
 replace github.com/ghbvf/gocell => ../../../../..
 
