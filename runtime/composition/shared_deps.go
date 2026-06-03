@@ -353,15 +353,28 @@ func (d *SharedDeps) validateProductionControlPlane() []error {
 		!validation.IsNilInterface(d.ConsumerClaimer) &&
 		d.ConsumerClaimer.Kind() != idempotency.ClaimerKindDistributed {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
-			"real multi-pod deployments require a Redis-backed outbox idempotency claimer; "+
-				"set GOCELL_REDIS_ADDR or GOCELL_SINGLE_POD=1 (cmd/corebundle convention)"))
+			"SharedDeps.ConsumerClaimer must report Kind() == ClaimerKindDistributed in real "+
+				"multi-pod deployments; a single-process claimer cannot coordinate outbox "+
+				"idempotency across pods. Inject a distributed (e.g. Redis-backed) claimer, or "+
+				"acknowledge single-pod topology (cmd/corebundle convention: set GOCELL_REDIS_ADDR "+
+				"for a distributed claimer, or GOCELL_SINGLE_POD=1)"))
 	}
 	return errs
 }
 
 // validateProductionNonceStore enforces the service-token replay-defense store
-// kind in real adapter mode: present (CP5), not the no-op sentinel (CP6), and not
-// single-process in-memory for a multi-pod deployment (CP7).
+// kind in real adapter mode: present (CP5), not the no-op sentinel (CP6), not
+// single-process in-memory for a multi-pod deployment (CP7), and — fail-closed —
+// not an unrecognized kind (#1410 review F2).
+//
+// The switch is exhaustive over the kauth.NonceStoreKind closed set with a
+// fail-closed default: distributed is the only always-safe kind, in-memory is
+// accepted only single-pod, noop is always rejected, and any other (bogus or
+// future-but-unverified) kind is rejected rather than waved through. The earlier
+// form accepted everything not noop/in-memory via a permissive default, so a
+// store reporting an unknown kind passed validation in real multi-pod mode —
+// fail-open. A genuinely new replay-safe kind must be added as an explicit case
+// here (and, for multi-pod, accepted only if it coordinates across pods).
 func (d *SharedDeps) validateProductionNonceStore() []error {
 	if validation.IsNilInterface(d.NonceStore) {
 		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
@@ -370,11 +383,9 @@ func (d *SharedDeps) validateProductionNonceStore() []error {
 				"or a shared store (multi-pod)")}
 	}
 	switch d.NonceStore.Kind() {
-	case kauth.NonceStoreKindNoop:
-		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-			"control-plane NonceStore must be a replay-safe implementation in adapter mode "+
-				"\"real\"; NoopNonceStore detected — inject InMemoryNonceStore (single pod) "+
-				"or a shared store (multi-pod)")}
+	case kauth.NonceStoreKindDistributed:
+		// The only replay-safe kind for any topology; always accepted.
+		return nil
 	case kauth.NonceStoreKindInMemory:
 		if d.requiresDistributedReplay() {
 			slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
@@ -386,10 +397,25 @@ func (d *SharedDeps) validateProductionNonceStore() []error {
 					"or a distributed store for multi-pod; refuse fail-open "+
 					"(cmd/corebundle convention: GOCELL_SINGLE_POD=1)")}
 		}
+		// Single-pod in-memory is an accepted replay-safe posture.
+		return nil
+	case kauth.NonceStoreKindNoop:
+		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"control-plane NonceStore must be a replay-safe implementation in adapter mode "+
+				"\"real\"; NoopNonceStore detected — inject InMemoryNonceStore (single pod) "+
+				"or a shared store (multi-pod)")}
 	default:
-		// NonceStoreKindDistributed (and any future replay-safe kind) is accepted.
+		// Fail-closed: an unrecognized NonceStoreKind cannot be proven replay-safe,
+		// so real adapter mode rejects it instead of waving it through.
+		slog.Warn("controlplane: unrecognized nonce store kind rejected in adapter mode real",
+			slog.String("nonce_store_kind", string(d.NonceStore.Kind())),
+			slog.String("hint", "use an in-memory (single-pod) or distributed nonce store; "+
+				"a new replay-safe kind must be added to validateProductionNonceStore"))
+		return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
+			"control-plane NonceStore reports an unrecognized kind in adapter mode \"real\"; "+
+				"only in-memory (single-pod) or distributed (any topology) replay-safe stores "+
+				"are accepted — refuse fail-open")}
 	}
-	return nil
 }
 
 // validateHealthReachability rejects a loopback-only health-listener bind address

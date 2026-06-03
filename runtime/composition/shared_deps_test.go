@@ -1,6 +1,7 @@
 package composition
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -124,6 +126,18 @@ type fakeDistributedNonceStore struct{ *auth.InMemoryNonceStore }
 
 func (fakeDistributedNonceStore) Kind() kauth.NonceStoreKind {
 	return kauth.NonceStoreKindDistributed
+}
+
+// fakeUnknownKindNonceStore reports an unrecognized NonceStoreKind while
+// delegating to an embedded in-memory store — used to exercise the fail-closed
+// default branch of validateProductionNonceStore (#1410 review F2). Its very
+// existence is also the rebuttal to "a method on the store cannot lie": Kind()
+// is an implementation self-report, so it can return any value, recognized or
+// not — the validator must therefore fail-closed on the unknown set.
+type fakeUnknownKindNonceStore struct{ *auth.InMemoryNonceStore }
+
+func (fakeUnknownKindNonceStore) Kind() kauth.NonceStoreKind {
+	return kauth.NonceStoreKind("totally-bogus-kind")
 }
 
 // minimalSharedDeps is a helper alias used by builder_test.go.
@@ -322,6 +336,13 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 		mutate  func(t *testing.T, s *SharedDeps)
 		wantErr bool
 		errSub  string
+		// errCode, when set, pins the *errcode.Error.Code carried by the failure.
+		// The error string (errSub) is operator-facing prose that may be reworded;
+		// the code is the machine contract dashboards / runbooks key on, so the
+		// control-plane sentinels are asserted by code, not just substring
+		// (#1410 review F8). Left empty for cases whose failure joins more than one
+		// error (no single canonical code).
+		errCode errcode.Code
 	}{
 		// --- always-on (dev baseline) ---
 		{name: "dev baseline valid", base: buildTestSharedDeps},
@@ -329,19 +350,19 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 			name:    "IL1 internal addr empty rejected in every mode",
 			base:    buildTestSharedDeps,
 			mutate:  func(_ *testing.T, s *SharedDeps) { s.InternalHTTPAddr = "" },
-			wantErr: true, errSub: "InternalHTTPAddr",
+			wantErr: true, errSub: "InternalHTTPAddr", errCode: errcode.ErrValidationFailed,
 		},
 		{
 			name:    "IL2 internal HMAC ring nil rejected in every mode",
 			base:    buildTestSharedDeps,
 			mutate:  func(_ *testing.T, s *SharedDeps) { s.InternalHMACRing = nil },
-			wantErr: true, errSub: "InternalHMACRing",
+			wantErr: true, errSub: "InternalHMACRing", errCode: errcode.ErrControlplaneServiceSecretMissing,
 		},
 		{
 			name:    "V2 verbose unconfigured rejected in every mode",
 			base:    buildTestSharedDeps,
 			mutate:  func(_ *testing.T, s *SharedDeps) { s.VerboseDisabled = false; s.VerboseToken = "" },
-			wantErr: true, errSub: "GOCELL_READYZ_VERBOSE_TOKEN",
+			wantErr: true, errSub: "GOCELL_READYZ_VERBOSE_TOKEN", errCode: errcode.ErrControlplaneVerboseTokenMissing,
 		},
 		{
 			name:   "V2 verbose token configured accepted",
@@ -354,25 +375,25 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 			name:    "CP1 verbose-disabled forbidden in real mode",
 			base:    buildValidRealModeSharedDeps,
 			mutate:  func(_ *testing.T, s *SharedDeps) { s.VerboseDisabled = true },
-			wantErr: true, errSub: "GOCELL_READYZ_VERBOSE_DISABLED",
+			wantErr: true, errSub: "GOCELL_READYZ_VERBOSE_DISABLED", errCode: errcode.ErrControlplaneVerboseTokenMissing,
 		},
 		{
 			name:    "CP3 metrics token required in real mode",
 			base:    buildValidRealModeSharedDeps,
 			mutate:  func(_ *testing.T, s *SharedDeps) { s.MetricsToken = "" },
-			wantErr: true, errSub: "GOCELL_METRICS_TOKEN",
+			wantErr: true, errSub: "GOCELL_METRICS_TOKEN", errCode: errcode.ErrValidationFailed,
 		},
 		{
 			name:    "CP5 nonce store required in real mode",
 			base:    buildValidRealModeSharedDeps,
 			mutate:  func(_ *testing.T, s *SharedDeps) { s.NonceStore = nil },
-			wantErr: true, errSub: "NonceStore must be set",
+			wantErr: true, errSub: "NonceStore must be set", errCode: errcode.ErrControlplaneNonceStoreMissing,
 		},
 		{
 			name:    "CP6 noop nonce store rejected in real mode",
 			base:    buildValidRealModeSharedDeps,
 			mutate:  func(_ *testing.T, s *SharedDeps) { s.NonceStore = auth.NewNoopNonceStore() },
-			wantErr: true, errSub: "NoopNonceStore",
+			wantErr: true, errSub: "NoopNonceStore", errCode: errcode.ErrControlplaneNonceStoreMissing,
 		},
 		{
 			name: "CP7 in-memory nonce store rejected for real multi-pod",
@@ -382,7 +403,21 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 				// distributed claimer so only the CP7 nonce check fires.
 				s.ConsumerClaimer = fakeDistributedClaimer{idempotency.NewInMemClaimer(clk)}
 			},
-			wantErr: true, errSub: "in-memory nonce store requires",
+			wantErr: true, errSub: "in-memory nonce store requires", errCode: errcode.ErrControlplaneNonceStoreMissing,
+		},
+		{
+			name: "F2 unrecognized nonce store kind rejected fail-closed in real mode",
+			base: buildValidRealModeSharedDeps,
+			mutate: func(t *testing.T, s *SharedDeps) {
+				// Single-pod real mode isolates the fail-closed default branch: an
+				// in-memory claimer is accepted single-pod, so only the unknown
+				// nonce-store kind fails. Pre-fix this passed (default accepted any
+				// non-noop/in-memory kind) — fail-open (#1410 review F2).
+				ns, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
+				require.NoError(t, err)
+				s.NonceStore = fakeUnknownKindNonceStore{ns}
+			},
+			wantErr: true, errSub: "unrecognized kind", errCode: errcode.ErrControlplaneNonceStoreMissing,
 		},
 		{
 			name: "CP8 in-memory claimer rejected for real multi-pod",
@@ -394,7 +429,7 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 				require.NoError(t, err)
 				s.NonceStore = fakeDistributedNonceStore{ns}
 			},
-			wantErr: true, errSub: "Redis-backed outbox idempotency claimer",
+			wantErr: true, errSub: "ClaimerKindDistributed", errCode: errcode.ErrControlplaneClaimerNotDistributed,
 		},
 		{
 			name: "real multi-pod with distributed nonce + claimer accepted",
@@ -447,6 +482,14 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 			require.Error(t, err)
 			if tc.errSub != "" {
 				assert.Contains(t, err.Error(), tc.errSub)
+			}
+			if tc.errCode != "" {
+				var ecErr *errcode.Error
+				require.True(t, errors.As(err, &ecErr),
+					"want an *errcode.Error in the chain to pin Code")
+				assert.Equal(t, tc.errCode, ecErr.Code,
+					"control-plane failure must carry the stable errcode (machine contract), "+
+						"not just operator-facing prose")
 			}
 		})
 	}

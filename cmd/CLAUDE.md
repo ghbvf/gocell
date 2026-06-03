@@ -67,7 +67,10 @@ bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
     []auth.ListenerAuth{jwtAuth})
 
 // Internal：控制平面 + ServiceToken（HMAC-SHA256 + replay guard）
-svcTokenAuth, err := auth.NewAuthServiceToken(guard.NonceStore(), guard.Ring())
+// nonce store + HMAC ring 提升到 composition.SharedDeps（#1410），auth plan 用
+// 同一份已校验的 SharedDeps 字段构造——不要另造 nonce store（否则绕过
+// SharedDeps.NonceStore.Kind() 的 control-plane 校验）。
+svcTokenAuth, err := auth.NewAuthServiceToken(shared.NonceStore, shared.InternalHMACRing)
 if err != nil {
     return nil, fmt.Errorf("NewAuthServiceToken: %w", err)
 }

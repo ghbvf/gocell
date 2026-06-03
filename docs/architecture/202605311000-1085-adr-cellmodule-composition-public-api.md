@@ -251,14 +251,22 @@ nonce/claimer-kind 等 control-plane 生产安全校验仍只活在 cmd 私有�
 | 关注点 | 迁移前 | 迁移后 |
 |--------|--------|--------|
 | 外部消费者跑 control-plane 校验 | ❌ cmd 私有，够不到（实质 Soft：cmd 手动调，重构可静默丢） | ✅ Hard sealed-marker 门控的 `NewSharedDeps→validate` 路径（上游 Hard / 下游 Medium，见下方残留 Medium 说明） |
-| claimer-distributed 真实性（CP8） | ⚠️ cmd 私有 `consumerClaimerKind`（topology 派生，自身不可绕但外部够不到） | ✅ `Claimer.Kind()` 实现自报，type-system Hard（不可伪造） |
-| nonce-store noop / in-mem-multipod（CP6/CP7） | ⚠️ cmd 私有 introspect `internalGuard.NonceStore()` | ✅ `shared.NonceStore.Kind()` 实现自报，type-system Hard |
+| claimer-distributed 真实性（CP8） | ⚠️ cmd 私有 `consumerClaimerKind`（topology 派生，自身不可绕但外部够不到） | ✅ 可达性升级（所有 `NewSharedDeps` 消费者都跑），**评级 Medium（非 type-system Hard）**：`Claimer.Kind()` 是实现自报，绑定到实现*类型*消除了「调用方自填 kind 字段撒谎」这一 Soft 面（kind 随值走，消费者无法填一个与所接 claimer 矛盾的字段），但方法本身可返回错值——impl 仍可撒谎（`shared_deps_test.go` 的 fake 正是如此）。残留由 (a) 生产实现为固定 in-repo 闭集 + (b) 每实现 Kind() 返回值 pin 测试（`TestInMemClaimer_Kind_ReportsInMemory` / `TestIdempotencyClaimer_Kind_ReportsDistributed`）+ (c) 校验侧对未知 kind fail-closed 封闭。**#1410 review F7 更正**：原写「type-system Hard（不可伪造）」不准确。 |
+| nonce-store noop / in-mem-multipod（CP6/CP7） | ⚠️ cmd 私有 introspect `internalGuard.NonceStore()` | ✅ 可达性升级，**评级 Medium（同上）**：`shared.NonceStore.Kind()` 实现自报，由 `runtime/auth` / `adapters/redis` 的 Kind() pin 测试 + `validateProductionNonceStore` 的 fail-closed default（#1410 F2）兜底，非 type-system Hard。 |
 | composition 不 import adapters/prometheus | ✅ | ✅（仅新增 `kernel/auth` import，kernel 层允许） |
 | AUTH-PLAN-04（auth plan 构造留 cmd） | ✅ | ✅（`buildInternalAuthChain` 仍在 cmd，读 SharedDeps 字段） |
 
-残留 Medium（非本 amendment 引入的新 funnel）：「`validate()` 体内必须调 `validateControlPlane`」
-无 archtest 强制（只能 Soft archtest，charter 禁；unit test backstop）——与既有 required-field /
-HR1 检查同档同 ceiling，是 `validate()` 类 runtime guard 的固有天花板。
+残留 Medium ×2（均非本 amendment 引入的新 funnel）：
+
+1. 「`validate()` 体内必须调 `validateControlPlane`」无 archtest 强制（只能 Soft archtest，charter 禁；
+   unit test backstop）——与既有 required-field / HR1 检查同档同 ceiling，是 `validate()` 类 runtime
+   guard 的固有天花板。
+2. **`Kind()` 实现自报失真**（CP6/CP7/CP8）：Go 无法在类型系统层强制「Redis-backed claimer 必返回
+   `distributed`、in-memory 必返回 `in_memory`」。补偿 = 固定 in-repo 实现闭集 + 每实现 Kind() 返回值
+   pin 测试 + 校验侧未知 kind fail-closed（#1410 F2/F3/F7）；与 #851/#893/#1282 family 的「self-report /
+   holder seal」永久天花板同形态，不立 Soft archtest。**注意上文第一行「外部消费者跑 control-plane 校验」
+   的「上游 Hard」专指 `SharedDeps` 的 sealed `valid` 构造门（`NewSharedDeps→validate` 不可绕），不延伸到
+   各 `Kind()` 自报的真实性——后者即本条残留 Medium。**
 
 **参考**：archtest 全绿（`MODULE-PROVIDE-NO-VALUE-HANDOFF-01` 只冻结 `ModuleResult` 字段，
 不冻结 `SharedDeps` 字段，加 `NonceStore` 不触发）；`runtime/composition/shared_deps_test.go`

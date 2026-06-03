@@ -21,6 +21,26 @@ func TestClaimState_Values(t *testing.T) {
 	assert.Equal(t, ClaimState(2), ClaimBusy)
 }
 
+// TestClaimerKind_Values pins the public ClaimerKind constant strings.
+// composition-root control-plane validation keys on these exact values to decide
+// whether a claimer is safe for multi-pod, so they are a machine contract that
+// must not drift silently (mirrors runtime/auth.TestNonceStoreKind_Values).
+func TestClaimerKind_Values(t *testing.T) {
+	assert.Equal(t, ClaimerKind("in_memory"), ClaimerKindInMemory)
+	assert.Equal(t, ClaimerKind("distributed"), ClaimerKindDistributed)
+}
+
+// TestInMemClaimer_Kind_ReportsInMemory pins the production in-memory claimer's
+// self-reported kind. Kind() is an implementation self-report, not a type-system
+// guarantee (see the ClaimerKind godoc), so a per-implementation return-value
+// assertion is what actually stops a single-process claimer from masquerading as
+// distributed and passing CP8 in a multi-pod deployment. The distributed
+// counterpart is adapters/redis/idempotency_test.go::TestIdempotencyClaimer_Kind_ReportsDistributed.
+func TestInMemClaimer_Kind_ReportsInMemory(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	assert.Equal(t, ClaimerKindInMemory, NewInMemClaimer(clk).Kind())
+}
+
 // --- Claimer Interface Test ---
 
 type mockClaimer struct {

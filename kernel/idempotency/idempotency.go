@@ -98,9 +98,23 @@ const (
 // ClaimerKind classifies a Claimer implementation for startup validation.
 // It mirrors kernel/auth.NonceStoreKind: the implementation self-reports its
 // kind so composition-root control-plane validation can reject a single-process
-// claimer in a multi-pod deployment without trusting a caller-supplied label
-// (a SharedDeps field the consumer fills in could lie; a method on the claimer
-// itself cannot).
+// claimer in a multi-pod deployment.
+//
+// Strength of the mechanism (AI-robust: Medium, not Hard). Binding the kind to a
+// method on the implementation removes the caller-supplied-label attack: a
+// consumer cannot fill a free-standing "kind" field that contradicts the claimer
+// it actually wired, because the kind travels with the value. It does NOT make
+// the kind unforgeable — Kind() is an ordinary method, so a buggy or hostile
+// implementation can still return the wrong value (the fakes in
+// runtime/composition/shared_deps_test.go do exactly that on purpose to isolate
+// validator branches). The residual "an implementation lies about its own kind"
+// risk is closed not by the type system but by (a) the production
+// implementations being a fixed, in-repo set and (b) a per-implementation
+// return-value assertion on each (kernel/idempotency
+// TestInMemClaimer_Kind_ReportsInMemory, adapters/redis
+// TestIdempotencyClaimer_Kind_ReportsDistributed). Validators MUST therefore
+// fail-closed on any unrecognized kind rather than wave it through a permissive
+// default (see runtime/composition validateProductionNonceStore).
 //
 // Note the deliberate absence of a noop variant (unlike kernel/auth.NonceStoreKind):
 // every Claimer coordinates idempotency. The absence of coordination is expressed
