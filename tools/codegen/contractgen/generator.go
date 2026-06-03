@@ -86,12 +86,60 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 		return res, err
 	}
 
+	// Cross-contract gate: (proto package, service, method) global uniqueness +
+	// single import path per proto service. Scans ALL grpc contracts (not just
+	// the selected scope) so collisions surface regardless of scope. Iterates the
+	// empty set until the first real grpc contract lands (PR 8).
+	if err := checkGRPCProtoCollisions(root, p); err != nil {
+		return res, err
+	}
+
 	for _, id := range contractIDs {
 		if err := generateOneContract(root, p, id, opts, &res); err != nil {
 			return res, err
 		}
 	}
 	return res, nil
+}
+
+// checkGRPCProtoCollisions builds a protoRegistry from every grpc contract in p
+// (reading each .proto for package/import identity) and fails fast on a
+// duplicate (proto package, service, method) or a divergent import path for the
+// same proto service. The single source of proto identity is the .proto file
+// (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01); this re-reads the protos that
+// buildGRPCSpec also reads (codegen is not a hot path), keeping the
+// cross-contract gate separate from per-contract spec construction.
+func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
+	reg := newProtoRegistry()
+	ids := make([]string, 0, len(p.Contracts))
+	for id, c := range p.Contracts {
+		// Honor the codegen:false opt-out, same as selectContractIDsByScope: a
+		// disabled grpc draft (placeholder/absent proto) must not be read here, or
+		// it would block generation of every other contract in the run.
+		if c != nil && c.Codegen && c.Kind == "grpc" && c.Endpoints.GRPC != nil {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		g := p.Contracts[id].Endpoints.GRPC
+		// This pre-pass runs before generateOneContract → buildGRPCSpec, so it
+		// applies the proto-path guards itself (it cannot rely on buildGRPCSpec
+		// having validated yet). The proto is read here and again in buildGRPCSpec;
+		// codegen is not a hot path and threading a shared registry through
+		// buildContractSpec's signature would be more invasive than the re-read.
+		if err := validateGRPCProtoPath(id, g.Proto); err != nil {
+			return err
+		}
+		info, err := readProtoTypeInfo(filepath.Join(root, filepath.FromSlash(g.Proto)), g.Service, g.Method)
+		if err != nil {
+			return fmt.Errorf("contract %q: %w", id, err)
+		}
+		if err := reg.register(id, g.Service, g.Method, info); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // generateOneContract renders all artifacts for a single contract and writes
