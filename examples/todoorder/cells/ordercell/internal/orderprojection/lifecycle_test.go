@@ -204,7 +204,7 @@ func TestOrderProjection_FanInLifecycle(t *testing.T) {
 	// (per-spec filter). The transition sub-view (latest) is untouched, so the
 	// composed query must still show order-A as confirmed. --
 	require.NoError(t, createdCoord.Rebuild(ctx))
-	testwait.External(t, "orderprojection-rebuild-order_status",
+	testwait.External(t, "orderprojection-rebuild-order-status",
 		func() bool { return createdCoord.Phase() == projection.PhaseLive },
 		testtime.EventuallyLong, testtime.FastPoll, "phase != PhaseLive")
 
@@ -223,7 +223,7 @@ func TestOrderProjection_FanInLifecycle(t *testing.T) {
 	// must still be pending and order-A still confirmed. This proves disjoint
 	// reset holds in BOTH directions. --
 	require.NoError(t, transitionCoord.Rebuild(ctx))
-	testwait.External(t, "orderprojection-rebuild-order_transition",
+	testwait.External(t, "orderprojection-rebuild-order-transition",
 		func() bool { return transitionCoord.Phase() == projection.PhaseLive },
 		testtime.EventuallyLong, testtime.FastPoll, "phase != PhaseLive")
 
