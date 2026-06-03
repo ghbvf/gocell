@@ -205,11 +205,11 @@ type Registrar interface {
 	// could not call projection.NewCoordinator even if it wanted to, because it
 	// holds no checkpoint store / tx runner.
 	//
-	// The call WILL be emitted by cellgen from slice.yaml contractUsages when the
-	// kind:projection derivation lands (PR-04b, #1367); until then RegisterProjection
-	// is only called from test files (PROJECTION-REGISTER-FUNNEL-01 enforces this).
-	// The exact slice.yaml role/field that drives the derivation is decided in
-	// PR-04b, not here. ProjectionRequest carries identifiers known at
+	// The call is emitted by cellgen from slice.yaml contractUsages (kind:projection
+	// derivation, PR-04b #1367 / #834 landed); the first production callsite is
+	// examples/todoorder/cells/ordercell/cell_gen.go. RegisterProjection is otherwise
+	// only called from test files — PROJECTION-REGISTER-FUNNEL-01 confines every call
+	// to cell_gen.go + _test.go. ProjectionRequest carries identifiers known at
 	// code-generation time (CellID injected from cell metadata exactly like
 	// Subscribe's positional cellID). The Apply / OnReset function types are
 	// cell-local ([ProjectionApply] / [ProjectionResetHook]) rather than

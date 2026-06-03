@@ -165,8 +165,9 @@ func isProjectionRegisterAllowed(rel, absPath string) bool {
 // reg.RegisterProjection must only be called from _test.go files or the cellgen
 // DO-NOT-EDIT cell_gen.go. Any other production callsite is a violation.
 //
-// PR-04a status: genuinely-green, vacuous (zero production callsites until the
-// PR-04b cellgen derivation lands).
+// PR-04b status: load-bearing active guard. The first production callsite exists —
+// examples/todoorder/cells/ordercell/cell_gen.go (orderprojection harness, #834) —
+// and the allowlist confines that and every future call to cell_gen.go + _test.go.
 func TestProjectionRegisterFunnel01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
