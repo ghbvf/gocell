@@ -185,9 +185,10 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 		conformUserInvalidTenantRejected(t, factory, features)
 	})
 	// U15: positive assertion for the GetByID by-PK tenant-deriving carve-out:
-	// GetByID must return the row regardless of tenant (no tenant predicate). If
-	// someone later adds a tenant predicate to GetByID this test fails.
-	t.Run("GetByID_ByPK_ReturnsRowRegardlessOfTenant", func(t *testing.T) {
+	// GetByID resolves by global UUID PK with no tenant predicate. If someone
+	// later adds a tenant filter, the seeded-tenant lookup returns nil and
+	// this test fails.
+	t.Run("GetByID_ByPK_NoTenantPredicate", func(t *testing.T) {
 		conformGetByIDByPKCarveOut(t, factory)
 	})
 	runNarrowWriteSurfaceConformance(t, factory)
@@ -1433,14 +1434,29 @@ func conformUpdatePasswordResetFlagNotFound(t *testing.T, factory UserRepoFactor
 	return err
 }
 
+// isErrInvalid reports whether err carries a KindInvalid error.
+func isErrInvalid(err error) bool {
+	var ec *errcode.Error
+	return errors.As(err, &ec) && ec.Kind == errcode.KindInvalid
+}
+
 // wantInvalidTenantErr asserts a tenant-scoped repo call rejected an invalid
-// (empty/zero-value) tenant. Top-level (not a closure) so its branch does not
-// count toward the callers' cognitive-complexity budget — the InvalidTenant
-// conformance helpers fan out across ~11 methods and would otherwise blow it.
+// (empty/zero-value) tenant. Checks both that an error is returned AND that it
+// is KindInvalid (the kind produced by tenant.TenantID.Validate). A rejection
+// from a different guard (ambient-tx, not-found, infra) would have a different
+// Kind and would be caught here rather than false-greening.
+//
+// Top-level (not a closure) so its branch does not count toward the callers'
+// cognitive-complexity budget — the InvalidTenant conformance helpers fan out
+// across ~11 methods and would otherwise blow it.
 func wantInvalidTenantErr(t *testing.T, method string, err error) {
 	t.Helper()
 	if err == nil {
 		t.Errorf("%s(invalidTenant): want error, got nil", method)
+		return
+	}
+	if !isErrInvalid(err) {
+		t.Errorf("%s(invalidTenant): want KindInvalid (tenant validation), got %v", method, err)
 	}
 }
 
@@ -1507,9 +1523,10 @@ func conformUserInvalidTenantRejected(t *testing.T, factory UserRepoFactory, fea
 }
 
 // conformGetByIDByPKCarveOut (U15): positive regression guard for the
-// GetByID tenant-deriving by-PK carve-out. GetByID must return the row by
-// global UUID PK regardless of tenant (no tenant predicate). If someone later
-// wrongly adds a tenant predicate to GetByID, this test fails.
+// GetByID tenant-deriving by-PK carve-out. Asserts GetByID resolves by global
+// UUID PK with no tenant predicate — GetByID has no tenant param and must not
+// apply any tenant filter internally. If someone later adds a tenant predicate,
+// the seeded-tenant lookup in this test returns nil and the test fails.
 //
 // Cross-tenant isolation of GetByID (the PG RLS backstop) is a PR-3 concern;
 // this test only asserts that the carve-out does NOT filter by tenant.

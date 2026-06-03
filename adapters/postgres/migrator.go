@@ -232,6 +232,10 @@ func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermi
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
 	}
+	if len(results) == 0 {
+		slog.InfoContext(ctx, "postgres: migrations already up to date", "applied", 0)
+		return nil
+	}
 	var finalVersion int64
 	for _, r := range results {
 		if r.Source != nil && r.Source.Version > finalVersion {

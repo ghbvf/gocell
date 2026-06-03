@@ -618,6 +618,8 @@ var expectedIndexes = []expectedIndex{
 	{Table: "audit_entries", Name: "idx_audit_namespace_trace_id", Unique: false, Columns: []string{"namespace", "trace_id"}},
 	// 051_audit_entries_tenant_index.sql: tenant-aware keyset pagination (namespace, tenant_id, timestamp DESC, id ASC)
 	// supports auditquery tenant-scoped reads (PR-2a AuditFilters.TenantID predicate).
+	// Columns excludes sort direction; DESC/ASC are not verified by schema_guard
+	// (consistent with idx_audit_namespace_ts_id above — direction is intentional omission).
 	{
 		Table: "audit_entries", Name: "idx_audit_namespace_tenant_ts_id",
 		Unique: false, Columns: []string{"namespace", "tenant_id", "timestamp", "id"},

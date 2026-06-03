@@ -308,7 +308,7 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	if err := refreshTenantID.Validate(); err != nil {
 		s.logger.Error("session-refresh: invalid tenant derived from user row (fail-closed)",
 			slog.Any("error", err),
-			slog.String("user_id", sess.SubjectID))
+			slog.String("subject_id", sess.SubjectID))
 		return dto.TokenPair{}, authRefreshRejected()
 	}
 	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{

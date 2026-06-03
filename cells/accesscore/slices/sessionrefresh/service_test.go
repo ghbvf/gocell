@@ -2403,6 +2403,57 @@ func TestRefreshInTx_EmptyDerivedTenant_FailsClosed(t *testing.T) {
 	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
 }
 
+// TestHandleReuseDetected_EmptyDerivedTenant_FailsClosed (U5 reuse path) verifies
+// that handleReuseDetected fails closed with 401 ErrAuthRefreshFailed when the
+// user row returned by GetByID has an empty TenantID (#1337 PR-2a review F6).
+// This mirrors TestRefreshInTx_EmptyDerivedTenant_FailsClosed but drives the
+// reuse-detection code path (Rotate returning ErrReused) rather than the normal
+// mint path. The emptyTenantUserRepo wrapper strips TenantID from the GetByID
+// response, causing reuseTenantID.Validate() to reject it.
+func TestHandleReuseDetected_EmptyDerivedTenant_FailsClosed(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	baseRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, err := domain.NewUser("usr-reuse-emptytenant", "reuse-emptytenant@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = "usr-reuse-emptytenant"
+	require.NoError(t, baseRepo.Create(context.Background(), testTenantID, u))
+
+	// Wrap so GetByID returns the user with empty TenantID (simulating data-integrity anomaly).
+	userRepo := emptyTenantUserRepo{UserRepository: baseRepo}
+
+	// reuseOnRotateRefreshStore causes Rotate to return ErrReused, triggering
+	// handleReuseDetected which calls userRepo.GetByID → reuseTenantID.Validate().
+	innerStore := newTestRefreshStore()
+	reuseStore := &reuseOnRotateRefreshStore{
+		Store: innerStore, subjectID: u.ID, sessionID: "sess-reuse-emptytenant",
+	}
+
+	// Use a real invalidator backed by baseRepo (not userRepo) so Apply would
+	// succeed if it were reached; the test asserts we fail-closed before Apply.
+	svc := mustNewServiceWithInvalidator(invalidatorServiceDeps{
+		sessionStore: sessionStore, roleRepo: roleRepo, userRepo: userRepo,
+		refreshStore: reuseStore, issuer: testIssuer, logger: slog.Default(),
+		inv: newTestInvalidator(baseRepo, sessionStore, innerStore),
+	}, WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
+
+	sess := newTestSession(u.ID, "sess-reuse-emptytenant")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-reuse-emptytenant", u.ID, int64(1))
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(tenantCtx(), wireToken)
+	require.Error(t, err, "empty derived TenantID in reuse path must cause fail-closed 401")
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"empty derived TenantID in reuse path must surface uniform 401 ErrAuthRefreshFailed (U5 reuse defense-in-depth)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
+
 // TestCascadeFailClosed_RotatedSubjectMismatch_401 verifies that a
 // rotated-subject-mismatch + cascade-write failure returns 401, not 503 (ADR §A13).
 func TestCascadeFailClosed_RotatedSubjectMismatch_401(t *testing.T) {

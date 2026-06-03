@@ -82,16 +82,23 @@ is sufficient.
 
 3. **Drain all sessions.** Migration 050's Up block ends with an `ALTER TABLE sessions
    ADD CONSTRAINT sessions_subject_id_fkey` that validates all existing sessions rows.
-   Any session whose `subject_id` references a deleted user UUID will cause the FK
-   addition to fail (`23503 foreign_key_violation`), aborting the migration. Ensure
-   sessions are expired or deleted before proceeding:
+   Any session row whose `subject_id` references a user UUID that was just deleted by
+   the DROP (whether or not the session is logically expired) will cause the FK
+   addition to fail (`23503 foreign_key_violation`), aborting the migration.
+   **Sessions must be physically deleted** before running this migration — logical
+   expiry (`expires_at < now()`) does not remove the row from the table and does not
+   satisfy the FK check. Delete all sessions and confirm the table is empty:
 
    ```sql
-   -- Confirm no sessions reference users (all sessions expired or truncated):
-   SELECT count(*) FROM sessions;  -- must be 0, or all rows expired past now()
+   -- Delete expired sessions first, then verify the table is empty.
+   DELETE FROM sessions WHERE expires_at < now();
+   -- If any active (non-expired) sessions remain, drain them or forcibly delete:
+   DELETE FROM sessions;
+   -- Confirm the table is empty before proceeding:
+   SELECT count(*) FROM sessions;  -- must be 0
    ```
 
-5. **Run the migration with an explicit rebuild permit.** Use the
+4. **Run the migration with an explicit rebuild permit.** Use the
    `tools/pg-migrate` CLI with the `-rebuild` flag:
 
    ```bash
@@ -121,11 +128,11 @@ is sufficient.
    If all three tables are empty or do not yet exist, `Up()` proceeds without a
    permit (fresh provision path).
 
-6. **Deploy the new tenant-aware binary** once the migration completes. The old
+5. **Deploy the new tenant-aware binary** once the migration completes. The old
    binary cannot write the new composite-keyed schema; step 1 ensures it is
    already stopped.
 
-7. **Restore traffic.**
+6. **Restore traffic.**
 
 ## Down (rollback)
 
