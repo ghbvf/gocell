@@ -28,13 +28,24 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// testTenantID is the canonical test tenant UUID for role_repo integration
-// tests. Seed and query must use the same value so tenant-scoped repo reads
-// return the seeded rows.
+// testTenantID is the canonical test tenant UUID for role_repo / user_repo
+// integration tests. Seed and query must use the same value so tenant-scoped
+// repo reads return the seeded rows.
 var testTenantID = func() tenant.TenantID {
 	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
 	if err != nil {
 		panic("role_repo_integration_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
+// testTenantIDOther is a second canonical tenant UUID used by cross-tenant
+// isolation tests (e.g. same-username-in-different-tenants). Must be distinct
+// from testTenantID to exercise composite-unique constraints.
+var testTenantIDOther = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000002")
+	if err != nil {
+		panic("role_repo_integration_test: invalid testTenantIDOther: " + err.Error())
 	}
 	return t
 }()

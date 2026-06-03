@@ -802,6 +802,8 @@ func TestLogin_EmptyCredentials_AuthErrorCode(t *testing.T) {
 	}{
 		{"empty_password", LoginInput{TenantID: testTenantIDStr, Username: "user@example.com", Password: ""}},
 		{"empty_email", LoginInput{TenantID: testTenantIDStr, Username: "", Password: "secret"}},
+		// U14 (#1337 PR-2a review): blank tenantId must also yield ErrAuthLoginInvalidInput.
+		{"blank_tenant_id", LoginInput{TenantID: "", Username: "user@example.com", Password: "secret"}},
 	}
 
 	for _, tc := range cases {

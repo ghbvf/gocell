@@ -179,6 +179,17 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 		// must be inline at the test site (archtest does not follow helpers).
 		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	})
+	// U13: parity with RoleRepo's InvalidTenant_Rejected sub-test — every
+	// tenant-scoped method must reject an empty (invalid) tenant via t.Validate().
+	t.Run("InvalidTenant_Rejected", func(t *testing.T) {
+		conformUserInvalidTenantRejected(t, factory, features)
+	})
+	// U15: positive assertion for the GetByID by-PK tenant-deriving carve-out:
+	// GetByID must return the row regardless of tenant (no tenant predicate). If
+	// someone later adds a tenant predicate to GetByID this test fails.
+	t.Run("GetByID_ByPK_ReturnsRowRegardlessOfTenant", func(t *testing.T) {
+		conformGetByIDByPKCarveOut(t, factory)
+	})
 	runNarrowWriteSurfaceConformance(t, factory)
 }
 
@@ -1420,6 +1431,109 @@ func conformUpdatePasswordResetFlagNotFound(t *testing.T, factory UserRepoFactor
 		t.Fatal("UpdatePasswordResetFlag_NotFound: must return error for non-existent user, got nil")
 	}
 	return err
+}
+
+// wantInvalidTenantErr asserts a tenant-scoped repo call rejected an invalid
+// (empty/zero-value) tenant. Top-level (not a closure) so its branch does not
+// count toward the callers' cognitive-complexity budget — the InvalidTenant
+// conformance helpers fan out across ~11 methods and would otherwise blow it.
+func wantInvalidTenantErr(t *testing.T, method string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s(invalidTenant): want error, got nil", method)
+	}
+}
+
+// conformUserInvalidTenantRejected (U13): every tenant-scoped UserRepository
+// method must reject an invalid (empty/zero-value) tenant via tenant.Validate
+// rather than silently reading/writing with a bad key. Mirrors
+// conformRoleInvalidTenantRejected shape exactly for parity.
+func conformUserInvalidTenantRejected(t *testing.T, factory UserRepoFactory, features Features) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+	var invalid tenant.TenantID // zero value — empty, rejected by Validate
+	now := time.Now().UTC()
+
+	wantInvalidTenantErr(t, "Create", repo.Create(ctx, invalid, &domain.User{}))
+	_, err := repo.GetByIDInTenant(ctx, invalid, "any")
+	wantInvalidTenantErr(t, "GetByIDInTenant", err)
+	_, err = repo.GetByUsername(ctx, invalid, "any")
+	wantInvalidTenantErr(t, "GetByUsername", err)
+	wantInvalidTenantErr(t, "Delete", repo.Delete(ctx, invalid, "any"))
+	wantInvalidTenantErr(t, "UpdateLockState",
+		repo.UpdateLockState(ctx, invalid, "any", domain.StatusLocked, now))
+	wantInvalidTenantErr(t, "UpdatePasswordResetFlag",
+		repo.UpdatePasswordResetFlag(ctx, invalid, "any", true, now))
+	_, err = repo.UpdateProfile(ctx, invalid, "any", nil, nil, now)
+	wantInvalidTenantErr(t, "UpdateProfile", err)
+
+	// for-update and epoch methods require ambient tx on PG; call inside RunInTx
+	// so the tenant guard (not the ambient-tx guard) fires for both implementations.
+	probeForUpdateAndEpoch := func(txCtx context.Context) error {
+		_, e := repo.GetByIDForUpdate(txCtx, invalid, "any")
+		wantInvalidTenantErr(t, "GetByIDForUpdate", e)
+		_, e = repo.GetByUsernameForUpdate(txCtx, invalid, "any")
+		wantInvalidTenantErr(t, "GetByUsernameForUpdate", e)
+		_, e = repo.BumpAuthzEpoch(txCtx, invalid, "any", credentialfence.Mint())
+		wantInvalidTenantErr(t, "BumpAuthzEpoch", e)
+		return nil
+	}
+	if features.RequiresAmbientTx {
+		if err := txRunner.RunInTx(ctx, probeForUpdateAndEpoch); err != nil {
+			t.Fatalf("InvalidTenant_Rejected: RunInTx: %v", err)
+		}
+	} else if err := probeForUpdateAndEpoch(ctx); err != nil {
+		t.Fatalf("InvalidTenant_Rejected: probeForUpdateAndEpoch: %v", err)
+	}
+
+	// UpdateLockoutFields cross-tenant: build a minimal domain.User to call it.
+	ghost, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // test helper
+		ID:           uuid.NewString(),
+		Username:     "invalid_tenant_ghost",
+		Email:        "invalid_tenant_ghost" + exampleEmailDomain,
+		PasswordHash: "$2a$12$conformancefakehash",
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		t.Fatalf("conformUserInvalidTenantRejected: ReconstituteUser: %v", err)
+	}
+	wantInvalidTenantErr(t, "UpdateLockoutFields", repo.UpdateLockoutFields(ctx, invalid, ghost))
+}
+
+// conformGetByIDByPKCarveOut (U15): positive regression guard for the
+// GetByID tenant-deriving by-PK carve-out. GetByID must return the row by
+// global UUID PK regardless of tenant (no tenant predicate). If someone later
+// wrongly adds a tenant predicate to GetByID, this test fails.
+//
+// Cross-tenant isolation of GetByID (the PG RLS backstop) is a PR-3 concern;
+// this test only asserts that the carve-out does NOT filter by tenant.
+func conformGetByIDByPKCarveOut(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	id := uuid.NewString()
+	username := "bypk_carveout_" + uuid.NewString()
+	// Seed the user under testTenantID.
+	seedActiveInTenant(t, txRunner, repo, testTenantID, id, username)
+
+	// GetByID must return the row using its global UUID PK alone — no tenant arg.
+	got, err := repo.GetByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetByID_ByPK_ReturnsRowRegardlessOfTenant: GetByID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetByID_ByPK_ReturnsRowRegardlessOfTenant: got nil, want non-nil user")
+	}
+	if got.ID != id {
+		t.Errorf("GetByID_ByPK_ReturnsRowRegardlessOfTenant: got ID %q, want %q", got.ID, id)
+	}
 }
 
 // ─── RoleRepository conformance ───────────────────────────────────────────────

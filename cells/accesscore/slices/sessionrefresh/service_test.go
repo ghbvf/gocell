@@ -2344,6 +2344,65 @@ func TestCascadeFailClosed_StaleEpoch_401(t *testing.T) {
 	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
 }
 
+// emptyTenantUserRepo wraps a real *mem.UserRepository but returns a user with
+// an empty TenantID from GetByID. Used by U5 tests to simulate a data-integrity
+// anomaly where a user row was stored without a tenant (should not happen in
+// production but must be rejected fail-closed rather than panicking).
+type emptyTenantUserRepo struct {
+	*mem.UserRepository
+}
+
+func (r emptyTenantUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	u, err := r.UserRepository.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// Return a copy of the user with TenantID cleared to simulate the anomaly.
+	stripped := *u
+	stripped.TenantID = ""
+	return &stripped, nil
+}
+
+// TestRefreshInTx_EmptyDerivedTenant_FailsClosed (U5) verifies that refreshInTx
+// fails closed with 401 ErrAuthRefreshFailed when the tenant derived from the
+// user row is empty (#1337 PR-2a review U5 defense-in-depth).
+// In normal operation user.TenantID is always stamped at Create time; this test
+// exercises the validate-failure branch to ensure we reject rather than passing
+// an empty tenant downstream.
+func TestRefreshInTx_EmptyDerivedTenant_FailsClosed(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	baseRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, err := domain.NewUser("usr-empty-tenant", "empty-tenant@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = "usr-empty-tenant"
+	require.NoError(t, baseRepo.Create(context.Background(), testTenantID, u))
+
+	// Wrap so GetByID returns the user with empty TenantID.
+	userRepo := emptyTenantUserRepo{UserRepository: baseRepo}
+
+	refreshStore := newTestRefreshStore()
+	svc := mustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		WithInvalidator(newTestInvalidator(baseRepo, sessionStore, refreshStore)))
+
+	sess := newTestSession(u.ID, "sess-empty-tenant")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-empty-tenant", u.ID, int64(1))
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(tenantCtx(), wireToken)
+	require.Error(t, err, "empty derived TenantID must cause fail-closed 401")
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"empty derived TenantID must surface uniform 401 ErrAuthRefreshFailed (U5 defense-in-depth)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
+
 // TestCascadeFailClosed_RotatedSubjectMismatch_401 verifies that a
 // rotated-subject-mismatch + cascade-write failure returns 401, not 503 (ADR §A13).
 func TestCascadeFailClosed_RotatedSubjectMismatch_401(t *testing.T) {

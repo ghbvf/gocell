@@ -47,7 +47,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -355,6 +357,52 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	getW := httptest.NewRecorder()
 	f.mux.ServeHTTP(getW, getReq)
 	assert.Equal(t, http.StatusOK, getW.Code, "GET must succeed after password change")
+}
+
+// withTenantB injects a DIFFERENT, second test tenant into ctx.
+// Used by cross-tenant negative tests to simulate a caller authenticated under
+// tenant-B attempting to access a resource owned by tenant-A.
+func withTenantB(ctx context.Context) context.Context {
+	return ctxkeys.WithTenantID(ctx, "00000000-0000-0000-0000-000000000002")
+}
+
+// TestChangePassword_CrossTenant_NotFound (U16 — #1337 PR-2a review) verifies
+// that an admin authenticated under tenant B cannot mutate a user that belongs
+// to tenant A. The tenant-scoped repo collapses the cross-tenant row to
+// ErrAuthUserNotFound (IDOR-safe 404) — the response must be 404, not 200 or
+// any other leaky status.
+//
+// Flow:
+//  1. Seed user "cross-tenant-victim" under e2eTestTenantID (tenant A).
+//  2. Issue a ChangePassword request with the caller's context set to tenant B
+//     (withTenantB) using an admin principal.
+//  3. Assert 404 — the tenant-scoped GetByIDInTenant collapses the row.
+func TestChangePassword_CrossTenant_NotFound(t *testing.T) {
+	f := newE2EFixture()
+	victimID := bootstrapAdminUser(t, f, "cross-tenant-victim", "OriginalP@ss1")
+
+	// Caller is authenticated under tenant B (different from tenant A where
+	// the victim user was seeded). Admin role is present but wrong tenant.
+	crossTenantCtx := withTenantB(auth.TestContext(victimID, []string{auth.RoleAdmin}))
+
+	body, _ := json.Marshal(map[string]string{
+		"oldPassword": "OriginalP@ss1",
+		"newPassword": "NewP@ss12345",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+victimID+"/password",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(crossTenantCtx)
+	w := httptest.NewRecorder()
+	f.mux.ServeHTTP(w, req)
+
+	// IDOR-safe: tenant-scoped GetByIDInTenant collapses the cross-tenant row
+	// to not-found. The caller must not be able to distinguish "user exists in
+	// another tenant" from "user does not exist". Assert via the typed wire
+	// funnel (POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01): a _NotFound
+	// test must pin both the 404 status and the typed ErrAuthUserNotFound code,
+	// not a bare status check (which a different 404-mapped error could satisfy).
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrAuthUserNotFound)
 }
 
 // TestChangePassword_RejectsBadOldPassword ensures the e2e flow returns 401

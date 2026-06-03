@@ -47,27 +47,26 @@ func New(
 	return &Mutator{inv: inv, repo: repo}, nil
 }
 
-// ApplyInTx executes the mutation within the caller-provided transaction
-// context txCtx. The caller MUST invoke ApplyInTx from within their own outer
-// RunInTx closure so that the domain mutation, credential invalidation, and
-// event publish all co-commit in the same transaction (L2 OutboxFact).
+// ApplyInTx executes the mutation scoped to tenant tid within the
+// caller-provided transaction context txCtx. tid is derived by the caller via
+// tenant.FromContext(ctx) (post-auth) or carried from the pre-auth login input
+// (accountlockout, sessionlogin); passing it as an explicit param avoids
+// fragility on pre-auth paths where ctx may not carry ctxkeys.TenantID.
+// The caller MUST invoke ApplyInTx from within their own outer RunInTx closure
+// so that the domain mutation, credential invalidation, and event publish all
+// co-commit in the same transaction (L2 OutboxFact).
 //
 // Steps:
-//  1. m.persist(txCtx, repo, userID, now) — writes the mutation directly via
-//     the appropriate narrow port method (UpdateLockState / UpdatePasswordResetFlag).
-//     RowsAffected==0 → ErrAuthUserNotFound (KindNotFound) from the port; this
-//     replaces the prior GetByIDForUpdate round-trip with the same observable
-//     error surface.
-//  2. If m.Invalidates(), inv.Apply(txCtx, userID, m.Event()) — bumps
+//  1. m.persist(txCtx, repo, tid, userID, now) — writes the mutation directly
+//     via the appropriate narrow port method (UpdateLockState /
+//     UpdatePasswordResetFlag). RowsAffected==0 → ErrAuthUserNotFound
+//     (KindNotFound) from the port; this replaces the prior GetByIDForUpdate
+//     round-trip with the same observable error surface.
+//  2. If m.Invalidates(), inv.Apply(txCtx, tid, userID, m.Event()) — bumps
 //     authz_epoch + revokes sessions + revokes refresh chains.
 //
 // Preconditions: m must not be nil; userID must not be empty; txCtx must be
 // an active transaction context obtained from the caller's RunInTx closure.
-// ApplyInTx executes the mutation within the caller-provided transaction
-// context txCtx. tid is the tenant that scopes the mutation; callers derive it
-// via tenant.FromContext(ctx) (post-auth) or carry it from the pre-auth login
-// input (accountlockout, sessionlogin). Passing it as an explicit param avoids
-// fragility on pre-auth paths where ctx may not carry ctxkeys.TenantID.
 func (a *Mutator) ApplyInTx(
 	ctx context.Context, txCtx context.Context, tid tenant.TenantID, userID string, m Mutation, now time.Time,
 ) error {

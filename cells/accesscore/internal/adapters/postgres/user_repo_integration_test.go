@@ -150,6 +150,39 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, errcode.KindConflict, ec.Kind)
 	})
 
+	t.Run("Create_same_username_different_tenants_succeeds", func(t *testing.T) {
+		// Model-A composite-unique (tenant_id, username) / (tenant_id, email):
+		// the same username and email CAN exist in two different tenants.
+		u1 := newTestUser("xtenant_shared_name")
+		require.NoError(t, repo.Create(ctx, testTenantID, u1), "tenant A create must succeed")
+
+		// Exact same username and email, but different tenant.
+		u2, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+			ID:           uuid.NewString(), // different PK
+			Username:     u1.Username,      // same username
+			Email:        u1.Email,         // same email
+			PasswordHash: u1.PasswordHash,
+			Status:       domain.StatusActive,
+			Source:       domain.UserSourceIdentity,
+			AuthzEpoch:   1,
+			CreatedAt:    u1.CreatedAt,
+			UpdatedAt:    u1.UpdatedAt,
+		})
+		require.NoError(t, err)
+
+		require.NoError(t, repo.Create(ctx, testTenantIDOther, u2),
+			"same username/email in a different tenant must succeed (composite-unique per tenant)")
+
+		// Sanity: each tenant finds its own row.
+		got1, err := repo.GetByUsername(ctx, testTenantID, u1.Username)
+		require.NoError(t, err)
+		assert.Equal(t, u1.ID, got1.ID, "tenant A must find tenant-A user")
+
+		got2, err := repo.GetByUsername(ctx, testTenantIDOther, u2.Username)
+		require.NoError(t, err)
+		assert.Equal(t, u2.ID, got2.ID, "tenant B must find tenant-B user")
+	})
+
 	t.Run("Create_duplicate_email_returns_ErrAuthUserDuplicate", func(t *testing.T) {
 		u := newTestUser("dup_email")
 		require.NoError(t, repo.Create(ctx, testTenantID, u))

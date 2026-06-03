@@ -423,18 +423,15 @@ func (r *PGUserRepo) getForUpdateBy(
 // GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row
 // lock via SELECT ... FOR UPDATE. The lookup is tenant-scoped (WHERE tenant_id=$1
 // AND id=$2) to prevent a cross-tenant read leak on the FOR UPDATE path.
+// Tenant validation is performed inside getForUpdateBy (the shared convergence
+// point for both lookup kinds); no redundant Validate call here.
 func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
-	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
-	}
 	return r.getForUpdateBy(ctx, t, lookupByID, id)
 }
 
-// GetByUsernameForUpdate (S4d) — see ports.UserRepository godoc.
+// GetByUsernameForUpdate (S4d) — see ports.UserRepository godoc. Tenant
+// validation is performed inside getForUpdateBy; no redundant Validate call here.
 func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
-	if err := t.Validate(); err != nil {
-		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
-	}
 	return r.getForUpdateBy(ctx, t, lookupByUsername, username)
 }
 

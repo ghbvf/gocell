@@ -63,6 +63,14 @@ func (s *Service) Query(
 		// resume against a different traceId or an unfiltered query (#1048).
 		attrs = append(attrs, "traceId", filters.TraceID)
 	}
+	if filters.TenantID != "" {
+		// tenantId is the primary isolation axis: a cursor minted under tenant A
+		// must not silently resume under tenant B. Including it in the scope
+		// fingerprint makes cross-tenant cursor replay produce a
+		// "query context mismatch" error rather than silently paging the wrong
+		// tenant's rows (#1337 PR-2a review U4).
+		attrs = append(attrs, "tenantId", filters.TenantID)
+	}
 	// From/To are time-range filter predicates, not cursor-scope identifiers.
 	// Including zero-value time.Time in the scope would embed "0001-01-01T00:00:00Z"
 	// and break cursor reuse when callers omit From/To (F-07). Non-zero values
