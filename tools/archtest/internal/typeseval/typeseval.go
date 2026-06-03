@@ -30,6 +30,7 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/types"
+	"os"
 	"strings"
 	"sync"
 
@@ -110,6 +111,15 @@ func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string)
 		Mode:  loadMode,
 		Dir:   modRoot,
 		Tests: tests,
+		// GOWORK=off forces module mode for every archtest load. The repo root
+		// go.work (`use .`) would otherwise put go/packages into workspace mode,
+		// which rejects the isolated fixture modules under tools/archtest/testdata/*
+		// ("directory ... does not contain modules listed in go.work") because
+		// those deliberately-standalone modules are not in the `use` set. archtest
+		// only ever analyzes the single root module plus those self-contained
+		// fixtures, so it must stay go.work-agnostic: module mode loads the root
+		// module and each fixture identically to the pre-go.work world.
+		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	if len(tags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
