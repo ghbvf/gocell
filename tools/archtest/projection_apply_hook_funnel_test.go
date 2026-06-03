@@ -37,14 +37,18 @@
 //     for a method-call restriction. Archtest enforcement is CI fail-closed.
 //     The sanctioned set is a single named file, tighter than the prior
 //     "any cell_gen.go".
-//   - Upstream: Medium. The allowlist is enforced by this archtest; a direct
-//     call compiles but is caught by CI. Hard upstream requires a cellgen-only
-//     sealed token (a marker injected at compile time that only cellgen can
-//     produce); this would change the PR-00-frozen Subscribe signature.
+//   - Upstream: Medium — and permanently so (won't-do, gh #1372). A "cellgen-only
+//     sealed token" that would make a hand-written Subscribe call uncompilable is
+//     NOT expressible in Go: cellgen emits this call into the cell's OWN package
+//     (cell_gen.go sits beside the hand-written cell.go), and Go has no
+//     compile-time identity for "generated code". Any token constructor the
+//     generated file can call, a hand-written sibling in the same package can call
+//     too. Same permanent Go-language ceiling as Subscribe / RegisterWebhookReceiver
+//     and the holder-seal family #851 / #893 / #1282.
 //
-// Because both sides are Medium, this is NOT yet a closed-loop Hard funnel.
-// The Hard-ization path (sealed token argument) is tracked as a gh follow-up to
-// #1176. The raw-infra-stays-in-bootstrap property IS Hard (type system): cells
+// Because both sides are Medium and the upstream side cannot be Hard-ized, this is
+// NOT a closed-loop Hard funnel and will not become one (gh #1372 closed won't-do).
+// The raw-infra-stays-in-bootstrap property IS Hard (type system): cells
 // hold sealed markers, never the CheckpointStore/TxRunner constructed in the
 // drain — that is what makes Option A sound vs emitting NewCoordinator into
 // generated cell code.

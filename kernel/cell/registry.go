@@ -227,8 +227,11 @@ type Registrar interface {
 	// cell_gen.go + _test.go + kernel/ by archtest PROJECTION-REGISTER-FUNNEL-01
 	// (Medium upstream + Medium downstream — Go cannot type-gate callers of a
 	// public method; this is the same permanent ceiling as Subscribe /
-	// RegisterWebhookReceiver). The Hard-ification path (cellgen-only sealed-token
-	// parameter) is tracked as a #1176 follow-up (#1372).
+	// RegisterWebhookReceiver). A "cellgen-only sealed-token" Hard-ification is NOT
+	// expressible in Go: cellgen emits this call into the cell's own package
+	// (cell_gen.go beside hand-written cell.go), which a same-package hand-written
+	// file is indistinguishable from at compile time. won't-do, gh #1372 (same
+	// ceiling family as #851 / #893 / #1282).
 	//
 	// ref: tools/archtest/projection_register_funnel_test.go (PROJECTION-REGISTER-FUNNEL-01)
 	// ref: ADR docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §7 + §Amendment 2026-05-31

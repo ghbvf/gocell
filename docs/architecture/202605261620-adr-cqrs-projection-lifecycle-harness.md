@@ -413,8 +413,8 @@ package godoc (not duplicated here).
 | ID | PR (stub → green) | Funnel direction / rating | Hard-template (§"Hard 范本目录") |
 |---|---|---|---|
 | **PROJECTION-STATE-PHASE-FROZEN-01** | PR-00 (green now) | n/a (membership freeze) — **Medium** (AST const-set + String-arm lock; Go enums are not reflectable as a set, so an AST/golden lock is the ceiling — same shape as `OUTBOX-STATE-TRANSITION-COMPLETENESS-01`). The orthogonal "zero value invalid" guarantee is Hard via `iota+1` + `Phase.Valid()` (type system). | enum-set golden lock |
-| **PROJECTION-APPLY-HOOK-FUNNEL-01** | PR-01 active (genuinely-green) → **PR-04a bootstrap-drain callsite** | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `Coordinator.Subscribe` callers to {kernel/projection self, `_test.go`, **`runtime/bootstrap/phases_projection.go`**}. **Relocation (PR-04a, Option A — §Amendment 2026-05-31):** the sanctioned callsite moved from cellgen `cell_gen.go` to the single bootstrap drain file, because `Coordinator.Subscribe` must be fed framework-owned raw infrastructure that cell code may never hold (sealed-marker architecture). Go cannot type-system-gate who calls a *public* method, so the caller-identity allowlist is the strongest achievable form (Medium, same shape as `HEALTHZ-WRITE-01` A2) — now over a single hand-written kernel/runtime file (tighter than "any cell_gen.go"). True Hard downstream needs a cellgen-only sealed-token parameter changing the PR-00-frozen `Subscribe` signature; tracked as a #1176 follow-up. | single sanctioned holder / caller-identity allowlist |
-| **PROJECTION-REGISTER-FUNNEL-01** | **PR-04a active (genuinely-green, vacuous)** → PR-04b cellgen callsite | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `cell.Registrar.RegisterProjection` callers to {`_test.go`, cellgen `cell_gen.go` + DO-NOT-EDIT banner}. The upstream complement of APPLY-HOOK-FUNNEL: cellgen's record-only single source is `reg.RegisterProjection` (guarded here); the `Coordinator.Subscribe` terminal that consumes it is in the bootstrap drain (guarded by APPLY-HOOK-FUNNEL). Same permanent Go-language ceiling (Medium); Hard-ization (sealed-token) is the same #1176 follow-up. The raw-infra-stays-in-bootstrap property is the **Hard** complement (type system): cells hold sealed markers, never the raw `CheckpointStore`/`TxRunner` the drain constructs. | single sanctioned holder / caller-identity allowlist |
+| **PROJECTION-APPLY-HOOK-FUNNEL-01** | PR-01 active (genuinely-green) → **PR-04a bootstrap-drain callsite** | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `Coordinator.Subscribe` callers to {kernel/projection self, `_test.go`, **`runtime/bootstrap/phases_projection.go`**}. **Relocation (PR-04a, Option A — §Amendment 2026-05-31):** the sanctioned callsite moved from cellgen `cell_gen.go` to the single bootstrap drain file, because `Coordinator.Subscribe` must be fed framework-owned raw infrastructure that cell code may never hold (sealed-marker architecture). Go cannot type-system-gate who calls a *public* method, so the caller-identity allowlist is the strongest achievable form (Medium, same shape as `HEALTHZ-WRITE-01` A2) — now over a single hand-written kernel/runtime file (tighter than "any cell_gen.go"). A true Hard would need a cellgen-only sealed-token parameter changing the PR-00-frozen `Subscribe` signature, but that is **not expressible in Go**: cellgen emits the caller into the cell's own package, indistinguishable at compile time from a same-package hand-written call — so this stays Medium permanently (won't-do, **gh #1372**; ceiling family #851 / #893 / #1282 — see §Amendment 2026-06-04). | single sanctioned holder / caller-identity allowlist |
+| **PROJECTION-REGISTER-FUNNEL-01** | **PR-04a active (genuinely-green, vacuous)** → PR-04b cellgen callsite | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `cell.Registrar.RegisterProjection` callers to {`_test.go`, cellgen `cell_gen.go` + DO-NOT-EDIT banner}. The upstream complement of APPLY-HOOK-FUNNEL: cellgen's record-only single source is `reg.RegisterProjection` (guarded here); the `Coordinator.Subscribe` terminal that consumes it is in the bootstrap drain (guarded by APPLY-HOOK-FUNNEL). Same permanent Go-language ceiling (Medium); a sealed-token Hard-ization is **not expressible** (cellgen emits into the cell's own package, indistinguishable at compile time from a same-package hand-written call) — won't-do, **gh #1372** (ceiling family #851 / #893 / #1282 — see §Amendment 2026-06-04). The raw-infra-stays-in-bootstrap property is the **Hard** complement (type system): cells hold sealed markers, never the raw `CheckpointStore`/`TxRunner` the drain constructs. | single sanctioned holder / caller-identity allowlist |
 | **PROJECTION-CHECKPOINT-TX-BOUND-01** | PR-01 stub → PR-02 green | **Medium** (`SaveOffset` impl must obtain tx via `persistence.TxFromContext`; raw `db.Exec` / `*sql.Tx` form fails). Rides the existing `PG-REPO-AMBIENT-TX-01` Hard funnel for the PG adapter. | typed-param / ambient-tx form |
 | **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | PR-02 | **Medium** (SQL-literal scan rejects `owner` in INSERT/UPDATE write paths; v1 scope — removed in the same PR that enables v1.1 claim). | input-struct field exclusion (SQL-write variant) |
 | **PROJECTION-CONSISTENCY-01** (codegen funnel) | gh #960 (delivered) | 下游 **Hard** — contractgen emits `const _ = uint(cellvocab.<level> - cellvocab.L3)` into the projection `types_gen.go`; a level below L3 overflows uint at compile time, so an invalid `codegen=true` projection cannot exist in a buildable tree. 上游 **Hard** (structural, not caller-allowlist) — `generateOneContract` renders `types.tmpl` unconditionally for every `kind:projection` contract and the guard sits in an unconditional `{{if eq .Kind "projection"}}` block, so a generated projection `types_gen.go` cannot exist without the guard; the byte-lock is the committed `generated/.../types_gen.go` + `hack/verify-codegen-contract.sh` regenerate-and-diff CI. The governance rule `PROJECTION-CONSISTENCY-01` is the **Medium** backstop for the two vectors the codegen funnel cannot reach (`codegen=false` contracts + in-memory fixtures). The original "parser load-time `jsonschema.Validate`" framing was **rejected** (a parse-time validator is a Medium runtime guard and does not cover the in-memory vector — see §Amendment 2026-06-02 #960). | codegen funnel + compile-error downstream |
@@ -466,7 +466,9 @@ split into sequenced sub-PRs (filed under epic #1100):
   `Cursor` + `ReplaySource` + corebundle wiring (conflicts #1085 Batch 2).
   **PR-04d (#1369)**: serial-delivery enforcement. **PR-04e (#1370)**: HTTP rebuild
   control-plane endpoint. **PR-04f (#1371)**: dev guide. **PR-04g (#1372)**: funnel
-  Hard-ization (cellgen-only sealed token).
+  Hard-ization (cellgen-only sealed token) — **closed won't-do** (the sealed token
+  is not expressible in Go; the two funnels stay Medium permanently). See
+  §Amendment 2026-06-04.
 
 ### Option A — wiring seam (supersedes the §7 "cell_gen.go Subscribe callsite")
 
@@ -801,3 +803,44 @@ surface, not a threat-discharge mechanism (a rebuild is equally triggerable via
 from a hypothetical cellgen handler to a framework-mounted RouteGroup. Auth is
 unchanged (service-token + caller-cell allowlist), so the endpoint's exposure
 surface is identical to the §5 freeze. No new threat row is introduced.
+
+## Amendment 2026-06-04 (PR-04g #1372 — funnel Hard-ization closed won't-do)
+
+PR-04g was scoped (Amendment 2026-05-31) as "funnel Hard-ization (cellgen-only
+sealed token)" for `PROJECTION-APPLY-HOOK-FUNNEL-01` / `PROJECTION-REGISTER-FUNNEL-01`,
+both Medium/Medium. On execution the proposed mechanism was found **not
+expressible in Go**, so #1372 is **closed won't-do** (a documentation/governance
+reclassification, no code change).
+
+**Why the sealed token cannot exist.** A "cellgen-only sealed token" would gate
+`reg.RegisterProjection` / `Coordinator.Subscribe` to callers that hold a value
+only cellgen can construct. But cellgen emits these calls into the **cell's own
+package** — the generated `cell_gen.go` (`func (c *Cell) Init(...)`) sits beside
+the hand-written `cell.go`. Go has no compile-time identity for "generated code";
+a hand-written file in the same package can call any constructor the generated
+file can. Sealing construction to a *package* (the `internal/topicns` #1247
+precedent) cannot separate generated from hand-written files of one cell. This is
+the identical permanent Go-language ceiling already documented for `Subscribe` /
+`RegisterWebhookReceiver` and the holder-seal family **#851 / #893 / #1282**: a
+caller-identity allowlist enforced by archtest (CI fail-closed) is the strongest
+achievable upstream form. The §7 rows for both funnels are reworded accordingly.
+
+**What stands unchanged (Hard).** The load-bearing **raw-infra-stays-in-bootstrap**
+property remains Hard (type system): cells hold only sealed markers and cannot
+construct `CheckpointStore` / `TxRunner`, so the §7 "Hard complement" is untouched.
+The two caller allowlists keep their Medium downstream/upstream ratings; nothing
+about runtime behavior or the generated wiring changes.
+
+**Note on the sibling #1475.** `PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01` (§7,
+Amendment 2026-06-02) is a *different* ceiling — its Hard path (a sealed
+framework-owned serial-transport token) *is* expressible but has no concrete
+concurrent-transport consumer in v1, so it stays **deferred (open) at gh #1475**,
+not won't-do. The two are not conflated.
+
+### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement)
+
+No row flips. This amendment only reclassifies the *upgrade prospect* of two
+already-Medium enforcement mechanisms from "pending Hard-ization" to "permanently
+Medium (won't-do)". Both archtests remain active and CI fail-closed; the §6
+threat discharges they back are unchanged. The move is `pending → unreachable`,
+not `✅ → ⚠️/❌`.

@@ -26,10 +26,13 @@
 //
 //   - Downstream: Medium archtest caller allowlist. Go cannot type-gate who
 //     calls a public method, so the archtest is the strongest achievable form.
-//   - Upstream: Medium. The allowlist is CI-enforced; a direct call compiles but
-//     is caught. Hard upstream requires a cellgen-only sealed token argument that
-//     only cellgen can produce — tracked as a gh follow-up to #1176, the same
-//     permanent Go-language ceiling as Subscribe / RegisterWebhookReceiver.
+//   - Upstream: Medium — permanently (won't-do, gh #1372). A "cellgen-only sealed
+//     token argument" is NOT expressible in Go: cellgen emits RegisterProjection
+//     into the cell's OWN package (cell_gen.go sits beside the hand-written
+//     cell.go), and Go has no compile-time identity for "generated code". Any
+//     token constructor the generated file can call, a hand-written sibling in the
+//     same package can call too. Same permanent Go-language ceiling as Subscribe /
+//     RegisterWebhookReceiver and the holder-seal family #851 / #893 / #1282.
 //
 // This is the upstream complement of PROJECTION-APPLY-HOOK-FUNNEL-01: cellgen's
 // single source is reg.RegisterProjection (guarded here); the Coordinator.Subscribe
