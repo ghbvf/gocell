@@ -51,12 +51,14 @@ var sharedPG = pgclone.New("gocell_l2atomicity_test_template",
 		if err := adapterpg.VerifyExpectedShape(ctx, pool); err != nil {
 			return fmt.Errorf("verify schema shape: %w", err)
 		}
-		// Migration 019 creates the `roles` table but only the admin role is
-		// seeded by the setup flow. RBAC cascade tests assign/revoke a non-admin
-		// role, which requires the row to exist or AssignToUser fails with an FK
-		// violation. Seed "editor" once into the template; every clone inherits it.
+		// Migration 047 rebuilt roles with composite PK (tenant_id, id). Seed the
+		// "editor" role for a fixed test-tenant so RBAC cascade tests can
+		// assign/revoke it without FK violations. ON CONFLICT now targets the
+		// composite PK; the single-column (id) constraint no longer exists.
 		if _, err := pool.DB().Exec(ctx,
-			`INSERT INTO roles (id, name) VALUES ('editor', 'editor') ON CONFLICT (id) DO NOTHING`); err != nil {
+			`INSERT INTO roles (tenant_id, id, name)
+			 VALUES ('00000000-0000-0000-0000-000000000001', 'editor', 'editor')
+			 ON CONFLICT (tenant_id, id) DO NOTHING`); err != nil {
 			return fmt.Errorf("seed editor role: %w", err)
 		}
 		return nil

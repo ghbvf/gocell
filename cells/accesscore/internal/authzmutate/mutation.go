@@ -39,6 +39,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -82,12 +83,9 @@ type Mutation interface {
 
 	// persist writes the mutation directly to the repository via the
 	// appropriate narrow port method. Called exclusively from
-	// Mutator.ApplyInTx inside a RunInTx closure.
-	//
-	// Precondition: Mutator.ApplyInTx validates m != nil before calling persist;
-	// implementations may assume the receiver is a concrete sealed Mutation
-	// variant and need not nil-check the repo (also validated by ApplyInTx).
-	persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error
+	// Mutator.ApplyInTx inside a RunInTx closure. tid is the tenant derived
+	// from ctx by ApplyInTx (post-auth; FromContext fail-closed).
+	persist(ctx context.Context, repo ports.UserRepository, tid tenant.TenantID, userID string, now time.Time) error
 
 	// mutationOK seals the interface to this package.
 	mutationOK()
@@ -98,8 +96,8 @@ type LockUser struct{}
 
 func (LockUser) Event() session.CredentialEvent { return session.CredentialEventLock }
 func (LockUser) Invalidates() bool              { return true }
-func (LockUser) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
-	return repo.UpdateLockState(ctx, userID, domain.StatusLocked, now)
+func (LockUser) persist(ctx context.Context, repo ports.UserRepository, tid tenant.TenantID, userID string, now time.Time) error {
+	return repo.UpdateLockState(ctx, tid, userID, domain.StatusLocked, now)
 }
 func (LockUser) mutationOK() {}
 
@@ -119,8 +117,8 @@ type SuspendUser struct{}
 
 func (SuspendUser) Event() session.CredentialEvent { return session.CredentialEventLock }
 func (SuspendUser) Invalidates() bool              { return true }
-func (SuspendUser) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
-	return repo.UpdateLockState(ctx, userID, domain.StatusSuspended, now)
+func (SuspendUser) persist(ctx context.Context, repo ports.UserRepository, tid tenant.TenantID, userID string, now time.Time) error {
+	return repo.UpdateLockState(ctx, tid, userID, domain.StatusSuspended, now)
 }
 func (SuspendUser) mutationOK() {}
 
@@ -142,8 +140,8 @@ type ActivateUser struct{}
 
 func (ActivateUser) Event() session.CredentialEvent { return session.CredentialEventLock }
 func (ActivateUser) Invalidates() bool              { return false }
-func (ActivateUser) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
-	return repo.UpdateLockState(ctx, userID, domain.StatusActive, now)
+func (ActivateUser) persist(ctx context.Context, repo ports.UserRepository, tid tenant.TenantID, userID string, now time.Time) error {
+	return repo.UpdateLockState(ctx, tid, userID, domain.StatusActive, now)
 }
 func (ActivateUser) mutationOK() {}
 
@@ -156,8 +154,10 @@ func (RequirePasswordReset) Event() session.CredentialEvent {
 	return session.CredentialEventPasswordReset
 }
 func (RequirePasswordReset) Invalidates() bool { return true }
-func (RequirePasswordReset) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
-	return repo.UpdatePasswordResetFlag(ctx, userID, true, now)
+func (RequirePasswordReset) persist(
+	ctx context.Context, repo ports.UserRepository, tid tenant.TenantID, userID string, now time.Time,
+) error {
+	return repo.UpdatePasswordResetFlag(ctx, tid, userID, true, now)
 }
 func (RequirePasswordReset) mutationOK() {}
 
@@ -171,7 +171,7 @@ func (ClearPasswordReset) Event() session.CredentialEvent {
 	return session.CredentialEventPasswordReset
 }
 func (ClearPasswordReset) Invalidates() bool { return false }
-func (ClearPasswordReset) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
-	return repo.UpdatePasswordResetFlag(ctx, userID, false, now)
+func (ClearPasswordReset) persist(ctx context.Context, repo ports.UserRepository, tid tenant.TenantID, userID string, now time.Time) error {
+	return repo.UpdatePasswordResetFlag(ctx, tid, userID, false, now)
 }
 func (ClearPasswordReset) mutationOK() {}

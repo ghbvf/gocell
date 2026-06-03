@@ -199,6 +199,62 @@ func TestIssue_JTI_Empty_Omitted(t *testing.T) {
 	assert.False(t, hasJTI, "jti claim must be absent from token when JTI is empty")
 }
 
+// TestIssue_TenantID_Written verifies that IssueOptions.TenantID is written as the
+// "tenant_id" JWT claim when non-empty, and that the verifier reads it back into
+// Claims.TenantID (the full issuer→verifier round-trip).
+func TestIssue_TenantID_Written(t *testing.T) {
+	const tenantUUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+		TenantID: tenantUUID,
+	})
+	require.NoError(t, err)
+
+	// Raw payload must contain tenant_id.
+	payload := decodeJWTPayload(t, tokenStr)
+	assert.Equal(t, tenantUUID, payload["tenant_id"], "tenant_id claim must be written when TenantID is non-empty")
+
+	// Round-trip: verifier must canonicalize and populate Claims.TenantID.
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, tenantUUID, claims.TenantID, "Claims.TenantID must be populated from tenant_id claim")
+
+	// tenant_id must not appear in Claims.Extra.
+	_, inExtra := claims.Extra["tenant_id"]
+	assert.False(t, inExtra, "tenant_id must not leak into Claims.Extra")
+}
+
+// TestIssue_TenantID_Empty_Omitted verifies that when TenantID is empty the
+// "tenant_id" claim is not written (single-tenant / pre-tenant path).
+func TestIssue_TenantID_Empty_Omitted(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	payload := decodeJWTPayload(t, tokenStr)
+	_, hasTenant := payload["tenant_id"]
+	assert.False(t, hasTenant, "tenant_id claim must be absent from token when TenantID is empty")
+
+	// Verifier must succeed and return empty TenantID (single-tenant path).
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, "", claims.TenantID)
+}
+
 // TestWithExpectedIssuer_EmptyString_NoOp verifies that WithExpectedIssuer("") is
 // equivalent to not calling the option — any issuer is accepted.
 func TestWithExpectedIssuer_EmptyString_NoOp(t *testing.T) {

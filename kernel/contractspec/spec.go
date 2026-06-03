@@ -62,14 +62,16 @@ type ContractSpec struct {
 // ContractSpec.GRPC. It mirrors metadata.GRPCTransportMeta but is the runtime
 // value type (kernel/contractspec is dependency-free of metadata parsing at the
 // registration boundary). Service + Method are the wire identity; ProtoPackage
-// is the proto file's `package` declaration (populated by codegen in PR 6).
+// is the proto file's `package` declaration.
 type GRPCEndpointSpec struct {
 	Service       string // proto FQ service name, e.g. "device.command.v1.DeviceCommandService"
 	Method        string // proto method name, e.g. "IssueCommand"
 	StreamingType string // unary | server-stream | client-stream | bidi (empty → unary)
 	Proto         string // contracts-relative .proto path
 	// ProtoPackage is the proto `package` declaration (e.g. "device.command.v1").
-	// Populated by codegen in PR 6; empty in PR 1–5 and must not be relied upon.
+	// The contractgen ProtoRegistry can resolve it from the .proto starting PR 6;
+	// runtime ContractSpec population lands PR 8 (first real grpc contract
+	// registration). Empty until then; must not be relied upon.
 	ProtoPackage string
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -62,7 +63,14 @@ func New(
 //
 // Preconditions: m must not be nil; userID must not be empty; txCtx must be
 // an active transaction context obtained from the caller's RunInTx closure.
-func (a *Mutator) ApplyInTx(ctx context.Context, txCtx context.Context, userID string, m Mutation, now time.Time) error {
+// ApplyInTx executes the mutation within the caller-provided transaction
+// context txCtx. tid is the tenant that scopes the mutation; callers derive it
+// via tenant.FromContext(ctx) (post-auth) or carry it from the pre-auth login
+// input (accountlockout, sessionlogin). Passing it as an explicit param avoids
+// fragility on pre-auth paths where ctx may not carry ctxkeys.TenantID.
+func (a *Mutator) ApplyInTx(
+	ctx context.Context, txCtx context.Context, tid tenant.TenantID, userID string, m Mutation, now time.Time,
+) error {
 	if m == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"authzmutate.ApplyInTx: mutation must not be nil")
@@ -72,11 +80,11 @@ func (a *Mutator) ApplyInTx(ctx context.Context, txCtx context.Context, userID s
 			"authzmutate.ApplyInTx: userID must not be empty")
 	}
 	slog.DebugContext(ctx, "authzmutate.ApplyInTx", "userID", userID, "mutation", fmt.Sprintf("%T", m))
-	if err := m.persist(txCtx, a.repo, userID, now); err != nil {
+	if err := m.persist(txCtx, a.repo, tid, userID, now); err != nil {
 		return fmt.Errorf("authzmutate.ApplyInTx: persist: %w", err)
 	}
 	if m.Invalidates() {
-		if err := a.inv.Apply(txCtx, userID, m.Event()); err != nil {
+		if err := a.inv.Apply(txCtx, tid, userID, m.Event()); err != nil {
 			return fmt.Errorf("authzmutate.ApplyInTx: invalidate credentials: %w", err)
 		}
 	}

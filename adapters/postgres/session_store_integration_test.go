@@ -42,14 +42,20 @@ func subjectUUID(subjectID string) uuid.UUID {
 // This is a test-only concern: the production sessions table uses a real UUID FK
 // into users, but storetest drives TEXT subject IDs. We bridge the gap here
 // without touching production code.
+// testTenantID is the canonical test-tenant UUID used in integration test user
+// fixtures. tenant.TenantID requires a non-empty canonical UUID; all test users
+// are placed in this tenant so the sessions FK chain resolves correctly.
+const testTenantID = "00000000-0000-0000-0000-000000000001"
+
 func upsertUser(t testing.TB, pool *Pool, subjectID string) uuid.UUID {
 	t.Helper()
 	id := subjectUUID(subjectID)
 	_, err := pool.DB().Exec(context.Background(), `
-INSERT INTO users (id, username, email, password_hash, status, creation_source, authz_epoch, created_at, updated_at)
-VALUES ($1, $2, $3, 'x', 'active', 'identity', 1, NOW(), NOW())
+INSERT INTO users (id, tenant_id, username, email, password_hash, status, creation_source, authz_epoch, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'x', 'active', 'identity', 1, NOW(), NOW())
 ON CONFLICT (id) DO NOTHING`,
 		id.String(),
+		testTenantID,
 		"user-"+subjectID,
 		subjectID+"@test.example",
 	)

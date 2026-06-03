@@ -500,14 +500,36 @@ func runBootstrap(
 // POST is guaranteed to land on a wired handler rather than racing against mux
 // finalization (race-detector + concurrent load occasionally surfaced "EOF"
 // responses when only /healthz was probed).
+//
+// X-Tenant-ID is set on the setup-status probe: the endpoint is tenant-scoped
+// (PR-2a) and always returns 200 regardless of tenant validity (fail-soft for
+// non-enumerable behavior), so the probe still works as a readiness gate while
+// being consistent with the mandatory-header contract.
 func waitForHealthz(t *testing.T, healthBase, primaryBase string) {
 	t.Helper()
 	testwait.External(t, "l2-harness-server-ready", func() bool {
 		if !httpGetOK(healthBase + "/healthz") {
 			return false
 		}
-		return httpGetOK(primaryBase + "/api/v1/access/setup/status")
+		return httpGetWithTenantOK(primaryBase + "/api/v1/access/setup/status")
 	}, testtime.EventuallyLong, testtime.MediumPoll, "HTTP server did not become ready")
+}
+
+// httpGetWithTenantOK is like httpGetOK but includes the canonical test
+// X-Tenant-ID header. Used for tenant-scoped endpoints like setup/status that
+// require (or accept) the header on every request.
+func httpGetWithTenantOK(url string) bool {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("X-Tenant-ID", l2TestTenantID)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // httpGetOK is a tiny helper that returns true iff GET returns 200.
@@ -558,9 +580,16 @@ func seedAdmin(t *testing.T, base string) {
 // setupHasAdmin queries GET /api/v1/access/setup/status and returns true iff
 // the response confirms an admin already exists. Used by seedAdmin to make
 // the EOF retry idempotent.
+//
+// X-Tenant-ID is required: setup/status is tenant-scoped (PR-2a). Without
+// the header the handler returns hasAdmin:false (non-enumerable fail-soft)
+// even when an admin exists, causing seedAdmin's EOF-retry logic to issue
+// a duplicate POST that returns 410 ERR_SETUP_ALREADY_INITIALIZED.
 func setupHasAdmin(t *testing.T, base string) bool {
 	t.Helper()
-	resp, err := httpClient.Get(base + "/api/v1/access/setup/status")
+	req, _ := http.NewRequest(http.MethodGet, base+"/api/v1/access/setup/status", nil)
+	req.Header.Set("X-Tenant-ID", l2TestTenantID)
+	resp, err := httpClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			_ = resp.Body.Close()
@@ -583,6 +612,7 @@ func postSetupAdmin(base string, body *bytes.Reader) (*http.Response, error) {
 	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/setup/admin", body)
 	req.SetBasicAuth(bootstrapUsername, bootstrapPassword)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-ID", l2TestTenantID)
 	return httpClient.Do(req)
 }
 

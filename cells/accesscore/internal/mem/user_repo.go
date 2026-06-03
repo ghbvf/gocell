@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/state/cas"
@@ -26,6 +27,13 @@ const (
 // It is always vended by Store.UserRepository() so the shared mutex covers
 // any cross-repo invariant (e.g. effective-admin checks in RoleRepository).
 //
+// # Tenancy (#1337 PR-2)
+//
+// Methods take a mandatory tenant.TenantID positional parameter and scope all
+// reads/writes to the tenant's partition of the underlying maps. The by-PK
+// tenant-deriving carve-out (GetByID) still looks up by the global UUID PK
+// without a tenant predicate, mirroring the PG adapter.
+//
 // # Lock contract
 //
 // Methods on UserRepository follow the single-lock rule (see store.go package
@@ -36,44 +44,75 @@ const (
 //     (sync.Mutex is not reentrant; re-acquiring would deadlock).
 //   - inLiveTx==false (no lease / dead lease / foreign store): acquire
 //     store.mu for the duration of this method call.
-//
-// ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the same
-// rule: inside memTxRunner.RunInTx they read under the held store.mu and deliver
-// SELECT FOR UPDATE-until-commit serialization; driven by a foreign CellTxManager
-// (corebundle PG-outbox topology, ssobff/demo) they fall back to a per-call
-// store.mu read lock — functional, but the cross-statement serialization
-// guarantee holds only when the mem Store's own TxRunner drives the tx. PG is
-// the production path that provides the hard guarantee unconditionally.
 type UserRepository struct {
 	store *Store
 }
 
-// Create persists a new User. Safe to call both inside and outside a RunInTx
-// closure; see UserRepository lock contract.
-func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
+// Create persists a new User within the tenant. Safe to call both inside and
+// outside a RunInTx closure; see UserRepository lock contract.
+func (r *UserRepository) Create(ctx context.Context, t tenant.TenantID, user *domain.User) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	if _, exists := r.store.byName[user.Username]; exists {
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
+
+	if _, exists := tByName[user.Username]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgUsernameFmt, user.Username))))
 	}
-	if _, exists := r.store.byEmail[user.Email]; exists {
+	if _, exists := tByEmail[user.Email]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "email already exists",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("email=%q", user.Email))))
 	}
 
 	c := cloneUser(user)
+	// Stamp the tenant authoritatively from the Create param (not the input
+	// aggregate) so every later READ (GetByID returns this stored copy) carries
+	// the tenant — the source for the by-PK tenant-deriving path (rbacassign).
+	c.TenantID = t
 	r.store.usersByID[user.ID] = c
-	r.store.byName[user.Username] = c
-	r.store.byEmail[user.Email] = c
+	tByName[user.Username] = c
+	tByEmail[user.Email] = c
 	return nil
 }
 
-// GetByID returns the User with the given ID. Safe to call both inside and
-// outside a RunInTx closure; see UserRepository lock contract.
+// checkProfileUniqueLocked enforces the tenant-scoped username / email UNIQUE
+// constraint for UpdateProfile (mirrors PG). Caller must hold the store lock.
+// Returns ErrAuthUserDuplicate when a different user in the tenant already holds
+// the target username or email.
+func checkProfileUniqueLocked(tByName, tByEmail map[string]*domain.User, userID, newName, newEmail string, existing *domain.User) error {
+	if newName != existing.Username {
+		if collider, hit := tByName[newName]; hit && collider.ID != userID {
+			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgUsernameFmt, newName))))
+		}
+	}
+	if newEmail != existing.Email {
+		if collider, hit := tByEmail[newEmail]; hit && collider.ID != userID {
+			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "email already exists",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("email=%q", newEmail))))
+		}
+	}
+	return nil
+}
+
+// userTenantMismatch reports whether a non-nil user belongs to a tenant other
+// than t — used by the GetByIDForUpdate carve-out path to reject a cross-tenant
+// row found via the global by-PK index (collapsing to not-found, mirroring the
+// PG `WHERE tenant_id = $N AND id = $1` predicate).
+func userTenantMismatch(existing *domain.User, t tenant.TenantID) bool {
+	return existing != nil && existing.TenantID != t
+}
+
+// GetByID returns the User with the given ID. Tenant-deriving carve-out: no
+// tenant predicate — looks up by the global UUID PK. Safe to call both inside
+// and outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -89,15 +128,40 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 	return cloneUser(u), nil
 }
 
-// GetByUsername returns the User with the given username. Safe to call both
-// inside and outside a RunInTx closure; see UserRepository lock contract.
-func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+// GetByIDInTenant fetches a user by primary key and verifies it belongs to t.
+// Returns ErrAuthUserNotFound when the row is absent OR in a different tenant,
+// collapsing both cases to prevent cross-tenant existence enumeration.
+func (r *UserRepository) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	u, ok := r.store.byName[username]
+	existing, exists := r.store.userByIDInTenant(id, string(t))
+	if !exists {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
+	}
+	return cloneUser(existing), nil
+}
+
+// GetByUsername returns the User with the given username within the tenant.
+// Safe to call both inside and outside a RunInTx closure.
+func (r *UserRepository) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
+	if !r.store.inLiveTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
+
+	tByName := r.store.tenantByName(string(t))
+	u, ok := tByName[username]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
@@ -107,44 +171,62 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*d
 }
 
 // GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
-// semantics. The mem store has no per-row lock distinct from GetByID — its
-// serialization unit is the whole memTxRunner.RunInTx closure holding store.mu
-// (full FOR-UPDATE-until-commit), or a per-call store.mu read under a foreign
-// CellTxManager. Both behaviors are exactly GetByID's lock contract, so this
-// is a deliberate, documented delegation: the ForUpdate vs plain distinction
-// is a PG-only concept the port preserves; mem cannot and need not differ.
-func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
-	return r.GetByID(ctx, id)
+// semantics. t is accepted for interface compliance; the lookup is by global
+// UUID PK (tenant-deriving), so no tenant predicate. The mem store serializes
+// via store.mu held in RunInTx — for details see UserRepository lock contract.
+func (r *UserRepository) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
+	// Tenant-scoped (NOT the GetByID carve-out): GetByIDForUpdate callers are
+	// post-auth and carry a tenant, so the for-update read must reject a
+	// cross-tenant row (mirrors PG selectUserByIDForUpdateSQL's tenant predicate).
+	u, err := r.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if userTenantMismatch(u, t) {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
+	}
+	return u, nil
 }
 
 // GetByUsernameForUpdate (S4d): username-keyed counterpart to
-// GetByIDForUpdate. Delegates to GetByUsername for the same reason — mem has
-// no row lock distinct from the plain read (see GetByIDForUpdate doc).
-func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
-	return r.GetByUsername(ctx, username)
+// GetByIDForUpdate, scoped to the tenant. Delegates to GetByUsername for the
+// same reason — mem has no row lock distinct from the plain read.
+func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
+	return r.GetByUsername(ctx, t, username)
 }
 
-// UpdateProfile writes username / email / updated_at only. PATCH semantics:
-// nil name/email skips that column. Returns the reconstituted *domain.User.
-// Safe to call both inside and outside a RunInTx closure; see UserRepository
-// lock contract.
+// UpdateProfile writes username / email / updated_at only within the tenant.
+// PATCH semantics: nil name/email skips that column. Returns the reconstituted
+// *domain.User. Safe to call both inside and outside a RunInTx closure.
 func (r *UserRepository) UpdateProfile(
 	ctx context.Context,
+	t tenant.TenantID,
 	userID string,
 	name, email *domain.NonEmpty,
 	now time.Time,
 ) (*domain.User, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	existing, exists := r.store.usersByID[userID]
+	existing, exists := r.store.userByIDInTenant(userID, string(t))
 	if !exists {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
+
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
 
 	newName := existing.Username
 	if name != nil {
@@ -155,20 +237,9 @@ func (r *UserRepository) UpdateProfile(
 		newEmail = string(*email)
 	}
 
-	// Uniqueness check mirrors PG (users.username UNIQUE / users.email UNIQUE).
-	// Self-match (collider.ID == userID) is allowed so a same-value PATCH is
-	// a legal no-op rather than spurious 409.
-	if newName != existing.Username {
-		if collider, hit := r.store.byName[newName]; hit && collider.ID != userID {
-			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgUsernameFmt, newName))))
-		}
-	}
-	if newEmail != existing.Email {
-		if collider, hit := r.store.byEmail[newEmail]; hit && collider.ID != userID {
-			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "email already exists",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("email=%q", newEmail))))
-		}
+	// Uniqueness check mirrors PG (tenant-scoped username / email UNIQUE).
+	if err := checkProfileUniqueLocked(tByName, tByEmail, userID, newName, newEmail, existing); err != nil {
+		return nil, err
 	}
 
 	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
@@ -191,49 +262,47 @@ func (r *UserRepository) UpdateProfile(
 		return nil, fmt.Errorf("mem: update-profile reconstitute: %w", err)
 	}
 
+	updated.TenantID = t
 	r.store.usersByID[userID] = updated
 	if newName != existing.Username {
-		delete(r.store.byName, existing.Username)
+		delete(tByName, existing.Username)
 	}
-	r.store.byName[newName] = updated
+	tByName[newName] = updated
 	if newEmail != existing.Email {
-		delete(r.store.byEmail, existing.Email)
+		delete(tByEmail, existing.Email)
 	}
-	r.store.byEmail[newEmail] = updated
+	tByEmail[newEmail] = updated
 	return cloneUser(updated), nil
 }
 
-// UpdateLockState writes status + updated_at, and atomically zeros the
-// auto-lockout columns when status == StatusActive (mirrors the SQL CASE
-// logic in the PG adapter and ActivateUser.apply ResetFailedLogins call).
-// Safe to call both inside and outside a RunInTx closure; see UserRepository
-// lock contract.
+// UpdateLockState writes status + updated_at within the tenant, and atomically
+// zeros the auto-lockout columns when status == StatusActive.
+// Safe to call both inside and outside a RunInTx closure.
 func (r *UserRepository) UpdateLockState(
 	ctx context.Context,
+	t tenant.TenantID,
 	userID string,
 	status domain.UserStatus,
 	now time.Time,
 ) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	existing, exists := r.store.usersByID[userID]
+	existing, exists := r.store.userByIDInTenant(userID, string(t))
 	if !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 
-	// S4.0 effective-admin invariant safety net (parallels migration 024
-	// effective_admin_invariant_on_users BEFORE UPDATE trigger). When a
-	// status transition demotes an active admin (active → non-active) and
-	// the user holds the admin role, refuse if no other effective admin
-	// remains. Running inside the same write lock as the map mutation
-	// matches the PG trigger's BEFORE-row semantics.
+	// S4.0 effective-admin invariant safety net (per-tenant).
 	if existing.Status() == domain.StatusActive && status != domain.StatusActive {
-		if err := r.guardEffectiveAdminRemovalLocked(userID); err != nil {
+		if err := r.guardEffectiveAdminRemovalLocked(string(t), userID); err != nil {
 			return err
 		}
 	}
@@ -242,7 +311,6 @@ func (r *UserRepository) UpdateLockState(
 	var lastFailedAt *time.Time
 	var lockedUntil *time.Time
 	if status == domain.StatusActive {
-		// Atomic lockout reset mirrors SQL CASE WHEN new.status='active' THEN 0/NULL/NULL.
 		failedLoginCount = 0
 		lastFailedAt = nil
 		lockedUntil = nil
@@ -272,27 +340,33 @@ func (r *UserRepository) UpdateLockState(
 		return fmt.Errorf("mem: update-lock-state reconstitute: %w", err)
 	}
 
+	updated.TenantID = t
 	r.store.usersByID[userID] = updated
-	r.store.byName[updated.Username] = updated
-	r.store.byEmail[updated.Email] = updated
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
+	tByName[updated.Username] = updated
+	tByEmail[updated.Email] = updated
 	return nil
 }
 
-// UpdatePasswordResetFlag writes password_reset_required + updated_at only.
-// Safe to call both inside and outside a RunInTx closure; see UserRepository
-// lock contract.
+// UpdatePasswordResetFlag writes password_reset_required + updated_at only
+// within the tenant. Safe to call both inside and outside a RunInTx closure.
 func (r *UserRepository) UpdatePasswordResetFlag(
 	ctx context.Context,
+	t tenant.TenantID,
 	userID string,
 	required bool,
 	now time.Time,
 ) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	existing, exists := r.store.usersByID[userID]
+	existing, exists := r.store.userByIDInTenant(userID, string(t))
 	if !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
@@ -319,28 +393,30 @@ func (r *UserRepository) UpdatePasswordResetFlag(
 		return fmt.Errorf("mem: update-password-reset-flag reconstitute: %w", err)
 	}
 
+	updated.TenantID = t
 	r.store.usersByID[userID] = updated
-	r.store.byName[updated.Username] = updated
-	r.store.byEmail[updated.Email] = updated
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
+	tByName[updated.Username] = updated
+	tByEmail[updated.Email] = updated
 	return nil
 }
 
 // guardEffectiveAdminRemovalLocked refuses the in-progress mutation when
-// removing/demoting userID would leave zero effective admins. Caller MUST
-// already hold r.store.mu (either from the non-tx lock in Update, or because
-// RunInTx holds it for the tx). Returns nil if the user does not hold the
-// admin role at all.
-func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
-	roles, hasRoles := r.store.userRoles[userID]
+// removing/demoting userID would leave zero effective admins within the
+// tenant. Caller MUST already hold r.store.mu.
+func (r *UserRepository) guardEffectiveAdminRemovalLocked(tenantID, userID string) error {
+	tUserRoles := r.store.tenantUserRoles(tenantID)
+	roles, hasRoles := tUserRoles[userID]
 	if !hasRoles {
 		return nil
 	}
 	if _, hasAdmin := roles[auth.RoleAdmin]; !hasAdmin {
 		return nil
 	}
-	// User is admin AND currently active. Count OTHER effective admins.
+	// User is admin AND currently active. Count OTHER effective admins within tenant.
 	other := 0
-	for otherID, otherRoles := range r.store.userRoles {
+	for otherID, otherRoles := range tUserRoles {
 		if otherID == userID {
 			continue
 		}
@@ -369,6 +445,7 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 func cloneUser(u *domain.User) *domain.User {
 	clone, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:                    u.ID,
+		TenantID:              u.TenantID,
 		Username:              u.Username,
 		Email:                 u.Email,
 		PasswordHash:          u.PasswordHash,
@@ -403,33 +480,31 @@ func copyTime(t *time.Time) *time.Time {
 	return &v
 }
 
-// UpdatePassword applies a CAS-guarded password update. Safe to call both
-// inside and outside a RunInTx closure; see UserRepository lock contract.
-//
-// If the stored PasswordVersion does not match expectedPV, it returns
-// ErrVersionConflict (KindConflict / HTTP 409). On success it returns the new
-// PasswordVersion (= expectedPV + 1).
+// UpdatePassword applies a CAS-guarded password update within the tenant.
+// Safe to call both inside and outside a RunInTx closure.
 func (r *UserRepository) UpdatePassword(
 	ctx context.Context,
+	t tenant.TenantID,
 	userID string,
 	newHash string,
 	resetRequired bool,
 	expectedPV int64,
 ) (int64, error) {
+	if err := t.Validate(); err != nil {
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	u, ok := r.store.usersByID[userID]
+	u, ok := r.store.userByIDInTenant(userID, string(t))
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 	// Status guard (#1017 F1): mirror the SQL `AND status='active'` predicate.
-	// Checked before the version guard so a concurrent freeze is reported as
-	// 403 (ErrAuthUserNotActive) even if the version also advanced.
 	if u.Status() != domain.StatusActive {
 		return 0, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 			"account is not active",
@@ -439,7 +514,6 @@ func (r *UserRepository) UpdatePassword(
 	if u.PasswordVersion != expectedPV {
 		return 0, cas.CheckVersionMatch(0, "user", userID)
 	}
-	// Rebuild via ReconstituteUser with updated fields so private fields are set correctly.
 	now := r.store.clock.Now()
 	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:                    u.ID,
@@ -460,32 +534,38 @@ func (r *UserRepository) UpdatePassword(
 	if err != nil {
 		return 0, fmt.Errorf("mem: update-password reconstitute: %w", err)
 	}
+	updated.TenantID = t
 	r.store.usersByID[userID] = updated
-	r.store.byName[updated.Username] = updated
-	r.store.byEmail[updated.Email] = updated
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
+	tByName[updated.Username] = updated
+	tByEmail[updated.Email] = updated
 	return updated.PasswordVersion, nil
 }
 
 // BumpAuthzEpoch atomically increments the AuthzEpoch counter for the given
 // user and returns the new value. Safe to call both inside and outside a
-// RunInTx closure; see UserRepository lock contract.
-//
-// Returns ErrAuthUserNotFound when no user matches userID.
-func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string, tok credentialfence.FenceToken) (int64, error) {
+// RunInTx closure. The lookup is tenant-scoped via userByIDInTenant to prevent
+// a cross-tenant epoch bump, mirroring the PG bumpAuthzEpochSQL tenant predicate.
+func (r *UserRepository) BumpAuthzEpoch(
+	ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken,
+) (int64, error) {
+	if err := t.Validate(); err != nil {
+		return 0, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	credentialfence.MustHave(tok, "ports.UserRepository.BumpAuthzEpoch")
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	u, ok := r.store.usersByID[userID]
+	u, ok := r.store.userByIDInTenant(userID, string(t))
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 	newEpoch := u.AuthzEpoch() + 1
-	// Rebuild the stored user with the bumped epoch.
 	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:                    u.ID,
 		Username:              u.Username,
@@ -505,76 +585,75 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string, tok 
 	if err != nil {
 		return 0, fmt.Errorf("mem: bump-authz-epoch reconstitute: %w", err)
 	}
+	updated.TenantID = t
 	r.store.usersByID[userID] = updated
-	r.store.byName[updated.Username] = updated
-	r.store.byEmail[updated.Email] = updated
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
+	tByName[updated.Username] = updated
+	tByEmail[updated.Email] = updated
 	return newEpoch, nil
 }
 
-// UpdateLockoutFields persists the auto-lockout state (failed_login_count,
-// last_failed_at, locked_until) for an existing user. Safe to call both
-// inside and outside a RunInTx closure; see UserRepository lock contract.
-//
-// Implementation note: the mem store re-clones the entire user via
-// ReconstituteUser, carrying over every field — including status and
-// authz_epoch. The accountlockout service contract is that it does NOT
-// mutate status/epoch through this method (those routes are reserved for
-// authzmutate.Mutator.ApplyInTx); the user's in-memory state at the time of
-// the call must reflect any pending status/epoch changes (which, in the
-// expected call order, are absent — sessionlogin reads user, calls
-// UpdateLockoutFields, then may call ApplyInTx(LockUser) which goes through
-// a separate Update path).
-func (r *UserRepository) UpdateLockoutFields(ctx context.Context, user *domain.User) error {
+// UpdateLockoutFields persists the auto-lockout state for an existing user
+// within the tenant. Safe to call both inside and outside a RunInTx closure.
+func (r *UserRepository) UpdateLockoutFields(ctx context.Context, t tenant.TenantID, user *domain.User) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	if _, exists := r.store.usersByID[user.ID]; !exists {
+	if _, exists := r.store.userByIDInTenant(user.ID, string(t)); !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, user.ID))))
 	}
 
 	c := cloneUser(user)
+	c.TenantID = t // authoritative tenant from the param (input aggregate carries none)
 	r.store.usersByID[user.ID] = c
-	r.store.byName[user.Username] = c
-	r.store.byEmail[user.Email] = c
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
+	tByName[user.Username] = c
+	tByEmail[user.Email] = c
 	return nil
 }
 
-// Delete removes the User with the given ID. Safe to call both inside and
-// outside a RunInTx closure; see UserRepository lock contract.
-func (r *UserRepository) Delete(ctx context.Context, id string) error {
+// Delete removes the User with the given ID within the tenant. Safe to call
+// both inside and outside a RunInTx closure.
+func (r *UserRepository) Delete(ctx context.Context, t tenant.TenantID, id string) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "user_repo: invalid tenant", err)
+	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	u, ok := r.store.usersByID[id]
+	u, ok := r.store.userByIDInTenant(id, string(t))
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
 	}
 
-	// S4.0 effective-admin invariant safety net (parallels migration 024
-	// effective_admin_invariant_on_users BEFORE DELETE trigger). Deleting an
-	// active admin removes them from the effective-admin set; refuse if no
-	// other effective admin remains.
+	// S4.0 effective-admin invariant safety net (per-tenant).
 	if u.Status() == domain.StatusActive {
-		if err := r.guardEffectiveAdminRemovalLocked(id); err != nil {
+		if err := r.guardEffectiveAdminRemovalLocked(string(t), id); err != nil {
 			return err
 		}
 	}
 
-	delete(r.store.byName, u.Username)
-	delete(r.store.byEmail, u.Email)
+	tByName := r.store.tenantByName(string(t))
+	tByEmail := r.store.tenantByEmail(string(t))
+	delete(tByName, u.Username)
+	delete(tByEmail, u.Email)
 	delete(r.store.usersByID, id)
-	// Cascade: drop the user's role assignments — mirrors the PG
-	// `role_assignments.user_id REFERENCES users(id) ON DELETE CASCADE` FK in
-	// migration 019. Without this, mem leaks stale role rows that would
-	// otherwise be visible to CountEffectiveAdmins for a deleted user.
-	delete(r.store.userRoles, id)
+	// Cascade: drop the user's role assignments within the tenant — mirrors the PG
+	// `role_assignments.user_id REFERENCES users(id) ON DELETE CASCADE` FK.
+	tUserRoles := r.store.tenantUserRoles(string(t))
+	delete(tUserRoles, id)
 	return nil
 }

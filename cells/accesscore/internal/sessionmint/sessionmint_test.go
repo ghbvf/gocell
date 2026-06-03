@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
@@ -45,23 +46,43 @@ type stubRoleRepo struct {
 	err   error
 }
 
-func (s *stubRoleRepo) GetByID(_ context.Context, _ string) (*domain.Role, error) {
+func (s *stubRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, _ string) (*domain.Role, error) {
 	panic("unused")
 }
 
-func (s *stubRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Role, error) {
+func (s *stubRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
 	return s.roles, s.err
 }
-func (s *stubRoleRepo) Create(_ context.Context, _ *domain.Role) error            { panic("unused") }
-func (s *stubRoleRepo) AssignToUser(_ context.Context, _, _ string) (bool, error) { panic("unused") }
-func (s *stubRoleRepo) RemoveFromUser(_ context.Context, _, _ string) error       { panic("unused") }
-func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _, _ string) (bool, error) {
+
+func (s *stubRoleRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.Role) error {
 	panic("unused")
 }
-func (s *stubRoleRepo) CountByRole(_ context.Context, _ string) (int, error) { panic("unused") }
-func (s *stubRoleRepo) CountEffectiveAdmins(_ context.Context) (int, error)  { panic("unused") }
-func (s *stubRoleRepo) EffectiveAdminExists(_ context.Context) (bool, error) { panic("unused") }
-func (s *stubRoleRepo) ListByUserID(_ context.Context, _ string, _ query.ListParams) ([]*domain.Role, error) {
+
+func (s *stubRoleRepo) AssignToUser(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
+	panic("unused")
+}
+
+func (s *stubRoleRepo) RemoveFromUser(_ context.Context, _ tenant.TenantID, _, _ string) error {
+	panic("unused")
+}
+
+func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _ tenant.TenantID, _, _ string) (bool, error) {
+	panic("unused")
+}
+
+func (s *stubRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ string) (int, error) {
+	panic("unused")
+}
+
+func (s *stubRoleRepo) CountEffectiveAdmins(_ context.Context, _ tenant.TenantID) (int, error) {
+	panic("unused")
+}
+
+func (s *stubRoleRepo) EffectiveAdminExists(_ context.Context, _ tenant.TenantID) (bool, error) {
+	panic("unused")
+}
+
+func (s *stubRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	panic("unused")
 }
 
@@ -209,6 +230,56 @@ func TestMintAccess_JWT_NoAuthzEpochClaim(t *testing.T) {
 	// authz_epoch must not appear in Extra either (it is not written at all).
 	_, epochInExtra := claims.Extra["authz_epoch"]
 	assert.False(t, epochInExtra, "S4d: authz_epoch must not be present in JWT (epoch lives in session row)")
+}
+
+// TestMintAccess_TenantID_PresentInToken verifies that when Request.TenantID is
+// non-empty, the minted access JWT carries the corresponding "tenant_id" claim.
+// This covers the P0 gap: login/refresh must emit tenant_id so that post-login
+// service calls can resolve the tenant from ctx.
+func TestMintAccess_TenantID_PresentInToken(t *testing.T) {
+	const tenantUUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
+	issuer, keySet := newTestIssuer(t)
+	deps := Deps{
+		Issuer:   issuer,
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+	}
+	tid, err := tenant.ParseTenantID(tenantUUID)
+	require.NoError(t, err)
+	req := Request{UserID: "usr-1", SessionID: "sess-1", TenantID: tid}
+
+	res, mintErr := MintAccess(context.Background(), clock.Real(), deps, req)
+	require.NoError(t, mintErr)
+
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, kauth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, tenantUUID, claims.TenantID,
+		"access JWT must carry tenant_id claim equal to Request.TenantID (#1337 P0 fix)")
+}
+
+// TestMintAccess_TenantID_EmptyOmitted verifies that when Request.TenantID is the
+// zero value, the minted access JWT omits the "tenant_id" claim (single-tenant /
+// pre-tenant path — must not emit an empty or invalid claim).
+func TestMintAccess_TenantID_EmptyOmitted(t *testing.T) {
+	issuer, keySet := newTestIssuer(t)
+	deps := Deps{
+		Issuer:   issuer,
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+	}
+	// Zero-value TenantID — omit the field.
+	req := Request{UserID: "usr-1", SessionID: "sess-1"}
+
+	res, mintErr := MintAccess(context.Background(), clock.Real(), deps, req)
+	require.NoError(t, mintErr)
+
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, kauth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Equal(t, "", claims.TenantID,
+		"access JWT must NOT carry tenant_id when Request.TenantID is empty (single-tenant path)")
 }
 
 // TestMintAccess_AccessTokenIssueFailure asserts that when the Issuer's access-token

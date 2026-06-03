@@ -23,6 +23,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
+// testTenantID is declared in service_test.go (same package)
+
 // testIssuer is declared in service_test.go
 
 const loginPath = "/api/v1/access/sessions/login"
@@ -37,7 +39,7 @@ func setup(t *testing.T) http.Handler {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
 	user, _ := domain.NewUser("alice", "a@b.com", string(hash), time.Now())
 	user.ID = "usr-1"
-	_ = userRepo.Create(context.Background(), user)
+	_ = userRepo.Create(context.Background(), testTenantID, user)
 
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newTestRefreshStore()
@@ -166,6 +168,7 @@ func TestHandleLogin(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Tenant-ID", testTenantIDStr)
 			h.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
@@ -173,6 +176,21 @@ func TestHandleLogin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandler_Login_MissingTenantHeader verifies that a request without the
+// X-Tenant-ID header returns 400 (the service treats an empty tenantId as
+// ErrAuthLoginInvalidInput via RequireNotEmpty).
+func TestHandler_Login_MissingTenantHeader(t *testing.T) {
+	h := setup(t)
+	body := `{"username":"alice","password":"correct-pass"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// Intentionally do NOT set X-Tenant-ID.
+	h.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assertValidationError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT")
 }
 
 // assertValidationError is a helper that asserts the error response has the

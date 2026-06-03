@@ -23,8 +23,12 @@ const (
 	leaderTestWaitMedium  = 6 * time.Second        // takeover headroom past lease expiry
 	leaderTestWaitLong    = 10 * time.Second       // I/O-retry backoff headroom (~2×leaderRetryPeriod)
 	leaderTestFastRenew   = 20 * time.Millisecond  // fast renew so a lost lease is detected quickly
-	leaderTestSettleSleep = 50 * time.Millisecond  // sub-ms in-memory settle; no signal exposed
+	leaderTestSettleSleep = 200 * time.Millisecond // CI headroom: goroutine scheduling can exceed 50ms under load
 	leaderTestShortTTL    = 100 * time.Millisecond // short lease TTL so takeover is quick
+	// leaderTestFollowerQuiet bounds the "follower must not dispatch" quiet period.
+	// Kept < leaderRetryPeriod (1s) so the follower stays a follower (no re-acquire
+	// attempt) for the whole window.
+	leaderTestFollowerQuiet = 400 * time.Millisecond
 )
 
 // TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch verifies that a Loop in
@@ -50,13 +54,14 @@ func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
 		return reconcile.Result{RequeueAfter: time.Hour}, nil // avoid rapid requeue churn
 	}}
 
-	l := &reconcile.Loop{
-		ReconcilerID: "leadertest",
-		Reconciler:   rec,
-		Source:       src,
-		Leader:       backend.Elector("A"),
-		FencedRepo:   repo,
-	}
+	l, err := reconcile.New(rec).
+		WithTrigger(reconciletest.FakeTrigger{In: src}).
+		WithReconcilerID("leadertest").
+		WithLeader(backend.Elector("A")).
+		WithFencedRepo(repo).
+		Build()
+	require.NoError(t, err)
+
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, l.Start(ownerCtx))
 	src <- reconcile.Request{EntityID: "dev-1"}
@@ -93,13 +98,14 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 		return reconcile.Result{}, ctx.Err()
 	}}
 
-	l := &reconcile.Loop{
-		ReconcilerID:  "leaderlost",
-		Reconciler:    rec,
-		Source:        src,
-		Leader:        backend.Elector("A"),
-		RenewInterval: leaderTestFastRenew, // fast renew so the lost lease is detected quickly
-	}
+	l, err := reconcile.New(rec).
+		WithTrigger(reconciletest.FakeTrigger{In: src}).
+		WithReconcilerID("leaderlost").
+		WithLeader(backend.Elector("A")).
+		WithRenewInterval(leaderTestFastRenew). // fast renew so the lost lease is detected quickly
+		Build()
+	require.NoError(t, err)
+
 	ownerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, l.Start(ownerCtx))
@@ -148,8 +154,20 @@ func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 
 	srcA := make(chan reconcile.Request, 1)
 	srcB := make(chan reconcile.Request, 1)
-	la := &reconcile.Loop{ReconcilerID: "foll", Reconciler: leaderRec, Source: srcA, Leader: backend.Elector("A")}
-	lb := &reconcile.Loop{ReconcilerID: "foll", Reconciler: followerRec, Source: srcB, Leader: backend.Elector("B")}
+
+	la, err := reconcile.New(leaderRec).
+		WithTrigger(reconciletest.FakeTrigger{In: srcA}).
+		WithReconcilerID("foll").
+		WithLeader(backend.Elector("A")).
+		Build()
+	require.NoError(t, err)
+
+	lb, err := reconcile.New(followerRec).
+		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
+		WithReconcilerID("foll").
+		WithLeader(backend.Elector("B")).
+		Build()
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -196,19 +214,21 @@ func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
 
 	srcA := make(chan reconcile.Request, 2)
 	srcB := make(chan reconcile.Request, 2)
+
 	// Use a short TTL so B can take over quickly after expiry.
-	la := &reconcile.Loop{
-		ReconcilerID: "takeover",
-		Reconciler:   mkRec(aDispatched),
-		Source:       srcA,
-		Leader:       backend.ElectorWithTTL("A", leaderTestShortTTL),
-	}
-	lb := &reconcile.Loop{
-		ReconcilerID: "takeover",
-		Reconciler:   mkRec(bDispatched),
-		Source:       srcB,
-		Leader:       backend.ElectorWithTTL("B", leaderTestShortTTL),
-	}
+	la, err := reconcile.New(mkRec(aDispatched)).
+		WithTrigger(reconciletest.FakeTrigger{In: srcA}).
+		WithReconcilerID("takeover").
+		WithLeader(backend.ElectorWithTTL("A", leaderTestShortTTL)).
+		Build()
+	require.NoError(t, err)
+
+	lb, err := reconcile.New(mkRec(bDispatched)).
+		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
+		WithReconcilerID("takeover").
+		WithLeader(backend.ElectorWithTTL("B", leaderTestShortTTL)).
+		Build()
+	require.NoError(t, err)
 
 	// Use separate contexts: cancelA stops A from re-contending after its lease
 	// is expired so B can cleanly take over. cancelAll stops both loops at the end.
@@ -301,12 +321,12 @@ func TestLoop_LeaderManageIOErrorRetry(t *testing.T) {
 	// Fail the first 2 AcquireLease calls with an I/O error, then succeed on the 3rd.
 	elector := &errAfterN{failFor: 2, inner: backend.Elector("A")}
 
-	l := &reconcile.Loop{
-		ReconcilerID: "ioretry",
-		Reconciler:   rec,
-		Source:       src,
-		Leader:       elector,
-	}
+	l, err := reconcile.New(rec).
+		WithTrigger(reconciletest.FakeTrigger{In: src}).
+		WithReconcilerID("ioretry").
+		WithLeader(elector).
+		Build()
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -322,4 +342,61 @@ func TestLoop_LeaderManageIOErrorRetry(t *testing.T) {
 
 	cancel()
 	require.NoError(t, l.Stop(context.Background()))
+}
+
+// TestLoop_FollowerDoesNotConsumeTrigger pins the leader-gated Trigger contract
+// (C1/F2): a leader-elect Loop that is a FOLLOWER (another holder owns the lease)
+// must NOT start its Trigger, so it never consumes its external source before
+// winning the lease — otherwise followers would steal/buffer events from the
+// active leader (controller-runtime: sources do not run before winning election).
+func TestLoop_FollowerDoesNotConsumeTrigger(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
+	const rid = "follower_noconsume"
+
+	// holder-A holds the lease for the whole test (acquired directly, never
+	// released; the fake's 30s default TTL outlasts the test), so B never wins.
+	if _, err := backend.Elector("holder-A").AcquireLease(context.Background(), rid); err != nil {
+		t.Fatalf("seed holder acquire: %v", err)
+	}
+
+	// B is a follower Loop. srcB is buffered so the submit never blocks (no leaked
+	// sender goroutine); the request is only forwarded/dispatched if B's Trigger
+	// were (wrongly) started while B is a follower.
+	srcB := make(chan reconcile.Request, 1)
+	var dispatched atomic.Int64
+	recB := reconciletest.FakeReconciler{Fn: func(_ context.Context, _ reconcile.Request) (reconcile.Result, error) {
+		dispatched.Add(1)
+		return reconcile.Result{RequeueAfter: time.Hour}, nil
+	}}
+	lb, err := reconcile.New(recB).
+		WithReconcilerID(rid).
+		WithTrigger(reconciletest.FakeTrigger{In: srcB}).
+		WithLeader(backend.Elector("holder-B")).
+		WithRenewInterval(leaderTestFastRenew).
+		Build()
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, lb.Start(ctx))
+	defer func() { _ = lb.Stop(context.Background()) }()
+
+	srcB <- reconcile.Request{EntityID: "e1"} // buffered; consumed only if B starts its Trigger
+
+	// Quiet period (< leaderRetryPeriod so B stays follower). Absence-of-consumption
+	// cannot be polled, so this is a genuine sleep.
+	time.Sleep(leaderTestFollowerQuiet) //archtest:allow:test-sleep follower must not consume source before lease (absence not pollable)
+
+	// Definitive F2 assertion: the request must STILL be in srcB — a follower that
+	// (wrongly) started its Trigger would have drained srcB into the internal queue.
+	// (Asserting "not dispatched" alone is insufficient: a follower spawns no
+	// feedFromSource, so a wrongly-started Trigger consumes srcB→triggerCh yet still
+	// never dispatches — bCount stays 0 either way.)
+	select {
+	case got := <-srcB:
+		require.Equal(t, "e1", got.EntityID, "request still buffered → follower never consumed its source")
+	default:
+		t.Fatal("follower consumed its trigger source before winning the lease — Trigger must be leader-gated")
+	}
+	require.Equal(t, int64(0), dispatched.Load(), "follower must not dispatch")
 }

@@ -81,7 +81,7 @@ kernel/
 │   ├── fenced.go                        # FencedRepository / FencedWriter（epoch-bound 写面 + CAS，PR-A6）
 │   ├── metrics.go                       # 4 个 metric wiring（counter/histogram/gauge）
 │   └── reconciletest/                   # conformance harness
-│       ├── conformance.go               # ReconcilerFactory + 跑遍 leader/RequeueAfter/Permanent/fencing
+│       ├── conformance.go               # HarnessFactory + Wiring + Features → RunConformance 跑遍 basic/RequeueAfter/Permanent/panic/MaxConcurrent/leader/fencing
 │       └── fake.go                      # 测试 fake（fake LeaderElector + fake Trigger）
 │
 ├── command/                             # 现有；改 Sweeper 实现 Reconciler 接口

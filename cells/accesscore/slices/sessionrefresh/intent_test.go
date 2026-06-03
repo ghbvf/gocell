@@ -31,7 +31,7 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	pair, err := svc.Refresh(context.Background(), bogusAccess)
+	pair, err := svc.Refresh(tenantCtx(), bogusAccess)
 	require.Error(t, err, "access-intent token must not be accepted as a refresh token")
 	assert.Empty(t, pair.AccessToken)
 	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED",
@@ -47,7 +47,7 @@ func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-r1", "usr-r1", int64(1))
 	require.NoError(t, err)
 
-	pair, err := svc.Refresh(context.Background(), wireToken)
+	pair, err := svc.Refresh(tenantCtx(), wireToken)
 	require.NoError(t, err)
 	require.NotEmpty(t, pair.AccessToken)
 

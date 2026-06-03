@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
@@ -32,11 +33,38 @@ import (
 //
 // ref: docs/architecture/202605222309-adr-user-repo-narrow-write-methods.md
 // ref: github.com/ory/kratos/identity/pool.go UpdateIdentityColumns pattern
+//
+// # Tenancy (#1337 PR-2, Model A)
+//
+// users.id is a global UUID primary key; username / email are unique only
+// WITHIN a tenant (composite unique (tenant_id, username) / (tenant_id, email)).
+// Every method takes a mandatory tenant.TenantID positional parameter
+// immediately after ctx and applies `AND tenant_id = $N`, EXCEPT the by-PK
+// tenant-deriving read carve-out:
+//
+//   - GetByID(ctx, id) — looks up by the global UUID primary key, which already
+//     uniquely identifies the row (and therefore its tenant), so the tenant
+//     predicate would be redundant. It is the ONLY method without a tenant
+//     parameter, because its sole tenant-less caller (sessionrefresh, which has
+//     no pre-auth tenant source — the refresh token / session row do not carry
+//     tenant until PR-3) must remain callable. Tenant isolation for this path is
+//     enforced at the DB layer by PR-3 RLS once the refresh tenant carrier lands.
+//     archtest TENANT-REPO-PARAM-FUNNEL-01 allowlists GetByID.
 type UserRepository interface {
-	Create(ctx context.Context, user *domain.User) error
+	Create(ctx context.Context, t tenant.TenantID, user *domain.User) error
+	// GetByID is the by-PK tenant-deriving carve-out — see the interface godoc.
 	GetByID(ctx context.Context, id string) (*domain.User, error)
-	GetByUsername(ctx context.Context, username string) (*domain.User, error)
-	Delete(ctx context.Context, id string) error
+	// GetByIDInTenant fetches a user by primary key and requires it to belong to
+	// tenant t. Returns ErrAuthUserNotFound when the row is absent OR belongs to a
+	// different tenant — the caller cannot distinguish the two cases (no cross-tenant
+	// existence leak). Validates t at the top (non-empty, canonical UUID).
+	//
+	// Use this method on every admin / post-auth path that already holds a tenant
+	// context (identitymanage user-detail and lockUserAndRevokeSessions). The
+	// tenant-less GetByID carve-out must NOT be used on those paths.
+	GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)
+	GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)
+	Delete(ctx context.Context, t tenant.TenantID, id string) error
 
 	// UpdateProfile writes username / email / updated_at only.
 	//
@@ -61,6 +89,7 @@ type UserRepository interface {
 	//   - ErrInternal (KindInternal / 500) — other DB errors
 	UpdateProfile(
 		ctx context.Context,
+		t tenant.TenantID,
 		userID string,
 		name, email *domain.NonEmpty,
 		now time.Time,
@@ -94,6 +123,7 @@ type UserRepository interface {
 	//   - ErrInternal (KindInternal / 500) — other DB errors
 	UpdateLockState(
 		ctx context.Context,
+		t tenant.TenantID,
 		userID string,
 		status domain.UserStatus,
 		now time.Time,
@@ -112,6 +142,7 @@ type UserRepository interface {
 	//   - ErrInternal (KindInternal / 500) — other DB errors
 	UpdatePasswordResetFlag(
 		ctx context.Context,
+		t tenant.TenantID,
 		userID string,
 		required bool,
 		now time.Time,
@@ -139,6 +170,7 @@ type UserRepository interface {
 	// responsible for bcrypt-hashing newHash before passing it here.
 	UpdatePassword(
 		ctx context.Context,
+		t tenant.TenantID,
 		userID string,
 		newHash string,
 		resetRequired bool,
@@ -155,7 +187,7 @@ type UserRepository interface {
 	// credentialinvalidate may mint a non-nil token in production. Passing a
 	// nil token panics through the panicregister funnel (B-class programmer
 	// error) at the implementation boundary.
-	BumpAuthzEpoch(ctx context.Context, userID string, tok credentialfence.FenceToken) (newEpoch int64, err error)
+	BumpAuthzEpoch(ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken) (newEpoch int64, err error)
 
 	// GetByIDForUpdate fetches a user by primary key inside an ambient
 	// transaction and acquires a row-level write lock (PG: SELECT ... FOR
@@ -176,7 +208,7 @@ type UserRepository interface {
 	//     ssobff/demo) it takes store.mu per call — functional; cross-statement
 	//     serialization holds only on the Store-TxRunner path. mem never
 	//     hard-fails on TxRunner pairing (that broke real composition roots, #501).
-	GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error)
+	GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)
 
 	// GetByUsernameForUpdate is the username-keyed counterpart to
 	// GetByIDForUpdate. Used by sessionlogin (which dispatches by username);
@@ -186,7 +218,7 @@ type UserRepository interface {
 	// Serialization contract: same as GetByIDForUpdate (PG fail-fast hard
 	// guarantee; mem full serialization on Store-TxRunner, per-call lock under
 	// a foreign CellTxManager, never hard-fails on pairing).
-	GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error)
+	GetByUsernameForUpdate(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)
 
 	// UpdateLockoutFields persists the auto-lockout state (failed_login_count,
 	// last_failed_at, locked_until) for an existing user. Called exclusively
@@ -198,5 +230,5 @@ type UserRepository interface {
 	// Must be invoked within an ambient transaction (txCtx) so the counter
 	// update co-commits with the surrounding sessionlogin tx (L2 OutboxFact).
 	// Returns ErrAuthUserNotFound (KindNotFound) when no row matches user.ID.
-	UpdateLockoutFields(ctx context.Context, user *domain.User) error
+	UpdateLockoutFields(ctx context.Context, t tenant.TenantID, user *domain.User) error
 }

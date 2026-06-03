@@ -27,17 +27,21 @@ username="${E2E_ADMIN_USERNAME:-admin}"
 email="${E2E_ADMIN_EMAIL:-admin@e2e.local}"
 password="${E2E_ADMIN_PASSWORD:-E2E-Bootstrap-Pwd-1!}"
 
+tenant_id="${E2E_TENANT_ID:-00000000-0000-0000-0000-000000000001}"
+
 setup_body=$(jq -n --arg u "$username" --arg e "$email" --arg p "$password" \
     '{username:$u, email:$e, password:$p}')
 curl -fsS -X POST "$base/api/v1/access/setup/admin" \
     -u "${GOCELL_BOOTSTRAP_ADMIN_USERNAME}:${GOCELL_BOOTSTRAP_ADMIN_PASSWORD}" \
     -H "Content-Type: application/json" \
+    -H "X-Tenant-ID: ${tenant_id}" \
     -d "$setup_body" \
     >/dev/null
 
 login_body=$(jq -n --arg u "$username" --arg p "$password" '{username:$u, password:$p}')
 token=$(curl -fsS -X POST "$base/api/v1/access/sessions/login" \
     -H "Content-Type: application/json" \
+    -H "X-Tenant-ID: ${tenant_id}" \
     -d "$login_body" \
     | jq -r '.data.accessToken // empty')
 

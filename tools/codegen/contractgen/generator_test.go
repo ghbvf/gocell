@@ -945,3 +945,33 @@ func TestGenerate_Options_ScopeAllProcessesAll(t *testing.T) {
 		t.Errorf("ScopeAll: expected 3 files for synth_http_minimal, got %d: %v", len(res.Generated), res.Generated)
 	}
 }
+
+// TestCheckGRPCProtoCollisions_SkipsDisabled (F3 regression) proves the
+// collision pre-pass honors codegen:false: a disabled grpc draft whose proto
+// file does not exist must NOT be read (which would error and block generation
+// of every other contract in the run).
+func TestCheckGRPCProtoCollisions_SkipsDisabled(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc.device.draft.v1": {
+				ID:      "grpc.device.draft.v1",
+				Kind:    "grpc",
+				Codegen: false, // disabled draft — must be skipped
+				File:    "contracts/grpc/device/draft/v1/contract.yaml",
+				Endpoints: metadata.EndpointsMeta{
+					Server: "devicecell",
+					GRPC: &metadata.GRPCTransportMeta{
+						Service: "device.draft.v1.DraftService",
+						Method:  "DoDraft",
+						// proto path that does not exist on disk; reading it would error.
+						Proto: "contracts/grpc/device/draft/v1/does_not_exist.proto",
+					},
+				},
+			},
+		},
+	}
+	if err := checkGRPCProtoCollisions(t.TempDir(), p); err != nil {
+		t.Fatalf("disabled grpc draft must be skipped, got %v", err)
+	}
+}
