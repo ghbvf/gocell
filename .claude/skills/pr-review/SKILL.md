@@ -98,9 +98,9 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 
 每簇标注：涉及维度 / Finding 数（按 P 级拆分）/ 系统性（Grep 数）/ 整簇 Cx（按整簇改动量重评）。
 
-### 5.3 输出 5 块（顺序固定）
+### 5.3 输出 5 块（**先打印到对话窗口给用户**，顺序固定）
 
-**输出语言**：中文。
+**输出语言**：中文。**这 5 块是主交付物——必须先在对话/窗口完整打印给用户看**（阶段 6 再把同一份内容贴成 PR 评论留痕，**不替代窗口打印**）。
 
 1. **根因簇视图**（主输出）— 每簇：根因一句 / 维度 / Finding 数 / 系统性 / 整簇 Cx / 子 Finding ID / 修复顺序建议
 2. **Finding 详表** — list 形式（不用表格，避免 CJK 竖排）。按 P0→P2、同级 Cx1→Cx4 排序，每条两行：
@@ -114,9 +114,9 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 
 ---
 
-## 阶段 6：贴 PR 评论
+## 阶段 6：贴 PR 评论（留痕，**不替代阶段 5 的窗口打印**）
 
-把阶段 5 的五块**完整**写进 `.github/project-template/pr-comment.md` 的 `<!-- pm:pr-review -->` 模板（**评论即 review 结果，不做有损浓缩**：每条 Finding 带 `file:line`，证据/建议/根因/方案种子入 `<details>` 供 `/fix` 无损提取），贴到 PR：
+阶段 5 的五块**已打印到窗口后**，把**同一份内容**写进 `.github/project-template/pr-comment.md` 的 `<!-- pm:pr-review -->` 模板，**额外**贴成 PR 评论留痕——**窗口打印是主输出、贴评论是留痕，两者都要做，缺一不可**（评论即 review 结果，不做有损浓缩：每条 Finding 带 `file:line`，证据/建议/根因/方案种子入 `<details>` 供 `/fix` 无损提取），贴到 PR：
 
 ```bash
 gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
