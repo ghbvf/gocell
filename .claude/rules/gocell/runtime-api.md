@@ -147,7 +147,7 @@ bootstrap.New(
 | `auth.NewAuthServiceToken(...) (..., error)` | HMAC-SHA256 service token | InternalListener |
 | `auth.AuthMTLS{}` | mTLS — 链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS）；中间件 `runtime/http/middleware.MTLS()` 守 peer cert presence + 把 curated `PeerIdentity{Subject,DNSNames,URIs}` 写入 ctx（`pkg/ctxkeys.PeerIdentityFrom`）；server-side `*tls.Config` 用 `runtime/http/tlsutil.NewServerMTLSConfig(certPEM, keyPEM, clientCAs)` 构造 | InternalListener（高安全场景） |
 | `auth.AuthNone{}` | 显式无验证（HealthListener loopback 隔离场景；nil 已被 phase0 拒绝） | HealthListener（loopback 隔离） |
-| `auth.NewAuthOperator(username, password []byte, limiter, onAuthFail) (AuthOperator, error)` | operator 控制面 Basic Auth（#1505）——env 凭据 + per-IP 限速 + 恒时比较（SHA-256 fixed-length digest，无长度/内容 oracle）。username 拒控制字符、password ≥ 8 bytes、limiter 必填非 nil（缺一 error-first 拒）。无 caller-cell allowlist。 | AdminListener（唯一允许，phase0 affinity 强制） |
+| `auth.NewAuthOperator(username, password []byte, limiter, onAuthFail) (AuthOperator, error)` | operator 控制面 Basic Auth（#1505）——env 凭据 + per-IP 限速 + 恒时比较（HMAC-SHA256 fixed-length digest，无长度/内容 oracle）。username 拒控制字符、password ≥ 8 bytes、limiter 必填非 nil（缺一 error-first 拒）。无 caller-cell allowlist。 | AdminListener（唯一允许，phase0 affinity 强制） |
 
 **多 plan chain 示例**：
 

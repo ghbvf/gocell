@@ -38,7 +38,7 @@ reserved foundation and migrates #1370 onto it.
    port, independent of public Primary and cell→cell Internal).
 2. `auth.AuthOperator` — an operator-credential `ListenerAuth` implementation that
    wraps the existing `NewBootstrapMiddleware` (env credentials + per-IP rate
-   limit + SHA-256 fixed-length-digest constant-time compare) at **listener**
+   limit + HMAC-SHA256 fixed-length-digest constant-time compare) at **listener**
    scope.
 3. `/admin/v1/` path prefix + bidirectional admin-path ↔ AdminListener affinity.
 4. Migration of #1370 projection rebuild onto the admin plane (no caller-cell
@@ -154,7 +154,7 @@ cell ever declares an `/admin/v1/*` contract, that is a separate concern.
 | # | Threat | Mechanism | Rating |
 |---|---|---|---|
 | 1 | **Unauthenticated operator access** to the admin plane | `AuthOperator` HTTP Basic Auth (env credentials) is the **enforced** gate; `AdminListener`-requires-`AuthOperator` phase0 guard rejects an admin listener with no operator gate. A loopback bind is a recommended (not framework-enforced) defense-in-depth layer — see Residual | Hard (sealed plan) + Medium (phase0) |
-| 2 | **Operator credential brute-force / credential probing** | per-IP token-bucket rate limiter (required by `NewAuthOperator`; nil limiter rejected at construction) + `NewAuthOperator` credential-strength floor (username rejects control chars, password ≥ 8 bytes — symmetric with the setup/admin floor) + **SHA-256 fixed-length-digest constant-time compare** (`authenticateBootstrap` → `constantTimeEqualHashed`: both sides hashed to 32 bytes before `subtle.ConstantTimeCompare`) + uniform 401 — no content **and no length** oracle | Medium |
+| 2 | **Operator credential brute-force / credential probing** | per-IP token-bucket rate limiter (required by `NewAuthOperator`; nil limiter rejected at construction) + `NewAuthOperator` credential-strength floor (username rejects control chars, password ≥ 8 bytes — symmetric with the setup/admin floor) + **HMAC-SHA256 fixed-length-digest constant-time compare** (`authenticateBootstrap` → `constantTimeEqualHashed`: both sides reduced to a 32-byte HMAC digest keyed by a per-process random key before `subtle.ConstantTimeCompare`) + uniform 401 — no content **and no length** oracle | Medium |
 | 3 | **Admin endpoint leaks onto the public listener** | bidirectional `verifyListenerRouteAffinity`: an admin path on a non-admin listener fails fast; the primary listener already 404s non-primary control-plane prefixes (port-level isolation) | Medium |
 | 4 | **Operator credentials accepted on the wrong (public/internal) listener** | `AuthOperator`-only-on-`AdminListener` phase0 guard | Medium |
 | 5 | **Credential leak via logs/spans** | the operator credentials live in the `AuthOperator` plan and the request `Authorization: Basic` header; the framework's fail-closed slog/span redaction masks `authorization`/`bearer`/`password` keys. The admit-time audit log records only `cell`/`projection` + correlation IDs (no credentials, no caller cell) | Medium (inherited redaction) |
@@ -226,13 +226,16 @@ and the §4 threat matrix row 2 was rewritten accordingly (rating unchanged —
 Medium):
 
 1. **Length oracle closed (F1).** `runtime/auth.authenticateBootstrap` now routes
-   each field through `constantTimeEqualHashed`, which SHA-256-digests both the
-   presented and expected value to a fixed 32 bytes **before**
-   `subtle.ConstantTimeCompare`. The compared inputs are now constant-length, so
-   the comparison time is independent of both content and length. This shared
-   helper protects both the operator gate (this ADR) and the per-cell setup/admin
-   endpoint (it mirrors the pre-existing `runtime/http/health` verbose-token
-   comparison, which already hashed before comparing).
+   each field through `constantTimeEqualHashed`, which reduces both the presented
+   and expected value to a fixed 32-byte **HMAC-SHA256** digest (keyed by a
+   per-process random key) **before** `subtle.ConstantTimeCompare`. The compared
+   inputs are now constant-length, so the comparison time is independent of both
+   content and length. A keyed MAC (not a bare SHA-256 of the credential) is used
+   so the digest is unpredictable and so the construction reads as an
+   authentication primitive, not password storage — a slow password KDF
+   (bcrypt/scrypt) is inapplicable here (the expected value is the plaintext env
+   credential, not a stored hash). This shared helper protects both the operator
+   gate (this ADR) and the per-cell setup/admin endpoint.
 2. **Weak-credential floor (F2).** `kernel/auth.NewAuthOperator` now rejects a
    username containing control characters and a password shorter than 8 bytes
    (`operatorMinPasswordLen`) — a one-byte password could previously gate the

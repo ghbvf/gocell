@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"math"
@@ -13,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // BootstrapCredentials carries the env-driven HTTP Basic Auth credentials
@@ -136,21 +139,35 @@ func allowBootstrapRequest(
 	return false
 }
 
+// hashCompareKey keys the constant-time credential comparison below. It is a
+// per-process random value — NOT a stored secret, never leaves the process, and
+// is regenerated each start. Its only purpose is to give constantTimeEqualHashed
+// fixed-length, unpredictable digests; its secrecy is not relied upon.
+var hashCompareKey = mustHashCompareKey()
+
+// mustHashCompareKey draws a 32-byte random key from the OS entropy source.
+// crypto/rand.Read does not fail on supported platforms (Go 1.24+); a failure
+// means no entropy is available, which is fatal for any authentication path.
+func mustHashCompareKey() []byte {
+	k := make([]byte, 32)
+	if _, err := rand.Read(k); err != nil {
+		panic(panicregister.Approved("auth-bootstrap-hash-key-entropy",
+			errcode.Assertion("crypto/rand unavailable for bootstrap credential hash key")))
+	}
+	return k
+}
+
 // authenticateBootstrap parses Basic Auth and constant-time-compares the
 // supplied credentials against creds. Returns ("", true) on match;
 // ("missing_header"|"wrong_credentials", false) on failure.
 //
-// Each field is compared via constantTimeEqualHashed, which SHA-256-digests both
-// sides to a fixed 32-byte length before subtle.ConstantTimeCompare. This closes
-// the length-timing oracle: ConstantTimeCompare returns 0 immediately when the
-// slices differ in length, so comparing raw credential bytes would leak the
-// username/password length to a timing attacker. Hashing makes the compared
-// inputs constant-length, so the check is timing-independent of both content and
-// length. AND-ing the two results bitwise keeps the check constant-time across
-// both comparisons.
-//
-// ref: Go stdlib net/http BasicAuth example (sha256.Sum256 + subtle.ConstantTimeCompare),
-// mirroring the runtime/http/health verbose-token comparison.
+// Each field is compared via constantTimeEqualHashed, which reduces both sides to
+// a fixed 32-byte HMAC digest before subtle.ConstantTimeCompare. This closes the
+// length-timing oracle: ConstantTimeCompare returns 0 immediately when the slices
+// differ in length, so comparing raw credential bytes would leak the
+// username/password length to a timing attacker. Reducing to a constant-length
+// digest makes the check timing-independent of both content and length. AND-ing
+// the two results bitwise keeps the check constant-time across both comparisons.
 func authenticateBootstrap(r *http.Request, creds BootstrapCredentials) (string, bool) {
 	user, pass, ok := r.BasicAuth()
 	if !ok {
@@ -165,12 +182,24 @@ func authenticateBootstrap(r *http.Request, creds BootstrapCredentials) (string,
 }
 
 // constantTimeEqualHashed reports 1 iff a and b are byte-equal, comparing their
-// SHA-256 digests so the comparison time is independent of input length (no
-// length oracle). Returns 0 otherwise.
+// fixed-length HMAC-SHA256 digests (keyed by the per-process hashCompareKey) so
+// the comparison time is independent of input length — no length oracle — and the
+// digests are unpredictable. Returns 0 otherwise.
+//
+// A keyed MAC is used rather than a bare hash because this is a length-normalising
+// equality check of in-memory operator credentials, not password storage: a slow
+// password KDF (bcrypt/scrypt/argon2) is inapplicable (the expected value is the
+// plaintext env credential, not a stored hash) and would only add latency to a
+// rate-limited path.
+//
+// ref: crypto/hmac godoc Example (hmac.New(sha256.New, key) + hmac.Equal),
+// mirroring runtime/auth/servicetoken.go's keyed-MAC comparison.
 func constantTimeEqualHashed(a, b []byte) int {
-	ha := sha256.Sum256(a)
-	hb := sha256.Sum256(b)
-	return subtle.ConstantTimeCompare(ha[:], hb[:])
+	ha := hmac.New(sha256.New, hashCompareKey)
+	_, _ = ha.Write(a)
+	hb := hmac.New(sha256.New, hashCompareKey)
+	_, _ = hb.Write(b)
+	return subtle.ConstantTimeCompare(ha.Sum(nil), hb.Sum(nil))
 }
 
 func writeBootstrapAuthFailed(ctx context.Context, w http.ResponseWriter) {
