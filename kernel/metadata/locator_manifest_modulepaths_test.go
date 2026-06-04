@@ -1,7 +1,10 @@
 package metadata
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -70,4 +73,65 @@ func TestReadManifestModulePaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReadManifestModulePathsRoot covers the os.Root-confined disk wrapper
+// (the #1592 review-F1 single source for tools/workspace's manifest
+// cross-check). It is exercised only cross-package in production (by
+// tools/workspace), which CI's per-package coverage — run without
+// -coverpkg=./... — does not credit back to this package; these in-package
+// cases keep the wrapper covered on its own. Three behaviors: it returns the
+// declared module paths for a normal on-disk layout, fails closed when the
+// root cannot be opened, and rejects a .gocell/manifest.yaml that is a symlink
+// escaping the root ("path escapes from parent" at the syscall layer).
+func TestReadManifestModulePathsRoot(t *testing.T) {
+	t.Run("normal on-disk layout returns module paths in declaration order", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, ".gocell", "manifest.yaml"),
+			"version: v1\nmodules:\n  - path: .\n  - path: sub\n")
+		// modules[1].path "sub" must exist and be a directory (validateManifestModuleDir).
+		writeFile(t, filepath.Join(root, "sub", "cells", "x", "cell.yaml"),
+			cellYAML("x", "team", "x.primary"))
+
+		got, err := ReadManifestModulePathsRoot(root, DefaultManifestPath)
+		if err != nil {
+			t.Fatalf("ReadManifestModulePathsRoot: %v", err)
+		}
+		if want := []string{".", "sub"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ReadManifestModulePathsRoot = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("open-root error on missing root fails closed", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+		_, err := ReadManifestModulePathsRoot(missing, DefaultManifestPath)
+		if err == nil {
+			t.Fatalf("ReadManifestModulePathsRoot(%q) = nil error; want open-root failure", missing)
+		}
+		if !strings.Contains(err.Error(), "open root") {
+			t.Fatalf("error = %q, want substring %q", err.Error(), "open root")
+		}
+	})
+
+	t.Run("symlinked manifest escaping root fails closed", func(t *testing.T) {
+		root := t.TempDir()
+		external := t.TempDir() // OUTSIDE root
+		writeFile(t, filepath.Join(external, "manifest.yaml"),
+			"version: v1\nmodules:\n  - path: .\n")
+		if err := os.MkdirAll(filepath.Join(root, ".gocell"), 0o755); err != nil {
+			t.Fatalf("MkdirAll .gocell: %v", err)
+		}
+		// root/.gocell/manifest.yaml -> external/manifest.yaml (escapes root).
+		if err := os.Symlink(filepath.Join(external, "manifest.yaml"),
+			filepath.Join(root, ".gocell", "manifest.yaml")); err != nil {
+			t.Skipf("symlink unsupported on this platform: %v", err)
+		}
+		_, err := ReadManifestModulePathsRoot(root, DefaultManifestPath)
+		if err == nil {
+			t.Fatalf("ReadManifestModulePathsRoot = nil error; want fail-closed (manifest symlink escapes root)")
+		}
+		if !strings.Contains(err.Error(), "escapes") {
+			t.Fatalf("error = %q, want root-confinement signal %q", err.Error(), "escapes")
+		}
+	})
 }

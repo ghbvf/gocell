@@ -64,6 +64,24 @@ func TestLocator_OpenRootError(t *testing.T) {
 	}
 }
 
+// TestNewLocator_InvalidManifestPathClosesRoot covers NewLocator's
+// validateManifestRelativePath rejection branch, which Closes the just-opened
+// os.Root before returning. A parent-escaping WithManifestPath on an otherwise
+// valid disk root must fail at construction (releasing the directory fd rather
+// than leaking it). The existing unsafe-path table
+// (TestLocator_WithManifestPathRejectsUnsafe) exercises only NewLocatorFS,
+// never this disk NewLocator branch.
+func TestNewLocator_InvalidManifestPathClosesRoot(t *testing.T) {
+	root := t.TempDir() // valid root → os.OpenRoot succeeds; only the manifest path is rejected
+	_, err := NewLocator(root, WithManifestPath("../outside/manifest.yaml"))
+	if err == nil {
+		t.Fatalf("NewLocator with parent-escaping manifest path = nil error; want rejection")
+	}
+	if !strings.Contains(err.Error(), "path escape not allowed") {
+		t.Fatalf("NewLocator error = %q, want substring %q", err.Error(), "path escape not allowed")
+	}
+}
+
 // TestLocator_RootConfinement_NormalLayoutParses guards against the confinement
 // change breaking ordinary (symlink-free) on-disk discovery.
 func TestLocator_RootConfinement_NormalLayoutParses(t *testing.T) {
