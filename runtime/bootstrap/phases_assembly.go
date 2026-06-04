@@ -51,19 +51,7 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateGRPCListenerConfigs(); err != nil {
 		return err
 	}
-	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
-		return err
-	}
-	if err := b.validateAuthPlanMTLSBindings(); err != nil {
-		return err
-	}
-	if err := b.validateAuthChainJWTSingleton(); err != nil {
-		return err
-	}
-	if err := b.validateAuthNoneExclusive(); err != nil {
-		return err
-	}
-	if err := b.validateAuthServiceTokenPlans(); err != nil {
+	if err := b.validateAuthPlans(); err != nil {
 		return err
 	}
 	// PR-A14b: validate declarative listener configs last — other option

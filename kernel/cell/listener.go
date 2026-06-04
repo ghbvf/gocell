@@ -49,4 +49,16 @@ var (
 	// it ever reaches the verifier. See .claude/rules/gocell/runtime-api.md
 	// §"单 listener 单 auth scheme".
 	WebhookListener = ListenerRef{"webhook"}
+	// AdminListener is the dedicated listener for operator control-plane routes
+	// (/admin/v1/*) — operator→system actions (projection rebuild, future saga
+	// control / reconcile triggers) triggered by an administrator or deployment
+	// pipeline, NOT cell→cell business calls. It carries an operator-credential
+	// auth chain (auth.AuthOperator: HTTP Basic Auth over env credentials with
+	// per-IP rate limiting), and is bound to a loopback address — loopback
+	// network isolation plus operator credentials form a defense-in-depth pair.
+	// Unlike InternalListener (/internal/v1/*, cell→cell, service-token +
+	// caller-cell allowlist), the admin plane has no caller-cell notion; the
+	// operator is authenticated directly. Mirrors the EventStoreDB projection
+	// admin API model (a network-isolated admin port + operator credentials).
+	AdminListener = ListenerRef{"admin"}
 )

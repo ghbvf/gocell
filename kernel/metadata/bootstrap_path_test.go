@@ -106,3 +106,36 @@ func TestIsInternalHTTPPath(t *testing.T) {
 		})
 	}
 }
+
+func TestIsAdminHTTPPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path string
+		want bool
+	}{
+		// accept — bare root + trailing-slash + deep sub-path
+		{"/admin/v1", true},
+		{"/admin/v1/", true},
+		{"/admin/v1/projection/ordercell/orders/rebuild", true},
+		// reject — public / internal listeners are not admin
+		{"/api/v1/access/sessions", false},
+		{"/internal/v1/access", false},
+		// reject — /adminx is not a prefix match
+		{"/adminx/v1/foo", false},
+		// reject — version-locked to v1 (mirror IsInternalHTTPPath)
+		{"/admin/v10/foo", false},
+		{"/admin/v1foo", false},
+		// reject — missing leading slash / empty
+		{"admin/v1/foo", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			if got := IsAdminHTTPPath(tc.path); got != tc.want {
+				t.Errorf("IsAdminHTTPPath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}

@@ -51,6 +51,7 @@ const (
 	AuthKindJWTFromAssembly                 // AuthJWTFromAssembly
 	AuthKindMTLS                            // AuthMTLS
 	AuthKindServiceToken                    // AuthServiceToken
+	AuthKindOperator                        // AuthOperator (see operator.go)
 )
 
 // AuthPlan is the sealed base interface for all authentication plans.

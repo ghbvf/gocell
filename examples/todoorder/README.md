@@ -167,16 +167,19 @@ The loop has four parts, all inside `ordercell`:
    IDs composed at the read side — no shared-state rebuild conflict.
 3. **Query** — `GET /api/v1/orders/projection/summary` reads the projection.
 4. **Rebuild** — rebuild is framework-owned (`projection.Coordinator.Rebuild`),
-   exposed as one internal control-plane endpoint *per projection*: `POST
-   /internal/v1/ordercell/projection/{order_status,order_transition}/rebuild`
-   (mounted by bootstrap on the internal listener via
-   `WithProjectionRebuildEndpoint("controlplane")`). Rebuilding one projection
-   resets and replays only its own stream — the per-spec replay filter skips
-   foreign streams — so the other projection's disjoint sub-view is undisturbed.
+   exposed as the **operator** control-plane endpoint *per projection*: `POST
+   /admin/v1/projection/ordercell/{order_status,order_transition}/rebuild`
+   (mounted by bootstrap on the loopback `cell.AdminListener` via
+   `WithProjectionRebuildEndpoint()`, #1505). Rebuilding one projection resets and
+   replays only its own stream — the per-spec replay filter skips foreign streams
+   — so the other projection's disjoint sub-view is undisturbed.
    It admits a background rebuild that drives `onReset + replay` automatically:
    `202` admitted (body carries `{phase, pendingEvents, replayLagSeconds}`), `409`
-   if a rebuild is already running, `404` for an unknown projection, `403` for a
-   caller cell outside the allowlist.
+   if a rebuild is already running, `404` for an unknown projection. This is an
+   operator→system action authenticated by operator credentials (no caller-cell
+   allowlist) — the admin listener is wired **only when** `GOCELL_OPERATOR_ADMIN_USERNAME`
+   / `GOCELL_OPERATOR_ADMIN_PASSWORD` are set (otherwise rebuild stays
+   programmatic-only).
 
 > **Security note (demo simplification)**: this demo's `Order` has no
 > `ownerID`; `projection/summary` exposes all `orderIds` and `orderconfirm`
@@ -213,13 +216,15 @@ curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
   http://localhost:8082/api/v1/orders/projection/summary
 # {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1}}
 
-# Rebuild the projection read model via the internal control-plane endpoint
-# (internal listener :9082, framework-owned). The Coordinator drives onReset+replay.
-#   POST /internal/v1/ordercell/projection/order_status/rebuild
+# Rebuild the projection read model via the operator control-plane endpoint
+# (loopback AdminListener 127.0.0.1:9093, framework-owned). Coordinator drives onReset+replay.
+# Wired only when GOCELL_OPERATOR_ADMIN_USERNAME / _PASSWORD are set:
+curl -X POST -u "$GOCELL_OPERATOR_ADMIN_USERNAME:$GOCELL_OPERATOR_ADMIN_PASSWORD" \
+  http://127.0.0.1:9093/admin/v1/projection/ordercell/order_status/rebuild
 #   → 202 admitted {phase,pendingEvents,replayLagSeconds} / 409 already running /
-#     404 unknown projection / 403 caller cell not in allowlist.
-# Auth: HMAC service token (ts:nonce:controlplane:mac over GOCELL_TODOORDER_SERVICE_SECRET),
-# callerCell=controlplane — not the JWT above; the demo ships no service-token generator.
+#     404 unknown projection. 401 without (or with wrong) operator Basic Auth.
+# Auth: operator HTTP Basic Auth (env credentials) — NOT the JWT above and NOT a
+# service token; operator→system, no caller-cell allowlist.
 ```
 
 > **Demo note**: the orderprojection slice is the canonical L3 CQRS harness reference:

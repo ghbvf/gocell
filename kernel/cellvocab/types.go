@@ -12,6 +12,11 @@ const internalValueQuotedFmt = "value=%q"
 // Shared by kernel/cell.AuthRouteMeta.IsInternal and kernel/contractspec.Validate.
 const InternalPathPrefix = "/internal/v1/"
 
+// AdminPathPrefix is the URL prefix that designates an admin-listener
+// (operator control-plane) route. Shared by kernel/cell.AuthRouteMeta.IsAdmin
+// and the runtime router's listener-route affinity check.
+const AdminPathPrefix = "/admin/v1/"
+
 // CellType classifies a Cell's architectural role.
 type CellType string
 
