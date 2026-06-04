@@ -186,7 +186,10 @@ func (s *Server) serveAddr(ctx context.Context) error {
 			"grpc: net.Listen failed", err,
 			errcode.WithInternal(errcode.InternalAttr("addr", s.cfg.Addr)))
 	}
-	slog.Info("grpc: server listening", slog.String("addr", s.cfg.Addr))
+	// Log the ACTUAL bound address, not cfg.Addr: cfg.Addr may be ":0"
+	// (ephemeral port) and never reflects the resolved port. Mirrors the
+	// bootstrap boundGRPC.boundAddr() funnel and the serve() error path below.
+	slog.Info("grpc: server listening", slog.String("addr", lis.Addr().String()))
 	return s.serve(ctx, lis)
 }
 
@@ -194,6 +197,13 @@ func (s *Server) serveAddr(ctx context.Context) error {
 // Serve returns (normal or error) or ctx is canceled. On ctx cancellation a
 // graceful drain is attempted within cfg.ShutdownTimeout.
 func (s *Server) serve(ctx context.Context, lis net.Listener) error {
+	// addr is the ACTUAL served address (lis.Addr()), used for every log/error
+	// in this function. It is correct for both serve paths: the listener-injection
+	// path (Serve, where cfg.Addr may not match the injected socket) and the
+	// self-bind path (serveAddr, where cfg.Addr may be ":0").
+	addr := lis.Addr().String()
+	warnIfInsecureNonLoopback(s.cfg.TLS.AllowInsecure, lis.Addr())
+
 	go func() {
 		err := s.grpcServer.Serve(lis)
 		s.serveErr = err
@@ -216,11 +226,11 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 			// operators see the cause even when the returned errcode is unwrapped
 			// upstream. The raw addr stays in InternalAttr (server-side only).
 			slog.Error("grpc: Serve returned unexpectedly",
-				slog.String("addr", s.cfg.Addr),
+				slog.String("addr", addr),
 				slog.Any("error", err))
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCServe,
 				"grpc: Serve returned unexpectedly", err,
-				errcode.WithInternal(errcode.InternalAttr("addr", s.cfg.Addr)))
+				errcode.WithInternal(errcode.InternalAttr("addr", addr)))
 		}
 		return nil
 
@@ -237,6 +247,29 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 		}
 		return ctx.Err()
 	}
+}
+
+// warnIfInsecureNonLoopback logs a startup Warn when the server serves plaintext
+// (AllowInsecure) on a non-loopback address. Plaintext on a non-loopback bind
+// (e.g. 0.0.0.0) is a legitimate mesh-sidecar posture (see TLSConfig.AllowInsecure),
+// so this is observability — not a fail-closed gate — mirroring the HTTP listener
+// OPS-07 warning (runtime/bootstrap/bootstrap_phase7.go). It lives adapter-side
+// because only the adapter knows its own TLSConfig and the resolved listener
+// address (runtime/bootstrap holds no adapters/grpc dependency). Non-TCP
+// listeners (e.g. bufconn in tests) and loopback binds are silent; wildcard_bind
+// flags a 0.0.0.0 / :: bind (the highest-exposure case).
+func warnIfInsecureNonLoopback(allowInsecure bool, addr net.Addr) {
+	if !allowInsecure {
+		return
+	}
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	if !ok || tcpAddr.IP.IsLoopback() {
+		return
+	}
+	slog.Warn("grpc: serving plaintext on a non-loopback address without TLS; "+
+		"ensure network-level isolation (e.g. a service-mesh sidecar terminating TLS)",
+		slog.String("addr", addr.String()),
+		slog.Bool("wildcard_bind", tcpAddr.IP.IsUnspecified()))
 }
 
 // gracefulStop initiates a graceful drain of in-flight RPCs bounded by ctx.

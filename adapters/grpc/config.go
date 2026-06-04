@@ -40,6 +40,10 @@ type TLSConfig struct {
 	// the explicit opt-in: plaintext is impossible unless the operator sets this
 	// flag (Config.validate V5 rejects the zero value). A loopback-only check
 	// would break the sidecar topology and is intentionally omitted.
+	//
+	// Serving plaintext on a non-loopback address emits a startup slog.Warn (once
+	// per Serve) flagging the posture — observability, not a gate. This is
+	// expected in the sidecar topology; see warnIfInsecureNonLoopback (server.go).
 	AllowInsecure bool
 
 	// CertPEM is the PEM-encoded server leaf certificate. Required for TLS/mTLS.
