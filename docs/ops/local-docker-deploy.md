@@ -166,6 +166,7 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 | `AUDITCORE_HMAC_KEY` | `openssl rand -base64 32` |
 | `AUDITCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `ACCESSCORE_CURSOR_KEY` | `openssl rand -base64 32` |
+| `ACCESSCORE_IP_HASH_SALT` | `openssl rand -base64 32` |
 | `SERVICE_SECRET` | `openssl rand -base64 32` |
 | `METRICS_TOKEN` | `openssl rand -base64 32` |
 | `READYZ_VERBOSE_TOKEN` | `openssl rand -hex 32` |
