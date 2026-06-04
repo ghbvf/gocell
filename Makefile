@@ -1,4 +1,4 @@
-.PHONY: build check-build test fmt verify validate generate proto-gen cover clean \
+.PHONY: build check-build test fmt verify validate generate proto-lint proto-gen cover clean \
         install-hooks update-archtest-golden \
         up down \
         local-up local-down \
@@ -92,6 +92,14 @@ generate:
 #
 # ref: bufbuild/buf `buf generate`; protocolbuffers/protobuf-go protoc-gen-go.
 BUF_VERSION := v1.70.0
+
+# proto-lint runs buf's STANDARD lint set (declared in buf.yaml) — package
+# directory match, service/RPC naming, etc. Separated from proto-gen so it can
+# be run on its own (`make proto-lint`); hack/verify-codegen-proto.sh runs it
+# before generation so the buf.yaml lint config is an enforced gate, not dead
+# config. ref: bufbuild/buf `buf lint`.
+proto-lint:
+	go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION) lint
 
 proto-gen:
 	go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION) generate

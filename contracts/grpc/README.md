@@ -20,12 +20,15 @@ module's `go.mod` is **not** polluted with buf's dependency tree:
 ## Regenerate
 
 ```sh
+make proto-lint       # buf lint (buf.yaml STANDARD ruleset)
 make proto-gen        # buf generate -> generated/contracts/grpc/**/*.pb.go
 ```
 
 Commit the regenerated `*.pb.go`. CI (`hack/verify-codegen-proto.sh`, wired into
-the `verify-codegen` job) regenerates and `git diff`s to gate drift — a stale or
-hand-edited `.pb.go` fails the build.
+the `verify-codegen` job) enforces both: it runs `buf lint`, then clean-slate
+regenerates and `git status`-diffs to gate drift — a lint violation, a stale /
+hand-edited `.pb.go`, an uncommitted new output, or an orphaned `.pb.go` (see
+below) all fail the build.
 
 ## Layout convention
 
@@ -58,9 +61,12 @@ against the main module's protobuf + grpc runtimes.
   (wired into the CI `verify-codegen` job) — regenerate + `git status`. The two
   mechanisms are orthogonal; once cell protos land in PR-8, both kinds coexist
   under `generated/contracts/grpc/` without overlap.
-- **Deleting a proto** also means deleting its `.pb.go` in the same change:
-  `buf generate` only writes, never deletes, so an orphaned `.pb.go` would slip
-  past the drift gate unchanged. Remove it by hand.
+- **Deleting a proto** also means deleting its `.pb.go` in the same change. The
+  drift gate enforces this mechanically: it deletes the tracked buf outputs and
+  regenerates from a clean slate, so a removed/renamed proto's now-orphaned
+  `.pb.go` is not regenerated and surfaces as a ` D` (deleted) drift. (`buf
+  generate` alone only writes, never deletes — a generate-on-top diff would miss
+  the orphan, so the gate cleans first.)
 - **Version integrity.** `buf` and the plugins are pinned by version and verified
   against the Go checksum DB (`sum.golang.org`) on resolution — an upstream retag
   fails the build rather than swapping bytes silently. These ephemeral tool builds
