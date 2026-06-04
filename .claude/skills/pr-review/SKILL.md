@@ -8,9 +8,7 @@ disable-model-invocation: true
 
 # GoCell PR Review — 自动分级六维度审查
 
-按 PR diff 净增删行数自动分配 2/3/6 个 `reviewer` agent 并行做六维度审查（< 200 行不派发，主 agent 自审），主 agent 做根因聚类与修复分流建议。**只 review，不自动 fix**（贴评论=留痕，不算改代码）。
-
-> 所有 `gh` 命令用 `dangerouslyDisableSandbox: true`（CLAUDE.md 全局总则）。
+按 PR diff 净增删行数自动分配 2/3/6 个 `reviewer` agent 并行做六维度审查（< 200 行不派发，主 agent 自审），主 agent 做根因聚类与修复分流建议。**只 review，不自动 fix**。
 
 ---
 
@@ -118,11 +116,14 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 
 阶段 5 的五块**已打印到窗口后**，把**同一份内容**写进 `.github/project-template/pr-comment.md` 的 `<!-- pm:pr-review -->` 模板，**额外**贴成 PR 评论留痕——**窗口打印是主输出、贴评论是留痕，两者都要做，缺一不可**（评论即 review 结果，不做有损浓缩：每条 Finding 带 `file:line`，证据/建议/根因/方案种子入 `<details>` 供 `/fix` 无损提取），贴到 PR：
 
+贴评论命令 + **回显 comment URL/id** 的单源见 `issues` B4：
+
 ```bash
-gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
+URL=$(gh pr comment <N> --body-file <填好的 pm:pr-review 模板>)   # stdout = https://.../pull/<N>#issuecomment-<id>
+echo "✅ 已贴评论：$URL"                                           # 回显给用户（含 comment id）
 ```
 
-贴失败则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
+贴失败（非 0 退出）则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
 
 ---
 
@@ -138,4 +139,4 @@ gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
 2. 分级处理：`diff < 200` 主 agent 自审不派发；`diff ≥ 200` 按行数派 2/3/6 个 reviewer agent（覆盖三档）
 3. 无 worktree 自动创建 `worktrees/review-pr<N>`；既有 worktree 复用，不重建
 4. 主 agent 输出含 Read/Grep 证据 + 根因簇视图先于 Finding 详表；维度名内部一致
-5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer + 每条 finding 的 file:line）
+5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer + 每条 finding 的 file:line）+ 回显 comment URL/id

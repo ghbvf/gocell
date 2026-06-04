@@ -7,10 +7,6 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 # GoCell Ship — 全流程实施
 
-默认 L3（三 agent 探索 + 详细计划 + 与用户确认 + 按 diff 行数自动 1/2/3/6 reviewer，见阶段 7）。
-
-> 所有 `gh` / `git push` 命令用 `dangerouslyDisableSandbox: true`（CLAUDE.md 全局总则）。
-
 > **多沟通原则（默认多问、有歧义即停）**：L2/L3 在创建 worktree（阶段 3）**之前**必须完整呈现「方案方向
 > （阶段 1）+ 改动计划（阶段 2）」并经 AskUserQuestion 确认——不在未对齐时就开工。实施中（阶段 5）surface
 > 阶段性进度与 blocker；阶段 7→8 呈现内置 review findings 表，**Cx1/Cx2 IN_SCOPE 自动修**，仅 Cx3/Cx4 / 归属-取舍
@@ -135,15 +131,13 @@ PR body 结构单源 = `.github/project-template/pull_request_template.md`；读
 
 **L1/L2**：1 个 `reviewer` agent（GoCell 六维度）。
 
-**L3**：按 PR diff 净增删行数确定 `reviewer` agent 数量。用 `--shortstat` 直接读增删行（避开 `--stat` 末行格式坑，也无需 awk 求和）：
+**L3**：按 PR diff 净增删行数确定 `reviewer` agent 数量：
 
 ```bash
-git -C worktrees/<wt> diff --shortstat origin/develop
+git -C worktrees/<wt> diff --shortstat origin/develop   # N files changed, X insertions(+), Y deletions(-)
 ```
 
-输出形如 `N files changed, X insertions(+), Y deletions(-)`；diff 行数 = X + Y（某项为 0 时该子句省略，按 0 计）。
-
-> 阶段 7 被单独调用（非 ship 完整流程、无 worktree）时，回退到仓库根执行 `git diff --shortstat origin/develop`。
+diff 行数 = X + Y（缺项按 0 计）。阶段 7 被单独调用（无 worktree）时回退仓库根 `git diff --shortstat origin/develop`。
 
 GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品。**reviewer 数 + 维度切分单源 = `.claude/agents/reviewer.md` §派发分档**（按上面算出的 diff 行数定档，区间左闭右开，边界归更高档）。
 
@@ -153,10 +147,11 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 
 ## 阶段 8：Fix（内置审 findings）+ 收尾
 
-1. **呈现内置 review findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。
-2. **Cx1/Cx2 IN_SCOPE findings 自动修**（派 `developer` agent 执行 `/fix <finding>`，**不逐条问**，对齐 `fix` 的 [AUTO-FIX]）；Cx3/Cx4 与 OUT_OF_SCOPE 收集到阶段 9。**仅当**归属不清 / 取舍没把握 / 有 Cx3+ 需现在做时才 AskUserQuestion。
-3. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
-   - `gh pr comment <PR#>` 贴 ship 评论：**每条 finding 带 `file:line`，证据/建议入 `<details>`（评论即 review 结果，无损——供 codex / `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex。
+1. **先在对话窗口完整打印内置 review findings 表**（主输出：含 P/Cx 分级 + IN_SCOPE/OUT 归属 + 每条 `file:line`）——窗口打印是主输出、下面贴 pm:ship 评论是无损留痕，**两者都要做**（对齐 `pr-review` 阶段 5/6 的"窗口=主输出、评论=留痕"约定）。
+2. **Cx1/Cx2 IN_SCOPE findings 自动修**（派 `developer` agent 按 `fix` 的 [AUTO-FIX] 流程直接 Edit-Test 修——developer 无 Skill 工具，不真调 `/fix`，是复用其判定 + 修复循环；**不逐条问**）；Cx3/Cx4 遗留与 OUT_OF_SCOPE 写进下面 pm:ship `<details>` 无损区（**不降级成计数**）+ 阶段 9 摘要。**仅当**归属不清 / 取舍没把握 / 有 Cx3+ 需现在做时才 AskUserQuestion。
+3. **推送 + 冲突预检 + CI 绿 gate**：`git -C worktrees/<wt> push` 推送内置修复 commits（阶段 6 已建 PR，CI 在新 SHA 上重跑）；按 `issues` B5 先验无文件冲突、再等 CI 绿（典型 ~5-6 min）——失败则回 `fix` 修复循环再推再等（**最多 3 轮**）；**3 轮仍红 → 直接贴 pm:ship 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。**CI 未绿不交接 codex**（label 保持 `pr-status/in-progress`）。
+4. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
+   - 贴 ship 评论（命令 + **回显 comment URL/id** 见 `issues` B4）：**每条 finding 带 `file:line`，证据/根因/建议/方案种子入 `<details>`（评论即 review 结果，无损——供 codex / `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex。**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数。
    - `gh pr edit` 切 `pr-status/needs-codex`（移除 `pr-status/in-progress`）。
 
 > ship 到此结束（内置审 + 修）。codex 外部 review 后，续修走 `/fix <PR#>`。
@@ -167,11 +162,13 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 
 ```
 PR: #<编号> <URL>
-已完成：TDD / 实施 / PR / review（实跑 reviewer 数：按 diff 1/2/3/6 自动） / Cx1-Cx2 fix / CI
+评论: <pm:ship 评论 URL，含 #issuecomment-<id>（来自 issues B4 回显）>
+已完成：TDD / 实施 / PR / review（实跑 reviewer 数：按 diff 1/2/3/6 自动） / Cx1-Cx2 fix / CI 绿
 
-未处理问题（需人工确认）：
-| # | Finding | Cx | 建议方案 | 原因 |
-|---|---------|----|---------|----|
+未处理问题（需人工确认）——本表仅摘要 + 指针；完整无损详表（证据/三维根因/三级方案种子）+
+OUT_OF_SCOPE 的建 issue 命令草稿，见上面 pm:ship 评论的 `<details>`：
+| # | Finding (file:line) | Cx | 归属 | 建议方案 | 原因 |
+|---|---------------------|----|------|---------|----|
 ```
 
 ---

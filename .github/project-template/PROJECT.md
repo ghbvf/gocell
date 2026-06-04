@@ -130,7 +130,7 @@
 [外部] 你跑 codex review → codex 把评论写进 PR
 
 /fix <PR#>（codex 有新评论可多次跑）
-  → gh pr view --json reviews,comments + gh api .../pulls/{N}/comments 读 codex 评论
+  → gh pr view --json reviews,comments 读 codex 评论（按 author/createdAt 过滤最新一轮）
   → triage + 修复
   → gh pr comment 贴 fix 评论（<!-- pm:fix -->，每次都贴）
   → 切 pr-status/ready（全清）或 pr-review/changes-requested（仍有遗留）
@@ -157,9 +157,8 @@ gh issue list --label backlog --label type-bug --state open
 # epic
 gh issue list --label epic --state open
 
-# 某 PR 的 codex review 评论（fix --from-pr 入口）
+# 某 PR 的 codex review 评论（fix 入口；每条带 body/id/url/createdAt）
 gh pr view <N> --json reviews,comments
-gh api repos/{owner}/{repo}/pulls/<N>/comments
 ```
 
 > label 维度（area/type/pri）经 REST 可查；Status/Estimate/Wave 仅 Project UI 可见（REST token 缺 `project` scope）。
