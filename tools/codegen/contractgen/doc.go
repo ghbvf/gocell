@@ -36,7 +36,7 @@
 // * saga's iface_gen.go is an empty package clause (no Service interface); the
 // typed business interface is Impl in saga_gen.go. See the iface_gen.go section.
 //
-// # types_gen.go (every contract kind)
+// # types_gen.go (all kinds except webhook)
 //
 // Renders Request / Response / Payload / Headers DTOs from the schemaRefs.
 // For HTTP contracts, additionally renders the typed-response-envelope set:
@@ -59,7 +59,7 @@
 // body (errors go through pkg/httputil.WriteErrorWithStatus to share the 4xx/
 // 5xx redaction policy with the framework fallback path).
 //
-// # iface_gen.go (every contract kind)
+// # iface_gen.go (http/event/projection/grpc/saga — not command/webhook)
 //
 // Renders the Service interface that the cell-side handler must implement.
 // For HTTP contracts the signature is
@@ -78,7 +78,10 @@
 // from the proto, not a hand-written literal. For
 // kind=saga, iface_gen.go is intentionally empty (just the package clause) —
 // the typed business interface is the Impl interface emitted in saga_gen.go,
-// not a Service here.
+// not a Service here. command contracts emit no iface_gen.go — the typed Handler
+// interface lives in command_gen.go (a Service interface there would collide);
+// webhook contracts emit no contractgen package at all (registration derives via
+// cellgen from slice.yaml).
 //
 // # handler_gen.go (kind=http only)
 //
