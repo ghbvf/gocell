@@ -94,7 +94,7 @@ external MDM 控制台 publish "command.device.reboot.v1"
 | AC-9 | payload 与 last_error 经 `pkg/redaction` 单源 redact；span attribute 经 `safeStringAttr` | unit + 既有 `SPAN-SETATTR-REDACT-01` 覆盖 |
 | AC-10 | Reject → publish 到 `$dead/<topic>` 可观测、可由独立 subscriber 验证 | integration |
 | AC-11 | examples/iotdevice 增加一条 MQTT 演示路径（事件发布或命令订阅，详 plan），smoke 通过 | example smoke |
-| AC-12 | CI 集成测试经 testcontainers（`eclipse-mosquitto:2.0`）由 `CI-INTEGRATION-DISCOVERY-01` 自动并入 integration-test adapters shard（非独立 job / 非静态 service container）；该 job wall-time 由 integration-tier slowgate 阈值（120s，保守初值，后续按真实 CI 时长收紧）机器门控，超阈测试走 `SLOWGATE-ALLOWLIST-01` must-justify。原「pr-check 增量 ≤60s」因 broker-restart 重连测试本身 ~60s 不可孤立计量，#1430 重构为该门控；预算记录见 plan.md PR-2 §验收 | `.github/workflows/_build-lint.yml`（slowgate step）+ `tools/slowgate/allowlist.txt` |
+| AC-12 | CI 集成测试经 testcontainers（`eclipse-mosquitto:2.0`）由 `CI-INTEGRATION-DISCOVERY-01` 自动并入 integration-test adapters shard（非独立 job / 非静态 service container）；该 job wall-time 由 integration-tier slowgate 阈值（120s，PR #1594 CI 实跑 PASS 验证）机器门控，超阈测试走 `SLOWGATE-ALLOWLIST-01` must-justify。原「pr-check 增量 ≤60s」因 broker-restart 重连测试本身 ~60s 不可孤立计量，#1430 重构为该门控；预算记录见 plan.md PR-2 §验收 | `.github/workflows/_build-lint.yml`（slowgate step）+ `tools/slowgate/allowlist.txt` |
 
 ## 6. 关键决策（来自 clarify 阶段）
 
