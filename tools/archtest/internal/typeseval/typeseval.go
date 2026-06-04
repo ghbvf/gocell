@@ -30,12 +30,13 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/types"
-	"os"
 	"strings"
 	"sync"
 
 	"golang.org/x/sync/singleflight"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 // EvaluateConstString returns the compile-time string constant value of expr,
@@ -111,24 +112,14 @@ func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string)
 		Mode:  loadMode,
 		Dir:   modRoot,
 		Tests: tests,
-		// GOWORK=off forces module mode for every archtest load. The repo root
-		// go.work (`use .`) would otherwise put go/packages into workspace mode,
-		// which rejects the isolated fixture modules under tools/archtest/testdata/*
-		// ("directory ... does not contain modules listed in go.work") because
-		// those deliberately-standalone modules are not in the `use` set. archtest
-		// only ever analyzes the single root module plus those self-contained
-		// fixtures, so it must stay go.work-agnostic: module mode loads the root
-		// module and each fixture identically to the pre-go.work world.
-		// append(os.Environ(), "GOWORK=off") is last-value-wins on the supported
-		// CI runners, so it overrides any inherited GOWORK. This guard is shared
-		// by every repo packages.Config loader, enforced by archtest
-		// PACKAGES-CONFIG-GOWORK-OFF-01.
-		Env: append(os.Environ(), "GOWORK=off"),
 	}
 	if len(tags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	// ModeModule (GOWORK=off): archtest analyzes the root module plus the
+	// isolated fixture modules under tools/archtest/testdata/*, none of which are
+	// in the repo go.work `use` set. See tools/packagesload.
+	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, patterns...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("packages.Load: %w", err)
 	}

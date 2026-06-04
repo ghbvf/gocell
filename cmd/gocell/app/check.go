@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/tools/nogo/unconditionalskip"
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 // checkL0NonL0SkipMsg is the message printed when --cell targets a non-L0 cell.
@@ -780,14 +781,11 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,
 		Dir:  filepath.Join(root, cellDir),
-		// GOWORK=off keeps loading go.work-agnostic (module mode), uniform with
-		// the repo's other packages.Config loaders. Today this loads a subdir of
-		// the root module — fine under workspace mode — but stays correct if
-		// cells/ ever splits into its own module. Enforced by archtest
-		// PACKAGES-CONFIG-GOWORK-OFF-01.
-		Env: append(os.Environ(), "GOWORK=off"),
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	// ModeModule (GOWORK=off): uniform go.work-agnostic loading. Today this loads
+	// a subdir of the root module, but module mode stays correct if cells/ ever
+	// splits into its own module. See tools/packagesload.
+	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, "./...")
 	if err != nil {
 		return nil, []governance.ValidationResult{{
 			Code:      governance.RuleCode("CHECK-L0-LOAD-ERROR"),
@@ -981,11 +979,9 @@ func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.
 		Tests:      true,
 		Dir:        root,
 		BuildFlags: []string{"-tags=integration,e2e,examples_smoke"},
-		// GOWORK=off: uniform go.work-agnostic loading (see loadCellImports).
-		// Enforced by archtest PACKAGES-CONFIG-GOWORK-OFF-01.
-		Env: append(os.Environ(), "GOWORK=off"),
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	// ModeModule (GOWORK=off): uniform go.work-agnostic loading (see loadCellImports).
+	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("load packages: %w", err)
 	}
