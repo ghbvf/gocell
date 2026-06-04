@@ -24,7 +24,7 @@ paths:
 > `cell.HealthListener` / `cell.AdminListener` 也留在 `kernel/cell`。`auth.AuthOperator` /
 > `auth.NewAuthOperator`（#1505 operator 控制面）同样来自 `kernel/auth`。下面所有示例按此约定。
 
-## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b / PR262)
+## Auth 路由声明 + listener 拓扑 + RouteGroup (PR-A14b / PR262 / admin #1505)
 
 每个 Cell 在 `Init(ctx, reg)` 中通过 `reg.RouteGroup(...)` 声明路由组。
 每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux) error` — PR-MODE-6: error-first 链路，phase5 把 Register 的错误连同 cell+listener+prefix 上下文 wrap 后冒泡到 `Bootstrap.Run`）。
@@ -220,13 +220,14 @@ bootstrap.WithListener(WebhookListener, ":8090",
 | `PasswordResetExempt` | 允许 password-reset token | 与 `Public` / `Bootstrap` 互斥；handler 内做细粒度校验 |
 | `Bootstrap` | HTTP Basic Auth（env 操作员凭据）保护 setup/admin endpoint | 与 `Public` / `PasswordResetExempt` / `Policy` 互斥；FMT-27 三方互斥守护；FMT-28 限定路径 `/api/v1/*/setup/admin`；`NewBootstrapMiddleware` 实现 per-IP token-bucket + `subtle.ConstantTimeCompare` |
 
-### 三 listener 分流（PR-A14b）
+### listener 分流（PR-A14b；admin 见 #1505）
 
-Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含独立 `*http.ServeMux`）：
+Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含独立 `*http.ServeMux`）。三个**核心** listener 恒在，外加**可选**的 operator admin listener：
 
-- **primary**：挂 `/api/v1/*` 业务路由；JWT AuthMiddleware（来自 `[]auth.ListenerAuth` 中的 AuthJWT/AuthJWTFromAssembly）。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
+- **primary**：挂 `/api/v1/*` 业务路由；JWT AuthMiddleware（来自 `[]auth.ListenerAuth` 中的 AuthJWT/AuthJWTFromAssembly）。primary listener 显式 404 所有 `/internal/v1/*` 与 `/admin/v1/*` 请求，实现端口级物理隔离。
 - **internal**：仅挂 `/internal/v1/*` 路由；AuthServiceToken / AuthMTLS 策略，无 JWT 中间件。
 - **health**：仅挂 `/healthz` `/readyz` `/metrics`；框架自动注册，Cell 不声明此 listener。
+- **admin**（可选，#1505）：仅挂 `/admin/v1/*` operator→system 控制面路由；`AuthOperator` 凭据闸门，无 JWT 中间件。仅当装配了 admin 端点（如 `WithProjectionRebuildEndpoint()`）时声明；`cmd/corebundle` 不装配它。
 
 详见 `docs/ops/listener-topology.md`。
 

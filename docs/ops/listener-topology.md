@@ -1,8 +1,12 @@
-# GoCell Three-Listener Topology and Deployment (PR-A14b / PR262)
+# GoCell Listener Topology and Deployment (PR-A14b / PR262 / #1505)
 
-GoCell runs three independent HTTP listeners. Each listener has a dedicated
-stdlib `*http.ServeMux` root and a typed `[]auth.ListenerAuth` chain — no
-route leaks between ports, no string-based auth dispatch.
+GoCell runs three **core** independent HTTP listeners — primary, internal, health
+— plus an **optional** operator admin listener (`cell.AdminListener`, #1505;
+declared only when an admin endpoint is wired, see [Admin Listener](#admin-listener-operator-control-plane-1505)).
+Each listener has a dedicated stdlib `*http.ServeMux` root and a typed
+`[]auth.ListenerAuth` chain — no route leaks between ports, no string-based auth
+dispatch. `cmd/corebundle` binds only the three core listeners; the admin
+listener is exercised by `examples/todoorder`.
 
 ## Topology Diagram
 
