@@ -28,6 +28,17 @@ type boundGRPC struct {
 	owned bool // true when bootstrap bound the socket (not caller-injected)
 }
 
+// boundAddr returns the ACTUAL bound socket address (e.g. "127.0.0.1:54321").
+// It is the single source for logging a bound listener's address: cfg.addr may
+// be ":0" (ephemeral port) and never reflects the resolved port. Every
+// post-bind log site — serve start and drain — reads boundAddr so the logged
+// address matches what clients connect to; only the pre-bind FAILURE path (no
+// listener yet) logs cfg.addr. net.TCPListener.Addr() keeps returning the
+// cached local address after Close, so boundAddr is safe to call during drain.
+func (bd boundGRPC) boundAddr() string {
+	return bd.lis.Addr().String()
+}
+
 // phase7bStartGRPCServers binds every declared gRPC listener synchronously, then
 // starts one serve goroutine per server and wires the drain hook (s.grpcDrain)
 // and error channel (s.grpcErrCh). serveCtx is the long-lived run context; drain
@@ -53,9 +64,10 @@ func (b *Bootstrap) phase7bStartGRPCServers(serveCtx context.Context, s *phaseSt
 				slog.String("addr", gc.addr), slog.Any("error", err))
 			return fmt.Errorf("bootstrap: grpc listen %s: %w", gc.addr, err)
 		}
+		bd := boundGRPC{cfg: gc, lis: lis, owned: owned}
 		slog.Info("bootstrap: gRPC listener bound",
-			slog.String("addr", lis.Addr().String()), slog.Bool("owned", owned))
-		bounds = append(bounds, boundGRPC{cfg: gc, lis: lis, owned: owned})
+			slog.String("addr", bd.boundAddr()), slog.Bool("owned", owned))
+		bounds = append(bounds, bd)
 	}
 
 	// Drain cell GRPCServiceSpecs: AFTER binding, BEFORE grpcServeAll, so
@@ -193,7 +205,7 @@ func (b *Bootstrap) grpcServeAll(serveCtx context.Context, bounds []boundGRPC) c
 					close(grpcErrCh)
 				}
 			}()
-			addr := bd.lis.Addr().String()
+			addr := bd.boundAddr()
 			slog.Info("bootstrap: gRPC server starting", slog.String("addr", addr))
 			if err := bd.cfg.server.Serve(serveCtx, bd.lis); err != nil {
 				grpcErrCh <- fmt.Errorf("grpc %s: %w", addr, err)
@@ -212,15 +224,16 @@ func drainAllGRPCServers(parent context.Context, bounds []boundGRPC) error {
 	resultCh := make(chan error, len(bounds))
 	for _, bd := range bounds {
 		go func() {
+			addr := bd.boundAddr()
 			ctx, cancel := shutdownCtxFor(parent, bd.cfg.shutGrace)
 			defer cancel()
 			err := bd.cfg.server.Close(ctx)
 			if err != nil {
 				slog.Error("bootstrap: gRPC server drain failed",
-					slog.String("addr", bd.cfg.addr), slog.Any("error", err))
-				err = fmt.Errorf("grpc %s drain: %w", bd.cfg.addr, err)
+					slog.String("addr", addr), slog.Any("error", err))
+				err = fmt.Errorf("grpc %s drain: %w", addr, err)
 			} else {
-				slog.Info("bootstrap: gRPC server drained", slog.String("addr", bd.cfg.addr))
+				slog.Info("bootstrap: gRPC server drained", slog.String("addr", addr))
 			}
 			resultCh <- err
 		}()
