@@ -1,6 +1,7 @@
 package configwrite
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -23,9 +24,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+// contractAdminCtx returns a context suitable for contract service calls:
+// admin principal + a valid TenantID (required by configwrite.Service methods).
+// Uses a fixed "contract-admin" subject so contract tests are self-contained.
+func contractAdminCtx() context.Context {
+	return ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testHandlerTenantStr)
+}
 
 func newContractService(t testing.TB) (*Service, *testutil.RecordingWriter) {
 	t.Helper()
@@ -97,7 +106,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"key":"app.name","value":"myapp"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -150,7 +159,7 @@ func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, writer := newContractService(t)
 
-	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "app.name", Value: "myapp"})
+	_, err := svc.Create(contractAdminCtx(), CreateInput{Key: "app.name", Value: "myapp"})
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Create must emit one outbox entry")
@@ -174,11 +183,11 @@ func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, writer := newContractService(t)
 
-	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "k", Value: "v1"})
+	_, err := svc.Create(contractAdminCtx(), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	_, err = svc.Update(auth.TestContext("contract-admin", []string{"admin"}), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
+	_, err = svc.Update(contractAdminCtx(), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Update must emit one outbox entry")
@@ -193,11 +202,11 @@ func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 	svc, writer := newContractService(t)
 
-	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "k", Value: "v"})
+	_, err := svc.Create(contractAdminCtx(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	err = svc.Delete(auth.TestContext("contract-admin", []string{"admin"}), "k", 1)
+	err = svc.Delete(contractAdminCtx(), "k", 1)
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Delete must emit one outbox entry")

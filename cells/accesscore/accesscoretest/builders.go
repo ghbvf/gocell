@@ -230,7 +230,7 @@ func WithConfigReceiveCollector(c obmetrics.ConfigEventCollector) BuildConfigRec
 // BuildConfigReceiveService constructs a ready-to-use *configreceive.Service.
 //
 // Default wiring:
-//   - ConfigGetter: NewFakeConfigGetter(nil) — all keys return ErrConfigNotFound
+//   - ConfigGetter: NewFakeConfigGetter(nil) — all keys return ErrConfigRepoNotFound
 //   - Logger: slog.New(slog.DiscardHandler)
 //   - ConfigEventCollector: not set — configreceive.NewService falls back to its
 //     own noop collector. Inject via WithConfigReceiveCollector to assert

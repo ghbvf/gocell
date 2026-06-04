@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // PlaintextMigrationConfig controls the batch-encrypt migration behavior.
@@ -46,23 +47,25 @@ func tableQueries(table string) (migTableQueries, error) {
 		// the same unencrypted row to appear in two successive batches, or
 		// be skipped entirely, under concurrent writes.
 		//
-		// SELECT returns (id, aadIdentity=configKey, value).
-		// AAD = AADForConfig(cellID, configKey).
+		// SELECT returns (id, tenant_id, aadIdentity=configKey, value).
+		// AAD = AADForConfig(cellID, tenant, configKey). tenant_id is selected so
+		// the migration's AAD matches the normal write path, which now binds the
+		// owning tenant into the AAD (cross-tenant replay protection, #1479).
 		return migTableQueries{
-			selectQ: `SELECT id, key, value FROM config_entries` +
+			selectQ: `SELECT id, tenant_id, key, value FROM config_entries` +
 				` WHERE sensitive = true AND value_cipher IS NULL ORDER BY id LIMIT $1`,
 			updateQ: `UPDATE config_entries SET value = '', value_cipher = $1, value_key_id = $2,` +
 				` value_edk = $3, value_nonce = $4 WHERE id = $5 AND value_cipher IS NULL`,
 		}, nil
 	case "config_versions":
 		// config_versions uses config_id (UUID) as the AAD identity, matching the
-		// normal write path (encryptVersionValue → AADForVersion(cellID, configID)).
-		// No JOIN needed: config_id is already on the config_versions row.
+		// normal write path (encryptVersionValue → AADForVersion(cellID, tenant, configID)).
+		// No JOIN needed: config_id and tenant_id are already on the config_versions row.
 		//
-		// SELECT returns (id, aadIdentity=config_id, value).
-		// AAD = AADForVersion(cellID, config_id).
+		// SELECT returns (id, tenant_id, aadIdentity=config_id, value).
+		// AAD = AADForVersion(cellID, tenant, config_id).
 		return migTableQueries{
-			selectQ: `SELECT id, config_id, value FROM config_versions` +
+			selectQ: `SELECT id, tenant_id, config_id, value FROM config_versions` +
 				` WHERE sensitive = true AND value_cipher IS NULL ORDER BY id LIMIT $1`,
 			updateQ: `UPDATE config_versions SET value = '', value_cipher = $1, value_key_id = $2,` +
 				` value_edk = $3, value_nonce = $4 WHERE id = $5 AND value_cipher IS NULL`,
@@ -76,8 +79,13 @@ func tableQueries(table string) (migTableQueries, error) {
 // aadIdentity is the value used to compute the row-specific AAD:
 //   - config_entries: configKey (human-readable key name)
 //   - config_versions: configID (UUID from config_entries.id)
+//
+// tenant is the owning tenant of the row; it is bound into the AAD so the
+// migration's ciphertext matches the normal write path (cross-tenant replay
+// protection, #1479).
 type pendingRow struct {
 	id          string
+	tenant      tenant.TenantID
 	aadIdentity string // configKey for entries, configID for versions
 	value       string
 }
@@ -176,7 +184,7 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 	var batch []pendingRow
 	for rows.Next() {
 		var r pendingRow
-		if scanErr := rows.Scan(&r.id, &r.aadIdentity, &r.value); scanErr != nil {
+		if scanErr := rows.Scan(&r.id, &r.tenant, &r.aadIdentity, &r.value); scanErr != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 				"plaintext-migrator: scan failed", scanErr,
 				errcode.WithDetails(errcode.PublicString("table", table)))
@@ -194,11 +202,13 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 // computeAAD returns the row-specific Additional Authenticated Data for the given table.
 // config_entries uses AADForConfig (identity = configKey);
 // config_versions uses AADForVersion (identity = configID UUID).
-func computeAAD(table, aadIdentity string) []byte {
+// The tenant is bound into the AAD so the migration's ciphertext matches the
+// normal write path's AAD (cross-tenant replay protection, #1479).
+func computeAAD(table string, t tenant.TenantID, aadIdentity string) []byte {
 	if table == "config_versions" {
-		return configcrypto.AADForVersion(cellID, aadIdentity)
+		return configcrypto.AADForVersion(cellID, t, aadIdentity)
 	}
-	return configcrypto.AADForConfig(cellID, aadIdentity)
+	return configcrypto.AADForConfig(cellID, t, aadIdentity)
 }
 
 // encryptBatch encrypts each row in the batch and writes it back.
@@ -206,7 +216,7 @@ func (m *plaintextMigrator) encryptBatch(
 	ctx context.Context, updateQ, table string, batch []pendingRow, result *PlaintextMigrationResult,
 ) error {
 	for _, row := range batch {
-		aad := computeAAD(table, row.aadIdentity)
+		aad := computeAAD(table, row.tenant, row.aadIdentity)
 		encResult, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
 		if encErr != nil {
 			return fmt.Errorf("plaintext-migrator: encrypt aad_identity=%s: %w", row.aadIdentity, encErr)

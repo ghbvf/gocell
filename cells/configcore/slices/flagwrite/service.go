@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -88,6 +89,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 		return nil, err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("flag-write: create: tenant: %w", err)
+	}
+
 	now := s.clock.Now()
 	flag := &domain.FeatureFlag{
 		ID:                "flg-" + uuid.NewString(),
@@ -101,7 +107,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Create(txCtx, flag); err != nil {
+		if err := s.repo.Create(txCtx, t, flag); err != nil {
 			return fmt.Errorf("flag-write: create: %w", err)
 		}
 		return nil
@@ -124,11 +130,16 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 		return nil, err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("flag-write: update: tenant: %w", err)
+	}
+
 	var updated *domain.FeatureFlag
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.repo.Update(txCtx, input.Key, input.ExpectedVersion, input.Enabled, input.RolloutPercentage, input.Description)
+		updated, err = s.repo.Update(txCtx, t, input.Key, input.ExpectedVersion, input.Enabled, input.RolloutPercentage, input.Description)
 		if err != nil {
 			return fmt.Errorf("flag-write: update: %w", err)
 		}
@@ -154,11 +165,16 @@ func (s *Service) Toggle(ctx context.Context, key string, expectedVersion int, e
 		return nil, err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("flag-write: toggle: tenant: %w", err)
+	}
+
 	var updated *domain.FeatureFlag
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
-		updated, err = s.repo.Toggle(txCtx, key, expectedVersion, enabled)
+		updated, err = s.repo.Toggle(txCtx, t, key, expectedVersion, enabled)
 		if err != nil {
 			return fmt.Errorf("flag-write: toggle: %w", err)
 		}
@@ -186,8 +202,13 @@ func (s *Service) Delete(ctx context.Context, key string, expectedVersion int) e
 		return err
 	}
 
+	t, err := tenant.FromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("flag-write: delete: tenant: %w", err)
+	}
+
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if _, err := s.repo.Delete(txCtx, key, expectedVersion); err != nil {
+		if _, err := s.repo.Delete(txCtx, t, key, expectedVersion); err != nil {
 			return fmt.Errorf("flag-write: delete: %w", err)
 		}
 		return nil

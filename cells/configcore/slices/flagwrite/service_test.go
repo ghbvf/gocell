@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
@@ -20,6 +21,15 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// testFlagTenant is the typed TenantID for direct repo operations.
+var testFlagTenant = configcoretest.TestTenant
+
+// flagSvcCtx returns a background context carrying the test tenant for
+// service-layer test calls.
+func flagSvcCtx() context.Context {
+	return configcoretest.CtxWithTenant(context.Background())
+}
 
 // failingTxRunner simulates a tx that wraps fn but fails after fn returns nil,
 // used to simulate a rollback scenario where in-memory repo already applied the
@@ -59,7 +69,7 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) {
 		CreatedAt:         time.Now(),
 		UpdatedAt:         time.Now(),
 	}
-	require.NoError(t, repo.Create(context.Background(), flag))
+	require.NoError(t, repo.Create(context.Background(), testFlagTenant, flag))
 }
 
 // --- Test: constructor ---
@@ -90,7 +100,7 @@ func TestFlagWrite_Create_Atomic_RepoInTx(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
-	flag, err := svc.Create(context.Background(), CreateInput{
+	flag, err := svc.Create(flagSvcCtx(), CreateInput{
 		Key:         "my-flag",
 		Description: "test",
 	})
@@ -99,7 +109,7 @@ func TestFlagWrite_Create_Atomic_RepoInTx(t *testing.T) {
 	assert.Equal(t, 1, tx.Calls, "Create must call RunInTx exactly once")
 
 	// Flag must be persisted in repo.
-	got, err := repo.GetByKey(context.Background(), "my-flag")
+	got, err := repo.GetByKey(context.Background(), testFlagTenant, "my-flag")
 	require.NoError(t, err)
 	assert.Equal(t, "my-flag", got.Key)
 }
@@ -111,7 +121,7 @@ func TestFlagWrite_Create_RepoFails(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
-	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
+	_, err = svc.Create(flagSvcCtx(), CreateInput{Key: "k"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tx commit failed")
 }
@@ -123,7 +133,7 @@ func TestFlagWrite_Toggle_TogglesFlag(t *testing.T) {
 	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feature-x")
 
-	flag, err := svc.Toggle(context.Background(), "feature-x", 1, true)
+	flag, err := svc.Toggle(flagSvcCtx(), "feature-x", 1, true)
 	require.NoError(t, err)
 	assert.True(t, flag.Enabled)
 	assert.Equal(t, "feature-x", flag.Key)
@@ -136,7 +146,7 @@ func TestFlagWrite_Update_UpdatesFlag(t *testing.T) {
 	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feat-update")
 
-	flag, err := svc.Update(context.Background(), UpdateInput{
+	flag, err := svc.Update(flagSvcCtx(), UpdateInput{
 		Key:               "feat-update",
 		ExpectedVersion:   1,
 		Enabled:           true,
@@ -157,10 +167,10 @@ func TestFlagWrite_Delete_RemovesFlag(t *testing.T) {
 	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feat-delete")
 
-	err := svc.Delete(context.Background(), "feat-delete", 1)
+	err := svc.Delete(flagSvcCtx(), "feat-delete", 1)
 	require.NoError(t, err)
 
-	_, getErr := repo.GetByKey(context.Background(), "feat-delete")
+	_, getErr := repo.GetByKey(context.Background(), testFlagTenant, "feat-delete")
 	require.Error(t, getErr, "flag must be removed after Delete")
 }
 
@@ -169,7 +179,7 @@ func TestFlagWrite_Delete_RemovesFlag(t *testing.T) {
 // TestFlagWrite_Create_BlankKey rejects blank key with validation error.
 func TestFlagWrite_Create_BlankKey(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.Create(context.Background(), CreateInput{Key: ""})
+	_, err := svc.Create(flagSvcCtx(), CreateInput{Key: ""})
 	require.Error(t, err)
 }
 
@@ -195,16 +205,16 @@ func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
-	_, createErr := svc.Create(context.Background(), CreateInput{Key: "flag-no-emit", Description: "test"})
+	_, createErr := svc.Create(flagSvcCtx(), CreateInput{Key: "flag-no-emit", Description: "test"})
 	require.NoError(t, createErr, "Create must succeed without emitter (L1 only)")
 
-	_, updateErr := svc.Update(context.Background(), UpdateInput{Key: "flag-no-emit", ExpectedVersion: 1, Description: "updated"})
+	_, updateErr := svc.Update(flagSvcCtx(), UpdateInput{Key: "flag-no-emit", ExpectedVersion: 1, Description: "updated"})
 	require.NoError(t, updateErr, "Update must succeed without emitter (L1 only)")
 
-	_, toggleErr := svc.Toggle(context.Background(), "flag-no-emit", 2, true)
+	_, toggleErr := svc.Toggle(flagSvcCtx(), "flag-no-emit", 2, true)
 	require.NoError(t, toggleErr, "Toggle must succeed without emitter (L1 only)")
 
-	deleteErr := svc.Delete(context.Background(), "flag-no-emit", 3)
+	deleteErr := svc.Delete(flagSvcCtx(), "flag-no-emit", 3)
 	require.NoError(t, deleteErr, "Delete must succeed without emitter (L1 only)")
 }
 
@@ -238,7 +248,7 @@ func TestConcurrentToggle_ExactlyOneSucceeds(t *testing.T) {
 		enabled := i == 0
 		go func(enabled bool) {
 			defer wg.Done()
-			_, togErr := svc.Toggle(context.Background(), "cas-toggle-flag", 1, enabled)
+			_, togErr := svc.Toggle(flagSvcCtx(), "cas-toggle-flag", 1, enabled)
 			if togErr == nil {
 				successes.Add(1)
 			} else {
@@ -282,7 +292,7 @@ func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
 		}
 		go func(desc string) {
 			defer wg.Done()
-			_, upErr := svc.Update(context.Background(), UpdateInput{
+			_, upErr := svc.Update(flagSvcCtx(), UpdateInput{
 				Key:             "cas-update-flag",
 				ExpectedVersion: 1,
 				Description:     desc,
@@ -327,7 +337,7 @@ func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
-			delErr := svc.Delete(context.Background(), "cas-delete-flag", 1)
+			delErr := svc.Delete(flagSvcCtx(), "cas-delete-flag", 1)
 			if delErr == nil {
 				successes.Add(1)
 			} else {

@@ -22,15 +22,28 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
-// adminIntegCtx returns a context carrying an admin principal for integration
-// service-method calls.
+// integTestTenantStr is the canonical test tenant UUID for integration tests
+// in this package. Mirrors integTestTenant so that rows written by
+// the service (which derives tenant from ctx via tenant.FromContext) and rows
+// probed directly via repo (which take an explicit tenant.TenantID param) are
+// always consistent.
+const integTestTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// integTestTenant is the typed TenantID used for direct repo calls.
+var integTestTenant = tenant.TenantID(integTestTenantStr)
+
+// adminIntegCtx returns a context carrying an admin principal and test tenant
+// for integration service-method calls. Services derive tenant via
+// tenant.FromContext; without the tenant injection the service methods fail-closed.
 func adminIntegCtx() context.Context {
-	return auth.TestContext("test-admin", []string{"admin"})
+	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), integTestTenantStr)
 }
 
 // writeBundle exposes the pool so tests can assert raw outbox_entries state
@@ -155,7 +168,7 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 		"Delete must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigEntryDeleted)
 
 	// Domain-side: the config_entries row must be absent after Delete.
-	_, getErr := bundle.svc.repo.GetByKey(context.Background(), "integration.atomic.delete")
+	_, getErr := bundle.svc.repo.GetByKey(context.Background(), integTestTenant, "integration.atomic.delete")
 	require.Error(t, getErr, "config_entries row must not exist after Delete")
 	var ec *errcode.Error
 	require.ErrorAs(t, getErr, &ec)
@@ -199,7 +212,7 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 		"Create error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// config_entries row must NOT exist (rolled back).
-	_, getErr := repo.GetByKey(ctx, "rollback.test")
+	_, getErr := repo.GetByKey(ctx, integTestTenant, "rollback.test")
 	require.Error(t, getErr)
 	var ec *errcode.Error
 	require.ErrorAs(t, getErr, &ec)
@@ -220,7 +233,7 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	assert.Equal(t, "rollback.test", got.Key)
 	assert.Equal(t, "v", got.Value)
 
-	controlEntry, getErr := repo.GetByKey(ctx, "rollback.test")
+	controlEntry, getErr := repo.GetByKey(ctx, integTestTenant, "rollback.test")
 	require.NoError(t, getErr, "negative control: config_entries row must exist after successful Create")
 	assert.Equal(t, "v", controlEntry.Value,
 		"negative control: persisted value must match the Create input")
@@ -248,7 +261,7 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the seed committed at version 1.
-	seedEntry, err := repo.GetByKey(ctx, "rollback.update.key")
+	seedEntry, err := repo.GetByKey(ctx, integTestTenant, "rollback.update.key")
 	require.NoError(t, err)
 	require.Equal(t, 1, seedEntry.Version, "seed must commit at version 1")
 
@@ -272,7 +285,7 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 		"Update error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// config_entries must still be at version 1 (UPDATE rolled back).
-	afterEntry, getErr := repo.GetByKey(ctx, "rollback.update.key")
+	afterEntry, getErr := repo.GetByKey(ctx, integTestTenant, "rollback.update.key")
 	require.NoError(t, getErr)
 	assert.Equal(t, 1, afterEntry.Version,
 		"config_entries version must not change when outbox write fails (atomic Update rollback)")
@@ -302,7 +315,7 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the seed committed.
-	_, err = repo.GetByKey(ctx, "rollback.delete.key")
+	_, err = repo.GetByKey(ctx, integTestTenant, "rollback.delete.key")
 	require.NoError(t, err, "seed entry must exist before the failing Delete")
 
 	// Phase 2: failing-writer Service — Delete must error and the row must survive.
@@ -320,7 +333,7 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 		"Delete error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// config_entries row must still exist (DELETE rolled back).
-	afterEntry, getErr := repo.GetByKey(ctx, "rollback.delete.key")
+	afterEntry, getErr := repo.GetByKey(ctx, integTestTenant, "rollback.delete.key")
 	require.NoError(t, getErr,
 		"config_entries row must still exist when outbox write fails (atomic Delete rollback)")
 	assert.Equal(t, "to-be-deleted", afterEntry.Value,

@@ -31,6 +31,10 @@ func (a WriteAdapter) Write(ctx context.Context, req *write.Request) (write.Writ
 		Sensitive: sensitive,
 	})
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) && ce.Code == errcode.ErrAuthForbidden {
+			return write.Write403ErrorResponse{Body: *ce}, nil
+		}
 		return nil, err
 	}
 	return write.Write201JSONResponse{Data: toWriteResponseData(entry)}, nil
@@ -51,6 +55,8 @@ func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (update.
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
 			switch ce.Code {
+			case errcode.ErrAuthForbidden:
+				return update.Update403ErrorResponse{Body: *ce}, nil
 			case errcode.ErrConfigRepoNotFound:
 				return update.Update404ErrorResponse{Body: *ce}, nil
 			case errcode.ErrVersionConflict:
@@ -71,6 +77,8 @@ func (a DeleteAdapter) Delete(ctx context.Context, req *configdelete.Request) (c
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
 			switch ce.Code {
+			case errcode.ErrAuthForbidden:
+				return configdelete.Delete403ErrorResponse{Body: *ce}, nil
 			case errcode.ErrConfigRepoNotFound:
 				return configdelete.Delete404ErrorResponse{Body: *ce}, nil
 			case errcode.ErrVersionConflict:

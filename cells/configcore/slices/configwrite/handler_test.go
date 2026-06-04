@@ -25,12 +25,29 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// testHandlerTenantStr is the test tenant injected into request contexts so
+// configwrite.Service.Create/Update/Delete can call tenant.FromContext without
+// error. Mirrors the pattern established by accesscore PR-2a.
+const testHandlerTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// testHandlerTenant is the typed TenantID used for direct repo.Create seeding
+// in handler tests.
+var testHandlerTenant = tenant.TenantID(testHandlerTenantStr)
+
 const testAdminSubject = "admin-test"
+
+// adminTestCtx returns a context with an admin principal and the canonical test
+// tenant injected, suitable for service-level calls in handler tests.
+func adminTestCtx() context.Context {
+	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testHandlerTenantStr)
+}
 
 // --- stubs ---
 
@@ -50,9 +67,11 @@ func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) err
 
 // withAdmin injects an admin context into a request for tests that exercise
 // non-auth logic (e.g. validation, business errors) and need to pass the
-// auth guard.
+// auth guard. Also injects a valid TenantID so configwrite.Service methods
+// can call tenant.FromContext without error.
 func withAdmin(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+	ctx := ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
+	return req.WithContext(ctx)
 }
 
 // --- handler tests ---
@@ -180,7 +199,7 @@ func TestHandler_HandleUpdate_UnknownField(t *testing.T) {
 func TestHandler_HandleUpdate_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "app.name", Value: "old",
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -206,7 +225,7 @@ func TestHandler_HandleUpdate_NotFound(t *testing.T) {
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
 }
 
 func TestHandler_HandleUpdate_BadJSON(t *testing.T) {
@@ -224,7 +243,7 @@ func TestHandler_HandleUpdate_BadJSON(t *testing.T) {
 func TestHandler_HandleDelete_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "app.name", Value: "v",
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -245,7 +264,49 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
+}
+
+// --- F6: missing-tenant → typed 403 (not 500) ---
+
+// withAdminNoTenant injects an admin principal but NO TenantID, so the request
+// passes the admin-role policy yet fails Service.tenant.FromContext.
+func withAdminNoTenant(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+}
+
+func TestHandler_HandleCreate_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"key":"app.name","value":"gocell"}`
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, withAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleUpdate_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"value":"v","expectedVersion":1}`
+	req := httptest.NewRequest(http.MethodPut, configPrefix+"/app.name", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, withAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleDelete_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/app.name?expectedVersion=1", nil)
+	handler.ServeHTTP(w, withAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 // --- sensitive value redaction tests (#27o) ---
@@ -273,7 +334,7 @@ func TestHandler_HandleCreate_SensitiveRedacted(t *testing.T) {
 func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
 		ID: "cfg-s1", Key: "api.key", Value: "old-secret", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -305,7 +366,7 @@ func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
-	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{
+	_, err = svc.Create(ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testHandlerTenantStr), CreateInput{
 		Key: "db.password", Value: "s3cret!", Sensitive: true,
 	})
 	require.NoError(t, err)
@@ -328,7 +389,7 @@ func TestService_WithEmitter(t *testing.T) {
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
-	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
+	_, err = svc.Create(adminTestCtx(), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1, "outbox writer should receive one entry")
@@ -341,7 +402,7 @@ func TestService_WithTxManager(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
-	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
+	_, err = svc.Create(adminTestCtx(), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, tx.calls, "tx runner should be called once")
@@ -356,15 +417,15 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create
-	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
+	_, err = svc.Create(adminTestCtx(), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	// Update
-	_, err = svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{Key: "k1", Value: "v2", ExpectedVersion: 1})
+	_, err = svc.Update(adminTestCtx(), UpdateInput{Key: "k1", Value: "v2", ExpectedVersion: 1})
 	require.NoError(t, err)
 
 	// Delete
-	err = svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "k1", 2)
+	err = svc.Delete(adminTestCtx(), "k1", 2)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, tx.calls, "each op should use tx")
@@ -393,7 +454,7 @@ func TestHandler_Authz_Create(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.injectAuth {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+				req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(tc.subject, tc.roles), testHandlerTenantStr))
 			}
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
@@ -427,7 +488,7 @@ func TestHandler_Authz_Update(t *testing.T) {
 		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
 		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
-			_ = r.Create(context.Background(), &domain.ConfigEntry{
+			_ = r.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
 				ID: "au-1", Key: "test.update", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
 			})
 		}, "/test.update", http.StatusOK, ""},
@@ -442,7 +503,7 @@ func TestHandler_Authz_Update(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPut, configPrefix+tc.path, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.injectAuth {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+				req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(tc.subject, tc.roles), testHandlerTenantStr))
 			}
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
@@ -476,7 +537,7 @@ func TestHandler_Authz_Delete(t *testing.T) {
 		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent?expectedVersion=1", http.StatusNotFound, ""},
 		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
-			_ = r.Create(context.Background(), &domain.ConfigEntry{
+			_ = r.Create(context.Background(), testHandlerTenant, &domain.ConfigEntry{
 				ID: "ad-1", Key: "test.delete", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
 			})
 		}, "/test.delete?expectedVersion=1", http.StatusNoContent, ""},
@@ -489,7 +550,7 @@ func TestHandler_Authz_Delete(t *testing.T) {
 			}
 			req := httptest.NewRequest(http.MethodDelete, configPrefix+tc.path, nil)
 			if tc.injectAuth {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+				req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext(tc.subject, tc.roles), testHandlerTenantStr))
 			}
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
@@ -521,11 +582,11 @@ type fakeConfigRepoErr struct {
 	deleteErr error
 }
 
-func (f *fakeConfigRepoErr) Update(_ context.Context, _ string, _ int, _ string) (*domain.ConfigEntry, error) {
+func (f *fakeConfigRepoErr) Update(_ context.Context, _ tenant.TenantID, _ string, _ int, _ string) (*domain.ConfigEntry, error) {
 	return nil, f.updateErr
 }
 
-func (f *fakeConfigRepoErr) Delete(_ context.Context, _ string, _ int) (*domain.ConfigEntry, error) {
+func (f *fakeConfigRepoErr) Delete(_ context.Context, _ tenant.TenantID, _ string, _ int) (*domain.ConfigEntry, error) {
 	return nil, f.deleteErr
 }
 
@@ -545,7 +606,7 @@ func TestUpdateAdapter_NotFound_Returns404Typed(t *testing.T) {
 	updateAd, _ := newConfigwriteAdapterUnderTest(t,
 		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"),
 		nil)
-	resp, err := updateAd.Update(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+	resp, err := updateAd.Update(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
 		&update.Request{Key: "missing.key", Value: "v", ExpectedVersion: 1})
 	require.NoError(t, err, "adapter must map ErrConfigRepoNotFound to typed 404 (not framework fallback)")
 	typed, ok := resp.(update.Update404ErrorResponse)
@@ -557,7 +618,7 @@ func TestUpdateAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	updateAd, _ := newConfigwriteAdapterUnderTest(t,
 		errcode.New(errcode.KindConflict, errcode.ErrVersionConflict, "concurrent update detected; reload and retry"),
 		nil)
-	resp, err := updateAd.Update(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+	resp, err := updateAd.Update(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
 		&update.Request{Key: "stale.key", Value: "v", ExpectedVersion: 1})
 	require.NoError(t, err, "adapter must map ErrVersionConflict to typed 409")
 	typed, ok := resp.(update.Update409ErrorResponse)
@@ -568,7 +629,7 @@ func TestUpdateAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 func TestDeleteAdapter_NotFound_Returns404Typed(t *testing.T) {
 	_, deleteAd := newConfigwriteAdapterUnderTest(t, nil,
 		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"))
-	resp, err := deleteAd.Delete(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+	resp, err := deleteAd.Delete(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
 		&configdelete.Request{Key: "missing.key", ExpectedVersion: 1})
 	require.NoError(t, err)
 	typed, ok := resp.(configdelete.Delete404ErrorResponse)
@@ -579,7 +640,7 @@ func TestDeleteAdapter_NotFound_Returns404Typed(t *testing.T) {
 func TestDeleteAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	_, deleteAd := newConfigwriteAdapterUnderTest(t, nil,
 		errcode.New(errcode.KindConflict, errcode.ErrVersionConflict, "concurrent update detected; reload and retry"))
-	resp, err := deleteAd.Delete(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}),
+	resp, err := deleteAd.Delete(ctxkeys.WithTenantID(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr),
 		&configdelete.Request{Key: "stale.key", ExpectedVersion: 1})
 	require.NoError(t, err)
 	typed, ok := resp.(configdelete.Delete409ErrorResponse)

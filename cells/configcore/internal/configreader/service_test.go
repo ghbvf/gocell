@@ -14,7 +14,15 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// testTenant is the tenant used throughout configreader service tests. Using
+// tenant.SystemTenantID mirrors the configreadinternal production path which
+// passes SystemTenantID directly (no ctx sourcing). Tests that exercise the
+// public read path use a regular tenant via ctx injection; here we focus on
+// the shared service logic, tenant-source-agnostically.
+var testTenant = tenant.SystemTenantID
 
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
@@ -44,7 +52,7 @@ func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 func seedEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {
 	t.Helper()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testTenant, &domain.ConfigEntry{
 		ID: "id-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -72,7 +80,7 @@ func TestService_GetByKey(t *testing.T) {
 				seedEntry(t, repo, tt.key, "value")
 			}
 
-			entry, err := svc.GetByKey(context.Background(), tt.key)
+			entry, err := svc.GetByKey(context.Background(), testTenant, tt.key)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Nil(t, entry)
@@ -101,7 +109,7 @@ func TestService_List(t *testing.T) {
 				seedEntry(t, repo, "key-"+string(rune('a'+i)), "v")
 			}
 
-			result, err := svc.List(context.Background(), query.PageParams{})
+			result, err := svc.List(context.Background(), testTenant, query.PageParams{})
 			require.NoError(t, err)
 			assert.Len(t, result.Items, tt.wantLen)
 		})
@@ -114,7 +122,7 @@ func TestService_List_FirstPage(t *testing.T) {
 		seedEntry(t, repo, "key-"+string(rune('a'+i)), "v")
 	}
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 3})
+	result, err := svc.List(context.Background(), testTenant, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -133,11 +141,11 @@ func TestService_List_WithCursor(t *testing.T) {
 		seedEntry(t, repo, "key-"+string(rune('a'+i)), "v")
 	}
 
-	page1, err := svc.List(context.Background(), query.PageParams{Limit: 3})
+	page1, err := svc.List(context.Background(), testTenant, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
-	page2, err := svc.List(context.Background(), query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.List(context.Background(), testTenant, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 2)
 	assert.NotEqual(t, page1.Items[0].ID, page2.Items[0].ID)
@@ -146,7 +154,7 @@ func TestService_List_WithCursor(t *testing.T) {
 func TestService_List_InvalidCursor(t *testing.T) {
 	svc, _ := newTestService()
 
-	_, err := svc.List(context.Background(), query.PageParams{Cursor: "garbage"})
+	_, err := svc.List(context.Background(), testTenant, query.PageParams{Cursor: "garbage"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -168,7 +176,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	svc, _ := newTestService()
-	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
+	_, err = svc.List(context.Background(), testTenant, query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -189,7 +197,7 @@ func TestService_List_ContextMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	svc, _ := newTestService()
-	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
+	_, err = svc.List(context.Background(), testTenant, query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -204,7 +212,7 @@ func TestService_List_LastPage(t *testing.T) {
 	seedEntry(t, repo, "key-a", "v")
 	seedEntry(t, repo, "key-b", "v")
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
+	result, err := svc.List(context.Background(), testTenant, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -214,7 +222,7 @@ func TestService_List_LastPage(t *testing.T) {
 func TestService_List_Empty(t *testing.T) {
 	svc, _ := newTestService()
 
-	result, err := svc.List(context.Background(), query.PageParams{})
+	result, err := svc.List(context.Background(), testTenant, query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)

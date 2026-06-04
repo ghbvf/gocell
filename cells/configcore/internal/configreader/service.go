@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // configSort defines the default sort for config listings.
@@ -75,17 +76,23 @@ func NewService(
 	return s, nil
 }
 
-// GetByKey retrieves a config entry by key.
-func (s *Service) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
-	entry, err := s.repo.GetByKey(ctx, key)
+// GetByKey retrieves a config entry by key within the tenant scope t. The
+// caller sources t differently per trust boundary: the public configread
+// handler derives it from the authenticated principal (tenant.FromContext);
+// the internal configreadinternal handler passes tenant.SystemTenantID (the
+// global config tier). Sourcing happens in the slice handler, never here, so
+// this shared Service stays tenant-source-agnostic.
+func (s *Service) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.ConfigEntry, error) {
+	entry, err := s.repo.GetByKey(ctx, t, key)
 	if err != nil {
 		return nil, fmt.Errorf("config-read: get: %w", err)
 	}
 	return entry, nil
 }
 
-// List returns a paginated page of config entries.
-func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.ConfigEntry], error) {
+// List returns a paginated page of config entries within the tenant scope t.
+// See GetByKey for how t is sourced per trust boundary.
+func (s *Service) List(ctx context.Context, t tenant.TenantID, pageReq query.PageParams) (query.PageResult[*domain.ConfigEntry], error) {
 	qctx := query.QueryContext("endpoint", s.sliceName)
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.ConfigEntry]{
 		Codec:      s.codec,
@@ -93,7 +100,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.Pag
 		Sort:       configSort,
 		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
-			entries, err := s.repo.List(ctx, params)
+			entries, err := s.repo.List(ctx, t, params)
 			if err != nil {
 				return nil, fmt.Errorf("config-read: list: %w", err)
 			}

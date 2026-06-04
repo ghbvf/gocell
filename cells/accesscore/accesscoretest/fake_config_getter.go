@@ -54,7 +54,7 @@ func SensitiveStub(key string, version int) ConfigGetterStub {
 }
 
 // NotFoundStub returns a stub representing a key that is explicitly absent;
-// GetEntry returns ErrConfigNotFound with CategoryDomain. Use this when
+// GetEntry returns ErrConfigRepoNotFound with CategoryDomain. Use this when
 // stubbing stale-event paths (configcore reports the key was upserted but
 // the subsequent fetch races a delete and finds nothing).
 func NotFoundStub() ConfigGetterStub {
@@ -70,7 +70,7 @@ func ErrorStub(err error) ConfigGetterStub {
 
 // FakeConfigGetter is a stub implementation of ports.ConfigGetter for use in
 // tests. It is concurrency-safe. Unknown keys (not in the stubs map) return
-// ErrConfigNotFound by convention so test authors do not need to explicitly
+// ErrConfigRepoNotFound by convention so test authors do not need to explicitly
 // stub every key they do not care about.
 //
 // Usage:
@@ -93,7 +93,7 @@ var _ ports.ConfigGetter = (*FakeConfigGetter)(nil)
 // NewFakeConfigGetter constructs a FakeConfigGetter with a deep copy of the
 // supplied stubs map. Subsequent mutations of the caller's map (or of any
 // ConfigGetterStub value re-used as a map alias) do not affect the fake.
-// A nil or empty stubs map means all keys return ErrConfigNotFound.
+// A nil or empty stubs map means all keys return ErrConfigRepoNotFound.
 func NewFakeConfigGetter(stubs map[string]ConfigGetterStub) *FakeConfigGetter {
 	cp := make(map[string]ConfigGetterStub, len(stubs))
 	for k, v := range stubs {
@@ -109,7 +109,7 @@ func NewFakeConfigGetter(stubs map[string]ConfigGetterStub) *FakeConfigGetter {
 // GetEntry implements ports.ConfigGetter. It honors ctx.Err() (matching the
 // production HTTP getter's cancellation semantic), records the call, and
 // returns the stubbed response for the given key. Unknown keys and
-// NotFoundStub entries return ErrConfigNotFound with CategoryDomain.
+// NotFoundStub entries return ErrConfigRepoNotFound with CategoryDomain.
 func (g *FakeConfigGetter) GetEntry(ctx context.Context, key string) (ports.ConfigEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigEntry{}, err
@@ -121,7 +121,7 @@ func (g *FakeConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	stub, ok := g.stubs[key]
 	if !ok || (stub.entry == nil && stub.err == nil) {
 		return ports.ConfigEntry{}, errcode.New(
-			errcode.KindNotFound, errcode.ErrConfigNotFound,
+			errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 			"fake config getter: key not found",
 			errcode.WithCategory(errcode.CategoryDomain),
 		)

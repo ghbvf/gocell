@@ -25,15 +25,24 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// adminCtx returns a request context carrying an admin subject + role for
-// authorized handler tests. Mirrors the identitymanage handler test pattern.
+// testPublishTenantStr is the test TenantID string for configpublish tests.
+const testPublishTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// testPublishTenant is the typed TenantID for direct repo seeding calls.
+var testPublishTenant = tenant.TenantID(testPublishTenantStr)
+
+// adminCtx returns a request context carrying an admin subject + role AND a
+// valid TenantID for authorized handler tests. configpublish.Service.Publish
+// and Rollback both call tenant.FromContext(ctx), so a tenant is required.
 func adminCtx() context.Context {
-	return auth.TestContext("test-admin", []string{"admin"})
+	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testPublishTenantStr)
 }
 
 // withAdmin clones req with the admin auth context attached.
@@ -133,7 +142,7 @@ func seedForPublish(t *testing.T, repo *mem.ConfigRepository) {
 	const key = "app.name"
 	const value = "v1"
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -160,7 +169,39 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/missing/publish", nil))
 	handler.ServeHTTP(w, req)
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
+}
+
+// --- F6: missing-tenant → typed 403 (not 500) ---
+
+// withAdminNoTenant injects an admin principal but NO TenantID, so the request
+// passes the admin-role policy yet fails Service.tenant.FromContext. The
+// resulting 403 carries ErrAuthForbidden (distinct from the policy's 403).
+func withAdminNoTenant(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("test-admin", []string{"admin"}))
+}
+
+func TestHandler_HandlePublish_MissingTenant_403(t *testing.T) {
+	handler, repo := setupHandler()
+	seedForPublish(t, repo)
+
+	w := httptest.NewRecorder()
+	req := withAdminNoTenant(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil))
+	handler.ServeHTTP(w, req)
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleRollback_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := withAdminNoTenant(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
+		strings.NewReader(`{"version":1,"expectedVersion":1}`)))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 // PR#155 followup F1 (Cx2, P1): publish + rollback are high-risk write operations
@@ -221,7 +262,7 @@ func TestHandler_HandleRollback_RequiresAdminRole(t *testing.T) {
 func TestHandler_HandlePublish_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -246,7 +287,7 @@ func TestHandler_HandlePublish_SensitiveRedacted(t *testing.T) {
 func TestHandler_HandlePublish_NonSensitiveVisible(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-plain", Key: "app.name", Value: "gocell", Sensitive: false,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -327,7 +368,7 @@ func TestHandler_HandleRollback_VersionNotFound(t *testing.T) {
 func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -458,7 +499,7 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 
 func seedForService(repo *mem.ConfigRepository, key, value string) {
 	now := time.Now()
-	_ = repo.Create(context.Background(), &domain.ConfigEntry{
+	_ = repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	})
@@ -476,7 +517,9 @@ type fakeConfigRepoForRollback struct {
 	rollbackErr error
 }
 
-func (f *fakeConfigRepoForRollback) UpdateForRollback(_ context.Context, _ string, _ int, _ string, _ bool) (*domain.ConfigEntry, error) {
+func (f *fakeConfigRepoForRollback) UpdateForRollback(
+	_ context.Context, _ tenant.TenantID, _ string, _ int, _ string, _ bool,
+) (*domain.ConfigEntry, error) {
 	return nil, f.rollbackErr
 }
 
@@ -500,8 +543,8 @@ func seedForRollbackAdapter(repo *mem.ConfigRepository, key, value string) {
 		ID: "cfg-rollback", Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	_ = repo.Create(context.Background(), entry)
-	_ = repo.PublishVersion(context.Background(), &domain.ConfigVersion{
+	_ = repo.Create(context.Background(), testPublishTenant, entry)
+	_ = repo.PublishVersion(context.Background(), testPublishTenant, &domain.ConfigVersion{
 		ID: "ver-1", ConfigID: entry.ID, Version: 1, Value: value, PublishedAt: &now,
 	})
 }
@@ -530,12 +573,12 @@ func TestRollbackAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // B2-T-08: typed 404 envelope for PublishAdapter — ErrConfigRepoNotFound path.
-// PublishAdapter.Publish maps both ErrConfigRepoNotFound (PG repo) and
-// ErrConfigNotFound (mem repo) to configpublishgen.Publish404ErrorResponse.
-// The ErrConfigNotFound path is covered by TestHandler_HandlePublish_NotFound
-// (via the full HTTP stack). This test directly exercises the PG-repo error
-// path by injecting ErrConfigRepoNotFound via a fakeConfigRepoForPublish that
-// overrides GetByKey — the first repo call in Service.Publish.
+// PublishAdapter.Publish maps ErrConfigRepoNotFound (the unified not-found code
+// returned by both the PG and mem repos) to configpublishgen.Publish404ErrorResponse.
+// TestHandler_HandlePublish_NotFound covers the same code via the full HTTP stack.
+// This test directly exercises the repo error path by injecting
+// ErrConfigRepoNotFound via a fakeConfigRepoForPublish that overrides GetByKey —
+// the first repo call in Service.Publish.
 // ---------------------------------------------------------------------------
 
 type fakeConfigRepoForPublish struct {
@@ -543,7 +586,7 @@ type fakeConfigRepoForPublish struct {
 	getByKeyErr error
 }
 
-func (f *fakeConfigRepoForPublish) GetByKey(_ context.Context, _ string) (*domain.ConfigEntry, error) {
+func (f *fakeConfigRepoForPublish) GetByKey(_ context.Context, _ tenant.TenantID, _ string) (*domain.ConfigEntry, error) {
 	return nil, f.getByKeyErr
 }
 

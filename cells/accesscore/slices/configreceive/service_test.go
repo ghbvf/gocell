@@ -228,7 +228,7 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchError(t *testing.T) {
 // since retrying cannot help when the entry no longer exists.
 func TestHandleEntryUpserted_WithConfigGetter_FetchNotFound(t *testing.T) {
 	stub := &stubConfigGetter{
-		err: errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config entry not found",
+		err: errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config entry not found",
 			errcode.WithCategory(errcode.CategoryDomain)),
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
@@ -278,7 +278,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 		},
 		{
 			name: "getter not found records stale",
-			getter: &stubConfigGetter{err: errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "missing",
+			getter: &stubConfigGetter{err: errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "missing",
 				errcode.WithCategory(errcode.CategoryDomain))},
 			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantDisposition: outbox.DispositionAck,
@@ -331,7 +331,7 @@ func TestIsPermanentAuthFailure(t *testing.T) {
 		{"plain error", errors.New("some error"), false},
 		{"errcode ErrAuthUnauthorized", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "401"), true},
 		{"errcode ErrAuthForbidden", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "403"), true},
-		{"errcode other code", errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "not found",
+		{"errcode other code", errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "not found",
 			errcode.WithCategory(errcode.CategoryDomain)), false},
 		{"wrapped ErrAuthUnauthorized", fmt.Errorf("wrap: %w",
 			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "401")), true},

@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -164,7 +165,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.wantLen, svc.Cache().Len())
-			v, ok := svc.Cache().GetVersion(tt.wantKey)
+			v, ok := svc.Cache().GetVersion("", tt.wantKey)
 			require.Equal(t, tt.wantPresent, ok)
 			assert.Equal(t, tt.wantVersion, v)
 		})
@@ -181,7 +182,7 @@ func TestService_HandleEntryUpserted_Monotonicity(t *testing.T) {
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
 
-	v, ok := svc.Cache().GetVersion("k")
+	v, ok := svc.Cache().GetVersion("", "k")
 	require.True(t, ok)
 	assert.Equal(t, 5, v, "stale/replayed event must not overwrite higher version")
 }
@@ -194,7 +195,7 @@ func TestService_HandleEntryDeleted(t *testing.T) {
 	// Len counts only active entries; after delete, Len must be 0.
 	assert.Equal(t, 0, svc.Cache().Len())
 	// GetVersion still returns the tombstone version, but present=false.
-	v, present := svc.Cache().GetVersion("k")
+	v, present := svc.Cache().GetVersion("", "k")
 	assert.False(t, present, "tombstoned key must return present=false")
 	assert.Equal(t, 2, v, "tombstone must record the delete version")
 }
@@ -207,7 +208,7 @@ func TestService_HandleEntryDeleted_NonExistentKey(t *testing.T) {
 	// No prior upsert — delete must still succeed and record a tombstone.
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("nonexistent", 1)))
 	assert.Equal(t, 0, svc.Cache().Len())
-	v, present := svc.Cache().GetVersion("nonexistent")
+	v, present := svc.Cache().GetVersion("", "nonexistent")
 	assert.False(t, present)
 	assert.Equal(t, 1, v)
 }
@@ -222,7 +223,7 @@ func TestService_Tombstone_ReplayedOlderUpsertRejected(t *testing.T) {
 	// Replayed older upsert must be rejected (silently — returns Ack because stale).
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
 
-	v, present := svc.Cache().GetVersion("k")
+	v, present := svc.Cache().GetVersion("", "k")
 	assert.False(t, present, "replayed upsert must not resurrect a tombstoned key")
 	assert.Equal(t, 2, v, "tombstone version must not be overwritten by stale upsert")
 	assert.Equal(t, 0, svc.Cache().Len())
@@ -238,7 +239,7 @@ func TestService_Tombstone_ReplayedOlderDeleteRejected(t *testing.T) {
 	// Stale delete with older version must be dropped (silently — returns Ack).
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
 
-	v, present := svc.Cache().GetVersion("k")
+	v, present := svc.Cache().GetVersion("", "k")
 	assert.True(t, present, "stale delete must not tombstone a newer active entry")
 	assert.Equal(t, 3, v)
 	assert.Equal(t, 1, svc.Cache().Len())
@@ -254,7 +255,7 @@ func TestService_Tombstone_DeleteThenHigherUpsertRestores(t *testing.T) {
 	// A new upsert with version > tombstone restores the entry.
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
 
-	v, present := svc.Cache().GetVersion("k")
+	v, present := svc.Cache().GetVersion("", "k")
 	assert.True(t, present, "upsert after delete with higher version must restore entry")
 	assert.Equal(t, 3, v)
 	assert.Equal(t, 1, svc.Cache().Len())
@@ -270,7 +271,7 @@ func TestService_GetVersion_AfterDelete_ReturnsTombstoneVersion(t *testing.T) {
 	// Normal delete: version equals the last upsert version (V >= known → accepted).
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 5)))
 
-	v, present := svc.Cache().GetVersion("k")
+	v, present := svc.Cache().GetVersion("", "k")
 	assert.False(t, present, "GetVersion must return present=false after delete")
 	assert.Equal(t, 5, v, "GetVersion must return the tombstone version")
 }
@@ -286,7 +287,7 @@ func TestService_Tombstone_SameVersionDeleteAccepted(t *testing.T) {
 	// delete at same version as existing upsert: V >= known → accepted as tombstone.
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 3)))
 
-	v, present := svc.Cache().GetVersion("k")
+	v, present := svc.Cache().GetVersion("", "k")
 	assert.False(t, present, "same-version delete must tombstone the entry")
 	assert.Equal(t, 3, v)
 	assert.Equal(t, 0, svc.Cache().Len())
@@ -453,7 +454,7 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 			var permErr *outbox.PermanentError
 			require.ErrorAs(t, result.Err, &permErr)
 			assert.Equal(t, 1, svc.Cache().Len(), "cache must be unchanged after invalid delete")
-			_, ok := svc.Cache().GetVersion("existing.key")
+			_, ok := svc.Cache().GetVersion("", "existing.key")
 			require.True(t, ok)
 		})
 	}
@@ -658,13 +659,13 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 	svc.cache.sweepTombstones(context.Background(), fc.Now())
 
 	// keyA still present as tombstone.
-	v, present := svc.Cache().GetVersion("keyA")
+	v, present := svc.Cache().GetVersion("", "keyA")
 	assert.False(t, present, "tombstone must survive before TTL expires")
 	assert.Equal(t, 2, v, "tombstone version must be preserved")
 
 	// Replayed older upsert v1 must still be rejected (monotonic guard intact).
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("keyA", 1)))
-	v, present = svc.Cache().GetVersion("keyA")
+	v, present = svc.Cache().GetVersion("", "keyA")
 	assert.False(t, present, "replayed upsert must not resurrect tombstone within TTL")
 	assert.Equal(t, 2, v)
 
@@ -675,7 +676,7 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 	svc.cache.sweepTombstones(context.Background(), fc.Now())
 
 	// keyA is now gone.
-	v, present = svc.Cache().GetVersion("keyA")
+	v, present = svc.Cache().GetVersion("", "keyA")
 	assert.False(t, present, "evicted tombstone must not be found")
 	assert.Equal(t, 0, v, "evicted tombstone must return zero version")
 
@@ -706,13 +707,13 @@ func TestCache_SweepTombstones_NeverTouchesActive(t *testing.T) {
 	svc.cache.sweepTombstones(context.Background(), fc.Now())
 
 	// keyB must still be present at v5.
-	v, present := svc.Cache().GetVersion("keyB")
+	v, present := svc.Cache().GetVersion("", "keyB")
 	assert.True(t, present, "active entry must never be evicted")
 	assert.Equal(t, 5, v, "active entry version must be preserved")
 
 	// Monotonic guard still intact: replay v3 rejected.
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("keyB", 3)))
-	v, present = svc.Cache().GetVersion("keyB")
+	v, present = svc.Cache().GetVersion("", "keyB")
 	assert.True(t, present)
 	assert.Equal(t, 5, v, "stale replay must not overwrite active entry")
 
@@ -735,7 +736,7 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 
 	// Delete keyC → tombstone.
 	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("keyC", 1)))
-	v, present := svc.Cache().GetVersion("keyC")
+	v, present := svc.Cache().GetVersion("", "keyC")
 	assert.False(t, present)
 	assert.Equal(t, 1, v)
 
@@ -756,7 +757,7 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 
 	// The GC goroutine should pick up the tick and sweep keyC.
 	testwait.External(t, "config-subscriber-tombstone-evicted", func() bool {
-		v, present := svc.Cache().GetVersion("keyC")
+		v, present := svc.Cache().GetVersion("", "keyC")
 		return !present && v == 0
 	}, testGCEventuallyTimeout, testGCEventuallyTick, "GC goroutine must evict expired tombstone")
 
@@ -887,13 +888,13 @@ func TestTombstoneTTL_SubWindowClampedPreventsResurrection(t *testing.T) {
 
 	// Sweep: tombstone must still be present (not GC'd).
 	svc.cache.sweepTombstones(context.Background(), fc.Now())
-	v, present := svc.Cache().GetVersion("k")
+	v, present := svc.Cache().GetVersion("", "k")
 	assert.False(t, present, "tombstone must survive past sub-window; clamped TTL holds")
 	assert.Equal(t, 5, v, "tombstone version must be preserved")
 
 	// Replayed older upsert k v3 must be rejected by the monotonic guard.
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
-	v, present = svc.Cache().GetVersion("k")
+	v, present = svc.Cache().GetVersion("", "k")
 	assert.False(t, present, "replayed upsert must not resurrect tombstone within idempotency window")
 	assert.Equal(t, 5, v, "monotonic guard must hold: tombstone version unchanged")
 }
@@ -941,4 +942,92 @@ func TestStopTombstoneGC_TimeoutThenNoRestartThenDrains(t *testing.T) {
 	assert.False(t, svc.gcStarted)
 	assert.False(t, svc.gcStopping)
 	svc.gcMu.Unlock()
+}
+
+// makeEntryUpsertedForTenant builds a metadata-only outbox.Entry for
+// entry-upserted whose principal carries the given tenantID. This allows
+// the cache composite-key logic (tenant, key) to be exercised in tests.
+func makeEntryUpsertedForTenant(tenantID, key string, version int) outbox.Entry {
+	payload, _ := json.Marshal(configevents.EntryUpserted{
+		Key:     key,
+		Version: version,
+		ActorID: "admin-test",
+	})
+	ctx := ctxkeys.WithTenantID(context.Background(), tenantID)
+	e, err := outbox.NewEntry(clock.Real(), ctx, domain.TopicConfigEntryUpserted, payload,
+		outbox.WithTopic(domain.TopicConfigEntryUpserted))
+	if err != nil {
+		panic("makeEntryUpsertedForTenant: " + err.Error())
+	}
+	return e
+}
+
+// makeEntryDeletedForTenant builds an outbox.Entry for entry-deleted whose
+// principal carries the given tenantID.
+func makeEntryDeletedForTenant(tenantID, key string, version int) outbox.Entry {
+	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key, Version: version, ActorID: "admin-test"})
+	ctx := ctxkeys.WithTenantID(context.Background(), tenantID)
+	e, err := outbox.NewEntry(clock.Real(), ctx, domain.TopicConfigEntryDeleted, payload,
+		outbox.WithTopic(domain.TopicConfigEntryDeleted))
+	if err != nil {
+		panic("makeEntryDeletedForTenant: " + err.Error())
+	}
+	return e
+}
+
+// TestCache_TwoTenantsIndependentVersionTracking is the focused correctness test
+// for the composite-key fix: two tenants sharing the same config key must track
+// independent version sequences. Tenant A's higher version must NOT suppress
+// tenant B's update via the monotonic guard.
+//
+// Scenario:
+//
+//	tenant-a upserts "feature.flag" at version 10.
+//	tenant-b upserts "feature.flag" at version 3.
+//
+// Before the fix (string key), tenant-a's v10 would suppress tenant-b's v3
+// (event.Version 3 <= known.version 10 → stale). After the fix the two entries
+// live in separate cacheKey buckets and do not interfere.
+func TestCache_TwoTenantsIndependentVersionTracking(t *testing.T) {
+	const key = "feature.flag"
+	const tenantA = "tenant-a"
+	const tenantB = "tenant-b"
+
+	svc := mustNewService(t, clock.Real(), slog.Default())
+
+	// tenant-a upserts at version 10.
+	requireAck(t, svc.HandleEntryUpserted(context.Background(),
+		makeEntryUpsertedForTenant(tenantA, key, 10)))
+
+	// tenant-b upserts at version 3 (lower than tenant-a's version 10).
+	// Must NOT be suppressed — different tenant bucket.
+	requireAck(t, svc.HandleEntryUpserted(context.Background(),
+		makeEntryUpsertedForTenant(tenantB, key, 3)))
+
+	// tenant-a: version 10, present.
+	vA, okA := svc.Cache().GetVersion(tenantA, key)
+	require.True(t, okA, "tenant-a entry must be present")
+	assert.Equal(t, 10, vA, "tenant-a version must be 10")
+
+	// tenant-b: version 3, present — not suppressed by tenant-a's higher version.
+	vB, okB := svc.Cache().GetVersion(tenantB, key)
+	require.True(t, okB, "tenant-b entry must be present and not suppressed by tenant-a")
+	assert.Equal(t, 3, vB, "tenant-b version must be 3, not suppressed by tenant-a v10")
+
+	// Both tenants count as active entries.
+	assert.Equal(t, 2, svc.Cache().Len())
+
+	// Tombstoning tenant-a must not affect tenant-b.
+	requireAck(t, svc.HandleEntryDeleted(context.Background(),
+		makeEntryDeletedForTenant(tenantA, key, 10)))
+
+	vA2, okA2 := svc.Cache().GetVersion(tenantA, key)
+	assert.False(t, okA2, "tenant-a must be tombstoned")
+	assert.Equal(t, 10, vA2, "tenant-a tombstone version must be 10")
+
+	vB2, okB2 := svc.Cache().GetVersion(tenantB, key)
+	require.True(t, okB2, "tenant-b must remain active after tenant-a is tombstoned")
+	assert.Equal(t, 3, vB2, "tenant-b version must remain 3")
+
+	assert.Equal(t, 1, svc.Cache().Len(), "only tenant-b remains active")
 }

@@ -16,8 +16,26 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
+
+// mustTenant parses a canonical UUID string into a tenant.TenantID for test
+// use. Panics if the string is not a valid canonical UUID (test bug, not
+// production path).
+func mustTenant(s string) tenant.TenantID {
+	t, err := tenant.ParseTenantID(s)
+	if err != nil {
+		panic("mustTenant: " + err.Error())
+	}
+	return t
+}
+
+// testTenantA is the canonical test-tenant constant shared across config and
+// flag unit tests within this package.
+// Cross-tenant isolation unit tests use integrationTestTenantB (declared in
+// config_repo_integration_test.go) under the integration build tag.
+var testTenantA = mustTenant("00000000-0000-0000-0000-000000000001")
 
 // newConfigRepositoryFromDBTX is a test-only constructor that bypasses the
 // Session layer, allowing unit tests to inject a mockDB directly.
@@ -36,20 +54,21 @@ func TestConfigRepository_Create(t *testing.T) {
 		Value: "GoCell",
 	}
 
-	err := repo.Create(context.Background(), entry)
+	err := repo.Create(context.Background(), testTenantA, entry)
 	require.NoError(t, err)
 
 	require.Len(t, db.execCalls, 1)
 	assert.Contains(t, db.execCalls[0].sql, "INSERT INTO config_entries")
-	assert.Equal(t, "cfg-1", db.execCalls[0].args[0])
-	assert.Equal(t, "app.name", db.execCalls[0].args[1])
+	// arg[0] is tenant_id; arg[1] is id; arg[2] is key
+	assert.Equal(t, "cfg-1", db.execCalls[0].args[1])
+	assert.Equal(t, "app.name", db.execCalls[0].args[2])
 }
 
 func TestConfigRepository_Create_Error(t *testing.T) {
 	db := &mockDB{execErr: assert.AnError}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "secret_user_key"})
+	err := repo.Create(context.Background(), testTenantA, &domain.ConfigEntry{Key: "secret_user_key"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -70,7 +89,7 @@ func TestConfigRepository_GetByKey(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	entry, err := repo.GetByKey(context.Background(), "app.name")
+	entry, err := repo.GetByKey(context.Background(), testTenantA, "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, "cfg-1", entry.ID)
 	assert.Equal(t, "app.name", entry.Key)
@@ -86,7 +105,7 @@ func TestGetByKey_NotFound_ReturnsErrConfigRepoNotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.GetByKey(context.Background(), "missing")
+	_, err := repo.GetByKey(context.Background(), testTenantA, "missing")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -103,7 +122,7 @@ func TestGetByKey_OtherScanError_ReturnsErrConfigRepoQuery(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.GetByKey(context.Background(), "missing")
+	_, err := repo.GetByKey(context.Background(), testTenantA, "missing")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -120,7 +139,7 @@ func TestGetByKey_NotFound_HasDomainCategory(t *testing.T) {
 	db := &mockDB{queryRowResult: &mockRow{scanErr: pgx.ErrNoRows}}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.GetByKey(context.Background(), "missing")
+	_, err := repo.GetByKey(context.Background(), testTenantA, "missing")
 	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"ErrConfigRepoNotFound must have Category=CategoryDomain for IsDomainNotFound to work")
 	require.False(t, errcode.IsInfraError(err),
@@ -174,19 +193,19 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		t.Run("GetByKey/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
-			_, err := repo.GetByKey(context.Background(), "any")
+			_, err := repo.GetByKey(context.Background(), testTenantA, "any")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Update_SelectForUpdate/"+tc.name, func(t *testing.T) {
 			seqDB := &sequencedMockDB{rows: []*mockRow{{scanErr: tc.scanErr}}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
-			_, err := repo.Update(context.Background(), "k", 1, "v")
+			_, err := repo.Update(context.Background(), testTenantA, "k", 1, "v")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("GetVersion/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
-			_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
+			_, err := repo.GetVersion(context.Background(), testTenantA, "cfg-1", 1)
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Update_Returning/"+tc.name, func(t *testing.T) {
@@ -196,19 +215,19 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 				{scanErr: tc.scanErr},  // UPDATE RETURNING → ctx cancel
 			}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
-			_, err := repo.Update(context.Background(), "k", 1, "v")
+			_, err := repo.Update(context.Background(), testTenantA, "k", 1, "v")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Delete/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
-			_, err := repo.Delete(context.Background(), "k", 1)
+			_, err := repo.Delete(context.Background(), testTenantA, "k", 1)
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("List/QueryErr/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryErr: tc.scanErr}
 			repo := newConfigRepositoryFromDBTX(db)
-			_, err := repo.List(context.Background(), query.ListParams{
+			_, err := repo.List(context.Background(), testTenantA, query.ListParams{
 				Sort: []query.SortColumn{{Name: "key", Direction: query.SortASC}},
 			})
 			assertCtxCancelErr(t, err, tc.scanErr)
@@ -216,7 +235,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		t.Run("PublishVersion/"+tc.name, func(t *testing.T) {
 			db := &mockDB{execErr: tc.scanErr}
 			repo := newConfigRepositoryFromDBTX(db)
-			err := repo.PublishVersion(context.Background(), &domain.ConfigVersion{
+			err := repo.PublishVersion(context.Background(), testTenantA, &domain.ConfigVersion{
 				ID:        "v-1",
 				ConfigID:  "cfg-1",
 				Version:   1,
@@ -228,7 +247,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		t.Run("Create/"+tc.name, func(t *testing.T) {
 			db := &mockDB{execErr: tc.scanErr}
 			repo := newConfigRepositoryFromDBTX(db)
-			err := repo.Create(context.Background(), &domain.ConfigEntry{
+			err := repo.Create(context.Background(), testTenantA, &domain.ConfigEntry{
 				ID:        "cfg-1",
 				Key:       "k",
 				Value:     "v",
@@ -334,7 +353,7 @@ func TestConfigRepository_Update(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(seqDB)
 
-	entry, err := repo.Update(context.Background(), "app.name", 1, "GoCell v2")
+	entry, err := repo.Update(context.Background(), testTenantA, "app.name", 1, "GoCell v2")
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.Equal(t, "GoCell v2", entry.Value)
@@ -354,7 +373,7 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(seqDB)
 
-	_, err := repo.Update(context.Background(), "missing", 1, "v")
+	_, err := repo.Update(context.Background(), testTenantA, "missing", 1, "v")
 	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 
 	var ec *errcode.Error
@@ -378,7 +397,7 @@ func TestConfigRepository_UpdateForRollback(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	entry, err := repo.UpdateForRollback(context.Background(), "app.name", 1, "GoCell v2", false)
+	entry, err := repo.UpdateForRollback(context.Background(), testTenantA, "app.name", 1, "GoCell v2", false)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.Equal(t, "GoCell v2", entry.Value)
@@ -395,7 +414,7 @@ func TestConfigRepository_UpdateForRollback_NotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.UpdateForRollback(context.Background(), "missing", 1, "v", false)
+	_, err := repo.UpdateForRollback(context.Background(), testTenantA, "missing", 1, "v", false)
 	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 
 	var ec *errcode.Error
@@ -418,7 +437,7 @@ func TestConfigRepository_Delete(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	deleted, err := repo.Delete(context.Background(), "app.name", 1)
+	deleted, err := repo.Delete(context.Background(), testTenantA, "app.name", 1)
 	require.NoError(t, err)
 	require.NotNil(t, deleted)
 	assert.Equal(t, "app.name", deleted.Key)
@@ -433,7 +452,7 @@ func TestConfigRepository_Delete_NotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.Delete(context.Background(), "missing", 1)
+	_, err := repo.Delete(context.Background(), testTenantA, "missing", 1)
 	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 
 	var ec *errcode.Error
@@ -464,7 +483,7 @@ func TestConfigRepository_List(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	entries, err := repo.List(context.Background(), params)
+	entries, err := repo.List(context.Background(), testTenantA, params)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, "a.key", entries[0].Key)
@@ -491,7 +510,7 @@ func TestConfigRepository_List_SensitiveRowReturnsSentinel(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	entries, err := repo.List(context.Background(), query.ListParams{
+	entries, err := repo.List(context.Background(), testTenantA, query.ListParams{
 		Limit: 50,
 		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
 	})
@@ -540,7 +559,7 @@ func TestConfigRepository_PublishVersion(t *testing.T) {
 				PublishedAt: &now,
 			}
 
-			err := repo.PublishVersion(context.Background(), version)
+			err := repo.PublishVersion(context.Background(), testTenantA, version)
 			require.NoError(t, err)
 
 			require.Len(t, db.execCalls, 1)
@@ -551,8 +570,9 @@ func TestConfigRepository_PublishVersion(t *testing.T) {
 			} else {
 				require.GreaterOrEqual(t, len(db.execCalls[0].args), 6,
 					"PublishVersion non-sensitive must bind 6 args")
-				assert.Equal(t, tt.sensitive, db.execCalls[0].args[4],
-					"5th positional arg must be ConfigVersion.Sensitive")
+				// With tenant_id as arg[0], the sensitive flag is now at arg[5].
+				assert.Equal(t, tt.sensitive, db.execCalls[0].args[5],
+					"sensitive flag positional arg must be ConfigVersion.Sensitive")
 			}
 		})
 	}
@@ -591,7 +611,7 @@ func TestConfigRepository_GetVersion(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	version, err := repo.GetVersion(context.Background(), "cfg-1", 1)
+	version, err := repo.GetVersion(context.Background(), testTenantA, "cfg-1", 1)
 	require.NoError(t, err)
 	assert.Equal(t, "cv-1", version.ID)
 	assert.Equal(t, "cfg-1", version.ConfigID)
@@ -612,7 +632,7 @@ func TestConfigRepository_GetVersion_Sensitive_LegacyPlaintext_FailsClosed(t *te
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
+	_, err := repo.GetVersion(context.Background(), testTenantA, "cfg-1", 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -628,7 +648,7 @@ func TestGetVersion_NotFound_ReturnsErrConfigRepoNotFound(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.GetVersion(context.Background(), "missing", 1)
+	_, err := repo.GetVersion(context.Background(), testTenantA, "missing", 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -647,7 +667,7 @@ func TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
+	_, err := repo.GetVersion(context.Background(), testTenantA, "cfg-1", 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -665,7 +685,7 @@ func TestCreate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil) // nil pool — resolveWrite never reaches pool path
 	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
-	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
+	err := repo.Create(context.Background(), testTenantA, &domain.ConfigEntry{Key: "k"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -679,7 +699,7 @@ func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
-	_, err := repo.Update(context.Background(), "k", 1, "v")
+	_, err := repo.Update(context.Background(), testTenantA, "k", 1, "v")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -693,7 +713,7 @@ func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
-	_, err := repo.Delete(context.Background(), "k", 1)
+	_, err := repo.Delete(context.Background(), testTenantA, "k", 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -708,7 +728,7 @@ func TestPublishVersion_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
-	err := repo.PublishVersion(context.Background(), &domain.ConfigVersion{ConfigID: "cfg-1"})
+	err := repo.PublishVersion(context.Background(), testTenantA, &domain.ConfigVersion{ConfigID: "cfg-1"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -722,7 +742,7 @@ func TestConfigRepository_List_QueryError(t *testing.T) {
 	repo := newConfigRepositoryFromDBTX(db)
 
 	params := query.ListParams{Limit: 50}
-	_, err := repo.List(context.Background(), params)
+	_, err := repo.List(context.Background(), testTenantA, params)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -743,7 +763,7 @@ func TestConfigRepository_List_ScanError(t *testing.T) {
 	repo := newConfigRepositoryFromDBTX(db)
 
 	params := query.ListParams{Limit: 50}
-	_, err := repo.List(context.Background(), params)
+	_, err := repo.List(context.Background(), testTenantA, params)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -761,7 +781,7 @@ func TestConfigRepository_List_RowsError(t *testing.T) {
 	repo := newConfigRepositoryFromDBTX(db)
 
 	params := query.ListParams{Limit: 50}
-	_, err := repo.List(context.Background(), params)
+	_, err := repo.List(context.Background(), testTenantA, params)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -775,7 +795,7 @@ func TestConfigRepository_Create_WithSession_NoTx(t *testing.T) {
 	s := NewSession(nil)
 	repo := NewConfigRepository(s, nil, nil, clock.Real())
 
-	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
+	err := repo.Create(context.Background(), testTenantA, &domain.ConfigEntry{Key: "k"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -798,6 +818,73 @@ func TestConfigRepository_ResolveDB_SessionPath(t *testing.T) {
 	// approach: just assert the repo was constructed with a session.
 	assert.NotNil(t, repo.session, "session-constructed repo must have non-nil session")
 	assert.Nil(t, repo.db, "session-constructed repo must have nil db field")
+}
+
+// --- Empty-tenant guard unit tests (no DB required) ---
+
+// TestConfigRepository_EmptyTenant_ReturnsValidationError verifies that every
+// data method on ConfigRepository rejects an empty/zero tenant.TenantID with
+// ErrValidationFailed before issuing any DB call. These are unit tests — no
+// real PG needed.
+func TestConfigRepository_EmptyTenant_ReturnsValidationError(t *testing.T) {
+	zero := tenant.TenantID("") // intentionally invalid
+
+	assertValidation := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+			"empty tenant must return ErrValidationFailed before any DB interaction")
+	}
+
+	t.Run("Create", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		err := repo.Create(context.Background(), zero, &domain.ConfigEntry{Key: "k"})
+		assertValidation(t, err)
+	})
+
+	t.Run("GetByKey", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		_, err := repo.GetByKey(context.Background(), zero, "k")
+		assertValidation(t, err)
+	})
+
+	t.Run("Update", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&sequencedMockDB{})
+		_, err := repo.Update(context.Background(), zero, "k", 1, "v")
+		assertValidation(t, err)
+	})
+
+	t.Run("UpdateForRollback", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		_, err := repo.UpdateForRollback(context.Background(), zero, "k", 1, "v", false)
+		assertValidation(t, err)
+	})
+
+	t.Run("Delete", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		_, err := repo.Delete(context.Background(), zero, "k", 1)
+		assertValidation(t, err)
+	})
+
+	t.Run("List", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		_, err := repo.List(context.Background(), zero, query.ListParams{Limit: 10})
+		assertValidation(t, err)
+	})
+
+	t.Run("PublishVersion", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		err := repo.PublishVersion(context.Background(), zero, &domain.ConfigVersion{ConfigID: "c"})
+		assertValidation(t, err)
+	})
+
+	t.Run("GetVersion", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		_, err := repo.GetVersion(context.Background(), zero, "cfg-1", 1)
+		assertValidation(t, err)
+	})
 }
 
 // --- mocks ---

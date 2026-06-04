@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -54,17 +55,17 @@ func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slo
 	return s, nil
 }
 
-// GetByKey retrieves a feature flag by key.
-func (s *Service) GetByKey(ctx context.Context, key string) (*domain.FeatureFlag, error) {
-	flag, err := s.repo.GetByKey(ctx, key)
+// GetByKey retrieves a feature flag by key within the tenant scope t.
+func (s *Service) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.FeatureFlag, error) {
+	flag, err := s.repo.GetByKey(ctx, t, key)
 	if err != nil {
 		return nil, fmt.Errorf("feature-flag: get: %w", err)
 	}
 	return flag, nil
 }
 
-// List returns a paginated page of feature flags.
-func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.FeatureFlag], error) {
+// List returns a paginated page of feature flags within the tenant scope t.
+func (s *Service) List(ctx context.Context, t tenant.TenantID, pageReq query.PageParams) (query.PageResult[*domain.FeatureFlag], error) {
 	qctx := query.QueryContext("endpoint", "feature-flag")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.FeatureFlag]{
 		Codec:      s.codec,
@@ -72,7 +73,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.Pag
 		Sort:       flagSort,
 		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
-			flags, err := s.repo.List(ctx, params)
+			flags, err := s.repo.List(ctx, t, params)
 			if err != nil {
 				return nil, fmt.Errorf("feature-flag: list: %w", err)
 			}
@@ -86,8 +87,8 @@ func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.Pag
 	})
 }
 
-// Evaluate checks if a flag is enabled for the given subject.
-func (s *Service) Evaluate(ctx context.Context, key, subject string) (*EvaluateResult, error) {
+// Evaluate checks if a flag is enabled for the given subject within the tenant scope t.
+func (s *Service) Evaluate(ctx context.Context, t tenant.TenantID, key, subject string) (*EvaluateResult, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 		validation.F("subject", subject),
@@ -95,7 +96,7 @@ func (s *Service) Evaluate(ctx context.Context, key, subject string) (*EvaluateR
 		return nil, err
 	}
 
-	flag, err := s.repo.GetByKey(ctx, key)
+	flag, err := s.repo.GetByKey(ctx, t, key)
 	if err != nil {
 		return nil, fmt.Errorf("feature-flag: evaluate: %w", err)
 	}

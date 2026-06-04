@@ -38,7 +38,7 @@ func TestBuildWriteServiceSmoke(t *testing.T) {
 		require.NotNil(t, repo)
 		require.NotNil(t, rec)
 
-		ctx := auth.TestContext("test-admin", []string{"admin"})
+		ctx := CtxWithTenant(auth.TestContext("test-admin", []string{"admin"}))
 		entry, err := svc.Create(ctx, configwrite.CreateInput{
 			Key:   "smoke-key",
 			Value: "smoke-value",
@@ -51,7 +51,7 @@ func TestBuildWriteServiceSmoke(t *testing.T) {
 		require.Len(t, entries, 1)
 		assert.Equal(t, domain.TopicConfigEntryUpserted, entries[0].EventType())
 
-		// returned repo handle observes the same state.
+		// returned repo handle observes the same state; Snapshot reads under TestTenant.
 		snap, err := repo.Snapshot(context.Background())
 		require.NoError(t, err)
 		require.Len(t, snap, 1)
@@ -81,7 +81,9 @@ func TestBuildSubscribeServiceSmoke(t *testing.T) {
 		result := svc.HandleEntryUpserted(context.Background(), entry)
 		assert.Equal(t, outbox.DispositionAck, result.Disposition)
 
-		version, present := cache.GetVersion("smoke-k")
+		// configsubscribe.Cache.GetVersion takes (tenantID, key); use empty tenant
+		// because the test outbox entry carries no principal/tenant metadata.
+		version, present := cache.GetVersion("", "smoke-k")
 		assert.True(t, present, "key should be present in cache after upsert")
 		assert.Equal(t, 1, version)
 		assert.Equal(t, 1, cache.Len())
@@ -139,7 +141,7 @@ func TestBuildWriteServiceWithCustomClock(t *testing.T) {
 		svc, _, rec := BuildWriteService(t, WithWriteClock(clk))
 		require.NotNil(t, svc)
 
-		ctx := auth.TestContext("test-admin", []string{"admin"})
+		ctx := CtxWithTenant(auth.TestContext("test-admin", []string{"admin"}))
 		entry, err := svc.Create(ctx, configwrite.CreateInput{
 			Key:   "clock-key",
 			Value: "clock-value",
@@ -167,7 +169,7 @@ func TestBuildWriteServiceClockSingleSource(t *testing.T) {
 	clk := clockmock.New(testFixedTime)
 	svc, _, _ := BuildWriteService(t, WithWriteClock(clk))
 
-	ctx := auth.TestContext("test-admin", []string{"admin"})
+	ctx := CtxWithTenant(auth.TestContext("test-admin", []string{"admin"}))
 	created, err := svc.Create(ctx, configwrite.CreateInput{
 		Key:   "clock-source-key",
 		Value: "v1",

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
@@ -29,9 +30,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// adminSvcCtx returns a context with an admin principal for direct service calls.
+// testSvcTenant is the typed TenantID for direct repo operations.
+var testSvcTenant = configcoretest.TestTenant
+
+// adminSvcCtx returns a context with an admin principal AND a valid TenantID
+// for direct service calls. configpublish.Service.Publish and Rollback both
+// call tenant.FromContext(ctx), so a tenant must be present.
 func adminSvcCtx() context.Context {
-	return auth.TestContext("test-admin", []string{"admin"})
+	return configcoretest.CtxWithTenant(auth.TestContext("test-admin", []string{"admin"}))
 }
 
 // newTestService returns a Service wired with the default NoopEmitter
@@ -76,7 +82,7 @@ func seedEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {
 
 func mustSeedEntry(repo *mem.ConfigRepository, key, value string) {
 	now := time.Now()
-	_ = repo.Create(context.Background(), &domain.ConfigEntry{
+	_ = repo.Create(context.Background(), testSvcTenant, &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	})
@@ -280,7 +286,7 @@ func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testSvcTenant, &domain.ConfigEntry{
 		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -300,8 +306,8 @@ func TestService_Rollback_KeyNotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec, "rollback must return a typed errcode.Error")
-	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
-		"missing key must return ErrConfigNotFound (mem repo) for 404 mapping")
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
+		"missing key must return ErrConfigRepoNotFound for 404 mapping")
 }
 
 func TestService_Rollback_VersionNotFound(t *testing.T) {
@@ -313,8 +319,8 @@ func TestService_Rollback_VersionNotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
-		"missing version must return ErrConfigNotFound (mem repo) for 404 mapping")
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
+		"missing version must return ErrConfigRepoNotFound for 404 mapping")
 }
 
 func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
@@ -350,7 +356,7 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 			svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 			require.NoError(t, err)
 			now := time.Now()
-			require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+			require.NoError(t, repo.Create(context.Background(), testSvcTenant, &domain.ConfigEntry{
 				ID: "cfg-x", Key: "app.x", Value: "v1", Sensitive: tt.seedSensitive,
 				Version: 1, CreatedAt: now, UpdatedAt: now,
 			}))
@@ -360,14 +366,14 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 
 			// Optionally flip the live entry's sensitivity to differ from the snapshot.
 			if tt.flipToSensitiveAt > 0 {
-				live, err := repo.GetByKey(context.Background(), "app.x")
+				live, err := repo.GetByKey(context.Background(), testSvcTenant, "app.x")
 				require.NoError(t, err)
-				_, err = repo.UpdateForRollback(context.Background(), live.Key, live.Version, "v-live", !tt.seedSensitive)
+				_, err = repo.UpdateForRollback(context.Background(), testSvcTenant, live.Key, live.Version, "v-live", !tt.seedSensitive)
 				require.NoError(t, err)
 			}
 
 			// Read the live version just before rollback to supply the correct expectedVersion.
-			live, err := repo.GetByKey(context.Background(), "app.x")
+			live, err := repo.GetByKey(context.Background(), testSvcTenant, "app.x")
 			require.NoError(t, err)
 
 			rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1, live.Version)

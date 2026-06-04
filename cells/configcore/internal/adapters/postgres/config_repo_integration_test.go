@@ -20,7 +20,15 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/crypto"
+)
+
+// integrationTestTenantA / integrationTestTenantB are canonical test-tenant
+// UUIDs used in integration tests for cross-tenant isolation assertions.
+var (
+	integrationTestTenantA = mustTenant("00000000-0000-0000-0000-000000000001")
+	integrationTestTenantB = mustTenant("00000000-0000-0000-0000-000000000002")
 )
 
 // setupConfigPG clones the package-shared pre-migrated template database
@@ -54,10 +62,10 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 			Version:   1,
 		}
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Create(txCtx, entry)
+			return repo.Create(txCtx, integrationTestTenantA, entry)
 		}))
 
-		got, err := repo.GetByKey(ctx, "integration.test.key")
+		got, err := repo.GetByKey(ctx, integrationTestTenantA, "integration.test.key")
 		require.NoError(t, err)
 		assert.Equal(t, entry.ID, got.ID)
 		assert.Equal(t, "hello", got.Value)
@@ -72,13 +80,13 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 			Version: 1,
 		}
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Create(txCtx, entry)
+			return repo.Create(txCtx, integrationTestTenantA, entry)
 		}))
 
 		var updated *domain.ConfigEntry
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
 			var err error
-			updated, err = repo.Update(txCtx, "integration.update.key", 1, "updated")
+			updated, err = repo.Update(txCtx, integrationTestTenantA, "integration.update.key", 1, "updated")
 			return err
 		}))
 
@@ -86,7 +94,7 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 		assert.Equal(t, "updated", updated.Value)
 		assert.Equal(t, 2, updated.Version)
 
-		got, err := repo.GetByKey(ctx, "integration.update.key")
+		got, err := repo.GetByKey(ctx, integrationTestTenantA, "integration.update.key")
 		require.NoError(t, err)
 		assert.Equal(t, "updated", got.Value)
 		assert.Equal(t, 2, got.Version)
@@ -100,19 +108,19 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 			Version: 1,
 		}
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Create(txCtx, entry)
+			return repo.Create(txCtx, integrationTestTenantA, entry)
 		}))
 
 		var deleted *domain.ConfigEntry
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
 			var err error
-			deleted, err = repo.Delete(txCtx, "integration.delete.key", 1)
+			deleted, err = repo.Delete(txCtx, integrationTestTenantA, "integration.delete.key", 1)
 			return err
 		}))
 		require.NotNil(t, deleted)
 		assert.Equal(t, "to-be-deleted", deleted.Value)
 
-		_, err := repo.GetByKey(ctx, "integration.delete.key")
+		_, err := repo.GetByKey(ctx, integrationTestTenantA, "integration.delete.key")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -123,7 +131,7 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 		for _, k := range []string{"list.a", "list.b", "list.c"} {
 			e := &domain.ConfigEntry{ID: uuid.NewString(), Key: k, Value: k, Version: 1}
 			require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-				return repo.Create(txCtx, e)
+				return repo.Create(txCtx, integrationTestTenantA, e)
 			}))
 		}
 
@@ -134,7 +142,7 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 				{Name: "id", Direction: query.SortASC},
 			},
 		}
-		entries, err := repo.List(ctx, params)
+		entries, err := repo.List(ctx, integrationTestTenantA, params)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(entries), 3)
 	})
@@ -147,7 +155,7 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 			Version: 1,
 		}
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Create(txCtx, entry)
+			return repo.Create(txCtx, integrationTestTenantA, entry)
 		}))
 
 		now := time.Now()
@@ -160,10 +168,10 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 			PublishedAt: &now,
 		}
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.PublishVersion(txCtx, ver)
+			return repo.PublishVersion(txCtx, integrationTestTenantA, ver)
 		}))
 
-		got, err := repo.GetVersion(ctx, entry.ID, 1)
+		got, err := repo.GetVersion(ctx, integrationTestTenantA, entry.ID, 1)
 		require.NoError(t, err)
 		assert.Equal(t, ver.ID, got.ID)
 		assert.Equal(t, "v1-value", got.Value)
@@ -176,7 +184,7 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 func TestGetByKey_NotFound_AgainstRealPG(t *testing.T) {
 	repo, _ := setupConfigPG(t)
 
-	_, err := repo.GetByKey(context.Background(), "definitely-does-not-exist")
+	_, err := repo.GetByKey(context.Background(), integrationTestTenantA, "definitely-does-not-exist")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -212,14 +220,14 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 		require.NoError(t, err)
 
 		err = txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			if err := repo.Create(txCtx, entry); err != nil {
+			if err := repo.Create(txCtx, integrationTestTenantA, entry); err != nil {
 				return err
 			}
 			return outboxWriter.Write(txCtx, outboxEntry)
 		})
 		require.NoError(t, err)
 
-		got, err := repo.GetByKey(ctx, entry.Key)
+		got, err := repo.GetByKey(ctx, integrationTestTenantA, entry.Key)
 		require.NoError(t, err)
 		assert.Equal(t, entry.ID, got.ID)
 	})
@@ -232,14 +240,14 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 			Version: 1,
 		}
 		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			if err := repo.Create(txCtx, rollbackEntry); err != nil {
+			if err := repo.Create(txCtx, integrationTestTenantA, rollbackEntry); err != nil {
 				return err
 			}
 			return errors.New("simulated failure — rollback both")
 		})
 		require.Error(t, err)
 
-		_, err = repo.GetByKey(ctx, "integration.rollback.key")
+		_, err = repo.GetByKey(ctx, integrationTestTenantA, "integration.rollback.key")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -290,10 +298,10 @@ func TestConfigRepo_Integration_Encryption_RoundTrip(t *testing.T) {
 			Version:   1,
 		}
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Create(txCtx, entry)
+			return repo.Create(txCtx, integrationTestTenantA, entry)
 		}))
 
-		got, err := repo.GetByKey(ctx, entry.Key)
+		got, err := repo.GetByKey(ctx, integrationTestTenantA, entry.Key)
 		require.NoError(t, err, "sensitive entry must decrypt cleanly on read")
 		assert.Equal(t, "s3cret-production-value", got.Value,
 			"round-trip: plaintext must survive encrypt → BYTEA → decrypt")
@@ -311,15 +319,15 @@ func TestConfigRepo_Integration_Encryption_RoundTrip(t *testing.T) {
 			Version:   1,
 		}
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Create(txCtx, entry)
+			return repo.Create(txCtx, integrationTestTenantA, entry)
 		}))
 
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			_, err := repo.UpdateForRollback(txCtx, entry.Key, 1, "rotated-token", true)
+			_, err := repo.UpdateForRollback(txCtx, integrationTestTenantA, entry.Key, 1, "rotated-token", true)
 			return err
 		}))
 
-		got, err := repo.GetByKey(ctx, entry.Key)
+		got, err := repo.GetByKey(ctx, integrationTestTenantA, entry.Key)
 		require.NoError(t, err)
 		assert.Equal(t, "rotated-token", got.Value)
 		assert.Equal(t, 2, got.Version)
@@ -382,4 +390,175 @@ func TestConfigRepo_Integration_RepoReadiness_FeatureFlagsDrop(t *testing.T) {
 	require.ErrorAs(t, err, &ec, "RepoReady error must be an *errcode.Error")
 	require.Equal(t, errcode.ErrConfigRepoQuery, ec.Code,
 		"second-probe failure must carry ErrConfigRepoQuery")
+}
+
+// TestConfigRepo_Integration_CrossTenantIsolation verifies that config entries
+// written under testTenantA are invisible to testTenantB on every data method:
+// GetByKey/Update/Delete/List/GetVersion all return not-found or empty under
+// the wrong tenant. Same-tenant access must still succeed.
+//
+// This mirrors accesscore's conformCrossTenantIsolation pattern.
+func TestConfigRepo_Integration_CrossTenantIsolation(t *testing.T) {
+	repo, txMgr := setupConfigPG(t)
+	ctx := context.Background()
+
+	key := "cross-tenant-isolation-" + uuid.NewString()
+	entryID := uuid.NewString()
+	entry := &domain.ConfigEntry{
+		ID:      entryID,
+		Key:     key,
+		Value:   "tenant-a-only",
+		Version: 1,
+	}
+
+	// Write under tenant A.
+	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		return repo.Create(txCtx, integrationTestTenantA, entry)
+	}))
+
+	t.Run("GetByKey_under_tenantB_returns_not_found", func(t *testing.T) {
+		_, err := repo.GetByKey(ctx, integrationTestTenantB, key)
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	})
+
+	t.Run("GetByKey_under_tenantA_succeeds", func(t *testing.T) {
+		got, err := repo.GetByKey(ctx, integrationTestTenantA, key)
+		require.NoError(t, err)
+		assert.Equal(t, "tenant-a-only", got.Value)
+	})
+
+	t.Run("Update_under_tenantB_returns_not_found", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.Update(txCtx, integrationTestTenantB, key, 1, "should-not-apply")
+			return err
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	})
+
+	t.Run("Delete_under_tenantB_returns_not_found", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.Delete(txCtx, integrationTestTenantB, key, 1)
+			return err
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	})
+
+	t.Run("List_under_tenantB_returns_empty", func(t *testing.T) {
+		entries, err := repo.List(ctx, integrationTestTenantB, query.ListParams{
+			Limit: 50,
+			Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}},
+		})
+		require.NoError(t, err)
+		for _, e := range entries {
+			assert.NotEqual(t, key, e.Key, "tenant B must not see tenant A's entry in List")
+		}
+	})
+
+	t.Run("GetVersion_under_tenantB_returns_not_found", func(t *testing.T) {
+		// Publish a version under tenant A first.
+		now := time.Now()
+		ver := &domain.ConfigVersion{
+			ID:          uuid.NewString(),
+			ConfigID:    entryID,
+			Version:     1,
+			Value:       "tenant-a-only",
+			Sensitive:   false,
+			PublishedAt: &now,
+		}
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.PublishVersion(txCtx, integrationTestTenantA, ver)
+		}))
+
+		_, err := repo.GetVersion(ctx, integrationTestTenantB, entryID, 1)
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	})
+
+	t.Run("GetVersion_under_tenantA_succeeds", func(t *testing.T) {
+		_, err := repo.GetVersion(ctx, integrationTestTenantA, entryID, 1)
+		require.NoError(t, err)
+	})
+}
+
+// TestConfigRepo_Integration_EmptyTenantGuard verifies that every data method
+// rejects a zero/empty tenant.TenantID with a validation error rather than
+// silently issuing a tenant-less query. This ensures the Validate() call in
+// each production method is exercised end-to-end.
+func TestConfigRepo_Integration_EmptyTenantGuard(t *testing.T) {
+	repo, txMgr := setupConfigPG(t)
+	ctx := context.Background()
+	zero := tenant.TenantID("") // intentionally invalid
+
+	assertValidationErr := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err, "empty tenant must return error")
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+			"empty tenant must return ErrValidationFailed, not a DB error")
+	}
+
+	t.Run("Create_zero_tenant", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.Create(txCtx, zero, &domain.ConfigEntry{Key: "k"})
+		})
+		assertValidationErr(t, err)
+	})
+
+	t.Run("GetByKey_zero_tenant", func(t *testing.T) {
+		_, err := repo.GetByKey(ctx, zero, "k")
+		assertValidationErr(t, err)
+	})
+
+	t.Run("Update_zero_tenant", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.Update(txCtx, zero, "k", 1, "v")
+			return err
+		})
+		assertValidationErr(t, err)
+	})
+
+	t.Run("UpdateForRollback_zero_tenant", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.UpdateForRollback(txCtx, zero, "k", 1, "v", false)
+			return err
+		})
+		assertValidationErr(t, err)
+	})
+
+	t.Run("Delete_zero_tenant", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, err := repo.Delete(txCtx, zero, "k", 1)
+			return err
+		})
+		assertValidationErr(t, err)
+	})
+
+	t.Run("List_zero_tenant", func(t *testing.T) {
+		_, err := repo.List(ctx, zero, query.ListParams{Limit: 10})
+		assertValidationErr(t, err)
+	})
+
+	t.Run("PublishVersion_zero_tenant", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.PublishVersion(txCtx, zero, &domain.ConfigVersion{ConfigID: "cfg-1"})
+		})
+		assertValidationErr(t, err)
+	})
+
+	t.Run("GetVersion_zero_tenant", func(t *testing.T) {
+		_, err := repo.GetVersion(ctx, zero, "cfg-1", 1)
+		assertValidationErr(t, err)
+	})
 }

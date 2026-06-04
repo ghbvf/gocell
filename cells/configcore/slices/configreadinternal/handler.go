@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	internalapig "github.com/ghbvf/gocell/generated/contracts/http/config/internalapi/get/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -17,9 +18,10 @@ import (
 // enforced by the listener chain.
 type InternalGetAdapter struct{ S *Service }
 
-// Get implements internalapig.Service.
+// Get implements internalapig.Service. Passes tenant.SystemTenantID because this
+// is the internal control-plane path: service-token callers have no tenant in ctx.
 func (a InternalGetAdapter) Get(ctx context.Context, req *internalapig.Request) (internalapig.GetResponseObject, error) {
-	entry, err := a.S.GetByKey(ctx, req.Key)
+	entry, err := a.S.GetByKey(ctx, tenant.SystemTenantID, req.Key)
 	if err != nil {
 		return nil, err
 	}

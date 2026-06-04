@@ -63,7 +63,7 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error": map[string]any{"code": "ERR_CONFIG_NOT_FOUND", "message": "key not found"},
+			"error": map[string]any{"code": "ERR_CONFIG_REPO_NOT_FOUND", "message": "key not found"},
 		})
 	}))
 	defer srv.Close()
@@ -71,7 +71,7 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
 	_, err := client.GetEntry(context.Background(), "missing.key")
-	errcodetest.AssertCode(t, err, errcode.ErrConfigNotFound)
+	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 }
 
 func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {

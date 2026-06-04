@@ -7,8 +7,31 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// TestTenant is the canonical test tenant UUID used by configcoretest helpers.
+// All Seed / Snapshot operations and CtxWithTenant use this fixed value so test
+// scenarios that write via service (which derives tenant from ctx) and then read
+// via Snapshot (which queries under TestTenant) see consistent data.
+//
+// Mirrors the pattern established by accesscore PR-2a:
+//
+//	ctxkeys.WithTenantID(ctx, "00000000-0000-0000-0000-000000000001")
+const testTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// TestTenant is the TenantID value that CtxWithTenant injects and that
+// Seed / Snapshot operate under.
+const TestTenant tenant.TenantID = testTenantStr
+
+// CtxWithTenant returns ctx with TestTenant injected via the canonical
+// ctxkeys.WithTenantID mechanism — the same path used by the JWT authenticator
+// in production and by all accesscore service tests.
+func CtxWithTenant(ctx context.Context) context.Context {
+	return ctxkeys.WithTenantID(ctx, testTenantStr)
+}
 
 // SeededEntry is a configcoretest-local view of a config entry suitable for
 // public test code outside the cells/configcore subtree. It mirrors the
@@ -54,12 +77,16 @@ func NewFakeConfigRepository(clk clock.Clock) *FakeConfigRepository {
 // Seed does NOT support upsert; calling Seed twice with the same Key returns
 // ErrConfigDuplicate. Construct a fresh repo via NewFakeConfigRepository
 // between scenarios.
+//
+// Tenant scoping: Seed uses TestTenant so that service tests that inject
+// CtxWithTenant(ctx) see the same rows. Tests that need cross-tenant isolation
+// should call the underlying repo methods directly with explicit TenantID values.
 func (r *FakeConfigRepository) Seed(ctx context.Context, entry SeededEntry) error {
 	v := entry.Version
 	if v == 0 {
 		v = 1
 	}
-	if err := r.Create(ctx, &domain.ConfigEntry{
+	if err := r.Create(ctx, TestTenant, &domain.ConfigEntry{
 		Key:       entry.Key,
 		Value:     entry.Value,
 		Sensitive: entry.Sensitive,
@@ -70,9 +97,9 @@ func (r *FakeConfigRepository) Seed(ctx context.Context, entry SeededEntry) erro
 	return nil
 }
 
-// Snapshot returns a point-in-time copy of all config entries currently stored,
-// sorted by key for deterministic ordering in assertions. It does not modify
-// the repository.
+// Snapshot returns a point-in-time copy of all config entries currently stored
+// under TestTenant, sorted by key for deterministic ordering in assertions.
+// It does not modify the repository.
 //
 // Snapshot returns up to 500 entries (query.MaxPageSize). Tests seeding more
 // entries than this limit will receive a truncated result — the returned slice
@@ -81,7 +108,7 @@ func (r *FakeConfigRepository) Seed(ctx context.Context, entry SeededEntry) erro
 // WARNING: entries with Sensitive=true contain the plaintext Value as stored in
 // the in-memory backend. Tests should not log entry.Value when Sensitive=true.
 func (r *FakeConfigRepository) Snapshot(ctx context.Context) ([]SeededEntry, error) {
-	entries, err := r.List(ctx, query.ListParams{
+	entries, err := r.List(ctx, TestTenant, query.ListParams{
 		Limit: query.MaxPageSize,
 		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}},
 	})

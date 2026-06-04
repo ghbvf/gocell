@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/configreader"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
@@ -26,12 +27,17 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// testReadTenant is the typed TenantID for direct repo seeding.
+var testReadTenant = configcoretest.TestTenant
+
 const configBasePath = "/api/v1/config"
 
-// asAdmin attaches an admin Principal to req so it satisfies the
-// auth.AnyRole(RoleAdmin) policy applied by RegisterRoutes.
+// asAdmin attaches an admin Principal AND a valid TenantID to req so it
+// satisfies the auth.AnyRole(RoleAdmin) policy AND configread handler's
+// tenant.FromContext call.
 func asAdmin(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+	return req.WithContext(ctx)
 }
 
 // setupHandler wires the slice handler onto a celltest mux via RegisterRoutes —
@@ -55,7 +61,7 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 func TestHandler_HandleGet_Found(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "app.name", Value: "gocell", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -88,17 +94,44 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, configBasePath+"/missing-key", nil)
 	handler.ServeHTTP(w, asAdmin(req))
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
+}
+
+// asAdminNoTenant attaches an admin Principal but NO TenantID, so the request
+// passes the admin-role policy yet fails tenant.FromContext. F6: this must map
+// to a typed 403, not a framework 500.
+func asAdminNoTenant(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+}
+
+func TestHandler_HandleGet_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/app.name", nil)
+	handler.ServeHTTP(w, asAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleList_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/?limit=1", nil)
+	handler.ServeHTTP(w, asAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 func TestHandler_HandleList_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "k1", Value: "v1", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-2", Key: "k2", Value: "v2", Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -151,7 +184,7 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	now := time.Now()
 	keys := []string{"key-a", "key-b", "key-c", "key-d", "key-e", "key-f", "key-g"}
 	for i, k := range keys {
-		require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 			ID: "cfg-" + k, Key: k, Value: "v" + k, Version: 1,
 			CreatedAt: now.Add(time.Duration(i) * time.Second),
 			UpdatedAt: now.Add(time.Duration(i) * time.Second),
@@ -235,7 +268,7 @@ func TestHandler_HandleList_InvalidCursor(t *testing.T) {
 func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-s1", Key: "db.password", Value: "s3cret!", Sensitive: true,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -257,7 +290,7 @@ func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
 func TestHandler_HandleGet_NonSensitiveVisible(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-n1", Key: "app.name", Value: "gocell", Sensitive: false,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -278,11 +311,11 @@ func TestHandler_HandleGet_NonSensitiveVisible(t *testing.T) {
 func TestHandler_HandleList_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "app.name", Value: "gocell", Sensitive: false,
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
-	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+	require.NoError(t, repo.Create(context.Background(), testReadTenant, &domain.ConfigEntry{
 		ID: "cfg-2", Key: "api.key", Value: "sk-secret-key-123", Sensitive: true,
 		Version: 1, CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second),
 	}))

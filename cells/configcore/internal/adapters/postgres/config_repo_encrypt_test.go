@@ -125,7 +125,7 @@ func TestEncrypt_Create_SensitiveWritesCipherColumns(t *testing.T) {
 		Sensitive: true,
 	}
 
-	err := repo.Create(context.Background(), entry)
+	err := repo.Create(context.Background(), testTenantA, entry)
 	require.NoError(t, err)
 
 	require.Len(t, db.execCalls, 1, "Create must issue exactly one INSERT")
@@ -162,7 +162,7 @@ func TestEncrypt_Create_NonSensitiveWritesPlaintext(t *testing.T) {
 		Value: "GoCell",
 	}
 
-	err := repo.Create(context.Background(), entry)
+	err := repo.Create(context.Background(), testTenantA, entry)
 	require.NoError(t, err)
 
 	// Plain SQL should not contain cipher columns.
@@ -186,7 +186,7 @@ func TestEncrypt_GetByKey_SensitiveDecryptsValue(t *testing.T) {
 
 	// Build what the DB row looks like after encryption.
 	original := "s3cr3t"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "db_password"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "db_password"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -202,7 +202,7 @@ func TestEncrypt_GetByKey_SensitiveDecryptsValue(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.GetByKey(ctx, "db_password")
+	entry, err := repo.GetByKey(ctx, testTenantA, "db_password")
 	require.NoError(t, err)
 	assert.Equal(t, original, entry.Value, "GetByKey must return decrypted plaintext")
 	assert.False(t, entry.Stale, "entry must not be stale (same key version)")
@@ -225,7 +225,7 @@ func TestEncrypt_GetByKey_SensitiveDecryptFailed_FailClosed(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	_, err := repo.GetByKey(ctx, "db_password")
+	_, err := repo.GetByKey(ctx, testTenantA, "db_password")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -241,7 +241,7 @@ func TestEncrypt_GetByKey_SensitiveStaleKey(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "stale-value"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "old_key"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "old_key"))
 	require.NoError(t, err)
 
 	// Simulate key rotation: current is now v2, but the row was encrypted with v1.
@@ -259,7 +259,7 @@ func TestEncrypt_GetByKey_SensitiveStaleKey(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.GetByKey(ctx, "old_key")
+	entry, err := repo.GetByKey(ctx, testTenantA, "old_key")
 	require.NoError(t, err)
 	assert.True(t, entry.Stale, "entry must be stale when keyID != current key")
 	assert.Equal(t, oldKeyID, entry.KeyID)
@@ -284,7 +284,7 @@ func TestEncrypt_GetByKey_NonSensitive_NoDecryption(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.GetByKey(ctx, "app.name")
+	entry, err := repo.GetByKey(ctx, testTenantA, "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, "GoCell", entry.Value)
 }
@@ -297,7 +297,7 @@ func TestEncrypt_UpdateForRollback_SensitiveWritesCipherColumns(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	// Build what the DB RETURNING row looks like after encryption.
-	result, err := tr.Encrypt(ctx, []byte("new-secret"), configcrypto.AADForConfig("configcore", "api_key"))
+	result, err := tr.Encrypt(ctx, []byte("new-secret"), configcrypto.AADForConfig("configcore", testTenantA, "api_key"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -308,7 +308,7 @@ func TestEncrypt_UpdateForRollback_SensitiveWritesCipherColumns(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.UpdateForRollback(context.Background(), "api_key", 1, "new-secret", true)
+	entry, err := repo.UpdateForRollback(context.Background(), testTenantA, "api_key", 1, "new-secret", true)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 
@@ -335,7 +335,7 @@ func TestEncrypt_PublishVersion_SensitiveWritesCipherColumns(t *testing.T) {
 		PublishedAt: &now,
 	}
 
-	err := repo.PublishVersion(context.Background(), version)
+	err := repo.PublishVersion(context.Background(), testTenantA, version)
 	require.NoError(t, err)
 
 	sql := db.execCalls[0].sql
@@ -352,7 +352,7 @@ func TestEncrypt_GetVersion_SensitiveDecryptsValue(t *testing.T) {
 
 	original := "published-secret"
 	// Use AADForVersion — matches decryptVersionValue called by GetVersion.
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForVersion("configcore", "cfg-1"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForVersion("configcore", testTenantA, "cfg-1"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -368,7 +368,7 @@ func TestEncrypt_GetVersion_SensitiveDecryptsValue(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	version, err := repo.GetVersion(ctx, "cfg-1", 1)
+	version, err := repo.GetVersion(ctx, testTenantA, "cfg-1", 1)
 	require.NoError(t, err)
 	assert.Equal(t, original, version.Value, "GetVersion must return decrypted plaintext")
 }
@@ -392,7 +392,7 @@ func TestConfigRepo_GetByKey_Sensitive_LegacyPlaintext_ReturnsErr(t *testing.T) 
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	_, err := repo.GetByKey(ctx, "db_password")
+	_, err := repo.GetByKey(ctx, testTenantA, "db_password")
 	require.Error(t, err, "legacy sensitive plaintext must return error (fail-closed)")
 
 	var ec *errcode.Error
@@ -413,13 +413,13 @@ func TestConfigRepo_Decrypt_AADMismatch_FailsClosed(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	// Encrypt value for "other_key" — edk embeds "other_key" AAD.
-	result, err := tr.Encrypt(ctx, []byte("secret"), configcrypto.AADForConfig("configcore", "other_key"))
+	result, err := tr.Encrypt(ctx, []byte("secret"), configcrypto.AADForConfig("configcore", testTenantA, "other_key"))
 	require.NoError(t, err)
 
 	// Construct an edk that binds to "other_key" AAD (cross-row replay).
 	// When GetByKey reads "db_password", the repo passes "db_password" AAD to
 	// Decrypt, which won't match this edk → ErrConfigDecryptFailed.
-	wrongEDK := append([]byte("edk-"+result.KeyID+":aad:"), configcrypto.AADForConfig("configcore", "other_key")...)
+	wrongEDK := append([]byte("edk-"+result.KeyID+":aad:"), configcrypto.AADForConfig("configcore", testTenantA, "other_key")...)
 
 	now := time.Now()
 	db := &mockDB{
@@ -433,7 +433,7 @@ func TestConfigRepo_Decrypt_AADMismatch_FailsClosed(t *testing.T) {
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
 	// GetByKey must fail-closed when AAD doesn't match.
-	_, err = repo.GetByKey(ctx, "db_password")
+	_, err = repo.GetByKey(ctx, testTenantA, "db_password")
 	require.Error(t, err, "AAD mismatch must return error")
 
 	var ec *errcode.Error
@@ -464,7 +464,7 @@ func TestGetByKey_Sensitive_EmptyValueCipher_LegacyPlaintext(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	_, err := repo.GetByKey(ctx, "secret_key")
+	_, err := repo.GetByKey(ctx, testTenantA, "secret_key")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -492,7 +492,7 @@ func TestCurrentKeyID_ProviderReturnsError(t *testing.T) {
 	}
 
 	original := "some-secret"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "my_key"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "my_key"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -506,7 +506,7 @@ func TestCurrentKeyID_ProviderReturnsError(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.GetByKey(ctx, "my_key")
+	entry, err := repo.GetByKey(ctx, testTenantA, "my_key")
 	require.NoError(t, err, "CurrentKeyID error must not propagate")
 	assert.Equal(t, original, entry.Value)
 	assert.False(t, entry.Stale, "Stale must be false when currentKeyID returns error (treated as empty)")
@@ -520,7 +520,7 @@ func TestGetByKey_Sensitive_StaleKey_DifferentStoredAndCurrentKeyID(t *testing.T
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"} // encrypt with v1 first
 
 	original := "stale-value"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "cfg_key"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "cfg_key"))
 	require.NoError(t, err)
 
 	// Now simulate key rotation: current is v2, but stored row has v1.
@@ -538,7 +538,7 @@ func TestGetByKey_Sensitive_StaleKey_DifferentStoredAndCurrentKeyID(t *testing.T
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.GetByKey(ctx, "cfg_key")
+	entry, err := repo.GetByKey(ctx, testTenantA, "cfg_key")
 	require.NoError(t, err)
 	assert.True(t, entry.Stale, "entry must be marked stale when storedKeyID != currentKeyID")
 	assert.Equal(t, storedKeyID, entry.KeyID)
@@ -579,7 +579,7 @@ func TestGetByKey_StaleKey_EmitsWarn(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "sensitive-value"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "api_secret"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "api_secret"))
 	require.NoError(t, err)
 
 	storedKeyID := "local-aes-v1"
@@ -600,7 +600,7 @@ func TestGetByKey_StaleKey_EmitsWarn(t *testing.T) {
 	repo := newEncryptedRepoFromDBTX(db, tr)
 	repo.logger = logger
 
-	entry, err := repo.GetByKey(ctx, "api_secret")
+	entry, err := repo.GetByKey(ctx, testTenantA, "api_secret")
 	require.NoError(t, err)
 	require.True(t, entry.Stale)
 
@@ -624,7 +624,7 @@ func TestGetByKey_FreshKey_NoWarn(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "fresh-value"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "fresh_key"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "fresh_key"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -642,7 +642,7 @@ func TestGetByKey_FreshKey_NoWarn(t *testing.T) {
 	repo := newEncryptedRepoFromDBTX(db, tr)
 	repo.logger = logger
 
-	entry, err := repo.GetByKey(ctx, "fresh_key")
+	entry, err := repo.GetByKey(ctx, testTenantA, "fresh_key")
 	require.NoError(t, err)
 	assert.False(t, entry.Stale)
 	assert.Empty(t, logBuf.Bytes(), "no log output must be emitted for fresh key")
@@ -673,7 +673,7 @@ func TestList_StaleKey_EmitsWarn(t *testing.T) {
 	repo := newEncryptedRepoFromDBTX(db, tr)
 	repo.logger = logger
 
-	entries, err := repo.List(ctx, query.ListParams{
+	entries, err := repo.List(ctx, testTenantA, query.ListParams{
 		Limit: 10,
 		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
 	})
@@ -701,7 +701,7 @@ func TestGetByKey_StaleKey_OnStaleCipherCallback(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "value"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "cb_key"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "cb_key"))
 	require.NoError(t, err)
 
 	storedKeyID := "local-aes-v1"
@@ -727,7 +727,7 @@ func TestGetByKey_StaleKey_OnStaleCipherCallback(t *testing.T) {
 		got = append(got, callbackArgs{key, storedID, currentID})
 	}
 
-	_, err = repo.GetByKey(ctx, "cb_key")
+	_, err = repo.GetByKey(ctx, testTenantA, "cb_key")
 	require.NoError(t, err)
 
 	require.Len(t, got, 1)
@@ -774,7 +774,7 @@ func TestList_StaleKey_LogDedup(t *testing.T) {
 		callbackCalls = append(callbackCalls, stalecallArgs{key, storedID, currentID})
 	}
 
-	entries, err := repo.List(ctx, query.ListParams{
+	entries, err := repo.List(ctx, testTenantA, query.ListParams{
 		Limit: 10,
 		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
 	})
@@ -845,7 +845,7 @@ func TestList_StaleKey_TwoDistinctKeyIDs_TwoWarns(t *testing.T) {
 		callbackCalls = append(callbackCalls, stalecallArgs{key, storedID, currentID})
 	}
 
-	entries, err := repo.List(ctx, query.ListParams{
+	entries, err := repo.List(ctx, testTenantA, query.ListParams{
 		Limit: 10,
 		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
 	})
@@ -901,7 +901,7 @@ func TestWithOnStaleCipher_Option(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "value"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "opt_key"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "opt_key"))
 	require.NoError(t, err)
 
 	storedKeyID := "local-aes-v1"
@@ -929,7 +929,7 @@ func TestWithOnStaleCipher_Option(t *testing.T) {
 	repo.session = nil
 	repo.db = db
 
-	_, err = repo.GetByKey(ctx, "opt_key")
+	_, err = repo.GetByKey(ctx, testTenantA, "opt_key")
 	require.NoError(t, err)
 
 	require.Len(t, got, 1, "WithOnStaleCipher callback must fire for stale key")
@@ -957,7 +957,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 			Value:     "s3cr3t",
 			Sensitive: true,
 		}
-		err := repo.Create(ctx, entry)
+		err := repo.Create(ctx, testTenantA, entry)
 		require.Error(t, err)
 
 		var ec *errcode.Error
@@ -984,7 +984,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 		tr := &fakeValueTransformer{currentKeyID: "local-aes-v1", failEncrypt: true}
 		repo := newEncryptedRepoFromDBTX(db, tr)
 
-		_, err := repo.UpdateForRollback(ctx, "api_key", 1, "new-secret", true)
+		_, err := repo.UpdateForRollback(ctx, testTenantA, "api_key", 1, "new-secret", true)
 		require.Error(t, err)
 
 		var ec *errcode.Error
@@ -1011,7 +1011,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 			Sensitive:   true,
 			PublishedAt: &now,
 		}
-		err := repo.PublishVersion(ctx, version)
+		err := repo.PublishVersion(ctx, testTenantA, version)
 		require.Error(t, err)
 
 		var ec *errcode.Error
@@ -1043,7 +1043,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 	t.Run("encryptValue direct call (covers Update sensitive write path)", func(t *testing.T) {
 		tr := &fakeValueTransformer{currentKeyID: "v1", failEncrypt: true}
 		repo := newEncryptedRepoFromDBTX(&mockDB{}, tr)
-		_, err := repo.encryptValue(ctx, "update_key", "new_value")
+		_, err := repo.encryptValue(ctx, testTenantA, "update_key", "new_value")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
@@ -1061,7 +1061,7 @@ func TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "value"
-	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", "fresh_cb_key"))
+	result, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("configcore", testTenantA, "fresh_cb_key"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -1078,7 +1078,7 @@ func TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled(t *testing.T) {
 	repo := newEncryptedRepoFromDBTX(db, tr)
 	repo.onStaleCipher = func(_, _, _ string) { called = true }
 
-	_, err = repo.GetByKey(ctx, "fresh_cb_key")
+	_, err = repo.GetByKey(ctx, testTenantA, "fresh_cb_key")
 	require.NoError(t, err)
 	assert.False(t, called, "onStaleCipher must not be called for a fresh key")
 }

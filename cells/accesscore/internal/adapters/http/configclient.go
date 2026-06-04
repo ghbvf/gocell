@@ -75,8 +75,8 @@ func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, h
 }
 
 // GetEntry fetches the current config entry for key from the configcore
-// internal endpoint. Returns errcode.ErrConfigNotFound when the key does not
-// exist (HTTP 404).
+// internal endpoint. Returns errcode.ErrConfigRepoNotFound when the key does
+// not exist (HTTP 404).
 func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.ConfigEntry, error) {
 	path := "/internal/v1/config/" + url.PathEscape(key)
 	fullURL := c.baseURL + path
@@ -108,7 +108,7 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	case http.StatusOK:
 		// fall through to decode
 	case http.StatusNotFound:
-		return ports.ConfigEntry{}, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound,
+		return ports.ConfigEntry{}, errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 			"config key not found",
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalKeyQuotedFmt, key))))

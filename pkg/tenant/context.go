@@ -2,9 +2,9 @@ package tenant
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // FromContext is the fail-closed read-side bridge between the ctx tenant key
@@ -25,6 +25,18 @@ import (
 // failure mode impossible to express by accident. ParseTenantID re-validates
 // (and canonicalizes) defensively even though the auth bridge already did so.
 //
+// CLASSIFICATION — the failure-path error is a typed *errcode.Error classified
+// as KindPermissionDenied (HTTP 403 Forbidden), single-sourced here so every
+// tenant-scoped handler maps a missing/invalid tenant to a 403 instead of a
+// 500. The semantics are "authenticated principal lacks a tenant scope": the
+// caller is authenticated (the auth boundary ran) but presents no usable
+// tenant predicate, which is an authorization failure, not an internal fault.
+// The returned value is still an `error`, so non-HTTP callers (accesscore
+// services, event consumers) are unaffected; HTTP cell adapters inspect the
+// code via errors.As and return the generated typed 4xx response struct. The
+// ParseTenantID cause is carried (errcode.Wrap) for server-side logging /
+// errors.Is chains but is stripped from the wire on the 4xx envelope.
+//
 // Pre-authentication paths that have no ctx tenant (e.g. sessionlogin, which
 // derives the tenant from the request body's TenantID, and sessionrefresh, which
 // reads users by the trusted global UUID primary key) do NOT use FromContext;
@@ -33,11 +45,13 @@ import (
 func FromContext(ctx context.Context) (TenantID, error) {
 	raw, ok := ctxkeys.TenantIDFrom(ctx)
 	if !ok {
-		return "", fmt.Errorf("tenant: no tenant in context (auth boundary did not populate ctxkeys.TenantID)")
+		return "", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"tenant scope required")
 	}
 	tid, err := ParseTenantID(raw)
 	if err != nil {
-		return "", fmt.Errorf("tenant: tenant in context is invalid: %w", err)
+		return "", errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"tenant scope invalid", err)
 	}
 	return tid, nil
 }

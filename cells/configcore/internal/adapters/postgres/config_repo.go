@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -205,12 +206,14 @@ func (r *ConfigRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 }
 
 // encryptValue encrypts value for a sensitive entry using the transformer.
-func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) (encryptedPayload, error) {
+// The tenant is bound into the AAD so a ciphertext cannot be replayed across
+// tenants (cross-tenant secret leak); AES-GCM authenticates the AAD.
+func (r *ConfigRepository) encryptValue(ctx context.Context, t tenant.TenantID, key, value string) (encryptedPayload, error) {
 	if r.transformer == nil {
 		return encryptedPayload{}, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
-	aad := configcrypto.AADForConfig(cellID, key)
+	aad := configcrypto.AADForConfig(cellID, t, key)
 	result, err := r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
 		return encryptedPayload{}, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key="+key, err)
@@ -224,13 +227,17 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 }
 
 // decryptValue decrypts a cipher-column tuple for a sensitive entry.
-// Fail-closed: returns ErrConfigDecryptFailed on any error.
-func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []byte, keyID string, nonce, edk []byte) (string, error) {
+// Fail-closed: returns ErrConfigDecryptFailed on any error. The tenant is bound
+// into the AAD and must match the encrypt-time tenant, or AES-GCM fails the
+// tag check (cross-tenant ciphertext transplant is rejected).
+func (r *ConfigRepository) decryptValue(
+	ctx context.Context, t tenant.TenantID, key string, ct []byte, keyID string, nonce, edk []byte,
+) (string, error) {
 	if r.transformer == nil {
 		return "", errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive value")
 	}
-	aad := configcrypto.AADForConfig(cellID, key)
+	aad := configcrypto.AADForConfig(cellID, t, key)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
 		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "Decrypt", "key="+key, err)
@@ -243,13 +250,13 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 // config entries — prevents cross-field ciphertext replay between the two tables.
 // configID is the UUID primary key from config_entries.
 func (r *ConfigRepository) encryptVersionValue(
-	ctx context.Context, configID, value string,
+	ctx context.Context, t tenant.TenantID, configID, value string,
 ) (encryptedPayload, error) {
 	if r.transformer == nil {
 		return encryptedPayload{}, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive version")
 	}
-	aad := configcrypto.AADForVersion(cellID, configID)
+	aad := configcrypto.AADForVersion(cellID, t, configID)
 	result, err := r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
 		return encryptedPayload{}, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "EncryptVersion", "config_id="+configID, err)
@@ -266,13 +273,13 @@ func (r *ConfigRepository) encryptVersionValue(
 // Uses AADForVersion so the AAD matches the write path in encryptVersionValue.
 // Fail-closed: returns ErrConfigDecryptFailed on any error.
 func (r *ConfigRepository) decryptVersionValue(
-	ctx context.Context, configID string, ct []byte, keyID string, nonce, edk []byte,
+	ctx context.Context, t tenant.TenantID, configID string, ct []byte, keyID string, nonce, edk []byte,
 ) (string, error) {
 	if r.transformer == nil {
 		return "", errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive version")
 	}
-	aad := configcrypto.AADForVersion(cellID, configID)
+	aad := configcrypto.AADForVersion(cellID, t, configID)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
 		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "DecryptVersion", "config_id="+configID, err)
@@ -283,7 +290,10 @@ func (r *ConfigRepository) decryptVersionValue(
 // Create inserts a new config entry.
 // For sensitive=true: encrypts value and writes cipher columns; value column is set to "".
 // For sensitive=false: writes plaintext value; cipher columns are NULL.
-func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry) error {
+func (r *ConfigRepository) Create(ctx context.Context, t tenant.TenantID, entry *domain.ConfigEntry) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	now := r.clock.Now()
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = now
@@ -298,25 +308,25 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 	}
 
 	if entry.Sensitive {
-		payload, encErr := r.encryptValue(ctx, entry.Key, entry.Value)
+		payload, encErr := r.encryptValue(ctx, t, entry.Key, entry.Value)
 		if encErr != nil {
 			return encErr
 		}
 		const q = `INSERT INTO config_entries
-			(id, key, value, sensitive, version, created_at, updated_at,
+			(tenant_id, id, key, value, sensitive, version, created_at, updated_at,
 			 value_cipher, value_key_id, value_edk, value_nonce)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
 		_, err = db.Exec(ctx, q,
-			entry.ID, entry.Key, "", entry.Sensitive, entry.Version,
+			string(t), entry.ID, entry.Key, "", entry.Sensitive, entry.Version,
 			entry.CreatedAt, entry.UpdatedAt,
 			payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce,
 		)
 	} else {
 		const q = `INSERT INTO config_entries
-			(id, key, value, sensitive, version, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`
+			(tenant_id, id, key, value, sensitive, version, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 		_, err = db.Exec(ctx, q,
-			entry.ID, entry.Key, entry.Value, entry.Sensitive, entry.Version,
+			string(t), entry.ID, entry.Key, entry.Value, entry.Sensitive, entry.Version,
 			entry.CreatedAt, entry.UpdatedAt,
 		)
 	}
@@ -411,7 +421,7 @@ func (r *ConfigRepository) scanConfigOrMapError(
 // no-op. The cipher tuple fields (ct, keyID, edk, nonce) are the raw values
 // returned by scanConfigRow.
 func (r *ConfigRepository) decryptScannedEntry(
-	ctx context.Context, e *domain.ConfigEntry, ct []byte, keyID *string, nonce, edk []byte,
+	ctx context.Context, t tenant.TenantID, e *domain.ConfigEntry, ct []byte, keyID *string, nonce, edk []byte,
 ) error {
 	if !e.Sensitive {
 		return nil
@@ -421,7 +431,7 @@ func (r *ConfigRepository) decryptScannedEntry(
 		return errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"sensitive value is in legacy plaintext format; run plaintext_migration tool before reading")
 	}
-	plain, err := r.decryptValue(ctx, e.Key, ct, *keyID, nonce, edk)
+	plain, err := r.decryptValue(ctx, t, e.Key, ct, *keyID, nonce, edk)
 	if err != nil {
 		return err
 	}
@@ -441,14 +451,17 @@ func (r *ConfigRepository) decryptScannedEntry(
 
 // GetByKey retrieves a config entry by key with transparent decryption for
 // sensitive entries. Sets entry.Stale=true when keyID != current active key.
-func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
-	const q = `SELECT ` + configEntryColumns + ` FROM config_entries WHERE key = $1`
-	row := r.resolveDB(ctx).QueryRow(ctx, q, key)
+func (r *ConfigRepository) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
+	const q = `SELECT ` + configEntryColumns + ` FROM config_entries WHERE tenant_id = $1 AND key = $2`
+	row := r.resolveDB(ctx).QueryRow(ctx, q, string(t), key)
 	e, ct, keyID, edk, nonce, err := r.scanConfigOrMapError(ctx, row, "GetByKey", key)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
+	if err := r.decryptScannedEntry(ctx, t, e, ct, keyID, nonce, edk); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -490,16 +503,21 @@ func (r *ConfigRepository) currentKeyID(ctx context.Context) string {
 // it internally via SELECT...FOR UPDATE to eliminate any TOCTOU race on the
 // sensitive flag. Returns ErrConfigRepoNotFound if the key does not exist, or
 // ErrVersionConflict if expectedVersion does not match the stored version.
-func (r *ConfigRepository) Update(ctx context.Context, key string, expectedVersion int, value string) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) Update(
+	ctx context.Context, t tenant.TenantID, key string, expectedVersion int, value string,
+) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Lock the row and read the current sensitive flag atomically.
-	const selectQ = `SELECT sensitive FROM config_entries WHERE key = $1 FOR UPDATE`
+	const selectQ = `SELECT sensitive FROM config_entries WHERE tenant_id = $1 AND key = $2 FOR UPDATE`
 	var sensitive bool
-	selectRow := db.QueryRow(ctx, selectQ, key)
+	selectRow := db.QueryRow(ctx, selectQ, string(t), key)
 	if scanErr := selectRow.Scan(&sensitive); scanErr != nil {
 		if infraErr := ctxcancel.Wrap(scanErr, "Update", "key="+key); infraErr != nil {
 			return nil, infraErr
@@ -518,7 +536,7 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, expectedVersi
 		)
 	}
 
-	return r.doUpdate(ctx, db, opUpdate, key, expectedVersion, value, sensitive)
+	return r.doUpdate(ctx, db, t, opUpdate, key, expectedVersion, value, sensitive)
 }
 
 // UpdateForRollback atomically sets value AND sensitive, increments version if
@@ -527,13 +545,16 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, expectedVersi
 // alongside its value. Returns ErrConfigRepoNotFound if the key does not exist,
 // or ErrVersionConflict if expectedVersion does not match.
 func (r *ConfigRepository) UpdateForRollback(
-	ctx context.Context, key string, expectedVersion int, value string, sensitive bool,
+	ctx context.Context, t tenant.TenantID, key string, expectedVersion int, value string, sensitive bool,
 ) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.doUpdate(ctx, db, opUpdateForRollback, key, expectedVersion, value, sensitive)
+	return r.doUpdate(ctx, db, t, opUpdateForRollback, key, expectedVersion, value, sensitive)
 }
 
 // doUpdate performs the actual UPDATE...RETURNING for both Update and
@@ -547,30 +568,30 @@ func (r *ConfigRepository) UpdateForRollback(
 //   - exists → ErrVersionConflict (409)
 //   - not found → ErrConfigRepoNotFound (404)
 func (r *ConfigRepository) doUpdate(
-	ctx context.Context, db DBTX, op, key string, expectedVersion int, value string, sensitive bool,
+	ctx context.Context, db DBTX, t tenant.TenantID, op, key string, expectedVersion int, value string, sensitive bool,
 ) (*domain.ConfigEntry, error) {
 	var (
 		rowsAffected int64
 		row          RowScanner
 	)
 	if sensitive {
-		payload, encErr := r.encryptValue(ctx, key, value)
+		payload, encErr := r.encryptValue(ctx, t, key, value)
 		if encErr != nil {
 			return nil, encErr
 		}
 		const q = `UPDATE config_entries
 			SET value = '', sensitive = true, version = version+1, updated_at = now(),
 			    value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4
-			WHERE key = $5 AND version = $6
+			WHERE key = $5 AND version = $6 AND tenant_id = $7
 			RETURNING ` + configEntryColumns
-		row = db.QueryRow(ctx, q, payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce, key, expectedVersion)
+		row = db.QueryRow(ctx, q, payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce, key, expectedVersion, string(t))
 	} else {
 		const q = `UPDATE config_entries
 			SET value = $1, sensitive = false, version = version+1, updated_at = now(),
 			    value_cipher = NULL, value_key_id = NULL, value_edk = NULL, value_nonce = NULL
-			WHERE key = $2 AND version = $3
+			WHERE key = $2 AND version = $3 AND tenant_id = $4
 			RETURNING ` + configEntryColumns
-		row = db.QueryRow(ctx, q, value, key, expectedVersion)
+		row = db.QueryRow(ctx, q, value, key, expectedVersion, string(t))
 	}
 
 	e, ct, keyID, edk, nonce, scanErr := scanConfigRow(row)
@@ -580,7 +601,7 @@ func (r *ConfigRepository) doUpdate(
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			// rowsAffected==0: distinguish version mismatch from not-found.
-			return nil, r.resolveUpdateConflict(ctx, op, key)
+			return nil, r.resolveUpdateConflict(ctx, t, op, key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, scanErr,
@@ -590,7 +611,7 @@ func (r *ConfigRepository) doUpdate(
 	}
 	_ = rowsAffected // row scan succeeded → rowsAffected implicitly 1
 
-	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
+	if err := r.decryptScannedEntry(ctx, t, e, ct, keyID, nonce, edk); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -606,8 +627,8 @@ func (r *ConfigRepository) doUpdate(
 //
 // ref: docs/reviews/PR-464 round-2 P1.2 (Kratos/Watermill/etcd: probe failure
 // must not collapse into business not-found).
-func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, op, key string) error {
-	probe, probeErr := r.GetByKey(ctx, key)
+func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, t tenant.TenantID, op, key string) error {
+	probe, probeErr := r.GetByKey(ctx, t, key)
 	if probeErr != nil {
 		notFound, infraErr := classifyProbeFailure(probeErr, errcode.ErrConfigRepoNotFound, op, key, "config_entry")
 		if !notFound {
@@ -629,21 +650,24 @@ func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, op, key st
 // enabling callers to publish a tombstone event without a separate pre-read.
 // Returns ErrConfigRepoNotFound if the key does not exist, or ErrVersionConflict
 // if expectedVersion does not match.
-func (r *ConfigRepository) Delete(ctx context.Context, key string, expectedVersion int) (*domain.ConfigEntry, error) {
-	const q = `DELETE FROM config_entries WHERE key = $1 AND version = $2 RETURNING ` + configEntryColumns
+func (r *ConfigRepository) Delete(ctx context.Context, t tenant.TenantID, key string, expectedVersion int) (*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
+	const q = `DELETE FROM config_entries WHERE key = $1 AND version = $2 AND tenant_id = $3 RETURNING ` + configEntryColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	row := db.QueryRow(ctx, q, key, expectedVersion)
+	row := db.QueryRow(ctx, q, key, expectedVersion, string(t))
 	e, ct, keyID, edk, nonce, scanErr := scanConfigRow(row)
 	if scanErr != nil {
 		if cancelErr := ctxcancel.Wrap(scanErr, "Delete", "key="+key); cancelErr != nil {
 			return nil, cancelErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
-			return nil, r.resolveUpdateConflict(ctx, "Delete", key)
+			return nil, r.resolveUpdateConflict(ctx, t, "Delete", key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, scanErr,
@@ -651,7 +675,7 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string, expectedVersi
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
-	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
+	if err := r.decryptScannedEntry(ctx, t, e, ct, keyID, nonce, edk); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -697,15 +721,16 @@ func (r *ConfigRepository) applySensitiveListSentinel(
 	}
 }
 
-// List retrieves config entries with keyset cursor pagination.
+// List retrieves config entries with keyset cursor pagination, scoped to the
+// tenant via the WHERE tenant_id = $1 predicate.
 //
-// Performance note: keyset pagination on `(key, id)` scans well in practice
-// because (a) the existing primary-key unique index on `id` supports the tie-
+// Performance note: keyset pagination on `(tenant_id, key, id)` scans well in
+// practice because (a) the primary-key unique index supports the `id` tie-
 // breaker and (b) the `key` column is typically low-cardinality for admin
-// browsing. A dedicated `(key ASC, id ASC)` composite index can be added in a
-// future migration if sort-heavy list traffic warrants it; it is intentionally
-// not shipped in migration 010 to keep this PR's migration scope minimal
-// (010 only adds the cipher columns).
+// browsing within a tenant. A dedicated `(tenant_id ASC, key ASC, id ASC)`
+// composite index can be added in a future migration if sort-heavy list
+// traffic warrants it; it is intentionally not shipped in migration 051
+// (the tenant rebuild) to keep that migration's scope minimal.
 //
 // Sensitive entries: List does NOT decrypt values. Instead, the Value field is
 // set to "***" (sentinel) and KeyID / Stale are preserved from the cipher columns.
@@ -713,9 +738,12 @@ func (r *ConfigRepository) applySensitiveListSentinel(
 //
 // This design avoids bulk decryption on list operations and prevents accidental
 // exposure of sensitive values in list responses.
-func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
+func (r *ConfigRepository) List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.ConfigEntry, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	b := pgquery.NewBuilder()
-	b.Append("SELECT " + listEntryColumns + " FROM config_entries WHERE 1=1")
+	b.AppendParam("SELECT "+listEntryColumns+" FROM config_entries WHERE tenant_id = ", string(t))
 
 	if err := pgquery.AppendKeyset(b, params); err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
@@ -756,32 +784,35 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 
 // PublishVersion inserts a config version record.
 // For sensitive=true: encrypts value and writes cipher columns.
-func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.ConfigVersion) error {
+func (r *ConfigRepository) PublishVersion(ctx context.Context, t tenant.TenantID, version *domain.ConfigVersion) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return err
 	}
 
 	if version.Sensitive {
-		payload, encErr := r.encryptVersionValue(ctx, version.ConfigID, version.Value)
+		payload, encErr := r.encryptVersionValue(ctx, t, version.ConfigID, version.Value)
 		if encErr != nil {
 			return encErr
 		}
 		const q = `INSERT INTO config_versions
-			(id, config_id, version, value, sensitive, published_at,
+			(tenant_id, id, config_id, version, value, sensitive, published_at,
 			 value_cipher, value_key_id, value_edk, value_nonce)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 		_, err = db.Exec(ctx, q,
-			version.ID, version.ConfigID, version.Version,
+			string(t), version.ID, version.ConfigID, version.Version,
 			"", version.Sensitive, version.PublishedAt,
 			payload.Ciphertext, payload.KeyID, payload.EDK, payload.Nonce,
 		)
 	} else {
 		const q = `INSERT INTO config_versions
-			(id, config_id, version, value, sensitive, published_at)
-			VALUES ($1, $2, $3, $4, $5, $6)`
+			(tenant_id, id, config_id, version, value, sensitive, published_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`
 		_, err = db.Exec(ctx, q,
-			version.ID, version.ConfigID, version.Version,
+			string(t), version.ID, version.ConfigID, version.Version,
 			version.Value, version.Sensitive, version.PublishedAt,
 		)
 	}
@@ -806,14 +837,22 @@ const configEntriesProbeSQL = `SELECT 1 FROM config_entries WHERE false`
 // config_entries for the RepoReady probe.
 const featureFlagsProbeSQL = `SELECT 1 FROM feature_flags WHERE false`
 
-// RepoReady implements healthz.RepoProber. It issues two cheap
+// configVersionsProbeSQL is the equivalent representative query for the
+// config_versions table. config_versions is load-bearing for tenant-scoped
+// versioning (PR-2b #1479): a missing or broken config_versions table must be
+// detected at readyz time, independently of config_entries and feature_flags.
+const configVersionsProbeSQL = `SELECT 1 FROM config_versions WHERE false`
+
+// RepoReady implements healthz.RepoProber. It issues three cheap
 // non-transactional representative Exec probes — SELECT 1 FROM config_entries
-// WHERE false and SELECT 1 FROM feature_flags WHERE false — so that missing
-// tables, dropped columns, or revoked table-level permissions are detected
-// independently of the pool-level postgres_ready probe. WHERE false
-// short-circuits the scan so there is no result-iteration overhead, and Exec
-// (matching PGSessionStore.RepoReady / LedgerStore.RepoReady) collapses each
-// table probe to a single failure branch — no transaction is opened.
+// WHERE false, SELECT 1 FROM feature_flags WHERE false, and SELECT 1 FROM
+// config_versions WHERE false — so that missing tables, dropped columns, or
+// revoked table-level permissions are detected independently of the pool-level
+// postgres_ready probe. WHERE false short-circuits the scan so there is no
+// result-iteration overhead, and Exec (matching PGSessionStore.RepoReady /
+// LedgerStore.RepoReady) collapses each table probe to a single failure branch
+// — no transaction is opened. config_versions is included because it is
+// load-bearing for tenant-scoped versioning (PR-2b #1479).
 func (r *ConfigRepository) RepoReady(ctx context.Context) error {
 	db := r.resolveDB(ctx)
 
@@ -829,17 +868,26 @@ func (r *ConfigRepository) RepoReady(ctx context.Context) error {
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
+	if _, err := db.Exec(ctx, configVersionsProbeSQL); err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
+			"config repo readiness check failed", err,
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
 
 	return nil
 }
 
 // GetVersion retrieves a specific config version with transparent decryption.
-func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error) {
+func (r *ConfigRepository) GetVersion(ctx context.Context, t tenant.TenantID, configID string, version int) (*domain.ConfigVersion, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "config repo: invalid tenant", err)
+	}
 	const q = `SELECT id, config_id, version, value, sensitive, published_at,
 		value_cipher, value_key_id, value_edk, value_nonce
-		FROM config_versions WHERE config_id = $1 AND version = $2`
+		FROM config_versions WHERE tenant_id = $1 AND config_id = $2 AND version = $3`
 
-	row := r.resolveDB(ctx).QueryRow(ctx, q, configID, version)
+	row := r.resolveDB(ctx).QueryRow(ctx, q, string(t), configID, version)
 
 	var (
 		v           domain.ConfigVersion
@@ -878,7 +926,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 				"sensitive version is in legacy plaintext format; run plaintext_migration tool before reading")
 		}
-		plain, err := r.decryptVersionValue(ctx, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)
+		plain, err := r.decryptVersionValue(ctx, t, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)
 		if err != nil {
 			return nil, err
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -23,9 +24,16 @@ const (
 )
 
 // FlagRepository is an in-memory implementation of ports.FlagRepository.
+//
+// # Tenancy (#1337 PR-2b)
+//
+// Every data method takes a mandatory tenant.TenantID positional parameter and
+// scopes all reads/writes to the tenant's inner map. Cross-tenant rows are
+// structurally unreachable — they live in a different inner map — so the
+// existing not-found error path fires naturally for any mismatched access.
 type FlagRepository struct {
 	mu    sync.RWMutex
-	flags map[string]*domain.FeatureFlag // key -> flag
+	flags map[tenant.TenantID]map[string]*domain.FeatureFlag // tenant -> key -> flag
 	clock clock.Clock
 }
 
@@ -34,29 +42,53 @@ type FlagRepository struct {
 func NewFlagRepository(clk clock.Clock) *FlagRepository {
 	clock.MustHaveClock(clk, "mem.NewFlagRepository")
 	return &FlagRepository{
-		flags: make(map[string]*domain.FeatureFlag),
+		flags: make(map[tenant.TenantID]map[string]*domain.FeatureFlag),
 		clock: clk,
 	}
 }
 
-func (r *FlagRepository) Create(_ context.Context, flag *domain.FeatureFlag) error {
+// tenantFlags lazily creates and returns the inner flags map for t.
+// Caller must hold mu (write lock).
+func (r *FlagRepository) tenantFlags(t tenant.TenantID) map[string]*domain.FeatureFlag {
+	m, ok := r.flags[t]
+	if !ok {
+		m = make(map[string]*domain.FeatureFlag)
+		r.flags[t] = m
+	}
+	return m
+}
+
+func (r *FlagRepository) Create(_ context.Context, t tenant.TenantID, flag *domain.FeatureFlag) error {
+	if err := t.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.flags[flag.Key]; exists {
+	tf := r.tenantFlags(t)
+	if _, exists := tf[flag.Key]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrFlagDuplicate, "flag key already exists",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(flagInternalKeyQuotedFmt, flag.Key))))
 	}
 	clone := *flag
-	r.flags[flag.Key] = &clone
+	tf[flag.Key] = &clone
 	return nil
 }
 
-func (r *FlagRepository) GetByKey(_ context.Context, key string) (*domain.FeatureFlag, error) {
+//nolint:dupl // mirrors ConfigRepository.GetByKey; typed differences (FeatureFlag vs ConfigEntry, distinct codes) preclude shared helper
+func (r *FlagRepository) GetByKey(_ context.Context, t tenant.TenantID, key string) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	flag, ok := r.flags[key]
+	tf, ok := r.flags[t]
+	if !ok {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(flagInternalKeyQuotedFmt, key))))
+	}
+	flag, ok := tf[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(flagInternalKeyQuotedFmt, key))))
@@ -70,12 +102,16 @@ func (r *FlagRepository) GetByKey(_ context.Context, key string) (*domain.Featur
 // Returns ErrFlagNotFound if the key does not exist,
 // or ErrVersionConflict if expectedVersion does not match.
 func (r *FlagRepository) Update(
-	_ context.Context, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
+	_ context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool, rolloutPercentage int, description string,
 ) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing, exists := r.flags[key]
+	tf := r.tenantFlags(t)
+	existing, exists := tf[key]
 	if !exists {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(flagInternalKeyQuotedFmt, key))))
@@ -95,11 +131,15 @@ func (r *FlagRepository) Update(
 // Delete removes a feature flag by key if expectedVersion matches.
 // Returns the deleted entity. Returns ErrFlagNotFound if the key does not exist,
 // or ErrVersionConflict if expectedVersion does not match.
-func (r *FlagRepository) Delete(_ context.Context, key string, expectedVersion int) (*domain.FeatureFlag, error) {
+func (r *FlagRepository) Delete(_ context.Context, t tenant.TenantID, key string, expectedVersion int) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing, exists := r.flags[key]
+	tf := r.tenantFlags(t)
+	existing, exists := tf[key]
 	if !exists {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(flagInternalKeyQuotedFmt, key))))
@@ -108,7 +148,7 @@ func (r *FlagRepository) Delete(_ context.Context, key string, expectedVersion i
 		return nil, cas.CheckVersionMatch(0, "feature_flag", key)
 	}
 	clone := *existing
-	delete(r.flags, key)
+	delete(tf, key)
 	return &clone, nil
 }
 
@@ -117,11 +157,19 @@ func (r *FlagRepository) Delete(_ context.Context, key string, expectedVersion i
 // It does not overwrite RolloutPercentage or Description.
 // Returns ErrFlagNotFound if the key does not exist,
 // or ErrVersionConflict if expectedVersion does not match.
-func (r *FlagRepository) Toggle(_ context.Context, key string, expectedVersion int, enabled bool) (*domain.FeatureFlag, error) {
+//
+//nolint:dupl // mirrors ConfigRepository.Update; typed differences (FeatureFlag vs ConfigEntry, distinct fields) preclude shared helper
+func (r *FlagRepository) Toggle(
+	_ context.Context, t tenant.TenantID, key string, expectedVersion int, enabled bool,
+) (*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing, exists := r.flags[key]
+	tf := r.tenantFlags(t)
+	existing, exists := tf[key]
 	if !exists {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrFlagNotFound, msgFlagNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(flagInternalKeyQuotedFmt, key))))
@@ -139,12 +187,16 @@ func (r *FlagRepository) Toggle(_ context.Context, key string, expectedVersion i
 // List returns flags sorted and paginated according to params.
 // It applies keyset cursor filtering and returns up to FetchLimit() rows
 // for N+1 hasMore detection.
-func (r *FlagRepository) List(_ context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
+func (r *FlagRepository) List(_ context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.FeatureFlag, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	all := make([]*domain.FeatureFlag, 0, len(r.flags))
-	for _, f := range r.flags {
+	tf := r.flags[t] // nil-safe: ranging over nil map is a no-op
+	all := make([]*domain.FeatureFlag, 0, len(tf))
+	for _, f := range tf {
 		clone := *f
 		all = append(all, &clone)
 	}

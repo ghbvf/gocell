@@ -192,7 +192,6 @@ const (
 	ErrAuthLastAdminProtected Code = "ERR_AUTH_LAST_ADMIN_PROTECTED"
 
 	// Config-core cell error codes.
-	ErrConfigNotFound            Code = "ERR_CONFIG_NOT_FOUND"
 	ErrConfigDuplicate           Code = "ERR_CONFIG_DUPLICATE"
 	ErrConfigInvalidInput        Code = "ERR_CONFIG_INVALID_INPUT"
 	ErrConfigPublishInvalidInput Code = "ERR_CONFIG_PUBLISH_INVALID_INPUT"

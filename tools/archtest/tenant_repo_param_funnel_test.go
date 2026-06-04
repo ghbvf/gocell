@@ -1,10 +1,12 @@
-// tenant_repo_param_funnel_test.go — guards that every tenant-scoped accesscore
+// tenant_repo_param_funnel_test.go — guards that every tenant-scoped platform
 // repo interface method carries a tenant.TenantID positional parameter.
+// Enrolled repos: accesscore (RoleRepository, UserRepository) and configcore
+// (ConfigRepository, FlagRepository).
 //
 //   - INVARIANT: TENANT-REPO-PARAM-FUNNEL-01
 //   - INVARIANT: TENANT-REPO-CALLSITE-FUNNEL-01
 //
-// # What TENANT-REPO-PARAM-FUNNEL-01 guards (#1337 PR-2, Model A)
+// # What TENANT-REPO-PARAM-FUNNEL-01 guards (#1337 PR-2 / PR-2b, Model A)
 //
 // Tenant isolation in GoCell is enforced as a mandatory typed positional
 // parameter on the platform repo interfaces (route A — the only shape that can
@@ -18,15 +20,26 @@
 // position (not param[1]). Such a method type-checks fine but reopens the
 // "no tenant predicate / wrong-typed tenant" hole.
 //
-// The scanner asserts that every explicit method of the two accesscore repo
-// interfaces satisfies BOTH conditions, except an explicit allowlist:
+// The scanner asserts that every explicit method of the enrolled repo interfaces
+// satisfies BOTH conditions, except an explicit allowlist:
 //
 //  1. Param[0] is context.Context.
 //  2. Param[1] is exactly tenant.TenantID (go/types object identity — not a
 //     name-string match; alias-proof because aliased types resolve to the same
 //     *types.Named).
 //
-// # Carve-out allowlist (by-PK tenant-deriving reads)
+// # Enrolled interfaces
+//
+// accesscore ports (accesscorePortsPkg):
+//   - RoleRepository — no carve-out.
+//   - UserRepository — carve-out: GetByID (by-global-UUID-PK tenant-deriving).
+//
+// configcore ports (configcorePortsPkg):
+//   - ConfigRepository — carve-out: RepoReady (schema-existence probe, not a
+//     tenant-scoped data read).
+//   - FlagRepository — no carve-out.
+//
+// # Carve-out allowlist (by-PK tenant-deriving reads / schema probes)
 //
 //   - UserRepository.GetByID — looks up by the GLOBAL UUID primary key, which
 //     already uniquely identifies the row (hence its tenant); the predicate would
@@ -34,9 +47,13 @@
 //     caller (sessionrefresh — the refresh token / session row carry no tenant
 //     until PR-3) must stay callable. DB-layer RLS (PR-3) is the Hard backstop for
 //     this path once the refresh tenant carrier lands.
+//   - ConfigRepository.RepoReady — schema-existence probe (exercises
+//     config_entries + feature_flags table presence); not a tenant-scoped data
+//     read, so a tenant predicate is meaningless.
 //
 // RoleRepository has NO carve-out: a role id is unique only within a tenant, so
 // even a by-id read must be tenant-scoped.
+// FlagRepository has NO carve-out: flags are keyed by (tenant, key).
 //
 // # What TENANT-REPO-CALLSITE-FUNNEL-01 guards
 //
@@ -122,20 +139,33 @@ const (
 	// module rename updates exactly one place — never a bare literal.
 	tenantPkgPath      = PlatformModulePath + "/pkg/tenant"
 	accesscorePortsPkg = PlatformModulePath + "/cells/accesscore/internal/ports"
+	configcorePortsPkg = PlatformModulePath + "/cells/configcore/internal/ports"
 	// tenantRepoParamFixPkg is a relative load path for go/packages — NOT a
 	// platform import path — so it is intentionally not derived from PlatformModulePath.
 	tenantRepoParamFixPkg = "./tools/archtest/internal/tenantrepoparamfixture"
 )
 
-// tenantScopedRepoIfaces are the accesscore repo interfaces every (non-allowlisted)
-// method of which must carry a tenant.TenantID positional parameter.
-var tenantScopedRepoIfaces = []string{"RoleRepository", "UserRepository"}
+// tenantScopedRepoIfaces are the platform repo interfaces every (non-allowlisted)
+// method of which must carry a tenant.TenantID positional parameter. Each name
+// is looked up via Scope.Lookup in each enrolled ports package; if an interface
+// name is not present in a package the Lookup returns nil and the scanner
+// silently skips it — so the same list works correctly across both packages.
+var tenantScopedRepoIfaces = []string{
+	// accesscore ports (accesscorePortsPkg)
+	"RoleRepository",
+	"UserRepository",
+	// configcore ports (configcorePortsPkg)
+	"ConfigRepository",
+	"FlagRepository",
+}
 
-// tenantParamCarveOut is the by-PK tenant-deriving read allowlist (see file godoc).
-// Key is "<Interface>.<Method>".
+// tenantParamCarveOut is the by-PK tenant-deriving read and schema-probe
+// allowlist (see file godoc). Key is "<Interface>.<Method>".
 var tenantParamCarveOut = map[string]string{
 	"UserRepository.GetByID": "by-global-UUID-PK tenant-deriving read; sole tenant-less " +
 		"caller is sessionrefresh (no pre-auth tenant source until PR-3 RLS)",
+	"ConfigRepository.RepoReady": "healthz schema-existence probe (exercises config_entries + " +
+		"feature_flags table presence); not a tenant-scoped data read, so a tenant predicate is meaningless",
 }
 
 // isTenantIDType reports whether t is pkg/tenant.TenantID (alias-proof via the
@@ -234,9 +264,23 @@ func scanTenantRepoParam(
 	return diags, withTenant, seenMethods
 }
 
-// TestTenantRepoParamFunnel01 asserts every accesscore repo interface method
-// (minus the by-PK carve-out) carries a tenant.TenantID at param[1] (after ctx),
-// and that no carve-out entry is stale.
+// enrolledPortsPkgs is the closed set of ports packages whose repo interfaces
+// are enrolled in TENANT-REPO-PARAM-FUNNEL-01. The scanner runs for any Pass
+// whose package path is in this set; other packages are skipped. Each enrolled
+// package declares a subset of tenantScopedRepoIfaces — Scope.Lookup silently
+// returns nil for interfaces not declared in a given package, so the same
+// interface list works across all enrolled packages without filtering.
+var enrolledPortsPkgs = map[string]struct{}{
+	accesscorePortsPkg: {},
+	configcorePortsPkg: {},
+}
+
+// TestTenantRepoParamFunnel01 asserts every enrolled platform repo interface
+// method (minus the carve-out allowlist) carries a tenant.TenantID at param[1]
+// (after ctx), and that no carve-out entry is stale.
+//
+// Enrolled ports packages: accesscore (RoleRepository, UserRepository) and
+// configcore (ConfigRepository, FlagRepository).
 func TestTenantRepoParamFunnel01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -248,7 +292,10 @@ func TestTenantRepoParamFunnel01(t *testing.T) {
 		allSeen         = map[string]struct{}{}
 	)
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
-		if !p.Typed() || p.Pkg == nil || p.Pkg.Path() != accesscorePortsPkg {
+		if !p.Typed() || p.Pkg == nil {
+			return nil
+		}
+		if _, enrolled := enrolledPortsPkgs[p.Pkg.Path()]; !enrolled {
 			return nil
 		}
 		d, withTenant, seen := scanTenantRepoParam(p, tenantScopedRepoIfaces, tenantParamCarveOut)
@@ -264,7 +311,8 @@ func TestTenantRepoParamFunnel01(t *testing.T) {
 	// regression would make this test vacuously pass).
 	if len(allSeen) == 0 {
 		diags = append(diags, Diagnostic{Message: "TENANT-REPO-PARAM-FUNNEL-01: scanned zero repo interface methods — " +
-			"scanner regressed or accesscore ports package path changed (expected " + accesscorePortsPkg + ")"})
+			"scanner regressed or enrolled ports package paths changed (expected " +
+			accesscorePortsPkg + " and " + configcorePortsPkg + ")"})
 	}
 	if totalWithTenant == 0 {
 		diags = append(diags, Diagnostic{Message: "TENANT-REPO-PARAM-FUNNEL-01: zero methods carry a tenant.TenantID " +

@@ -102,6 +102,19 @@ func (r Evaluate403ErrorResponse) visitEvaluateResponse(ctx context.Context, w h
 	return nil
 }
 
+// Evaluate404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Evaluate404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Evaluate404ErrorResponse) visitEvaluateResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}
+
 // Evaluate413ErrorResponse renders an HTTP 413 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json

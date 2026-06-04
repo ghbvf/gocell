@@ -53,37 +53,37 @@ func TestFlagRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		t.Run("GetByKey/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.GetByKey(context.Background(), "dark-mode")
+			_, err := repo.GetByKey(context.Background(), testTenantA, "dark-mode")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Update/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.Update(context.Background(), "dark-mode", 1, true, 100, "desc")
+			_, err := repo.Update(context.Background(), testTenantA, "dark-mode", 1, true, 100, "desc")
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Delete/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.Delete(context.Background(), "dark-mode", 1)
+			_, err := repo.Delete(context.Background(), testTenantA, "dark-mode", 1)
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Toggle/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.Toggle(context.Background(), "dark-mode", 1, true)
+			_, err := repo.Toggle(context.Background(), testTenantA, "dark-mode", 1, true)
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Create/"+tc.name, func(t *testing.T) {
 			db := &mockDB{execErr: tc.scanErr}
 			repo := newFlagRepositoryFromDBTX(db)
-			err := repo.Create(context.Background(), &domain.FeatureFlag{ID: "flg-1", Key: "dark-mode"})
+			err := repo.Create(context.Background(), testTenantA, &domain.FeatureFlag{ID: "flg-1", Key: "dark-mode"})
 			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("List/Query/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryErr: tc.scanErr}
 			repo := newFlagRepositoryFromDBTX(db)
-			_, err := repo.List(context.Background(), query.ListParams{
+			_, err := repo.List(context.Background(), testTenantA, query.ListParams{
 				Sort: []query.SortColumn{{Name: "key", Direction: query.SortASC}},
 			})
 			assertCtxCancelErr(t, err, tc.scanErr)

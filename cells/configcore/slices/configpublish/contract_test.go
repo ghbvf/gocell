@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -42,7 +43,7 @@ func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testuti
 func seedContractEntry(repo *mem.ConfigRepository, value string) {
 	const key = "app.name"
 	now := time.Now()
-	_ = repo.Create(context.Background(), &domain.ConfigEntry{
+	_ = repo.Create(context.Background(), testPublishTenant, &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	})
@@ -95,7 +96,7 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
+		WithContext(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -112,7 +113,7 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	seedContractEntry(repo, "value")
 
 	// Publish first to create version 1 so rollback target exists.
-	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
+	_, err := svc.Publish(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr), "app.name")
 	require.NoError(t, err)
 
 	mux := newContractMux(svc)
@@ -130,7 +131,7 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1,"expectedVersion":1}`)).
-		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
+		WithContext(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -147,7 +148,7 @@ type errEnvelope struct {
 
 // TestHttpConfigPublishV1_Serve_NotFound exercises the 404 path declared in
 // http.config.publish.v1: publishing a key that does not exist returns 404 with
-// ERR_CONFIG_NOT_FOUND, validated against the contract's declared error schema.
+// ERR_CONFIG_REPO_NOT_FOUND, validated against the contract's declared error schema.
 func TestHttpConfigPublishV1_Serve_NotFound(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
@@ -157,19 +158,19 @@ func TestHttpConfigPublishV1_Serve_NotFound(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{key}", "no-such-key", 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
+		WithContext(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr))
 	mux.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 	// Typed funnel assertion required by POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01:
 	// every _NotFound test must call errcodetest.AssertWireCode with a typed errcode.Err*NotFound
-	// selector. The mem repo returns ErrConfigNotFound for missing keys (see service_test.go L299).
-	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrConfigNotFound)
+	// selector. The mem repo returns ErrConfigRepoNotFound for missing keys (see service_test.go).
+	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
 	var env errEnvelope
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
-	require.Equal(t, "ERR_CONFIG_NOT_FOUND", env.Error.Code,
-		"missing key must produce ERR_CONFIG_NOT_FOUND")
+	require.Equal(t, "ERR_CONFIG_REPO_NOT_FOUND", env.Error.Code,
+		"missing key must produce ERR_CONFIG_REPO_NOT_FOUND")
 }
 
 // TestHttpConfigPublishV1_Serve_Unauthorized exercises the real handler for
@@ -264,7 +265,7 @@ func TestEventConfigVersionPublishedV1Publish(t *testing.T) {
 	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "value")
 
-	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
+	_, err := svc.Publish(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr), "app.name")
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Publish must emit one outbox entry")
@@ -285,11 +286,11 @@ func TestEventConfigRollbackV1Publish_RollbackEmitsStateThenAudit(t *testing.T) 
 	seedContractEntry(repo, "v1")
 
 	// Publish first to create a version, then rollback
-	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
+	_, err := svc.Publish(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr), "app.name")
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	_, err = svc.Rollback(auth.TestContext("contract-admin", []string{"admin"}), "app.name", 1, 1)
+	_, err = svc.Rollback(ctxkeys.WithTenantID(auth.TestContext("contract-admin", []string{"admin"}), testPublishTenantStr), "app.name", 1, 1)
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 2, "Rollback must emit state-sync then audit outbox entries")
