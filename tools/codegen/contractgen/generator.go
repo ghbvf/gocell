@@ -4,12 +4,66 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
+
+// Error message prefixes for the two contract rendering entry points. Each names
+// a full error namespace: errPrefixGenerate covers every generate-side message
+// (Generate guards, scope selection, and per-artifact render in
+// generateOneContract); errPrefixRender covers every RenderContractArtifacts
+// message.
+const (
+	errPrefixGenerate = "contractgen generate: "
+	errPrefixRender   = "contractgen render artifacts: "
+)
+
+// artifactDef is one row of the contract kind × artifact matrix: a template, its
+// generated output file, and the contract kinds that emit it. contractArtifacts
+// (below) is the single source consumed by both generateOneContract (disk write)
+// and RenderContractArtifacts (in-memory); the human-readable table lives in
+// doc.go. Slice order is the emit/append order — RenderContractArtifacts returns
+// artifacts in this order (consumed by cellgen/generatedverify), so reordering
+// changes wire behavior and must regenerate goldens.
+type artifactDef struct {
+	template string   // e.g. "types.tmpl"
+	file     string   // generated output filename, e.g. "types_gen.go"
+	kinds    []string // contract kinds that emit this artifact
+}
+
+// word returns the artifact noun used in error messages (the file stem),
+// e.g. "types" for "types_gen.go".
+func (a artifactDef) word() string { return strings.TrimSuffix(a.file, "_gen.go") }
+
+// contractArtifacts is the kind × artifact matrix. webhook is intentionally
+// absent (zero artifacts by design); projection and grpc need no special-casing
+// — they are covered by the types/iface kind sets.
+var contractArtifacts = []artifactDef{
+	{"types.tmpl", "types_gen.go", []string{"http", "event", "command", "projection", "grpc", "saga"}},
+	{"iface.tmpl", "iface_gen.go", []string{"http", "event", "projection", "grpc", "saga"}},
+	{"handler.tmpl", "handler_gen.go", []string{"http"}},
+	{"spec.tmpl", "spec_gen.go", []string{"event"}},
+	{"subscription.tmpl", "subscription_gen.go", []string{"event"}},
+	{"projection.tmpl", "projection_gen.go", []string{"event"}},
+	{"saga.tmpl", "saga_gen.go", []string{"saga"}},
+	{"command.tmpl", "command_gen.go", []string{"command"}},
+}
+
+// artifactsForKind returns the artifacts emitted for a contract kind, in matrix
+// order. An unrecognized kind (including webhook) yields nil.
+func artifactsForKind(kind string) []artifactDef {
+	var out []artifactDef
+	for _, a := range contractArtifacts {
+		if slices.Contains(a.kinds, kind) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
 
 // Options controls Generate behavior. Mirrors cellgen.Options.
 type Options struct {
@@ -69,16 +123,16 @@ type CodegenArtifact struct {
 func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error) {
 	var res Result
 	if root == "" {
-		return res, fmt.Errorf("contractgen generate: root is empty")
+		return res, fmt.Errorf(errPrefixGenerate + "root is empty")
 	}
 	if p == nil {
-		return res, fmt.Errorf("contractgen generate: project is nil")
+		return res, fmt.Errorf(errPrefixGenerate + "project is nil")
 	}
 	if opts.Scope == nil {
-		return res, fmt.Errorf("contractgen generate: Scope is required; use ScopeAll{} for all contracts")
+		return res, fmt.Errorf(errPrefixGenerate + "Scope is required; use ScopeAll{} for all contracts")
 	}
 	if opts.ModulePath == "" {
-		return res, fmt.Errorf("contractgen generate: ModulePath is required (resolve from go.mod or --module-path)")
+		return res, fmt.Errorf(errPrefixGenerate + "ModulePath is required (resolve from go.mod or --module-path)")
 	}
 
 	contractIDs, err := selectContractIDsByScope(p, opts)
@@ -143,13 +197,9 @@ func checkGRPCProtoCollisions(root string, p *metadata.ProjectMeta) error {
 }
 
 // generateOneContract renders all artifacts for a single contract and writes
-// (or dry-runs / verifies) them to disk, appending outcomes to res.
-//
-// Cognitive complexity is intrinsic to the orchestrator: 5 contract kinds ×
-// dry-run/write/verify branches × per-artifact emit (types / iface / handler /
-// spec / subscription). Splitting would only push the same matrix into helpers.
-//
-//nolint:gocognit,cyclop,funlen // structural orchestration; see godoc above.
+// (or dry-runs / verifies) them to disk, appending outcomes to res. The kind ×
+// artifact matrix is driven by artifactsForKind (single source, shared with
+// RenderContractArtifacts).
 func generateOneContract(root string, p *metadata.ProjectMeta, contractID string, opts Options, res *Result) error {
 	// B.5: contract ID sanity — must not contain path separators or traversal sequences.
 	if strings.Contains(contractID, "..") || strings.ContainsAny(contractID, `/\`) {
@@ -187,70 +237,14 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 			"contractID", contractID)
 	}
 
-	// types_gen.go — always generated.
-	typesPath := filepath.Join(pkgDir, "types_gen.go")
-	errPfxTypes := "contractgen generate: render types " + contractID
-	if err := renderWriteContract(root, "types.tmpl", spec, typesPath, opts, res, errPfxTypes); err != nil {
-		return err
-	}
-
-	// iface_gen.go — generated for all kinds except command (Handler lives in
-	// command_gen.go; emitting iface_gen.go would create a duplicate Service
-	// interface conflict).
-	if spec.Kind != "command" {
-		ifacePath := filepath.Join(pkgDir, "iface_gen.go")
-		errPfxIface := "contractgen generate: render iface " + contractID
-		if err := renderWriteContract(root, "iface.tmpl", spec, ifacePath, opts, res, errPfxIface); err != nil {
-			return err
-		}
-	}
-
-	// handler_gen.go — only for kind=http.
-	if spec.Kind == "http" {
-		handlerPath := filepath.Join(pkgDir, "handler_gen.go")
-		errPfxHandler := "contractgen generate: render handler " + contractID
-		if err := renderWriteContract(root, "handler.tmpl", spec, handlerPath, opts, res, errPfxHandler); err != nil {
-			return err
-		}
-	}
-
-	// spec_gen.go + subscription_gen.go + projection_gen.go — only for kind=event.
-	if spec.Kind == "event" {
-		specPath := filepath.Join(pkgDir, "spec_gen.go")
-		errPfxSpec := "contractgen generate: render spec " + contractID
-		if err := renderWriteContract(root, "spec.tmpl", spec, specPath, opts, res, errPfxSpec); err != nil {
-			return err
-		}
-
-		subPath := filepath.Join(pkgDir, "subscription_gen.go")
-		errPfxSub := "contractgen generate: render subscription " + contractID
-		if err := renderWriteContract(root, "subscription.tmpl", spec, subPath, opts, res, errPfxSub); err != nil {
-			return err
-		}
-
-		projPath := filepath.Join(pkgDir, "projection_gen.go")
-		errPfxProj := "contractgen generate: render projection " + contractID
-		if err := renderWriteContract(root, "projection.tmpl", spec, projPath, opts, res, errPfxProj); err != nil {
-			return err
-		}
-	}
-
-	// saga_gen.go — only for kind=saga (typed Impl + BuildDefinition/Register).
-	if spec.Kind == "saga" {
-		sagaPath := filepath.Join(pkgDir, "saga_gen.go")
-		errPfxSaga := "contractgen generate: render saga " + contractID
-		if err := renderWriteContract(root, "saga.tmpl", spec, sagaPath, opts, res, errPfxSaga); err != nil {
-			return err
-		}
-	}
-
-	// command_gen.go — only for kind=command (DispatchID + typed Handler interface
-	// + Register + Dispatch). buildCommandSpec guarantees spec.Command is non-nil
-	// for any command that builds (it errors otherwise), so no nil guard here.
-	if spec.Kind == "command" {
-		commandPath := filepath.Join(pkgDir, "command_gen.go")
-		errPfxCommand := "contractgen generate: render command " + contractID
-		if err := renderWriteContract(root, "command.tmpl", spec, commandPath, opts, res, errPfxCommand); err != nil {
+	// Per-artifact emit, driven by the kind × artifact matrix. The applicable-kind
+	// rules (types always; iface except command; handler only http; spec /
+	// subscription / projection only event; saga only saga; command only command)
+	// live in contractArtifacts.
+	for _, a := range artifactsForKind(spec.Kind) {
+		path := filepath.Join(pkgDir, a.file)
+		errPrefix := errPrefixGenerate + "render " + a.word() + " " + contractID
+		if err := renderWriteContract(root, a.template, spec, path, opts, res, errPrefix); err != nil {
 			return err
 		}
 	}
@@ -294,20 +288,18 @@ func renderWriteContract(root, tmplName string, spec *ContractGenSpec, path stri
 // the real repo's go.mod (the render root may be a staging dir without a
 // go.mod, e.g. scaffold staging in cellgen/stage_render.go).
 //
-// Mirrors generateOneContract on the same kind × artifact matrix; the high
-// cognitive complexity is structural orchestration, not nested business logic.
-//
-//nolint:gocognit,cyclop,funlen // structural orchestration; see godoc above.
+// The kind × artifact matrix is driven by artifactsForKind (single source,
+// shared with generateOneContract).
 func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, modulePath string) ([]CodegenArtifact, error) {
 	if p == nil {
-		return nil, fmt.Errorf("contractgen render artifacts: project is nil")
+		return nil, fmt.Errorf(errPrefixRender + "project is nil")
 	}
 	if modulePath == "" {
-		return nil, fmt.Errorf("contractgen render artifacts: modulePath is required (resolve from go.mod or --module-path)")
+		return nil, fmt.Errorf(errPrefixRender + "modulePath is required (resolve from go.mod or --module-path)")
 	}
 	contract, ok := p.Contracts[contractID]
 	if !ok {
-		return nil, fmt.Errorf("contractgen render artifacts: contract %q not found", contractID)
+		return nil, fmt.Errorf(errPrefixRender+"contract %q not found", contractID)
 	}
 	if !contract.Codegen {
 		return nil, nil
@@ -328,153 +320,25 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))
 
+	// Per-artifact emit, driven by the kind × artifact matrix (contractArtifacts);
+	// the applicable-kind rules are shared with generateOneContract.
 	var out []CodegenArtifact
-
-	// types_gen.go
-	typesPath := filepath.Join(pkgDir, "types_gen.go")
-	typesContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-		TemplateName: "types.tmpl",
-		Templates:    templates,
-		Data:         spec,
-		Filename:     typesPath,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("contractgen render artifacts: %q types: %w", contractID, err)
-	}
-	typesRel, err := relFromRoot(root, typesPath)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, CodegenArtifact{Path: typesRel, Content: typesContent})
-
-	// iface_gen.go — generated for all kinds except command (Handler lives in
-	// command_gen.go; emitting iface_gen.go for command would create a duplicate
-	// Service interface conflict in the generated package).
-	if spec.Kind != "command" {
-		ifacePath := filepath.Join(pkgDir, "iface_gen.go")
-		ifaceContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-			TemplateName: "iface.tmpl",
+	for _, a := range artifactsForKind(spec.Kind) {
+		path := filepath.Join(pkgDir, a.file)
+		content, err := codegen.Render(modulePath, codegen.RenderOptions{
+			TemplateName: a.template,
 			Templates:    templates,
 			Data:         spec,
-			Filename:     ifacePath,
+			Filename:     path,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("contractgen render artifacts: %q iface: %w", contractID, err)
+			return nil, fmt.Errorf(errPrefixRender+"%q %s: %w", contractID, a.word(), err)
 		}
-		ifaceRel, err := relFromRoot(root, ifacePath)
+		rel, err := relFromRoot(root, path)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, CodegenArtifact{Path: ifaceRel, Content: ifaceContent})
-	}
-
-	// handler_gen.go — only for kind=http.
-	if spec.Kind == "http" {
-		handlerPath := filepath.Join(pkgDir, "handler_gen.go")
-		handlerContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-			TemplateName: "handler.tmpl",
-			Templates:    templates,
-			Data:         spec,
-			Filename:     handlerPath,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("contractgen render artifacts: %q handler: %w", contractID, err)
-		}
-		handlerRel, err := relFromRoot(root, handlerPath)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, CodegenArtifact{Path: handlerRel, Content: handlerContent})
-	}
-
-	// spec_gen.go + subscription_gen.go + projection_gen.go — only for kind=event.
-	if spec.Kind == "event" {
-		specPath := filepath.Join(pkgDir, "spec_gen.go")
-		specContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-			TemplateName: "spec.tmpl",
-			Templates:    templates,
-			Data:         spec,
-			Filename:     specPath,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("contractgen render artifacts: %q spec: %w", contractID, err)
-		}
-		specRel, err := relFromRoot(root, specPath)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, CodegenArtifact{Path: specRel, Content: specContent})
-
-		subPath := filepath.Join(pkgDir, "subscription_gen.go")
-		subContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-			TemplateName: "subscription.tmpl",
-			Templates:    templates,
-			Data:         spec,
-			Filename:     subPath,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("contractgen render artifacts: %q subscription: %w", contractID, err)
-		}
-		subRel, err := relFromRoot(root, subPath)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, CodegenArtifact{Path: subRel, Content: subContent})
-
-		projPath := filepath.Join(pkgDir, "projection_gen.go")
-		projContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-			TemplateName: "projection.tmpl",
-			Templates:    templates,
-			Data:         spec,
-			Filename:     projPath,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("contractgen render artifacts: %q projection: %w", contractID, err)
-		}
-		projRel, err := relFromRoot(root, projPath)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, CodegenArtifact{Path: projRel, Content: projContent})
-	}
-
-	// saga_gen.go — only for kind=saga.
-	if spec.Kind == "saga" {
-		sagaPath := filepath.Join(pkgDir, "saga_gen.go")
-		sagaContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-			TemplateName: "saga.tmpl",
-			Templates:    templates,
-			Data:         spec,
-			Filename:     sagaPath,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("contractgen render artifacts: %q saga: %w", contractID, err)
-		}
-		sagaRel, err := relFromRoot(root, sagaPath)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, CodegenArtifact{Path: sagaRel, Content: sagaContent})
-	}
-
-	// command_gen.go — only for kind=command (buildCommandSpec guarantees
-	// spec.Command is non-nil for any command that builds).
-	if spec.Kind == "command" {
-		commandPath := filepath.Join(pkgDir, "command_gen.go")
-		commandContent, err := codegen.Render(modulePath, codegen.RenderOptions{
-			TemplateName: "command.tmpl",
-			Templates:    templates,
-			Data:         spec,
-			Filename:     commandPath,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("contractgen render artifacts: %q command: %w", contractID, err)
-		}
-		commandRel, err := relFromRoot(root, commandPath)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, CodegenArtifact{Path: commandRel, Content: commandContent})
+		out = append(out, CodegenArtifact{Path: rel, Content: content})
 	}
 
 	return out, nil
@@ -515,10 +379,10 @@ func selectByContractList(p *metadata.ProjectMeta, ids []string) ([]string, erro
 	for _, id := range ids {
 		contract, ok := p.Contracts[id]
 		if !ok {
-			return nil, fmt.Errorf("contractgen generate: contract %q not found", id)
+			return nil, fmt.Errorf(errPrefixGenerate+"contract %q not found", id)
 		}
 		if !contract.Codegen {
-			return nil, fmt.Errorf("contractgen generate: contract %q has codegen=false", id)
+			return nil, fmt.Errorf(errPrefixGenerate+"contract %q has codegen=false", id)
 		}
 		out = append(out, id)
 	}

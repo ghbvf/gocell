@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,65 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
+
+// TestArtifactsForKind locks the kind × artifact matrix — the single source
+// (contractArtifacts) consumed by both generateOneContract (disk write) and
+// RenderContractArtifacts (in-memory). slices.Equal below is an exhaustive lock
+// (order AND membership): each row asserts both the emitted files in order and,
+// implicitly, the absence of every other artifact — so the command row also
+// pins iface_gen.go's exclusion. The order IS the emit/append order, and
+// RenderContractArtifacts returns artifacts in it (consumed by
+// cellgen/generatedverify), so reordering is a wire change. webhook and any
+// unknown kind emit zero artifacts.
+func TestArtifactsForKind(t *testing.T) {
+	tests := []struct {
+		kind  string
+		files []string
+	}{
+		{"http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
+		{"event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"}},
+		{"command", []string{"types_gen.go", "command_gen.go"}}, // no iface_gen.go by design
+		{"projection", []string{"types_gen.go", "iface_gen.go"}},
+		{"grpc", []string{"types_gen.go", "iface_gen.go"}},
+		{"saga", []string{"types_gen.go", "iface_gen.go", "saga_gen.go"}},
+		{"webhook", nil},
+		{"unknown-kind", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.kind, func(t *testing.T) {
+			var got []string
+			for _, a := range artifactsForKind(tc.kind) {
+				got = append(got, a.file)
+			}
+			if !slices.Equal(got, tc.files) {
+				t.Errorf("artifactsForKind(%q) files = %v, want %v", tc.kind, got, tc.files)
+			}
+		})
+	}
+}
+
+// TestContractArtifacts_NamingConvention locks the template↔file convention the
+// matrix relies on: template = <stem>.tmpl, file = <stem>_gen.go, word() =
+// <stem>. A future artifact that breaks this (a template whose output filename
+// diverges from its stem) is caught here, since word() and the generate-side
+// error prefix derive the artifact noun from file.
+func TestContractArtifacts_NamingConvention(t *testing.T) {
+	for _, a := range contractArtifacts {
+		stem := strings.TrimSuffix(a.file, "_gen.go")
+		if stem == a.file {
+			t.Errorf("artifact file %q does not end in _gen.go", a.file)
+		}
+		if want := stem + ".tmpl"; a.template != want {
+			t.Errorf("artifact %q template = %q, want %q", a.file, a.template, want)
+		}
+		if a.word() != stem {
+			t.Errorf("artifact %q word() = %q, want %q", a.file, a.word(), stem)
+		}
+		if len(a.kinds) == 0 {
+			t.Errorf("artifact %q has no applicable kinds", a.file)
+		}
+	}
+}
 
 // --- helpers ------------------------------------------------------------------
 
