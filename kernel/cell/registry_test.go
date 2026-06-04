@@ -19,6 +19,39 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// TestAuthRouteMeta_ListenerAffinity pins the path-prefix predicates that the
+// runtime router's listener-route affinity check delegates to: IsInternal
+// (/internal/v1/*) and IsAdmin (/admin/v1/*) are mutually exclusive and each is
+// false for the public surface.
+func TestAuthRouteMeta_ListenerAffinity(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path         string
+		wantInternal bool
+		wantAdmin    bool
+	}{
+		{"/api/v1/access/sessions", false, false},
+		{"/internal/v1/access/rbac", true, false},
+		{"/internal/v1", true, false},
+		{"/admin/v1/projection/ordercell/orders/rebuild", false, true},
+		{"/admin/v1", false, true},
+		{"/adminx/v1/foo", false, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			m := AuthRouteMeta{Method: http.MethodPost, Path: tc.path}
+			if got := m.IsInternal(); got != tc.wantInternal {
+				t.Errorf("IsInternal(%q) = %v, want %v", tc.path, got, tc.wantInternal)
+			}
+			if got := m.IsAdmin(); got != tc.wantAdmin {
+				t.Errorf("IsAdmin(%q) = %v, want %v", tc.path, got, tc.wantAdmin)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -759,4 +792,45 @@ func TestRegistry_Subscribe_SpecValidate_RejectsInvalidSpec(t *testing.T) {
 			assert.Empty(t, rec.Snapshot().Subscriptions, "rejected subscription must not accumulate")
 		})
 	}
+}
+
+// validGRPCSpecInternal returns a well-formed GRPCServiceSpec for in-package tests.
+func validGRPCSpecInternal(contractID string) GRPCServiceSpec {
+	return GRPCServiceSpec{
+		ContractID: contractID,
+		CellID:     "test-cell",
+		Listener:   PrimaryListener,
+		Register:   func() {}, // non-nil any; type check happens in runtime/grpc layer
+	}
+}
+
+// TestRegistrySnapshot_GRPCServices_DefensiveCopy verifies Snapshot().GRPCServices
+// is a defensive copy: mutating the returned slice must NOT corrupt the recorder's
+// internal grpcServices slice. This is an in-package test so it can observe the
+// SAME recorder's unexported field — an external test mutating one recorder's
+// snapshot and asserting on a second independent recorder would pass even if
+// Snapshot aliased the internal slice (the mutation could never reach the other
+// recorder regardless), making it vacuous.
+func TestRegistrySnapshot_GRPCServices_DefensiveCopy(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistryRecorder(nil, outbox.DurabilityDemo)
+	require.NoError(t, r.GRPCService(validGRPCSpecInternal("grpc.svc.v1")))
+	require.NoError(t, r.GRPCService(validGRPCSpecInternal("grpc.svc.v2")))
+
+	snap := r.Snapshot()
+	require.Len(t, snap.GRPCServices, 2)
+
+	// Mutate the snapshot's first element in-place.
+	snap.GRPCServices[0] = GRPCServiceSpec{ContractID: "CORRUPTED"}
+
+	// Assert 1: the mutation landed on the snapshot (non-vacuous check).
+	assert.Equal(t, "CORRUPTED", snap.GRPCServices[0].ContractID,
+		"mutation must be visible on the snapshot to confirm the test is non-vacuous")
+
+	// Assert 2: the SAME recorder's internal slice is untainted — proving Snapshot
+	// returned a copy, not an alias.
+	require.Len(t, r.grpcServices, 2)
+	assert.Equal(t, "grpc.svc.v1", r.grpcServices[0].ContractID,
+		"recorder's internal grpcServices[0] must not be corrupted by mutating the snapshot")
 }

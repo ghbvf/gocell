@@ -753,7 +753,7 @@ const (
 	// separately from cell-wide conflict signals.
 	ErrSagaDuplicateInstance Code = "ERR_SAGA_DUPLICATE_INSTANCE"
 	// ErrProjectionNotFound signals that the projection rebuild control-plane
-	// endpoint (POST /internal/v1/<cell>/projection/<name>/rebuild) was given a
+	// endpoint (POST /admin/v1/projection/<cell>/<name>/rebuild) was given a
 	// <cell>/<name> path that resolves to no registered projection Coordinator.
 	// Constructed with KindNotFound → HTTP 404.
 	ErrProjectionNotFound Code = "ERR_PROJECTION_NOT_FOUND"

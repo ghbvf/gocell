@@ -141,6 +141,29 @@ const (
 	maxManifestMatchesPerGlob = 50_000
 )
 
+// ReadManifestModulePaths reads the manifest at manifestPath from fsys and
+// returns its declared module disk paths (ManifestModule.Path), in declaration
+// order. It runs the same loadManifest validation (schema version, path safety,
+// singleton uniqueness), so a malformed manifest fails closed rather than
+// yielding a partial set.
+//
+// It is the exported accessor for the workspace's metadata-module set. Tooling
+// (the archtest workspace enumerator in tools/workspace) cross-checks this set
+// against go.work's `use` directives — every metadata module MUST be a Go module
+// the toolchain compiles (manifest.modules ⊆ go.work.use); a manifest module
+// absent from go.work is a drift bug surfaced fail-closed at archtest time.
+func ReadManifestModulePaths(fsys fs.FS, manifestPath string) ([]string, error) {
+	spec, err := loadManifest(fsys, manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, len(spec.Modules))
+	for i, m := range spec.Modules {
+		paths[i] = m.Path
+	}
+	return paths, nil
+}
+
 // loadManifest reads and decodes the manifest at manifestPath from fsys,
 // validating the schema version, module path safety, and singleton
 // uniqueness invariants.

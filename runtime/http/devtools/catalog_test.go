@@ -17,7 +17,7 @@ import (
 
 // minimalPkgGraph returns a small *kerneldepgraph.Graph for use in tests.
 func minimalPkgGraph() *kerneldepgraph.Graph {
-	return kerneldepgraph.FromNodes("github.com/ghbvf/gocell", []*kerneldepgraph.Node{
+	return kerneldepgraph.FromNodes([]string{"github.com/ghbvf/gocell"}, []*kerneldepgraph.Node{
 		{ID: "github.com/ghbvf/gocell/kernel/cell", Layer: "kernel", Imports: []string{}},
 	})
 }

@@ -9,6 +9,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 // loadMode is the packages.Load mode required to build a Graph. depgraph
@@ -37,10 +38,28 @@ type LoadOptions struct {
 	Dir string
 }
 
-// Load builds a Graph by running packages.Load against patterns. The
-// module path is auto-detected from the first loaded package's Module
-// field. Callers do not pass a module path.
+// Load builds a Graph by running packages.Load against patterns in single-module
+// mode (GOWORK=off): it loads one standalone module (the testdata/synth fixture,
+// or any caller-supplied Dir not in the repo go.work `use` set). The module set
+// is auto-detected from the loaded packages' Module fields. For a workspace-wide
+// graph spanning every go.work member, use [LoadWorkspace].
 func Load(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
+	return loadWithMode(packagesload.ModeModule, opts, patterns...)
+}
+
+// LoadWorkspace builds a Graph spanning every module matched by patterns under
+// the ambient go.work workspace (GOWORK on). Callers pass one `<importPath>/...`
+// pattern per workspace member (see tools/workspace.Modules); the module set is
+// auto-detected from the loaded packages' Module fields, so nested modules are
+// classified within their own module (LayerCells, not LayerUnknown) rather than
+// as unknown directories of the core module.
+func LoadWorkspace(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
+	return loadWithMode(packagesload.ModeWorkspace, opts, patterns...)
+}
+
+// loadWithMode is the shared body of Load / LoadWorkspace; mode selects the
+// GOWORK semantics (see tools/packagesload).
+func loadWithMode(mode packagesload.Mode, opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
 	cfg := &packages.Config{
 		Mode:  loadMode,
 		Tests: opts.IncludeTests,
@@ -49,7 +68,7 @@ func Load(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
 	if len(opts.BuildTags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(opts.BuildTags, ",")}
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	pkgs, err := packagesload.Load(mode, cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("packages.Load: %w", err)
 	}
@@ -66,22 +85,26 @@ func Load(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
 			return nil, fmt.Errorf("packages.Load: package %q: %w", p.PkgPath, p.Errors[0])
 		}
 	}
-	module := detectModule(pkgs)
-	if module == "" {
-		return nil, errors.New("module path not detected; load with NeedModule and ensure go.mod exists")
+	modules := detectModules(pkgs)
+	if len(modules) == 0 {
+		return nil, errors.New("module path(s) not detected; load with NeedModule and ensure go.mod exists")
 	}
-	return FromPackages(module, pkgs), nil
+	return FromPackages(modules, pkgs), nil
 }
 
-// FromPackages builds a Graph from already-loaded packages. module must be
-// the bare module path (e.g. "github.com/ghbvf/gocell"). It is the
-// injection point for callers that share a packages.Load with another
-// consumer; archtest uses this to reuse typeseval.SharedResolver's cached
-// load instead of running packages.Load twice per test run.
+// FromPackages builds a Graph from already-loaded packages classified against
+// the given module set. modules is the set of module import paths the graph
+// spans (one element for a single-module load; every workspace member for a
+// multi-module load). It is the injection point for callers that share a
+// packages.Load with another consumer; archtest uses this to reuse
+// typeseval.SharedResolver's cached load instead of running packages.Load twice
+// per test run — passing the workspace module set from tools/workspace.Modules
+// (its own load omits NeedModule, so it cannot detect the set from packages).
 //
 // Only structural fields (PkgPath, Imports, ID for test-variant filtering)
 // are read; pkgs is not retained after the call returns.
-func FromPackages(module string, pkgs []*packages.Package) *kerneldepgraph.Graph {
+func FromPackages(modules []string, pkgs []*packages.Package) *kerneldepgraph.Graph {
+	cls := kerneldepgraph.NewClassifier(modules)
 	nodes := make([]*kerneldepgraph.Node, 0, len(pkgs))
 	for _, p := range pkgs {
 		if p == nil || p.PkgPath == "" {
@@ -96,9 +119,9 @@ func FromPackages(module string, pkgs []*packages.Package) *kerneldepgraph.Graph
 		}
 		n := &kerneldepgraph.Node{
 			ID:      p.PkgPath,
-			Layer:   kerneldepgraph.LayerOf(module, p.PkgPath),
-			CellID:  kerneldepgraph.CellOf(module, p.PkgPath),
-			SliceID: kerneldepgraph.SliceOf(module, p.PkgPath),
+			Layer:   cls.Layer(p.PkgPath),
+			CellID:  cls.Cell(p.PkgPath),
+			SliceID: cls.Slice(p.PkgPath),
 		}
 		n.Imports = make([]string, 0, len(p.Imports))
 		for imp := range p.Imports {
@@ -107,20 +130,31 @@ func FromPackages(module string, pkgs []*packages.Package) *kerneldepgraph.Graph
 		sort.Strings(n.Imports)
 		nodes = append(nodes, n)
 	}
-	g := kerneldepgraph.FromNodes(module, nodes)
+	g := kerneldepgraph.FromNodes(modules, nodes)
 	prod, test := collectImporters(pkgs)
 	kerneldepgraph.MarkTestOnly(g, prod, test)
 	return g
 }
 
-// detectModule returns the first non-empty Module.Path from pkgs, or "".
-func detectModule(pkgs []*packages.Package) string {
+// detectModules returns the distinct non-empty Module.Path values across pkgs,
+// sorted for determinism. Because the load patterns match only workspace
+// members (never their third-party dependencies), this yields exactly the
+// workspace module set.
+func detectModules(pkgs []*packages.Package) []string {
+	seen := make(map[string]struct{})
+	var mods []string
 	for _, p := range pkgs {
-		if p != nil && p.Module != nil && p.Module.Path != "" {
-			return p.Module.Path
+		if p == nil || p.Module == nil || p.Module.Path == "" {
+			continue
 		}
+		if _, dup := seen[p.Module.Path]; dup {
+			continue
+		}
+		seen[p.Module.Path] = struct{}{}
+		mods = append(mods, p.Module.Path)
 	}
-	return ""
+	sort.Strings(mods)
+	return mods
 }
 
 // collectImporters partitions all import edges in pkgs into production-side

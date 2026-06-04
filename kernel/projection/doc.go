@@ -29,9 +29,16 @@
 //     never Coordinator.Subscribe (raw infra may not reach cell code).
 //   - PR-04b: cellgen kind:projection derivation of reg.RegisterProjection.
 //   - PR-04c: production journal-backed Cursor + ReplaySource.
-//   - PR-04e: HTTP rebuild endpoint (POST /internal/v1/<cell>/projection/
-//     <name>/rebuild) — deferred until a host cell exists (a platform-level
-//     active contract with no cell impl would trip DEAD-CONTRACT-01).
+//   - PR-04e (landed; migrated to the operator admin plane by #1505): the
+//     framework-owned HTTP rebuild endpoint is POST
+//     /admin/v1/projection/<cell>/<name>/rebuild on the loopback
+//     cell.AdminListener, gated by an auth.AuthOperator operator-credential
+//     ListenerAuth (no caller-cell allowlist). It was originally framed for the
+//     InternalListener (POST /internal/v1/<cell>/projection/<name>/rebuild,
+//     service-token + caller-cell); #1505 moved it because a rebuild is an
+//     operator→system action, not cell→cell (see ADR 202606041200-1505 and
+//     202605261620 §Amendment 2026-06-04). It stays a framework-owned RouteGroup
+//     (no contract.yaml, never trips DEAD-CONTRACT-01).
 //
 // Subscribe's frozen forward signature (projectionID moved to NewCoordinator
 // in PR-03):

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
 )
 
 // errDirFile implements fs.File and fs.ReadDirFile, returning error from ReadDir.
@@ -121,14 +122,6 @@ func TestExpectedVersion_SyntheticFS(t *testing.T) {
 			wantMax: 1,
 		},
 		{
-			name: "files without numeric prefix are ignored",
-			files: map[string][]byte{
-				"create_foo.sql":    []byte("-- up"),
-				"002_something.sql": []byte("-- up"),
-			},
-			wantMax: 2,
-		},
-		{
 			name: "subdirectory entries are skipped",
 			files: map[string][]byte{
 				"subdir/nested.sql": []byte("-- up"),
@@ -155,17 +148,19 @@ func TestExpectedVersion_SyntheticFS(t *testing.T) {
 // TestVerifyExpectedVersion — unit tests for the validation guard
 // ---------------------------------------------------------------------------
 
-// TestVerifyExpectedVersion_InvalidTableName verifies that an invalid SQL
-// identifier in the tableName argument is rejected before any DB interaction.
-func TestVerifyExpectedVersion_InvalidTableName(t *testing.T) {
+// TestVerifyExpectedVersion_InvalidNamespace verifies that an invalid
+// migration.Namespace is rejected before any DB interaction. The exported API
+// takes a typed Namespace (not a free table string), so the table can never be
+// invalid for a valid namespace — the only fail path is an invalid namespace.
+func TestVerifyExpectedVersion_InvalidNamespace(t *testing.T) {
 	tests := []struct {
-		name      string
-		tableName string
+		name string
+		ns   migration.Namespace
 	}{
-		{name: "semicolon injection", tableName: "schema_migrations; DROP TABLE users"},
-		{name: "dash in name", tableName: "schema-migrations"},
-		{name: "space in name", tableName: "schema migrations"},
-		{name: "leading digit", tableName: "1_schema_migrations"},
+		{name: "empty", ns: migration.Namespace("")},
+		{name: "dash conversion-literal escape", ns: migration.Namespace("schema-migrations")},
+		{name: "space", ns: migration.Namespace("schema migrations")},
+		{name: "leading digit", ns: migration.Namespace("1pay")},
 	}
 
 	fsys := fstest.MapFS{
@@ -174,14 +169,29 @@ func TestVerifyExpectedVersion_InvalidTableName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// VerifyExpectedVersion validates tableName before opening any DB connection.
-			err := VerifyExpectedVersion(context.Background(), nil, fsys, tc.tableName)
-			require.Error(t, err, "invalid tableName should return error")
+			// ns.Validate runs before opening any DB connection (pool=nil proves it).
+			err := VerifyExpectedVersion(context.Background(), nil, fsys, tc.ns)
+			require.Error(t, err, "invalid namespace should return error")
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec, "error should be an errcode.Error")
-			assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
-				"error code should be ErrValidationFailed")
+			assert.Equal(t, ErrAdapterPGSchemaMismatch, ec.Code)
 		})
+	}
+}
+
+// TestVerifyExpectedVersionForTable_InvalidTableName verifies the unexported
+// in-package escape hatch still rejects an invalid table identifier (production
+// reaches it only via VerifyExpectedVersion's trackingTableFor(ns)).
+func TestVerifyExpectedVersionForTable_InvalidTableName(t *testing.T) {
+	fsys := fstest.MapFS{
+		"001_create.sql": &fstest.MapFile{Data: []byte("-- +goose Up")},
+	}
+	for _, tbl := range []string{"schema_migrations; DROP TABLE users", "schema-migrations", "1_schema_migrations"} {
+		err := verifyExpectedVersionForTable(context.Background(), nil, fsys, tbl)
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 	}
 }
 
@@ -221,19 +231,34 @@ func TestExpectedVersion_ReadDirError(t *testing.T) {
 	assert.ErrorIs(t, err, sentinel, "original error must be wrapped")
 }
 
-// TestExpectedVersion_OverflowVersionIgnored verifies that a migration file
-// with a numeric prefix too large for int64 is silently skipped (ParseInt
-// overflow → parseErr != nil → continue).
-func TestExpectedVersion_OverflowVersionIgnored(t *testing.T) {
-	// 99999999999999999999 overflows int64.
-	fsys := fstest.MapFS{
-		"99999999999999999999_too_big.sql": &fstest.MapFile{Data: []byte("-- up")},
-		"003_normal.sql":                   &fstest.MapFile{Data: []byte("-- up")},
+// TestExpectedVersion_RejectsNonGooseParseable verifies the STRICT behavior
+// (#1089 / codex C2): a top-level .sql whose name goose cannot derive a version
+// from is rejected fail-fast (naming the file), NOT silently skipped — so a
+// malformed/misnamed external-cell migration cannot vanish from ExpectedVersion
+// (and thus VerifyAll) while goose's collector also ignores it.
+func TestExpectedVersion_RejectsNonGooseParseable(t *testing.T) {
+	tests := []struct {
+		name    string
+		badFile string
+	}{
+		{name: "no numeric prefix", badFile: "create_foo.sql"},
+		{name: "namespace-prefixed", badFile: "payment_001.sql"},
+		{name: "int64 overflow prefix", badFile: "99999999999999999999_too_big.sql"},
 	}
-	v, err := ExpectedVersion(fsys)
-	require.NoError(t, err)
-	assert.Equal(t, int64(3), v,
-		"overflow version must be skipped; normal max must be returned")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				tc.badFile:       &fstest.MapFile{Data: []byte("-- up")},
+				"003_normal.sql": &fstest.MapFile{Data: []byte("-- up")},
+			}
+			_, err := ExpectedVersion(fsys)
+			require.Error(t, err, "malformed migration filename must be rejected, not skipped")
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, ErrAdapterPGSchemaMismatch, ec.Code)
+			assert.Contains(t, err.Error(), tc.badFile, "error must name the offending file")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -247,9 +272,9 @@ func TestVerifyExpectedVersion_ExpectedVersionError(t *testing.T) {
 	sentinel := errors.New("disk I/O error")
 	fsys := readDirErrFS{err: sentinel}
 
-	// Valid table name → passes validateIdentifier, then fails at ExpectedVersion.
-	// pool=nil is intentional: we must NOT reach stdlib.OpenDBFromPool.
-	err := VerifyExpectedVersion(context.Background(), nil, fsys)
+	// Valid namespace → passes ns.Validate + table validateIdentifier, then fails
+	// at ExpectedVersion. pool=nil is intentional: we must NOT reach stdlib.OpenDBFromPool.
+	err := VerifyExpectedVersion(context.Background(), nil, fsys, migration.PlatformNamespace)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "schema_guard: compute expected version",
 		"error must include context prefix")

@@ -47,8 +47,9 @@ const grpcTestBufSize = 1024 * 1024
 
 // buildAdapterServer constructs an adapters/grpc.Server with the full unary
 // interceptor chain wired (as the composition root would), registering the
-// caller-supplied services. authPublic, when non-nil, marks methods exempt from
-// the auth interceptor so RPCs can be issued without a bearer token.
+// caller-supplied services via the Form B Registrar path. authPublic, when
+// non-nil, marks methods exempt from the auth interceptor so RPCs can be issued
+// without a bearer token.
 func buildAdapterServer(
 	t *testing.T,
 	authPublic func(fullMethod string) bool,
@@ -72,7 +73,16 @@ func buildAdapterServer(
 	})
 	require.NoError(t, err)
 	if register != nil {
-		register(srv.ServiceRegistrar())
+		// Register via Form B callback using a synthetic spec (grpc_listener_test
+		// plays the composition-root role; it may import adapters/grpc and call
+		// Registrar() directly — identical to how cmd/ would wire things pre-cell).
+		spec := cell.GRPCServiceSpec{
+			ContractID: "grpc.listener.test.v1",
+			CellID:     "_listener-test",
+			Listener:   cell.PrimaryListener,
+			Register:   register,
+		}
+		require.NoError(t, srv.Registrar().Register(spec))
 	}
 	return srv
 }
@@ -121,6 +131,12 @@ type stubGRPCServer struct{}
 
 func (stubGRPCServer) Serve(context.Context, net.Listener) error { return nil }
 func (stubGRPCServer) Close(context.Context) error               { return nil }
+func (stubGRPCServer) Registrar() GRPCServiceRegistrar           { return &noopGRPCServiceRegistrar{} }
+
+// noopGRPCServiceRegistrar is a no-op GRPCServiceRegistrar for config-validation tests.
+type noopGRPCServiceRegistrar struct{}
+
+func (n *noopGRPCServiceRegistrar) Register(_ cell.GRPCServiceSpec) error { return nil }
 
 // --- Case 1: phase0 fail-fast on nil server -------------------------------
 
@@ -134,7 +150,7 @@ func TestWithGRPCListener_NilServer_Phase0FailFast(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := New(clock.Real(), WithGRPCListener(tc.server, ":0"))
+			b := New(clock.Real(), WithGRPCListener(cell.PrimaryListener, tc.server, ":0"))
 			err := b.Run(context.Background())
 			require.Error(t, err)
 			assert.ErrorContains(t, err, string(errcode.ErrGRPCServerMissing),
@@ -154,7 +170,7 @@ func TestWithGRPCListener_HappyPath_ServeThenGracefulStop(t *testing.T) {
 		clock.Real(),
 		WithAssembly(asm),
 		healthListenerOpt(t),
-		WithGRPCListener(srv, ":0", WithGRPCListenerNet(lis)),
+		WithGRPCListener(cell.PrimaryListener, srv, ":0", WithGRPCListenerNet(lis)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -195,7 +211,7 @@ func TestBootstrap_HTTPAndGRPC_ConcurrentServe_ErrorPropagation(t *testing.T) {
 		clock.Real(),
 		WithAssembly(asm),
 		healthListenerOpt(t),
-		WithGRPCListener(srv, ":0", WithGRPCListenerNet(lis)),
+		WithGRPCListener(cell.PrimaryListener, srv, ":0", WithGRPCListenerNet(lis)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -221,8 +237,8 @@ func TestWithGRPCListener_TwoListeners_BothServeAndDrain(t *testing.T) {
 		clock.Real(),
 		WithAssembly(asm),
 		healthListenerOpt(t),
-		WithGRPCListener(buildAdapterServer(t, healthPublic, registerHealth), ":0", WithGRPCListenerNet(lisA)),
-		WithGRPCListener(buildAdapterServer(t, healthPublic, registerHealth), ":0", WithGRPCListenerNet(lisB)),
+		WithGRPCListener(cell.PrimaryListener, buildAdapterServer(t, healthPublic, registerHealth), ":0", WithGRPCListenerNet(lisA)),
+		WithGRPCListener(cell.InternalListener, buildAdapterServer(t, healthPublic, registerHealth), ":0", WithGRPCListenerNet(lisB)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -283,7 +299,7 @@ func TestGRPCDrain_BudgetExceeded_HardStop(t *testing.T) {
 		clock.Real(),
 		WithAssembly(asm),
 		healthListenerOpt(t),
-		WithGRPCListener(srv, ":0",
+		WithGRPCListener(cell.PrimaryListener, srv, ":0",
 			WithGRPCListenerNet(lis),
 			WithGRPCListenerShutdownGrace(testtime.D50ms),
 		),
@@ -338,7 +354,7 @@ func TestWithGRPCListener_BindFailure_DrainsHTTP(t *testing.T) {
 		clock.Real(),
 		WithAssembly(asm),
 		healthListenerOpt(t),
-		WithGRPCListener(srv, occupied.Addr().String()), // no WithGRPCListenerNet → net.Listen on occupied addr
+		WithGRPCListener(cell.PrimaryListener, srv, occupied.Addr().String()), // no WithGRPCListenerNet → net.Listen on occupied addr
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -359,23 +375,40 @@ func TestWithGRPCListener_BindFailure_DrainsHTTP(t *testing.T) {
 func TestWithGRPCListener_Phase0ConfigValidation(t *testing.T) {
 	cases := []struct {
 		name string
-		opt  Option
+		opts []Option
 		want string
 	}{
 		{
 			name: "negative_shutdown_grace",
-			opt:  WithGRPCListener(stubGRPCServer{}, ":0", WithGRPCListenerShutdownGrace(-testtime.D2s)),
+			opts: []Option{WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ":0", WithGRPCListenerShutdownGrace(-testtime.D2s))},
 			want: "negative shutdownGrace",
 		},
 		{
 			name: "empty_addr_no_net",
-			opt:  WithGRPCListener(stubGRPCServer{}, ""),
+			opts: []Option{WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, "")},
 			want: "non-empty addr or a pre-bound listener",
+		},
+		{
+			// F4: a zero ListenerRef can never be targeted by GRPCServiceSpec.Listener,
+			// so the cell's services would be silently dropped. Reject at phase0.
+			name: "zero_ref",
+			opts: []Option{WithGRPCListener(cell.ListenerRef{}, stubGRPCServer{}, ":0")},
+			want: "zero gRPC listener ref",
+		},
+		{
+			// F4: two WithGRPCListener calls sharing a ref make spec routing
+			// ambiguous; reject at phase0 rather than in phase7b after sockets bind.
+			name: "duplicate_ref",
+			opts: []Option{
+				WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ":0"),
+				WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ":0"),
+			},
+			want: "duplicate WithGRPCListener call for ref",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := New(clock.Real(), tc.opt)
+			b := New(clock.Real(), tc.opts...)
 			err := b.Run(context.Background())
 			require.Error(t, err)
 			assert.ErrorContains(t, err, tc.want)

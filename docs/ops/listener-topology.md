@@ -1,8 +1,12 @@
-# GoCell Three-Listener Topology and Deployment (PR-A14b / PR262)
+# GoCell Listener Topology and Deployment (PR-A14b / PR262 / #1505)
 
-GoCell runs three independent HTTP listeners. Each listener has a dedicated
-stdlib `*http.ServeMux` root and a typed `[]auth.ListenerAuth` chain — no
-route leaks between ports, no string-based auth dispatch.
+GoCell runs three **core** independent HTTP listeners — primary, internal, health
+— plus an **optional** operator admin listener (`cell.AdminListener`, #1505;
+declared only when an admin endpoint is wired, see [Admin Listener](#admin-listener-operator-control-plane-1505)).
+Each listener has a dedicated stdlib `*http.ServeMux` root and a typed
+`[]auth.ListenerAuth` chain — no route leaks between ports, no string-based auth
+dispatch. `cmd/corebundle` binds only the three core listeners; the admin
+listener is exercised by `examples/todoorder`.
 
 ## Topology Diagram
 
@@ -10,12 +14,21 @@ route leaks between ports, no string-based auth dispatch.
                         ┌───────────────────────────────────────────┐
 Internet / Edge         │              primary  :8080               │
      ──────────────────▶│  /api/v1/*   (JWT AuthMiddleware)         │
-                        │  404 on /internal/v1/* (hard-blocked)     │
+                        │  404 on /internal/v1/* and /admin/v1/*    │
+                        │       (hard-blocked, port isolation)      │
                         └───────────────────────────────────────────┘
 
                         ┌───────────────────────────────────────────┐
 Internal Network        │             internal  127.0.0.1:9090      │
  (VPC / pod-local) ────▶│  /internal/v1/*   (ServiceToken / mTLS)   │
+                        │  cell→cell; caller-cell allowlist         │
+                        │  404 on all other paths                   │
+                        └───────────────────────────────────────────┘
+
+                        ┌───────────────────────────────────────────┐
+Operator / Pipeline     │       admin  127.0.0.1:9093 (optional)    │
+ (loopback) ───────────▶│  /admin/v1/*   (AuthOperator basic-auth)  │
+                        │  operator→system; no caller-cell allowlist│
                         │  404 on all other paths                   │
                         └───────────────────────────────────────────┘
 
@@ -33,6 +46,7 @@ Kubelet / Prometheus    │              health  :9091                │
 | primary  | `:8080`             | `GOCELL_HTTP_PRIMARY_ADDR` |
 | internal | `127.0.0.1:9090`    | `GOCELL_HTTP_INTERNAL_ADDR` |
 | health   | `127.0.0.1:9091` local/dev default; use `:9091` for PodIP/Service probes | `GOCELL_HTTP_HEALTH_ADDR` |
+| admin    | `127.0.0.1:9093` (loopback; operator control-plane, optional — declared only when an admin endpoint is wired) | composition-root supplied (e.g. `127.0.0.1:9093` in the todoorder demo) |
 
 For full variable reference see `docs/ops/env-vars.md`.
 
@@ -250,6 +264,46 @@ rather than role-based policies:
 The `health` listener is reserved for framework-owned endpoints (`/healthz`,
 `/readyz`, `/metrics`). Cells must not declare routes on `cell.HealthListener`.
 
+### Admin Listener (operator control-plane, #1505)
+
+`cell.AdminListener` (`/admin/v1/*`) carries **operator→system** control-plane
+endpoints (an administrator or deployment pipeline triggers them) — distinct from
+the `internal` listener's **cell→cell** model. It is **optional**: declared only
+when an admin endpoint is wired.
+
+- **Auth**: an `auth.AuthOperator` operator-credential gate — HTTP Basic Auth over
+  env credentials `GOCELL_OPERATOR_ADMIN_USERNAME` / `GOCELL_OPERATOR_ADMIN_PASSWORD`,
+  with a per-IP rate limiter and constant-time comparison. There is **no
+  caller-cell allowlist** (operators have no caller cell). The **enforced** gate is
+  the operator credentials; a loopback bind is a recommended deployment posture
+  layered on top (defense in depth), **not framework-enforced** — a non-loopback
+  admin bind is a documented misconfiguration window, symmetric to the internal
+  listener's and tracked under the same backlog **#626**
+  (`BOOTSTRAP-INTERNAL-LOCAL-ONLY-FAIL-FAST-01`). The credentials are separate from
+  the per-cell `/api/v{N}/{cell}/setup/admin` bootstrap credentials
+  (`GOCELL_BOOTSTRAP_ADMIN_*`).
+- **Affinity (enforced at startup, both directions)**: an `/admin/v1/*` path must
+  be mounted on `AdminListener`, and `AdminListener` must carry only `/admin/v1/*`
+  paths. `AdminListener` must carry an `AuthOperator` (loopback alone is
+  insufficient); `AuthOperator` may appear only on `AdminListener` — all four are
+  bootstrap phase0 / router fail-fast checks.
+- **Wiring**:
+
+  ```go
+  bootstrap.WithListener(cell.AdminListener, "127.0.0.1:9093",
+      []kauth.ListenerAuth{operatorAuth}) // operatorAuth = kauth.NewAuthOperator(...)
+  ```
+
+- **Endpoints today**: `POST /admin/v1/projection/{cell}/{name}/rebuild`
+  (framework-owned; migrated from `/internal/v1/{cell}/projection/{name}/rebuild`
+  by #1505). An ops tool / deployment pipeline presents the operator Basic Auth
+  credentials to trigger a projection rebuild — `202` admitted (async) / `409`
+  already running / `404` unknown cell/projection.
+
+Design rationale + threat matrix:
+`docs/architecture/202606041200-1505-adr-operator-control-plane-auth.md` (and the
+projection lifecycle ADR `202605261620-...` §Amendment 2026-06-04).
+
 ## Deployment Boundaries
 
 The framework enforces one Hard invariant for the `/internal/v1/*` listener. Everything else operators do at deployment time — port mapping, bind address, NetworkPolicy — is defense-in-depth and lives in [Deployment Recommendations](#deployment-recommendations).
@@ -266,9 +320,10 @@ These are operator-side defense-in-depth practices. They are **not enforced by c
 
 | Recommendation | Consequence of violation | Code-side interception |
 |----------------|--------------------------|------------------------|
-| Map only the primary listener (`:8080`) through LB / Ingress. Never expose the internal or health port through `Service type=LoadBalancer` or an Ingress rule. | `/internal/v1/*` is reachable from the public internet, leaving ServiceToken as the last line of defense. | **None** — Kubernetes manifests live outside this repository; archtest cannot enforce. |
+| Map only the primary listener (`:8080`) through LB / Ingress. Never expose the internal, health, or admin port through `Service type=LoadBalancer` or an Ingress rule. | `/internal/v1/*` or `/admin/v1/*` is reachable from the public internet, leaving ServiceToken (internal) or the operator credential gate (admin) as the last line of defense. | **None** — Kubernetes manifests live outside this repository; archtest cannot enforce. |
 | Bind the internal listener to `127.0.0.1:9090` (default) or a VPC-only network. If `GOCELL_HTTP_INTERNAL_ADDR` is set to a non-loopback address (e.g. `:9090`, `0.0.0.0:9090`), wrap the workload in a NetworkPolicy restricting ingress to authorized caller pods. | Other pods / namespaces in the same cluster can reach `/internal/v1/*` directly, again relying on ServiceToken. | **None** — corebundle has no symmetric reachability check for the internal listener: `cmd/corebundle/shared_deps_validate.go::validateHealthReachability` covers the health bind, but no `validateInternalReachability` exists. The client-side defensive normalization at `cmd/corebundle/access_module.go::internalAddrToBaseURL` documents this misconfiguration window without closing it. The upgrade path is tracked under backlog `BOOTSTRAP-INTERNAL-LOCAL-ONLY-FAIL-FAST-01` (symmetric to `HEALTH_LOCAL_ONLY`). |
 | Bind the health listener to `:9091` for Pod-reachable probes (the default `127.0.0.1:9091` only works for same-netns access). Opt in to loopback in non-test deployments by setting `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1`. | Kubernetes `httpGet` liveness / readiness probes cannot reach the health endpoint. | **Already enforced** — corebundle refuses to start in `real` adapter mode when the health bind is loopback unless `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` is set. This is the template used by the `INTERNAL_LOCAL_ONLY` backlog item. |
+| Keep the admin listener (`cell.AdminListener`, `/admin/v1/*`, optional) bound to loopback (`127.0.0.1:9093`) — its operator control-plane is reached by an administrator or deployment pipeline, never by public or cell→cell traffic. A non-loopback admin bind is a documented misconfiguration window (symmetric to the internal listener). | `/admin/v1/*` operator endpoints (e.g. projection rebuild) are reachable beyond the operator boundary, leaving the operator credential gate (per-IP rate-limited Basic Auth) as the only defense. | **None** — loopback isolation is a deployment-side recommendation; the framework enforces operator-credential presence (`AuthOperator` affinity), not the bind address. |
 
 ## Docker Compose Deployment
 
@@ -303,7 +358,7 @@ If a sibling container needs to call `/internal/v1/*` (for example, a control-pl
 - **Shared netns**: declare the caller with `network_mode: "service:gocell"`; the caller reaches the listener via `http://127.0.0.1:9090` exactly like an in-container client.
 - **Bridge network**: change the bind to `GOCELL_HTTP_INTERNAL_ADDR=:9090`, then add an explicit Compose network and limit the caller list to authorized services; ServiceToken + caller-cell allowlist remains the fail-closed boundary (see [Deployment Boundaries](#deployment-boundaries)). Publishing the port on the host is still discouraged because Docker bridge isolation is the only thing keeping unrelated host processes off `/internal/v1/*`.
 
-When fronting the stack with a reverse proxy (nginx, Traefik, …), publish only port `8080`; the internal and health ports must never appear in proxy `upstream` blocks.
+When fronting the stack with a reverse proxy (nginx, Traefik, …), publish only port `8080`; the internal, health, and admin ports must never appear in proxy `upstream` blocks.
 
 ## Kubernetes NetworkPolicy
 

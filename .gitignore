@@ -18,8 +18,9 @@ dist/
 coverage.html
 coverage.txt
 
-# Go workspace (local dev only, not committed)
-go.work
+# Go workspace: go.work is committed (single-repo monorepo, all modules in-tree —
+# per go.dev/ref/mod#workspaces "modules developed exclusively together" exception).
+# go.work.sum stays local (single-module produces none; multi-module content is path-dependent).
 go.work.sum
 
 # IDE

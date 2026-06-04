@@ -40,6 +40,7 @@ type RuntimeOptionsFunc func(cells []cell.Cell) ([]bootstrap.Option, error)
 type Builder struct {
 	modules         []CellModule
 	expectedCellIDs []string
+	migrations      []MigrationRegistration
 }
 
 // New returns a new Builder whose composed cells must form exactly the
@@ -202,6 +203,9 @@ func (b *Builder) Build(
 		return nil, err
 	}
 	if err := b.validateClosedSet(); err != nil {
+		return nil, err
+	}
+	if err := b.validateMigrations(); err != nil {
 		return nil, err
 	}
 

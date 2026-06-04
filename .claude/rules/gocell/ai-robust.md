@@ -58,6 +58,7 @@
 - **input-struct field exclusion** — framework 收口的横切字段（build tag / 加载 mode）从公开 input struct 删除，使"业务自传"在 type system 上编译不可表达。只锁字面量值不锁 callee 是反模式（同 PR 新 const 即新绕过路径），必须 (callee resolve 到 loader 集) AND (arg 求值到禁止值集) 双锁，并同 PR 补 meta-archtest 锁 façade 旁路，否则只是 funnel 内 Hard / funnel 外 Soft。
 - **single sanctioned holder** — 仅一个 struct 可持有某 raw 基建字段时，用类型信息解析字段类型 + 断言宿主 struct 名 = 唯一许可名，无需 hand-maintained allowlist。包级可见性使包内绕过不可阻挡（上游 Medium）；闭环上游需 seal interface + 私有构造使包外不可表达跳过。
 - **sealed construction** — 让"包外构造该类型"在 Go 可见性层面编译不可表达：unexported envelope struct（包外不可构造、不可作 unmarshal target）或 `internal/` wrap 包（包外不可 import），公开 surface 只过领域类型 / `[]byte`。**任意名 re-export（alias / 同字段集 re-shape）是闭环必查点**——exact-name lookup 不足以拦住重新可构造路径。
+- **reflect schema freeze** — wire/schema struct 的字段集（字段数 + 逐字段 name / json-或-yaml tag / 类型 identity）经 `reflect` 枚举 + 冻结 tuple 清单精确比对锁定，捕获 Go 类型系统允许、但破坏 wire / 派生契约的 in-package drift（rename / reorder / retag / 增删字段）。与 **sealed construction** 正交并常并存于同一 wire 类型：后者封"包外能否构造该类型"，本范本封"字段集能否静默漂移"。Hard 源自 reflect 字段数 / 类型是运行时枚举的客观结构事实（非字符串锚点 / 非注释），任何 drift 必触发 tuple 比对失败 → 强制改动落到冻结清单这一显式审查检查点；派生字段经 tag 值（如 `yaml:"-"`）锁定其不可手写性。与 **codegen funnel + golden** 区别：本范本的冻结清单是测试内 reflect 枚举的手写 tuple，非生成源的字节 diff。
 - **codegen funnel + golden** — 见 §载体决策原则 #1：schema / marker / struct tag 单源 → 派生执行体 → regenerate-and-diff 字节级锁（上游 Hard）+ callsite 唯一性 / ban 手写等价 guard（下游 Hard）。
 
 ## archtest 文件命名

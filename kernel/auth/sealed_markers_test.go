@@ -27,6 +27,7 @@ func TestAuthPlanKind_DiscriminantParity(t *testing.T) {
 		{"AuthJWTFromAssembly", AuthJWTFromAssembly{}, AuthKindJWTFromAssembly},
 		{"AuthMTLS", AuthMTLS{}, AuthKindMTLS},
 		{"AuthServiceToken", AuthServiceToken{}, AuthKindServiceToken},
+		{"AuthOperator", AuthOperator{}, AuthKindOperator},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,6 +52,7 @@ func TestListenerAuthSeal_ExercisesMarker(t *testing.T) {
 		AuthJWTFromAssembly{},
 		AuthMTLS{},
 		AuthServiceToken{},
+		AuthOperator{},
 	}
 	for _, p := range plans {
 		p.listenerAuthOK() // no-op marker; the call is the coverage signal

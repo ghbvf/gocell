@@ -186,7 +186,7 @@ func TestIntegration_Migrator(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err, "NewMigrator should succeed")
 
 	t.Run("up", func(t *testing.T) {
@@ -373,7 +373,7 @@ func TestMigrator_Applies004_WithConcurrentlyIndexes(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_004")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_004")
 	require.NoError(t, err)
 
 	// First Up: applies all 5 migrations including 004.
@@ -424,7 +424,7 @@ func TestMigration004_StructuralAssertions(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_struct")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_struct")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
 
@@ -483,7 +483,7 @@ func TestMigration006_ConfigVersionsConfigIDIndex(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_006")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_006")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations including 006")
 
@@ -535,7 +535,7 @@ func TestMigrator_Up_RefusesIfInvalidIndexExists(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply all migrations so tables and indexes exist.
-	prep, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_guard_prep")
+	prep, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_guard_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "preparatory Up() must succeed")
 
@@ -555,7 +555,7 @@ func TestMigrator_Up_RefusesIfInvalidIndexExists(t *testing.T) {
 	// Construct a fresh migrator using the same pool (with invalid index present).
 	// Use a new tracking table so Up() attempts to run from scratch (pre-check
 	// fires before any migration runs).
-	migrator2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_guard_test")
+	migrator2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_guard_test")
 	require.NoError(t, err)
 
 	// Up() must return an error: refusing to migrate due to invalid indexes.
@@ -628,7 +628,7 @@ func TestMigrator_ConcurrentUp_NoRaceWithSessionLocker(t *testing.T) {
 	errs := make(chan error, N)
 	for range N {
 		go func() {
-			m, err := NewMigrator(pool, fixtureFS, tableName)
+			m, err := newMigratorForTable(pool, fixtureFS, tableName)
 			if err != nil {
 				errs <- err
 				return
@@ -694,7 +694,7 @@ func TestMigrator_NineBeforeTen_OrderRegression(t *testing.T) {
 	const tableName = "schema_migrations_seq910"
 	fixtureFS := sequenceFixtureFS_910()
 
-	m, err := NewMigrator(pool, fixtureFS, tableName)
+	m, err := newMigratorForTable(pool, fixtureFS, tableName)
 	require.NoError(t, err)
 	defer func() { _ = m.Close() }()
 
@@ -750,7 +750,7 @@ func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
 	}
 
 	const tableName = "schema_migrations_down_v0"
-	m, err := NewMigrator(pool, fixtureFS, tableName)
+	m, err := newMigratorForTable(pool, fixtureFS, tableName)
 	require.NoError(t, err)
 	defer func() { _ = m.Close() }()
 
@@ -782,7 +782,7 @@ func TestMigrator_Down_WithPermit_Succeeds(t *testing.T) {
 	// Apply migrations up to 012 so there is a migration to roll back.
 	// Migration 012 Down has no GUC SQL guard — permit is the only gate.
 	mfs := migrationsUpToFS(t, 12)
-	migrator, err := NewMigrator(pool, mfs, "schema_migrations_permit_down")
+	migrator, err := newMigratorForTable(pool, mfs, "schema_migrations_permit_down")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 012")
 
@@ -820,7 +820,7 @@ func TestMigrator_ForwardRebuild_EmptyTable_Up(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_fwd_empty")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_fwd_empty")
 	require.NoError(t, err)
 
 	// Fresh DB: all rebuild targets are empty/missing — Up() must succeed without permits.
@@ -844,7 +844,7 @@ func TestMigrator_ForwardRebuild_PopulatedTable_UpFailClosed(t *testing.T) {
 
 	// Apply migrations up through 011 (refresh_tokens exists and can be populated).
 	mfs011 := migrationsUpToFS(t, 11)
-	prep, err := NewMigrator(pool, mfs011, "schema_migrations_fwd_prep")
+	prep, err := newMigratorForTable(pool, mfs011, "schema_migrations_fwd_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 011 must succeed")
 
@@ -856,7 +856,7 @@ func TestMigrator_ForwardRebuild_PopulatedTable_UpFailClosed(t *testing.T) {
 	require.NoError(t, execErr, "must be able to insert a row into pre-012 refresh_tokens")
 
 	// Now create a migrator with the full FS so migration 012 is pending.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_fwd_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_fwd_prep")
 	require.NoError(t, err)
 
 	upErr := migrator.Up(ctx)
@@ -878,7 +878,7 @@ func TestMigrator_ForwardRebuild_PopulatedTable_WithPermit(t *testing.T) {
 
 	// Apply migrations up through 011.
 	mfs011 := migrationsUpToFS(t, 11)
-	prep, err := NewMigrator(pool, mfs011, "schema_migrations_permit_prep")
+	prep, err := newMigratorForTable(pool, mfs011, "schema_migrations_permit_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 011 must succeed")
 
@@ -890,7 +890,7 @@ func TestMigrator_ForwardRebuild_PopulatedTable_WithPermit(t *testing.T) {
 	require.NoError(t, execErr)
 
 	// ForwardRebuild with permit for migration 12 must succeed.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_permit_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_permit_prep")
 	require.NoError(t, err)
 
 	permit := mustAllowForwardRebuild(t, 12, "integration test: approved refresh_tokens v2 rebuild")
@@ -917,7 +917,7 @@ func TestMigrator_ForwardRebuild_MisconfiguredPermit(t *testing.T) {
 
 	// Fresh DB — no migrations applied yet, so version 999 cannot be a pending
 	// forward-rebuild (it does not exist in the FS at all).
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_misconfig")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_misconfig")
 	require.NoError(t, err)
 
 	permit := mustAllowForwardRebuild(t, 999, "misconfig test")
@@ -947,7 +947,7 @@ func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T
 
 	// Apply migrations up through 042 so audit_entries (from 020) exists.
 	mfs042 := migrationsUpToFS(t, 42)
-	prep, err := NewMigrator(pool, mfs042, "schema_migrations_043_prep")
+	prep, err := newMigratorForTable(pool, mfs042, "schema_migrations_043_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 042 must succeed")
 
@@ -962,7 +962,7 @@ func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T
 	require.NoError(t, execErr, "must be able to insert a row into pre-043 audit_entries")
 
 	// Up() must fail-closed: 043 is pending and audit_entries has rows.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_043_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_043_prep")
 	require.NoError(t, err)
 
 	upErr := migrator.Up(ctx)
@@ -975,7 +975,7 @@ func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T
 	assert.Equal(t, int64(43), migDetail.Value(), "migration detail value must be 43")
 
 	// ForwardRebuild with the correct permit must succeed.
-	migrator2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_043_prep")
+	migrator2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_043_prep")
 	require.NoError(t, err)
 
 	permit := mustAllowForwardRebuild(t, 43, "043 audit_entries v2 rebuild integration test")
@@ -1003,7 +1003,7 @@ func TestMigrator_ForwardRebuild_Migrations043And044_DualPermit(t *testing.T) {
 
 	// Apply migrations up through 042 so audit_entries and outbox_entries exist.
 	mfs042 := migrationsUpToFS(t, 42)
-	prep, err := NewMigrator(pool, mfs042, "schema_migrations_044_prep")
+	prep, err := newMigratorForTable(pool, mfs042, "schema_migrations_044_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 042 must succeed")
 
@@ -1026,7 +1026,7 @@ func TestMigrator_ForwardRebuild_Migrations043And044_DualPermit(t *testing.T) {
 	`, entryID)
 	require.NoError(t, outboxErr, "must be able to insert a row into pre-044 outbox_entries")
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_044_prep")
 	require.NoError(t, err)
 
 	// Up() without permits: must fail-closed.
@@ -1037,7 +1037,7 @@ func TestMigrator_ForwardRebuild_Migrations043And044_DualPermit(t *testing.T) {
 	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
 
 	// ForwardRebuild with only permit 43 must fail-closed (044 still needs one).
-	migrator2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_prep")
+	migrator2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_044_prep")
 	require.NoError(t, err)
 	permit43Only := mustAllowForwardRebuild(t, 43, "043 dual-test permit")
 	onlyPermit43Err := migrator2.ForwardRebuild(ctx, permit43Only)
@@ -1047,7 +1047,7 @@ func TestMigrator_ForwardRebuild_Migrations043And044_DualPermit(t *testing.T) {
 	assert.Equal(t, ErrAdapterPGMigrate, ec2.Code)
 
 	// ForwardRebuild with both permits must succeed.
-	migrator3, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_prep")
+	migrator3, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_044_prep")
 	require.NoError(t, err)
 	permit43 := mustAllowForwardRebuild(t, 43, "043 dual-test permit final")
 	permit44 := mustAllowForwardRebuild(t, 44, "044 outbox_entries principal dual-test permit")
@@ -1078,7 +1078,7 @@ func TestMigrator_TableHasRows_DBError_FailClosed(t *testing.T) {
 
 	// Apply migrations up through 011 so refresh_tokens exists and can be populated.
 	mfs011 := migrationsUpToFS(t, 11)
-	prep, err := NewMigrator(pool, mfs011, "schema_migrations_dbfail_prep")
+	prep, err := newMigratorForTable(pool, mfs011, "schema_migrations_dbfail_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 011 must succeed")
 
@@ -1093,7 +1093,7 @@ func TestMigrator_TableHasRows_DBError_FailClosed(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel() // immediately cancel
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_dbfail_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_dbfail_prep")
 	require.NoError(t, err)
 
 	// ForwardRebuild with cancelled context must fail — either due to context
@@ -1115,7 +1115,7 @@ func TestMigrator_ForwardRebuild_Migration044_EmptyTable_Up(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_empty")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_044_empty")
 	require.NoError(t, err)
 
 	// Fresh DB: all rebuild targets are empty/missing — Up() must succeed without permits.
@@ -1147,7 +1147,7 @@ func TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_UpFailClosed(t *te
 
 	// Apply migrations up through 043 (so outbox_entries exists post-043 TRUNCATE).
 	mfs043 := migrationsUpToFS(t, 43)
-	prep, err := NewMigrator(pool, mfs043, "schema_migrations_044_failclosed_prep")
+	prep, err := newMigratorForTable(pool, mfs043, "schema_migrations_044_failclosed_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 043 must succeed")
 
@@ -1161,7 +1161,7 @@ func TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_UpFailClosed(t *te
 	require.NoError(t, execErr, "must be able to insert a row into post-043 outbox_entries")
 
 	// Up() without permits: must fail-closed.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_failclosed_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_044_failclosed_prep")
 	require.NoError(t, err)
 
 	upErr := migrator.Up(ctx)
@@ -1186,7 +1186,7 @@ func TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_WithPermit(t *test
 
 	// Apply migrations up through 043.
 	mfs043 := migrationsUpToFS(t, 43)
-	prep, err := NewMigrator(pool, mfs043, "schema_migrations_044_permit_prep")
+	prep, err := newMigratorForTable(pool, mfs043, "schema_migrations_044_permit_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 043 must succeed")
 
@@ -1201,7 +1201,7 @@ func TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_WithPermit(t *test
 
 	// ForwardRebuild with only permit 44 must succeed — audit_entries is empty
 	// so migration 043 is not pending-dangerous (no rows → no permit needed).
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_permit_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_044_permit_prep")
 	require.NoError(t, err)
 
 	permit44 := mustAllowForwardRebuild(t, 44, "044 outbox_entries principal permit integration test")
@@ -1238,7 +1238,7 @@ func TestMigrator_ForwardRebuild_Migration050_EmptyTable_Up(t *testing.T) {
 
 	// Apply all migrations from scratch: all rebuild targets are empty/missing →
 	// Up() must succeed without any permit.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_empty")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_empty")
 	require.NoError(t, err)
 
 	require.NoError(t, migrator.Up(ctx),
@@ -1285,7 +1285,7 @@ func TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_UpFailClosed(t *tes
 	// Apply migrations up through 049 so users table exists (from migration 017)
 	// but migration 050 is still pending.
 	mfs049 := migrationsUpToFS(t, 49)
-	prep, err := NewMigrator(pool, mfs049, "schema_migrations_050_failclosed_prep")
+	prep, err := newMigratorForTable(pool, mfs049, "schema_migrations_050_failclosed_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 049 must succeed")
 
@@ -1301,7 +1301,7 @@ func TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_UpFailClosed(t *tes
 	require.NoError(t, execErr, "must be able to insert a row into pre-050 users table")
 
 	// Up() without permits: must fail-closed because users has rows.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_failclosed_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_failclosed_prep")
 	require.NoError(t, err)
 
 	upErr := migrator.Up(ctx)
@@ -1327,7 +1327,7 @@ func TestMigrator_ForwardRebuild_Migration050_DeclaredTargets(t *testing.T) {
 
 	// Empty DB → every migration is pending; collectPendingForwardRebuilds parses
 	// the +gocell annotations from each pending migration's Up section.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_targets")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_targets")
 	require.NoError(t, err)
 
 	pending, err := migrator.collectPendingForwardRebuilds(ctx)
@@ -1350,7 +1350,7 @@ func TestMigrator_ForwardRebuild_Migration050_PopulatedRoles_UpFailClosed(t *tes
 
 	// Apply through 049 so roles exists (migration 019) but 050 is still pending.
 	mfs049 := migrationsUpToFS(t, 49)
-	prep, err := NewMigrator(pool, mfs049, "schema_migrations_050_roles_failclosed")
+	prep, err := newMigratorForTable(pool, mfs049, "schema_migrations_050_roles_failclosed")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 049 must succeed")
 
@@ -1359,7 +1359,7 @@ func TestMigrator_ForwardRebuild_Migration050_PopulatedRoles_UpFailClosed(t *tes
 	_, execErr := pool.DB().Exec(ctx, `INSERT INTO roles (id, name) VALUES ('viewer', 'Viewer')`)
 	require.NoError(t, execErr, "must be able to insert a row into pre-050 roles table")
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_roles_failclosed")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_roles_failclosed")
 	require.NoError(t, err)
 
 	upErr := migrator.Up(ctx)
@@ -1402,7 +1402,7 @@ func TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_WithPermit(t *testi
 
 	// Apply migrations up through 049.
 	mfs049 := migrationsUpToFS(t, 49)
-	prep, err := NewMigrator(pool, mfs049, "schema_migrations_050_permit_prep")
+	prep, err := newMigratorForTable(pool, mfs049, "schema_migrations_050_permit_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "Up() through 049 must succeed")
 
@@ -1424,7 +1424,7 @@ func TestMigrator_ForwardRebuild_Migration050_PopulatedUsers_WithPermit(t *testi
 
 	// ForwardRebuild with permit 50 must succeed. The users target has rows;
 	// roles and role_assignments are empty so only one permit is needed.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_permit_prep")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_permit_prep")
 	require.NoError(t, err)
 
 	permit50 := mustAllowForwardRebuild(t, 50, "050 accesscore tenant rebuild integration test")

@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -72,7 +73,7 @@ func setupSharedDeviceRepoPG(t *testing.T) (*adapterpg.Pool, *adapterpg.TxManage
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
 	require.NoError(t, err)
 
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 

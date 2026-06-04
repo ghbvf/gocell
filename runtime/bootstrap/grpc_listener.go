@@ -18,14 +18,24 @@ import (
 	"net"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+// GRPCServiceRegistrar is a local alias for [cell.GRPCServiceRegistrar] (the
+// canonical definition in kernel/cell/grpc_service.go). The alias lets the
+// bootstrap-package [GRPCServer] interface and bootstrap-package tests name the
+// type without an additional import path; the canonical definition lives in
+// kernel/cell so both adapters/grpc and bootstrap can import it without an
+// import cycle.
+type GRPCServiceRegistrar = cell.GRPCServiceRegistrar
+
 // GRPCServer is the narrow lifecycle contract bootstrap needs from a gRPC
 // server. adapters/grpc.Server satisfies it (Serve serves a pre-bound listener;
-// Close gracefully drains in-flight RPCs bounded by the passed ctx). Defining it
-// here — rather than importing the adapter — keeps runtime/bootstrap free of any
-// adapters/ dependency (LAYER-03 / GRPC-ADAPTER-LAYER-01).
+// Close gracefully drains in-flight RPCs bounded by the passed ctx; Registrar
+// returns the cell-facing service registrar used by the drain in phase7b).
+// Defining it here — rather than importing the adapter — keeps runtime/bootstrap
+// free of any adapters/ dependency (LAYER-03 / GRPC-ADAPTER-LAYER-01).
 type GRPCServer interface {
 	// Serve serves RPCs on the pre-bound listener until ctx is canceled or the
 	// server stops (e.g. via Close). It blocks; bootstrap calls it in a goroutine.
@@ -33,11 +43,16 @@ type GRPCServer interface {
 	// Close initiates a graceful drain of in-flight RPCs bounded by ctx, hard
 	// stopping if the budget is exceeded. Idempotent.
 	Close(ctx context.Context) error
+	// Registrar returns the cell-facing service registrar. bootstrap calls
+	// Registrar().Register(spec) in phase7b for each GRPCServiceSpec drained from
+	// the cell snapshots, before grpcServeAll.
+	Registrar() GRPCServiceRegistrar
 }
 
 // grpcListenerConfig is the resolved per-gRPC-listener wiring captured by
 // WithGRPCListener and consumed by phase7b (serve) + phase10 stage2 (drain).
 type grpcListenerConfig struct {
+	ref       cell.ListenerRef // identity for routing cell GRPCServiceSpecs (GAP-1 PR-7)
 	server    GRPCServer
 	addr      string
 	net       net.Listener  // optional pre-bound socket (bufconn/test); nil → bootstrap binds addr
@@ -63,14 +78,20 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 }
 
 // WithGRPCListener declares a gRPC listener served on addr by the
-// composition-root-constructed server. The server must be non-nil — both
-// bare-nil and typed-nil are rejected at phase0 with ErrGRPCServerMissing
-// (strong-dependency wiring option, mirroring WithRateLimiter / WithManagedResource).
+// composition-root-constructed server (GAP-1 PR-7 [#1150]).
 //
-// The server is expected to already have its interceptor chain wired and its
-// services registered before being passed here. bootstrap drives Serve in
-// phase7b (in parallel with HTTP) and Close in phase10 stage2 (before LIFO
-// teardown, so in-flight RPCs drain while backends are alive).
+// ref identifies this listener so that cells can route their GRPCServiceSpecs
+// to the correct server via GRPCServiceSpec.Listener — fully symmetric with
+// HTTP's WithListener(ref, addr, authChain). ref must be non-zero and unique
+// across all WithGRPCListener calls; a zero or duplicate ref is rejected at
+// phase0 (validateGRPCListenerConfigs), mirroring the HTTP listener ref gate,
+// before any socket binds.
+//
+// The server must be non-nil — both bare-nil and typed-nil are rejected at
+// phase0 with ErrGRPCServerMissing (mirroring WithRateLimiter / WithManagedResource).
+// bootstrap drives Serve in phase7b (in parallel with HTTP) and Close in
+// phase10 stage2 (before LIFO teardown, so in-flight RPCs drain while backends
+// are alive).
 //
 // Composition-root wiring (cmd/ or examples/, which may import adapters/grpc and
 // runtime/grpc/interceptor — cells/ may not):
@@ -82,15 +103,19 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 //	    Addr: ":9000", TLS: tlsCfg,
 //	    ServerOptions: []grpc.ServerOption{chain},
 //	})
-//	// register services on srv.ServiceRegistrar() ...
-//	bootstrap.New(clk, bootstrap.WithGRPCListener(srv, ":9000"))
-func WithGRPCListener(server GRPCServer, addr string, opts ...GRPCListenerOption) Option {
+//	bootstrap.New(clk, bootstrap.WithGRPCListener(cell.PrimaryListener, srv, ":9000"))
+//
+// Cell services are drained from RegistrySnapshot.GRPCServices in phase7b
+// (after binding, before grpcServeAll) and registered via
+// server.Registrar().Register(spec) — the stopgap of pre-passing registered
+// services is replaced by this drain.
+func WithGRPCListener(ref cell.ListenerRef, server GRPCServer, addr string, opts ...GRPCListenerOption) Option {
 	return func(b *Bootstrap) {
 		if validation.IsNilInterface(server) {
 			b.grpcServerNil = true // sentinel → phase0 fail-fast
 			return
 		}
-		cfg := grpcListenerConfig{server: server, addr: addr}
+		cfg := grpcListenerConfig{ref: ref, server: server, addr: addr}
 		for _, o := range opts {
 			o(&cfg)
 		}

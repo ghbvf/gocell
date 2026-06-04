@@ -64,3 +64,4 @@ itself enforces.
 | `verify-shellcheck.sh` | `shellcheck` lints every `*.sh` under `scripts/ hack/ tests/`. Disabled lints `SC1090,SC1091,SC2230` mirror `kubernetes/kubernetes hack/verify-shellcheck.sh`. Replaces the regex-only `verify-shell-safety.sh` from PR #350 |
 | `verify-supply-chain-clean.sh` | drift detection: blocks `--exclude/--ignore/-skip` flags + `.govulncheckignore` / `.semgrepignore` / CodeQL `paths-ignore` workarounds |
 | `verify-unconditional-skip.sh` | no `t.Skip` without a runtime predicate |
+| `verify-workspace.sh` | `go.work` consistency: `go work edit -json` parses, `go work sync` drift over `go.work` + member `go.mod`/`go.sum`, per-module release build (`GOWORK=off go build ./...`). Module enumeration single-sourced from `go.work` via `hack/lib/modules.sh` (validated DiskPaths) |

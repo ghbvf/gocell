@@ -29,6 +29,7 @@ import (
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -214,7 +215,7 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 		closePool()
 		return nil, nil, 0, nil, fmt.Errorf("migrations fs: %w", err)
 	}
-	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, migration.PlatformNamespace)
 	if err != nil {
 		closePool()
 		return nil, nil, 0, nil, fmt.Errorf("migrator: %w", err)
@@ -225,7 +226,7 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 	}
 	logger.Info("iotdevice: migrations applied")
 
-	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, "schema_migrations"); err != nil {
+	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, migration.PlatformNamespace); err != nil {
 		closePool()
 		return nil, nil, 0, nil, fmt.Errorf("schema version verify: %w", err)
 	}

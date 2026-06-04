@@ -12,7 +12,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 ## 输入解析
-优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` + `gh api .../pulls/<N>/comments` 读评论提 findings）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
+优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` + `gh api .../pulls/<N>/comments` 读评论提 findings；**只取最新一轮**——按 createdAt 倒序，跳过自己贴的 `pm:ship`/`pm:fix`/`pm:pr-review` 留痕评论，只取最近一批 codex review/comment，**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
 
 > pm:ship / pm:fix / pm:pr-review 评论按 `.github/project-template/pr-comment.md` **无损格式**：每条 finding 带 `file:line` + `<details>` 证据/建议/根因/方案种子——**直接据此定位 + triage，不丢信息、不重新 review**（codex 评论缺 file:line 时再回退阶段 1 定位）。
 

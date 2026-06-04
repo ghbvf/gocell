@@ -79,6 +79,20 @@ func (b *Bootstrap) applyListenerAuthChain(
 				auth.WithServiceTokenNonceStore(p.Store),
 			))
 
+		case kauth.AuthOperator:
+			// Operator-credential gate for the admin control-plane. The plan
+			// carries kernel-level deps (raw credentials, kernel-projection
+			// OperatorRateLimiter, optional observer func); the concrete HTTP
+			// middleware is the same per-IP-rate-limit + Basic-Auth +
+			// constant-time-compare chain as the per-cell setup/admin endpoint.
+			// p.Limiter (kauth.OperatorRateLimiter) and p.OnAuthFail satisfy the
+			// runtime/auth parameter types by structural interface/func identity.
+			mws = append(mws, auth.NewBootstrapMiddleware(
+				auth.BootstrapCredentials{Username: p.Username, Password: p.Password},
+				p.Limiter,
+				p.OnAuthFail,
+			))
+
 		default:
 			// Sealed interface: this branch is theoretically unreachable.
 			return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,

@@ -42,6 +42,27 @@ func IsInternalHTTPPath(path string) bool {
 	return path == "/internal/v1" || strings.HasPrefix(path, "/internal/v1/")
 }
 
+// IsAdminHTTPPath reports whether path targets the admin HTTP listener
+// (operator control-plane) prefix /admin/v1. This is GoCell's single
+// admin-path predicate; the runtime router's listener-route affinity check and
+// kernel/cell.AuthRouteMeta.IsAdmin call it exclusively, so the prefix never
+// drifts across layers (mirrors IsInternalHTTPPath).
+//
+// Accepted:
+//
+//	/admin/v1
+//	/admin/v1/projection/ordercell/orders/rebuild
+//
+// Rejected (fail-closed):
+//
+//	""                    (empty string)
+//	"admin/v1/foo"        (missing leading /)
+//	"/adminx/v1/foo"      (prefix must be /admin/v1 or /admin/v1/, not /adminx)
+//	"/api/v1/foo"         (public listener, not admin)
+func IsAdminHTTPPath(path string) bool {
+	return path == "/admin/v1" || strings.HasPrefix(path, "/admin/v1/")
+}
+
 // IsPublicHTTPPath reports whether path targets the public-facing HTTP
 // listener (the internet-exposed API surface). The classification covers all
 // versioned public API prefixes — /api/vN — without locking to a specific

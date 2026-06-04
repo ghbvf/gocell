@@ -10,6 +10,7 @@ import (
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 const synthModule = "example.com/synth"
@@ -45,7 +46,9 @@ func loadSynthPackages(t *testing.T, includeTests bool) []*packages.Package {
 		Dir:   dir,
 		Tests: includeTests,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	// ModeModule (GOWORK=off): testdata/synth is a standalone module not in the
+	// repo go.work `use` set. Mirrors depgraph.Load.
+	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, "./...")
 	if err != nil {
 		t.Fatalf("packages.Load: %v", err)
 	}
@@ -55,8 +58,8 @@ func loadSynthPackages(t *testing.T, includeTests bool) []*packages.Package {
 func TestLoad_AutoDetectsModule(t *testing.T) {
 	t.Parallel()
 	g := loadSynth(t, false)
-	if g.Module != synthModule {
-		t.Errorf("Module = %q, want %q", g.Module, synthModule)
+	if len(g.Modules) != 1 || g.Modules[0] != synthModule {
+		t.Errorf("Modules = %v, want [%q]", g.Modules, synthModule)
 	}
 }
 
@@ -232,10 +235,10 @@ func TestLoad_RejectsMalformedPattern(t *testing.T) {
 func TestFromPackages_ExplicitModuleOverride(t *testing.T) {
 	t.Parallel()
 	pkgs := loadSynthPackages(t, false)
-	rebuilt := depgraph.FromPackages("forced.example/different", pkgs)
-	if rebuilt.Module != "forced.example/different" {
-		t.Errorf("FromPackages module override: got %q, want %q",
-			rebuilt.Module, "forced.example/different")
+	rebuilt := depgraph.FromPackages([]string{"forced.example/different"}, pkgs)
+	if len(rebuilt.Modules) != 1 || rebuilt.Modules[0] != "forced.example/different" {
+		t.Errorf("FromPackages module override: got %v, want [%q]",
+			rebuilt.Modules, "forced.example/different")
 	}
 }
 
@@ -277,12 +280,12 @@ func TestFromPackages_StructuralOnlyContract(t *testing.T) {
 	}
 
 	// Must not panic and must produce a valid graph.
-	g := depgraph.FromPackages(module, pkgs)
+	g := depgraph.FromPackages([]string{module}, pkgs)
 	if g == nil {
 		t.Fatal("FromPackages returned nil graph")
 	}
-	if g.Module != module {
-		t.Errorf("Module = %q, want %q", g.Module, module)
+	if len(g.Modules) != 1 || g.Modules[0] != module {
+		t.Errorf("Modules = %v, want [%q]", g.Modules, module)
 	}
 	if g.Stats.Packages != 2 {
 		t.Errorf("Stats.Packages = %d, want 2", g.Stats.Packages)

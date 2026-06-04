@@ -103,33 +103,27 @@ func WithProjectionCursor(cursor projection.Cursor) Option {
 // WithProjectionRebuildEndpoint opts the assembly into the framework projection
 // rebuild control-plane endpoint:
 //
-//	POST /internal/v1/{cell}/projection/{name}/rebuild
+//	POST /admin/v1/projection/{cell}/{name}/rebuild
 //
-// mounted by bootstrap on the InternalListener (the framework-owned-RouteGroup
+// mounted by bootstrap on the AdminListener (the framework-owned-RouteGroup
 // pattern, like /healthz·/readyz·/metrics — no contract.yaml, no host cell). The
 // handler dispatches by {cell}/{name} to the Coordinator wired in the phase6
 // drain and returns 202 (rebuild admitted, body carries the {phase,
 // pendingEvents, replayLagSeconds} snapshot) / 409 (already running) / 404
 // (unknown cell/projection).
 //
-// allowedCallers is the caller-cell allowlist (service-token callerCell segment).
-// A non-listed caller is rejected 403 via RequireCallerCell. At least one caller
-// is REQUIRED: an /internal/ endpoint must name its callers
-// (ContractSpec.validateHTTP fails closed on empty Clients), and the
-// InternalListener MUST be declared via WithListener — phase0
-// (validateProjectionRebuildEndpoint) fails fast otherwise.
+// This is an operator→system control-plane action (an administrator or
+// deployment pipeline rebuilds a projection), NOT a cell→cell call: there is no
+// caller-cell allowlist. Authentication is the AdminListener's operator
+// credential gate (AuthOperator). The AdminListener MUST be declared via
+// WithListener(cell.AdminListener, addr, []kauth.ListenerAuth{operatorAuth}) —
+// phase0 (validateProjectionRebuildEndpoint) fails fast otherwise.
 //
-// Opt-in is determined solely by len(allowedCallers) > 0. Not calling this
-// option — OR calling it with zero callers, WithProjectionRebuildEndpoint() —
-// leaves the endpoint unmounted with NO error: projection rebuilds remain
-// triggerable only programmatically via Coordinator.Rebuild. (A zero-caller call
-// is therefore a no-op, not a misconfiguration; an /internal/ endpoint with a
-// non-empty caller list is the only mounted form.)
-//
-// This is a wiring option — a later call REPLACES the allowlist set by an
-// earlier one (including clearing it back to unmounted with a zero-caller call).
-func WithProjectionRebuildEndpoint(allowedCallers ...string) Option {
+// Not calling this option leaves the endpoint unmounted with NO error:
+// projection rebuilds remain triggerable only programmatically via
+// Coordinator.Rebuild. This is a wiring option (idempotent opt-in).
+func WithProjectionRebuildEndpoint() Option {
 	return func(b *Bootstrap) {
-		b.projectionRebuildCallers = allowedCallers
+		b.projectionRebuildEnabled = true
 	}
 }

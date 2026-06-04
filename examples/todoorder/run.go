@@ -115,6 +115,14 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("invalid JWT auth plan: %w", err)
 	}
 
+	// Operator control-plane (AdminListener) — configured only when operator
+	// credentials are present in the environment, so the demo still starts out
+	// of the box (the projection rebuild endpoint then stays programmatic-only).
+	operatorAuth, operatorEnabled, err := newOperatorAuthFromEnv()
+	if err != nil {
+		return fmt.Errorf("configure admin listener auth: %w", err)
+	}
+
 	// Demo wires in-memory projection infra; events are discarded by NoopWriter
 	// so live consumption is best-effort (same as every todoorder demo) — the
 	// harness still cold-starts and registers its readyz probe; faithful
@@ -138,8 +146,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 
 	// No WithMetricsProvider in demo → projection metric instruments are no-ops.
-	app := bootstrap.New(
-		clock.Real(),
+	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ":8082",
 			[]auth.ListenerAuth{jwtPlan}),
@@ -154,13 +161,22 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithProjectionTxRunner(demoTxRunner{}),
 		bootstrap.WithProjectionReplaySource(projReplay),
 		bootstrap.WithProjectionCursor(projCursor),
-		// Framework projection rebuild control-plane endpoint
-		// (POST /internal/v1/{cell}/projection/{name}/rebuild) on the internal
-		// listener. "controlplane" is the demo caller-cell allowlist; an ops tool
-		// presents a service token with callerCell=controlplane to trigger a
-		// rebuild of ordercell's order_status projection.
-		bootstrap.WithProjectionRebuildEndpoint("controlplane"),
-	)
+	}
+	if operatorEnabled {
+		// Operator control-plane on a network-isolated (loopback) admin port,
+		// gated by operator credentials (defense in depth). The framework
+		// projection rebuild endpoint
+		// (POST /admin/v1/projection/{cell}/{name}/rebuild) is an operator→system
+		// action — an ops tool / deployment pipeline presents the operator Basic
+		// Auth credentials to rebuild ordercell's order_status projection. No
+		// caller-cell allowlist (that was the prior /internal/v1/* cell→cell model).
+		opts = append(opts,
+			bootstrap.WithListener(cell.AdminListener, "127.0.0.1:9093",
+				[]auth.ListenerAuth{operatorAuth}),
+			bootstrap.WithProjectionRebuildEndpoint(),
+		)
+	}
+	app := bootstrap.New(clock.Real(), opts...)
 
 	logger.Info("todoorder: starting on :8082; protected routes require an RS256 bearer token")
 	return app.Run(ctx)

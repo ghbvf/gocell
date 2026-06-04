@@ -32,7 +32,7 @@ func buildSynthForClosure(withTestOnly bool) *depgraph.Graph {
 		{ID: mod + "/cells/cellA", Layer: depgraph.LayerCells, CellID: "cellA", Imports: []string{}},
 		{ID: mod + "/testhelper", Layer: depgraph.LayerUnknown, Imports: []string{}},
 	}
-	g := depgraph.FromNodes(mod, nodes)
+	g := depgraph.FromNodes([]string{mod}, nodes)
 	if withTestOnly {
 		prod := map[string]bool{
 			mod + "/a": true, mod + "/b": true, mod + "/c": true, mod + "/d": true,
@@ -207,7 +207,7 @@ func TestTransitiveImportsWithPaths_GhostNodeNotMarked(t *testing.T) {
 		Layer:   depgraph.LayerUnknown,
 		Imports: []string{ghost},
 	}
-	g := depgraph.FromNodes(mod, []*depgraph.Node{srcNode})
+	g := depgraph.FromNodes([]string{mod}, []*depgraph.Node{srcNode})
 
 	paths := g.TransitiveImportsWithPaths(src)
 	if _, ok := paths[ghost]; ok {
@@ -229,7 +229,7 @@ func TestTransitiveImports_SelfCycle(t *testing.T) {
 		Layer:   depgraph.LayerUnknown,
 		Imports: []string{pkgPath}, // self-import
 	}
-	g := depgraph.FromNodes(mod, []*depgraph.Node{loopNode})
+	g := depgraph.FromNodes([]string{mod}, []*depgraph.Node{loopNode})
 	got := g.TransitiveImports(pkgPath)
 	if len(got) != 0 {
 		t.Errorf("TransitiveImports(self-cycle) = %v, want empty", got)

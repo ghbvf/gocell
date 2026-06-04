@@ -16,7 +16,7 @@ import (
 func TestEmitCatalogFile_OutputCompiles(t *testing.T) {
 	t.Parallel()
 
-	g := kerneldepgraph.FromNodes("github.com/example/mod", []*kerneldepgraph.Node{
+	g := kerneldepgraph.FromNodes([]string{"github.com/example/mod"}, []*kerneldepgraph.Node{
 		{
 			ID:      "github.com/example/mod/pkg/a",
 			Layer:   "pkg",
@@ -53,7 +53,7 @@ func TestEmitCatalogFile_OutputCompiles(t *testing.T) {
 func TestEmitCatalogFile_EmptyGraph(t *testing.T) {
 	t.Parallel()
 
-	g := kerneldepgraph.FromNodes("github.com/example/mod", nil)
+	g := kerneldepgraph.FromNodes([]string{"github.com/example/mod"}, nil)
 	src, err := generatedcatalog.EmitFile("main", "github.com/example/mod", g)
 	if err != nil {
 		t.Fatalf("emitCatalogFile: %v", err)

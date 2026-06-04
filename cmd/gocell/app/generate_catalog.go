@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ghbvf/gocell/tools/depgraph"
 	"github.com/ghbvf/gocell/tools/generatedcatalog"
 )
 
@@ -47,7 +46,9 @@ func generateCatalog(args []string) error {
 	}
 
 	// Load the package dep graph synchronously (CLI context — acceptable latency).
-	g, err := depgraph.Load(depgraph.LoadOptions{Dir: rootDir}, "./...")
+	// Workspace-aware: spans every go.work member so a satellite module's
+	// packages are emitted, not silently dropped (#1555 review F1).
+	g, err := loadPackageGraph(rootDir, false)
 	if err != nil {
 		return fmt.Errorf("generate catalog: depgraph load: %w", err)
 	}
