@@ -1,0 +1,14 @@
+version: v2
+# Proto module roots. Each root mirrors the contracts/{kind}/{domain}/{version}
+# layout: a proto at <root>/<domain-path>/vN/x.proto generates to
+# generated/contracts/grpc/<domain-path>/vN/ (see buf.gen.yaml out +
+# paths=source_relative). The PR-8 epic adds examples/iotdevice/contracts/grpc
+# as a second module root for the first cell-owned proto (#1151).
+modules:
+  - path: contracts/grpc
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - WIRE

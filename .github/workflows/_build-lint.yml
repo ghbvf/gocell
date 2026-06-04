@@ -1051,6 +1051,13 @@ jobs:
       - name: Verify shared-schema codegen
         run: ./hack/verify-codegen-shared-schema.sh
 
+      # Proto codegen gate: generated/contracts/grpc/**/*.pb.go must be in sync
+      # with contracts/grpc/**.proto. The pipeline (buf + protoc-gen-go +
+      # protoc-gen-go-grpc) is hermetic via `go run` — no buf/protoc install,
+      # just the setup-go above + module cache. See contracts/grpc/README.md.
+      - name: Verify proto codegen (buf)
+        run: ./hack/verify-codegen-proto.sh
+
       - name: Verify scaffold bundle (sandbox)
         run: ./hack/verify-scaffold-bundle.sh
       - name: Verify scaffold assembly (sandbox)

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+// conformance.v1 is the buf-toolchain conformance fixture, NOT a runtime
+// contract. It is the single committed .proto that proves the proto -> .pb.go
+// pipeline (buf + protoc-gen-go + protoc-gen-go-grpc) works end-to-end and stays
+// green: hack/verify-codegen-proto.sh regenerates from it and diffs, and
+// tools/protobuild imports the generated package to assert it compiles against
+// the main module's protobuf + grpc runtimes. The first real cell-owned grpc
+// contract lands with examples/iotdevice in the PR-8 epic (#1151).
+package conformance.v1;
+
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/conformance/v1;conformancev1";
+
+// ConformanceService exercises a unary RPC so both protoc-gen-go (messages) and
+// protoc-gen-go-grpc (service + Register func) are covered by the fixture.
+service ConformanceService {
+  // Check is a trivial unary RPC used only to exercise the codegen pipeline.
+  rpc Check(CheckRequest) returns (CheckResponse) {}
+}
+
+message CheckRequest {
+  string token = 1;
+}
+
+message CheckResponse {
+  bool ok = 1;
+}
