@@ -60,7 +60,7 @@ func TestWorkspaceMultiModuleFixture(t *testing.T) {
 	corePkg := wsmmCoreModule + "/cells/corecell"
 	satPkg := wsmmSatModule + "/cells/satcell"
 	if g.ByID(corePkg) == nil {
-		t.Errorf("core package %q not in workspace scan", corePkg)
+		t.Fatalf("core package %q not in workspace scan", corePkg)
 	}
 	satNode := g.ByID(satPkg)
 	if satNode == nil {

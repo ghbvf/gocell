@@ -68,6 +68,12 @@ func TestCrossModuleImportDirection01_SyntheticGraph(t *testing.T) {
 	if v[0].Pkg != core+"/cmd/app" || v[0].Import != sat+"/cells/x" || v[0].Module != sat {
 		t.Fatalf("violation = %+v, want core/cmd/app → satellite/cells/x (module satellite)", v[0])
 	}
+	// Explicit assertion: the allowed satellite→core direction (sat+"/cells/x") must NOT be flagged.
+	for _, viol := range v {
+		if viol.Pkg == sat+"/cells/x" {
+			t.Errorf("satellite→core allowed direction must not be flagged; got violation %+v", viol)
+		}
+	}
 	// Reverse self-check: the allowed satellite→core edge must NOT appear.
 	for _, viol := range v {
 		if viol.Module == core {

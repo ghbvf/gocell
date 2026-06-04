@@ -180,6 +180,28 @@ func TestIsStdlib(t *testing.T) {
 	}
 }
 
+// TestNewClassifier_EmptyStringFilter verifies that an empty-string entry in
+// the modules slice is dropped by NewClassifier. An empty-prefix module would
+// match every import path (strings.HasPrefix(x, "") is always true), causing
+// fmt, encoding/json, and third-party paths to be "owned" by the empty module
+// and mis-classified as LayerUnknown instead of LayerStdlib/LayerThirdParty.
+func TestNewClassifier_EmptyStringFilter(t *testing.T) {
+	t.Parallel()
+	// Construct with an empty string alongside a real module path.
+	c := NewClassifier([]string{"", "github.com/ghbvf/gocell"})
+	// stdlib must still classify as LayerStdlib, not be "owned" by the empty module.
+	if got := c.OwningModule("fmt"); got != "" {
+		t.Errorf("OwningModule(\"fmt\") = %q, want \"\" (empty-prefix entry must be dropped)", got)
+	}
+	if got := c.Layer("fmt"); got != LayerStdlib {
+		t.Errorf("Layer(\"fmt\") = %q, want %q (empty-prefix entry must be dropped)", got, LayerStdlib)
+	}
+	// The real module still works.
+	if got := c.OwningModule("github.com/ghbvf/gocell/kernel/cell"); got != "github.com/ghbvf/gocell" {
+		t.Errorf("OwningModule core pkg = %q, want core module", got)
+	}
+}
+
 // TestClassifier_InternalUnknownDistinct locks the contract that
 // module-internal-but-unmapped paths are distinguishable from true third-party
 // paths. Collapsing both into LayerThirdParty is fail-open for governance: a new

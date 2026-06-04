@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
@@ -61,8 +62,8 @@ func ReadModulePath(root string) (string, error) {
 
 // ReadWorkUseDirs reads root/go.work and returns the disk paths of its `use`
 // directives, each filepath.Clean'd and kept relative as written (e.g. "." or
-// "mdm" or "examples/ssobff"). It uses golang.org/x/mod/modfile.ParseWork — the
-// canonical go.work parser the Go toolchain itself uses — so it is robust
+// "mdm" or "examples/ssobff"). It uses golang.org/x/mod/modfile.ParseWork -- the
+// canonical go.work parser the Go toolchain itself uses -- so it is robust
 // against comments, block (`use (...)`) and single-line forms.
 //
 // go.work `use` is the authoritative set of Go modules the toolchain compiles
@@ -70,7 +71,10 @@ func ReadModulePath(root string) (string, error) {
 // scan set from it (so a module extracted into go.work is auto-covered).
 //
 // Returns an error when go.work is absent/unreadable or malformed (fail-closed:
-// callers must not proceed with a guessed module set).
+// callers must not proceed with a guessed module set). Absolute paths and
+// directories that escape the workspace root via ".." are rejected to prevent
+// path-traversal bugs (a malicious/buggy go.work use ../../etc would yield a
+// Module.Dir that escapes the workspace and flows into LoadProductionPackages).
 func ReadWorkUseDirs(root string) ([]string, error) {
 	p := filepath.Clean(filepath.Join(root, "go.work"))
 	data, err := os.ReadFile(p)
@@ -86,7 +90,22 @@ func ReadWorkUseDirs(root string) ([]string, error) {
 		if u == nil || u.Path == "" {
 			continue
 		}
-		dirs = append(dirs, filepath.Clean(u.Path))
+		cleaned := filepath.Clean(u.Path)
+		if filepath.IsAbs(cleaned) {
+			return nil, fmt.Errorf(
+				"go.work use directive %q resolves to an absolute path %q; only relative paths are allowed",
+				u.Path, cleaned,
+			)
+		}
+		for _, seg := range strings.Split(filepath.ToSlash(cleaned), "/") {
+			if seg == ".." {
+				return nil, fmt.Errorf(
+					"go.work use directive %q escapes the workspace root via \"..\"; path traversal is not allowed",
+					u.Path,
+				)
+			}
+		}
+		dirs = append(dirs, cleaned)
 	}
 	return dirs, nil
 }

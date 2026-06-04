@@ -199,4 +199,28 @@ func TestWorkspaceRoot(t *testing.T) {
 			t.Fatalf("WorkspaceRoot = nil error, want fail-loud (no go.work and no go.mod)")
 		}
 	})
+
+	// go.work-first wins over a nearer go.mod — this is the exact #1555 bug scenario.
+	// A nested sub/go.mod exists, but the root go.work must win so archtest anchors
+	// to the WORKSPACE root, not a nested module's root.
+	t.Run("go.work-first wins over a nearer go.mod", func(t *testing.T) {
+		tree := writeTree(t, map[string]string{
+			"go.work":    "go 1.25\n\nuse .\n",
+			"go.mod":     "module github.com/ghbvf/gocell\n\ngo 1.25\n",
+			"sub/go.mod": "module example.test/sub\n\ngo 1.25\n",
+			"sub/pkg.go": "package sub\n",
+		})
+		// Chdir INTO sub — where the nearer go.mod lives.
+		t.Chdir(filepath.Join(tree, "sub"))
+		got, err := workspace.WorkspaceRoot()
+		if err != nil {
+			t.Fatalf("WorkspaceRoot (go.work-first) unexpected error: %v", err)
+		}
+		// Should resolve to tree (the go.work root), NOT tree/sub.
+		gotResolved, _ := filepath.EvalSymlinks(got)
+		wantResolved, _ := filepath.EvalSymlinks(tree)
+		if gotResolved != wantResolved {
+			t.Fatalf("WorkspaceRoot = %q, want workspace root %q (go.work must win over nearer go.mod)", gotResolved, wantResolved)
+		}
+	})
 }

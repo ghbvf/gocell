@@ -13,6 +13,8 @@ import (
 // load). It is the membership set for Graph.inModule closure walks and the
 // classification basis the builder used. A single-module graph has
 // Modules == []string{module}.
+//
+// Use NewClassifier(g.Modules) to classify packages by layer/cell/slice.
 type Graph struct {
 	Modules  []string `json:"modules"`
 	Packages []*Node  `json:"packages"`

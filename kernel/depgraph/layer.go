@@ -215,6 +215,11 @@ func IsStdlib(importPath string) bool {
 
 // IsThirdParty reports whether importPath belongs to neither the given
 // module nor stdlib.
+//
+// In a multi-module workspace, prefer [Classifier.OwningModule](importPath) == ""
+// (longest-prefix) over this function — IsThirdParty takes a single module string
+// and would mis-classify a satellite module's packages as third-party when the
+// satellite path is not passed as the module argument.
 func IsThirdParty(module, importPath string) bool {
 	if importPath == "" {
 		return false

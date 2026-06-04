@@ -16,6 +16,10 @@
 // not compile is a configuration bug surfaced at archtest time. A workspace
 // without a manifest has no metadata modules to cross-check (the Go scan still
 // derives from go.work).
+//
+// Allowed import surface: this package imports only stdlib, kernel/metadata
+// (manifest cross-check), and tools/gomodutil; it must not import
+// golang.org/x/tools, cells/, runtime/, or adapters/.
 package workspace
 
 import (

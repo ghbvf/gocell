@@ -159,6 +159,16 @@ func TestReadWorkUseDirs(t *testing.T) {
 			goWork:  "this is not a go.work file {{{\n",
 			wantErr: true,
 		},
+		{
+			name:    "dotdot escape rejected",
+			goWork:  "go 1.25\n\nuse ../escape\n",
+			wantErr: true,
+		},
+		{
+			name:    "absolute path rejected",
+			goWork:  "go 1.25\n\nuse /abs/path\n",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

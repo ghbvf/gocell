@@ -87,10 +87,10 @@ satellite→core edge is observed.
 | `manifest ⊆ go.work` cross-check | Medium (fail-closed guard) | runtime consistency check; drift fails closed |
 | `Classifier` (deleted single-module free funcs) | Medium | single classification entry; all callers migrated |
 | `CROSS-MODULE-IMPORT-DIRECTION-01` (generic) | Medium | archtest type-aware via `Classifier.OwningModule` on real import edges; Hard unreachable (Go cannot express "module A ⊀ module B" — #851/#893/#1282 permanent ceiling) |
-| per-satellite depguard path-ban (complement) | **Hard** (per satellite) | `.golangci.yml` path-level ban added at each extraction; tracked close-out |
+| per-satellite depguard path-ban (complement) | **Hard** (per satellite) | `.golangci.yml` path-level ban added at each extraction; tracked close-out (gh #1590) |
 
 The two Medium mechanisms each have a Hard complement: the cross-module ban is
-backstopped per-satellite by depguard; the coverage guarantee is itself Hard by
+backstopped per-satellite by depguard (gh #1590); the coverage guarantee is itself Hard by
 construction.
 
 ## #1302 / #1304 coordination (close-out)
@@ -113,10 +113,12 @@ construction.
 - The production scan requires `GOWORK` **active** (ModeWorkspace). Do NOT run
   archtest with `GOWORK=off` once satellites exist, or satellite modules silently
   drop from the scan. Today (single module) `GOWORK=off` is harmless; the
-  `hack/verify-archtest*.sh` scripts do not set it. (`verify-workspace.sh` sets
+  `hack/verify-archtest*.sh` scripts do not set it. Enforcing `GOWORK!=off` in CI
+  once satellites land is tracked at gh #1590. (`verify-workspace.sh` sets
   `GOWORK=off` for per-module isolation builds — that is a different gate, not
   archtest.)
 - At each satellite extraction: add the module to `go.work` (required to compile)
   AND to `.gocell/manifest.yaml` if it carries metadata (the cross-check enforces
   the subset), and add a `.golangci.yml` depguard ban of the satellite's import
-  path from core packages (the Hard complement to CROSS-MODULE-IMPORT-DIRECTION-01).
+  path from core packages (the Hard complement to CROSS-MODULE-IMPORT-DIRECTION-01,
+  tracked gh #1590).

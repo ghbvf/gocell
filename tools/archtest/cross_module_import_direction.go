@@ -49,7 +49,7 @@ type CrossModuleViolation struct {
 // `.golangci.yml` depguard rule banning the satellite's import path from core
 // packages is a path-level compile-fast gate. This generic archtest auto-covers
 // every future satellite (including ones not yet enumerated in depguard);
-// per-satellite depguard Hard-ization is tracked as the close-out task.
+// per-satellite depguard Hard-ization is tracked as the close-out task (gh #1590).
 //
 // Blind spots (see cross_module_import_direction_test.go for the reverse
 // self-checks): a base package reaching a satellite via a string-built import
