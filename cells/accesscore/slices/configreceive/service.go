@@ -105,7 +105,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 			//      visible through the system tier lookup.
 			// In either case, retrying will not help. Real per-tenant config
 			// consumption (reading the correct tenant tier) is tracked at gh #1577.
-			if errcode.IsDomainNotFound(fetchErr, errcode.ErrConfigNotFound, errcode.ErrConfigRepoNotFound) {
+			if errcode.IsDomainNotFound(fetchErr, errcode.ErrConfigRepoNotFound) {
 				s.logger.Warn("config-receive: config entry not found in system tier (stale or per-tenant), skipping",
 					slog.Any("error", fetchErr),
 					slog.String("key", event.Key),

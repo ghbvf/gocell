@@ -142,5 +142,5 @@ func TestExternalImportSurface_NoInternalTypes(t *testing.T) {
 	// these are only here so this file's imports stay non-trivial.
 	_ = auth.TestContext("u1", []string{"r1"})
 	_ = identitymanage.TopicUserCreated
-	_ = errcode.ErrConfigNotFound
+	_ = errcode.ErrConfigRepoNotFound
 }

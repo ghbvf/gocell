@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,10 +25,24 @@ import (
 // migrationRow represents a row in the fake DB.
 type migrationRow struct {
 	id        string
+	tenant    string
 	key       string
 	value     string
 	cipher    []byte
 	sensitive bool
+}
+
+// migTestTenant is the canonical tenant used by migration fakes when a row
+// does not set one explicitly.
+const migTestTenant = "00000000-0000-0000-0000-000000000001"
+
+// tenantOrDefault returns r.tenant or the canonical default when unset, so
+// existing fixtures that predate the tenant column keep producing a valid AAD.
+func (r migrationRow) tenantOrDefault() string {
+	if r.tenant == "" {
+		return migTestTenant
+	}
+	return r.tenant
 }
 
 // fakeDB implements DBTX for the migration tests. It supports:
@@ -105,12 +120,13 @@ func (r *fakeRows) Scan(dest ...any) error {
 	}
 	row := r.rows[r.pos]
 	r.pos++
-	if len(dest) < 3 {
-		return fmt.Errorf("scan: want 3 dest, got %d", len(dest))
+	if len(dest) < 4 {
+		return fmt.Errorf("scan: want 4 dest, got %d", len(dest))
 	}
 	*dest[0].(*string) = row.id
-	*dest[1].(*string) = row.key
-	*dest[2].(*string) = row.value
+	*dest[1].(*tenant.TenantID) = tenant.TenantID(row.tenantOrDefault())
+	*dest[2].(*string) = row.key
+	*dest[3].(*string) = row.value
 	return nil
 }
 
@@ -422,18 +438,28 @@ func TestPlaintextMigration_AADBinding(t *testing.T) {
 			require.True(t, ok, "first arg of UPDATE must be []byte ciphertext")
 
 			// Correct AAD: must decrypt successfully and match original plaintext.
-			correctAAD := configcrypto.AADForConfig(cellID, tc.configKey)
+			tnt := tenant.TenantID(migTestTenant)
+			correctAAD := configcrypto.AADForConfig(cellID, tnt, tc.configKey)
 			pt, err := tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, correctAAD)
 			require.NoError(t, err, "Decrypt with correct AAD must succeed")
 			assert.Equal(t, tc.value, string(pt), "decrypted plaintext must match original")
 
 			// Wrong AAD (different configKey): must fail — cross-row replay blocked.
-			wrongAAD := configcrypto.AADForConfig(cellID, "other_key")
+			wrongAAD := configcrypto.AADForConfig(cellID, tnt, "other_key")
 			_, err = tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, wrongAAD)
 			require.Error(t, err, "Decrypt with wrong AAD must fail")
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec), "error must be errcode.Error")
 			assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ec.Code)
+
+			// Wrong tenant (same configKey): must fail — cross-tenant replay blocked (#1479).
+			otherTenant := tenant.TenantID("00000000-0000-0000-0000-000000000002")
+			wrongTenantAAD := configcrypto.AADForConfig(cellID, otherTenant, tc.configKey)
+			_, err = tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, wrongTenantAAD)
+			require.Error(t, err, "Decrypt with a different tenant must fail (cross-tenant replay blocked)")
+			var ecT *errcode.Error
+			require.True(t, errors.As(err, &ecT), "error must be errcode.Error")
+			assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ecT.Code)
 		})
 	}
 }
@@ -535,13 +561,14 @@ func TestPlaintextMigration_ConfigVersions_AADBinding(t *testing.T) {
 	require.True(t, ok, "first arg of UPDATE must be []byte ciphertext")
 
 	// Correct AAD: AADForVersion (matches config_repo.go encryptVersionValue path).
-	correctAAD := configcrypto.AADForVersion(cellID, configID)
+	tnt := tenant.TenantID(migTestTenant)
+	correctAAD := configcrypto.AADForVersion(cellID, tnt, configID)
 	pt, err := tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, correctAAD)
 	require.NoError(t, err, "Decrypt with AADForVersion must succeed")
 	assert.Equal(t, value, string(pt), "decrypted plaintext must match original")
 
 	// Wrong AAD domain: AADForConfig with the same configID string must fail.
-	wrongAAD := configcrypto.AADForConfig(cellID, configID)
+	wrongAAD := configcrypto.AADForConfig(cellID, tnt, configID)
 	_, err = tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, wrongAAD)
 	require.Error(t, err, "Decrypt with AADForConfig (wrong domain) must fail")
 	var ec *errcode.Error

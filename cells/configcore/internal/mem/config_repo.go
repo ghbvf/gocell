@@ -102,12 +102,12 @@ func (r *ConfigRepository) GetByKey(_ context.Context, t tenant.TenantID, key st
 
 	te, ok := r.entries[t]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	entry, ok := te[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	clone := *entry
@@ -127,7 +127,7 @@ func (r *ConfigRepository) Update(
 	te := r.tenantEntries(t)
 	existing, ok := te[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	if existing.Version != expectedVersion {
@@ -153,7 +153,7 @@ func (r *ConfigRepository) UpdateForRollback(
 	te := r.tenantEntries(t)
 	existing, ok := te[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	if existing.Version != expectedVersion {
@@ -177,7 +177,7 @@ func (r *ConfigRepository) Delete(_ context.Context, t tenant.TenantID, key stri
 	te := r.tenantEntries(t)
 	existing, ok := te[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, msgConfigNotFound,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	if existing.Version != expectedVersion {
@@ -286,5 +286,5 @@ func (r *ConfigRepository) GetVersion(_ context.Context, t tenant.TenantID, conf
 			return &clone, nil
 		}
 	}
-	return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "version not found")
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "version not found")
 }

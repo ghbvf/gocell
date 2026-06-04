@@ -14,6 +14,6 @@ import (
 func TestHandler_HandleGet_NotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rec.Code = http.StatusNotFound
-	rec.Body.WriteString(`{"error":{"code":"ERR_CONFIG_NOT_FOUND","message":"x","details":[]}}`)
-	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrConfigNotFound)
+	rec.Body.WriteString(`{"error":{"code":"ERR_CONFIG_REPO_NOT_FOUND","message":"x","details":[]}}`)
+	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
 }

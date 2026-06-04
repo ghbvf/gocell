@@ -14,10 +14,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
-// testFlagTenant reuses the package-level testTenant defined in config_repo_test.go.
-// Both test files are in the same package (mem), so the var is shared.
+// testFlagTenant reuses the package-level testTenant / testTenantB defined in
+// config_repo_test.go. Both test files are in the same package (mem), so the
+// vars are shared.
 
 func TestFlagRepository_Create(t *testing.T) {
 	tests := []struct {
@@ -396,4 +398,97 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 	wg.Wait()
 	assert.Zero(t, writeErrors.Load(), "concurrent writes should not error (unique keys)")
 	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
+}
+
+// TestFlagRepository_CrossTenantIsolation verifies that a flag written under
+// testTenant is invisible to testTenantB on every read/write path:
+// GetByKey/Update/Toggle/Delete return ErrFlagNotFound and List returns empty
+// under the wrong tenant; same-tenant access still succeeds.
+// Mirrors the config-repo cross-tenant isolation test.
+func TestFlagRepository_CrossTenantIsolation(t *testing.T) {
+	repo := NewFlagRepository(clock.Real())
+	ctx := context.Background()
+
+	const key = "cross.tenant.flag"
+	require.NoError(t, repo.Create(ctx, testTenant, &domain.FeatureFlag{
+		ID: "f-cross-1", Key: key, Type: domain.FlagBoolean, Enabled: true, Version: 1,
+	}))
+
+	assertNotFound := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrFlagNotFound, ecErr.Code,
+			"cross-tenant access must return ErrFlagNotFound, not leak the flag")
+	}
+
+	t.Run("GetByKey_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.GetByKey(ctx, testTenantB, key)
+		assertNotFound(t, err)
+	})
+	t.Run("GetByKey_under_tenantA_succeeds", func(t *testing.T) {
+		got, err := repo.GetByKey(ctx, testTenant, key)
+		require.NoError(t, err)
+		assert.True(t, got.Enabled)
+	})
+	t.Run("Update_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.Update(ctx, testTenantB, key, 1, false, 0, "")
+		assertNotFound(t, err)
+	})
+	t.Run("Toggle_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.Toggle(ctx, testTenantB, key, 1, false)
+		assertNotFound(t, err)
+	})
+	t.Run("Delete_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.Delete(ctx, testTenantB, key, 1)
+		assertNotFound(t, err)
+	})
+	t.Run("List_under_tenantB_empty", func(t *testing.T) {
+		flags, err := repo.List(ctx, testTenantB, query.ListParams{
+			Limit: 50,
+			Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}},
+		})
+		require.NoError(t, err)
+		for _, f := range flags {
+			assert.NotEqual(t, key, f.Key, "tenant B must not see tenant A's flag in List")
+		}
+	})
+}
+
+// TestFlagRepository_EmptyTenantGuard verifies that every data method rejects a
+// zero/empty tenant.TenantID with ErrValidationFailed (the t.Validate() guard).
+// Mirrors the config-repo empty-tenant guard test.
+func TestFlagRepository_EmptyTenantGuard(t *testing.T) {
+	repo := NewFlagRepository(clock.Real())
+	ctx := context.Background()
+	zero := tenant.TenantID("") // intentionally invalid
+
+	assertValidationErr := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err, "empty tenant must return error")
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code,
+			"empty tenant must return ErrValidationFailed, not a not-found/duplicate error")
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"Create", func() error {
+			return repo.Create(ctx, zero, &domain.FeatureFlag{ID: "x", Key: "k", Type: domain.FlagBoolean})
+		}},
+		{"GetByKey", func() error { _, err := repo.GetByKey(ctx, zero, "k"); return err }},
+		{"Update", func() error { _, err := repo.Update(ctx, zero, "k", 1, true, 0, ""); return err }},
+		{"Toggle", func() error { _, err := repo.Toggle(ctx, zero, "k", 1, true); return err }},
+		{"Delete", func() error { _, err := repo.Delete(ctx, zero, "k", 1); return err }},
+		{"List", func() error { _, err := repo.List(ctx, zero, query.ListParams{Limit: 10}); return err }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertValidationErr(t, tc.call())
+		})
+	}
 }

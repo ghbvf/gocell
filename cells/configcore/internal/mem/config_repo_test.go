@@ -30,6 +30,10 @@ const (
 // testTenant is a canonical test tenant UUID used across all config-repo tests.
 var testTenant = tenant.TenantID("00000000-0000-0000-0000-000000000001")
 
+// testTenantB is a second canonical test tenant UUID used by cross-tenant
+// isolation tests (mirrors the PG integration testTenantB).
+var testTenantB = tenant.TenantID("00000000-0000-0000-0000-000000000002")
+
 func TestConfigRepository_Create(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -99,7 +103,7 @@ func TestConfigRepository_GetByKey(t *testing.T) {
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
-		assert.Equal(t, errcode.ErrConfigNotFound, ecErr.Code)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ecErr.Code)
 	})
 }
 
@@ -130,7 +134,7 @@ func TestConfigRepository_Update(t *testing.T) {
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
-		assert.Equal(t, errcode.ErrConfigNotFound, ecErr.Code)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ecErr.Code)
 	})
 
 	t.Run("version mismatch returns ErrVersionConflict", func(t *testing.T) {
@@ -166,7 +170,7 @@ func TestConfigRepository_UpdateForRollback(t *testing.T) {
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
-		assert.Equal(t, errcode.ErrConfigNotFound, ecErr.Code)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ecErr.Code)
 	})
 
 	t.Run("version mismatch returns ErrVersionConflict", func(t *testing.T) {
@@ -761,4 +765,113 @@ func TestConcurrentUpdate_CAS(t *testing.T) {
 	entry, err := repo.GetByKey(context.Background(), testTenant, "k")
 	require.NoError(t, err)
 	assert.Equal(t, updates+1, entry.Version, "each CAS Update retry must eventually succeed; version must reach initial+N")
+}
+
+// TestConfigRepository_CrossTenantIsolation verifies that an entry written under
+// testTenant is invisible to testTenantB on every read/write path:
+// GetByKey/Update/Delete/GetVersion return ErrConfigRepoNotFound and List
+// returns empty under the wrong tenant; same-tenant access still succeeds.
+// Mirrors the PG TestConfigRepo_Integration_CrossTenantIsolation.
+func TestConfigRepository_CrossTenantIsolation(t *testing.T) {
+	repo := NewConfigRepository(clock.Real())
+	ctx := context.Background()
+
+	now := time.Now()
+	const key = "cross.tenant.key"
+	const entryID = "cfg-cross-1"
+	require.NoError(t, repo.Create(ctx, testTenant, &domain.ConfigEntry{
+		ID: entryID, Key: key, Value: "tenant-a-only", Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	require.NoError(t, repo.PublishVersion(ctx, testTenant, &domain.ConfigVersion{
+		ID: "cv-cross-1", ConfigID: entryID, Version: 1, Value: "tenant-a-only",
+	}))
+
+	assertNotFound := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrConfigRepoNotFound, ecErr.Code,
+			"cross-tenant access must return ErrConfigRepoNotFound, not leak the entry")
+	}
+
+	t.Run("GetByKey_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.GetByKey(ctx, testTenantB, key)
+		assertNotFound(t, err)
+	})
+	t.Run("GetByKey_under_tenantA_succeeds", func(t *testing.T) {
+		got, err := repo.GetByKey(ctx, testTenant, key)
+		require.NoError(t, err)
+		assert.Equal(t, "tenant-a-only", got.Value)
+	})
+	t.Run("Update_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.Update(ctx, testTenantB, key, 1, "should-not-apply")
+		assertNotFound(t, err)
+	})
+	t.Run("UpdateForRollback_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.UpdateForRollback(ctx, testTenantB, key, 1, "should-not-apply", true)
+		assertNotFound(t, err)
+	})
+	t.Run("Delete_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.Delete(ctx, testTenantB, key, 1)
+		assertNotFound(t, err)
+	})
+	t.Run("List_under_tenantB_empty", func(t *testing.T) {
+		entries, err := repo.List(ctx, testTenantB, query.ListParams{
+			Limit: 50,
+			Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}},
+		})
+		require.NoError(t, err)
+		for _, e := range entries {
+			assert.NotEqual(t, key, e.Key, "tenant B must not see tenant A's entry in List")
+		}
+	})
+	t.Run("GetVersion_under_tenantB_not_found", func(t *testing.T) {
+		_, err := repo.GetVersion(ctx, testTenantB, entryID, 1)
+		assertNotFound(t, err)
+	})
+	t.Run("GetVersion_under_tenantA_succeeds", func(t *testing.T) {
+		_, err := repo.GetVersion(ctx, testTenant, entryID, 1)
+		require.NoError(t, err)
+	})
+}
+
+// TestConfigRepository_EmptyTenantGuard verifies that every data method rejects
+// a zero/empty tenant.TenantID with ErrValidationFailed (the t.Validate() guard)
+// rather than silently operating on the empty-tenant inner map. RepoReady is
+// excluded — it is a schema-existence probe, not a tenant-scoped data read.
+// Mirrors the PG TestConfigRepo_Integration_EmptyTenantGuard.
+func TestConfigRepository_EmptyTenantGuard(t *testing.T) {
+	repo := NewConfigRepository(clock.Real())
+	ctx := context.Background()
+	zero := tenant.TenantID("") // intentionally invalid
+
+	assertValidationErr := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err, "empty tenant must return error")
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code,
+			"empty tenant must return ErrValidationFailed, not a not-found/duplicate error")
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"Create", func() error { return repo.Create(ctx, zero, &domain.ConfigEntry{ID: "x", Key: "k"}) }},
+		{"GetByKey", func() error { _, err := repo.GetByKey(ctx, zero, "k"); return err }},
+		{"Update", func() error { _, err := repo.Update(ctx, zero, "k", 1, "v"); return err }},
+		{"UpdateForRollback", func() error { _, err := repo.UpdateForRollback(ctx, zero, "k", 1, "v", false); return err }},
+		{"Delete", func() error { _, err := repo.Delete(ctx, zero, "k", 1); return err }},
+		{"List", func() error { _, err := repo.List(ctx, zero, query.ListParams{Limit: 10}); return err }},
+		{"PublishVersion", func() error { return repo.PublishVersion(ctx, zero, &domain.ConfigVersion{ConfigID: "x", Version: 1}) }},
+		{"GetVersion", func() error { _, err := repo.GetVersion(ctx, zero, "x", 1); return err }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertValidationErr(t, tc.call())
+		})
+	}
 }

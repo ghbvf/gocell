@@ -71,7 +71,7 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
 	_, err := client.GetEntry(context.Background(), "missing.key")
-	errcodetest.AssertCode(t, err, errcode.ErrConfigNotFound)
+	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 }
 
 func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {

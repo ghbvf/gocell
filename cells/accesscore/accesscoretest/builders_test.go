@@ -106,7 +106,7 @@ func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 		"SensitiveStub must mirror configcore's redaction contract")
 
 	// ErrorStub — error surfaced verbatim.
-	customErr := errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found")
+	customErr := errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found")
 	fgErr := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"missing": accesscoretest.ErrorStub(customErr),
 	})
@@ -114,11 +114,11 @@ func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, customErr)
 
-	// Unknown key (no stub) — ErrConfigNotFound with CategoryDomain.
+	// Unknown key (no stub) — ErrConfigRepoNotFound with CategoryDomain.
 	fgUnknown := accesscoretest.NewFakeConfigGetter(nil)
 	_, err = fgUnknown.GetEntry(ctx, "unknown")
 	require.Error(t, err)
-	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigNotFound),
+	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"unknown key must carry CategoryDomain so HandleEntryUpserted Acks")
 
 	// NotFoundStub — same shape as unknown key.
@@ -127,7 +127,7 @@ func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 	})
 	_, err = fgGone.GetEntry(ctx, "stale")
 	require.Error(t, err)
-	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigNotFound),
+	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"NotFoundStub must carry CategoryDomain so HandleEntryUpserted Acks")
 }
 
@@ -243,7 +243,7 @@ func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 	calls := fg.Calls()
 	require.Contains(t, calls, "jwt.ttl", "HandleEntryUpserted must query ConfigGetter for the upserted key")
 
-	// Stale-event path: NotFoundStub triggers ErrConfigNotFound with
+	// Stale-event path: NotFoundStub triggers ErrConfigRepoNotFound with
 	// CategoryDomain, so HandleEntryUpserted Acks instead of Requeueing.
 	fgStale := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"gone.key": accesscoretest.NotFoundStub(),

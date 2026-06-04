@@ -214,8 +214,9 @@ func (r *FlagRepository) Update(
 	return flag, nil
 }
 
-// List retrieves feature flags with keyset cursor pagination.
-// Requires composite index: CREATE INDEX idx_feature_flags_key_id ON feature_flags (key ASC, id ASC).
+// List retrieves feature flags with keyset cursor pagination, scoped to the
+// tenant via the WHERE tenant_id = $1 predicate.
+// Requires composite index: CREATE INDEX idx_feature_flags_tenant_key_id ON feature_flags (tenant_id ASC, key ASC, id ASC).
 func (r *FlagRepository) List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.FeatureFlag, error) {
 	if err := t.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "flag repo: invalid tenant", err)
