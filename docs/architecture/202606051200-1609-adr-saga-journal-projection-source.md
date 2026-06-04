@@ -76,7 +76,7 @@ ref: akka/akka-projection ShardedDaemonProcess（per-ProjectionId offset）
 | D1 | **model-a**：`saga_events` 作 durable 投影源，投影 replay + tail journal 派生读模型；**不**让引擎发终态事件（否决 model-b） | 设计决策；下游由 D2–D4 载体守 | — |
 | D2 | **载体 SHARED-INTERFACE**：harness `Apply`/`ReplaySource`/`Cursor` 的 event 载体泛化为最小 typed 只读接口 `projection.ProjectionEvent`（多态 `RestoreContext`/`Stream`，非 type-assert）；`outbox.Entry` 与 saga 事件各自实现；**同 PR 迁移 todoorder，无双路径、不伪造 `outbox.Entry`**（否决 UNIFY，否决 sealed-Entry 桥接 shim） | 接口 = type-system Hard；下游 archtest 禁投影公开 API 裸收 `outbox.Entry` | 下游 **Hard**（type-system）+ 上游 **Hard**（载体接口替换了签名，旧形态编译不可表达） |
 | D3 | **saga journal 全局有序扫描**：新增窄接口 `journal.GlobalReader`（**不并入 `JournalCore`**，保 `SAGA-JOURNAL-HOLDER-SEAL-01`）+ `saga_events` 全局有序序列（PG `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`；mem 全局计数器；`Event.GlobalSeq` additive） | 接口 + conformance enroll | conformance = Medium（Hard 路径 = codegen golden 枚举实现，**gh #1003** 同源） |
-| D4 | **tailing = 独立 `Tailer`（Option B）**：自有 `Start/Stop/tickLoop`，持 `journal.GlobalReader`，**共享同一 `distlock.Locker` 实例但用 per-projection key**（如 `saga-journal-tailer:{projection}`）；**不** piggyback 进 saga `Coordinator.tickOnce`（5 框架对标一致） | 单 checkpoint-advancer funnel + leader-gate | advancer funnel 下游 **Hard**（caller-allowlist，go/types 解析）+ 上游 **Medium**（Go 可见性天花板，开 gh 跟踪 Hard 化） |
+| D4 | **tailing = 独立 `Tailer`（Option B）**：自有 `Start/Stop/tickLoop`，持 `journal.GlobalReader`，**共享同一 `distlock.Locker` 实例但用 per-projection key**（如 `saga-journal-tailer:{projection}`）；**不** piggyback 进 saga `Coordinator.tickOnce`（saga distlock 是 per-instance 粒度、无 process-level global leader 可复用；5 框架对标一致） | 单 checkpoint-advancer funnel + leader-gate | advancer funnel 下游 **Hard**（caller-allowlist，go/types 解析）+ 上游 **Medium**（Go 可见性天花板；Hard 化追踪 **gh #1612**） |
 | D5 | **exactly-once**：复用 `projection.CheckpointStore`；apply 与 checkpoint advance 同事务提交；leader 交接安全经 lease-token CAS（同 `OUTBOX-LEASE-ID-CAS-01` 范式）；position = `global_seq` 稳定全序（**非 `created_at`**——同毫秒两实例无稳定序） | checkpoint tx-bound（复用 `PROJECTION-CHECKPOINT-TX-BOUND-01`）+ advancer funnel（D4） | 复用既有 Hard + D4 |
 | D6 | **增量 per-event apply**（非终态缓冲）：投影 fold 每条 saga 事件（含 Running 期 step 事件），语义等价当前 `deriveStatus` fold，但物化、异步、可重放 | 设计决策 | — |
 | D7 | **retention 约束**：`saga_events` append-only 永不截断到任何投影 checkpoint 之下；归档/截断须 ≥ 最慢投影 checkpoint（投影引入后 journal retention 多一约束） | 设计约束（归档能力本身仍 out-of-scope，见 §5/§7） | — |
@@ -101,7 +101,7 @@ type ProjectionEvent interface {
 }
 ```
 
-- `Apply`、`ReplaySource.Replay` 的 fn、`Cursor.Position` 均改收 `ProjectionEvent`（替换 `outbox.Entry`），`kernel/cell.ProjectionApply` 同步。
+- `Apply`、`ReplaySource.Replay` 的 fn、`Cursor.Position` 均改收 `ProjectionEvent`（替换 `outbox.Entry`），`kernel/cell.ProjectionApply` 同步。**codegen 扇出（PR-01 主体量）**：`cell.ProjectionApply` 被 contractgen 为**每个 event contract** 派生的 `generated/contracts/event/*/v*/projection_gen.go::NewProjectionRequest(apply cell.ProjectionApply, …)` 引用——当前 **18 个** `projection_gen.go`（不止 todoorder 用到的 2 个）。PR-01 必须重跑 contractgen 重生成全部 18 个；若 18-file 重生成 + 载体迁移超 ~2000 行，PR-01 拆为 PR-01a（kernel/projection 载体接口 + 手写迁移）/ PR-01b（codegen 重生成 byte-diff）两子 PR。
 - rebuild 路径 `rebuild.go` 的 `entry.Observability().RestoreToContext` / `Principal().RestoreToContext` / `RoutingTopic()==spec.Topic` 三处 outbox-only 调用，改走载体多态：`evt.RestoreContext(ctx)` + `evt.Stream()==spec.Topic`（**避免 explorer 建议的 type-assert 两层**——多态优于 type-switch）。
 - **同 PR 迁移 todoorder** `orderprojection`（`HandleOrderCreated(ctx, ProjectionEvent)`，`entry.Payload()` 不变）+ 重生成受影响 `generated/contracts/event/*/projection_gen.go`；删 `outbox.Entry` 专用签名。无双路径。
 
@@ -150,8 +150,8 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 
 | ID（占位，落地 PR 定型） | 摘要 | 评级（双向锁分轴） |
 |---|---|---|
-| `PROJECTION-EVENT-CARRIER-TYPED-01` | 投影公开 API（`Apply`/`ReplaySource.Replay` fn/`Cursor.Position`）只收 `ProjectionEvent`，禁裸 `outbox.Entry` | 下游 **Hard** + 上游 **Hard**（签名替换，旧形态编译不可表达） |
-| `SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01` | saga 投影 checkpoint advance 只在单一 sanctioned 函数（Tailer drain）调用 | 下游 **Hard**（caller-allowlist，go/types）+ 上游 **Medium**（Go 天花板，开 gh 跟踪 Hard 化） |
+| `PROJECTION-EVENT-CARRIER-TYPED-01` | 投影公开 API（`Apply`/`ReplaySource.Replay` fn/`Cursor.Position`）只收 `ProjectionEvent`，禁裸 `outbox.Entry` | 下游 **Hard**（archtest 禁公开 API 裸收 `outbox.Entry`）+ 上游 **Hard**（机制 = Go 接口类型形参：签名为 `ProjectionEvent` 后，传不实现该接口的实参即编译错误——type-system gate，非 sealed-construction 概念） |
+| `SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01` | saga 投影 checkpoint advance 只在单一 sanctioned 函数（Tailer drain）调用。落地于 `tools/archtest/saga_invariants_test.go`（`SAGA-INVARIANTS-FILE-CONSOLIDATED-01` 要求 `SAGA-*` 同文件） | 下游 **Hard**（caller-allowlist，go/types）+ 上游 **Medium**（Go 天花板；Hard 化追踪 **gh #1612**，PR-04 archtest godoc 点名该 issue） |
 | `SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01` | 每个 `journal.GlobalReader` 实现 + `SagaJournalSource` 入 conformance（全局序单调 + replay/cursor 一致） | **Medium**（Hard 路径 = codegen golden 枚举实现，gh #1003 同源） |
 
 > 每条 invariant 的完整盲区清单 + 反向自检活在落地 PR 的 archtest package godoc（单源，`ai-robust.md`）；本表只导航。所有新约束 ≥ Medium（无 Soft 立项）；Medium 上游天花板均开 gh 跟踪。
@@ -164,7 +164,7 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 |------|---------|
 | **model-b**（引擎 `MarkTerminal` 补发 `SagaTerminated` outbox 事件） | 反转 saga ADR line132/D2（journal = 真值源、replay-from-journal）；引擎对所有 saga 生效、blast radius 大；compensation-pure 下补偿态本无事件可发，得为终态破例——两套真理源 |
 | **UNIFY**（Coordinator source-agnostic、砍总线订阅 live 路径改 tail-the-source） | 打爆 todoorder（NoopWriter 无东西可 poll）+ 作废 `PROJECTION-SERIAL-DELIVERY` / `PROJECTION-CONSUMERBASE-WIRING` 两 archtest + 混淆 push-delivery 与 pull-replay；blast radius 极大。SHARED-INTERFACE 等价收益、6-8 文件 |
-| **Option A**（投影 drain piggyback 进 saga `Coordinator.tickOnce`） | saga 无全局 leader（distlock per-instance），投影仍需另开 per-projection 锁；混两种锁粒度、撑大 `SAGA-DRIVE-BEHIND-LEADER-GATE` / `SAGA-STEP-RUN-OUTSIDE-TX` 守护的复杂函数、往 coordinator-only `JournalCore` 加方法；5 框架对标一致选独立组件 |
+| **Option A**（投影 drain piggyback 进 saga `Coordinator.tickOnce`） | saga distlock 是 per-instance 粒度（无 process-level global leader 可复用），投影仍需另开 per-projection 锁；混两种锁粒度、撑大 `SAGA-DRIVE-BEHIND-LEADER-GATE` / `SAGA-STEP-RUN-OUTSIDE-TX` 守护的复杂函数、往 coordinator-only `JournalCore` 加方法；5 框架对标一致选独立组件 |
 | **载体方案 A**（桥接 `journal.Event → outbox.Entry`） | 为迁就旧 harness 形状伪造 sealed `outbox.Entry`，在 `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` Hard seal 打洞——compat shim，违 AI-HARD |
 | **沿用 outbox-backed reader 做 saga 投影** | outbox transient-relay 删行 → #1504 缺陷；saga 投影本就该读 append-only 的 `saga_events` |
 
@@ -187,7 +187,7 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 | PR-00（本 PR） | 本 ADR + saga ADR §8/§7 同 PR 重写 | D1–D7 |
 | PR-01 | 载体泛化 `ProjectionEvent` + 迁移 todoorder + `PROJECTION-EVENT-CARRIER-TYPED-01` | D2 |
 | PR-02 | `journal.GlobalReader` + `global_seq`（mem + PG migration）+ conformance | D3 |
-| PR-03 | `SagaJournalSource`（ReplaySource + Cursor）+ conformance enroll | D3/D5 |
+| PR-03 | `SagaJournalSource`（ReplaySource + Cursor）+ conformance enroll。**依赖 PR-01 已落**（`projection.ReplaySource`/`Cursor` 此时已 `ProjectionEvent` 化，否则 `SagaJournalSource` 编译失败）+ PR-02 已落（`GlobalReader`） | D3/D5 |
 | PR-04 | `Tailer`（Option B）+ per-projection distlock + 单 advancer funnel | D4/D5 |
 | PR-05 | wiring：扩展 subscribe 角色加 projection-source 选择子（单一路径）+ cellgen 派生 | D2/D4 |
 | PR-06 | #1391 落地：orderfulfillment 读投影 + 删 `deriveStatus` + dev guide | D6 |
