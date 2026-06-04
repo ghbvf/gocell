@@ -477,7 +477,7 @@ Medium（上游 + 下游残留）+ Hard 下游现实向量为合法过渡形态�
 | Monorepo 误植 `.gocell/manifest.yaml` | 切到 manifest 模式，可能解析错误路径 | `--layout=conventional` flag 显式 override；governance 检查双模式声明冲突 |
 | manifest `path` 含 `../` 越界 | 路径逃逸至 repo 边界外 | `Locator` 在解析期拒绝绝对路径与含 `..` 段的相对路径，fail-fast，返回 wrapped `fmt.Errorf` 包含 `"path escape not allowed"` 或 `"absolute path not allowed"` 提示，无独立 sentinel |
 | manifest 漏写 `excludes: ["generated/**"]` | `generated/` 下的 contract YAML 被重复解析，parser 报重复 ID | `excludes` 默认含 `generated/**`；用户显式写空时 warn |
-| symlink 跨 module 引入循环 | `fs.WalkDir` 死循环 | `Locator.discoverManifest` 走 `os.DirFS`，`fs.WalkDir` 不追踪 symlinked dir（标准库行为：`DirEntry.Type()&ModeSymlink != 0` 时 skip） |
+| symlink 引入循环 / 逃逸 repo 外（#1592） | `fs.WalkDir` 死循环 / 解析 repo 外 metadata | **Amendment 2026-06-05（#1592）**：原表述（`os.DirFS` + `fs.WalkDir` 不追踪 symlinked dir）是 false-secure——`os.DirFS` 跟随 symlink，`fs.WalkDir` 从一个位于 symlinked base 之下的 walk-root 会进入该 symlink，故一个指向 repo 外的 `modules[].path` symlink 会被 walk+read。已改为 `NewLocator` 经 `os.OpenRoot(root).FS()`（Go 1.24+ rooted fs）在 syscall 层 confine：任何经 symlink 逃逸 root 的路径被拒（`"path escapes from parent"`），覆盖 Stat/WalkDir/ReadFile 全路径；`fs.WalkDir` 的 `DirEntry.Type()&ModeSymlink` skip 保留为 in-root defense-in-depth。enforcement = `LOCATOR-ROOT-CONFINED-01` archtest（禁 kernel/metadata 调 os.DirFS）|
 | Workspace 多模块 cell ID 冲突 | 同名 cell 被装配两次 | `parser.go` 现有 `duplicate cell ID` 校验保持不变，locator 不旁路此检查 |
 | manifest `modules[*].path` 指向不存在目录 | WalkDir 报 `*PathError` | `NewLocator` / `NewLocatorFS` 在构造阶段对每个 `path` 调用 `fs.Stat` fail-fast，而非推迟到 `Discover()` 调用时 |
 | go.work 中 use 的 module 不在 manifest modules 列表中 | manifest 遗漏子 module，相关 cell 不被扫描 | 本 ADR 不强制 go.work 与 manifest 对齐；M2 codegen module path 注入会在 codegen 阶段捕获不一致；long-term M11 指南补充手动校验步骤 |

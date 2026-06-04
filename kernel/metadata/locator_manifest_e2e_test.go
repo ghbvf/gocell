@@ -83,6 +83,7 @@ func TestLocatorManifest_E2E_DiscoverConsistency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocator: %v", err)
 	}
+	defer func() { _ = loc.Close() }()
 	if loc.Mode() != LocatorManifest {
 		t.Fatalf("mode = %v, want LocatorManifest", loc.Mode())
 	}
@@ -228,6 +229,7 @@ func requireE2EDiscover(t *testing.T, root string) []MetadataSource {
 	if err != nil {
 		t.Fatalf("NewLocator: %v", err)
 	}
+	defer func() { _ = loc.Close() }()
 	sources, err := loc.Discover()
 	if err != nil {
 		t.Fatalf("Discover: %v", err)

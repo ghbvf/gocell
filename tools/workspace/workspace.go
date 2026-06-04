@@ -173,7 +173,11 @@ func crossCheckManifest(root string, useSet map[string]struct{}) error {
 		return fmt.Errorf("workspace: stat manifest: %w", err)
 	}
 
-	manifestPaths, err := metadata.ReadManifestModulePaths(os.DirFS(root), metadata.DefaultManifestPath)
+	// Root-confined read: os.Root rejects a symlinked .gocell/manifest.yaml (or
+	// symlinked module dir) that escapes root, so the manifest contract's source
+	// cannot leave the workspace (#1592 review F1). The os.Stat above only gates
+	// the no-manifest skip; this is the protected read.
+	manifestPaths, err := metadata.ReadManifestModulePathsRoot(root, metadata.DefaultManifestPath)
 	if err != nil {
 		return fmt.Errorf("workspace: read manifest: %w", err)
 	}
@@ -232,16 +236,18 @@ func checkUndeclaredMetadataMembers(root string, useSet, manifestSet map[string]
 }
 
 // memberHasMetadata reports whether the workspace member at root/dir contains
-// any GoCell metadata file at the conventional layout. It reuses the
-// conventional metadata Locator so the recognized marker set stays single-source
-// (the same classifier that the parser and governance rely on); the Locator's
-// WalkDir already skips symlinks and is match-capped.
+// any GoCell metadata file at the conventional layout. It uses the root-confined
+// disk Locator (NewLocator → os.OpenRoot) so the scan cannot follow a symlink
+// escaping the member, keeping every disk-backed metadata read in the workspace
+// boundary on the same os.Root primitive (#1592 review F1); the conventional
+// Locator's WalkDir additionally skips symlink entries and is match-capped.
 func memberHasMetadata(root, dir string) (bool, error) {
 	memberRoot := filepath.Join(root, dir)
-	loc, err := metadata.NewLocatorFS(os.DirFS(memberRoot), metadata.WithLocatorMode(metadata.LocatorConventional))
+	loc, err := metadata.NewLocator(memberRoot, metadata.WithLocatorMode(metadata.LocatorConventional))
 	if err != nil {
 		return false, fmt.Errorf("workspace: locate metadata in member %q: %w", dir, err)
 	}
+	defer func() { _ = loc.Close() }()
 	srcs, err := loc.Discover()
 	if err != nil {
 		return false, fmt.Errorf("workspace: scan metadata in member %q: %w", dir, err)

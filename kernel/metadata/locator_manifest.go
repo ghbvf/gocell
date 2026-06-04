@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -162,6 +163,23 @@ func ReadManifestModulePaths(fsys fs.FS, manifestPath string) ([]string, error) 
 		paths[i] = m.Path
 	}
 	return paths, nil
+}
+
+// ReadManifestModulePathsRoot is the root-confined form of
+// ReadManifestModulePaths for disk callers: it opens an os.Root at root (Go
+// 1.24+ traversal-resistant fs) and reads through os.Root.FS(), so a symlinked
+// .gocell/manifest.yaml (or a symlinked module dir) that resolves outside root
+// is rejected at the syscall layer rather than silently read from outside the
+// workspace. Disk callers (e.g. tools/workspace cross-check) MUST use this
+// rather than building os.DirFS themselves — confinement is not the caller's to
+// opt out of. Mirrors NewLocator's os.OpenRoot confinement (#1592).
+func ReadManifestModulePathsRoot(root, manifestPath string) ([]string, error) {
+	osRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("metadata: ReadManifestModulePathsRoot open root: %w", err)
+	}
+	defer func() { _ = osRoot.Close() }()
+	return ReadManifestModulePaths(osRoot.FS(), manifestPath)
 }
 
 // loadManifest reads and decodes the manifest at manifestPath from fsys,
@@ -782,7 +800,8 @@ func (es *manifestExcludeSet) matchDir(dir string) bool {
 
 // matchManifestGlob expands a glob pattern against fsys via WalkDir. Returns
 // sorted matches. Symlinks are explicitly skipped to avoid traversal through
-// unexpected filesystem topology that os.DirFS might not prevent.
+// unexpected filesystem topology; the disk-backed fs is additionally
+// root-confined via os.OpenRoot(root).FS() (NewLocator).
 //
 // To avoid O(modules × total_files) WalkDir amplification, the walk is
 // started from the longest fixed prefix before the first wildcard segment
@@ -864,9 +883,11 @@ func manifestGlobWalkFn(pattern string, excludes *manifestExcludeSet, matches *[
 		if walkErr != nil {
 			return walkErr
 		}
-		// Explicitly skip symlinks regardless of whether the underlying fs.FS
-		// follows them. This avoids traversal through unexpected filesystem
-		// topology (e.g. symlink loops) that os.DirFS does not prevent.
+		// Explicitly skip symlinks. The disk-backed fs is os.OpenRoot(root).FS()
+		// (NewLocator), which already rejects symlink escapes at the syscall
+		// layer; this skip is defense-in-depth for in-root symlink entries and
+		// the fs.FS-backed path (NewLocatorFS / MapFS), avoiding traversal
+		// through unexpected topology (e.g. symlink loops).
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
