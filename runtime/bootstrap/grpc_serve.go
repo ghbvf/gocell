@@ -40,7 +40,7 @@ type boundGRPC struct {
 // otherwise leak the serving HTTP goroutines.
 func (b *Bootstrap) phase7bStartGRPCServers(serveCtx context.Context, s *phaseState) error {
 	if len(b.grpcListenerConfigs) == 0 {
-		return nil
+		return b.checkOrphanGRPCServices(s)
 	}
 
 	bounds := make([]boundGRPC, 0, len(b.grpcListenerConfigs))
@@ -232,6 +232,29 @@ func drainAllGRPCServers(parent context.Context, bounds []boundGRPC) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// checkOrphanGRPCServices is called when no WithGRPCListener was configured. If
+// any cell snapshot has a non-empty GRPCServices slice it means a cell called
+// reg.GRPCService but the composition root forgot to add WithGRPCListener — a
+// silent data-loss bug. Fail-fast to surface the misconfiguration, mirroring the
+// HTTP undeclared-listener fail-fast intent.
+func (b *Bootstrap) checkOrphanGRPCServices(s *phaseState) error {
+	if s.asm == nil || len(s.cellSnapshots) == 0 {
+		return nil
+	}
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		if n := len(snap.GRPCServices); n > 0 {
+			return fmt.Errorf("bootstrap: cell %q declares %d gRPC service(s) but no "+
+				"WithGRPCListener is configured; add WithGRPCListener(ref, server, addr) "+
+				"to bootstrap options", id, n)
+		}
+	}
+	return nil
 }
 
 // drainHTTPOnGRPCStartFailure drains the HTTP servers started in phase7 when a

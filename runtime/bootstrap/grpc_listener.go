@@ -22,10 +22,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// GRPCServiceRegistrar is an alias for the kernel-defined interface; kept here
-// as a local name so existing test code (bootstrapTestFakeGRPCServer.Registrar()
-// returns GRPCServiceRegistrar) compiles without importing kernel/cell directly.
-// The canonical definition is cell.GRPCServiceRegistrar (kernel/cell/grpc_service.go).
+// GRPCServiceRegistrar is a local alias for [cell.GRPCServiceRegistrar] (the
+// canonical definition in kernel/cell/grpc_service.go). The alias lets the
+// bootstrap-package [GRPCServer] interface and bootstrap-package tests name the
+// type without an additional import path; the canonical definition lives in
+// kernel/cell so both adapters/grpc and bootstrap can import it without an
+// import cycle.
 type GRPCServiceRegistrar = cell.GRPCServiceRegistrar
 
 // GRPCServer is the narrow lifecycle contract bootstrap needs from a gRPC

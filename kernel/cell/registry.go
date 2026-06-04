@@ -880,7 +880,12 @@ func (r *RegistryRecorder) GRPCService(spec GRPCServiceSpec) error {
 	if _, dup := r.grpcServiceIDs[spec.ContractID]; dup {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry GRPCService: duplicate ContractID; each gRPC service must have a "+
-				"unique ContractID within its cell (ContractID="+spec.ContractID+")")
+				"unique ContractID within its cell (the ContractID is used as the dedup key — "+
+				"a duplicate would silently shadow the first registration)",
+			errcode.WithInternal(
+				errcode.InternalAttr("reason", "duplicate"),
+				errcode.InternalAttr("contractID", spec.ContractID),
+				errcode.InternalAttr("cellID", spec.CellID)))
 	}
 
 	r.grpcServiceIDs[spec.ContractID] = struct{}{}

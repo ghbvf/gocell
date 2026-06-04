@@ -35,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // ServiceRegistrar is the cell-facing gRPC service registration seam.
@@ -55,8 +56,13 @@ type ServiceRegistrar struct {
 }
 
 // NewServiceRegistrar wraps inner (typically *grpc.Server) into a ServiceRegistrar.
-// inner must not be nil (caller's responsibility; adapters/grpc.New guarantees this).
+// inner must not be nil — both bare-nil and typed-nil are rejected with a
+// panicregister.Approved("grpc-registrar-nil-inner", …) panic (B-class programmer error).
 func NewServiceRegistrar(inner grpc.ServiceRegistrar) *ServiceRegistrar {
+	if validation.IsNilInterface(inner) {
+		panic(panicregister.Approved("grpc-registrar-nil-inner",
+			errcode.Assertion("NewServiceRegistrar: inner must not be nil")))
+	}
 	return &ServiceRegistrar{
 		inner:   inner,
 		methods: make(map[string]string),
@@ -67,6 +73,9 @@ func NewServiceRegistrar(inner grpc.ServiceRegistrar) *ServiceRegistrar {
 // Register invokes the spec.Register callback via an attribution-aware
 // cellScopedRegistrar interceptor, then records every method/stream exposed by
 // the registered service under spec.CellID.
+//
+// This implementation always returns nil; contract violations (bad callback
+// type, duplicate ServiceName) panic via panicregister.Approved.
 //
 // spec.Register must be a func(grpc.ServiceRegistrar). Any other dynamic type
 // panics with panicregister.Approved("grpc-registrar-bad-register-fn", …).
@@ -89,6 +98,10 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 				spec.Register, spec.ContractID, spec.CellID)))
 	}
 
+	// NOTE: fn(scoped) runs UNDER the write lock. Do NOT call CellIDForMethod
+	// inside fn — it takes an RLock and would deadlock. This is safe today
+	// because the drain runs serially in phase7b (pre-Serve, single goroutine).
+	// Post-Serve registration safety is a PR-9 concern (out of scope here).
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

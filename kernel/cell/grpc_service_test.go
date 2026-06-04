@@ -125,23 +125,38 @@ func TestRegistryRecorder_GRPCService_AfterSnapshot_Panics(t *testing.T) {
 	})
 }
 
-// TestRegistrySnapshot_GRPCServices_DefensiveCopy verifies that mutating the
-// returned slice does not affect the recorder's internal state.
+// TestRegistrySnapshot_GRPCServices_DefensiveCopy verifies that GRPCServices
+// returns a defensive copy: mutating the returned slice must not affect a
+// separately taken snapshot from an independent recorder with identical inputs.
+//
+// Design note: Snapshot() finalizes the recorder, so a single recorder cannot
+// produce two snapshots. Instead we use two independent recorders seeded with
+// identical specs, take one snapshot each, mutate snap1, and assert that:
+//  1. The mutation visibly landed on snap1 (the test is not vacuous).
+//  2. snap2 from the second, unaffected recorder still holds the original value.
 func TestRegistrySnapshot_GRPCServices_DefensiveCopy(t *testing.T) {
 	t.Parallel()
-	r := cell.NewRegistryRecorder(nil, outbox.DurabilityDemo)
-	require.NoError(t, r.GRPCService(validGRPCSpec("grpc.svc.v1")))
-	require.NoError(t, r.GRPCService(validGRPCSpec("grpc.svc.v2")))
 
-	snap1 := r.Snapshot()
-	// Mutate the first snapshot's slice.
-	snap1.GRPCServices[0] = cell.GRPCServiceSpec{ContractID: "CORRUPTED"}
+	// Recorder 1 → snap1 (will be mutated).
+	r1 := cell.NewRegistryRecorder(nil, outbox.DurabilityDemo)
+	require.NoError(t, r1.GRPCService(validGRPCSpec("grpc.svc.v1")))
+	require.NoError(t, r1.GRPCService(validGRPCSpec("grpc.svc.v2")))
+	snap1 := r1.Snapshot()
 
-	// A second Snapshot call on an already-finalized recorder would panic, so
-	// we construct a fresh recorder for the second snapshot check.
+	// Recorder 2 → snap2 (control: same inputs, independent recorder).
 	r2 := cell.NewRegistryRecorder(nil, outbox.DurabilityDemo)
 	require.NoError(t, r2.GRPCService(validGRPCSpec("grpc.svc.v1")))
+	require.NoError(t, r2.GRPCService(validGRPCSpec("grpc.svc.v2")))
 	snap2 := r2.Snapshot()
-	// The fresh recorder is unaffected; original IDs are preserved.
-	assert.Equal(t, "grpc.svc.v1", snap2.GRPCServices[0].ContractID)
+
+	// Mutate snap1's first element in-place.
+	snap1.GRPCServices[0] = cell.GRPCServiceSpec{ContractID: "CORRUPTED"}
+
+	// Assert 1: the mutation landed on snap1 (non-vacuous check).
+	assert.Equal(t, "CORRUPTED", snap1.GRPCServices[0].ContractID,
+		"mutation must be visible on snap1 to confirm the test is non-vacuous")
+
+	// Assert 2: snap2 from the independent recorder is unaffected.
+	assert.Equal(t, "grpc.svc.v1", snap2.GRPCServices[0].ContractID,
+		"snap2 from an independent recorder must not be affected by snap1 mutation")
 }

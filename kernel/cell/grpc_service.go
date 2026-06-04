@@ -35,6 +35,9 @@ import (
 type GRPCServiceRegistrar interface {
 	// Register invokes the spec.Register callback on a cellScopedRegistrar
 	// interceptor, recording method→cellID attribution for each service.
+	// The canonical implementation (runtime/grpc.ServiceRegistrar) always returns
+	// nil; contract violations (bad callback type, duplicate ServiceName) panic
+	// via panicregister.Approved.
 	Register(spec GRPCServiceSpec) error
 }
 
