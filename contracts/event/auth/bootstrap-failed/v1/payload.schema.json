@@ -6,7 +6,7 @@
     "reason": {
       "type": "string"
     },
-    "clientIp": {
+    "clientIpHash": {
       "type": "string"
     }
   },

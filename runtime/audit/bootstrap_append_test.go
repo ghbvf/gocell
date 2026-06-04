@@ -44,29 +44,31 @@ func buildTestLedgerStore(t *testing.T) (*audit.BootstrapLedgerStore, ledger.Sto
 	return wrapped, mem, clk
 }
 
-// TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIP covers T1.
-// All three valid reasons × (with-IP, without-IP) write a well-formed entry
-// to the ledger; payload is canonical JSON {"reason","clientIp"} camelCase.
-func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIP(t *testing.T) {
+// TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIPHash covers T1.
+// All three valid reasons × (with-hash, without-hash) write a well-formed entry
+// to the ledger; payload is canonical JSON {"reason","clientIpHash"} camelCase.
+// The composition root has already hashed the IP (#1488), so this layer stores
+// the opaque hash string verbatim — never a plaintext IP.
+func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIPHash(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name     string
-		reason   string
-		clientIP string
+		name         string
+		reason       string
+		clientIPHash string
 	}{
-		{"missing_header_no_ip", "missing_header", ""},
-		{"missing_header_with_ip", "missing_header", "192.0.2.1"},
-		{"wrong_credentials_no_ip", "wrong_credentials", ""},
-		{"wrong_credentials_with_ip", "wrong_credentials", "203.0.113.7"},
-		{"rate_limited_no_ip", "rate_limited", ""},
-		{"rate_limited_with_ip", "rate_limited", "198.51.100.42"},
+		{"missing_header_no_hash", "missing_header", ""},
+		{"missing_header_with_hash", "missing_header", "a1b2c3d4e5f60718"},
+		{"wrong_credentials_no_hash", "wrong_credentials", ""},
+		{"wrong_credentials_with_hash", "wrong_credentials", "deadbeefcafef00d"},
+		{"rate_limited_no_hash", "rate_limited", ""},
+		{"rate_limited_with_hash", "rate_limited", "0011223344556677"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			store, raw, clk := buildTestLedgerStore(t)
 
-			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, uuid.NewString(), tc.reason, tc.clientIP)
+			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, uuid.NewString(), tc.reason, tc.clientIPHash)
 			require.NoError(t, err, "AppendBootstrapAuthFail must succeed for valid reason %q", tc.reason)
 
 			entries, err := raw.Query(context.Background(),
@@ -83,13 +85,13 @@ func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIP(t *testing.T) 
 				"Timestamp must come from injected clock in UTC; got=%s want=%s", e.Timestamp, testNow.UTC())
 
 			var got struct {
-				Reason   string `json:"reason"`
-				ClientIP string `json:"clientIp"`
+				Reason       string `json:"reason"`
+				ClientIPHash string `json:"clientIpHash"`
 			}
 			require.NoError(t, json.Unmarshal(e.Payload, &got), "payload must be valid JSON")
 			assert.Equal(t, tc.reason, got.Reason)
-			assert.Equal(t, tc.clientIP, got.ClientIP,
-				"clientIp must be passed through verbatim (empty when context carries none)")
+			assert.Equal(t, tc.clientIPHash, got.ClientIPHash,
+				"clientIpHash must be passed through verbatim (empty when no IP)")
 		})
 	}
 }

@@ -61,6 +61,13 @@ var wellKnownDemoKeys = []string{
 	//
 	// #nosec G101 -- known public demo value; presence here is the security mechanism.
 	"starter-dev-secret-32-bytes-ok!!",
+	// Client-IP hash salts (#1488). Dev fallbacks for GOCELL_ACCESSCORE_IP_HASH_SALT
+	// and GOCELL_SSOBFF_IP_HASH_SALT; real mode must reject them so a deployment
+	// cannot ship the public salt (which would make the keyed IP hash reversible).
+	//
+	// #nosec G101 -- known public demo values; presence here is the security mechanism.
+	"dev-ip-hash-salt-accesscore-32b!",
+	"dev-ip-hash-salt-ssobff-32-byte!",
 }
 
 // WellKnownDemoKeys returns a copy of the demo-key denylist for callers that

@@ -16,10 +16,10 @@ func TestEventAuthBootstrapFailedV1Subscribe(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.auth.bootstrap-failed.v1")
 
 	// --- payload: valid cases ---
-	c.ValidatePayload(t, []byte(`{"reason":"missing_header","clientIp":"1.2.3.4"}`))
-	c.ValidatePayload(t, []byte(`{"reason":"wrong_credentials","clientIp":"10.0.0.1"}`))
+	c.ValidatePayload(t, []byte(`{"reason":"missing_header","clientIpHash":"a1b2c3d4"}`))
+	c.ValidatePayload(t, []byte(`{"reason":"wrong_credentials","clientIpHash":"deadbeef"}`))
 	c.ValidatePayload(t, []byte(`{"reason":"rate_limited"}`))
-	// clientIp is optional
+	// clientIpHash is optional
 	c.ValidatePayload(t, []byte(`{"reason":"missing_header"}`))
 
 	// --- payload: missing required reason ---
@@ -28,7 +28,7 @@ func TestEventAuthBootstrapFailedV1Subscribe(t *testing.T) {
 	// does not support the `enum` keyword, so the schema only enforces that
 	// reason is a present string. The subscriber Rejects unknown reasons at
 	// runtime (auditappendbootstrap.HandleEvent → AppendBootstrapAuthFail).
-	c.MustRejectPayload(t, []byte(`{"clientIp":"1.2.3.4"}`))
+	c.MustRejectPayload(t, []byte(`{"clientIpHash":"a1b2c3d4"}`))
 	c.MustRejectPayload(t, []byte(`{}`))
 
 	// --- headers ---

@@ -5,8 +5,8 @@ package bootstrapfailed
 
 // Payload — event.auth.bootstrap-failed.v1.payload
 type Payload struct {
-	Reason   string `json:"reason"`
-	ClientIP string `json:"clientIp,omitempty"`
+	Reason       string `json:"reason"`
+	ClientIPHash string `json:"clientIpHash,omitempty"`
 }
 
 // Headers — event.auth.bootstrap-failed.v1.headers

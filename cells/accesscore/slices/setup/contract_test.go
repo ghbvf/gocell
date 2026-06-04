@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -215,7 +216,8 @@ func TestEventAuthBootstrapFailedV1Publish_FromSetup(t *testing.T) {
 	w := &stubWriter{}
 	svc := newService(t, mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(), w)
 
-	err := svc.RecordBootstrapAuthFail(context.Background(), "missing_header", "1.2.3.4")
+	err := svc.RecordBootstrapAuthFail(context.Background(), "missing_header",
+		redaction.HashIP(bootstrapTestIPSalt, "1.2.3.4"))
 	require.NoError(t, err, "RecordBootstrapAuthFail must succeed for a valid reason")
 	require.Len(t, w.entries, 1, "RecordBootstrapAuthFail must emit exactly one entry")
 
@@ -228,7 +230,7 @@ func TestEventAuthBootstrapFailedV1Publish_FromSetup(t *testing.T) {
 	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 
 	// Negative: missing reason must fail validation.
-	c.MustRejectPayload(t, []byte(`{"clientIp":"1.2.3.4"}`))
+	c.MustRejectPayload(t, []byte(`{"clientIpHash":"a1b2c3d4"}`))
 
 	// All three valid reasons must pass the schema.
 	for _, reason := range []string{"missing_header", "wrong_credentials", "rate_limited"} {

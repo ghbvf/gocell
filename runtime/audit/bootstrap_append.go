@@ -69,15 +69,20 @@ var validBootstrapAuthFailReasons = map[string]struct{}{
 // bootstrapAuthFailPayload is the JSON envelope persisted in ledger.Entry.Payload.
 // Field names are camelCase per go-standards JSON convention; future fields
 // must be optional/additive (v1 schema-evolution rule for ledger payloads).
+//
+// ClientIPHash is the keyed, non-reversible hash of the client IP (#1488): the
+// ledger stores the hash, never the plaintext PII, so it cannot leak through the
+// replayable outbox/broker/DLX path or the auditquery egress.
 type bootstrapAuthFailPayload struct {
-	Reason   string `json:"reason"`
-	ClientIP string `json:"clientIp"`
+	Reason       string `json:"reason"`
+	ClientIPHash string `json:"clientIpHash"`
 }
 
 // AppendBootstrapAuthFail constructs a bootstrap.auth.fail ledger entry and
-// persists it via the sealed *BootstrapLedgerStore. clientIP may be empty
-// when the request did not flow through middleware that sets ctxkeys.RealIP
-// (e.g. health probes).
+// persists it via the sealed *BootstrapLedgerStore. clientIPHash is the keyed,
+// non-reversible hash of the client IP (#1488); it is empty when no IP was
+// available (e.g. health probes, or the request did not flow through middleware
+// that sets ctxkeys.RealIP).
 //
 // eventID is the stable source-event identity (the consuming slice passes
 // outbox.Entry.ID()). It becomes the ledger EventID, which is the SOLE
@@ -103,7 +108,7 @@ type bootstrapAuthFailPayload struct {
 // Payload JSON shape (camelCase, additive evolution):
 //
 //	{"reason": "<one of: missing_header | wrong_credentials | rate_limited>",
-//	 "clientIp": "<IPv4/IPv6 or empty>"}
+//	 "clientIpHash": "<keyed HMAC hex hash of the client IP, or empty>"}
 //
 // Errors:
 //   - ErrValidationFailed when store / clock is nil, eventID is empty, or
@@ -112,7 +117,10 @@ type bootstrapAuthFailPayload struct {
 //     ErrAuditLedgerAlreadyExists (idempotent replay; callers Ack) or a
 //     chain-write failure (transient; callers Requeue). The wrap preserves the
 //     inner *errcode.Error code so callers can classify via errors.As.
-func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, clk clock.Clock, eventID, reason, clientIP string) error {
+func AppendBootstrapAuthFail(
+	ctx context.Context, store *BootstrapLedgerStore, clk clock.Clock,
+	eventID, reason, clientIPHash string,
+) error {
 	if store == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: AppendBootstrapAuthFail requires non-nil *BootstrapLedgerStore",
@@ -141,7 +149,7 @@ func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, c
 			"audit: bootstrap auth-fail reason not in whitelist",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("reason=%q allowed=%v", reason, allowed))))
 	}
-	payload, err := json.Marshal(bootstrapAuthFailPayload{Reason: reason, ClientIP: clientIP})
+	payload, err := json.Marshal(bootstrapAuthFailPayload{Reason: reason, ClientIPHash: clientIPHash})
 	if err != nil {
 		// json.Marshal of two strings can only fail under engine-level
 		// corruption; wrap for diagnostic surface and propagate.

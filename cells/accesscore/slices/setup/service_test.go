@@ -30,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -862,6 +863,10 @@ func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *
 
 // --- RecordBootstrapAuthFail ------------------------------------------------
 
+// bootstrapTestIPSalt is the keyed-hash salt used by RecordBootstrapAuthFail
+// tests; the composition root hashes the IP before calling the service.
+var bootstrapTestIPSalt = []byte("test-ip-hash-salt-32-bytes-pad!!")
+
 func TestService_RecordBootstrapAuthFail_ValidReasons(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -880,15 +885,27 @@ func TestService_RecordBootstrapAuthFail_ValidReasons(t *testing.T) {
 			w := &stubWriter{}
 			svc := newService(t, store.UserRepository(), store.RoleRepository(), w)
 
-			err := svc.RecordBootstrapAuthFail(context.Background(), tc.reason, tc.clientIP)
+			hash := redaction.HashIP(bootstrapTestIPSalt, tc.clientIP)
+			err := svc.RecordBootstrapAuthFail(context.Background(), tc.reason, hash)
 			require.NoError(t, err)
 			require.Len(t, w.entries, 1, "exactly one outbox entry emitted")
 
-			var payload dto.BootstrapAuthFailedEvent
-			require.NoError(t, json.Unmarshal(w.entries[0].Payload(), &payload))
+			raw := w.entries[0].Payload()
+			// The wire payload carries the keyed hash, never the plaintext IP
+			// (#1488). Decode into a string-bearing view — the producer DTO field
+			// is the sealed redaction.IPHash, which has no UnmarshalJSON.
+			var payload struct {
+				Reason       string `json:"reason"`
+				ClientIPHash string `json:"clientIpHash"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &payload))
 			assert.Equal(t, tc.reason, payload.Reason)
-			assert.Equal(t, tc.clientIP, payload.ClientIP)
+			assert.Equal(t, hash.String(), payload.ClientIPHash)
 			assert.Equal(t, dto.TopicBootstrapAuthFailed, w.entries[0].EventType())
+			if tc.clientIP != "" {
+				assert.NotContains(t, string(raw), tc.clientIP,
+					"plaintext client IP must not appear in the replayable payload")
+			}
 		})
 	}
 }
@@ -899,7 +916,7 @@ func TestService_RecordBootstrapAuthFail_InvalidReason_Error(t *testing.T) {
 	w := &stubWriter{}
 	svc := newService(t, store.UserRepository(), store.RoleRepository(), w)
 
-	err := svc.RecordBootstrapAuthFail(context.Background(), "invalid_reason", "1.2.3.4")
+	err := svc.RecordBootstrapAuthFail(context.Background(), "invalid_reason", redaction.HashIP(bootstrapTestIPSalt, "1.2.3.4"))
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -913,7 +930,7 @@ func TestService_RecordBootstrapAuthFail_EmitterFailure_Propagates(t *testing.T)
 	w := &stubWriter{err: errors.New("broker down")}
 	svc := newService(t, store.UserRepository(), store.RoleRepository(), w)
 
-	err := svc.RecordBootstrapAuthFail(context.Background(), "rate_limited", "1.2.3.4")
+	err := svc.RecordBootstrapAuthFail(context.Background(), "rate_limited", redaction.HashIP(bootstrapTestIPSalt, "1.2.3.4"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "broker down")
 }
@@ -942,7 +959,7 @@ func TestService_RecordBootstrapAuthFail_EmitsInsideTx(t *testing.T) {
 		setup.WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, txWriter))),
 	)
 
-	err := svc.RecordBootstrapAuthFail(context.Background(), "rate_limited", "1.2.3.4")
+	err := svc.RecordBootstrapAuthFail(context.Background(), "rate_limited", redaction.HashIP(bootstrapTestIPSalt, "1.2.3.4"))
 	require.NoError(t, err)
 	assert.True(t, txChecked, "txCheckWriter must be invoked")
 	assert.True(t, emitHappenedInsideTx,

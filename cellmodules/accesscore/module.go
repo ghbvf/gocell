@@ -119,10 +119,23 @@ func (m module) Provide(
 		Burst: bootstrapRateLimitBurst,
 	}, shared.Clock)
 
+	// Per-deployment secret salt for the keyed client-IP hash (#1488). Loaded
+	// here in the composition root so the cell never holds the secret; real mode
+	// fails fast if unset, dev falls back to a registered demo key.
+	ipHashSalt, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
+		AdapterMode: shared.Topology.AdapterMode(),
+		EnvName:     "GOCELL_ACCESSCORE_IP_HASH_SALT",
+		Primary:     os.Getenv("GOCELL_ACCESSCORE_IP_HASH_SALT"),
+		DevDefault:  bootstrapIPHashSaltDevDefault,
+	})
+	if err != nil {
+		return composition.ModuleResult{}, fmt.Errorf("accesscore: bootstrap IP-hash salt: %w", err)
+	}
+
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
 	// See newBootstrapAuthObserver for the lazy atomic.Pointer semantics (C7).
 	var cellAtomicPtr atomic.Pointer[accesscell.AccessCore]
-	bootstrapAuthObserver := newBootstrapAuthObserver(slog.Default(), &cellAtomicPtr)
+	bootstrapAuthObserver := newBootstrapAuthObserver(slog.Default(), &cellAtomicPtr, ipHashSalt)
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{Username: creds.Username, Password: creds.Password},
@@ -383,29 +396,38 @@ func (r bootstrapLimiterResource) Close(ctx context.Context) error {
 	return r.lim.Close(ctx)
 }
 
+// bootstrapIPHashSaltDevDefault is the dev-mode fallback salt for the keyed
+// client-IP hash. It is registered in cellsecrets.wellKnownDemoKeys so real mode
+// rejects it (must set GOCELL_ACCESSCORE_IP_HASH_SALT to a fresh secret).
+const bootstrapIPHashSaltDevDefault = "dev-ip-hash-salt-accesscore-32b!"
+
 // newBootstrapAuthObserver returns an auth.BootstrapAuthFailObserver that:
-//   - logs the event with a hashed client IP (C3: observability-safe),
+//   - hashes the client IP once with the keyed, non-reversible redaction.HashIP
+//     and uses that single value for BOTH the slog field and the wire payload
+//     (#1488: the plaintext IP never crosses the outbox/broker/DLX boundary),
 //   - lazily loads the cell via cellPtr (C7: atomic.Pointer forward reference),
 //   - calls RecordBootstrapAuthFail with a 2s detached timeout.
 //
-// cellPtr must be non-nil; *cellPtr is stored by the caller immediately after
-// NewAccessCore returns. The observer fires only after HTTP servers start
-// (post-Init), so *cellPtr is always non-nil by the time Load is called.
+// salt is the per-deployment secret (loaded by the caller via cellsecrets);
+// the cell stays secret-free. cellPtr must be non-nil; *cellPtr is stored by the
+// caller immediately after NewAccessCore returns. The observer fires only after
+// HTTP servers start (post-Init), so *cellPtr is always non-nil by the time Load
+// is called.
 func newBootstrapAuthObserver(
 	logger *slog.Logger,
 	cellPtr *atomic.Pointer[accesscell.AccessCore],
+	salt []byte,
 ) auth.BootstrapAuthFailObserver {
 	return func(ctx context.Context, reason string) {
 		ip, _ := ctxkeys.RealIPFrom(ctx)
-		// C3: slog uses hashed IP for observability; ledger payload keeps
-		// plaintext IP for compliance (RecordBootstrapAuthFail passes ip
-		// unchanged).
-		ipHash := redaction.HashIPForLog(ip)
+		// Single keyed, non-reversible hash for both slog and the replayable
+		// payload — no plaintext IP leaves this closure (#1488).
+		ipHash := redaction.HashIP(salt, ip)
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
 			slog.String("event", "bootstrap_auth_failed"),
 			slog.String("namespace", "bootstrap"),
 			slog.String("reason", reason),
-			slog.String("client_ip_hash", ipHash))
+			slog.String("client_ip_hash", ipHash.String()))
 		c := cellPtr.Load()
 		if c == nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
@@ -413,17 +435,17 @@ func newBootstrapAuthObserver(
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
 				slog.String("failure", "cell not yet initialized"),
-				slog.String("client_ip_hash", ipHash))
+				slog.String("client_ip_hash", ipHash.String()))
 			return
 		}
 		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, bootstrapAppendDetachedTimeout)
 		defer cancel()
-		if err := c.RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+		if err := c.RecordBootstrapAuthFail(appendCtx, reason, ipHash); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
-				slog.String("client_ip_hash", ipHash),
+				slog.String("client_ip_hash", ipHash.String()),
 				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
 				slog.Any("error", err))
 		}
