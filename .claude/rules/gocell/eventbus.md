@@ -174,6 +174,22 @@ ADV-06（contract.subscribers ↔ slice CU 双向对齐）已退役——cell �
 - Claim 获取处理租约 → handler 执行 → broker Ack 后 Settlement.Commit / 失败时 Settlement.Release（由 Subscriber delivery loop 完成）。
 - 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护。
 
+## Projection ↔ ConsumerBase 装配（composition root）
+
+Projection 经与 subscription **同一条 ConsumerBase 消费路径** 在 bootstrap phase6 被
+projection coordinator 驱动；因此任何注册 projection 的 assembly，其 composition root
+**必须** wire `bootstrap.WithConsumerBase`——漏掉则 phase6 启动即 fail-fast（PR #1483
+`examples/todoorder/run.go` 即此 bug，CI 绿但 `go run` 崩）。该运行时不变式由下表 archtest
+提前到 CI 静态层。
+
+| Archtest ID | 摘要 | 评级 |
+|---|---|---|
+| `PROJECTION-CONSUMERBASE-WIRING-01` | composition-root 包（`examples/*` + `cmd/*`）凡 wire `bootstrap.WithProjection*` 必同包 wire `bootstrap.WithConsumerBase`，否则 CI 红 | 下游 Hard（`ResolvePackageRef` 类型解析 callee，alias / dot-import 不可绕）+ 上游 Medium（包级共址 presence check；唯一 Hard 路径 = projection 注册需 ConsumerBase typed token 的 kernel 重设计，won't-do 追踪 gh #1597，archtest 即定型） |
+
+完整盲区清单 + 反向自检活在 `tools/archtest/projection_consumerbase_wiring_test.go` 的 package
+godoc（单源）；运行时 defense-in-depth = `examples/todoorder/run_smoke_test.go` 启动 smoke
+（真启动过 phase6，抓任意 boot 失败）。
+
 ## Stream 命名
 
 - 新建 stream 前搜索已有常量，禁止重复定义
