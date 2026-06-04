@@ -62,7 +62,7 @@ PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 fun
 
 - **④ async outbox 桥（#1044 子 issue）**：`DispatchAsync[C]` 写 `outbox.Entry`（携带 command kind——触及 sealed `Entry` wire envelope 或 topic 约定，触发 contract-fanout 5 载体）；relay 消费按 command id `LookupHandler` → 触发 handler。此时 JSON marshal 在 outbox 边界发生（D4 的同步 type-assert 不变，异步路径独立 marshal）。
 - **⑤ idempotency 桥（#1044 子 issue）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` Claimer 两阶段）。
-- **command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level（命令跨 L1 同步..L4 设备；现有 active L4 device-command 不能被锁 L3 误伤）。
+- **command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level（命令跨 L1 同步..L4 设备；现有 active L4 `devicecommand` slice 不能被锁 L3 误伤）。
 - **真实 handler 端到端接线（#1044 子 issue）**：PR-1 funnel 由 unit test 假 handler + golden 证，未经真实 cell 接线（devicecell enqueue adapter + bootstrap `Registry`）。
 
 amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：④ 引入的 sealed `Entry` 修改若改变某格评级，显式列补偿。
