@@ -2,10 +2,12 @@
 
 > 何时贴 / 留痕约定 / 标记规则见 `PROJECT.md` §5；P + Cx 评级见 §3。
 > **footer 必填**（每个模板末尾那行）：AI 自填 `<Claude Code|Codex>`、PR 号、head 分支、**worktree 路径**（当前工作目录；develop 直改填 `—`）、**session 会话id**（AI 想办法拿到，如 `$CLAUDE_CODE_SESSION_ID` / codex 等价；拿不到填 `—`）。
+> **贴完回显 comment URL**：`gh pr comment` 的 stdout 返回评论 URL（含 `#issuecomment-<id>`，已实测），贴完必须捕获并回显给用户（命令形态单源见 `issues` Part B4）。
 
 > **评论即 review 结果，无损（关键约定）**：评论是 `/fix <PR#>` 提取 findings 的**唯一来源**。
 > 每条 Finding **必带 `file:line`**（fix 据此定位，不重新 review），根因 + 证据 + 建议 + 三级方案种子写进 `<details>`（人看摘要、fix 读详表，两不丢）。
-> **禁止有损浓缩**——只写计数 / 模糊一句话会让 fix 丢失定位与根因，违背本约定。
+> **OUT_OF_SCOPE finding 同享无损区，不准降级成计数 `OUT_OF_SCOPE <k>`**：每条 OOS 在 `<details>` 里带 file:line + 证据 + 三维根因（代码/架构/历史）+ 三级方案种子 + Files 列表 + 建 issue 命令草稿，使后续 `gh issue create`（body 按 `backlog.md` 字段映射：现状←证据+根因+影响 / 修复方向←方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`）能无损成文。
+> **禁止有损浓缩**——只写计数 / 模糊一句话会让 fix 与后续建 issue 丢失定位与根因，违背本约定。
 
 ## ship 评论（`<!-- pm:ship -->`）
 
@@ -17,8 +19,9 @@
 
 - **F1** [P1·Cx2·安全] `path/to/file.go:120` — <一句话> → ✅ 已修
 - **F2** [P2·Cx3·DX] `path/to/x.go:88` — <一句话> → ⏸ 遗留（需人工决策）
+- **F3** [P2·Cx2·运维] `other/pkg/z.go:64` — <一句话> → 🚦 OUT_OF_SCOPE（issue 草稿见详表）
 
-<details><summary>完整详表（根因 + 证据 + 建议 + 方案种子，/fix 读此）</summary>
+<details><summary>完整详表（根因 + 证据 + 建议 + 方案种子，/fix 与后续建 issue 读此）</summary>
 
 **F1** [P1·Cx2·安全] `path/to/file.go:120`
 - 证据：`<code 片段>`
@@ -29,9 +32,17 @@
 - 证据：`<code 片段>`
 - 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
 - 处置：⏸ 遗留（原因：<…>）
+
+**F3** [P2·Cx2·运维] `other/pkg/z.go:64`（🚦 OUT_OF_SCOPE，属 `other/` 子系统）
+- 证据：`<code 片段>`
+- 三维根因：代码 <…> / 架构 <1 处局部｜Grep N 处系统性> / 历史 <git log 同类>
+- 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
+- 影响范围：直接 <…> / 间接 <…> / 同类 <Grep N 处>
+- Files：`other/pkg/z.go:64` `other/pkg/w.go:30`
+- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3>`
 </details>
 
-**下一步**：切 `pr-status/needs-codex`（待 codex review）。
+**下一步**：切 `pr-status/needs-review-again`（待再审：codex / `/pr-review`）。
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
@@ -47,8 +58,9 @@
 
 - **F1** [P1·Cx2·安全] `path/to/file.go:120` — <一句话> → ✅ 已修
 - **F2** [P2·Cx3·DX] `path/to/x.go:88` — <一句话> → ⏸ 遗留（需人工决策）
+- **F3** [P2·Cx2·运维] `other/pkg/z.go:64` — <一句话> → 🚦 OUT_OF_SCOPE（issue 草稿见详表）
 
-<details><summary>完整详表（triage 依据 + 证据 + 建议，下次 fix / 人工读此）</summary>
+<details><summary>完整详表（triage 依据 + 证据 + 建议，下次 fix / 人工 / 建 issue 读此）</summary>
 
 **F1** [P1·Cx2·安全] `path/to/file.go:120`（IN_SCOPE）
 - 证据：`<code 片段>`
@@ -57,9 +69,17 @@
 **F2** [P2·Cx3·DX] `path/to/x.go:88`（IN_SCOPE，遗留）
 - 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
 - 遗留原因 + 升级窗口：<…>
+
+**F3** [P2·Cx2·运维] `other/pkg/z.go:64`（🚦 OUT_OF_SCOPE，属 `other/` 子系统）
+- 证据：`<code 片段>`
+- 三维根因：代码 <…> / 架构 <1 处局部｜Grep N 处系统性> / 历史 <git log 同类>
+- 三级方案种子：最小 <…> / 彻底 <…> / 重构 <…>
+- 影响范围：直接 <…> / 间接 <…> / 同类 <Grep N 处>
+- Files：`other/pkg/z.go:64` `other/pkg/w.go:30`
+- → 建 issue 草稿（确认后跑）：`gh issue create --label backlog --label pri-p2 --label area-XX --label type-XX --title "[<ID>] <标题>" --body-file <backlog.md：现状←证据+根因+影响 / 修复方向←方案种子 / Files←上行 / Source←PR #<N> F3，派生注 Discovered via /fix #<N>>`
 </details>
 
-**下一步**：切 `pr-status/ready`（全清）或列 `pr-review/changes-requested` 遗留。
+**下一步**：切 `pr-status/needs-check-fix`（待 `/pr-review --check` 验证；fix 不直接到 ready）。
 
 ---
 🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
@@ -68,6 +88,7 @@
 ## pr-review 评论（`<!-- pm:pr-review -->`，独立 review 留痕）
 
 > 评论 = 阶段 5 的五块**完整**写入（不浓缩）：summary + 根因簇 + Finding 列表（带 file:line）+ 详表 details + 修复分流 + 结论。
+> **`--check` 变体**（验证上一轮 findings，见 pr-review 模式 B）：Finding 列表每条用 `✅已修复 / ❌未修复 / ⚠️回归 / 🔧部分` 替代「→ 簇 C{m}」；summary 用 `已修复 N / 未修复 M / 回归 K / 部分 J`；详表 `<details>` 记每条验证证据；结论给流转建议（全 ✅ → ready / 有遗留 → 回 /fix）。
 
 ```markdown
 <!-- pm:pr-review -->

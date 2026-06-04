@@ -1,25 +1,25 @@
 ---
 name: pr-review
-description: "对指定 PR 跑一次自动分级六维度 review。按 diff 净增删行数自动分配 2/3/6 reviewer agent 并行（< 200 行不派发，主 agent 自审）；主 agent 做根因聚类 + Cx 分级 + 修复分流建议，不自动 fix。"
-argument-hint: "<PR 编号>"
+description: "对指定 PR 跑自动分级六维度 review（默认）；或 --check 模式验证上一轮 findings 是否修复 + 抓回归。按 diff 净增删行数自动分配 2/3/6 reviewer agent 并行（< 200 行不派发，主 agent 自审）；主 agent 做根因聚类 + Cx 分级 + 修复分流建议，不自动 fix。"
+argument-hint: "<PR 编号> [--check]"
 allowed-tools: [Read, Glob, Grep, Bash, Agent]
 disable-model-invocation: true
 ---
 
 # GoCell PR Review — 自动分级六维度审查
 
-按 PR diff 净增删行数自动分配 2/3/6 个 `reviewer` agent 并行做六维度审查（< 200 行不派发，主 agent 自审），主 agent 做根因聚类与修复分流建议。**只 review，不自动 fix**（贴评论=留痕，不算改代码）。
-
-> 所有 `gh` 命令用 `dangerouslyDisableSandbox: true`（CLAUDE.md 全局总则）。
+按 PR diff 净增删行数自动分配 2/3/6 个 `reviewer` agent 并行做六维度审查（< 200 行不派发，主 agent 自审），主 agent 做根因聚类与修复分流建议。**只 review，不自动 fix**。
 
 ---
 
 ## 阶段 1：输入解析
 
-参数必须是 PR 编号（纯数字或 `#NNN`）。
+参数：`<PR 编号> [--check]`。剥离 `--check` flag 后，剩余必须是 PR 编号（纯数字或 `#NNN`）。
 
-- 缺参 → 输出 `错误：缺少 PR 编号；用法：/pr-review <PR 编号>`，不执行后续
+- 缺参 → 输出 `错误：缺少 PR 编号；用法：/pr-review <PR 编号> [--check]`，不执行后续
 - 非法格式 → 输出 `错误：参数 "<原值>" 不是合法 PR 编号`，不执行后续
+- **带 `--check`** → 走下方 **模式 B：--check 验证**（不跑全新六维 review），跑完即返回
+- **不带** → 走默认全新六维 review（阶段 2-6）
 
 ---
 
@@ -118,17 +118,62 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 
 阶段 5 的五块**已打印到窗口后**，把**同一份内容**写进 `.github/project-template/pr-comment.md` 的 `<!-- pm:pr-review -->` 模板，**额外**贴成 PR 评论留痕——**窗口打印是主输出、贴评论是留痕，两者都要做，缺一不可**（评论即 review 结果，不做有损浓缩：每条 Finding 带 `file:line`，证据/建议/根因/方案种子入 `<details>` 供 `/fix` 无损提取），贴到 PR：
 
+贴评论命令 + **回显 comment URL/id** 的单源见 `issues` B4：
+
 ```bash
-gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
+URL=$(gh pr comment <N> --body-file <填好的 pm:pr-review 模板>)   # stdout = https://.../pull/<N>#issuecomment-<id>
+echo "✅ 已贴评论：$URL"                                           # 回显给用户（含 comment id）
 ```
 
-贴失败则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
+贴失败（非 0 退出）则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
+
+贴完按结论切 **review 轴 label**（命令见 `issues` B3）：有 finding → `pr-review/changes-requested`；无 finding → `pr-review/approved`（默认 review 不动 pr-status 轴——PR 仍 `needs-review-again`，由后续 `/fix` 推进）。
+
+---
+
+## 模式 B：--check 验证（确认上一轮 findings 是否修复 + 抓回归）
+
+> `/pr-review <PR#> --check` 走本模式：**不做全新六维 review**，只验证上一轮发现的问题是否真修复，并在这些站点抓 `/fix` 引入的回归。配 `pr-status/needs-check-fix`（PROJECT.md §5：fix 不能自证完成，必过本验证才能 ready）。
+
+### B1 读上一轮 findings（无损源）
+
+**优先当前会话窗口**：同 session 内刚跑过 `/pr-review` 或 `/fix`、findings 已在上下文 → 直接用，不重复拉取。窗口没有 → `gh pr view <N> --json comments,reviews`，按 createdAt 倒序锁定**最近一次 review findings**（codex review/comment 或 `pm:pr-review` 的 `<details>` 无损详表，每条带 `file:line` + 证据 + 建议）+ 其后 `pm:fix`（fix 声称修了什么）。两者都无 → 报错退出（无可验证项）。
+
+### B2 定位 worktree
+
+同 阶段 2.5（复用既有 worktree 或自动建 review-only worktree，读当前 head 代码）。
+
+### B3 逐条验证（Read 当前代码，只信代码）
+
+对每条上一轮 finding，在 `$WORKTREE` Read 其 `file:line` 现状判定：
+
+| 状态 | 判据 |
+|------|------|
+| ✅ 已修复 | 原问题代码已按建议改掉，证据充分 |
+| ❌ 未修复 | 原问题代码仍在（pm:fix 声称修了但实际没改） |
+| ⚠️ 回归 | 修了原问题，但在该站点 / 调用链引入新问题（`Grep` 调用方确认） |
+| 🔧 部分 | 只修一部分 / 留了 TODO |
+
+**每条必须 Read 实证，不凭 pm:fix 的"已修"自述**（review 只信代码，对齐 reviewer.md §Reasoning Blindness）。
+
+### B4 输出（窗口=主输出）
+
+1. **验证表**（主输出，逐条）：`F{n} [原 P·Cx·维度] repo-relative-path:line → ✅/❌/⚠️/🔧 + 一句证据`
+2. **汇总**：已修复 N / 未修复 M / 回归 K / 部分 J
+3. **结论 + 流转建议**：
+   - 全 ✅ → 切 `pr-status/ready` + `pr-review/approved`
+   - 有 ❌/⚠️/🔧 → 切 `pr-review/changes-requested` + `pr-status/needs-review-again`，未修/回归项带 `file:line` 回 `/fix`
+
+### B5 贴 pm:pr-review（--check 留痕）+ 切 label
+
+窗口打印 B4 后，贴 `pm:pr-review` 评论（--check 变体：每条 finding 带 ✅/❌/⚠️/🔧 状态替代簇归属，summary 用 已修复N/未修复M/回归K）——**窗口=主输出、评论=留痕，两者都做**。命令 + 回显见 `issues` B4；再按 B4 结论切 label（命令见 `issues` B3）。
 
 ---
 
 ## 约束
 
-- 不调用 `/fix`，不写代码，不评 CI（贴 pm:pr-review 评论=留痕，不算改代码）
+- 默认模式不调用 `/fix`，不写代码，不评 CI（贴 pm:pr-review 评论=留痕，不算改代码）
+- `--check` 模式同样不写代码 / 不调 `/fix`；只读代码验证 + 贴评论 + 切 label（编排）
 
 ---
 
@@ -138,4 +183,5 @@ gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
 2. 分级处理：`diff < 200` 主 agent 自审不派发；`diff ≥ 200` 按行数派 2/3/6 个 reviewer agent（覆盖三档）
 3. 无 worktree 自动创建 `worktrees/review-pr<N>`；既有 worktree 复用，不重建
 4. 主 agent 输出含 Read/Grep 证据 + 根因簇视图先于 Finding 详表；维度名内部一致
-5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer + 每条 finding 的 file:line）
+5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer + 每条 finding 的 file:line）+ 回显 comment URL/id
+6. `--check` 模式：读上一轮 findings → 逐条 Read 验证 ✅/❌/⚠️/🔧（含抓回归）→ 窗口主输出验证表 + 贴 pm:pr-review（--check）→ 按结论切 label（全 ✅ → ready+approved / 有遗留 → changes-requested+needs-review-again）

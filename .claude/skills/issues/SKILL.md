@@ -1,6 +1,6 @@
 ---
 name: issues
-description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 滚动排序：OPEN 重排、已完成不动、超窗不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /fix 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
+description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 滚动排序：OPEN 重排、已完成不动、超窗不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 + 冲突预检/CI watch 跟进，ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /fix 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
 argument-hint: "<epic #N | #issue（非epic→状态核查）| create-issue | edit-labels | pr-status | comment> [...]"
 allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 ---
@@ -9,7 +9,7 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 
 > 真源 = GitHub Issues + Project v2 #3。**内容/结构 + 治理全在 `.github/project-template/`**：issue body → `backlog.md`/`epic.md`，PR body → `pull_request_template.md`，PR 评论 → `pr-comment.md`，label/字段/评级/流程 → `PROJECT.md`（索引见 `README.md`）。本技能只负责编排，不复制模版内容。
 > 输入分派：**`epic #N` / 带 `epic` label 的 issue** → Part A（拆解 + wave 调度）；**普通 issue 号（无 `epic` label）** → 下方「非 epic issue 状态核查」；**动词**（create / edit / pr-status / comment）→ Part B 原子操作。
-> 所有 `gh` 命令用 `dangerouslyDisableSandbox: true`；写入前 `gh auth status`；create 前先 search 查重（幂等）。
+> create issue 前先 search 查重（幂等）。
 > 仓库：`ghbvf/gocell`。Project v2：`--owner ghbvf --number 3`（title `gocell`）。
 
 ---
@@ -135,6 +135,8 @@ gh issue create \
 # body 骨架单源 = .github/project-template/backlog.md（现状 / 修复方向 / Files / Trigger / Source）——本技能不复制其结构
 ```
 
+> **由 review/fix finding（OUT_OF_SCOPE / 派生）成文时**：body 按 backlog.md 顶部的字段映射**无损**填充（现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`），不得一句话带过——否则后续无法据此修复。
+
 - **area-XX**（1 个，8 选）：见 `.github/project-template/PROJECT.md` §2.1。
 - **type-XX**（1 个，8 选）：见 §2.2。
 - **pri-pX**：评级 rubric 见 `.github/project-template/PROJECT.md` §3。`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident-driven，停下 AskUserQuestion 确认。
@@ -156,24 +158,56 @@ epic 用 `epic` label + GitHub 原生 sub-issue（不手写 body task list）。
 
 ## B3. PR 状态 label 流转（编排）
 
-> 两正交轴（pr-status 流转 / pr-review 结论）的取值与「何时切」语义见 `.github/project-template/PROJECT.md` §2.5 + §5（单源，不在此复制表）。本节只给切换命令。
+> 两正交轴（pr-status 流转 / pr-review 结论）的取值与「何时切」语义见 `.github/project-template/PROJECT.md` §2.5 + §5（单源，不在此复制表）。**两轴各自互斥**：pr-status 恰好一个；pr-review `approved` XOR `changes-requested`——**切一侧必 `--remove-label` 同轴对侧**。本节只给切换命令。
 
 ```bash
-gh pr edit <N> --add-label pr-status/needs-codex --remove-label pr-status/in-progress
-gh pr edit <N> --add-label pr-status/ready      --remove-label pr-status/needs-codex
-gh pr edit <N> --add-label pr-review/changes-requested
+# ship 后：待再审
+gh pr edit <N> --add-label pr-status/needs-review-again --remove-label pr-status/in-progress
+# review 轮结论（默认 /pr-review 或 codex；review 轴互斥）
+gh pr edit <N> --add-label pr-review/changes-requested --remove-label pr-review/approved          # 有 finding
+gh pr edit <N> --add-label pr-review/approved          --remove-label pr-review/changes-requested  # 无 finding
+# fix 后：待 --check 验证（fix 不直接到 ready）
+gh pr edit <N> --add-label pr-status/needs-check-fix --remove-label pr-status/needs-review-again
+# --check 全修复：可合并（清 pr-status 前态 + review 轴对侧）
+gh pr edit <N> --add-label pr-status/ready --add-label pr-review/approved --remove-label pr-status/needs-check-fix --remove-label pr-review/changes-requested
+# --check 有未修/回归：回 fix（清 pr-status 前态 + review 轴对侧）
+gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-review-again --remove-label pr-status/needs-check-fix --remove-label pr-review/approved
 ```
 
 ## B4. PR 评论（编排）
 
-留痕约定 / 标记规则见 `.github/project-template/PROJECT.md` §5；评论格式（`pm:ship` / `pm:fix` / `pm:pr-review` 三模板 + footer）见 `.github/project-template/pr-comment.md`。本节只给命令：
+留痕约定 / 标记规则见 `.github/project-template/PROJECT.md` §5；评论格式（`pm:ship` / `pm:fix` / `pm:pr-review` 三模板 + footer）见 `.github/project-template/pr-comment.md`。本节是贴评论命令 + **回显 comment id** 的单源（ship/fix/pr-review 引用本节，不重印）：
 
 ```bash
-gh pr comment <N> --body-file <填好的 pr-comment.md 模板>
+URL=$(gh pr comment <N> --body-file <填好的 pr-comment.md 模板>)   # stdout = https://github.com/ghbvf/gocell/pull/<N>#issuecomment-<id>（实测返回，成功 exit 0）
+echo "✅ 已贴评论：$URL"                                            # 必须回显给用户；comment id = URL 尾段 #issuecomment-<id>
 ```
 
-footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
+- stdout 即评论 URL（含 `#issuecomment-<id>`）——**贴完必须捕获并回显**，便于用户跳转 / 引用该评论。
+- 命令非 0 退出 → 报错退出，不静默跳过。
+- footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
 
-## B5. 沟通规则
+## B5. PR 冲突预检 + CI 跟进（ship/fix 共用）
+
+push 后**先验无文件冲突、再等 CI 收敛**，才交接 / 收尾（ship 切 `pr-status/needs-review-again` 前、fix 切 `pr-status/needs-check-fix` 前都过此 gate）。
+
+**① 冲突预检**：`gh pr view <N> --json mergeable,mergeStateStatus`。`mergeable` 由 GitHub **异步计算**，刚 push 常返回 `UNKNOWN`——**轮询几次（~5-10s 间隔）直到落定** `MERGEABLE` / `CONFLICTING`，单查 UNKNOWN 无效。`CONFLICTING`（或 `mergeStateStatus=DIRTY`）→ 先解冲突：`git -C <wt> fetch origin && git -C <wt> merge origin/develop --no-edit`（解冲突 → commit → push）→ 回本步重检。`MERGEABLE` → 进 ②。
+
+**② CI watch**：本仓 PR CI 五个 check 并行跑，**典型 ~5-6 min**（实测最慢 PR Check 中位 ~4.6 / 峰值 ~5.5 min；Governance ~4-5 min；Race / Static ~3 min；govulncheck ~40s）。
+
+```bash
+# 阻塞轮询直到所有 check 完成（exit 0=全绿 / 8=pending / 非0=有失败；--fail-fast 见首个失败即退）
+gh pr checks <N> --watch --interval 30 --fail-fast       # Bash timeout 设 ~600000ms（10min 工具上限）；预计 6min 内返回
+# 失败 → 列失败 check（精确到 PR head，bucket=fail）+ run 链接
+gh pr checks <N> --json name,bucket,link --jq '.[] | select(.bucket=="fail") | [.name,.link] | @tsv'
+gh run view <run-id> --job <job-id> --log-failed         # link=/actions/runs/<run-id>/job/<job-id>：中段 run-id、末段 job-id（裸 job-id 给 gh run view 会 404）
+```
+
+- **等待上限 ~12-15 min**（~2.5× 典型，吸收 runner 排队）。超 Bash 10min 上限用后台轮询兜底（`run_in_background` 跑 watch，或循环 `gh pr checks <N> --json bucket --jq 'any(.[]; .bucket=="pending")'` 间隔 30-60s）；超上限仍 pending → 停下报告，不无限等。
+- 失败 → 回 `fix` 修复循环（定位 → 修 → commit → push → 重新预检 + watch），**最多 3 轮**；**3 轮仍红 → 直接贴 PR 评论留痕（ship 走 pm:ship、fix 走 pm:fix，含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。
+- **全绿才继续收尾**（贴评论 / 切 label）。
+
+## B6. 沟通规则
 
 - label 编辑 / PR 状态切换 / 评论：按流程自动执行，不逐条问。
+- CI watch / 取失败日志：自动执行；CI 修复 3 轮仍红 → 贴 PR 评论留痕 + 停下交人工（不 AskUserQuestion）。

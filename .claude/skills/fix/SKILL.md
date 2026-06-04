@@ -7,18 +7,16 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 # 问题诊断与修复
 
-> `gh` 命令均 `dangerouslyDisableSandbox: true`；创建/查询前 `gh auth status`；`gh issue create` 经 §沟通规则闸门。真源 = GitHub Issues + Project v2 #3；label / 评级 rubric（P + Cx）见 `.github/project-template/PROJECT.md`；issue/PR/label/评论原子操作规范见 `issues`（Part B）。
+> 真源 = GitHub Issues + Project v2 #3；label / 评级 rubric（P + Cx）见 `.github/project-template/PROJECT.md`；issue/PR/label/评论原子操作规范见 `issues`（Part B）。
 
 ---
 
 ## 输入解析
-优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` + `gh api .../pulls/<N>/comments` 读评论提 findings；**只取最新一轮**——按 createdAt 倒序，跳过自己贴的 `pm:ship`/`pm:fix`/`pm:pr-review` 留痕评论，只取最近一批 codex review/comment，**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
-
-> pm:ship / pm:fix / pm:pr-review 评论按 `.github/project-template/pr-comment.md` **无损格式**：每条 finding 带 `file:line` + `<details>` 证据/建议/根因/方案种子——**直接据此定位 + triage，不丢信息、不重新 review**（codex 评论缺 file:line 时再回退阶段 1 定位）。
+优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读对话评论 + review 摘要（每条带 body/id/url/createdAt）；再 `gh api repos/ghbvf/gocell/pulls/<N>/comments --jq length` 探 inline review comments，>0 则 `gh api .../pulls/<N>/comments` 一并读入（codex/人的 inline finding 不静默漏），=0（本仓常态）跳过；**只取最新一轮**——按 createdAt 倒序，跳过自己上一轮的 `pm:ship`/`pm:fix` 留痕（已处理），取最近一批 **review findings**：codex review/comment 或 `/pr-review` 贴的 `pm:pr-review` 无损详表（二者都是 fix 的 findings 源），**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
 
 ---
 
-## 阶段 1: 问题定位（必须完成）
+## 阶段 1: 问题定位
 
 ### 1.1 找到问题代码
 
@@ -29,7 +27,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 从问题代码向上（调用方）和向下（被调用方）追踪。跨 3+ 包用 Agent(Explore)。
 同时追踪数据流：数据源 → 变换 → 消费者。
 
-### 1.4 确认问题是否存在
+### 1.3 确认问题是否存在
 
 | 状态 | 含义 | 下一步 |
 |------|------|--------|
@@ -40,7 +38,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 输出含：状态 / 位置 / 调用链 / 数据流 / 问题描述（自己总结，不照搬 backlog）。
 
-### 1.5 复现测试（Reproduction Test First）
+### 1.4 复现测试（Reproduction Test First）
 
 CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 
@@ -93,16 +91,11 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 
 **判定结果：**
 
-| 结果 | 判定条件 | 下一步 |
+| 结果 | 判定条件（按文件归属快速判） | 下一步 |
 |------|---------|--------|
-| **IN_SCOPE** | finding 涉及的文件在当前分支 diff 中，或 PR 描述明确包含该 finding ID | 在当前分支修复 |
-| **RELATED** | finding 涉及的文件不在 diff 中，但与当前分支的功能主题直接相关（如同一子系统的遗留问题） | 建议在当前分支一并修复，但标注为"搭车" |
-| **OUT_OF_SCOPE** | finding 涉及完全不同的模块/子系统 | 不在当前分支修；按 §沟通规则闸门输出 issue 建议命令 |
-
-**快速判定规则：**
-- 当前分支 diff 包含 finding 文件 → IN_SCOPE
-- 当前分支 diff 不包含但同包 → RELATED
-- 完全不同的包 → OUT_OF_SCOPE
+| **IN_SCOPE** | finding 文件在当前分支 diff 中，或 PR 描述含该 finding ID | 在当前分支修复 |
+| **RELATED** | 不在 diff 中但同包 / 同子系统遗留 | 建议搭车修，标注"搭车" |
+| **OUT_OF_SCOPE** | 完全不同的包 / 模块 | 不在当前分支修；按 §沟通规则闸门输出 issue 建议命令 |
 
 输出含：代码/架构/历史三维度根因、复杂度、当前分支归属（含理由）、影响范围（直接/间接/同类）、历史修复。
 
@@ -148,13 +141,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 
 **必须给出明确的时机建议**，回答三个问题：
 
-**Q0: 是否属于当前分支？**（阶段 2.4 判定结果优先）
-
-| 归属 | 时机决策 |
-|------|---------|
-| **IN_SCOPE** | 在当前分支/PR 修，进入 Q1 判断优先级 |
-| **RELATED** | 建议搭车修，但如果改动量大可 defer |
-| **OUT_OF_SCOPE** | 不在当前分支修，按 §沟通规则闸门输出建议命令；跳过 Q1-Q3 |
+**Q0: 是否属于当前分支？** 取 2.4 归属结果：**OUT_OF_SCOPE** → 按 §沟通规则闸门输出建议命令，跳过 Q1-Q3；**IN_SCOPE / RELATED** → 进 Q1（RELATED 改动量大可 defer）。
 
 **Q1: 推荐现在做还是后面做？**（仅 IN_SCOPE / RELATED 继续）
 
@@ -185,7 +172,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 
 **不可自动执行**: 并发语义变更、接口签名修改、新依赖、数据流方向变更、Cx2+。
 
-**仅以下情况用 AskUserQuestion**: 测试失败且 4 轮回退无法修正；修复中发现新问题超出 scope。
+**何时用 AskUserQuestion**: 见文末 §沟通规则（默认自动决策，不逐条问）。
 
 ### 3.5 执行前任务清单（阶段 3 → 4 门禁）
 
@@ -206,7 +193,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 在当前分支直接修改。Commit: `fix(<scope>): <问题简述>` + 根因 + 复杂度 + Refs + Co-Authored-By。
 scope 按层：kernel/runtime/cells/pkg。安全约束：只 add 修复文件（不 add -A）；不 amend。
 
-### 4.4 执行代码修改（逐编辑测试循环）
+### 4.2 执行代码修改（逐编辑测试循环）
 
 > **批量并行**：4+ 条 finding 时按 Cell 包（cells/kernel/runtime/adapters/pkg）聚类派发 `developer` sub-agent（**同包同 agent** 防写冲突，组内串行执行下面循环）；并发 4-9→2 / ≥10→3；≤3 条由主 agent 直接处理。triage 同理可按聚类并行（`Explore`）。
 
@@ -216,14 +203,14 @@ scope 按层：kernel/runtime/cells/pkg。安全约束：只 add 修复文件（
 2. Read 目标文件
 3. Edit / Write 修改代码
 4. `go build ./...` — 编译检查
-5. `go test ./修改的包/...` — **立即运行测试**（含阶段 1.5 的复现测试）
+5. `go test ./修改的包/...` — **立即运行测试**（含阶段 1.4 的复现测试）
 6. 如果测试失败：
    - 分析失败原因
    - 如果是当前编辑引入 → 立即修正，重回步骤 3
    - 如果是暴露了后续步骤的依赖 → 记录，继续下一步骤
 7. 测试通过 → **TaskUpdate → completed** → 进入下一个任务
 
-### 4.5 最终测试
+### 4.3 最终测试
 
 全部修改完成后，运行完整测试：
 
@@ -234,7 +221,7 @@ go test -race ./path/to/modified/package/...  # 涉及并发时
 go test ./kernel/...                            # 改了 kernel 时
 ```
 
-### 4.6 测试失败处理（分层回退）
+### 4.4 测试失败处理（分层回退）
 
 | Round | 策略 |
 |-------|------|
@@ -242,26 +229,30 @@ go test ./kernel/...                            # 改了 kernel 时
 | 3 | `git stash` + 切换到备选方案重新执行 |
 | 4 | 回滚（`git checkout -- <文件>`），Cx1 标 ESCALATE，Cx2 降级到最小修复标遗留 |
 
-### 4.7 验证修复
+### 4.5 验证修复
 
 重新执行阶段 1 的定位逻辑，确认：
 - 原问题代码已被替换
 - 数据流已正确保护
 - 测试覆盖了问题场景
 
-### 4.8 Git 收尾（测试通过后自动执行）
+### 4.6 Git 收尾（测试通过后自动执行）
 
-分两步：先提交分支代码，再操作 GitHub issues。issue 写入不产生 git diff，无需"不 commit"概念。
+分三步：先提交分支代码，再等 CI 绿，再操作 GitHub。issue 写入不产生 git diff，无需"不 commit"概念。
 
 **步骤 1: 提交当前分支代码**
 1. `git add` 修复涉及的代码文件
-2. 按 4.1 的关联模式执行 commit → push → PR
+2. 按 4.1 commit → push；**PR 已存在（输入是 PR 号 / 分支已有 PR）则不重建**，仅当前分支尚无 PR 时才 `gh pr create`
 
-**步骤 2: GitHub 收尾（按输入类型，无 issue 查找；命令形态见 `issues` Part B）**
+**步骤 2: 冲突预检 + CI 绿 gate（有 push 时；命令 + 时长见 `issues` B5）**
+
+push 后先验无文件冲突、再等 CI 收敛再收尾（典型 ~5-6 min）：冲突 → 先 merge origin/develop --no-edit 解冲突再 push；CI 失败则回阶段 1-4 修复循环（定位 → 修 → commit → push）再等，**最多 3 轮**；**3 轮仍红 → 直接贴 pm:fix 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。纯 issue 路径（无代码 push）跳过本步。
+
+**步骤 3: GitHub 收尾（按输入类型，无 issue 查找；命令形态见 `issues` Part B）**
 
 - **输入是 issue 号 + 已修** → 关闭该 issue（`gh issue close`，reason completed，comment 引用 `PR #<NNN>`；N 即输入，不查找）。
-- **输入是 PR 号 + 修完** → 贴 fix 评论（`.github/project-template/pr-comment.md` 的 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留，**每条带 `file:line` + 证据/建议入 `<details>`（无损，供下次 fix / 人工读）**，含 footer）；再 `gh pr edit` 切 `pr-status/ready`（全清）或 `pr-review/changes-requested`（仍有 Cx3/Cx4 或 OUT_OF_SCOPE 遗留）。
-- **未修 / 待办 finding**（OUT_OF_SCOPE / `/fix` 派生）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX`；body 按 `.github/project-template/backlog.md` 填 现状/修复方向/Files/Source，条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
+- **输入是 PR 号 + 修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `.github/project-template/pr-comment.md` 的 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留，**每条带 `file:line` + 证据/根因/建议/方案种子入 `<details>`（无损，供下次 fix / 人工 / 建 issue 读）**，含 footer）；**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数；再 `gh pr edit` 切 `pr-status/needs-check-fix`（待 `/pr-review --check` 验证；**fix 不再直接到 ready**，遗留/OOS 已无损入评论 + 建 issue）。
+- **未修 / 待办 finding**（OUT_OF_SCOPE / `/fix` 派生）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX`；body 按 `.github/project-template/backlog.md` 的字段映射**无损**填充——现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`，**不得一句话带过**；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
 Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。完成后 **TaskUpdate → completed**。
 
@@ -269,11 +260,13 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 
 ## 阶段 5: 输出 + 验证
 
+**窗口打印诊断 / 修复报告是主输出**；pm:fix 评论（4.6 已贴）是无损留痕，两者都要做（对齐 `pr-review` 阶段 5/6 的"窗口=主输出、评论=留痕"约定）。
+
 - 诊断报告（未修）
 - 修复报告（已修）
 - 批量验证（审查报告）
 
-**验证**（4.8 已执行，此处复核，不再查找）：issue-输入 → 核对该 issue 已 closed + comment 引用 PR（`gh issue view <N>`）；PR-输入 → 核对 fix 评论 + `pr-status` 已切；未修/派生 → create 建议命令已输出待确认。
+**验证**（4.6 已执行，此处复核，不再查找）：issue-输入 → 核对该 issue 已 closed + comment 引用 PR（`gh issue view <N>`）；PR-输入 → 核对 fix 评论 + `pr-status` 已切；未修/派生 → create 建议命令已输出待确认。
 
 ---
 
@@ -283,5 +276,5 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 - 无法定位问题代码
 - 测试失败且 4 轮回退后仍无法修正
 - 修复过程中发现新问题超出原始 scope
-- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题）：先反思确认问题是否PR相关，Cx1问题搭车修，如真实OUT_OF_SCOPE先输出建议命令 + body 草稿，再create issues。
+- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题）：先反思确认问题是否PR相关，Cx1问题搭车修，如真实OUT_OF_SCOPE先输出建议命令 + **无损 body 草稿**（按 backlog.md 字段映射），再create issues。
 - pri-p0 红线升级（incident-driven 或安全 CVE）
