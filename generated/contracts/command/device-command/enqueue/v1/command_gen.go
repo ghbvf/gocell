@@ -25,7 +25,7 @@ const DispatchID idutil.SafeID = "command.device-command.enqueue.v1"
 //
 // Only Register is the sanctioned registration path; calling
 // command.Registry.RegisterHandler directly is intercepted by archtest
-// COMMAND-DISPATCH-REGISTER-CALLER-01 (landing in Batch E).
+// COMMAND-DISPATCH-REGISTER-CALLER-01.
 type Handler interface {
 	HandleEnqueue(ctx context.Context, req *Request) (*Response, error)
 }
@@ -33,11 +33,15 @@ type Handler interface {
 // Register wires h under DispatchID in reg. It is the sole sanctioned
 // registration path for command.device-command.enqueue.v1.
 //
-// Returns KindInvalid / ErrValidationFailed when h is nil or typed-nil.
-// Returns KindConflict / ErrConflict when a handler is already registered
-// (enforces the one-to-one command→handler mapping; mirrors Watermill
+// Returns KindInvalid / ErrValidationFailed when reg is nil, or h is nil or
+// typed-nil. Returns KindConflict / ErrConflict when a handler is already
+// registered (enforces the one-to-one command→handler mapping; mirrors Watermill
 // DuplicateCommandHandlerError and the saga registry duplicate check).
 func Register(reg *command.Registry, h Handler) error {
+	if reg == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.device-command.enqueue.v1 register: registry must not be nil")
+	}
 	if validation.IsNilInterface(h) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command.device-command.enqueue.v1 register: handler must not be nil")
@@ -47,12 +51,22 @@ func Register(reg *command.Registry, h Handler) error {
 
 // Dispatch looks up the Handler registered under DispatchID and invokes it.
 //
+// Returns KindInvalid / ErrValidationFailed when reg or req is nil (miswiring /
+// caller bug — surfaced as a structured error rather than a nil-pointer panic).
 // Returns KindNotFound / ErrCommandNotFound when no handler has been registered.
 // Returns KindInternal / ErrInternal when the registered value has an unexpected
 // type (invariant violation: Register is the sole writer and always stores a
 // Handler, so this branch is a programmer error that should never fire in
 // production).
 func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Response, error) {
+	if reg == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.device-command.enqueue.v1 dispatch: registry must not be nil")
+	}
+	if req == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.device-command.enqueue.v1 dispatch: request must not be nil")
+	}
 	boxed, ok := reg.LookupHandler(DispatchID)
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,

@@ -55,10 +55,12 @@ const commandRegistryTypeName = "Registry"
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
 //   - Downstream: HARD by archtest caller-allowlist. The callee is resolved via
-//     go/types (ResolveMethodCall), so import aliases, dot-imports, and
-//     method-expression forms (`f := reg.RegisterHandler; f(...)`) are all
-//     resolved to the same *types.Func symbol. Any callsite outside the allowlist
-//     fails CI.
+//     go/types (ResolveMethodCall), so import aliases, dot-imports, method-value
+//     forms (`f := reg.RegisterHandler; f(...)`), and method-expression forms
+//     (`(*command.Registry).RegisterHandler(reg, ...)`) are all resolved to the
+//     same *types.Func symbol. Any callsite outside the allowlist fails CI. The
+//     RED fixture (commandregistercallerfixture) exercises all four shapes so the
+//     indirection coverage cannot silently regress to call-only detection.
 //   - Upstream: MEDIUM, and this is a GO-LANGUAGE CEILING, not a deferred TODO.
 //     Hard upstream would require RegisterHandler/LookupHandler to be unreachable
 //     outside the sanctioned packages. Go package visibility cannot express
@@ -258,13 +260,15 @@ func isCommandRegistryMethod(info *types.Info, sel *ast.SelectorExpr) bool {
 // ---------------------------------------------------------------------------
 
 // TestCommandDispatchRegisterCaller01_RedFixture verifies that the scanner fires
-// against the deliberate violation in commandregistercallerfixture, where a
-// foreign (non-generated) package calls RegisterHandler and LookupHandler directly.
+// against the deliberate violations in commandregistercallerfixture, where a
+// foreign (non-generated) package reaches RegisterHandler and LookupHandler
+// through four syntactic shapes: direct call ×2, method value, and method
+// expression.
 //
-// The fixture must produce ≥ 2 diagnostics (one for RegisterHandler, one for
-// LookupHandler). The exact count assertion is ≥ 2 rather than == 2 because
-// both method REFERENCES (including method-value form) are counted, and the
-// fixture intentionally exercises two shapes.
+// The fixture must produce ≥ 4 diagnostics — one per shape. Asserting ≥ 4
+// (rather than ≥ 2) is what LOCKS the indirection coverage the rule godoc
+// claims: a regression to call-only detection would drop the method-value and
+// method-expression references and fail this self-check.
 //
 // Non-vacuity proof: if the scanner were trivially pass-open (reporting 0
 // diagnostics for everything), this test would fail with found==0, catching
@@ -294,14 +298,16 @@ func TestCommandDispatchRegisterCaller01_RedFixture(t *testing.T) {
 			return nil
 		})
 
-	assert.GreaterOrEqual(t, found, 2,
+	assert.GreaterOrEqual(t, found, 4,
 		"COMMAND-DISPATCH-REGISTER-CALLER-01 RED fixture self-check FAILED: "+
-			"expected ≥ 2 violations from commandregistercallerfixture "+
-			"(one for RegisterHandler + one for LookupHandler); got %d. "+
-			"If found==0 the scanner is fail-open (isCommandRegistryMethod "+
-			"or isCommandRegistryCaller regressed). "+
-			"Check that the fixture package loads under archtest_fixture tag "+
-			"and that ResolveMethodCall resolves *command.Registry methods.",
+			"expected ≥ 4 violations from commandregistercallerfixture "+
+			"(direct RegisterHandler + direct LookupHandler + method-value "+
+			"RegisterHandler + method-expression LookupHandler); got %d. "+
+			"If found<4 the scanner regressed to call-only detection (method-value "+
+			"or method-expression form no longer matched); if found==0 it is "+
+			"fail-open (isCommandRegistryMethod or isCommandRegistryCaller "+
+			"regressed). Check that the fixture package loads under archtest_fixture "+
+			"tag and that ResolveMethodCall resolves *command.Registry methods.",
 		found)
 }
 
@@ -311,9 +317,9 @@ func TestCommandDispatchRegisterCaller01_RedFixture(t *testing.T) {
 
 // TestCommandGenFunnelSoleEmitter01 asserts that the typed Handler interface
 // paired with Register + Dispatch free funcs referencing *command.Registry is
-// DECLARED only inside generated/contracts/command/**. No hand-written file
-// under cells/** or examples/** (production, non-_test.go) may declare a
-// look-alike trio.
+// DECLARED only inside generated/contracts/command/**. No hand-written file in
+// ANY production package (non-generated, non-_test.go) may declare a look-alike
+// trio.
 //
 // # What this guards
 //
@@ -349,8 +355,8 @@ func TestCommandDispatchRegisterCaller01_RedFixture(t *testing.T) {
 //
 // # Scanned declaration shapes
 //
-// For cells/** and examples/** production (non-_test.go) files, the rule
-// checks for co-occurrence of:
+// For ALL production (non-generated, non-_test.go) files, the rule checks for
+// co-occurrence of:
 //
 //  1. An exported interface type with at least one method whose name starts
 //     with "Handle" and whose result list includes (*SomeType, error) — the
@@ -393,17 +399,19 @@ func TestCommandGenFunnelSoleEmitter01(t *testing.T) {
 			return nil
 		}
 
-		// Scan the hand-written cell-authoring layers — cells/, examples/, and
-		// cellmodules/ (the composition-root layer, which may import all layers and
-		// could otherwise host a hand-written look-alike funnel undetected). The
-		// generated/ packages are excluded by Production() scope, and runtime/command
-		// is the defining package (naturally excluded from the "hand-written" check).
+		// Scan EVERY production (non-generated) package, not just the
+		// cell-authoring layers. The ADR (D2) and the codegen golden lock the typed
+		// Handler + Register/Dispatch trio to generated/contracts/command/** ONLY; a
+		// hand-written look-alike trio in ANY production package (runtime/, kernel/,
+		// pkg/, adapters/, cmd/, tools/, …) — not only cells/examples/cellmodules —
+		// creates a parallel registration path that bypasses the
+		// COMMAND-DISPATCH-REGISTER-CALLER-01 caller-allowlist. generated/ packages
+		// are excluded by Production() scope; runtime/command (the Registry's
+		// defining package) declares METHODS on *Registry, not the free-func trio,
+		// so it never trips. The co-occurrence gate is the *command.Registry
+		// free-func param, which only generated code carries — making a false
+		// positive in an unrelated infra package structurally impossible.
 		pkgPath := p.Pkg.Path()
-		if !strings.HasPrefix(pkgPath, PlatformModulePath+"/cells/") &&
-			!strings.HasPrefix(pkgPath, PlatformModulePath+"/examples/") &&
-			!strings.HasPrefix(pkgPath, PlatformModulePath+"/cellmodules/") {
-			return nil
-		}
 
 		// Collect declaration shapes per package:
 		// - hasHandlerInterface: any exported interface type with a Handle*-prefix

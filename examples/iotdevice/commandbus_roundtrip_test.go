@@ -103,3 +103,32 @@ func TestCommandBus_Enqueue_RegisterNilHandler(t *testing.T) {
 	var typedNil *fakeEnqueueHandler
 	errcodetest.AssertCode(t, enqueue.Register(reg, typedNil), errcode.ErrValidationFailed)
 }
+
+// TestCommandBus_Enqueue_RegisterNilRegistry verifies the generated Register
+// guards a nil *command.Registry with a structured error instead of panicking
+// on the receiver deref (#1578 F4).
+func TestCommandBus_Enqueue_RegisterNilRegistry(t *testing.T) {
+	t.Parallel()
+	errcodetest.AssertCode(t, enqueue.Register(nil, &fakeEnqueueHandler{}), errcode.ErrValidationFailed)
+}
+
+// TestCommandBus_Enqueue_DispatchNilRegistry verifies the generated Dispatch
+// guards a nil *command.Registry with a structured error instead of panicking
+// on the receiver deref (#1578 F4).
+func TestCommandBus_Enqueue_DispatchNilRegistry(t *testing.T) {
+	t.Parallel()
+	_, err := enqueue.Dispatch(context.Background(), nil, &enqueue.Request{Payload: "x"})
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+}
+
+// TestCommandBus_Enqueue_DispatchNilRequest verifies the generated Dispatch
+// rejects a nil request before it can reach a handler (#1578 F4).
+func TestCommandBus_Enqueue_DispatchNilRequest(t *testing.T) {
+	t.Parallel()
+	reg := command.NewRegistry()
+	if err := enqueue.Register(reg, &fakeEnqueueHandler{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	_, err := enqueue.Dispatch(context.Background(), reg, nil)
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+}
