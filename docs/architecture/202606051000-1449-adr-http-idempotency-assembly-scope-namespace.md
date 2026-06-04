@@ -55,6 +55,8 @@ HTTP 幂等 store 的 owner `KeyNamespace` 定为 `_runtime`，语义是**整个
 
 a/d 是 wiring/config（留本 ADR + review 守，强行 archtest 化属过度，见 §AI-robust）；b/c 是承载不变式，由两道结构闸 + 三层行为测试守（见 §Enforcement）。
 
+> **消费者须知（namespace 定制语义）**：`_runtime` 表达「无 cell owner 的框架级去重域」。框架消费者若为 HTTP store 注入**不同** namespace，会形成**独立的去重域**——多 pod 下不同 namespace 的 pod 之间不共享幂等状态（无报错，是 `assemblyID` 级别去重域分区的预期行为，非 bug）。`cmd/corebundle` 刻意统一用 `_runtime`，使整个 assembly 落入同一去重域。
+
 ### 3. cross-cell 显式 **Out-of-scope**（blocked，→ #1610）
 
 「同一 idempotency-key 在不同 cell/listener 间共享同一去重槽」**不在本 ADR**，原因：
@@ -102,6 +104,8 @@ ADR-1043 威胁矩阵全部 ✅ 行在 assembly scope 下**不退化**（key 隔
 | 跨 pod 指纹绕过（B pod 用不同 body 劫持 A pod 录的 key） | 指纹 blob 在 Redis（共享底物），任意 pod Claim 同 key 异 fp → `ErrFingerprintMismatch` → 422；A 层集成测试 `CrossPodFingerprintMismatch` 覆盖 | ✅ |
 | Cluster CROSSSLOT（多 KEY EVAL 跨 slot 失败 → 幂等静默失效） | 三键共 hashtag `{<key>}` colocate；B 层单元静态守 + C 层真 cluster 守 | ✅ |
 | 节点身份污染 key（未来改动把 pod/cell id 拼进 key → 破坏跨 pod 去重） | 闸 β（`HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01`）+ 闸 α（无内存态）结构拦截 | ✅ |
+| 单租户→多租户迁移 namespace 碰撞（`_notenant` 期录的 key 在分配 tenant UUID 后被误回放） | 结构性无碰撞——request-ns 前缀 `_notenant:…` 与任何 `<uuid>:…` 字节不相等，是不同 Redis key；旧 `_notenant` key 在 24h `done` TTL 内自然过期，无需主动清理 | ✅ (结构性) |
+| 日志 `tenant_id` 明文（replay/busy/mismatch 路径 slog 携带 `tenant_id=ns`） | by-design——对齐 outbox observability 规范「actor/subject/tenant opaque 明文」；`tenant_id` 非密钥（opaque UUID 或 `_notenant`），`pkg/redaction.IsSensitiveKey` 刻意不含 `tenant_id`；assembly scope 未改变该日志面 | ✅ (by-design，不变) |
 
 无 ✅ → ⚠️/❌ 退化格子。
 
@@ -125,7 +129,7 @@ ADR-1043 威胁矩阵全部 ✅ 行在 assembly scope 下**不退化**（key 隔
 
 - cross-cell（跨 cell 同槽）仍未交付，blocked on #1044 命令桥（#1610）。
 - 闸 β 维持 Medium（AST），Hard 升级（sealed key funnel）延期至 #1610。
-- legacy-form 示例 assembly 未覆盖（见 §覆盖范围）。
+- legacy-form 示例 assembly（todoorder / iotdevice / orderfulfillment）未接通 HTTP 幂等 store（见 §覆盖范围）。**消费者风险**：以这些示例为模板构建自定义 assembly 时，需手动参照 `cmd/corebundle.buildHTTPIdempotencyStore` + `bootstrap.WithIdempotencyStore` 接线，否则幂等中间件**静默 skip**（未注入 store → router 无 store → Middleware 不安装），生产缺去重保护而无报错。
 
 ---
 

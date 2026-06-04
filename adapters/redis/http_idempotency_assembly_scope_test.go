@@ -47,6 +47,11 @@ const (
 // newTwoPodStores returns two independent HTTPIdempotencyStore instances backed
 // by the same Redis, modeling two pods of one assembly (see file godoc), plus a
 // cleanup func.
+//
+// startRedis launches a fresh testcontainers Redis per call, so each test
+// function gets an isolated Redis instance — the hard-coded key prefixes
+// (asm-replay / asm-busy / asm-fp) plus the per-test t.Name() suffix need not
+// guard against cross-test residue; there is none.
 func newTwoPodStores(t *testing.T) (podA, podB *HTTPIdempotencyStore, cleanup func()) {
 	t.Helper()
 	client, cleanup := startRedis(t)

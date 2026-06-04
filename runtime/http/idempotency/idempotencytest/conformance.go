@@ -137,7 +137,7 @@ func conformClaimDoneAfterRecord(t *testing.T, factory Factory) {
 
 	wantBody := []byte(`{"id":"abc"}`)
 	wantContentType := "application/json"
-	resp := buildTestResponse(t, 201, wantBody)
+	resp := BuildRecordedResponse(t, 201, wantBody)
 	if err := receipt.Record(ctx, &resp, conformDoneTTL); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -270,7 +270,7 @@ func conformStaleTokenRecord(t *testing.T, factory Factory) {
 	}
 
 	// Receipt A (stale token) must fail.
-	resp := buildTestResponse(t, 200, []byte(`ok`))
+	resp := BuildRecordedResponse(t, 200, []byte(`ok`))
 	err3 := receiptA.Record(ctx, &resp, conformDoneTTL)
 	if err3 == nil {
 		t.Error("stale receipt A Record must return an error, got nil")
@@ -330,7 +330,7 @@ func conformDoneTTLExpiry(t *testing.T, factory Factory) {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
 
-	resp := buildTestResponse(t, 200, []byte(`{"ok":true}`))
+	resp := BuildRecordedResponse(t, 200, []byte(`{"ok":true}`))
 	if err := receipt.Record(ctx, &resp, shortDoneTTL); err != nil {
 		t.Fatalf("Record with shortDoneTTL: %v", err)
 	}
@@ -420,7 +420,7 @@ func conformFingerprintMismatchDone(t *testing.T, factory Factory) {
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (fp=A): state=%v err=%v", state, err)
 	}
-	resp := buildTestResponse(t, 201, []byte(`{"id":"fp-done"}`))
+	resp := BuildRecordedResponse(t, 201, []byte(`{"id":"fp-done"}`))
 	if err := receipt.Record(ctx, &resp, conformDoneTTL); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -483,12 +483,6 @@ func conformFingerprintMismatchBusy(t *testing.T, factory Factory) {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-// buildTestResponse constructs a minimal RecordedResponse for assertion.
-func buildTestResponse(t *testing.T, status int, body []byte) idemhttp.RecordedResponse {
-	t.Helper()
-	return BuildRecordedResponse(t, status, body)
-}
 
 // BuildRecordedResponse constructs a minimal RecordedResponse (Content-Type:
 // application/json) via the only package-external construction path,

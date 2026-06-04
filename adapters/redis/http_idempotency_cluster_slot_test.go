@@ -28,6 +28,11 @@ import (
 //
 // These tests use the REAL key derivation (KeyNamespace.apply/applyHashtag), so
 // if http_idempotency.go changes the key shape the test reflects it.
+//
+// No build tag (deliberate): this is pure CRC16 slot arithmetic with no Redis
+// connection, so — unlike its integration / integration_cluster siblings in this
+// directory — it runs in the default `go test ./adapters/redis/...` and on every
+// PR, giving the Cluster-safety invariant a fast, always-on guard.
 
 // httpIdempotencyStoreKeys derives the three Redis keys for one (store-ns,
 // req-ns, business-key) exactly as HTTPIdempotencyStore.Claim does.

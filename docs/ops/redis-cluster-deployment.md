@@ -120,20 +120,30 @@ It holds because the replay key carries no per-node identity:
 These two structural facts are frozen by archtests
 `HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01` (key node-agnostic) and
 `HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01` (store stateless); the cross-pod
-replay behavior is covered by the `integration` test
-`adapters/redis/http_idempotency_assembly_scope_test.go` and (on a live cluster)
-the `integration_cluster` test `…_cluster_real_test.go`.
+replay behavior is covered by the cross-pod integration test
+`adapters/redis/http_idempotency_assembly_scope_test.go` (run with
+`go test -tags=integration ./adapters/redis/...` — it is `//go:build integration`,
+so a plain `go test` skips it) and, on a live cluster, the `integration_cluster`
+test `…_cluster_real_test.go`.
 
 **Multi-pod requires Redis** (fail-closed): `Topology.RequiresDistributedReplay()`
 makes `cmd/corebundle` refuse to start a multi-pod deployment in `real` adapter
-mode without `GOCELL_REDIS_ADDR` or `GOCELL_REDIS_CLUSTER_ADDRS`. Single-pod /
-memory mode has no cross-pod replay need and skips the Redis store.
+mode without `GOCELL_REDIS_ADDR` or `GOCELL_REDIS_CLUSTER_ADDRS`. The single-pod
+escape is explicit: set `GOCELL_SINGLE_POD=1` to acknowledge a single-pod
+deployment (in-memory replay state is then sufficient and no Redis is required);
+default `memory` / dev mode likewise has no cross-pod replay need and skips the
+Redis store.
 
-**Scope note**: this is *assembly-wide* (all pods + all listeners share the
-domain via the same `(tenant, subject, method, path, header)` key). It is **not**
-*cross-cell* dedup — i.e. routing one **logical command** to a single dedup slot
-across different cells — which requires an Idempotency-Key ↔ command_id bridge
-and is deferred (#1610, blocked-by #1044).
+**Scope note**: this is *assembly-wide* — all pods **and all listeners** share
+the same Redis store and key space via the `(tenant, subject, method, path,
+header)` key. Because the key includes `path`, a request to `POST /api/v1/orders`
+(primary listener) and a hypothetical `POST /internal/v1/orders` (internal
+listener) carrying the same `Idempotency-Key` produce **different** keys and do
+not collide — sharing the store ≠ sharing a dedup slot across paths. *Cross-cell*
+dedup (routing one **logical command** to a single dedup slot regardless of
+path/listener/cell) is a different, stronger guarantee that requires an
+Idempotency-Key ↔ command_id bridge and remains deferred (#1610, blocked-by
+#1044).
 
 ## Operational notes
 

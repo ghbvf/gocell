@@ -302,7 +302,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 
 | 威胁 | 缓解措施 | 状态 |
 |------|---------|------|
-| **Replay 攻击**（攻击者用他人的 `Idempotency-Key` 触发 replay）| namespace = `(tenantID, userID)`，key 中含 `subject + "\x00" + method + "\x00" + path + "\x00" + header`；A 用户的幂等键不会与 B 用户碰撞，跨用户 replay 在 Claim 阶段因 namespace 不匹配而取不到 | ✅ |
+| **Replay 攻击**（攻击者用他人的 `Idempotency-Key` 触发 replay）| namespace = `(tenantID, userID)`，key 中含 `subject + "\x00" + method + "\x00" + path + "\x00" + header`；A 用户的幂等键不会与 B 用户碰撞，跨用户 replay 在 Claim 阶段因 namespace 不匹配而取不到。（注：multi-pod 下 Redis key 为 `_runtime:<tenantID>:{<key>}:resp\|lease\|fp`——`_runtime` 是 store-owner namespace（assembly-wide 层，#1449），`tenantID`/`_notenant` 是 request-scoped namespace（身份隔离层）；两层正交，均不含 pod/listener/cell 维度，本行隔离论证落在 request-scoped 层不变）| ✅ |
 | **回放跳过当前授权再校验**（同主体在权限被回收后仍能 replay 旧响应；对标 Envoy ext_authz 把"后续 filter 改变路由缓存绕过授权"列为提权风险）| **非提权 by-design**：(1) 回放只命中**同一已认证主体本人**的已录响应——key 含 `subject + tenant`，跨主体回放结构上不可能（见上行）；非 `PrincipalUser` 主体在 `extractIdentity` passthrough（service-token 不缓存）；凭据路由 `idempotencyExempt` 不缓存。(2) 回放返回的是该主体**先前在授权状态下已执行**操作的已录响应，**不重新执行任何副作用**；对一个已成功的幂等键在回放时再跑 route Policy，会让同一 key 后续转 403，**违反 IETF Idempotency-Key 语义**（同 key 必返回原响应）——因此"回放不再校验授权"是正确行为而非缺陷。Envoy 的路由缓存以 route 为键、与主体无关，故其绕过模型不迁移到这里（本实现以 principal 为键）。**残留面**：同主体在 24h TTL 内重收自己授权撤销前的旧响应体，bounded by per-principal key + TTL，非越权 | ✅ (by-design) |
 | **Cache poisoning**（伪造 response 污染 replay 缓存）| 只有原始请求者本人的成功响应被 Record；`httpRecordScript` token-guard 防止 stale-lease 的 Record 提交伪造 blob；`RecordedResponse` sealed 防止包外构造伪造结构 | ✅ |
 | **Thundering herd / 并发重复**（同 key 多个飞行请求）| `ClaimBusy` 即时 409，lease 在 `ClaimAcquired` 时原子 SET NX；Lua 脚本原子性防止两个请求同时 Claim 成功 | ✅ |

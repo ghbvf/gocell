@@ -60,9 +60,17 @@ package archtest
 //     param-type freeze; (2) referencing a package-level node-identity source or
 //     calling os/net/runtime → caught by the body free-reference + no-call check;
 //     (3) leaking extra principal fields into the key → caught by the
-//     selector-allowlist {TenantID,Subject}. Non-vacuity proven by
-//     TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot against inline
-//     malformed source. Known tightness (documented, intentional): the body must
+//     selector-allowlist {TenantID,Subject}; (4) a chained selector like
+//     provider.Node.ID (whose selector base x.X is itself a SelectorExpr, not the
+//     principal Ident) → caught by the "non-principal source" branch. Non-vacuity
+//     proven by TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot against inline
+//     malformed source (incl. a chained-selector fixture). Residual (NOT caught,
+//     documented): a *type alias* of auth.Principal used as `*P` makes param[0] an
+//     *ast.Ident rather than *ast.SelectorExpr, so isPrincipalPtr returns false and
+//     the param-type freeze rejects it as "not *auth.Principal" — i.e. a false
+//     positive that forces review, not a bypass. The Hard form (sealed key
+//     constructor, #1610) removes the AST-shape dependency entirely.
+//     Known tightness (documented, intentional): the body must
 //     be call-free, so a future benign refactor introducing any call (even
 //     strings.Join) trips the gate — that is the deliberate review checkpoint for
 //     changes to key derivation, not a defect.
@@ -94,6 +102,16 @@ const ruleHTTPIdemStoreStatelessFrozen01 = "HTTP-IDEMPOTENCY-STORE-STATELESS-FRO
 // cache) would break the cross-pod equivalence the full-assembly scope relies
 // on. Changing this set is an assembly-scope contract change that must be made
 // together with ADR 202606051000-1449 + the cross-pod integration test.
+//
+// The type values are reflect.Type.String() forms, not reflect.Type identities:
+// `rdb` is the package-unexported interface `cmdable`, which cannot be named from
+// outside adapters/redis, so a `f.Type == reflect.TypeOf(...)` identity check is
+// not expressible here — the string form is the strongest check available for an
+// unexported field type. reflect.Type.String() is "<pkgname>.<TypeName>"; since
+// this archtest imports adapters/redis directly (no alias), the "redis." prefix
+// does not drift. If a future Go release changed the String() format, the primary
+// test would fail loudly with a "field type = X, want Y" message — a visible
+// review checkpoint, not a silent pass.
 var httpIdemStoreWantFields = map[string]string{
 	"rdb": "redis.cmdable",
 	"ns":  "redis.KeyNamespace",
@@ -357,6 +375,12 @@ const noTenantSentinelConst = "noTenantSentinel"
 // collectDeclaredNames returns the identifiers declared inside fn: parameters,
 // named results, and locals introduced by `:=`, `var`, and `range`. These are
 // the non-free identifiers the body may reference.
+//
+// Not covered (intentional — buildNamespaceKey's body is a flat assign/if/return
+// with no such constructs): type-switch guard bindings (`switch x := y.(type)`)
+// and labeled-statement labels. If a future buildNamespaceKey introduced one,
+// the binding would be flagged as a free reference (a false positive forcing
+// review), not silently allowed — fail-closed for this gate's purpose.
 func collectDeclaredNames(fn *ast.FuncDecl) map[string]struct{} {
 	declared := map[string]struct{}{}
 	for _, p := range flattenFieldList(fn.Type.Params) {
@@ -423,7 +447,7 @@ func isPredeclaredIdent(name string) bool {
 // TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot proves the β detectors
 // flag drift: a conforming inline function yields zero violations, and each
 // malformed variant (node-identity param, external call, package-var reference,
-// extra principal field) yields ≥1.
+// extra principal field, chained selector) yields ≥1.
 func TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot(t *testing.T) {
 	t.Parallel()
 
@@ -461,6 +485,11 @@ func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key
 		"extra-principal-field": `package p
 func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
 	key = p.Subject + p.Region
+	return
+}`,
+		"chained-selector": `package p
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
+	key = p.Subject + provider.Node.ID
 	return
 }`,
 	}
@@ -524,8 +553,13 @@ func isStringIdent(e ast.Expr) bool {
 }
 
 // isPrincipalPtr reports whether e is `*<pkg>.Principal` (the auth.Principal
-// pointer). Selector-name match is alias-robust enough for a Medium gate; the
-// Hard form would be a sealed key constructor (out of scope, #1449 follow-up).
+// pointer) by matching the selector name "Principal". This handles the
+// direct-import form (`*auth.Principal`); it does NOT accept a type alias
+// (`*P` where `type P = auth.Principal`, which is an *ast.Ident, not a
+// SelectorExpr) — such a form is rejected by the param-type freeze as "not
+// *auth.Principal", a false positive that forces review rather than a bypass.
+// The Hard form (sealed key constructor, #1610) removes this AST-shape
+// dependency entirely.
 func isPrincipalPtr(e ast.Expr) bool {
 	star, ok := e.(*ast.StarExpr)
 	if !ok {
