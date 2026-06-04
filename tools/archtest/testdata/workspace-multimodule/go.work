@@ -1,0 +1,13 @@
+go 1.25.11
+
+// Reverse fixture for #1555: a self-contained two-module workspace proving the
+// archtest workspace-root model loads + classifies EVERY member module. The
+// satellite module path (fixturetest/wsmm/satellite) is intentionally a string
+// subpath of the core module path (fixturetest/wsmm) — the Plan D shape
+// (github.com/ghbvf/gocell/mdm) — so the longest-prefix owner selection in
+// kerneldepgraph.Classifier is exercised (satellite packages must classify
+// within the satellite module, not as LayerUnknown of the core module).
+use (
+	.
+	./satellite
+)

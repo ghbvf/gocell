@@ -124,3 +124,71 @@ func TestReadModulePath(t *testing.T) {
 		})
 	}
 }
+
+func TestReadWorkUseDirs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		goWork  string // "" means do not write go.work
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:   "single use dot",
+			goWork: "go 1.25\n\nuse .\n",
+			want:   []string{"."},
+		},
+		{
+			name:   "block form multiple modules",
+			goWork: "go 1.25\n\nuse (\n\t.\n\t./mdm\n\t./examples/ssobff\n)\n",
+			want:   []string{".", "mdm", "examples/ssobff"},
+		},
+		{
+			name:   "trailing-slash and dot-prefix cleaned",
+			goWork: "go 1.25\n\nuse (\n\t./mdm/\n\t./zerotrust\n)\n",
+			want:   []string{"mdm", "zerotrust"},
+		},
+		{
+			name:    "missing go.work",
+			goWork:  "",
+			wantErr: true,
+		},
+		{
+			name:    "malformed go.work",
+			goWork:  "this is not a go.work file {{{\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			if tt.goWork != "" {
+				if err := os.WriteFile(filepath.Join(root, "go.work"), []byte(tt.goWork), 0o600); err != nil {
+					t.Fatalf("write go.work: %v", err)
+				}
+			}
+
+			got, err := gomodutil.ReadWorkUseDirs(root)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ReadWorkUseDirs(%q) = %v, want error", root, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadWorkUseDirs(%q) unexpected error: %v", root, err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("ReadWorkUseDirs(%q) = %v, want %v", root, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("ReadWorkUseDirs(%q)[%d] = %q, want %q", root, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

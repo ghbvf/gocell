@@ -227,12 +227,13 @@ func TestKernelInternalDAG(t *testing.T) {
 		}
 	})
 
-	// Sub-test 2: depgraph LayerOf labels every owner under kernel/ as LayerKernel.
+	// Sub-test 2: Classifier.Layer labels every owner under kernel/ as LayerKernel.
 	t.Run("owners_classified_as_kernel_layer", func(t *testing.T) {
+		cls := kerneldepgraph.NewClassifier([]string{module})
 		for owner := range owners {
 			pkg := module + "/kernel/" + owner
 			assert.Equal(t, kerneldepgraph.LayerKernel,
-				kerneldepgraph.LayerOf(module, pkg),
+				cls.Layer(pkg),
 				"kernel/%s must classify as LayerKernel", owner)
 		}
 	})

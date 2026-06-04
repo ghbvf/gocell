@@ -76,10 +76,23 @@ func (g *Graph) dfs(id string, currentPath []string, paths map[string][]string) 
 	}
 }
 
-// inModule reports whether id is the module root or any package below it.
+// inModule reports whether id is the root, or a package below the root, of ANY
+// of the graph's workspace modules. Membership is an explicit set check over
+// g.Modules — it does NOT rely on nested module paths happening to be string
+// subpaths of the core module (a coincidence that holds today but is not a
+// guarantee), so a satellite module whose path is unrelated to the core's is
+// still correctly treated as in-module.
 func (g *Graph) inModule(id string) bool {
-	if g == nil || g.Module == "" {
+	if g == nil {
 		return false
 	}
-	return id == g.Module || strings.HasPrefix(id, g.Module+"/")
+	for _, m := range g.Modules {
+		if m == "" {
+			continue
+		}
+		if id == m || strings.HasPrefix(id, m+"/") {
+			return true
+		}
+	}
+	return false
 }

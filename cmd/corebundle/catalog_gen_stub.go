@@ -26,6 +26,6 @@ import kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 // degrades gracefully (cellDeps + statusBoard + entities still populated;
 // only packageDeps is empty).
 var generatedPackageGraph = kerneldepgraph.FromNodes(
-	"github.com/ghbvf/gocell",
+	[]string{"github.com/ghbvf/gocell"},
 	[]*kerneldepgraph.Node{},
 )

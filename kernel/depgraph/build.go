@@ -3,7 +3,10 @@ package depgraph
 import "sort"
 
 // FromNodes builds a Graph from a pre-constructed []*Node slice.
-// module must be the bare module path (e.g. "github.com/ghbvf/gocell").
+// modules is the set of module import paths the graph spans (one element for a
+// single-module load, e.g. []string{"github.com/ghbvf/gocell"}; every workspace
+// member for a multi-module load). It becomes Graph.Modules — the membership set
+// for closure walks (Graph.inModule).
 // FromNodes handles:
 //   - deduplication by Node.ID (first occurrence wins)
 //   - byID index construction for O(1) ByID lookups and closure walks
@@ -14,10 +17,10 @@ import "sort"
 // the Layer, CellID, SliceID, and Imports fields are taken as-is.
 // MarkTestOnly must be called separately when test-importer information
 // is available (see tools/depgraph.FromPackages).
-func FromNodes(module string, nodes []*Node) *Graph {
+func FromNodes(modules []string, nodes []*Node) *Graph {
 	g := &Graph{
-		Module: module,
-		byID:   make(map[string]*Node, len(nodes)),
+		Modules: append([]string(nil), modules...),
+		byID:    make(map[string]*Node, len(nodes)),
 	}
 	for _, n := range nodes {
 		if n == nil || n.ID == "" {
@@ -45,7 +48,7 @@ func FromNodes(module string, nodes []*Node) *Graph {
 // match or if g is nil.
 func (g *Graph) FilterByLayer(allowedLayers map[string]bool) *Graph {
 	if g == nil {
-		return &Graph{Module: "", Packages: []*Node{}, Stats: Stats{}}
+		return &Graph{Modules: []string{}, Packages: []*Node{}, Stats: Stats{}}
 	}
 	var filtered []*Node
 	for _, n := range g.Packages {
@@ -53,7 +56,7 @@ func (g *Graph) FilterByLayer(allowedLayers map[string]bool) *Graph {
 			filtered = append(filtered, n)
 		}
 	}
-	return FromNodes(g.Module, filtered)
+	return FromNodes(g.Modules, filtered)
 }
 
 // MarkTestOnly tags each node in g TestOnly=true when it is imported by at

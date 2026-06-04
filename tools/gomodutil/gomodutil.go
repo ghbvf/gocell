@@ -58,3 +58,35 @@ func ReadModulePath(root string) (string, error) {
 	}
 	return mod, nil
 }
+
+// ReadWorkUseDirs reads root/go.work and returns the disk paths of its `use`
+// directives, each filepath.Clean'd and kept relative as written (e.g. "." or
+// "mdm" or "examples/ssobff"). It uses golang.org/x/mod/modfile.ParseWork — the
+// canonical go.work parser the Go toolchain itself uses — so it is robust
+// against comments, block (`use (...)`) and single-line forms.
+//
+// go.work `use` is the authoritative set of Go modules the toolchain compiles
+// in workspace mode; archtest's workspace enumeration derives its production
+// scan set from it (so a module extracted into go.work is auto-covered).
+//
+// Returns an error when go.work is absent/unreadable or malformed (fail-closed:
+// callers must not proceed with a guessed module set).
+func ReadWorkUseDirs(root string) ([]string, error) {
+	p := filepath.Clean(filepath.Join(root, "go.work"))
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("read go.work: %w", err)
+	}
+	wf, err := modfile.ParseWork(p, data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("parse go.work at %s: %w", root, err)
+	}
+	dirs := make([]string, 0, len(wf.Use))
+	for _, u := range wf.Use {
+		if u == nil || u.Path == "" {
+			continue
+		}
+		dirs = append(dirs, filepath.Clean(u.Path))
+	}
+	return dirs, nil
+}

@@ -8,10 +8,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
+
+// defaultGraphPattern is the --pattern default. When unchanged AND --root is a
+// workspace (has go.work), the graph spans every workspace member (one
+// "<importPath>/..." pattern per module) rather than only the root module's
+// "./..." — so a nested module is graphed, not silently dropped.
+const defaultGraphPattern = "./..."
 
 // defaultRootDir returns the current working directory, used as the default
 // value for the --root flag when the caller does not supply one.
@@ -68,7 +77,9 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	// Default output (os.Stderr) is preserved so `-h` prints usage; do not
 	// silence with io.Discard. Dispatch maps flag.ErrHelp → exit code 0.
 	format := fs.String("format", "json", "output format: json|dot")
-	pattern := fs.String("pattern", "./...", "package pattern passed to packages.Load")
+	pattern := fs.String("pattern", defaultGraphPattern,
+		"package pattern passed to packages.Load; in a workspace (--root has go.work), "+
+			"the default spans every member module — override to scope to one pattern")
 	root := fs.String("root", defaultRootDir(), "project root directory passed as Dir to packages.Load")
 	includeTests := fs.Bool("include-tests", false,
 		"load test-variant packages so TestOnly markers are populated; "+
@@ -94,11 +105,40 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	}, nil
 }
 
+// loadGraph builds the dependency graph for opts.Root. When the root is a
+// workspace (a go.work is present) it spans every workspace member module
+// (LoadWorkspace) so a nested module is graphed rather than silently dropped;
+// when the root has no go.work it loads that single standalone module (Load).
+// The mode is selected by go.work presence — an explicit branch, not a silent
+// default — so both the in-repo workspace graph and an arbitrary standalone
+// module remain expressible.
+func loadGraph(opts graphOptions) (*kerneldepgraph.Graph, error) {
+	lo := depgraph.LoadOptions{IncludeTests: opts.IncludeTests, Dir: opts.Root}
+
+	if _, err := os.Stat(filepath.Join(opts.Root, "go.work")); err != nil {
+		// No go.work above the root → single standalone module.
+		return depgraph.Load(lo, opts.Pattern)
+	}
+
+	// Workspace: span every member module. A non-default --pattern is an
+	// explicit scope override (escape hatch); the default expands to one
+	// "<importPath>/..." pattern per workspace member.
+	if opts.Pattern != defaultGraphPattern {
+		return depgraph.LoadWorkspace(lo, opts.Pattern)
+	}
+	mods, err := workspace.Modules(opts.Root)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate workspace modules: %w", err)
+	}
+	patterns := make([]string, len(mods))
+	for i, m := range mods {
+		patterns[i] = m.ImportPath + "/..."
+	}
+	return depgraph.LoadWorkspace(lo, patterns...)
+}
+
 func executeGraph(opts graphOptions) error {
-	g, err := depgraph.Load(depgraph.LoadOptions{
-		IncludeTests: opts.IncludeTests,
-		Dir:          opts.Root,
-	}, opts.Pattern)
+	g, err := loadGraph(opts)
 	if err != nil {
 		return fmt.Errorf("graph: load: %w", err)
 	}

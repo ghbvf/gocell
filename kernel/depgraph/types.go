@@ -5,11 +5,18 @@ import (
 	"sort"
 )
 
-// Graph is the typed dependency graph for one Go module. Wire-format stable.
+// Graph is the typed dependency graph for a workspace's Go modules.
+// Wire-format stable.
+//
+// Modules is the set of module import paths the graph spans (one element for a
+// single-module load; every workspace member under a go.work multi-module
+// load). It is the membership set for Graph.inModule closure walks and the
+// classification basis the builder used. A single-module graph has
+// Modules == []string{module}.
 type Graph struct {
-	Module   string  `json:"module"`
-	Packages []*Node `json:"packages"`
-	Stats    Stats   `json:"stats"`
+	Modules  []string `json:"modules"`
+	Packages []*Node  `json:"packages"`
+	Stats    Stats    `json:"stats"`
 
 	byID map[string]*Node // O(1) lookup; not serialized
 }
@@ -79,12 +86,18 @@ func (g *Graph) MarshalJSON() ([]byte, error) {
 	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].ID < pkgs[j].ID })
 
 	type graphAlias struct {
-		Module   string  `json:"module"`
-		Packages []*Node `json:"packages"`
-		Stats    Stats   `json:"stats"`
+		Modules  []string `json:"modules"`
+		Packages []*Node  `json:"packages"`
+		Stats    Stats    `json:"stats"`
+	}
+	mods := append([]string(nil), g.Modules...)
+	sort.Strings(mods)
+	if mods == nil {
+		// Honor a non-null wire contract for the module set.
+		mods = []string{}
 	}
 	return json.Marshal(graphAlias{
-		Module:   g.Module,
+		Modules:  mods,
 		Packages: pkgs,
 		Stats:    g.Stats,
 	})
