@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -996,7 +997,10 @@ type fingerprintMismatchStore struct{}
 func (fingerprintMismatchStore) Claim(
 	_ context.Context, _, _, _ string, _ time.Duration,
 ) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
-	return 0, nil, nil, ErrFingerprintMismatch
+	// Return the typed error wrapping the sentinel, matching the Store contract
+	// (Implementations MUST return a *FingerprintMismatchError). Stored is empty
+	// here — this fake exercises the metric/status path, not the per-field diff.
+	return 0, nil, nil, &FingerprintMismatchError{}
 }
 
 // TestMiddleware_Metrics_KeyReused verifies that a fingerprint mismatch
@@ -1128,6 +1132,81 @@ func mismatchedFieldsFromBody(t *testing.T, raw []byte) []string {
 		fields = append(fields, v)
 	}
 	return fields
+}
+
+// TestMiddleware_KeyReused_NoFieldDetails covers two mismatch shapes that yield a
+// 422 with NO per-field detail: (a) same fields, different top-level key order
+// (Body byte-mismatch but identical field hashes); (b) a non-JSON-object body
+// (no field map). The base 422 is still returned in both cases.
+func TestMiddleware_KeyReused_NoFieldDetails(t *testing.T) {
+	cases := []struct{ name, first, second string }{
+		{"key-order-only", `{"a":1,"b":2}`, `{"b":2,"a":1}`},
+		{"non-json-body", `plain-text-A`, `plain-text-B`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			clk := clockmock.New(time.Now())
+			mw := Middleware(clk, NewMemStore(clk))
+			mkReq := func(body string) *http.Request {
+				r := httptest.NewRequest("POST", "/o", strings.NewReader(body))
+				r.Header.Set("Idempotency-Key", "k-nofields")
+				return r.WithContext(auth.WithPrincipal(r.Context(),
+					&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: "t1"}))
+			}
+			rr1 := httptest.NewRecorder()
+			mw(testHandler(201, "ok")).ServeHTTP(rr1, mkReq(tc.first))
+			if rr1.Code != 201 {
+				t.Fatalf("first code: got %d, want 201", rr1.Code)
+			}
+			rr2 := httptest.NewRecorder()
+			mw(testHandler(201, "ok")).ServeHTTP(rr2, mkReq(tc.second))
+			if rr2.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+			}
+			if got := mismatchedFieldsFromBody(t, rr2.Body.Bytes()); len(got) != 0 {
+				t.Errorf("expected no mismatchedField details, got %v", got)
+			}
+		})
+	}
+}
+
+// TestMiddleware_KeyReused_TruncatesManyFields verifies the diff is capped at
+// maxMismatchedFields with a mismatchedFieldsTruncated marker when more fields
+// differ.
+func TestMiddleware_KeyReused_TruncatesManyFields(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	mw := Middleware(clk, NewMemStore(clk))
+	body := func(val string) string {
+		m := make(map[string]string, maxMismatchedFields+5)
+		for i := 0; i < maxMismatchedFields+5; i++ {
+			m[fmt.Sprintf("field%02d", i)] = val
+		}
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
+	mkReq := func(b string) *http.Request {
+		r := httptest.NewRequest("POST", "/o", strings.NewReader(b))
+		r.Header.Set("Idempotency-Key", "k-trunc")
+		return r.WithContext(auth.WithPrincipal(r.Context(),
+			&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: "t1"}))
+	}
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "ok")).ServeHTTP(rr1, mkReq(body("A")))
+	if rr1.Code != 201 {
+		t.Fatalf("first code: got %d, want 201", rr1.Code)
+	}
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "ok")).ServeHTTP(rr2, mkReq(body("B")))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := len(mismatchedFieldsFromBody(t, rr2.Body.Bytes())); got != maxMismatchedFields {
+		t.Errorf("mismatchedField count: got %d, want %d (capped)", got, maxMismatchedFields)
+	}
+	if !strings.Contains(rr2.Body.String(), "mismatchedFieldsTruncated") {
+		t.Errorf("expected mismatchedFieldsTruncated detail; body=%s", rr2.Body.String())
+	}
 }
 
 // TestComputeFingerprintAndDiff exercises the canonical fingerprint + per-field

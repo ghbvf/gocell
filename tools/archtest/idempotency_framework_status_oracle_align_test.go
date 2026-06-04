@@ -36,9 +36,15 @@ func TestIdempotencyFrameworkStatusOracleAlign01(t *testing.T) {
 	runtimeSet := append([]int(nil), idemhttp.FrameworkStatuses()...)
 	sort.Ints(runtimeSet)
 
-	// Anti-vacuity: an empty set would make this test (and CH-07) pass trivially.
-	if len(runtimeSet) == 0 {
-		t.Fatal("idemhttp.FrameworkStatuses() is empty; expected the framework-injected status set")
+	// Anti-vacuity / golden anchor: a pure cross-equality check would still pass
+	// if BOTH the runtime source and the kernel oracle drifted together to a
+	// wrong-but-equal value (e.g. both → {409, 423}). Anchor the runtime source to
+	// the known-good set so any drift on either side is caught. Update this golden
+	// only alongside a deliberate framework-status change.
+	wantGolden := []int{409, 422} // 409 ClaimBusy, 422 key-reused
+	if !reflect.DeepEqual(runtimeSet, wantGolden) {
+		t.Fatalf("idemhttp.FrameworkStatuses()=%v, want golden %v (update the golden only "+
+			"alongside a deliberate framework-status change)", runtimeSet, wantGolden)
 	}
 
 	// Every mutating method shares the same framework-injected set; POST is

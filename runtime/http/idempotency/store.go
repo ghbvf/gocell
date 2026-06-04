@@ -99,14 +99,19 @@ func FrameworkStatuses() []int {
 //
 // On error (err != nil), fail closed: do not run the handler.
 // If err wraps ErrFingerprintMismatch (errors.Is), the same key was previously
-// claimed with a different fingerprint — the middleware returns 409 with
-// ErrIdempotencyKeyReused. Do NOT add a 4th ClaimState for this case; use the
-// sentinel error path instead.
+// claimed with a different fingerprint — the middleware returns 422
+// (KindUnprocessable) with ErrIdempotencyKeyReused. Do NOT add a 4th ClaimState
+// for this case; use the sentinel error path instead. Implementations MUST
+// return a *FingerprintMismatchError (which wraps the sentinel) so the middleware
+// can recover the stored fingerprint blob for the per-field diff.
 //
 // ns is the idempotency namespace that scopes keys to a part of the
 // application. In the standard Middleware, ns is the caller TenantID (or
 // "_notenant" when absent). key is method+"\x00"+path+"\x00"+subject+"\x00"+
-// Idempotency-Key header value. fingerprint is hex(sha256(body)).
+// Idempotency-Key header value. fingerprint is the opaque canonical blob produced
+// by computeFingerprint (JSON whose Body field is hex(sha256(rawBody)) and whose
+// Fields field maps top-level field names to per-field hashes for the diff); the
+// Store treats it as an opaque string and only compares / round-trips it.
 type Store interface {
 	Claim(ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error)
 }

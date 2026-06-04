@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -78,6 +79,11 @@ const (
 	// body has many top-level fields. When the diff exceeds this, the names are
 	// truncated and a mismatchedFieldsTruncated=true detail is added.
 	maxMismatchedFields = 20
+
+	// maxFieldNameLen caps the byte length of each reported field name. Field
+	// names come from client-controlled JSON keys, so an over-long name is
+	// truncated (with a … marker) to bound 422 response size.
+	maxFieldNameLen = 128
 
 	// retryAfterHintSeconds is the Retry-After header value sent on 409
 	// ClaimBusy responses. A small hint (5 s) is better than the full lease
@@ -253,10 +259,12 @@ func (c middlewareConfig) observeState(ctx context.Context, state RequestState) 
 // is independent per endpoint — a key for POST /orders does NOT collide with
 // POST /payments. (Stripe / IETF idempotency-key draft §3 aligned.)
 //
-// Body fingerprinting: the request body is read, SHA-256 hashed (hex), and
-// passed as the Store fingerprint. BodyLimit middleware MUST run before this
-// middleware so r.Body is already size-bounded. Fingerprint mismatch (same key,
-// different body) returns 409 ErrIdempotencyKeyReused.
+// Body fingerprinting: the request body is read and reduced to a canonical
+// fingerprint blob (whole-body hash + per-field hashes; see computeFingerprint).
+// BodyLimit middleware MUST run before this middleware so r.Body is already
+// size-bounded. Fingerprint mismatch (same key, different body) returns 422
+// (KindUnprocessable) ErrIdempotencyKeyReused, with the differing top-level field
+// names in the error details (per-field diff).
 //
 // clk must be non-nil; clock.MustHaveClock panics on nil.
 // store must be non-nil; a nil store causes a panic with panicregister.Approved
@@ -589,7 +597,7 @@ func shouldRecord(status int) bool {
 // opaque string. Body is hex(sha256(rawBody)) — the match decision is exact
 // equality of the whole blob, so Body preserves byte-exact match semantics
 // (reordered keys or whitespace change Body and therefore mismatch). Fields maps
-// each top-level JSON field name to hex(sha256(canonicalValue)) and exists ONLY
+// each top-level JSON field name to hex(sha256(rawValueBytes)) and exists ONLY
 // to drive the per-field diff on mismatch; it holds hashes, never raw values.
 type fingerprintBlob struct {
 	Body   string            `json:"b"`
@@ -622,10 +630,13 @@ func parseFingerprint(s string) fingerprintBlob {
 	return blob
 }
 
-// fieldHashes returns {topLevelField: hex(sha256(canonicalValue))} for a JSON
+// fieldHashes returns {topLevelField: hex(sha256(rawValueBytes))} for a JSON
 // object body, or nil when body is not a JSON object. Only top-level fields are
 // hashed (Stripe-param granularity); a changed nested value surfaces as a change
-// to its top-level parent.
+// to its top-level parent. Each value is hashed by its raw bytes (json.RawMessage
+// defers value parsing — no recursive decode/re-encode), which keeps the per-field
+// diff consistent with the byte-exact whole-body match (Body) and avoids any
+// hot-path cost or deep-nesting surface from canonicalizing untrusted values.
 func fieldHashes(body []byte) map[string]string {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
@@ -633,25 +644,9 @@ func fieldHashes(body []byte) map[string]string {
 	}
 	out := make(map[string]string, len(top))
 	for k, raw := range top {
-		out[k] = canonicalValueHash(raw)
+		out[k] = hashHex(raw)
 	}
 	return out
-}
-
-// canonicalValueHash hashes a field value after canonicalizing it (json.Marshal
-// of the decoded value sorts nested keys and normalizes whitespace), so values
-// that are semantically equal but textually different hash identically. On a
-// decode/encode failure it falls back to hashing the raw bytes.
-func canonicalValueHash(raw json.RawMessage) string {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return hashHex(raw)
-	}
-	canon, err := json.Marshal(v)
-	if err != nil {
-		return hashHex(raw)
-	}
-	return hashHex(canon)
 }
 
 // diffFields returns the sorted top-level field names whose hash differs between
@@ -705,12 +700,26 @@ func keyReusedDetailOpts(err error, incoming string) []errcode.Option {
 	}
 	details := make([]errcode.PublicDetail, 0, len(fields)+1)
 	for _, f := range fields {
-		details = append(details, errcode.PublicString("mismatchedField", f))
+		details = append(details, errcode.PublicString("mismatchedField", truncateFieldName(f)))
 	}
 	if truncated {
 		details = append(details, errcode.PublicBool("mismatchedFieldsTruncated", true))
 	}
 	return []errcode.Option{errcode.WithDetails(details...)}
+}
+
+// truncateFieldName bounds a client-controlled JSON field name to maxFieldNameLen
+// bytes (appending "…" when truncated) so an over-long key cannot bloat the 422
+// response. Truncates on a rune boundary to keep the output valid UTF-8.
+func truncateFieldName(name string) string {
+	if len(name) <= maxFieldNameLen {
+		return name
+	}
+	cut := maxFieldNameLen
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return name[:cut] + "…"
 }
 
 // hashHex returns hex(sha256(b)).

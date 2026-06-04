@@ -822,7 +822,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
     severity: info
   annotations:
     summary: "Idempotency key reused with different body"
-    description: "同 key 不同 body 指纹不匹配 409 速率 >0.05/sec（≈ 3/min）持续 15min。客户端 bug 或重放尝试，结合 slog idempotency_key_hash 关联请求来源。"
+    description: "同 key 不同 body 指纹不匹配 422 速率 >0.05/sec（≈ 3/min）持续 15min（响应附 per-field diff 差异字段名）。客户端 bug 或重放尝试，结合 slog idempotency_key_hash 关联请求来源。"
 ```
 
 ### 调试查询
