@@ -51,6 +51,16 @@ func Register(reg *command.Registry, h Handler) error {
 
 // Dispatch looks up the Handler registered under DispatchID and invokes it.
 //
+// Request value-constraints declared in the contract request schema
+// (minLength/maxLength/required/additionalProperties) are NOT runtime-validated
+// here. Per ADR §D4/§D6 + Amendment 2026-06-04, the request schema's role at the
+// in-process sync boundary is to SOURCE the typed *Request signature, not to gate
+// values at runtime: Go enforces field types, additionalProperties:false is
+// structurally unviolatable on a typed struct, and the caller is first-party
+// in-process code. JSON-schema value-validation belongs at the untrusted
+// command-entry boundaries (HTTP→command, async outbox→command), tracked as a
+// #1044 sub-issue.
+//
 // Returns KindInvalid / ErrValidationFailed when reg or req is nil (miswiring /
 // caller bug — surfaced as a structured error rather than a nil-pointer panic).
 // Returns KindNotFound / ErrCommandNotFound when no handler has been registered.

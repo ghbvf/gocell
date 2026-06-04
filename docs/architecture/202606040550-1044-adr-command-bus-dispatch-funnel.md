@@ -27,7 +27,7 @@ PR-1 交付其中的**同步 in-process 核心**：codegen 派生 typed `Handler
 | **D3** | **sealed Registry，异构 handler 装箱 `any`**：`runtime/command.Registry` 私有 `map[CommandID]any` + RWMutex。一个 registry 持有多个 typed Handler（每契约不同 Handler 类型），Go 异构 typed map **无法去 `any`/erasure**——同 saga 持 untyped `*Definition`。`RegisterHandler`/`LookupHandler` 收口写/读。 | `runtime/command/registry.go`（unexported 字段，包外不可构造/读写）；`COMMAND-DISPATCH-REGISTER-CALLER-01` | **下游 Hard / 上游 Medium**（见 §4） |
 | **D4** | **同步 type-assert，不用 JSON round-trip**：生成 `Dispatch` 把 boxed handler 断言回 typed `Handler` 后直调。零序列化、in-process 惯用。saga 用 JSON 是因跨异步 step 边界；PR-1 同步不跨边界。JSON 统一性留 ④ 异步。 | 生成码形态（golden 锁） | 形态由 golden 锁（上游 Hard） |
 | **D5** | **「编译期注册唯一性」= sole-emitter funnel + runtime KindConflict**。issue ③ 字面「编译期 Handler 注册唯一性」中**「编译期阻止第二次 runtime `Register` 调用」Go 不可表达**（运行时多次调用无法编译期拦）。落地 = (a) 编译期：typed `Register` 唯一来源（sole-emitter）；(b) 运行时：`RegisterHandler` 第二次同 id → `KindConflict`（对标 Watermill `DuplicateCommandHandlerError`）。 | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（a）+ `Registry.RegisterHandler` runtime guard（b） | a 上游 Hard / b runtime guard（Medium） |
-| **D6** | **codegen fail-closed，无 stub 降级**：`kind:command,codegen:true` 缺 request **或** response schemaRef → `buildCommandSpec` 硬错（不静默生成空包）。governance `COMMAND-CONTRACT-SCHEMA-REF-01` 在 validate 期并行兜底。 | `contractgen.buildCommandSpec`（codegen Hard 半边）+ `COMMAND-CONTRACT-SCHEMA-REF-01`（governance Medium 兜底） | **codegen 上游 Hard + governance Medium**（同 saga step-schema-ref 范式） |
+| **D6** | **codegen fail-closed，无 stub 降级**：`kind:command,codegen:true` 缺 request **或** response schemaRef → `buildCommandSpec` 硬错（不静默生成空包）。governance `COMMAND-CONTRACT-SCHEMA-REF-01` 在 validate 期并行兜底。schemaRef 的作用 = **派生 typed `*Request`/`*Response` 签名**，**非**运行时值约束门；sync `Dispatch` 不执行 request value-validation（见 §Amendment 2026-06-04）。 | `contractgen.buildCommandSpec`（codegen Hard 半边）+ `COMMAND-CONTRACT-SCHEMA-REF-01`（governance Medium 兜底） | **codegen 上游 Hard + governance Medium**（同 saga step-schema-ref 范式） |
 | **D7** | **layer = `runtime/command`**：dispatcher 核心入 `runtime/command`（已有 SweeperLifecycle），依赖 `kernel/+pkg/`，不依赖 cells/adapters。生成码在 `generated/contracts/command/**` import `runtime/command`（`generated/` 可 import 任意层，无环）。 | 分层依赖规则（`go-standards.md`）+ build | 结构性（build 守） |
 
 ---
@@ -87,3 +87,24 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 | governance | `COMMAND-CONTRACT-SCHEMA-REF-01` | `kernel/governance/rules_command.go` |
 | codegen | `kind:command` 生成器 + golden | `tools/codegen/contractgen/{builder,generator}.go` + `templates/command.tmpl` |
 | runtime | sealed `Registry` | `runtime/command/registry.go` |
+
+---
+
+## Amendment 2026-06-04（F5：schemaRef 边界澄清 — value-validation 不在 sync fast-path）
+
+**触发**：PR #1578 round-2 codex review finding C4/F5（Cx3，需人工裁决）。观察：D6 强制 `kind:command,codegen:true` 声明 request/response schemaRef，但 D4 的同步 `Dispatch` 把 boxed handler 断言回 typed `Handler` 后直调，**从不**对 typed `*Request` 执行该 schema 的值约束（`minLength`/`maxLength`/`required`/`additionalProperties`）。表面上「schemaRef 被强制存在但不被执行」是声明强于执行的不一致。
+
+**裁决（Option A，#1578 用户确认）**——**D8：schemaRef = typed-signature 来源，value-validation 在不可信边界，不在 in-process sync fast-path**：
+
+1. **schemaRef-presence（D6）的语义 = 派生 typed `*Request`/`*Response` 签名**，不是「运行时值约束契约」。D6 fail-closed 仍成立（缺 schemaRef ⇒ 无法派生 typed signature ⇒ 硬错），但其被强制的理由是「签名来源」而非「约束被执行」。两者不矛盾，本 amendment 只是把 D6 的*意图*显式化。
+
+2. **sync in-process `Dispatch`（D4）刻意不执行 request value-validation**。三条理由：
+   - **typed-struct 即契约**：调用方传入 typed `*Request`，Go 类型系统已强制字段*类型*；`additionalProperties:false` 在 typed struct 上**结构性不可违反**（无法塞未知字段）。剩余未执行约束仅 string 长度 / `required` presence。
+   - **可信边界**：sync `Dispatch` 的调用方是 **in-process 第一方 Go 代码**（派发 cell），非不可信 wire 输入。JSON-schema 值约束是 untrusted-JSON 的 wire 卫生规则；在 in-process typed 调用上重复执行是对编程错误的 defense-in-depth，非安全/正确性边界。
+   - **D4 = 零序列化 fast-path**：HTTP 的 `runtime/http/schemavalidate.Validator.Validate(ctx, body []byte)` 是 **JSON-bytes 校验器**；复用它必须先把 typed `*Request` marshal 回 JSON——正是 D4 拒绝的 round-trip。在 sync 路径强加 marshal+validate 直接违背 D4 的 in-process 惯用，故**不**复用 HTTP validator。
+
+3. **value-validation 归属不可信 command-entry 边界**（= §5 演进路径的 ④/⑤）：HTTP→command（handler 在入 cell 前已校验 untrusted JSON）、async outbox→command（D4 已注明 JSON marshal 在 outbox 边界发生）。这些边界落地时，request schema 的值约束在**该处**执行——schemaRef 因此最终*被*执行，只是不在 in-process fast-path 上冗余重检。command-entry validation funnel 设计与 ④ async 共同落地，跟踪为 **#1044 子 issue**（`Discovered via /fix #1578 F5`）。
+
+**§4 评级矩阵逐行重评（ai-robust.md ADR amendment 必查）**：本 amendment **不改 §4 任一格**。§4 双向锁矩阵约束的是 *dispatch/register funnel*（typed Handler/Register/Dispatch 仅由 codegen 派生 + raw `RegisterHandler`/`LookupHandler` 调用方收口），与 *request value-validation* 正交——后者既不放宽前者的上游/下游 Hard，也不新增伪造面。D4（golden 锁 sync 形态）、D6（codegen fail-closed 上游 Hard + governance Medium）评级不变；无 ✅→⚠️/❌ 降格，无需补偿措施。
+
+**为何不 silent defer（非 lazy）**：真实 blocker = 正确实现（typed-struct 级约束 IR，不 JSON round-trip）是一个**全新 codegen 机制**（须自带 AI-robust 评级 + archtest + golden），且其唯一真实消费点是不可信 command-entry 边界——与 ④ async 共同设计才有正确 altitude；廉价实现（JSON round-trip）违背 D4。故 funnel 设计随 ④ 落地，本 PR 以 §D8 显式收口设计边界。
