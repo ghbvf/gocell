@@ -194,6 +194,62 @@ func TestProjectionRebuild_LongPathParamClamped(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), strings.Repeat("a", maxPathParamReport))
 }
 
+// TestProjectionRebuild_BehindAuthOperatorGate is the end-to-end regression for
+// the migrated admin endpoint (#1505 F4): it composes the *real* projection
+// rebuild handler (projectionRebuildRouteGroup) behind the *real* AdminListener
+// operator gate (applyListenerAuthChain → AuthOperator → NewBootstrapMiddleware),
+// exactly as phase5 wires them. This closes the gap where the handler
+// (202/409/404/500) and the operator Basic-Auth gate were only ever exercised in
+// isolation: without credentials the gate 401s and the rebuild controller is
+// never reached; with correct operator credentials the request flows through to
+// the real handler and returns 202.
+func TestProjectionRebuild_BehindAuthOperatorGate(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRebuildController{snap: projection.Snapshot{Phase: projection.PhaseLive, PendingEvents: 3}}
+	b := rebuildBootstrap(map[string]rebuildController{"ordercell/order_status": fake})
+
+	// Real rebuild handler on its RouteGroup (mountRebuildEndpoint also asserts
+	// the group targets the AdminListener).
+	mux := mountRebuildEndpoint(t, b)
+
+	// Real listener-level operator gate, identical to the phase5 install path.
+	mws, _, _, err := b.applyListenerAuthChain(cell.AdminListener, []kauth.ListenerAuth{newTestOperatorAuth(t)})
+	require.NoError(t, err)
+	require.Len(t, mws, 1, "AuthOperator installs exactly one listener middleware")
+	guarded := mws[0](mux)
+
+	do := func(setAuth func(*http.Request)) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost,
+			"/admin/v1/projection/ordercell/order_status/rebuild", nil)
+		if setAuth != nil {
+			setAuth(req)
+		}
+		rec := httptest.NewRecorder()
+		guarded.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// No Basic Auth → 401 at the gate; the rebuild handler must never run.
+	assert.Equal(t, http.StatusUnauthorized, do(nil).Code, "missing operator credentials → 401")
+	assert.Equal(t, 0, fake.rebuildCalls, "gate must block before the rebuild handler runs")
+
+	// Wrong password → 401, still blocked.
+	assert.Equal(t, http.StatusUnauthorized,
+		do(func(r *http.Request) { r.SetBasicAuth("ops", "wrongwrong") }).Code,
+		"wrong operator password → 401")
+	assert.Equal(t, 0, fake.rebuildCalls, "wrong credentials must not reach the handler")
+
+	// Correct operator credentials → gate passes, real handler returns 202 + snapshot.
+	rec := do(func(r *http.Request) { r.SetBasicAuth("ops", "s3cretpwd") })
+	require.Equal(t, http.StatusAccepted, rec.Code, "correct operator credentials → 202")
+	assert.Equal(t, 1, fake.rebuildCalls, "authenticated request reaches the rebuild handler")
+	var got projectionRebuildResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, "live", got.Data.Phase)
+	assert.Equal(t, int64(3), got.Data.PendingEvents)
+}
+
 // TestValidateProjectionRebuildEndpoint covers the phase0 fail-fast: opting into
 // the endpoint requires an AdminListener; not opting in is a no-op.
 func TestValidateProjectionRebuildEndpoint(t *testing.T) {
@@ -225,7 +281,7 @@ func TestValidateProjectionRebuildEndpoint(t *testing.T) {
 // newTestOperatorAuth builds a valid AuthOperator for listener-config tests.
 func newTestOperatorAuth(t *testing.T) kauth.AuthOperator {
 	t.Helper()
-	op, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cret"), allowAllLimiter{}, nil)
+	op, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cretpwd"), allowAllLimiter{}, nil)
 	require.NoError(t, err)
 	return op
 }

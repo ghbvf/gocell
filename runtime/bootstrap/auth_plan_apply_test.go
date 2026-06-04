@@ -126,7 +126,7 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 	resolvedPlan := authtest.MustAuthJWTFromAssembly(asm)
 	resolvedPlan.SetResolved(verifier)
 
-	operatorPlan, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cret"), allowAllLimiter{}, nil)
+	operatorPlan, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cretpwd"), allowAllLimiter{}, nil)
 	require.NoError(t, err)
 
 	ref := cell.PrimaryListener
@@ -228,7 +228,7 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 func TestApplyListenerAuthChain_Operator(t *testing.T) {
 	t.Parallel()
 
-	op, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cret"), allowAllLimiter{}, nil)
+	op, err := kauth.NewAuthOperator([]byte("ops"), []byte("s3cretpwd"), allowAllLimiter{}, nil)
 	require.NoError(t, err)
 
 	b := newMinimalBootstrap()
@@ -257,7 +257,7 @@ func TestApplyListenerAuthChain_Operator(t *testing.T) {
 		"no Basic Auth → 401")
 	assert.Equal(t, http.StatusUnauthorized, do(func(r *http.Request) { r.SetBasicAuth("ops", "wrong") }),
 		"wrong password → 401")
-	assert.Equal(t, http.StatusOK, do(func(r *http.Request) { r.SetBasicAuth("ops", "s3cret") }),
+	assert.Equal(t, http.StatusOK, do(func(r *http.Request) { r.SetBasicAuth("ops", "s3cretpwd") }),
 		"correct operator credentials → 200")
 }
 

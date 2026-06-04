@@ -38,7 +38,8 @@ reserved foundation and migrates #1370 onto it.
    port, independent of public Primary and cell→cell Internal).
 2. `auth.AuthOperator` — an operator-credential `ListenerAuth` implementation that
    wraps the existing `NewBootstrapMiddleware` (env credentials + per-IP rate
-   limit + constant-time compare) at **listener** scope.
+   limit + SHA-256 fixed-length-digest constant-time compare) at **listener**
+   scope.
 3. `/admin/v1/` path prefix + bidirectional admin-path ↔ AdminListener affinity.
 4. Migration of #1370 projection rebuild onto the admin plane (no caller-cell
    allowlist).
@@ -136,6 +137,7 @@ consistent with the established internal-affinity precedent.
 | Mechanism | Rating | Notes |
 |---|---|---|
 | `AuthOperator` is a `ListenerAuth` | **Hard (type system, inherited)** | sealed `listenerAuthOK()` marker — external packages cannot implement `ListenerAuth`. |
+| `cells/` must not construct `AuthOperator` | **Medium→Hard (archtest, inherited LAYER-09)** | enrolled in `AUTH-PLAN-04` `authPlanConstructorNames` (go/types alias-agnostic) alongside the other AuthPlan types; AuthPlan construction stays a composition-root concern (PR #1581 F3). |
 | `AdminListener` is a `ListenerRef` | **Hard (type system, inherited)** | unexported `name` field — external packages cannot mint a `ListenerRef`. |
 | admin-path ↔ AdminListener affinity | **Medium (runtime guard + archtest)** | `verifyListenerRouteAffinity` fails fast at startup, both directions; router unit tests mirror the internal-affinity cases. Same shape as the existing internal-route affinity (no Soft mechanism introduced). |
 | operator-only-on-Admin / Admin-requires-operator | **Medium (phase0 runtime guard)** | `validateAuthOperatorPlans`. Same family as `validateAuthServiceTokenPlans`. |
@@ -152,7 +154,7 @@ cell ever declares an `/admin/v1/*` contract, that is a separate concern.
 | # | Threat | Mechanism | Rating |
 |---|---|---|---|
 | 1 | **Unauthenticated operator access** to the admin plane | `AuthOperator` HTTP Basic Auth (env credentials) is the **enforced** gate; `AdminListener`-requires-`AuthOperator` phase0 guard rejects an admin listener with no operator gate. A loopback bind is a recommended (not framework-enforced) defense-in-depth layer — see Residual | Hard (sealed plan) + Medium (phase0) |
-| 2 | **Operator credential brute-force** | per-IP token-bucket rate limiter (required by `NewAuthOperator`; nil limiter rejected at construction) + constant-time compare (`subtle.ConstantTimeCompare`) + uniform 401 (no username/password oracle) | Medium |
+| 2 | **Operator credential brute-force / credential probing** | per-IP token-bucket rate limiter (required by `NewAuthOperator`; nil limiter rejected at construction) + `NewAuthOperator` credential-strength floor (username rejects control chars, password ≥ 8 bytes — symmetric with the setup/admin floor) + **SHA-256 fixed-length-digest constant-time compare** (`authenticateBootstrap` → `constantTimeEqualHashed`: both sides hashed to 32 bytes before `subtle.ConstantTimeCompare`) + uniform 401 — no content **and no length** oracle | Medium |
 | 3 | **Admin endpoint leaks onto the public listener** | bidirectional `verifyListenerRouteAffinity`: an admin path on a non-admin listener fails fast; the primary listener already 404s non-primary control-plane prefixes (port-level isolation) | Medium |
 | 4 | **Operator credentials accepted on the wrong (public/internal) listener** | `AuthOperator`-only-on-`AdminListener` phase0 guard | Medium |
 | 5 | **Credential leak via logs/spans** | the operator credentials live in the `AuthOperator` plan and the request `Authorization: Basic` header; the framework's fail-closed slog/span redaction masks `authorization`/`bearer`/`password` keys. The admit-time audit log records only `cell`/`projection` + correlation IDs (no credentials, no caller cell) | Medium (inherited redaction) |
@@ -212,3 +214,31 @@ posture and upgrade path).
 - `docs/ops/listener-topology.md` (AdminListener topology).
 - Projection lifecycle ADR `202605261620-...` §5 + §Amendment 2026-06-04.
 - EventStoreDB projections HTTP admin API (admin-cred + network isolation benchmark).
+
+## Amendment 2026-06-04 (PR #1581 review)
+
+Round-2 review (codex) found that the original §4 row 2 "no username/password
+oracle" claim was **incomplete**: `subtle.ConstantTimeCompare` returns 0
+immediately when the two slices differ in length, so comparing **raw** credential
+bytes leaked the credential length to a timing attacker (a length oracle), even
+though the content comparison was constant-time. Two fixes landed in the same PR
+and the §4 threat matrix row 2 was rewritten accordingly (rating unchanged —
+Medium):
+
+1. **Length oracle closed (F1).** `runtime/auth.authenticateBootstrap` now routes
+   each field through `constantTimeEqualHashed`, which SHA-256-digests both the
+   presented and expected value to a fixed 32 bytes **before**
+   `subtle.ConstantTimeCompare`. The compared inputs are now constant-length, so
+   the comparison time is independent of both content and length. This shared
+   helper protects both the operator gate (this ADR) and the per-cell setup/admin
+   endpoint (it mirrors the pre-existing `runtime/http/health` verbose-token
+   comparison, which already hashed before comparing).
+2. **Weak-credential floor (F2).** `kernel/auth.NewAuthOperator` now rejects a
+   username containing control characters and a password shorter than 8 bytes
+   (`operatorMinPasswordLen`) — a one-byte password could previously gate the
+   network-reachable admin plane. This mirrors the setup/admin credential floor in
+   `cellmodules/accesscore` (`loadBootstrapCredentials`), so both operator gates
+   share one strength contract.
+
+No other §4 row flips: rows 1, 3–6 are unaffected (the fix only strengthens the
+brute-force/probing surface in row 2).

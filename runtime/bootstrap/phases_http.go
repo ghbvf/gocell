@@ -368,9 +368,12 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		opts = append(opts, routerAuthOpts...)
 	}
 
-	// R2-11: Health and Internal listeners intentionally run without a JWT
-	// verifier. Suppress the FinalizeAuth Warn for these listeners.
-	if ref == cell.HealthListener || ref == cell.InternalListener {
+	// R2-11: Health, Internal, and Admin listeners intentionally run without a
+	// JWT verifier — Health is loopback-isolated, Internal carries
+	// ServiceToken/mTLS, and Admin (#1505) carries the operator-credential gate
+	// (AuthOperator). phase0 affinity guarantees AdminListener never carries a JWT
+	// plan, so the FinalizeAuth "no JWT verifier" Warn is noise on all three.
+	if ref == cell.HealthListener || ref == cell.InternalListener || ref == cell.AdminListener {
 		opts = append(opts, router.WithSuppressNoAuthVerifierWarn())
 	}
 

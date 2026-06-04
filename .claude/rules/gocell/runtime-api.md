@@ -21,7 +21,8 @@ paths:
 > ```
 > `cell.Registrar` 仍在 `kernel/cell`，是 `Cell.Init(ctx, reg)` 的参数类型（PR #615
 > 之前叫 `cell.Registry`）。`cell.PrimaryListener` / `cell.InternalListener` /
-> `cell.HealthListener` 也留在 `kernel/cell`。下面所有示例按此约定。
+> `cell.HealthListener` / `cell.AdminListener` 也留在 `kernel/cell`。`auth.AuthOperator` /
+> `auth.NewAuthOperator`（#1505 operator 控制面）同样来自 `kernel/auth`。下面所有示例按此约定。
 
 ## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b / PR262)
 
@@ -126,8 +127,11 @@ bootstrap.New(
 | 常量 | 物理端口 | 挂载路由 | 默认地址 |
 |------|---------|---------|---------|
 | `cell.PrimaryListener` | public / API | `/api/v1/*` | `:8080` |
-| `cell.InternalListener` | control-plane | `/internal/v1/*` | `127.0.0.1:9090` |
+| `cell.InternalListener` | control-plane（cell→cell） | `/internal/v1/*` | `127.0.0.1:9090` |
 | `cell.HealthListener` | infra | `/healthz` `/readyz` `/metrics` | `127.0.0.1:9091` |
+| `cell.AdminListener`（可选，#1505） | control-plane（operator→system） | `/admin/v1/*` | `127.0.0.1:9093`（loopback） |
+
+> `cell.AdminListener` 是 operator 控制面专用 listener（#1505）：承载 `/admin/v1/*` operator→system 端点（如 framework projection rebuild `POST /admin/v1/projection/{cell}/{name}/rebuild`），区别于 internal listener 的 cell→cell 模型。**可选**——仅当装配了 admin 端点（如 `bootstrap.WithProjectionRebuildEndpoint()`）时声明。认证用 `auth.NewAuthOperator`（operator 凭据 Basic Auth + per-IP 限速），**无 caller-cell allowlist**。双向 affinity（phase0 强制）：`/admin/v1/*` 路径必须挂在 AdminListener 且 AdminListener 只挂 `/admin/v1/*`；AdminListener 必须携带 `AuthOperator`，`AuthOperator` 只能用于 AdminListener。详见 `docs/ops/listener-topology.md` §"Admin Listener"。
 
 ### bootstrap.WithListener 认证链 (PR262)
 
@@ -143,6 +147,7 @@ bootstrap.New(
 | `auth.NewAuthServiceToken(...) (..., error)` | HMAC-SHA256 service token | InternalListener |
 | `auth.AuthMTLS{}` | mTLS — 链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS）；中间件 `runtime/http/middleware.MTLS()` 守 peer cert presence + 把 curated `PeerIdentity{Subject,DNSNames,URIs}` 写入 ctx（`pkg/ctxkeys.PeerIdentityFrom`）；server-side `*tls.Config` 用 `runtime/http/tlsutil.NewServerMTLSConfig(certPEM, keyPEM, clientCAs)` 构造 | InternalListener（高安全场景） |
 | `auth.AuthNone{}` | 显式无验证（HealthListener loopback 隔离场景；nil 已被 phase0 拒绝） | HealthListener（loopback 隔离） |
+| `auth.NewAuthOperator(username, password []byte, limiter, onAuthFail) (AuthOperator, error)` | operator 控制面 Basic Auth（#1505）——env 凭据 + per-IP 限速 + 恒时比较（SHA-256 fixed-length digest，无长度/内容 oracle）。username 拒控制字符、password ≥ 8 bytes、limiter 必填非 nil（缺一 error-first 拒）。无 caller-cell allowlist。 | AdminListener（唯一允许，phase0 affinity 强制） |
 
 **多 plan chain 示例**：
 

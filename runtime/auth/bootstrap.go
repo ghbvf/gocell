@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"math"
 	"net"
@@ -137,20 +138,39 @@ func allowBootstrapRequest(
 
 // authenticateBootstrap parses Basic Auth and constant-time-compares the
 // supplied credentials against creds. Returns ("", true) on match;
-// ("missing_header"|"wrong_credentials", false) on failure. ConstantTimeCompare
-// returns 1 only when the slices are equal AND same length; AND-ing the two
-// results bitwise keeps the check constant-time across both comparisons.
+// ("missing_header"|"wrong_credentials", false) on failure.
+//
+// Each field is compared via constantTimeEqualHashed, which SHA-256-digests both
+// sides to a fixed 32-byte length before subtle.ConstantTimeCompare. This closes
+// the length-timing oracle: ConstantTimeCompare returns 0 immediately when the
+// slices differ in length, so comparing raw credential bytes would leak the
+// username/password length to a timing attacker. Hashing makes the compared
+// inputs constant-length, so the check is timing-independent of both content and
+// length. AND-ing the two results bitwise keeps the check constant-time across
+// both comparisons.
+//
+// ref: Go stdlib net/http BasicAuth example (sha256.Sum256 + subtle.ConstantTimeCompare),
+// mirroring the runtime/http/health verbose-token comparison.
 func authenticateBootstrap(r *http.Request, creds BootstrapCredentials) (string, bool) {
 	user, pass, ok := r.BasicAuth()
 	if !ok {
 		return "missing_header", false
 	}
-	userOK := subtle.ConstantTimeCompare([]byte(user), creds.Username)
-	passOK := subtle.ConstantTimeCompare([]byte(pass), creds.Password)
+	userOK := constantTimeEqualHashed([]byte(user), creds.Username)
+	passOK := constantTimeEqualHashed([]byte(pass), creds.Password)
 	if userOK&passOK != 1 {
 		return "wrong_credentials", false
 	}
 	return "", true
+}
+
+// constantTimeEqualHashed reports 1 iff a and b are byte-equal, comparing their
+// SHA-256 digests so the comparison time is independent of input length (no
+// length oracle). Returns 0 otherwise.
+func constantTimeEqualHashed(a, b []byte) int {
+	ha := sha256.Sum256(a)
+	hb := sha256.Sum256(b)
+	return subtle.ConstantTimeCompare(ha[:], hb[:])
 }
 
 func writeBootstrapAuthFailed(ctx context.Context, w http.ResponseWriter) {

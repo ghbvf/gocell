@@ -81,22 +81,14 @@ Both variables are **required, persistent operator Basic Auth credentials** prot
 | `GOCELL_BOOTSTRAP_ADMIN_USERNAME` | HTTP Basic Auth username protecting the setup/admin endpoint. Persistent operator authenticator — env is the authenticator (who may trigger setup), not the business admin identity (which comes from the POST body). Must be non-empty; empty value fails fast. | — | **Required, persistent (lifetime of deployment)** |
 | `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` | HTTP Basic Auth password protecting the setup/admin endpoint. Minimum 8 bytes after TrimSpace (handles K8s secret trailing newlines). Control characters fail fast. Persistent operator authenticator — not the business admin password. | — | **Required, persistent (lifetime of deployment)** |
 
-### operator control-plane (admin listener)
-
-Operator Basic Auth credentials for the **admin listener** (`cell.AdminListener`,
-`/admin/v1/*` operator→system control-plane — e.g. projection rebuild). These are
-**separate** from the `GOCELL_BOOTSTRAP_ADMIN_*` first-admin-setup credentials
-(different lifecycle, rotation, and leak surface). **Both-or-neither**: when both
-are set the admin listener + its endpoints are exposed; when either is unset the
-admin plane is **not mounted** (control-plane actions stay programmatic-only).
-The operator gate is per-IP rate-limited + constant-time-compared; there is no
-caller-cell allowlist. See `docs/architecture/202606041200-1505-adr-operator-control-plane-auth.md`
-and `docs/ops/listener-topology.md` §"Admin Listener".
-
-| Variable | Purpose | Default | Notes |
-|---|---|---|---|
-| `GOCELL_OPERATOR_ADMIN_USERNAME` | HTTP Basic Auth username for the admin listener operator gate. | — | Optional; admin plane exposed only when both username + password set |
-| `GOCELL_OPERATOR_ADMIN_PASSWORD` | HTTP Basic Auth password for the admin listener operator gate. Not trimmed (passwords may contain whitespace). | — | Optional; both-or-neither with the username |
+> **Operator control-plane (admin listener)**: `cmd/corebundle` does **not** wire
+> `cell.AdminListener` / `AuthOperator`, so it reads no `GOCELL_OPERATOR_ADMIN_*`
+> variables — setting them on corebundle has no effect. The operator
+> control-plane (`/admin/v1/*`, e.g. projection rebuild) is demonstrated in
+> `examples/todoorder` (see `examples/todoorder/auth.go::newOperatorAuthFromEnv`,
+> which reads `GOCELL_OPERATOR_ADMIN_USERNAME` / `_PASSWORD`). Design:
+> `docs/architecture/202606041200-1505-adr-operator-control-plane-auth.md` and
+> `docs/ops/listener-topology.md` §"Admin Listener".
 
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 

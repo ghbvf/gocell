@@ -24,9 +24,16 @@ package auth
 import (
 	"context"
 	"fmt"
+	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/validation"
 )
+
+// operatorMinPasswordLen is the minimum operator password length in bytes. A
+// short password cannot meaningfully protect the network-reachable admin plane
+// (a single byte would be trivially brute-forceable). Mirrors the setup/admin
+// credential floor in cellmodules/accesscore (loadBootstrapCredentials).
+const operatorMinPasswordLen = 8
 
 // OperatorRateLimiter decides whether a request identified by key (typically the
 // client IP) should be allowed. It is the kernel projection of
@@ -65,10 +72,21 @@ type AuthOperator struct {
 	OnAuthFail func(ctx context.Context, reason string)
 }
 
-// NewAuthOperator constructs an AuthOperator plan. Returns an error when either
-// credential is empty or the limiter is nil: an operator gate with empty
-// credentials would authenticate every request, and one without a rate limiter
-// cannot defeat brute-force. The observer is optional (nil disables it).
+// NewAuthOperator constructs an AuthOperator plan. Returns an error when the
+// credentials are too weak or the limiter is nil:
+//
+//   - empty username/password — an operator gate with empty credentials would
+//     authenticate every request;
+//   - username containing control characters — a malformed credential, almost
+//     always an accidentally-injected newline/tab from a secret manager;
+//   - password shorter than operatorMinPasswordLen — a one-byte password is
+//     trivially brute-forceable and cannot protect the admin plane;
+//   - nil limiter — without per-IP rate limiting, credentials cannot defeat
+//     brute-force enumeration.
+//
+// These mirror the setup/admin credential floor (cellmodules/accesscore
+// loadBootstrapCredentials) so both operator gates share one strength contract.
+// The observer is optional (nil disables it).
 func NewAuthOperator(
 	username, password []byte,
 	limiter OperatorRateLimiter,
@@ -77,6 +95,17 @@ func NewAuthOperator(
 	if len(username) == 0 || len(password) == 0 {
 		return AuthOperator{}, fmt.Errorf(
 			"auth: NewAuthOperator requires non-empty operator username and password")
+	}
+	for _, r := range string(username) {
+		if unicode.IsControl(r) {
+			return AuthOperator{}, fmt.Errorf(
+				"auth: NewAuthOperator operator username must not contain control characters")
+		}
+	}
+	if len(password) < operatorMinPasswordLen {
+		return AuthOperator{}, fmt.Errorf(
+			"auth: NewAuthOperator operator password must be at least %d bytes",
+			operatorMinPasswordLen)
 	}
 	if validation.IsNilInterface(limiter) {
 		return AuthOperator{}, fmt.Errorf(

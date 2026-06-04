@@ -24,12 +24,16 @@ func TestNewAuthOperator(t *testing.T) {
 		onFail   func(context.Context, string)
 		wantErr  bool
 	}{
-		{"valid with observer", []byte("ops"), []byte("s3cret"), lim, obs, false},
-		{"valid nil observer ok", []byte("ops"), []byte("s3cret"), lim, nil, false},
-		{"empty username", nil, []byte("s3cret"), lim, obs, true},
+		{"valid with observer", []byte("ops"), []byte("s3cretpwd"), lim, obs, false},
+		{"valid nil observer ok", []byte("ops"), []byte("s3cretpwd"), lim, nil, false},
+		{"min-length password (8) accepted", []byte("ops"), []byte("8bytespw"), lim, obs, false},
+		{"empty username", nil, []byte("s3cretpwd"), lim, obs, true},
 		{"empty password", []byte("ops"), []byte(""), lim, obs, true},
-		{"nil limiter (bare)", []byte("ops"), []byte("s3cret"), nil, obs, true},
-		{"nil limiter (typed)", []byte("ops"), []byte("s3cret"), OperatorRateLimiter(nil), obs, true},
+		{"one-byte password rejected", []byte("ops"), []byte("x"), lim, obs, true},
+		{"short password (7) rejected", []byte("ops"), []byte("7bytesp"), lim, obs, true},
+		{"control-char username rejected", []byte("ops\n"), []byte("s3cretpwd"), lim, obs, true},
+		{"nil limiter (bare)", []byte("ops"), []byte("s3cretpwd"), nil, obs, true},
+		{"nil limiter (typed)", []byte("ops"), []byte("s3cretpwd"), OperatorRateLimiter(nil), obs, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
