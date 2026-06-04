@@ -721,6 +721,8 @@ jobs:
 
 **禁止动作**：不要预先创建 mdm/ 或 zerotrust/ 空目录；不要预先建 go.work；不要预先做 module 拆分。
 
+> **注（#1554, 2026-06）**：`use .` workspace 地基已由 #1554 前置落地（committed `go.work` + `.gocell/manifest.yaml` + CI 遍历扩展点），与本节不矛盾——本节「不要预先建 go.work」针对的是**真正的 mdm/ 多 module 拆分 + 外部 module 版本选择**，那部分仍按 A1.1 在 Phase 1 落地。`use .` 单 module 形态对依赖解析行为与无 go.work 完全等价，仅为 Phase 1 预设扩展点。
+
 ### 阶段 1：MDM 启动（2027 Q1）
 
 **触发条件**：core v1.0 GA + 决定启动 MDM Phase 1。

@@ -21,12 +21,12 @@ func TestVerifyExpectedVersion_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply all migrations first.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	// VerifyExpectedVersion should pass: DB version == FS max version.
-	err = VerifyExpectedVersion(ctx, pool, testMigrationsFS(t), "schema_migrations")
+	err = verifyExpectedVersionForTable(ctx, pool, testMigrationsFS(t), "schema_migrations")
 	assert.NoError(t, err, "VerifyExpectedVersion should return nil after full Up()")
 }
 
@@ -40,7 +40,7 @@ func TestDetectInvalidIndexes_WithInjectedInvalid(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply migrations to create tables/indexes.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_invalid_idx")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_invalid_idx")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
@@ -92,7 +92,7 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 	const tbl = "schema_migrations_ahead"
 
 	// Apply all migrations.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), tbl)
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), tbl)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "initial Up() must succeed")
 
@@ -109,7 +109,7 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 	require.NoError(t, execErr, "inserting extra version record must succeed")
 
 	// VerifyExpectedVersion must now return a schema mismatch error (DB ahead).
-	err = VerifyExpectedVersion(ctx, pool, testMigrationsFS(t), tbl)
+	err = verifyExpectedVersionForTable(ctx, pool, testMigrationsFS(t), tbl)
 	require.Error(t, err, "should return error when DB version is ahead of binary")
 	assert.Contains(t, err.Error(), "schema version mismatch",
 		"error message should mention schema version mismatch")
@@ -130,7 +130,7 @@ func TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert(t *testing.T)
 	pool := emptyPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_check")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_lease_check")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 015")
 
@@ -170,7 +170,7 @@ func TestOutboxMigration014_AbortsOnClaimingResidue(t *testing.T) {
 	pool := emptyPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_014_residue")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_014_residue")
 	require.NoError(t, err)
 
 	// Migrate up to but NOT including 014 — pre-014 schema lacks lease_id and
@@ -213,7 +213,7 @@ func TestOutboxMigration015_RejectsExistingClaimingNullLeaseRow(t *testing.T) {
 	pool := emptyPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_015_existing_bad")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_015_existing_bad")
 	require.NoError(t, err)
 
 	// Apply through 014: lease_id column exists, but the CHECK constraint
@@ -249,7 +249,7 @@ func TestOutboxMigration015_RejectsUpdateIntoClaimingNullLease(t *testing.T) {
 	pool := emptyPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_015_update_path")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_015_update_path")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 015")
 
@@ -283,7 +283,7 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply all migrations.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lagged")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_lagged")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "initial Up() must succeed")
 
@@ -299,7 +299,7 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 	require.NoError(t, execErr, "deleting version records should succeed")
 
 	// VerifyExpectedVersion must now return a schema mismatch error.
-	err = VerifyExpectedVersion(ctx, pool, testMigrationsFS(t), "schema_migrations_lagged")
+	err = verifyExpectedVersionForTable(ctx, pool, testMigrationsFS(t), "schema_migrations_lagged")
 	require.Error(t, err, "should return error when DB is lagged")
 	assert.Contains(t, err.Error(), "schema version mismatch",
 		"error message should mention schema version mismatch")
@@ -331,7 +331,7 @@ func TestVerifyExpectedShape_AllColumnsPresent(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_happy")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_happy")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -347,7 +347,7 @@ func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_missing")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_missing")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -381,7 +381,7 @@ func TestVerifyExpectedShape_SeqIdentityDropped(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_seq_identity")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_seq_identity")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -412,7 +412,7 @@ func TestVerifyExpectedShape_ForbiddenColumnPresent(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_forbidden")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_forbidden")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -446,7 +446,7 @@ func TestVerifyNoInvalidIndexes_NoneInvalid(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_valid_idx")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_valid_idx")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -461,7 +461,7 @@ func TestVerifyNoInvalidIndexes_DetectInvalid(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_invalidcheck")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_invalidcheck")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -521,7 +521,7 @@ func TestDetectInvalidIndexes_Empty(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_detect_empty")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_detect_empty")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -538,7 +538,7 @@ func TestDetectInvalidIndexes_WithInvalidIndex(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_detect_invalid")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_detect_invalid")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -583,7 +583,7 @@ func TestInvalidIndexCheck_NoInvalidIndexes(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_probe_happy")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_probe_happy")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -617,7 +617,7 @@ func TestVerifyExpectedShape_AllDimensionsHappy(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_9dim_happy")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_9dim_happy")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -633,7 +633,7 @@ func TestVerifyExpectedShape_DetectsMissingForeignKey(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fk")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_fk")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -658,7 +658,7 @@ func TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fk_ondel")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_fk_ondel")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -686,7 +686,7 @@ func TestVerifyExpectedShape_DetectsMissingUniqueIndex(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_uidx")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_uidx")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -713,7 +713,7 @@ func TestVerifyExpectedShape_DetectsIndexColumnsMismatch(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_idxcols")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_idxcols")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -749,7 +749,7 @@ func TestVerifyExpectedShape_DetectsMissingTrigger(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_trig")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_trig")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -777,7 +777,7 @@ func TestVerifyExpectedShape_DetectsMissingUsersTrigger(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_users_trig")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_users_trig")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -802,7 +802,7 @@ func TestVerifyExpectedShape_DetectsDisabledTrigger(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_trig_dis")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_trig_dis")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -827,7 +827,7 @@ func TestVerifyExpectedShape_DetectsWrongColumnType(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_coltype")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_coltype")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -853,7 +853,7 @@ func TestVerifyExpectedShape_DetectsNullableColumn(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_nullable")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_nullable")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -880,7 +880,7 @@ func TestVerifyExpectedShape_DetectsMissingColumnDefault(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_default")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_default")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -911,7 +911,7 @@ func TestVerifyExpectedShape_DetectsMissingCheckConstraint(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_chk")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_chk")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -936,7 +936,7 @@ func TestVerifyExpectedShape_DetectsMissingPrimaryKey(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_pk")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_pk")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -965,7 +965,7 @@ func TestVerifyExpectedShape_DetectsMissingFunction(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fn")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_fn")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -1001,7 +1001,7 @@ func TestUsersMigration033_PasswordVersionNonNegative(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_033_pw_version")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_033_pw_version")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "all migrations must apply cleanly through 033")
 
@@ -1049,7 +1049,7 @@ func TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded(t *testi
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_inprogress_filter")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_inprogress_filter")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -1089,7 +1089,7 @@ func TestVerifyExpectedShape_DetectsWrongFKLocalColumns(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_fk_localcols")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_shape_fk_localcols")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
@@ -1125,7 +1125,7 @@ func TestMigration050_UpDownUpIdempotency(t *testing.T) {
 	ctx := context.Background()
 
 	// First Up pass: apply all migrations (tables are empty, no permit needed).
-	m1, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	m1, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_idem")
 	require.NoError(t, err)
 	require.NoError(t, m1.Up(ctx), "initial Up() through all migrations must succeed")
 
@@ -1140,14 +1140,14 @@ func TestMigration050_UpDownUpIdempotency(t *testing.T) {
 	// Down rolls back the most-recently-applied migration. With 050 as the highest
 	// migration, a single Down rolls it back to version 049, so 050 is the next
 	// pending migration for the second Up pass.
-	m2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	m2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_idem")
 	require.NoError(t, err)
 
 	// Roll back migration 050 (the destructive users/roles/role_assignments rebuild).
 	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 050 must succeed")
 
 	// Second Up pass: from version 049 → re-applies 050 (empty tables → no permit).
-	m3, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	m3, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_idem")
 	require.NoError(t, err)
 	require.NoError(t, m3.Up(ctx),
 		"second Up() (after Down through 050) must succeed (empty tables, no permit needed)")
@@ -1165,7 +1165,7 @@ func TestMigration050_DestructiveDownPermitRejection(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply all migrations.
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_050_downpermit")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_downpermit")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must succeed on a fresh DB")
 

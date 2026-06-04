@@ -38,8 +38,10 @@ package bootstrap
 // This is the single sanctioned Coordinator.Subscribe call site (allowlisted by
 // PROJECTION-APPLY-HOOK-FUNNEL-01). reg.RegisterProjection callers are locked to
 // cellgen-derived cell_gen.go by PROJECTION-REGISTER-FUNNEL-01. Both are Medium
-// (Go cannot type-gate callers of a public method); the Hard-ification path
-// (cellgen-only sealed-token parameter) is tracked as a gh follow-up to #1176.
+// (Go cannot type-gate callers of a public method); a "cellgen-only sealed-token"
+// Hard-ification is NOT expressible (cellgen emits into the cell's own package,
+// indistinguishable from a same-package hand-written file at compile time) —
+// won't-do, gh #1372 (ceiling family #851 / #893 / #1282).
 // The raw-infra-stays-in-bootstrap guarantee is the Hard property (type system):
 // cells hold sealed markers, never the CheckpointStore/TxRunner constructed here.
 

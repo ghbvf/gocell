@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/tests/testutil/pgclone"
 )
 
@@ -35,7 +36,7 @@ var sharedPG = pgclone.New("gocell_sagaleader_test_template",
 		if err != nil {
 			return fmt.Errorf("load migrations fs: %w", err)
 		}
-		migrator, err := adapterpg.NewMigrator(pool, fsys, "schema_migrations")
+		migrator, err := adapterpg.NewMigrator(pool, fsys, migration.PlatformNamespace)
 		if err != nil {
 			return fmt.Errorf("new migrator: %w", err)
 		}

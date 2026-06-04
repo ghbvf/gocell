@@ -6,6 +6,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
@@ -129,7 +130,7 @@ func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
 	if err != nil {
 		return fmt.Errorf("configcore PG migrations fs: %w", err)
 	}
-	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS); err != nil {
+	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, migration.PlatformNamespace); err != nil {
 		return fmt.Errorf("configcore PG schema guard: %w", err)
 	}
 	return nil

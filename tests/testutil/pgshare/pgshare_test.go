@@ -89,11 +89,13 @@ func TestNewPerTestPool_TemplateSchemaApplied(t *testing.T) {
 	ctx := context.Background()
 
 	var migrationCount int
-	row := pool.DB().QueryRow(ctx, "SELECT COUNT(*) FROM schema_migrations")
+	// Platform migrations track in schema_migrations_platform (the "platform"
+	// namespace, #1089), not the bare goose default schema_migrations.
+	row := pool.DB().QueryRow(ctx, "SELECT COUNT(*) FROM schema_migrations_platform")
 	if err := row.Scan(&migrationCount); err != nil {
-		t.Fatalf("schema_migrations probe: %v — migrations may not have been applied to template", err)
+		t.Fatalf("schema_migrations_platform probe: %v — migrations may not have been applied to template", err)
 	}
 	if migrationCount == 0 {
-		t.Fatal("schema_migrations is empty in cloned DB; template did not receive migrations")
+		t.Fatal("schema_migrations_platform is empty in cloned DB; template did not receive migrations")
 	}
 }

@@ -63,6 +63,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/postgres.InvalidIndex":              "value-object: schema validation diagnostic",
 	"adapters/postgres.LedgerStore":               "subresource-not-owner: storage facade over caller-owned pool; no independent lifecycle",
 	"adapters/postgres.MigrationDirection":        "value-object: migration enum",
+	"adapters/postgres.MigrationSet":              "registry: namespace migration sources; opens+closes Migrators over caller-owned pool",
 	"adapters/postgres.MigrationStatus":           "value-object: migration diagnostic snapshot",
 	"adapters/postgres.Migrator":                  "subresource-not-owner: uses caller-owned pool, no independent lifecycle",
 	"adapters/postgres.OutboxWriter":              "stateless-adapter: writes through ctx-bound transaction",

@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -74,7 +75,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pool.Close(ctx) })
 
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
@@ -358,7 +359,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pool.Close(ctx) })
 
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 	require.NoError(t, adapterpg.VerifyExpectedShape(ctx, pool))

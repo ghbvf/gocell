@@ -205,11 +205,11 @@ type Registrar interface {
 	// could not call projection.NewCoordinator even if it wanted to, because it
 	// holds no checkpoint store / tx runner.
 	//
-	// The call WILL be emitted by cellgen from slice.yaml contractUsages when the
-	// kind:projection derivation lands (PR-04b, #1367); until then RegisterProjection
-	// is only called from test files (PROJECTION-REGISTER-FUNNEL-01 enforces this).
-	// The exact slice.yaml role/field that drives the derivation is decided in
-	// PR-04b, not here. ProjectionRequest carries identifiers known at
+	// The call is emitted by cellgen from slice.yaml contractUsages (kind:projection
+	// derivation, PR-04b #1367 / #834 landed); the first production callsite is
+	// examples/todoorder/cells/ordercell/cell_gen.go. RegisterProjection is otherwise
+	// only called from test files — PROJECTION-REGISTER-FUNNEL-01 confines every call
+	// to cell_gen.go + _test.go. ProjectionRequest carries identifiers known at
 	// code-generation time (CellID injected from cell metadata exactly like
 	// Subscribe's positional cellID). The Apply / OnReset function types are
 	// cell-local ([ProjectionApply] / [ProjectionResetHook]) rather than
@@ -227,8 +227,11 @@ type Registrar interface {
 	// cell_gen.go + _test.go + kernel/ by archtest PROJECTION-REGISTER-FUNNEL-01
 	// (Medium upstream + Medium downstream — Go cannot type-gate callers of a
 	// public method; this is the same permanent ceiling as Subscribe /
-	// RegisterWebhookReceiver). The Hard-ification path (cellgen-only sealed-token
-	// parameter) is tracked as a #1176 follow-up (#1372).
+	// RegisterWebhookReceiver). A "cellgen-only sealed-token" Hard-ification is NOT
+	// expressible in Go: cellgen emits this call into the cell's own package
+	// (cell_gen.go beside hand-written cell.go), which a same-package hand-written
+	// file is indistinguishable from at compile time. won't-do, gh #1372 (same
+	// ceiling family as #851 / #893 / #1282).
 	//
 	// ref: tools/archtest/projection_register_funnel_test.go (PROJECTION-REGISTER-FUNNEL-01)
 	// ref: ADR docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §7 + §Amendment 2026-05-31

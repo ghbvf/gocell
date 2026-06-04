@@ -1,0 +1,39 @@
+# GoCell root module manifest — declares the monorepo's metadata footprint.
+#
+# WHY EXPLICIT includes: the Locator auto-detects this file and switches every
+# `gocell` command (validate / generate / codegen-drift gates) from conventional
+# to manifest mode. A minimal `modules: [{path: .}]` would use the top-level-only
+# defaults and SILENTLY DROP the entire examples/ subtree from governance scope.
+# These patterns mirror kernel/metadata/locator_conventional.go's matchers
+# (top-level + examples/<id>/ branch) so manifest-mode discovery is byte-identical
+# to conventional mode. The equivalence is machine-guarded by
+# kernel/metadata/locator_equivalence_test.go.
+#
+# Fail-closed: with explicit `includes:`, if a kind's patterns match zero files,
+# `gocell validate` FAILS (hard error) — so deleting the last file of a kind
+# requires removing the corresponding `includes:` entry from this manifest.
+#
+# go.work-style extension point: when a future module is added (Plan D /
+# docs/plans/product-roadmap/202604300950-plan-d-go-workspace-multimodule-migration.md),
+# append a second `modules:` entry alongside the new go.work `use` directive.
+version: v1
+modules:
+  - path: .
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+        - "examples/*/cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+        - "examples/*/cells/*/slices/*/slice.yaml"
+      contracts:
+        - "contracts/**/contract.yaml"
+        - "examples/*/contracts/**/contract.yaml"
+      journeys:
+        - "journeys/J-*.yaml"
+        - "examples/*/journeys/J-*.yaml"
+      assemblies:
+        - "assemblies/*/assembly.yaml"
+        - "examples/*/assembly.yaml"
+      actors: "actors.yaml"
+      statusBoard: "journeys/status-board.yaml"

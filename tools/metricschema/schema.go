@@ -30,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 const (
@@ -211,7 +212,8 @@ func loadPackagesWithMode(ctx context.Context, root string, includeDeps bool, pa
 		Mode:    packageLoadMode(includeDeps),
 		Dir:     root,
 	}
-	roots, err := packages.Load(cfg, patterns...)
+	// ModeModule (GOWORK=off): uniform go.work-agnostic loading. See tools/packagesload.
+	roots, err := packagesload.Load(packagesload.ModeModule, cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("packages.Load: %w", err)
 	}
