@@ -184,7 +184,7 @@ projection coordinator 驱动；因此任何注册 projection 的 assembly，其
 
 | Archtest ID | 摘要 | 评级 |
 |---|---|---|
-| `PROJECTION-CONSUMERBASE-WIRING-01` | composition-root 包（`examples/*` + `cmd/*`）凡 wire `bootstrap.WithProjection*` 必同包 wire `bootstrap.WithConsumerBase`，否则 CI 红 | 下游 Hard（`ResolvePackageRef` 类型解析 callee，alias / dot-import 不可绕）+ 上游 Medium（包级共址 presence check；唯一 Hard 路径 = projection 注册需 ConsumerBase typed token 的 kernel 重设计，high-cost 不追，archtest 即定型） |
+| `PROJECTION-CONSUMERBASE-WIRING-01` | composition-root 包（`examples/*` + `cmd/*`）凡 wire `bootstrap.WithProjection*` 必同包 wire `bootstrap.WithConsumerBase`，否则 CI 红 | 下游 Hard（`ResolvePackageRef` 类型解析 callee，alias / dot-import 不可绕）+ 上游 Medium（包级共址 presence check；唯一 Hard 路径 = projection 注册需 ConsumerBase typed token 的 kernel 重设计，won't-do 追踪 gh #1597，archtest 即定型） |
 
 完整盲区清单 + 反向自检活在 `tools/archtest/projection_consumerbase_wiring_test.go` 的 package
 godoc（单源）；运行时 defense-in-depth = `examples/todoorder/run_smoke_test.go` 启动 smoke

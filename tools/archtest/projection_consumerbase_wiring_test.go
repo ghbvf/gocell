@@ -32,9 +32,9 @@
 //     archtest is the strongest achievable form. The only Hard upstream path is
 //     a kernel redesign threading a ConsumerBase typed token into projection
 //     registration so phase6 is unreachable without one — a high-cost change far
-//     beyond this invariant's value, intentionally not pursued (no low-cost Hard
-//     path exists, so no upgrade issue is tracked; this archtest is the intended
-//     permanent form). The runtime smoke is the complementary backstop.
+//     beyond this invariant's value, won't-do (tracked at gh #1597, same
+//     Go-language-ceiling family as #851 / #893 / #1282). This archtest is the
+//     intended permanent form; the runtime smoke is the complementary backstop.
 //
 // # Blind spots
 //
@@ -93,6 +93,11 @@ var projectionWiringOptions = map[string]bool{
 // isProjectionCompositionRootPkg reports whether pkgPath is a composition root
 // that may wire bootstrap options — examples/* or cmd/*. Cells/runtime/kernel do
 // not assemble bootstrap option slices, so they are out of scope.
+//
+// cmd/* is included conservatively (covers cmd/corebundle, which DOES wire
+// projections). It also matches the cmd/gocell governance CLI, which never wires
+// bootstrap today and is therefore a vacuous pass; if it ever wires
+// WithProjection* it will (correctly) be required to co-locate WithConsumerBase.
 func isProjectionCompositionRootPkg(pkgPath string) bool {
 	return strings.HasPrefix(pkgPath, PlatformModulePath+"/examples/") ||
 		strings.HasPrefix(pkgPath, PlatformModulePath+"/cmd/")

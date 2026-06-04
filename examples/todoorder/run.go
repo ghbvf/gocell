@@ -81,8 +81,8 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	if err != nil {
 		return err
 	}
-	slog.Default().Info("todoorder: starting on " + addrs.primary +
-		"; protected routes require an RS256 bearer token")
+	slog.Default().Info("todoorder: starting; protected routes require an RS256 bearer token",
+		slog.String("primary_addr", addrs.primary))
 	return app.Run(ctx)
 }
 
@@ -99,11 +99,12 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// runs, so logger (and every slog.Default() call) is already scrubbed.
 	logger := slog.Default()
 
-	mods, err := runTodoorderModules(assemblyID, assemblyCellIDs)
-	if err != nil {
+	// runTodoorderModules returns stub modules used solely for the assembly drift
+	// check; the real ordercell is constructed directly below (this example does
+	// not use the compositionAPI/CellModule Provide pattern).
+	if _, err := runTodoorderModules(assemblyID, assemblyCellIDs); err != nil {
 		return nil, err
 	}
-	_ = mods // cell construction is done directly below; mods only validates drift
 
 	internalAuthChain, err := newInternalAuthChainFromEnv()
 	if err != nil {

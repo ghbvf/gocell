@@ -20,8 +20,20 @@ const smokeBootWindow = 3 * time.Second
 
 // smokeShutdownGrace is the extra slack on top of smokeBootWindow before the
 // test declares app.Run wedged (the select-timeout is a hang backstop, not a
-// fixed sleep). Extracted per TEST-TIME-LITERAL-01.
+// fixed sleep). Generous on purpose: it bounds only the rare hang case (the
+// happy path returns ~smokeBootWindow after the deadline fires), so a too-tight
+// grace would risk flaking on a legitimately slow phase10 drain. Extracted per
+// TEST-TIME-LITERAL-01.
 const smokeShutdownGrace = 10 * time.Second
+
+// smokeOperatorUsername / smokeOperatorPassword are test-only ephemeral operator
+// credentials (set via t.Setenv, never persisted) used to exercise the
+// AdminListener + projection-rebuild-endpoint branch. Password is ≥ 8 bytes per
+// auth.NewAuthOperator. Extracted as consts to mirror testServiceKey (main_test.go).
+const (
+	smokeOperatorUsername = "todoorder-operator"
+	smokeOperatorPassword = "operator-pass-1234"
+)
 
 // TestTodoorderBootstrapBootsThroughPhase6 is the startup smoke for the
 // todoorder example (#1497). It boots the real run.go wiring
@@ -62,8 +74,8 @@ func TestTodoorderBootstrapBootsThroughPhase6(t *testing.T) {
 			t.Setenv(jwtAudienceEnv, "gocell")
 			t.Setenv(todoorderServiceSecretEnv, testServiceKey)
 			if tc.operatorCreds {
-				t.Setenv(operatorAdminUsernameEnv, "todoorder-operator")
-				t.Setenv(operatorAdminPasswordEnv, "operator-pass-1234")
+				t.Setenv(operatorAdminUsernameEnv, smokeOperatorUsername)
+				t.Setenv(operatorAdminPasswordEnv, smokeOperatorPassword)
 			}
 
 			// Ephemeral loopback for every listener so the smoke never collides
@@ -87,14 +99,19 @@ func TestTodoorderBootstrapBootsThroughPhase6(t *testing.T) {
 
 			select {
 			case runErr := <-runErrCh:
-				// The app must boot past phase6 and only stop when the deadline
-				// fires (graceful shutdown → nil or a context error). A non-context
-				// error means a phase failed fast — e.g. a regression dropping
-				// WithConsumerBase crashes phase6 before any listener binds.
+				// On the success path the app boots past phase6, sits at phase9,
+				// and returns when the deadline fires — graceful shutdown yields nil
+				// or a context error (the corebundlestarter smoke documents the same
+				// nil/context-error contract). Any OTHER (non-context) error is a
+				// real failure to surface: a startup-phase fail-fast (e.g. a
+				// regression dropping WithConsumerBase crashes phase6 before any
+				// listener binds — returned well before the deadline) or a teardown
+				// error during shutdown. Both deserve a red test.
 				if runErr != nil &&
 					!errors.Is(runErr, context.DeadlineExceeded) &&
 					!errors.Is(runErr, context.Canceled) {
-					t.Fatalf("todoorder boot failed before phase9 shutdown: %v", runErr)
+					t.Fatalf("todoorder app.Run returned a non-context error "+
+						"(boot-phase fail-fast or shutdown error): %v", runErr)
 				}
 			case <-time.After(smokeBootWindow + smokeShutdownGrace):
 				t.Fatal("app.Run did not return within the boot window + grace after the deadline")
