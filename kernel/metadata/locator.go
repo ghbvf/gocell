@@ -204,15 +204,16 @@ type Locator struct {
 // NewLocator constructs a Locator backed by the on-disk root directory.
 //
 // The filesystem is rooted via os.OpenRoot(root).FS(), which confines EVERY
-// access (Stat / WalkDir / ReadFile) to the directory tree at root: any path
-// that resolves outside root via a symlink is rejected at the syscall layer
-// ("path escapes from parent"). This is the root-confinement that prevents a
-// manifest module path (or any subpath) that is a symlink escaping the
-// workspace from making discovery read cells/contracts outside the repo
-// (#1592). NOTE: os.Root rejects symlinks regardless of whether their target
-// is in- or out-of-root, so metadata behind an in-root symlink is not followed
-// either — the GoCell layout has no metadata behind symlinks, so this is a
-// deliberate fail-closed default, not a regression.
+// access (Stat / WalkDir / ReadFile) to the directory tree at root. Per the
+// os.Root contract, it FOLLOWS symlinks that resolve within root and REJECTS
+// those that escape it (absolute targets, or `..`/symlink chains leaving root)
+// with "path escapes from parent" at the syscall layer. This is the
+// root-confinement that prevents a manifest module path (or any subpath) that
+// is a symlink escaping the workspace from making discovery read cells/contracts
+// outside the repo (#1592). Discovery additionally skips symlink *entries*
+// during WalkDir (see discoverConventional / matchManifestGlob), so in practice
+// no symlink is traversed; the GoCell layout has no symlinks at all, so neither
+// behavior changes discovery output.
 //
 // The root path itself may be a symlinked directory (e.g. macOS /var ->
 // /private/var); os.OpenRoot follows the root's own symlink to open it, then

@@ -37,19 +37,17 @@ func TestLocator_RootConfinement_SymlinkEscape(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gocell", "manifest.yaml"),
 		"version: v1\nmodules:\n  - path: linked\n")
 
+	// The user-visible contract is fail-closed: an escaping-symlink module path
+	// makes Parse() return an ERROR (os.Root rejects it), not silently skip it.
+	// Assert err != nil unconditionally, then bind it to the os.Root confinement
+	// signal so an unrelated failure can't masquerade as the #1592 fix. Pre-fix
+	// Parse returned a nil error and discovered the external "leak" cell.
 	pm, err := NewParser(root).Parse()
-	if err != nil {
-		// Fail-closed at root confinement — the desired outcome. Bind the
-		// assertion to the os.Root confinement signal ("path escapes from
-		// parent") so an unrelated failure (permissions, OS quirk) can't masquerade
-		// as the #1592 fix. Pre-fix Parse returned nil error and leaked the cell.
-		if !strings.Contains(err.Error(), "escapes") {
-			t.Fatalf("Parse() failed, but not via root confinement (want \"escapes\"): %v", err)
-		}
-		return
+	if err == nil {
+		t.Fatalf("Parse() = nil error; want fail-closed (symlink escapes root). pm.Cells=%v", keysOf(pm.Cells))
 	}
-	if _, leaked := pm.Cells["leak"]; leaked {
-		t.Fatalf("Parse() discovered external cell %q through an escaping symlink (pm.Cells=%v)", "leak", keysOf(pm.Cells))
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("Parse() failed, but not via root confinement (want \"escapes\"): %v", err)
 	}
 }
 

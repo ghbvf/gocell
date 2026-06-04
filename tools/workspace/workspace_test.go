@@ -238,3 +238,49 @@ func TestWorkspaceRoot(t *testing.T) {
 		}
 	})
 }
+
+// TestModules_ManifestSymlinkEscape is the #1596 review F1 regression: a
+// .gocell/manifest.yaml that is a symlink escaping the workspace root must fail
+// closed. Pre-fix crossCheckManifest read it via os.DirFS (follows symlinks),
+// silently sourcing the manifest contract from outside root; the fix routes the
+// read through metadata.ReadManifestModulePathsRoot (os.Root), which rejects it.
+func TestModules_ManifestSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	external := t.TempDir() // OUTSIDE root
+	// External manifest declares only ".", so a pre-fix read would pass the
+	// forward cross-check (manifest ⊆ go.work.use) and succeed silently — the
+	// escape. Only os.Root confinement turns it into a fail-closed error.
+	if err := os.WriteFile(filepath.Join(external, "manifest.yaml"),
+		[]byte("version: v1\nmodules:\n  - path: .\n"), 0o600); err != nil {
+		t.Fatalf("write external manifest: %v", err)
+	}
+	for rel, content := range map[string]string{
+		"go.work":           "go 1.25\n\nuse .\n",
+		"go.mod":            "module example.test/x\n\ngo 1.25\n",
+		"cells/x/cell.yaml": "id: x\n",
+	} {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".gocell"), 0o755); err != nil {
+		t.Fatalf("mkdir .gocell: %v", err)
+	}
+	// root/.gocell/manifest.yaml -> external/manifest.yaml (escapes root).
+	if err := os.Symlink(filepath.Join(external, "manifest.yaml"),
+		filepath.Join(root, ".gocell", "manifest.yaml")); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	_, err := workspace.Modules(root)
+	if err == nil {
+		t.Fatalf("Modules() = nil error; want fail-closed (manifest symlink escapes root)")
+	}
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("Modules() error = %q, want root-confinement signal %q", err.Error(), "escapes")
+	}
+}

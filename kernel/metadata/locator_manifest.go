@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -162,6 +163,23 @@ func ReadManifestModulePaths(fsys fs.FS, manifestPath string) ([]string, error) 
 		paths[i] = m.Path
 	}
 	return paths, nil
+}
+
+// ReadManifestModulePathsRoot is the root-confined form of
+// ReadManifestModulePaths for disk callers: it opens an os.Root at root (Go
+// 1.24+ traversal-resistant fs) and reads through os.Root.FS(), so a symlinked
+// .gocell/manifest.yaml (or a symlinked module dir) that resolves outside root
+// is rejected at the syscall layer rather than silently read from outside the
+// workspace. Disk callers (e.g. tools/workspace cross-check) MUST use this
+// rather than building os.DirFS themselves — confinement is not the caller's to
+// opt out of. Mirrors NewLocator's os.OpenRoot confinement (#1592).
+func ReadManifestModulePathsRoot(root, manifestPath string) ([]string, error) {
+	osRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("metadata: ReadManifestModulePathsRoot open root: %w", err)
+	}
+	defer func() { _ = osRoot.Close() }()
+	return ReadManifestModulePaths(osRoot.FS(), manifestPath)
 }
 
 // loadManifest reads and decodes the manifest at manifestPath from fsys,
