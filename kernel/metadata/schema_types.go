@@ -68,6 +68,13 @@ type HTTPIdempotencyMeta struct {
 // must not import runtime/ (layering); it is bound to the single runtime source
 // runtime/http/idempotency.FrameworkStatuses() by archtest
 // IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01, which fails if the two diverge.
+//
+// Known reachability gap: this oracle keys only on method + Idempotency.Exempt, so
+// it also requires 409/422 on mutating routes the middleware never claims for —
+// public / bootstrap / service-token routes, whose non-PrincipalUser principals are
+// bypassed by middleware.extractIdentity. Those routes therefore declare statuses
+// they cannot emit (a pre-existing property of the 409 leg, not introduced by 422).
+// Making the oracle auth-shape-aware is tracked at gh #1591.
 func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 	if h == nil || h.Idempotency.Exempt {
 		return nil

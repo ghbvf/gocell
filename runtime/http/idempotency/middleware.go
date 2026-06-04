@@ -85,6 +85,24 @@ const (
 	// truncated (with a … marker) to bound 422 response size.
 	maxFieldNameLen = 128
 
+	// hashHexLen is the byte length of a hex(sha256) digest (32 bytes × 2).
+	hashHexLen = sha256.Size * 2
+
+	// maxFingerprintFieldsBytes bounds the byte cost of the per-field hash map
+	// PERSISTED in the fingerprint blob. The per-field map exists ONLY to drive
+	// the best-effort per-field diff on mismatch; the whole-body hash
+	// (fingerprintBlob.Body) is what actually drives the match decision. A request
+	// body with a pathological number of top-level fields (or an over-long field
+	// name) could otherwise inflate the stored blob far beyond the body itself
+	// (Redis value amplification / memory pressure across the 24h record TTL).
+	// When the accumulated per-field cost would exceed this budget, fieldHashes
+	// drops the map entirely (degrade to body-hash-only). Because the decision is
+	// a pure function of the body, identical bodies always yield identical blobs,
+	// so the degrade never causes a false mismatch — only the diagnostic diff is
+	// unavailable for pathological bodies. 8 KiB comfortably covers any realistic
+	// request shape (≈100+ fields) while hard-capping amplification.
+	maxFingerprintFieldsBytes = 8 * 1024
+
 	// retryAfterHintSeconds is the Retry-After header value sent on 409
 	// ClaimBusy responses. A small hint (5 s) is better than the full lease
 	// TTL (300 s default) because clients should retry soon; the lease may
@@ -637,13 +655,26 @@ func parseFingerprint(s string) fingerprintBlob {
 // defers value parsing — no recursive decode/re-encode), which keeps the per-field
 // diff consistent with the byte-exact whole-body match (Body) and avoids any
 // hot-path cost or deep-nesting surface from canonicalizing untrusted values.
+//
+// The accumulated per-field cost (field name + hash digest, both client-influenced)
+// is bounded by maxFingerprintFieldsBytes. If a pathological body would push the
+// map past the budget, the whole map is dropped (returns nil → body-hash-only),
+// keeping the PERSISTED fingerprint bounded regardless of body size. The cut is a
+// pure function of the body, so identical bodies still produce identical maps and
+// the degrade can never cause a false mismatch — only the diagnostic per-field
+// diff is unavailable for such bodies.
 func fieldHashes(body []byte) map[string]string {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
 		return nil // not a JSON object — no per-field diff available
 	}
 	out := make(map[string]string, len(top))
+	size := 0
 	for k, raw := range top {
+		size += len(k) + hashHexLen
+		if size > maxFingerprintFieldsBytes {
+			return nil // oversized field set — degrade to body-hash-only
+		}
 		out[k] = hashHex(raw)
 	}
 	return out

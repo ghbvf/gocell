@@ -1242,6 +1242,107 @@ func TestComputeFingerprintAndDiff(t *testing.T) {
 	}
 }
 
+// manyFieldBody builds a JSON object with n top-level string fields all set to
+// val. Used to drive the per-field map past maxFingerprintFieldsBytes.
+func manyFieldBody(n int, val string) []byte {
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, "%q:%q", fmt.Sprintf("field%05d", i), val)
+	}
+	sb.WriteByte('}')
+	return []byte(sb.String())
+}
+
+// TestComputeFingerprint_FieldsBudgetDegrade verifies F2: a request body whose
+// top-level field set would push the per-field hash map past
+// maxFingerprintFieldsBytes degrades to body-hash-only (Fields dropped), so the
+// PERSISTED fingerprint stays bounded regardless of how large the body is. The
+// whole-body hash is still present (match decision intact), and the degrade is a
+// pure function of the body so identical bodies still produce identical blobs.
+func TestComputeFingerprint_FieldsBudgetDegrade(t *testing.T) {
+	// ~5000 small fields — far past the 8 KiB per-field budget.
+	body := manyFieldBody(5000, "v")
+
+	fp := computeFingerprint(body)
+
+	// Degraded: per-field map dropped → no diff data persisted.
+	if got := parseFingerprint(fp).Fields; got != nil {
+		t.Errorf("Fields should be nil (degraded) for oversized field set, got %d entries", len(got))
+	}
+	// Whole-body hash still present → match decision unaffected.
+	if parseFingerprint(fp).Body == "" {
+		t.Error("Body hash must be present even when Fields is dropped")
+	}
+	// Stored fingerprint bounded: a body-hash-only blob is tiny (the {"b":"<64hex>"}
+	// envelope), and in particular must NOT scale with the (huge) body.
+	if len(fp) > maxFingerprintFieldsBytes {
+		t.Errorf("degraded fingerprint length %d exceeds budget %d (Fields not dropped?)", len(fp), maxFingerprintFieldsBytes)
+	}
+	// Determinism preserved across the degrade boundary.
+	if fp != computeFingerprint(manyFieldBody(5000, "v")) {
+		t.Error("degraded computeFingerprint is not deterministic")
+	}
+}
+
+// TestComputeFingerprint_LongFieldNameDegrade verifies the byte budget also
+// covers a single field with a pathologically long (client-controlled) name —
+// the per-field cost accounts the name length, so one over-long key degrades to
+// body-hash-only rather than persisting a giant key.
+func TestComputeFingerprint_LongFieldNameDegrade(t *testing.T) {
+	longName := strings.Repeat("x", maxFingerprintFieldsBytes+1)
+	body := []byte(fmt.Sprintf("{%q:1}", longName))
+
+	if got := parseFingerprint(computeFingerprint(body)).Fields; got != nil {
+		t.Errorf("Fields should be nil for an over-long field name, got %v", got)
+	}
+}
+
+// TestComputeFingerprint_UnderBudgetKeepsFields is the negative control: a normal
+// body comfortably under the budget keeps its per-field map so the per-field diff
+// remains available (proving the degrade is bounded to pathological inputs only).
+func TestComputeFingerprint_UnderBudgetKeepsFields(t *testing.T) {
+	body := manyFieldBody(50, "v") // 50 fields ≈ well under 8 KiB
+	fields := parseFingerprint(computeFingerprint(body)).Fields
+	if len(fields) != 50 {
+		t.Errorf("under-budget body should keep all 50 field hashes, got %d", len(fields))
+	}
+}
+
+// TestMiddleware_KeyReused_OversizedFields_BoundedNoDiff is the end-to-end F2
+// regression: a same-key/different-body reuse where BOTH bodies have a degraded
+// (oversized) field set still returns the base 422 — with NO per-field details,
+// since the stored fingerprint dropped its field map — proving the storage bound
+// does not break the 422 decision.
+func TestMiddleware_KeyReused_OversizedFields_BoundedNoDiff(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	mw := Middleware(clk, NewMemStore(clk))
+	mkReq := func(body []byte) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(string(body)))
+		r.Header.Set("Idempotency-Key", "key-big")
+		return r.WithContext(auth.WithPrincipal(r.Context(),
+			&auth.Principal{Kind: auth.PrincipalUser, Subject: "user-big", TenantID: "t1"}))
+	}
+
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq(manyFieldBody(5000, "AAA")))
+	if rr1.Code != 201 {
+		t.Fatalf("first code: got %d, want 201", rr1.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq(manyFieldBody(5000, "BBB")))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := mismatchedFieldsFromBody(t, rr2.Body.Bytes()); len(got) != 0 {
+		t.Errorf("degraded fingerprint must yield no mismatchedField details, got %v", got)
+	}
+}
+
 // panickingObserver is a MetricsObserver whose ObserveRequest always panics.
 // It models a faulty composition-root-supplied collector; the middleware must
 // isolate the panic (observability.SafeObserve) so idempotency correctness is
