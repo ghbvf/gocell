@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/configreader"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
@@ -20,19 +21,14 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// testReadTenantStr is the test TenantID for configread handler tests.
-const testReadTenantStr = "00000000-0000-0000-0000-000000000001"
-
 // testReadTenant is the typed TenantID for direct repo seeding.
-var testReadTenant = tenant.TenantID(testReadTenantStr)
+var testReadTenant = configcoretest.TestTenant
 
 const configBasePath = "/api/v1/config"
 
@@ -40,7 +36,7 @@ const configBasePath = "/api/v1/config"
 // satisfies the auth.AnyRole(RoleAdmin) policy AND configread handler's
 // tenant.FromContext call.
 func asAdmin(req *http.Request) *http.Request {
-	ctx := ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{auth.RoleAdmin}), testReadTenantStr)
+	ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
 	return req.WithContext(ctx)
 }
 

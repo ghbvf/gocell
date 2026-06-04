@@ -114,7 +114,7 @@ func (r *ConfigRepository) GetByKey(_ context.Context, t tenant.TenantID, key st
 	return &clone, nil
 }
 
-//nolint:dupl // mirrors FlagRepository.Toggle; typed differences (ConfigEntry vs FeatureFlag, distinct fields) preclude shared helper
+//nolint:dupl // mirrors FlagRepository.Update; typed differences (ConfigEntry vs FeatureFlag, distinct fields) preclude shared helper
 func (r *ConfigRepository) Update(
 	_ context.Context, t tenant.TenantID, key string, expectedVersion int, value string,
 ) (*domain.ConfigEntry, error) {

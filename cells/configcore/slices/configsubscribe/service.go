@@ -133,6 +133,15 @@ func (c *Cache) sweepTombstones(ctx context.Context, now time.Time) {
 
 // tenantFromEntry extracts the tenant string from the outbox entry's principal.
 // An empty TenantID (tenant-less system event) is a legitimate distinct bucket ("").
+//
+// Architecture note (PR-2b #1479): an absent principal TenantID is NOT a
+// fail-open bug. The (tenant, key) composite cacheKey already prevents
+// cross-tenant version collation — events from different tenants populate
+// independent buckets. A system-tier event that carries no tenant principal
+// correctly lands in the "" bucket, which is structurally disjoint from any
+// per-tenant bucket (tenant UUIDs are non-empty canonical strings). This is
+// intentional: system-tier config events predate per-tenant keying and remain
+// valid as tenant-less facts.
 func tenantFromEntry(entry outbox.Entry) string {
 	return string(entry.Principal().TenantID)
 }

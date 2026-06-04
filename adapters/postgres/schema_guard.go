@@ -29,9 +29,16 @@ import (
 //                                   GENERATED ALWAYS AS IDENTITY + idx_outbox_seq
 //                                   (projection ReplaySource/Cursor position, #1368).
 //   - config_entries     (004)  cell configuration key-value store
+//                                 + tenant_id TEXT NOT NULL (051 DROP+CREATE rebuild)
+//                                   UNIQUE(tenant_id,key) / UNIQUE(tenant_id,id)
+//                                   replacing global idx_config_entries_tenant_key.
 //   - config_versions    (004)  immutable configuration version history
+//                                 + tenant_id TEXT NOT NULL (051 DROP+CREATE rebuild)
+//                                   composite FK (tenant_id,config_id)→config_entries(tenant_id,id).
 //   - refresh_tokens     (007)  append-only refresh token lineage
 //   - feature_flags      (008)  flag definitions
+//                                 + tenant_id TEXT NOT NULL (051 DROP+CREATE rebuild)
+//                                   UNIQUE(tenant_id,key) replacing global uq_feature_flags_tenant_key.
 //   - users              (017)  accesscore user identities
 //                                 + users_status_chk, users_creation_source_chk (023 CHECK)
 //                                 + effective_admin_invariant_on_users trigger (024)
@@ -414,10 +421,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "users", Column: "failed_login_count", Type: "integer", NotNull: true},
 	{Table: "users", Column: "last_failed_at", Type: pgTypeTSTZ, NotNull: false},
 	{Table: "users", Column: "locked_until", Type: pgTypeTSTZ, NotNull: false},
-	// config_entries.version + feature_flags.version — PR449-F7 carry-over
-	// gate columns. Original tables predate S3F structural checks; only the
-	// version column is asserted here (existence + type + NOT NULL).
+	// config_entries / config_versions / feature_flags — PR449-F7 carry-over
+	// gate columns. 051 DROP+CREATE rebuild adds tenant_id TEXT NOT NULL to all
+	// three tables; version column asserted for config_entries + feature_flags
+	// (existence + type + NOT NULL).
+	{Table: "config_entries", Column: "tenant_id", Type: "text", NotNull: true}, // 051 NEW
 	{Table: "config_entries", Column: "version", Type: "integer", NotNull: true},
+	{Table: "config_versions", Column: "tenant_id", Type: "text", NotNull: true}, // 051 NEW
+	{Table: "feature_flags", Column: "tenant_id", Type: "text", NotNull: true},   // 051 NEW
 	{Table: "feature_flags", Column: "version", Type: "integer", NotNull: true},
 	// sessions (018_sessions.sql + 026_restore_sessions_authz_epoch_at_issue.sql)
 	{Table: "sessions", Column: "id", Type: "text", NotNull: true},
@@ -635,6 +646,25 @@ var expectedIndexes = []expectedIndex{
 	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true, Columns: []string{"(expr)"}},
 	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
 	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false, Columns: []string{"started_at", "id"}},
+	// config_entries (051_configcore_tenant_id.sql — DROP+CREATE rebuild).
+	// config_entries_tenant_id_uq is an inline CONSTRAINT UNIQUE (tenant_id, id);
+	// PG creates a backing index with the same name.
+	{Table: "config_entries", Name: "config_entries_tenant_id_uq", Unique: true, Columns: []string{"tenant_id", "id"}},
+	{Table: "config_entries", Name: "idx_config_entries_tenant_key", Unique: true, Columns: []string{"tenant_id", "key"}},
+	{Table: "config_entries", Name: "idx_config_entries_key_id", Unique: false, Columns: []string{"tenant_id", "key", "id"}},
+	// config_versions (051_configcore_tenant_id.sql — DROP+CREATE rebuild).
+	{
+		Table: "config_versions", Name: "idx_config_versions_tenant_entry_version",
+		Unique: true, Columns: []string{"tenant_id", "config_id", "version"},
+	},
+	{
+		Table: "config_versions", Name: "idx_config_versions_config_version",
+		Unique: false, Columns: []string{"tenant_id", "config_id", "version"},
+	},
+	{Table: "config_versions", Name: "idx_config_versions_config_id", Unique: false, Columns: []string{"config_id"}},
+	// feature_flags (051_configcore_tenant_id.sql — DROP+CREATE rebuild).
+	{Table: "feature_flags", Name: "uq_feature_flags_tenant_key", Unique: true, Columns: []string{"tenant_id", "key"}},
+	{Table: "feature_flags", Name: "idx_feature_flags_key_id", Unique: false, Columns: []string{"tenant_id", "key", "id"}},
 }
 
 // expectedFKs is the foreign key constraint registry. ON DELETE action uses
@@ -648,6 +678,21 @@ var expectedIndexes = []expectedIndex{
 //
 // ref: https://www.postgresql.org/docs/current/catalog-pg-constraint.html
 var expectedFKs = []expectedFK{
+	{
+		// 051: (tenant_id, config_id) references config_entries(tenant_id, id) via
+		// CONSTRAINT config_entries_tenant_id_uq UNIQUE (tenant_id, id).
+		// Enforces same-tenant membership between a version and its parent entry at
+		// the DB level (defense-in-depth; app layer already passes consistent tenant).
+		// The (tenant_id, config_id) local column ORDER is the isolation pair — a
+		// swap must be rejected (F6).
+		// ON DELETE action is 'a' (NO ACTION / default) — no ON DELETE clause in DDL.
+		Table:      "config_versions",
+		Constraint: "config_versions_tenant_entry_fk",
+		Columns:    []string{"tenant_id", "config_id"},
+		RefTable:   "config_entries",
+		RefColumns: []string{"tenant_id", "id"},
+		OnDelete:   "a", // NO ACTION (default) — migrations/051_configcore_tenant_id.sql
+	},
 	{
 		Table:      "sessions",
 		Constraint: "sessions_subject_id_fkey",

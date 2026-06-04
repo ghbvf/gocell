@@ -38,7 +38,10 @@
 -- Schema changes (config_versions):
 --   - Add tenant_id TEXT NOT NULL.
 --   - REPLACE global UNIQUE (config_id, version) with (tenant_id, config_id, version).
---   - FK config_id REFERENCES config_entries(id) retained (PK reference is stable).
+--   - FK upgraded to composite: FOREIGN KEY (tenant_id, config_id) REFERENCES
+--     config_entries(tenant_id, id) — enforces same-tenant membership at DB level
+--     (defense-in-depth; app already passes consistent tenant). Requires support
+--     UNIQUE (tenant_id, id) on config_entries (CONSTRAINT config_entries_tenant_id_uq).
 --   - Tenant-prefixed keyset index: (tenant_id, config_id, version DESC).
 --   - Retain single-column config_id index (eq-lookup optimization, migration 006).
 --   - Keep all 004+010 columns: value, sensitive, published_at,
@@ -101,7 +104,10 @@ CREATE TABLE config_entries (
     value_key_id    VARCHAR(128),
     value_edk       BYTEA,
     value_nonce     BYTEA,
-    CONSTRAINT config_entries_pk PRIMARY KEY (id)
+    CONSTRAINT config_entries_pk PRIMARY KEY (id),
+    -- Support index target for config_versions composite FK (tenant_id, config_id)
+    -- → config_entries(tenant_id, id). Enforces same-tenant FK at DB level.
+    CONSTRAINT config_entries_tenant_id_uq UNIQUE (tenant_id, id)
 );
 
 -- Composite unique per-tenant: same config key can exist in different tenants.
@@ -120,7 +126,7 @@ CREATE INDEX idx_config_entries_key_id
 CREATE TABLE config_versions (
     id              TEXT        NOT NULL,
     tenant_id       TEXT        NOT NULL,
-    config_id       TEXT        NOT NULL REFERENCES config_entries(id),
+    config_id       TEXT        NOT NULL,
     version         INT         NOT NULL,
     value           TEXT        NOT NULL DEFAULT '',
     sensitive       BOOLEAN     NOT NULL DEFAULT false,
@@ -130,7 +136,13 @@ CREATE TABLE config_versions (
     value_key_id    VARCHAR(128),
     value_edk       BYTEA,
     value_nonce     BYTEA,
-    CONSTRAINT config_versions_pk PRIMARY KEY (id)
+    CONSTRAINT config_versions_pk PRIMARY KEY (id),
+    -- Composite FK: (tenant_id, config_id) → config_entries(tenant_id, id).
+    -- Enforces same-tenant membership at DB level (defense-in-depth).
+    -- Requires CONSTRAINT config_entries_tenant_id_uq UNIQUE (tenant_id, id) on config_entries.
+    CONSTRAINT config_versions_tenant_entry_fk
+        FOREIGN KEY (tenant_id, config_id)
+        REFERENCES config_entries (tenant_id, id)
 );
 
 -- Composite unique per-tenant: (tenant_id, config_id, version) replaces (config_id, version).

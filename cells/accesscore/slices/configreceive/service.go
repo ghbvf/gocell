@@ -94,10 +94,19 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 	if s.configGetter != nil {
 		cfg, fetchErr := s.configGetter.GetEntry(ctx, event.Key)
 		if fetchErr != nil {
-			// If the config entry is genuinely gone (404), the event is stale;
-			// retrying won't help, so log at Warn and Ack.
+			// If the config entry is not found (404), Ack and move on.
+			//
+			// PR-2b tenant-tier note: the internal config GET is issued via
+			// configreadinternal, which passes tenant.SystemTenantID — it reads
+			// from the system/global tier only. A 404 therefore has two distinct
+			// causes that are indistinguishable at this layer:
+			//   1. The config key is genuinely absent (truly stale event).
+			//   2. The key exists but belongs to a per-tenant tier that is not
+			//      visible through the system tier lookup.
+			// In either case, retrying will not help. Real per-tenant config
+			// consumption (reading the correct tenant tier) is tracked at gh #1577.
 			if errcode.IsDomainNotFound(fetchErr, errcode.ErrConfigNotFound, errcode.ErrConfigRepoNotFound) {
-				s.logger.Warn("config-receive: config entry not found after upsert (stale event), skipping",
+				s.logger.Warn("config-receive: config entry not found in system tier (stale or per-tenant), skipping",
 					slog.Any("error", fetchErr),
 					slog.String("key", event.Key),
 					slog.Int("version", event.Version))

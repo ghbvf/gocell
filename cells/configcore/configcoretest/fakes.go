@@ -24,7 +24,7 @@ const testTenantStr = "00000000-0000-0000-0000-000000000001"
 
 // TestTenant is the TenantID value that CtxWithTenant injects and that
 // Seed / Snapshot operate under.
-var TestTenant = tenant.TenantID(testTenantStr)
+const TestTenant tenant.TenantID = testTenantStr
 
 // CtxWithTenant returns ctx with TestTenant injected via the canonical
 // ctxkeys.WithTenantID mechanism — the same path used by the JWT authenticator

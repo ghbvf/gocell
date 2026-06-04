@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	flagsdelete "github.com/ghbvf/gocell/generated/contracts/http/config/flags/delete/v1"
@@ -15,7 +16,6 @@ import (
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/flags/update/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -57,7 +57,7 @@ func (f *fakeFlagRepoErr) Delete(_ context.Context, _ tenant.TenantID, _ string,
 }
 
 func adminCtx() context.Context {
-	return ctxkeys.WithTenantID(auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin}), testFlagTenantStr)
+	return configcoretest.CtxWithTenant(auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin}))
 }
 
 func newFlagAdapters(t *testing.T, updateErr, toggleErr, deleteErr error) (UpdateAdapter, ToggleAdapter, FlagDeleteAdapter) {

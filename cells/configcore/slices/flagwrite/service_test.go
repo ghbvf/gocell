@@ -13,28 +13,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
-// testFlagTenantStr is the test TenantID for flagwrite service tests.
-// flagwrite.Service methods derive tenant via tenant.FromContext(ctx), so every
-// service call context must carry this tenant.
-const testFlagTenantStr = "00000000-0000-0000-0000-000000000001"
-
 // testFlagTenant is the typed TenantID for direct repo operations.
-var testFlagTenant = tenant.TenantID(testFlagTenantStr)
+var testFlagTenant = configcoretest.TestTenant
 
 // flagSvcCtx returns a background context carrying the test tenant for
 // service-layer test calls.
 func flagSvcCtx() context.Context {
-	return ctxkeys.WithTenantID(context.Background(), testFlagTenantStr)
+	return configcoretest.CtxWithTenant(context.Background())
 }
 
 // failingTxRunner simulates a tx that wraps fn but fails after fn returns nil,

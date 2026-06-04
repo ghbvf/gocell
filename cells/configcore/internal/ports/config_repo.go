@@ -11,10 +11,10 @@ import (
 
 // ConfigRepository persists and retrieves ConfigEntry and ConfigVersion records.
 // It also implements healthz.RepoProber via RepoReady — a differentiated
-// readiness check that exercises the cell's own relations (config_entries and
-// feature_flags) rather than a bare connection ping, surfacing schema/migration
-// drift that the pool-level postgres_ready probe cannot detect. See
-// kernel/healthz.RepoProber for the full contract.
+// readiness check that exercises the cell's own relations (config_entries,
+// feature_flags, and config_versions) rather than a bare connection ping,
+// surfacing schema/migration drift that the pool-level postgres_ready probe
+// cannot detect. See kernel/healthz.RepoProber for the full contract.
 //
 // Tenant scoping (epic #1337 PR-2b): every data method takes tenant.TenantID as
 // a mandatory typed positional parameter (param[1], right after ctx); "漏传" is a
@@ -49,11 +49,13 @@ type ConfigRepository interface {
 	List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]*domain.ConfigEntry, error)
 	PublishVersion(ctx context.Context, t tenant.TenantID, version *domain.ConfigVersion) error
 	GetVersion(ctx context.Context, t tenant.TenantID, configID string, version int) (*domain.ConfigVersion, error)
-	// RepoReady implements healthz.RepoProber. It issues two cheap
-	// non-transactional representative queries — one against config_entries and
-	// one against feature_flags — so that missing tables or permission loss are
-	// detected independently of the pool-level postgres_ready probe. In-memory
-	// implementations return nil (always ready). This is a schema-existence probe,
-	// not a tenant-scoped data read, so it takes no tenant parameter.
+	// RepoReady implements healthz.RepoProber. It issues three cheap
+	// non-transactional representative queries — one against config_entries,
+	// one against feature_flags, and one against config_versions — so that
+	// missing tables or permission loss are detected independently of the
+	// pool-level postgres_ready probe. config_versions is included because it
+	// is load-bearing for tenant-scoped versioning (PR-2b #1479). In-memory
+	// implementations return nil (always ready). This is a schema-existence
+	// probe, not a tenant-scoped data read, so it takes no tenant parameter.
 	RepoReady(ctx context.Context) error
 }

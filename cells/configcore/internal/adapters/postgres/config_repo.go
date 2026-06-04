@@ -830,14 +830,22 @@ const configEntriesProbeSQL = `SELECT 1 FROM config_entries WHERE false`
 // config_entries for the RepoReady probe.
 const featureFlagsProbeSQL = `SELECT 1 FROM feature_flags WHERE false`
 
-// RepoReady implements healthz.RepoProber. It issues two cheap
+// configVersionsProbeSQL is the equivalent representative query for the
+// config_versions table. config_versions is load-bearing for tenant-scoped
+// versioning (PR-2b #1479): a missing or broken config_versions table must be
+// detected at readyz time, independently of config_entries and feature_flags.
+const configVersionsProbeSQL = `SELECT 1 FROM config_versions WHERE false`
+
+// RepoReady implements healthz.RepoProber. It issues three cheap
 // non-transactional representative Exec probes — SELECT 1 FROM config_entries
-// WHERE false and SELECT 1 FROM feature_flags WHERE false — so that missing
-// tables, dropped columns, or revoked table-level permissions are detected
-// independently of the pool-level postgres_ready probe. WHERE false
-// short-circuits the scan so there is no result-iteration overhead, and Exec
-// (matching PGSessionStore.RepoReady / LedgerStore.RepoReady) collapses each
-// table probe to a single failure branch — no transaction is opened.
+// WHERE false, SELECT 1 FROM feature_flags WHERE false, and SELECT 1 FROM
+// config_versions WHERE false — so that missing tables, dropped columns, or
+// revoked table-level permissions are detected independently of the pool-level
+// postgres_ready probe. WHERE false short-circuits the scan so there is no
+// result-iteration overhead, and Exec (matching PGSessionStore.RepoReady /
+// LedgerStore.RepoReady) collapses each table probe to a single failure branch
+// — no transaction is opened. config_versions is included because it is
+// load-bearing for tenant-scoped versioning (PR-2b #1479).
 func (r *ConfigRepository) RepoReady(ctx context.Context) error {
 	db := r.resolveDB(ctx)
 
@@ -848,6 +856,12 @@ func (r *ConfigRepository) RepoReady(ctx context.Context) error {
 		)
 	}
 	if _, err := db.Exec(ctx, featureFlagsProbeSQL); err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
+			"config repo readiness check failed", err,
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
+	}
+	if _, err := db.Exec(ctx, configVersionsProbeSQL); err != nil {
 		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrConfigRepoQuery,
 			"config repo readiness check failed", err,
 			errcode.WithCategory(errcode.CategoryInfra),

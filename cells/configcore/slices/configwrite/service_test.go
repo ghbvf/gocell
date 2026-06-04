@@ -28,17 +28,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// testTenantStr is the test tenant UUID injected into service-level test
-// contexts. configwrite.Service.Create/Update/Delete derive the tenant via
-// tenant.FromContext, so a valid TenantID must be present in every ctx passed
-// to service methods.
-const testTenantStr = "00000000-0000-0000-0000-000000000001"
-
 // adminSvcCtx returns a context with an admin principal AND a valid tenant for
 // direct service calls. Both are required: admin principal satisfies
 // actorFromContext, and the tenant satisfies tenant.FromContext.
+//
+// Uses testHandlerTenantStr (shared from handler_test.go in same package) so
+// service-layer and handler-layer tests operate under the same tenant.
 func adminSvcCtx() context.Context {
-	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testTenantStr)
+	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testHandlerTenantStr)
 }
 
 func newTestService() *Service {

@@ -23,14 +23,26 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
-// adminIntegCtx returns a context carrying an admin principal for integration
-// service-method calls. Repository calls don't need auth context.
+// integTestTenantStr is the canonical test tenant UUID for integration tests
+// in this package. Mirrors integTestTenant so that rows seeded directly
+// via repo and rows written/read by the service (which derives tenant from ctx
+// via tenant.FromContext) are always consistent.
+const integTestTenantStr = "00000000-0000-0000-0000-000000000001"
+
+// integTestTenant is the typed TenantID used for direct repo calls.
+var integTestTenant = tenant.TenantID(integTestTenantStr)
+
+// adminIntegCtx returns a context carrying an admin principal and test tenant
+// for integration service-method calls. Services derive tenant via
+// tenant.FromContext; without the tenant injection the service methods fail-closed.
 func adminIntegCtx() context.Context {
-	return auth.TestContext("test-admin", []string{"admin"})
+	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), integTestTenantStr)
 }
 
 // publishServiceBundle groups the PG-backed components for integration tests.
@@ -110,7 +122,7 @@ func seedConfigEntryWithSensitivity(t *testing.T, b publishServiceBundle, key, v
 		UpdatedAt: now,
 	}
 	require.NoError(t, b.txMgr.RunInTx(context.Background(), func(txCtx context.Context) error {
-		return b.repo.Create(txCtx, entry)
+		return b.repo.Create(txCtx, integTestTenant, entry)
 	}))
 	return entry
 }
@@ -152,7 +164,7 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 	assert.NotNil(t, ver.PublishedAt)
 
 	// Domain-side: the persisted version row confirms the repo write committed.
-	got, err := bundle.repo.GetVersion(repoCtx, entry.ID, 1)
+	got, err := bundle.repo.GetVersion(repoCtx, integTestTenant, entry.ID, 1)
 	require.NoError(t, err)
 	assert.Equal(t, ver.ID, got.ID)
 	assert.Equal(t, "publish-value", got.Value)
@@ -218,7 +230,7 @@ func TestL2Atomicity_configpublish_RollsBack(t *testing.T) {
 	require.NoError(t, err)
 
 	// Capture the config_entries version before the failing Rollback.
-	entryBefore, err := bundle.repo.GetByKey(ctx, "rollback.failure.key")
+	entryBefore, err := bundle.repo.GetByKey(ctx, integTestTenant, "rollback.failure.key")
 	require.NoError(t, err)
 	versionBefore := entryBefore.Version
 	beforeState := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
@@ -245,7 +257,7 @@ func TestL2Atomicity_configpublish_RollsBack(t *testing.T) {
 		"Rollback error must wrap the injected outbox sentinel")
 
 	// config_entries version must NOT have changed (rolled back).
-	entryAfter, err := bundle.repo.GetByKey(ctx, "rollback.failure.key")
+	entryAfter, err := bundle.repo.GetByKey(ctx, integTestTenant, "rollback.failure.key")
 	require.NoError(t, err)
 	assert.Equal(t, versionBefore, entryAfter.Version,
 		"config_entries version must not change when outbox write fails (atomic rollback)")
@@ -264,11 +276,11 @@ func TestL2Atomicity_configpublish_RollsBack(t *testing.T) {
 	seedConfigEntry(t, passBundle, "rollback.failure.control.key", "control-value")
 	_, err = passBundle.svc.Publish(svcCtx, "rollback.failure.control.key")
 	require.NoError(t, err)
-	controlBefore, err := passBundle.repo.GetByKey(ctx, "rollback.failure.control.key")
+	controlBefore, err := passBundle.repo.GetByKey(ctx, integTestTenant, "rollback.failure.control.key")
 	require.NoError(t, err)
 	_, err = passBundle.svc.Rollback(svcCtx, "rollback.failure.control.key", 1, controlBefore.Version)
 	require.NoError(t, err, "negative control: Rollback must succeed with pass-through writer")
-	controlAfter, err := passBundle.repo.GetByKey(ctx, "rollback.failure.control.key")
+	controlAfter, err := passBundle.repo.GetByKey(ctx, integTestTenant, "rollback.failure.control.key")
 	require.NoError(t, err)
 	assert.Equal(t, controlBefore.Version+1, controlAfter.Version,
 		"negative control: Rollback must increment config_entries version on success")
@@ -314,9 +326,9 @@ func TestL2Atomicity_configpublish_RollsBack_Publish(t *testing.T) {
 
 	// Domain-side: no config_versions row must have been committed.
 	// GetVersion requires a configID; obtain it via the live entry.
-	liveEntry, getErr := bundle.repo.GetByKey(ctx, "rollback.publish.key")
+	liveEntry, getErr := bundle.repo.GetByKey(ctx, integTestTenant, "rollback.publish.key")
 	require.NoError(t, getErr, "live config_entries row must still exist after rolled-back Publish")
-	_, verErr := bundle.repo.GetVersion(ctx, liveEntry.ID, 1)
+	_, verErr := bundle.repo.GetVersion(ctx, integTestTenant, liveEntry.ID, 1)
 	require.Error(t, verErr,
 		"config_versions row must not exist when outbox write fails (atomic Publish rollback)")
 
@@ -327,9 +339,9 @@ func TestL2Atomicity_configpublish_RollsBack_Publish(t *testing.T) {
 	seedConfigEntry(t, passBundle, "rollback.publish.control.key", "control-value")
 	_, err = passBundle.svc.Publish(svcCtx, "rollback.publish.control.key")
 	require.NoError(t, err, "negative control: Publish must succeed with pass-through writer")
-	controlEntry, err := passBundle.repo.GetByKey(ctx, "rollback.publish.control.key")
+	controlEntry, err := passBundle.repo.GetByKey(ctx, integTestTenant, "rollback.publish.control.key")
 	require.NoError(t, err)
-	_, err = passBundle.repo.GetVersion(ctx, controlEntry.ID, 1)
+	_, err = passBundle.repo.GetVersion(ctx, integTestTenant, controlEntry.ID, 1)
 	require.NoError(t, err,
 		"negative control: config_versions row must exist after successful Publish")
 }
@@ -408,7 +420,7 @@ func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
 
 	// Final-state check: the live entry version must have been bumped exactly
 	// once (1 → 2) — the losing goroutine must not have written anything.
-	finalEntry, err := bundle.repo.GetByKey(context.Background(), key)
+	finalEntry, err := bundle.repo.GetByKey(context.Background(), integTestTenant, key)
 	require.NoError(t, err)
 	assert.Equal(t, 2, finalEntry.Version,
 		"config_entries.version must increment by exactly 1 across concurrent rollbacks")
@@ -464,7 +476,7 @@ func TestConcurrentRollback_PG_Sensitive_ExactlyOneWins(t *testing.T) {
 	assert.Equal(t, int32(1), versionConflicts.Load(),
 		"exactly one concurrent Rollback must yield ErrVersionConflict (sensitive branch)")
 
-	finalEntry, err := bundle.repo.GetByKey(context.Background(), key)
+	finalEntry, err := bundle.repo.GetByKey(context.Background(), integTestTenant, key)
 	require.NoError(t, err)
 	assert.Equal(t, 2, finalEntry.Version,
 		"config_entries.version must increment by exactly 1 across concurrent sensitive rollbacks")

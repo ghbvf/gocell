@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
@@ -25,23 +26,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// testSvcTenantStr is the test TenantID string for configpublish service tests.
-const testSvcTenantStr = "00000000-0000-0000-0000-000000000001"
-
 // testSvcTenant is the typed TenantID for direct repo operations.
-var testSvcTenant = tenant.TenantID(testSvcTenantStr)
+var testSvcTenant = configcoretest.TestTenant
 
 // adminSvcCtx returns a context with an admin principal AND a valid TenantID
 // for direct service calls. configpublish.Service.Publish and Rollback both
 // call tenant.FromContext(ctx), so a tenant must be present.
 func adminSvcCtx() context.Context {
-	return ctxkeys.WithTenantID(auth.TestContext("test-admin", []string{"admin"}), testSvcTenantStr)
+	return configcoretest.CtxWithTenant(auth.TestContext("test-admin", []string{"admin"}))
 }
 
 // newTestService returns a Service wired with the default NoopEmitter

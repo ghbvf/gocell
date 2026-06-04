@@ -14,24 +14,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// testFlagHandlerTenantStr is the test TenantID string for featureflag handler tests.
-const testFlagHandlerTenantStr = "00000000-0000-0000-0000-000000000001"
-
 // testFlagHandlerTenant is the typed TenantID for direct repo seeding.
-var testFlagHandlerTenant = tenant.TenantID(testFlagHandlerTenantStr)
+var testFlagHandlerTenant = configcoretest.TestTenant
 
 var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
 
@@ -41,7 +37,7 @@ const flagsBasePath = "/api/v1/flags"
 // satisfies the auth.AnyRole(RoleAdmin) policy AND the featureflag handler's
 // tenant.FromContext call.
 func asAdminFlag(req *http.Request) *http.Request {
-	ctx := ctxkeys.WithTenantID(auth.TestContext("admin-user", []string{auth.RoleAdmin}), testFlagHandlerTenantStr)
+	ctx := configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
 	return req.WithContext(ctx)
 }
 
