@@ -53,12 +53,11 @@ type violation struct {
 
 // --- helpers (pure functions) ---
 
-// layerOf is a backward-compatible shim around depgraph.LayerOf that keeps
-// archtest's "external returns empty string" convention. modPrefix must
-// include the trailing slash (e.g. "github.com/ghbvf/gocell/"). Internal
-// known-bucket packages return their layer name; stdlib / third-party /
-// root / unknown-internal collapse to "" so existing skip-on-empty
-// branches in checkLayering keep working.
+// layerOf is a backward-compatible shim around Classifier.Layer that keeps
+// archtest's "external returns empty string" convention. Internal known-bucket
+// packages return their layer name; stdlib / third-party / root /
+// unknown-internal collapse to "" so existing skip-on-empty branches in
+// checkLayering keep working.
 //
 // LayerUnknown is folded here intentionally: depgraph still surfaces
 // internal-unknown distinctly (so future governance code can pick it up),
@@ -67,9 +66,8 @@ type violation struct {
 //
 // The single source of truth for layer classification is now
 // tools/depgraph/layer.go; this shim only adapts the signature.
-func layerOf(modPrefix, importPath string) string {
-	module := strings.TrimSuffix(modPrefix, "/")
-	switch layer := kerneldepgraph.LayerOf(module, importPath); layer {
+func layerOf(cls kerneldepgraph.Classifier, importPath string) string {
+	switch layer := cls.Layer(importPath); layer {
 	case kerneldepgraph.LayerStdlib, kerneldepgraph.LayerThirdParty, kerneldepgraph.LayerRoot, kerneldepgraph.LayerUnknown, "":
 		return ""
 	default:
@@ -77,9 +75,22 @@ func layerOf(modPrefix, importPath string) string {
 	}
 }
 
-// cellOf delegates to kerneldepgraph.CellOf with archtest's modPrefix convention.
-func cellOf(modPrefix, importPath string) string {
-	return kerneldepgraph.CellOf(strings.TrimSuffix(modPrefix, "/"), importPath)
+// cellOf delegates to Classifier.Cell using owner-relative semantics.
+func cellOf(cls kerneldepgraph.Classifier, importPath string) string {
+	return cls.Cell(importPath)
+}
+
+// relWithinOwner returns importPath relative to its owning workspace module
+// (the "<owner>/" prefix stripped), or "" when no member module owns it. It
+// replaces the former strings.TrimPrefix(importPath, modPrefix) — each package
+// is made relative to ITS OWN owning module so a nested module's packages are
+// not mis-stripped against the core module prefix.
+func relWithinOwner(cls kerneldepgraph.Classifier, importPath string) string {
+	owner := cls.OwningModule(importPath)
+	if owner == "" || importPath == owner {
+		return ""
+	}
+	return strings.TrimPrefix(importPath, owner+"/")
 }
 
 // isInternal returns true if the import path contains an internal package segment.
@@ -112,16 +123,16 @@ var cellOwnedSubpackages = map[string]string{
 // over the depgraph view of the module. Consumes Node.ID and Node.Imports
 // directly — there is no longer an intermediate pkgInfo bridge type.
 // LAYER-01..04 path rules are owned by depguard in `.golangci.yml`.
-// modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
-func checkLayering(modPrefix string, g *kerneldepgraph.Graph) []violation {
+// cls is built from the workspace module set (g.Modules).
+func checkLayering(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 
 	for _, pkg := range g.Packages {
-		srcLayer := layerOf(modPrefix, pkg.ID)
-		srcCell := cellOf(modPrefix, pkg.ID)
+		srcLayer := layerOf(cls, pkg.ID)
+		srcCell := cellOf(cls, pkg.ID)
 
 		for _, imp := range pkg.Imports {
-			impLayer := layerOf(modPrefix, imp)
+			impLayer := layerOf(cls, imp)
 			if impLayer == "" {
 				continue // external package, skip
 			}
@@ -131,7 +142,7 @@ func checkLayering(modPrefix string, g *kerneldepgraph.Graph) []violation {
 			// by sibling cells in the same assembly. When L0 cells exist under cells/,
 			// parse cell.yaml to identify them and skip LAYER-05 for L0 targets.
 			if srcCell != "" && isInternal(imp) {
-				impCell := cellOf(modPrefix, imp)
+				impCell := cellOf(cls, imp)
 				if impCell != "" && impCell != srcCell {
 					out = append(out, violation{
 						Rule:    "LAYER-05",
@@ -147,7 +158,7 @@ func checkLayering(modPrefix string, g *kerneldepgraph.Graph) []violation {
 			// unrestricted). Flags cases like cells/auditcore importing
 			// cells/accesscore/initialadmin, which would bypass the cell
 			// boundary without triggering LAYER-05 (no /internal/ segment).
-			if v := checkCellOwnedSubpackage(modPrefix, pkg.ID, imp, srcLayer); v != nil {
+			if v := checkCellOwnedSubpackage(cls, pkg.ID, imp, srcLayer); v != nil {
 				out = append(out, *v)
 			}
 
@@ -155,9 +166,9 @@ func checkLayering(modPrefix string, g *kerneldepgraph.Graph) []violation {
 			// rationale: cell-patterns.md three-tier DTO rule — cells/{cell}/events/ packages
 			// are owned by the declaring cell; sibling cells must use contract wire types instead.
 			// Same-cell self-import is allowed; cmd/ and examples/ are unrestricted.
-			impCell := cellOf(modPrefix, imp)
-			if isRootCellPackage(modPrefix, pkg.ID) && srcCell != "" {
-				impRel := strings.TrimPrefix(imp, modPrefix)
+			impCell := cellOf(cls, imp)
+			if isRootCellPackage(cls, pkg.ID) && srcCell != "" {
+				impRel := relWithinOwner(cls, imp)
 				internalAdaptersPrefix := "cells/" + srcCell + "/internal/adapters/"
 				if strings.HasPrefix(impRel, internalAdaptersPrefix) {
 					out = append(out, violation{
@@ -170,7 +181,7 @@ func checkLayering(modPrefix string, g *kerneldepgraph.Graph) []violation {
 			}
 
 			if srcCell != "" && impCell != "" && srcCell != impCell {
-				impRel := strings.TrimPrefix(imp, modPrefix)
+				impRel := relWithinOwner(cls, imp)
 				eventsPrefix := "cells/" + impCell + "/events"
 				if impRel == eventsPrefix || strings.HasPrefix(impRel, eventsPrefix+"/") {
 					out = append(out, violation{
@@ -189,8 +200,8 @@ func checkLayering(modPrefix string, g *kerneldepgraph.Graph) []violation {
 // matchCellOwnedSubpackage reports whether dep falls inside a cell-owned
 // public subpackage entry, returning the owner-tree prefix (with trailing
 // slash) when it does. Pure lookup — no exemption logic.
-func matchCellOwnedSubpackage(modPrefix, dep string) (ownerPrefix string, ok bool) {
-	impRel := strings.TrimPrefix(dep, modPrefix)
+func matchCellOwnedSubpackage(cls kerneldepgraph.Classifier, dep string) (ownerPrefix string, ok bool) {
+	impRel := relWithinOwner(cls, dep)
 	for ownedRel, ownerPrefix := range cellOwnedSubpackages {
 		if impRel == ownedRel || strings.HasPrefix(impRel, ownedRel+"/") {
 			return ownerPrefix, true
@@ -204,11 +215,11 @@ func matchCellOwnedSubpackage(modPrefix, dep string) (ownerPrefix string, ok boo
 // examples/ are universally unrestricted composition-root layers; the owning
 // cell's tree may import freely. cellmodules/ is the importable Composition Root
 // layer (#1085 LayerCellModules) and must have the same exemptions as cmd/.
-func isCellOwnedSubpackageExempt(modPrefix, srcPath, srcLayer, ownerPrefix string) bool {
+func isCellOwnedSubpackageExempt(cls kerneldepgraph.Classifier, srcPath, srcLayer, ownerPrefix string) bool {
 	if srcLayer == "cmd" || srcLayer == "cellmodules" || srcLayer == "examples" {
 		return true
 	}
-	srcRel := strings.TrimPrefix(srcPath, modPrefix)
+	srcRel := relWithinOwner(cls, srcPath)
 	// ownerRoot covers the case where srcRel is the cell root itself
 	// (e.g. "cells/accesscore") which HasPrefix("cells/accesscore/") would
 	// reject due to the missing trailing slash.
@@ -219,12 +230,12 @@ func isCellOwnedSubpackageExempt(modPrefix, srcPath, srcLayer, ownerPrefix strin
 // checkCellOwnedSubpackage returns a LAYER-06 violation if imp is a cell-owned
 // public subpackage that src is not permitted to import. Returns nil when the
 // import is allowed or unrelated.
-func checkCellOwnedSubpackage(modPrefix, srcPath, imp, srcLayer string) *violation {
-	ownerPrefix, ok := matchCellOwnedSubpackage(modPrefix, imp)
+func checkCellOwnedSubpackage(cls kerneldepgraph.Classifier, srcPath, imp, srcLayer string) *violation {
+	ownerPrefix, ok := matchCellOwnedSubpackage(cls, imp)
 	if !ok {
 		return nil
 	}
-	if isCellOwnedSubpackageExempt(modPrefix, srcPath, srcLayer, ownerPrefix) {
+	if isCellOwnedSubpackageExempt(cls, srcPath, srcLayer, ownerPrefix) {
 		return nil
 	}
 	return &violation{
@@ -238,18 +249,18 @@ func checkCellOwnedSubpackage(modPrefix, srcPath, imp, srcLayer string) *violati
 	}
 }
 
-func isRootCellPackage(modPrefix, importPath string) bool {
-	cellsPrefix := modPrefix + "cells/"
-	if !strings.HasPrefix(importPath, cellsPrefix) {
+func isRootCellPackage(cls kerneldepgraph.Classifier, importPath string) bool {
+	rel := relWithinOwner(cls, importPath)
+	if !strings.HasPrefix(rel, "cells/") {
 		return false
 	}
-	rel := strings.TrimPrefix(importPath, cellsPrefix)
-	return rel != "" && !strings.Contains(rel, "/") && !strings.HasSuffix(rel, "_test")
+	r := strings.TrimPrefix(rel, "cells/")
+	return r != "" && !strings.Contains(r, "/") && !strings.HasSuffix(r, "_test")
 }
 
-func isCellPublicAPIDisallowedType(modPrefix, pkgPath string) bool {
-	module := strings.TrimSuffix(modPrefix, "/")
-	if strings.HasPrefix(pkgPath, module+"/adapters/") {
+func isCellPublicAPIDisallowedType(cls kerneldepgraph.Classifier, pkgPath string) bool {
+	owner := cls.OwningModule(pkgPath)
+	if owner != "" && strings.HasPrefix(pkgPath, owner+"/adapters/") {
 		return true
 	}
 	for _, prefix := range []string{
@@ -267,51 +278,51 @@ func isCellPublicAPIDisallowedType(modPrefix, pkgPath string) bool {
 	return false
 }
 
-func findDisallowedTypePath(modPrefix string, typ types.Type) string {
+func findDisallowedTypePath(cls kerneldepgraph.Classifier, typ types.Type) string {
 	switch t := typ.(type) {
 	case nil:
 		return ""
 	case *types.Basic:
 		return ""
 	case *types.Named:
-		if obj := t.Obj(); obj != nil && obj.Pkg() != nil && isCellPublicAPIDisallowedType(modPrefix, obj.Pkg().Path()) {
+		if obj := t.Obj(); obj != nil && obj.Pkg() != nil && isCellPublicAPIDisallowedType(cls, obj.Pkg().Path()) {
 			return obj.Pkg().Path()
 		}
 		typeArgs := t.TypeArgs()
 		for i := 0; typeArgs != nil && i < typeArgs.Len(); i++ {
-			if p := findDisallowedTypePath(modPrefix, typeArgs.At(i)); p != "" {
+			if p := findDisallowedTypePath(cls, typeArgs.At(i)); p != "" {
 				return p
 			}
 		}
 		return ""
 	case *types.TypeParam:
-		return findDisallowedTypePath(modPrefix, t.Constraint())
+		return findDisallowedTypePath(cls, t.Constraint())
 	case *types.Pointer:
-		return findDisallowedTypePath(modPrefix, t.Elem())
+		return findDisallowedTypePath(cls, t.Elem())
 	case *types.Slice:
-		return findDisallowedTypePath(modPrefix, t.Elem())
+		return findDisallowedTypePath(cls, t.Elem())
 	case *types.Array:
-		return findDisallowedTypePath(modPrefix, t.Elem())
+		return findDisallowedTypePath(cls, t.Elem())
 	case *types.Map:
-		if p := findDisallowedTypePath(modPrefix, t.Key()); p != "" {
+		if p := findDisallowedTypePath(cls, t.Key()); p != "" {
 			return p
 		}
-		return findDisallowedTypePath(modPrefix, t.Elem())
+		return findDisallowedTypePath(cls, t.Elem())
 	case *types.Chan:
-		return findDisallowedTypePath(modPrefix, t.Elem())
+		return findDisallowedTypePath(cls, t.Elem())
 	case *types.Signature:
-		if p := findDisallowedTupleTypePath(modPrefix, t.Params()); p != "" {
+		if p := findDisallowedTupleTypePath(cls, t.Params()); p != "" {
 			return p
 		}
-		return findDisallowedTupleTypePath(modPrefix, t.Results())
+		return findDisallowedTupleTypePath(cls, t.Results())
 	case *types.Interface:
 		for method := range t.ExplicitMethods() {
-			if p := findDisallowedTypePath(modPrefix, method.Type()); p != "" {
+			if p := findDisallowedTypePath(cls, method.Type()); p != "" {
 				return p
 			}
 		}
 		for etyp := range t.EmbeddedTypes() {
-			if p := findDisallowedTypePath(modPrefix, etyp); p != "" {
+			if p := findDisallowedTypePath(cls, etyp); p != "" {
 				return p
 			}
 		}
@@ -321,7 +332,7 @@ func findDisallowedTypePath(modPrefix string, typ types.Type) string {
 			if !f.Exported() && !f.Anonymous() {
 				continue
 			}
-			if p := findDisallowedTypePath(modPrefix, f.Type()); p != "" {
+			if p := findDisallowedTypePath(cls, f.Type()); p != "" {
 				return p
 			}
 		}
@@ -331,12 +342,12 @@ func findDisallowedTypePath(modPrefix string, typ types.Type) string {
 	}
 }
 
-func findDisallowedTupleTypePath(modPrefix string, tuple *types.Tuple) string {
+func findDisallowedTupleTypePath(cls kerneldepgraph.Classifier, tuple *types.Tuple) string {
 	if tuple == nil {
 		return ""
 	}
 	for v := range tuple.Variables() {
-		if p := findDisallowedTypePath(modPrefix, v.Type()); p != "" {
+		if p := findDisallowedTypePath(cls, v.Type()); p != "" {
 			return p
 		}
 	}
@@ -351,10 +362,10 @@ func layer10IncompleteTypeDataViolation(pkgPath, detail string) violation {
 	}
 }
 
-func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) []violation {
+func checkCellPublicAPIAdapterTypes(cls kerneldepgraph.Classifier, pkgs []*packages.Package) []violation {
 	var out []violation
 	for _, pkg := range pkgs {
-		if !isRootCellPackage(modPrefix, pkg.PkgPath) {
+		if !isRootCellPackage(cls, pkg.PkgPath) {
 			continue
 		}
 		for _, pe := range pkg.Errors {
@@ -392,7 +403,7 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 						fmt.Sprintf("missing type info for exported API %s", symbol)))
 					return
 				}
-				if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
+				if p := findDisallowedTypePath(cls, obj.Type()); p != "" {
 					out = append(out, violation{
 						Rule:    "LAYER-10",
 						Pkg:     pkg.PkgPath,
@@ -412,7 +423,7 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 							fmt.Sprintf("missing type info for exported type %s", s.Name.Name)))
 						return
 					}
-					if p := findDisallowedTypePath(modPrefix, typ); p != "" {
+					if p := findDisallowedTypePath(cls, typ); p != "" {
 						out = append(out, violation{
 							Rule:    "LAYER-10",
 							Pkg:     pkg.PkgPath,
@@ -432,7 +443,7 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 								fmt.Sprintf("missing type info for exported var/const %s", name.Name)))
 							continue
 						}
-						if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
+						if p := findDisallowedTypePath(cls, obj.Type()); p != "" {
 							out = append(out, violation{
 								Rule:    "LAYER-10",
 								Pkg:     pkg.PkgPath,
@@ -470,8 +481,8 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 // banned by PRODUCTION-LOADER-FUNNEL-01.
 func loadModule(t *testing.T, root string) (*kerneldepgraph.Graph, *typeseval.ProductionResolver) {
 	t.Helper()
-	module := readModulePath(t, root)
-	resolver, err := typeseval.LoadProductionPackages(root, module, false /* tests */, []string{"integration"})
+	modules := findWorkspaceModules(t, root)
+	resolver, err := typeseval.LoadProductionPackages(root, modules, false /* tests */, []string{"integration"})
 	require.NoError(t, err, "typeseval.LoadProductionPackages failed")
 	all := resolver.All()
 	for _, p := range all {
@@ -479,20 +490,21 @@ func loadModule(t *testing.T, root string) (*kerneldepgraph.Graph, *typeseval.Pr
 			t.Logf("packages.Load: package %q error: %v", p.PkgPath, pe)
 		}
 	}
-	return depgraph.FromPackages(module, all), resolver
+	return depgraph.FromPackages(moduleImportPaths(modules), all), resolver
 }
 
 // --- integration test (real go/packages data via depgraph) ---
 
 func TestLayeringRules(t *testing.T) {
 	root := findModuleRoot(t)
-	modPrefix := readModulePath(t, root) + "/"
-	module := strings.TrimSuffix(modPrefix, "/")
+	module := readModulePath(t, root)
 
 	g, resolver := loadModule(t, root)
 	require.NotEmpty(t, g.Packages, "depgraph returned no packages")
 
-	violations := checkLayering(modPrefix, g)
+	cls := kerneldepgraph.NewClassifier(g.Modules)
+
+	violations := checkLayering(cls, g)
 
 	// Group violations by rule for readable output.
 	byRule := map[string][]string{}
@@ -524,7 +536,7 @@ func TestLayeringRules(t *testing.T) {
 		routerPkg := module + "/runtime/http/router"
 		var layer07violations []string
 		for _, pkg := range g.Packages {
-			if layerOf(modPrefix, pkg.ID) != "cells" {
+			if layerOf(cls, pkg.ID) != "cells" {
 				continue
 			}
 			if strings.HasSuffix(pkg.ID, "_test") {
@@ -570,7 +582,7 @@ func TestLayeringRules(t *testing.T) {
 	// concrete adapter/driver types.
 	t.Run("LAYER-10_cell_root_public_api_no_adapter_driver_types", func(t *testing.T) {
 		typedCellPkgs := filterCellPackages(module, resolver.Production())
-		violations := checkCellPublicAPIAdapterTypes(modPrefix, typedCellPkgs)
+		violations := checkCellPublicAPIAdapterTypes(cls, typedCellPkgs)
 		for _, v := range violations {
 			t.Logf("LAYER-10 violation: %s", v.Message)
 		}
@@ -589,7 +601,7 @@ func TestLayeringRules(t *testing.T) {
 	// module on production edges).
 
 	t.Run("LAYER-05T_no_transitive_cross_cell_internal_imports", func(t *testing.T) {
-		violations := checkTransitiveCrossCellInternal(module, g)
+		violations := checkTransitiveCrossCellInternal(cls, g)
 		for _, v := range violations {
 			t.Logf("LAYER-05T violation: %s", v.Message)
 		}
@@ -598,7 +610,7 @@ func TestLayeringRules(t *testing.T) {
 	})
 
 	t.Run("LAYER-06T_no_transitive_cell_owned_subpackage_imports", func(t *testing.T) {
-		violations := checkTransitiveCellOwnedSubpackage(modPrefix, g)
+		violations := checkTransitiveCellOwnedSubpackage(cls, g)
 		for _, v := range violations {
 			t.Logf("LAYER-06T violation: %s", v.Message)
 		}
@@ -607,7 +619,7 @@ func TestLayeringRules(t *testing.T) {
 	})
 
 	t.Run("LAYER-09T_no_transitive_cross_cell_events_imports", func(t *testing.T) {
-		violations := checkTransitiveCrossCellEvents(module, g)
+		violations := checkTransitiveCrossCellEvents(cls, g)
 		for _, v := range violations {
 			t.Logf("LAYER-09T violation: %s", v.Message)
 		}
@@ -681,14 +693,14 @@ func formatTransitivePath(path []string) string {
 // import closure reaches cells/B/internal/... for any B != A. The
 // violation message includes the laundering path so reviewers can locate
 // the offending intermediary without grepping the codebase.
-func checkTransitiveCrossCellInternal(module string, g *kerneldepgraph.Graph) []violation {
+func checkTransitiveCrossCellInternal(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
 		if src.Layer != kerneldepgraph.LayerCells || src.CellID == "" {
 			continue
 		}
 		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
-			depCell := kerneldepgraph.CellOf(module, dep)
+			depCell := cls.Cell(dep)
 			if depCell == "" || depCell == src.CellID {
 				continue
 			}
@@ -716,19 +728,19 @@ func checkTransitiveCrossCellInternal(module string, g *kerneldepgraph.Graph) []
 // records directly via the shared matchCellOwnedSubpackage /
 // isCellOwnedSubpackageExempt helpers — no string-replace coupling to the
 // direct-form message template.
-func checkTransitiveCellOwnedSubpackage(modPrefix string, g *kerneldepgraph.Graph) []violation {
+func checkTransitiveCellOwnedSubpackage(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
-		srcLayer := layerOf(modPrefix, src.ID)
+		srcLayer := layerOf(cls, src.ID)
 		if srcLayer == "cmd" || srcLayer == "examples" {
 			continue
 		}
 		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
-			ownerPrefix, ok := matchCellOwnedSubpackage(modPrefix, dep)
+			ownerPrefix, ok := matchCellOwnedSubpackage(cls, dep)
 			if !ok {
 				continue
 			}
-			if isCellOwnedSubpackageExempt(modPrefix, src.ID, srcLayer, ownerPrefix) {
+			if isCellOwnedSubpackageExempt(cls, src.ID, srcLayer, ownerPrefix) {
 				continue
 			}
 			out = append(out, violation{
@@ -747,18 +759,22 @@ func checkTransitiveCellOwnedSubpackage(modPrefix string, g *kerneldepgraph.Grap
 
 // checkTransitiveCrossCellEvents flags every cell A whose transitive
 // import closure reaches cells/B/events for any B != A.
-func checkTransitiveCrossCellEvents(module string, g *kerneldepgraph.Graph) []violation {
+func checkTransitiveCrossCellEvents(cls kerneldepgraph.Classifier, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
 		if src.Layer != kerneldepgraph.LayerCells || src.CellID == "" {
 			continue
 		}
 		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
-			depCell := kerneldepgraph.CellOf(module, dep)
+			depCell := cls.Cell(dep)
 			if depCell == "" || depCell == src.CellID {
 				continue
 			}
-			eventsPrefix := module + "/cells/" + depCell + "/events"
+			depOwner := cls.OwningModule(dep)
+			if depOwner == "" {
+				continue
+			}
+			eventsPrefix := depOwner + "/cells/" + depCell + "/events"
 			if dep != eventsPrefix && !strings.HasPrefix(dep, eventsPrefix+"/") {
 				continue
 			}
@@ -779,7 +795,8 @@ func checkTransitiveCrossCellEvents(module string, g *kerneldepgraph.Graph) []vi
 // --- unit tests for helper functions ---
 
 func TestLayerOf(t *testing.T) {
-	const mod = "github.com/ghbvf/gocell/"
+	const module = "github.com/ghbvf/gocell"
+	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		input string
 		want  string
@@ -804,13 +821,14 @@ func TestLayerOf(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, layerOf(mod, tt.input))
+			assert.Equal(t, tt.want, layerOf(cls, tt.input))
 		})
 	}
 }
 
 func TestCellOf(t *testing.T) {
-	const mod = "github.com/ghbvf/gocell/"
+	const module = "github.com/ghbvf/gocell"
+	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		input string
 		want  string
@@ -826,13 +844,14 @@ func TestCellOf(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, cellOf(mod, tt.input))
+			assert.Equal(t, tt.want, cellOf(cls, tt.input))
 		})
 	}
 }
 
 func TestIsRootCellPackage(t *testing.T) {
-	const mod = "github.com/ghbvf/gocell/"
+	const module = "github.com/ghbvf/gocell"
+	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		input string
 		want  bool
@@ -845,13 +864,14 @@ func TestIsRootCellPackage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, isRootCellPackage(mod, tt.input))
+			assert.Equal(t, tt.want, isRootCellPackage(cls, tt.input))
 		})
 	}
 }
 
 func TestIsCellPublicAPIDisallowedType(t *testing.T) {
-	const mod = "github.com/ghbvf/gocell/"
+	const module = "github.com/ghbvf/gocell"
+	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		pkgPath string
 		want    bool
@@ -866,13 +886,14 @@ func TestIsCellPublicAPIDisallowedType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.pkgPath, func(t *testing.T) {
-			assert.Equal(t, tt.want, isCellPublicAPIDisallowedType(mod, tt.pkgPath))
+			assert.Equal(t, tt.want, isCellPublicAPIDisallowedType(cls, tt.pkgPath))
 		})
 	}
 }
 
 func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
-	const mod = "github.com/ghbvf/gocell/"
+	const module = "github.com/ghbvf/gocell"
+	cls := kerneldepgraph.NewClassifier([]string{module})
 	rootPkg := types.NewPackage("github.com/ghbvf/gocell/cells/accesscore", "accesscore")
 	poolPkg := types.NewPackage("github.com/jackc/pgx/v5/pgxpool", "pgxpool")
 	promPkg := types.NewPackage("github.com/prometheus/client_golang/prometheus", "prometheus")
@@ -922,7 +943,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	fakePkg.TypesInfo.Defs[metricName] = types.NewVar(token.NoPos, rootPkg, "ExportedMetric", counterType)
 	fakePkg.PkgPath = "github.com/ghbvf/gocell/cells/accesscore"
 
-	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{fakePkg})
+	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{fakePkg})
 
 	var messages []string
 	for _, v := range violations {
@@ -936,7 +957,8 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 }
 
 func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *testing.T) {
-	const mod = "github.com/ghbvf/gocell/"
+	const module = "github.com/ghbvf/gocell"
+	cls := kerneldepgraph.NewClassifier([]string{module})
 	rootPkg := types.NewPackage("github.com/ghbvf/gocell/cells/accesscore", "accesscore")
 	funcDecl := &ast.FuncDecl{Name: ast.NewIdent("Exported"), Type: &ast.FuncType{}}
 	file := &ast.File{
@@ -970,7 +992,7 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 		Types:   types.NewPackage("github.com/ghbvf/gocell/cells/auditcore", "auditcore"),
 	}
 
-	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{
+	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{
 		loadErrorPkg,
 		missingObjectPkg,
 		missingTypesInfoPkg,
@@ -1008,7 +1030,6 @@ func TestIsInternal(t *testing.T) {
 // --- unit tests for checkLayering (table-driven with mock data) ---
 
 func TestCheckLayering(t *testing.T) {
-	const modPrefix = "github.com/ghbvf/gocell/"
 	const module = "github.com/ghbvf/gocell"
 	// Note: LAYER-01..04 path rules are owned by depguard in .golangci.yml.
 	// Only LAYER-05/06/09/10 (metadata-aware rules) are tested here. Each
@@ -1177,8 +1198,9 @@ func TestCheckLayering(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := depgraph.FromPackages(module, tt.pkgs)
-			violations := checkLayering(modPrefix, g)
+			g := depgraph.FromPackages([]string{module}, tt.pkgs)
+			cls := kerneldepgraph.NewClassifier(g.Modules)
+			violations := checkLayering(cls, g)
 
 			gotRules := make([]string, 0, len(violations))
 			seen := map[string]bool{}
@@ -1213,20 +1235,20 @@ func TestCheckLayering(t *testing.T) {
 func TestLayeringRules_LAYER07_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const modPrefix = "github.com/ghbvf/gocell/"
-	module := strings.TrimSuffix(modPrefix, "/")
+	const module = "github.com/ghbvf/gocell"
 	routerPkg := module + "/runtime/http/router"
 	cellSlice := module + "/cells/accesscore/slices/some_route_slice"
 
-	g := depgraph.FromPackages(module, []*packages.Package{
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
 		synthPkg(cellSlice, routerPkg),
 		synthPkg(routerPkg),
 	})
+	cls := kerneldepgraph.NewClassifier(g.Modules)
 
 	// Run the same inline logic as LAYER-07 in TestLayeringRules.
 	var layer07violations []string
 	for _, pkg := range g.Packages {
-		if layerOf(modPrefix, pkg.ID) != "cells" {
+		if layerOf(cls, pkg.ID) != "cells" {
 			continue
 		}
 		if strings.HasSuffix(pkg.ID, "_test") {
@@ -1280,8 +1302,7 @@ func TestLayeringRules_LAYER08_NegativeProbe(t *testing.T) {
 func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const modPrefix = "github.com/ghbvf/gocell/"
-	module := strings.TrimSuffix(modPrefix, "/")
+	const module = "github.com/ghbvf/gocell"
 
 	tests := []struct {
 		name        string
@@ -1291,26 +1312,26 @@ func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	}{
 		{
 			name:        "cross-cell: auditcore imports configcore/events → violation",
-			src:         modPrefix + "cells/auditcore/slices/auditappend",
-			imp:         modPrefix + "cells/configcore/events",
+			src:         module + "/cells/auditcore/slices/auditappend",
+			imp:         module + "/cells/configcore/events",
 			wantViolate: true,
 		},
 		{
 			name:        "same-cell: configcore imports configcore/events → allowed",
-			src:         modPrefix + "cells/configcore/slices/configpublish",
-			imp:         modPrefix + "cells/configcore/events",
+			src:         module + "/cells/configcore/slices/configpublish",
+			imp:         module + "/cells/configcore/events",
 			wantViolate: false,
 		},
 		{
 			name:        "examples imports configcore/events → allowed",
-			src:         modPrefix + "examples/ssobff",
-			imp:         modPrefix + "cells/configcore/events",
+			src:         module + "/examples/ssobff",
+			imp:         module + "/cells/configcore/events",
 			wantViolate: false,
 		},
 		{
 			name:        "cmd imports configcore/events → allowed",
-			src:         modPrefix + "cmd/corebundle",
-			imp:         modPrefix + "cells/configcore/events",
+			src:         module + "/cmd/corebundle",
+			imp:         module + "/cells/configcore/events",
 			wantViolate: false,
 		},
 	}
@@ -1318,11 +1339,12 @@ func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			g := depgraph.FromPackages(module, []*packages.Package{
+			g := depgraph.FromPackages([]string{module}, []*packages.Package{
 				synthPkg(tt.src, tt.imp),
 				synthPkg(tt.imp),
 			})
-			violations := checkLayering(modPrefix, g)
+			cls := kerneldepgraph.NewClassifier(g.Modules)
+			violations := checkLayering(cls, g)
 			var layer09 []violation
 			for _, v := range violations {
 				if v.Rule == "LAYER-09" {
@@ -1366,13 +1388,13 @@ func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 	util := module + "/pkg/util"
 	cellBInt := module + "/cells/cellB/internal/domain"
 
-	g := depgraph.FromPackages(module, []*packages.Package{
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
 		synthPkg(cellA, util),
 		synthPkg(util, cellBInt),
 		synthPkg(cellBInt),
 	})
 
-	violations := checkTransitiveCrossCellInternal(module, g)
+	violations := checkTransitiveCrossCellInternal(kerneldepgraph.NewClassifier([]string{module}), g)
 	require.Len(t, violations, 1,
 		"LAYER-05T negative probe: must flag cellA → pkg/util → cellB/internal laundering")
 	assert.Equal(t, "LAYER-05T", violations[0].Rule)
@@ -1395,19 +1417,19 @@ func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const modPrefix = "github.com/ghbvf/gocell/"
-	module := strings.TrimSuffix(modPrefix, "/")
+	const module = "github.com/ghbvf/gocell"
 	auditcore := module + "/cells/auditcore"
 	util := module + "/pkg/util"
 	initialadmin := module + "/cells/accesscore/initialadmin"
 
-	g := depgraph.FromPackages(module, []*packages.Package{
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
 		synthPkg(auditcore, util),
 		synthPkg(util, initialadmin),
 		synthPkg(initialadmin),
 	})
+	cls := kerneldepgraph.NewClassifier(g.Modules)
 
-	violations := checkTransitiveCellOwnedSubpackage(modPrefix, g)
+	violations := checkTransitiveCellOwnedSubpackage(cls, g)
 	// Both auditcore and util reach initialadmin; util has srcLayer="pkg" so
 	// it is not exempt — the rule fires for any non-cmd/non-examples source.
 	// Filter to the auditcore violation that the probe is specifically guarding.
@@ -1440,13 +1462,13 @@ func TestLayeringRules_LAYER09T_NegativeProbe(t *testing.T) {
 	util := module + "/pkg/util"
 	cellBEvents := module + "/cells/cellB/events"
 
-	g := depgraph.FromPackages(module, []*packages.Package{
+	g := depgraph.FromPackages([]string{module}, []*packages.Package{
 		synthPkg(cellA, util),
 		synthPkg(util, cellBEvents),
 		synthPkg(cellBEvents),
 	})
 
-	violations := checkTransitiveCrossCellEvents(module, g)
+	violations := checkTransitiveCrossCellEvents(kerneldepgraph.NewClassifier([]string{module}), g)
 	require.Len(t, violations, 1,
 		"LAYER-09T negative probe: must flag cellA → pkg/util → cellB/events laundering")
 	assert.Equal(t, "LAYER-09T", violations[0].Rule)
@@ -1467,8 +1489,8 @@ func TestLoadModule_IntegrationTagPlumbing(t *testing.T) {
 	g, _ := loadModule(t, root)
 	require.NotEmpty(t, g.Packages, "loadModule must return packages; empty result means -tags=integration broke the load")
 
-	modPrefix := readModulePath(t, root) + "/"
-	archtestPkg := modPrefix + "tools/archtest"
+	module := readModulePath(t, root)
+	archtestPkg := module + "/tools/archtest"
 	if g.ByID(archtestPkg) == nil {
 		t.Errorf("tools/archtest package must appear in depgraph output (confirms -tags=integration did not break load)")
 	}

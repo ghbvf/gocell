@@ -61,7 +61,7 @@ func EmitFile(pkg, modulePath string, g *kerneldepgraph.Graph) ([]byte, error) {
 	}
 
 	fmt.Fprintf(&b, "\t}\n")
-	fmt.Fprintf(&b, "\treturn kerneldepgraph.FromNodes(%s, nodes)\n", goString(g.Module))
+	fmt.Fprintf(&b, "\treturn kerneldepgraph.FromNodes(%s, nodes)\n", goStringSlice(g.Modules))
 	fmt.Fprintf(&b, "}()\n")
 
 	formatted, err := codegen.FormatGoSource(modulePath, CorebundlePath, b.Bytes())

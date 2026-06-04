@@ -8,10 +8,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
+
+// defaultGraphPattern is the --pattern default. When unchanged AND --root is a
+// workspace (has go.work), the graph spans every workspace member (one
+// "<importPath>/..." pattern per module) rather than only the root module's
+// "./..." — so a nested module is graphed, not silently dropped.
+const defaultGraphPattern = "./..."
 
 // defaultRootDir returns the current working directory, used as the default
 // value for the --root flag when the caller does not supply one.
@@ -68,7 +76,9 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	// Default output (os.Stderr) is preserved so `-h` prints usage; do not
 	// silence with io.Discard. Dispatch maps flag.ErrHelp → exit code 0.
 	format := fs.String("format", "json", "output format: json|dot")
-	pattern := fs.String("pattern", "./...", "package pattern passed to packages.Load")
+	pattern := fs.String("pattern", defaultGraphPattern,
+		"package pattern passed to packages.Load; in a workspace (--root has go.work), "+
+			"the default spans every member module — override to scope to one pattern")
 	root := fs.String("root", defaultRootDir(), "project root directory passed as Dir to packages.Load")
 	includeTests := fs.Bool("include-tests", false,
 		"load test-variant packages so TestOnly markers are populated; "+
@@ -94,11 +104,26 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	}, nil
 }
 
+// loadGraph builds the dependency graph for opts.Root. The default --pattern
+// delegates to loadPackageGraph (the shared workspace-aware loader: spans every
+// go.work member via relative-dir "./<dir>/..." patterns, or a single standalone
+// module when no go.work). A non-default --pattern is an explicit scope override
+// (escape hatch) that is passed through verbatim — still go.work-aware (it loads
+// in ModeWorkspace when a go.work is present, ModeModule otherwise).
+func loadGraph(opts graphOptions) (*kerneldepgraph.Graph, error) {
+	if opts.Pattern == defaultGraphPattern {
+		return loadPackageGraph(opts.Root, opts.IncludeTests)
+	}
+	lo := depgraph.LoadOptions{IncludeTests: opts.IncludeTests, Dir: opts.Root}
+	if _, err := os.Stat(filepath.Join(opts.Root, "go.work")); err != nil {
+		// No go.work above the root → single standalone module.
+		return depgraph.Load(lo, opts.Pattern)
+	}
+	return depgraph.LoadWorkspace(lo, opts.Pattern)
+}
+
 func executeGraph(opts graphOptions) error {
-	g, err := depgraph.Load(depgraph.LoadOptions{
-		IncludeTests: opts.IncludeTests,
-		Dir:          opts.Root,
-	}, opts.Pattern)
+	g, err := loadGraph(opts)
 	if err != nil {
 		return fmt.Errorf("graph: load: %w", err)
 	}

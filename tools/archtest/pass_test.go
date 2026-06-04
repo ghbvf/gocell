@@ -1418,11 +1418,8 @@ func TestRun_Production_matchesProductionResolverSet(t *testing.T) {
 		t.Skip("full-module packages.Load; skipped in -short")
 	}
 	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	if err != nil {
-		t.Fatalf("moduleImportPath: %v", err)
-	}
-	resolver, err := typeseval.LoadProductionPackages(root, modPath, false, nil)
+	modules := findWorkspaceModules(t, root)
+	resolver, err := typeseval.LoadProductionPackages(root, modules, false, nil)
 	if err != nil {
 		t.Fatalf("LoadProductionPackages: %v", err)
 	}

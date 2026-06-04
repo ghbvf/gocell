@@ -341,14 +341,11 @@ func runAST(t testing.TB, fs Scope, rule Rule) []Diagnostic {
 // ref: golang.org/x/tools/go/analysis Pass.Files driver-controlled scope
 func runProduction(t testing.TB, opts TypedOpts, rule Rule) []Diagnostic {
 	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
+	modules := findWorkspaceModules(t, root)
+	resolver, err := typeseval.LoadProductionPackages(root, modules, opts.Tests, opts.Tags)
 	if err != nil {
-		t.Fatalf("archtest.Run: Production: read module path: %v", err)
-	}
-	resolver, err := typeseval.LoadProductionPackages(root, modPath, opts.Tests, opts.Tags)
-	if err != nil {
-		t.Fatalf("archtest.Run: Production: LoadProductionPackages(root=%s, tests=%v, tags=%v): %v",
-			root, opts.Tests, opts.Tags, err)
+		t.Fatalf("archtest.Run: Production: LoadProductionPackages(root=%s, modules=%v, tests=%v, tags=%v): %v",
+			root, modules, opts.Tests, opts.Tags, err)
 	}
 	return runRulePasses(root, resolver.Production(), rule)
 }

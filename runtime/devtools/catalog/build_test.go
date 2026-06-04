@@ -746,7 +746,7 @@ func TestBuildDocument_DepsFilter_Layers(t *testing.T) {
 		Layer:   "kernel",
 		Imports: []string{},
 	}
-	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{cellsNode, kernelNode})
+	g := kerneldepgraph.FromNodes([]string{"github.com/foo/bar"}, []*kerneldepgraph.Node{cellsNode, kernelNode})
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
 		Root: "/projects/gocell",
@@ -788,7 +788,7 @@ func TestBuildDocument_DepsFilter_PackageCells(t *testing.T) {
 		Layer:   "kernel",
 		Imports: []string{},
 	}
-	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{accessNode, auditNode, kernelNode})
+	g := kerneldepgraph.FromNodes([]string{"github.com/foo/bar"}, []*kerneldepgraph.Node{accessNode, auditNode, kernelNode})
 	pm := fullPM()
 	opts := catalog.ExportOptions{
 		Root: "/projects/gocell",

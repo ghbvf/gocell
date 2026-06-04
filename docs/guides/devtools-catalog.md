@@ -151,7 +151,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/api/v1/devtools/catalog?cells=accesscore&include=packageDeps,cellDeps' \
-  | jq '.dependencies.packages.graph.rootModule, .dependencies.cells.nodes'
+  | jq '.dependencies.packages.graph.modules[], .dependencies.cells.nodes'
 ```
 
 ### build-time packageDeps（`dependencies.packages.graph`）
@@ -237,7 +237,7 @@ const catalog: CatalogDocument = await resp.json();
     },
     "packages": {
       "graph": {
-        "rootModule": "github.com/ghbvf/gocell",
+        "modules": ["github.com/ghbvf/gocell"],
         "packages": [ { "importPath": "...", "layer": "cells", "cellID": "accesscore" } ],
         "edges": [ { "from": "...", "to": "..." } ]
       }

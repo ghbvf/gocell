@@ -15,7 +15,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/csvparam"
 	"github.com/ghbvf/gocell/runtime/devtools/catalog"
-	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
 // errExportPrefix wraps validation errors surfaced by `gocell export <sub>`
@@ -169,7 +168,9 @@ func attachPackageDeps(opts *catalog.ExportOptions, filter catalog.Filter, rootD
 	if !filter.Include.PackageDeps {
 		return nil
 	}
-	g, err := depgraph.Load(depgraph.LoadOptions{Dir: rootDir}, "./...")
+	// Workspace-aware: spans every go.work member so satellite packages appear
+	// in the exported catalog, not silently dropped (#1555 review F2).
+	g, err := loadPackageGraph(rootDir, false)
 	if err != nil {
 		slog.Error("export: package dep graph load failed",
 			slog.String("root", rootDir),
