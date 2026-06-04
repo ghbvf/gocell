@@ -12,7 +12,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 ## 输入解析
-优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读评论提 findings（每条带 body/id/url/createdAt，对话评论已够——本仓 codex 不发 inline 评论）；**只取最新一轮**——按 createdAt 倒序，跳过自己贴的 `pm:ship`/`pm:fix`/`pm:pr-review` 留痕评论，只取最近一批 codex review/comment，**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
+优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读评论提 findings（每条带 body/id/url/createdAt，对话评论已够——本仓 codex 不发 inline 评论）；**只取最新一轮**——按 createdAt 倒序，跳过自己上一轮的 `pm:ship`/`pm:fix` 留痕（已处理），取最近一批 **review findings**：codex review/comment 或 `/pr-review` 贴的 `pm:pr-review` 无损详表（二者都是 fix 的 findings 源），**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
 
 ---
 
@@ -246,12 +246,12 @@ go test ./kernel/...                            # 改了 kernel 时
 
 **步骤 2: 冲突预检 + CI 绿 gate（有 push 时；命令 + 时长见 `issues` B5）**
 
-push 后先验无文件冲突、再等 CI 收敛再收尾（典型 ~5-6 min）：冲突 → 先 merge origin/develop --no-edit 解冲突再 push；CI 失败则回阶段 1-4 修复循环（定位 → 修 → commit → push）再等，**最多 3 轮**；**3 轮仍红 → 直接贴 pm:fix 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。**CI 未绿不切 `pr-status/ready`、不贴"全清"评论**（保持当前 pr-status）。纯 issue 路径（无代码 push）跳过本步。
+push 后先验无文件冲突、再等 CI 收敛再收尾（典型 ~5-6 min）：冲突 → 先 merge origin/develop --no-edit 解冲突再 push；CI 失败则回阶段 1-4 修复循环（定位 → 修 → commit → push）再等，**最多 3 轮**；**3 轮仍红 → 直接贴 pm:fix 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。纯 issue 路径（无代码 push）跳过本步。
 
 **步骤 3: GitHub 收尾（按输入类型，无 issue 查找；命令形态见 `issues` Part B）**
 
 - **输入是 issue 号 + 已修** → 关闭该 issue（`gh issue close`，reason completed，comment 引用 `PR #<NNN>`；N 即输入，不查找）。
-- **输入是 PR 号 + 修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `.github/project-template/pr-comment.md` 的 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留，**每条带 `file:line` + 证据/根因/建议/方案种子入 `<details>`（无损，供下次 fix / 人工 / 建 issue 读）**，含 footer）；**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数；再 `gh pr edit` 切 `pr-status/ready`（全清）或 `pr-review/changes-requested`（仍有 Cx3/Cx4 或 OUT_OF_SCOPE 遗留）。
+- **输入是 PR 号 + 修完** → 贴 fix 评论（命令 + **回显 comment URL/id** 见 `issues` B4；用 `.github/project-template/pr-comment.md` 的 `<!-- pm:fix -->` 模板：findings triage + 修复结果 + 遗留，**每条带 `file:line` + 证据/根因/建议/方案种子入 `<details>`（无损，供下次 fix / 人工 / 建 issue 读）**，含 footer）；**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数；再 `gh pr edit` 切 `pr-status/needs-check-fix`（待 `/pr-review --check` 验证；**fix 不再直接到 ready**，遗留/OOS 已无损入评论 + 建 issue）。
 - **未修 / 待办 finding**（OUT_OF_SCOPE / `/fix` 派生）→ §沟通规则闸门输出 `gh issue create` 建议命令（确认后跑，留 open；label = `backlog` + `pri-pX` + `area-XX` + `type-XX`；body 按 `.github/project-template/backlog.md` 的字段映射**无损**填充——现状←证据+三维根因+影响 / 修复方向←三级方案种子 / Files←file:line 全集 / Source←`PR #<N> finding <Fk>`，**不得一句话带过**；条件延后型加 `flag-cond` + Trigger，派生注明 `Discovered via /fix #<original>`）。
 
 Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri-p0` 仅 incident（线上故障/数据完整性/CVE），停下 AskUserQuestion 确认。建 issue 必须显式 `--label pri-pX`。完成后 **TaskUpdate → completed**。

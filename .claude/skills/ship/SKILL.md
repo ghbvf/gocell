@@ -117,7 +117,7 @@ golangci-lint run ./...   # 0 issues 才进阶段 6
 ```bash
 git -C worktrees/<wt> push -u origin <branch>
 gh pr create --title "..." --body-file <填好的 pull_request_template.md>
-gh pr edit <PR#> --add-label pr-status/in-progress   # 进入 ship→codex→fix 流程（见 .github/project-template/PROJECT.md §5）
+gh pr edit <PR#> --add-label pr-status/in-progress   # 进入 ship→review→fix→check 流程（见 .github/project-template/PROJECT.md §5）
 ```
 
 PR body 结构单源 = `.github/project-template/pull_request_template.md`；读模版填占位（`Refs: Closes #<ID>` + `ref: framework file`），不在技能内重述结构。本仓 PR 全程 CLI 创建，必须 `--body-file` 读填好的模版。
@@ -126,7 +126,7 @@ PR body 结构单源 = `.github/project-template/pull_request_template.md`；读
 
 ## 阶段 7：Review（内置 reviewer）
 
-> ship 的 review 是 ship→codex→fix 流程里的**内置首审**（6 维 reviewer）；codex 外部 review 由你在外部跑，
+> ship 的 review 是 ship→review→fix→check 流程里的**内置首审**（6 维 reviewer）；外部再审（codex / `/pr-review`）由你在外部跑，
 > 续修走 `/fix <PR#>`（见 `.github/project-template/PROJECT.md` §5）。ship 单独使用只做内置审。
 
 **L1/L2**：1 个 `reviewer` agent（GoCell 六维度）。
@@ -149,12 +149,12 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 
 1. **先在对话窗口完整打印内置 review findings 表**（主输出：含 P/Cx 分级 + IN_SCOPE/OUT 归属 + 每条 `file:line`）——窗口打印是主输出、下面贴 pm:ship 评论是无损留痕，**两者都要做**（对齐 `pr-review` 阶段 5/6 的"窗口=主输出、评论=留痕"约定）。
 2. **Cx1/Cx2 IN_SCOPE findings 自动修**（派 `developer` agent 按 `fix` 的 [AUTO-FIX] 流程直接 Edit-Test 修——developer 无 Skill 工具，不真调 `/fix`，是复用其判定 + 修复循环；**不逐条问**）；Cx3/Cx4 遗留与 OUT_OF_SCOPE 写进下面 pm:ship `<details>` 无损区（**不降级成计数**）+ 阶段 9 摘要。**仅当**归属不清 / 取舍没把握 / 有 Cx3+ 需现在做时才 AskUserQuestion。
-3. **推送 + 冲突预检 + CI 绿 gate**：`git -C worktrees/<wt> push` 推送内置修复 commits（阶段 6 已建 PR，CI 在新 SHA 上重跑）；按 `issues` B5 先验无文件冲突、再等 CI 绿（典型 ~5-6 min）——失败则回 `fix` 修复循环再推再等（**最多 3 轮**）；**3 轮仍红 → 直接贴 pm:ship 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。**CI 未绿不交接 codex**（label 保持 `pr-status/in-progress`）。
+3. **推送 + 冲突预检 + CI 绿 gate**：`git -C worktrees/<wt> push` 推送内置修复 commits（阶段 6 已建 PR，CI 在新 SHA 上重跑）；按 `issues` B5 先验无文件冲突、再等 CI 绿（典型 ~5-6 min）——失败则回 `fix` 修复循环再推再等（**最多 3 轮**）；**3 轮仍红 → 直接贴 pm:ship 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。
 4. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
-   - 贴 ship 评论（命令 + **回显 comment URL/id** 见 `issues` B4）：**每条 finding 带 `file:line`，证据/根因/建议/方案种子入 `<details>`（评论即 review 结果，无损——供 codex / `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex。**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数。
-   - `gh pr edit` 切 `pr-status/needs-codex`（移除 `pr-status/in-progress`）。
+   - 贴 ship 评论（命令 + **回显 comment URL/id** 见 `issues` B4）：**每条 finding 带 `file:line`，证据/根因/建议/方案种子入 `<details>`（评论即 review 结果，无损——供再审（codex / `/pr-review`）/ `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待再审。**OUT_OF_SCOPE finding 也写满无损详表 + 建 issue 命令草稿**（形态见 pr-comment.md 的 F3 OOS 示范），不只计数。
+   - `gh pr edit` 切 `pr-status/needs-review-again`（移除 `pr-status/in-progress`）。
 
-> ship 到此结束（内置审 + 修）。codex 外部 review 后，续修走 `/fix <PR#>`。
+> ship 到此结束（内置审 + 修）。再审（codex / `/pr-review`）后，续修走 `/fix <PR#>`。
 
 ---
 

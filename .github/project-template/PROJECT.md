@@ -60,12 +60,13 @@
 | 轴 | Label | 含义 |
 |----|-------|------|
 | **pr-status**（流转） | `pr-status/in-progress` | ship 实施 + 内置 review/fix 中 |
-| | `pr-status/needs-codex` | ship 内置 review/fix 完成，待外部 codex review |
-| | `pr-status/ready` | fix 续修完成，可合并 |
-| **pr-review**（codex 结论） | `pr-review/approved` | codex review 无需改 |
-| | `pr-review/changes-requested` | codex review 提出需改项 |
+| | `pr-status/needs-review-again` | ship 内置 / fix 完成，待再审（codex / `/pr-review`） |
+| | `pr-status/needs-check-fix` | `/fix` 已修，待 `/pr-review --check` 验证修复是否到位 |
+| | `pr-status/ready` | `--check` 验证全修复，可合并 |
+| **pr-review**（审查结论） | `pr-review/approved` | review 无需改 |
+| | `pr-review/changes-requested` | review 提出需改项 |
 
-流转见 §5。
+流转见 §5。PR 始终恰好一个 `pr-status/*`。`/fix` 不能直接到 `ready`——必过 `/pr-review --check` 验证（fix 不能自证完成）。
 
 ---
 
@@ -118,25 +119,31 @@
 
 ---
 
-## 5. PR 流程（ship → codex → fix）
+## 5. PR 流程（ship → review → fix → check）
 
 ```
 /ship <issue>
   实施 → PR 创建 → 贴 pr-status/in-progress
-  → ship：内置 6 维 reviewer + /fix Cx1/Cx2
-  → gh pr comment 贴 ship 评论（<!-- pm:ship -->）
-  → 切 pr-status/needs-codex → 停下交接
+  → ship：内置 6 维 reviewer + /fix Cx1/Cx2 → 贴 pm:ship → 冲突预检 + CI 绿
+  → 切 pr-status/needs-review-again → 停下交接
 
-[外部] 你跑 codex review → codex 把评论写进 PR
+[review 轮] codex review 或 /pr-review <PR#>
+  → 贴 findings 评论（codex / pm:pr-review）
+  → 有需改 → 切 pr-review/changes-requested
 
-/fix <PR#>（codex 有新评论可多次跑）
-  → gh pr view --json reviews,comments 读 codex 评论（按 author/createdAt 过滤最新一轮）
-  → triage + 修复
-  → gh pr comment 贴 fix 评论（<!-- pm:fix -->，每次都贴）
-  → 切 pr-status/ready（全清）或 pr-review/changes-requested（仍有遗留）
+/fix <PR#>（有 changes-requested 时；可多次跑）
+  → gh pr view --json reviews,comments 读评论（按 author/createdAt 过滤最新一轮）
+  → triage + 修复 → 贴 pm:fix → 冲突预检 + CI 绿
+  → 切 pr-status/needs-check-fix（待验证）
+
+/pr-review <PR#> --check（验证上一轮 findings 是否修复 + 抓回归）
+  → 逐条核对当前代码：✅已修复 / ❌未修复 / ⚠️回归 / 🔧部分 → 贴 pm:pr-review（--check）
+  → 全 ✅ → 切 pr-status/ready + pr-review/approved
+  → 有 ❌/⚠️/🔧 → 切 pr-review/changes-requested + pr-status/needs-review-again → 回 /fix
 ```
 
-> 不变式：PR 始终恰好一个 `pr-status/*`（切换时同步移除旧态）；每次 ship/fix 阶段结束都贴评论留痕（约定，无 CI 机器门），标记按来源不编 round 号（1 次 ship + N 次 fix）。
+> 不变式：PR 始终恰好一个 `pr-status/*`（切换时同步移除旧态）；每阶段结束都贴评论留痕（约定，无 CI 机器门），标记按来源不编 round 号。
+> `/fix` 不能直接到 `ready`——必过 `/pr-review --check` 独立验证（fix 不能自证完成）。
 > 评论格式模板单源 = `.github/project-template/pr-comment.md`。
 
 ---
