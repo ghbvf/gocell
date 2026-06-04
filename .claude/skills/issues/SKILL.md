@@ -172,7 +172,7 @@ gh pr edit <N> --add-label pr-review/changes-requested
 gh pr comment <N> --body-file <填好的 pr-comment.md 模板>
 ```
 
-footer 由 AI 自填（PR# / Generated with Claude Code|Codex / head 分支）。
+footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
 
 ## B5. 沟通规则
 

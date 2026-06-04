@@ -1,7 +1,7 @@
 # PR 评论格式（`pm:ship` / `pm:fix` / `pm:pr-review` 模板单源）
 
 > 何时贴 / 留痕约定 / 标记规则见 `PROJECT.md` §5；P + Cx 评级见 §3。
-> **footer 必填**（每个模板末尾那行）：AI 按当前身份自填 `<Claude Code|Codex>`、PR 号、head 分支（不跑 shell/env）。
+> **footer 必填**（每个模板末尾那行）：AI 自填 `<Claude Code|Codex>`、PR 号、head 分支、**worktree 路径**（当前工作目录；develop 直改填 `—`）、**session 会话id**（AI 想办法拿到，如 `$CLAUDE_CODE_SESSION_ID` / codex 等价；拿不到填 `—`）。
 
 > **评论即 review 结果，无损（关键约定）**：评论是 `/fix <PR#>` 提取 findings 的**唯一来源**。
 > 每条 Finding **必带 `file:line`**（fix 据此定位，不重新 review），根因 + 证据 + 建议 + 三级方案种子写进 `<details>`（人看摘要、fix 读详表，两不丢）。
@@ -34,7 +34,7 @@
 **下一步**：切 `pr-status/needs-codex`（待 codex review）。
 
 ---
-🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支>
+🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
 ```
 
 ## fix 评论（`<!-- pm:fix -->`，每次 fix 都贴）
@@ -62,7 +62,7 @@
 **下一步**：切 `pr-status/ready`（全清）或列 `pr-review/changes-requested` 遗留。
 
 ---
-🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支>
+🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
 ```
 
 ## pr-review 评论（`<!-- pm:pr-review -->`，独立 review 留痕）
@@ -97,5 +97,5 @@
 **结论**：<一句话理由>
 
 ---
-🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支>
+🤖 PR #<N> · Generated with <Claude Code|Codex> · branch <head 分支> · worktree <路径|—> · session <会话id|—>
 ```

@@ -122,7 +122,7 @@ pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上
 gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
 ```
 
-贴失败则报错退出，不静默跳过。footer 由 AI 按当前运行身份自填：`PR #<N> · Generated with <Claude Code|Codex> · branch <PR head 分支>`。
+贴失败则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
 
 ---
 
