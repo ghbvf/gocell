@@ -1,0 +1,31 @@
+version: v2
+# Hermetic, zero-go.mod-footprint plugin invocation: buf runs each plugin via
+# `go run`, so no protoc/plugin binary needs to be installed or pinned in the
+# main module's go.mod (which would drag buf's entire dependency tree in).
+#   - protoc-gen-go: no @version — resolved from the main module's go.mod
+#     (google.golang.org/protobuf), keeping the generator in lockstep with the
+#     protobuf runtime the generated code links against (single source of truth).
+#     NOTE: bumping google.golang.org/protobuf in go.mod changes this generator's
+#     version, so re-run `make proto-gen` and commit the regenerated .pb.go (the
+#     verify-codegen-proto CI gate enforces this).
+#   - protoc-gen-go-grpc: a SEPARATE module not required by go.mod, so it is
+#     version-pinned here. Bump in lockstep with google.golang.org/grpc.
+#
+# Version integrity: every `@version` (here + buf in the Makefile) is verified
+# against the Go checksum DB (sum.golang.org) on resolution — a tag is content-
+# pinned by hash, so an upstream retag fails the build rather than silently
+# swapping bytes. These ephemeral tool builds do NOT enter the main module's
+# go.sum (independent resolution), which is why go.mod/go.sum stay untouched.
+#
+# out + paths=source_relative places files at generated/contracts/grpc/<path>,
+# where <path> is the proto's path relative to its buf module root. That path
+# MUST equal the proto's go_package import path suffix so `go build` resolves
+# the package (e.g. contracts/grpc/conformance/v1/x.proto with go_package
+# .../generated/contracts/grpc/conformance/v1 -> generated/contracts/grpc/conformance/v1/).
+plugins:
+  - local: ["go", "run", "google.golang.org/protobuf/cmd/protoc-gen-go"]
+    out: generated/contracts/grpc
+    opt: paths=source_relative
+  - local: ["go", "run", "google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1"]
+    out: generated/contracts/grpc
+    opt: paths=source_relative

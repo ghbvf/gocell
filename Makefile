@@ -1,4 +1,4 @@
-.PHONY: build check-build test fmt verify validate generate cover clean \
+.PHONY: build check-build test fmt verify validate generate proto-lint proto-gen cover clean \
         install-hooks update-archtest-golden \
         up down \
         local-up local-down \
@@ -80,6 +80,29 @@ generate:
 	go run ./cmd/gocell generate shared-schema --all
 	go run ./cmd/gocell generate saga-coverage
 	go generate ./cmd/corebundle/
+
+# proto-gen regenerates generated/contracts/grpc/**/*.pb.go from
+# contracts/grpc/**.proto (+ examples/*/contracts/grpc once cell protos land,
+# see contracts/grpc/README.md). The toolchain is hermetic and adds NOTHING to
+# the main module's go.mod: buf and the grpc plugin run through `go run` at
+# pinned versions (BUF_VERSION below; protoc-gen-go-grpc in buf.gen.yaml), and
+# protoc-gen-go resolves from the module's protobuf require so the generator
+# stays in lockstep with the runtime. Commit the regenerated *.pb.go; CI runs
+# hack/verify-codegen-proto.sh (regenerate + diff) to gate drift.
+#
+# ref: bufbuild/buf `buf generate`; protocolbuffers/protobuf-go protoc-gen-go.
+BUF_VERSION := v1.70.0
+
+# proto-lint runs buf's STANDARD lint set (declared in buf.yaml) — package
+# directory match, service/RPC naming, etc. Separated from proto-gen so it can
+# be run on its own (`make proto-lint`); hack/verify-codegen-proto.sh runs it
+# before generation so the buf.yaml lint config is an enforced gate, not dead
+# config. ref: bufbuild/buf `buf lint`.
+proto-lint:
+	go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION) lint
+
+proto-gen:
+	go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION) generate
 
 cover:
 	go test ./... -coverprofile=coverage.out
