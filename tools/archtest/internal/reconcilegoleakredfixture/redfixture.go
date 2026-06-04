@@ -11,6 +11,11 @@
 // (goleakVerifyNoneViolations) must flag redPerTestVerifyNone's
 // goleak.VerifyNone(IgnoreCurrent()) and must NOT flag greenVerifyTestMain's
 // package-level goleak.VerifyTestMain.
+//
+// This is a build-tagged .go (not a _test.go): the detector is filename-agnostic
+// (it resolves callee types, not file names), and a plain .go keeps the bait out
+// of the production A1 scan's _test.go filter so it is exercised only by the
+// dedicated REDFixture test.
 package reconcilegoleakredfixture
 
 import (

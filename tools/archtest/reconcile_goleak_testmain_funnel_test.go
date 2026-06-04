@@ -32,21 +32,26 @@
 //     calls goleak.VerifyTestMain. Deleting the package-level guard (which would
 //     silently drop all leak coverage) is CI-red.
 //
-// Hard is UNREACHABLE for both prongs and there is NO upgrade path: goroutine
-// leak-freedom and "which goleak idiom a test uses" are runtime/test-convention
-// properties, not statically-inexpressible type-system constraints (Go cannot
-// require a TestMain to exist, nor forbid a function call, at compile time).
-// This is the established ceiling of all goleak usage — a permanent won't-do in
-// the family of SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893);
-// no gh-tracked Hard-ization task is owed.
+// Hard is UNREACHABLE for both prongs: "a test must call VerifyTestMain" and "a
+// test must not call VerifyNone" are test conventions — Go cannot require a
+// TestMain to exist nor forbid a function call at compile time. This differs in
+// KIND from the holder-seal ceilings (SPAN-SETATTR-HOLDER-SEAL #851 /
+// HEALTHZ-HOLDER-SEAL #893), which have a *conceivable* type-system Hard form
+// (seal an interface) that is merely infeasible; here no Hard form is even
+// conceivable, as for all goleak usage. The Hard-ization assessment → won't-do
+// is recorded at gh #1607 (matching the reconcile-Medium-archtest convention of
+// citing a gh issue, cf. #1416 / #1418).
 //
-// # Scope (reconcile fire-and-forget-trigger binaries only)
+// # Scope (the package that exhibited the flake — #1568)
 //
 // In scope: kernel/reconcile + kernel/reconcile/reconciletest. Both run Loops
-// whose fire-and-forget Trigger makes the per-test snapshot inherently fragile.
-// Other packages' per-test goleak.VerifyNone(IgnoreCurrent()) is NOT flaky
-// (their Stop joins everything; no fire-and-forget source), so a repo-wide ban
-// would be over-reach — deliberately not in scope.
+// whose fire-and-forget Trigger makes the per-test IgnoreCurrent snapshot
+// inherently fragile under -race. Scope is deliberately narrow — other packages
+// use per-test goleak.VerifyNone without a reported flake, so a repo-wide ban
+// would be over-reach (not an assertion that those packages are leak-join-
+// complete — only that none has exhibited this flake). If another package with
+// a fire-and-forget / ctx-bound non-joined goroutine later flakes the same way,
+// extend reconcileGoleakDirs rather than widening to all packages.
 //
 // # Blind-spot catalog (charter §盲区反向自检)
 //
@@ -62,6 +67,17 @@
 //     goleak.VerifyNone is a known residual (same ceiling as every go/types
 //     callsite scan). No production reconcile test uses indirection; the
 //     RED fixture proves the direct-form branch fires.
+//   - B4. external test package (package reconciletest_test): A1/A2 match by the
+//     file's module-relative dir (path.Dir(rel)), NOT the package-declaration
+//     name, and packages.Load(Tests: true) surfaces xtest files at their real
+//     source paths — so main_test.go in the reconciletest_test xtest package is
+//     correctly attributed to dir kernel/reconcile/reconciletest.
+//   - B5. detector is filename-agnostic: goleakVerifyNoneViolations walks
+//     CallExprs and resolves the callee's type; it does not depend on the
+//     _test.go suffix. The production scan applies the _test.go + in-scope-dir
+//     filter BEFORE calling it; the RED fixture (a build-tagged .go, not
+//     _test.go) calls it directly, so the non-vacuity proof exercises the
+//     identical detector branch.
 //
 // Non-vacuity: TestReconcileGoleakTestmainFunnel asserts the scan visited >0
 // in-scope test files AND that A2 found a VerifyTestMain TestMain in every
