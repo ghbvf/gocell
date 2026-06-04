@@ -66,7 +66,7 @@
 | **pr-review**（审查结论） | `pr-review/approved` | review 无需改 |
 | | `pr-review/changes-requested` | review 提出需改项 |
 
-流转见 §5。PR 始终恰好一个 `pr-status/*`。`/fix` 不能直接到 `ready`——必过 `/pr-review --check` 验证（fix 不能自证完成）。
+流转见 §5。PR 始终恰好一个 `pr-status/*`，pr-review 轴 `approved` XOR `changes-requested`（切一侧必清同轴对侧）。`/fix` 不能直接到 `ready`——必过 `/pr-review --check` 验证（fix 不能自证完成）。
 
 ---
 
@@ -132,7 +132,7 @@
   → 有需改 → 切 pr-review/changes-requested
 
 /fix <PR#>（有 changes-requested 时；可多次跑）
-  → gh pr view --json reviews,comments 读评论（按 author/createdAt 过滤最新一轮）
+  → gh pr view --json reviews,comments + gh api pulls/N/comments 探 inline（>0 才读）→ 过滤最新一轮
   → triage + 修复 → 贴 pm:fix → 冲突预检 + CI 绿
   → 切 pr-status/needs-check-fix（待验证）
 
@@ -142,7 +142,7 @@
   → 有 ❌/⚠️/🔧 → 切 pr-review/changes-requested + pr-status/needs-review-again → 回 /fix
 ```
 
-> 不变式：PR 始终恰好一个 `pr-status/*`（切换时同步移除旧态）；每阶段结束都贴评论留痕（约定，无 CI 机器门），标记按来源不编 round 号。
+> 不变式：PR 始终恰好一个 `pr-status/*`、pr-review 轴 `approved` XOR `changes-requested`（切换时同步移除同轴对侧）；每阶段结束都贴评论留痕（约定，无 CI 机器门），标记按来源不编 round 号。
 > `/fix` 不能直接到 `ready`——必过 `/pr-review --check` 独立验证（fix 不能自证完成）。
 > 评论格式模板单源 = `.github/project-template/pr-comment.md`。
 
@@ -164,8 +164,9 @@ gh issue list --label backlog --label type-bug --state open
 # epic
 gh issue list --label epic --state open
 
-# 某 PR 的 codex review 评论（fix 入口；每条带 body/id/url/createdAt）
+# 某 PR 的 review 评论（fix 入口；每条带 body/id/url/createdAt）
 gh pr view <N> --json reviews,comments
+gh api repos/{owner}/{repo}/pulls/<N>/comments --jq length   # 探 inline review comments，>0 才一并读取
 ```
 
 > label 维度（area/type/pri）经 REST 可查；Status/Estimate/Wave 仅 Project UI 可见（REST token 缺 `project` scope）。

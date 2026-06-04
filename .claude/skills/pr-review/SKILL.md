@@ -127,6 +127,8 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 
 贴失败（非 0 退出）则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
 
+贴完按结论切 **review 轴 label**（命令见 `issues` B3）：有 finding → `pr-review/changes-requested`；无 finding → `pr-review/approved`（默认 review 不动 pr-status 轴——PR 仍 `needs-review-again`，由后续 `/fix` 推进）。
+
 ---
 
 ## 模式 B：--check 验证（确认上一轮 findings 是否修复 + 抓回归）

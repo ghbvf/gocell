@@ -12,7 +12,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 ## 输入解析
-优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读评论提 findings（每条带 body/id/url/createdAt，对话评论已够——本仓 codex 不发 inline 评论）；**只取最新一轮**——按 createdAt 倒序，跳过自己上一轮的 `pm:ship`/`pm:fix` 留痕（已处理），取最近一批 **review findings**：codex review/comment 或 `/pr-review` 贴的 `pm:pr-review` 无损详表（二者都是 fix 的 findings 源），**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
+优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读对话评论 + review 摘要（每条带 body/id/url/createdAt）；再 `gh api repos/ghbvf/gocell/pulls/<N>/comments --jq length` 探 inline review comments，>0 则 `gh api .../pulls/<N>/comments` 一并读入（codex/人的 inline finding 不静默漏），=0（本仓常态）跳过；**只取最新一轮**——按 createdAt 倒序，跳过自己上一轮的 `pm:ship`/`pm:fix` 留痕（已处理），取最近一批 **review findings**：codex review/comment 或 `/pr-review` 贴的 `pm:pr-review` 无损详表（二者都是 fix 的 findings 源），**不回头处理上一轮已 triage 的 findings**）> **issue 号**（`gh issue view`，404 停）> **文件:行号** > **自然语言**（Grep/Glob）。
 
 ---
 

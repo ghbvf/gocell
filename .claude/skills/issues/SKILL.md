@@ -158,17 +158,20 @@ epic 用 `epic` label + GitHub 原生 sub-issue（不手写 body task list）。
 
 ## B3. PR 状态 label 流转（编排）
 
-> 两正交轴（pr-status 流转 / pr-review 结论）的取值与「何时切」语义见 `.github/project-template/PROJECT.md` §2.5 + §5（单源，不在此复制表）。本节只给切换命令。
+> 两正交轴（pr-status 流转 / pr-review 结论）的取值与「何时切」语义见 `.github/project-template/PROJECT.md` §2.5 + §5（单源，不在此复制表）。**两轴各自互斥**：pr-status 恰好一个；pr-review `approved` XOR `changes-requested`——**切一侧必 `--remove-label` 同轴对侧**。本节只给切换命令。
 
 ```bash
 # ship 后：待再审
 gh pr edit <N> --add-label pr-status/needs-review-again --remove-label pr-status/in-progress
+# review 轮结论（默认 /pr-review 或 codex；review 轴互斥）
+gh pr edit <N> --add-label pr-review/changes-requested --remove-label pr-review/approved          # 有 finding
+gh pr edit <N> --add-label pr-review/approved          --remove-label pr-review/changes-requested  # 无 finding
 # fix 后：待 --check 验证（fix 不直接到 ready）
 gh pr edit <N> --add-label pr-status/needs-check-fix --remove-label pr-status/needs-review-again
-# --check 全修复：可合并
-gh pr edit <N> --add-label pr-status/ready --add-label pr-review/approved --remove-label pr-status/needs-check-fix
-# --check 有未修/回归：回 fix
-gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-review-again --remove-label pr-status/needs-check-fix
+# --check 全修复：可合并（清 pr-status 前态 + review 轴对侧）
+gh pr edit <N> --add-label pr-status/ready --add-label pr-review/approved --remove-label pr-status/needs-check-fix --remove-label pr-review/changes-requested
+# --check 有未修/回归：回 fix（清 pr-status 前态 + review 轴对侧）
+gh pr edit <N> --add-label pr-review/changes-requested --add-label pr-status/needs-review-again --remove-label pr-status/needs-check-fix --remove-label pr-review/approved
 ```
 
 ## B4. PR 评论（编排）
@@ -197,7 +200,7 @@ push 后**先验无文件冲突、再等 CI 收敛**，才交接 / 收尾（ship
 gh pr checks <N> --watch --interval 30 --fail-fast       # Bash timeout 设 ~600000ms（10min 工具上限）；预计 6min 内返回
 # 失败 → 列失败 check（精确到 PR head，bucket=fail）+ run 链接
 gh pr checks <N> --json name,bucket,link --jq '.[] | select(.bucket=="fail") | [.name,.link] | @tsv'
-gh run view <run-id> --log-failed                        # run-id 取自上行 link 末段
+gh run view <run-id> --job <job-id> --log-failed         # link=/actions/runs/<run-id>/job/<job-id>：中段 run-id、末段 job-id（裸 job-id 给 gh run view 会 404）
 ```
 
 - **等待上限 ~12-15 min**（~2.5× 典型，吸收 runner 排队）。超 Bash 10min 上限用后台轮询兜底（`run_in_background` 跑 watch，或循环 `gh pr checks <N> --json bucket --jq 'any(.[]; .bucket=="pending")'` 间隔 30-60s）；超上限仍 pending → 停下报告，不无限等。
