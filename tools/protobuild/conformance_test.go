@@ -46,7 +46,13 @@ func TestConformanceFixtureCompilesAndRoundTrips(t *testing.T) {
 	// the grpc runtime, not just that they type-check.
 	srv := grpc.NewServer()
 	conformancev1.RegisterConformanceServiceServer(srv, conformancev1.UnimplementedConformanceServiceServer{})
-	if _, ok := srv.GetServiceInfo()["conformance.v1.ConformanceService"]; !ok {
+	info, ok := srv.GetServiceInfo()["conformance.v1.ConformanceService"]
+	if !ok {
 		t.Fatalf("ConformanceService not registered on grpc.Server; got services %v", srv.GetServiceInfo())
+	}
+	// The registered descriptor must expose exactly the proto's RPC set; a codegen
+	// regression that drops or renames a method surfaces here, not just at compile time.
+	if len(info.Methods) != 1 || info.Methods[0].Name != "Check" {
+		t.Fatalf("ConformanceService methods = %+v, want exactly [Check]", info.Methods)
 	}
 }
