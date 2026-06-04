@@ -45,10 +45,12 @@ broker 再跑 demo**；仅"未设环境变量"是合法的关闭方式。
 ## 跑通命令
 
 ```bash
-# 1. 启动 MQTT broker（先于 demo）
-# 仅绑 127.0.0.1：无认证 broker 不可暴露到宿主机外部网卡，本命令仅供本机 demo。
-docker run --rm -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.0 \
-  mosquitto -c /mosquitto-no-auth.conf
+# 1. 启动 MQTT broker（先于 demo）。compose 已含 mosquitto 服务（仅绑 127.0.0.1：
+#    无认证 broker 不可暴露到宿主机外部网卡，仅供本机 demo）：
+docker compose -f examples/iotdevice/docker-compose.yml up -d mosquitto
+# 或不用 compose 时手动起一次性 broker：
+#   docker run --rm -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.0 \
+#     mosquitto -c /mosquitto-no-auth.conf
 
 # 2. 另开终端：订阅 device-registered 主题（外部观测者）
 mosquitto_sub -h 127.0.0.1 -p 1883 -t 'iotdevice/#' -v
