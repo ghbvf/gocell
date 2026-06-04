@@ -10,6 +10,7 @@ import (
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 const synthModule = "example.com/synth"
@@ -45,7 +46,9 @@ func loadSynthPackages(t *testing.T, includeTests bool) []*packages.Package {
 		Dir:   dir,
 		Tests: includeTests,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	// ModeModule (GOWORK=off): testdata/synth is a standalone module not in the
+	// repo go.work `use` set. Mirrors depgraph.Load.
+	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, "./...")
 	if err != nil {
 		t.Fatalf("packages.Load: %v", err)
 	}
