@@ -61,6 +61,9 @@ func goldenRuleIDs() []string {
 		// Gaps are intentional.
 		"ADV-01", "ADV-03", "ADV-04", "ADV-05",
 
+		// COMMAND — command contract format (rules_command.go)
+		"COMMAND-CONTRACT-SCHEMA-REF-01",
+
 		// CONTRACT-ENDPOINT-TEST-MAPPING — active HTTP contract → slice.verify.contract.serve
 		// reverse coverage check (rules_contract_test_mapping.go).
 		"CONTRACT-ENDPOINT-TEST-MAPPING-01",
