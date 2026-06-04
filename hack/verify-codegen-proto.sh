@@ -8,9 +8,16 @@
 #
 # The pipeline is hermetic via `go run` (see Makefile `proto-gen` + buf.gen.yaml),
 # so this runs anywhere setup-go + the module cache are available with no extra
-# buf/protoc install. Unlike the K#04/K#06 `gocell verify codegen-*` gates, proto
-# generation is buf-native (not a gocell subcommand), so drift is detected with
-# `git status` rather than a sandbox worktree.
+# buf/protoc install. It DOES require network on the first run (buf + the grpc
+# plugin are fetched via `go run …@version`); the build cache covers reruns.
+# Unlike the K#04/K#06 `gocell verify codegen-*` gates, proto generation is
+# buf-native (not a gocell subcommand), so drift is detected with `git status`
+# rather than a sandbox worktree.
+#
+# Blind spot: `buf generate` only writes — it never deletes. If a .proto is
+# removed, its now-orphaned .pb.go is NOT regenerated and stays byte-identical,
+# so this gate passes. Deleting a .proto therefore requires manually removing
+# its generated .pb.go in the same change (documented in contracts/grpc/README.md).
 #
 # Pattern: kubernetes/kubernetes hack/lib/verify-generated.sh (regenerate + diff).
 set -euo pipefail

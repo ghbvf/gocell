@@ -5,8 +5,17 @@ version: v2
 #   - protoc-gen-go: no @version — resolved from the main module's go.mod
 #     (google.golang.org/protobuf), keeping the generator in lockstep with the
 #     protobuf runtime the generated code links against (single source of truth).
+#     NOTE: bumping google.golang.org/protobuf in go.mod changes this generator's
+#     version, so re-run `make proto-gen` and commit the regenerated .pb.go (the
+#     verify-codegen-proto CI gate enforces this).
 #   - protoc-gen-go-grpc: a SEPARATE module not required by go.mod, so it is
 #     version-pinned here. Bump in lockstep with google.golang.org/grpc.
+#
+# Version integrity: every `@version` (here + buf in the Makefile) is verified
+# against the Go checksum DB (sum.golang.org) on resolution — a tag is content-
+# pinned by hash, so an upstream retag fails the build rather than silently
+# swapping bytes. These ephemeral tool builds do NOT enter the main module's
+# go.sum (independent resolution), which is why go.mod/go.sum stay untouched.
 #
 # out + paths=source_relative places files at generated/contracts/grpc/<path>,
 # where <path> is the proto's path relative to its buf module root. That path
