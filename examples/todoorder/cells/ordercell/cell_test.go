@@ -255,6 +255,43 @@ func TestOrderCell_RouteGroups(t *testing.T) {
 	assert.GreaterOrEqual(t, mux.handleCount, 3, "should register at least 3 route patterns")
 }
 
+// TestOrderCell_ProjectionRegistrations asserts that OrderCell.Init registers
+// BOTH the order_status and order_transition projections through the production
+// generated wiring (cell_gen.go RegisterProjection) — #1574 F4. The journey
+// checkRef test (TestJOrderprojectionStatusTransitionProjection) drives the
+// orderprojection.Service handlers directly, so a dropped order_transition
+// registration in cell_gen.go would still pass it; this test reads the
+// RegistrySnapshot so such a wiring regression reds.
+func TestOrderCell_ProjectionRegistrations(t *testing.T) {
+	c := newTestCell()
+	rec := newTestRec()
+	require.NoError(t, c.Init(context.Background(), rec))
+
+	projs := rec.Snapshot().Projections
+	require.Len(t, projs, 2, "ordercell must register exactly order_status + order_transition")
+
+	byID := make(map[string]cell.ProjectionRequest, len(projs))
+	for _, p := range projs {
+		byID[p.ProjectionID] = p
+	}
+
+	status, ok := byID["order_status"]
+	require.True(t, ok, "order_status projection must be registered")
+	assert.Equal(t, "event.order-created.v1", status.Spec.ID)
+	assert.Equal(t, "event.order-created.v1", status.Spec.Topic)
+	assert.Equal(t, "ordercell", status.CellID)
+	assert.Equal(t, "orderprojection", status.SliceID)
+	assert.NotNil(t, status.OnReset, "order_status must carry its ResetOrderStatus hook")
+
+	transition, ok := byID["order_transition"]
+	require.True(t, ok, "order_transition projection must be registered (#1574 F4)")
+	assert.Equal(t, "event.order-status-changed.v1", transition.Spec.ID)
+	assert.Equal(t, "event.order-status-changed.v1", transition.Spec.Topic)
+	assert.Equal(t, "ordercell", transition.CellID)
+	assert.Equal(t, "orderprojection", transition.SliceID)
+	assert.NotNil(t, transition.OnReset, "order_transition must carry its ResetOrderTransition hook")
+}
+
 // stubMux implements cell.RouteMux for testing.
 type stubMux struct {
 	handleCount int

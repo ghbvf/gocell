@@ -337,7 +337,7 @@ func (c *Coordinator) resolvePosition(ctx context.Context, entry outbox.Entry) (
 // applyOne is the inner per-event logic for an OWN-stream entry: resolve the
 // position (1-based + exactly-once guards via resolvePosition), call Apply,
 // advance the checkpoint, and update lastApplied lag metrics. It runs inside a
-// transaction provided by the caller (buildHandler's RunInTx / replayPhase).
+// transaction provided by the caller (buildHandler's RunInTx / drainGap).
 func (c *Coordinator) applyOne(ctx context.Context, entry outbox.Entry, apply Apply) error {
 	pos, proceed, err := c.resolvePosition(ctx, entry)
 	if err != nil || !proceed {

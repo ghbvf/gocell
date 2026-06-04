@@ -1,22 +1,31 @@
 // INVARIANT: PROJECTION-REPLAY-PER-SPEC-FILTER-01
 //
 // Package archtest enforces PROJECTION-REPLAY-PER-SPEC-FILTER-01: inside the
-// kernel projection rebuild, the business Apply reach (the applyOne call in
-// replayPhase) MUST be guarded by the per-spec topic gate
-// `entry.RoutingTopic() == c.spec.Topic`. A projection rebuild iterates the
-// single whole-journal ReplaySource shared by every Coordinator, so without the
-// gate a projection would apply foreign streams to its read model and the
-// multi-projection fan-in (#1482, examples/todoorder orderprojection) would be
-// unsound. Foreign streams must instead route through advanceOffsetPastForeign
-// (advances the checkpoint without applying).
+// kernel projection rebuild's single per-spec replay funnel `drainGap` (called by
+// BOTH replayPhase for (0, head0] and catchupPhase for (head0, head1]), TWO shapes
+// must hold:
+//
+//	(a) the business Apply reach (the applyOne call) MUST be guarded by the
+//	    per-spec topic gate `entry.RoutingTopic() == c.spec.Topic`; and
+//	(b) the foreign fall-through MUST call advanceOffsetPastForeign OUTSIDE that
+//	    gate, so a foreign-stream entry advances the checkpoint without applying.
+//
+// A projection rebuild iterates the single whole-journal ReplaySource shared by
+// every Coordinator, so without (a) a projection would apply foreign streams to
+// its read model and the multi-projection fan-in (#1482, examples/todoorder
+// orderprojection) would be unsound; without (b) a trailing foreign entry that
+// lands during catchup would never advance the checkpoint and the bounded drain
+// could never reach head1 — the #1574 C1 catchup-termination hang. Because both
+// phases route through drainGap, guarding it covers replay AND catchup.
 //
 // Why this rule exists: the per-spec filter is a new FRAMEWORK invariant whose
-// correctness the example's disjoint-sub-view fan-in depends on. Per the
-// AI-robust charter, a new constraint ships with a static guard (this archtest),
-// a documented contract (replayPhase godoc + ADR amendment), and a regression
-// test (TestRebuild_PerSpecTopicFilter). Deleting the gate would silently
-// reintroduce cross-stream contamination during rebuild; this rule reds the
-// moment the gate is removed or the applyOne call escapes it.
+// correctness the example's disjoint-sub-view fan-in (and rebuild termination)
+// depends on. Per the AI-robust charter, a new constraint ships with a static
+// guard (this archtest), a documented contract (drainGap/advanceOffsetPastForeign
+// godoc + ADR amendment), and regression tests (TestRebuild_PerSpecTopicFilter +
+// TestRebuild_ForeignDuringCatchup). Deleting the gate would silently reintroduce
+// cross-stream contamination; deleting/mis-placing the foreign advance would
+// reintroduce the catchup hang; this rule reds the moment either shape breaks.
 //
 // AI-robust: Medium (NOT a double-locked funnel — the gate is enforced by a
 // single archtest, not by the type system).
@@ -30,8 +39,9 @@
 //     cannot reach the rebuild apply at all, but only because applyOne is a
 //     private kernel method (ordinary Go visibility) — that is incidental, not
 //     the invariant. The invariant this rule actually enforces is "the
-//     FRAMEWORK's replayPhase keeps the topic gate around applyOne", and a
-//     name-anchored AST gate is a Medium guard for it.
+//     FRAMEWORK's drainGap keeps the topic gate around applyOne and advances past
+//     foreign streams outside it", and a name-anchored AST gate is a Medium guard
+//     for it.
 //   - Hard path (won't-do now): resolve applyOne via TypesInfo.ObjectOf to the
 //     Coordinator method (typed callsite-uniqueness, à la
 //     SAGA-STEP-RUN-OUTSIDE-TX-01 A1) AND verify CFG/SSA dominance of the gate
@@ -44,33 +54,37 @@
 // the detector must match by structural name, mirroring
 // CHANGEPASSWORD-INACTIVE-GATE-01's mutation anchor):
 //
-//   - Anchor by name (replayPhase / applyOne / RoutingTopic / spec.Topic):
-//     renaming replayPhase makes the production scan fail loudly (sawTarget=false
-//     → t.Fatal), not silently no-op. Renaming applyOne or removing the gate
-//     trips sawApply / sawGate anti-vacuity fatals. A rename of RoutingTopic or
-//     the spec.Topic field would make isPerSpecTopicGate miss the gate → sawGate
-//     fatal. Every drift direction is fail-closed.
+//   - Anchor by name (drainGap / applyOne / advanceOffsetPastForeign /
+//     RoutingTopic / spec.Topic): renaming drainGap makes the production scan fail
+//     loudly (sawTarget=false → t.Fatal), not silently no-op. Renaming applyOne or
+//     removing the gate trips sawApply / sawGate anti-vacuity fatals; removing the
+//     foreign advance trips the sawForeignAdvance fatal. A rename of RoutingTopic
+//     or the spec.Topic field would make isPerSpecTopicGate miss the gate →
+//     sawGate fatal. Every drift direction is fail-closed.
 //
 //   - Cross-function extraction: moving the applyOne call into a helper called
-//     from replayPhase would drop the applyOne CallExpr from replayPhase's
-//     subtree → sawApply anti-vacuity fatal (the rule cannot silently pass). The
-//     helper would then itself need its own gate review. This blind spot is
+//     from drainGap would drop the applyOne CallExpr from drainGap's subtree →
+//     sawApply anti-vacuity fatal (the rule cannot silently pass). The helper
+//     would then itself need its own gate review. This blind spot is
 //     MACHINE-VERIFIED, not just documented: the crossfn fixture below extracts
 //     applyOne into a helper, and the self-check asserts the detector reports
 //     sawApply=false for it (the exact signal the production scan turns into a
 //     t.Fatal).
 //
-//   - Enclosure is token.Pos containment of the applyOne call within a
-//     topic-gate IfStmt.Body, not full control-flow dominance. A gate whose
-//     body conditionally skips applyOne via a nested branch is not modeled;
-//     that is a residual escape, fail-closed in the common forms (an ungated
-//     applyOne is rejected). CFG dominance is the Hard path (won't-do now, same
-//     ceiling family).
+//   - Enclosure is token.Pos containment within a topic-gate IfStmt.Body, not
+//     full control-flow dominance: applyOne must sit inside a gate body, and
+//     advanceOffsetPastForeign must sit outside every gate body (the foreign
+//     fall-through). A gate whose body conditionally skips applyOne via a nested
+//     branch is not modeled; that is a residual escape, fail-closed in the common
+//     forms (an ungated applyOne / an in-gate foreign-advance are rejected). CFG
+//     dominance is the Hard path (won't-do now, same ceiling family).
 //
-// Self-check: TestProjectionReplayPerSpecFilter_01_NegativeFixture loads the
-// green (gated), red (ungated), and crossfn (applyOne extracted to a helper)
-// fixtures under tools/archtest/testdata/projection_replay_filter_{green,red,crossfn}
-// and asserts the detector stays silent on green, fires on red, and reports
+// Self-check: TestProjectionReplayPerSpecFilter_01_NegativeFixture loads the green
+// (gated), red (ungated applyOne), crossfn (applyOne extracted to a helper), and
+// foreigngate (advanceOffsetPastForeign nested inside the own gate) fixtures under
+// tools/archtest/testdata/projection_replay_filter_{green,red,crossfn,foreigngate}
+// and asserts the detector stays silent on green, fires on red + foreigngate, and
+// reports
 // sawApply=false on crossfn (the anti-vacuity signal).
 package archtest
 
@@ -84,11 +98,19 @@ import (
 
 const (
 	rulePerSpecReplayFilter01 = "PROJECTION-REPLAY-PER-SPEC-FILTER-01"
-	// psfTargetFunc is the framework function whose apply-gate placement is
-	// governed. It is a method on *Coordinator in production; matched by name.
-	psfTargetFunc = "replayPhase"
-	// psfApplyMethod is the business-apply reach within replayPhase.
+	// psfTargetFunc is the framework function whose apply-gate + foreign-advance
+	// placement is governed. It is the single per-spec replay funnel `drainGap` on
+	// *Coordinator (replayPhase drains (0, head0], catchupPhase drains (head0,
+	// head1] — both call drainGap, so guarding it covers BOTH phases). Matched by
+	// name.
+	psfTargetFunc = "drainGap"
+	// psfApplyMethod is the business-apply reach within drainGap.
 	psfApplyMethod = "applyOne"
+	// psfForeignAdvanceMethod is the foreign-stream checkpoint-advance reach. The
+	// foreign fall-through MUST call it (and OUTSIDE the own-topic gate) so a
+	// trailing foreign entry advances the checkpoint and cannot stall catchup
+	// (#1574 C1).
+	psfForeignAdvanceMethod = "advanceOffsetPastForeign"
 	// psfTopicAccessor / psfSpecField / psfSpecTopicField form the gate shape
 	// `entry.RoutingTopic() == c.spec.Topic`.
 	psfTopicAccessor  = "RoutingTopic"
@@ -101,7 +123,7 @@ const (
 func TestProjectionReplayPerSpecFilter_01(t *testing.T) {
 	t.Parallel()
 
-	var sawTarget, sawApply, sawGate bool
+	var sawTarget, sawApply, sawGate, sawForeignAdvance bool
 	diags := Run(t, Typed(TypedOpts{}, []string{"./kernel/projection/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Fset == nil {
@@ -113,10 +135,11 @@ func TestProjectionReplayPerSpecFilter_01(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				fileDiags, found, apply, gate := perSpecFilterScan(p.Fset, file, rel)
+				fileDiags, found, apply, gate, fwd := perSpecFilterScan(p.Fset, file, rel)
 				sawTarget = sawTarget || found
 				sawApply = sawApply || apply
 				sawGate = sawGate || gate
+				sawForeignAdvance = sawForeignAdvance || fwd
 				d = append(d, fileDiags...)
 			}
 			return d
@@ -134,6 +157,11 @@ func TestProjectionReplayPerSpecFilter_01(t *testing.T) {
 	if !sawGate {
 		t.Fatalf("%s: production %q contains no `%s() == c.%s.%s` gate — the per-spec filter was removed",
 			rulePerSpecReplayFilter01, psfTargetFunc, psfTopicAccessor, psfSpecField, psfSpecTopicField)
+	}
+	if !sawForeignAdvance {
+		t.Fatalf("%s: production %q contains no %s(...) call — anti-vacuity: foreign streams MUST advance "+
+			"the checkpoint or a trailing foreign entry stalls catchup (#1574 C1)",
+			rulePerSpecReplayFilter01, psfTargetFunc, psfForeignAdvanceMethod)
 	}
 
 	Report(t, rulePerSpecReplayFilter01, diags)
@@ -155,6 +183,10 @@ func TestProjectionReplayPerSpecFilter_01_NegativeFixture(t *testing.T) {
 		{path: "./tools/archtest/testdata/projection_replay_filter_green", wantViolations: false, wantSawApply: true},
 		{path: "./tools/archtest/testdata/projection_replay_filter_red", wantViolations: true, wantSawApply: true},
 		{path: "./tools/archtest/testdata/projection_replay_filter_crossfn", wantViolations: false, wantSawApply: false},
+		// foreigngate: advanceOffsetPastForeign nested INSIDE the own-topic gate —
+		// reverse self-check for the foreign-advance placement rule (#1574 F2). The
+		// detector must fire ≥1 diagnostic; applyOne stays gated so sawApply=true.
+		{path: "./tools/archtest/testdata/projection_replay_filter_foreigngate", wantViolations: true, wantSawApply: true},
 	}
 
 	for _, tc := range cases {
@@ -173,7 +205,7 @@ func TestProjectionReplayPerSpecFilter_01_NegativeFixture(t *testing.T) {
 						if strings.HasSuffix(rel, "_test.go") {
 							continue
 						}
-						fileDiags, found, apply, _ := perSpecFilterScan(p.Fset, file, rel)
+						fileDiags, found, apply, _, _ := perSpecFilterScan(p.Fset, file, rel)
 						sawTarget = sawTarget || found
 						sawApply = sawApply || apply
 						d = append(d, fileDiags...)
@@ -187,7 +219,7 @@ func TestProjectionReplayPerSpecFilter_01_NegativeFixture(t *testing.T) {
 			}
 			if sawApply != tc.wantSawApply {
 				t.Errorf("%s: fixture %q sawApply = %v, want %v "+
-					"(crossfn must report false — proves the detector sees no direct applyOne in replayPhase)",
+					"(crossfn must report false — proves the detector sees no direct applyOne in drainGap)",
 					rulePerSpecReplayFilter01, tc.path, sawApply, tc.wantSawApply)
 			}
 			if tc.wantViolations && len(diags) == 0 {
@@ -210,11 +242,15 @@ type psfPosRange struct {
 	lo, hi token.Pos
 }
 
-// perSpecFilterScan finds the replayPhase FuncDecl in file and reports a
-// diagnostic for each applyOne call not enclosed by a per-spec topic gate.
-// Returns whether the target function was present and whether any applyOne call
-// / topic gate was seen (anti-vacuity signals for the caller).
-func perSpecFilterScan(fset *token.FileSet, file *ast.File, rel string) (diags []Diagnostic, foundFunc, sawApply, sawGate bool) {
+// perSpecFilterScan finds the drainGap FuncDecl in file and reports a diagnostic
+// for (a) each applyOne call NOT enclosed by a per-spec topic gate, and (b) each
+// advanceOffsetPastForeign call that IS enclosed by the own-topic gate (the
+// foreign fall-through must advance the checkpoint outside the gate). Returns
+// whether the target function was present and whether any applyOne call / topic
+// gate / foreign-advance call was seen (anti-vacuity signals for the caller).
+func perSpecFilterScan(
+	fset *token.FileSet, file *ast.File, rel string,
+) (diags []Diagnostic, foundFunc, sawApply, sawGate, sawForeignAdvance bool) {
 	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Name == nil || fd.Name.Name != psfTargetFunc || fd.Body == nil {
 			return
@@ -252,8 +288,32 @@ func perSpecFilterScan(fset *token.FileSet, file *ast.File, rel string) (diags [
 				})
 			}
 		})
+
+		// Every advanceOffsetPastForeign call must sit OUTSIDE the own-topic gate —
+		// it is the foreign fall-through. A foreign-advance nested inside the own
+		// gate (or absent — caught by the caller's sawForeignAdvance anti-vacuity)
+		// would let a trailing foreign entry stall catchup (#1574 C1).
+		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != psfForeignAdvanceMethod {
+				return
+			}
+			sawForeignAdvance = true
+			if psfPosWithinAny(call.Pos(), gateRanges) {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: fset.Position(call.Pos()).Line,
+					Message: fmt.Sprintf(
+						"%s: %s(...) in %s sits INSIDE the own-stream topic gate; the foreign "+
+							"fall-through must advance the checkpoint OUTSIDE the gate so a trailing "+
+							"foreign entry advances the checkpoint and cannot stall catchup (#1574 C1). "+
+							"Move it to the non-gated path.",
+						rulePerSpecReplayFilter01, psfForeignAdvanceMethod, psfTargetFunc),
+				})
+			}
+		})
 	})
-	return diags, foundFunc, sawApply, sawGate
+	return diags, foundFunc, sawApply, sawGate, sawForeignAdvance
 }
 
 // isPerSpecTopicGate reports whether cond is the `<x>.RoutingTopic() == <y>.spec.Topic`

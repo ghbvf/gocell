@@ -858,16 +858,40 @@ threat discharges they back. The move is `pending → unreachable`, not `✅ →
 1. **Per-spec replay filtering at the Coordinator** (`kernel/projection/rebuild.go`).
    The bootstrap ReplaySource is a single whole-journal source shared by every
    projection Coordinator (the Row 1 / §Amendment 2026-06-03 contract). During a
-   rebuild, `replayPhase` now invokes the business `applyOne` **only** when
+   rebuild, the replay loop invokes the business `applyOne` **only** when
    `entry.RoutingTopic() == c.spec.Topic` — matching the same key live delivery is
    topic-routed on — so the business Apply never sees a foreign stream and needs
-   no defensive topic check. Foreign entries route through the new
-   `advanceOffsetPastForeign`, which advances the checkpoint **without** applying.
-   Advancing over foreign is a correctness requirement, not an optimization:
-   `catchupPhase` compares the checkpoint against the whole-journal `Head`, so a
-   trailing foreign entry (another stream's event at the highest position) would
-   otherwise leave catchup unable to terminate. Filtering thus gates the Apply,
-   not the checkpoint.
+   no defensive topic check. Foreign entries route through `advanceOffsetPastForeign`,
+   which advances the checkpoint **without** applying. Advancing over foreign is a
+   correctness requirement, not an optimization: a rebuild's catchup must drain the
+   checkpoint over the journal gap (own applied + foreign advanced) so it reaches
+   the catchup cutoff even when foreign entries sit in the range. Filtering thus
+   gates the Apply, not the checkpoint.
+
+   The replay loop is the single shared funnel `drainGap(ctx, from, through)`:
+   `replayPhase` drains `(0, head0]`; `catchupPhase` drains `(head0, head1]` where
+   `head1` is the source `Head` captured at catchup start. Both run on the rebuild
+   goroutine with the gate **shut**, so the rebuild goroutine is the SOLE applier
+   and the replay→live handoff is strictly sequential.
+
+   **Catchup termination (corrected during #1574 review).** An earlier framing of
+   this amendment claimed catchup termination was discharged because "`catchupPhase`
+   compares the checkpoint against the whole-journal `Head`" while the foreign
+   advance keeps the checkpoint moving. That reasoning was incomplete — it only
+   covered foreign entries inside the replay range `[0, head0]`. A foreign entry
+   appended *during* catchup raises the whole-journal `Head`, but the prior catchup
+   polled `checkpoint >= Head` with the gate **open** and relied on the
+   topic-routed live handler to advance the checkpoint; the live handler never sees
+   foreign streams, so the poll spun forever (the #1574 C1 hang). The fix makes
+   catchup a **bounded self-drain** of `(head0, head1]` (`drainGap`, gate shut,
+   advance past foreign), and only **then** opens the gate; the residual
+   `(head1, now]` tail is consumed by live delivery. This matches the Marten
+   async-daemon (high-water gap skip) + Axon streaming-processor (sequential
+   replay-then-live, no replay+live dual-applier path) consensus, and — crucially —
+   keeps a **single applier**, preserving the serial-delivery precondition (Row 4).
+   codex's proposed open-gate catchup gap-scan was **rejected**: it would run the
+   scan while the live handler also consumes, giving two concurrent appliers →
+   double-apply, violating that precondition.
 
 2. **Multi-stream fan-in reference** (`examples/todoorder` orderprojection). The
    status-summary read model is now fed by **two** independent single-stream
@@ -893,15 +917,20 @@ retained projection journal (#1504 P1) lands, so SQL-level pruning would optimiz
 a path not yet production-active.
 
 **AI-robust.** The per-spec filter is a new framework invariant the example's
-fan-in soundness depends on, so it ships the three-piece closure (static guard +
-documented contract + regression test): archtest
-`PROJECTION-REPLAY-PER-SPEC-FILTER-01` form-locks the `applyOne` callsite inside
-the topic gate; `replayPhase`/`advanceOffsetPastForeign` godoc + this amendment
-are the contract; `TestRebuild_PerSpecTopicFilter` (kernel) +
-`TestOrderProjection_FanInLifecycle` (example) are the regression tests. Rating:
-**Medium** (single archtest, not a type-system double-lock). The gate is
-NAME-ANCHORED AST containment — the `applyOne` CallExpr must sit inside the
-`entry.RoutingTopic() == c.spec.Topic` IfStmt body (token.Pos containment +
+fan-in soundness (and rebuild termination) depends on, so it ships the three-piece
+closure (static guard + documented contract + regression test): archtest
+`PROJECTION-REPLAY-PER-SPEC-FILTER-01` form-locks, inside the single `drainGap`
+funnel, BOTH (a) the `applyOne` callsite inside the topic gate AND (b) the
+`advanceOffsetPastForeign` callsite **outside** the gate (the foreign
+fall-through) — plus a `sawForeignAdvance` anti-vacuity fatal so deleting the
+foreign advance reds CI; `drainGap`/`advanceOffsetPastForeign` godoc + this
+amendment are the contract; `TestRebuild_PerSpecTopicFilter` +
+`TestRebuild_ForeignDuringCatchup` (kernel) + `TestOrderProjection_FanInLifecycle`
+(example) are the regression tests. Because both phases route through `drainGap`,
+the archtest covers replay AND catchup. Rating: **Medium** (single archtest, not a
+type-system double-lock). The gate is NAME-ANCHORED AST containment — the
+`applyOne` CallExpr must sit inside the `entry.RoutingTopic() == c.spec.Topic`
+IfStmt body and `advanceOffsetPastForeign` outside it (token.Pos containment +
 structural-name gate form), the same dominance-lite shape as the Medium
 `CHANGEPASSWORD-INACTIVE-GATE-01`; it is NOT typed callsite-uniqueness and NOT
 CFG dominance, so it is not Hard. (Business code being unable to reach the rebuild
@@ -927,21 +956,35 @@ AI-robust archtest scope.
   the example's two projections each have their own Coordinator/Phase.
 - **Row 4** (out-of-order / serial-delivery): unchanged — the filter is intra-
   Coordinator and adds no concurrency vector; the per-projectionID serial-delivery
-  precondition (PR-04d) still holds per stream.
+  precondition (PR-04d) still holds per stream. The #1574 catchup fix deliberately
+  drains `(head0, head1]` with the gate **shut** so the rebuild goroutine is the
+  sole applier (no concurrent live applier); an open-gate catchup gap-scan would
+  have introduced a second applier and violated this row, which is why it was
+  rejected.
 - **Row 5** (fail-closed): unchanged — `advanceOffsetPastForeign` keeps the same
   1-based / `pos <= current` guards and runs in the rebuild's `RunInTx`.
 - **Row 6** (GAP-8 boundary): unchanged — no new framework constraint on the
   business read-model schema; the disjoint-sub-view composition is business code.
 - **Row 7** (multi-pod boundary): unchanged (v1 single-pod).
-- **Row 8 (NEW — introduced by #1482)** — *whole-journal replay interleaving /
-  catchup termination*: because one whole-journal ReplaySource feeds every
-  Coordinator, a rebuild sees foreign streams interleaved with its own, and a
-  trailing foreign entry (another stream's event at the highest journal position)
-  must not strand catchup. **Discharged** by `advanceOffsetPastForeign`: foreign
-  entries advance the checkpoint (without applying) so `catchupPhase`'s
-  `checkpoint >= Head` comparison still reaches Head; covered by
-  `TestRebuild_PerSpecTopicFilter` (trailing-foreign case) +
-  `TestAdvanceOffsetPastForeign_ErrorBranches`. This is a v1 row that did not exist
-  before per-spec filtering; it is ✅, not ⚠️/❌.
+- **Row 8 (NEW — introduced by #1482, fix corrected in #1574)** — *whole-journal
+  replay interleaving / catchup termination*: because one whole-journal
+  ReplaySource feeds every Coordinator, a rebuild sees foreign streams interleaved
+  with its own, and a foreign entry **at any position — including one appended
+  during catchup** — must not strand catchup. The initial #1482 discharge (foreign
+  advance during replay + an open-gate `checkpoint >= whole-journal Head` poll in
+  catchup) was **incomplete**: it only handled foreign entries inside `[0, head0]`;
+  a foreign entry arriving during catchup raised `Head` while the topic-routed live
+  handler could never advance the checkpoint past it, so the poll spun forever
+  (#1574 C1, P1). **Discharged** by making catchup a bounded gate-shut self-drain
+  of `(head0, head1]` via `drainGap` (own applied + foreign advanced), which
+  reaches `head1` regardless of foreign entries in the range, then opens the gate;
+  the residual `(head1, now]` tail is consumed by live delivery. Covered by
+  `TestRebuild_ForeignDuringCatchup` (foreign-arrives-during-catchup, the case the
+  pre-fix poll hung on) + `TestRebuild_PerSpecTopicFilter` (trailing-foreign in
+  replay range) + `TestAdvanceOffsetPastForeign_ErrorBranches`, and form-locked by
+  `PROJECTION-REPLAY-PER-SPEC-FILTER-01`'s foreign-advance assertion. This is a v1
+  row that did not exist before per-spec filtering; after the #1574 correction it
+  is ✅, not ⚠️/❌.
 
-No row flips to ⚠️/❌; the one new row (Row 8) lands ✅.
+No row flips to ⚠️/❌; the one new row (Row 8) lands ✅ after the #1574 catchup
+correction.

@@ -1,5 +1,5 @@
 // Package projection_replay_filter_green is a GREEN fixture for
-// PROJECTION-REPLAY-PER-SPEC-FILTER-01: replayPhase invokes applyOne ONLY inside
+// PROJECTION-REPLAY-PER-SPEC-FILTER-01: drainGap invokes applyOne ONLY inside
 // the `entry.RoutingTopic() == c.spec.Topic` gate, mirroring the production
 // kernel/projection/rebuild.go shape. The detector must report 0 diagnostics.
 //
@@ -21,8 +21,8 @@ func (c *coord) applyOne(e entry, apply func(entry) error) error { return apply(
 
 func (c *coord) advanceOffsetPastForeign(_ entry) error { return nil }
 
-// replayPhase gates applyOne behind the per-spec topic check.
-func (c *coord) replayPhase(entries []entry) error {
+// drainGap gates applyOne behind the per-spec topic check.
+func (c *coord) drainGap(entries []entry) error {
 	for _, e := range entries {
 		if e.RoutingTopic() == c.spec.Topic {
 			if err := c.applyOne(e, c.apply); err != nil {

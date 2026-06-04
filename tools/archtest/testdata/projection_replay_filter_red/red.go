@@ -1,5 +1,5 @@
 // Package projection_replay_filter_red is a RED fixture for
-// PROJECTION-REPLAY-PER-SPEC-FILTER-01: replayPhase invokes applyOne
+// PROJECTION-REPLAY-PER-SPEC-FILTER-01: drainGap invokes applyOne
 // UNCONDITIONALLY (no `entry.RoutingTopic() == c.spec.Topic` gate), so the
 // business Apply would run for foreign streams during a rebuild. The detector
 // must report ≥1 diagnostic.
@@ -20,8 +20,8 @@ type coord struct {
 
 func (c *coord) applyOne(e entry, apply func(entry) error) error { return apply(e) }
 
-// replayPhase calls applyOne with no per-spec gate — the violation.
-func (c *coord) replayPhase(entries []entry) error {
+// drainGap calls applyOne with no per-spec gate — the violation.
+func (c *coord) drainGap(entries []entry) error {
 	for _, e := range entries {
 		if err := c.applyOne(e, c.apply); err != nil {
 			return err
