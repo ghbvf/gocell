@@ -52,6 +52,7 @@ func TestDiscoverConventional_SkipsSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocator: %v", err)
 	}
+	defer func() { _ = l.Close() }()
 	sources, err := l.Discover()
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
@@ -104,6 +105,7 @@ func TestDiscoverConventional_SkipsSymlinkDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocator: %v", err)
 	}
+	defer func() { _ = l.Close() }()
 	sources, err := l.Discover()
 	if err != nil {
 		t.Fatalf("Discover: %v", err)

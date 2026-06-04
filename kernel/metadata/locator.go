@@ -214,6 +214,12 @@ type Locator struct {
 // either — the GoCell layout has no metadata behind symlinks, so this is a
 // deliberate fail-closed default, not a regression.
 //
+// The root path itself may be a symlinked directory (e.g. macOS /var ->
+// /private/var); os.OpenRoot follows the root's own symlink to open it, then
+// confines all SUBSEQUENT accesses within the opened directory. Resolution uses
+// filepath.Abs (not EvalSymlinks) — confinement comes from os.Root, not from
+// pre-resolving root.
+//
 // Callers must Close the returned Locator to release the underlying directory
 // file descriptor (Parser.Parse does this for the Locator it constructs).
 func NewLocator(root string, opts ...LocatorOption) (*Locator, error) {
@@ -253,6 +259,9 @@ func NewLocator(root string, opts ...LocatorOption) (*Locator, error) {
 // safe to call more than once. Parser.Parse / ParseFS close the Locator they
 // construct; callers that use NewLocator directly should defer Close to release
 // the underlying directory file descriptor.
+//
+// Close errors are non-retryable (closing a read-only directory fd), so
+// deferred callers may safely ignore them: `defer func() { _ = loc.Close() }()`.
 func (l *Locator) Close() error {
 	if l.osRoot == nil {
 		return nil
@@ -262,9 +271,17 @@ func (l *Locator) Close() error {
 	return r.Close()
 }
 
-// NewLocatorFS constructs a Locator backed by an arbitrary fs.FS. Used by
-// tests to feed fstest.MapFS fixtures and by callers that already hold an
-// fs.FS handle (e.g., embed.FS, virtual FS).
+// NewLocatorFS constructs a Locator backed by an arbitrary fs.FS. Used by tests
+// to feed fstest.MapFS fixtures and by callers that already hold an fs.FS handle
+// (e.g., embed.FS, virtual FS).
+//
+// Unlike NewLocator, NewLocatorFS does NOT add root confinement: it uses the
+// caller's fsys verbatim. If a caller passes os.DirFS(dir) (which follows
+// symlinks), symlink-escape confinement is the CALLER's responsibility — either
+// use NewLocator (os.OpenRoot-confined) for untrusted disk roots, or guarantee
+// safety another way (conventional Discover never recurses into symlink entries;
+// tools/workspace additionally symlink-guards its go.work `use` dirs). MapFS /
+// embed.FS have no OS symlinks, so the test/virtual path is unaffected.
 func NewLocatorFS(fsys fs.FS, opts ...LocatorOption) (*Locator, error) {
 	if fsys == nil {
 		return nil, errors.New("metadata: NewLocatorFS requires non-nil fsys")
@@ -355,6 +372,7 @@ func (l *Locator) resolveMode() error {
 		spec, err := loadManifest(l.fsys, l.manifestPath)
 		if err != nil {
 			slog.Error("metadata: locator manifest load failed",
+				slog.String("root", l.root),
 				slog.String("manifest_path", l.manifestPath),
 				slog.String("requested_mode", l.requestedMode.String()),
 				slog.Any("err", err))
@@ -370,6 +388,7 @@ func (l *Locator) resolveMode() error {
 			spec, lerr := loadManifest(l.fsys, l.manifestPath)
 			if lerr != nil {
 				slog.Error("metadata: locator manifest load failed (auto-detected)",
+					slog.String("root", l.root),
 					slog.String("manifest_path", l.manifestPath),
 					slog.String("requested_mode", l.requestedMode.String()),
 					slog.Any("err", lerr))
@@ -381,6 +400,7 @@ func (l *Locator) resolveMode() error {
 			return nil
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			slog.Error("metadata: locator manifest probe failed",
+				slog.String("root", l.root),
 				slog.String("manifest_path", l.manifestPath),
 				slog.String("requested_mode", l.requestedMode.String()),
 				slog.Any("err", err))

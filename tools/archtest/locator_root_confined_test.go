@@ -32,20 +32,26 @@
 // disk-backed metadata fs.FS must be root-confined" — so the single NewLocator
 // construction site + this downstream ban are the enforcement.
 //
+// COVERED FORMS in kernel/metadata: both a direct call os.DirFS(root) AND a
+// func-value reference `f := os.DirFS` (laundering) are flagged — the reverse
+// self-check below resolves every os.DirFS selector and flags any that is not a
+// direct call's Fun, so func-value laundering cannot disguise the primitive.
+//
 // BLIND SPOTS (accepted Medium gaps; no current code uses these forms):
-//  1. Func-value laundering — `f := os.DirFS; f(root)` references the func
-//     without a direct call selector and is NOT flagged. No code does this.
-//  2. A different symlink-following fs primitive (e.g. a third-party rooted-but-
+//  1. A different symlink-following fs primitive (e.g. a third-party rooted-but-
 //     following fs). Only os.DirFS, the stdlib symlink-following root, is banned.
 //
-// REVERSE SELF-CHECK: the scan counts every resolved os.DirFS call tree-wide and
-// asserts >= 1 (the tools/workspace callsites). If callee resolution silently
-// broke, that count would be 0 and the test fails.
+// REVERSE SELF-CHECK: (a) the scan counts every resolved os.DirFS call tree-wide
+// and asserts >= 1 (the tools/workspace callsites) — if callee resolution
+// silently broke, that count would be 0 and the test fails; (b) the func-value
+// branch scans every os.DirFS selector that is not a call Fun, closing the
+// laundering blind spot rather than only documenting it.
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"sync"
 	"testing"
@@ -71,6 +77,9 @@ func TestLocatorRootConfined01(t *testing.T) {
 		flagged := p.Pkg.Path() == metadataPkgPath
 		for _, f := range p.Files {
 			rel := p.Rel(f)
+			// Pass 1: direct calls os.DirFS(...). Record each call's Fun selector
+			// position so Pass 2 can tell calls apart from func-value references.
+			callFunPos := map[token.Pos]bool{}
 			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 				if !isOsDirFSCall(p.TypesInfo, call) {
 					return
@@ -78,21 +87,25 @@ func TestLocatorRootConfined01(t *testing.T) {
 				mu.Lock()
 				resolved++
 				mu.Unlock()
-				if !flagged {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+					callFunPos[sel.Sel.Pos()] = true
+				}
+				if flagged {
+					d = append(d, dirFSDiagnostic(rel, p.Fset.Position(call.Pos()).Line, "calls os.DirFS"))
+				}
+			})
+			if !flagged {
+				continue
+			}
+			// Pass 2 (reverse self-check, closes the func-value-laundering blind
+			// spot): any os.DirFS selector that is NOT a direct call's Fun is a
+			// func-value reference (`f := os.DirFS`) that Pass 1 cannot see.
+			EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
+				if !isOsDirFSSelector(p.TypesInfo, sel) || callFunPos[sel.Sel.Pos()] {
 					return
 				}
-				pos := p.Fset.Position(call.Pos())
-				d = append(d, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						locatorRootConfinedRule+": %s:%d calls os.DirFS in kernel/metadata. "+
-							"The disk-backed Locator must build its fs.FS via os.OpenRoot(root).FS() "+
-							"(NewLocator) so discovery is confined to the workspace root and cannot "+
-							"follow a symlink escaping it (#1592).",
-						rel, pos.Line,
-					),
-				})
+				d = append(d, dirFSDiagnostic(rel, p.Fset.Position(sel.Pos()).Line,
+					"references os.DirFS as a func value (func-value laundering)"))
 			})
 		}
 		return d
@@ -107,14 +120,31 @@ func TestLocatorRootConfined01(t *testing.T) {
 	}
 }
 
-// isOsDirFSCall reports whether call invokes the canonical os.DirFS function.
-// Uses go/types so import aliases and dot-imports cannot disguise the callee.
-func isOsDirFSCall(info *types.Info, call *ast.CallExpr) bool {
-	if info == nil {
-		return false
+// dirFSDiagnostic builds the standard LOCATOR-ROOT-CONFINED-01 message.
+func dirFSDiagnostic(rel string, line int, what string) Diagnostic {
+	return Diagnostic{
+		Rel:  rel,
+		Line: line,
+		Message: fmt.Sprintf(
+			locatorRootConfinedRule+": %s:%d %s in kernel/metadata. The disk-backed "+
+				"Locator must build its fs.FS via os.OpenRoot(root).FS() (NewLocator) so "+
+				"discovery is confined to the workspace root and cannot follow a symlink "+
+				"escaping it (#1592).",
+			rel, line, what,
+		),
 	}
+}
+
+// isOsDirFSCall reports whether call invokes the canonical os.DirFS function.
+func isOsDirFSCall(info *types.Info, call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
+	return ok && isOsDirFSSelector(info, sel)
+}
+
+// isOsDirFSSelector reports whether sel resolves to the canonical os.DirFS
+// function. Uses go/types so import aliases and dot-imports cannot disguise it.
+func isOsDirFSSelector(info *types.Info, sel *ast.SelectorExpr) bool {
+	if info == nil {
 		return false
 	}
 	fn, ok := info.Uses[sel.Sel].(*types.Func)

@@ -39,13 +39,30 @@ func TestLocator_RootConfinement_SymlinkEscape(t *testing.T) {
 
 	pm, err := NewParser(root).Parse()
 	if err != nil {
-		// Fail-closed at root confinement (os.Root rejects the escaping symlink)
-		// — the desired outcome. Pre-fix Parse returned nil error and leaked the
-		// external cell below.
+		// Fail-closed at root confinement — the desired outcome. Bind the
+		// assertion to the os.Root confinement signal ("path escapes from
+		// parent") so an unrelated failure (permissions, OS quirk) can't masquerade
+		// as the #1592 fix. Pre-fix Parse returned nil error and leaked the cell.
+		if !strings.Contains(err.Error(), "escapes") {
+			t.Fatalf("Parse() failed, but not via root confinement (want \"escapes\"): %v", err)
+		}
 		return
 	}
 	if _, leaked := pm.Cells["leak"]; leaked {
 		t.Fatalf("Parse() discovered external cell %q through an escaping symlink (pm.Cells=%v)", "leak", keysOf(pm.Cells))
+	}
+}
+
+// TestLocator_OpenRootError covers NewLocator's os.OpenRoot failure branch: a
+// non-existent root must fail closed at construction (not defer to Discover).
+func TestLocator_OpenRootError(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+	_, err := NewLocator(missing)
+	if err == nil {
+		t.Fatalf("NewLocator(%q) = nil error; want fail-closed open-root error", missing)
+	}
+	if !strings.Contains(err.Error(), "open root") {
+		t.Fatalf("NewLocator error = %q, want substring %q", err.Error(), "open root")
 	}
 }
 

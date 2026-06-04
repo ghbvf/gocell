@@ -56,6 +56,7 @@ func TestLocator_RealTreeConventionalManifestEquivalence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocator conventional: %v", err)
 	}
+	defer func() { _ = convLoc.Close() }()
 	convSrc, err := convLoc.Discover()
 	if err != nil {
 		t.Fatalf("Discover conventional: %v", err)
@@ -65,6 +66,7 @@ func TestLocator_RealTreeConventionalManifestEquivalence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocator manifest (needs committed .gocell/manifest.yaml): %v", err)
 	}
+	defer func() { _ = manLoc.Close() }()
 	manSrc, err := manLoc.Discover()
 	if err != nil {
 		t.Fatalf("Discover manifest (needs committed .gocell/manifest.yaml): %v", err)
