@@ -186,7 +186,10 @@ func (s *Server) serveAddr(ctx context.Context) error {
 			"grpc: net.Listen failed", err,
 			errcode.WithInternal(errcode.InternalAttr("addr", s.cfg.Addr)))
 	}
-	slog.Info("grpc: server listening", slog.String("addr", s.cfg.Addr))
+	// Log the ACTUAL bound address, not cfg.Addr: cfg.Addr may be ":0"
+	// (ephemeral port) and never reflects the resolved port. Mirrors the
+	// bootstrap boundGRPC.boundAddr() funnel and the serve() error path below.
+	slog.Info("grpc: server listening", slog.String("addr", lis.Addr().String()))
 	return s.serve(ctx, lis)
 }
 
@@ -194,6 +197,11 @@ func (s *Server) serveAddr(ctx context.Context) error {
 // Serve returns (normal or error) or ctx is canceled. On ctx cancellation a
 // graceful drain is attempted within cfg.ShutdownTimeout.
 func (s *Server) serve(ctx context.Context, lis net.Listener) error {
+	// addr is the ACTUAL served address (lis.Addr()), used for every log/error
+	// in this function. It is correct for both serve paths: the listener-injection
+	// path (Serve, where cfg.Addr may not match the injected socket) and the
+	// self-bind path (serveAddr, where cfg.Addr may be ":0").
+	addr := lis.Addr().String()
 	warnIfInsecureNonLoopback(s.cfg.TLS.AllowInsecure, lis.Addr())
 
 	go func() {
@@ -218,11 +226,11 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 			// operators see the cause even when the returned errcode is unwrapped
 			// upstream. The raw addr stays in InternalAttr (server-side only).
 			slog.Error("grpc: Serve returned unexpectedly",
-				slog.String("addr", s.cfg.Addr),
+				slog.String("addr", addr),
 				slog.Any("error", err))
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCServe,
 				"grpc: Serve returned unexpectedly", err,
-				errcode.WithInternal(errcode.InternalAttr("addr", s.cfg.Addr)))
+				errcode.WithInternal(errcode.InternalAttr("addr", addr)))
 		}
 		return nil
 

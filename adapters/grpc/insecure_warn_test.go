@@ -26,6 +26,18 @@ type fakeNonTCPAddr struct{}
 func (fakeNonTCPAddr) Network() string { return "bufconn" }
 func (fakeNonTCPAddr) String() string  { return "bufnet" }
 
+// installCaptureLogger swaps the process slog default for a JSON handler over a
+// concurrency-safe buffer, restoring the original on cleanup (t.Cleanup, not a
+// bare defer, so the restore survives a t.FailNow in the subtest body).
+func installCaptureLogger(t *testing.T) *sloghelper.SyncBuffer {
+	t.Helper()
+	buf := sloghelper.NewSyncBuffer()
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(original) })
+	return buf
+}
+
 func TestWarnIfInsecureNonLoopback(t *testing.T) {
 	const warnMsgSubstr = "non-loopback"
 
@@ -41,16 +53,17 @@ func TestWarnIfInsecureNonLoopback(t *testing.T) {
 		{"insecure + IPv6 unspecified warns + wildcard_bind", true, &net.TCPAddr{IP: net.IPv6unspecified, Port: 9000}, true, true},
 		{"insecure + loopback IPv4 no warn", true, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9000}, false, false},
 		{"insecure + loopback IPv6 no warn", true, &net.TCPAddr{IP: net.IPv6loopback, Port: 9000}, false, false},
+		// IPv4-mapped IPv6 loopback: net.IP.IsLoopback() resolves via To4(), so
+		// ::ffff:127.0.0.1 is correctly treated as loopback (no warn). Locks the
+		// behavior a reviewer flagged as a potential false positive.
+		{"insecure + IPv4-mapped loopback no warn", true, &net.TCPAddr{IP: net.ParseIP("::ffff:127.0.0.1"), Port: 9000}, false, false},
 		{"insecure + non-TCP addr no warn", true, fakeNonTCPAddr{}, false, false},
 		{"TLS + non-loopback no warn", false, &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 9000}, false, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			buf := sloghelper.NewSyncBuffer()
-			original := slog.Default()
-			slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
-			defer slog.SetDefault(original)
+			buf := installCaptureLogger(t)
 
 			warnIfInsecureNonLoopback(tc.allowInsecure, tc.addr)
 
