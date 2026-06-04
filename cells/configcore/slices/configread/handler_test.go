@@ -94,7 +94,34 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, configBasePath+"/missing-key", nil)
 	handler.ServeHTTP(w, asAdmin(req))
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
+}
+
+// asAdminNoTenant attaches an admin Principal but NO TenantID, so the request
+// passes the admin-role policy yet fails tenant.FromContext. F6: this must map
+// to a typed 403, not a framework 500.
+func asAdminNoTenant(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+}
+
+func TestHandler_HandleGet_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/app.name", nil)
+	handler.ServeHTTP(w, asAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleList_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/?limit=1", nil)
+	handler.ServeHTTP(w, asAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 func TestHandler_HandleList_OK(t *testing.T) {

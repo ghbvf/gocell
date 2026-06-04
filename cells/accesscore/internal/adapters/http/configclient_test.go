@@ -63,7 +63,7 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error": map[string]any{"code": "ERR_CONFIG_NOT_FOUND", "message": "key not found"},
+			"error": map[string]any{"code": "ERR_CONFIG_REPO_NOT_FOUND", "message": "key not found"},
 		})
 	}))
 	defer srv.Close()

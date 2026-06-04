@@ -306,8 +306,8 @@ func TestService_Rollback_KeyNotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec, "rollback must return a typed errcode.Error")
-	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
-		"missing key must return ErrConfigNotFound (mem repo) for 404 mapping")
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
+		"missing key must return ErrConfigRepoNotFound for 404 mapping")
 }
 
 func TestService_Rollback_VersionNotFound(t *testing.T) {
@@ -319,8 +319,8 @@ func TestService_Rollback_VersionNotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
-		"missing version must return ErrConfigNotFound (mem repo) for 404 mapping")
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
+		"missing version must return ErrConfigRepoNotFound for 404 mapping")
 }
 
 func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {

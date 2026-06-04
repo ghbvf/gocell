@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/configcoretest"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	create "github.com/ghbvf/gocell/generated/contracts/http/config/flags/create/v1"
 	flagsdelete "github.com/ghbvf/gocell/generated/contracts/http/config/flags/delete/v1"
 	toggle "github.com/ghbvf/gocell/generated/contracts/http/config/flags/toggle/v1"
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/flags/update/v1"
@@ -147,4 +148,43 @@ func TestFlagDeleteAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	typed, ok := resp.(flagsdelete.Delete409ErrorResponse)
 	require.True(t, ok, "expected Delete409ErrorResponse, got %T", resp)
 	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
+}
+
+// --- F6: missing-tenant → typed 403 (not 500) ---
+
+// adminCtxNoTenant carries an admin Principal but NO TenantID, so
+// Service.tenant.FromContext fails and the adapter must map it to a typed 403.
+func adminCtxNoTenant() context.Context {
+	return auth.TestContext(testFlagwriteAdmin, []string{auth.RoleAdmin})
+}
+
+func newCreateAdapter(t *testing.T) CreateAdapter {
+	t.Helper()
+	svc, err := NewService(clock.Real(), mem.NewFlagRepository(clock.Real()), slog.Default(),
+		WithTxManager(persistence.WrapForCell(stubFlagTxRunner{})))
+	require.NoError(t, err)
+	return CreateAdapter{S: svc}
+}
+
+func TestFlagCreateAdapter_MissingTenant_Returns403Typed(t *testing.T) {
+	createAd := newCreateAdapter(t)
+	enabled := true
+	resp, err := createAd.Create(adminCtxNoTenant(), &create.Request{
+		Key: "dark-mode", Enabled: &enabled, RolloutPercentage: 100, Description: "d",
+	})
+	require.NoError(t, err)
+	typed, ok := resp.(create.Create403ErrorResponse)
+	require.True(t, ok, "expected Create403ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrAuthForbidden, typed.Body.Code)
+}
+
+func TestFlagUpdateAdapter_MissingTenant_Returns403Typed(t *testing.T) {
+	updateAd, _, _ := newFlagAdapters(t, nil, nil, nil)
+	resp, err := updateAd.Update(adminCtxNoTenant(), &update.Request{
+		Key: "dark-mode", Enabled: true, RolloutPercentage: 100, Description: "d", ExpectedVersion: 1,
+	})
+	require.NoError(t, err)
+	typed, ok := resp.(update.Update403ErrorResponse)
+	require.True(t, ok, "expected Update403ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrAuthForbidden, typed.Body.Code)
 }

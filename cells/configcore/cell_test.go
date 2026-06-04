@@ -361,7 +361,9 @@ func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/app.name", nil)
-	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
+	// Inject a valid tenant so the configread handler reaches the business path
+	// rather than the F6 missing-tenant 403 (a separate gate from auth role).
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), "00000000-0000-0000-0000-000000000001"))
 	r.ServeHTTP(rec, req)
 
 	// Handler ran (not routing 404): response must be JSON and must not be an auth rejection.
@@ -453,8 +455,13 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 			// --- 2xx: admin role. We do not pin the exact success code
 			// (some paths return 404 because the resource was not seeded),
 			// but 401 / 403 must be gone — proving the policy ran and admits
-			// the admin.
-			rec = exec(t, p, auth.TestContext("admin-user", []string{"admin"}))
+			// the admin. A valid TenantID is injected so the tenant-scoped
+			// handlers reach the business path rather than the F6 missing-tenant
+			// 403 (which is a separate gate from the admin-role policy under test).
+			adminCtx := ctxkeys.WithTenantID(
+				auth.TestContext("admin-user", []string{"admin"}),
+				"00000000-0000-0000-0000-000000000001")
+			rec = exec(t, p, adminCtx)
 			assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
 				"admin %s %s must not be 401; body %s", p.method, p.path, rec.Body)
 			assert.NotEqual(t, http.StatusForbidden, rec.Code,
@@ -528,10 +535,15 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.NoError(t, r.FinalizeAuth())
 
 	// Seed flags directly via repository (no HTTP create endpoint for flags).
-	// Use tenant.SystemTenantID as a placeholder — this test exercises cursor
-	// cross-slice rejection, not tenant isolation.
+	// Use a normal per-tenant UUID — NOT tenant.SystemTenantID. The HTTP read
+	// path below resolves the tenant via tenant.FromContext → ParseTenantID,
+	// which rejects the reserved nil-UUID sentinel as untrusted external input
+	// (F2). This test exercises cursor cross-slice rejection, not tenant
+	// isolation, so any valid tenant works as long as seed + request agree.
+	const reverseTestTenantStr = "00000000-0000-0000-0000-000000000001"
+	reverseTestTenant := tenant.TenantID(reverseTestTenantStr)
 	for i := range 3 {
-		require.NoError(t, c.flagRepo.Create(ctx, tenant.SystemTenantID, &domain.FeatureFlag{
+		require.NoError(t, c.flagRepo.Create(ctx, reverseTestTenant, &domain.FeatureFlag{
 			ID:      fmt.Sprintf("id-%d", i),
 			Key:     fmt.Sprintf("flag-%d", i),
 			Type:    domain.FlagBoolean,
@@ -544,7 +556,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	// Also inject the same tenant used for seeding so the handler can find the flags.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), string(tenant.SystemTenantID)))
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), reverseTestTenantStr))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -561,7 +573,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
-	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), string(tenant.SystemTenantID)))
+	req = req.WithContext(ctxkeys.WithTenantID(auth.TestContext("tester", []string{"admin"}), reverseTestTenantStr))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,

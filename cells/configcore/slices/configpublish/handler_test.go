@@ -169,7 +169,39 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/missing/publish", nil))
 	handler.ServeHTTP(w, req)
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
+}
+
+// --- F6: missing-tenant → typed 403 (not 500) ---
+
+// withAdminNoTenant injects an admin principal but NO TenantID, so the request
+// passes the admin-role policy yet fails Service.tenant.FromContext. The
+// resulting 403 carries ErrAuthForbidden (distinct from the policy's 403).
+func withAdminNoTenant(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("test-admin", []string{"admin"}))
+}
+
+func TestHandler_HandlePublish_MissingTenant_403(t *testing.T) {
+	handler, repo := setupHandler()
+	seedForPublish(t, repo)
+
+	w := httptest.NewRecorder()
+	req := withAdminNoTenant(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil))
+	handler.ServeHTTP(w, req)
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleRollback_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := withAdminNoTenant(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
+		strings.NewReader(`{"version":1,"expectedVersion":1}`)))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 // PR#155 followup F1 (Cx2, P1): publish + rollback are high-risk write operations
@@ -541,12 +573,12 @@ func TestRollbackAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // B2-T-08: typed 404 envelope for PublishAdapter — ErrConfigRepoNotFound path.
-// PublishAdapter.Publish maps both ErrConfigRepoNotFound (PG repo) and
-// ErrConfigNotFound (mem repo) to configpublishgen.Publish404ErrorResponse.
-// The ErrConfigNotFound path is covered by TestHandler_HandlePublish_NotFound
-// (via the full HTTP stack). This test directly exercises the PG-repo error
-// path by injecting ErrConfigRepoNotFound via a fakeConfigRepoForPublish that
-// overrides GetByKey — the first repo call in Service.Publish.
+// PublishAdapter.Publish maps ErrConfigRepoNotFound (the unified not-found code
+// returned by both the PG and mem repos) to configpublishgen.Publish404ErrorResponse.
+// TestHandler_HandlePublish_NotFound covers the same code via the full HTTP stack.
+// This test directly exercises the repo error path by injecting
+// ErrConfigRepoNotFound via a fakeConfigRepoForPublish that overrides GetByKey —
+// the first repo call in Service.Publish.
 // ---------------------------------------------------------------------------
 
 type fakeConfigRepoForPublish struct {

@@ -2,7 +2,7 @@ package featureflag
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -10,6 +10,7 @@ import (
 	flagsget "github.com/ghbvf/gocell/generated/contracts/http/config/flags/get/v1"
 	flagslist "github.com/ghbvf/gocell/generated/contracts/http/config/flags/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -63,10 +64,18 @@ type GetAdapter struct{ S *Service }
 func (a GetAdapter) Get(ctx context.Context, req *flagsget.Request) (flagsget.GetResponseObject, error) {
 	t, err := tenant.FromContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("feature-flag: get: tenant: %w", err)
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			return flagsget.Get403ErrorResponse{Body: *ce}, nil
+		}
+		return nil, err
 	}
 	flag, err := a.S.GetByKey(ctx, t, req.Key)
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) && ce.Code == errcode.ErrFlagNotFound {
+			return flagsget.Get404ErrorResponse{Body: *ce}, nil
+		}
 		return nil, err
 	}
 	return flagsget.Get200JSONResponse{Data: toGetResponseData(flag)}, nil
@@ -79,7 +88,11 @@ type ListAdapter struct{ S *Service }
 func (a ListAdapter) List(ctx context.Context, req *flagslist.Request) (flagslist.ListResponseObject, error) {
 	t, err := tenant.FromContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("feature-flag: list: tenant: %w", err)
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			return flagslist.List403ErrorResponse{Body: *ce}, nil
+		}
+		return nil, err
 	}
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
@@ -107,10 +120,18 @@ type EvaluateAdapter struct{ S *Service }
 func (a EvaluateAdapter) Evaluate(ctx context.Context, req *evaluate.Request) (evaluate.EvaluateResponseObject, error) {
 	t, err := tenant.FromContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("feature-flag: evaluate: tenant: %w", err)
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			return evaluate.Evaluate403ErrorResponse{Body: *ce}, nil
+		}
+		return nil, err
 	}
 	result, err := a.S.Evaluate(ctx, t, req.Key, req.Subject)
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) && ce.Code == errcode.ErrFlagNotFound {
+			return evaluate.Evaluate404ErrorResponse{Body: *ce}, nil
+		}
 		return nil, err
 	}
 	return evaluate.Evaluate200JSONResponse{Data: &evaluate.ResponseData{

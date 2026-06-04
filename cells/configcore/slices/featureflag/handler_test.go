@@ -201,6 +201,45 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrFlagNotFound)
 }
 
+// asAdminFlagNoTenant attaches an admin Principal but NO TenantID, so the
+// request passes the admin-role policy yet fails tenant.FromContext. F6: this
+// must map to a typed 403, not a framework 500.
+func asAdminFlagNoTenant(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
+}
+
+func TestHandler_HandleGet_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/dark-mode", nil)
+	handler.ServeHTTP(w, asAdminFlagNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleList_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/?limit=1", nil)
+	handler.ServeHTTP(w, asAdminFlagNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleEvaluate_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"subject":"user-1"}`
+	req := httptest.NewRequest(http.MethodPost, flagsBasePath+"/dark-mode/evaluate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, asAdminFlagNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
 func TestHandler_HandleEvaluate_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	require.NoError(t, repo.Create(context.Background(), testFlagHandlerTenant, &domain.FeatureFlag{

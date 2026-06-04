@@ -34,7 +34,7 @@ endpoints:
         description: "Forbidden — authenticated but lacks admin role"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       404:
-        description: "Not Found — config key does not exist (ERR_CONFIG_NOT_FOUND)"
+        description: "Not Found — config key does not exist (ERR_CONFIG_REPO_NOT_FOUND)"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Request body too large"

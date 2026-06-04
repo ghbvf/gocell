@@ -125,7 +125,7 @@ func TestHandler_InternalGet_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, internalBasePath+"/missing-key", nil)
 	handler.ServeHTTP(w, asCaller(req))
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
 }
 
 func TestHandler_InternalGet_SensitiveRedacted(t *testing.T) {

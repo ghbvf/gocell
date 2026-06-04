@@ -49,7 +49,9 @@ func (a PublishAdapter) Publish(ctx context.Context, req *configpublishgen.Reque
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
 			switch ce.Code {
-			case errcode.ErrConfigRepoNotFound, errcode.ErrConfigNotFound:
+			case errcode.ErrAuthForbidden:
+				return configpublishgen.Publish403ErrorResponse{Body: *ce}, nil
+			case errcode.ErrConfigRepoNotFound:
 				return configpublishgen.Publish404ErrorResponse{Body: *ce}, nil
 			}
 		}
@@ -69,7 +71,9 @@ func (a RollbackAdapter) Rollback(ctx context.Context, req *rollbackgen.Request)
 		var ce *errcode.Error
 		if errors.As(err, &ce) {
 			switch ce.Code {
-			case errcode.ErrConfigRepoNotFound, errcode.ErrConfigNotFound:
+			case errcode.ErrAuthForbidden:
+				return rollbackgen.Rollback403ErrorResponse{Body: *ce}, nil
+			case errcode.ErrConfigRepoNotFound:
 				return rollbackgen.Rollback404ErrorResponse{Body: *ce}, nil
 			case errcode.ErrVersionConflict:
 				return rollbackgen.Rollback409ErrorResponse{Body: *ce}, nil

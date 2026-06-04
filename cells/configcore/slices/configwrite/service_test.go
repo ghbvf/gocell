@@ -424,7 +424,7 @@ func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
 
 // TestConcurrentDelete_ExactlyOneSucceeds verifies that when two goroutines race
 // to delete the same config entry with the same expectedVersion, exactly one
-// succeeds. The loser receives either ErrVersionConflict or ErrConfigNotFound
+// succeeds. The loser receives either ErrVersionConflict or ErrConfigRepoNotFound
 // (when the winner committed the delete before the loser's CAS check).
 func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
@@ -451,7 +451,7 @@ func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 			} else {
 				var ce *errcode.Error
 				if errors.As(delErr, &ce) &&
-					(ce.Code == errcode.ErrVersionConflict || ce.Code == errcode.ErrConfigNotFound) {
+					(ce.Code == errcode.ErrVersionConflict || ce.Code == errcode.ErrConfigRepoNotFound) {
 					losers.Add(1)
 				} else {
 					t.Errorf("unexpected error in concurrent Delete: %v", delErr)
@@ -462,7 +462,7 @@ func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int32(1), successes.Load(), "exactly one concurrent Delete must succeed")
-	assert.Equal(t, int32(1), losers.Load(), "exactly one concurrent Delete must yield ErrVersionConflict or ErrConfigNotFound")
+	assert.Equal(t, int32(1), losers.Load(), "exactly one concurrent Delete must yield ErrVersionConflict or ErrConfigRepoNotFound")
 }
 
 // TestService_CrossTenant_Isolation asserts that a config entry written under
@@ -471,7 +471,7 @@ func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 // scoping invariant at the service layer.
 //
 // The test seeds a key via configwrite under tenantA (via ctx injection), then
-// attempts to Update the same key under tenantB and asserts ErrConfigNotFound
+// attempts to Update the same key under tenantB and asserts ErrConfigRepoNotFound
 // is returned — proving the tenant predicate is applied to every repo call.
 func TestService_CrossTenant_Isolation(t *testing.T) {
 	const tenantA = "00000000-0000-0000-0000-000000000001"
@@ -491,12 +491,12 @@ func TestService_CrossTenant_Isolation(t *testing.T) {
 	_, err = svc.Create(ctxA, CreateInput{Key: "shared-key", Value: "from-A"})
 	require.NoError(t, err, "Create under tenant A must succeed")
 
-	// Read (via Update — the cheapest write that returns ErrConfigNotFound) under tenant B.
+	// Read (via Update — the cheapest write that returns ErrConfigRepoNotFound) under tenant B.
 	// If the isolation is working, tenant B cannot see tenant A's entry.
 	_, err = svc.Update(ctxB, UpdateInput{Key: "shared-key", Value: "from-B", ExpectedVersion: 1})
 	require.Error(t, err, "Update under tenant B must fail: tenant A's entry must be invisible")
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
-	assert.Equal(t, errcode.ErrConfigNotFound, ce.Code,
-		"cross-tenant read must return ErrConfigNotFound, not leak the entry")
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ce.Code,
+		"cross-tenant read must return ErrConfigRepoNotFound, not leak the entry")
 }

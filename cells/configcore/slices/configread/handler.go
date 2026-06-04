@@ -2,7 +2,7 @@ package configread
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -10,6 +10,7 @@ import (
 	configget "github.com/ghbvf/gocell/generated/contracts/http/config/get/v1"
 	configlist "github.com/ghbvf/gocell/generated/contracts/http/config/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -22,7 +23,11 @@ type GetAdapter struct{ S *Service }
 func (a GetAdapter) Get(ctx context.Context, req *configget.Request) (configget.GetResponseObject, error) {
 	t, err := tenant.FromContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("config-read: get: tenant: %w", err)
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			return configget.Get403ErrorResponse{Body: *ce}, nil
+		}
+		return nil, err
 	}
 	entry, err := a.S.GetByKey(ctx, t, req.Key)
 	if err != nil {
@@ -38,7 +43,11 @@ type ListAdapter struct{ S *Service }
 func (a ListAdapter) List(ctx context.Context, req *configlist.Request) (configlist.ListResponseObject, error) {
 	t, err := tenant.FromContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("config-read: list: tenant: %w", err)
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			return configlist.List403ErrorResponse{Body: *ce}, nil
+		}
+		return nil, err
 	}
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,

@@ -225,7 +225,7 @@ func TestHandler_HandleUpdate_NotFound(t *testing.T) {
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
 }
 
 func TestHandler_HandleUpdate_BadJSON(t *testing.T) {
@@ -264,7 +264,49 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
-	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigRepoNotFound)
+}
+
+// --- F6: missing-tenant → typed 403 (not 500) ---
+
+// withAdminNoTenant injects an admin principal but NO TenantID, so the request
+// passes the admin-role policy yet fails Service.tenant.FromContext.
+func withAdminNoTenant(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
+}
+
+func TestHandler_HandleCreate_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"key":"app.name","value":"gocell"}`
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, withAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleUpdate_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"value":"v","expectedVersion":1}`
+	req := httptest.NewRequest(http.MethodPut, configPrefix+"/app.name", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, withAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
+}
+
+func TestHandler_HandleDelete_MissingTenant_403(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/app.name?expectedVersion=1", nil)
+	handler.ServeHTTP(w, withAdminNoTenant(req))
+
+	errcodetest.AssertWireCode(t, w, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 // --- sensitive value redaction tests (#27o) ---
