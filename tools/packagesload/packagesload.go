@@ -22,6 +22,7 @@ package packagesload
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -36,9 +37,12 @@ const (
 	// the workspace `use` set (archtest / depgraph testdata fixtures) and for
 	// release-pinned per-module builds.
 	ModeModule Mode = iota
-	// ModeWorkspace uses the ambient workspace (the repo-root go.work, if any):
-	// the load resolves across all `use` member modules. For loaders that
-	// genuinely need a cross-module view.
+	// ModeWorkspace uses the ambient workspace (the repo-root go.work): the load
+	// resolves across all `use` member modules. For loaders that genuinely need
+	// a cross-module view. GOWORK=off is rejected fail-closed here — under it the
+	// `go` tool silently falls back to a single-module context, dropping every
+	// non-core member from the scan (the exact silent-coverage-loss #1555
+	// prevents). See [applyMode].
 	ModeWorkspace
 )
 
@@ -65,8 +69,19 @@ func applyMode(mode Mode, cfg *packages.Config) error {
 		// Appended last so it overrides any inherited / caller-set GOWORK.
 		cfg.Env = append(baseEnv(cfg.Env), "GOWORK=off")
 	case ModeWorkspace:
-		// Inherit the ambient workspace; leave GOWORK untouched.
-		cfg.Env = baseEnv(cfg.Env)
+		// Inherit the ambient workspace; leave GOWORK untouched — UNLESS it is
+		// explicitly off, in which case `go` would silently degrade to a
+		// single-module context and drop every non-core workspace member from
+		// the scan. That is the exact silent-coverage-loss #1555 guards against,
+		// so reject it fail-closed rather than producing a partial graph.
+		env := baseEnv(cfg.Env)
+		if v, ok := effectiveGOWORK(env); ok && v == "off" {
+			return fmt.Errorf(
+				"packagesload: ModeWorkspace requires an active go.work workspace, but GOWORK=off is set; " +
+					"unset GOWORK (or point it at the target go.work) so the cross-module scan covers every member",
+			)
+		}
+		cfg.Env = env
 	default:
 		return fmt.Errorf("packagesload: invalid mode %d", mode)
 	}
@@ -80,4 +95,17 @@ func baseEnv(cfgEnv []string) []string {
 		return os.Environ()
 	}
 	return cfgEnv
+}
+
+// effectiveGOWORK returns the value of the LAST GOWORK= entry in env (later
+// entries override earlier ones, matching exec semantics), and whether any was
+// present. Used by [applyMode] to reject GOWORK=off under ModeWorkspace.
+func effectiveGOWORK(env []string) (string, bool) {
+	val, found := "", false
+	for _, e := range env {
+		if v, ok := strings.CutPrefix(e, "GOWORK="); ok {
+			val, found = v, true
+		}
+	}
+	return val, found
 }

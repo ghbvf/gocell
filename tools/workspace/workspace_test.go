@@ -90,6 +90,20 @@ func TestModules(t *testing.T) {
 			},
 		},
 		{
+			name: "undeclared go.work member carrying metadata fails closed (reverse closure)",
+			files: map[string]string{
+				"go.work":                       "go 1.25\n\nuse (\n\t.\n\t./satellite\n)\n",
+				"go.mod":                        "module github.com/ghbvf/gocell\n\ngo 1.25\n",
+				"satellite/go.mod":              "module github.com/ghbvf/gocell/satellite\n\ngo 1.25\n",
+				".gocell/manifest.yaml":         "version: v1\nmodules:\n  - path: .\n",
+				"cells/platform/cell.yaml":      "id: platform\n",
+				"satellite/cells/sat/cell.yaml": "id: sat\n",
+			},
+			// satellite is a go.work member, absent from manifest, yet carries a
+			// cell.yaml — metadata tooling would never discover it. Fail closed.
+			wantErr: "carry GoCell metadata but are not declared",
+		},
+		{
 			name: "manifest drift fails closed",
 			files: map[string]string{
 				"go.work":                    "go 1.25\n\nuse .\n",

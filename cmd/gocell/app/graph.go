@@ -13,7 +13,6 @@ import (
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
-	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 // defaultGraphPattern is the --pattern default. When unchanged AND --root is a
@@ -105,36 +104,22 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	}, nil
 }
 
-// loadGraph builds the dependency graph for opts.Root. When the root is a
-// workspace (a go.work is present) it spans every workspace member module
-// (LoadWorkspace) so a nested module is graphed rather than silently dropped;
-// when the root has no go.work it loads that single standalone module (Load).
-// The mode is selected by go.work presence — an explicit branch, not a silent
-// default — so both the in-repo workspace graph and an arbitrary standalone
-// module remain expressible.
+// loadGraph builds the dependency graph for opts.Root. The default --pattern
+// delegates to loadPackageGraph (the shared workspace-aware loader: spans every
+// go.work member via relative-dir "./<dir>/..." patterns, or a single standalone
+// module when no go.work). A non-default --pattern is an explicit scope override
+// (escape hatch) that is passed through verbatim — still go.work-aware (it loads
+// in ModeWorkspace when a go.work is present, ModeModule otherwise).
 func loadGraph(opts graphOptions) (*kerneldepgraph.Graph, error) {
+	if opts.Pattern == defaultGraphPattern {
+		return loadPackageGraph(opts.Root, opts.IncludeTests)
+	}
 	lo := depgraph.LoadOptions{IncludeTests: opts.IncludeTests, Dir: opts.Root}
-
 	if _, err := os.Stat(filepath.Join(opts.Root, "go.work")); err != nil {
 		// No go.work above the root → single standalone module.
 		return depgraph.Load(lo, opts.Pattern)
 	}
-
-	// Workspace: span every member module. A non-default --pattern is an
-	// explicit scope override (escape hatch); the default expands to one
-	// "<importPath>/..." pattern per workspace member.
-	if opts.Pattern != defaultGraphPattern {
-		return depgraph.LoadWorkspace(lo, opts.Pattern)
-	}
-	mods, err := workspace.Modules(opts.Root)
-	if err != nil {
-		return nil, fmt.Errorf("enumerate workspace modules: %w", err)
-	}
-	patterns := make([]string, len(mods))
-	for i, m := range mods {
-		patterns[i] = m.ImportPath + "/..."
-	}
-	return depgraph.LoadWorkspace(lo, patterns...)
+	return depgraph.LoadWorkspace(lo, opts.Pattern)
 }
 
 func executeGraph(opts graphOptions) error {

@@ -11,11 +11,18 @@
 //
 // go.work is authoritative for the Go module set. .gocell/manifest.yaml declares
 // the (smaller-or-equal) set of modules that carry GoCell metadata
-// (cells/contracts/journeys); [Modules] cross-checks manifest.modules ⊆
-// go.work.use and fails closed on drift — a metadata module the toolchain does
-// not compile is a configuration bug surfaced at archtest time. A workspace
-// without a manifest has no metadata modules to cross-check (the Go scan still
-// derives from go.work).
+// (cells/contracts/journeys); [Modules] cross-checks the two in BOTH directions
+// and fails closed on drift:
+//
+//   - forward — manifest.modules ⊆ go.work.use: a metadata module the toolchain
+//     does not compile is a configuration bug.
+//   - reverse — every go.work member that carries GoCell metadata must appear in
+//     the manifest: an undeclared metadata-bearing member is compiled but
+//     invisible to metadata tooling (a silent coverage hole). A pure-tool /
+//     pure-library member with no metadata may stay out of the manifest.
+//
+// A workspace without a manifest has no metadata-module contract to cross-check
+// (the Go scan still derives from go.work).
 //
 // Allowed import surface: this package imports only stdlib, kernel/metadata
 // (manifest cross-check), and tools/gomodutil; it must not import
@@ -149,8 +156,15 @@ func Modules(root string) ([]Module, error) {
 	return mods, nil
 }
 
-// crossCheckManifest enforces manifest.modules ⊆ go.work.use. It is a no-op when
-// no manifest exists (no metadata modules to verify).
+// crossCheckManifest enforces the bidirectional go.work ↔ manifest closure. It
+// is a no-op when no manifest exists (no metadata-module contract to verify).
+//
+//	forward:  manifest.modules ⊆ go.work.use   — a metadata module the toolchain
+//	          does not compile is a drift bug.
+//	reverse:  every go.work member that CARRIES GoCell metadata MUST be declared
+//	          in the manifest — an undeclared metadata-bearing member is invisible
+//	          to all metadata tooling (governance/codegen/catalog), the other half
+//	          of the closure (#1555 review F5).
 func crossCheckManifest(root string, useSet map[string]struct{}) error {
 	manifestAbs := filepath.Join(root, metadata.DefaultManifestPath)
 	if _, err := os.Stat(manifestAbs); errors.Is(err, fs.ErrNotExist) {
@@ -163,9 +177,13 @@ func crossCheckManifest(root string, useSet map[string]struct{}) error {
 	if err != nil {
 		return fmt.Errorf("workspace: read manifest: %w", err)
 	}
+	// Forward: manifest.modules ⊆ go.work.use.
+	manifestSet := make(map[string]struct{}, len(manifestPaths))
 	var missing []string
 	for _, p := range manifestPaths {
-		if _, ok := useSet[filepath.Clean(p)]; !ok {
+		clean := filepath.Clean(p)
+		manifestSet[clean] = struct{}{}
+		if _, ok := useSet[clean]; !ok {
 			missing = append(missing, p)
 		}
 	}
@@ -177,5 +195,56 @@ func crossCheckManifest(root string, useSet map[string]struct{}) error {
 			strings.Join(missing, ", "),
 		)
 	}
-	return nil
+	// Reverse: no go.work member may carry GoCell metadata without being declared.
+	return checkUndeclaredMetadataMembers(root, useSet, manifestSet)
+}
+
+// checkUndeclaredMetadataMembers fails closed when a go.work member that is NOT
+// declared in .gocell/manifest.yaml carries GoCell metadata (cell.yaml /
+// slice.yaml / contract.yaml / J-*.yaml / assembly.yaml / actors.yaml /
+// status-board.yaml). Such a member is compiled by the toolchain but invisible
+// to every metadata-driven tool (governance validate, codegen, catalog) — the
+// reverse of the manifest ⊆ go.work check. A pure-tool / pure-library member
+// with no metadata is legitimately allowed to stay out of the manifest.
+func checkUndeclaredMetadataMembers(root string, useSet, manifestSet map[string]struct{}) error {
+	var offenders []string
+	for dir := range useSet {
+		if _, declared := manifestSet[dir]; declared {
+			continue
+		}
+		has, err := memberHasMetadata(root, dir)
+		if err != nil {
+			return err
+		}
+		if has {
+			offenders = append(offenders, dir)
+		}
+	}
+	if len(offenders) == 0 {
+		return nil
+	}
+	sort.Strings(offenders)
+	return fmt.Errorf(
+		"workspace: go.work member(s) %s carry GoCell metadata but are not declared in "+
+			".gocell/manifest.yaml (metadata tooling would never discover them; add each to manifest.modules)",
+		strings.Join(offenders, ", "),
+	)
+}
+
+// memberHasMetadata reports whether the workspace member at root/dir contains
+// any GoCell metadata file at the conventional layout. It reuses the
+// conventional metadata Locator so the recognized marker set stays single-source
+// (the same classifier that the parser and governance rely on); the Locator's
+// WalkDir already skips symlinks and is match-capped.
+func memberHasMetadata(root, dir string) (bool, error) {
+	memberRoot := filepath.Join(root, dir)
+	loc, err := metadata.NewLocatorFS(os.DirFS(memberRoot), metadata.WithLocatorMode(metadata.LocatorConventional))
+	if err != nil {
+		return false, fmt.Errorf("workspace: locate metadata in member %q: %w", dir, err)
+	}
+	srcs, err := loc.Discover()
+	if err != nil {
+		return false, fmt.Errorf("workspace: scan metadata in member %q: %w", dir, err)
+	}
+	return len(srcs) > 0, nil
 }
