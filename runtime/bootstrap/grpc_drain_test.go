@@ -265,9 +265,15 @@ func (c *grpcDrainCell) Init(ctx context.Context, reg cell.Registrar) error {
 type spyGRPCServer struct {
 	// inner is the real server; calls are always forwarded.
 	inner GRPCServer
-	// registeredBeforeServe is set to 1 atomically the moment Register is
-	// invoked; Serve checks the flag to verify ordering.
+	// registeredBeforeServe is set to 1 atomically the moment Register is invoked.
 	registeredBeforeServe atomic.Int32
+	// registeredAtServe captures registeredBeforeServe's value at the exact
+	// instant Serve begins. The assertion reads THIS snapshot — not the live
+	// registeredBeforeServe flag — to avoid a false positive: a regressed
+	// register-after-Serve implementation could still flip the live flag to 1
+	// between the test observing serveStarted and reading the flag. The snapshot
+	// pins the value as-of Serve entry.
+	registeredAtServe atomic.Int32
 	// serveStarted is closed when Serve is first called.
 	serveStarted chan struct{}
 	// serveOnce guards serveStarted close.
@@ -280,6 +286,10 @@ func (s *spyGRPCServer) Registrar() GRPCServiceRegistrar {
 
 func (s *spyGRPCServer) Serve(ctx context.Context, lis net.Listener) error {
 	if s.serveOnce.CompareAndSwap(0, 1) {
+		// Snapshot the registration flag BEFORE signaling serveStarted, so the
+		// asserted value is fixed at Serve entry and cannot be tainted by a later
+		// (regressed) registration.
+		s.registeredAtServe.Store(s.registeredBeforeServe.Load())
 		close(s.serveStarted)
 	}
 	return s.inner.Serve(ctx, lis)
@@ -340,9 +350,11 @@ func TestGRPCDrain_RegistrationPrecedesServe(t *testing.T) {
 		t.Fatal("spy Serve was never called")
 	}
 
-	// Assert: Register must have been called BEFORE Serve.
-	assert.Equal(t, int32(1), spy.registeredBeforeServe.Load(),
-		"Register must be called before Serve starts")
+	// Assert: Register must have been called BEFORE Serve. Read the snapshot
+	// captured at Serve entry (not the live flag) so a register-after-Serve
+	// regression cannot pass by flipping the flag after serveStarted fires.
+	assert.Equal(t, int32(1), spy.registeredAtServe.Load(),
+		"Register must be called before Serve starts (snapshot at Serve entry)")
 
 	// Also verify the service is actually reachable (defense-in-depth).
 	cc := grpcBufDial(t, lis)

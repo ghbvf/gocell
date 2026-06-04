@@ -9,9 +9,15 @@ package grpc_test
 //   4. CellIDForMethod: unknown method returns (_, false)
 //   5. bad Register fn type panics with panicregister.Approved (grpc-registrar-bad-register-fn)
 //   6. duplicate ServiceName panics with panicregister.Approved (grpc-registrar-dup-service)
+//   7. duplicate ServiceName panic names both first/current owner (F3)
+//   8. typed-nil Register callback panics (grpc-registrar-nil-register-fn) (F2)
+//   9. no-op callback (0 services) panics (grpc-registrar-service-count) (F1)
+//  10. multi-register callback (>1 service) panics (grpc-registrar-service-count) (F1)
+//  11. registrar retained past callback (escaped scope) panics (grpc-registrar-escaped-scope) (F1)
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 
@@ -182,4 +188,118 @@ func TestServiceRegistrar_Register_DupServiceName_Panics(t *testing.T) {
 	assert.Panics(t, func() {
 		registerHealth("cell-b") // duplicate grpc.health.v1.Health ServiceName
 	}, "duplicate ServiceName must panic")
+}
+
+// --- Case 7: duplicate ServiceName panic names both owners (F3) ---------------
+
+// TestServiceRegistrar_Register_DupServiceName_OwnerContext verifies the dup
+// panic message identifies BOTH the first owner (cell + contractID) and the
+// re-registering owner, so an operator can pinpoint the colliding cells without
+// guessing.
+func TestServiceRegistrar_Register_DupServiceName_OwnerContext(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+
+	require.NoError(t, reg.Register(synthSpec("grpc.health.first.v1", "cell-first", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})))
+
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "duplicate ServiceName must panic")
+		msg := fmt.Sprint(rec)
+		assert.Contains(t, msg, "cell-first", "panic must name the first owner cell")
+		assert.Contains(t, msg, "grpc.health.first.v1", "panic must name the first owner contractID")
+		assert.Contains(t, msg, "cell-second", "panic must name the re-registering cell")
+		assert.Contains(t, msg, "grpc.health.second.v1", "panic must name the re-registering contractID")
+	}()
+
+	_ = reg.Register(synthSpec("grpc.health.second.v1", "cell-second", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	}))
+}
+
+// --- Case 8: typed-nil Register callback panics (F2) -------------------------
+
+// TestServiceRegistrar_Register_TypedNilCallback_Panics verifies a typed-nil
+// func(grpc.ServiceRegistrar) boxed in any — which slips past kernel's bare-nil
+// Validate — fails fast through the Approved funnel instead of an unregistered
+// Go runtime nil-func panic.
+func TestServiceRegistrar_Register_TypedNilCallback_Panics(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	var nilFn func(grpc.ServiceRegistrar) // typed nil
+	spec := cell.GRPCServiceSpec{
+		ContractID: "grpc.typednil.v1",
+		CellID:     "test-cell",
+		Listener:   cell.PrimaryListener,
+		Register:   nilFn, // boxed: spec.Register != nil (typed), but the func is nil
+	}
+	// Sanity: the kernel-level bare-nil guard does NOT catch a typed-nil.
+	require.NoError(t, spec.Validate(), "kernel Validate only catches bare-nil Register")
+
+	assert.Panics(t, func() {
+		_ = reg.Register(spec)
+	}, "typed-nil Register callback must panic")
+}
+
+// --- Case 9: no-op callback (0 services) panics (F1) -------------------------
+
+// TestServiceRegistrar_Register_NoOpCallback_Panics verifies a callback that
+// registers nothing panics: a declared spec that serves no service is a bug.
+func TestServiceRegistrar_Register_NoOpCallback_Panics(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.noop.v1", "noop-cell", func(_ grpc.ServiceRegistrar) {
+		// registers nothing
+	})
+	assert.Panics(t, func() {
+		_ = reg.Register(spec)
+	}, "no-op callback (0 services) must panic")
+}
+
+// --- Case 10: multi-register callback (>1 service) panics (F1) ---------------
+
+// TestServiceRegistrar_Register_MultiRegister_Panics verifies a callback that
+// registers more than one service panics: one spec must map to one service.
+func TestServiceRegistrar_Register_MultiRegister_Panics(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.multi.v1", "multi-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+		r.RegisterService(&grpc.ServiceDesc{ServiceName: "test.ExtraService"}, struct{}{})
+	})
+	assert.Panics(t, func() {
+		_ = reg.Register(spec)
+	}, "callback registering >1 service must panic")
+}
+
+// --- Case 11: escaped registrar use after callback panics (F1) ---------------
+
+// TestServiceRegistrar_Register_EscapedScope_Panics verifies that a registrar
+// retained by the callback and used after it returns fails fast — closing the
+// loophole where a cell could register a service after Serve (which grpc-go
+// fatals on).
+func TestServiceRegistrar_Register_EscapedScope_Panics(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+
+	var captured grpc.ServiceRegistrar
+	spec := synthSpec("grpc.escape.v1", "escape-cell", func(r grpc.ServiceRegistrar) {
+		captured = r // stash the registrar to use later
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	// In-scope registration succeeds (exactly one service).
+	require.NoError(t, reg.Register(spec))
+	require.NotNil(t, captured)
+
+	// Using the escaped registrar after the scope closed must panic.
+	assert.Panics(t, func() {
+		captured.RegisterService(&grpc.ServiceDesc{ServiceName: "test.EscapedService"}, struct{}{})
+	}, "escaped registrar use after callback must panic")
 }

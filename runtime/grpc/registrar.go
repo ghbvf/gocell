@@ -51,8 +51,17 @@ type ServiceRegistrar struct {
 	mu    sync.RWMutex
 	// methods maps /{ServiceName}/{methodName} → cellID.
 	methods map[string]string
-	// names tracks registered service names for dedup (shared with cellScopedRegistrar).
-	names map[string]struct{}
+	// names maps a registered gRPC ServiceName → its owning spec, used both for
+	// cross-spec dedup and to report first/current owner on a collision (shared
+	// with cellScopedRegistrar).
+	names map[string]serviceOwner
+}
+
+// serviceOwner records which spec first registered a given gRPC ServiceName, so
+// a later duplicate registration can name both sides of the collision.
+type serviceOwner struct {
+	cellID     string
+	contractID string
 }
 
 // NewServiceRegistrar wraps inner (typically *grpc.Server) into a ServiceRegistrar.
@@ -66,27 +75,36 @@ func NewServiceRegistrar(inner grpc.ServiceRegistrar) *ServiceRegistrar {
 	return &ServiceRegistrar{
 		inner:   inner,
 		methods: make(map[string]string),
-		names:   make(map[string]struct{}),
+		names:   make(map[string]serviceOwner),
 	}
 }
 
-// Register invokes the spec.Register callback via an attribution-aware
-// cellScopedRegistrar interceptor, then records every method/stream exposed by
-// the registered service under spec.CellID.
+// Register invokes the spec.Register callback via an attribution-aware,
+// single-use cellScopedRegistrar interceptor, then records every method/stream
+// exposed by the registered service under spec.CellID.
 //
-// This implementation always returns nil; contract violations (bad callback
-// type, duplicate ServiceName) panic via panicregister.Approved.
+// This implementation always returns nil; every contract violation panics via
+// panicregister.Approved (B-class programmer / config error, fail-fast at
+// startup — the drain runs in phase7b before any RPC is served):
 //
-// spec.Register must be a func(grpc.ServiceRegistrar). Any other dynamic type
-// panics with panicregister.Approved("grpc-registrar-bad-register-fn", …).
-//
-// If the callback attempts to register a service whose ServiceName is already
-// registered (cross-cell collision), cellScopedRegistrar panics with
-// panicregister.Approved("grpc-registrar-dup-service", …) before grpc-go's own
-// fatal — providing a more informative message.
+//   - spec.Register is not a func(grpc.ServiceRegistrar):
+//     panicregister.Approved("grpc-registrar-bad-register-fn", …).
+//   - spec.Register is a typed-nil callback (a nil func(grpc.ServiceRegistrar)
+//     boxed in any — passes kernel's bare-nil Validate but is uninvokable):
+//     panicregister.Approved("grpc-registrar-nil-register-fn", …).
+//   - the callback does not register exactly one service (zero = silently
+//     unserved spec; >1 = a single spec smuggling multiple services):
+//     panicregister.Approved("grpc-registrar-service-count", …).
+//   - the callback registers a ServiceName already owned by another spec
+//     (cross-cell collision): panicregister.Approved("grpc-registrar-dup-service",
+//     …) before grpc-go's own fatal — with first/current owner context.
+//   - the cellScopedRegistrar is retained and used after the callback returns
+//     (escaped scope — would let registration leak past Serve):
+//     panicregister.Approved("grpc-registrar-escaped-scope", …).
 //
 // Register must be called before grpcServer.Serve (enforced by the drain ordering:
-// bootstrap calls Register in phase7b before grpcServeAll).
+// bootstrap calls Register in phase7b before grpcServeAll). The scope is closed
+// once the callback returns so a retained registrar cannot register after Serve.
 func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 	// Type-assert: kernel stores Register as `any` to stay grpc-import-free.
 	fn, ok := spec.Register.(func(grpc.ServiceRegistrar))
@@ -97,6 +115,17 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 					"got %T (contractID=%q, cellID=%q)",
 				spec.Register, spec.ContractID, spec.CellID)))
 	}
+	// A typed-nil func passes the assert (ok==true, fn==nil) and slips through
+	// kernel's bare-nil GRPCServiceSpec.Validate (which only checks `Register ==
+	// nil` on the any). Invoking it would raise an unregistered Go runtime panic;
+	// fail-fast through the Approved funnel instead.
+	if fn == nil {
+		panic(panicregister.Approved("grpc-registrar-nil-register-fn",
+			errcode.Assertion(
+				"grpc: GRPCServiceSpec.Register is a typed-nil func(grpc.ServiceRegistrar) "+
+					"(contractID=%q, cellID=%q); supply a non-nil callback",
+				spec.ContractID, spec.CellID)))
+	}
 
 	// NOTE: fn(scoped) runs UNDER the write lock. Do NOT call CellIDForMethod
 	// inside fn — it takes an RLock and would deadlock. This is safe today
@@ -106,12 +135,29 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 	defer r.mu.Unlock()
 
 	scoped := &cellScopedRegistrar{
-		inner:   r.inner,
-		cellID:  spec.CellID,
-		methods: r.methods,
-		names:   r.names,
+		inner:      r.inner,
+		cellID:     spec.CellID,
+		contractID: spec.ContractID,
+		methods:    r.methods,
+		names:      r.names,
+		active:     true,
 	}
 	fn(scoped)
+	// Close the scope: a registrar retained by the callback can no longer register
+	// (it would otherwise be able to RegisterService after Serve, which grpc-go
+	// fatals on). All further RegisterService calls now fail-fast.
+	scoped.active = false
+
+	// Each GRPCServiceSpec maps to exactly one gRPC service. Zero means the spec
+	// is declared but silently unserved; more than one means a single spec is
+	// smuggling multiple services past the contract/attribution model.
+	if scoped.count != 1 {
+		panic(panicregister.Approved("grpc-registrar-service-count",
+			errcode.Assertion(
+				"grpc: GRPCServiceSpec.Register callback must register exactly one service "+
+					"(contractID=%q, cellID=%q); got %d RegisterService call(s)",
+				spec.ContractID, spec.CellID, scoped.count)))
+	}
 	return nil
 }
 
@@ -129,38 +175,62 @@ func (r *ServiceRegistrar) CellIDForMethod(fullMethod string) (string, bool) {
 // cellScopedRegistrar — unexported attribution interceptor
 // ---------------------------------------------------------------------------
 
-// cellScopedRegistrar implements grpc.ServiceRegistrar. It is the value handed
-// to each spec.Register callback. It records every /{ServiceName}/{method} →
-// cellID entry into the shared methods map, deduplicates service names across
-// specs, and delegates to the real server.
+// cellScopedRegistrar implements grpc.ServiceRegistrar. It is the single-use
+// value handed to one spec.Register callback. It records every
+// /{ServiceName}/{method} → cellID entry into the shared methods map,
+// deduplicates service names across specs (reporting first/current owner on a
+// collision), counts its own RegisterService calls, and delegates to the real
+// server.
 //
 // It shares the methods and names maps with its parent ServiceRegistrar, so
 // attribution data is immediately visible via CellIDForMethod once Register
-// returns.
+// returns. active gates the registrar to the dynamic extent of the callback:
+// Register sets it true before fn(scoped) and false after, so a registrar
+// retained past the callback (or used after Serve) fails fast.
 type cellScopedRegistrar struct {
-	inner   grpc.ServiceRegistrar
-	cellID  string
-	methods map[string]string   // shared with ServiceRegistrar
-	names   map[string]struct{} // shared with ServiceRegistrar
+	inner      grpc.ServiceRegistrar
+	cellID     string
+	contractID string
+	methods    map[string]string       // shared with ServiceRegistrar
+	names      map[string]serviceOwner // shared with ServiceRegistrar
+	active     bool                    // true only during the spec.Register callback
+	count      int                     // number of RegisterService calls in this scope
 }
 
 // RegisterService implements grpc.ServiceRegistrar. It:
 //
-//  1. Deduplicates by sd.ServiceName — panics on collision (cross-cell bug).
-//  2. Records /{ServiceName}/{method} → cellID for every Methods + Streams entry.
-//  3. Delegates to r.inner.RegisterService(sd, impl) so grpc-go actually registers
+//  1. Rejects use outside its registration scope (escaped / post-Serve registrar).
+//  2. Deduplicates by sd.ServiceName — panics on collision, naming both owners.
+//  3. Records /{ServiceName}/{method} → cellID for every Methods + Streams entry.
+//  4. Delegates to r.inner.RegisterService(sd, impl) so grpc-go actually registers
 //     the service (which fatals if called after Serve — the drain ordering prevents this).
+//
+// The active/count fields are read and written only under the parent
+// ServiceRegistrar write lock held across the whole callback, so the in-extent
+// path is race-free; the active guard is a best-effort fail-fast for a registrar
+// that escaped its callback (a programmer error that grpc-go's own concurrency
+// rules already forbid).
 func (c *cellScopedRegistrar) RegisterService(sd *grpc.ServiceDesc, impl any) {
+	if !c.active {
+		panic(panicregister.Approved("grpc-registrar-escaped-scope",
+			errcode.Assertion(
+				"grpc: cellScopedRegistrar.RegisterService called outside its registration "+
+					"scope (contractID=%q, cellID=%q, service=%q); the registrar must not be "+
+					"retained past the spec.Register callback",
+				c.contractID, c.cellID, sd.ServiceName)))
+	}
+	c.count++
+
 	svcName := sd.ServiceName
-	if _, dup := c.names[svcName]; dup {
+	if owner, dup := c.names[svcName]; dup {
 		panic(panicregister.Approved("grpc-registrar-dup-service",
 			errcode.Assertion(
-				"grpc: duplicate ServiceName %q: this service is already registered "+
-					"(cross-cell collision or duplicate spec.Register callback). "+
-					"Each gRPC service must be registered exactly once.",
-				svcName)))
+				"grpc: duplicate gRPC ServiceName %q: already registered by cell %q "+
+					"(contractID=%q); re-registered by cell %q (contractID=%q). "+
+					"Each gRPC service must be registered exactly once across all cells.",
+				svcName, owner.cellID, owner.contractID, c.cellID, c.contractID)))
 	}
-	c.names[svcName] = struct{}{}
+	c.names[svcName] = serviceOwner{cellID: c.cellID, contractID: c.contractID}
 
 	// Record every unary method.
 	for _, m := range sd.Methods {

@@ -325,6 +325,6 @@ None. Transport-only feature; no stateful entities.
 | `(package, service, method)` globally unique | ProtoRegistry at codegen time | PR 6 |
 | Handler signature MUST match generated interface | Go compiler (interface assertion) | PR 7 |
 | Service registration MUST happen before `Serve()` | `ServiceRegistrar.Register` ordering | PR 7 |
-| `*grpc.ServiceDesc` type assertion safety | adapter layer panic with Approved marker | PR 7 |
+| `func(grpc.ServiceRegistrar)` callback (Form B) type assertion safety | runtime/grpc panics with Approved marker on bad/typed-nil callback type | PR 7 |
 | Hand-written grpc method registration banned in `cells/` | archtest `GRPC-METHOD-IN-CONTRACT-01` | PR 8 |
 | Exhaustive `errcode.Kind → codes.Code` mapping | archtest `GRPC-ERRCODE-MAPPING-01` | PR 12 |

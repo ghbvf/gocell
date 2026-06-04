@@ -375,23 +375,40 @@ func TestWithGRPCListener_BindFailure_DrainsHTTP(t *testing.T) {
 func TestWithGRPCListener_Phase0ConfigValidation(t *testing.T) {
 	cases := []struct {
 		name string
-		opt  Option
+		opts []Option
 		want string
 	}{
 		{
 			name: "negative_shutdown_grace",
-			opt:  WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ":0", WithGRPCListenerShutdownGrace(-testtime.D2s)),
+			opts: []Option{WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ":0", WithGRPCListenerShutdownGrace(-testtime.D2s))},
 			want: "negative shutdownGrace",
 		},
 		{
 			name: "empty_addr_no_net",
-			opt:  WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ""),
+			opts: []Option{WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, "")},
 			want: "non-empty addr or a pre-bound listener",
+		},
+		{
+			// F4: a zero ListenerRef can never be targeted by GRPCServiceSpec.Listener,
+			// so the cell's services would be silently dropped. Reject at phase0.
+			name: "zero_ref",
+			opts: []Option{WithGRPCListener(cell.ListenerRef{}, stubGRPCServer{}, ":0")},
+			want: "zero gRPC listener ref",
+		},
+		{
+			// F4: two WithGRPCListener calls sharing a ref make spec routing
+			// ambiguous; reject at phase0 rather than in phase7b after sockets bind.
+			name: "duplicate_ref",
+			opts: []Option{
+				WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ":0"),
+				WithGRPCListener(cell.PrimaryListener, stubGRPCServer{}, ":0"),
+			},
+			want: "duplicate WithGRPCListener call for ref",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := New(clock.Real(), tc.opt)
+			b := New(clock.Real(), tc.opts...)
 			err := b.Run(context.Background())
 			require.Error(t, err)
 			assert.ErrorContains(t, err, tc.want)

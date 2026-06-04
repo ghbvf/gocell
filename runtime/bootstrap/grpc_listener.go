@@ -82,9 +82,10 @@ func WithGRPCListenerShutdownGrace(d time.Duration) GRPCListenerOption {
 //
 // ref identifies this listener so that cells can route their GRPCServiceSpecs
 // to the correct server via GRPCServiceSpec.Listener — fully symmetric with
-// HTTP's WithListener(ref, addr, authChain). Each ref must be unique across all
-// WithGRPCListener calls; a duplicate ref causes a fail-fast error in phase7b
-// when building the ref→boundGRPC routing map.
+// HTTP's WithListener(ref, addr, authChain). ref must be non-zero and unique
+// across all WithGRPCListener calls; a zero or duplicate ref is rejected at
+// phase0 (validateGRPCListenerConfigs), mirroring the HTTP listener ref gate,
+// before any socket binds.
 //
 // The server must be non-nil — both bare-nil and typed-nil are rejected at
 // phase0 with ErrGRPCServerMissing (mirroring WithRateLimiter / WithManagedResource).
