@@ -8,7 +8,9 @@
 package gomodutil
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,10 +73,15 @@ func ReadModulePath(root string) (string, error) {
 // scan set from it (so a module extracted into go.work is auto-covered).
 //
 // Returns an error when go.work is absent/unreadable or malformed (fail-closed:
-// callers must not proceed with a guessed module set). Absolute paths and
-// directories that escape the workspace root via ".." are rejected to prevent
-// path-traversal bugs (a malicious/buggy go.work use ../../etc would yield a
-// Module.Dir that escapes the workspace and flows into LoadProductionPackages).
+// callers must not proceed with a guessed module set). Three path-traversal
+// guards reject a use directive whose Module.Dir would escape the workspace and
+// flow into LoadProductionPackages (`go list ./<dir>/...` scanning packages
+// outside the repo): absolute paths, ".." segments, and SYMLINKS that resolve
+// outside the root (e.g. `use ./linked` where ./linked -> /outside — which
+// string-cleaning alone cannot catch). The symlink guard is existence-agnostic:
+// a use dir that does not exist on disk is left as-is (a not-yet-created member
+// cannot be a symlink escape), preserving this parser's existence-agnostic
+// contract.
 func ReadWorkUseDirs(root string) ([]string, error) {
 	p := filepath.Clean(filepath.Join(root, "go.work"))
 	data, err := os.ReadFile(p)
@@ -85,27 +92,69 @@ func ReadWorkUseDirs(root string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse go.work at %s: %w", root, err)
 	}
+	// Resolve the workspace root once (it may itself sit under a symlinked path,
+	// e.g. macOS /var -> /private/var) so the containment check below compares
+	// resolved-against-resolved.
+	rootResolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace root %s: %w", root, err)
+	}
 	dirs := make([]string, 0, len(wf.Use))
 	for _, u := range wf.Use {
 		if u == nil || u.Path == "" {
 			continue
 		}
-		cleaned := filepath.Clean(u.Path)
-		if filepath.IsAbs(cleaned) {
-			return nil, fmt.Errorf(
-				"go.work use directive %q resolves to an absolute path %q; only relative paths are allowed",
-				u.Path, cleaned,
-			)
-		}
-		for _, seg := range strings.Split(filepath.ToSlash(cleaned), "/") {
-			if seg == ".." {
-				return nil, fmt.Errorf(
-					"go.work use directive %q escapes the workspace root via \"..\"; path traversal is not allowed",
-					u.Path,
-				)
-			}
+		cleaned, err := validateWorkUseDir(root, rootResolved, u.Path)
+		if err != nil {
+			return nil, err
 		}
 		dirs = append(dirs, cleaned)
 	}
 	return dirs, nil
+}
+
+// validateWorkUseDir applies the absolute / ".." / symlink-escape guards to a
+// single go.work `use` path and returns its cleaned relative form.
+func validateWorkUseDir(root, rootResolved, raw string) (string, error) {
+	cleaned := filepath.Clean(raw)
+	if filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf(
+			"go.work use directive %q resolves to an absolute path %q; only relative paths are allowed",
+			raw, cleaned,
+		)
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(cleaned), "/") {
+		if seg == ".." {
+			return "", fmt.Errorf(
+				"go.work use directive %q escapes the workspace root via \"..\"; path traversal is not allowed",
+				raw,
+			)
+		}
+	}
+	if err := checkWorkUseDirSymlink(root, rootResolved, raw, cleaned); err != nil {
+		return "", err
+	}
+	return cleaned, nil
+}
+
+// checkWorkUseDirSymlink rejects a use dir that, after resolving symlinks,
+// escapes the workspace root. It is a no-op for a dir that does not exist on
+// disk (existence-agnostic: a non-existent path cannot be a symlink escape, and
+// downstream go.mod reads fail closed for genuinely missing members).
+func checkWorkUseDirSymlink(root, rootResolved, raw, cleaned string) error {
+	resolved, err := filepath.EvalSymlinks(filepath.Join(root, cleaned))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("resolve go.work use directive %q: %w", raw, err)
+	}
+	if resolved == rootResolved || strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
+		return nil
+	}
+	return fmt.Errorf(
+		"go.work use directive %q resolves via symlink to %q which escapes the workspace root %q; "+
+			"symlink path traversal is not allowed",
+		raw, resolved, rootResolved,
+	)
 }

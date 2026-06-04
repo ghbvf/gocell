@@ -3,6 +3,7 @@ package gomodutil_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/gomodutil"
@@ -201,4 +202,58 @@ func TestReadWorkUseDirs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReadWorkUseDirs_SymlinkEscape covers the symlink path-traversal guard:
+// a `use` dir that is a symlink resolving OUTSIDE the workspace root must be
+// rejected (else `go list ./<dir>/...` would scan packages outside the repo),
+// while a symlink resolving WITHIN the root is accepted. Not table-driven
+// because it needs real symlink setup. Not parallel (filesystem-heavy, but
+// isolated temp dirs so it is safe to parallelize; kept serial for clarity).
+func TestReadWorkUseDirs_SymlinkEscape(t *testing.T) {
+	t.Run("symlink escaping the workspace root is rejected", func(t *testing.T) {
+		root := t.TempDir()
+		external := t.TempDir() // a sibling dir OUTSIDE root
+		if err := os.WriteFile(filepath.Join(external, "go.mod"),
+			[]byte("module example.test/outside\n\ngo 1.25\n"), 0o600); err != nil {
+			t.Fatalf("write external go.mod: %v", err)
+		}
+		if err := os.Symlink(external, filepath.Join(root, "linked")); err != nil {
+			t.Skipf("symlink unsupported on this platform: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "go.work"),
+			[]byte("go 1.25\n\nuse ./linked\n"), 0o600); err != nil {
+			t.Fatalf("write go.work: %v", err)
+		}
+
+		got, err := gomodutil.ReadWorkUseDirs(root)
+		if err == nil {
+			t.Fatalf("ReadWorkUseDirs = %v, want error (symlink escapes workspace root)", got)
+		}
+		if !strings.Contains(err.Error(), "escapes the workspace root") {
+			t.Fatalf("error = %q, want substring %q", err.Error(), "escapes the workspace root")
+		}
+	})
+
+	t.Run("symlink resolving within the workspace root is accepted", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "real"), 0o755); err != nil {
+			t.Fatalf("mkdir real: %v", err)
+		}
+		if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "linked")); err != nil {
+			t.Skipf("symlink unsupported on this platform: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "go.work"),
+			[]byte("go 1.25\n\nuse ./linked\n"), 0o600); err != nil {
+			t.Fatalf("write go.work: %v", err)
+		}
+
+		got, err := gomodutil.ReadWorkUseDirs(root)
+		if err != nil {
+			t.Fatalf("ReadWorkUseDirs unexpected error for in-root symlink: %v", err)
+		}
+		if len(got) != 1 || got[0] != "linked" {
+			t.Fatalf("ReadWorkUseDirs = %v, want [linked]", got)
+		}
+	})
 }
