@@ -278,9 +278,13 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 		if err != nil {
 			return fooCoreModuleResult{}, fmt.Errorf("foocore: %w", err)
 		}
-		if schemaErr := adapterpg.VerifyExpectedVersion(db, foocorecell.MigrationsFS()); schemaErr != nil {
-			return fooCoreModuleResult{}, fmt.Errorf("foocore PG schema guard: %w", schemaErr)
-		}
+		// foocore ships its own migration set under its own namespace
+		// (migration.ParseNamespace("foocore") → goose tracking table
+		// schema_migrations_foocore). Applying + verifying that namespace is an
+		// ops / bootstrap concern, NOT a cellmodule one: register the set via
+		// composition.WithMigrations(ns, fs) and apply/verify it
+		// (adapters/postgres.MigrationSet.ApplyAll / VerifyAll) BEFORE Build —
+		// see docs/guides/cell-external-repo-quickstart.md "Migrations".
 		txMgr := cfg.pg.TxManager()
 		outboxWriter := cfg.pg.OutboxWriter()
 
@@ -425,7 +429,9 @@ func TestFooCoreModule_Postgres_SchemaMatched(t *testing.T) {
 	// 预先跑 migration
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err)
-	migrator, err := adapterpg.NewMigrator(pool, foocorecell.MigrationsFS(), "schema_migrations")
+	fooNS, err := migration.ParseNamespace("foocore") // tracking table schema_migrations_foocore
+	require.NoError(t, err)
+	migrator, err := adapterpg.NewMigrator(pool, foocorecell.MigrationsFS(), fooNS)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 

@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
@@ -227,7 +228,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 2: Run migrations to create outbox_entries table.
 	// ---------------------------------------------------------------
-	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), "schema_migrations")
+	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
@@ -546,7 +547,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 2: Run migrations.
 	// ---------------------------------------------------------------
-	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), "schema_migrations")
+	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
@@ -725,7 +726,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	defer cleanup()
 
 	// Run migrations.
-	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), "schema_migrations")
+	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
@@ -814,7 +815,7 @@ func TestIntegration_OutboxObservability_ZeroRoundtrip(t *testing.T) {
 	pool, cleanup := setupPostgresContainer(t)
 	defer cleanup()
 
-	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), "schema_migrations")
+	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, mErr)
 	require.NoError(t, migrator.Up(ctx))
 

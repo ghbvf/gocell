@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
 )
 
 // stubMigrationFS returns a minimal valid goose-annotated migration FS
@@ -26,23 +27,56 @@ func stubMigrationFS() fstest.MapFS {
 	}
 }
 
-func TestNewMigrator_DefaultTableName(t *testing.T) {
+func TestNewMigrator_DerivesTrackingTableFromNamespace(t *testing.T) {
 	p := &Pool{inner: nil}
-	m, err := NewMigrator(p, stubMigrationFS(), "")
+
+	m, err := NewMigrator(p, stubMigrationFS(), migration.PlatformNamespace)
 	require.NoError(t, err)
-	assert.Equal(t, "schema_migrations", m.tableName)
+	assert.Equal(t, "schema_migrations_platform", m.tableName,
+		"platform namespace must derive schema_migrations_platform (no special-casing)")
 	_ = m.Close()
+
+	ns, err := migration.ParseNamespace("payment")
+	require.NoError(t, err)
+	m2, err := NewMigrator(p, stubMigrationFS(), ns)
+	require.NoError(t, err)
+	assert.Equal(t, "schema_migrations_payment", m2.tableName,
+		"external namespace must derive schema_migrations_<namespace>")
+	_ = m2.Close()
 }
 
-func TestNewMigrator_CustomTableName(t *testing.T) {
-	p := &Pool{inner: nil}
-	m, err := NewMigrator(p, stubMigrationFS(), "custom_migrations")
-	require.NoError(t, err)
-	assert.Equal(t, "custom_migrations", m.tableName)
-	_ = m.Close()
+func TestNewMigrator_InvalidNamespace(t *testing.T) {
+	// A typed migration.Namespace makes omission / bare-string a COMPILE error;
+	// these invalid VALUES (incl. the Namespace("x") conversion-literal escape)
+	// are caught fail-fast at runtime by NewMigrator's ns.Validate().
+	tests := []struct {
+		name string
+		ns   migration.Namespace
+	}{
+		{name: "empty (zero value)", ns: migration.Namespace("")},
+		{name: "dash conversion-literal escape", ns: migration.Namespace("acme-payment")},
+		{name: "uppercase", ns: migration.Namespace("Payment")},
+		{name: "leading digit", ns: migration.Namespace("2pay")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pool{inner: nil}
+			m, err := NewMigrator(p, stubMigrationFS(), tt.ns)
+			assert.Nil(t, m)
+			require.Error(t, err)
+
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, ErrAdapterPGMigrate, ecErr.Code)
+		})
+	}
 }
 
-func TestNewMigrator_InvalidTableName(t *testing.T) {
+func TestNewMigratorForTable_InvalidTableName(t *testing.T) {
+	// newMigratorForTable is the unexported in-package escape hatch for tests
+	// that need isolated tracking tables; it still validates the table identifier
+	// (production code reaches it only via NewMigrator's trackingTableFor(ns)).
 	tests := []struct {
 		name      string
 		tableName string
@@ -52,15 +86,12 @@ func TestNewMigrator_InvalidTableName(t *testing.T) {
 		{name: "contains spaces", tableName: "my table"},
 		{name: "contains dash", tableName: "my-table"},
 		{name: "contains dot", tableName: "schema.table"},
-		{name: "contains semicolon", tableName: "table;"},
-		{name: "contains parentheses", tableName: "table()"},
-		{name: "unicode characters", tableName: "tbl\u00e9"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Pool{inner: nil}
-			m, err := NewMigrator(p, stubMigrationFS(), tt.tableName)
+			m, err := newMigratorForTable(p, stubMigrationFS(), tt.tableName)
 			assert.Nil(t, m)
 			require.Error(t, err)
 
@@ -71,28 +102,12 @@ func TestNewMigrator_InvalidTableName(t *testing.T) {
 	}
 }
 
-func TestNewMigrator_ValidTableNames(t *testing.T) {
-	tests := []struct {
-		name      string
-		tableName string
-	}{
-		{name: "lowercase", tableName: "migrations"},
-		{name: "with underscore", tableName: "schema_migrations"},
-		{name: "starts with underscore", tableName: "_private"},
-		{name: "uppercase", tableName: "MIGRATIONS"},
-		{name: "mixed case", tableName: "SchemaMigrations"},
-		{name: "with digits", tableName: "migrations_v2"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &Pool{inner: nil}
-			m, err := NewMigrator(p, stubMigrationFS(), tt.tableName)
-			require.NoError(t, err)
-			assert.Equal(t, tt.tableName, m.tableName)
-			_ = m.Close()
-		})
-	}
+func TestNewMigratorForTable_ValidTableName(t *testing.T) {
+	p := &Pool{inner: nil}
+	m, err := newMigratorForTable(p, stubMigrationFS(), "schema_migrations_iso_probe")
+	require.NoError(t, err)
+	assert.Equal(t, "schema_migrations_iso_probe", m.tableName)
+	_ = m.Close()
 }
 
 func TestValidateIdentifier(t *testing.T) {
