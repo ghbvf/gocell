@@ -419,7 +419,7 @@ map、`pkg/errcode` `TestKindStatusAndPublicCode` 表。`IsClient()`（status-ra
 （JSON 编码，map key 排序 → 确定性）：
 
 - **match 决策**仍是整 blob 相等（`b` 分量保留字节级语义：reordered key / whitespace 仍 mismatch）。
-- **`f` 分量**逐顶层字段存 `hex(sha256(canonicalValue))`，**仅供 mismatch 时 diff**——只存哈希、不存 raw 值。
+- **`f` 分量**逐顶层字段存 `hex(sha256(rawValueBytes))`（`json.RawMessage` 不递归解析值，无 canonicalize 热路径/深嵌套面，与 `b` 的 byte-exact match 一致），**仅供 mismatch 时 diff**——只存哈希、不存 raw 值。
 - mismatch 时 Store 经 `*FingerprintMismatchError{Stored}` 把 stored blob 带回中间件，`diffFields(stored, incoming)`
   算差异（值不同 / 新增 / 缺失）的顶层字段名（sorted，cap `maxMismatchedFields=20`），写入 422 响应
   `details`（逐条 `PublicString("mismatchedField", name)`；超 cap 加 `PublicBool("mismatchedFieldsTruncated", true)`）。
