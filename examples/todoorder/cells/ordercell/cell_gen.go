@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	proj0 "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
+	proj1 "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -69,6 +70,12 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registrar) error {
 		c.projectionSvc.HandleOrderCreated, "order_status", "ordercell", "orderprojection", c.projectionSvc.ResetOrderStatus,
 	)); err != nil {
 		return fmt.Errorf("ordercell: projection order_status: %w", err)
+	}
+
+	if err := reg.RegisterProjection(proj1.NewProjectionRequest(
+		c.projectionSvc.HandleOrderStatusChanged, "order_transition", "ordercell", "orderprojection", c.projectionSvc.ResetOrderTransition,
+	)); err != nil {
+		return fmt.Errorf("ordercell: projection order_transition: %w", err)
 	}
 
 	return nil

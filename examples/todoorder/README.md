@@ -145,23 +145,34 @@ The loop has four parts, all inside `ordercell`:
 1. **Command** — `orderconfirm` slice (L2): `PATCH /api/v1/orders/{id}/status`
    confirms a pending order and publishes `event.order-status-changed.v1`
    through the transactional outbox.
-2. **Projection** — `orderprojection` slice (L3): subscribes to
-   `event.order-created.v1` (single-stream), maintaining an in-memory
-   status-grouped read model declared as the `projection.order.status-summary.v1`
-   contract (GoCell's first `kind: projection` instance). The read model is a
-   *derived view* (per-status counts + order IDs) the write-side `orders` map
-   cannot cheaply serve — `GET /api/v1/orders/` returns a flat list of complete
-   order records; `GET /api/v1/orders/projection/summary` returns a server-side
-   aggregated-by-status read model (`{statuses:[{status,count,orderIds}]}`) that
-   the write-side by-id map cannot provide without a full scan.
-   Status-transition projection (consuming `event.order-status-changed.v1`) is a
-   natural next step tracked in #1482, out of scope for this single-stream
-   harness reference.
+2. **Projection** — `orderprojection` slice (L3): registers **two independent
+   single-stream projections** via `reg.RegisterProjection` and composes them at
+   query time — `order_status` consumes `event.order-created.v1` (created sub-view)
+   and `order_transition` consumes `event.order-status-changed.v1` (latest-
+   transition sub-view). The composed status-grouped read model — *latest
+   transition wins over created status* — is declared as the
+   `projection.order.status-summary.v1` contract (GoCell's first `kind: projection`
+   instance). The read model is a *derived view* (per-status counts + order IDs)
+   the write-side `orders` map cannot cheaply serve — `GET /api/v1/orders/`
+   returns a flat list of complete order records; `GET
+   /api/v1/orders/projection/summary` returns a server-side aggregated-by-status
+   read model (`{statuses:[{status,count,orderIds}]}`) that the write-side by-id
+   map cannot provide without a full scan.
+   This is the canonical **multi-stream fan-in within the single-stream harness**
+   (#1482): each projection owns a *disjoint* sub-view with its own checkpoint and
+   `onReset`, so rebuilding one never clears the other's data, and the framework's
+   per-spec replay filter applies each projection only its own stream during a
+   rebuild (foreign streams advance the checkpoint without applying). A logical
+   read model that fans in N event streams is therefore expressed as N projection
+   IDs composed at the read side — no shared-state rebuild conflict.
 3. **Query** — `GET /api/v1/orders/projection/summary` reads the projection.
 4. **Rebuild** — rebuild is framework-owned (`projection.Coordinator.Rebuild`),
-   exposed as the internal control-plane endpoint `POST
-   /internal/v1/ordercell/projection/order_status/rebuild` (mounted by bootstrap
-   on the internal listener via `WithProjectionRebuildEndpoint("controlplane")`).
+   exposed as one internal control-plane endpoint *per projection*: `POST
+   /internal/v1/ordercell/projection/{order_status,order_transition}/rebuild`
+   (mounted by bootstrap on the internal listener via
+   `WithProjectionRebuildEndpoint("controlplane")`). Rebuilding one projection
+   resets and replays only its own stream — the per-spec replay filter skips
+   foreign streams — so the other projection's disjoint sub-view is undisturbed.
    It admits a background rebuild that drives `onReset + replay` automatically:
    `202` admitted (body carries `{phase, pendingEvents, replayLagSeconds}`), `409`
    if a rebuild is already running, `404` for an unknown projection, `403` for a
@@ -175,14 +186,24 @@ The loop has four parts, all inside `ordercell`:
 
 > **Demo mode — NoopWriter does not deliver events to the projection**: `run.go`
 > uses `outbox.NoopWriter{}`, so events are validated then discarded; there is
-> no in-process fan-out. In demo mode, `PATCH confirm` does not update the
-> projection, so `GET /projection/summary` always returns an empty statuses
-> array. The outputs below reflect **durable mode** (real broker + relay) or
-> the unit tests in `orderprojection/service_test.go`. For the projection
-> closed-loop runtime validation, see that test file.
+> no in-process fan-out. The HTTP commands themselves still work in demo mode —
+> `POST /orders` returns `201` and `PATCH .../status` returns `200` — but because
+> the published events are discarded, `GET /projection/summary` returns an empty
+> statuses array (the projection is never fed). The summary/rebuild outputs below
+> reflect **durable mode** (real broker + relay) or the unit/lifecycle tests in
+> `orderprojection/{service,lifecycle}_test.go` (the projection closed-loop is
+> validated there).
+>
+> **Readyz probes** — each of the two projections registers framework-owned probes
+> derived from its `projectionID`: `ordercell_projection_order_status_ready` /
+> `_lag` and `ordercell_projection_order_transition_ready` / `_lag` (names are
+> cellgen-derived from `(cellID, projectionID)`, so they are self-documenting and
+> need no hand-maintained inventory).
 
 ```bash
-# Confirm an order (PATCH) → publishes order-status-changed (durable mode only)
+# Confirm an order (PATCH) — returns 200 in BOTH demo and durable mode; only the
+# downstream projection update (via the published order-status-changed event)
+# requires durable wiring.
 curl -X PATCH -H "Authorization: Bearer $TODOORDER_TOKEN" \
   -H "Content-Type: application/json" -d '{"status":"confirmed"}' \
   http://localhost:8082/api/v1/orders/{id}/status
