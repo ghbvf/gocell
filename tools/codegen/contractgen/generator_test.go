@@ -16,10 +16,13 @@ import (
 
 // TestArtifactsForKind locks the kind × artifact matrix — the single source
 // (contractArtifacts) consumed by both generateOneContract (disk write) and
-// RenderContractArtifacts (in-memory). The expected file slice is ordered: it IS
-// the emit/append order, and RenderContractArtifacts returns artifacts in this
-// order (consumed by cellgen/generatedverify), so reordering is a wire change.
-// webhook and any unknown kind emit zero artifacts.
+// RenderContractArtifacts (in-memory). slices.Equal below is an exhaustive lock
+// (order AND membership): each row asserts both the emitted files in order and,
+// implicitly, the absence of every other artifact — so the command row also
+// pins iface_gen.go's exclusion. The order IS the emit/append order, and
+// RenderContractArtifacts returns artifacts in it (consumed by
+// cellgen/generatedverify), so reordering is a wire change. webhook and any
+// unknown kind emit zero artifacts.
 func TestArtifactsForKind(t *testing.T) {
 	tests := []struct {
 		kind  string
@@ -27,7 +30,7 @@ func TestArtifactsForKind(t *testing.T) {
 	}{
 		{"http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
 		{"event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"}},
-		{"command", []string{"types_gen.go", "command_gen.go"}},
+		{"command", []string{"types_gen.go", "command_gen.go"}}, // no iface_gen.go by design
 		{"projection", []string{"types_gen.go", "iface_gen.go"}},
 		{"grpc", []string{"types_gen.go", "iface_gen.go"}},
 		{"saga", []string{"types_gen.go", "iface_gen.go", "saga_gen.go"}},
