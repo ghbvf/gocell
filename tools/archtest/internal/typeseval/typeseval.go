@@ -97,7 +97,10 @@ func (r *Resolver) Packages() []*packages.Package {
 const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 	packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports
 
-// LoadPackages loads patterns from modRoot with full type info.
+// LoadPackages loads patterns from modRoot with full type info in single-module
+// mode (GOWORK=off): archtest analyzes the root module plus the isolated fixture
+// modules under tools/archtest/testdata/*, none of which are in the repo go.work
+// `use` set.
 //
 // Parameters:
 //   - tests: when true, load the test variant of each package (includes
@@ -107,26 +110,37 @@ const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 // Returns the flat slice of packages.Errors collected from every package as
 // the second value so callers can fail fast on type-check errors without
 // re-walking.
+//
+// The cross-module workspace scan ([LoadProductionPackages]) uses the
+// ModeWorkspace variant ([loadPackagesMode]); this single-module form is the one
+// the Typed / Fixture / StandaloneModule scopes route through, and its signature
+// is held stable so the pass / production funnel meta-archtests keep matching it.
 func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
+	return loadPackagesMode(packagesload.ModeModule, modRoot, tests, tags, patterns...)
+}
+
+// loadPackagesMode is the shared body of LoadPackages; mode selects the GOWORK
+// semantics (see tools/packagesload). ModeWorkspace is used only by the
+// cross-module workspace production scan.
+func loadPackagesMode(
+	mode packagesload.Mode, dir string, tests bool, tags []string, patterns ...string,
+) ([]*packages.Package, []packages.Error, error) {
 	cfg := &packages.Config{
 		Mode:  loadMode,
-		Dir:   modRoot,
+		Dir:   dir,
 		Tests: tests,
 	}
 	if len(tags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
 	}
-	// ModeModule (GOWORK=off): archtest analyzes the root module plus the
-	// isolated fixture modules under tools/archtest/testdata/*, none of which are
-	// in the repo go.work `use` set. See tools/packagesload.
-	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, patterns...)
+	pkgs, err := packagesload.Load(mode, cfg, patterns...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("packages.Load: %w", err)
 	}
 	var errs []packages.Error
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		for i := range p.Errors {
-			p.Errors[i].Msg = modRoot + ": " + p.Errors[i].Msg
+			p.Errors[i].Msg = dir + ": " + p.Errors[i].Msg
 		}
 		errs = append(errs, p.Errors...)
 	})
@@ -161,11 +175,22 @@ var (
 // LoadProductionPackages typed wrapper 完成（固定 patterns="./..."）。
 // ref: ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md
 func SharedResolver(modRoot string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
+	return sharedResolverMode(packagesload.ModeModule, modRoot, tests, tags, patterns...)
+}
+
+// sharedResolverMode is the mode-parameterized body of SharedResolver. The cache
+// key includes mode so a ModeModule load and a ModeWorkspace load of the same
+// (dir, tests, tags, patterns) never alias. SharedResolver fixes ModeModule
+// (the only public form, kept stable for the funnel meta-archtests); the
+// ModeWorkspace path is reached solely via LoadProductionPackages for the
+// cross-module workspace production scan.
+func sharedResolverMode(mode packagesload.Mode, dir string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
 	testsFlag := "0"
 	if tests {
 		testsFlag = "1"
 	}
-	key := modRoot + "\x00" + testsFlag + "\x00" + strings.Join(tags, "\x00") + "\x00" + strings.Join(patterns, "\x00")
+	key := fmt.Sprintf("%d", mode) + "\x00" + dir + "\x00" + testsFlag + "\x00" +
+		strings.Join(tags, "\x00") + "\x00" + strings.Join(patterns, "\x00")
 
 	sharedMu.Lock()
 	if r, ok := sharedCache[key]; ok {
@@ -184,7 +209,7 @@ func SharedResolver(modRoot string, tests bool, tags []string, patterns ...strin
 		}
 		sharedMu.Unlock()
 
-		pkgs, errs, err := LoadPackages(modRoot, tests, tags, patterns...)
+		pkgs, errs, err := loadPackagesMode(mode, dir, tests, tags, patterns...)
 		if err != nil {
 			return nil, err
 		}

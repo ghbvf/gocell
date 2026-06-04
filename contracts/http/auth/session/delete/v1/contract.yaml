@@ -23,6 +23,7 @@ endpoints:
       passwordResetExempt: true
       responses:
         - 409
+        - 422
         - 503
     ownership:
       subjectPath: ctx.subjectID

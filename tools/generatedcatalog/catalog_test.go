@@ -14,7 +14,7 @@ import (
 func TestEmitFileDeterministicGo(t *testing.T) {
 	t.Parallel()
 
-	g := kerneldepgraph.FromNodes("github.com/example/mod", []*kerneldepgraph.Node{
+	g := kerneldepgraph.FromNodes([]string{"github.com/example/mod"}, []*kerneldepgraph.Node{
 		{
 			ID:      "github.com/example/mod/pkg/a",
 			Layer:   "pkg",

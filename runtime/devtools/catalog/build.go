@@ -722,7 +722,7 @@ func filterPackageDepsView(v *PackageDepsView, filter Filter) *PackageDepsView {
 		nodes = append(nodes, n)
 	}
 	return &PackageDepsView{
-		Graph: kerneldepgraph.FromNodes(v.Graph.Module, nodes),
+		Graph: kerneldepgraph.FromNodes(v.Graph.Modules, nodes),
 		Error: v.Error,
 	}
 }

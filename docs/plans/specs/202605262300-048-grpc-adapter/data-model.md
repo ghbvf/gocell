@@ -118,20 +118,32 @@ grpc:
 
 ### `GRPCServiceSpec` (new)
 
+**As-built (PR-7 #1150): Form B (callback).** The spec carries a `Register` callback —
+`func(grpc.ServiceRegistrar)` held as `any` — instead of a `(ServiceDesc, Impl)` pair. This is
+isomorphic with GoCell's own `RouteGroup.Register func(mux) error` and matches the go-zero
+`RegisterFn func(*grpc.Server)` / Kratos `pb.RegisterXxxServer(srv, impl)` idiom: the cell supplies
+a closure that calls the generated `pb.RegisterXxxServer` helper. Plus a `Listener` ref for
+per-listener routing (symmetric with `RouteGroup.Listener`).
+
 ```go
-// GRPCServiceSpec carries the registration intent for a gRPC service belonging
-// to a cell. It deliberately stores the grpc.ServiceDesc as `any` so that
-// kernel/ does NOT import google.golang.org/grpc.
-//
-// Hard upgrade tracked: replace `any` with a sealed marker interface defined
-// in adapters/grpc with a private constructor — see plan.md Complexity Tracking.
 type GRPCServiceSpec struct {
-    ContractID  string
-    CellID      string
-    ServiceDesc any  // expected *grpc.ServiceDesc, asserted in adapter layer
-    Impl        any  // expected the service interface impl, asserted in adapter layer
+    ContractID string
+    CellID     string
+    Listener   ListenerRef // target gRPC listener; matches a WithGRPCListener(ref, …)
+    Register   any         // expected func(grpc.ServiceRegistrar); asserted in runtime/grpc
 }
 ```
+
+> **AI-robust — permanent ceiling, not a feasible upgrade.** `Register` is `any` because
+> `kernel/ ⊥ grpc` makes naming `func(grpc.ServiceRegistrar)` impossible. The earlier "sealed
+> marker interface in adapters/grpc" idea is **infeasible** (kernel ⊥ adapters; an exported kernel
+> marker seals nothing; an unexported kernel marker can't be implemented by cell/adapter closures)
+> — same family as #851/#893/#1282. `GRPC-CELL-REGISTRAR-LAYER-01` is Medium (reflect field-lock) +
+> the existing kernel⊥grpc depguard/`kernel_internal_dag_test.go` gate. Won't-do tracked at **#1582**.
+
+`kernel/cell` also defines the narrow `GRPCServiceRegistrar interface { Register(GRPCServiceSpec) error }`
+(bottom-of-graph home so both `adapters/grpc` and `runtime/bootstrap` import it without a cycle);
+`*runtime/grpc.ServiceRegistrar` satisfies it structurally.
 
 ### `Registrar` (extended)
 
@@ -166,25 +178,31 @@ type RegistrySnapshot struct {
 
 ### `ServiceRegistrar` (new)
 
+**As-built (PR-7 #1150): single public path + unexported interceptor.** The public
+`ServiceRegistrar` exposes only `Register(spec)` + `CellIDForMethod` — it does **not** implement
+`grpc.ServiceRegistrar` (no raw `RegisterService` bypass). Attribution is captured by an unexported
+`cellScopedRegistrar` that *does* implement `grpc.ServiceRegistrar`: `Register(spec)` hands it to
+the spec's callback, and it intercepts the callback's `RegisterService(sd, impl)` to record
+`/{ServiceName}/{method} → cellID` (Methods + Streams) before delegating to the real server.
+
 ```go
-// ServiceRegistrar is the bootstrap-side drain target for kernel/cell
-// GRPCServices. It owns the grpc.Server and performs the actual
-// RegisterService call with proper type assertions.
 type ServiceRegistrar struct {
-    server   *grpc.Server                              // adapters/grpc value
-    methods  map[string]string                         // "/svc/method" → cellID, used by attribution interceptor
+    inner   grpc.ServiceRegistrar // typically *grpc.Server; NOT re-exported
+    methods map[string]string     // "/svc/method" → cellID (for PR-9 attribution)
+    names   map[string]struct{}   // ServiceName dedup across specs
 }
 
-func NewServiceRegistrar(server *grpc.Server) *ServiceRegistrar
-
+func NewServiceRegistrar(inner grpc.ServiceRegistrar) *ServiceRegistrar
 func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error
 func (r *ServiceRegistrar) CellIDForMethod(fullMethod string) (cellID string, ok bool)
 ```
 
 **Invariants**:
-- `Register` MUST be called before `grpc.Server.Serve()`.
-- Duplicate `ContractID` → fail-fast.
-- `(spec.ServiceDesc).(*grpc.ServiceDesc)` assertion MUST succeed; on failure, panic via `panicregister.Approved("grpc-registrar-bad-servicedesc", ...)`.
+- `Register` MUST be called before `grpc.Server.Serve()` (drain runs in bootstrap phase7b before `grpcServeAll`).
+- Duplicate `ContractID` → fail-fast error at the recorder (`RegistryRecorder.GRPCService`).
+- `spec.Register.(func(grpc.ServiceRegistrar))` assertion MUST succeed; on failure, panic via `panicregister.Approved("grpc-registrar-bad-register-fn", ...)`.
+- Duplicate `ServiceName` across specs → panic via `panicregister.Approved("grpc-registrar-dup-service", ...)` before grpc-go's own fatal.
+- `adapters/grpc.Server.Registrar()` returns the `cell.GRPCServiceRegistrar` interface (the concrete `*ServiceRegistrar`, carrying `CellIDForMethod`, is held inside the adapter for PR-9). `WithGRPCListener` gained a leading `ref cell.ListenerRef`.
 
 ---
 
@@ -307,6 +325,6 @@ None. Transport-only feature; no stateful entities.
 | `(package, service, method)` globally unique | ProtoRegistry at codegen time | PR 6 |
 | Handler signature MUST match generated interface | Go compiler (interface assertion) | PR 7 |
 | Service registration MUST happen before `Serve()` | `ServiceRegistrar.Register` ordering | PR 7 |
-| `*grpc.ServiceDesc` type assertion safety | adapter layer panic with Approved marker | PR 7 |
+| `func(grpc.ServiceRegistrar)` callback (Form B) type assertion safety | runtime/grpc panics with Approved marker on bad/typed-nil callback type | PR 7 |
 | Hand-written grpc method registration banned in `cells/` | archtest `GRPC-METHOD-IN-CONTRACT-01` | PR 8 |
 | Exhaustive `errcode.Kind → codes.Code` mapping | archtest `GRPC-ERRCODE-MAPPING-01` | PR 12 |

@@ -350,7 +350,7 @@ func newHTTPClaimerMock() *httpClaimerMockCmdable {
 // evalClaimResp simulates claimRespScript:
 // KEYS=[resp_key, lease_key, fp_key], ARGV=[token, leaseMs, fingerprint, fpMs].
 //
-// Returns {3} on fingerprint mismatch, {2,blob} for Done, {1} for Acquired, {0} for Busy.
+// Returns {3,fp} on fingerprint mismatch, {2,blob} for Done, {1} for Acquired, {0} for Busy.
 // Caller MUST hold m.mu.
 func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, args []any) {
 	respKey, leaseKey, fpKey := keys[0], keys[1], keys[2]
@@ -362,7 +362,7 @@ func (m *httpClaimerMockCmdable) evalClaimResp(cmd *goredis.Cmd, keys []string, 
 	// Check fingerprint mismatch first (mirrors Lua script order).
 	if fp, ok := m.store[fpKey]; ok && !fp.expiry.Before(time.Now()) {
 		if fingerprint != "" && fp.value != fingerprint {
-			cmd.SetVal([]any{int64(3)}) // FingerprintMismatch
+			cmd.SetVal([]any{int64(3), fp.value}) // FingerprintMismatch + stored fp blob
 			return
 		}
 	}

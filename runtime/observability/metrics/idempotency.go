@@ -65,14 +65,21 @@ func NewIdempotencyCollector(p kernelmetrics.Provider) (*IdempotencyCollector, e
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: IdempotencyCollector Provider is required")
 	}
+	// The HELP describes the {state} decision only — it deliberately does NOT
+	// embed the HTTP status each state maps to. The state→status mapping is volatile
+	// (it changed once already: key_reused moved 409→422) and is single-sourced by
+	// idemhttp.FrameworkStatuses() + the contract auth.responses; duplicating status
+	// integers in this free-form prose is a drift surface, so it is omitted entirely
+	// rather than restated here.
 	cv, err := p.CounterVec(kernelmetrics.CounterOpts{
 		Name: "idempotency_requests_total",
 		Help: "Total HTTP idempotency decisions, labeled by terminal state " +
 			"(acquired = fresh claim processed; replayed = cached response served; " +
-			"busy = in-flight lease 409; store_error = Claim-path failure 500 " +
+			"busy = an in-flight lease already holds the key; " +
+			"store_error = Claim-path store failure " +
 			"(Record/Release failures are logged only, not counted here); " +
 			"oversize = response too large to record; " +
-			"key_reused = same key, different body 409). " +
+			"key_reused = same key presented with a different request body (fingerprint mismatch)). " +
 			"acquired counts every fresh claim; oversize is a sub-event of acquired. " +
 			"cell is the owning RouteGroup cell or _runtime for framework paths.",
 		LabelNames: []string{"cell", "state"},

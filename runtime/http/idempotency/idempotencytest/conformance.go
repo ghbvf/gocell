@@ -433,6 +433,21 @@ func conformFingerprintMismatchDone(t *testing.T, factory Factory) {
 	if !errors.Is(err2, idemhttp.ErrFingerprintMismatch) {
 		t.Errorf("error must wrap ErrFingerprintMismatch; got %v", err2)
 	}
+	assertStoredFingerprint(t, err2, conformFP)
+}
+
+// assertStoredFingerprint verifies the mismatch error is a *FingerprintMismatchError
+// carrying the originally-stored fingerprint blob (needed by the middleware for the
+// per-field diff). Every Store implementation must surface the stored blob.
+func assertStoredFingerprint(t *testing.T, err error, want string) {
+	t.Helper()
+	var fpErr *idemhttp.FingerprintMismatchError
+	if !errors.As(err, &fpErr) {
+		t.Fatalf("error must be *FingerprintMismatchError (errors.As); got %T (%v)", err, err)
+	}
+	if fpErr.Stored != want {
+		t.Errorf("FingerprintMismatchError.Stored = %q, want %q (stored blob must round-trip)", fpErr.Stored, want)
+	}
 }
 
 // conformFingerprintMismatchBusy verifies that Claim returns ErrFingerprintMismatch
@@ -462,6 +477,7 @@ func conformFingerprintMismatchBusy(t *testing.T, factory Factory) {
 	if !errors.Is(err2, idemhttp.ErrFingerprintMismatch) {
 		t.Errorf("error must wrap ErrFingerprintMismatch; got %v", err2)
 	}
+	assertStoredFingerprint(t, err2, conformFP)
 }
 
 // ---------------------------------------------------------------------------

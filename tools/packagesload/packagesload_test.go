@@ -49,6 +49,21 @@ func TestApplyMode(t *testing.T) {
 		}
 	})
 
+	t.Run("ModeWorkspace rejects ambient GOWORK=off", func(t *testing.T) {
+		cfg := &packages.Config{Env: []string{"FOO=1", "GOWORK=off"}}
+		if err := applyMode(ModeWorkspace, cfg); err == nil {
+			t.Error("applyMode(ModeWorkspace) with GOWORK=off = nil error, want fail-closed")
+		}
+	})
+
+	t.Run("ModeWorkspace accepts a later GOWORK override of off", func(t *testing.T) {
+		// Last GOWORK= entry wins (exec semantics): off then a real path is fine.
+		cfg := &packages.Config{Env: []string{"GOWORK=off", "GOWORK=/repo/go.work"}}
+		if err := applyMode(ModeWorkspace, cfg); err != nil {
+			t.Fatalf("applyMode(ModeWorkspace) with later GOWORK override: %v", err)
+		}
+	})
+
 	t.Run("invalid mode errors", func(t *testing.T) {
 		cfg := &packages.Config{}
 		if err := applyMode(Mode(99), cfg); err == nil {

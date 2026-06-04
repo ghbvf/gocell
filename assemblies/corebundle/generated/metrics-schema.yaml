@@ -307,7 +307,7 @@ metrics:
       fqName: gocell_idempotency_requests_total
       namespace: gocell
       type: counter
-      help: Total HTTP idempotency decisions, labeled by terminal state (acquired = fresh claim processed; replayed = cached response served; busy = in-flight lease 409; store_error = Claim-path failure 500 (Record/Release failures are logged only, not counted here); oversize = response too large to record; key_reused = same key, different body 409). acquired counts every fresh claim; oversize is a sub-event of acquired. cell is the owning RouteGroup cell or _runtime for framework paths.
+      help: Total HTTP idempotency decisions, labeled by terminal state (acquired = fresh claim processed; replayed = cached response served; busy = an in-flight lease already holds the key; store_error = Claim-path store failure (Record/Release failures are logged only, not counted here); oversize = response too large to record; key_reused = same key presented with a different request body (fingerprint mismatch)). acquired counts every fresh claim; oversize is a sub-event of acquired. cell is the owning RouteGroup cell or _runtime for framework paths.
       labels:
         - cell
         - state

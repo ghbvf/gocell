@@ -92,14 +92,16 @@ func (ms *MemStore) Claim(ctx context.Context, ns, key, fingerprint string, leas
 	}, nil
 }
 
-// checkFingerprintEntry returns ErrFingerprintMismatch if the existing entry has
-// a stored fingerprint that differs from the incoming one, and the entry is still
-// active (not expired). Returns nil if fingerprints match or either is empty.
+// checkFingerprintEntry returns a *FingerprintMismatchError (wrapping
+// ErrFingerprintMismatch and carrying the stored fingerprint blob) if the
+// existing entry has a stored fingerprint that differs from the incoming one,
+// and the entry is still active (not expired). Returns nil if fingerprints match
+// or either is empty.
 func checkFingerprintEntry(e *memEntry, fingerprint string, now time.Time) error {
 	active := (e.recorded != nil && now.Before(e.doneExpiry)) ||
 		(e.leaseToken != "" && now.Before(e.leaseExpiry))
 	if active && fpMismatch(e.fingerprint, fingerprint) {
-		return fmt.Errorf("idempotency.MemStore: %w", ErrFingerprintMismatch)
+		return &FingerprintMismatchError{Stored: e.fingerprint}
 	}
 	return nil
 }

@@ -134,14 +134,15 @@ func (s *HTTPIdempotencyStore) ReadyCheck(ctx context.Context) error {
 //
 // Returns:
 //
-//	{1}      = ClaimAcquired (lease set successfully; fp stored at KEYS[3])
-//	{0}      = ClaimBusy    (lease already held; fp matches or fp absent)
-//	{2,blob} = ClaimDone    (resp key exists; blob = stored response; fp matches or fp absent)
-//	{3}      = FingerprintMismatch (fp key exists and differs from ARGV[3])
+//	{1}            = ClaimAcquired (lease set successfully; fp stored at KEYS[3])
+//	{0}            = ClaimBusy    (lease already held; fp matches or fp absent)
+//	{2,blob}       = ClaimDone    (resp key exists; blob = stored response; fp matches or fp absent)
+//	{3,fp_stored}  = FingerprintMismatch (fp key differs from ARGV[3]; fp_stored = the
+//	                 stored fingerprint blob, carried back for the per-field diff)
 const claimRespScript = `
 local fp_stored = redis.call('GET', KEYS[3])
 if fp_stored ~= false and ARGV[3] ~= "" and fp_stored ~= ARGV[3] then
-  return {3}
+  return {3, fp_stored}
 end
 local resp = redis.call('GET', KEYS[1])
 if resp ~= false then
@@ -268,10 +269,10 @@ func (s *HTTPIdempotencyStore) Claim(
 // Lua claim-result codes. claimRespScript always returns a Lua table, which
 // go-redis surfaces as a []any: {1}→[]any{int64(1)} (acquired),
 // {0}→[]any{int64(0)} (busy), {2,blob}→[]any{int64(2), string} (done),
-// {3}→[]any{int64(3)} (fingerprint mismatch). A single-element Lua table is
-// NOT flattened to a bare int64 by real Redis — the reply is always a
-// multi-bulk array — so decodeClaim treats every reply as a slice and switches
-// on the leading code element.
+// {3,fp}→[]any{int64(3), string} (fingerprint mismatch; fp = stored blob). A
+// single-element Lua table is NOT flattened to a bare int64 by real Redis — the
+// reply is always a multi-bulk array — so decodeClaim treats every reply as a
+// slice and switches on the leading code element.
 const (
 	claimCodeBusy                int64 = 0
 	claimCodeAcquired            int64 = 1
@@ -305,7 +306,7 @@ func (s *HTTPIdempotencyStore) decodeClaim(
 	case claimCodeDone:
 		return decodeClaimDone(arr)
 	case claimCodeFingerprintMismatch:
-		return 0, nil, nil, fmt.Errorf("redis: http idempotency: %w", idemhttp.ErrFingerprintMismatch)
+		return decodeClaimFingerprintMismatch(arr)
 	default:
 		return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
 			"redis: http idempotency claim unexpected result code")
@@ -329,6 +330,21 @@ func decodeClaimDone(arr []any) (idempotency.ClaimState, *idemhttp.RecordedRespo
 			"redis: http idempotency claim replay decode failed", err)
 	}
 	return idempotency.ClaimDone, &rec, noopHTTPReceipt{}, nil
+}
+
+// decodeClaimFingerprintMismatch decodes the {3, fp_stored} reply (code already
+// matched) into a *idemhttp.FingerprintMismatchError carrying the stored
+// fingerprint blob, so the middleware can compute a per-field diff. A missing or
+// non-string fp element degrades to an empty Stored (the base 422 is still
+// returned, just without the per-field diff).
+func decodeClaimFingerprintMismatch(arr []any) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
+	stored := ""
+	if len(arr) >= 2 {
+		if s, ok := arr[1].(string); ok {
+			stored = s
+		}
+	}
+	return 0, nil, nil, &idemhttp.FingerprintMismatchError{Stored: stored}
 }
 
 // ---------------------------------------------------------------------------

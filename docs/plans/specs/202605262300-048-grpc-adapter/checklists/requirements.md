@@ -35,5 +35,5 @@
 ## Notes
 
 - The spec was written after a 3-explorer research pass (see [research.md](../research.md)); decisions documented there pre-empt clarification markers.
-- Constitution check (in plan.md) flagged one Medium archtest as a known funnel-pair Hard upgrade — tracked, not blocking.
+- Constitution check (in plan.md) flagged one Medium archtest (`GRPC-CELL-REGISTRAR-LAYER-01`) whose Hard upgrade is **infeasible** — a permanent Go-language ceiling (won't-do #1582), not a deferred upgrade. Tracked, not blocking.
 - The 12 PR slicing (in plan.md §"Phase 2") is the delivery contract for FR-014.

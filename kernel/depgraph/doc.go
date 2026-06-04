@@ -8,8 +8,10 @@
 //
 // # Types
 //
-// Graph holds the typed dependency graph for one Go module. Wire format is
-// stable JSON; see Graph.MarshalJSON and Node.MarshalJSON.
+// Graph holds the typed dependency graph for a workspace's Go modules (one
+// element in Modules when single-module; all workspace members under a go.work
+// multi-module load). Wire format is stable JSON; see Graph.MarshalJSON and
+// Node.MarshalJSON.
 //
 // Node represents one Go package. Edges (Imports) use import-path strings
 // (not pointers) so JSON serialization is cycle-safe.
@@ -18,17 +20,25 @@
 //
 // # Layer classification
 //
-// LayerOf assigns each import path to a layer string. The canonical layer
-// constants (LayerKernel, LayerCells, …) are the JSON values of Node.Layer
-// and the single source of truth for archtest layer rules.
-//
-// CellOf and SliceOf extract the cell/slice ID from a cells/ import path.
+// Classifier is the single classification entry point for a workspace's Go
+// modules. Construct it with NewClassifier(modules []string) — pass every
+// member module's import path (one element for a single-module workspace).
+// It exposes .Layer, .Cell, .Slice, and .OwningModule methods. OwningModule
+// selects the module that owns an import path by LONGEST matching prefix, so a
+// nested module path (e.g. "github.com/ghbvf/gocell/mdm") correctly wins over
+// the core module for packages like ".../mdm/cells/foo" — which then
+// classifies as LayerCells within the mdm module rather than LayerUnknown
+// under the core module. The canonical layer constants (LayerKernel,
+// LayerCells, ...) are the JSON values of Node.Layer and the single source of
+// truth for archtest layer rules.
 //
 // # Graph construction
 //
-// FromNodes builds a Graph from a pre-constructed []*Node slice. The caller
-// is responsible for building each Node (ID, Layer, CellID, SliceID, Imports);
-// FromNodes handles sorting, byID indexing, Stats, and MarkTestOnly.
+// FromNodes(modules []string, nodes) builds a Graph from a pre-constructed
+// []*Node slice. The caller is responsible for building each Node (ID, Layer,
+// CellID, SliceID, Imports); FromNodes handles sorting, byID indexing, Stats,
+// and MarkTestOnly. Graph.Modules is the set of module import paths the graph
+// spans.
 //
 // MarkTestOnly marks each Node TestOnly=true when it is imported by at least
 // one test consumer but no production consumer. Both the production and test

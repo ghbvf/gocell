@@ -54,7 +54,7 @@ func WriteDOT(g *kerneldepgraph.Graph, w io.Writer) error {
 	b.WriteString("digraph depgraph {\n")
 	b.WriteString("  rankdir=LR;\n")
 	b.WriteString("  node [shape=box, style=\"filled,rounded\", fontname=\"Helvetica\"];\n")
-	fmt.Fprintf(&b, "  label=%q;\n", "module: "+g.Module)
+	fmt.Fprintf(&b, "  label=%q;\n", "modules: "+strings.Join(g.Modules, ", "))
 
 	// Clusters by layer.
 	for i, layer := range layers {

@@ -54,9 +54,10 @@ key = subject + "\x00" + method + "\x00" + path + "\x00" + Idempotency-Key heade
 不同端点独立——`POST /orders` 和 `POST /payments` 用同一 header 值生成不同 key，
 不会碰撞。此设计对齐 Stripe 幂等设计和 IETF idempotency-key draft §3。
 
-**request body SHA-256 fingerprint**：`Store.Claim` 签名包含 `fingerprint string` 参数
-（`hex(sha256(body))`）。同一 key + 不同 body 时 Store 返回 `ErrFingerprintMismatch`
-（wraps `errcode.KindConflict` + `ErrIdempotencyKeyReused`），Middleware 将其转成 409。
+**request body fingerprint**：`Store.Claim` 签名包含 `fingerprint string` 参数
+（canonical blob，见下方 §"指纹 blob 与 per-field diff"）。同一 key + 不同 body 时 Store
+返回 `*FingerprintMismatchError`（wraps `ErrFingerprintMismatch` = `errcode.KindUnprocessable` +
+`ErrIdempotencyKeyReused`），Middleware 将其转成 **422** 并附 per-field diff（差异字段名）。
 指纹计算在 BodyLimit 之后（body 已 bounded），在 Claim 之前。
 
 只有 `PrincipalUser` + 非空 `Subject` 的请求参与幂等追踪。Service-token 主体、匿名
@@ -67,10 +68,12 @@ key = subject + "\x00" + method + "\x00" + path + "\x00" + Idempotency-Key heade
 multi-tenant 落地后的 UUID namespace 形态在语义上兼容——sentinel 是有效 namespace
 而非空字符串，不会与任何 tenant UUID 碰撞。
 
-**决策：不使用 422 作为 fingerprint mismatch 状态码。** `pkg/errcode` 的 Kind 集合中
-无 `KindUnprocessable`，最接近的安全选择是 `KindConflict` → HTTP 409。错误码名称
-`ErrIdempotencyKeyReused` 保留了 IETF/Stripe 的 422 语义意图；状态码 409 是当前 Kind
-集合的限制而非语义选择。见 `pkg/errcode/errcode.go` 中 `ErrIdempotencyKeyReused` 注释。
+**决策：fingerprint mismatch 使用 422（Unprocessable Content）。** 引入 `errcode.KindUnprocessable`
+→ HTTP 422，`ErrFingerprintMismatch` / 中间件 key-reused 路径映射至此，对齐 IETF idempotency-key
+draft §2.7（同 key + 不同 payload 是语义不可处理的客户端错误）。`ClaimBusy`（in-flight）保持 409。
+> **Amendment 2026-06-04（#1450）**：本段为 422 升级后形态，已重写。原决策「不使用 422，
+> 回退 409」因 Kind 集合无 `KindUnprocessable` 而采用；#1450 引入该 Kind 后取代。详见文末
+> §"Amendment 2026-06-04：422 升级 + per-field diff"。
 
 ### 3. Middleware 位序 — Auth 之后、handler 之前（BodyLimit 之内）
 
@@ -161,8 +164,9 @@ hashtag 外），保证 lease + resp 落在同一 slot，使 `EVAL` multi-key �
 
 **Claim 流程**（`claimRespScript`）：先检查 resp key 是否存在（`ClaimDone` 回放路径），
 再尝试 `SET NX` lease key（`ClaimAcquired` 或 `ClaimBusy`）。Claim 同时携带 `fingerprint`
-参数：`ClaimAcquired` 时原子存储指纹；后续同 key Claim 时比对存储指纹，不匹配返回
-`ErrFingerprintMismatch`。
+参数：`ClaimAcquired` 时原子存储指纹；后续同 key Claim 时比对存储指纹，不匹配时 Lua 返回
+`{3, fp_stored}`，decode 为 `*FingerprintMismatchError{Stored: fp_stored}`（携带 stored blob
+供中间件做 per-field diff）。
 
 **Record 流程**（`httpRecordScript`）：token-guarded：先校验 lease key 的当前值 = token，
 原子执行 `DEL lease + SET resp`。Token 不匹配（stale lease 过期后被其他 worker 重新
@@ -303,7 +307,8 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 | **Handler panic 持久化 lease**（panic 导致 Release 未调用）| `recordOrRelease` 的 `defer Release` 在 panic 时仍执行（Go defer 在 panic 栈展开时运行）；Release 后 panic 自然传播 | ✅ |
 | **4xx 响应被缓存为永久回放**（参数错误的 response 被 Record）| `shouldRecord` 仅对 2xx/3xx 记录；4xx/5xx 走 Release 路径，客户端可修正参数后重试 | ✅ |
 | **同一 key + 不同 endpoint mis-replay**（相同 header 值跨端点错误 replay）| method + path 包含在 key 组成中（`subject + "\x00" + method + "\x00" + path + "\x00" + header`）；不同 endpoint 的 Claim 使用不同 key，结构上无法碰撞 | ✅ |
-| **同一 key + 不同 body mis-replay**（相同 key + 不同请求体绕过指纹检测）| `Store.Claim` 接受 `fingerprint = hex(sha256(body))`；后续不匹配指纹的 Claim 返回 `ErrFingerprintMismatch` → 409 `ErrIdempotencyKeyReused`；攻击者无法用不同 body 劫持已有 replay | ✅ |
+| **同一 key + 不同 body mis-replay**（相同 key + 不同请求体绕过指纹检测）| `Store.Claim` 接受 canonical fingerprint blob；后续不匹配指纹的 Claim 返回 `*FingerprintMismatchError` → 422 `ErrIdempotencyKeyReused`；攻击者无法用不同 body 劫持已有 replay | ✅ |
+| **per-field diff 字段名泄漏**（422 响应回字段名是否泄露原始请求）| diff 只回**字段名**（如 `amount`），绝不回字段**值**——**结构性 Hard**：store 只持 per-field 哈希（无值可回），diff helper 返回 `[]string`（签名不可回值）。幂等 key = `(subject, method, path, tenant, header)`，diff 只发生在**同一认证主体**自己先后两次请求间，回字段名给本人无泄漏 | ✅ (by-design) |
 | **敏感响应体持久化到 replay store**（session cookie / credential 被 store）| **header 维度 ✅**：`sensitiveResponseHeaders`（Set-Cookie、Authorization 等）在 `filterSensitiveHeaders` 中剔除，RecordedResponse 只存安全可重放的 header。**body 维度 ✅（gh #1469 收口）**：`filterSensitiveHeaders` 只过滤 header，body 维度防护由三层组成——(1) `endpoints.http.idempotency.exempt` codegen 入口落地；(2) 全部凭据响应路由（`login` / `refresh` / `change-password`）声明豁免，exempt 路由 response **永不写入 store**；(3) fail-closed 守卫 `CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01`——response schema 含 `IsSensitiveKey` 字段而未豁免的契约生成期被拒，未来凭据路由无法 fail-open。详见下方 §"敏感 body route 豁免（✅ 已收口，gh #1469）"。 | ✅ |
 
 ---
@@ -316,7 +321,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 - `RecordedResponse` sealed construction 提供 type-safe replay blob，无法从外部伪造。
 - Redis 双键 Lua 原子模型与 `kernel/idempotency.Claimer` 的 PG outbox fencing（`OUTBOX-LEASE-ID-CAS-01`）同一 token-guard 语义，一致性模型可预测。
 - `REDIS-KEY-NAMESPACE-01` 已有 archtest 自动覆盖新增的 `HTTPIdempotencyStore` 构造器，无需新 archtest 守卫 namespace 约束。
-- request body fingerprint 已实现：同一 key + 不同 body → 409 即时拒绝，防止 mis-replay。
+- request body fingerprint 已实现：同一 key + 不同 body → 422 即时拒绝 + per-field diff，防止 mis-replay。
 - route opt-out **运行时机制**（`auth.Route.IdempotencyExempt` → matcher → `WithExemptMatcher`）已落地并有测试，允许敏感路由显式豁免 recording。
 
 **Negative / 已知限制**:
@@ -326,7 +331,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 - **回放 best-effort**：256 KiB cap 意味着大响应不可回放。客户端应对"无回放"设计防御（幂等键的第二次请求可能重新执行，而非 replay）。
 - **Service token 主体不追踪**：`PrincipalService` passthrough，service-to-service 调用的幂等需调用方自行保证。此为有意选择（§决策 2 解释）。
 - **单 listener 作用域**：跨 listener / 多 pod 场景不在本 PR 覆盖（§决策 9）。
-- **409 而非 422 用于 fingerprint mismatch**：IETF/Stripe 建议 422 Unprocessable Entity，但 `pkg/errcode` Kind 集合无 `KindUnprocessable`，使用 409 KindConflict 是当前的安全 fallback。错误码名称 `ErrIdempotencyKeyReused` 保留了语义意图。
+- **422 用于 fingerprint mismatch**（#1450）：引入 `errcode.KindUnprocessable` → 422，对齐 IETF idempotency-key draft §2.7。`ClaimBusy`（in-flight）仍 409。详见文末 §"Amendment 2026-06-04"。
 
 ---
 
@@ -386,7 +391,56 @@ Dependent contracts (governance scan): none — middleware 是 framework 横切�
 以下内容在本 PR 范围之外，按 `feedback_pr_scope_carveouts_must_backlog` 规则同步登记 backlog：
 
 - **cross-cell / full-assembly 幂等命名空间**（gh #1449）：多 listener 共享 Store + namespace 约定，需设计 Store 共享策略（wiring）和 namespace collision 防御。
-- **request-payload fingerprinting** — ✅ **已实现**（本 PR）：`Store.Claim` 现接收 `fingerprint = hex(sha256(body))`；同一 key + 不同 body → 409 `ERR_IDEMPOTENCY_KEY_REUSED`。原 gh #1450 中「422 + per-field request-param diff」的完整 Stripe 对标（精确差异报告、422 状态码支持）仍未实现；如需完整实现请重开或新建 backlog 条目。gh #1450 的基础 fingerprint check 部分已关闭。
+- **request-payload fingerprinting + 422 + per-field diff** — ✅ **已实现**（gh #1450）：`Store.Claim` 接收 canonical fingerprint blob；同一 key + 不同 body → **422** `ERR_IDEMPOTENCY_KEY_REUSED`，响应 details 列出差异的顶层字段名（Stripe 式 per-field diff，只回字段名/不回值）。详见文末 §"Amendment 2026-06-04"。gh #1450 关闭。
 - **production wiring** — ✅ **已实现**（gh #1469）：`cmd/corebundle` 在 `shared.Redis != nil` 时默认接通 `bootstrap.WithIdempotencyStore(redis.NewHTTPIdempotencyStore(client, "_runtime"))`（`buildHTTPIdempotencyStore` + `defaultRuntimeOptions`）。HARD 前置三件套（codegen 入口 + 3 凭据路由豁免 + fail-closed 守卫）同 PR 落地，见 §"敏感 body route 豁免（✅ 已收口，gh #1469）"。bootstrap e2e replay + exempt-never-recorded 测试覆盖。
 - **Block-and-wait 并发**（gh #1451，可选增强）：如果 409 + Retry-After 被产品侧确认为可接受，此项关闭；否则可作为 opt-in `WithWaitOnBusy(timeout)` 选项。
 - **`HTTP-IDEMPOTENCY-CONFORMANCE-ENROLLMENT-01` Hard 化**：当前上游和下游均为 Medium（`types.Implements` 穷举 + `_test.go` 调用点解析），升 Hard 路径 = codegen golden 枚举 Store 实现（对标 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 Hard 路径 gh #1003）。尚无独立 gh issue，标为 future work。
+
+---
+
+## Amendment 2026-06-04：422 升级 + per-field diff（gh #1450）
+
+原 §2 将 fingerprint mismatch 状态码定为 **409**，唯一理由是 `pkg/errcode` Kind 集合无
+`KindUnprocessable`。本 amendment 落地 #1450（EPIC #1489 Phase 2），把它升级为 **422** 并补齐
+Stripe 式 per-field diff。矛盾段（§2 决策、§威胁矩阵「同一 key + 不同 body」行、§Consequences
+Negative、§Follow-ups）已**同 PR 重写**（ai-robust「ADR amendment 落地必查」）。
+
+### 1. `errcode.KindUnprocessable` → 422
+
+`pkg/errcode/status.go` 新增 `KindUnprocessable`（`Kind.Status()` → `http.StatusUnprocessableEntity`）。
+errcode 新 Kind 扇出三载体同 PR 同步：`Kind.Status()` switch、`kernel/governance.errcodeKindNameToStatus`
+map、`pkg/errcode` `TestKindStatusAndPublicCode` 表。`IsClient()`（status-range）/ `PublicCode()` /
+`PublicCodeForStatus()`（仅 5xx）无需改。`ErrFingerprintMismatch` 与中间件 key-reused 路径改用
+`KindUnprocessable`；`ClaimBusy`（in-flight，`ErrIdempotencyInProgress`）**保持 409 不变**。
+
+### 2. 指纹 blob 与 per-field diff（隐私保护）
+
+`computeFingerprint(body)` 由 `hex(sha256(body))` 升级为 canonical blob `{b: bodyHash, f: {field: fieldHash}}`
+（JSON 编码，map key 排序 → 确定性）：
+
+- **match 决策**仍是整 blob 相等（`b` 分量保留字节级语义：reordered key / whitespace 仍 mismatch）。
+- **`f` 分量**逐顶层字段存 `hex(sha256(rawValueBytes))`（`json.RawMessage` 不递归解析值，无 canonicalize 热路径/深嵌套面，与 `b` 的 byte-exact match 一致），**仅供 mismatch 时 diff**——只存哈希、不存 raw 值。
+- mismatch 时 Store 经 `*FingerprintMismatchError{Stored}` 把 stored blob 带回中间件，`diffFields(stored, incoming)`
+  算差异（值不同 / 新增 / 缺失）的顶层字段名（sorted，cap `maxMismatchedFields=20`），写入 422 响应
+  `details`（逐条 `PublicString("mismatchedField", name)`；超 cap 加 `PublicBool("mismatchedFieldsTruncated", true)`）。
+  字段 map 相等但 blob 不同（仅 key 顺序/空白）→ 无 per-field details，回 base 422。
+
+**隐私结构性 Hard**：store 侧只有哈希（无 raw 值可回），`diffFields` 返回 `[]string`（签名层不可能回值）。
+幂等 key = `(subject, method, path, tenant, header)` → diff 只发生在同一认证主体自己先后两次请求间，
+回字段名给本人无泄漏。见 §威胁矩阵新增行「per-field diff 字段名泄漏」✅ (by-design)。
+
+### 3. CH-07 oracle 扩为 {409, 422} + 契约扇出
+
+`metadata.HTTPTransportMeta.IdempotencyFrameworkStatuses()` 由 `{409}` 改 `{409, 422}`（409=ClaimBusy，
+422=key-reused）。该 kernel 字面量受分层约束（kernel/ 不可 import runtime/）须手写，由新 archtest
+`IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01`（**Medium**）绑定到单源
+`runtime/http/idempotency.FrameworkStatuses()`（从 sentinel 派生），漂移即 CI 红。该 Medium 是分层下
+可达上限（type-system Hard 不可达，同 #851/#893/#1282 天花板族）。CH-07 据此对全部非豁免 mutating
+契约强制声明 422——本 PR 经 `gocell check contract-health` 机器派生给 **28** 个契约的
+`endpoints.http.auth.responses` 补 422（含平台 + examples）。422 是 middleware-injected，声明在
+`auth.responses`（无 typed response struct），无 codegen。
+
+### 4. 威胁矩阵逐行重评
+
+§威胁矩阵「同一 key + 不同 body mis-replay」行：409 → 422，✅ 不变。新增「per-field diff 字段名泄漏」
+行：✅ (by-design，结构性无值)。无 ✅ → ⚠️/❌ 退化格子。

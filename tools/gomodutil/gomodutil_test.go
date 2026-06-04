@@ -3,6 +3,7 @@ package gomodutil_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/gomodutil"
@@ -123,4 +124,136 @@ func TestReadModulePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadWorkUseDirs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		goWork  string // "" means do not write go.work
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:   "single use dot",
+			goWork: "go 1.25\n\nuse .\n",
+			want:   []string{"."},
+		},
+		{
+			name:   "block form multiple modules",
+			goWork: "go 1.25\n\nuse (\n\t.\n\t./mdm\n\t./examples/ssobff\n)\n",
+			want:   []string{".", "mdm", "examples/ssobff"},
+		},
+		{
+			name:   "trailing-slash and dot-prefix cleaned",
+			goWork: "go 1.25\n\nuse (\n\t./mdm/\n\t./zerotrust\n)\n",
+			want:   []string{"mdm", "zerotrust"},
+		},
+		{
+			name:    "missing go.work",
+			goWork:  "",
+			wantErr: true,
+		},
+		{
+			name:    "malformed go.work",
+			goWork:  "this is not a go.work file {{{\n",
+			wantErr: true,
+		},
+		{
+			name:    "dotdot escape rejected",
+			goWork:  "go 1.25\n\nuse ../escape\n",
+			wantErr: true,
+		},
+		{
+			name:    "absolute path rejected",
+			goWork:  "go 1.25\n\nuse /abs/path\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			if tt.goWork != "" {
+				if err := os.WriteFile(filepath.Join(root, "go.work"), []byte(tt.goWork), 0o600); err != nil {
+					t.Fatalf("write go.work: %v", err)
+				}
+			}
+
+			got, err := gomodutil.ReadWorkUseDirs(root)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ReadWorkUseDirs(%q) = %v, want error", root, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadWorkUseDirs(%q) unexpected error: %v", root, err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("ReadWorkUseDirs(%q) = %v, want %v", root, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("ReadWorkUseDirs(%q)[%d] = %q, want %q", root, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestReadWorkUseDirs_SymlinkEscape covers the symlink path-traversal guard:
+// a `use` dir that is a symlink resolving OUTSIDE the workspace root must be
+// rejected (else `go list ./<dir>/...` would scan packages outside the repo),
+// while a symlink resolving WITHIN the root is accepted. Not table-driven
+// because it needs real symlink setup. Not parallel (filesystem-heavy, but
+// isolated temp dirs so it is safe to parallelize; kept serial for clarity).
+func TestReadWorkUseDirs_SymlinkEscape(t *testing.T) {
+	t.Run("symlink escaping the workspace root is rejected", func(t *testing.T) {
+		root := t.TempDir()
+		external := t.TempDir() // a sibling dir OUTSIDE root
+		if err := os.WriteFile(filepath.Join(external, "go.mod"),
+			[]byte("module example.test/outside\n\ngo 1.25\n"), 0o600); err != nil {
+			t.Fatalf("write external go.mod: %v", err)
+		}
+		if err := os.Symlink(external, filepath.Join(root, "linked")); err != nil {
+			t.Skipf("symlink unsupported on this platform: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "go.work"),
+			[]byte("go 1.25\n\nuse ./linked\n"), 0o600); err != nil {
+			t.Fatalf("write go.work: %v", err)
+		}
+
+		got, err := gomodutil.ReadWorkUseDirs(root)
+		if err == nil {
+			t.Fatalf("ReadWorkUseDirs = %v, want error (symlink escapes workspace root)", got)
+		}
+		if !strings.Contains(err.Error(), "escapes the workspace root") {
+			t.Fatalf("error = %q, want substring %q", err.Error(), "escapes the workspace root")
+		}
+	})
+
+	t.Run("symlink resolving within the workspace root is accepted", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "real"), 0o755); err != nil {
+			t.Fatalf("mkdir real: %v", err)
+		}
+		if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "linked")); err != nil {
+			t.Skipf("symlink unsupported on this platform: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "go.work"),
+			[]byte("go 1.25\n\nuse ./linked\n"), 0o600); err != nil {
+			t.Fatalf("write go.work: %v", err)
+		}
+
+		got, err := gomodutil.ReadWorkUseDirs(root)
+		if err != nil {
+			t.Fatalf("ReadWorkUseDirs unexpected error for in-root symlink: %v", err)
+		}
+		if len(got) != 1 || got[0] != "linked" {
+			t.Fatalf("ReadWorkUseDirs = %v, want [linked]", got)
+		}
+	})
 }
