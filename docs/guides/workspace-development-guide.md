@@ -73,24 +73,32 @@ to `go.work` is sufficient for the new module to be picked up automatically;
 After running `go work sync` with a second module, a local `go.work.sum` may be
 generated. It is gitignored by design: cross-module sums are path-dependent on
 the developer's local checkout and must not be committed. The CI drift check in
-`hack/verify-workspace.sh` watches only `go.work`, not `go.work.sum`
-(intentional).
+`hack/verify-workspace.sh` runs `go work sync` and diffs `go.work` **plus each
+member module's `go.mod` / `go.sum`** (`go work sync` rewrites those too) — but
+NOT `go.work.sum`, which stays gitignored (intentional).
 
 ## CI traversal chain
 
 ```
 make verify
   └── hack/make-rules/verify.sh          (glob-discovers all hack/verify-*.sh)
-        └── hack/verify-workspace.sh     (when present; enumerates + builds modules)
-              └── hack/lib/modules.sh    (single-sourced from go.work)
+        └── hack/verify-workspace.sh     (go.work drift + per-module release build)
+              └── hack/lib/modules.sh    (single-sourced from go.work; validated DiskPaths)
 ```
 
 `make verify` uses a glob-discovery model: adding `hack/verify-workspace.sh` is
 sufficient — no change to the driver script is needed.
 
-`hack/verify-workspace.sh` runs `go build ./...` per module. Once multiple large
-modules exist and CI budget is a concern, `VERIFY_SKIP=workspace make verify`
-skips this gate (the standard make-verify skip mechanism).
+`hack/verify-workspace.sh` builds each module with `GOWORK=off go -C "$dir" build
+./...` so it resolves against the module's own pinned `go.mod` (release-consistent,
+Plan D §5.6), not the workspace-stitched graph. It builds but does **not** `go
+test` per module — that would duplicate the build-test matrix and slow `make
+verify`; test traversal reuses the same `hack/lib/modules.sh` funnel in CI / a
+future workspace-test gate. Once multiple large modules exist and CI budget is a
+concern, `VERIFY_SKIP=workspace make verify` skips this gate (the standard
+make-verify skip mechanism). The `hack/lib/modules.sh` funnel fail-closed
+validates every `go.work` DiskPath (rejects absolute / `..`-escaping / out-of-repo
+paths) — see `MODULES-PATH-VALIDATION-01`.
 
 ## Reference
 
