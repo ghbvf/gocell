@@ -1,6 +1,9 @@
 package depgraph
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Layer constants name the buckets used by archtest layering rules and the
 // `gocell graph` CLI. They are the JSON values for Node.Layer.
@@ -34,7 +37,7 @@ const (
 
 // internalLayerByDir maps a top-level directory under the module root to
 // its Layer. Unrecognized segments are reported as LayerUnknown — see
-// LayerOf for the failure-loud rationale.
+// Classifier.Layer for the failure-loud rationale.
 var internalLayerByDir = map[string]string{
 	"kernel":    LayerKernel,
 	"runtime":   LayerRuntime,
@@ -56,47 +59,103 @@ var internalLayerByDir = map[string]string{
 	"cellmodules": LayerCellModules,
 }
 
-// LayerOf classifies importPath relative to module. module must be the
-// bare module path without trailing slash (e.g. "github.com/ghbvf/gocell").
+// Classifier maps Go import paths to layers / cell IDs / slice IDs relative to
+// a SET of workspace module paths. It is the single classification entry point;
+// there is no module-singular free function, because a caller that passed the
+// core module path for a nested module's package would mis-bucket it as
+// LayerUnknown.
 //
-// Internal-module packages map to one of LayerKernel..LayerGenerated based
-// on the first path segment. The bare module path itself maps to LayerRoot.
-// Internal packages whose first segment is not in internalLayerByDir map
-// to LayerUnknown — distinct from LayerThirdParty so consumers can spot
+// OwningModule selects the module that owns an import path by LONGEST matching
+// prefix, so a nested module path (e.g. "github.com/ghbvf/gocell/mdm") wins over
+// the core module ("github.com/ghbvf/gocell") for a package like
+// ".../mdm/cells/foo" — which then classifies as LayerCells within the mdm
+// module rather than LayerUnknown under the core module.
+//
+// A single-module caller constructs NewClassifier([]string{module}); behavior is
+// byte-identical to the former module-singular classification. The multi-module
+// workspace passes every member module's import path.
+type Classifier struct {
+	// modules is sorted by descending length so OwningModule's first match is
+	// the longest (most specific) owning prefix.
+	modules []string
+}
+
+// NewClassifier builds a Classifier over the given module import paths. The
+// input is copied and sorted longest-first (ties broken lexically for
+// determinism); the caller's slice is neither retained nor mutated. Empty
+// entries are dropped.
+func NewClassifier(modules []string) Classifier {
+	cp := make([]string, 0, len(modules))
+	for _, m := range modules {
+		if m != "" {
+			cp = append(cp, m)
+		}
+	}
+	sort.Slice(cp, func(i, j int) bool {
+		if len(cp[i]) != len(cp[j]) {
+			return len(cp[i]) > len(cp[j])
+		}
+		return cp[i] < cp[j]
+	})
+	return Classifier{modules: cp}
+}
+
+// OwningModule returns the module path that owns importPath (the longest member
+// equal to importPath or a "<module>/" prefix of it), or "" when no member owns
+// it (stdlib / third-party / unrelated).
+func (c Classifier) OwningModule(importPath string) string {
+	for _, m := range c.modules {
+		if importPath == m || strings.HasPrefix(importPath, m+"/") {
+			return m
+		}
+	}
+	return ""
+}
+
+// Layer classifies importPath relative to its owning module. Internal-module
+// packages map to one of LayerKernel..LayerGenerated based on the first path
+// segment under the owning module; the bare owning-module path maps to
+// LayerRoot; an internal first segment not in internalLayerByDir maps to
+// LayerUnknown — distinct from LayerThirdParty so consumers can spot
 // repo-structure evolution that has not been classified.
 //
-// External packages classify as LayerStdlib (no dot in first segment) or
-// LayerThirdParty (any other domain).
-func LayerOf(module, importPath string) string {
+// Packages owned by no member module classify as LayerStdlib (no dot in first
+// segment) or LayerThirdParty.
+func (c Classifier) Layer(importPath string) string {
 	if importPath == "" {
 		return ""
 	}
-	if importPath == module {
+	owner := c.OwningModule(importPath)
+	if owner == "" {
+		if IsStdlib(importPath) {
+			return LayerStdlib
+		}
+		return LayerThirdParty
+	}
+	if importPath == owner {
 		return LayerRoot
 	}
-	if strings.HasPrefix(importPath, module+"/") {
-		rel := strings.TrimPrefix(importPath, module+"/")
-		seg := rel
-		if i := strings.IndexByte(rel, '/'); i >= 0 {
-			seg = rel[:i]
-		}
-		if layer, ok := internalLayerByDir[seg]; ok {
-			return layer
-		}
-		return LayerUnknown
+	rel := strings.TrimPrefix(importPath, owner+"/")
+	seg := rel
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		seg = rel[:i]
 	}
-	if IsStdlib(importPath) {
-		return LayerStdlib
+	if layer, ok := internalLayerByDir[seg]; ok {
+		return layer
 	}
-	return LayerThirdParty
+	return LayerUnknown
 }
 
-// CellOf returns the cell ID for a package under module/cells/<id>/...,
-// or "" if the package is not under cells/. The Go-reserved "internal"
-// segment (e.g. cells/internal/testoutbox — shared cell-test helpers) is
-// not a cell ID; CellOf returns "" for paths under cells/internal/.
-func CellOf(module, importPath string) string {
-	prefix := module + "/cells/"
+// Cell returns the cell ID for a package under <owningModule>/cells/<id>/...,
+// or "" if the package is not under any member module's cells/. The Go-reserved
+// "internal" segment (e.g. cells/internal/testoutbox — shared cell-test
+// helpers) is not a cell ID; Cell returns "" for paths under cells/internal/.
+func (c Classifier) Cell(importPath string) string {
+	owner := c.OwningModule(importPath)
+	if owner == "" {
+		return ""
+	}
+	prefix := owner + "/cells/"
 	if !strings.HasPrefix(importPath, prefix) {
 		return ""
 	}
@@ -114,16 +173,17 @@ func CellOf(module, importPath string) string {
 	return seg
 }
 
-// SliceOf returns the slice ID for a package under
-// module/cells/<id>/slices/<sliceId>/..., or "" if not under a slice.
+// Slice returns the slice ID for a package under
+// <owningModule>/cells/<id>/slices/<sliceId>/..., or "" if not under a slice.
 // Slices may have nested subdirectories; only the immediate slice ID is
 // returned.
-func SliceOf(module, importPath string) string {
-	cell := CellOf(module, importPath)
+func (c Classifier) Slice(importPath string) string {
+	cell := c.Cell(importPath)
 	if cell == "" {
 		return ""
 	}
-	prefix := module + "/cells/" + cell + "/slices/"
+	owner := c.OwningModule(importPath)
+	prefix := owner + "/cells/" + cell + "/slices/"
 	if !strings.HasPrefix(importPath, prefix) {
 		return ""
 	}
@@ -155,6 +215,11 @@ func IsStdlib(importPath string) bool {
 
 // IsThirdParty reports whether importPath belongs to neither the given
 // module nor stdlib.
+//
+// In a multi-module workspace, prefer [Classifier.OwningModule](importPath) == ""
+// (longest-prefix) over this function — IsThirdParty takes a single module string
+// and would mis-classify a satellite module's packages as third-party when the
+// satellite path is not passed as the module argument.
 func IsThirdParty(module, importPath string) bool {
 	if importPath == "" {
 		return false

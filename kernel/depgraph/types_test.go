@@ -25,7 +25,7 @@ func buildSynth(withTestOnly bool) *depgraph.Graph {
 		{ID: mod + "/cells/cellA", Layer: depgraph.LayerCells, CellID: "cellA", Imports: []string{}},
 		{ID: mod + "/testhelper", Layer: depgraph.LayerUnknown, Imports: []string{}},
 	}
-	g := depgraph.FromNodes(mod, nodes)
+	g := depgraph.FromNodes([]string{mod}, nodes)
 	if withTestOnly {
 		prod := map[string]bool{
 			mod + "/a": true, mod + "/b": true, mod + "/c": true, mod + "/d": true,
@@ -64,7 +64,7 @@ func TestGraphMarshalJSON_StableFieldNames(t *testing.T) {
 	// Wire-format contract: every field below MUST appear in the output.
 	// Renaming any of these is a breaking change requiring a major bump.
 	mustContain := []string{
-		`"module":`,
+		`"modules":[`,
 		`"packages":[`,
 		`"stats":{"packages":`,
 		`"id":"`,
@@ -143,7 +143,7 @@ func TestFromNodes_DedupAndSort(t *testing.T) {
 		{ID: mod + "/a", Layer: depgraph.LayerUnknown, Imports: []string{mod + "/z"}},
 		{ID: mod + "/z", Layer: depgraph.LayerUnknown, Imports: []string{}}, // duplicate
 	}
-	g := depgraph.FromNodes(mod, nodes)
+	g := depgraph.FromNodes([]string{mod}, nodes)
 	if g.Stats.Packages != 2 {
 		t.Errorf("Stats.Packages = %d, want 2 (dedup)", g.Stats.Packages)
 	}
@@ -158,7 +158,7 @@ func TestFromNodes_DedupAndSort(t *testing.T) {
 func TestFilterByLayer(t *testing.T) {
 	t.Parallel()
 	const mod = "example.com/filter"
-	g := depgraph.FromNodes(mod, []*depgraph.Node{
+	g := depgraph.FromNodes([]string{mod}, []*depgraph.Node{
 		{ID: mod + "/kernel", Layer: depgraph.LayerKernel, Imports: []string{mod + "/pkg"}},
 		{ID: mod + "/pkg", Layer: depgraph.LayerPkg, Imports: []string{}},
 		{ID: mod + "/runtime", Layer: depgraph.LayerRuntime, Imports: []string{mod + "/pkg"}},
@@ -169,8 +169,8 @@ func TestFilterByLayer(t *testing.T) {
 		depgraph.LayerPkg:    true,
 	})
 
-	if filtered.Module != mod {
-		t.Fatalf("filtered.Module = %q, want %q", filtered.Module, mod)
+	if len(filtered.Modules) != 1 || filtered.Modules[0] != mod {
+		t.Fatalf("filtered.Modules = %v, want [%q]", filtered.Modules, mod)
 	}
 	if filtered.Stats.Packages != 2 {
 		t.Fatalf("filtered package count = %d, want 2", filtered.Stats.Packages)
@@ -197,7 +197,7 @@ func TestFilterByLayer_NilGraph(t *testing.T) {
 	if filtered == nil {
 		t.Fatal("FilterByLayer(nil) returned nil graph")
 	}
-	if filtered.Module != "" || filtered.Stats.Packages != 0 || filtered.Stats.Edges != 0 || len(filtered.Packages) != 0 {
+	if len(filtered.Modules) != 0 || filtered.Stats.Packages != 0 || filtered.Stats.Edges != 0 || len(filtered.Packages) != 0 {
 		t.Fatalf("FilterByLayer(nil) = %+v, want empty graph", filtered)
 	}
 }
@@ -207,7 +207,7 @@ func TestMarkTestOnly(t *testing.T) {
 	const mod = "example.com/test"
 	helper := &depgraph.Node{ID: mod + "/helper", Layer: depgraph.LayerUnknown, Imports: []string{}}
 	prod := &depgraph.Node{ID: mod + "/prod", Layer: depgraph.LayerUnknown, Imports: []string{}}
-	g := depgraph.FromNodes(mod, []*depgraph.Node{helper, prod})
+	g := depgraph.FromNodes([]string{mod}, []*depgraph.Node{helper, prod})
 
 	prodImporters := map[string]bool{mod + "/prod": true}
 	testImporters := map[string]bool{mod + "/helper": true}

@@ -14,6 +14,7 @@ endpoints:
     auth:
       responses:
         - 409
+        - 422
     noContent: false
     responses:
       400:

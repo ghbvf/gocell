@@ -642,10 +642,10 @@ const (
 	ErrIdempotencyInProgress Code = "ERR_IDEMPOTENCY_IN_PROGRESS"
 	// ErrIdempotencyKeyReused signals that the same Idempotency-Key was sent with
 	// a different request body (fingerprint mismatch). Per IETF idempotency-key
-	// draft §6 and Stripe's idempotency guide, reusing a key with a different
-	// payload is a client error. Maps to HTTP 409 (KindConflict) because the
-	// errcode Kind set has no KindUnprocessable (422) — 409 is the closest safe
-	// choice that signals a conflict between the stored request and the new one.
+	// draft §2.7, reusing a key with a different payload is a client error that
+	// maps to HTTP 422 (KindUnprocessable) — the request is syntactically valid
+	// but semantically unprocessable against the response already committed for
+	// the original payload.
 	ErrIdempotencyKeyReused Code = "ERR_IDEMPOTENCY_KEY_REUSED"
 
 	// Metrics error codes (kernel/observability/metrics).
