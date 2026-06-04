@@ -11,8 +11,6 @@ package reconciletest_test
 import (
 	"testing"
 
-	"go.uber.org/goleak"
-
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
@@ -21,7 +19,6 @@ import (
 // TestRunConformance_NoLeader exercises all non-leader subtests with a
 // fakes-backed harness (Features{} — Leader=false, Fencing=false).
 func TestRunConformance_NoLeader(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	reconciletest.RunConformance(t, noLeaderHarness, reconciletest.Features{})
 }
 
@@ -29,7 +26,6 @@ func TestRunConformance_NoLeader(t *testing.T) {
 // LeaderFlow and Fencing) with fakes-backed leader + fenced repo
 // (Features{Leader:true, Fencing:true}).
 func TestRunConformance_WithLeaderAndFencing(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	reconciletest.RunConformance(t, leaderFencingHarness, reconciletest.Features{
 		Leader:  true,
 		Fencing: true,

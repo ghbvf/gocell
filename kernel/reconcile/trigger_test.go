@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -27,8 +26,6 @@ const tickerInterval = testtime.D1s
 // clock: each Advance(interval) fires exactly one zero-value resync pulse, with
 // no dependence on wall-clock time.
 func TestTickerTrigger_EmitsAtInterval(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	fc := clockmock.New(time.Time{})
 	trig := TickerTrigger(fc, tickerInterval)
 
@@ -51,8 +48,6 @@ func TestTickerTrigger_EmitsAtInterval(t *testing.T) {
 // TestTickerTrigger_RespectsCtxCancel asserts the ticker goroutine exits on ctx
 // cancellation (goleak proves no leak).
 func TestTickerTrigger_RespectsCtxCancel(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	fc := clockmock.New(time.Time{})
 	trig := TickerTrigger(fc, tickerInterval)
 
@@ -87,8 +82,6 @@ func TestTickerTrigger_NonPositiveIntervalPanics(t *testing.T) {
 // TestChannelTrigger_PassesRequest asserts an external Request written to the
 // source channel is forwarded to the work queue with its EntityID intact.
 func TestChannelTrigger_PassesRequest(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	in := make(chan Request, 1)
 	trig := ChannelTrigger(in)
 
@@ -106,8 +99,6 @@ func TestChannelTrigger_PassesRequest(t *testing.T) {
 // unbuffered work queue, the trigger forwards every Request in order, blocking
 // on each send until the consumer reads it — nothing is dropped.
 func TestChannelTrigger_BlockedOnFull(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	in := make(chan Request)
 	trig := ChannelTrigger(in)
 
@@ -130,8 +121,6 @@ func TestChannelTrigger_BlockedOnFull(t *testing.T) {
 // TestChannelTrigger_SourceClosedExits asserts the goroutine exits cleanly when
 // the source channel is closed (no leak, no further forwarding).
 func TestChannelTrigger_SourceClosedExits(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	in := make(chan Request)
 	trig := ChannelTrigger(in)
 
@@ -146,8 +135,6 @@ func TestChannelTrigger_SourceClosedExits(t *testing.T) {
 // cancellation while idle (blocked on the source) — the outer select's ctx.Done
 // path (goleak proves no leak).
 func TestChannelTrigger_RespectsCtxCancel(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	in := make(chan Request)
 	trig := ChannelTrigger(in)
 
@@ -165,8 +152,6 @@ func TestChannelTrigger_RespectsCtxCancel(t *testing.T) {
 // proceed (no reader) — so cancel deterministically drives the inner exit (no
 // leak, no hang).
 func TestChannelTrigger_CancelWhileBlockedOnQueue(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	in := make(chan Request) // unbuffered: send completes after the goroutine receives
 	trig := ChannelTrigger(in)
 

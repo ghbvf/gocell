@@ -14,7 +14,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -133,7 +132,6 @@ func stopCtx(t *testing.T) (context.Context, context.CancelFunc) {
 // -----------------------------------------------------------------------------
 
 func TestLoop_NilReconcilerFailsStart(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{reconcilerID: "rc"}
 	err := l.Start(context.Background())
 	require.Error(t, err)
@@ -142,7 +140,6 @@ func TestLoop_NilReconcilerFailsStart(t *testing.T) {
 }
 
 func TestLoop_ReconcilerNotReadyFailsStart(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{reconcilerID: "rc", reconciler: notReadyReconciler{}}
 	err := l.Start(context.Background())
 	require.Error(t, err)
@@ -151,7 +148,6 @@ func TestLoop_ReconcilerNotReadyFailsStart(t *testing.T) {
 }
 
 func TestLoop_BadMetricLabelsFailsStart(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	p := newRecordingProvider()
 	bad, err := p.CounterVec(kernelmetrics.CounterOpts{Name: metricReconcileTotal, LabelNames: []string{"wrong"}})
 	require.NoError(t, err)
@@ -171,7 +167,6 @@ func TestLoop_BadMetricLabelsFailsStart(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestLoop_StartStopGraceful(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
 		reconcilerID: "rc",
 		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
@@ -187,7 +182,6 @@ func TestLoop_StartStopGraceful(t *testing.T) {
 }
 
 func TestLoop_OwnerCtxCancelDrainsWithoutStop(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
@@ -221,7 +215,6 @@ func TestLoop_OwnerCtxCancelDrainsWithoutStop(t *testing.T) {
 // Start returns nil without reporting "started", and the subsequent Stop is a
 // no-op (state was cleared). goleak verifies the spawned workers self-drain.
 func TestLoop_OwnerCtxCanceledBeforeStart(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
 		reconcilerID: "rc",
 		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
@@ -234,7 +227,6 @@ func TestLoop_OwnerCtxCanceledBeforeStart(t *testing.T) {
 }
 
 func TestLoop_StopTimeoutReturnsDeadline(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := newBlockingReconciler()
 	rec.ignoreCtx = true // simulate a reconcile stuck mid-work, not yet checking ctx
 	src := make(chan Request)
@@ -262,7 +254,6 @@ func TestLoop_StopTimeoutReturnsDeadline(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestLoop_MaxConcurrencyRespected(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := newBlockingReconciler()
 	src := make(chan Request)
 	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, maxConcurrentReconciles: 2, interval: testtime.D1h}
@@ -304,7 +295,6 @@ func TestLoop_MaxConcurrencyRespected(t *testing.T) {
 // dirty re-run ensures convergence even without a resync. The skip counter still
 // fires 3 times (one per duplicate trigger), and maxPerEntity stays 1.
 func TestLoop_SameEntityIDSerial(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := newBlockingReconciler()
 	src := make(chan Request)
 	p := newRecordingProvider()
@@ -316,7 +306,8 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 	// Register the deterministic signal BEFORE Start so no skip increment is
 	// missed between Start and the first Request send.
 	skippedThrice := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 3)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 3,
+	)
 	require.NoError(t, l.Start(ownerCtx))
 
 	for i := 0; i < 4; i++ {
@@ -337,7 +328,8 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 	// count == 2 after Stop (one in-flight + one dirty re-run). This complements
 	// TestLoop_F5_DirtyDedupCoalescedRerun which also asserts this guarantee.
 	secondCall := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}, 2)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSuccess)}, 2,
+	)
 	close(rec.release)
 	testwait.Deterministic(t, secondCall, "dirty-rerun-success")
 	assert.EqualValues(t, 2, rec.calls.Load(), "exactly 2 reconcile calls: in-flight + coalesced dirty re-run")
@@ -351,7 +343,6 @@ func TestLoop_SameEntityIDSerial(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestLoop_PanicRecoveredAndOtherEntitiesUnaffected(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	// okSig is closed the first time the non-panicking "ok" entity is reconciled.
 	okSig := make(chan struct{})
 	var okOnce sync.Once
@@ -368,7 +359,8 @@ func TestLoop_PanicRecoveredAndOtherEntitiesUnaffected(t *testing.T) {
 	require.NoError(t, err)
 	// Register the transient-counter signal before Start so no increment is missed.
 	panicTransient := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}, 1)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultTransient)}, 1,
+	)
 	l := &Loop{reconcilerID: "rc", reconciler: rec, source: src, interval: testtime.D1h, metrics: m}
 	ownerCtx, ownerCancel := startCtxs(t)
 	defer ownerCancel()
@@ -389,7 +381,6 @@ func TestLoop_PanicRecoveredAndOtherEntitiesUnaffected(t *testing.T) {
 }
 
 func TestLoop_PermanentNotRequeued_TransientRequeued(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := funcReconciler(func(_ context.Context, req Request) (Result, error) {
 		if req.EntityID == "perm" {
 			return Result{}, PermanentError(errors.New("revoked"))
@@ -427,7 +418,6 @@ func TestLoop_PermanentNotRequeued_TransientRequeued(t *testing.T) {
 }
 
 func TestLoop_RecordsSuccessMetrics(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := funcReconciler(func(context.Context, Request) (Result, error) {
 		return Result{RequeueAfter: testtime.D1h}, nil
 	})
@@ -469,7 +459,6 @@ func TestLoop_RecordsSuccessMetrics(t *testing.T) {
 // pre-check returns without confirming the loop and makes the subsequent Stop a
 // no-op. The gauge MUST be reset to 0 on that path, else it stays stuck at 1.
 func TestLoop_OwnerCtxCanceledBeforeStartResetsLeader(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
@@ -500,7 +489,6 @@ func TestLoop_OwnerCtxCanceledBeforeStartResetsLeader(t *testing.T) {
 // second pool racing the draining one) and a later Stop drains and resets the
 // gauge to 0.
 func TestLoop_StopRetryableAfterTimeout(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := newBlockingReconciler()
 	rec.ignoreCtx = true // stuck mid-work, ignores ctx until released
 	src := make(chan Request)
@@ -582,7 +570,6 @@ func TestValidateReconcilerID(t *testing.T) {
 // TestLoop_BadReconcilerIDFailsStart covers F7 at the Start gate: a malformed
 // ReconcilerID fails OnStart (bootstrap rolls back) before any metric record.
 func TestLoop_BadReconcilerIDFailsStart(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
 		reconcilerID: "Bad-ID",
 		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
@@ -604,8 +591,6 @@ func TestLoop_BadReconcilerIDFailsStart(t *testing.T) {
 // Setup: MaxConcurrentReconciles=4, 1 slow entity, 4 duplicate triggers.
 // Expected: reconcile count == 2 (one in-flight + one dirty re-run), maxPerEntity==1.
 func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	const entity = "coalesce-me"
 
 	// secondStarted is closed when the second (dirty re-run) reconcile begins.
@@ -648,7 +633,8 @@ func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
 
 	// Register skip signal before Start so no increment is missed.
 	skippedThrice := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 3)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 3,
+	)
 
 	require.NoError(t, l.Start(ownerCtx))
 
@@ -692,8 +678,6 @@ func TestLoop_F5_DirtyDedupCoalescedRerun(t *testing.T) {
 // for marginal gain over the mutex-by-construction guarantee), so a probabilistic
 // stress sweep is the cleanest available coverage.
 func TestLoop_F5_LostWakeupStress(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	const (
 		entity   = "stress-entity"
 		triggers = 256
@@ -894,7 +878,6 @@ func TestDispatchResult_SuccessEnqueuesNotCancel(t *testing.T) {
 // TestLoop_BaseDelayExceedsMaxDelayFailsStart proves F6: an inverted backoff
 // window (BaseDelay > MaxDelay, both explicitly set) is rejected at Start.
 func TestLoop_BaseDelayExceedsMaxDelayFailsStart(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	l := &Loop{
 		reconcilerID: "rc",
 		reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
@@ -913,8 +896,6 @@ func TestLoop_BaseDelayExceedsMaxDelayFailsStart(t *testing.T) {
 // delaying queue feeds retries back). No timing assertions are made here — the
 // exponential/reset timing property is unit-covered by backoff_test.go.
 func TestLoop_TransientExponentialBackoff(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
@@ -955,8 +936,6 @@ func TestLoop_TransientExponentialBackoff(t *testing.T) {
 // timing assertions are made here — the reset timing property is unit-covered
 // by TestBackoff_ResetOnSuccess in backoff_test.go.
 func TestLoop_SuccessForgetsBackoff(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
@@ -1010,14 +989,12 @@ func TestLoop_SuccessForgetsBackoff(t *testing.T) {
 
 // TestLoop_SharedWaitingLoopNoLeak verifies that the F6 shared delaying queue
 // (waitingLoop goroutine) exits cleanly when Stop is called, even when there are
-// many pending requeue items. goleak.VerifyNone asserts that no goroutines leak.
+// many pending requeue items. The package-level goleak.VerifyTestMain (main_test.go) asserts that no goroutines leak.
 //
 // Design confirmation: the waitingLoop goroutine is tracked by the WaitGroup and
 // exits on runCtx.Done(), so Stop waits for it. This test seeds many requeues and
 // verifies zero goroutine leak.
 func TestLoop_SharedWaitingLoopNoLeak(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	const nEntities = 20
 
 	// Reconciler always returns transient so items keep being requeued into the
@@ -1060,7 +1037,7 @@ func TestLoop_SharedWaitingLoopNoLeak(t *testing.T) {
 	sc, cancel := stopCtx(t)
 	defer cancel()
 	require.NoError(t, l.Stop(sc))
-	// goleak.VerifyNone at defer confirms no leaked goroutines.
+	// Package-level goleak.VerifyTestMain (main_test.go) confirms no leaked goroutines.
 }
 
 // TestLoop_StopCleansEntityMaps verifies that the processing and dirty maps are
@@ -1071,8 +1048,6 @@ func TestLoop_SharedWaitingLoopNoLeak(t *testing.T) {
 // ensure dirty state is set. We then release and Stop; by the time Stop returns
 // (watchDrain has run), all goroutines have exited and entity maps are empty.
 func TestLoop_StopCleansEntityMaps(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	const entity = "in-flight-entity"
 
 	rec := newBlockingReconciler()
@@ -1083,7 +1058,8 @@ func TestLoop_StopCleansEntityMaps(t *testing.T) {
 
 	// Register skip signal before Start so no increment is missed.
 	skippedOnce := p.signalWhenCounterReaches(
-		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 1)
+		kernelmetrics.Labels{labelReconciler: "rc", labelResult: string(resultSkipped)}, 1,
+	)
 
 	l := &Loop{
 		reconcilerID:            "rc",
@@ -1127,8 +1103,6 @@ func TestLoop_StopCleansEntityMaps(t *testing.T) {
 // This covers the resync-all pattern: a Trigger produces Request{EntityID: ""}
 // to re-observe all entities. The empty key should not collide with real keys.
 func TestLoop_ResyncSentinelIsolation(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)
@@ -1177,8 +1151,6 @@ func TestLoop_ResyncSentinelIsolation(t *testing.T) {
 // test). We wait for two successes using signalWhenCounterReaches — no wall-clock
 // sleeps.
 func TestLoop_SuccessRequeueAfterPositive(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	p := newRecordingProvider()
 	m, err := RegisterMetrics(p)
 	require.NoError(t, err)

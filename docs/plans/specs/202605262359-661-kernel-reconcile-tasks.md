@@ -279,34 +279,35 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 
 #### Tests for PR-A7 (TDD)
 
-- [ ] **T28** [P] [PR-A7] `kernel/reconcile/builder_test.go`：
+- [x] **T28** [P] [PR-A7] `kernel/reconcile/builder_test.go`：
   - `TestBuilder_RequiresReconcilerAndTrigger`：缺 reconciler 或 trigger 返回 err
   - `TestBuilder_DefaultsLeaderAsNoop`：无 LeaderElector 时 single-process 模式（in-process mutex）
   - `TestBuilder_DefaultsConcurrencyTo1`：MaxConcurrentReconciles 默认 1
   - 估算：300 LoC
-- [ ] **T29** [P] [PR-A7] `kernel/reconcile/reconciletest/conformance_test.go`：
+- [x] **T29** [P] [PR-A7] `kernel/reconcile/reconciletest/conformance_test.go`：
   - 自检：fakeReconciler 跑过所有 conformance test 集
   - 估算：200 LoC
 
 #### Implementation for PR-A7
 
-- [ ] **T30** [PR-A7] `kernel/reconcile/builder.go`：
+- [x] **T30** [PR-A7] `kernel/reconcile/builder.go`：
   - `func New(reconciler Reconciler) *Builder`
   - `WithTrigger / WithLeader / WithFencedRepo / WithConcurrency / WithBackoff / WithMetrics / WithInterval / WithName / WithReconcilerID / WithRenewInterval`
   - `Build() (*Loop, error)`（私有化 Loop 构造）
   - 估算：250 LoC
-- [ ] **T31** [PR-A7] `kernel/reconcile/reconciletest/conformance.go`：
+- [x] **T31** [PR-A7] `kernel/reconcile/reconciletest/conformance.go`：
   - `type HarnessFactory func(t *testing.T) Wiring`（`Wiring{NewTrigger, Leader, Fenced, Cleanup}`）+ `type Features struct { Leader, Fencing bool }`
   - `RunConformance(t, newHarness, features)` 跑遍：basic Reconcile / RequeueAfter / PermanentError / panic recovery / MaxConcurrentReconciles（cross-entity + same-entity）/ leader 流转 / fencing
   - 估算：400 LoC
-- [ ] **T32** [PR-A7] `kernel/reconcile/reconciletest/fake.go`：
+- [x] **T32** [PR-A7] `kernel/reconcile/reconciletest/fake.go`：
   - `FakeLeaderElector` / `FakeTrigger` / `FakeReconciler`
   - 估算：200 LoC
-- [ ] **T33** [PR-A7] `tools/archtest/reconcile_builder_funnel_test.go`：
+- [x] **T33** [PR-A7] `tools/archtest/reconcile_builder_funnel_test.go`：
   - `RECONCILE-BUILDER-FUNNEL-01`：消费方构造 Loop callsite ⊆ Builder.Build()（funnel 上游 Hard：Loop 构造函数私有化）
   - 估算：100 LoC
+  - 落地说明：archtest 合并进 `tools/archtest/reconcile_invariants_test.go`（同主题 invariants 文件），非独立 `reconcile_builder_funnel_test.go`。
 
-**Checkpoint A7**: Builder funnel 上游 Hard；消费方可跑 conformance
+**Checkpoint A7** ✅ 已交付（PR #1528，commit `7311ca058`）：Builder funnel 上游 Hard；消费方可跑 conformance
 
 ---
 
