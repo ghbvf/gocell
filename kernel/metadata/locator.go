@@ -193,7 +193,8 @@ func WithManifestPath(p string) LocatorOption {
 // MetadataSource per file, sorted by path for deterministic test fixtures.
 type Locator struct {
 	fsys          fs.FS
-	root          string // on-disk root for diagnostics; "" for in-memory fsys
+	osRoot        *os.Root // non-nil for disk-backed (NewLocator); nil for fs.FS-backed (NewLocatorFS)
+	root          string   // on-disk root for diagnostics; "" for in-memory fsys
 	requestedMode LocatorMode
 	resolvedMode  LocatorMode
 	manifestPath  string
@@ -201,6 +202,20 @@ type Locator struct {
 }
 
 // NewLocator constructs a Locator backed by the on-disk root directory.
+//
+// The filesystem is rooted via os.OpenRoot(root).FS(), which confines EVERY
+// access (Stat / WalkDir / ReadFile) to the directory tree at root: any path
+// that resolves outside root via a symlink is rejected at the syscall layer
+// ("path escapes from parent"). This is the root-confinement that prevents a
+// manifest module path (or any subpath) that is a symlink escaping the
+// workspace from making discovery read cells/contracts outside the repo
+// (#1592). NOTE: os.Root rejects symlinks regardless of whether their target
+// is in- or out-of-root, so metadata behind an in-root symlink is not followed
+// either — the GoCell layout has no metadata behind symlinks, so this is a
+// deliberate fail-closed default, not a regression.
+//
+// Callers must Close the returned Locator to release the underlying directory
+// file descriptor (Parser.Parse does this for the Locator it constructs).
 func NewLocator(root string, opts ...LocatorOption) (*Locator, error) {
 	if root == "" {
 		return nil, errors.New("metadata: NewLocator requires non-empty root")
@@ -209,8 +224,13 @@ func NewLocator(root string, opts ...LocatorOption) (*Locator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("metadata: NewLocator resolve abs root: %w", err)
 	}
+	osRoot, err := os.OpenRoot(abs)
+	if err != nil {
+		return nil, fmt.Errorf("metadata: NewLocator open root: %w", err)
+	}
 	l := &Locator{
-		fsys:         os.DirFS(abs),
+		fsys:         osRoot.FS(),
+		osRoot:       osRoot,
 		root:         abs,
 		manifestPath: DefaultManifestPath,
 	}
@@ -218,12 +238,28 @@ func NewLocator(root string, opts ...LocatorOption) (*Locator, error) {
 		opt(l)
 	}
 	if err := validateManifestRelativePath(l.manifestPath); err != nil {
+		_ = l.Close()
 		return nil, fmt.Errorf("metadata: NewLocator manifest path: %w", err)
 	}
 	if err := l.resolveMode(); err != nil {
+		_ = l.Close()
 		return nil, err
 	}
 	return l, nil
+}
+
+// Close releases the os.Root directory handle held by a disk-backed Locator
+// (NewLocator). It is a no-op for an fs.FS-backed Locator (NewLocatorFS) and is
+// safe to call more than once. Parser.Parse / ParseFS close the Locator they
+// construct; callers that use NewLocator directly should defer Close to release
+// the underlying directory file descriptor.
+func (l *Locator) Close() error {
+	if l.osRoot == nil {
+		return nil
+	}
+	r := l.osRoot
+	l.osRoot = nil
+	return r.Close()
 }
 
 // NewLocatorFS constructs a Locator backed by an arbitrary fs.FS. Used by

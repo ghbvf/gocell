@@ -782,7 +782,8 @@ func (es *manifestExcludeSet) matchDir(dir string) bool {
 
 // matchManifestGlob expands a glob pattern against fsys via WalkDir. Returns
 // sorted matches. Symlinks are explicitly skipped to avoid traversal through
-// unexpected filesystem topology that os.DirFS might not prevent.
+// unexpected filesystem topology; the disk-backed fs is additionally
+// root-confined via os.OpenRoot(root).FS() (NewLocator).
 //
 // To avoid O(modules × total_files) WalkDir amplification, the walk is
 // started from the longest fixed prefix before the first wildcard segment
@@ -864,9 +865,11 @@ func manifestGlobWalkFn(pattern string, excludes *manifestExcludeSet, matches *[
 		if walkErr != nil {
 			return walkErr
 		}
-		// Explicitly skip symlinks regardless of whether the underlying fs.FS
-		// follows them. This avoids traversal through unexpected filesystem
-		// topology (e.g. symlink loops) that os.DirFS does not prevent.
+		// Explicitly skip symlinks. The disk-backed fs is os.OpenRoot(root).FS()
+		// (NewLocator), which already rejects symlink escapes at the syscall
+		// layer; this skip is defense-in-depth for in-root symlink entries and
+		// the fs.FS-backed path (NewLocatorFS / MapFS), avoiding traversal
+		// through unexpected topology (e.g. symlink loops).
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}

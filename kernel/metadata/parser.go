@@ -59,6 +59,7 @@ func (p *Parser) Parse() (*ProjectMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = loc.Close() }() // release the os.Root directory fd
 	return p.parseWith(loc)
 }
 
@@ -69,6 +70,7 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = loc.Close() }() // no-op for fs.FS-backed Locator
 	return p.parseWith(loc)
 }
 
