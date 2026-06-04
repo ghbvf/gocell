@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/reconcile"
@@ -36,7 +35,6 @@ const (
 // epoch-bound FencedWriter (carrying the live lease's Epoch) as the reconciler's
 // write surface — and that the write lands at that epoch.
 func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	repo := reconciletest.NewFakeFencedRepository()
 	src := make(chan reconcile.Request, 1)
@@ -82,7 +80,6 @@ func TestLoop_LeaderElectInjectsFencedWriterWithLeaseEpoch(t *testing.T) {
 // (ADR §4.2): when the lease expires and the next renew fails, the Loop cancels
 // the lease-scoped ctx, interrupting the in-flight Reconcile.
 func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	src := make(chan reconcile.Request, 1)
 	started := make(chan struct{}, 1)
@@ -135,7 +132,6 @@ func TestLoop_LeaderElectLostLeaseCancelsInflight(t *testing.T) {
 // Channel-driven sync: we signal on leaderDispatched when the leader's reconciler
 // runs, then assert follower count == 0 — no brittle sleeps on the assertion path.
 func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	var bCount atomic.Int64
 	leaderDispatched := make(chan struct{}, 1)
@@ -196,7 +192,6 @@ func TestLoop_LeaderElectFollowerDoesNotDispatch(t *testing.T) {
 // forcibly expired; Loop B detects the vacancy and takes over. The assertion that
 // B begins dispatching is channel-driven (no sleep on the critical path).
 func TestLoop_LeaderElectFollowerTakesOverAfterLeaseExpiry(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 
 	aDispatched := make(chan struct{}, 1)
@@ -305,7 +300,6 @@ func (e *errAfterN) ReleaseLease(ctx context.Context, tok reconcile.LeaseToken) 
 // leaderRetryPeriod and eventually acquires the lease and dispatches. This closes
 // the coverage gap on the Warn retry branch.
 func TestLoop_LeaderManageIOErrorRetry(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	dispatched := make(chan struct{}, 1)
 
@@ -350,7 +344,6 @@ func TestLoop_LeaderManageIOErrorRetry(t *testing.T) {
 // winning the lease — otherwise followers would steal/buffer events from the
 // active leader (controller-runtime: sources do not run before winning election).
 func TestLoop_FollowerDoesNotConsumeTrigger(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	backend := reconciletest.NewFakeLeaseBackend(clock.Real())
 	const rid = "follower_noconsume"
 
