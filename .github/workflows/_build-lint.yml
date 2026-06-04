@@ -456,6 +456,23 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      # Build slowgate (G9 SLOW-TEST-BUDGET) for the integration job — the
+      # same wall-clock budget gate the build-test job uses, here applied to
+      # the testcontainer integration suite. The integration tier uses a
+      # higher --threshold (90s) than build-test's 20s because container
+      # round-trips (broker restart / reconnect — e.g. adapters/mqtt
+      # TestIntegration_PublisherTrueReconnect ~60s) are legitimately slower
+      # than unit tests; 90s gates genuine runaway while letting the current
+      # container-test population pass churn-free. Calibrated value — the
+      # first CI run validates it; a test that exceeds 90s must be optimized
+      # or take a justified tools/slowgate/allowlist.txt entry (SLOWGATE-
+      # ALLOWLIST-01 must-justify; its packages.Load uses FlatNonDefaultTags,
+      # so integration-tagged entries resolve). #1430 wires this so the AC-12
+      # ≤60s budget is machine-gated rather than an unenforced prose note.
+      - name: Build slowgate (integration)
+        if: ${{ matrix.run_main_integration }}
+        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
+
       - name: Integration tests (testcontainers)
         # Skipped on adapters-race leg (run_main_integration: false); that
         # leg only runs the focused race/OTel steps below, not the full
@@ -525,7 +542,33 @@ jobs:
           test "${#pkgs[@]}" -gt 0 || { echo "FAIL: no integration packages discovered for shard '$SHARD_NAME' (filter='$SHARD_FILTER'); either filter regex is wrong or the package set under that prefix vanished" >&2; exit 1; }
           printf 'Shard %s integration packages (%d):\n' "$SHARD_NAME" "${#pkgs[@]}"
           printf '  %s\n' "${pkgs[@]}"
-          go test -tags=integration -covermode=atomic -coverprofile=coverage-integration-${{ matrix.shard }}.out "${pkgs[@]}" -count=1 -timeout 15m
+          # `-json` emits the test2json event stream to stdout; slowgate
+          # consumes it and fails the shard on any (Package, Test) Elapsed
+          # over --threshold without an allowlist entry. `tee` archives the
+          # raw stream to RUNNER_TEMP so non-slowgate failures (panics,
+          # container errors) stay diagnosable. `set -euo pipefail` (set at
+          # the top of this run block) makes a go-test OR slowgate non-zero
+          # exit fail the step. `-coverprofile` still writes the atomic
+          # profile independently. #1430.
+          # `go test … "${pkgs[@]}" … -timeout 15m` is kept on one physical
+          # line — CI-INTEGRATION-DISCOVERY-01 matches `go test … "${pkgs[@]}"`
+          # within a single line; only the pipe stages continue below.
+          go test -tags=integration -covermode=atomic -coverprofile=coverage-integration-${{ matrix.shard }}.out -json "${pkgs[@]}" -count=1 -timeout 15m \
+            | tee "$RUNNER_TEMP/integration-${{ matrix.shard }}.json" \
+            | "$RUNNER_TEMP/slowgate" --threshold=90s --allowlist=tools/slowgate/allowlist.txt
+
+      # Upload the raw `go test -json` event stream only on Integration step
+      # failure. With `-json`, the GHA step log shows slowgate's threshold
+      # summary on stderr, not human-readable test output — a non-slowgate
+      # failure (panic, container error) is only fully diagnosable from this
+      # archived stream. Mirrors the build-test job's test-json artifact.
+      - name: Upload integration test-json artifact (failure only)
+        if: ${{ failure() && matrix.run_main_integration }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-test-json-${{ matrix.shard }}
+          path: ${{ runner.temp }}/integration-${{ matrix.shard }}.json
+          retention-days: 3
 
       - name: OTel collector smoke
         if: ${{ matrix.run_adapters_race }}

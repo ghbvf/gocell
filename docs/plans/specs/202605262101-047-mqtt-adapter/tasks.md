@@ -51,6 +51,8 @@
 
 **并行批次**：T-2.1 与 T-2.2/T-2.5 可并行（不同文件）；T-2.3 等前两者完；T-2.4 收尾。
 
+> **T-2.4 实施偏离 + AC-12 对账（#1430）**：T-2.4/T-2.5 原计划在 integration-test job 加静态 mosquitto **service container** + `mosquitto.conf` fixture。实际交付改用 **testcontainers in-test 自管 broker**（`testmain_integration_test.go`）+ `CI-INTEGRATION-DISCOVERY-01` 自动发现并入 adapters shard——无静态 service container、无独立 job。AC-12「pr-check 增量 ≤60s」因单个 broker-restart 重连测试本身 ~60s 而孤立计量不可达，#1430 将其重构为 **integration-tier slowgate 机器门控**（`_build-lint.yml` integration step 经 `slowgate --threshold=90s`），并补 wall-time 预算记录于 plan.md PR-2 §验收。决策：保留并入、不回归静态 service container。
+
 ---
 
 ## PR-3 / 047-pr3: Subscriber + ConsumerBase 接入
