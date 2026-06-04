@@ -41,6 +41,7 @@ import (
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/composition"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -316,7 +317,11 @@ func wrapSessionStoreWithCache(inner session.Store, shared *composition.SharedDe
 	if err != nil {
 		return nil, fmt.Errorf("accesscore: session cache: %w", err)
 	}
-	wrapped, err := adapterredis.NewCachingSessionStore(inner, cache, ttl, logger)
+	cacheMetrics, err := obmetrics.NewSessionCacheCollector(shared.MetricsProvider, string(sessionCacheNamespace))
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: session cache metrics: %w", err)
+	}
+	wrapped, err := adapterredis.NewCachingSessionStore(inner, cache, ttl, logger, cacheMetrics)
 	if err != nil {
 		return nil, fmt.Errorf("accesscore: session cache: %w", err)
 	}

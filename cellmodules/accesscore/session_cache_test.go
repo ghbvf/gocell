@@ -5,11 +5,15 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
 
@@ -85,4 +89,30 @@ func TestWrapSessionStoreWithCache_ValidTTLNoRedis_SilentDowngrade(t *testing.T)
 	got, err := wrapSessionStoreWithCache(inner, shared, slog.Default())
 	require.NoError(t, err)
 	assert.Same(t, inner, got, "nil Redis with valid TTL should silently return inner store")
+}
+
+// TestWrapSessionStoreWithCache_ValidTTLWithRedis_ReturnsCachingStore is the
+// happy-path wiring assertion (#795): a valid TTL env + a real Redis provider
+// yields a *adapterredis.CachingSessionStore (not the bare inner store), with
+// the metrics collector wired. The Redis client is lazily constructed via the
+// NewClientForTest seam (never dials — wrapSessionStoreWithCache issues no Redis
+// command), and the metrics provider is a Nop. Together they exercise the
+// previously-uncovered construction branch end-to-end without a live Redis.
+func TestWrapSessionStoreWithCache_ValidTTLWithRedis_ReturnsCachingStore(t *testing.T) {
+	t.Setenv(envSessionCacheTTL, "5s")
+	inner := newTestSessionMemStore(t)
+
+	// Lazily-connected client; never dialed because the wrap helper performs no
+	// Redis I/O (only NewCache + NewCachingSessionStore, both pure constructors).
+	redisClient := adapterredis.NewClientForTest(goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1"}))
+	shared := &composition.SharedDeps{
+		Redis:           capability.NewRedisProvider(redisClient),
+		MetricsProvider: kernelmetrics.NopProvider{},
+	}
+
+	got, err := wrapSessionStoreWithCache(inner, shared, slog.Default())
+	require.NoError(t, err)
+	require.NotSame(t, inner, got, "valid TTL + Redis must wrap, not return inner")
+	_, ok := got.(*adapterredis.CachingSessionStore)
+	assert.True(t, ok, "wrapped store must be *adapterredis.CachingSessionStore, got %T", got)
 }

@@ -1,50 +1,76 @@
 // INVARIANT: CACHING-SESSION-REVOKE-DELEGATE-ONLY-01
+// INVARIANT: CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01
 //
-// Package archtest — single-rule file for CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
+// Package archtest — two related rules on (*CachingSessionStore) in
+// adapters/redis, governing where session-cache mutation may appear in the two
+// revoke methods. The single security invariant both rules serve is: a cache
+// mutation must NEVER run inside the database transaction that performs the
+// revoke (an in-tx cache.Delete/Set races with concurrent re-population from the
+// still-uncommitted PG row, extending the stale window to 2×TTL — the
+// historical Q1-A failure mode rejected in PR #524's third-round review).
 //
-// Rule: (*CachingSessionStore).Revoke and (*CachingSessionStore).RevokeForSubject
-// in adapters/redis must each have a body that is EXACTLY ONE statement: a
-// ReturnStmt whose single result is a CallExpr of the form
-// s.inner.<SAME-METHOD-NAME>(args...). Any deviation — >1 statement, a cache
-// field access in the body, or a delegate to a different method name — fails
-// the archtest.
+// CACHING-SESSION-REVOKE-DELEGATE-ONLY-01 — (*CachingSessionStore).RevokeForSubject
+//   must be EXACTLY one ReturnStmt delegating to s.inner.RevokeForSubject(args...).
+//   No cache op, no extra statement. RevokeForSubject needs no cache eviction at
+//   all: credentialinvalidate.Apply co-tx bumps users.authz_epoch, and
+//   sessionvalidate fail-closes any stale cached view on the epoch mismatch
+//   regardless of cache state. (Subject-wide cache purge for the future case
+//   where user state IS cached is deferred — AUTH-CACHE-SUBJECT-REVERSE-INDEX-01
+//   / gh #793.)
 //
-// AI-robust grade: Hard. The guard is archtest-bound (Go does not make the
-// violated form uncompilable), but form-uniqueness is total: "exactly one
-// ReturnStmt whose callee is s.inner.SameMethodName" has no gray zone.
-// Any other shape fails CI.
+// CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01 — (*CachingSessionStore).Revoke (#796)
+//   must (A) delegate to s.inner.Revoke(ctx, id), and (B) confine every
+//   s.cache.Delete / s.cache.Set to the body of a persistence.RegisterAfterCommit
+//   hook literal. A cache mutation anywhere in the Revoke body OUTSIDE such a hook
+//   is a violation — that is the relocated 2×TTL protection: the rule does not
+//   forbid the cache DEL, it forbids it from running in the tx body. The
+//   sanctioned shape fires the DEL only after the revoke commit is durable.
 //
-// Scanning tool: Run(t, Typed(...)) + ast.FuncDecl receiver-type check (syntactic) +
-// ast.BlockStmt length check + ast.ReturnStmt / ast.CallExpr shape check.
-// ResolveMethodCall is intentionally NOT used for the delegate callee check
-// because we need to verify the method name matches the enclosing FuncDecl,
-// not merely that the callee resolves to session.Store — the name symmetry
-// invariant is stronger than interface resolution.
+// AI-robust grade: Hard (both rules; single-axis, not a funnel). The guards are
+// archtest-bound (Go does not make the violated forms uncompilable), but form
+// uniqueness is total:
+//   - Delegate-only: "exactly one ReturnStmt whose callee is
+//     s.inner.RevokeForSubject" has no gray zone.
+//   - After-commit-DEL: "every s.cache.{Delete,Set} CallExpr is lexically within
+//     a persistence.RegisterAfterCommit hook FuncLit body" is a position-
+//     containment fact (token.Pos ∈ [Lbrace, Rbrace]) over a type-resolved
+//     callee (RegisterAfterCommit via TypesInfo, alias-proof) — no gray zone.
+//   The hook body's own purity (no tx / outbox writer) is enforced independently
+//   and in parallel by AFTERCOMMIT-HOOK-PURE-TRANSIENT-01.
+//
+// Scanning tool: Run(t, Typed(...)) + ast.FuncDecl receiver-type check +
+// ast.BlockStmt / ReturnStmt / CallExpr shape checks (delegate-only) +
+// EachInSubtree[ast.CallExpr] + token.Pos containment + TypesInfo.ObjectOf
+// callee resolution (after-commit-DEL). The cache field selector (<recv>.cache)
+// is matched by AST field name, not type: the RED fixtures use a local fakeCache
+// type so a *redis.Cache type assertion would miss them.
 //
 // Blind-spot self-check (ai-robust.md §"工具选定后强制盲区自检"):
 //
-//  1. Multi-statement body: archtest counts len(body.List) — ANY extra
-//     statement is caught regardless of its type. Self-check:
-//     TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt asserts
-//     absence of multi-statement Revoke/RevokeForSubject bodies in production.
-//
-//  2. Delegate via method-value store:
-//     `fn := s.inner.Revoke; return fn(ctx, id)` — the return result is
-//     *ast.CallExpr with Fun=*ast.Ident, not *ast.SelectorExpr, so the
-//     inner-delegate check would pass for wrong reasons (body still has
-//     2 stmts: assign + return). Caught by the >1 statement check.
-//     Self-check: TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue
-//     asserts absence in production code.
-//
-//  3. reflect.Value.MethodByName("Revoke").Call(…): fully AST-invisible.
-//     Self-check: TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect
-//     asserts absence in production code.
+//  1. RevokeForSubject multi-statement body: counted via len(body.List). Any
+//     extra statement is caught regardless of type. Self-check:
+//     TestCachingSessionRevoke_BlindSpot_RevokeForSubjectSingleStmt.
+//  2. cache mutation via method-value (`fn := s.cache.Delete; fn(...)`): the
+//     CallExpr's Fun is then an *ast.Ident, not the <recv>.cache.Delete
+//     selector, so cacheMutationCall would not match. Self-check:
+//     TestCachingSessionRevoke_BlindSpot_CacheMethodValue asserts no method-value
+//     of cache.{Delete,Set} or inner.{Revoke,RevokeForSubject} in production.
+//  3. reflect.Value.MethodByName invocation: AST-invisible. Self-check:
+//     TestCachingSessionRevoke_BlindSpot_Reflect asserts no reflect MethodByName
+//     of the revoke methods in production.
+//  4. cache mutation reached through a same-package helper called from the
+//     Revoke body (one level deep): not resolved here (the cache selector must
+//     appear lexically in the Revoke body). This is the same documented Medium
+//     residual as AFTERCOMMIT-HOOK-PURE-TRANSIENT-01/B4 and is structurally
+//     defanged by RunAfterCommitHooks stripping the tx from the hook ctx.
 
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
+	"go/types"
 	"sort"
 	"strings"
 	"testing"
@@ -53,73 +79,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// revokeTargetMethods lists the method names on *CachingSessionStore that must
-// conform to the pure-delegate body shape.
-var revokeTargetMethods = map[string]bool{
-	"Revoke":           true,
-	"RevokeForSubject": true,
-}
-
 // cachingStoreReceiverType is the concrete receiver type name (without pointer).
 const cachingStoreReceiverType = "CachingSessionStore"
 
-// cachingStoreInnerField is the field name for the inner session.Store.
-const cachingStoreInnerField = "inner"
+// cachingStoreInnerField / cachingStoreCacheField are the decorator's fields.
+const (
+	cachingStoreInnerField = "inner"
+	cachingStoreCacheField = "cache"
+)
 
-// TestCachingSessionRevokeDelegateOnly_01 enforces
-// CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: (*CachingSessionStore).Revoke and
-// (*CachingSessionStore).RevokeForSubject in adapters/redis must each be a
-// single-statement pure delegate to s.inner.<SameMethodName>(args...).
-//
-// Production code at adapters/redis/session_cache_store.go satisfies this
-// invariant post-GREEN; the seven RED fixtures below mirror the rejected
-// forms so the scanner's detection mechanism is itself verified.
-//
-// RED fixture verification — each fixture package embodies one violation
-// class; all seven MUST be detected by scanRevokeDelegateViolations:
-//
-//   - F1 (testdata/.../f1_multi_stmt_red): Revoke body contains a second
-//     statement before the return (logs/side-effects). Detects multi-stmt
-//     bodies.
-//   - F2 (testdata/.../f2_cache_delete_red): Revoke body calls
-//     s.cache.Delete before delegating. Detects the historical Q1-A failure
-//     mode this PR's #533 third-round review removed (in-tx cache.Delete
-//     race vs PG commit).
-//   - F3 (testdata/.../f3_cache_set_red): Revoke body calls s.cache.Set.
-//     Detects any cache-side write injected into the revoke path (would
-//     equally race vs PG commit; symmetrical with F2).
-//   - F4 (testdata/.../f4_wrong_delegate_red): Revoke body delegates to a
-//     differently-named inner method (e.g. RevokeForSubject). Detects
-//     same-method-name invariant breakage that would silently route revoke
-//     semantics to the wrong sink.
-//   - F5 (testdata/.../f5_wrong_receiver_red): Revoke body delegates via a
-//     different variable (other.inner.Revoke) instead of the method receiver
-//     (s.inner.Revoke). Detects receiver-ident invariant breakage.
-//   - F6 (testdata/.../f6_wrong_args_red): Revoke body delegates with
-//     literal arguments (context.Background(), "") instead of the method's
-//     own parameter idents. Detects args-ident invariant breakage.
-//   - F7 (testdata/.../f7_cache_in_arg_red): Revoke body delegates with a
-//     CallExpr as an argument (idFromCache(s.cache, id)) instead of a plain
-//     parameter ident. Detects computed/derived args invariant breakage.
-func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
+// delegateOnlyMethod is the method held to the strict single-delegate shape.
+const delegateOnlyMethod = "RevokeForSubject"
+
+// afterCommitMethod is the method held to the after-commit-DEL shape.
+const afterCommitMethod = "Revoke"
+
+// revokeMethodNames is the set of both revoke methods, used by the blind-spot
+// scans that are method-agnostic.
+var revokeMethodNames = map[string]bool{afterCommitMethod: true, delegateOnlyMethod: true}
+
+// cacheMutationMethods are the cache-write method names confined to after-commit
+// hooks.
+var cacheMutationMethods = map[string]bool{"Delete": true, "Set": true}
+
+// registerAfterCommitFuncName is the persistence funnel that schedules
+// post-commit work; resolved by package path (not just name) for alias-safety.
+const (
+	registerAfterCommitFuncName = "RegisterAfterCommit"
+	persistencePkgSuffix        = "/kernel/persistence"
+)
+
+// TestCachingSessionRevoke_01 enforces both CACHING-SESSION-REVOKE-DELEGATE-ONLY-01
+// (RevokeForSubject) and CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01 (Revoke) over
+// adapters/redis production code, with RED/GREEN fixtures proving the detection
+// mechanism on each deviation class.
+func TestCachingSessionRevoke_01(t *testing.T) {
 	t.Parallel()
 
-	// Single packages.Load over production + all 7 RED fixtures. Per-Pass
-	// dispatch by pkg path: each typed Run call carries ~3s of toolchain
-	// overhead on GHA 2-CPU runners, so collapsing 8 separate loads into 1
-	// keeps the test under the 20s slowgate budget as the fixture set grows.
 	fixtureRoot := "./tools/archtest/testdata/caching_session_revoke_fixtures"
 	fixtureCases := []struct {
 		label string
 		dir   string
+		green bool // green fixture must have ZERO violations
 	}{
-		{"F1_multi_stmt", "f1_multi_stmt_red"},
-		{"F2_cache_delete", "f2_cache_delete_red"},
-		{"F3_cache_set", "f3_cache_set_red"},
-		{"F4_wrong_delegate", "f4_wrong_delegate_red"},
-		{"F5_wrong_receiver", "f5_wrong_receiver_red"},
-		{"F6_wrong_args", "f6_wrong_args_red"},
-		{"F7_cache_in_arg", "f7_cache_in_arg_red"},
+		// CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01 (Revoke).
+		{"Revoke_intx_delete", "revoke_intx_delete_red", false},
+		{"Revoke_intx_set", "revoke_intx_set_red", false},
+		{"Revoke_no_delegate", "revoke_nodelegate_red", false},
+		{"Revoke_aftercommit", "revoke_aftercommit_green", true},
+		// CACHING-SESSION-REVOKE-DELEGATE-ONLY-01 (RevokeForSubject).
+		{"RFS_multi_stmt", "rfs_multistmt_red", false},
+		{"RFS_cache_op", "rfs_cacheop_red", false},
+		{"RFS_wrong_delegate", "rfs_wrongdelegate_red", false},
 	}
 	patterns := make([]string, 0, 1+len(fixtureCases))
 	patterns = append(patterns, "./adapters/redis/...")
@@ -142,7 +153,7 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				prodViolations = append(prodViolations, scanRevokeDelegateViolations(p, file, rel)...)
+				prodViolations = append(prodViolations, scanCachingRevokeViolations(p, file, rel)...)
 			}
 			return nil
 		}
@@ -152,7 +163,7 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 			}
 			for _, file := range p.Files {
 				rel := p.Rel(file)
-				fixtureViolationCount[fix.dir] += len(scanRevokeDelegateViolations(p, file, rel))
+				fixtureViolationCount[fix.dir] += len(scanCachingRevokeViolations(p, file, rel))
 			}
 			break
 		}
@@ -164,99 +175,193 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 		t.Log(v)
 	}
 	assert.Empty(t, prodViolations,
-		"CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: (*CachingSessionStore).Revoke and "+
-			"(*CachingSessionStore).RevokeForSubject must each be a single-statement body "+
-			"of the form `return s.inner.<SameMethodName>(args...)`. "+
-			"Any cache operation or extra statement in these methods is a violation. "+
-			"This rule locks Q1=B (Revoke no cache.Delete) and Q2=α (RevokeForSubject no cache op) "+
-			"from the third-round review plan.")
+		"CACHING-SESSION-REVOKE-{DELEGATE-ONLY,AFTERCOMMIT-DEL}-01: RevokeForSubject must be a "+
+			"single-statement delegate to s.inner.RevokeForSubject; Revoke must delegate to "+
+			"s.inner.Revoke and confine every s.cache.{Delete,Set} to a persistence.RegisterAfterCommit "+
+			"hook (no in-tx cache mutation — that is the 2×TTL race).")
 
-	// RED fixture self-check: each of the seven fixture packages must have ≥ 1 detected violation.
+	// RED/GREEN fixture self-check.
 	for _, fix := range fixtureCases {
-		require.GreaterOrEqual(t, fixtureViolationCount[fix.dir], 1,
+		if fix.green {
+			require.Equalf(t, 0, fixtureViolationCount[fix.dir],
+				"GREEN fixture self-check FAILED: %s — the sanctioned after-commit shape must have 0 "+
+					"violations, got %d.", fix.label, fixtureViolationCount[fix.dir])
+			continue
+		}
+		require.GreaterOrEqualf(t, fixtureViolationCount[fix.dir], 1,
 			"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
-				"Check that the fixture file has the correct deviation and is type-checkable.",
-			fix.label)
+				"Check that the fixture file has the correct deviation and is type-checkable.", fix.label)
 	}
 }
 
-// scanRevokeDelegateViolations walks a file's AST and finds any FuncDecl for
-// (*CachingSessionStore).Revoke or (*CachingSessionStore).RevokeForSubject
-// whose body deviates from the single-statement pure-delegate shape:
-//
-//	return s.inner.<SameMethodName>(args...)
-//
-// Deviations:
-//   - body has ≠ 1 statement
-//   - the single statement is not a ReturnStmt
-//   - the ReturnStmt result count ≠ 1
-//   - the single result is not a CallExpr
-//   - the CallExpr Fun is not `*ast.SelectorExpr` with X=*ast.SelectorExpr `<recv>.inner` and Sel.Name==methodName
-//   - the receiver ident in the callee's X does not match the method's own receiver name
-//   - the arguments to the call are not all plain parameter idents (in order)
-func scanRevokeDelegateViolations(p *Pass, file *ast.File, rel string) []string {
+// scanCachingRevokeViolations dispatches each (*CachingSessionStore) revoke
+// method to its rule: RevokeForSubject → delegate-only; Revoke → after-commit.
+func scanCachingRevokeViolations(p *Pass, file *ast.File, rel string) []string {
 	var out []string
 	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-		if fn.Recv == nil || len(fn.Recv.List) != 1 {
+		recvName, ok := cachingStoreReceiver(fn)
+		if !ok {
 			return
 		}
-		if !revokeTargetMethods[fn.Name.Name] {
-			return
-		}
-		// Receiver must be pointer to CachingSessionStore.
-		recvType := fn.Recv.List[0].Type
-		starExpr, isStar := recvType.(*ast.StarExpr)
-		if !isStar {
-			return
-		}
-		ident, isIdent := starExpr.X.(*ast.Ident)
-		if !isIdent || ident.Name != cachingStoreReceiverType {
-			return
-		}
-		if fn.Body == nil {
-			return
-		}
-
-		// Derive the receiver name. Anonymous receivers have no Names — treat
-		// as empty string so the check reliably detects any callee mismatch.
-		recvName := ""
-		if recvNames := fn.Recv.List[0].Names; len(recvNames) > 0 {
-			recvName = recvNames[0].Name
-		}
-
-		// Collect param ident names in order (one Field may name multiple same-type params).
-		var paramNames []string
-		if fn.Type.Params != nil {
-			for _, field := range fn.Type.Params.List {
-				for _, n := range field.Names {
-					paramNames = append(paramNames, n.Name)
-				}
-			}
-		}
-
-		methodName := fn.Name.Name
 		line := p.Fset.Position(fn.Pos()).Line
-		violation := checkRevokeDelegateBody(fn.Body, methodName, recvName, paramNames)
-
-		if violation != "" {
-			out = append(out, fmt.Sprintf(
-				"%s:%d: CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: (*CachingSessionStore).%s: %s",
-				rel, line, methodName, violation,
-			))
+		switch fn.Name.Name {
+		case delegateOnlyMethod:
+			if v := checkRevokeDelegateBody(fn.Body, fn.Name.Name, recvName, paramNames(fn)); v != "" {
+				out = append(out, fmt.Sprintf("%s:%d: CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: (*%s).%s: %s",
+					rel, line, cachingStoreReceiverType, fn.Name.Name, v))
+			}
+		case afterCommitMethod:
+			for _, v := range checkRevokeAfterCommitBody(p, fn, recvName) {
+				out = append(out, fmt.Sprintf("%s:%d: CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01: (*%s).%s: %s",
+					rel, line, cachingStoreReceiverType, fn.Name.Name, v))
+			}
 		}
 	})
 	return out
+}
+
+// cachingStoreReceiver returns the receiver var name if fn is a method on
+// *CachingSessionStore, else ("", false).
+func cachingStoreReceiver(fn *ast.FuncDecl) (string, bool) {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Body == nil {
+		return "", false
+	}
+	starExpr, isStar := fn.Recv.List[0].Type.(*ast.StarExpr)
+	if !isStar {
+		return "", false
+	}
+	ident, isIdent := starExpr.X.(*ast.Ident)
+	if !isIdent || ident.Name != cachingStoreReceiverType {
+		return "", false
+	}
+	if names := fn.Recv.List[0].Names; len(names) > 0 {
+		return names[0].Name, true
+	}
+	return "", true // anonymous receiver — empty name still matches callee mismatch
+}
+
+// paramNames collects the ordered parameter ident names of fn.
+func paramNames(fn *ast.FuncDecl) []string {
+	var names []string
+	if fn.Type.Params != nil {
+		for _, field := range fn.Type.Params.List {
+			for _, n := range field.Names {
+				names = append(names, n.Name)
+			}
+		}
+	}
+	return names
+}
+
+// cacheHookRange is a lexical [lo, hi] span (a hook FuncLit body).
+type cacheHookRange struct{ lo, hi token.Pos }
+
+func posInCacheHookRange(pos token.Pos, ranges []cacheHookRange) bool {
+	for _, r := range ranges {
+		if pos >= r.lo && pos <= r.hi {
+			return true
+		}
+	}
+	return false
+}
+
+// checkRevokeAfterCommitBody enforces CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01:
+//
+//	(A) the body delegates to <recv>.inner.Revoke(...);
+//	(B) every <recv>.cache.{Delete,Set} CallExpr is lexically inside a
+//	    persistence.RegisterAfterCommit hook FuncLit body.
+func checkRevokeAfterCommitBody(p *Pass, fn *ast.FuncDecl, recvName string) []string {
+	var out []string
+	var hookRanges []cacheHookRange
+	var hasDelegate bool
+
+	EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		if lit := registerAfterCommitHookLit(p, call); lit != nil && lit.Body != nil {
+			hookRanges = append(hookRanges, cacheHookRange{lit.Body.Lbrace, lit.Body.Rbrace})
+		}
+		if isInnerDelegateCall(call, recvName, afterCommitMethod) {
+			hasDelegate = true
+		}
+	})
+	if !hasDelegate {
+		out = append(out, "body must delegate to s."+cachingStoreInnerField+".Revoke(ctx, id)")
+	}
+	EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		if m, ok := cacheMutationCall(call, recvName); ok && !posInCacheHookRange(call.Pos(), hookRanges) {
+			out = append(out, fmt.Sprintf(
+				"s.%s.%s called outside a persistence.RegisterAfterCommit hook — in-tx cache mutation "+
+					"reintroduces the 2×TTL re-population race", cachingStoreCacheField, m))
+		}
+	})
+	return out
+}
+
+// registerAfterCommitHookLit returns the hook func literal if call is a
+// persistence.RegisterAfterCommit(ctx, func(...){...}) call (callee resolved by
+// package path for alias-safety), else nil.
+func registerAfterCommitHookLit(p *Pass, call *ast.CallExpr) *ast.FuncLit {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != registerAfterCommitFuncName {
+		return nil
+	}
+	if p.TypesInfo != nil {
+		fn, _ := p.TypesInfo.ObjectOf(sel.Sel).(*types.Func)
+		if fn == nil || fn.Pkg() == nil || !strings.HasSuffix(fn.Pkg().Path(), persistencePkgSuffix) {
+			return nil
+		}
+	}
+	if len(call.Args) == 0 {
+		return nil
+	}
+	lit, _ := call.Args[len(call.Args)-1].(*ast.FuncLit)
+	return lit
+}
+
+// cacheMutationCall reports whether call is <recv>.cache.{Delete,Set}(...).
+func cacheMutationCall(call *ast.CallExpr, recvName string) (string, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || !cacheMutationMethods[sel.Sel.Name] {
+		return "", false
+	}
+	field, ok := sel.X.(*ast.SelectorExpr)
+	if !ok || field.Sel.Name != cachingStoreCacheField {
+		return "", false
+	}
+	if !recvIdentMatches(field.X, recvName) {
+		return "", false
+	}
+	return sel.Sel.Name, true
+}
+
+// isInnerDelegateCall reports whether call is <recv>.inner.<method>(...).
+func isInnerDelegateCall(call *ast.CallExpr, recvName, method string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != method {
+		return false
+	}
+	field, ok := sel.X.(*ast.SelectorExpr)
+	if !ok || field.Sel.Name != cachingStoreInnerField {
+		return false
+	}
+	return recvIdentMatches(field.X, recvName)
+}
+
+// recvIdentMatches reports whether x is the receiver ident (an empty recvName,
+// from an anonymous receiver, matches any ident).
+func recvIdentMatches(x ast.Expr, recvName string) bool {
+	id, ok := x.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return recvName == "" || id.Name == recvName
 }
 
 // checkRevokeDelegateBody validates that body is exactly:
 //
 //	{ return <recvName>.inner.<methodName>(paramNames...) }
 //
-// recvName is the method's receiver variable name (e.g. "s").
-// paramNames is the ordered list of method parameter ident names.
-//
 // Returns a non-empty violation description string on failure, "" on pass.
-func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName string, paramNames []string) string {
+func checkRevokeDelegateBody(body *ast.BlockStmt, methodName, recvName string, paramNames []string) string {
 	if len(body.List) != 1 {
 		return fmt.Sprintf("body has %d statement(s); want exactly 1", len(body.List))
 	}
@@ -271,9 +376,6 @@ func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName st
 	if !ok {
 		return fmt.Sprintf("return result is %T; want *ast.CallExpr", retStmt.Results[0])
 	}
-	// Fun must be a SelectorExpr: <something>.inner.<methodName>
-	// We accept the outer selector as: selOuter.Sel.Name == methodName
-	// and selOuter.X must be another SelectorExpr: <recv>.inner
 	outerSel, ok := callExpr.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return fmt.Sprintf("callee is %T; want selector expr <recv>.%s.%s", callExpr.Fun, cachingStoreInnerField, methodName)
@@ -288,7 +390,6 @@ func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName st
 	if innerSel.Sel.Name != cachingStoreInnerField {
 		return fmt.Sprintf("callee accesses field .%s; want .%s", innerSel.Sel.Name, cachingStoreInnerField)
 	}
-	// step 8: innerSel.X must be an *ast.Ident whose Name matches the method receiver.
 	recvIdent, ok := innerSel.X.(*ast.Ident)
 	if !ok {
 		return fmt.Sprintf("callee receiver is %T; want *ast.Ident (receiver variable)", innerSel.X)
@@ -296,26 +397,15 @@ func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName st
 	if recvName != "" && recvIdent.Name != recvName {
 		return fmt.Sprintf("callee receiver is %q; want method receiver %q", recvIdent.Name, recvName)
 	}
-	// step 9: arg count must match param count.
 	if len(callExpr.Args) != len(paramNames) {
 		return fmt.Sprintf("callee has %d arg(s); want %d (one per param)", len(callExpr.Args), len(paramNames))
 	}
-	// step 10: each arg must be a plain *ast.Ident matching the corresponding param name.
-	// Index-based iteration avoids the "for-range []ast.Expr + type-assert" pattern
-	// that SCANNER-FRAMEWORK-USAGE-01 Path-B prohibits in archtest files.
 	i := 0
 	mismatch := ""
 	EachInChildren[ast.Ident](callExpr, func(argIdent *ast.Ident) {
 		if mismatch != "" || i >= len(paramNames) {
 			return
 		}
-		// EachInChildren visits all direct *ast.Ident children of callExpr,
-		// which includes Fun idents. We only want Args; skip any Ident that
-		// is the callee selector (Fun is a SelectorExpr, not a bare Ident here,
-		// so direct Ident children of callExpr are exactly the args).
-		// Double-check: if callExpr.Fun is *ast.SelectorExpr, its Ident parts
-		// are NOT direct children of callExpr — they are children of the
-		// SelectorExpr child. EachInChildren depth=1 is thus safe.
 		if argIdent.Name != paramNames[i] {
 			mismatch = fmt.Sprintf("callee arg[%d] is %q; want param ident %q", i, argIdent.Name, paramNames[i])
 		}
@@ -324,8 +414,6 @@ func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName st
 	if mismatch != "" {
 		return mismatch
 	}
-	// Check for non-Ident args: if i < len(paramNames) after visiting all
-	// direct Ident children, some args were non-Ident expressions.
 	if i != len(paramNames) {
 		return fmt.Sprintf("callee has %d plain-ident arg(s); want %d (some args are non-Ident expressions)", i, len(paramNames))
 	}
@@ -334,27 +422,19 @@ func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName st
 
 // ─── Blind-spot self-check tests ────────────────────────────────────────────
 
-// TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt asserts that
-// multi-statement Revoke/RevokeForSubject bodies are absent from production
-// adapters/redis code (post-GREEN state). The F1 RED fixture (fixtures/
-// caching_session_revoke_f1_multi_stmt/) proves the detection mechanism works:
-// verifyRevokeDelegateRedFixture asserts ≥ 1 violation in that fixture.
-// This blind-spot self-check asserts the continued absence of multi-stmt bodies
-// in the real production code, closing the coverage loop.
-func TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt(t *testing.T) {
+// TestCachingSessionRevoke_BlindSpot_RevokeForSubjectSingleStmt asserts the
+// production RevokeForSubject body stays single-statement (Revoke is legitimately
+// multi-statement after #796, so only the delegate-only method is checked here).
+func TestCachingSessionRevoke_BlindSpot_RevokeForSubjectSingleStmt(t *testing.T) {
 	t.Parallel()
-	// Verification via the F1 fixture: verifyRevokeDelegateRedFixture already
-	// asserts that a multi-statement body (log.Print + return) is detected.
-	// We additionally verify production absence explicitly.
 	var multiStmtFound bool
 	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/redis/..."}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
+			if strings.HasSuffix(p.Rel(file), "_test.go") {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-				if !revokeTargetMethods[fn.Name.Name] {
+				if _, ok := cachingStoreReceiver(fn); !ok || fn.Name.Name != delegateOnlyMethod {
 					return
 				}
 				if fn.Body != nil && len(fn.Body.List) > 1 {
@@ -364,20 +444,18 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt(t *testing.T) {
 		}
 		return nil
 	})
-
 	assert.False(t, multiStmtFound,
-		"production Revoke/RevokeForSubject body must be single-statement after GREEN fix; F1 fixture is the RED-state mirror")
+		"production RevokeForSubject body must be single-statement (delegate-only); the rfs_multistmt_red fixture is the RED-state mirror")
 }
 
-// TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue asserts that
-// method-value assignment of Revoke/RevokeForSubject (e.g. `fn := s.inner.Revoke`)
-// does NOT appear in adapters/redis production code. If it did, a 2-stmt body
-// (assign + return fn(...)) would catch it via the >1 statement check, but the
-// callee-name check would be skipped. Documents the existing coverage guarantee.
-func TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue(t *testing.T) {
+// TestCachingSessionRevoke_BlindSpot_CacheMethodValue asserts that method-value
+// assignment of cache.{Delete,Set} or inner.{Revoke,RevokeForSubject} does NOT
+// appear in adapters/redis production code — a method value would let a cache
+// mutation be invoked through an *ast.Ident, bypassing the selector-shape check.
+func TestCachingSessionRevoke_BlindSpot_CacheMethodValue(t *testing.T) {
 	t.Parallel()
-
 	var violations []string
+	watched := func(name string) bool { return cacheMutationMethods[name] || revokeMethodNames[name] }
 	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/redis/..."}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := p.Rel(file)
@@ -386,31 +464,27 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue(t *testing.T) {
 			}
 			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
 				EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-					if revokeTargetMethods[sel.Sel.Name] {
+					if watched(sel.Sel.Name) {
 						line := p.Fset.Position(assign.Pos()).Line
 						violations = append(violations, fmt.Sprintf(
-							"%s:%d: method-value assignment of %s detected — blind spot for body-shape check",
-							rel, line, sel.Sel.Name,
-						))
+							"%s:%d: method-value assignment of %s detected — blind spot for the selector-shape check",
+							rel, line, sel.Sel.Name))
 					}
 				})
 			})
 		}
 		return nil
 	})
-
 	assert.Empty(t, violations,
-		"CACHING-SESSION-REVOKE-DELEGATE-ONLY-01 blind-spot: method-value assignment of "+
-			"Revoke/RevokeForSubject found in adapters/redis production code — "+
-			"refactor to direct call form so the body-shape archtest remains complete.")
+		"CACHING-SESSION-REVOKE blind-spot: method-value assignment of a cache mutation / inner delegate "+
+			"found in adapters/redis production code — refactor to a direct call so the archtest stays complete.")
 }
 
-// TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect asserts that
-// reflect.MethodByName("Revoke") / ("RevokeForSubject") does NOT appear in
-// adapters/redis production code, confirming the reflect blind spot is absent.
-func TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect(t *testing.T) {
+// TestCachingSessionRevoke_BlindSpot_Reflect asserts that
+// reflect.MethodByName("Revoke"/"RevokeForSubject") does NOT appear in
+// adapters/redis production code.
+func TestCachingSessionRevoke_BlindSpot_Reflect(t *testing.T) {
 	t.Parallel()
-
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/redis/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
@@ -422,18 +496,14 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect(t *testing.T) {
 				continue
 			}
 			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
-				func(n string) bool { return revokeTargetMethods[n] }) {
+				func(n string) bool { return revokeMethodNames[n] }) {
 				violations = append(violations, fmt.Sprintf(
-					"%s:%d: CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: reflect.MethodByName(%q) "+
-						"detected — archtest cannot see reflect-based invocations",
-					rel, hit.Line, hit.Name,
-				))
+					"%s:%d: CACHING-SESSION-REVOKE: reflect.MethodByName(%q) detected — archtest cannot see reflect-based invocations",
+					rel, hit.Line, hit.Name))
 			}
 		}
 		return nil
 	})
-
 	assert.Empty(t, violations,
-		"CACHING-SESSION-REVOKE-DELEGATE-ONLY-01 blind-spot: reflect.MethodByName of "+
-			"Revoke/RevokeForSubject found in adapters/redis — refactor to direct form.")
+		"CACHING-SESSION-REVOKE blind-spot: reflect.MethodByName of Revoke/RevokeForSubject found in adapters/redis.")
 }

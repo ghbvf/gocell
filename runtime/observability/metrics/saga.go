@@ -67,13 +67,13 @@ type SagaCollector struct {
 // compile-time interface check.
 var _ executor.Observer = (*SagaCollector)(nil)
 
-// registerSagaCounter registers one counter and appends it to *registered on
+// registerCounterVec registers one counter and appends it to *registered on
 // success. On failure it tears down every previously-registered counter LIFO
 // (#1181 F11 atomic registration: the provider registry must not retain orphans
 // so a retry can re-register under the same names — mirrors
 // prometheus/client_golang Registry.Unregister) and wraps the error with the
-// metric name.
-func registerSagaCounter(
+// metric name. Shared by SagaCollector and SessionCacheCollector (session_cache.go).
+func registerCounterVec(
 	p kernelmetrics.Provider, opts kernelmetrics.CounterOpts, registered *[]kernelmetrics.Collector,
 ) (kernelmetrics.CounterVec, error) {
 	cv, err := p.CounterVec(opts)
@@ -113,7 +113,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 	var registered []kernelmetrics.Collector
 	c := &SagaCollector{cellID: cellID}
 	var err error
-	if c.outcome, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+	if c.outcome, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name: "saga_step_outcome_total",
 		Help: "Total saga step Execute outcomes (succeeded/failed/expired/canceled/lease_lost). " +
 			"step_name is intentionally excluded to bound the step×outcome cardinality; " +
@@ -122,14 +122,14 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 	}, &registered); err != nil {
 		return nil, err
 	}
-	if c.retry, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+	if c.retry, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name:       "saga_step_retry_total",
 		Help:       "Total retry attempts emitted by the saga executor (attempt N>1 fired) per definition+step.",
 		LabelNames: []string{"cell", "definition_id", "step_name"},
 	}, &registered); err != nil {
 		return nil, err
 	}
-	if c.hbFail, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+	if c.hbFail, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name: "saga_heartbeat_failed_total",
 		Help: "Total heartbeat tick failures observed by the saga executor, labeled by reason " +
 			"(infra_error = transient err; stale_lease = ok=false / another coordinator took over). " +
@@ -138,7 +138,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 	}, &registered); err != nil {
 		return nil, err
 	}
-	if c.tick, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+	if c.tick, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name: "saga_tick_total",
 		Help: "Total Coordinator ClaimPending cycles, labeled by result " +
 			"(claimed = ≥1 instance; empty = idle tick; error = ClaimPending failed). " +
@@ -147,7 +147,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 	}, &registered); err != nil {
 		return nil, err
 	}
-	if c.drive, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+	if c.drive, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name: "saga_drive_total",
 		Help: "Total Coordinator driveOne completions, labeled by result " +
 			"(ok = advanced cleanly; error = stale lease / instance gone / step failure). " +
@@ -156,7 +156,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 	}, &registered); err != nil {
 		return nil, err
 	}
-	if c.leaderSkip, err = registerSagaCounter(p, kernelmetrics.CounterOpts{
+	if c.leaderSkip, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name: "saga_leader_elect_skip_total",
 		Help: "Total leader-elect skips (acquireLead could not confirm leadership), labeled by reason " +
 			"(contended = another coordinator holds the distlock; ctx_canceled = shutdown; " +
