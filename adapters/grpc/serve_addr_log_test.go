@@ -18,6 +18,7 @@ import (
 
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestServeAddr_LogsBoundAddr drives the Worker self-bind path with Addr ":0"
@@ -42,7 +43,7 @@ func TestServeAddr_LogsBoundAddr(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return sloghelper.FindLogEntry(buf.String(), "server listening") != nil
-	}, 2*time.Second, 10*time.Millisecond, "expected a 'server listening' log line")
+	}, testtime.D2s, testtime.MediumPoll, "expected a 'server listening' log line")
 
 	entry := sloghelper.FindLogEntry(buf.String(), "server listening")
 	require.NotNil(t, entry)
@@ -53,7 +54,7 @@ func TestServeAddr_LogsBoundAddr(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		t.Fatal("Worker.Start did not return after ctx cancel")
 	}
 }
