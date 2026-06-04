@@ -306,7 +306,7 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
   - `busy` = 在途 lease 冲突（ClaimBusy → 409 Retry-After）。
   - `store_error` = `Store.Claim` 非指纹错误（→ 500）。**仅指 Claim 路径失败**；Record/Release 失败（响应已下发、仅缓存写失败的罕见 store 故障）刻意留 slog.Error，不计 state。
   - `oversize` = 响应体超限不录（响应仍正常下发）。
-  - `key_reused` = 同 key 不同 body 指纹不匹配（→ 409 ErrIdempotencyKeyReused），安全相关（客户端 bug / 重放）。
+  - `key_reused` = 同 key 不同 body 指纹不匹配（→ 422 ErrIdempotencyKeyReused，附 per-field diff 字段名），安全相关（客户端 bug / 重放）。
 - **`acquired` ⊇ `oversize`**：同一 oversize 请求先计 `acquired`（claim 时）再计 `oversize`（录入时），刻意如此——`oversize/acquired` = 不可缓存率。其余 5 个 state 互斥、各计一次。
 - **`cell` label** 复用 `http_requests_total{cell}` 同款语义：collector 从 `kernel/ctxkeys.CellID`（router root `CellAttribution` 注入）读取，缺失回退 `RuntimeCellSentinel`（`_runtime`）；业务取值天然 ∈ assembly closed-set（#1093 在 `composition.Builder` 已守），不需新 enforcement。注册经 bootstrap `autoWireIdempotencyMetricsCollector` → 共享 `autoWireCachedCollector` funnel（`BOOTSTRAP-AUTOWIRE-COLLECTOR-FUNNEL-01` 守），与 HTTP collector 同纪律（construct-once / cache / 冲突 startup-fatal）。
 

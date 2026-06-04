@@ -102,6 +102,7 @@ func TestKindStatusAndPublicCode(t *testing.T) {
 		{KindPermissionDenied, http.StatusForbidden, ErrInternal, true},
 		{KindNotFound, http.StatusNotFound, ErrInternal, true},
 		{KindConflict, http.StatusConflict, ErrInternal, true},
+		{KindUnprocessable, http.StatusUnprocessableEntity, ErrInternal, true},
 		{KindGone, http.StatusGone, ErrInternal, true},
 		{KindPayloadTooLarge, http.StatusRequestEntityTooLarge, ErrInternal, true},
 		{KindRateLimited, http.StatusTooManyRequests, ErrInternal, true},

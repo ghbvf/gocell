@@ -787,7 +787,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 - `busy`：在途 lease 冲突 → 409
 - `store_error`：Claim 路径失败 → 500
 - `oversize`：响应超限不录（`acquired` 的子事件）
-- `key_reused`：同 key 不同 body → 409（安全相关）
+- `key_reused`：同 key 不同 body → 422（附 per-field diff 字段名；安全相关）
 
 > 仅当配置真实 `Provider` 且某 listener 接线了 idempotency store 时才会有时间序列；无 store 时该 metric 仅出现在 `/metrics` HELP，无序列。
 
@@ -822,7 +822,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
     severity: info
   annotations:
     summary: "Idempotency key reused with different body"
-    description: "同 key 不同 body 指纹不匹配 409 速率 >0.05/sec（≈ 3/min）持续 15min。客户端 bug 或重放尝试，结合 slog idempotency_key_hash 关联请求来源。"
+    description: "同 key 不同 body 指纹不匹配 422 速率 >0.05/sec（≈ 3/min）持续 15min（响应附 per-field diff 差异字段名）。客户端 bug 或重放尝试，结合 slog idempotency_key_hash 关联请求来源。"
 ```
 
 ### 调试查询

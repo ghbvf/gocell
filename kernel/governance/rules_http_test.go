@@ -1544,10 +1544,9 @@ func intToStr(i int) string { // local helper avoids strconv import noise.
 	return string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
 }
 
-// TestDeclaredErrorStatuses_FoldsIdempotency409 locks Change B (#1469 review F4):
-// CH-07 (#1537 review F4): non-exempt mutating routes must declare the
-// framework-injected idempotency 409; exempt routes / non-mutating methods /
-// already-declared routes must not be flagged.
+// CH-07 (#1537 review F4 + #1450): non-exempt mutating routes must declare the
+// framework-injected idempotency 409 (ClaimBusy) AND 422 (key-reused); exempt
+// routes / non-mutating methods / already-declared routes must not be flagged.
 func ch07Contract(method string, exempt bool, authResponses []int) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:   "http.test.ch07.v1",
@@ -1570,25 +1569,36 @@ func runCH07(t *testing.T, c *metadata.ContractMeta) []ValidationResult {
 	return NewValidator(project, "", clock.Real()).checkCH07()
 }
 
-func TestCheckCH07_MutatingNonExemptMissing409_Fails(t *testing.T) {
+func TestCheckCH07_MutatingNonExemptMissingBoth_Fails(t *testing.T) {
 	results := runCH07(t, ch07Contract("POST", false, nil))
-	require.Len(t, results, 1, "non-exempt mutating route missing 409 must produce one CH-07 finding")
-	assert.Equal(t, codeCH07, results[0].Code)
-	assert.Equal(t, SeverityError, results[0].Severity)
-	assert.Contains(t, results[0].Message, "409")
+	require.Len(t, results, 2, "non-exempt mutating route missing 409 and 422 must produce two CH-07 findings")
+	var msgs string
+	for _, r := range results {
+		assert.Equal(t, codeCH07, r.Code)
+		assert.Equal(t, SeverityError, r.Severity)
+		msgs += r.Message
+	}
+	assert.Contains(t, msgs, "409")
+	assert.Contains(t, msgs, "422")
 }
 
-func TestCheckCH07_Declared409_Passes(t *testing.T) {
-	assert.Empty(t, runCH07(t, ch07Contract("POST", false, []int{409})),
-		"declaring 409 in auth.responses must satisfy CH-07")
+func TestCheckCH07_Declared409Only_Fails422(t *testing.T) {
+	results := runCH07(t, ch07Contract("POST", false, []int{409}))
+	require.Len(t, results, 1, "declaring only 409 must still flag the missing 422")
+	assert.Contains(t, results[0].Message, "422")
+}
+
+func TestCheckCH07_DeclaredBoth_Passes(t *testing.T) {
+	assert.Empty(t, runCH07(t, ch07Contract("POST", false, []int{409, 422})),
+		"declaring both 409 and 422 in auth.responses must satisfy CH-07")
 }
 
 func TestCheckCH07_Exempt_Passes(t *testing.T) {
 	assert.Empty(t, runCH07(t, ch07Contract("POST", true, nil)),
-		"idempotency.exempt route must not require a 409 declaration")
+		"idempotency.exempt route must not require 409/422 declarations")
 }
 
 func TestCheckCH07_NonMutating_Passes(t *testing.T) {
 	assert.Empty(t, runCH07(t, ch07Contract("GET", false, nil)),
-		"GET is not idempotency-tracked; no 409 required")
+		"GET is not idempotency-tracked; no 409/422 required")
 }

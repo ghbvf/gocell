@@ -2,7 +2,9 @@ package idempotency
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -995,7 +997,10 @@ type fingerprintMismatchStore struct{}
 func (fingerprintMismatchStore) Claim(
 	_ context.Context, _, _, _ string, _ time.Duration,
 ) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
-	return 0, nil, nil, ErrFingerprintMismatch
+	// Return the typed error wrapping the sentinel, matching the Store contract
+	// (Implementations MUST return a *FingerprintMismatchError). Stored is empty
+	// here — this fake exercises the metric/status path, not the per-field diff.
+	return 0, nil, nil, &FingerprintMismatchError{}
 }
 
 // TestMiddleware_Metrics_KeyReused verifies that a fingerprint mismatch
@@ -1009,8 +1014,8 @@ func TestMiddleware_Metrics_KeyReused(t *testing.T) {
 	rr := httptest.NewRecorder()
 	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
 
-	if rr.Code != 409 {
-		t.Fatalf("code: got %d, want 409", rr.Code)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code: got %d, want 422", rr.Code)
 	}
 	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
 		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
@@ -1019,7 +1024,7 @@ func TestMiddleware_Metrics_KeyReused(t *testing.T) {
 
 // TestMiddleware_Metrics_KeyReused_RealMemStore exercises the real MemStore
 // fingerprint-comparison path end-to-end: the same Idempotency-Key presented
-// with a DIFFERENT request body returns 409 and emits [StateKeyReused] — proving
+// with a DIFFERENT request body returns 422 and emits [StateKeyReused] — proving
 // the emit is wired to the actual fingerprint mismatch, not only the fake store.
 func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
 	clk := clockmock.New(time.Now())
@@ -1046,14 +1051,295 @@ func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
 	}
 	obs.states = obs.states[:0]
 
-	// Same key, DIFFERENT body → real fingerprint mismatch → 409 + key_reused.
+	// Same key, DIFFERENT body → real fingerprint mismatch → 422 + key_reused.
 	rr2 := httptest.NewRecorder()
 	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq("BBB"))
-	if rr2.Code != 409 {
-		t.Fatalf("code: got %d, want 409", rr2.Code)
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code: got %d, want 422", rr2.Code)
 	}
 	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
 		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
+	}
+}
+
+// TestMiddleware_KeyReused_PerFieldDiff verifies the Stripe-style per-field diff:
+// a fingerprint mismatch returns 422 whose details name exactly the top-level
+// fields that changed (sorted), and NO field value leaks into the response.
+func TestMiddleware_KeyReused_PerFieldDiff(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	mkReq := func(body string) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(body))
+		r.Header.Set("Idempotency-Key", "key-diff")
+		ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+			Kind: auth.PrincipalUser, Subject: "user-d", TenantID: "t1",
+		})
+		return r.WithContext(ctx)
+	}
+
+	// First request establishes the stored fingerprint (distinctive values so a
+	// privacy leak would be unmistakable).
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq(`{"amount":"AMT-AAA","currency":"usd","note":"NOTE-AAA"}`))
+	if rr1.Code != 201 {
+		t.Fatalf("first request code: got %d, want 201", rr1.Code)
+	}
+
+	// Same key, amount + note changed; currency unchanged → diff = [amount, note].
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq(`{"amount":"AMT-BBB","currency":"usd","note":"NOTE-BBB"}`))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := strings.Join(mismatchedFieldsFromBody(t, rr2.Body.Bytes()), ","); got != "amount,note" {
+		t.Errorf("mismatched fields: got %q, want %q", got, "amount,note")
+	}
+	// Privacy: no field VALUE may appear in the response (only field NAMES).
+	body := rr2.Body.String()
+	for _, leak := range []string{"AMT-AAA", "AMT-BBB", "NOTE-AAA", "NOTE-BBB"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response leaked field value %q: %s", leak, body)
+		}
+	}
+}
+
+// mismatchedFieldsFromBody extracts the "mismatchedField" detail values from a
+// 422 error envelope body, in wire order.
+func mismatchedFieldsFromBody(t *testing.T, raw []byte) []string {
+	t.Helper()
+	var env struct {
+		Error struct {
+			Details []struct {
+				Key   string          `json:"key"`
+				Value json.RawMessage `json:"value"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("decode error envelope: %v (body=%s)", err, raw)
+	}
+	var fields []string
+	for _, d := range env.Error.Details {
+		if d.Key != "mismatchedField" {
+			continue
+		}
+		var v string
+		if err := json.Unmarshal(d.Value, &v); err != nil {
+			t.Fatalf("mismatchedField value not a string: %v", err)
+		}
+		fields = append(fields, v)
+	}
+	return fields
+}
+
+// TestMiddleware_KeyReused_NoFieldDetails covers two mismatch shapes that yield a
+// 422 with NO per-field detail: (a) same fields, different top-level key order
+// (Body byte-mismatch but identical field hashes); (b) a non-JSON-object body
+// (no field map). The base 422 is still returned in both cases.
+func TestMiddleware_KeyReused_NoFieldDetails(t *testing.T) {
+	cases := []struct{ name, first, second string }{
+		{"key-order-only", `{"a":1,"b":2}`, `{"b":2,"a":1}`},
+		{"non-json-body", `plain-text-A`, `plain-text-B`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			clk := clockmock.New(time.Now())
+			mw := Middleware(clk, NewMemStore(clk))
+			mkReq := func(body string) *http.Request {
+				r := httptest.NewRequest("POST", "/o", strings.NewReader(body))
+				r.Header.Set("Idempotency-Key", "k-nofields")
+				return r.WithContext(auth.WithPrincipal(r.Context(),
+					&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: "t1"}))
+			}
+			rr1 := httptest.NewRecorder()
+			mw(testHandler(201, "ok")).ServeHTTP(rr1, mkReq(tc.first))
+			if rr1.Code != 201 {
+				t.Fatalf("first code: got %d, want 201", rr1.Code)
+			}
+			rr2 := httptest.NewRecorder()
+			mw(testHandler(201, "ok")).ServeHTTP(rr2, mkReq(tc.second))
+			if rr2.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+			}
+			if got := mismatchedFieldsFromBody(t, rr2.Body.Bytes()); len(got) != 0 {
+				t.Errorf("expected no mismatchedField details, got %v", got)
+			}
+		})
+	}
+}
+
+// TestMiddleware_KeyReused_TruncatesManyFields verifies the diff is capped at
+// maxMismatchedFields with a mismatchedFieldsTruncated marker when more fields
+// differ.
+func TestMiddleware_KeyReused_TruncatesManyFields(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	mw := Middleware(clk, NewMemStore(clk))
+	body := func(val string) string {
+		m := make(map[string]string, maxMismatchedFields+5)
+		for i := 0; i < maxMismatchedFields+5; i++ {
+			m[fmt.Sprintf("field%02d", i)] = val
+		}
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
+	mkReq := func(b string) *http.Request {
+		r := httptest.NewRequest("POST", "/o", strings.NewReader(b))
+		r.Header.Set("Idempotency-Key", "k-trunc")
+		return r.WithContext(auth.WithPrincipal(r.Context(),
+			&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: "t1"}))
+	}
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "ok")).ServeHTTP(rr1, mkReq(body("A")))
+	if rr1.Code != 201 {
+		t.Fatalf("first code: got %d, want 201", rr1.Code)
+	}
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "ok")).ServeHTTP(rr2, mkReq(body("B")))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := len(mismatchedFieldsFromBody(t, rr2.Body.Bytes())); got != maxMismatchedFields {
+		t.Errorf("mismatchedField count: got %d, want %d (capped)", got, maxMismatchedFields)
+	}
+	if !strings.Contains(rr2.Body.String(), "mismatchedFieldsTruncated") {
+		t.Errorf("expected mismatchedFieldsTruncated detail; body=%s", rr2.Body.String())
+	}
+}
+
+// TestComputeFingerprintAndDiff exercises the canonical fingerprint + per-field
+// diff helpers directly (white-box).
+func TestComputeFingerprintAndDiff(t *testing.T) {
+	base := computeFingerprint([]byte(`{"x":1,"y":2,"z":3}`))
+
+	// Deterministic: identical body → identical blob.
+	if base != computeFingerprint([]byte(`{"x":1,"y":2,"z":3}`)) {
+		t.Fatal("computeFingerprint is not deterministic")
+	}
+
+	// Changed value → that field in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":9,"z":3}`))), ","); got != "y" {
+		t.Errorf("changed-field diff: got %q, want %q", got, "y")
+	}
+	// Removed field → in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":2}`))), ","); got != "z" {
+		t.Errorf("removed-field diff: got %q, want %q", got, "z")
+	}
+	// Added field → in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":2,"z":3,"w":4}`))), ","); got != "w" {
+		t.Errorf("added-field diff: got %q, want %q", got, "w")
+	}
+	// Key order / whitespace only → fields identical → empty diff (the middleware
+	// then falls back to the plain "request body differs" 422).
+	if got := diffFields(base, computeFingerprint([]byte(`{ "z":3, "y":2, "x":1 }`))); len(got) != 0 {
+		t.Errorf("order-only diff: got %v, want []", got)
+	}
+	// Non-JSON-object body → nil Fields (no per-field diff available).
+	if fp := parseFingerprint(computeFingerprint([]byte("not json"))); fp.Fields != nil {
+		t.Errorf("non-object body Fields: got %v, want nil", fp.Fields)
+	}
+}
+
+// manyFieldBody builds a JSON object with n top-level string fields all set to
+// val. Used to drive the per-field map past maxFingerprintFieldsBytes.
+func manyFieldBody(n int, val string) []byte {
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, "%q:%q", fmt.Sprintf("field%05d", i), val)
+	}
+	sb.WriteByte('}')
+	return []byte(sb.String())
+}
+
+// TestComputeFingerprint_FieldsBudgetDegrade verifies F2: a request body whose
+// top-level field set would push the per-field hash map past
+// maxFingerprintFieldsBytes degrades to body-hash-only (Fields dropped), so the
+// PERSISTED fingerprint stays bounded regardless of how large the body is. The
+// whole-body hash is still present (match decision intact), and the degrade is a
+// pure function of the body so identical bodies still produce identical blobs.
+func TestComputeFingerprint_FieldsBudgetDegrade(t *testing.T) {
+	// ~5000 small fields — far past the 8 KiB per-field budget.
+	body := manyFieldBody(5000, "v")
+
+	fp := computeFingerprint(body)
+
+	// Degraded: per-field map dropped → no diff data persisted.
+	if got := parseFingerprint(fp).Fields; got != nil {
+		t.Errorf("Fields should be nil (degraded) for oversized field set, got %d entries", len(got))
+	}
+	// Whole-body hash still present → match decision unaffected.
+	if parseFingerprint(fp).Body == "" {
+		t.Error("Body hash must be present even when Fields is dropped")
+	}
+	// Stored fingerprint bounded: a body-hash-only blob is tiny (the {"b":"<64hex>"}
+	// envelope), and in particular must NOT scale with the (huge) body.
+	if len(fp) > maxFingerprintFieldsBytes {
+		t.Errorf("degraded fingerprint length %d exceeds budget %d (Fields not dropped?)", len(fp), maxFingerprintFieldsBytes)
+	}
+	// Determinism preserved across the degrade boundary.
+	if fp != computeFingerprint(manyFieldBody(5000, "v")) {
+		t.Error("degraded computeFingerprint is not deterministic")
+	}
+}
+
+// TestComputeFingerprint_LongFieldNameDegrade verifies the byte budget also
+// covers a single field with a pathologically long (client-controlled) name —
+// the per-field cost accounts the name length, so one over-long key degrades to
+// body-hash-only rather than persisting a giant key.
+func TestComputeFingerprint_LongFieldNameDegrade(t *testing.T) {
+	longName := strings.Repeat("x", maxFingerprintFieldsBytes+1)
+	body := []byte(fmt.Sprintf("{%q:1}", longName))
+
+	if got := parseFingerprint(computeFingerprint(body)).Fields; got != nil {
+		t.Errorf("Fields should be nil for an over-long field name, got %v", got)
+	}
+}
+
+// TestComputeFingerprint_UnderBudgetKeepsFields is the negative control: a normal
+// body comfortably under the budget keeps its per-field map so the per-field diff
+// remains available (proving the degrade is bounded to pathological inputs only).
+func TestComputeFingerprint_UnderBudgetKeepsFields(t *testing.T) {
+	body := manyFieldBody(50, "v") // 50 fields ≈ well under 8 KiB
+	fields := parseFingerprint(computeFingerprint(body)).Fields
+	if len(fields) != 50 {
+		t.Errorf("under-budget body should keep all 50 field hashes, got %d", len(fields))
+	}
+}
+
+// TestMiddleware_KeyReused_OversizedFields_BoundedNoDiff is the end-to-end F2
+// regression: a same-key/different-body reuse where BOTH bodies have a degraded
+// (oversized) field set still returns the base 422 — with NO per-field details,
+// since the stored fingerprint dropped its field map — proving the storage bound
+// does not break the 422 decision.
+func TestMiddleware_KeyReused_OversizedFields_BoundedNoDiff(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	mw := Middleware(clk, NewMemStore(clk))
+	mkReq := func(body []byte) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(string(body)))
+		r.Header.Set("Idempotency-Key", "key-big")
+		return r.WithContext(auth.WithPrincipal(r.Context(),
+			&auth.Principal{Kind: auth.PrincipalUser, Subject: "user-big", TenantID: "t1"}))
+	}
+
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq(manyFieldBody(5000, "AAA")))
+	if rr1.Code != 201 {
+		t.Fatalf("first code: got %d, want 201", rr1.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq(manyFieldBody(5000, "BBB")))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := mismatchedFieldsFromBody(t, rr2.Body.Bytes()); len(got) != 0 {
+		t.Errorf("degraded fingerprint must yield no mismatchedField details, got %v", got)
 	}
 }
 

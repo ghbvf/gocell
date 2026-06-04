@@ -5,13 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -70,6 +73,35 @@ const (
 	// is presented with a different request body (fingerprint mismatch).
 	// Must be a const literal (MESSAGE-CONST-LITERAL-01 archtest).
 	msgKeyReused = "idempotency key reused with a different request body"
+
+	// maxMismatchedFields caps the number of differing field names reported in
+	// the 422 key-reused response details, bounding response size when a request
+	// body has many top-level fields. When the diff exceeds this, the names are
+	// truncated and a mismatchedFieldsTruncated=true detail is added.
+	maxMismatchedFields = 20
+
+	// maxFieldNameLen caps the byte length of each reported field name. Field
+	// names come from client-controlled JSON keys, so an over-long name is
+	// truncated (with a … marker) to bound 422 response size.
+	maxFieldNameLen = 128
+
+	// hashHexLen is the byte length of a hex(sha256) digest (32 bytes × 2).
+	hashHexLen = sha256.Size * 2
+
+	// maxFingerprintFieldsBytes bounds the byte cost of the per-field hash map
+	// PERSISTED in the fingerprint blob. The per-field map exists ONLY to drive
+	// the best-effort per-field diff on mismatch; the whole-body hash
+	// (fingerprintBlob.Body) is what actually drives the match decision. A request
+	// body with a pathological number of top-level fields (or an over-long field
+	// name) could otherwise inflate the stored blob far beyond the body itself
+	// (Redis value amplification / memory pressure across the 24h record TTL).
+	// When the accumulated per-field cost would exceed this budget, fieldHashes
+	// drops the map entirely (degrade to body-hash-only). Because the decision is
+	// a pure function of the body, identical bodies always yield identical blobs,
+	// so the degrade never causes a false mismatch — only the diagnostic diff is
+	// unavailable for pathological bodies. 8 KiB comfortably covers any realistic
+	// request shape (≈100+ fields) while hard-capping amplification.
+	maxFingerprintFieldsBytes = 8 * 1024
 
 	// retryAfterHintSeconds is the Retry-After header value sent on 409
 	// ClaimBusy responses. A small hint (5 s) is better than the full lease
@@ -245,10 +277,12 @@ func (c middlewareConfig) observeState(ctx context.Context, state RequestState) 
 // is independent per endpoint — a key for POST /orders does NOT collide with
 // POST /payments. (Stripe / IETF idempotency-key draft §3 aligned.)
 //
-// Body fingerprinting: the request body is read, SHA-256 hashed (hex), and
-// passed as the Store fingerprint. BodyLimit middleware MUST run before this
-// middleware so r.Body is already size-bounded. Fingerprint mismatch (same key,
-// different body) returns 409 ErrIdempotencyKeyReused.
+// Body fingerprinting: the request body is read and reduced to a canonical
+// fingerprint blob (whole-body hash + per-field hashes; see computeFingerprint).
+// BodyLimit middleware MUST run before this middleware so r.Body is already
+// size-bounded. Fingerprint mismatch (same key, different body) returns 422
+// (KindUnprocessable) ErrIdempotencyKeyReused, with the differing top-level field
+// names in the error details (per-field diff).
 //
 // clk must be non-nil; clock.MustHaveClock panics on nil.
 // store must be non-nil; a nil store causes a panic with panicregister.Approved
@@ -380,11 +414,7 @@ func handleWithIdempotency(
 				"tenant_id", ns,
 			)
 			cfg.observeState(ctx, StateKeyReused)
-			httputil.WriteError(ctx, w, errcode.New(
-				errcode.KindConflict,
-				errcode.ErrIdempotencyKeyReused,
-				msgKeyReused,
-			))
+			httputil.WriteError(ctx, w, keyReusedError(err, fingerprint))
 			return
 		}
 		slog.ErrorContext(ctx, "idempotency: store claim failed",
@@ -430,11 +460,7 @@ func handleWithIdempotency(
 		// Use a small fixed hint (retryAfterHintSeconds) rather than the full
 		// leaseTTL (300 s default) so clients retry soon without a long wait.
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterHintSeconds))
-		httputil.WriteError(ctx, w, errcode.New(
-			errcode.KindConflict,
-			errcode.ErrIdempotencyInProgress,
-			msgInProgress,
-		))
+		httputil.WriteError(ctx, w, errInProgress)
 
 	default: // ClaimAcquired
 		cfg.observeState(ctx, StateAcquired)
@@ -585,10 +611,151 @@ func shouldRecord(status int) bool {
 	return status >= 200 && status < 400
 }
 
-// computeFingerprint returns hex(sha256(body)). An empty body produces the
-// sha256 of the empty byte slice (deterministic).
+// fingerprintBlob is the canonical fingerprint persisted by the Store as an
+// opaque string. Body is hex(sha256(rawBody)) — the match decision is exact
+// equality of the whole blob, so Body preserves byte-exact match semantics
+// (reordered keys or whitespace change Body and therefore mismatch). Fields maps
+// each top-level JSON field name to hex(sha256(rawValueBytes)) and exists ONLY
+// to drive the per-field diff on mismatch; it holds hashes, never raw values.
+type fingerprintBlob struct {
+	Body   string            `json:"b"`
+	Fields map[string]string `json:"f,omitempty"`
+}
+
+// computeFingerprint returns the canonical fingerprint blob (JSON-encoded) for a
+// request body. json.Marshal sorts map keys, so the encoding is deterministic.
+// For a non-JSON-object body, Fields is nil (no per-field diff is available) and
+// only Body participates.
 func computeFingerprint(body []byte) string {
-	sum := sha256.Sum256(body)
+	blob := fingerprintBlob{Body: hashHex(body), Fields: fieldHashes(body)}
+	encoded, err := json.Marshal(blob)
+	if err != nil {
+		// Unreachable for string + map[string]string, but fall back to the bare
+		// body hash so Claim always has a stable, non-empty key.
+		return hashHex(body)
+	}
+	return string(encoded)
+}
+
+// parseFingerprint decodes a fingerprint blob produced by computeFingerprint. A
+// parse failure degrades to an empty blob, which yields an empty per-field diff
+// (the base 422 is still returned) rather than an error.
+func parseFingerprint(s string) fingerprintBlob {
+	var blob fingerprintBlob
+	if err := json.Unmarshal([]byte(s), &blob); err != nil {
+		return fingerprintBlob{}
+	}
+	return blob
+}
+
+// fieldHashes returns {topLevelField: hex(sha256(rawValueBytes))} for a JSON
+// object body, or nil when body is not a JSON object. Only top-level fields are
+// hashed (Stripe-param granularity); a changed nested value surfaces as a change
+// to its top-level parent. Each value is hashed by its raw bytes (json.RawMessage
+// defers value parsing — no recursive decode/re-encode), which keeps the per-field
+// diff consistent with the byte-exact whole-body match (Body) and avoids any
+// hot-path cost or deep-nesting surface from canonicalizing untrusted values.
+//
+// The accumulated per-field cost (field name + hash digest, both client-influenced)
+// is bounded by maxFingerprintFieldsBytes. If a pathological body would push the
+// map past the budget, the whole map is dropped (returns nil → body-hash-only),
+// keeping the PERSISTED fingerprint bounded regardless of body size. The cut is a
+// pure function of the body, so identical bodies still produce identical maps and
+// the degrade can never cause a false mismatch — only the diagnostic per-field
+// diff is unavailable for such bodies.
+func fieldHashes(body []byte) map[string]string {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil // not a JSON object — no per-field diff available
+	}
+	out := make(map[string]string, len(top))
+	size := 0
+	for k, raw := range top {
+		size += len(k) + hashHexLen
+		if size > maxFingerprintFieldsBytes {
+			return nil // oversized field set — degrade to body-hash-only
+		}
+		out[k] = hashHex(raw)
+	}
+	return out
+}
+
+// diffFields returns the sorted top-level field names whose hash differs between
+// the stored and incoming fingerprint blobs (changed, added, or removed). It
+// returns names only — never values, which are not present in either blob.
+func diffFields(storedBlob, incomingBlob string) []string {
+	stored := parseFingerprint(storedBlob).Fields
+	incoming := parseFingerprint(incomingBlob).Fields
+	seen := make(map[string]struct{}, len(incoming))
+	var diff []string
+	for k, h := range incoming {
+		seen[k] = struct{}{}
+		if stored[k] != h {
+			diff = append(diff, k)
+		}
+	}
+	for k := range stored {
+		if _, ok := seen[k]; !ok {
+			diff = append(diff, k)
+		}
+	}
+	sort.Strings(diff)
+	return diff
+}
+
+// keyReusedError builds the 422 response for a fingerprint mismatch, enriched
+// with the names of the top-level request fields that differ (per-field diff).
+// err is the *FingerprintMismatchError from Store.Claim; incoming is the current
+// request's fingerprint blob.
+func keyReusedError(err error, incoming string) *errcode.Error {
+	return errcode.New(errcode.KindUnprocessable, errcode.ErrIdempotencyKeyReused,
+		msgKeyReused, keyReusedDetailOpts(err, incoming)...)
+}
+
+// keyReusedDetailOpts derives the per-field diff details. It returns nil (no
+// details) when the stored blob is unavailable or the diff is empty (e.g. body
+// differs only by key order / whitespace, or a non-JSON-object body).
+func keyReusedDetailOpts(err error, incoming string) []errcode.Option {
+	var fpErr *FingerprintMismatchError
+	if !errors.As(err, &fpErr) {
+		return nil
+	}
+	fields := diffFields(fpErr.Stored, incoming)
+	if len(fields) == 0 {
+		return nil
+	}
+	truncated := false
+	if len(fields) > maxMismatchedFields {
+		fields = fields[:maxMismatchedFields]
+		truncated = true
+	}
+	details := make([]errcode.PublicDetail, 0, len(fields)+1)
+	for _, f := range fields {
+		details = append(details, errcode.PublicString("mismatchedField", truncateFieldName(f)))
+	}
+	if truncated {
+		details = append(details, errcode.PublicBool("mismatchedFieldsTruncated", true))
+	}
+	return []errcode.Option{errcode.WithDetails(details...)}
+}
+
+// truncateFieldName bounds a client-controlled JSON field name to maxFieldNameLen
+// bytes (appending "…" when truncated) so an over-long key cannot bloat the 422
+// response. Truncates on a rune boundary to keep the output valid UTF-8.
+func truncateFieldName(name string) string {
+	if len(name) <= maxFieldNameLen {
+		return name
+	}
+	cut := maxFieldNameLen
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return name[:cut] + "…"
+}
+
+// hashHex returns hex(sha256(b)).
+func hashHex(b []byte) string {
+	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 
