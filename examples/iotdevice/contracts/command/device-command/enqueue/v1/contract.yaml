@@ -1,6 +1,6 @@
 id: command.device-command.enqueue.v1
 kind: command
-codegen: false  # K#09 funnel: kind=command deferred from K#06 PR-4 (see backlog CONTRACT-YAML-CODEGEN-DEFAULT-CLEANUP @ PR559)
+codegen: true  # command-bus sync funnel (#1044 PR-1): generates command_gen.go typed Handler/Register/Dispatch
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active

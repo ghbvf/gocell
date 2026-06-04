@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -105,31 +104,41 @@ func (c *Coordinator) runRebuild(ctx context.Context) {
 		return
 	}
 
-	// Phase: Replay — replay from 0 through head0.
+	// Phase: Replay — drain (0, head0] from the whole-journal source. The gate is
+	// SHUT (set above), so this rebuild goroutine is the SOLE applier — the live
+	// handler stays parked.
 	c.phase.Store(uint32(PhaseReplay))
-	if err := c.replayPhase(ctx, head0); err != nil {
-		c.failRebuild(ctx, "replayPhase", err)
+	if err := c.drainGap(ctx, 0, head0); err != nil {
+		c.failRebuild(ctx, "replay", err)
 		return
 	}
 
-	// Phase: Catchup — open gate, let live handler consume (head0, ∞).
+	// Phase: Catchup — drain (head0, head1] with the gate STILL SHUT, so the
+	// rebuild goroutine remains the sole applier (no concurrent live applier —
+	// preserving the serial-delivery precondition the exactly-once compare relies
+	// on; ADR §6 Row 4 + §Amendment 2026-06-04 Row 8). Only AFTER the bounded
+	// drain do we hand off to live delivery.
 	c.phase.Store(uint32(PhaseCatchup))
+	caughtUp, err := c.catchupPhase(ctx, head0)
+	if err != nil {
+		// ctx cancel / drain error during catchup: failRebuild opens the gate and
+		// restores PhaseLive so live delivery resumes.
+		c.failRebuild(ctx, "catchup", err)
+		return
+	}
+
+	// Hand off to live delivery: the checkpoint has been drained to head₁ (own
+	// stream applied + foreign advanced); the residual (head₁, now] tail —
+	// including any foreign entry appended during the drain — is consumed by the
+	// topic-routed live handler. openGate strictly before PhaseLive so a handler
+	// that observes PhaseLive never finds the gate still shut.
 	c.openGate()
 
-	// Catchup: wait until checkpoint ≥ current Head (or ctx cancel).
-	caughtUp, err := c.catchupPhase(ctx)
-	if err != nil {
-		// ctx cancel during catchup: gate is already open, live handler continues.
-		// Route through failRebuild for consistent logging; openGate is idempotent.
-		c.failRebuild(ctx, "catchupPhase", err)
-		return
-	}
-
-	// rebuild_duration + the "completed" success signal are recorded ONLY when
-	// catchup actually reached the head. A degraded catchup (Head/LoadOffset
-	// error → caughtUp=false) returns to PhaseLive without observing the
-	// histogram, so dashboards/alerting do not mistake a degraded run for a
-	// clean completion (it was already logged at Warn in catchupPhase).
+	// rebuild_duration + the "completed" success signal are recorded ONLY when the
+	// catchup drain reached head₁. A degraded catchup (Head error → caughtUp=false)
+	// still hands off to live delivery but skips the histogram so dashboards do not
+	// mistake a degraded run for a clean completion (it was logged at Warn in
+	// catchupPhase).
 	durSecs := c.clk.Since(start).Seconds()
 	if caughtUp {
 		c.metrics.observeRebuildDuration(ctx, c.cellID, c.projectionID, durSecs)
@@ -179,20 +188,43 @@ func (c *Coordinator) resetPhase(ctx context.Context) error {
 	})
 }
 
-// errReplayDone is the internal sentinel returned by the Replay fn to stop
-// iteration early once head0 is reached. replayPhase filters it out.
-var errReplayDone = errors.New("projection.rebuild: replay reached head0")
+// errDrainDone is the internal sentinel returned by the Replay fn to stop
+// iteration early once the `through` cutoff is reached. drainGap filters it out.
+var errDrainDone = errors.New("projection.rebuild: drain reached cutoff head")
 
-// replayPhase replays events from offset 0 through head0 (inclusive).
-// Each event is applied via applyOne in its own tx (exactly-once skip + pos<1
-// guard apply). Stops at head0 (catchup picks up from there).
+// drainGap drains the whole-journal slice (from, through] in ascending position
+// order, applying this projection's own stream via applyOne and advancing the
+// checkpoint past foreign streams via advanceOffsetPastForeign — each in its own
+// tx (exactly-once skip + pos<1 guard). Iteration stops once an entry's position
+// reaches `through` (events beyond it are handled by the next phase / live
+// delivery). `from`==0 drains from the start of history; `through`==0 means the
+// source is empty (no events) and the drain is a no-op.
 //
-// v1: replay is bounded only by Close()/process shutdown (no max-entries /
-// max-duration). The triggering request's deadline does NOT bound it — the
-// rebuild ctx is derived via context.WithoutCancel, which strips the parent
-// deadline so a detached rebuild outlives the short-lived 202 request.
-func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
-	err := c.replay.Replay(ctx, 0, func(entry outbox.Entry) error {
+// It is the single shared per-spec replay funnel: replayPhase drains (0, head0]
+// and catchupPhase drains (head0, head1], so the apply gate and foreign-advance
+// branch live in ONE place and cannot drift between the two phases.
+//
+// Per-spec replay filtering (#1482): the bootstrap-wired ReplaySource is a single
+// whole-journal source shared by every projection Coordinator (kernel contract:
+// one source serves all projections), so a rebuild interleaves every cell's event
+// streams. The business Apply runs ONLY for entries whose routing topic matches
+// this projection's subscribed spec — mirroring live topic-routed delivery, so the
+// Apply never sees a foreign stream and needs no defensive topic check. Foreign
+// entries are NOT applied but DO advance the checkpoint (advanceOffsetPastForeign,
+// like Marten async-daemon's high-water gap skip): the checkpoint must record
+// journal progress over foreign streams so a rebuild's catchup can terminate —
+// see catchupPhase. Filtering thus gates the Apply, not the checkpoint.
+//
+// Sole applier: drainGap runs on the rebuild goroutine while the gate is SHUT, so
+// it is the only writer of the checkpoint during both replay and catchup; there is
+// no concurrent live applier (serial-delivery precondition, ADR §6 Row 4).
+//
+// v1: a drain is bounded by `through` and by Close()/process shutdown (no
+// max-entries / max-duration). The triggering request's deadline does NOT bound
+// it — the rebuild ctx is derived via context.WithoutCancel, which strips the
+// parent deadline so a detached rebuild outlives the short-lived 202 request.
+func (c *Coordinator) drainGap(ctx context.Context, from, through int64) error {
+	err := c.replay.Replay(ctx, from, func(entry outbox.Entry) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -204,80 +236,113 @@ func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 			// the ambient tx carried in txCtx.
 			rctx := entry.Observability().RestoreToContext(txCtx)
 			rctx = entry.Principal().RestoreToContext(rctx)
-			return c.applyOne(rctx, entry, c.apply)
+			// Per-spec replay filter (#1482): apply only this projection's stream;
+			// advance the checkpoint past foreign streams without applying.
+			if entry.RoutingTopic() == c.spec.Topic {
+				return c.applyOne(rctx, entry, c.apply)
+			}
+			return c.advanceOffsetPastForeign(rctx, entry)
 		}); err != nil {
-			return fmt.Errorf("projection.rebuild[replay]: %w", err)
+			return fmt.Errorf("projection.rebuild[drain]: %w", err)
 		}
-		// Stop at head0; events at positions > head0 are handled by catchup. A
-		// Position error here is unexpected — applyOne resolved this same entry's
-		// position just above — so surface it instead of swallowing it (F8).
+		// Stop at the cutoff; events beyond it are handled by the next phase. A
+		// Position error here is unexpected — applyOne/advanceOffsetPastForeign
+		// resolved this same entry's position just above — so surface it instead
+		// of swallowing it (F8).
 		pos, posErr := c.cursor.Position(entry)
 		if posErr != nil {
 			return fmt.Errorf("projection.rebuild[cutoff]: %w", posErr)
 		}
-		if head0 > 0 && pos >= head0 {
-			return errReplayDone
+		if through > 0 && pos >= through {
+			return errDrainDone
 		}
 		return nil
 	})
-	if errors.Is(err, errReplayDone) {
+	if errors.Is(err, errDrainDone) {
 		return nil
 	}
 	return err
 }
 
-// catchupPhase waits until the checkpoint has caught up to the current head.
-// The gate is already open, so live event handlers are processing events.
+// advanceOffsetPastForeign advances the projection checkpoint past a replayed
+// entry that does NOT belong to this projection's subscribed topic, WITHOUT
+// invoking the business Apply or touching the replay-lag metrics.
+//
+// Rationale: see drainGap. The whole-journal ReplaySource interleaves every
+// cell's streams; a projection must skip foreign streams (live delivery is
+// topic-routed and never delivers them) yet still record journal progress so a
+// rebuild's catchup drain — which advances the checkpoint over (head0, head1] —
+// reaches head1 even when foreign entries (including a trailing one) sit in that
+// range. Without the foreign advance the checkpoint would stall at the last own
+// entry and the bounded drain could never reach its cutoff. The 1-based and
+// exactly-once (pos <= current) guards are shared with applyOne via
+// resolvePosition so a foreign skip can never move the checkpoint backward or
+// past a bad cursor, and the two paths cannot drift.
+//
+// Ops note (lag-gauge blind spot): foreign entries deliberately do NOT update
+// projection_event_replay_lag_seconds (lag is an own-stream apply signal). On a
+// journal dominated by foreign streams the lag gauge can therefore stay flat for
+// stretches of a rebuild even though work is progressing — the checkpoint and
+// pending_events still move; watch those for rebuild progress, not lag.
+func (c *Coordinator) advanceOffsetPastForeign(ctx context.Context, entry outbox.Entry) error {
+	pos, proceed, err := c.resolvePosition(ctx, entry)
+	if err != nil || !proceed {
+		return err
+	}
+	if err := c.store.SaveOffset(ctx, c.cellID, c.projectionID, pos); err != nil {
+		return fmt.Errorf("projection.rebuild[foreign-save]: %w", err)
+	}
+	return nil
+}
+
+// catchupPhase drains the journal gap (head0, head1] — where head1 is the source
+// Head captured at catchup start — applying this projection's own stream and
+// advancing the checkpoint past foreign streams (drainGap). The gate is still
+// SHUT, so the rebuild goroutine is the SOLE applier: there is no concurrent live
+// applier, which preserves the serial-delivery precondition the exactly-once
+// checkpoint compare relies on (ADR §6 Row 4 + §Amendment 2026-06-04 Row 8). The
+// bounded head1 cutoff guarantees termination even on a continuously-growing
+// whole-journal source; the residual (head1, now] tail (including any foreign
+// entry appended during the drain) is consumed by live delivery after the caller
+// opens the gate.
+//
+// Why a self-drain and not the prior open-gate poll on `checkpoint >= Head`: the
+// live handler is topic-routed and never sees foreign streams, so it cannot
+// advance the checkpoint past a foreign entry that lands during catchup — an
+// open-gate poll against the whole-journal Head would then spin forever once such
+// an entry arrives. Draining ourselves (advance past foreign, like Marten's
+// high-water gap skip) with the gate shut makes the replay→live handoff strictly
+// sequential — no replay+live dual-applier path, matching the Axon/Marten
+// streaming-processor consensus.
 //
 // Return contract:
-//   - (true, nil)  — the checkpoint reached the head; a clean completion.
-//   - (false, nil) — DEGRADED: a non-fatal Head/LoadOffset error aborted the
-//     catchup check (already logged at Warn). The live path continues, but the
-//     caller MUST NOT record rebuild_duration / a "completed" success signal.
-//   - (false, err) — ctx canceled; the caller routes through failRebuild.
-func (c *Coordinator) catchupPhase(ctx context.Context) (caughtUp bool, err error) {
-	for {
-		if cerr := ctx.Err(); cerr != nil {
-			return false, cerr
-		}
-		caught, ierr := c.isCaughtUp(ctx)
-		if ierr != nil {
-			// Non-fatal: store/Head error in catchup; live handler continues.
-			// Signal DEGRADED (caughtUp=false) so the caller skips the success
-			// duration/log — recording a clean completion here misleads dashboards.
-			slog.WarnContext(ctx, "projection rebuild catchup check degraded",
-				"cell", c.cellID,
-				"projection", c.projectionID,
-				"error", ierr,
-			)
-			return false, nil
-		}
-		if caught {
-			return true, nil
-		}
-		// Yield briefly to let the live handler process incoming events.
-		sleepUntil := c.clk.Now().Add(catchupPollInterval)
-		if serr := c.clk.Sleep(ctx, sleepUntil); serr != nil {
-			return false, serr
-		}
+//   - (true, nil)  — drained to head1; clean completion.
+//   - (false, nil) — DEGRADED: a non-fatal Head error aborted the cutoff capture
+//     (already logged at Warn). The caller opens the gate (live delivery resumes)
+//     but MUST NOT record rebuild_duration / a "completed" success signal.
+//   - (false, err) — ctx canceled or a drain apply/save error; the caller routes
+//     through failRebuild.
+func (c *Coordinator) catchupPhase(ctx context.Context, head0 int64) (caughtUp bool, err error) {
+	if cerr := ctx.Err(); cerr != nil {
+		return false, cerr
 	}
+	head1, herr := c.replay.Head(ctx)
+	if herr != nil {
+		// Non-fatal: cannot determine the catchup cutoff. Signal DEGRADED so the
+		// caller opens the gate (live delivery drains the own stream) but skips the
+		// success duration/log — recording a clean completion here misleads dashboards.
+		slog.WarnContext(ctx, "projection rebuild catchup head check degraded",
+			"cell", c.cellID,
+			"projection", c.projectionID,
+			"error", herr,
+		)
+		return false, nil
+	}
+	if derr := c.drainGap(ctx, head0, head1); derr != nil {
+		return false, derr
+	}
+	return true, nil
 }
-
-// isCaughtUp checks whether the checkpoint >= current head.
-func (c *Coordinator) isCaughtUp(ctx context.Context) (bool, error) {
-	head, err := c.replay.Head(ctx)
-	if err != nil {
-		return false, err
-	}
-	cp, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
-	if err != nil {
-		return false, err
-	}
-	return cp >= head, nil
-}
-
-// catchupPollInterval is the polling period during Catchup phase.
-const catchupPollInterval = 5 * time.Millisecond
 
 // failRebuild restores PhaseLive and opens the gate on any rebuild error.
 // It logs a structured slog error with the phase name and error for ops diagnostics.

@@ -192,6 +192,13 @@ func (st *spyTracer) Start(ctx context.Context, _ string, _ ...wrapper.Attr) (co
 // helpers
 // ---------------------------------------------------------------------------
 
+// testEventTopic is the routing topic shared by minimalSpec and the replay-seed
+// helpers so a seeded entry's RoutingTopic() matches the subscribed spec.Topic.
+// The Coordinator's per-spec replay filter (#1482) applies only entries whose
+// topic equals spec.Topic, so rebuild tests MUST seed matching-topic entries or
+// every event is treated as a foreign stream and skipped.
+const testEventTopic = "myproj.events.v1"
+
 // minimalSpec returns a valid event ContractSpec suitable for passing to
 // Coordinator.Subscribe. Kind must be "event" (not "projection" — projection is
 // the slice concept, not the kind of the subscribed event contract) and Topic
@@ -201,7 +208,7 @@ func minimalSpec(id string) contractspec.ContractSpec {
 		ID:        id,
 		Kind:      cellvocab.ContractEvent,
 		Transport: "amqp",
-		Topic:     "myproj.events.v1",
+		Topic:     testEventTopic,
 	}
 }
 

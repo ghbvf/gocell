@@ -12,6 +12,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -60,7 +61,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	migPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err, "pool for migration prep must succeed")
 
-	migrator, err := adapterpg.NewMigrator(migPool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(migPool, testAdapterMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err, "NewMigrator must succeed")
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
 	_ = migPool.Close(ctx)
@@ -105,14 +106,14 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err, "pool for migration prep must succeed")
 
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err, "NewMigrator must succeed")
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations initially")
 
 	// Simulate lag: remove entries for versions > 3 so VerifyExpectedVersion sees
 	// actual < expected and returns a schema mismatch error.
 	_, execErr := pool.DB().Exec(ctx,
-		"DELETE FROM schema_migrations WHERE version_id > 3")
+		"DELETE FROM schema_migrations_platform WHERE version_id > 3")
 	require.NoError(t, execErr, "deleting version records must succeed")
 
 	// Schema verification now lives in verifyPGPreconditions (provisionPostgres).

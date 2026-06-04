@@ -35,6 +35,8 @@ import (
 
 	"golang.org/x/sync/singleflight"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 // EvaluateConstString returns the compile-time string constant value of expr,
@@ -114,7 +116,10 @@ func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string)
 	if len(tags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	// ModeModule (GOWORK=off): archtest analyzes the root module plus the
+	// isolated fixture modules under tools/archtest/testdata/*, none of which are
+	// in the repo go.work `use` set. See tools/packagesload.
+	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, patterns...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("packages.Load: %w", err)
 	}

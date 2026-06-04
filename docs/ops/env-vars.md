@@ -81,6 +81,15 @@ Both variables are **required, persistent operator Basic Auth credentials** prot
 | `GOCELL_BOOTSTRAP_ADMIN_USERNAME` | HTTP Basic Auth username protecting the setup/admin endpoint. Persistent operator authenticator — env is the authenticator (who may trigger setup), not the business admin identity (which comes from the POST body). Must be non-empty; empty value fails fast. | — | **Required, persistent (lifetime of deployment)** |
 | `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` | HTTP Basic Auth password protecting the setup/admin endpoint. Minimum 8 bytes after TrimSpace (handles K8s secret trailing newlines). Control characters fail fast. Persistent operator authenticator — not the business admin password. | — | **Required, persistent (lifetime of deployment)** |
 
+> **Operator control-plane (admin listener)**: `cmd/corebundle` does **not** wire
+> `cell.AdminListener` / `AuthOperator`, so it reads no `GOCELL_OPERATOR_ADMIN_*`
+> variables — setting them on corebundle has no effect. The operator
+> control-plane (`/admin/v1/*`, e.g. projection rebuild) is demonstrated in
+> `examples/todoorder` (see `examples/todoorder/auth.go::newOperatorAuthFromEnv`,
+> which reads `GOCELL_OPERATOR_ADMIN_USERNAME` / `_PASSWORD`). Design:
+> `docs/architecture/202606041200-1505-adr-operator-control-plane-auth.md` and
+> `docs/ops/listener-topology.md` §"Admin Listener".
+
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 
 Each Cell that uses PostgreSQL reads its own DB and encryption env variables.

@@ -355,6 +355,87 @@ func TestValidateAuthNoneExclusive(t *testing.T) {
 	}
 }
 
+func TestValidateAuthOperatorPlans(t *testing.T) {
+	t.Parallel()
+
+	validOp := newTestOperatorAuth(t)
+
+	tests := []struct {
+		name       string
+		ref        cell.ListenerRef
+		chain      []auth.ListenerAuth
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name:  "operator on AdminListener accepted",
+			ref:   cell.AdminListener,
+			chain: []auth.ListenerAuth{validOp},
+		},
+		{
+			name:       "operator on PrimaryListener rejected",
+			ref:        cell.PrimaryListener,
+			chain:      []auth.ListenerAuth{validOp},
+			wantErr:    true,
+			wantErrSub: "only be used on cell.AdminListener",
+		},
+		{
+			name:       "operator on InternalListener rejected",
+			ref:        cell.InternalListener,
+			chain:      []auth.ListenerAuth{validOp},
+			wantErr:    true,
+			wantErrSub: "only be used on cell.AdminListener",
+		},
+		{
+			name:       "AdminListener without operator rejected",
+			ref:        cell.AdminListener,
+			chain:      []auth.ListenerAuth{auth.AuthNone{}},
+			wantErr:    true,
+			wantErrSub: "requires an AuthOperator",
+		},
+		{
+			name:       "struct-literal empty credentials rejected",
+			ref:        cell.AdminListener,
+			chain:      []auth.ListenerAuth{auth.AuthOperator{Limiter: allowAllLimiter{}}},
+			wantErr:    true,
+			wantErrSub: "non-empty operator credentials",
+		},
+		{
+			name:       "struct-literal nil limiter rejected",
+			ref:        cell.AdminListener,
+			chain:      []auth.ListenerAuth{auth.AuthOperator{Username: []byte("ops"), Password: []byte("pw")}},
+			wantErr:    true,
+			wantErrSub: "Limiter must not be nil",
+		},
+		{
+			name:       "two operators rejected",
+			ref:        cell.AdminListener,
+			chain:      []auth.ListenerAuth{validOp, validOp},
+			wantErr:    true,
+			wantErrSub: "at most one AuthOperator",
+		},
+		{
+			name:  "non-admin listener without operator is fine",
+			ref:   cell.PrimaryListener,
+			chain: []auth.ListenerAuth{auth.AuthMTLS{}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := bootstrapWithListener(tc.ref, tc.chain, nil)
+			err := b.validateAuthOperatorPlans()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, errFull(t, err), tc.wantErrSub)
+		})
+	}
+}
+
 // applyDistributedNonceStore reports NonceStoreKindDistributed (the cross-pod
 // replay-safe kind). Used to exercise the multi-pod accept path.
 type applyDistributedNonceStore struct{}

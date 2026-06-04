@@ -14,6 +14,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
 )
 
 // Tables owned by the adapters/postgres migration set (in migration order).
@@ -103,13 +104,26 @@ func ExpectedVersion(fsys fs.FS) (int64, error) {
 		if !strings.HasSuffix(name, ".sql") {
 			continue
 		}
+		// STRICT (#1089 / codex C2): a top-level .sql whose name goose cannot
+		// derive a version from is NOT silently skipped. Silent-skip is a
+		// fail-open — goose's own collector would also ignore the file, so a
+		// malformed/misnamed (e.g. namespace-prefixed) external-cell migration
+		// would vanish from BOTH ExpectedVersion and apply, and VerifyAll would
+		// pass against a DB missing it. Fail fast and name the file. cf. Flyway
+		// `validate`, Django (app,name) explicit migration records.
 		m := migrationVersionRe.FindStringSubmatch(name)
 		if m == nil {
-			continue
+			return 0, errcode.New(errcode.KindInvalid, ErrAdapterPGSchemaMismatch,
+				"schema_guard: migration filename has no leading NNN_ version prefix; must be goose-native NNN_desc.sql",
+				errcode.WithInternal(errcode.InternalAttr("file", name)))
 		}
 		v, parseErr := strconv.ParseInt(m[1], 10, 64)
 		if parseErr != nil {
-			continue
+			return 0, errcode.New(errcode.KindInvalid, ErrAdapterPGSchemaMismatch,
+				"schema_guard: migration filename version prefix is not a parseable int64",
+				errcode.WithInternal(
+					errcode.InternalAttr("file", name),
+					errcode.InternalAttr("parse_error", parseErr.Error())))
 		}
 		if v > max {
 			max = v
@@ -118,15 +132,14 @@ func ExpectedVersion(fsys fs.FS) (int64, error) {
 	return max, nil
 }
 
-// defaultSchemaTable is the goose migration tracking table used by GoCell.
-// Must match the tableName passed to NewMigrator in production code.
-const defaultSchemaTable = "schema_migrations"
-
 // VerifyExpectedVersion compares the database's current goose schema version
-// against the expected version derived from the embedded migration FS.
+// against the expected version derived from the embedded migration FS for the
+// given namespace.
 //
-// tableName is the goose tracking table (pass "" to use the default
-// "schema_migrations"). It must match the table used by NewMigrator.
+// ns identifies the migration lineage; the goose tracking table is derived as
+// schema_migrations_<namespace> (see trackingTableFor) and must match the table
+// NewMigrator(_, _, ns) writes. Taking a typed migration.Namespace rather than a
+// free table string keeps the read and write sides on the same derivation.
 //
 // Returns ErrAdapterPGSchemaMismatch if:
 //   - actual < expected: DB schema is behind the binary (migrations not run).
@@ -135,12 +148,22 @@ const defaultSchemaTable = "schema_migrations"
 // Returns nil when actual == expected.
 //
 // ref: pressly/goose v3.27 Provider.GetDBVersion — GetDBVersion reads max version
-// from the goose version table (schema_migrations by default).
-func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableName ...string) error {
-	tbl := defaultSchemaTable
-	if len(tableName) > 0 && tableName[0] != "" {
-		tbl = tableName[0]
+// from the goose version table.
+func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, ns migration.Namespace) error {
+	if err := ns.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrAdapterPGSchemaMismatch,
+			"schema_guard: invalid migration namespace", err)
 	}
+	return verifyExpectedVersionForTable(ctx, pool, fsys, trackingTableFor(ns))
+}
+
+// verifyExpectedVersionForTable is the unexported core of VerifyExpectedVersion
+// against an explicit goose tracking table. The only production caller is
+// VerifyExpectedVersion, which derives the table from a migration.Namespace via
+// trackingTableFor; in-package tests call it directly to verify isolated
+// per-test tracking tables. Non-test caller allowlist held by archtest
+// MIGRATION-TRACKING-TABLE-DERIVED-01.
+func verifyExpectedVersionForTable(ctx context.Context, pool *Pool, fsys fs.FS, tbl string) error {
 	if err := validateIdentifier(tbl); err != nil {
 		return err
 	}
@@ -177,10 +200,17 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 	if actual != expected {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaMismatch,
 			"schema version mismatch",
-			errcode.WithDetails(errcode.PublicInt("db", actual), errcode.PublicInt("binary", expected)))
+			errcode.WithDetails(
+				errcode.PublicString("trackingTable", tbl),
+				errcode.PublicInt("db", actual),
+				errcode.PublicInt("binary", expected)))
 	}
 
-	slog.Info("schema_guard: schema version matched",
+	// Carry the tracking table (schema_migrations_<namespace>) so a VerifyAll
+	// over multiple namespaces is attributable in slog; use the request ctx so
+	// the entry keeps its correlation fields.
+	slog.InfoContext(ctx, "schema_guard: schema version matched",
+		slog.String("tracking_table", tbl),
 		slog.Int64("version", actual))
 	return nil
 }

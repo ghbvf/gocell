@@ -43,7 +43,7 @@ GoCell project constitution (`.specify/memory/constitution.md`) gates re-evaluat
 
 | Principle | Gate | Status |
 |-----------|------|--------|
-| **I. Cell-Native Layering** | `kernel/` ↛ `runtime/`/`adapters/`/`cells/`; `cells/` ↛ `adapters/grpc` | ✅ — `kernel/cell.GRPCServiceSpec` holds `any` (interface), grpc.ServiceDesc injected from adapter layer; archtest `GRPC-CELL-REGISTRAR-LAYER-01` (Medium) enforces |
+| **I. Cell-Native Layering** | `kernel/` ↛ `runtime/`/`adapters/`/`cells/`; `cells/` ↛ `adapters/grpc` | ✅ — `kernel/cell.GRPCServiceSpec.Register` holds `any` (Form B: a `func(grpc.ServiceRegistrar)` callback; the cell's closure builds the `*ServiceDesc` via the generated `pb.RegisterXxxServer`, so kernel never names a grpc type); archtest `GRPC-CELL-REGISTRAR-LAYER-01` (Medium, permanent ceiling — see Complexity Tracking) enforces |
 | **II. Cell Governance + Six Truths** | contract.yaml is boundary truth | ✅ — `kind: grpc` is a kind extension; proto file is referenced from contract.yaml (`grpc.proto`), not a parallel SoR. archtest `GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01` (Hard) ensures no hand-written proto import paths in generated code |
 | **III. Contract Boundary Discipline** | RPC contracts use existing kind taxonomy | ⚠️ — current closed set is `http \| event \| command \| projection`; this plan extends to add `grpc`. Constitution defines contract kinds in table at §III but the runtime closed set (`kernel/governance.builder.go`) is the enforced gate. **Decision**: extend the kind enumeration as a one-line addition; archtest `CONTRACT-KINDS-CLOSED-SET-01` updated in PR 1. No constitution amendment needed — `command` is the analogous precedent. Provider/consumer role pair for `grpc`: `server` / `clients`; provider role `serve`, consumer role `call` (mirrors `http`). |
 | **IV. TDD non-negotiable** | every PR ships its tests | ✅ — each PR lists `*_test.go` first in the file list per PR section below |
@@ -311,18 +311,18 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 
 ### PR 7 — ServiceRegistrar + Cell.GRPCService API ⚡
 
-- **Scope**: new `runtime/grpc/registrar.go` `ServiceRegistrar.RegisterService(desc, impl)`; `kernel/cell.Registrar` gains `GRPCService(spec GRPCServiceSpec, impl any)`; bootstrap phase5 drains `RegistrySnapshot.GRPCServices` to registrar.
-- **Files**:
-  - `runtime/grpc/registrar.go` ~150
-  - `runtime/grpc/registrar_test.go` ~150
-  - `kernel/cell/registrar.go` (+`GRPCService` method) ~60
-  - `kernel/cell/registry.go` (+`GRPCServiceSpec` `any`-typed) ~60
-  - `runtime/bootstrap/bootstrap.go` (+drain `GRPCServices`) ~80
-- **TDD**: register-then-call happy path; duplicate service desc → fail-fast; cellID resolution from `GRPCServiceSpec.CellID`
+- **Scope** (as-built PR-7 #1150, **Form B**): new `runtime/grpc/registrar.go` — public `ServiceRegistrar.Register(spec cell.GRPCServiceSpec) error` + `CellIDForMethod` (single public path; an unexported `cellScopedRegistrar` implements `grpc.ServiceRegistrar` for attribution); `kernel/cell.Registrar` gains `GRPCService(spec GRPCServiceSpec) error` (one arg — impl folds into the `spec.Register func(grpc.ServiceRegistrar)` callback); `WithGRPCListener` gains a leading `ref cell.ListenerRef`; bootstrap **phase7b** (after bind, before `grpcServeAll`) drains `RegistrySnapshot.GRPCServices` routed by `spec.Listener` ref.
+- **Files** (as-built):
+  - `kernel/cell/grpc_service.go` (new — `GRPCServiceSpec{…Register any}` + `Validate` + `GRPCServiceRegistrar` iface)
+  - `kernel/cell/registry.go` (+`GRPCService` method + recorder dedup + `RegistrySnapshot.GRPCServices` + Snapshot copy)
+  - `runtime/grpc/registrar.go` + `_test.go`
+  - `adapters/grpc/server.go` (`Registrar()` replaces `ServiceRegistrar()`)
+  - `runtime/bootstrap/grpc_listener.go` + `grpc_serve.go` (+`ref` + drain)
+  - `tools/archtest/grpc_cell_registrar_layer_test.go`
+- **TDD**: register-then-invoke (bufconn); bad-`Register`-fn-type panic; dup-`ServiceName` panic; dup-`ContractID` recorder error; `CellIDForMethod`; bootstrap drain happy + undeclared-ref/dup-ref/CellID-mismatch fail-fast.
 - **archtest**:
-  - `GRPC-CELL-REGISTRAR-LAYER-01` (Medium: `kernel/cell.GRPCServiceSpec` holds `interface{}` for `*grpc.ServiceDesc`; `kernel/` MUST NOT import `google.golang.org/grpc` — AST + import scan)
-- **Est.**: 500 lines
-- **Risk**: `kernel/` ↛ grpc constraint enforced via `any`-typed field, with runtime type assertion in the adapter layer. Upgrade path to type-safe sealed interface tracked in a follow-up gh issue (Hard upgrade per AI-robust §Funnel 双向锁评级).
+  - `GRPC-CELL-REGISTRAR-LAYER-01` (Medium: reflect field-lock that `GRPCServiceSpec.Register` is untyped `any` + negative control. kernel⊥grpc itself is enforced by the existing depguard + `kernel/depgraph/layer_test.go` gate — **not** duplicated here.)
+- **Risk**: `kernel/` ↛ grpc enforced via the `any`-typed `Register` field. The "sealed interface" Hard upgrade is **infeasible** (kernel ⊥ adapters / unexported-marker rule) — a **permanent Go-language ceiling**, won't-do, tracked **#1582** (#851/#893/#1282 family). See Complexity Tracking below.
 
 ### PR 8 — examples/iotdevice gRPC handler (first end-to-end) ⚡
 
@@ -345,11 +345,11 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 
 ### PR 9 — observability parity: cell label + readyz probe + AccessLog
 
-- **Scope**: complete metrics cell label injection; new `grpc_ready` readiness probe; AccessLog interceptor; full slog field set (`cell`, `method`, `code`, `duration_ms`, `request_id`, `correlation_id`, `trace_id`).
+- **Scope**: complete metrics cell label injection; readyz integration of the existing `grpc_ready` probe (the `adapters/grpc.ProbeReady` const was already minted in PR-5; PR-9 wires it into the healthz aggregator/observability, not a new const); AccessLog interceptor; full slog field set (`cell`, `method`, `code`, `duration_ms`, `request_id`, `correlation_id`, `trace_id`).
 - **Files**:
   - `runtime/grpc/interceptor/metrics.go` (+cell label injection finalised) ~80
   - `runtime/grpc/interceptor/access_log.go` ~80
-  - `adapters/grpc/readyz.go` (+`ProbeReady healthz.ReadyProbeName = "grpc_ready"`) ~80
+  - `adapters/grpc/server.go` (wire the existing `ProbeReady healthz.ProbeName = "grpc_ready"` into the readyz aggregator) ~80
   - `runtime/grpc/interceptor/metrics_test.go` ~120
   - `runtime/grpc/interceptor/access_log_test.go` ~100
   - `adapters/grpc/readyz_test.go` ~80
@@ -418,7 +418,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 ### Highest-risk PRs
 
 1. **PR 5 (bootstrap wiring)** — Bootstrap.Run is the most complex lifecycle code in repo. Mitigation: mirror HTTP listener wiring shape exactly; no novel phase sequencing; same-PR regression test against existing bootstrap test suite.
-2. **PR 7 (kernel/cell GRPCServiceSpec)** — `kernel/` ↛ grpc enforced via `any` field rather than type system. Mitigation: archtest `GRPC-CELL-REGISTRAR-LAYER-01` (Medium) + gh issue tracking Hard upgrade (sealed interface via private constructor in `adapters/grpc` once feasible).
+2. **PR 7 (kernel/cell GRPCServiceSpec)** — `kernel/` ↛ grpc enforced via `any` field rather than type system. Mitigation: archtest `GRPC-CELL-REGISTRAR-LAYER-01` (Medium). Sealing the `any` is infeasible (kernel cannot name `func(grpc.ServiceRegistrar)`; an unexported marker can't be implemented by cell/adapter closures, an exported marker seals nothing, an `adapters/grpc` marker is unreachable from `kernel/cell`) — this is a permanent ceiling, not a deferred Hard upgrade. Tracked as won't-do at **#1582** (see Complexity Tracking).
 3. **PR 12 (errcode mapping)** — wire-side semantics fixed; future client migrations expensive. Mitigation: ADR `202605260100` reviewed before PR 12 lands; explicit table; exhaustiveness archtest.
 
 ### Milestones
@@ -436,13 +436,16 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 
 No constitution violations require justification.
 
-One **funnel-pair Medium → Hard upgrade** is tracked as a follow-up rather than blocking this feature:
+One archtest carries a **Medium rating with a permanent upstream ceiling** (corrected PR-7 #1150 —
+the earlier "Hard upgrade" framing was found infeasible):
 
-| Item | Why Medium now | Path to Hard | Tracking |
-|------|---------------|--------------|----------|
-| `GRPC-CELL-REGISTRAR-LAYER-01` | `kernel/cell.GRPCServiceSpec` field is `any`; archtest enforces `kernel/` ↛ grpc, but a kernel-internal struct could still hold a `*grpc.ServiceDesc` indirectly | Introduce a sealed interface in `adapters/grpc` with private constructor; `kernel/cell` references only the interface; archtest upgrade to Hard form (single sanctioned holder) | gh issue (to open at PR 7 merge) |
+| Item | Why Medium | Why true-Hard is unreachable (permanent ceiling) | Tracking |
+|------|-----------|--------------------------------------------------|----------|
+| `GRPC-CELL-REGISTRAR-LAYER-01` | `kernel/cell.GRPCServiceSpec.Register` is `any` (reflect field-lock); kernel⊥grpc itself is the existing depguard + `kernel/depgraph/layer_test.go` gate | Sealing the `any` is infeasible: a kernel **unexported** marker can't be implemented by cell/adapter closures; a kernel **exported** marker seals nothing; a marker in `adapters/grpc` can't be referenced by `kernel/cell` (kernel ⊥ adapters). The `any` is irreducible because kernel cannot name `func(grpc.ServiceRegistrar)`. | **#1582** (won't-do) |
 
-This matches AI-robust §Hard 范本目录 "single sanctioned holder" — currently Medium because upgrade path requires the adapter layer to exist (PR 3+).
+This is the same permanent Go-language ceiling family as #851 / #893 / #1282 — **not** a "single
+sanctioned holder" upgrade (that pattern needs the holder type to be nameable across the boundary,
+which kernel ⊥ grpc / ⊥ adapters forbids).
 
 ---
 

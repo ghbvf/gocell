@@ -47,6 +47,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -98,7 +99,7 @@ func setupIdentityManagePG(t *testing.T) (*accesspgrepo.PGUserRepo, *adapterpg.T
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
 	require.NoError(t, err)
 
-	migrator, err := adapterpg.NewMigrator(pool, pgIntegMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, pgIntegMigrationsFS(t), migration.PlatformNamespace)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 

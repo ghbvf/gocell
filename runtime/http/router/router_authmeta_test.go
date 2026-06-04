@@ -195,6 +195,82 @@ func TestFinalizeAuth_InternalPathOnZeroRef_Accepted(t *testing.T) {
 		"internal-path route on a zero-ref router must still finalize for unit tests")
 }
 
+// --- admin-listener affinity (#1505) — mirrors the internal-affinity tests ---
+
+func TestFinalizeAuth_AdminPathOnPrimary_Rejected(t *testing.T) {
+	r, err := NewForListener(clock.Real(), kcell.PrimaryListener)
+	require.NoError(t, err)
+	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/admin/v1/projection/ordercell/orders/rebuild",
+	}))
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject /admin/v1/* on PrimaryListener")
+	assert.Contains(t, err.Error(), "must be mounted on AdminListener")
+	assert.Contains(t, err.Error(), `"primary"`)
+}
+
+func TestFinalizeAuth_AdminPathOnInternal_Rejected(t *testing.T) {
+	r, err := NewForListener(clock.Real(), kcell.InternalListener)
+	require.NoError(t, err)
+	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/admin/v1/projection/ordercell/orders/rebuild",
+	}))
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject /admin/v1/* on InternalListener")
+	assert.Contains(t, err.Error(), "must be mounted on AdminListener")
+}
+
+func TestFinalizeAuth_AdminPathOnAdmin_Accepted(t *testing.T) {
+	r, err := NewForListener(clock.Real(), kcell.AdminListener)
+	require.NoError(t, err)
+	mustMountRoute(r, auth.Route{
+		Contract: testHTTPContract("POST", "/admin/v1/projection/ordercell/orders/rebuild"),
+		Handler:  okHandler,
+	})
+	require.NoError(t, r.FinalizeAuth(),
+		"admin-path route on AdminListener must finalize cleanly")
+}
+
+func TestFinalizeAuth_AdminPathOnZeroRef_Accepted(t *testing.T) {
+	r := mustNew(clock.Real())
+	mustMountRoute(r, auth.Route{
+		Contract: testHTTPContract("POST", "/admin/v1/projection/ordercell/orders/rebuild"),
+		Handler:  okHandler,
+	})
+	require.NoError(t, r.FinalizeAuth(),
+		"admin-path route on a zero-ref router must still finalize for unit tests")
+}
+
+func TestFinalizeAuth_RejectsInternalPathOnAdminListener(t *testing.T) {
+	r, err := NewForListener(clock.Real(), kcell.AdminListener)
+	require.NoError(t, err)
+	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "GET",
+		Path:   "/internal/v1/probe",
+	}))
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject /internal/v1/* on AdminListener")
+	assert.Contains(t, err.Error(), "must be mounted on InternalListener")
+}
+
+// TestFinalizeAuth_RejectsNonAdminPathOnAdminListener closes the gap a plain
+// IsInternal-only check left open: a non-admin (e.g. public-shaped) path mounted
+// on the admin listener must fail fast, mirroring the internal listener's
+// reject-foreign-path direction.
+func TestFinalizeAuth_RejectsNonAdminPathOnAdminListener(t *testing.T) {
+	r, err := NewForListener(clock.Real(), kcell.AdminListener)
+	require.NoError(t, err)
+	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "GET",
+		Path:   "/api/v1/widgets",
+	}))
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject non-/admin/v1/* paths on AdminListener")
+	assert.Contains(t, err.Error(), "mounted on admin listener but path lacks")
+}
+
 func TestFinalizeAuth_NoVerifier_EmitsWarn_ByDefault(t *testing.T) {
 	buf, restore := captureSlogWarn(t)
 	defer restore()

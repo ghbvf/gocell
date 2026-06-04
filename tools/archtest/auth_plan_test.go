@@ -82,6 +82,7 @@ var authPlanConstructorNames = map[string]struct{}{
 	"AuthMTLS":            {},
 	"AuthNone":            {},
 	"AuthServiceToken":    {},
+	"AuthOperator":        {}, // #1505 operator control-plane listener gate
 }
 
 // authPlanPkgPath is the canonical import path of the package that owns the

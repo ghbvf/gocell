@@ -9,12 +9,14 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 默认 L3（三 agent 探索 + 详细计划 + 与用户确认 + 按 diff 行数自动 1/2/3/6 reviewer，见阶段 7）。
 
+> 所有 `gh` / `git push` 命令用 `dangerouslyDisableSandbox: true`（CLAUDE.md 全局总则）。
+
 > **多沟通原则（默认多问、有歧义即停）**：L2/L3 在创建 worktree（阶段 3）**之前**必须完整呈现「方案方向
 > （阶段 1）+ 改动计划（阶段 2）」并经 AskUserQuestion 确认——不在未对齐时就开工。实施中（阶段 5）surface
-> 阶段性进度与 blocker；阶段 7→8 之间呈现内置 review findings 表再决定修哪些。任何方案歧义 / 范围不清 / 取舍
-> 没把握 → 停下问，不默默假设。
+> 阶段性进度与 blocker；阶段 7→8 呈现内置 review findings 表，**Cx1/Cx2 IN_SCOPE 自动修**，仅 Cx3/Cx4 / 归属-取舍
+> 不清才停下问。任何方案歧义 / 范围不清 / 取舍没把握 → 停下问，不默默假设。
 
-剥离 `--level=` flag 后，剩余参数匹配 `^#?[0-9]+$` 时视为 issue 号，先 `gh issue view <N> --json title,body,labels,state`（`dangerouslyDisableSandbox: true`）拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。`state != "OPEN"`（CLOSED / MERGED 等）或 `gh issue view` 失败均用 AskUserQuestion 让用户裁定是否继续。
+剥离 `--level=` flag 后，剩余参数匹配 `^#?[0-9]+$` 时视为 issue 号，先 `gh issue view <N> --json title,body,labels,state` 拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。`state != "OPEN"`（CLOSED / MERGED 等）或 `gh issue view` 失败均用 AskUserQuestion 让用户裁定是否继续。
 
 ## 等级
 
@@ -35,32 +37,24 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 2. 测试策略（table-driven / 集成 / benchmark 覆盖模式）
 3. 边界条件与安全处理
 
-全部完成后按"方案与计划原则"汇总，执行下方"反思自检"，再**用 AskUserQuestion 与用户确认方案方向**后继续。
+全部完成后按「方案与计划原则（含自检）」汇总并逐条自查，再**用 AskUserQuestion 与用户确认方案方向**后继续。
 
 ---
 
-### 方案与计划原则（阶段 1 汇总 / 阶段 2 计划必须满足）
+### 方案与计划原则（含进入下一步前的自检）
 
-- **彻底**：根因 + 完整解法，不留 TODO/FIXME/follow-up；范围内紧密相关的小工作一并纳入，不拆 P2/后续 PR
-- **不向后兼容**：删字段/改签名/换实现直接做，不留 deprecation 别名、不留兼容 shim、不留旧路径
-- **优雅简洁**：用最少的代码改动达成目标，不引入新抽象层、不预设未来需求
-- **开源对标**：做了嘛，方向正确吗
+阶段 1 汇总 / 阶段 2 计划必须满足下列原则；L3 在 AskUserQuestion 前逐条自查，任一不通过 → 在确认问题中**显式列出取舍及理由**，不默认放行：
 
-### 反思自检（AskUserQuestion 前强制执行）
-
-呈现给用户前，逐条自查并在确认问题中如实回答：
-
-1. **彻底**：方案/计划里是否还藏着 TODO、兼容代码、未列入范围的关联工作？→ 合并进当前 PR 或写明 blocker 理由
-2. **不向后兼容**：是否引入了 deprecation 别名、旧字段保留、双路径并存？→ 删掉或写明保留理由
-3. **优雅简洁**：能否用更少的代码、更少的抽象、更少的新文件达成同样目标？→ 简化或写明保留理由
-
-任一条不通过 → AskUserQuestion 中**显式列出取舍及理由**，不得默认放行。
+- **彻底**：根因 + 完整解法，范围内紧密相关的小工作一并纳入。自查「是否还藏 TODO/FIXME/follow-up、兼容代码、未列入范围的关联工作？」→ 合并进当前 PR 或写明 blocker 理由。
+- **不向后兼容**：删字段/改签名/换实现直接做。自查「是否留了 deprecation 别名、旧字段、兼容 shim、双路径？」→ 删掉或写明保留理由。
+- **优雅简洁**：最少代码改动达成目标，不引入新抽象层、不预设未来需求。自查「能否用更少的代码/抽象/新文件达成同样目标？」→ 简化或写明保留理由。
+- **开源对标**：做了嘛，方向正确吗。
 
 ---
 
 ## 阶段 2：计划
 
-按"方案与计划原则"生成改动文件清单（按依赖顺序）、任务分组（串行/并行批次）、TDD 测试先写清单、对标参考（`ref: framework file`）。生成后执行"反思自检"，L3 用 AskUserQuestion 与用户确认计划后继续。
+按「方案与计划原则（含自检）」生成改动文件清单（按依赖顺序）、任务分组（串行/并行批次）、TDD 测试先写清单、对标参考（`ref: framework file`）。生成后逐条自查，L3 用 AskUserQuestion 与用户确认计划后继续。
 
 **并行批次分析**（改动文件 ≥ 4 时必须在计划中明确）：
 - 标注各任务的文件归属和批次编号
@@ -125,12 +119,12 @@ golangci-lint run ./...   # 0 issues 才进阶段 6
 ## 阶段 6：PR
 
 ```bash
-git -C worktrees/<wt> push -u origin <branch>   # dangerouslyDisableSandbox: true
+git -C worktrees/<wt> push -u origin <branch>
 gh pr create --title "..." --body-file <填好的 pull_request_template.md>
 gh pr edit <PR#> --add-label pr-status/in-progress   # 进入 ship→codex→fix 流程（见 .github/project-template/PROJECT.md §5）
 ```
 
-PR body 结构单源 = `.github/project-template/pull_request_template.md`（Summary / Refs / Test plan）；读模版填占位（`Refs: Closes #<ID>` + `ref: framework file`），不在技能内重述结构。本仓 PR 全程 CLI 创建，必须 `--body-file` 读填好的模版。
+PR body 结构单源 = `.github/project-template/pull_request_template.md`；读模版填占位（`Refs: Closes #<ID>` + `ref: framework file`），不在技能内重述结构。本仓 PR 全程 CLI 创建，必须 `--body-file` 读填好的模版。
 
 ---
 
@@ -151,30 +145,19 @@ git -C worktrees/<wt> diff --shortstat origin/develop
 
 > 阶段 7 被单独调用（非 ship 完整流程、无 worktree）时，回退到仓库根执行 `git diff --shortstat origin/develop`。
 
-GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品。分档（区间左闭右开，边界值归入更高档）：
+GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品。**reviewer 数 + 维度切分单源 = `.claude/agents/reviewer.md` §派发分档**（按上面算出的 diff 行数定档，区间左闭右开，边界归更高档）。
 
-| diff 行数 | reviewer 数 | 维度切分（不重不漏覆盖六维度全集） |
-|-----------|------------|---------|
-| `diff < 200` | 1 | 单 agent 跑全六维度 |
-| `200 ≤ diff < 600` | 2 | A：架构合规 + 测试 + 产品；B：安全 + 运维可观测 + DX |
-| `600 ≤ diff < 1500` | 3 | A：架构合规 + 测试；B：安全 + 产品；C：运维可观测 + DX |
-| `diff ≥ 1500` | 6 | 六角色一一对应：架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品 各 1 agent 并行 |
-
-多 agent 时并行启动，每个 agent prompt 自包含其负责维度；全部完成后由主 agent 汇总去重 findings 表（含 Cx 分级）。
+多 agent 时并行启动，每个 agent prompt 自包含其负责维度 + 必读 `.github/project-template/PROJECT.md` §3（P/Cx 评级单源）；全部完成后由主 agent 汇总去重 findings 表（含 Cx 分级）。
 
 ---
 
 ## 阶段 8：Fix（内置审 findings）+ 收尾
 
-1. **呈现内置 review findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。L3 用 AskUserQuestion 与用户确认
-   修哪些（默认修 Cx1/Cx2 IN_SCOPE）。
-2. 对 Cx1/Cx2 IN_SCOPE findings 派发 `developer` agent 执行 `/fix <finding>`；Cx3/Cx4 和 OUT_OF_SCOPE 收集到阶段 9。
-3. **收尾**（按 `.github/project-template/pr-comment.md` 的 ship 模板，**评论必留**）：
-
-   ```bash
-   gh pr comment <PR#> --body-file <填好的 pr-comment.md ship 模板>   # <!-- pm:ship -->：reviewer 数 / findings 表 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex
-   gh pr edit <PR#> --add-label pr-status/needs-codex --remove-label pr-status/in-progress
-   ```
+1. **呈现内置 review findings 表**（含 P/Cx 分级 + IN_SCOPE/OUT 归属）。
+2. **Cx1/Cx2 IN_SCOPE findings 自动修**（派 `developer` agent 执行 `/fix <finding>`，**不逐条问**，对齐 `fix` 的 [AUTO-FIX]）；Cx3/Cx4 与 OUT_OF_SCOPE 收集到阶段 9。**仅当**归属不清 / 取舍没把握 / 有 Cx3+ 需现在做时才 AskUserQuestion。
+3. **收尾**（命令形态见 `issues` Part B；评论用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ship -->` 模板，含 footer，**评论必留**）：
+   - `gh pr comment <PR#>` 贴 ship 评论：**每条 finding 带 `file:line`，证据/建议入 `<details>`（评论即 review 结果，无损——供 codex / `/fix` 直接读取，不重新 review）**；含 reviewer 数 / 已修 Cx1-Cx2 / 遗留 / OUT_OF_SCOPE / 下一步=待 codex。
+   - `gh pr edit` 切 `pr-status/needs-codex`（移除 `pr-status/in-progress`）。
 
 > ship 到此结束（内置审 + 修）。codex 外部 review 后，续修走 `/fix <PR#>`。
 
@@ -196,5 +179,4 @@ PR: #<编号> <URL>
 ## 约束
 
 - lint 0 issues 才 push；不 `--no-verify`；不 amend 已 push commit
-- `git push` 用 `dangerouslyDisableSandbox: true`
 - worktree merge 后提示用户手动 `git worktree remove`，不自动删除

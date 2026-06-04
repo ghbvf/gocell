@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -139,6 +140,36 @@ func healthCheck(t *testing.T, cc *grpc.ClientConn) (grpc_health_v1.HealthCheckR
 	return resp.GetStatus(), nil
 }
 
+// integRegisterHealth registers the gRPC health service on srv via the Form B
+// callback path (srv.Registrar().Register(spec)).
+func integRegisterHealth(t *testing.T, srv *grpcadapter.Server, healthSrv *health.Server) {
+	t.Helper()
+	spec := cell.GRPCServiceSpec{
+		ContractID: "grpc.health.v1",
+		CellID:     "_integration-test",
+		Listener:   cell.PrimaryListener,
+		Register: func(r grpc.ServiceRegistrar) {
+			grpc_health_v1.RegisterHealthServer(r, healthSrv)
+		},
+	}
+	require.NoError(t, srv.Registrar().Register(spec))
+}
+
+// integRegisterDesc registers an arbitrary ServiceDesc on srv via the Form B
+// callback path (srv.Registrar().Register(spec)).
+func integRegisterDesc(t *testing.T, srv *grpcadapter.Server, contractID string, desc *grpc.ServiceDesc, impl any) {
+	t.Helper()
+	spec := cell.GRPCServiceSpec{
+		ContractID: contractID,
+		CellID:     "_integration-test",
+		Listener:   cell.PrimaryListener,
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(desc, impl)
+		},
+	}
+	require.NoError(t, srv.Registrar().Register(spec))
+}
+
 // ─── Integration tests ────────────────────────────────────────────────────────
 
 // TestIntegration_Plaintext_BufconnCheck verifies plaintext gRPC via bufconn.
@@ -156,7 +187,7 @@ func TestIntegration_Plaintext_BufconnCheck(t *testing.T) {
 	// Register health service so the RPC call has something to hit.
 	healthSrv := health.NewServer()
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+	integRegisterHealth(t, srv, healthSrv)
 
 	// Use bufconn for in-process networking.
 	bufSize := 1024 * 1024
@@ -207,7 +238,7 @@ func TestIntegration_ServerTLS(t *testing.T) {
 
 	healthSrv := health.NewServer()
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+	integRegisterHealth(t, srv, healthSrv)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -255,7 +286,7 @@ func TestIntegration_ServerOptionsCannotOverrideTLS(t *testing.T) {
 
 	healthSrv := health.NewServer()
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+	integRegisterHealth(t, srv, healthSrv)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -301,7 +332,7 @@ func TestIntegration_MTLS_WithValidClientCert(t *testing.T) {
 
 	healthSrv := health.NewServer()
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+	integRegisterHealth(t, srv, healthSrv)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -344,7 +375,7 @@ func TestIntegration_MTLS_NoClientCert(t *testing.T) {
 
 	healthSrv := health.NewServer()
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+	integRegisterHealth(t, srv, healthSrv)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -396,7 +427,7 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 	rpcStarted := make(chan struct{})
 	release := make(chan struct{})
 	desc := blockingServiceDesc(rpcStarted, release)
-	srv.ServiceRegistrar().RegisterService(&desc, new(any))
+	integRegisterDesc(t, srv, "grpc.test.blocker.v1", &desc, new(any))
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -549,7 +580,7 @@ func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 	rpcStarted := make(chan struct{})
 	release := make(chan struct{})
 	desc := blockingServiceDesc(rpcStarted, release)
-	srv.ServiceRegistrar().RegisterService(&desc, new(any))
+	integRegisterDesc(t, srv, "grpc.test.blocker.v1", &desc, new(any))
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

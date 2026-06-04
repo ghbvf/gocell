@@ -205,7 +205,11 @@ projection 可 fan-in 多个事件流并共享一个 checkpoint。但 PR-04a 合
 + 一个 checkpoint）。一个 slice **可以**声明多个 projection（每个带 `projection:` 的 CU
 一个，projectionID 在 cell 内唯一，由 parser `validateProjectionUniqueness` fail-closed
 守卫）。一个需要 fan-in 多个事件流的逻辑读模型，在 v1 表现为多个 projectionID（多
-checkpoint）写同一个业务读模型 store。
+checkpoint）写同一 store 的**不相交子区域**，在 query 时合成。**不可**写共享可变态：
+每个 projectionID 有独立的 onReset，naive 共享 store 会在某个 projection 的 rebuild
+Reset 阶段把其它 projection 的贡献一并清空（reset 互清）。disjoint 子视图 + query 合成
+是 v1 唯一 sound 的 fan-in 形态，连同 per-spec replay 过滤一起落地于 §Amendment
+2026-06-04（#1482，examples/todoorder orderprojection 为 reference）。
 
 **不变项。**「多 slice 共享一个 projection」仍是 Q3 的 v1.1 rollback condition（需要新的
 multi-slice metadata node），本次 amendment 不改变它。checkpoint 键仍是
@@ -357,35 +361,52 @@ RouteGroup — the same pattern as `/healthz`·`/readyz`·`/metrics` — so it h
 `contract.yaml`, no host cell, and never reaches `DEAD-CONTRACT-01`**. See
 §Amendment 2026-06-03.
 
-**PR-03 freezes the programmatic trigger surface** and forward contract for PR-04:
+The HTTP trigger contract. The **current** (post-#1505) form is the operator
+admin plane; the PR-03/PR-04 forward contract (service-token + caller-cell
+allowlist on `/internal/v1/*`) was superseded by **PR #1505** — it lands the
+"deferred operator-credential admin surface" that §Amendment 2026-06-03 already
+anticipated. Full rationale + the operator-credential threat matrix live in ADR
+`202606041200-1505-adr-operator-control-plane-auth.md`; see §Amendment 2026-06-04
+below.
 
-- **Endpoint**: `POST /internal/v1/<cellID>/projection/<projectionID>/rebuild`.
-- **Caller / auth**: service-token authentication + caller-cell allowlist (the
-  caller's cell ID must be in the contract's `clients` allowlist). No public
-  access. Same shape as other `/internal/v1/` control-plane endpoints.
-- **Network boundary**: internal-only — never mounted on a public listener.
-- **HTTP semantics**: `202 Accepted` (rebuild is async — `Coordinator.Rebuild`
-  returns immediately; the state machine runs on a background goroutine) /
-  `409 Conflict` (`ErrRebuildInProgress` — a rebuild is already running) /
-  `404 Not Found` (unknown cell/projection).
-- **Response envelope**: unified `{"data": {...}}` shape; `data` carries the
-  current `{phase, replayLagSeconds, pendingEvents}` snapshot. Errors use the
-  shared error envelope.
+- **Endpoint**: `POST /admin/v1/projection/<cellID>/<projectionID>/rebuild` on the
+  `cell.AdminListener` (operator control-plane). *Superseded the PR-03/PR-04
+  forward contract `POST /internal/v1/<cellID>/projection/<projectionID>/rebuild`.*
+- **Caller / auth**: operator-credential gate (`auth.AuthOperator`: HTTP Basic
+  Auth over env credentials + per-IP rate limit + constant-time compare). This is
+  an **operator→system** action, NOT cell→cell — there is **no caller-cell
+  allowlist** (the prior `/internal/v1/*` model). No public access.
+- **Network boundary**: a network-isolated (loopback) admin listener; loopback
+  isolation **plus** operator credentials are a defense-in-depth pair. Never
+  mounted on the public or internal listener — admin-path ↔ AdminListener affinity
+  is enforced bidirectionally at startup by the router.
+- **HTTP semantics** (unchanged across the migration): `202 Accepted` (rebuild is
+  async — `Coordinator.Rebuild` returns immediately; the state machine runs on a
+  background goroutine) / `409 Conflict` (`ErrRebuildInProgress` — a rebuild is
+  already running) / `404 Not Found` (unknown cell/projection).
+- **Response envelope** (unchanged): unified `{"data": {...}}` shape; `data`
+  carries the current `{phase, replayLagSeconds, pendingEvents}` snapshot. Errors
+  use the shared error envelope.
 - **PR-03 programmatic surface**: `Coordinator.Rebuild(ctx) error` (admission
   CAS `PhaseLive→PhaseStopped`) + `Coordinator.Close(ctx)` for graceful drain.
   The snapshot is computed by the readyz probe / metrics path delivered in PR-03.
 
-**PR-04e (#1370) authors the HTTP endpoint** as a framework-owned RouteGroup
+**PR-04e (#1370) authored the HTTP endpoint** as a framework-owned RouteGroup
 (bootstrap-mounted via `WithProjectionRebuildEndpoint`, **not** cellgen output)
-calling `Coordinator.Rebuild`, with the **unchanged** auth model / network
-boundary / 202·409·404 status semantics frozen above. Mechanism detail
-(framework-mount, the `Coordinator.Snapshot` accessor, and the deferred
-operator-credential admin surface) in §Amendment 2026-06-03.
+calling `Coordinator.Rebuild`. **PR #1505 then migrated the listener / path / auth
+model** to the operator admin plane above (the 202·409·404 status semantics + the
+framework-owned-RouteGroup mechanism are unchanged). Mechanism detail
+(framework-mount, the `Coordinator.Snapshot` accessor) in §Amendment 2026-06-03;
+the operator-credential migration in §Amendment 2026-06-04.
 
 **Threat-matrix re-evaluation.** No cell flips: row 3 (rebuild-period read
 consistency) is discharged by `Phase()` + readyz, **both delivered in PR-03** as
 planned — the HTTP *trigger* is a convenience surface, not a threat-discharge
-mechanism (a rebuild is equally triggerable via `Coordinator.Rebuild`).
+mechanism (a rebuild is equally triggerable via `Coordinator.Rebuild`). The #1505
+listener/path/auth migration changes *who may reach the trigger* (operator vs
+cell), not *how rebuild-period reads stay consistent*, so the row-3 discharge is
+untouched. The operator-credential surface's own threats are matrixed in the
+#1505 ADR.
 
 ## 6. Threat matrix
 
@@ -398,7 +419,7 @@ verified by the listed PR).
 |---|---|---|---|
 | 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` + `ReplaySource` are **DELIVERED in PR-04c (#1368)** — outbox-journal-backed (`outbox_entries.seq`), enrolled in the shared Cursor/ReplaySource conformance suites; corebundle wires them in PG mode (mem cursor/replay fakes remain for the serial in-memory bus / demos). See §Amendment 2026-06-03. PR-06 real-PG e2e (cold-start/crash/rebuild) remains a follow-up |
 | 2 | **crash recovery** (no replay window after restart) | checkpoint persisted in the apply tx; restart loads checkpoint, resumes at offset+1 | PR-01 crash-recovery unit test; PR-06 real-PG integration (kill → restart) |
-| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. The HTTP trigger moved to **PR-04e (#1370)** (a #1176 follow-up — §Amendment 2026-05-31); the Phase()/readyz discharge mechanism landed in PR-03 as planned (the HTTP trigger is a convenience surface, not a threat-discharge mechanism). |
+| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. The HTTP trigger moved to **PR-04e (#1370)** (a #1176 follow-up — §Amendment 2026-05-31), then **migrated to the operator admin plane in PR #1505** (`/admin/v1/*` + `AuthOperator`, §Amendment 2026-06-04); the Phase()/readyz discharge mechanism landed in PR-03 as planned and is unchanged by either move (the HTTP trigger is a convenience surface, not a threat-discharge mechanism). |
 | 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement DISCHARGED by PR-04d (#1369)** — the `outbox.SerialInOrderGuarantor` capability marker + the fail-closed-by-absence guard `checkSubscriberGuaranteesSerialDelivery` in `runtime/bootstrap/phases_projection.go` (rejects wiring a projection onto any subscriber that does not guarantee serial in-order delivery), locked by archtest `PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01`. A concurrent transport (AMQP prefetch>1 / MQTT worker pool) now fails fast at bootstrap instead of silently dropping positions. See §Amendment 2026-06-02 |
 | 5 | **fail-closed** (checkpoint store failure) | `SaveOffset` failure rolls back the whole `CellTx` (apply not committed); Coordinator requeues; never advances offset past an un-applied event | PR-01 fail-closed unit test |
 | 6 | **GAP-8 boundary** (harness must not prescribe read-model schema) | CellTx-offset design touches only the framework offset table; apply body + read-model schema stay business-owned (§4) | This PR (§4 record) + PR-02 schema review |
@@ -699,8 +720,10 @@ an explicit `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW=true` opt-in (dev/preview only
 with a NOT-production-safe startup WARN). So no production projection can silently
 run on the unsound foundation. The durable append-only projection journal that
 removes the limitation is tracked at **gh #1504 (P1)** as the C1 design item; the
-real PG e2e rebuild test T-06-2 and per-spec replay filtering (#1482) remain
-follow-ups blocked on it. The review also hardened the adapter: a schema_guard
+real PG e2e rebuild test T-06-2 remains a follow-up blocked on it. (Per-spec
+replay filtering — #1482 — has since **landed** at the Coordinator level,
+decoupled from the PG reader and the durable journal; see §Amendment 2026-06-04.)
+The review also hardened the adapter: a schema_guard
 IDENTITY guard on `seq` (F5), a bounded-ctx position lookup (F6), rebuild ctx
 identity restore (F4), and a no-duplicate conformance assertion (F7).
 
@@ -844,3 +867,191 @@ already-Medium enforcement mechanisms from "pending Hard-ization" to "permanentl
 Medium (won't-do)". Both archtests remain active and CI fail-closed; their
 allowlists, implementations, and enforcement behavior are unchanged, as are the §6
 threat discharges they back. The move is `pending → unreachable`, not `✅ → ⚠️/❌`.
+
+## Amendment 2026-06-04 (PR #1505 — operator control-plane migration)
+
+The projection rebuild HTTP trigger — authored by PR-04e (#1370) as a
+framework-owned RouteGroup on the **InternalListener** at
+`POST /internal/v1/<cellID>/projection/<projectionID>/rebuild` with service-token
+auth + a caller-cell allowlist — **migrated to the operator admin plane**: a new
+`cell.AdminListener` (loopback-isolated admin port) carrying an `auth.AuthOperator`
+operator-credential gate, at `POST /admin/v1/projection/<cellID>/<projectionID>/rebuild`.
+
+**Why.** A projection rebuild is an **operator→system** action (an administrator
+or deployment pipeline triggers it), not a **cell→cell** business call. The
+`/internal/v1/*` + service-token + caller-cell allowlist model is the cell→cell
+control-plane shape; using it for an operator action was a semantic coincidence.
+The EventStoreDB projection admin API (a network-isolated admin port + operator
+basic-auth credentials) is the right-sized benchmark. This lands the "deferred
+operator-credential admin surface" §5 / §Amendment 2026-06-03 already anticipated.
+Full decision + threat matrix: ADR
+`202606041200-1505-adr-operator-control-plane-auth.md`.
+
+**What changed (§5 rewritten in-place above).**
+
+- Listener: `cell.InternalListener` → new `cell.AdminListener` (`127.0.0.1:9093`
+  default; loopback isolation + operator credentials = defense in depth).
+- Path: `/internal/v1/{cell}/projection/{name}/rebuild` →
+  `/admin/v1/projection/{cell}/{name}/rebuild`.
+- Auth: service-token + caller-cell allowlist → `auth.AuthOperator` (HTTP Basic
+  Auth over env credentials `GOCELL_OPERATOR_ADMIN_*` + per-IP rate limit +
+  constant-time compare). No caller-cell allowlist (operator has no caller cell);
+  the admit-time audit log drops the `caller_cell` field accordingly.
+- Opt-in: `WithProjectionRebuildEndpoint(callers...)` → `WithProjectionRebuildEndpoint()`
+  (bool); phase0 now requires a `cell.AdminListener`.
+
+**What is unchanged.** The framework-owned-RouteGroup mechanism (no `contract.yaml`,
+no host cell, never reaches `DEAD-CONTRACT-01`), the async `202`/`409`/`404` status
+set, the `{"data":{phase,pendingEvents,replayLagSeconds}}` envelope, and the
+programmatic `Coordinator.Rebuild`/`Snapshot` surface.
+
+**Threat-matrix re-evaluation (ai-robust ADR-amendment requirement).** No row
+flips in this ADR's §6. Row 3 (rebuild-period read consistency) is discharged by
+`Phase()` + readyz and is **independent of the trigger's auth/listener** — the
+migration changes *who may reach the trigger*, not *how reads stay consistent*.
+The control-plane access-model change (operator-credential gate replacing
+service-token + caller-cell allowlist) is a *different* threat surface, matrixed
+in the #1505 ADR (operator credential brute-force → per-IP rate limit + constant-
+time compare; admin-path ↔ AdminListener affinity → bidirectional router check;
+operator-only-on-Admin / Admin-requires-operator → phase0 fail-fast). The
+`AuthOperator` plan and `AdminListener` ref inherit the existing sealed
+`ListenerAuth` interface + closed `ListenerRef` enum (type-system Hard), so no new
+Soft mechanism is introduced.
+
+## Amendment 2026-06-04 (#1482 — per-spec replay filtering landed + multi-stream fan-in reference)
+
+**What landed.** Two things, one structural and one in the reference example:
+
+1. **Per-spec replay filtering at the Coordinator** (`kernel/projection/rebuild.go`).
+   The bootstrap ReplaySource is a single whole-journal source shared by every
+   projection Coordinator (the Row 1 / §Amendment 2026-06-03 contract). During a
+   rebuild, the replay loop invokes the business `applyOne` **only** when
+   `entry.RoutingTopic() == c.spec.Topic` — matching the same key live delivery is
+   topic-routed on — so the business Apply never sees a foreign stream and needs
+   no defensive topic check. Foreign entries route through `advanceOffsetPastForeign`,
+   which advances the checkpoint **without** applying. Advancing over foreign is a
+   correctness requirement, not an optimization: a rebuild's catchup must drain the
+   checkpoint over the journal gap (own applied + foreign advanced) so it reaches
+   the catchup cutoff even when foreign entries sit in the range. Filtering thus
+   gates the Apply, not the checkpoint.
+
+   The replay loop is the single shared funnel `drainGap(ctx, from, through)`:
+   `replayPhase` drains `(0, head0]`; `catchupPhase` drains `(head0, head1]` where
+   `head1` is the source `Head` captured at catchup start. Both run on the rebuild
+   goroutine with the gate **shut**, so the rebuild goroutine is the SOLE applier
+   and the replay→live handoff is strictly sequential.
+
+   **Catchup termination (corrected during #1574 review).** An earlier framing of
+   this amendment claimed catchup termination was discharged because "`catchupPhase`
+   compares the checkpoint against the whole-journal `Head`" while the foreign
+   advance keeps the checkpoint moving. That reasoning was incomplete — it only
+   covered foreign entries inside the replay range `[0, head0]`. A foreign entry
+   appended *during* catchup raises the whole-journal `Head`, but the prior catchup
+   polled `checkpoint >= Head` with the gate **open** and relied on the
+   topic-routed live handler to advance the checkpoint; the live handler never sees
+   foreign streams, so the poll spun forever (the #1574 C1 hang). The fix makes
+   catchup a **bounded self-drain** of `(head0, head1]` (`drainGap`, gate shut,
+   advance past foreign), and only **then** opens the gate; the residual
+   `(head1, now]` tail is consumed by live delivery. This matches the Marten
+   async-daemon (high-water gap skip) + Axon streaming-processor (sequential
+   replay-then-live, no replay+live dual-applier path) consensus, and — crucially —
+   keeps a **single applier**, preserving the serial-delivery precondition (Row 4).
+   codex's proposed open-gate catchup gap-scan was **rejected**: it would run the
+   scan while the live handler also consumes, giving two concurrent appliers →
+   double-apply, violating that precondition.
+
+2. **Multi-stream fan-in reference** (`examples/todoorder` orderprojection). The
+   status-summary read model is now fed by **two** independent single-stream
+   projections — `order_status` (order-created) + `order_transition`
+   (order-status-changed) — each owning a **disjoint** sub-view (created vs latest)
+   with its own checkpoint and `onReset`, composed at query time (latest wins).
+   This is the sound realization of the §Amendment 2026-06-02 fan-in clarification:
+   disjoint sub-views avoid the reset-互清 hazard a naive shared mutable store
+   would have. `event.order-status-changed.v1` flips `draft → active` (publisher
+   orderconfirm + the new subscriber satisfy ADV-05 / DEAD-CONTRACT-01).
+
+**Why Coordinator-level, not ReplaySource-level.** The #1482 issue framed the
+filter as "global ReplaySource filters replay by spec". Filtering at the
+Coordinator (which holds `c.spec`) instead keeps the `ReplaySource` interface
+**unchanged** — no churn to the Cursor/ReplaySource/CheckpointStore conformance
+suites or their enrollment archtests, and the source stays a pure whole-journal
+reader (its documented contract). It also works identically for Mem and PG
+sources without the issue's stated #1368 dependency. Pushing the topic filter
+down into PG SQL (`WHERE topic = $1`) is a future efficiency optimization for the
+PG source only; it is **deferred with a real blocker** — the PG journal-backed
+reader is gated off by default (preview-only) and not durably sound until the
+retained projection journal (#1504 P1) lands, so SQL-level pruning would optimize
+a path not yet production-active.
+
+**AI-robust.** The per-spec filter is a new framework invariant the example's
+fan-in soundness (and rebuild termination) depends on, so it ships the three-piece
+closure (static guard + documented contract + regression test): archtest
+`PROJECTION-REPLAY-PER-SPEC-FILTER-01` form-locks, inside the single `drainGap`
+funnel, BOTH (a) the `applyOne` callsite inside the topic gate AND (b) the
+`advanceOffsetPastForeign` callsite **outside** the gate (the foreign
+fall-through) — plus a `sawForeignAdvance` anti-vacuity fatal so deleting the
+foreign advance reds CI; `drainGap`/`advanceOffsetPastForeign` godoc + this
+amendment are the contract; `TestRebuild_PerSpecTopicFilter` +
+`TestRebuild_ForeignDuringCatchup` (kernel) + `TestOrderProjection_FanInLifecycle`
+(example) are the regression tests. Because both phases route through `drainGap`,
+the archtest covers replay AND catchup. Rating: **Medium** (single archtest, not a
+type-system double-lock). The gate is NAME-ANCHORED AST containment — the
+`applyOne` CallExpr must sit inside the `entry.RoutingTopic() == c.spec.Topic`
+IfStmt body and `advanceOffsetPastForeign` outside it (token.Pos containment +
+structural-name gate form), the same dominance-lite shape as the Medium
+`CHANGEPASSWORD-INACTIVE-GATE-01`; it is NOT typed callsite-uniqueness and NOT
+CFG dominance, so it is not Hard. (Business code being unable to reach the rebuild
+apply at all is incidental Go visibility — `applyOne` is private — not what this
+rule enforces; the rule enforces that the FRAMEWORK keeps the gate.) Hard path
+(won't-do now, over-engineering for one call site): `TypesInfo.ObjectOf` typed
+resolution of `applyOne` à la `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 + CFG/SSA dominance
+— the #851 / #893 / #1282 / CHANGEPASSWORD-#1212 ceiling family. The
+disjoint-sub-view discipline in the example is guarded by its own unit/cell tests
+(a single reference, not a cross-cutting constraint), so it is not in the
+AI-robust archtest scope.
+
+### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement — 逐行重评)
+
+- **Row 1** (exactly-once): ✅ → **✅** (per-spec filtering delivered). The
+  compare/skip mechanism is unchanged for own-stream entries; foreign entries now
+  skip the Apply but still advance the checkpoint via `advanceOffsetPastForeign`,
+  which keeps the per-projectionID checkpoint monotonic and catchup-terminating.
+  The whole-journal-replay deferral noted in §Amendment 2026-06-03 is discharged.
+- **Row 2** (crash recovery): unchanged — checkpoint persistence is independent of
+  the apply filter.
+- **Row 3** (rebuild read consistency): unchanged — `Phase()` is per-Coordinator;
+  the example's two projections each have their own Coordinator/Phase.
+- **Row 4** (out-of-order / serial-delivery): unchanged — the filter is intra-
+  Coordinator and adds no concurrency vector; the per-projectionID serial-delivery
+  precondition (PR-04d) still holds per stream. The #1574 catchup fix deliberately
+  drains `(head0, head1]` with the gate **shut** so the rebuild goroutine is the
+  sole applier (no concurrent live applier); an open-gate catchup gap-scan would
+  have introduced a second applier and violated this row, which is why it was
+  rejected.
+- **Row 5** (fail-closed): unchanged — `advanceOffsetPastForeign` keeps the same
+  1-based / `pos <= current` guards and runs in the rebuild's `RunInTx`.
+- **Row 6** (GAP-8 boundary): unchanged — no new framework constraint on the
+  business read-model schema; the disjoint-sub-view composition is business code.
+- **Row 7** (multi-pod boundary): unchanged (v1 single-pod).
+- **Row 8 (NEW — introduced by #1482, fix corrected in #1574)** — *whole-journal
+  replay interleaving / catchup termination*: because one whole-journal
+  ReplaySource feeds every Coordinator, a rebuild sees foreign streams interleaved
+  with its own, and a foreign entry **at any position — including one appended
+  during catchup** — must not strand catchup. The initial #1482 discharge (foreign
+  advance during replay + an open-gate `checkpoint >= whole-journal Head` poll in
+  catchup) was **incomplete**: it only handled foreign entries inside `[0, head0]`;
+  a foreign entry arriving during catchup raised `Head` while the topic-routed live
+  handler could never advance the checkpoint past it, so the poll spun forever
+  (#1574 C1, P1). **Discharged** by making catchup a bounded gate-shut self-drain
+  of `(head0, head1]` via `drainGap` (own applied + foreign advanced), which
+  reaches `head1` regardless of foreign entries in the range, then opens the gate;
+  the residual `(head1, now]` tail is consumed by live delivery. Covered by
+  `TestRebuild_ForeignDuringCatchup` (foreign-arrives-during-catchup, the case the
+  pre-fix poll hung on) + `TestRebuild_PerSpecTopicFilter` (trailing-foreign in
+  replay range) + `TestAdvanceOffsetPastForeign_ErrorBranches`, and form-locked by
+  `PROJECTION-REPLAY-PER-SPEC-FILTER-01`'s foreign-advance assertion. This is a v1
+  row that did not exist before per-spec filtering; after the #1574 correction it
+  is ✅, not ⚠️/❌.
+
+No row flips to ⚠️/❌; the one new row (Row 8) lands ✅ after the #1574 catchup
+correction.

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "command.synth.do.v1.request",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "deviceId": { "type": "string", "format": "uuid" },
+    "payload": { "type": "string" }
+  },
+  "required": ["deviceId"]
+}

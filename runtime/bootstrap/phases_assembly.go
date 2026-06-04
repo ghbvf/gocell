@@ -51,19 +51,7 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateGRPCListenerConfigs(); err != nil {
 		return err
 	}
-	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
-		return err
-	}
-	if err := b.validateAuthPlanMTLSBindings(); err != nil {
-		return err
-	}
-	if err := b.validateAuthChainJWTSingleton(); err != nil {
-		return err
-	}
-	if err := b.validateAuthNoneExclusive(); err != nil {
-		return err
-	}
-	if err := b.validateAuthServiceTokenPlans(); err != nil {
+	if err := b.validateAuthPlans(); err != nil {
 		return err
 	}
 	// PR-A14b: validate declarative listener configs last — other option
@@ -113,12 +101,32 @@ func (b *Bootstrap) validateNilDependencySentinels() error {
 	return nil
 }
 
-// validateGRPCListenerConfigs rejects per-listener shutdown-grace budgets that
-// are negative, mirroring the HTTP validateListenerConfig shutGrace check. A
-// negative budget would make the drain ctx expire immediately, silently
-// degrading every graceful stop into a hard stop.
+// validateGRPCListenerConfigs phase0-validates every declared gRPC listener,
+// inheriting the same ref discipline as the HTTP listener gate so a
+// misconfiguration surfaces before any socket binds (not in phase7b after HTTP
+// has already started serving). It rejects:
+//
+//   - a zero ListenerRef — no GRPCServiceSpec.Listener can target it, so the
+//     cell's services would be silently dropped (mirrors validateListenerConfig).
+//   - a duplicate ref across WithGRPCListener calls — ambiguous spec routing
+//     (mirrors validateNoDuplicateListenerRefs; phase7b's buildGRPCRefMap is the
+//     later lifecycle backstop, now unreachable in normal startup).
+//   - a listener with neither addr nor a pre-bound socket — cannot bind.
+//   - a negative per-listener shutdown-grace budget — would degrade every
+//     graceful stop into an immediate hard stop.
 func (b *Bootstrap) validateGRPCListenerConfigs() error {
+	seen := make(map[cell.ListenerRef]struct{}, len(b.grpcListenerConfigs))
 	for _, gc := range b.grpcListenerConfigs {
+		if gc.ref.IsZero() {
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"bootstrap: zero gRPC listener ref is invalid; use cell.PrimaryListener, "+
+					"cell.InternalListener, or another declared ref")
+		}
+		if _, dup := seen[gc.ref]; dup {
+			return fmt.Errorf("bootstrap: duplicate WithGRPCListener call for ref %q;"+
+				" each gRPC listener ref may only be declared once", gc.ref.String())
+		}
+		seen[gc.ref] = struct{}{}
 		// Mirror HTTP validateListenerConfig: a listener with neither an addr nor
 		// a pre-bound socket cannot bind. Fail fast at phase0 rather than letting
 		// net.Listen("tcp", "") fail in phase7b after HTTP has already started.

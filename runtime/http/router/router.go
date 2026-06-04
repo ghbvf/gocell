@@ -541,6 +541,10 @@ func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler
 // to avoid changing call-site references throughout this file.
 const internalPathPrefix = cellvocab.InternalPathPrefix
 
+// adminPathPrefix aliases cellvocab.AdminPathPrefix for the admin-prefix
+// isolation responder (#1505), mirroring internalPathPrefix.
+const adminPathPrefix = cellvocab.AdminPathPrefix
+
 // New creates a Router with default middleware and optional configuration.
 // It returns an error when configuration is invalid.
 //
@@ -1083,7 +1087,7 @@ func (r *Router) FinalizeAuth() error {
 // compileAuthMetas compiles all accumulated AuthRouteMeta declarations into
 // matchers. Called from FinalizeAuth when at least one declaration exists.
 func (r *Router) compileAuthMetas() error {
-	if err := r.verifyInternalRouteAffinity(); err != nil {
+	if err := r.verifyListenerRouteAffinity(); err != nil {
 		return err
 	}
 
@@ -1126,20 +1130,26 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	}
 }
 
-// verifyInternalRouteAffinity verifies that routes with /internal/v1/* paths
-// are mounted on an InternalListener router and vice versa.
+// verifyListenerRouteAffinity verifies that routes whose path targets a
+// constrained control-plane prefix are mounted on the matching listener, and
+// that a constrained listener carries only its own path family:
 //
-// Internal-route affinity is derived structurally from the path prefix via
-// AuthRouteMeta.IsInternal(). This function retains the listener-ref check so
-// that a /internal/v1/* route mounted on the wrong listener still fails fast
-// at startup.
-func (r *Router) verifyInternalRouteAffinity() error {
+//   - /internal/v1/* (AuthRouteMeta.IsInternal) ⟺ InternalListener
+//   - /admin/v1/*    (AuthRouteMeta.IsAdmin)    ⟺ AdminListener
+//
+// Affinity is derived structurally from the path prefix. Both directions fail
+// fast at startup: a constrained path on the wrong listener, and a constrained
+// listener carrying a non-matching path (which would otherwise let an admin
+// path slip onto the public listener — neither IsInternal nor the pre-#1505
+// check would have caught it). Zero-ref routers (unit tests without a listener
+// identity) skip the path→listener direction; Bootstrap-built routers always
+// carry a real ref so the production path stays guarded.
+func (r *Router) verifyListenerRouteAffinity() error {
 	isInternal := r.ref == kcell.InternalListener
-	// Zero-ref routers are used in unit tests without a listener identity.
-	// Skip the listener-ref check for those; Bootstrap-built routers always
-	// have a real ref so the production path remains guarded.
+	isAdmin := r.ref == kcell.AdminListener
 	isZeroRef := r.ref.IsZero()
 	for _, m := range r.declaredAuthMetas {
+		// Direction 1: a constrained path must live on its listener.
 		if m.IsInternal() && !isInternal && !isZeroRef {
 			return fmt.Errorf(
 				"router: route %s %s (internal path) must be mounted on InternalListener (got %q); "+
@@ -1147,10 +1157,24 @@ func (r *Router) verifyInternalRouteAffinity() error {
 				m.Method, m.Path, r.ref.String(),
 			)
 		}
-		if !m.IsInternal() && isInternal {
+		if m.IsAdmin() && !isAdmin && !isZeroRef {
+			return fmt.Errorf(
+				"router: route %s %s (admin path) must be mounted on AdminListener (got %q); "+
+					"check the RouteGroup.Listener field",
+				m.Method, m.Path, r.ref.String(),
+			)
+		}
+		// Direction 2: a constrained listener must carry only its path family.
+		if isInternal && !m.IsInternal() {
 			return fmt.Errorf(
 				"router %q: route %s %s mounted on internal listener but path lacks %s prefix",
 				r.ref, m.Method, m.Path, cellvocab.InternalPathPrefix,
+			)
+		}
+		if isAdmin && !m.IsAdmin() {
+			return fmt.Errorf(
+				"router %q: route %s %s mounted on admin listener but path lacks %s prefix",
+				r.ref, m.Method, m.Path, cellvocab.AdminPathPrefix,
 			)
 		}
 	}
@@ -1380,6 +1404,23 @@ func InternalPrefixIsolationResponder() Option {
 	predicate := func(r *http.Request) bool {
 		p := r.URL.Path
 		return strings.HasPrefix(p, internalPathPrefix) || p == bare
+	}
+	return WithEarlyResponder(predicate, not404Handler)
+}
+
+// AdminPrefixIsolationResponder returns a router.Option that 404s any request
+// whose path starts with /admin/v1 (or equals the bare path) BEFORE any auth or
+// policy middleware runs. Bootstrap installs this on the primary listener (the
+// admin symmetric counterpart of InternalPrefixIsolationResponder, #1505) so the
+// primary listener never reveals that /admin/v1/* operator endpoints exist — an
+// undeclared admin-path probe to the public port 404s like an unknown path,
+// rather than 401-ing through the JWT chain. The real admin endpoints live on the
+// loopback AdminListener; this responder is the public-port isolation contract.
+func AdminPrefixIsolationResponder() Option {
+	bare := strings.TrimSuffix(adminPathPrefix, "/")
+	predicate := func(r *http.Request) bool {
+		p := r.URL.Path
+		return strings.HasPrefix(p, adminPathPrefix) || p == bare
 	}
 	return WithEarlyResponder(predicate, not404Handler)
 }

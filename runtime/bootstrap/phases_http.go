@@ -140,8 +140,8 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 	}
 	// Framework projection rebuild control-plane endpoint (opt-in via
 	// WithProjectionRebuildEndpoint). phase0 (validateProjectionRebuildEndpoint)
-	// guaranteed the InternalListener exists when callers are set.
-	if len(b.projectionRebuildCallers) > 0 {
+	// guaranteed the AdminListener exists when enabled.
+	if b.projectionRebuildEnabled {
 		groups = append(groups, b.projectionRebuildRouteGroup())
 	}
 	for _, id := range s.asm.CellIDs() {
@@ -343,12 +343,16 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		return nil, err
 	}
 
-	// Primary listener: install the /internal/v1/* 404 isolation as an
-	// early-responder middleware so the contract runs BEFORE auth and does
-	// NOT require a JWT public-matcher exemption nor a policy-coverage
-	// whitelist. PR-258 RES-5 narrowing.
+	// Primary listener: install the /internal/v1/* and /admin/v1/* 404 isolation
+	// as early-responder middleware so the contract runs BEFORE auth and does NOT
+	// require a JWT public-matcher exemption nor a policy-coverage whitelist.
+	// PR-258 RES-5 narrowing; admin counterpart added in #1505 so an undeclared
+	// /admin/v1/* probe to the public port 404s (symmetric with /internal/v1/*)
+	// instead of 401-ing through the JWT chain.
 	if ref == cell.PrimaryListener {
-		opts = append(opts, router.InternalPrefixIsolationResponder())
+		opts = append(opts,
+			router.InternalPrefixIsolationResponder(),
+			router.AdminPrefixIsolationResponder())
 	}
 
 	// Apply the listener's AuthPlan chain: extract non-JWT middleware and
@@ -364,9 +368,12 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		opts = append(opts, routerAuthOpts...)
 	}
 
-	// R2-11: Health and Internal listeners intentionally run without a JWT
-	// verifier. Suppress the FinalizeAuth Warn for these listeners.
-	if ref == cell.HealthListener || ref == cell.InternalListener {
+	// R2-11: Health, Internal, and Admin listeners intentionally run without a
+	// JWT verifier — Health is loopback-isolated, Internal carries
+	// ServiceToken/mTLS, and Admin (#1505) carries the operator-credential gate
+	// (AuthOperator). phase0 affinity guarantees AdminListener never carries a JWT
+	// plan, so the FinalizeAuth "no JWT verifier" Warn is noise on all three.
+	if ref == cell.HealthListener || ref == cell.InternalListener || ref == cell.AdminListener {
 		opts = append(opts, router.WithSuppressNoAuthVerifierWarn())
 	}
 

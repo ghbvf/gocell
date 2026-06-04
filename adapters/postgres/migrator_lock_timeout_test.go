@@ -56,7 +56,7 @@ func TestMigrator_LockTimeoutSessionLocker_SetsAndResets(t *testing.T) {
 
 // TestMigrator_LockTimeoutAppliedViaProvider guards the wiring (not just the
 // locker type): it runs probe migrations through the REAL
-// NewMigrator(...).Up(ctx) → newGooseProvider → goose → SessionLock path, where
+// newMigratorForTable(...).Up(ctx) → newGooseProvider → goose → SessionLock path, where
 // each migration body RAISEs unless current_setting('lock_timeout') = '5s'. If
 // the lockTimeoutSessionLocker wrapper in newGooseProvider were removed, the
 // session would carry the default lock_timeout and Up would fail here — which
@@ -97,7 +97,7 @@ END $$;
 		"002_locktimeout_probe_notxn.sql": &fstest.MapFile{Data: []byte(noTxnProbe)},
 	}
 
-	migrator, err := NewMigrator(pool, fixtureFS, "schema_migrations_locktimeout_probe")
+	migrator, err := newMigratorForTable(pool, fixtureFS, "schema_migrations_locktimeout_probe")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = migrator.Close() })
 
@@ -138,7 +138,7 @@ DROP TABLE IF EXISTS _locktimeout_down_probe;
 		"001_locktimeout_down_probe.sql": &fstest.MapFile{Data: []byte(downProbe)},
 	}
 
-	migrator, err := NewMigrator(pool, fixtureFS, "schema_migrations_locktimeout_down_probe")
+	migrator, err := newMigratorForTable(pool, fixtureFS, "schema_migrations_locktimeout_down_probe")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = migrator.Close() })
 

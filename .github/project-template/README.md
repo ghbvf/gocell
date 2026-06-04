@@ -16,8 +16,8 @@
 | `PROJECT.md` | label 体系 / Project 字段 / 评级 rubric / PR 流程（治理单源） |
 | `backlog.md` | 新建 backlog issue 的 body 骨架（现状 / 修复方向 / Files / Trigger / Source） |
 | `epic.md` | epic body 骨架（目标 / 验收 / 实施顺序段） |
-| `pull_request_template.md` | PR body 骨架（Summary / Refs / Test plan） |
-| `pr-comment.md` | `pm:ship` / `pm:fix` PR 评论格式 |
+| `pull_request_template.md` | PR body 骨架（Summary / Why / Refs / Risk / Test plan） |
+| `pr-comment.md` | `pm:ship` / `pm:fix` / `pm:pr-review` PR 评论格式（含可追溯 footer） |
 
 ## 用法
 
