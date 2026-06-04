@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -154,6 +155,15 @@ func AppendBootstrapAuthFail(
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: bootstrap auth-fail reason not in whitelist",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("reason=%q allowed=%v", reason, allowed))))
+	}
+	if !redaction.IsIPHashString(clientIPHash) {
+		// Consumer trust boundary (#1488): the event arrives from an untrusted
+		// wire (broker / replay / DLX), so a malformed or plaintext-laundered
+		// clientIpHash must never reach the ledger. Reject as a permanent schema
+		// violation (KindInvalid → IsExpected4xx → consumer Rejects to DLX).
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit: bootstrap auth-fail clientIpHash is not a valid hash (empty or 64-hex)",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("len=%d", len(clientIPHash)))))
 	}
 	payload, err := json.Marshal(bootstrapAuthFailPayload{Reason: reason, ClientIPHash: clientIPHash})
 	if err != nil {

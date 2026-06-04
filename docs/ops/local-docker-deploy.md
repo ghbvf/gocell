@@ -44,7 +44,7 @@ cd gocell
 bash scripts/gen-deploy-secrets.sh
 ```
 
-The script generates 11 values in `.env.local` (see §Secrets table for the
+The script generates 12 values in `.env.local` (see §Secrets table for the
 full list). The file is set to `chmod 600` automatically. The script exits
 with code 1 if `.env.local` already exists, so it is safe to run without
 checking first.
@@ -156,7 +156,7 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 
 ### What the script generates
 
-`scripts/gen-deploy-secrets.sh` writes 11 values to `.env.local`:
+`scripts/gen-deploy-secrets.sh` writes 12 values to `.env.local`:
 
 | Variable | How generated |
 |----------|---------------|

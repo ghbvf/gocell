@@ -7,7 +7,8 @@
       "type": "string"
     },
     "clientIpHash": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^$|^[a-f0-9]{64}$"
     }
   },
   "required": [

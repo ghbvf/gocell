@@ -103,6 +103,35 @@ func TestHashIP_EmptyIP_ZeroValue(t *testing.T) {
 	}
 }
 
+func TestIsIPHashString(t *testing.T) {
+	t.Parallel()
+	salt := []byte("test-ip-hash-salt-32-bytes-pad!!")
+	// A real HashIP output must validate (round-trip with the wire shape).
+	if got := redaction.HashIP(salt, "203.0.113.7"); !redaction.IsIPHashString(got.String()) {
+		t.Fatalf("HashIP output %q must satisfy IsIPHashString", got.String())
+	}
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", true},
+		{"64 lowercase hex", strings.Repeat("a1b2c3d4", 8), true},
+		{"64 zeros", strings.Repeat("0", 64), true},
+		{"plaintext ip", "192.0.2.1", false},
+		{"too short", "a1b2c3d4", false},
+		{"63 chars", strings.Repeat("a", 63), false},
+		{"65 chars", strings.Repeat("a", 65), false},
+		{"uppercase hex", strings.Repeat("A1B2C3D4", 8), false},
+		{"non-hex 64", strings.Repeat("z", 64), false},
+	}
+	for _, tc := range cases {
+		if got := redaction.IsIPHashString(tc.in); got != tc.want {
+			t.Errorf("IsIPHashString(%q) = %v, want %v (%s)", tc.in, got, tc.want, tc.name)
+		}
+	}
+}
+
 func TestHashIP_MarshalJSON(t *testing.T) {
 	t.Parallel()
 	salt := []byte("test-ip-hash-salt-32-bytes-pad!!")

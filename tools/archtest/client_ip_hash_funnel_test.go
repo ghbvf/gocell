@@ -19,10 +19,12 @@
 //   - Prong A (pkg/redaction) — IPHash shape + sole-constructor freeze:
 //     IPHash must be a struct with exactly one field, named "v", of type string,
 //     unexported (the seal). AND the only producer of an IPHash value may be the
-//     package func HashIP — no other package func and no IPHash method may return
-//     an IPHash (a re-export / builder / FromString would launder a plaintext
-//     into a populated IPHash, defeating the seal; charter "sealed construction —
-//     任意名 re-export 是闭环必查点").
+//     package func HashIP — no other package func, no package-level function
+//     VARIABLE (#1488 F3), and no IPHash method may return an IPHash, AND no
+//     deserialization entry (UnmarshalJSON/UnmarshalText/UnmarshalBinary/Scan,
+//     #1488 F4) may populate one from bytes (a re-export / builder / FromString /
+//     unmarshal would launder a plaintext into a populated IPHash, defeating the
+//     seal; charter "sealed construction — 任意名 re-export 是闭环必查点").
 //
 //   - Prong B (cells/accesscore/internal/dto) — DTO field type freeze:
 //     BootstrapAuthFailedEvent.ClientIPHash must be exactly redaction.IPHash.
@@ -49,11 +51,11 @@
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
-//   - A bare-string laundering via json.Unmarshal is structurally avoided:
-//     IPHash deliberately has no UnmarshalJSON, so it is not a decode target;
-//     consumers read the hash as a plain string in their own DTOs. Not scanned
-//     here (no constructor surface), guaranteed by absence + the no-UnmarshalJSON
-//     freeze is covered by the method-result scan (no method returns IPHash).
+//   - Deserialization laundering (json/text/binary/sql Unmarshal) is now EXPLICITLY
+//     banned by forbiddenIPHashMethods (#1488 F4): those entries return error (not
+//     IPHash), so the returns-IPHash scan never caught them — a prior godoc claim
+//     that "no UnmarshalJSON" was "covered by the method-result scan" was wrong and
+//     is corrected here. Consumers read the hash as a plain string in their own DTOs.
 //   - The anti-vacuity guard (both target packages must be visited) forbids the
 //     rule silently passing if a package path is renamed/moved.
 //   - The constructor-set scan covers package funcs AND IPHash methods. Method
@@ -154,25 +156,49 @@ func checkIPHashSealed(p *Pass) []Diagnostic {
 		}
 	}
 
-	// Sole-constructor freeze: only HashIP may produce an IPHash value.
+	// Sole-constructor freeze: only the package func HashIP may produce an IPHash
+	// value — neither another package func NOR a package-level function VARIABLE
+	// (e.g. `var FromString = func(string) IPHash`) may return one (#1488 F3),
+	// since a callable var is an equally usable second constructor surface.
 	for _, name := range p.Pkg.Scope().Names() {
-		fn, ok := p.Pkg.Scope().Lookup(name).(*types.Func)
-		if !ok {
+		var sig *types.Signature
+		switch o := p.Pkg.Scope().Lookup(name).(type) {
+		case *types.Func:
+			s, ok := o.Type().(*types.Signature)
+			if !ok || s.Recv() != nil {
+				continue
+			}
+			sig = s
+		case *types.Var:
+			s, ok := o.Type().(*types.Signature)
+			if !ok {
+				continue
+			}
+			sig = s
+		default:
 			continue
 		}
-		sig, ok := fn.Type().(*types.Signature)
-		if !ok || sig.Recv() != nil {
-			continue
-		}
-		if signatureReturnsNamed(sig, named) && fn.Name() != ipHashCtorName {
+		if signatureReturnsNamed(sig, named) && name != ipHashCtorName {
 			d = append(d, Diagnostic{Message: fmt.Sprintf(
-				"CLIENT-IP-HASH-FUNNEL-01: package func %q returns redaction.IPHash, but HashIP must be the SOLE "+
-					"constructor. A second producer (re-export / FromString / builder) can launder a plaintext "+
-					"value into a populated IPHash, defeating the seal.", fn.Name())})
+				"CLIENT-IP-HASH-FUNNEL-01: package-level %q returns redaction.IPHash, but HashIP must be the SOLE "+
+					"constructor. A second producer (re-export / FromString / builder / function variable) can "+
+					"launder a plaintext value into a populated IPHash, defeating the seal.", name)})
 		}
 	}
+	// Method freeze: (a) no IPHash method may return a NEW IPHash (builder
+	// laundering); (b) no deserialization entry may populate an IPHash from bytes
+	// (#1488 F4 — UnmarshalJSON/UnmarshalText/UnmarshalBinary/Scan return error,
+	// NOT IPHash, so the returns-IPHash scan alone never catches them). NumMethods
+	// enumerates both value- and pointer-receiver methods.
 	for i := 0; i < named.NumMethods(); i++ {
 		m := named.Method(i)
+		if forbiddenIPHashMethods[m.Name()] {
+			d = append(d, Diagnostic{Message: fmt.Sprintf(
+				"CLIENT-IP-HASH-FUNNEL-01: IPHash must not declare %q — a deserialization entry (json/text/binary/sql) "+
+					"lets an external package construct a populated IPHash from bytes, bypassing the sole constructor "+
+					"HashIP. Consumers read the hash as a plain string in their own DTOs instead.", m.Name())})
+			continue
+		}
 		sig, ok := m.Type().(*types.Signature)
 		if !ok {
 			continue
@@ -184,6 +210,17 @@ func checkIPHashSealed(p *Pass) []Diagnostic {
 		}
 	}
 	return d
+}
+
+// forbiddenIPHashMethods are deserialization entries that would let an external
+// package populate a sealed IPHash from bytes, bypassing the sole constructor
+// HashIP (#1488 F4). They return error, not IPHash, so the returns-IPHash scan
+// does not catch them — they are banned by name.
+var forbiddenIPHashMethods = map[string]bool{
+	"UnmarshalJSON":   true, // encoding/json.Unmarshaler
+	"UnmarshalText":   true, // encoding.TextUnmarshaler
+	"UnmarshalBinary": true, // encoding.BinaryUnmarshaler
+	"Scan":            true, // database/sql.Scanner
 }
 
 // checkBootstrapDTOFieldType freezes BootstrapAuthFailedEvent.ClientIPHash to be

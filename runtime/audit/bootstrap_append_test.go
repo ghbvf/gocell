@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,17 +52,22 @@ func buildTestLedgerStore(t *testing.T) (*audit.BootstrapLedgerStore, ledger.Sto
 // the opaque hash string verbatim — never a plaintext IP.
 func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIPHash(t *testing.T) {
 	t.Parallel()
+	// Valid clientIpHash is empty or a 64-char lowercase-hex HMAC-SHA256 digest
+	// (redaction.IsIPHashString); short/old fixtures would now be rejected.
+	h64a := strings.Repeat("a1b2c3d4", 8)
+	h64b := strings.Repeat("deadbeef", 8)
+	h64c := strings.Repeat("01234567", 8)
 	tests := []struct {
 		name         string
 		reason       string
 		clientIPHash string
 	}{
 		{"missing_header_no_hash", "missing_header", ""},
-		{"missing_header_with_hash", "missing_header", "a1b2c3d4e5f60718"},
+		{"missing_header_with_hash", "missing_header", h64a},
 		{"wrong_credentials_no_hash", "wrong_credentials", ""},
-		{"wrong_credentials_with_hash", "wrong_credentials", "deadbeefcafef00d"},
+		{"wrong_credentials_with_hash", "wrong_credentials", h64b},
 		{"rate_limited_no_hash", "rate_limited", ""},
-		{"rate_limited_with_hash", "rate_limited", "0011223344556677"},
+		{"rate_limited_with_hash", "rate_limited", h64c},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,6 +99,29 @@ func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIPHash(t *testing
 			assert.Equal(t, tc.clientIPHash, got.ClientIPHash,
 				"clientIpHash must be passed through verbatim (empty when no IP)")
 		})
+	}
+}
+
+// TestAppendBootstrapAuthFail_RejectsMalformedClientIPHash is the consumer
+// trust-boundary guard (#1488 F1): an untrusted wire event whose clientIpHash is
+// neither empty nor a 64-hex digest (plaintext-laundering, short/old hash,
+// uppercase, non-hex) must be rejected with ErrValidationFailed and never reach
+// the ledger — the sealed IPHash producer type does not cover the consumer.
+func TestAppendBootstrapAuthFail_RejectsMalformedClientIPHash(t *testing.T) {
+	t.Parallel()
+	store, _, clk := buildTestLedgerStore(t)
+	for _, bad := range []string{
+		"192.0.2.1",                   // plaintext IP laundered as the hash field
+		"a1b2c3d4",                    // too short (not 64 chars)
+		strings.Repeat("A1B2C3D4", 8), // uppercase hex (HashIP emits lowercase)
+		strings.Repeat("z", 64),       // 64 chars but non-hex
+	} {
+		err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, uuid.NewString(), "missing_header", bad)
+		require.Error(t, err, "malformed clientIpHash %q must be rejected", bad)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+			"malformed clientIpHash must be a permanent ErrValidationFailed (→ DLX)")
 	}
 }
 
@@ -133,13 +162,14 @@ func TestAppendBootstrapAuthFail_RedeliverySameEventID_Deduplicates(t *testing.T
 	store, raw, clk := buildTestLedgerStore(t)
 	ctx := context.Background()
 	eventID := uuid.NewString()
+	h64 := strings.Repeat("ab", 32) // valid 64-hex clientIpHash
 
 	// First delivery — must succeed.
-	err := audit.AppendBootstrapAuthFail(ctx, store, clk, eventID, "rate_limited", "192.0.2.1")
+	err := audit.AppendBootstrapAuthFail(ctx, store, clk, eventID, "rate_limited", h64)
 	require.NoError(t, err, "first delivery must succeed")
 
 	// Redelivery — same stable eventID ⇒ same fingerprint ⇒ idempotent dedup.
-	err = audit.AppendBootstrapAuthFail(ctx, store, clk, eventID, "rate_limited", "192.0.2.1")
+	err = audit.AppendBootstrapAuthFail(ctx, store, clk, eventID, "rate_limited", h64)
 	require.Error(t, err, "redelivery of the same eventID must be rejected as duplicate")
 	var coded *errcode.Error
 	require.True(t, errors.As(err, &coded), "duplicate error must be *errcode.Error; got %T", err)
@@ -153,7 +183,7 @@ func TestAppendBootstrapAuthFail_RedeliverySameEventID_Deduplicates(t *testing.T
 	assert.Len(t, entries, 1, "redelivery of the same eventID must leave exactly one ledger entry")
 
 	// A genuinely distinct event (different eventID) persists independently.
-	err = audit.AppendBootstrapAuthFail(ctx, store, clk, uuid.NewString(), "rate_limited", "192.0.2.1")
+	err = audit.AppendBootstrapAuthFail(ctx, store, clk, uuid.NewString(), "rate_limited", h64)
 	require.NoError(t, err, "distinct eventID must persist a second entry")
 	entries, qerr = raw.Query(ctx,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},

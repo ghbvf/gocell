@@ -321,6 +321,7 @@ tracked in the backlog. The current PR provides the middleware primitives.
 |----------|---------|---------|
 | `DATABASE_URL` | (required) | PostgreSQL DSN. With the bundled docker-compose: `postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable`. The process fails fast when absent. |
 | `GOCELL_SSOBFF_SERVICE_SECRET` | (required) | Internal listener service-token shared secret. ≥ 32 bytes; missing or short value fails the process at startup. |
+| `GOCELL_SSOBFF_IP_HASH_SALT` | `dev-ip-hash-salt-ssobff-32-byte!` | Salt for the bootstrap-failed client-IP keyed hash (#1488). Demo-only default; the plaintext IP never leaves the observer. |
 | `GOCELL_SSOBFF_PRIMARY_ADDR` | `:8081` | Primary listener bind address (public business API). |
 | `GOCELL_SSOBFF_INTERNAL_ADDR` | `127.0.0.1:9081` | Internal listener bind (control-plane / service-token). Loopback default keeps it off the public network until the operator opts in. |
 | `GOCELL_SSOBFF_HEALTH_ADDR` | `127.0.0.1:9091` | Health listener bind (`/healthz`, `/readyz`, `/metrics`). Loopback default. |

@@ -51,12 +51,13 @@
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
-//   - Detection is REFERENCE-based (every SelectorExpr go/types resolves to
-//     RealIPFrom, whether call or function value) — load-bearing because
-//     access_log.go passes RealIPFrom as a function value, not a direct call.
-//   - Dot-import bare-identifier form (import . "…/pkg/ctxkeys"; RealIPFrom(ctx))
-//     references the symbol as a bare *ast.Ident, not a SelectorExpr — not
-//     matched. Dot-importing pkg/ctxkeys is absent and conspicuous; documented.
+//   - Detection is REFERENCE-based and scans every *ast.Ident (go/types resolves
+//     it to RealIPFrom, whether call, function value, qualified `ctxkeys.RealIPFrom`
+//     `.Sel`, OR a dot-imported bare `RealIPFrom`). Load-bearing two ways:
+//     access_log.go passes RealIPFrom as a function value (not a direct call); and
+//     the bare-ident scan closes the former dot-import gap (#1488 F2) —
+//     ResolvePackageRef's resolveBarePkgSymbol resolves a bare *ast.Ident to the
+//     same *types.Func, so `import . "…/pkg/ctxkeys"; RealIPFrom(ctx)` is now caught.
 //   - //go:build-gated production files under a non-default tag are missed by the
 //     default-tags scan (the integration test observers are *_test.go + tagged,
 //     so out of the Production(Tests:false) scope anyway).
@@ -101,13 +102,18 @@ func TestCtxkeysRealIPReadCaller01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-				if !isRealIPFromRef(p.TypesInfo, sel) {
+			// Scan every *ast.Ident (not just SelectorExpr): ResolvePackageRef
+			// resolves both the `.Sel` of a qualified `ctxkeys.RealIPFrom` AND a
+			// bare `RealIPFrom` from a dot-import — closing the dot-import gap
+			// (#1488 F2). Each callsite has exactly one matching ident, so there
+			// is no double-count.
+			EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+				if !isRealIPFromRef(p.TypesInfo, id) {
 					return
 				}
 				observed[rel] = struct{}{}
 				if _, allowed := realIPReadAllowlist[rel]; !allowed {
-					pos := p.Fset.Position(sel.Pos())
+					pos := p.Fset.Position(id.Pos())
 					d = append(d, Diagnostic{
 						Rel:  rel,
 						Line: pos.Line,
@@ -150,9 +156,10 @@ func TestCtxkeysRealIPReadCaller01(t *testing.T) {
 	Report(t, "CTXKEYS-REALIP-READ-CALLER-01", diags)
 }
 
-// isRealIPFromRef reports whether sel is a REFERENCE (call or function value) to
-// pkg/ctxkeys.RealIPFrom, alias-proof via go/types.
-func isRealIPFromRef(info *types.Info, sel *ast.SelectorExpr) bool {
-	pkgPath, name, ok := ResolvePackageRef(info, sel)
+// isRealIPFromRef reports whether expr is a REFERENCE (call, function value, or
+// dot-imported bare ident) to pkg/ctxkeys.RealIPFrom, alias-proof via go/types.
+// ResolvePackageRef accepts both *ast.SelectorExpr and *ast.Ident.
+func isRealIPFromRef(info *types.Info, expr ast.Expr) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, expr)
 	return ok && pkgPath == ctxkeysPkgPath && name == "RealIPFrom"
 }

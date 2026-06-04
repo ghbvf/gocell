@@ -478,6 +478,34 @@ func (h IPHash) IsEmpty() bool { return h.v == "" }
 // IPHash is wire-compatible with the schema's {"type": "string"} field.
 func (h IPHash) MarshalJSON() ([]byte, error) { return json.Marshal(h.v) }
 
+// IsIPHashString reports whether s is a valid wire form of an IPHash digest:
+// either empty (no IP was available) or a 64-character lowercase-hex
+// HMAC-SHA256 digest. It is the runtime counterpart of the clientIpHash
+// JSON-schema pattern "^$|^[a-f0-9]{64}$" and the single source of the IP-hash
+// wire shape.
+//
+// The sealed IPHash type guards the PRODUCER (a plaintext string cannot be
+// assigned where an IPHash is required), but a consumer reading the hash from an
+// UNTRUSTED wire event (broker / replay / DLX) decodes into a plain string and
+// has no such protection — a malformed or plaintext-laundered value could
+// otherwise reach the audit ledger. Consumers call IsIPHashString to fail closed
+// at that trust boundary (#1488).
+func IsIPHashString(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // RedactAny scrubs sensitive substrings from arbitrary panic-style payloads
 // before they reach observability backends. Three branches:
 //
