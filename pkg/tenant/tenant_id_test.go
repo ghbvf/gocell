@@ -80,6 +80,17 @@ func TestParseTenantID(t *testing.T) {
 		}
 	})
 
+	t.Run("reserved nil-UUID rejected (F2 security fix)", func(t *testing.T) {
+		t.Parallel()
+		// The nil-UUID is SystemTenantID — a tenant-isolation bypass token.
+		// ParseTenantID is the untrusted-input boundary (JWT claim, X-Tenant-ID
+		// header, UnmarshalJSON); it must reject the nil-UUID so external callers
+		// cannot alias the system-tier config.
+		_, err := ParseTenantID("00000000-0000-0000-0000-000000000000")
+		require.Error(t, err, "nil-UUID must be rejected from untrusted input")
+		assert.Contains(t, err.Error(), "reserved")
+	})
+
 	t.Run("uppercase normalized to canonical lowercase", func(t *testing.T) {
 		t.Parallel()
 		got, err := ParseTenantID(validTenantUUIDUp)
@@ -100,6 +111,9 @@ func TestTenantID_UnmarshalJSON(t *testing.T) {
 		{"uppercase canonicalized", `"` + validTenantUUIDUp + `"`, TenantID(validTenantUUID), false},
 		{"empty string rejected", `""`, "", true},
 		{"non-uuid rejected", `"garbage"`, "", true},
+		// The nil-UUID is the reserved SystemTenantID sentinel; UnmarshalJSON routes
+		// through ParseTenantID, so it must also be rejected (F2 security fix).
+		{"nil-UUID rejected (reserved sentinel)", `"00000000-0000-0000-0000-000000000000"`, "", true},
 		{"null rejected (no absent over wire)", `null`, "", true},
 		{"non-string json rejected", `123`, "", true},
 		{"malformed json rejected", `{`, "", true},

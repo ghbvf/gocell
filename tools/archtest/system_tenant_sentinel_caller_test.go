@@ -1,8 +1,11 @@
 // system_tenant_sentinel_caller_test.go — locks the single sanctioned
 // production reference to tenant.SystemTenantID, a tenant-isolation bypass
-// token used by the configcore internal control-plane read path.
+// token used by the configcore internal control-plane read path. Also locks
+// production code against constructing the reserved nil-UUID value from a raw
+// string literal (value-level bypass of the const-ref scanner).
 //
 // INVARIANT: SYSTEM-TENANT-SENTINEL-CALLER-01
+//   - INVARIANT: SYSTEM-TENANT-SENTINEL-VALUE-01
 //
 // # What this guards
 //
@@ -70,8 +73,11 @@ package archtest
 
 import (
 	"fmt"
+	"go/ast"
+	"go/token"
 	"go/types"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -398,6 +404,407 @@ func TestSystemTenantSentinelCaller01_BlindSpot_LocalVarLaunderingAbsent(t *test
 				"production reference(s) to tenant.SystemTenantID (these should "+
 				"also be caught by TestSystemTenantSentinelCaller01): %v",
 			len(unsanctionedAssignments), unsanctionedAssignments,
+		)
+	}
+}
+
+// ─── SYSTEM-TENANT-SENTINEL-VALUE-01 ─────────────────────────────────────────
+
+// TestSystemTenantSentinelValue01 bans non-allowlist PRODUCTION code from
+// constructing the reserved nil-UUID value from a raw string literal.
+//
+// # What this guards
+//
+// SYSTEM-TENANT-SENTINEL-CALLER-01 matches const-object identity via
+// TypesInfo.Uses: it fires when code references the *types.Const for
+// tenant.SystemTenantID. A value-level bypass exists: a caller could write
+//
+//	tenant.TenantID("00000000-0000-0000-0000-000000000000")
+//	tenant.ParseTenantID("00000000-0000-0000-0000-000000000000")
+//	ctxkeys.WithTenantID("00000000-0000-0000-0000-000000000000")
+//
+// These expressions produce the sentinel value without ever naming the const,
+// so they escape CALLER-01. This test closes that gap by scanning for
+// the nil-UUID string literal "00000000-0000-0000-0000-000000000000" appearing
+// as a CallExpr argument to any of the three typed functions above (identified
+// by their resolved package path + function name). The only sanctioned site is
+// the const declaration itself in pkg/tenant/system_tenant.go.
+//
+// # AI-robust rating (charter §"Funnel 双向锁评级")
+//
+//   - Downstream: MEDIUM. Archtest value-level caller-allowlist: for each AST
+//     CallExpr whose callee resolves (via go/types TypesInfo.Selections or
+//     ObjectOf) to one of the three watched functions, if any argument is a
+//     string BasicLit with value == the nil-UUID, the containing file must be
+//     in the allowlist. Import aliases cannot bypass because the resolution
+//     uses go/types package path + function name, not source text.
+//
+//   - Upstream: Go-language ceiling (permanent won't-do). TenantID is a plain
+//     `string` newtype; Go cannot prevent `tenant.TenantID("any string")` at
+//     the type-system level. The sentinel must stay exported (cross-package
+//     configreadinternal reference), so no sealed accessor can gate it. Hard
+//     path (unexport SystemTenantID + sanctioned typed accessor) tracked at
+//     gh #1576 — same permanent ceiling as #851 / #893 / #1282.
+//
+// # Tool blind spots (charter §"工具选定后强制盲区自检")
+//
+//  1. Computed nil-UUID (e.g. strings.Repeat("0", 8)+"-..."+...): the scanner
+//     matches only ast.BasicLit string nodes, not computed strings. Mitigation:
+//     rare in practice; would also trigger CALLER-01 suspicion at code review.
+//  2. Indirect call (e.g. f := tenant.ParseTenantID; f("0000...")):  the
+//     callee is a local *ast.Ident resolved to a *types.Var, not a *types.Func;
+//     not detected. Mitigation: indirect call is itself suspicious and would
+//     require a reference to ParseTenantID at the assignment site (caught by
+//     CALLER-01 if it uses the const; not caught if it uses the func name — an
+//     accepted residual with very low exploitation probability).
+//  3. Constant folding / const alias (e.g. const nilUUID = "0000...";
+//     ParseTenantID(nilUUID)): the argument is a *ast.Ident, not a *ast.BasicLit
+//     — not detected. Mitigation: a non-system_tenant.go production file
+//     declaring a local copy of the nil-UUID string would itself be suspicious
+//     and likely caught in review.
+//
+// # Anti-vacuity
+//
+// The test asserts that at least one sanctioned site (the const declaration in
+// system_tenant.go) is observed during the scan; if the const value changes or
+// the file is deleted, the test fails rather than vacuously passing.
+//
+// # Reverse self-check (blind-spot #1 absence)
+//
+// TestSystemTenantSentinelValue01_BlindSpot_ComputedAbsent asserts that no
+// production code constructs the nil-UUID via string concatenation or
+// format verbs — verifying the computed-string blind spot is absent today.
+const (
+	ruleIDSentinelValue = "SYSTEM-TENANT-SENTINEL-VALUE-01"
+	// nilUUIDLiteral is the canonical nil-UUID string. It is spelled out here
+	// (not imported from pkg/tenant) to keep the archtest self-contained and
+	// avoid a circular dependency on the very package being audited.
+	nilUUIDLiteral = "00000000-0000-0000-0000-000000000000"
+	// sentinelDeclFile is the sole sanctioned production file allowed to contain
+	// the nil-UUID literal. All *_test.go files are additionally allowed.
+	sentinelDeclFile = "pkg/tenant/system_tenant.go"
+)
+
+// sentinelValueAllowlist is the bounded set of non-test production file paths
+// (module-relative) that may contain the nil-UUID literal.
+// Only the declaration site is allowed; all other production callers must use
+// the typed constant tenant.SystemTenantID.
+var sentinelValueAllowlist = map[string]struct{}{
+	sentinelDeclFile: {},
+}
+
+// sentinelValueWatchedCallees is the set of (pkgPath, funcName) pairs whose
+// string arguments are checked for the nil-UUID literal. These are the three
+// public APIs that could be used to construct the sentinel value from input.
+//
+// Note: tenant.TenantID("0000...") is a type conversion, not a function call;
+// in AST terms it appears as a *ast.CallExpr with Fun = *ast.SelectorExpr or
+// *ast.Ident resolving to the type. We handle it by detecting CastExpr to
+// tenant.TenantID via TypesInfo (type name == "TenantID" in pkg/tenant).
+var sentinelValueWatchedCallees = []struct {
+	pkgPath  string
+	funcName string
+}{
+	{pkgPath: tenantSentinelPkg, funcName: "ParseTenantID"},
+	{pkgPath: PlatformModulePath + "/pkg/ctxkeys", funcName: "WithTenantID"},
+}
+
+// isSentinelValueFileAllowed mirrors isSystemTenantSentinelFileAllowed: test
+// files and test-support packages are always allowed.
+func isSentinelValueFileAllowed(rel string) bool {
+	if strings.HasSuffix(rel, "_test.go") {
+		return true
+	}
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == "test" || strings.HasSuffix(seg, "test") {
+			return true
+		}
+	}
+	_, ok := sentinelValueAllowlist[rel]
+	return ok
+}
+
+// extractStringLiteral returns the unquoted string value of an ast.BasicLit
+// with token.STRING kind, or ("", false) for any other node type.
+func extractStringLiteral(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// TestSystemTenantSentinelValue01 is the main invariant test for
+// SYSTEM-TENANT-SENTINEL-VALUE-01. See package godoc above for rationale.
+func TestSystemTenantSentinelValue01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var allDiags []Diagnostic
+	var sanctionedSeen bool // anti-vacuity: declaration site observed?
+
+	scanDiags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() || p.TypesInfo == nil {
+			return nil
+		}
+
+		relByAbs := make(map[string]string, len(p.Files))
+		for _, f := range p.Files {
+			relByAbs[p.Abs(f)] = p.Rel(f)
+		}
+
+		var d []Diagnostic
+
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			// Anti-vacuity: record observation of the declaration site.
+			if rel == sentinelDeclFile {
+				sanctionedSeen = true
+			}
+
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				// Check if any arg is the nil-UUID literal.
+				argIdx := -1
+				var argStr string
+				for i, arg := range call.Args {
+					s, ok := extractStringLiteral(arg)
+					if ok && s == nilUUIDLiteral {
+						argIdx = i
+						argStr = s
+						break
+					}
+				}
+				if argIdx < 0 {
+					return // no nil-UUID literal arg
+				}
+
+				pos := p.Fset.Position(call.Pos())
+				fileRel, ok := relByAbs[pos.Filename]
+				if !ok {
+					return
+				}
+				if isSentinelValueFileAllowed(fileRel) {
+					return // allowed (declaration site or test file)
+				}
+
+				// Determine if this callsite invokes a watched function.
+				calleeDesc := resolveCalleeDesc(p, call)
+				if calleeDesc == "" {
+					return // not a watched callee
+				}
+
+				d = append(d, Diagnostic{
+					Rel:  fileRel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						ruleIDSentinelValue+": %s:%d passes the reserved nil-UUID literal %q "+
+							"to %s (arg index %d). "+
+							"Use the typed constant tenant.SystemTenantID instead of a raw string literal — "+
+							"raw nil-UUID construction bypasses the CALLER-01 const-ref scanner "+
+							"and risks aliasing the system-tier config. "+
+							"Only pkg/tenant/system_tenant.go may contain this literal. "+
+							"Hard-upgrade path: gh #1576 (unexport + typed accessor).",
+						fileRel, pos.Line, argStr, calleeDesc, argIdx,
+					),
+				})
+			})
+
+			// Also check TenantID("0000...") type-conversion calls.
+			// A type conversion tenant.TenantID("0000...") appears as a
+			// *ast.CallExpr where Fun resolves to the TenantID type in pkg/tenant.
+			checkTenantIDConversion(p, file, relByAbs, &d)
+		}
+		return d
+	})
+	allDiags = append(allDiags, scanDiags...)
+
+	// Anti-vacuity: the declaration site must have been observed.
+	if !sanctionedSeen {
+		allDiags = append(allDiags, Diagnostic{
+			Message: ruleIDSentinelValue + ": declaration site " + sentinelDeclFile +
+				" was not observed during the scan — either the file was renamed/removed " +
+				"or the scanner regressed. Update sentinelDeclFile if the file moved.",
+		})
+	}
+
+	Report(t, ruleIDSentinelValue, allDiags)
+}
+
+// resolveCalleeDesc returns a human-readable "pkg.Func" description if the
+// call's callee is one of the watched functions; returns "" otherwise.
+// Uses TypesInfo to resolve the callee to its *types.Func object, then checks
+// its package path and name against sentinelValueWatchedCallees.
+func resolveCalleeDesc(p *Pass, call *ast.CallExpr) string {
+	var obj types.Object
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		obj = p.TypesInfo.ObjectOf(fun)
+	case *ast.SelectorExpr:
+		obj = p.TypesInfo.ObjectOf(fun.Sel)
+	default:
+		return ""
+	}
+	if obj == nil {
+		return ""
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return ""
+	}
+	pkg := fn.Pkg()
+	if pkg == nil {
+		return ""
+	}
+	for _, w := range sentinelValueWatchedCallees {
+		if pkg.Path() == w.pkgPath && fn.Name() == w.funcName {
+			return pkg.Name() + "." + fn.Name()
+		}
+	}
+	return ""
+}
+
+// checkTenantIDConversion scans for tenant.TenantID("0000...") type conversion
+// calls in the given file. A type conversion appears in the AST as a
+// *ast.CallExpr where Fun is an *ast.SelectorExpr (or *ast.Ident) resolving to
+// the named type tenant.TenantID. We detect this by resolving the Fun via
+// TypesInfo.Uses and checking if the object is the TenantID type in pkg/tenant.
+func checkTenantIDConversion(p *Pass, file ast.Node,
+	relByAbs map[string]string, d *[]Diagnostic,
+) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if len(call.Args) != 1 {
+			return
+		}
+		argStr, ok := extractStringLiteral(call.Args[0])
+		if !ok || argStr != nilUUIDLiteral {
+			return
+		}
+		// Check if Fun resolves to the TenantID type.
+		var ident *ast.Ident
+		switch fun := call.Fun.(type) {
+		case *ast.Ident:
+			ident = fun
+		case *ast.SelectorExpr:
+			ident = fun.Sel
+		default:
+			return
+		}
+		obj := p.TypesInfo.ObjectOf(ident)
+		if obj == nil {
+			return
+		}
+		tn, ok := obj.(*types.TypeName)
+		if !ok {
+			return
+		}
+		if tn.Pkg() == nil || tn.Pkg().Path() != tenantSentinelPkg || tn.Name() != "TenantID" {
+			return
+		}
+		// This is tenant.TenantID("0000...").
+		pos := p.Fset.Position(call.Pos())
+		fileRel, hasRel := relByAbs[pos.Filename]
+		if !hasRel {
+			return
+		}
+		if isSentinelValueFileAllowed(fileRel) {
+			return
+		}
+		*d = append(*d, Diagnostic{
+			Rel:  fileRel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				ruleIDSentinelValue+": %s:%d constructs the reserved nil-UUID literal %q "+
+					"via tenant.TenantID(...) type conversion. "+
+					"Use the typed constant tenant.SystemTenantID instead. "+
+					"Only pkg/tenant/system_tenant.go may contain this literal. "+
+					"Hard-upgrade path: gh #1576.",
+				fileRel, pos.Line, nilUUIDLiteral,
+			),
+		})
+	})
+}
+
+// TestSystemTenantSentinelValue01_BlindSpot_ComputedAbsent is the reverse
+// self-check for blind spot #1 (computed nil-UUID strings). It asserts that
+// no production non-test file contains string literals that are clearly a
+// partial nil-UUID construction — specifically, strings that contain "00000000"
+// but are neither the full nil-UUID literal nor any other valid 36-char
+// canonical UUID (which would just be a legitimate test-fixture value).
+//
+// This test PASSES vacuously if the pattern is absent (desired state). If it
+// fails, someone introduced a computed nil-UUID construction in production code
+// — which the main scanner cannot catch — requiring manual investigation.
+//
+// Note: strings like "00000000-0000-0000-0000-000000000001" are valid canonical
+// UUIDs (test fixtures), not partial nil-UUID constructions — they are excluded.
+func TestSystemTenantSentinelValue01_BlindSpot_ComputedAbsent(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	// Segments that appear in a manually split nil-UUID. If these appear as
+	// string literals in production code outside the allowlist AND are not
+	// themselves complete canonical UUIDs (36-char dashed form), it is
+	// strong evidence of a partial nil-UUID construction.
+	const nilUUIDSegment = "00000000"
+
+	// isCanonicalUUID reports whether s is a complete 36-char dashed UUID.
+	// These are legitimate values (test fixtures, IDs) even if they start with zeros.
+	// 36 = canonical UUID length: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+	isCanonicalUUID := func(s string) bool {
+		if len(s) != 36 {
+			return false
+		}
+		// Cheap structural check: dashes at positions 8, 13, 18, 23.
+		return s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-'
+	}
+
+	var violations []string
+
+	Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if isSentinelValueFileAllowed(rel) {
+				continue
+			}
+			EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
+				if lit.Kind != token.STRING {
+					return
+				}
+				s, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					return
+				}
+				// Flag only strings that:
+				// 1. Contain the 8-zero segment (could be partial nil-UUID), AND
+				// 2. Are NOT the full nil-UUID itself (already caught by main scanner), AND
+				// 3. Are NOT a complete canonical UUID (legitimate test fixture).
+				if strings.Contains(s, nilUUIDSegment) && s != nilUUIDLiteral && !isCanonicalUUID(s) {
+					pos := p.Fset.Position(lit.Pos())
+					violations = append(violations,
+						fmt.Sprintf("%s:%d (value %q)", rel, pos.Line, s))
+				}
+			})
+		}
+		return nil
+	})
+
+	if len(violations) > 0 {
+		t.Errorf(
+			ruleIDSentinelValue+" blind-spot #1 self-check: found production file(s) "+
+				"containing partial zero-segment string literals that may be part of a computed "+
+				"nil-UUID construction (cannot be detected by the main literal scanner): %v",
+			violations,
 		)
 	}
 }

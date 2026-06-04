@@ -11,8 +11,13 @@ package tenant
 // callerCell claim is not a tenant (see runtime/auth/middleware.go: service
 // principals get no ctxkeys.TenantID).
 //
-// The nil UUID is a canonical 36-char dashed lowercase UUID, so it passes
-// TenantID.Validate() and ParseTenantID without any special-casing in repos.
+// The nil UUID is a canonical 36-char dashed lowercase UUID.
+// TenantID.Validate() accepts it (repo param guards call Validate; the sentinel
+// is a valid canonical TenantID value for internal use).
+// ParseTenantID() rejects it — that function is the untrusted-input boundary
+// (JWT claim, X-Tenant-ID header, UnmarshalJSON); a public caller must not be
+// able to alias the system-tier config by submitting the nil-UUID string.
+// Internal code must reference this constant directly, never parse it from a string.
 //
 // Strict-equality model (no OR-merge overlay): rows written under a real tenant
 // are invisible to SystemTenantID reads and vice versa. Platform/global config
