@@ -17,6 +17,8 @@ import (
 	"log/slog"
 	"net"
 	"sync/atomic"
+
+	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 // boundGRPC pairs a resolved gRPC listener config with its bound socket.
@@ -38,7 +40,7 @@ type boundGRPC struct {
 // otherwise leak the serving HTTP goroutines.
 func (b *Bootstrap) phase7bStartGRPCServers(serveCtx context.Context, s *phaseState) error {
 	if len(b.grpcListenerConfigs) == 0 {
-		return nil
+		return b.checkOrphanGRPCServices(s)
 	}
 
 	bounds := make([]boundGRPC, 0, len(b.grpcListenerConfigs))
@@ -56,8 +58,94 @@ func (b *Bootstrap) phase7bStartGRPCServers(serveCtx context.Context, s *phaseSt
 		bounds = append(bounds, boundGRPC{cfg: gc, lis: lis, owned: owned})
 	}
 
+	// Drain cell GRPCServiceSpecs: AFTER binding, BEFORE grpcServeAll, so
+	// services are reachable from the first accepted connection. This replaces
+	// the PR-5 stopgap of pre-registering services before bootstrap.Run.
+	if err := b.drainCellGRPCServices(s, bounds); err != nil {
+		closeOwnedGRPCSockets(bounds)
+		b.drainHTTPOnGRPCStartFailure(s)
+		return err
+	}
+
 	s.grpcErrCh = b.grpcServeAll(serveCtx, bounds)
 	s.grpcDrain = func(ctx context.Context) error { return drainAllGRPCServers(ctx, bounds) }
+	return nil
+}
+
+// drainCellGRPCServices drains GRPCServiceSpecs from all cell snapshots and
+// routes each to the gRPC listener identified by spec.Listener. Called in
+// phase7b after binding but before grpcServeAll (GAP-1 PR-7 [#1150]).
+//
+// Fail-fast conditions (mirroring the HTTP phase5 + subscription drain patterns):
+//   - duplicate ref across gRPC listeners (ambiguous routing)
+//   - spec.CellID != snapshot key (config bug — mirrors subscription drain check)
+//   - spec.Listener ref not found in the bound gRPC listener set (undeclared listener)
+//
+// ref: runtime/bootstrap/phases_http.go phase4CollectRouteGroups + phase5MountRouteGroups
+// ref: runtime/bootstrap/phases_events.go drainCellSubscriptions
+func (b *Bootstrap) drainCellGRPCServices(s *phaseState, bounds []boundGRPC) error {
+	refMap, err := buildGRPCRefMap(bounds)
+	if err != nil {
+		return err
+	}
+	if s.asm == nil || len(s.cellSnapshots) == 0 {
+		return nil
+	}
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		if err := registerCellGRPCServices(id, snap.GRPCServices, refMap); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildGRPCRefMap builds a map from ListenerRef to boundGRPC. Returns an error
+// when two configs share the same ref (duplicate ref is a config bug).
+func buildGRPCRefMap(bounds []boundGRPC) (map[cell.ListenerRef]*boundGRPC, error) {
+	refMap := make(map[cell.ListenerRef]*boundGRPC, len(bounds))
+	for i := range bounds {
+		bd := &bounds[i]
+		if _, dup := refMap[bd.cfg.ref]; dup {
+			return nil, fmt.Errorf("bootstrap: duplicate gRPC listener ref %q; "+
+				"each WithGRPCListener must use a distinct cell.ListenerRef",
+				bd.cfg.ref.String())
+		}
+		refMap[bd.cfg.ref] = bd
+	}
+	return refMap, nil
+}
+
+// registerCellGRPCServices routes each spec from a single cell snapshot to its
+// target listener and calls Register. Returns on first error.
+func registerCellGRPCServices(cellID string, specs []cell.GRPCServiceSpec, refMap map[cell.ListenerRef]*boundGRPC) error {
+	for _, spec := range specs {
+		if spec.CellID != cellID {
+			return fmt.Errorf("bootstrap: gRPC service spec CellID mismatch: "+
+				"spec.CellID=%q does not match snapshot key %q "+
+				"(cell must use its own ID in GRPCServiceSpec)",
+				spec.CellID, cellID)
+		}
+		bd, ok := refMap[spec.Listener]
+		if !ok {
+			return fmt.Errorf("bootstrap: gRPC service %q (cell %q) references "+
+				"undeclared listener ref %q; add WithGRPCListener(%s, server, addr) "+
+				"to bootstrap options",
+				spec.ContractID, cellID, spec.Listener.String(), spec.Listener.String())
+		}
+		if err := bd.cfg.server.Registrar().Register(spec); err != nil {
+			return fmt.Errorf("bootstrap: failed to register gRPC service %q "+
+				"(cell %q, listener %q): %w",
+				spec.ContractID, cellID, spec.Listener.String(), err)
+		}
+		slog.Info("bootstrap: registered gRPC service",
+			slog.String("contractID", spec.ContractID),
+			slog.String("cellID", cellID),
+			slog.String("listener", spec.Listener.String()))
+	}
 	return nil
 }
 
@@ -144,6 +232,29 @@ func drainAllGRPCServers(parent context.Context, bounds []boundGRPC) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// checkOrphanGRPCServices is called when no WithGRPCListener was configured. If
+// any cell snapshot has a non-empty GRPCServices slice it means a cell called
+// reg.GRPCService but the composition root forgot to add WithGRPCListener — a
+// silent data-loss bug. Fail-fast to surface the misconfiguration, mirroring the
+// HTTP undeclared-listener fail-fast intent.
+func (b *Bootstrap) checkOrphanGRPCServices(s *phaseState) error {
+	if s.asm == nil || len(s.cellSnapshots) == 0 {
+		return nil
+	}
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		if n := len(snap.GRPCServices); n > 0 {
+			return fmt.Errorf("bootstrap: cell %q declares %d gRPC service(s) but no "+
+				"WithGRPCListener is configured; add WithGRPCListener(ref, server, addr) "+
+				"to bootstrap options", id, n)
+		}
+	}
+	return nil
 }
 
 // drainHTTPOnGRPCStartFailure drains the HTTP servers started in phase7 when a

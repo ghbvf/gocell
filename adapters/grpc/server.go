@@ -11,10 +11,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
 	"github.com/ghbvf/gocell/runtime/http/tlsutil"
 )
 
@@ -36,8 +38,10 @@ var (
 // It wraps a *grpc.Server with the GoCell lifecycle contract:
 // Probes() / Worker() / Close().
 //
-// Construction: call New(cfg) to obtain a configured *Server, then register
-// services via ServiceRegistrar() before starting the Worker.
+// Construction: call New(cfg) to obtain a configured *Server. Services are
+// registered during bootstrap via Registrar().Register(spec) — cells declare
+// GRPCServiceSpec in Cell.Init; bootstrap drains the snapshot and calls
+// Registrar().Register for each spec in phase7b, before grpcServeAll.
 //
 // Concurrency: all public methods are safe for concurrent use. GracefulStop
 // is idempotent via stopOnce — calling Worker().Stop() and Close() simultaneously
@@ -45,6 +49,7 @@ var (
 type Server struct {
 	cfg        Config
 	grpcServer *grpc.Server
+	registrar  *runtimegrpc.ServiceRegistrar
 
 	// serving is true while grpcServer.Serve is actively running.
 	// Flipped to true inside serve() after Serve returns from the initial
@@ -92,18 +97,30 @@ func New(cfg Config) (*Server, error) {
 		opts = append(opts, grpc.Creds(creds))
 	}
 
+	inner := grpc.NewServer(opts...)
 	return &Server{
 		cfg:        cfg,
-		grpcServer: grpc.NewServer(opts...),
+		grpcServer: inner,
+		registrar:  runtimegrpc.NewServiceRegistrar(inner),
 		serveDone:  make(chan struct{}),
 	}, nil
 }
 
-// ServiceRegistrar returns the grpc.ServiceRegistrar so callers can register
-// gRPC service implementations before the Worker starts. Must be called before
-// Worker().Start() to avoid data races on the service registry.
-func (s *Server) ServiceRegistrar() grpc.ServiceRegistrar {
-	return s.grpcServer
+// Registrar returns the cell-facing service registrar that bootstrap uses to
+// register gRPC services (GAP-1 PR-7 [#1150]). It wraps the underlying
+// *grpc.Server and intercepts RegisterService calls to record method→cellID
+// attribution for each spec.
+//
+// The return type is cell.GRPCServiceRegistrar (the narrow kernel-defined
+// interface) so bootstrap's GRPCServer interface can reference it without
+// importing adapters/grpc or google.golang.org/grpc. The concrete value is
+// *runtime/grpc.ServiceRegistrar, which callers that import adapters/grpc may
+// type-assert to access CellIDForMethod (PR-9).
+//
+// All service registrations must happen before Serve/Worker().Start() to avoid
+// data races — the bootstrap drain (phase7b) guarantees this ordering.
+func (s *Server) Registrar() cell.GRPCServiceRegistrar {
+	return s.registrar
 }
 
 // Probes implements lifecycle.ManagedResource. It returns a single probe named

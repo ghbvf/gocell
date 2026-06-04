@@ -793,3 +793,44 @@ func TestRegistry_Subscribe_SpecValidate_RejectsInvalidSpec(t *testing.T) {
 		})
 	}
 }
+
+// validGRPCSpecInternal returns a well-formed GRPCServiceSpec for in-package tests.
+func validGRPCSpecInternal(contractID string) GRPCServiceSpec {
+	return GRPCServiceSpec{
+		ContractID: contractID,
+		CellID:     "test-cell",
+		Listener:   PrimaryListener,
+		Register:   func() {}, // non-nil any; type check happens in runtime/grpc layer
+	}
+}
+
+// TestRegistrySnapshot_GRPCServices_DefensiveCopy verifies Snapshot().GRPCServices
+// is a defensive copy: mutating the returned slice must NOT corrupt the recorder's
+// internal grpcServices slice. This is an in-package test so it can observe the
+// SAME recorder's unexported field — an external test mutating one recorder's
+// snapshot and asserting on a second independent recorder would pass even if
+// Snapshot aliased the internal slice (the mutation could never reach the other
+// recorder regardless), making it vacuous.
+func TestRegistrySnapshot_GRPCServices_DefensiveCopy(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistryRecorder(nil, outbox.DurabilityDemo)
+	require.NoError(t, r.GRPCService(validGRPCSpecInternal("grpc.svc.v1")))
+	require.NoError(t, r.GRPCService(validGRPCSpecInternal("grpc.svc.v2")))
+
+	snap := r.Snapshot()
+	require.Len(t, snap.GRPCServices, 2)
+
+	// Mutate the snapshot's first element in-place.
+	snap.GRPCServices[0] = GRPCServiceSpec{ContractID: "CORRUPTED"}
+
+	// Assert 1: the mutation landed on the snapshot (non-vacuous check).
+	assert.Equal(t, "CORRUPTED", snap.GRPCServices[0].ContractID,
+		"mutation must be visible on the snapshot to confirm the test is non-vacuous")
+
+	// Assert 2: the SAME recorder's internal slice is untainted — proving Snapshot
+	// returned a copy, not an alias.
+	require.Len(t, r.grpcServices, 2)
+	assert.Equal(t, "grpc.svc.v1", r.grpcServices[0].ContractID,
+		"recorder's internal grpcServices[0] must not be corrupted by mutating the snapshot")
+}
