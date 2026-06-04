@@ -1177,3 +1177,74 @@ func TestMigration050_DestructiveDownPermitRejection(t *testing.T) {
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
 		"error code must be ErrValidationFailed for a missing permit")
 }
+
+// ---------------------------------------------------------------------------
+// Migration 051 up-down-up idempotency and DestructiveDownPermit rejection
+// ---------------------------------------------------------------------------
+
+// TestMigration051_UpDownUpIdempotency verifies that running migration 051 Up,
+// then Down (with a DestructiveDownPermit), then Up again leaves the schema in
+// the expected post-051 shape — i.e., config_entries/config_versions/feature_flags
+// have tenant_id and all composite constraints are present. This ensures the
+// Down + Up cycle is safe for dev-reset workflows.
+//
+// Migration 051 is a destructive forward-rebuild (DROP+CREATE) of the three
+// configcore tables; Down drops and recreates the pre-051 schema, so a second
+// Up re-applies the rebuild starting from empty tables (no permit needed on Up).
+func TestMigration051_UpDownUpIdempotency(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// First Up pass: apply all migrations (tables are empty, no permit needed).
+	m1, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_051_idem")
+	require.NoError(t, err)
+	require.NoError(t, m1.Up(ctx), "initial Up() through all migrations must succeed")
+
+	// Verify post-051 shape is correct before Down.
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"VerifyExpectedShape must pass after initial Up()")
+
+	// Down: requires an explicit DestructiveDownPermit.
+	downPermit, dpErr := AllowDestructiveDown("051 up-down-up idempotency test")
+	require.NoError(t, dpErr)
+
+	// Down rolls back the most-recently-applied migration. With 051 as the highest
+	// migration, a single Down rolls it back to version 050, so 051 is the next
+	// pending migration for the second Up pass.
+	m2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_051_idem")
+	require.NoError(t, err)
+
+	// Roll back migration 051 (the destructive config_entries/config_versions/feature_flags rebuild).
+	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 051 must succeed")
+
+	// Second Up pass: from version 050 → re-applies 051 (empty tables → no permit).
+	m3, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_051_idem")
+	require.NoError(t, err)
+	require.NoError(t, m3.Up(ctx),
+		"second Up() (after Down through 051) must succeed (empty tables, no permit needed)")
+
+	// VerifyExpectedShape must pass after the second Up pass.
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"VerifyExpectedShape must pass after up-down-up cycle through migration 051")
+}
+
+// TestMigration051_DestructiveDownPermitRejection verifies that Migrator.Down
+// returns an error when no DestructiveDownPermit is supplied (nil permit), i.e.,
+// the typed-permit gate is enforced for migration 051's destructive Down block.
+func TestMigration051_DestructiveDownPermitRejection(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply all migrations.
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_051_downpermit")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must succeed on a fresh DB")
+
+	// Attempt Down without a permit: must be rejected.
+	downErr := migrator.Down(ctx, nil)
+	require.Error(t, downErr, "Down() without a permit must return an error")
+	var ec *errcode.Error
+	require.True(t, errors.As(downErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"error code must be ErrValidationFailed for a missing permit")
+}

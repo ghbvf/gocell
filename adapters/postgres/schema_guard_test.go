@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"slices"
 	"testing"
 	"testing/fstest"
 
@@ -43,7 +44,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 44 migrations: 001-033 contiguous, plus 040-050 (intentional gap
+	// Currently 45 migrations: 001-033 contiguous, plus 040-051 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -81,9 +82,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// the monotonic stream position for the projection journal ReplaySource/Cursor
 	// (#1368 / W10 PR-04c);
 	// 050 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
-	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered 047→049→050 on merges).
-	assert.Equal(t, int64(50), v,
-		"expected version should be exactly 50 (current migration max — 050 accesscore_tenant_id)")
+	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered 047→049→050 on merges);
+	// 051 rebuilds config_entries/config_versions/feature_flags (DROP+CREATE) adding
+	// tenant_id TEXT NOT NULL for configcore multi-tenancy isolation (EPIC #1337 PR-2b, #1479).
+	assert.Equal(t, int64(51), v,
+		"expected version should be exactly 51 (current migration max — 051_configcore_tenant_id)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -416,5 +419,102 @@ func TestVerifyExpectedShape_RequiresLockoutCountPositiveCheck(t *testing.T) {
 		containsCheck("users", "users_failed_login_count_positive"),
 		"expectedChecks must include users.users_failed_login_count_positive "+
 			"(migration 032 auto-lockout counter non-negativity)",
+	)
+}
+
+// ---------------------------------------------------------------------------
+// TestVerifyExpectedShape_051 — migration 051 full-shape membership checks
+// ---------------------------------------------------------------------------
+
+// containsPK returns true when expectedPKs contains an entry with the given
+// table and columns (order-sensitive, using slices.Equal).
+func containsPK(table string, columns []string) bool {
+	for _, pk := range expectedPKs {
+		if pk.Table == table && slices.Equal(pk.Columns, columns) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestVerifyExpectedShape_Requires051ConfigEntriesColumns verifies that all
+// load-bearing columns for the 051-rebuilt config_entries table are declared
+// in expectedColumns, including the new tenant_id column and the full set of
+// cipher columns from migration 010.
+func TestVerifyExpectedShape_Requires051ConfigEntriesColumns(t *testing.T) {
+	for _, col := range []string{
+		"id", "tenant_id", "key", "value", "sensitive",
+		"version", "created_at", "updated_at",
+		"value_cipher", "value_key_id", "value_edk", "value_nonce",
+	} {
+		col := col
+		t.Run("config_entries/"+col, func(t *testing.T) {
+			assert.True(t, containsColumn("config_entries", col),
+				"expectedColumns must include config_entries.%s (migration 051 rebuild)", col)
+		})
+	}
+}
+
+// TestVerifyExpectedShape_Requires051ConfigVersionsColumns verifies that all
+// load-bearing columns for the 051-rebuilt config_versions table are declared
+// in expectedColumns.
+func TestVerifyExpectedShape_Requires051ConfigVersionsColumns(t *testing.T) {
+	for _, col := range []string{
+		"id", "tenant_id", "config_id", "version", "value", "sensitive",
+		"published_at",
+		"value_cipher", "value_key_id", "value_edk", "value_nonce",
+	} {
+		col := col
+		t.Run("config_versions/"+col, func(t *testing.T) {
+			assert.True(t, containsColumn("config_versions", col),
+				"expectedColumns must include config_versions.%s (migration 051 rebuild)", col)
+		})
+	}
+}
+
+// TestVerifyExpectedShape_Requires051FeatureFlagsColumns verifies that all
+// load-bearing columns for the 051-rebuilt feature_flags table are declared
+// in expectedColumns.
+func TestVerifyExpectedShape_Requires051FeatureFlagsColumns(t *testing.T) {
+	for _, col := range []string{
+		"id", "tenant_id", "key", "enabled", "rollout_percentage",
+		"description", "version", "created_at", "updated_at",
+	} {
+		col := col
+		t.Run("feature_flags/"+col, func(t *testing.T) {
+			assert.True(t, containsColumn("feature_flags", col),
+				"expectedColumns must include feature_flags.%s (migration 051 rebuild)", col)
+		})
+	}
+}
+
+// TestVerifyExpectedShape_Requires051PKs verifies that all three 051-rebuilt
+// tables have their primary key declared in expectedPKs.
+func TestVerifyExpectedShape_Requires051PKs(t *testing.T) {
+	tests := []struct {
+		table   string
+		columns []string
+	}{
+		{"config_entries", []string{"id"}},
+		{"config_versions", []string{"id"}},
+		{"feature_flags", []string{"id"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.table, func(t *testing.T) {
+			assert.True(t, containsPK(tc.table, tc.columns),
+				"expectedPKs must include %s.%v (migration 051 rebuild)", tc.table, tc.columns)
+		})
+	}
+}
+
+// TestVerifyExpectedShape_Requires051FeatureFlagsRolloutCheck verifies that
+// the rollout_percentage BETWEEN 0 AND 100 CHECK constraint for feature_flags
+// is declared in expectedChecks (migration 051 DROP+CREATE rebuild preserves
+// migration 009's rollout_percentage constraint).
+func TestVerifyExpectedShape_Requires051FeatureFlagsRolloutCheck(t *testing.T) {
+	assert.True(t,
+		containsCheck("feature_flags", "feature_flags_rollout_percentage_range"),
+		"expectedChecks must include feature_flags.feature_flags_rollout_percentage_range "+
+			"(migration 051 rebuild — rollout_percentage BETWEEN 0 AND 100)",
 	)
 }

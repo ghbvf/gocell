@@ -451,15 +451,51 @@ var expectedColumns = []expectedColumn{
 	{Table: "users", Column: "failed_login_count", Type: "integer", NotNull: true},
 	{Table: "users", Column: "last_failed_at", Type: pgTypeTSTZ, NotNull: false},
 	{Table: "users", Column: "locked_until", Type: pgTypeTSTZ, NotNull: false},
-	// config_entries / config_versions / feature_flags — PR449-F7 carry-over
-	// gate columns. 051 DROP+CREATE rebuild adds tenant_id TEXT NOT NULL to all
-	// three tables; version column asserted for config_entries + feature_flags
-	// (existence + type + NOT NULL).
+	// config_entries (004_create_config_entries_and_versions.sql + 010_add_config_value_cipher.sql
+	// + 051_configcore_tenant_id.sql DROP+CREATE rebuild).
+	// Full column set registered for the 051 rebuild: tenant_id added NOT NULL,
+	// composite UNIQUE(tenant_id,key)/UNIQUE(tenant_id,id), cipher columns nullable.
+	{Table: "config_entries", Column: "id", Type: "text", NotNull: true},
 	{Table: "config_entries", Column: "tenant_id", Type: "text", NotNull: true}, // 051 NEW
+	{Table: "config_entries", Column: "key", Type: "text", NotNull: true},
+	{Table: "config_entries", Column: "value", Type: "text", NotNull: true},
+	{Table: "config_entries", Column: "sensitive", Type: "boolean", NotNull: true},
 	{Table: "config_entries", Column: "version", Type: "integer", NotNull: true},
+	{Table: "config_entries", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "config_entries", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
+	// Cipher columns (010) — nullable: NULL when sensitive=false, populated when sensitive=true.
+	{Table: "config_entries", Column: "value_cipher", Type: "bytea", NotNull: false},
+	{Table: "config_entries", Column: "value_key_id", Type: "character varying(128)", NotNull: false},
+	{Table: "config_entries", Column: "value_edk", Type: "bytea", NotNull: false},
+	{Table: "config_entries", Column: "value_nonce", Type: "bytea", NotNull: false},
+	// config_versions (004_create_config_entries_and_versions.sql + 010_add_config_value_cipher.sql
+	// + 051_configcore_tenant_id.sql DROP+CREATE rebuild).
+	// Full column set registered; composite FK (tenant_id, config_id) → config_entries(tenant_id, id)
+	// registered in expectedFKs as config_versions_tenant_entry_fk.
+	{Table: "config_versions", Column: "id", Type: "text", NotNull: true},
 	{Table: "config_versions", Column: "tenant_id", Type: "text", NotNull: true}, // 051 NEW
-	{Table: "feature_flags", Column: "tenant_id", Type: "text", NotNull: true},   // 051 NEW
+	{Table: "config_versions", Column: "config_id", Type: "text", NotNull: true},
+	{Table: "config_versions", Column: "version", Type: "integer", NotNull: true},
+	{Table: "config_versions", Column: "value", Type: "text", NotNull: true},
+	{Table: "config_versions", Column: "sensitive", Type: "boolean", NotNull: true},
+	{Table: "config_versions", Column: "published_at", Type: pgTypeTSTZ, NotNull: false},
+	// Cipher columns (010) — nullable.
+	{Table: "config_versions", Column: "value_cipher", Type: "bytea", NotNull: false},
+	{Table: "config_versions", Column: "value_key_id", Type: "character varying(128)", NotNull: false},
+	{Table: "config_versions", Column: "value_edk", Type: "bytea", NotNull: false},
+	{Table: "config_versions", Column: "value_nonce", Type: "bytea", NotNull: false},
+	// feature_flags (008_create_feature_flags.sql + 009_feature_flags_rollout.sql
+	// + 051_configcore_tenant_id.sql DROP+CREATE rebuild).
+	// Full column set registered; rollout_percentage CHECK constraint registered in expectedChecks.
+	{Table: "feature_flags", Column: "id", Type: "text", NotNull: true},
+	{Table: "feature_flags", Column: "tenant_id", Type: "text", NotNull: true}, // 051 NEW
+	{Table: "feature_flags", Column: "key", Type: "text", NotNull: true},
+	{Table: "feature_flags", Column: "enabled", Type: "boolean", NotNull: true},
+	{Table: "feature_flags", Column: "rollout_percentage", Type: "integer", NotNull: true},
+	{Table: "feature_flags", Column: "description", Type: "text", NotNull: true},
 	{Table: "feature_flags", Column: "version", Type: "integer", NotNull: true},
+	{Table: "feature_flags", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "feature_flags", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 	// sessions (018_sessions.sql + 026_restore_sessions_authz_epoch_at_issue.sql)
 	{Table: "sessions", Column: "id", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "subject_id", Type: "uuid", NotNull: true},
@@ -597,6 +633,12 @@ var expectedPKs = []expectedPK{
 	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
 	// reconcile_leases: PK on reconciler_id (046_create_reconcile_leases.sql).
 	{Table: "reconcile_leases", Columns: []string{"reconciler_id"}},
+	// config_entries (051_configcore_tenant_id.sql): PK on id (global opaque ID).
+	{Table: "config_entries", Columns: []string{"id"}},
+	// config_versions (051_configcore_tenant_id.sql): PK on id.
+	{Table: "config_versions", Columns: []string{"id"}},
+	// feature_flags (051_configcore_tenant_id.sql): PK on id.
+	{Table: "feature_flags", Columns: []string{"id"}},
 }
 
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
@@ -835,6 +877,9 @@ var expectedChecks = []expectedCheck{
 	// saga_events (040_create_saga_tables.sql).
 	{Table: "saga_events", Name: "saga_events_kind_range"},
 	{Table: "saga_events", Name: "saga_events_version_positive"},
+	// feature_flags (051_configcore_tenant_id.sql DROP+CREATE rebuild).
+	// rollout_percentage BETWEEN 0 AND 100 is the tenant-scoped flag invariant.
+	{Table: "feature_flags", Name: "feature_flags_rollout_percentage_range"},
 }
 
 // ---------------------------------------------------------------------------
