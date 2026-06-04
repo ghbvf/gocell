@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "command.synth.do.v1.response",
+  "type": "object",
+  "properties": {
+    "commandId": { "type": "string", "format": "uuid" },
+    "status": { "type": "string" }
+  },
+  "required": ["commandId", "status"]
+}

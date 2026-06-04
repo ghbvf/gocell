@@ -4,6 +4,7 @@ package projection
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -89,7 +90,10 @@ func makeReplayWithEntries(t *testing.T, n int) (*MemReplaySource, *MemCursor) {
 		t.Fatalf("NewMemCursor() error = %v", err)
 	}
 	for i := 0; i < n; i++ {
-		entry := mustNewTestEntry(t, clk, "topic.v1")
+		// Seed with the same topic the Coordinator subscribes to (minimalSpec.Topic)
+		// so the per-spec replay filter (#1482) treats every seeded entry as
+		// own-stream and applies it.
+		entry := mustNewTestEntry(t, clk, testEventTopic)
 		src.Append(entry)
 	}
 	return src, cur
@@ -149,6 +153,249 @@ func TestRebuild_ColdFull(t *testing.T) {
 	}
 	if c.Phase() != PhaseLive {
 		t.Errorf("Phase = %v, want PhaseLive", c.Phase())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_PerSpecTopicFilter — #1482 per-spec replay filter
+// ---------------------------------------------------------------------------
+
+// TestRebuild_PerSpecTopicFilter verifies the #1482 per-spec replay filter: a
+// rebuild over a whole-journal source that interleaves foreign streams must
+// invoke the business Apply ONLY for entries whose routing topic matches the
+// subscribed spec.Topic, while the checkpoint still advances past foreign
+// entries so catchup can reach the whole-journal head (even when the trailing
+// journal entry belongs to another stream).
+func TestRebuild_PerSpecTopicFilter(t *testing.T) {
+	t.Parallel()
+	// Guard the implicit cross-file contract this test relies on: the seeded
+	// own-stream entries use testEventTopic and the Coordinator subscribes via
+	// minimalSpec, so their topics MUST agree — otherwise the per-spec filter
+	// would treat EVERY entry as foreign and the apply-count assertion below would
+	// fail with a misleading "got 0" instead of pointing at the topic drift.
+	if got := minimalSpec("projection.p1.v1").Topic; got != testEventTopic {
+		t.Fatalf("test invariant broken: minimalSpec topic %q != testEventTopic %q; "+
+			"realign the seed topics with the subscribed spec", got, testEventTopic)
+	}
+	clk := clockmock.New(time.Now())
+	src := NewMemReplaySource()
+	cur, err := NewMemCursor(src)
+	if err != nil {
+		t.Fatalf("NewMemCursor: %v", err)
+	}
+
+	// Interleave own-stream (testEventTopic) and foreign-stream entries. Positions
+	// are assigned by insertion index (1..4); the LAST entry is foreign to prove
+	// the checkpoint advances to head over a trailing foreign entry.
+	const foreignTopic = "other.stream.v1"
+	src.Append(mustNewTestEntry(t, clk, testEventTopic)) // pos 1 — own
+	src.Append(mustNewTestEntry(t, clk, foreignTopic))   // pos 2 — foreign
+	src.Append(mustNewTestEntry(t, clk, testEventTopic)) // pos 3 — own
+	src.Append(mustNewTestEntry(t, clk, foreignTopic))   // pos 4 — foreign
+
+	store := NewMemCheckpointStore()
+	var applied int32
+	apply := func(_ context.Context, e outbox.Entry) error {
+		atomic.AddInt32(&applied, 1)
+		if e.RoutingTopic() != testEventTopic {
+			t.Errorf("business Apply called with foreign topic %q; per-spec filter must gate it out", e.RoutingTopic())
+		}
+		return nil
+	}
+
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, store: store, cursor: cur, replay: src})
+	subscribeWithDefaults(t, c, apply)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitForPhase(t, c, PhaseLive)
+
+	if got := atomic.LoadInt32(&applied); got != 2 {
+		t.Errorf("apply count = %d, want 2 (only own-stream entries reach the business Apply)", got)
+	}
+	head, _ := src.Head(context.Background())
+	cp, _ := store.LoadOffset(context.Background(), "testcell", "p1")
+	if cp != head {
+		t.Errorf("checkpoint = %d, want %d (head — checkpoint advances past foreign entries)", cp, head)
+	}
+}
+
+// TestAdvanceOffsetPastForeign_ErrorBranches covers the foreign-stream
+// checkpoint-advance error paths (#1482): a load/cursor failure or 1-based
+// violation surfaces via the shared resolvePosition, a SaveOffset failure
+// surfaces as projection.rebuild[foreign-save], and an already-applied position
+// is a silent no-op skip.
+func TestAdvanceOffsetPastForeign_ErrorBranches(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	entry := mustNewTestEntry(t, clk, "other.stream.v1")
+
+	tests := []struct {
+		name      string
+		store     CheckpointStore
+		cursor    Cursor
+		wantErr   bool
+		wantPerm  bool
+		errSubstr string
+	}{
+		{
+			name:      "LoadOffset error",
+			store:     &seededStore{offsets: map[string]int64{}, loadErr: errors.New("load boom")},
+			cursor:    &fakeCursor{pos: 5},
+			wantErr:   true,
+			errSubstr: "projection.position[load]",
+		},
+		{
+			name:      "Position error",
+			store:     NewMemCheckpointStore(),
+			cursor:    &fakeCursor{pos: 5, err: errors.New("cursor boom")},
+			wantErr:   true,
+			errSubstr: "projection.position[cursor]",
+		},
+		{
+			name:      "non-positive position is a permanent error",
+			store:     NewMemCheckpointStore(),
+			cursor:    &fakeCursor{pos: 0},
+			wantErr:   true,
+			wantPerm:  true,
+			errSubstr: "projection.position",
+		},
+		{
+			name:      "SaveOffset error",
+			store:     &errSaveStore{currentOffset: 0, saveErr: errors.New("save boom")},
+			cursor:    &fakeCursor{pos: 5},
+			wantErr:   true,
+			errSubstr: "projection.rebuild[foreign-save]",
+		},
+		{
+			name:    "already-applied position is a no-op skip",
+			store:   newSeededStore("testcell", "p1", 5),
+			cursor:  &fakeCursor{pos: 5}, // pos <= current(5) → skip, no SaveOffset
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newCoordinatorFull(t, coordinatorFullParams{
+				clk: clk, store: tc.store, cursor: tc.cursor, replay: NewMemReplaySource(),
+			})
+			err := c.advanceOffsetPastForeign(context.Background(), entry)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.errSubstr)
+			}
+			if tc.wantPerm {
+				var pe *outbox.PermanentError
+				if !errors.As(err, &pe) {
+					t.Errorf("expected *outbox.PermanentError, got %T", err)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_ForeignDuringCatchup (#1574 C1 / F1) — a foreign-stream entry that
+// arrives AFTER head0 (during the catchup window) must not strand the rebuild.
+//
+// Regression for the catchup-termination hang: the pre-fix catchup opened the
+// gate and polled `checkpoint >= whole-journal Head`, relying on the topic-routed
+// live handler to advance the checkpoint. A foreign entry appended during catchup
+// raises the whole-journal Head but the live handler never sees it, so the poll
+// spun forever. The fix drains (head0, head1] itself (gate shut, advance past
+// foreign — like Marten's high-water gap skip), so the bounded drain reaches
+// head1 and the rebuild reaches PhaseLive.
+// ---------------------------------------------------------------------------
+
+// growHeadReplaySource wraps a MemReplaySource but reports head0 on the FIRST
+// Head call (the rebuild's captureHead) and the inner (grown) head on every
+// subsequent call (catchup). Replay/position delegate to inner, so the trailing
+// foreign entry the test seeds is consistent for the cursor yet sits outside the
+// replay cutoff — modeling "a foreign entry arrived during catchup".
+type growHeadReplaySource struct {
+	inner    *MemReplaySource
+	mu       sync.Mutex
+	headCall int
+	head0    int64
+}
+
+func (s *growHeadReplaySource) Replay(ctx context.Context, from int64, fn func(outbox.Entry) error) error {
+	return s.inner.Replay(ctx, from, fn)
+}
+
+func (s *growHeadReplaySource) Head(ctx context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.headCall++
+	if s.headCall == 1 {
+		return s.head0, nil // captureHead sees only the replay prefix
+	}
+	return s.inner.Head(ctx) // catchup sees the grown head (the trailing foreign entry)
+}
+
+var _ ReplaySource = (*growHeadReplaySource)(nil)
+
+func TestRebuild_ForeignDuringCatchup(t *testing.T) {
+	t.Parallel()
+	if got := minimalSpec("projection.p1.v1").Topic; got != testEventTopic {
+		t.Fatalf("test invariant broken: minimalSpec topic %q != testEventTopic %q", got, testEventTopic)
+	}
+	clk := clockmock.New(time.Now())
+	inner := NewMemReplaySource()
+	const foreignTopic = "other.stream.v1"
+	// Replay prefix: two own-stream entries (pos 1,2); head0 = 2.
+	inner.Append(mustNewTestEntry(t, clk, testEventTopic)) // pos 1 — own
+	inner.Append(mustNewTestEntry(t, clk, testEventTopic)) // pos 2 — own
+	// Trailing FOREIGN entry (pos 3): present in the inner source for Replay/cursor
+	// resolution, but hidden behind head0 until the catchup Head call reveals it.
+	inner.Append(mustNewTestEntry(t, clk, foreignTopic)) // pos 3 — foreign, "arrives" during catchup
+
+	cur, err := NewMemCursor(inner)
+	if err != nil {
+		t.Fatalf("NewMemCursor: %v", err)
+	}
+	src := &growHeadReplaySource{inner: inner, head0: 2}
+	store := NewMemCheckpointStore()
+
+	var applied int32
+	apply := func(_ context.Context, e outbox.Entry) error {
+		atomic.AddInt32(&applied, 1)
+		if e.RoutingTopic() != testEventTopic {
+			t.Errorf("business Apply called with foreign topic %q; per-spec filter must gate it out", e.RoutingTopic())
+		}
+		return nil
+	}
+
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, store: store, cursor: cur, replay: src})
+	subscribeWithDefaults(t, c, apply)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	// The bounded catchup drain MUST reach PhaseLive. Under the pre-fix open-gate
+	// poll this hung (checkpoint stalled at 2 while whole-journal Head=3) and this
+	// wait would time out.
+	waitForPhase(t, c, PhaseLive)
+
+	if got := atomic.LoadInt32(&applied); got != 2 {
+		t.Errorf("apply count = %d, want 2 (only the two own-stream entries reach the business Apply)", got)
+	}
+	head, _ := inner.Head(context.Background())
+	cp, _ := store.LoadOffset(context.Background(), "testcell", "p1")
+	if cp != head {
+		t.Errorf("checkpoint = %d, want %d (catchup advanced past the foreign entry that arrived during catchup)", cp, head)
 	}
 }
 
@@ -765,7 +1012,7 @@ func TestRebuild_OnResetError_GateReopened(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRebuild_CatchupPaths — non-fatal isCaughtUp error + ctx-cancel paths
+// TestRebuild_CatchupPaths — non-fatal catchup Head-error + ctx-cancel paths
 // (finding #20)
 // ---------------------------------------------------------------------------
 
@@ -792,9 +1039,9 @@ func (s *catchupErrReplaySource) Replay(_ context.Context, _ int64, _ func(outbo
 	return nil
 }
 
-// TestRebuild_CatchupIsCaughtUpError asserts that a Head/LoadOffset error during
-// catchup is non-fatal: phase returns to Live without blocking.
-func TestRebuild_CatchupIsCaughtUpError(t *testing.T) {
+// TestRebuild_CatchupHeadError asserts that a Head error at catchup start (the
+// head1 cutoff capture) is non-fatal: phase returns to Live without blocking.
+func TestRebuild_CatchupHeadError(t *testing.T) {
 	t.Parallel()
 	// Arrange: on Head call 1 (captureHead) return 0; on call 2+ (catchup) return error.
 	catchupSrc := &catchupErrReplaySource{failAt: 2, headErr: errors.New("head transient error")}
@@ -825,7 +1072,7 @@ func TestRebuild_CatchupIsCaughtUpError(t *testing.T) {
 	// Non-fatal path must resolve to PhaseLive.
 	waitForPhase(t, c, PhaseLive)
 	if c.Phase() != PhaseLive {
-		t.Errorf("Phase = %v, want PhaseLive after catchup isCaughtUp error", c.Phase())
+		t.Errorf("Phase = %v, want PhaseLive after catchup Head error", c.Phase())
 	}
 }
 

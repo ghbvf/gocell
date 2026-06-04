@@ -544,37 +544,6 @@ func TestBuildContractSpec_EmptyTransports(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_CommandKind_GracefulSkip verifies that kind=command is
-// accepted without error. command and projection are in the closed set but do not
-// yet have full generators — only types_gen.go + iface_gen.go are emitted.
-func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
-	p := &metadata.ProjectMeta{
-		Contracts: map[string]*metadata.ContractMeta{
-			"command.foo.bar.v1": {
-				ID:         "command.foo.bar.v1",
-				Kind:       "command",
-				Codegen:    true,
-				Transports: []string{"amqp"}, // mirrors parser defaultTransportsForKind("command")
-			},
-		},
-	}
-	root := findRepoRoot()
-	spec, err := buildContractSpec(root, p, "command.foo.bar.v1")
-	if err != nil {
-		t.Fatalf("buildContractSpec should not error for kind=command (graceful skip), got: %v", err)
-	}
-	if spec == nil || spec.Kind != "command" {
-		t.Errorf("expected spec with Kind=command, got: %v", spec)
-	}
-	// No Endpoint or Event fields populated for command kind.
-	if spec.Endpoint != nil {
-		t.Errorf("spec.Endpoint should be nil for kind=command, got non-nil")
-	}
-	if spec.Event != nil {
-		t.Errorf("spec.Event should be nil for kind=command, got non-nil")
-	}
-}
-
 // TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
 // closed set (http | event | command | projection | webhook | grpc | saga) returns an error.
 func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {

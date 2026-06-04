@@ -276,10 +276,13 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 // Contracts are opted into codegen by default; `codegen: false` in
 // contract.yaml is the only way to opt out.
 // For every opted-in contract:
-//   - generated/<kind>/<...>/v<N>/types_gen.go must exist
-//   - generated/<kind>/<...>/v<N>/iface_gen.go must exist
+//   - generated/<kind>/<...>/v<N>/types_gen.go must exist (all kinds)
+//   - generated/<kind>/<...>/v<N>/iface_gen.go must exist (all kinds EXCEPT command)
 //   - generated/<kind>/<...>/v<N>/handler_gen.go must exist (kind=http only)
 //   - generated/<kind>/<...>/v<N>/saga_gen.go must exist (kind=saga only)
+//   - generated/<kind>/<...>/v<N>/command_gen.go must exist (kind=command only;
+//     command skips iface_gen.go — the typed Handler interface + Register/Dispatch
+//     dispatch funnel live in command_gen.go, mirroring saga_gen.go)
 func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -300,7 +303,20 @@ func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 		}
 		pkgDir := filepath.Join(root, contractIDToExpectedPkgPath(contract.ID))
 
+		// types_gen.go is universal across every codegen kind.
 		requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "types_gen.go"), contract.ID)
+
+		// kind=command emits command_gen.go INSTEAD OF iface_gen.go: the typed
+		// Handler interface + Register/Dispatch dispatch funnel live in
+		// command_gen.go (mirroring saga_gen.go); emitting iface_gen.go would
+		// create a duplicate Service interface conflict. This matches contractgen
+		// generateOneContract (iface_gen.go is gated `spec.Kind != "command"`) and
+		// command.tmpl.
+		if contract.Kind == "command" {
+			requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "command_gen.go"), contract.ID)
+			continue
+		}
+
 		requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "iface_gen.go"), contract.ID)
 		if contract.Kind == "http" {
 			requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "handler_gen.go"), contract.ID)

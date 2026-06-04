@@ -8,7 +8,9 @@ disable-model-invocation: true
 
 # GoCell PR Review — 自动分级六维度审查
 
-按 PR diff 净增删行数自动分配 2/3/6 个 `reviewer` agent 并行做六维度审查（< 200 行不派发，主 agent 自审），主 agent 做根因聚类与修复分流建议。**只 review，不自动 fix**。
+按 PR diff 净增删行数自动分配 2/3/6 个 `reviewer` agent 并行做六维度审查（< 200 行不派发，主 agent 自审），主 agent 做根因聚类与修复分流建议。**只 review，不自动 fix**（贴评论=留痕，不算改代码）。
+
+> 所有 `gh` 命令用 `dangerouslyDisableSandbox: true`（CLAUDE.md 全局总则）。
 
 ---
 
@@ -27,7 +29,7 @@ disable-model-invocation: true
 gh pr view <N> --json additions,deletions --jq '.additions + .deletions'
 ```
 
-`gh` 命令须 `dangerouslyDisableSandbox: true`。取不到 PR → 报错退出。
+取不到 PR → 报错退出。
 
 ---
 
@@ -54,17 +56,9 @@ WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
 
 ## 阶段 3：分级表
 
-区间左闭右开，边界归更高档。
+**派发档位（reviewer 数 + 维度切分）单源 = `.claude/agents/reviewer.md` §派发分档**，按阶段 2 的 diff 行数定档（区间左闭右开，边界归更高档）。
 
-**`diff < 200`**：不派发 sub-agent，主 agent 在自身上下文按 `.claude/agents/reviewer.md` 的六维度 / Finding 格式 / Cx 分级，在 `$WORKTREE` 上 Read/Grep 完成审查，直接进入阶段 5。
-
-**`diff ≥ 200`** 按下表派发：
-
-| diff 行数 | reviewer 数 | 维度切分 |
-|-----------|------------|---------|
-| `200 ≤ diff < 600` | 2 | A：架构合规 + 测试 + 产品；B：安全 + 运维可观测 + DX |
-| `600 ≤ diff < 1500` | 3 | A：架构合规 + 测试；B：安全 + 产品；C：运维可观测 + DX |
-| `diff ≥ 1500` | 6 | 六维度各 1 agent |
+pr-review 的 `diff < 200` 约定：不派发 sub-agent，主 agent 在自身上下文按 reviewer.md（六维度 / Finding 格式 / 评级）+ PROJECT.md §3 评级 rubric，在 `$WORKTREE` 上 Read/Grep 自审，直接进入阶段 5。`diff ≥ 200` 按 §派发分档 派 2/3/6 个 reviewer。
 
 ---
 
@@ -76,11 +70,11 @@ WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
 
 每个 sub-agent prompt 必须自包含：
 
-- PR 编号 + 取 diff 命令 `gh pr diff <N>` / `gh pr view <N> --json title,body,files,headRefOid`（**`gh` 须 `dangerouslyDisableSandbox: true`**）
+- PR 编号 + 取 diff 命令 `gh pr diff <N>` / `gh pr view <N> --json title,body,files,headRefOid`
 - 工作目录 `$WORKTREE` 绝对路径，所有 Read/Grep 路径前缀 `$WORKTREE/`
 - Finding 输出的 `文件:行号` 必须是 **repo-relative**（去掉 `$WORKTREE/` 与 `worktrees/<name>/` 前缀），便于主 agent 汇总后排版
-- 分配的维度子集（阶段 3 表格）
-- 必读：CLAUDE.md + `.claude/rules/gocell/*.md`
+- 分配的维度子集（见 reviewer.md §派发分档）
+- 必读：CLAUDE.md + `.claude/rules/gocell/*.md` + `.github/project-template/PROJECT.md` §3（P/Cx 评级单源）
 - Finding 格式、Cx 分级、输出契约 → 沿用 `.claude/agents/reviewer.md`
 
 ---
@@ -104,9 +98,9 @@ WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
 
 每簇标注：涉及维度 / Finding 数（按 P 级拆分）/ 系统性（Grep 数）/ 整簇 Cx（按整簇改动量重评）。
 
-### 5.3 输出 5 块（顺序固定）
+### 5.3 输出 5 块（**先打印到对话窗口给用户**，顺序固定）
 
-**输出语言**：中文。
+**输出语言**：中文。**这 5 块是主交付物——必须先在对话/窗口完整打印给用户看**（阶段 6 再把同一份内容贴成 PR 评论留痕，**不替代窗口打印**）。
 
 1. **根因簇视图**（主输出）— 每簇：根因一句 / 维度 / Finding 数 / 系统性 / 整簇 Cx / 子 Finding ID / 修复顺序建议
 2. **Finding 详表** — list 形式（不用表格，避免 CJK 竖排）。按 P0→P2、同级 Cx1→Cx4 排序，每条两行：
@@ -115,15 +109,26 @@ WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
 3. **复杂度汇总** — 按根因簇 + 按 Finding 两套：`Cx1: N / Cx2: N / Cx3: N / Cx4: N`
 4. **修复分流** — Cx1/Cx2 簇 → `/fix`；Cx3/Cx4 簇 → "需人工决策" + 三级方案种子（最小/彻底/重构）。若 PR body（阶段 4 已取）含 GitHub closing keyword（`close[sd]?` / `fix(e[sd])?` / `resolve[sd]?` / `refs`，大小写不敏感）后跟 `#<N>`，分流条目附 `← issue #<N>`
 5. **总体结论** — `通过 / 需修复 / 需讨论` + 一句话理由
-6. PR编号；Worktree文件夹；AI Agent会话ID
+
 输出前自检：① 每个根因簇都 Read 过代表文件？② 根因到了根本层（不停在症状）？③ 系统性判定有 Grep 证据？— 任一不通过 → 补做。
+
+---
+
+## 阶段 6：贴 PR 评论（留痕，**不替代阶段 5 的窗口打印**）
+
+阶段 5 的五块**已打印到窗口后**，把**同一份内容**写进 `.github/project-template/pr-comment.md` 的 `<!-- pm:pr-review -->` 模板，**额外**贴成 PR 评论留痕——**窗口打印是主输出、贴评论是留痕，两者都要做，缺一不可**（评论即 review 结果，不做有损浓缩：每条 Finding 带 `file:line`，证据/建议/根因/方案种子入 `<details>` 供 `/fix` 无损提取），贴到 PR：
+
+```bash
+gh pr comment <N> --body-file <填好的 pm:pr-review 模板>
+```
+
+贴失败则报错退出，不静默跳过。footer 格式见 `.github/project-template/pr-comment.md`（PR#/工具/分支/worktree/session，AI 自填）。
 
 ---
 
 ## 约束
 
-- 不调用 `/fix`，不写代码，不评 CI
-- `gh` 命令 `dangerouslyDisableSandbox: true`
+- 不调用 `/fix`，不写代码，不评 CI（贴 pm:pr-review 评论=留痕，不算改代码）
 
 ---
 
@@ -133,3 +138,4 @@ WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
 2. 分级处理：`diff < 200` 主 agent 自审不派发；`diff ≥ 200` 按行数派 2/3/6 个 reviewer agent（覆盖三档）
 3. 无 worktree 自动创建 `worktrees/review-pr<N>`；既有 worktree 复用，不重建
 4. 主 agent 输出含 Read/Grep 证据 + 根因簇视图先于 Finding 详表；维度名内部一致
+5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer + 每条 finding 的 file:line）

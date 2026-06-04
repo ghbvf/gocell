@@ -97,3 +97,40 @@ func TestEventOrderCreatedV1Apply(t *testing.T) {
 	var pe *outbox.PermanentError
 	assert.True(t, errors.As(badErr, &pe), "undecodable payload must be a PermanentError")
 }
+
+// TestEventOrderStatusChangedV1Apply verifies the projection apply contract for
+// event.order-status-changed.v1 (the order_transition subscribe declared in
+// slice.yaml — #1574 F3): HandleOrderStatusChanged correctly processes conforming
+// payloads (returns nil, advances the latest sub-view) and rejects invalid ones
+// (returns permanent error). Without this, the slice.yaml
+// `contract.event.order-status-changed.v1.subscribe` verify target had no
+// executable consumer contract test backing it.
+func TestEventOrderStatusChangedV1Apply(t *testing.T) {
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
+	c := contracttest.LoadByID(t, root, "event.order-status-changed.v1")
+
+	ctx := context.Background()
+	svc, err := NewService()
+	require.NoError(t, err)
+
+	// positive: valid payload (all schema-required fields) must return nil
+	validPayload := []byte(`{"id":"order-ct-1","oldStatus":"pending","newStatus":"active"}`)
+	c.ValidatePayload(t, validPayload)
+
+	applyErr := svc.HandleOrderStatusChanged(ctx, outboxtest.NewEntry("event.order-status-changed.v1", validPayload))
+	assert.NoError(t, applyErr, "HandleOrderStatusChanged must return nil for valid payload")
+
+	// the transition feeds the latest sub-view; Query's union counts the order
+	summary := svc.Query(ctx)
+	assert.Equal(t, int64(1), summary.TotalOrders)
+
+	// negative: payload missing a required field (id) must be rejected by schema
+	c.MustRejectPayload(t, []byte(`{"oldStatus":"pending","newStatus":"active"}`))
+
+	// negative: invalid JSON must return permanent error
+	badEntry := outboxtest.NewEntry("event.order-status-changed.v1", []byte("not-json"))
+	badErr := svc.HandleOrderStatusChanged(ctx, badEntry)
+	require.Error(t, badErr)
+	var pe *outbox.PermanentError
+	assert.True(t, errors.As(badErr, &pe), "undecodable payload must be a PermanentError")
+}

@@ -3,7 +3,6 @@ package orderprojection_test
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +10,7 @@ import (
 
 	orderprojection "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
+	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
@@ -21,6 +21,15 @@ import (
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	testtime "github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+)
+
+// topicOrderCreated / topicOrderStatusChanged mirror the production routing
+// topics (= generated spec.Topic = producer WithTopic). The per-spec replay
+// filter applies an entry only when its RoutingTopic() equals the subscribed
+// spec.Topic, so the test entries and specs must agree on these values.
+const (
+	topicOrderCreated       = "event.order-created.v1"
+	topicOrderStatusChanged = "event.order-status-changed.v1"
 )
 
 // nopLifecycleTracer is a no-op wrapper.Tracer for the lifecycle test.
@@ -69,112 +78,162 @@ func (r *lifecycleRegistrar) Subscribe(
 	return nil
 }
 
-func appendAndReturn(t *testing.T, src *projection.MemReplaySource, id, status string) outbox.Entry {
+func eventSpec(id, topic string) contractspec.ContractSpec {
+	return contractspec.ContractSpec{ID: id, Kind: "event", Transport: "amqp", Topic: topic}
+}
+
+// newProjectionCoord builds a Coordinator for one projection over the shared
+// whole-journal replay source and returns it plus its registered live handler.
+func newProjectionCoord(
+	t *testing.T,
+	projectionID string,
+	store projection.CheckpointStore,
+	replay projection.ReplaySource,
+	cursor projection.Cursor,
+	spec contractspec.ContractSpec,
+	apply projection.Apply,
+	onReset projection.OnReset,
+) (*projection.Coordinator, outbox.EntryHandler) {
 	t.Helper()
-	payload := ordercreated.Payload{ID: id, Item: "widget", Status: status}
-	b, err := json.Marshal(payload)
+	reg := &lifecycleRegistrar{}
+	coord, err := projection.NewCoordinator(clock.Real(), projection.CoordinatorConfig{
+		Registrar:    reg,
+		CellID:       "ordercell",
+		ProjectionID: projectionID,
+		TxRunner:     lifecycleDemoTxRunner{},
+		Store:        store,
+		Cursor:       cursor,
+		Replay:       replay,
+		Tracer:       nopLifecycleTracer{},
+	})
 	require.NoError(t, err)
-	e := outboxtest.NewEntry("event.order-created.v1", b)
+	require.NoError(t, coord.Subscribe(context.Background(), spec, apply, projection.WithOnReset(onReset)))
+	require.NotNil(t, reg.handler, "coordinator must register an event handler")
+	return coord, reg.handler
+}
+
+func appendCreated(t *testing.T, src *projection.MemReplaySource, id, status string) outbox.Entry {
+	t.Helper()
+	b, err := json.Marshal(ordercreated.Payload{ID: id, Item: "widget", Status: status})
+	require.NoError(t, err)
+	e := outboxtest.NewEntry(topicOrderCreated, b)
 	src.Append(e)
 	return e
 }
 
-// TestOrderProjection_HarnessLifecycle verifies:
-//  1. Cold-start: the Coordinator's registered handler calls HandleOrderCreated
-//     and advances the checkpoint offset.
-//  2. Rebuild: onReset (ResetOrderStatus) clears the read model; replay
-//     reconstructs a byte-identical Query snapshot.
-func TestOrderProjection_HarnessLifecycle(t *testing.T) {
+func appendStatusChanged(t *testing.T, src *projection.MemReplaySource, id, oldStatus, newStatus string) outbox.Entry {
+	t.Helper()
+	b, err := json.Marshal(orderstatuschanged.Payload{ID: id, OldStatus: oldStatus, NewStatus: newStatus})
+	require.NoError(t, err)
+	e := outboxtest.NewEntry(topicOrderStatusChanged, b)
+	src.Append(e)
+	return e
+}
+
+// currentStatusOf returns the composed current status of an order in the summary
+// (the bucket containing it), or "" if absent.
+func currentStatusOf(s orderprojection.Summary, orderID string) string {
+	for _, b := range s.Statuses {
+		for _, id := range b.OrderIDs {
+			if id == orderID {
+				return b.Status
+			}
+		}
+	}
+	return ""
+}
+
+// TestOrderProjection_FanInLifecycle verifies the #1482 multi-stream fan-in:
+//  1. Two single-stream projections (order_status from order-created,
+//     order_transition from order-status-changed) feed one composed read model.
+//  2. A status transition moves an order between status buckets at query time.
+//  3. Rebuilding ONE projection does not wipe the other's sub-view (disjoint
+//     reset) — the transition survives a order_status rebuild, and the created
+//     view survives a order_transition rebuild — thanks to the per-spec replay
+//     filter skipping foreign streams while advancing the checkpoint.
+func TestOrderProjection_FanInLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	checkpointStore := projection.NewMemCheckpointStore()
-	replaySource := projection.NewMemReplaySource()
+	replaySource := projection.NewMemReplaySource() // shared whole-journal source
 	cursor, err := projection.NewMemCursor(replaySource)
 	require.NoError(t, err)
 
 	svc, err := orderprojection.NewService()
 	require.NoError(t, err)
 
-	reg := &lifecycleRegistrar{}
+	createdCoord, createdHandler := newProjectionCoord(t, "order_status",
+		checkpointStore, replaySource, cursor,
+		eventSpec(topicOrderCreated, topicOrderCreated),
+		svc.HandleOrderCreated, svc.ResetOrderStatus)
 
-	coord, err := projection.NewCoordinator(clock.Real(), projection.CoordinatorConfig{
-		Registrar:    reg,
-		CellID:       "ordercell",
-		ProjectionID: "order_status",
-		TxRunner:     lifecycleDemoTxRunner{},
-		Store:        checkpointStore,
-		Cursor:       cursor,
-		Replay:       replaySource,
-		Tracer:       nopLifecycleTracer{},
-	})
-	require.NoError(t, err)
+	transitionCoord, transitionHandler := newProjectionCoord(t, "order_transition",
+		checkpointStore, replaySource, cursor,
+		eventSpec(topicOrderStatusChanged, topicOrderStatusChanged),
+		svc.HandleOrderStatusChanged, svc.ResetOrderTransition)
 
-	spec := contractspec.ContractSpec{
-		ID:        "event.order-created.v1",
-		Kind:      "event",
-		Transport: "amqp",
-		Topic:     "order-created.v1",
-	}
+	// -- Phase 1: cold-start live delivery (both streams) --
+	eCreatedA := appendCreated(t, replaySource, "order-A", "pending")
+	eCreatedB := appendCreated(t, replaySource, "order-B", "pending")
+	assert.Equal(t, outbox.DispositionAck, createdHandler(ctx, eCreatedA).Disposition)
+	assert.Equal(t, outbox.DispositionAck, createdHandler(ctx, eCreatedB).Disposition)
 
-	err = coord.Subscribe(ctx, spec,
-		func(ctx context.Context, e outbox.Entry) error {
-			return svc.HandleOrderCreated(ctx, e)
-		},
-		projection.WithOnReset(svc.ResetOrderStatus),
-	)
-	require.NoError(t, err)
-	require.NotNil(t, reg.handler, "coordinator must register an event handler")
-
-	// -- Phase 1: cold-start apply --
-	e1 := appendAndReturn(t, replaySource, "order-A", "pending")
-	e2 := appendAndReturn(t, replaySource, "order-B", "confirmed")
-
-	// Simulate live delivery through the registered handler (gate is open on cold-start)
-	res1 := reg.handler(ctx, e1)
-	assert.Equal(t, outbox.DispositionAck, res1.Disposition, "apply order-A must ack")
-	res2 := reg.handler(ctx, e2)
-	assert.Equal(t, outbox.DispositionAck, res2.Disposition, "apply order-B must ack")
+	// order-A transitions pending → confirmed; order-B stays pending.
+	eConfirmA := appendStatusChanged(t, replaySource, "order-A", "pending", "confirmed")
+	assert.Equal(t, outbox.DispositionAck, transitionHandler(ctx, eConfirmA).Disposition)
 
 	before := svc.Query(ctx)
-	assert.Equal(t, int64(2), before.TotalOrders)
+	assert.Equal(t, int64(2), before.TotalOrders, "two orders total")
+	assert.Equal(t, "confirmed", currentStatusOf(before, "order-A"), "order-A reflects the status transition")
+	assert.Equal(t, "pending", currentStatusOf(before, "order-B"), "order-B stays pending")
 
-	offset, err := checkpointStore.LoadOffset(ctx, "ordercell", "order_status")
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), offset, "checkpoint must equal head (2) after two applies")
+	// -- Exactly-once: re-deliver the transition; latest map is idempotent --
+	assert.Equal(t, outbox.DispositionAck, transitionHandler(ctx, eConfirmA).Disposition, "re-deliver acks")
+	assert.Equal(t, before.TotalOrders, svc.Query(ctx).TotalOrders, "re-deliver does not change totals")
 
-	// -- B3: exactly-once skip — re-deliver e1, projection must ack but not double-count --
-	res1again := reg.handler(ctx, e1)
-	assert.Equal(t, outbox.DispositionAck, res1again.Disposition, "re-deliver order-A must ack (idempotent gate)")
-	afterSkip := svc.Query(ctx)
-	assert.Equal(t, int64(2), afterSkip.TotalOrders, "re-deliver must not increase TotalOrders (exactly-once)")
+	// -- Bad payloads → permanent reject on both handlers --
+	assert.Equal(t, outbox.DispositionReject,
+		createdHandler(ctx, outboxtest.NewEntry(topicOrderCreated, []byte("not-json"))).Disposition)
+	assert.Equal(t, outbox.DispositionReject,
+		transitionHandler(ctx, outboxtest.NewEntry(topicOrderStatusChanged, []byte("not-json"))).Disposition)
 
-	// -- B4: bad-payload → permanent --
-	badEntry := outboxtest.NewEntry("event.order-created.v1", []byte("not-json"))
-	resBad := reg.handler(ctx, badEntry)
-	assert.Equal(t, outbox.DispositionReject, resBad.Disposition, "bad payload must be rejected (permanent error)")
-
-	// -- B5: business-read not blocked during rebuild —
-	// Query must return synchronously without blocking; call it directly and assert
-	// it completes (a synchronous call that returns is sufficient proof).
-	// We verify this before coord.Rebuild so we are in the normal PhaseLive state.
-	readableBeforeRebuild := svc.Query(ctx)
-	assert.GreaterOrEqual(t, readableBeforeRebuild.TotalOrders, int64(0), "Query must return without blocking")
-
-	// -- Phase 2: Rebuild → onReset → replay → byte-identical snapshot --
-	err = coord.Rebuild(ctx)
-	require.NoError(t, err)
-
-	// Wait for coordinator to return to PhaseLive (rebuild is async).
-	// Sanctioned poll via testwait.External (TEST-SLEEP-DISCIPLINE-01).
-	testwait.External(t, "orderprojection-lifecycle-wait-for-phase",
-		func() bool { return coord.Phase() == projection.PhaseLive },
+	// -- Phase 2: rebuild ONLY order_status. Its onReset clears the created
+	// sub-view; replay over the shared whole-journal source re-applies the two
+	// order-created entries and SKIPS the foreign order-status-changed entry
+	// (per-spec filter). The transition sub-view (latest) is untouched, so the
+	// composed query must still show order-A as confirmed. --
+	require.NoError(t, createdCoord.Rebuild(ctx))
+	testwait.External(t, "orderprojection-rebuild-order-status",
+		func() bool { return createdCoord.Phase() == projection.PhaseLive },
 		testtime.EventuallyLong, testtime.FastPoll, "phase != PhaseLive")
-	assert.Equal(t, projection.PhaseLive, coord.Phase(), "coordinator must return to PhaseLive after rebuild")
 
 	after := svc.Query(ctx)
-	assert.True(t, reflect.DeepEqual(before.Statuses, after.Statuses),
-		"rebuild must reproduce identical Statuses\nbefore: %+v\nafter:  %+v",
-		before.Statuses, after.Statuses)
-	assert.Equal(t, before.TotalOrders, after.TotalOrders, "rebuild must reproduce identical TotalOrders")
+	assert.Equal(t, before.TotalOrders, after.TotalOrders,
+		"rebuilding order_status must not change order count")
+	assert.Equal(t, "confirmed", currentStatusOf(after, "order-A"),
+		"order-A's transition must SURVIVE a order_status rebuild (disjoint reset + per-spec filter)")
+	assert.Equal(t, "pending", currentStatusOf(after, "order-B"),
+		"order-B remains pending after rebuild")
+
+	// -- Phase 3 (reverse direction): rebuild ONLY order_transition. Its onReset
+	// clears the transition (latest) sub-view; replay re-applies the
+	// order-status-changed entry and SKIPS the foreign order-created entries. The
+	// created sub-view is untouched, so order-B (created-only, never transitioned)
+	// must still be pending and order-A still confirmed. This proves disjoint
+	// reset holds in BOTH directions. --
+	require.NoError(t, transitionCoord.Rebuild(ctx))
+	testwait.External(t, "orderprojection-rebuild-order-transition",
+		func() bool { return transitionCoord.Phase() == projection.PhaseLive },
+		testtime.EventuallyLong, testtime.FastPoll, "phase != PhaseLive")
+
+	afterReverse := svc.Query(ctx)
+	assert.Equal(t, before.TotalOrders, afterReverse.TotalOrders,
+		"rebuilding order_transition must not change order count")
+	assert.Equal(t, "pending", currentStatusOf(afterReverse, "order-B"),
+		"order-B's created sub-view must SURVIVE a order_transition rebuild (disjoint reset)")
+	assert.Equal(t, "confirmed", currentStatusOf(afterReverse, "order-A"),
+		"order-A's transition is rebuilt from its own stream")
+	_ = eCreatedA
+	_ = eCreatedB
 }

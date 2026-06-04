@@ -72,7 +72,7 @@ func TestMigration012_StructuralAssertions(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_012_struct")
+	migrator, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_012_struct")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations through 012")
 

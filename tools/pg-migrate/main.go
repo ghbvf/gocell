@@ -19,6 +19,7 @@ import (
 	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/pkg/migration"
 )
 
 // defaultMigrationTimeout is the default overall timeout for applying
@@ -87,7 +88,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "pg-migrate: migrations fs: %v\n", err)
 		os.Exit(1)
 	}
-	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, migration.PlatformNamespace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pg-migrate: build migrator: %v\n", err)
 		os.Exit(1)

@@ -1,0 +1,11 @@
+id: command.synth.do.v1
+kind: command
+ownerCell: synthcell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: synthcell
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
+codegen: true

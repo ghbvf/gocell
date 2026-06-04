@@ -9,6 +9,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 // loadMode is the packages.Load mode required to build a Graph. depgraph
@@ -49,7 +50,10 @@ func Load(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
 	if len(opts.BuildTags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(opts.BuildTags, ",")}
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	// ModeModule (GOWORK=off): depgraph loads standalone modules (the
+	// testdata/synth fixture, or any caller-supplied Dir) not in the repo go.work
+	// `use` set. See tools/packagesload.
+	pkgs, err := packagesload.Load(packagesload.ModeModule, cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("packages.Load: %w", err)
 	}

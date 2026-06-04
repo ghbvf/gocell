@@ -51,6 +51,11 @@ type ContractGenSpec struct {
 	// Impl interface + BuildDefinition/Register); the step output DTOs it
 	// references are emitted into DTOs (rendered by types.tmpl) like any kind.
 	Saga *SagaSpec
+	// Command is non-nil when Kind == "command". It drives command.tmpl (the
+	// typed Handler interface + Register + Dispatch). Request/Response DTOs
+	// are generated into DTOs (rendered by types.tmpl) like any kind.
+	// iface_gen.go is NOT emitted for command (Handler lives in command_gen.go).
+	Command *CommandSpec
 	// GRPC is non-nil when Kind == "grpc". It drives the server interface emitted
 	// into iface_gen.go; the proto-generated message types + import path are
 	// resolved from the .proto go_package option + rpc declaration
@@ -414,6 +419,31 @@ type GRPCEndpointSpec struct {
 	RequestType string
 	// ResponseType is the proto response message simple name.
 	ResponseType string
+}
+
+// CommandSpec holds command-specific generation data (Kind=="command" only). It
+// drives command.tmpl, which emits the typed Handler interface + Register +
+// Dispatch that provide a sealed typed funnel over runtime/command.Registry.
+//
+// The Handler interface + Register + Dispatch exist ONLY in generated code —
+// a hand-written typed command handler is unexpressible, mirroring saga's
+// Impl/BuildDefinition pattern. See ADR docs/architecture/ for the command-bus
+// ADR (#1044).
+type CommandSpec struct {
+	// DispatchID is the contract id used as the command.Registry key const,
+	// e.g. "command.device-command.enqueue.v1".
+	DispatchID string
+	// HandlerMethod is the method name on the generated Handler interface:
+	// "Handle" + goPascalCase(domainLastSegment(id)).
+	// Example: for "command.synth.do.v1" → "HandleDo".
+	HandlerMethod string
+	// RequestGoType is the Go type name for the command request DTO.
+	// Always "Request" (the generated DTO from types_gen.go); held as a field
+	// so command.tmpl has a single source rather than a hardcoded literal.
+	RequestGoType string
+	// ResponseGoType is the Go type name for the command response DTO.
+	// Always "Response".
+	ResponseGoType string
 }
 
 // ParamSpec describes a single HTTP path or query parameter.
