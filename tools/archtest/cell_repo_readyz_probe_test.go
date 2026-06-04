@@ -93,9 +93,16 @@ import (
 )
 
 const (
-	repoProberIfacePkg           = "github.com/ghbvf/gocell/kernel/healthz"
-	repoProberIfaceName          = "RepoProber"
-	repoReadinessConformancePkg  = "github.com/ghbvf/gocell/kernel/cell/celltest"
+	// repoProberIfacePkg aliases repoProberIfacePkgPath (declared in the
+	// non-test cell_repo_readyz_probe.go) so this _test.go remains
+	// self-descriptive without reintroducing a bare literal.
+	repoProberIfacePkg = repoProberIfacePkgPath
+
+	repoProberIfaceName = "RepoProber"
+
+	// repoReadinessConformancePkg aliases repoReadinessConformancePkgPath
+	// (declared in the non-test cell_repo_readyz_probe.go).
+	repoReadinessConformancePkg  = repoReadinessConformancePkgPath
 	repoReadinessConformanceFunc = "RunRepoReadinessConformance"
 )
 
@@ -205,8 +212,8 @@ func TestCellRepoReadyzProbe_REDFixture(t *testing.T) {
 	t.Parallel()
 
 	const (
-		pgPkg   = "github.com/ghbvf/gocell/adapters/postgres"
-		sagaPkg = "github.com/ghbvf/gocell/runtime/saga"
+		pgPkg   = repoProberAdapterPostgresPkgPath
+		sagaPkg = repoProberRuntimeSagaPkgPath
 		ledger  = pgPkg + ".LedgerStore"
 		session = pgPkg + ".PGSessionStore" // same package as ledger
 		coord   = sagaPkg + ".Coordinator"

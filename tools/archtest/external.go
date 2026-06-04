@@ -127,6 +127,12 @@ type ConfigForExternalCell struct {
 func StandardCellRules() []*CellRule {
 	return []*CellRule{
 		{ID: rulePanicRegistered01, Run: CheckPanicRegistered},
+		// CELL-L2-INIT-CHECKNOTNOOP-CALLED-01: every L2+ cell's Init must
+		// reach kernel/outbox.CheckNotNoop (directly or via same-package
+		// callees) to guard durable-mode wiring. Platform symbol path is
+		// anchored to PlatformModulePath; scan scope resolved from the
+		// running module's go.mod.
+		{ID: ruleCellL2InitCheckNotNoop01, Run: CheckCellL2InitCheckNotNoop},
 	}
 }
 
