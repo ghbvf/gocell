@@ -314,6 +314,8 @@ The framework enforces one Hard invariant for the `/internal/v1/*` listener. Eve
 
 This is the **only fail-closed boundary** the framework enforces for `/internal/v1/*` traffic. LB mapping, the internal-listener bind address, and NetworkPolicy are deployment-side defense-in-depth (see [Deployment Recommendations](#deployment-recommendations)); none of them are code-side enforcement mechanisms — Kubernetes resources do not live in this repository (LB), and corebundle does not reject non-loopback `GOCELL_HTTP_INTERNAL_ADDR` values (internal bind). The AI-robust charter (`.claude/rules/gocell/ai-robust.md` §"AI-robust 三档分级") prohibits filing such Soft conventions in the invariant table; they appear as recommendations instead.
 
+> **HTTP idempotency scope is assembly-wide, not per-listener.** Unlike auth (per-listener — each listener carries its own auth chain), the framework HTTP idempotency replay domain spans **all listeners and all pods** that share one Redis backend: a mutating request is deduplicated/replayed by the `(tenant, subject, method, path, Idempotency-Key)` key with no per-listener/cell/pod dimension. See `docs/ops/redis-cluster-deployment.md` §"Full-assembly HTTP idempotency" and ADR `202606051000-1449`. (Routing one *logical command* to a single dedup slot *across cells* is a distinct, deferred concern — #1610.)
+
 ## Deployment Recommendations
 
 These are operator-side defense-in-depth practices. They are **not enforced by code** — violations are caught (if at all) by the Hard invariant in [Deployment Boundaries](#deployment-boundaries).

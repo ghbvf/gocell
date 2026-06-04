@@ -99,6 +99,42 @@ cluster-safety. The archtest gate `IDEMPOTENCY-LUA-HASHTAG-01` (in
 `tools/archtest/`) statically checks the existing claimer key construction;
 extend it (or add a sibling gate) when introducing new multi-key call sites.
 
+## Full-assembly HTTP idempotency (multi-pod replay scope)
+
+Every pod of an assembly that points at the **same** Redis backend (standalone
+or cluster) shares **one** HTTP idempotency replay domain: a mutating request
+recorded by any pod is replayed by every other pod. This is the assembly-wide
+scope established by ADR `202606051000-1449`.
+
+It holds because the replay key carries no per-node identity:
+
+- The store namespace is the `_runtime` sentinel (`cmd/corebundle` →
+  `httpIdempotencyStoreNamespace`), which is **not** pod- or cell-specific.
+- The per-request key is `(tenantID | "_notenant") · subject · method · path ·
+  Idempotency-Key` — derived only from request + principal data, never from the
+  serving pod / listener / cell (`runtime/http/idempotency.buildNamespaceKey`).
+- The `HTTPIdempotencyStore` holds no in-memory replay state — all
+  Claim/Record/Release state lives in Redis — so any pod's store instance sees
+  the same state.
+
+These two structural facts are frozen by archtests
+`HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01` (key node-agnostic) and
+`HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01` (store stateless); the cross-pod
+replay behavior is covered by the `integration` test
+`adapters/redis/http_idempotency_assembly_scope_test.go` and (on a live cluster)
+the `integration_cluster` test `…_cluster_real_test.go`.
+
+**Multi-pod requires Redis** (fail-closed): `Topology.RequiresDistributedReplay()`
+makes `cmd/corebundle` refuse to start a multi-pod deployment in `real` adapter
+mode without `GOCELL_REDIS_ADDR` or `GOCELL_REDIS_CLUSTER_ADDRS`. Single-pod /
+memory mode has no cross-pod replay need and skips the Redis store.
+
+**Scope note**: this is *assembly-wide* (all pods + all listeners share the
+domain via the same `(tenant, subject, method, path, header)` key). It is **not**
+*cross-cell* dedup — i.e. routing one **logical command** to a single dedup slot
+across different cells — which requires an Idempotency-Key ↔ command_id bridge
+and is deferred (#1610, blocked-by #1044).
+
 ## Operational notes
 
 - **MOVED / ASK redirection** is handled transparently by go-redis. Business

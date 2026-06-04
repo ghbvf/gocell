@@ -485,21 +485,28 @@ func conformFingerprintMismatchBusy(t *testing.T, factory Factory) {
 // ---------------------------------------------------------------------------
 
 // buildTestResponse constructs a minimal RecordedResponse for assertion.
-// Uses MarshalRecordedResponse + UnmarshalRecordedResponse (the only
-// package-external construction path for RecordedResponse).
 func buildTestResponse(t *testing.T, status int, body []byte) idemhttp.RecordedResponse {
 	t.Helper()
-	// Round-trip through the wire codec: this is the only package-external
-	// construction path available (RecordedResponse fields are unexported).
-	// We synthesize a minimal JSON blob that UnmarshalRecordedResponse accepts.
+	return BuildRecordedResponse(t, status, body)
+}
+
+// BuildRecordedResponse constructs a minimal RecordedResponse (Content-Type:
+// application/json) via the only package-external construction path,
+// [idemhttp.UnmarshalRecordedResponse]. It is exported so cross-package Store
+// integration tests — e.g. the adapters/redis full-assembly cross-pod replay
+// test (#1449) — build replay fixtures from the same single source as this
+// conformance suite, instead of re-deriving the unexported recordedResponseDTO
+// wire shape a third time.
+func BuildRecordedResponse(t *testing.T, status int, body []byte) idemhttp.RecordedResponse {
+	t.Helper()
 	hdr := http.Header{"Content-Type": {"application/json"}}
 	raw, err := marshalMinimalResponse(status, body, hdr)
 	if err != nil {
-		t.Fatalf("buildTestResponse marshal: %v", err)
+		t.Fatalf("BuildRecordedResponse marshal: %v", err)
 	}
 	resp, err := idemhttp.UnmarshalRecordedResponse(raw)
 	if err != nil {
-		t.Fatalf("buildTestResponse unmarshal: %v", err)
+		t.Fatalf("BuildRecordedResponse unmarshal: %v", err)
 	}
 	return resp
 }

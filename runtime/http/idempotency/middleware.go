@@ -504,6 +504,16 @@ func extractIdentity(ctx context.Context) (*auth.Principal, bool) {
 // adapter would be "{<tenantID>}:<subject>\x00<method>\x00<path>\x00<idemKey>",
 // which colocates all keys for the same tenant on the same hash slot — good for
 // single-slot transactions.
+//
+// Assembly-scope (node-agnostic) invariant: the (ns, key) pair is derived ONLY
+// from request + principal data — it carries no pod / listener / cell / instance
+// dimension. That is what makes the framework idempotency replay domain
+// assembly-wide (every pod sharing one Redis deduplicates the same logical
+// request). This is frozen by archtest HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01 and
+// governed by ADR docs/architecture/202606051000-1449-adr-http-idempotency-assembly-scope-namespace.md.
+// Do not add a node/listener/cell parameter here — that would make the key
+// node-specific and break assembly-wide dedup. (Routing one logical command to a
+// single dedup slot across cells is the deferred cross-cell concern, #1610.)
 func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
 	ns = p.TenantID
 	if ns == "" {

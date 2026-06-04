@@ -184,20 +184,27 @@ Claim）→ 返回 0，抛出 permanent error（不重试）。
 `ns` 参数由 Middleware 生成，不走同一 funnel，但代码中对 `"{}` 字符做了额外 runtime
 guard（避免破坏 hashtag 边界）。
 
-### 9. 作用域范围 — 本 PR 仅覆盖单 listener
+### 9. 作用域范围
 
-本 PR 的幂等作用域是**单 listener 内** — 同一进程同一 listener 的重复请求被去重。
+> **Amendment 2026-06-05（#1449）**：full-assembly 行由 `❌ defer` 改为 `✅`，本节按
+> ai-robust「ADR amendment 落地必查：矛盾段同 PR 重写」重写为收口后形态。治理定调 +
+> 结构闸 + 三层证明测试见 ADR `202606051000-1449-adr-http-idempotency-assembly-scope-namespace.md`。
+> 威胁矩阵逐行重评：本 amendment **纯加性**（扩大「同一 key 跨 pod 共享」这一预期能力，
+> 隔离维度 `(tenant, subject, method, path, header)` 不变），原 ✅ 行无退化；ADR-1449 §威胁矩阵
+> 新增「跨 pod 回放越权 / 指纹绕过 / CROSSSLOT / 节点身份污染」四行，均 ✅。
 
-三种作用域及其差异：
+PR #1448（本 ADR 原始 PR）的幂等作用域是**单 listener 内**。full-assembly（多 pod 共享）经
+#1449 收口——其运行时机制本就就绪（`_runtime` 非 pod-specific 命名空间 + 跨 listener 共享 store +
+node-agnostic key + 无内存态 store + 共享 Redis），#1449 把它从偶然 wiring 升为被结构守卫的契约。
 
-| 作用域 | 描述 | 本 PR |
-|--------|------|-------|
-| single-listener | 同一进程同一 listener（Redis 共享） | ✅ 覆盖 |
-| cross-cell | 同一进程不同 listener（primary ↔ internal）共享同一幂等命名空间 | ❌ defer |
-| full-assembly | 多 pod 横向扩展共享幂等状态（Redis Cluster 必须） | ❌ defer |
+| 作用域 | 描述 | 状态 |
+|--------|------|------|
+| single-listener | 同一进程同一 listener（Redis 共享） | ✅ 覆盖（本 ADR / #1448） |
+| full-assembly | 多 pod 横向扩展共享幂等状态（Redis Cluster 必须） | ✅ 覆盖（#1449，治理 ADR `202606051000-1449`） |
+| cross-cell | 同一进程不同 listener（primary ↔ internal）共享**同一去重槽** | ❌ defer（#1610，blocked-by #1044 命令桥） |
 
-cross-cell 与 full-assembly 作用域需要统一的 namespace 命名约定 + 跨 listener 的
-Store 共享策略，设计复杂度较高，拆分到后续 epic（见 §Follow-ups）。
+cross-cell（跨 cell 同槽）仍延期：依赖 HTTP `Idempotency-Key` ↔ `command_id` 映射桥（ADR
+`202606040550-1044` §5 演进路径 ⑤ 延期子项）+ 新的共享 KeyNamespace 治理决策，跟踪于 #1610。
 
 ### 10. Route opt-out — `auth.Route.IdempotencyExempt`
 
@@ -390,7 +397,8 @@ Dependent contracts (governance scan): none — middleware 是 framework 横切�
 
 以下内容在本 PR 范围之外，按 `feedback_pr_scope_carveouts_must_backlog` 规则同步登记 backlog：
 
-- **cross-cell / full-assembly 幂等命名空间**（gh #1449）：多 listener 共享 Store + namespace 约定，需设计 Store 共享策略（wiring）和 namespace collision 防御。
+- **full-assembly 幂等命名空间** — ✅ **已实现**（gh #1449）：`_runtime` 定调为 assembly-wide 命名空间 + 两道结构闸（`HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01` Hard / `HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01` Medium）+ 三层证明测试，见 §9 Amendment + ADR `202606051000-1449`。
+- **cross-cell 跨 cell 同槽幂等**（gh #1610，blocked-by #1044）：同一 idempotency-key 在不同 cell/listener 间共享同一去重槽，需 HTTP `Idempotency-Key` ↔ `command_id` 映射桥（ADR-1044 §5 演进路径 ⑤）+ 新的共享 KeyNamespace 治理决策。
 - **request-payload fingerprinting + 422 + per-field diff** — ✅ **已实现**（gh #1450）：`Store.Claim` 接收 canonical fingerprint blob；同一 key + 不同 body → **422** `ERR_IDEMPOTENCY_KEY_REUSED`，响应 details 列出差异的顶层字段名（Stripe 式 per-field diff，只回字段名/不回值）。详见文末 §"Amendment 2026-06-04"。gh #1450 关闭。
 - **production wiring** — ✅ **已实现**（gh #1469）：`cmd/corebundle` 在 `shared.Redis != nil` 时默认接通 `bootstrap.WithIdempotencyStore(redis.NewHTTPIdempotencyStore(client, "_runtime"))`（`buildHTTPIdempotencyStore` + `defaultRuntimeOptions`）。HARD 前置三件套（codegen 入口 + 3 凭据路由豁免 + fail-closed 守卫）同 PR 落地，见 §"敏感 body route 豁免（✅ 已收口，gh #1469）"。bootstrap e2e replay + exempt-never-recorded 测试覆盖。
 - **Block-and-wait 并发**（gh #1451，可选增强）：如果 409 + Retry-After 被产品侧确认为可接受，此项关闭；否则可作为 opt-in `WithWaitOnBusy(timeout)` 选项。
