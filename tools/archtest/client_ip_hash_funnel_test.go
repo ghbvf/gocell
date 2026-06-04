@@ -56,6 +56,11 @@
 //     freeze is covered by the method-result scan (no method returns IPHash).
 //   - The anti-vacuity guard (both target packages must be visited) forbids the
 //     rule silently passing if a package path is renamed/moved.
+//   - The constructor-set scan covers package funcs AND IPHash methods. Method
+//     coverage uses named.NumMethods(), which in go/types enumerates every method
+//     declared with the named type as receiver — BOTH value (func (h IPHash)) and
+//     pointer (func (h *IPHash)) receivers — so a pointer-receiver IPHash-returning
+//     method is NOT a blind spot.
 package archtest
 
 import (

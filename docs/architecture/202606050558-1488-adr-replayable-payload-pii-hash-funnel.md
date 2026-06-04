@@ -47,9 +47,20 @@ bootstrap 观察者的 slog `client_ip_hash` 与 wire payload 共用**同一个 
 
 ### key 管理
 
-salt 走现有 `cellmodules/cellsecrets` 机制：env `GOCELL_ACCESSCORE_IP_HASH_SALT` / `GOCELL_SSOBFF_IP_HASH_SALT`，
-real 模式缺失 fail-fast，dev 默认值登记进 `wellKnownDemoKeys`（real 模式拒绝，防公开 salt 进真部署使哈希可逆）。
-IP-hash salt 与 audit HMAC chain key **独立**（key separation）。
+salt 走现有 `cellmodules/cellsecrets` 机制，dev 默认值登记进 `wellKnownDemoKeys`（防公开 salt 误抄进真部署使哈希可逆）。
+IP-hash salt 与 audit HMAC chain key **独立**（key separation）。两个 composition root 不对称、刻意如此：
+
+- **accesscore（生产路径，`cmd/corebundle`）**：env `GOCELL_ACCESSCORE_IP_HASH_SALT` 经 `cellsecrets.BuildHMACKey`——real
+  模式缺失 / demo-key fail-fast；composition root 另强制 **≥32 字节**（`redaction.MinIPHashSaltBytes`），短 salt 启动即拒
+  （短 salt 静默使 IPv4 空间可暴力还原）。
+- **ssobff（demo-only 示例）**：env `GOCELL_SSOBFF_IP_HASH_SALT` 为 env-or-default，**无 real-mode fail-fast**（ssobff
+  无 real/demo adapter mode，永非生产）；default 仍登记进 `wellKnownDemoKeys`。
+
+### slog `client_ip_hash` 值变更（运维感知）
+
+bootstrap observer 的 slog `client_ip_hash` 值从 **8-hex**（旧 `HashIPForLog` 的 32-bit 截断 SHA）变为 **64-hex**
+（keyed HMAC-SHA256）。值本身始终随 IP 变化、dashboard 不解析其内容，但任何**按长度/正则**硬匹配 `client_ip_hash`
+的日志解析器 / grep 需更新。这是 slog 与 wire 哈希统一（单一 keyed 原语）的预期副作用。
 
 ## 为何 hash 而非加密 / 保留明文
 

@@ -55,6 +55,39 @@ func TestHashIP_NotReversibleToPlaintext(t *testing.T) {
 	}
 }
 
+func TestHashIP_IPv6_Deterministic(t *testing.T) {
+	t.Parallel()
+	salt := []byte("test-ip-hash-salt-32-bytes-pad!!")
+	// HashIP hashes the input string verbatim (no IP normalization); callers
+	// pass whatever ctxkeys.RealIP holds.
+	a := redaction.HashIP(salt, "2001:db8::1")
+	b := redaction.HashIP(salt, "2001:db8::1")
+	if a.String() != b.String() {
+		t.Fatal("same salt+IPv6 must hash identically")
+	}
+	if a.IsEmpty() || len(a.String()) != 64 {
+		t.Fatalf("IPv6 hash must be a 64-hex digest, got %q", a.String())
+	}
+	if v4 := redaction.HashIP(salt, "203.0.113.7"); a.String() == v4.String() {
+		t.Fatal("distinct IPv6 vs IPv4 strings must hash differently")
+	}
+}
+
+// TestHashIP_ShortSalt_StillHashes documents that HashIP itself does NOT validate
+// the salt (it cannot return an error): a short/empty salt produces a valid-looking
+// digest with no secrecy. The ≥MinIPHashSaltBytes guarantee is enforced at the
+// composition root (cellmodules/accesscore), not here.
+func TestHashIP_ShortSalt_StillHashes(t *testing.T) {
+	t.Parallel()
+	if redaction.MinIPHashSaltBytes != 32 {
+		t.Fatalf("MinIPHashSaltBytes = %d, want 32 (matches auth HMAC key min)", redaction.MinIPHashSaltBytes)
+	}
+	h := redaction.HashIP([]byte("short"), "203.0.113.7")
+	if h.IsEmpty() || len(h.String()) != 64 {
+		t.Fatalf("HashIP must still produce a digest with a short salt (insecurity enforced at root), got %q", h.String())
+	}
+}
+
 func TestHashIP_EmptyIP_ZeroValue(t *testing.T) {
 	t.Parallel()
 	h := redaction.HashIP([]byte("test-ip-hash-salt-32-bytes-pad!!"), "")

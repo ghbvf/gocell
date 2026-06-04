@@ -75,7 +75,7 @@ var validBootstrapAuthFailReasons = map[string]struct{}{
 // replayable outbox/broker/DLX path or the auditquery egress.
 type bootstrapAuthFailPayload struct {
 	Reason       string `json:"reason"`
-	ClientIPHash string `json:"clientIpHash"`
+	ClientIPHash string `json:"clientIpHash,omitempty"`
 }
 
 // AppendBootstrapAuthFail constructs a bootstrap.auth.fail ledger entry and
@@ -83,6 +83,12 @@ type bootstrapAuthFailPayload struct {
 // non-reversible hash of the client IP (#1488); it is empty when no IP was
 // available (e.g. health probes, or the request did not flow through middleware
 // that sets ctxkeys.RealIP).
+//
+// clientIPHash is typed string (not redaction.IPHash) by design: this is the
+// CONSUMER side — the sealed type that blocks plaintext lives on the producer
+// (cells/accesscore setup.Service), and runtime/audit must not import
+// pkg/redaction. Callers are responsible for passing an already-hashed value;
+// the only producer is the bootstrap observer, which hashes via redaction.HashIP.
 //
 // eventID is the stable source-event identity (the consuming slice passes
 // outbox.Entry.ID()). It becomes the ledger EventID, which is the SOLE

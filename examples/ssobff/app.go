@@ -321,9 +321,14 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}, nil
 }
 
-// IP-hash salt for the demo (#1488). ssobff is demo-only (no real/demo adapter
-// mode), so the salt is env-or-default; the default is registered in
-// cellsecrets.wellKnownDemoKeys so it can never be copied into a real secret.
+// IP-hash salt for the demo (#1488). ssobff is a demo-only binary with NO
+// real/demo adapter-mode concept, so — unlike cellmodules/accesscore which goes
+// through cellsecrets.BuildHMACKey (real-mode demo-key fail-fast) — the salt is a
+// plain env-or-default. The default is still registered in
+// cellsecrets.wellKnownDemoKeys so it can never be copied into a real secret. The
+// deliberate absence of a real-mode fail-fast here is acceptable because ssobff
+// is never a production deployment; the production path (accesscore) enforces both
+// demo-key rejection and the ≥32-byte minimum.
 const (
 	ssobffIPHashSaltEnv     = "GOCELL_SSOBFF_IP_HASH_SALT"
 	ssobffIPHashSaltDefault = "dev-ip-hash-salt-ssobff-32-byte!"
@@ -348,6 +353,14 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 			slog.String("reason", reason),
 			slog.String("client_ip_hash", ipHash.String()))
 		if *acPtr == nil {
+			// Symmetric with cellmodules/accesscore: surface the cell-not-ready
+			// path so it is not a silent observability hole during debugging.
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("failure", "cell not yet initialized"),
+				slog.String("client_ip_hash", ipHash.String()))
 			return
 		}
 		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, 2*time.Second)

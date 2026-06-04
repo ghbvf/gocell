@@ -79,7 +79,8 @@ const bootstrapAppendDetachedTimeout = 2 * time.Second
 // constructed cell, bootstrap options, and lifecycle resources.
 //
 // Reads GOCELL_BOOTSTRAP_ADMIN_USERNAME, GOCELL_BOOTSTRAP_ADMIN_PASSWORD,
-// GOCELL_ACCESSCORE_CURSOR_KEY, GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY from
+// GOCELL_ACCESSCORE_CURSOR_KEY, GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY, and
+// GOCELL_ACCESSCORE_IP_HASH_SALT (real-mode required, ≥32 bytes; #1488) from
 // the environment.
 func (m module) Provide(
 	_ context.Context, shared *composition.SharedDeps,
@@ -130,6 +131,12 @@ func (m module) Provide(
 	})
 	if err != nil {
 		return composition.ModuleResult{}, fmt.Errorf("accesscore: bootstrap IP-hash salt: %w", err)
+	}
+	if len(ipHashSalt) < redaction.MinIPHashSaltBytes {
+		// A short salt silently defeats the keyed-hash secrecy (the IPv4 space is
+		// brute-forceable), so fail fast rather than ship a reversible IP hash.
+		return composition.ModuleResult{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: GOCELL_ACCESSCORE_IP_HASH_SALT must be at least 32 bytes")
 	}
 
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).

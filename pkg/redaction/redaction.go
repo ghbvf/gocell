@@ -441,14 +441,23 @@ type IPHash struct {
 	v string
 }
 
+// MinIPHashSaltBytes is the minimum salt length composition roots must enforce
+// before calling [HashIP] in production. 32 bytes matches the other GoCell HMAC
+// secrets (auth.MinHMACKeyBytes); a shorter salt weakens the keyed-hash secrecy.
+const MinIPHashSaltBytes = 32
+
 // HashIP returns a keyed HMAC-SHA256 hash of ip, hex-encoded, as a sealed
 // [IPHash]. An empty ip returns the zero IPHash (IsEmpty, marshals to "") —
 // HMAC of the empty string is non-empty, so the empty case is special-cased to
 // preserve the "no IP available" signal end to end.
 //
 // salt is a per-deployment secret loaded from the environment (see
-// cellmodules/cellsecrets). An empty salt still produces a valid keyed digest
-// but offers no secrecy, so callers MUST inject a real secret in production.
+// cellmodules/cellsecrets). HashIP itself does not validate the salt (it cannot
+// return an error). An empty/short salt still produces a valid-looking digest but
+// offers NO secrecy — with a known or empty salt the whole IPv4 space (2^32) is
+// brute-forceable, so the hash is effectively reversible. Composition roots MUST
+// inject a real secret of at least [MinIPHashSaltBytes] bytes in production
+// (enforced at the wiring site, e.g. cellmodules/accesscore).
 func HashIP(salt []byte, ip string) IPHash {
 	if ip == "" {
 		return IPHash{}
