@@ -45,10 +45,16 @@ broker 再跑 demo**；仅"未设环境变量"是合法的关闭方式。
 ## 跑通命令
 
 ```bash
-# 1. 启动 MQTT broker（先于 demo）
-# 仅绑 127.0.0.1：无认证 broker 不可暴露到宿主机外部网卡，本命令仅供本机 demo。
+# 1. 启动 MQTT broker（先于 demo）。最简：一次性 standalone broker（仅绑 127.0.0.1：
+#    无认证 broker 不可暴露到宿主机外部网卡，仅供本机 demo）：
 docker run --rm -p 127.0.0.1:1883:1883 eclipse-mosquitto:2.0 \
   mosquitto -c /mosquitto-no-auth.conf
+# broker 现已是 iotdevice compose 服务；要随完整 demo 基建一起起（postgres + mosquitto），用：
+#   GOCELL_EXAMPLE_POSTGRES_PASSWORD=<demo-pw> \
+#     docker compose -f examples/iotdevice/docker-compose.yml up -d
+#   注意：compose 对整个文件做插值，postgres 的必填 ${GOCELL_EXAMPLE_POSTGRES_PASSWORD:?}
+#   使该命令在变量未设时直接报错退出（刻意如此——demo 的 postgres 存储本就需要该口令，
+#   不放默认口令进仓库）。仅起 broker 用上面的 docker run，无需该变量。
 
 # 2. 另开终端：订阅 device-registered 主题（外部观测者）
 mosquitto_sub -h 127.0.0.1 -p 1883 -t 'iotdevice/#' -v

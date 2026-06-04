@@ -142,7 +142,9 @@
 | 集成测试 publisher | `integration_test.go` PR-2 部分（仅 publisher 场景：QoS1 / broker 断连重连 / publish timeout） |
 | CI | `.github/workflows/_build-lint.yml` 通过 testcontainers auto-discovery（`CI-INTEGRATION-DISCOVERY-01`）接入，无需手动添加 mqtt service 配置 |
 
-**验收**：unit + integration（testcontainers eclipse-mosquitto:2.0）publisher 路径全过；adapters shard CI 实测时长 +<60s（待 CI 实测回填；计划估算基于 rabbitmq integration 同类参考值）。
+**验收**：unit + integration（testcontainers eclipse-mosquitto:2.0）publisher 路径全过；MQTT 集成套件经 `CI-INTEGRATION-DISCOVERY-01` 自动并入 integration-test adapters shard（非独立 job / 非静态 service container）。
+
+**AC-12 wall-time 预算（#1430 对账）**：MQTT 集成套件主导项 `TestIntegration_PublisherTrueReconnect`（broker-restart 重连，~60s）；其余 publisher 场景各 <10s。整套并入 adapters shard（`-timeout 15m`、按包并行），不延伸 shard 关键路径出该信封。原 spec「pr-check 增量 ≤60s」作为**孤立独立计量目标不可达**——单个 broker-restart 重连测试本身即 ~60s——故 #1430 将其重构为**机器门控**：integration-test job 现经 `slowgate --threshold=120s`（integration-tier，**保守初值**：~2× 已知最慢集成测试 + GHA 容器 start/stop 开销 headroom，dev 机无 Docker 无法预先实测，刻意偏向首跑不误红）门控每个 (Package, Test) 的 wall-time，runaway（如重连测试劣化到 120s+）触 CI 红；超阈测试须取 `tools/slowgate/allowlist.txt` justified 条目（`SLOWGATE-ALLOWLIST-01` 守，其 `packages.Load` 用 `FlatNonDefaultTags`，integration-tagged 条目可解析，无需改 archtest）。决策：保留并入、不新建 job、不回归静态 service container（与 `CI-INTEGRATION-DISCOVERY-01` 一致）。**CI 实测回填（PR #1594，GHA ubuntu-latest）**：adapters integration shard 全量 **~3m2s**（含 MQTT + 全部 adapter 集成测试，远在 15m job 信封内）；slowgate **120s per-test gate PASS**——所有集成测试（含 `TestIntegration_PublisherTrueReconnect`）实测 ≤120s，120s 经真实 CI 实跑验证为安全阈值，予以保留。单测精确耗时在 gate PASS 时不入 GHA 日志（slowgate 消费 `-json`、`tee` 仅失败上传），进一步收紧需失败 artifact 或本机 Docker 实测，当前非必要。
 
 ### PR-3 / 047-pr3: Subscriber + ConsumerBase 接入
 

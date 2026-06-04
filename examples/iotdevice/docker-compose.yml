@@ -15,5 +15,21 @@ services:
       timeout: 3s
       retries: 5
 
+  # MQTT broker for the optional MQTT publish channel (GOCELL_IOTDEVICE_MQTT_BROKERS).
+  # Reuses the image's built-in /mosquitto-no-auth.conf (listener 1883 + allow_anonymous true)
+  # — same form the docs/mqtt.md `docker run` path uses, so no extra conf file is needed.
+  # Bound to 127.0.0.1 only: an anonymous broker must not be exposed beyond loopback, and the
+  # iotdevice plaintext (tcp://) scheme requires a loopback host.
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    command: ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
+    ports:
+      - "127.0.0.1:1883:1883"
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -t healthcheck/ping -m up -i healthcheck -q 0 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 volumes:
   pgdata:
