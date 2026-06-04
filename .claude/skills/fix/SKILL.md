@@ -246,7 +246,7 @@ go test ./kernel/...                            # 改了 kernel 时
 
 **步骤 2: 冲突预检 + CI 绿 gate（有 push 时；命令 + 时长见 `issues` B5）**
 
-push 后先验无文件冲突、再等 CI 收敛再收尾（典型 ~5-6 min）：冲突 → 先 merge origin/develop 解冲突再 push；CI 失败则回阶段 1-4 修复循环（定位 → 修 → commit → push）再等，**最多 3 轮**；**3 轮仍红 → 直接贴 pm:fix 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。**CI 未绿不切 `pr-status/ready`、不贴"全清"评论**（保持当前 pr-status）。纯 issue 路径（无代码 push）跳过本步。
+push 后先验无文件冲突、再等 CI 收敛再收尾（典型 ~5-6 min）：冲突 → 先 merge origin/develop --no-edit 解冲突再 push；CI 失败则回阶段 1-4 修复循环（定位 → 修 → commit → push）再等，**最多 3 轮**；**3 轮仍红 → 直接贴 pm:fix 评论留痕（含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**。**CI 未绿不切 `pr-status/ready`、不贴"全清"评论**（保持当前 pr-status）。纯 issue 路径（无代码 push）跳过本步。
 
 **步骤 3: GitHub 收尾（按输入类型，无 issue 查找；命令形态见 `issues` Part B）**
 
@@ -260,7 +260,7 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 
 ## 阶段 5: 输出 + 验证
 
-**窗口打印诊断 / 修复报告是主输出**；pm:fix 评论（4.6 已贴）是无损留痕，两者都要做（对齐 `pr-review` 的"窗口=主输出、评论=留痕"约定）。
+**窗口打印诊断 / 修复报告是主输出**；pm:fix 评论（4.6 已贴）是无损留痕，两者都要做（对齐 `pr-review` 阶段 5/6 的"窗口=主输出、评论=留痕"约定）。
 
 - 诊断报告（未修）
 - 修复报告（已修）
@@ -276,5 +276,5 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 - 无法定位问题代码
 - 测试失败且 4 轮回退后仍无法修正
 - 修复过程中发现新问题超出原始 scope
-- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题）：先反思确认问题是否PR相关，Cx1问题搭车修，如真实OUT_OF_SCOPE先输出建议命令 + **无损 body 草稿**（按 backlog.md 字段映射，见 4.6 步骤3），再create issues。
+- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题）：先反思确认问题是否PR相关，Cx1问题搭车修，如真实OUT_OF_SCOPE先输出建议命令 + **无损 body 草稿**（按 backlog.md 字段映射），再create issues。
 - pri-p0 红线升级（incident-driven 或安全 CVE）

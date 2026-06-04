@@ -183,7 +183,7 @@ echo "✅ 已贴评论：$URL"                                            # 必�
 
 push 后**先验无文件冲突、再等 CI 收敛**，才交接 / 收尾（ship 切 `pr-status/needs-codex` 前、fix 切 `pr-status` 前都过此 gate）。
 
-**① 冲突预检**：`gh pr view <N> --json mergeable,mergeStateStatus`。`mergeable` 由 GitHub **异步计算**，刚 push 常返回 `UNKNOWN`——**轮询几次（~5-10s 间隔）直到落定** `MERGEABLE` / `CONFLICTING`，单查 UNKNOWN 无效。`CONFLICTING`（或 `mergeStateStatus=DIRTY`）→ 先解冲突：`git -C <wt> fetch origin && git -C <wt> merge origin/develop`（解冲突 → commit → push）→ 回本步重检。`MERGEABLE` → 进 ②。
+**① 冲突预检**：`gh pr view <N> --json mergeable,mergeStateStatus`。`mergeable` 由 GitHub **异步计算**，刚 push 常返回 `UNKNOWN`——**轮询几次（~5-10s 间隔）直到落定** `MERGEABLE` / `CONFLICTING`，单查 UNKNOWN 无效。`CONFLICTING`（或 `mergeStateStatus=DIRTY`）→ 先解冲突：`git -C <wt> fetch origin && git -C <wt> merge origin/develop --no-edit`（解冲突 → commit → push）→ 回本步重检。`MERGEABLE` → 进 ②。
 
 **② CI watch**：本仓 PR CI 五个 check 并行跑，**典型 ~5-6 min**（实测最慢 PR Check 中位 ~4.6 / 峰值 ~5.5 min；Governance ~4-5 min；Race / Static ~3 min；govulncheck ~40s）。
 
@@ -196,7 +196,7 @@ gh run view <run-id> --log-failed                        # run-id 取自上行 l
 ```
 
 - **等待上限 ~12-15 min**（~2.5× 典型，吸收 runner 排队）。超 Bash 10min 上限用后台轮询兜底（`run_in_background` 跑 watch，或循环 `gh pr checks <N> --json bucket --jq 'any(.[]; .bucket=="pending")'` 间隔 30-60s）；超上限仍 pending → 停下报告，不无限等。
-- 失败 → 回 `fix` 修复循环（定位 → 修 → commit → push → 重新预检 + watch），**最多 3 轮**；**3 轮仍红 → 直接贴 PR 评论留痕（pm:ship / pm:fix，含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**（CI 未绿故不切 needs-codex / ready，label 保持当前态）。
+- 失败 → 回 `fix` 修复循环（定位 → 修 → commit → push → 重新预检 + watch），**最多 3 轮**；**3 轮仍红 → 直接贴 PR 评论留痕（ship 走 pm:ship、fix 走 pm:fix，含 CI 失败摘要 + 已尝试轮次）+ 停下交人工，不 AskUserQuestion**（CI 未绿故不切 needs-codex / ready，label 保持当前态）。
 - **全绿才继续收尾**（贴评论 / 切 label）。
 
 ## B6. 沟通规则
