@@ -1,5 +1,19 @@
 {
   "skillOverrides": {
     "sonar-scan": "user-invocable-only"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/fix-self-audit.sh\"",
+            "statusMessage": "fix 决策自检…"
+          }
+        ]
+      }
+    ]
   }
 }
