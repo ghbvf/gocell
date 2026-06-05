@@ -179,7 +179,7 @@ func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
 
 func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "command.device-command.enqueue.v1")
+	c := contracttest.LoadByID(t, root, "command.devicecommand.enqueue.v1")
 
 	// deviceId + payload required; commandType optional (#1580: deviceId added so
 	// the sync command-bus handler can target a device — see EnqueueCommandAdapter).
@@ -195,7 +195,7 @@ func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 
 func TestCommandDeviceCommandDequeueV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "command.device-command.dequeue.v1")
+	c := contracttest.LoadByID(t, root, "command.devicecommand.dequeue.v1")
 
 	dequeueResp := `{"data":[{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
 		`"payload":"reboot","status":"sent","attempt":1,` +
@@ -206,7 +206,7 @@ func TestCommandDeviceCommandDequeueV1Handle(t *testing.T) {
 
 func TestCommandDeviceCommandAckV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "command.device-command.ack.v1")
+	c := contracttest.LoadByID(t, root, "command.devicecommand.ack.v1")
 
 	c.ValidateRequest(t, []byte(`{"reason":"success"}`))
 	c.ValidateRequest(t, []byte(`{"reason":"failure"}`))
@@ -222,7 +222,7 @@ func TestCommandDeviceCommandAckV1Handle(t *testing.T) {
 
 func TestCommandDeviceCommandReportV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "command.device-command.report.v1")
+	c := contracttest.LoadByID(t, root, "command.devicecommand.report.v1")
 
 	c.ValidateRequest(t, []byte(`{}`))
 	c.MustRejectRequest(t, []byte(`{"extra":"bad"}`))
@@ -236,7 +236,7 @@ func TestCommandDeviceCommandReportV1Handle(t *testing.T) {
 
 func TestCommandDeviceCommandExtendLeaseV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "command.device-command.extend-lease.v1")
+	c := contracttest.LoadByID(t, root, "command.devicecommand.extend-lease.v1")
 
 	c.ValidateRequest(t, []byte(`{"extensionSeconds":60}`))
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":0}`))

@@ -37,8 +37,8 @@ The command bus is **not** a second HTTP layer and **not** an event bus:
 ### 1. Declare the contract (`kind: command`, `codegen: true`)
 
 ```yaml
-# examples/iotdevice/contracts/command/device-command/enqueue/v1/contract.yaml
-id: command.device-command.enqueue.v1
+# examples/iotdevice/contracts/command/devicecommand/enqueue/v1/contract.yaml
+id: command.devicecommand.enqueue.v1
 kind: command
 codegen: true          # emits command_gen.go (Handler / Register / Dispatch)
 ownerCell: devicecell
@@ -53,10 +53,10 @@ schemaRefs:
 ```
 
 `gocell generate contract` (run `go run ./cmd/gocell generate contract --all`)
-derives, into `generated/contracts/command/device-command/enqueue/v1/`:
+derives, into `generated/contracts/command/devicecommand/enqueue/v1/`:
 
 ```go
-const DispatchID idutil.SafeID = "command.device-command.enqueue.v1"
+const DispatchID idutil.SafeID = "command.devicecommand.enqueue.v1"
 
 type Handler interface {
     HandleEnqueue(ctx context.Context, req *Request) (*Response, error)
@@ -117,7 +117,7 @@ if c.commandRegistry == nil {
             "call WithCommandRegistry(command.NewRegistry())")
 }
 if err := cmdenqueue.Register(c.commandRegistry, devicecommand.EnqueueCommandAdapter{S: pubSvc}); err != nil {
-    return fmt.Errorf("device-command register: %w", err)
+    return fmt.Errorf("devicecommand register: %w", err)
 }
 ```
 
@@ -166,7 +166,7 @@ resp, err := cmdenqueue.Dispatch(ctx, commandReg, &cmdenqueue.Request{
 > **⚠️ Authz and validation are the caller's job — the sync path runs neither.**
 > Per ADR §D8, `Dispatch` does **not** authenticate, authorize, or value-validate
 > the request: the registered handler delegates straight to the domain service
-> (the device-command handler runs with **no role check** — the role gate
+> (the devicecommand handler runs with **no role check** — the role gate
 > `auth.AnyRole(admin, operator)` only exists on the HTTP enqueue *handler*, not on
 > the command path). Any production front-end for this command bus (HTTP→command,
 > async outbox→command) **MUST**, before calling `Dispatch`: (a) authenticate +
@@ -175,7 +175,7 @@ resp, err := cmdenqueue.Dispatch(ctx, commandReg, &cmdenqueue.Request{
 > bridge lands, populate the contract's `endpoints.invokers` so callers are
 > accountable.
 
-As of this writing there is **no production `Dispatch` caller** for device-command
+As of this writing there is **no production `Dispatch` caller** for devicecommand
 enqueue: the production entry points that front the command bus — an
 HTTP→command bridge and an async outbox→command relay — are later #1044 PRs (ADR
 §5). The wiring is exercised end-to-end by `examples/iotdevice/cells/devicecell/command_wiring_test.go`.

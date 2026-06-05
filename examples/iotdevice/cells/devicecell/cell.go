@@ -16,7 +16,7 @@ import (
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/device-command/enqueue/v1"
+	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
@@ -80,7 +80,7 @@ func WithCursorCodec(c *query.CursorCodec) Option {
 
 // WithCommandRegistry wires the process command.Registry into which the cell
 // registers its synchronous command-bus handlers (today:
-// command.device-command.enqueue.v1, via cmdenqueue.Register in initSlices).
+// command.devicecommand.enqueue.v1, via cmdenqueue.Register in initSlices).
 //
 // REQUIRED, not optional: devicecell declares command handle contracts, so an
 // assembly that omits this fails fast in Init (initSlices) rather than silently
@@ -311,7 +311,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 				"RegisterCommandQueue(postgres.NewCommandQueue(...)) for durable mode")
 	}
 	// The sync command-bus registry is required: devicecell declares command
-	// handle contracts (command.device-command.enqueue.v1), so the generated
+	// handle contracts (command.devicecommand.enqueue.v1), so the generated
 	// funnel must be wired to a real handler. Fail fast rather than silently
 	// leaving it unregistered (the dead-but-compiles state #1580 fixes) — same
 	// "no soft fallback" rationale as the commandQueue guard above.

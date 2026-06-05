@@ -9,7 +9,7 @@ import (
 )
 
 // CommandID is the registry key — the command contract id (e.g.
-// "command.device-command.enqueue.v1").
+// "command.devicecommand.enqueue.v1").
 //
 // It is a type alias (not a defined type) for idutil.SafeID so that:
 //   - idutil.SafeID.Validate() is available for id validation without conversion.

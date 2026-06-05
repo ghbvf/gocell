@@ -1,4 +1,4 @@
-id: command.device-command.ack.v1
+id: command.devicecommand.report.v1
 kind: command
 codegen: false  # K#09 funnel: kind=command deferred from K#06 PR-4 (see backlog CONTRACT-YAML-CODEGEN-DEFAULT-CLEANUP @ PR559)
 ownerCell: devicecell

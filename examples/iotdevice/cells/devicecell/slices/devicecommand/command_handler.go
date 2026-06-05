@@ -3,12 +3,12 @@ package devicecommand
 import (
 	"context"
 
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/device-command/enqueue/v1"
+	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/kernel/command"
 )
 
 // EnqueueCommandAdapter bridges the generated synchronous command-bus Handler
-// for command.device-command.enqueue.v1 to the domain Service.Enqueue method.
+// for command.devicecommand.enqueue.v1 to the domain Service.Enqueue method.
 //
 // It is the command-bus analog of EnqueueAdapter (which bridges the HTTP
 // enqueue contract): both wrap the same devicecmd.Service so the HTTP entry
