@@ -3,7 +3,7 @@
 // GRPC-METHOD-IN-CONTRACT-01 — reg.GRPCService caller allowlist + contract
 // bidirectional coverage.
 //
-// IMPORTANT — service-level vs method-level granularity
+// # IMPORTANT — service-level vs method-level granularity
 //
 // This invariant operates at the SERVICE / CONTRACT level, NOT the per-RPC
 // method level. The generated cellgen call is:
