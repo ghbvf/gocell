@@ -133,7 +133,13 @@ type ValidateView struct {
 //     already wraps Revoke in RunInTx); bare callers — the storetest
 //     conformance suite — supply a unit-of-work scope themselves. Compile-
 //     enforcing this precondition (a typed tx-scoped revoke capability rather
-//     than a runtime panic) is the deferred Hard-upgrade tracked at gh #1615.
+//     than a runtime panic) was evaluated as gh #1615's F3 and resolved won't-do
+//     (a same-package seal is unreachable — adapters/redis's read path needs a
+//     synchronous cache mutation on the same field Revoke uses, and Go has no
+//     per-method field scoping; a cross-package seal is disproportionate with no
+//     industry precedent). The "second caller outside a tx" risk is instead
+//     caught statically by archtest SESSION-REVOKE-CALLER-INTX-01, which
+//     allowlists session.Store.Revoke's production callers (each RunInTx-wrapped).
 //   - RevokeForSubject: mark every active session for SubjectID dead. tok is
 //     a credentialfence.FenceToken — a sealed capability proof minted only by
 //     credentialinvalidate.Invalidator via credentialfence.Mint; passing nil
