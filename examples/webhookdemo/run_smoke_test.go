@@ -18,6 +18,7 @@ import (
 // phase (e.g. an undeclared WebhookListener, or a missing webhook source store)
 // returns a non-context error well before the deadline, turning this test red.
 func TestWebhookdemoBootSmoke(t *testing.T) {
+	t.Parallel()
 	addrs := webhookdemoAddrs{
 		webhook: listenerBinding{addr: "127.0.0.1:0"},
 		health:  listenerBinding{addr: "127.0.0.1:0"},
@@ -57,4 +58,30 @@ func TestDefaultWebhookdemoAddrs(t *testing.T) {
 	require.NotEmpty(t, addrs.health.addr)
 	require.Nil(t, addrs.webhook.ln, "default bindings carry no pre-bound listener")
 	require.Nil(t, addrs.health.ln)
+}
+
+// TestAssertModuleIDsMatch covers the assembly drift check (assembly.yaml cells ↔
+// modules_gen.go): the matching case plus both fail-fast branches.
+func TestAssertModuleIDsMatch(t *testing.T) {
+	t.Parallel()
+	mods := generatedCellModules() // [HooksCellModule{}]
+
+	t.Run("match", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, assertModuleIDsMatch("webhookdemo", []string{"hooks"}, mods))
+	})
+
+	t.Run("length mismatch", func(t *testing.T) {
+		t.Parallel()
+		err := assertModuleIDsMatch("webhookdemo", []string{"hooks", "extra"}, mods)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "length mismatch")
+	})
+
+	t.Run("id mismatch", func(t *testing.T) {
+		t.Parallel()
+		err := assertModuleIDsMatch("webhookdemo", []string{"wrongcell"}, mods)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "drift")
+	})
 }

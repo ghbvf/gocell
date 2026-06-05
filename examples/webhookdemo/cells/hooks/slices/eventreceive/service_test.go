@@ -20,6 +20,7 @@ func newDelivery(t *testing.T, payload string) webhook.Delivery {
 	t.Helper()
 	did, err := webhook.NewDeliveryID("delivery-001")
 	require.NoError(t, err)
+	// must match contract.endpoints.inbound.sourceID (webhook.demo.events.v1)
 	sid, err := webhook.NewSourceID("demosource")
 	require.NoError(t, err)
 	return webhook.Delivery{
@@ -39,6 +40,7 @@ func TestService_HandleEvent(t *testing.T) {
 		{name: "valid full payload", payload: `{"eventId":"evt-1","type":"order.created","data":{"orderId":"o-9"}}`},
 		{name: "valid minimal payload", payload: `{"eventId":"evt-2","type":"ping"}`},
 		{name: "valid ignores unknown extra fields", payload: `{"eventId":"evt-3","type":"x","extra":true}`},
+		{name: "valid empty object (zero-value eventId/type allowed)", payload: `{}`},
 		{name: "malformed json rejected", payload: `{not json`, wantErr: true},
 		{name: "json array (not object) rejected", payload: `[1,2,3]`, wantErr: true},
 		{name: "empty body rejected", payload: ``, wantErr: true},

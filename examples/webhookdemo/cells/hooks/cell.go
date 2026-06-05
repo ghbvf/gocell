@@ -5,9 +5,12 @@
 // reg.RegisterWebhookReceiver call (cell_gen.go), and an assembly that mounts the
 // receiver on the dedicated cell.WebhookListener (run.go).
 //
-// Consistency: L0 LocalOnly — see cell.yaml. The cell holds no outbox/txManager;
-// HMAC verification, the timestamp window, and idempotency are the runtime
-// receiver's job, not the cell's.
+// Consistency: the cell is declared L1 in cell.yaml — not because it runs a
+// transaction (HandleEvent only decodes + logs), but because TOPO-05 forbids an
+// L0 cell from being a contract provider/consumer, and an inbound webhook
+// contract's provider is its ownerCell. The eventreceive slice itself is L0. The
+// cell holds no outbox/txManager; HMAC verification, the timestamp window, and
+// idempotency are the runtime receiver's job, not the cell's.
 package hooks
 
 import (

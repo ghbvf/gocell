@@ -49,6 +49,7 @@ func demoCellL1(project *metadata.ProjectMeta) {
 // webhook contract (the gap this fix closes — webhook-receive is a consumer role
 // but is the inbound contract's implementer).
 func TestVERIFY04_InboundWebhook_ReceiveSliceSatisfies(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	demoCellL1(project)
 	project.Contracts["webhook.demo.events.v1"] = webhookContractOwnedByDemo("webhook.demo.events.v1", "inbound")
@@ -65,6 +66,7 @@ func TestVERIFY04_InboundWebhook_ReceiveSliceSatisfies(t *testing.T) {
 // guard still holds for webhooks: an active inbound webhook contract with no
 // webhook-receive slice in its owner cell is flagged.
 func TestVERIFY04_InboundWebhook_NoReceiveSlice_Rejected(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	demoCellL1(project)
 	project.Contracts["webhook.demo.events.v1"] = webhookContractOwnedByDemo("webhook.demo.events.v1", "inbound")
@@ -78,6 +80,7 @@ func TestVERIFY04_InboundWebhook_NoReceiveSlice_Rejected(t *testing.T) {
 // webhook-dispatch slice (the OUTBOUND role) does not satisfy an INBOUND webhook
 // contract — the directions are distinct implementing roles.
 func TestVERIFY04_InboundWebhook_OnlyDispatchSlice_Rejected(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	demoCellL1(project)
 	project.Contracts["webhook.demo.events.v1"] = webhookContractOwnedByDemo("webhook.demo.events.v1", "inbound")
@@ -94,6 +97,7 @@ func TestVERIFY04_InboundWebhook_OnlyDispatchSlice_Rejected(t *testing.T) {
 // outbound path: webhook-dispatch is a provider role, so it satisfies VERIFY-04
 // for an outbound webhook contract.
 func TestVERIFY04_OutboundWebhook_DispatchSliceSatisfies(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	demoCellL1(project)
 	project.Contracts["webhook.shopify.dispatch.v1"] = webhookContractOwnedByDemo("webhook.shopify.dispatch.v1", "outbound")

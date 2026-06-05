@@ -18,10 +18,13 @@ re-run).
 | `reg.RegisterWebhookReceiver(...)` (cellgen-derived) | `cells/hooks/cell_gen.go` |
 | Assembly + entrypoint | `assembly.yaml`, `main.go` (generated), `run.go` (hand-written) |
 
-The cell is **L0 LocalOnly**: the runtime `webhook.Receiver` does HMAC
-verification, the timestamp window check, and idempotency claiming; the cell's
-`HandleEvent` only decodes the verified delivery and structured-logs it (no
-transaction, no outbox, no persistence).
+The `eventreceive` slice is **L0 LocalOnly** — the runtime `webhook.Receiver`
+does HMAC verification, the timestamp window check, and idempotency claiming, and
+the slice's `HandleEvent` only decodes the verified delivery and structured-logs
+it (no transaction, no outbox, no persistence). The **cell** is declared `L1` in
+`cell.yaml` not because it runs a transaction, but because `TOPO-05` forbids an
+`L0` cell from being a contract provider/consumer and an inbound webhook
+contract's provider is its `ownerCell`.
 
 `run.go` mounts the receiver on the dedicated **`cell.WebhookListener`** with
 `auth.AuthNone{}` — the HMAC signature **is** the application-layer auth, so a JWT
@@ -33,9 +36,13 @@ runs. `WithWebhookSourceStore` seeds the per-sender secret and
 
 ```bash
 go run ./examples/webhookdemo
-# webhook listener  :8083   (POST signed webhooks here)
+# webhook listener  :8084   (POST signed webhooks here)
 # health  listener  127.0.0.1:9099  (/healthz /readyz /metrics)
 ```
+
+> Demo mode wires **no metrics provider**, so the webhook instruments listed in
+> `generated/metrics-schema.yaml` (e.g. `webhook_signature_failures_total`) are
+> no-ops — a real Prometheus provider must be wired to observe them.
 
 ## Signature scheme (Svix / standard-webhooks)
 
@@ -58,9 +65,12 @@ The canonical, executable example of building a signed request is the e2e test
 `webhook_e2e_test.go` (`newSignedReq`). In short:
 
 ```go
-src, _ := webhook.NewSource(webhook.MustSourceID("demosource"), []byte(secret))
+// error-first constructors (the same calls the e2e test uses — copy-pasteable)
+sourceID, _ := webhook.NewSourceID("demosource")
+src, _ := webhook.NewSource(sourceID, []byte(secret))
 signer, _ := webhook.NewHMACSigner(src)
-headers, _ := signer.Sign(body, time.Now(), webhook.MustDeliveryID("delivery-1"))
+did, _ := webhook.NewDeliveryID("delivery-1")
+headers, _ := signer.Sign(body, time.Now(), did)
 req.Header.Set("Webhook-Delivery-Id", string(headers.DeliveryID))
 req.Header.Set("Webhook-Timestamp", headers.Timestamp)
 req.Header.Set("Webhook-Signature", headers.Signature)
@@ -68,7 +78,15 @@ req.Header.Set("Webhook-Signature", headers.Signature)
 
 > The demo seeds a single hardcoded source secret in `run.go` for convenience.
 > A real deployment loads each sender's secret from a secret manager and seeds it
-> into the `SourceStore` — never hardcodes one.
+> into the `SourceStore` — never hardcodes one. There is no standalone sender CLI:
+> `curl` cannot compute the HMAC inline, so `webhook_e2e_test.go` is the runnable,
+> copy-pasteable signer reference.
+
+## Next steps
+
+This demo intentionally stops at decode + log to keep the webhook plumbing in
+focus. For what to *do* with a received event — persisting it and emitting a
+domain event through the transactional outbox (L2) — see `examples/todoorder`.
 
 ## Test it
 

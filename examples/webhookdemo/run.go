@@ -72,7 +72,9 @@ type webhookdemoAddrs struct {
 // generated main.go entrypoint (go run ./examples/webhookdemo).
 func defaultWebhookdemoAddrs() webhookdemoAddrs {
 	return webhookdemoAddrs{
-		webhook: listenerBinding{addr: ":8083"},
+		// :8084 — distinct from the other examples' default ports (todoorder :8082,
+		// iotdevice primary :8083) so several demos can run side by side.
+		webhook: listenerBinding{addr: ":8084"},
 		health:  listenerBinding{addr: "127.0.0.1:9099"},
 	}
 }
@@ -95,7 +97,7 @@ func runWebhookdemo(ctx context.Context, assemblyID string, assemblyCellIDs []st
 	if err != nil {
 		return err
 	}
-	slog.Default().Info("webhookdemo: starting; POST HMAC-signed webhooks to the webhook listener",
+	slog.InfoContext(ctx, "webhookdemo: starting; POST HMAC-signed webhooks to the webhook listener",
 		slog.String("webhook_addr", addrs.webhook.addr),
 		slog.String("health_addr", addrs.health.addr))
 	return app.Run(ctx)
@@ -136,7 +138,9 @@ func buildWebhookdemoBootstrap(assemblyID string, assemblyCellIDs []string, addr
 	claimer := idempotency.NewInMemClaimer(clock.Real())
 
 	// Construct the hooks cell and register it on the assembly. The cell holds no
-	// outbox/txManager — it is L0 LocalOnly (the receiver only decodes + logs).
+	// outbox/txManager — its eventreceive slice is L0 (decode + log only); the
+	// cell is declared L1 in cell.yaml only to satisfy TOPO-05 (an inbound webhook
+	// contract's provider cannot be L0).
 	hc := hooks.NewHooksCell(hooks.WithLogger(logger))
 	asm := assembly.New(clock.Real(), assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
 	if err := asm.Register(hc); err != nil {

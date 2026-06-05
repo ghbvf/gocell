@@ -18,13 +18,18 @@ import (
 
 // Contract-declared inbound path + signature header names
 // (contracts/webhook/demo/events/v1/contract.yaml). The receiver reads the
-// signature from THESE header names, so the test sets them manually rather than
-// using kwh.Headers.Apply (which writes the standard-webhooks webhook-* names).
+// signature from THESE contract-declared header names, so the test sets them
+// explicitly rather than using kwh.Headers.Apply, which writes the fixed
+// outbound (signer-side) header constants kwh.HeaderID/HeaderTimestamp/
+// HeaderSignature — a different set from a contract's inbound header names in
+// the general case.
 const (
-	e2ePath        = "/api/webhooks/demo/events"
-	hdrDeliveryID  = "Webhook-Delivery-Id"
-	hdrTimestamp   = "Webhook-Timestamp"
-	hdrSignature   = "Webhook-Signature"
+	e2ePath       = "/api/webhooks/demo/events"
+	hdrDeliveryID = "Webhook-Delivery-Id"
+	hdrTimestamp  = "Webhook-Timestamp"
+	hdrSignature  = "Webhook-Signature"
+	// forgedSigToken is a well-formed v1 token (base64 of 32 zero bytes) whose MAC
+	// cannot match any real signature — it exercises the verify-failure → 401 path.
 	forgedSigToken = "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 )
 
@@ -82,6 +87,7 @@ func startWebhookdemo(t *testing.T) string {
 // validly HMAC-signed request reaches the handler (200), while a forged or
 // unsigned request is rejected by the runtime verifier before the handler runs.
 func TestWebhookdemoE2E(t *testing.T) {
+	t.Parallel()
 	webhookURL := startWebhookdemo(t)
 
 	// A signer for the same demo source the assembly seeded into its SourceStore.
@@ -134,10 +140,14 @@ func TestWebhookdemoE2E(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, do(t, req))
 	})
 
-	t.Run("replayed delivery is idempotent (200, handler not re-run)", func(t *testing.T) {
+	t.Run("replayed delivery is idempotent (still 200)", func(t *testing.T) {
+		// Same delivery id twice: both succeed (200). The runtime receiver's
+		// idempotency claim collapses the replay (ClaimDone → cached response,
+		// handler not re-run); that handler-skip is unit-tested in runtime/webhook
+		// — here we only assert the end-to-end replay stays 200, not the internal
+		// claim mechanics (the e2e has no seam to count handler invocations).
 		first := newSignedReq(t, "delivery-replay")
 		assert.Equal(t, http.StatusOK, do(t, first))
-		// Same delivery id again → the claimer reports done → cached 200 replay.
 		second := newSignedReq(t, "delivery-replay")
 		assert.Equal(t, http.StatusOK, do(t, second))
 	})

@@ -215,8 +215,8 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 					c.ID, providerID,
 				),
 				"create a slice in that cell with a contractUsage that implements this "+
-					"contract (a provider role such as serve/publish/handle/provide, "+
-					"or webhook-receive for an inbound webhook)",
+					"contract (a provider role such as serve/publish/handle/provide; "+
+					"webhook-receive for an inbound webhook, webhook-dispatch for an outbound one)",
 			))
 		}
 	}
@@ -248,8 +248,11 @@ func (v *Validator) hasImplementingSlice(c *metadata.ContractMeta, providerCell 
 }
 
 // implementsContract reports whether role is the owner cell's implementing role
-// for contract c. An inbound webhook is implemented by a webhook-receive slice
-// (a consumer role); every other kind is implemented by a provider role.
+// for contract c. An inbound webhook is the carve-out: its on-paper provider is
+// the ownerCell, but the actual data provider is the external sender — the owner
+// cell implements the contract by RECEIVING, so a webhook-receive slice (a
+// consumer role per cellvocab) is what implements it. Every other kind (incl.
+// outbound webhooks via webhook-dispatch) is implemented by a provider role.
 func implementsContract(c *metadata.ContractMeta, role string) bool {
 	if cellvocab.ContractKind(c.Kind) == cellvocab.ContractWebhook &&
 		c.Direction == string(cellvocab.DirectionInbound) {
