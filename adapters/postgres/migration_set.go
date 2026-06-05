@@ -104,7 +104,9 @@ func (s *MigrationSet) addNamespace(ns migration.Namespace, fsys fs.FS) error {
 	// a malformed external-cell migration never silently vanishes at apply/verify.
 	if _, err := ExpectedVersion(fsys); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, ErrAdapterPGMigrate,
-			fmt.Sprintf("postgres: migration set namespace %q has a malformed migration file", ns), err)
+			"postgres: migration set namespace has a malformed migration file", err,
+			errcode.WithInternal(errcode.InternalAttr("_",
+				fmt.Sprintf("postgres: migration set namespace %q has a malformed migration file", ns))))
 	}
 	for _, e := range s.entries {
 		if e.ns == ns {

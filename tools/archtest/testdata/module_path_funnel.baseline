@@ -25,7 +25,6 @@ tools/archtest/credential_invalidate_funnel_invariants_test.go
 tools/archtest/ctxkeys_principal_write_caller_test.go
 tools/archtest/distlock_lock_not_context_test.go
 tools/archtest/domain_authz_mutation_funnel_invariants_test.go
-tools/archtest/errcode_invariants_test.go
 tools/archtest/eval_predicate_centralization_test.go
 tools/archtest/fence_token_mint_funnel_test.go
 tools/archtest/fixture_cellid_typed_builder_test.go
