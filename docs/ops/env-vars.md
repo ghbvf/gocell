@@ -71,6 +71,7 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 |---|---|---|---|
 | `GOCELL_ACCESSCORE_CURSOR_KEY` | HMAC key for access cursor codec | `corebundle-access-cursor-key32!!` | **Real mode** |
 | `GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY` | Previous access cursor key (rotation) | — | No |
+| `GOCELL_ACCESSCORE_IP_HASH_SALT` | HMAC salt for the bootstrap-failed event client-IP hash (≥32 bytes; #1488). Keeps plaintext IP off outbox/broker/DLX + the audit ledger. Real mode fails fast if unset or a well-known demo value. | `dev-ip-hash-salt-accesscore-32b!` | **Real mode** |
 
 ### accesscore first-admin provisioning
 

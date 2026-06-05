@@ -326,6 +326,19 @@ audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extr
 
 ref: `cells/auditcore/slices/auditquery/handler.go` 出口；`pkg/redaction/redaction.go` 单源治理。
 
+## Client-IP PII Hash Funnel（replayable payload，#1488）
+
+replayable event payload 里的客户端 IP 一律以 keyed、非可逆 HMAC 哈希承载，明文永不进 outbox/broker/DLX 或 audit ledger。单源 primitive = `pkg/redaction.IPHash`（sealed struct，唯一构造器 `HashIP(salt, ip)` = HMAC-SHA256；`HashIPForLog` 已删）。composition root（`cellmodules/accesscore` / `examples/ssobff`）从 `cellsecrets` 载 salt（`GOCELL_<APP>_IP_HASH_SALT`，real 模式 demo-key fail-fast），在 bootstrap 观察者闭包内哈希——cell 收 sealed `IPHash`，永不见明文；slog 与 wire payload 共用同一哈希。
+
+双侧 funnel（完整盲区清单 + 评级举证活在各 archtest package godoc，本节只导航）：
+
+| ID | 侧 | 摘要 | 评级 |
+|----|----|------|------|
+| `CLIENT-IP-HASH-FUNNEL-01` | sink | go/types 冻结 `redaction.IPHash` 字段集 + 唯一构造器集 + `dto.BootstrapAuthFailedEvent.ClientIPHash` 字段类型 = `redaction.IPHash` | 上游 Hard（sealed unexported 字段）/ 下游 Hard（reflect/types 冻结） |
+| `CTXKEYS-REALIP-READ-CALLER-01` | source | `ctxkeys.RealIPFrom` 生产引用点收口为 5-成员 allowlist（rate-limit ×2 / access-log / 2 observer） | 下游 Hard（go/types caller-allowlist）/ 上游 Medium（Go 可见性天花板，won't-do 同 #1282 族） |
+
+范围 = IP 字段（今日唯一 replayable-payload PII）；generic「按字段名扫所有 payload」= Soft，宪章拒绝立项；generic Hard 机制（codegen 派生 typed PII 字段）追踪 gh #1605。设计真值源：ADR `docs/architecture/202606050558-1488-adr-replayable-payload-pii-hash-funnel.md`。
+
 ## Audit trace_id 反查（trace → audit）
 
 `audit_entries` 带 `trace_id` 列（observability，**非** HMAC 链字段——`Protocol.ComputeHash` 12-field 输入冻结，`audit_hash_input_frozen_test.go` 守）。注入唯一路径 = `cells/auditcore/internal/appender`，经 `correlation.New(string(obs.TraceID), string(obs.RequestID), string(obs.CorrelationID))`（`obs = entry.Observability()`）从 W0 outbox observability envelope 同时派生 `trace_id` + `correlation_id`（`correlation.Correlation` 全字段 unexported 只防包外 struct literal 构造，但 `New` 是公开通用构造器，故 Correlation seal 不 gate provenance；值的可信 provenance 仅来自上游 sealed `outbox.Entry` 的 Hard 继承——下游 `AUDIT-TRACE-ID-WRITE-CALLER-01` 只锁**写入位置**（appender 为唯一写点，Medium caller-allowlist），**不校验 appender 内部值来源**，该最后一跳由单一审查注入点 + anti-vacuity 兜底）。

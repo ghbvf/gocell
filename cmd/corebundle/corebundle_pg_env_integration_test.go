@@ -69,6 +69,7 @@ func setRealModeEnv(t *testing.T, dsn string) {
 
 	// accesscore cell
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
+	t.Setenv("GOCELL_ACCESSCORE_IP_HASH_SALT", "access-ip-hash-salt-32b-pad-test!!")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 }

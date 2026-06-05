@@ -6,8 +6,9 @@
     "reason": {
       "type": "string"
     },
-    "clientIp": {
-      "type": "string"
+    "clientIpHash": {
+      "type": "string",
+      "pattern": "^$|^[a-f0-9]{64}$"
     }
   },
   "required": [

@@ -33,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -51,6 +52,10 @@ const (
 	setupTestBootstrapUsername = "setup-test-op"
 	setupTestBootstrapPassword = "setup-test-pass-1!"
 )
+
+// setupTestIPHashSalt keys the client-IP hash in the integration observers,
+// mirroring the composition root's per-deployment salt (#1488).
+var setupTestIPHashSalt = []byte("test-ip-hash-salt-32-bytes-pad!!")
 
 // setupTestAllowAllLimiter satisfies auth.BootstrapRateLimiter without
 // throttling. The authtest helper lives under runtime/internal/authtest (Go
@@ -127,7 +132,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		}
 		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, testtime.D2s)
 		defer cancel()
-		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, ip)
+		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, redaction.HashIP(setupTestIPHashSalt, ip))
 	})
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
@@ -264,8 +269,8 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, len(entries), 1)
 		var payloadStruct struct {
-			Reason   string `json:"reason"`
-			ClientIP string `json:"clientIp"`
+			Reason       string `json:"reason"`
+			ClientIPHash string `json:"clientIpHash"`
 		}
 		require.NoError(t, json.Unmarshal(entries[0].Payload, &payloadStruct))
 		assert.Equal(t, "missing_header", payloadStruct.Reason,
@@ -477,7 +482,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		}
 		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, testtime.D2s)
 		defer cancel()
-		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, ip)
+		_ = ac.RecordBootstrapAuthFail(appendCtx, reason, redaction.HashIP(setupTestIPHashSalt, ip))
 	})
 
 	limiter := &setupTestBlockAfterNLimiter{remaining: capacity}
@@ -609,8 +614,8 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	require.Len(t, entries, 1, "exactly one rate_limited entry expected")
 
 	var payload struct {
-		Reason   string `json:"reason"`
-		ClientIP string `json:"clientIp"`
+		Reason       string `json:"reason"`
+		ClientIPHash string `json:"clientIpHash"`
 	}
 	require.NoError(t, json.Unmarshal(entries[0].Payload, &payload))
 	assert.Equal(t, "rate_limited", payload.Reason)

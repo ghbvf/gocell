@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit"
@@ -371,8 +372,10 @@ var validBootstrapAuthFailReasons = map[string]struct{}{
 // persistent outbox row for durable mode).
 //
 // reason must be one of "missing_header", "wrong_credentials", "rate_limited".
-// clientIP may be empty when the middleware did not set ctxkeys.RealIP.
-func (s *Service) RecordBootstrapAuthFail(ctx context.Context, reason, clientIP string) error {
+// clientIPHash is the sealed, keyed hash of the client IP (redaction.HashIP),
+// computed by the composition root — the plaintext IP never reaches the cell or
+// the replayable payload (#1488). It is the zero IPHash when no IP was available.
+func (s *Service) RecordBootstrapAuthFail(ctx context.Context, reason string, clientIPHash redaction.IPHash) error {
 	if _, ok := validBootstrapAuthFailReasons[reason]; !ok {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"setup: RecordBootstrapAuthFail: reason not in whitelist",
@@ -380,7 +383,7 @@ func (s *Service) RecordBootstrapAuthFail(ctx context.Context, reason, clientIP 
 	}
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicBootstrapAuthFailed,
-			dto.BootstrapAuthFailedEvent{Reason: reason, ClientIP: clientIP})
+			dto.BootstrapAuthFailedEvent{Reason: reason, ClientIPHash: clientIPHash})
 	})
 }
 

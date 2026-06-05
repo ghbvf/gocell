@@ -252,7 +252,8 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// The observer fires only after Init (i.e. HTTP servers start), so *acPtr
 	// is always non-nil by then.
 	var acPtr *accesscore.AccessCore
-	authFailObserver := newSSOBFFAuthFailObserver(cfg.logger, &acPtr)
+	ipHashSalt := []byte(envOr(ssobffIPHashSaltEnv, ssobffIPHashSaltDefault))
+	authFailObserver := newSSOBFFAuthFailObserver(cfg.logger, &acPtr, ipHashSalt)
 
 	ssobffBootstrapCreds := auth.BootstrapCredentials{
 		Username: []byte(ssobffBootstrapUsername),
@@ -320,34 +321,56 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}, nil
 }
 
+// IP-hash salt for the demo (#1488). ssobff is a demo-only binary with NO
+// real/demo adapter-mode concept, so — unlike cellmodules/accesscore which goes
+// through cellsecrets.BuildHMACKey (real-mode demo-key fail-fast) — the salt is a
+// plain env-or-default. The default is still registered in
+// cellsecrets.wellKnownDemoKeys so it can never be copied into a real secret. The
+// deliberate absence of a real-mode fail-fast here is acceptable because ssobff
+// is never a production deployment; the production path (accesscore) enforces both
+// demo-key rejection and the ≥32-byte minimum.
+const (
+	ssobffIPHashSaltEnv     = "GOCELL_SSOBFF_IP_HASH_SALT"
+	ssobffIPHashSaltDefault = "dev-ip-hash-salt-ssobff-32-byte!"
+)
+
 // newSSOBFFAuthFailObserver returns an auth.BootstrapAuthFailObserver that logs
 // the bootstrap auth failure with a hashed client IP and then (lazily) calls
 // RecordBootstrapAuthFail on the accesscore cell via the *acPtr forward pointer.
 //
-// *acPtr is set by the caller immediately after the accesscore cell is
-// constructed (see buildSSOBFFAssembly). The observer fires only after HTTP
-// servers start (post-Init), so *acPtr is always non-nil by then.
-func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCore) auth.BootstrapAuthFailObserver {
+// salt keys the single redaction.HashIP used for BOTH the slog field and the
+// wire payload — no plaintext IP leaves this closure (#1488). *acPtr is set by
+// the caller immediately after the accesscore cell is constructed (see
+// buildSSOBFFAssembly). The observer fires only after HTTP servers start
+// (post-Init), so *acPtr is always non-nil by then.
+func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCore, salt []byte) auth.BootstrapAuthFailObserver {
 	return func(ctx context.Context, reason string) {
 		ip, _ := ctxkeys.RealIPFrom(ctx)
-		// C3: slog uses hashed IP; ledger payload keeps plaintext for compliance.
-		ipHash := redaction.HashIPForLog(ip)
+		ipHash := redaction.HashIP(salt, ip)
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
 			slog.String("event", "bootstrap_auth_failed"),
 			slog.String("namespace", "bootstrap"),
 			slog.String("reason", reason),
-			slog.String("client_ip_hash", ipHash))
+			slog.String("client_ip_hash", ipHash.String()))
 		if *acPtr == nil {
-			return
-		}
-		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, 2*time.Second)
-		defer cancel()
-		if err := (*acPtr).RecordBootstrapAuthFail(appendCtx, reason, ip); err != nil {
+			// Symmetric with cellmodules/accesscore: surface the cell-not-ready
+			// path so it is not a silent observability hole during debugging.
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
 				slog.String("namespace", "bootstrap"),
 				slog.String("auth_reason", reason),
-				slog.String("client_ip_hash", ipHash),
+				slog.String("failure", "cell not yet initialized"),
+				slog.String("client_ip_hash", ipHash.String()))
+			return
+		}
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if err := (*acPtr).RecordBootstrapAuthFail(appendCtx, reason, ipHash); err != nil {
+			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
+				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
+				slog.String("auth_reason", reason),
+				slog.String("client_ip_hash", ipHash.String()),
 				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)),
 				slog.Any("error", err))
 		}

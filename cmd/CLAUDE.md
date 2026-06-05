@@ -130,5 +130,6 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 |------|------|---------|
 | `GOCELL_JWT_ISSUER` | JWT iss claim | fail-fast |
 | `GOCELL_SERVICE_SECRET` | /internal/v1/* HMAC 密钥（≥32 字节） | fail-fast |
+| `GOCELL_ACCESSCORE_IP_HASH_SALT` | bootstrap-failed 事件 client-IP keyed-hash salt（≥32 字节，#1488） | real 模式 fail-fast（缺失/demo key/<32B） |
 | `GOCELL_ADAPTER_MODE` | 适配器模式：`""`（dev，默认）/ `real` | — |
 | `GOCELL_CELL_ADAPTER_MODE` | 存储后端：`memory`（默认）/ `postgres`（`postgres` 经 Topology 耦合规则强制要求 `GOCELL_ADAPTER_MODE=real`） | — |

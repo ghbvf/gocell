@@ -32,9 +32,13 @@ import (
 // inaccessible to cells/auditcore by the IMPL-DECL-COVER-01 rule.
 //
 // Schema: contracts/event/auth/bootstrap-failed/v1/payload.schema.json.
+//
+// ClientIPHash carries the already-hashed client IP (#1488); the consumer reads
+// it as a plain string — only the producer side is sealed (redaction.IPHash) to
+// block plaintext at emit time.
 type bootstrapAuthFailedPayload struct {
-	Reason   string `json:"reason"`
-	ClientIP string `json:"clientIp,omitempty"`
+	Reason       string `json:"reason"`
+	ClientIPHash string `json:"clientIpHash,omitempty"`
 }
 
 // Option configures a Service.
@@ -139,7 +143,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 				"auditappendbootstrap: bootstrap-failed payload missing reason")))
 	}
 
-	if err := audit.AppendBootstrapAuthFail(ctx, s.bootstrapStore, s.clk, entry.ID(), payload.Reason, payload.ClientIP); err != nil {
+	if err := audit.AppendBootstrapAuthFail(ctx, s.bootstrapStore, s.clk, entry.ID(), payload.Reason, payload.ClientIPHash); err != nil {
 		// Idempotent replay: the ledger already holds this entry (same stable
 		// EventID = entry.ID(), keyed by IdempotencyContentFingerprint), e.g.
 		// outbox redelivery. ErrAuditLedgerAlreadyExists (KindConflict) is an
