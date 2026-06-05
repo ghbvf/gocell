@@ -121,9 +121,9 @@ type ConfigForExternalCell struct {
 // PR-2..N, tracked at issue #1302); the ratchet meta-archtest
 // ARCHTEST-MODULE-PATH-FUNNEL-01 guarantees that migration converges.
 //
-// Rules intentionally NOT registered (register=no) because they depend on a
-// GoCell-internal positive allowlist (errorFirstEnforcedFiles) and produce
-// vacuous no-op results in external modules with zero matching files:
+// Rules intentionally NOT registered (register=no) because they reason about
+// GoCell's own internal package layout / source, not about how a consumer uses
+// platform APIs — so they are vacuous-green or false-red in an external module:
 //
 //   - ERROR-FIRST-API-01 (CheckErrorFirstAPI01): gated by errorFirstEnforcedFiles,
 //     a hardcoded 22-path positive allowlist of GoCell-specific files. An external
@@ -133,6 +133,14 @@ type ConfigForExternalCell struct {
 //   - ERROR-FIRST-TYPED-NIL-01 (CheckErrorFirstTypedNil01): similarly gated by
 //     errorFirstEnforcedFiles via errorFirstPackagePatterns(). Same false-safety
 //     concern for external modules. Enforced in GoCell via TestErrorFirstTypedNil01.
+//   - DETAILS-SEALED-FIELD-FROZEN-01 (CheckDetailsSealedFieldFrozen01): a
+//     platform-source self-check — it reflects on errcode.PublicDetail/InternalDetail
+//     and AST-parses pkg/errcode/details.go. The reflect half is tautological for a
+//     consumer (it inspects the imported GoCell dependency type, which the consumer
+//     cannot alter); the AST half resolves details.go under the CONSUMER module root
+//     (findModuleRoot), where that file does not exist → false-red in a clean
+//     external repo. It constrains GoCell's own errcode package shape, so it stays a
+//     GoCell-internal self-check enforced via TestDetailsSealedFieldFrozen01.
 //
 // An external consumer gets the rules migrated so far plus any cfg.ExtraRules
 // they add. The set expands as additional portable rules land in #1302.
@@ -142,7 +150,6 @@ func StandardCellRules() []*CellRule {
 		{ID: ruleErrcodeKindLiteral01, Run: CheckErrcodeKindLiteralBanned},
 		{ID: ruleMessageConstLiteral01, Run: CheckErrcodeMessageConstLiteral},
 		{ID: ruleExportedErrorNew01, Run: CheckExportedErrorNew},
-		{ID: ruleDetailsSealedFieldFrozen, Run: CheckDetailsSealedFieldFrozen01},
 	}
 }
 

@@ -813,14 +813,6 @@ linters:
       - path: ^cmd/gocell/app/verify_codegen_(cell|contract)\.go
         linters:
           - dupl
-      # errcode_invariants.go: detector functions migrated from _test.go (#1302 M3).
-      # resolveGatedCallee / resolveCodeGatedCallee are intentionally parallel
-      # (message-gated vs code-gated callee dispatch); merging into a generic
-      # would hide the semantic distinction between message-arg and code-arg
-      # scanning (F4: funlen/gocognit/cyclop exemptions removed after refactor).
-      - path: ^tools/archtest/errcode_invariants\.go
-        linters:
-          - dupl
       # token_pair.go: ToTokenPairResponse uses an explicit struct literal to
       # create a wire/model boundary that prevents accidental field
       # auto-leakage when either struct evolves. Source comment documents the

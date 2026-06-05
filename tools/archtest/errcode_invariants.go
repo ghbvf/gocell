@@ -2,18 +2,35 @@ package archtest
 
 // errcode_invariants.go — importable errcode-theme rule logic (#1302 M3).
 //
-// This is the non-test home of the detector logic for six errcode-theme
-// CellRules so they can be compiled and run by an external Cell repository
-// through CheckErrcodeKindLiteralBanned / CheckErrcodeMessageConstLiteral /
-// CheckExportedErrorNew / CheckErrorFirstAPI01 / CheckErrorFirstTypedNil01 /
-// CheckDetailsSealedFieldFrozen01 (via StandardCellRules / RunStandardCellRules).
-// Go never compiles a dependency's _test.go, so rule logic that external repos
-// must run cannot live in a _test.go file. GoCell's own Test* functions in
+// This is the non-test home of the detector logic for six errcode-theme rules,
+// so they can be compiled and run by an external Cell repository (Go never
+// compiles a dependency's _test.go, so rule logic external repos must run cannot
+// live in a _test.go file). GoCell's own Test* functions in
 // errcode_invariants_test.go call the same Check* — single source, no parallel
 // rule body.
 //
-// Two rules are intentionally NOT registered (register=no) because they are
-// bound to GoCell's own registry/ADR, making them vacuous for external modules:
+// Two distinct layers — importable surface vs registered subset — do NOT
+// coincide; do not conflate them:
+//
+//	Importable Check* functions (all six, callable directly / dogfooded):
+//	  CheckErrcodeKindLiteralBanned, CheckErrcodeMessageConstLiteral,
+//	  CheckExportedErrorNew, CheckErrorFirstAPI01, CheckErrorFirstTypedNil01,
+//	  CheckDetailsSealedFieldFrozen01.
+//
+//	Registered in StandardCellRules (the consumer-portable subset — rules that
+//	reason about how a consumer USES platform errcode APIs):
+//	  ERRCODE-KIND-LITERAL-01, MESSAGE-CONST-LITERAL-01, EXPORTED-ERROR-NEW-01.
+//
+// The other three Check* are importable but intentionally NOT registered because
+// they constrain GoCell's OWN internal layout/source, making them vacuous-green
+// or false-red for an external module (see external.go's StandardCellRules
+// godoc): ERROR-FIRST-API-01 / ERROR-FIRST-TYPED-NIL-01 (gated by the
+// GoCell-specific errorFirstEnforcedFiles allowlist) and
+// DETAILS-SEALED-FIELD-FROZEN-01 (a platform-source self-check on
+// pkg/errcode/details.go).
+//
+// Two further errcode-theme rules are bound to GoCell's own registry/ADR and so
+// have no importable Check* at all — they remain in errcode_invariants_test.go:
 //
 //   - ERRCODE-PREFIX-OWNERSHIP-01: scans pkg/errcode/testdata/prefix_set.golden
 //     and the gocell platform prefix registry — meaningless for external cells.
@@ -21,8 +38,7 @@ package archtest
 //     against docs/architecture/202605121800-adr-archtest-carveout-narrow.md,
 //     a GoCell-internal ADR.
 //
-// Both are kept module-path-agnostic (no bare platform-path literals) but remain
-// in errcode_invariants_test.go.
+// Both are kept module-path-agnostic (no bare platform-path literals).
 //
 // Platform-symbol paths are anchored to [PlatformModulePath] (fixed: external
 // repos import these packages as a GoCell dependency at that path). The scan
@@ -284,12 +300,28 @@ func buildCarvedRangeChecker(f *ast.File, rel string, carveOuts map[carveOut]str
 	}
 }
 
-// ─── MESSAGE-CONST-LITERAL-01 ────────────────────────────────────────────────
+// ─── shared typed production scan ─────────────────────────────────────────────
 
-// CheckErrcodeMessageConstLiteral runs MESSAGE-CONST-LITERAL-01 over the
-// running module and returns its diagnostics. It is the importable CellRule
-// body wrapped by StandardCellRules.
-func CheckErrcodeMessageConstLiteral(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+// runErrcodeTypedScan loads the running module and applies perFile to every
+// production file, returning the aggregated diagnostics. It mirrors
+// CheckPanicRegistered's two-pass shape: the default build configuration is
+// always scanned, and when cfg.BuildTags is non-empty a second pass loads files
+// behind those build directives so a violation hidden by `//go:build prod` is
+// not missed. The two loads are deduped per absolute file path (visited) so a
+// file present under both configs is scanned once and multiple violations on a
+// single line are preserved. GoCell's dogfood passes FlatNonDefaultTags(); an
+// external repo passes whatever tags gate its production files — neither is
+// baked in. The scan SCOPE is the running module's prodscan patterns (resolved
+// by findModuleRoot from its go.mod), never the platform module.
+//
+// skip excludes a rule's allowlisted relative paths (e.g. pkg/errcode/ itself,
+// the migration destination); perFile is the rule's per-file AST/types scanner.
+func runErrcodeTypedScan(
+	t *testing.T,
+	cfg ConfigForExternalCell,
+	skip func(rel string) bool,
+	perFile func(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic,
+) []Diagnostic {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
@@ -299,33 +331,47 @@ func CheckErrcodeMessageConstLiteral(t *testing.T, cfg ConfigForExternalCell) []
 	patterns := prodscan.PatternsExtended(root)
 
 	visited := map[string]bool{}
-	return Run(t, Typed(
-		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
-		patterns,
-	),
-		func(p *Pass) []Diagnostic {
-			var out []Diagnostic
-			for _, file := range p.Files {
-				abs := p.Abs(file)
-				if visited[abs] {
-					continue
-				}
-				visited[abs] = true
-
-				rel := p.Rel(file)
-				if !fileroles.IsProductionCode(rel) {
-					continue
-				}
-				if strings.HasPrefix(rel, errcodeMessageAllowlist) {
-					continue
-				}
-				if strings.HasPrefix(rel, errcodeMessageTestdataAllowlist) {
-					continue
-				}
-				out = append(out, scanErrcodeMessageASTDiags(p.Fset, file, rel, p.TypesInfo)...)
+	var out []Diagnostic
+	scan := func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			abs := p.Abs(file)
+			if visited[abs] {
+				continue
 			}
-			return out
-		})
+			visited[abs] = true
+
+			rel := p.Rel(file)
+			if !fileroles.IsProductionCode(rel) || skip(rel) {
+				continue
+			}
+			out = append(out, perFile(p.Fset, file, rel, p.TypesInfo)...)
+		}
+		return nil
+	}
+
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), scan)
+	if len(cfg.BuildTags) > 0 {
+		_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags}, patterns), scan)
+	}
+	return out
+}
+
+// ─── MESSAGE-CONST-LITERAL-01 ────────────────────────────────────────────────
+
+// CheckErrcodeMessageConstLiteral runs MESSAGE-CONST-LITERAL-01 over the
+// running module and returns its diagnostics. It is the importable CellRule
+// body wrapped by StandardCellRules. The default build config plus the
+// consumer's cfg.BuildTags are scanned (see runErrcodeTypedScan) so a violation
+// behind a `//go:build` directive in any repo is not missed.
+func CheckErrcodeMessageConstLiteral(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	return runErrcodeTypedScan(t, cfg,
+		func(rel string) bool {
+			return strings.HasPrefix(rel, errcodeMessageAllowlist) ||
+				strings.HasPrefix(rel, errcodeMessageTestdataAllowlist)
+		},
+		scanErrcodeMessageASTDiags,
+	)
 }
 
 // scanErrcodeMessageASTDiags is the Diagnostic-returning form used by the
@@ -529,8 +575,10 @@ func isAcceptableMessageExpr(expr ast.Expr, info *types.Info) bool {
 // ─── ERROR-FIRST-API-01 ───────────────────────────────────────────────────────
 
 // CheckErrorFirstAPI01 runs ERROR-FIRST-API-01 over the enforced file list and
-// returns its diagnostics. It is the importable CellRule body wrapped by
-// StandardCellRules.
+// returns its diagnostics. Importable for GoCell dogfood / direct invocation,
+// but intentionally NOT registered in StandardCellRules: it is gated by the
+// GoCell-specific errorFirstEnforcedFiles allowlist and so is vacuous-green in
+// an external module (see external.go). Enforced in GoCell via TestErrorFirstAPI01.
 func CheckErrorFirstAPI01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	root := findModuleRoot(t)
@@ -592,8 +640,11 @@ func scanFileForErrorFirstViolations(fset *token.FileSet, file *ast.File, rel st
 // ─── ERROR-FIRST-TYPED-NIL-01 ────────────────────────────────────────────────
 
 // CheckErrorFirstTypedNil01 runs ERROR-FIRST-TYPED-NIL-01 over the enforced
-// file list and returns its diagnostics. It is the importable CellRule body
-// wrapped by StandardCellRules.
+// file list and returns its diagnostics. Importable for GoCell dogfood / direct
+// invocation, but intentionally NOT registered in StandardCellRules: it is gated
+// by the GoCell-specific errorFirstEnforcedFiles allowlist and so is
+// vacuous-green in an external module (see external.go). Enforced in GoCell via
+// TestErrorFirstTypedNil01.
 func CheckErrorFirstTypedNil01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	if testing.Short() {
@@ -983,41 +1034,17 @@ func errcodeErrorAliasReexports(f *ast.File) []string {
 
 // CheckExportedErrorNew runs EXPORTED-ERROR-NEW-01 over the running module and
 // returns its diagnostics. It is the importable CellRule body wrapped by
-// StandardCellRules.
+// StandardCellRules. The default build config plus the consumer's cfg.BuildTags
+// are scanned (see runErrcodeTypedScan) so an exported `Err* = errors.New(...)`
+// behind a `//go:build` directive in any repo is not missed.
 func CheckExportedErrorNew(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
-
-	visited := map[string]bool{}
-	return Run(t, Typed(
-		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
-		patterns,
-	),
-		func(p *Pass) []Diagnostic {
-			var out []Diagnostic
-			for _, file := range p.Files {
-				abs := p.Abs(file)
-				if visited[abs] {
-					continue
-				}
-				visited[abs] = true
-
-				rel := p.Rel(file)
-				if !fileroles.IsProductionCode(rel) {
-					continue
-				}
-				if strings.HasPrefix(rel, errcodeAllowlistPath) {
-					continue
-				}
-				out = append(out, scanExportedErrorNewASTDiags(p.Fset, file, rel, p.TypesInfo)...)
-			}
-			return out
-		})
+	return runErrcodeTypedScan(t, cfg,
+		func(rel string) bool {
+			return strings.HasPrefix(rel, errcodeAllowlistPath)
+		},
+		scanExportedErrorNewASTDiags,
+	)
 }
 
 // scanExportedErrorNewASTDiags is the Diagnostic-returning form used by
@@ -1119,12 +1146,18 @@ func isErrorsNewCall(expr ast.Expr, info *types.Info) bool {
 
 // CheckDetailsSealedFieldFrozen01 runs DETAILS-SEALED-FIELD-FROZEN-01 against
 // the platform errcode package's PublicDetail/InternalDetail structs and
-// returns its diagnostics. It is the importable CellRule body wrapped by
-// StandardCellRules.
+// returns its diagnostics.
 //
-// This rule uses reflect on the actual errcode.PublicDetail and InternalDetail
-// types — the platform package must be importable as a dependency, which it is
-// for any external Cell that imports GoCell as a module.
+// Importable for GoCell dogfood / direct invocation, but intentionally NOT
+// registered in StandardCellRules: it is a platform-source self-check, not a
+// consumer-API rule. The reflect half inspects errcode.PublicDetail/InternalDetail
+// — for a consumer that is the imported GoCell dependency type, which they cannot
+// alter (tautological); the AST half (checkPublicDetailInvariants) parses
+// pkg/errcode/details.go resolved under the CONSUMER module root via
+// findModuleRoot, where that file does not exist → false-red in a clean external
+// repo. It constrains GoCell's own errcode package shape, so it stays a
+// GoCell-internal self-check enforced via TestDetailsSealedFieldFrozen01. See
+// external.go's StandardCellRules godoc.
 func CheckDetailsSealedFieldFrozen01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	var diags []Diagnostic
