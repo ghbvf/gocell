@@ -53,8 +53,8 @@ check-build:
 # go.work member from the single funnel (hack/lib/modules.sh → `go work edit
 # -json`) and `go -C "$$dir" test ./...` each — covers root + every satellite
 # (#1556) with zero hardcoded list, and an ambient GOWORK=off can't silently
-# narrow the set to examples/demo the way the old hardcoded
-# `github.com/ghbvf/gocell/examples/...` wildcard did. Fail-closed: a broken
+# mis-narrow coverage the way a hardcoded
+# `github.com/ghbvf/gocell/examples/...` wildcard would. Fail-closed: a broken
 # funnel (missing jq / malformed go.work) aborts under `set -e` rather than
 # skipping satellites. Mirrors hack/verify-workspace-test.sh + the CI lanes.
 test:

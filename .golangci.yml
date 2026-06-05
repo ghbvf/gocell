@@ -381,6 +381,7 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/examples/demo
+            - github.com/ghbvf/gocell/generated/contracts
           deny:
             - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
               desc: |
