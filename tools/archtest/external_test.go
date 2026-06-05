@@ -12,8 +12,16 @@ package archtest
 import "testing"
 
 // TestStandardCellRulesComposition asserts the curated set is well-formed:
-// non-empty, every rule has a non-empty unique ID and a non-nil Run, and the
-// PR-1 exemplar PANIC-REGISTERED-01 is present. Cheap (no module scan).
+// non-empty, every rule has a non-empty unique ID and a non-nil Run, and its
+// membership is EXACTLY the adjudicated set. Cheap (no module scan).
+//
+// Asserting exact membership (not merely "contains PANIC-REGISTERED-01") proves
+// the standard set holds only adjudicated rules: registering a new rule or
+// dropping one becomes a deliberate, test-visible edit to wantRuleIDs rather
+// than silent drift. This closes codex #1621 F1 — the cell-family rules are
+// gocell-internal and deliberately NOT registered (see each rule file's godoc),
+// so a stray registration must fail here, not slip in behind a stale "wrapped
+// by StandardCellRules" narrative.
 func TestStandardCellRulesComposition(t *testing.T) {
 	t.Parallel()
 	rules := StandardCellRules()
@@ -21,7 +29,6 @@ func TestStandardCellRulesComposition(t *testing.T) {
 		t.Fatal("StandardCellRules() must not be empty")
 	}
 	seen := make(map[string]bool, len(rules))
-	var hasPanicRule bool
 	for _, r := range rules {
 		if r == nil {
 			t.Fatal("StandardCellRules() contains a nil *CellRule")
@@ -36,12 +43,24 @@ func TestStandardCellRulesComposition(t *testing.T) {
 			t.Errorf("duplicate rule ID %q in StandardCellRules()", r.ID)
 		}
 		seen[r.ID] = true
-		if r.ID == rulePanicRegistered01 {
-			hasPanicRule = true
+	}
+
+	// wantRuleIDs is the adjudicated standard set. PR-1 ships PANIC-REGISTERED-01
+	// as the sole migration exemplar; the cell-family rules are gocell-internal
+	// and NOT registered. A new entry here must be a rule portable to external
+	// Cell repos (it reasons about platform-API usage, not GoCell's own package
+	// layout) — see external.go's StandardCellRules godoc.
+	wantRuleIDs := map[string]bool{rulePanicRegistered01: true}
+	for id := range seen {
+		if !wantRuleIDs[id] {
+			t.Errorf("StandardCellRules() contains undeclared rule %q; if intended, add it to "+
+				"wantRuleIDs and confirm the rule is portable to external Cell repos", id)
 		}
 	}
-	if !hasPanicRule {
-		t.Errorf("StandardCellRules() must include %q (PR-1 exemplar)", rulePanicRegistered01)
+	for id := range wantRuleIDs {
+		if !seen[id] {
+			t.Errorf("StandardCellRules() is missing adjudicated rule %q", id)
+		}
 	}
 }
 

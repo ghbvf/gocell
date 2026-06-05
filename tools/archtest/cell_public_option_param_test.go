@@ -59,11 +59,15 @@ const expectedRawParamFixtureViolations = 11
 // examples/<demo>/cells/<x>/**/*.go) must NOT accept. Adding a new type is
 // permanent (AI-HARD): every existing exported With* re-evaluates against
 // the new entry.
+//
+// The canonical paths are derived from PlatformModulePath constants declared
+// in cell_public_option_param.go, eliminating bare string literals from this
+// _test.go file.
 var rawPublicOptionForbidden = map[string]bool{
-	"github.com/ghbvf/gocell/kernel/persistence.TxRunner": true,
-	"github.com/ghbvf/gocell/kernel/outbox.Publisher":     true,
-	"github.com/ghbvf/gocell/kernel/outbox.Writer":        true,
-	"github.com/ghbvf/gocell/kernel/outbox.Emitter":       true,
+	rawPublicOptionForbiddenPersistenceTxRunner: true,
+	rawPublicOptionForbiddenOutboxPublisher:     true,
+	rawPublicOptionForbiddenOutboxWriter:        true,
+	rawPublicOptionForbiddenOutboxEmitter:       true,
 }
 
 type rawPublicOptionViolation struct {
@@ -428,22 +432,22 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	for _, v := range violations {
 		got[v.FuncName] = v.ParamType
 	}
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithBadTxRunner"])
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadPublisher"])
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Writer", got["WithBadWriter"])
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Emitter", got["WithBadEmitter"])
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithAliasedBadTxRunner"],
+	assert.Equal(t, rawPublicOptionForbiddenPersistenceTxRunner, got["WithBadTxRunner"])
+	assert.Equal(t, rawPublicOptionForbiddenOutboxPublisher, got["WithBadPublisher"])
+	assert.Equal(t, rawPublicOptionForbiddenOutboxWriter, got["WithBadWriter"])
+	assert.Equal(t, rawPublicOptionForbiddenOutboxEmitter, got["WithBadEmitter"])
+	assert.Equal(t, rawPublicOptionForbiddenPersistenceTxRunner, got["WithAliasedBadTxRunner"],
 		"types.Unalias must resolve type alias to canonical raw type")
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadEmbedPublisher"],
+	assert.Equal(t, rawPublicOptionForbiddenOutboxPublisher, got["WithBadEmbedPublisher"],
 		"inline interface embed must resolve to embedded raw type")
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Writer", got["WithBadEmbedWriter"],
+	assert.Equal(t, rawPublicOptionForbiddenOutboxWriter, got["WithBadEmbedWriter"],
 		"inline interface embed must resolve to embedded raw type")
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithBadEmbedTxRunner"],
+	assert.Equal(t, rawPublicOptionForbiddenPersistenceTxRunner, got["WithBadEmbedTxRunner"],
 		"inline interface embed must resolve to embedded raw type")
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithBadPureMethodIfaceTxRunner"],
+	assert.Equal(t, rawPublicOptionForbiddenPersistenceTxRunner, got["WithBadPureMethodIfaceTxRunner"],
 		"pure-method anonymous interface must resolve via types.Implements fall-through")
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadNamedLocalEmbedPublisher"],
+	assert.Equal(t, rawPublicOptionForbiddenOutboxPublisher, got["WithBadNamedLocalEmbedPublisher"],
 		"named local interface that embeds outbox.Publisher must resolve via underlying recursion")
-	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithGenericTx"],
+	assert.Equal(t, rawPublicOptionForbiddenPersistenceTxRunner, got["WithGenericTx"],
 		"generic type param constrained to TxRunner must resolve via TypeParam.Constraint()")
 }

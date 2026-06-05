@@ -98,11 +98,14 @@ import (
 // cellInitCheckNotNoopRuleID is the diagnostic anchor for this archtest.
 const cellInitCheckNotNoopRuleID = "CELL-L2-INIT-CHECKNOTNOOP-CALLED-01"
 
-// kernelCellCheckNotNoopFullName is the fully-qualified callee name produced
-// by `(*types.Func).FullName()` for `kernel/outbox.CheckNotNoop`. Used as the
-// equality probe in Phase B's BFS — string match on FullName is rename-safe
-// across packages and import aliases (handled by *types.Info.Uses lookup).
-const kernelCellCheckNotNoopFullName = "github.com/ghbvf/gocell/kernel/outbox.CheckNotNoop"
+// kernelCellCheckNotNoopFullName aliases the package-level checkNotNoopFullName
+// constant (declared in cell_init_checknotnoop.go) so existing test helpers in
+// this file remain readable without a rename — both refer to the same
+// platform-anchored path derived from PlatformModulePath.
+//
+// This alias removes the bare "github.com/ghbvf/gocell" literal from this
+// _test.go file; the single source is now cell_init_checknotnoop.go.
+const kernelCellCheckNotNoopFullName = checkNotNoopFullName
 
 // l2TargetCell captures the minimal data Phase A collects from cell.yaml to
 // drive Phase B's production scan.
