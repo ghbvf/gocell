@@ -61,6 +61,13 @@
 //     generated cell_gen.go — EvaluateConstString returns ("", false) → the
 //     check is skipped (conservatively not flagging). In practice cellgen always
 //     emits a string literal, so this case cannot arise from the template.
+//   - B3. Dot-import (`import . "github.com/ghbvf/gocell/kernel/cell"`) makes
+//     GRPCService(spec) appear as a bare *ast.Ident (not *ast.SelectorExpr),
+//     invisible to isGRPCServiceCall / ResolveMethodCall. Mitigated by the
+//     revive dot-imports linter rule in .golangci.yml (prohibits all dot-imports
+//     in production code) and by the kernel/cell import graph (cells/ and
+//     examples/ do not and cannot dot-import kernel/cell due to layer rules).
+//     No separate self-check test is added — the linter is the gate.
 //
 // ref: tools/archtest/projection_register_funnel_test.go (canonical template)
 // ref: tools/archtest/reverse_coverage_invariants_test.go (loadReverseCoverageContracts)
@@ -315,6 +322,71 @@ func TestGRPCMethodInContract01_A_CallerAllowlist(t *testing.T) {
 	Report(t, "GRPC-METHOD-IN-CONTRACT-01/A", diags)
 }
 
+// grpcRegRef describes a single reg.GRPCService call site extracted from a
+// generated cell_gen.go, carrying enough context to perform orphan detection
+// without needing to re-run packages.Load.
+type grpcRegRef struct {
+	Rel        string // relative file path (used in Diagnostic.Rel)
+	ContractID string // the ContractID string literal from the call
+}
+
+// detectOrphanRegs is the pure diagnostic core of sub-check B. It accepts the
+// known set of kind:grpc contract IDs and a list of reg.GRPCService references
+// found in generated cell_gen.go files, and returns one Diagnostic per
+// reference whose ContractID is absent from the known set.
+//
+// Both the production test (TestGRPCMethodInContract01_B_NoOrphanReg) and the
+// synthetic RED test (TestGRPCMethodInContract01_B_SyntheticOrphanReg) call
+// this function directly — the production test drives it via the packages.Load
+// code path; the synthetic test drives it via in-memory inputs.
+func detectOrphanRegs(knownGRPCContracts map[string]bool, regs []grpcRegRef) []Diagnostic {
+	var diags []Diagnostic
+	for _, r := range regs {
+		if !knownGRPCContracts[r.ContractID] {
+			diags = append(diags, Diagnostic{
+				Rel: r.Rel,
+				Message: fmt.Sprintf(
+					"GRPC-METHOD-IN-CONTRACT-01/B: generated cell_gen.go references "+
+						"ContractID %q which does not match any kind:grpc contract.yaml. "+
+						"Delete or regenerate the stale entry.",
+					r.ContractID,
+				),
+			})
+		}
+	}
+	return diags
+}
+
+// detectOrphanContracts is the pure diagnostic core of sub-check C. It accepts
+// a list of contractDocs and the set of contract IDs that have at least one
+// serve contractUsage, and returns one Diagnostic per active kind:grpc contract
+// with a non-empty endpoints.server that has no matching serve usage.
+//
+// Both the production test (TestGRPCMethodInContract01_C_NoOrphanContract) and
+// the synthetic RED test (TestGRPCMethodInContract01_C_SyntheticOrphanContract)
+// call this function directly.
+func detectOrphanContracts(contracts []contractDoc, servedIDs map[string]bool) []Diagnostic {
+	var diags []Diagnostic
+	for _, c := range contracts {
+		if !isActiveGRPCContractWithServer(c) {
+			continue
+		}
+		if !servedIDs[c.ID] {
+			diags = append(diags, Diagnostic{
+				Rel: c.FilePath,
+				Message: fmt.Sprintf(
+					"GRPC-METHOD-IN-CONTRACT-01/C: active kind:grpc contract %q has "+
+						"endpoints.server=%q but no slice.yaml declares "+
+						"contractUsages[role=serve] referencing it. "+
+						"Add a serve contractUsage or set lifecycle to inactive.",
+					c.ID, c.Endpoints.Server,
+				),
+			})
+		}
+	}
+	return diags
+}
+
 // TestGRPCMethodInContract01_B_NoOrphanReg enforces the B sub-check of
 // GRPC-METHOD-IN-CONTRACT-01: every ContractID string found in a generated
 // cell_gen.go's reg.GRPCService call must resolve to a real kind:grpc contract.
@@ -335,7 +407,7 @@ func TestGRPCMethodInContract01_B_NoOrphanReg(t *testing.T) {
 	grpcContractIDs := buildGRPCContractIDSet(contracts)
 
 	allPatterns := prodscan.Patterns(root)
-	var diags []Diagnostic
+	var regs []grpcRegRef
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns),
 		func(p *Pass) []Diagnostic {
@@ -350,22 +422,13 @@ func TestGRPCMethodInContract01_B_NoOrphanReg(t *testing.T) {
 					continue
 				}
 				for _, contractID := range extractGRPCContractIDs(f, p.TypesInfo) {
-					if !grpcContractIDs[contractID] {
-						diags = append(diags, Diagnostic{
-							Rel: rel,
-							Message: fmt.Sprintf(
-								"GRPC-METHOD-IN-CONTRACT-01/B: generated cell_gen.go references "+
-									"ContractID %q which does not match any kind:grpc contract.yaml. "+
-									"Delete or regenerate the stale entry.",
-								contractID,
-							),
-						})
-					}
+					regs = append(regs, grpcRegRef{Rel: rel, ContractID: contractID})
 				}
 			}
 			return nil
 		})
 
+	diags := detectOrphanRegs(grpcContractIDs, regs)
 	sort.Slice(diags, func(i, j int) bool {
 		return diags[i].Rel < diags[j].Rel
 	})
@@ -407,25 +470,7 @@ func TestGRPCMethodInContract01_C_NoOrphanContract(t *testing.T) {
 	// Build a set of (belongsToCell, contractID) serve pairs keyed by contractID.
 	servedContracts := buildServedContractSet(serveUsages)
 
-	var diags []Diagnostic
-	for _, c := range contracts {
-		if !isActiveGRPCContractWithServer(c) {
-			continue
-		}
-		if !servedContracts[c.ID] {
-			diags = append(diags, Diagnostic{
-				Rel: c.FilePath,
-				Message: fmt.Sprintf(
-					"GRPC-METHOD-IN-CONTRACT-01/C: active kind:grpc contract %q has "+
-						"endpoints.server=%q but no slice.yaml declares "+
-						"contractUsages[role=serve] referencing it. "+
-						"Add a serve contractUsage or set lifecycle to inactive.",
-					c.ID, c.Endpoints.Server,
-				),
-			})
-		}
-	}
-
+	diags := detectOrphanContracts(contracts, servedContracts)
 	sort.Slice(diags, func(i, j int) bool {
 		return diags[i].Rel < diags[j].Rel
 	})
@@ -448,6 +493,80 @@ func buildServedContractSet(usages []sliceServeEntry) map[string]bool {
 		m[u.ContractID] = true
 	}
 	return m
+}
+
+// TestGRPCMethodInContract01_B_SyntheticOrphanReg exercises detectOrphanRegs
+// on in-memory synthetic data to prove the diagnostic-producing branch is
+// reachable even when the repository has zero kind:grpc contracts (sub-check B
+// is vacuously green in production today).
+//
+// RED case: a reg reference to an unknown ContractID must produce a diagnostic.
+// GREEN case: a reg reference to a known ContractID must produce no diagnostic.
+func TestGRPCMethodInContract01_B_SyntheticOrphanReg(t *testing.T) {
+	t.Parallel()
+
+	known := map[string]bool{
+		"grpc.device.command.v1": true,
+	}
+
+	// RED: ContractID not in known set → must fire.
+	redRegs := []grpcRegRef{
+		{Rel: "cells/fakecell/cell_gen.go", ContractID: "grpc.nonexistent.v1"},
+	}
+	redDiags := detectOrphanRegs(known, redRegs)
+	assert.Len(t, redDiags, 1,
+		"detectOrphanRegs: unknown ContractID must produce exactly one diagnostic")
+	if len(redDiags) == 1 {
+		assert.Contains(t, redDiags[0].Message, "grpc.nonexistent.v1",
+			"diagnostic must name the offending ContractID")
+		assert.Equal(t, "cells/fakecell/cell_gen.go", redDiags[0].Rel)
+	}
+
+	// GREEN: ContractID in known set → must produce no diagnostic.
+	greenRegs := []grpcRegRef{
+		{Rel: "cells/fakecell/cell_gen.go", ContractID: "grpc.device.command.v1"},
+	}
+	greenDiags := detectOrphanRegs(known, greenRegs)
+	assert.Empty(t, greenDiags,
+		"detectOrphanRegs: known ContractID must produce no diagnostic")
+}
+
+// TestGRPCMethodInContract01_C_SyntheticOrphanContract exercises
+// detectOrphanContracts on in-memory synthetic data to prove the
+// diagnostic-producing branch is reachable even when the repository has zero
+// kind:grpc contracts (sub-check C is vacuously green in production today).
+//
+// RED case: an active kind:grpc contract with a server but no matching serve
+// usage must produce a diagnostic.
+// GREEN case: an active kind:grpc contract WITH a matching serve usage must
+// produce no diagnostic.
+func TestGRPCMethodInContract01_C_SyntheticOrphanContract(t *testing.T) {
+	t.Parallel()
+
+	contracts := []contractDoc{
+		{
+			ID:        "grpc.device.command.v1",
+			Kind:      "grpc",
+			Lifecycle: "active",
+			FilePath:  "contracts/grpc/device/command/v1/contract.yaml",
+			Endpoints: contractEndpoints{Server: "devicecell"},
+		},
+	}
+
+	// RED: no serve usage for this contract → must fire.
+	redDiags := detectOrphanContracts(contracts, map[string]bool{})
+	assert.Len(t, redDiags, 1,
+		"detectOrphanContracts: unserved active grpc contract must produce exactly one diagnostic")
+	if len(redDiags) == 1 {
+		assert.Contains(t, redDiags[0].Message, "grpc.device.command.v1",
+			"diagnostic must name the offending contract ID")
+	}
+
+	// GREEN: serve usage present → must produce no diagnostic.
+	served := map[string]bool{"grpc.device.command.v1": true}
+	greenDiags := detectOrphanContracts(contracts, served)
+	assert.Empty(t, greenDiags,
+		"detectOrphanContracts: served active grpc contract must produce no diagnostic")
 }
 
 // TestGRPCMethodInContract01_ReverseFixture loads the synthetic violation

@@ -18,6 +18,6 @@ func fixtureSpec() cell.GRPCServiceSpec {
 		ContractID: "grpc.fixture.v1",
 		CellID:     "fixturecell",
 		Listener:   cell.PrimaryListener,
-		Register:   func() {},
+		Register: func() {}, // wrong type intentionally: real type is func(grpc.ServiceRegistrar); this fixture only feeds the AST scan and never reaches runtime, so Validate()'s nil-only check passes and the grpc import is avoided.
 	}
 }
