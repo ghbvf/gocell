@@ -60,8 +60,8 @@ var reconcileDurationBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2
 // Metrics holds the optional pre-bound instruments the Loop records to. A nil
 // field disables that instrument (the Loop nil-checks before every record).
 // Build via RegisterMetrics at the composition root and inject; the Loop
-// preflights label sets at Start (same wiring shape as
-// runtime/command.preflightSweepErrorCounter).
+// preflights label sets at Start (same construction-time label preflight
+// pattern).
 type Metrics struct {
 	// Total counts reconcile outcomes, labels {reconciler, result}.
 	Total kernelmetrics.CounterVec
@@ -125,8 +125,8 @@ func RegisterMetrics(p kernelmetrics.Provider) (Metrics, error) {
 // mismatch; without this, the first record would crash a worker goroutine and
 // crashloop the service. Catching it here turns a misconfigured vec into a
 // fail-fast Start error. The recovered value is redacted before wrapping so a
-// credential-bearing panic string cannot leak. Mirrors
-// runtime/command.preflightSweepErrorCounter.
+// credential-bearing panic string cannot leak. Uses the bootstrap-time metric
+// label preflight pattern.
 func (m Metrics) preflight(reconcilerID string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {

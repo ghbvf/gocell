@@ -209,11 +209,10 @@ func TestLoop_OwnerCtxCancelDrainsWithoutStop(t *testing.T) {
 		testtime.EventuallyDefault, testtime.D1ms, "leader gauge must reset to 0 when owner ctx drains the loop without Stop")
 }
 
-// TestLoop_OwnerCtxCanceledBeforeStart mirrors the transplant source's
-// TestSweeperLifecycle_OwnerCtxCancelDuringProbe: the owner ctx is canceled
-// BEFORE Start, so awaitProbe must take the deterministic cancel pre-check —
-// Start returns nil without reporting "started", and the subsequent Stop is a
-// no-op (state was cleared). goleak verifies the spawned workers self-drain.
+// TestLoop_OwnerCtxCanceledBeforeStart: the owner ctx is canceled BEFORE Start,
+// so awaitProbe must take the deterministic cancel pre-check — Start returns nil
+// without reporting "started", and the subsequent Stop is a no-op (state was
+// cleared). goleak verifies the spawned workers self-drain.
 func TestLoop_OwnerCtxCanceledBeforeStart(t *testing.T) {
 	l := &Loop{
 		reconcilerID: "rc",

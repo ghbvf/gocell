@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -69,30 +71,29 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 	return ExpiryTransition{}, false
 }
 
-// Sweeper is a kernel-level command expiry actor that, on each SweepTick call,
-// scans non-terminal commands (via ActiveScanner) and terminates expired entries
-// (via Queue.Ack(AckTimeout)).
+// Sweeper is a kernel-level command expiry actor. It implements
+// reconcile.Reconciler: each Reconcile call scans non-terminal commands (via
+// ActiveScanner) and terminates expired entries (via Queue.Ack(AckTimeout)).
+// It is the reconcile runtime's first real consumer — a reconcile.Loop drives
+// it on a TickerTrigger cadence (the per-tick control shell that used to live in
+// runtime/command has been deleted).
 //
-// Sweeper has no clock or ticker fields — time source and tick scheduling are
-// entirely owned by the control plane (runtime/command.SweeperLifecycle). This
-// makes "inject a fake clock into Sweeper for control-plane timing" impossible
-// at the type level (C.1 Hard carrier): there is no clock field to inject.
-//
-// AI-robust 评级：**C.1 Hard（类型不可表达）** — Sweeper 无任何时钟字段；
-// 控制面 fake clock 在 kernel 类型层不可表达。runtime 层控制面真实时间
-// carve-out 是 Medium（archtest 函数级白名单）。
-//
-// Business-plane time (now) is passed explicitly to SweepTick and SweepOnce,
-// preserving full determinism for business logic tests without requiring any
-// clock injection into Sweeper itself.
+// Time source: the Sweeper holds the cell's business clock (clk). Reconcile —
+// whose signature carries no "now" — sources the sweep time from clk.Now(),
+// following the reconcile convention that a Reconciler owns its own domain
+// clock. Control-plane scheduling (the tick cadence, startup probe, requeue
+// timers) is NOT the Sweeper's concern: it is owned by reconcile.Loop's sealed
+// real-only clock and the injected TickerTrigger clock. The lower-level
+// SweepTick(ctx, now) primitive still takes an explicit "now", keeping
+// business-plane sweep logic deterministically testable without clock injection.
 //
 // All non-built fields are unexported — callers cannot populate them via
-// `&command.Sweeper{Scanner: ...}` literals. The remaining attack surface is
+// `&command.Sweeper{scanner: ...}` literals. The remaining attack surface is
 // the bare zero-value literal `&command.Sweeper{}`, which produces an instance
-// with nil scanner / queue and would panic on the first SweepTick call.
-// The unexported `built` sentinel + SweepTick head fail-closed turns that panic
-// into a clean error: only NewSweeper sets `built=true`, so any literal-zero
-// Sweeper short-circuits at SweepTick.
+// with nil scanner / queue / clk and would panic on the first sweep. The
+// unexported `built` sentinel + head fail-closed (SweepTick and Reconcile) turns
+// that panic into a clean error: only NewSweeper sets `built=true`, so any
+// literal-zero Sweeper short-circuits before dereferencing scanner / clk.
 //
 // Filter narrows the scan; zero value (default) means "all devices, all
 // non-terminal statuses". Adapters decide whether ScanFilter is honored
@@ -100,14 +101,16 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 //
 // ref: Temporal HistoryService timer scan loop — role-based periodic scan
 // over active timers; disposition (expire vs retry) is a separate decision.
+// ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go (Reconciler).
 // ref: kernel/outbox.ConsumerBase.built — same sentinel pattern.
 type Sweeper struct {
 	scanner ActiveScanner
 	queue   Queue
 	filter  ScanFilter
+	clk     clock.Clock // business clock; Reconcile sources "now" from clk.Now()
 
 	// built is the construction sentinel; only NewSweeper sets it to true.
-	// SweepTick() rejects any Sweeper with built==false, closing the
+	// SweepTick() / Reconcile() reject any Sweeper with built==false, closing the
 	// `&command.Sweeper{}` zero-value literal attack surface.
 	built bool
 }
@@ -123,23 +126,21 @@ func WithSweeperFilter(f ScanFilter) SweeperOption {
 	return func(s *Sweeper) { s.filter = f }
 }
 
-// NewSweeper constructs a Sweeper. The two positional parameters are required
-// dependencies; nil triggers fail-fast per validation.IsNilInterface
-// (typed-nil safety, ≈ OUTBOX-SERVICE-01 pattern).
-//
-// Clock is intentionally absent from the constructor: control-plane timing
-// (ticker interval, startup probe) is owned entirely by runtime/command.
-// SweeperLifecycle. Business-plane time is passed per-tick via SweepTick(now).
+// NewSweeper constructs a Sweeper. scanner and queue are required interface
+// dependencies; nil triggers fail-fast per validation.IsNilInterface (typed-nil
+// safety, ≈ OUTBOX-SERVICE-01 pattern). clk is the mandatory business clock —
+// Reconcile sources the sweep "now" from clk.Now(); a nil clock is a programmer
+// error and panics (clock.MustHaveClock) per CLOCK-POSITIONAL-INJECTION-01.
 //
 // Example:
 //
-//	sweeper, err := command.NewSweeper(scanner, queue,
+//	sweeper, err := command.NewSweeper(scanner, queue, clk,
 //	    command.WithSweeperFilter(command.ScanFilter{DeviceID: "dev-1"}),
 //	)
 //	if err != nil {
 //	    return fmt.Errorf("sweeper: %w", err)
 //	}
-func NewSweeper(scanner ActiveScanner, queue Queue, opts ...SweeperOption) (*Sweeper, error) {
+func NewSweeper(scanner ActiveScanner, queue Queue, clk clock.Clock, opts ...SweeperOption) (*Sweeper, error) {
 	if validation.IsNilInterface(scanner) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command: NewSweeper: scanner required")
@@ -148,9 +149,11 @@ func NewSweeper(scanner ActiveScanner, queue Queue, opts ...SweeperOption) (*Swe
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command: NewSweeper: queue required")
 	}
+	clock.MustHaveClock(clk, "command: NewSweeper: clk required")
 	s := &Sweeper{
 		scanner: scanner,
 		queue:   queue,
+		clk:     clk,
 		built:   true,
 	}
 	for _, opt := range opts {
@@ -160,9 +163,10 @@ func NewSweeper(scanner ActiveScanner, queue Queue, opts ...SweeperOption) (*Swe
 }
 
 // Validate reports whether the Sweeper is ready to run, with NO side effects
-// (no scan, no Ack). It is the readiness gate runtime/command.SweeperLifecycle
-// invokes at OnStart so a misconstructed sweeper fails startup (bootstrap
-// rolls back) instead of starting and erroring on every tick (review P2-1).
+// (no scan, no Ack). It is the readiness gate reconcile.Loop invokes before
+// Start (the reconcilerReadinessChecker seam) so a misconstructed sweeper fails
+// startup (bootstrap rolls back) instead of starting and erroring on every tick
+// (review P2-1).
 //
 // It catches exactly the cases SweepTick's head guards catch — nil receiver
 // and the zero-value &command.Sweeper{} literal (built==false) — plus a
@@ -231,4 +235,33 @@ func (s *Sweeper) SweepTick(ctx context.Context, now time.Time) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Reconcile implements reconcile.Reconciler. The Sweeper is a bulk scan-all
+// actor: req.EntityID is ignored. A TickerTrigger emits Request{} (empty
+// EntityID) as the "resync-all" pulse, and the Sweeper has no per-entity path —
+// every call performs one full SweepTick at clk.Now().
+//
+// Error semantics: any sweep error (scan failure or aggregated Ack failures) is
+// returned as-is. The reconcile.Loop classifies a bare error as transient and
+// backs off + retries on the next tick; nothing the Sweeper produces is a
+// reconcile.PermanentError (a transient DB/broker fault is always retryable).
+// On success Reconcile returns the zero Result{} (RequeueAfter == 0), so the
+// Loop re-observes at its configured tick interval — the TickerTrigger cadence
+// is the real driver, making the sweep level-triggered.
+//
+// The head guard mirrors SweepTick's: a nil receiver or zero-value
+// &command.Sweeper{} (built==false) fails closed with an error BEFORE
+// dereferencing s.clk, instead of panicking. A Sweeper wired through
+// reconcile.New(...).Build() can never be in that state (Build rejects a
+// typed-nil reconciler), so this is defense-in-depth.
+func (s *Sweeper) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
+	if s == nil || !s.built {
+		return reconcile.Result{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper must be constructed via NewSweeper")
+	}
+	if err := s.SweepTick(ctx, s.clk.Now()); err != nil {
+		return reconcile.Result{}, err
+	}
+	return reconcile.Result{}, nil
 }

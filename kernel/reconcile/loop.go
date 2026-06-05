@@ -74,22 +74,21 @@ const (
 // sites for stdlib time.NewTimer / time.NewTicker / time.Now in this package;
 // newRenewTicker handles the lease renew cadence ticker.
 //
-// kernel/reconcile is a sanctioned control-plane host alongside runtime/command:
-// PROD-CLOCK-INJECTION-01's path gate accepts both, and the (method, callee)
+// kernel/reconcile is the sanctioned control-plane host:
+// PROD-CLOCK-INJECTION-01's path gate accepts it, and the (method, callee)
 // pairs below are registered in that archtest's exactSanctionedTimeCalls map
 // (RECONCILE-LOOP-CLOCK-CARVEOUT-01). A new method here without a matching map
 // entry — or any other time.* call in a method body — is a violation.
 //
-// Carve-out rationale (mirrors runtime/command): control-plane scheduling and
-// the framework's own duration observability must use real wall-clock time.
-// Injecting a frozen fake clock with no Advance would deadlock Start (the
-// startup probe never fires) and freeze every requeue.
+// Carve-out rationale: control-plane scheduling and the framework's own
+// duration observability must use real wall-clock time. Injecting a frozen
+// fake clock with no Advance would deadlock Start (the startup probe never
+// fires) and freeze every requeue.
 //
 // AI-robust grade: Medium (permanent ceiling). The stdlib time free functions
 // cannot be made uncallable in Go, so receiver-type confinement + (method,
 // callee) form-uniqueness is the achievable ceiling — identical to the
-// runtime/command controlPlaneClock and the SPAN-SETATTR-REDACT-01
-// package-internal axis.
+// SPAN-SETATTR-REDACT-01 package-internal axis.
 type controlPlaneClock struct{}
 
 // newProbeTimer creates a real-time timer for the startup probe window.
@@ -123,7 +122,7 @@ func (controlPlaneClock) newRenewTicker(d time.Duration) *time.Ticker {
 // reconcilerReadinessChecker is the optional no-side-effect readiness contract a
 // Reconciler may implement. Loop.Start invokes it before spawning workers so a
 // misconstructed reconciler fails at OnStart (bootstrap rolls back) instead of
-// erroring on every reconcile. Mirrors runtime/command.sweeperReadinessChecker.
+// erroring on every reconcile. Implemented via the reconcilerReadinessChecker seam.
 type reconcilerReadinessChecker interface {
 	Validate() error
 }
@@ -169,8 +168,8 @@ func (h *waitingHeap) Pop() any {
 // dispatches each to the Reconciler across a bounded worker pool (serializing
 // per EntityID), and requeues per the returned Result. Its lifecycle skeleton
 // (Start fast-return + startup probe, owner-ctx derivation, graceful Stop) is
-// transplanted from runtime/command.SweeperLifecycle; the per-entity worker
-// dispatch and requeue are reconcile-specific.
+// the scheduling loop's own control shell; the per-entity worker dispatch and
+// requeue are reconcile-specific.
 //
 // Construct via the Builder (reconcile.New(r).With*().Build()) in production.
 // All configuration fields are unexported; the Builder is the sole public
