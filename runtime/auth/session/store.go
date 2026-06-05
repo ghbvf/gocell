@@ -124,6 +124,16 @@ type ValidateView struct {
 //   - Revoke: mark a single session dead. Idempotent: already-revoked or
 //     missing IDs are no-ops returning nil (防枚举 — must not leak existence).
 //     RevokedAt is set exactly once; subsequent Revoke calls do not re-stamp.
+//     Decorating implementations MAY narrow this with an ambient-transaction
+//     precondition: adapters/redis.CachingSessionStore registers a post-commit
+//     cache-eviction hook (#796) and therefore panics if Revoke runs outside a
+//     RunInTx (after-commit) scope; the bare PG / mem stores impose no such
+//     precondition. Callers obtaining a Store from composition must honor the
+//     strictest wrapped implementation's scope (sessionlogout's persistRevoke
+//     already wraps Revoke in RunInTx); bare callers — the storetest
+//     conformance suite — supply a unit-of-work scope themselves. Compile-
+//     enforcing this precondition (a typed tx-scoped revoke capability rather
+//     than a runtime panic) is the deferred Hard-upgrade tracked at gh #1615.
 //   - RevokeForSubject: mark every active session for SubjectID dead. tok is
 //     a credentialfence.FenceToken — a sealed capability proof minted only by
 //     credentialinvalidate.Invalidator via credentialfence.Mint; passing nil

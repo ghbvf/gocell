@@ -275,6 +275,30 @@ metrics:
         - cell
         - result
       file: runtime/observability/metrics/saga.go
+    - name: session_cache_errors_total
+      type: counter
+      help: 'Total session-cache read-path access errors (Redis GET/SET failure, corrupt JSON, or schema-invalid entry). Fail-safe — every read-path error degrades to a miss (errors ⊆ misses) — so this rate distinguishes a cold cache from a degraded Redis. Post-commit revoke DEL failures are a distinct series: session_cache_revoke_del_errors_total.'
+      labels:
+        - cell
+      file: runtime/observability/metrics/session_cache.go
+    - name: session_cache_hits_total
+      type: counter
+      help: Total session-cache hits (valid entry served from Redis without consulting the inner store). hits + misses = total Get() calls; read-path errors are a subset of misses.
+      labels:
+        - cell
+      file: runtime/observability/metrics/session_cache.go
+    - name: session_cache_misses_total
+      type: counter
+      help: Total session-cache misses (no Redis entry; inner store consulted and result lazily populated). hits + misses = total Get() calls; read-path errors are a subset of misses.
+      labels:
+        - cell
+      file: runtime/observability/metrics/session_cache.go
+    - name: session_cache_revoke_del_errors_total
+      type: counter
+      help: Total post-commit single-session revoke cache-DEL failures (#796). A failed DEL leaves the logged-out session's cached entry to expire at TTL (accepted degraded window — stale ≤ TTL). NOT a read-path miss, so it is tracked separately from session_cache_errors_total; a non-zero rate means invalidation latency degraded from near-zero to ≤ TTL (security-relevant).
+      labels:
+        - cell
+      file: runtime/observability/metrics/session_cache.go
     - name: webhook_deliveries_total
       type: counter
       help: Total outbound webhook deliveries by outcome.
