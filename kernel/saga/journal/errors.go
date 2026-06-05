@@ -79,7 +79,7 @@ func NewNonPositiveLeaseDurationError(d time.Duration) error {
 func NewNonPositiveLimitError(limit int) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga journal: LoadSince limit must be positive",
-		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("limit=%d", limit))),
+		errcode.WithInternal(errcode.InternalAttr("limit", limit)),
 	)
 }
 
@@ -89,7 +89,7 @@ func NewNonPositiveLimitError(limit int) error {
 func NewNegativeGlobalSeqError(afterGlobalSeq int64) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga journal: LoadSince afterGlobalSeq must not be negative",
-		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("afterGlobalSeq=%d", afterGlobalSeq))),
+		errcode.WithInternal(errcode.InternalAttr("afterGlobalSeq", afterGlobalSeq)),
 	)
 }
 

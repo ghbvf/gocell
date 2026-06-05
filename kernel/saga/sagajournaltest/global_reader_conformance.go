@@ -3,6 +3,7 @@ package sagajournaltest
 import (
 	"bytes"
 	"context"
+	"math"
 	"sync"
 	"testing"
 
@@ -40,10 +41,14 @@ func RunGlobalReaderConformance(t *testing.T, factory Factory) {
 		{"LoadSince_Pagination", conformGlobalLoadSincePagination},
 		// Cursor at/after head, and empty store, return empty (no error).
 		{"LoadSince_PastHead_Empty", conformGlobalLoadSincePastHeadEmpty},
+		// A pathologically large limit is clamped to the head (no int64 overflow / panic).
+		{"LoadSince_HugeLimit_NoOverflow", conformGlobalLoadSinceHugeLimit},
 		// Fail-closed argument validation.
 		{"LoadSince_InvalidArgs_KindInvalid", conformGlobalLoadSinceInvalidArgs},
-		// Terminal events (written via MarkTerminal) are visible to the global scan.
-		{"TerminalEvent_InGlobalLog", conformGlobalTerminalEventScannable},
+		// Terminal events (written via MarkTerminal) are visible to the global scan
+		// — succeeded AND the compensation terminals, the raison d'être of model-A.
+		{"TerminalEvent_SucceededInGlobalLog", conformGlobalTerminalEventScannable},
+		{"TerminalEvent_CompensatedInGlobalLog", conformGlobalCompensatedTerminalScannable},
 		// Returned payloads are defensive copies.
 		{"GlobalEvent_DefensiveCopy", conformGlobalEventDefensiveCopy},
 		// Concurrent cross-instance appends: global seq stays distinct + contiguous.
@@ -116,6 +121,12 @@ func conformGlobalSeqMonotonicAcrossInstances(t *testing.T, factory Factory) {
 		t.Fatalf("LoadSince returned %d events; want 4 (seqs=%v)", len(events), globalSeqs(events))
 	}
 
+	// The suite drives appends serially (single goroutine), so for any conforming
+	// backend the global order equals the append order — including PG, where the
+	// IDENTITY column is assigned in commit order and these commits are serial on
+	// one connection. Concurrent cross-instance ordering is covered separately by
+	// GlobalSeq_ConcurrentAppend_NoDupContiguous, which asserts only
+	// distinctness + contiguity rather than a specific interleaving.
 	wantInstances := []idutil.SafeID{instA.ID, instB.ID, instA.ID, instB.ID}
 	for i, ge := range events {
 		wantSeq := int64(i + 1)
@@ -160,17 +171,24 @@ func conformGlobalHeadSeqReflectsAppends(t *testing.T, factory Factory) {
 	mustEnqueue(t, j, inst)
 	_, leaseID := mustClaimAll(t, j)
 
-	const n = 3
-	appendStep(t, j, inst.ID, leaseID, journal.KindStepStarted)   // Pending → Running
-	appendStep(t, j, inst.ID, leaseID, journal.KindStepCompleted) // Running no-op
-	appendStep(t, j, inst.ID, leaseID, journal.KindStepStarted)   // Running no-op
+	// Derive the expected head from the actual append calls — no hardcoded count
+	// that could silently drift from the statements below.
+	kinds := []journal.EventKind{
+		journal.KindStepStarted,   // Pending → Running
+		journal.KindStepCompleted, // Running no-op
+		journal.KindStepStarted,   // Running no-op
+	}
+	for _, k := range kinds {
+		appendStep(t, j, inst.ID, leaseID, k)
+	}
+	wantHead := int64(len(kinds))
 
 	head, err = gr.HeadSeq(context.Background())
 	if err != nil {
 		t.Fatalf("HeadSeq: %v", err)
 	}
-	if head != n {
-		t.Errorf("HeadSeq after %d appends = %d; want %d", n, head, n)
+	if head != wantHead {
+		t.Errorf("HeadSeq after %d appends = %d; want %d", wantHead, head, wantHead)
 	}
 }
 
@@ -253,6 +271,85 @@ func conformGlobalLoadSincePastHeadEmpty(t *testing.T, factory Factory) {
 	}
 	if len(pastHead) != 0 {
 		t.Errorf("LoadSince past head returned %d events; want 0", len(pastHead))
+	}
+}
+
+// conformGlobalLoadSinceHugeLimit asserts a pathologically large limit (one that
+// would overflow int64 if naively added to the cursor) is clamped to the head
+// and returns the remaining events without erroring or panicking. Regression for
+// the start+limit int64 overflow → makeslice panic (PR-02 review F-overflow).
+func conformGlobalLoadSinceHugeLimit(t *testing.T, factory Factory) {
+	t.Helper()
+	j, gr, clk, cleanup := newGlobalReaderFixture(t, factory)
+	defer cleanup()
+
+	inst := NewInstanceFixture(t, "inst-huge-limit", clk.Now())
+	mustEnqueue(t, j, inst)
+	_, leaseID := mustClaimAll(t, j)
+	appendStep(t, j, inst.ID, leaseID, journal.KindStepStarted)   // seq 1
+	appendStep(t, j, inst.ID, leaseID, journal.KindStepCompleted) // seq 2
+
+	// afterGlobalSeq > 0 with limit = MaxInt64: a naive start+limit overflows
+	// int64 to a negative end → slice/makeslice panic. The implementation must
+	// clamp to the head and return the single remaining event (seq 2).
+	got, err := gr.LoadSince(context.Background(), 1, math.MaxInt64)
+	if err != nil {
+		t.Fatalf("LoadSince(after=1, limit=MaxInt64): %v", err)
+	}
+	if len(got) != 1 || got[0].GlobalSeq != 2 {
+		t.Fatalf("LoadSince huge limit = %v; want exactly [seq 2]", globalSeqs(got))
+	}
+
+	// From the beginning with a huge limit returns everything, still no overflow.
+	all, err := gr.LoadSince(context.Background(), 0, math.MaxInt64)
+	if err != nil {
+		t.Fatalf("LoadSince(after=0, limit=MaxInt64): %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("LoadSince(0, MaxInt64) = %v; want 2 events", globalSeqs(all))
+	}
+}
+
+// conformGlobalCompensatedTerminalScannable asserts the compensation terminal
+// (Compensating → Compensated) is assigned a GlobalSeq and visible to the global
+// scan. This is the core model-A guarantee: compensated/failed sagas emit NO bus
+// event (compensation is emit-pure), so the journal global scan is the only way a
+// projection can observe them.
+func conformGlobalCompensatedTerminalScannable(t *testing.T, factory Factory) {
+	t.Helper()
+	j, gr, clk, cleanup := newGlobalReaderFixture(t, factory)
+	defer cleanup()
+
+	inst := NewInstanceFixture(t, "inst-compensated-global", clk.Now())
+	mustEnqueue(t, j, inst)
+	_, leaseID := mustClaimAll(t, j)
+	appendStep(t, j, inst.ID, leaseID, journal.KindStepStarted) // seq 1, Pending → Running
+	if _, err := j.Append(context.Background(), inst.ID, leaseID, journal.Event{
+		Kind: journal.KindCompensationStarted, // seq 2, Running → Compensating
+	}); err != nil {
+		t.Fatalf("Append(CompensationStarted): %v", err)
+	}
+	appendStep(t, j, inst.ID, leaseID, journal.KindStepCompensated) // seq 3, legal while Compensating
+
+	ok, err := j.MarkTerminal(context.Background(), inst.ID, leaseID, saga.StatusCompensated)
+	if err != nil || !ok {
+		t.Fatalf("MarkTerminal(Compensated): ok=%v err=%v", ok, err)
+	}
+
+	events, err := gr.LoadSince(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("LoadSince: %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("LoadSince returned %d events; want 4 (step+compStarted+compensated+terminal), seqs=%v",
+			len(events), globalSeqs(events))
+	}
+	last := events[len(events)-1]
+	if last.Event.Kind != journal.KindSagaCompensated {
+		t.Errorf("terminal global event Kind=%v; want KindSagaCompensated", last.Event.Kind)
+	}
+	if last.GlobalSeq != 4 || last.InstanceID != inst.ID {
+		t.Errorf("terminal event GlobalSeq=%d InstanceID=%q; want 4 / %q", last.GlobalSeq, last.InstanceID, inst.ID)
 	}
 }
 

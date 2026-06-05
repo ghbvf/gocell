@@ -25,10 +25,15 @@
 //   - saga_status_fanout_coverage_test.go         (SAGA-STATUS-FANOUT-COVERAGE-01)
 //   - saga_step_run_outside_tx_test.go            (SAGA-STEP-RUN-OUTSIDE-TX-01)
 //
-// The 9th invariant, SAGA-INVARIANTS-FILE-CONSOLIDATED-01, is this file's own
-// consolidation guard (defined inline at the end): the machine guard that keeps
-// the saga theme from re-fragmenting. Its repo-wide generalization to every
-// theme is tracked in #1279.
+// SAGA-INVARIANTS-FILE-CONSOLIDATED-01 is this file's own consolidation guard
+// (defined inline at the end): the machine guard that keeps the saga theme from
+// re-fragmenting. Its repo-wide generalization to every theme is tracked in #1279.
+//
+// Invariants added after the #1213 merge are defined directly in this file (not
+// merged from a standalone file): SAGA-CONSTRUCTOR-NIL-GUARD-01,
+// SAGA-METRIC-LABEL-VALUES-FROZEN-01, SAGA-SLOG-INSTANCE-FIELDS-CALLER-01, and
+// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01 (#1609 PR-02). The authoritative
+// per-file invariant list is the `// invariants:` header at the top.
 package archtest
 
 import (
@@ -1730,6 +1735,17 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 //     structurally satisfies the interface; such helpers live in _test.go (out of
 //     the impl scan). A production struct embedding it is treated as an impl and
 //     must enroll.
+//   - B4. pointer-receiver-only impl whose constructor returns *T: collectSagaJournalImpls
+//     keys impls by value-type name (pkg.T), and extractEnrolledImpls unwraps the
+//     constructor's *T return to T, so the keys match. Confirmed by MemJournal
+//     (NewMemJournal returns *MemJournal; the test load unwraps to journal.MemJournal).
+//     The PG impl (PR-PG #1630) must follow the same constructor shape.
+//
+// B2/B3/B4 have no dedicated reverse self-test (only B1 does, via
+// ...ReverseBlindSpot_NoReflectImpl): they are accepted Medium ceilings, not
+// gaps. The single Hard upgrade that closes all of them at once is the codegen
+// golden enumeration shared with SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 at
+// gh #1003 — do NOT open a separate issue.
 //
 // ref: SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (sibling rule, same mechanism)
 // ref: docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md §6

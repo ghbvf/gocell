@@ -295,17 +295,23 @@ func (m *MemJournal) LoadSince(_ context.Context, afterGlobalSeq int64, limit in
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Events with GlobalSeq > afterGlobalSeq are exactly globalLog[afterGlobalSeq:]
-	// (GlobalSeq == index+1). Clamp start to len for an at/after-head cursor, and
-	// end to len for the final short page.
+	// Dense 1-indexed (globalLog[i].GlobalSeq == i+1), so events with
+	// GlobalSeq > afterGlobalSeq begin at slice index afterGlobalSeq. Two clamps,
+	// both fail-closed to an empty/short page:
+	//   - start := min(afterGlobalSeq, len) — a cursor at/past head → empty.
+	//   - end   := min(start+limit, len) — the final short page.
+	// end is computed WITHOUT evaluating start+limit when that could overflow
+	// int64 (a pathologically large limit): the addition runs only when it is
+	// provably < n-start (hence start+limit < n ≤ MaxInt64), so end stays in
+	// range and globalLog[start:end] / make(cap=end-start) never panic.
 	n := int64(len(m.globalLog))
 	start := afterGlobalSeq
 	if start > n {
 		start = n
 	}
-	end := start + int64(limit)
-	if end > n {
-		end = n
+	end := n
+	if int64(limit) < n-start {
+		end = start + int64(limit)
 	}
 
 	out := make([]GlobalEvent, 0, end-start)
@@ -357,8 +363,10 @@ func (m *MemJournal) fenced(row *instanceRow, leaseID idutil.SafeID, now time.Ti
 //
 // e.Payload was already defensively copied by the caller (Append) and is owned
 // by the Journal, so sharing the same backing slice between the per-instance log
-// and the global log is safe: neither is mutated after storage, and both Load
-// and LoadSince deep-copy on read.
+// and the global log is safe: neither is mutated after storage, and Load and
+// LoadSince each copy the payload INDEPENDENTLY on read. (MarkTerminal's payload
+// is nil, so it has no shared slice at all.) Invariant: if either read-path copy
+// is ever removed, this shared backing slice reintroduces a mutation vector.
 func (m *MemJournal) appendLocked(row *instanceRow, instanceID idutil.SafeID, e Event) int64 {
 	version := row.currentVersion + 1
 	e.Version = version
