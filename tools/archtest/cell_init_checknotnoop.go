@@ -58,7 +58,7 @@ func CheckCellL2InitCheckNotNoop(t *testing.T, _ ConfigForExternalCell) []Diagno
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
 	if err != nil {
-		t.Fatalf("CELL-L2-INIT-CHECKNOTNOOP-CALLED-01: read module path: %v", err)
+		t.Fatalf("%s: read module path: %v", ruleCellL2InitCheckNotNoop01, err)
 	}
 
 	scope := ModuleScope(root)

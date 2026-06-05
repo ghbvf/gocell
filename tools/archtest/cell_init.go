@@ -10,6 +10,20 @@ package archtest
 //
 // Platform symbol paths are anchored to [PlatformModulePath] so a module
 // rename updates exactly one place and no bare literal appears here.
+//
+// Style note — why the detector helpers stay in _test.go:
+//
+// The two Check* wrappers here share their package with cell_init_test.go
+// because their underlying scan helpers (the Go type-system queries) do not
+// need to be compiled into the importable surface for external repos. Unlike
+// cell_init_checknotnoop.go — which fully migrates its helpers out of the
+// _test.go so that external consumers can call CheckCellL2InitCheckNotNoop via
+// StandardCellRules — these two checks target GoCell's own kernel/cell layout
+// and are intentionally NOT in StandardCellRules (external repos have no
+// kernel/cell package to scan). Keeping the heavier type-query helpers in
+// _test.go avoids polluting the importable archtest surface with gocell-
+// internal symbols. New contributors: this is not a missed migration — it is
+// a deliberate scope boundary.
 
 import (
 	"go/types"
@@ -27,26 +41,33 @@ const cellInitKernelCellPkgPath = PlatformModulePath + "/kernel/cell"
 // layout check, vacuous for external repos).
 func CheckKernelCellDoesNotImportRuntime(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	var violations []string
+	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/cell"}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
-			return nil
-		}
-		for _, imp := range p.Pkg.Imports() {
-			path := imp.Path()
-			if strings.Contains(path, "runtime/") || strings.Contains(path, "adapters/") {
-				violations = append(violations, path)
-			}
-		}
+		diags = append(diags, scanPassForForbiddenImports(p, "kernel/cell")...)
 		return nil
 	})
+	return diags
+}
+
+// scanPassForForbiddenImports returns a Diagnostic for each import in p that
+// contains "runtime/" or "adapters/". The rel parameter is used as the Rel
+// field of each diagnostic. Extracted so the detector logic can be exercised
+// directly by RED fixture tests without wiring through the full
+// Run(t, Typed(..., []string{"./kernel/cell"})) scope.
+func scanPassForForbiddenImports(p *Pass, rel string) []Diagnostic {
+	if p == nil || p.Pkg == nil {
+		return nil
+	}
 	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{
-			Rel:     "kernel/cell",
-			Line:    0,
-			Message: "kernel/cell must not import runtime/* or adapters/*; found: " + v,
-		})
+	for _, imp := range p.Pkg.Imports() {
+		path := imp.Path()
+		if strings.Contains(path, "runtime/") || strings.Contains(path, "adapters/") {
+			diags = append(diags, Diagnostic{
+				Rel:     rel,
+				Line:    0,
+				Message: "kernel/cell must not import runtime/* or adapters/*; found: " + path,
+			})
+		}
 	}
 	return diags
 }
@@ -56,54 +77,49 @@ func CheckKernelCellDoesNotImportRuntime(t *testing.T, _ ConfigForExternalCell) 
 // registered in StandardCellRules (gocell-internal layout check).
 func CheckKernelCellRegistrarDefinedHere(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	var (
-		found      bool
-		isTypeName bool
-		isIface    bool
-		pkgPath    string
-	)
+	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/cell"}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
-			return nil
-		}
-		scope := p.Pkg.Scope()
-		obj := scope.Lookup("Registrar")
-		if obj == nil {
-			return nil
-		}
-		found = true
-		tn, ok := obj.(*types.TypeName)
-		if !ok {
-			return nil
-		}
-		isTypeName = true
-		named, ok := tn.Type().(*types.Named)
-		if !ok {
-			return nil
-		}
-		_, ok = named.Underlying().(*types.Interface)
-		isIface = ok
-		if obj.Pkg() != nil {
-			pkgPath = obj.Pkg().Path()
-		}
+		diags = append(diags, scanPassForRegistrarLocality(p, "kernel/cell", cellInitKernelCellPkgPath)...)
 		return nil
 	})
+	return diags
+}
 
-	if !found {
-		return []Diagnostic{{Rel: "kernel/cell", Line: 0, Message: "Registrar must be defined in kernel/cell"}}
+// scanPassForRegistrarLocality checks that "Registrar" in the scanned package
+// is a locally-declared interface type (not an alias or a type from another
+// package). rel is used as the Rel field; wantPkgPath is the expected package
+// import path of the Registrar declaration. Extracted so RED fixture tests can
+// call the detector directly without going through the "./kernel/cell" scope.
+func scanPassForRegistrarLocality(p *Pass, rel, wantPkgPath string) []Diagnostic {
+	if p == nil || p.Pkg == nil {
+		return nil
 	}
-	if !isTypeName {
-		return []Diagnostic{{Rel: "kernel/cell", Line: 0, Message: "Registrar must be a type name"}}
+	scope := p.Pkg.Scope()
+	obj := scope.Lookup("Registrar")
+	if obj == nil {
+		return []Diagnostic{{Rel: rel, Line: 0, Message: "Registrar must be defined in kernel/cell"}}
+	}
+	tn, ok := obj.(*types.TypeName)
+	if !ok {
+		return []Diagnostic{{Rel: rel, Line: 0, Message: "Registrar must be a type name"}}
+	}
+	named, ok := tn.Type().(*types.Named)
+	if !ok {
+		return []Diagnostic{{Rel: rel, Line: 0, Message: "Registrar must be a named type"}}
 	}
 	var diags []Diagnostic
-	if !isIface {
-		diags = append(diags, Diagnostic{Rel: "kernel/cell", Line: 0, Message: "Registrar must be an interface type"})
+	if _, ok = named.Underlying().(*types.Interface); !ok {
+		diags = append(diags, Diagnostic{Rel: rel, Line: 0, Message: "Registrar must be an interface type"})
 	}
-	if pkgPath != cellInitKernelCellPkgPath {
+	pkgPath := ""
+	if obj.Pkg() != nil {
+		pkgPath = obj.Pkg().Path()
+	}
+	if pkgPath != wantPkgPath {
 		diags = append(diags, Diagnostic{
-			Rel:     "kernel/cell",
+			Rel:     rel,
 			Line:    0,
-			Message: "Registrar must be defined in " + cellInitKernelCellPkgPath + ", got " + pkgPath,
+			Message: "Registrar must be defined in " + wantPkgPath + ", got " + pkgPath,
 		})
 	}
 	return diags
