@@ -85,8 +85,12 @@ jobs:
         if: always()
         # SARIF mode always exits 0 (per govulncheck docs); always run so the
         # SARIF reports upload even when the text-mode gate above failed. One
-        # SARIF per workspace member (same funnel as the gate); the upload step
-        # below points at the directory.
+        # SARIF per workspace member (same funnel as the gate). Each run is
+        # stamped with a DISTINCT `automationDetails.id` (= its Code Scanning
+        # category) via jq — the CodeQL upload action rejects multiple SARIF
+        # runs sharing one category (github.blog 2025-07-21), so a single shared
+        # `category:` input on the upload step below is removed and the per-run
+        # id drives a distinct category per module instead.
         run: |
           set -euo pipefail
           source hack/lib/util.sh
@@ -97,12 +101,16 @@ jobs:
             [ -n "$dir" ] || continue
             if [ "$dir" = "." ]; then slug=root; else slug="$(printf '%s' "${dir#./}" | tr '/' '-')"; fi
             echo "+++ govulncheck (sarif) in module: $dir -> govulncheck-sarif/govulncheck-$slug.sarif"
-            ( cd "$dir" && govulncheck -format sarif ./... ) > "govulncheck-sarif/govulncheck-$slug.sarif"
+            ( cd "$dir" && govulncheck -format sarif ./... ) \
+              | jq --arg id "govulncheck/$slug" '.runs |= map(.automationDetails = {"id": $id})' \
+              > "govulncheck-sarif/govulncheck-$slug.sarif"
           done <<<"$module_dirs"
 
       - name: Upload SARIF to GitHub Security
         if: always() && hashFiles('govulncheck-sarif/*.sarif') != ''
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v3
+        # No `category:` input — each SARIF carries its own per-module
+        # `automationDetails.id` (set above) so the runs upload as distinct
+        # categories rather than colliding under one shared category.
         with:
           sarif_file: govulncheck-sarif
-          category: govulncheck

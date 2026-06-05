@@ -31,18 +31,22 @@ build:
 
 # check-build is the full-repo compile check (no artefacts). Module-aware
 # (#1556): iterate every go.work member from the single funnel
-# (hack/lib/modules.sh) and `go -C "$$dir" build ./...` each, so root AND the
-# satellite example modules compile (a bare root `./...` stops at the
-# nested-module boundary). The CodeQL security workflow runs this as its trace
-# build, so its extractor follows automatically; the deliberately-broken
-# archtest fixtures under tools/archtest/testdata/ stay out because they are not
-# go.work members. Fail-closed: a broken funnel aborts under `set -e`.
+# (hack/lib/modules.sh) and build each, so root AND the satellite example
+# modules compile (a bare root `./...` stops at the nested-module boundary).
+# The CodeQL security workflow runs this as its trace build, so its extractor
+# follows automatically; the deliberately-broken archtest fixtures under
+# tools/archtest/testdata/ stay out because they are not go.work members.
+# Uses `( cd "$$d" && go build ./... )` rather than `go -C "$$d" build`: under
+# CodeQL's Go build-tracer the canonical `go build ./...` command form is what
+# the tracing shim recognizes — a leading `-C` flag makes it miss the build and
+# the database ends up empty ("no source code seen during build"). Fail-closed:
+# a broken funnel aborts under `set -e`.
 check-build:
 	@bash -c 'set -euo pipefail; \
 	source hack/lib/util.sh; source hack/lib/modules.sh; \
 	dirs="$$(gocell::modules::dirs)"; \
 	while IFS= read -r d; do [ -n "$$d" ] || continue; \
-	  echo "+++ go build ($$d)"; go -C "$$d" build ./...; \
+	  echo "+++ go build ($$d)"; ( cd "$$d" && go build ./... ); \
 	done <<< "$$dirs"'
 
 # Root `./...` stops at the examples/* nested-module boundary. Iterate every
