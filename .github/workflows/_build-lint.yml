@@ -88,6 +88,12 @@ jobs:
           # Per-module example unit tests run in hack/verify-workspace-test.sh
           # (make verify → governance.yml); per-module example build runs in
           # hack/verify-workspace.sh — both iterate the go.work module funnel.
+          # Likewise cmd/gocell became its own go.work module (#1557): the
+          # `./cmd/...` pattern in the others-light shard below stops at its
+          # nested-module boundary and no longer matches cmd/gocell packages (it
+          # still matches cmd/corebundle + cmd/internal). cmd/gocell unit tests run
+          # in hack/verify-workspace-test.sh and its build in hack/verify-workspace.sh
+          # — the same go.work funnel as examples/*.
           - shard: others-heavy
             pkgs: ./adapters/...
             static_checks: false
@@ -118,6 +124,11 @@ jobs:
       # golangci-lint v2's default linter set — see the absence-rationale
       # comment between Build and golangci-lint below.)
       - name: Build
+        # `go build ./...` stops at nested-module boundaries: examples/* (#1556)
+        # and cmd/gocell (#1557) are not compiled here. Their per-module
+        # release-consistency build runs in hack/verify-workspace.sh (GOWORK=off);
+        # cmd/gocell additionally compiles via `go run ./cmd/gocell verify generated`
+        # in the verify-codegen job below.
         if: matrix.static_checks
         run: go build ./...
 
