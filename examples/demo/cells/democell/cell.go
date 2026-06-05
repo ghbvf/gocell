@@ -7,6 +7,7 @@ package democell
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	helloslice "github.com/ghbvf/gocell/examples/demo/cells/democell/slices/hello"
@@ -63,7 +64,10 @@ func NewDemoCell(opts ...Option) *DemoCell {
 // ctx and reg are part of the fixed K#04 initInternal contract; this minimal
 // cell needs neither (it registers no readiness probe and uses no request ctx).
 func (c *DemoCell) initInternal(_ context.Context, _ cell.Registrar) error {
-	svc := helloslice.NewService()
+	svc, err := helloslice.NewService()
+	if err != nil {
+		return fmt.Errorf("democell: build hello service: %w", err)
+	}
 	c.helloSvc = svc
 	c.helloHandler = hellov1.NewHandler(helloslice.NewHandler(svc))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(helloslice.SliceMetadata()))

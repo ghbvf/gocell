@@ -16,7 +16,11 @@ func TestService_Greeting(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := NewService().Greeting(); got != tc.want {
+			svc, err := NewService()
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+			if got := svc.Greeting(); got != tc.want {
 				t.Errorf("Greeting() = %q, want %q", got, tc.want)
 			}
 		})

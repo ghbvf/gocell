@@ -29,7 +29,11 @@ func TestHttpDemoHelloV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "demo")
 	c := contracttest.LoadByID(t, root, "http.demo.hello.v1")
 
-	h := hellov1.NewHandler(hello.NewHandler(hello.NewService()))
+	svc, err := hello.NewService()
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h := hellov1.NewHandler(hello.NewHandler(svc))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
