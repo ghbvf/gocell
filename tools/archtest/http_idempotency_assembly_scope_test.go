@@ -56,10 +56,10 @@ package archtest
 //     tuple). A field-set drift is inexpressible without a CI-visible failure.
 //     Sibling范本: PEER-IDENTITY-FIELDS-FROZEN-01 / MODULE-PROVIDE-NO-VALUE-HANDOFF-01.
 //   - β: Medium — AST signature + body form-lock (no string anchor; the param
-//     type list, the body's reference set, AND the required-use set are pinned).
+//     type list, the body's reference set, AND the isolation taint-flow are pinned).
 //     Both halves (ban-external-source + require-isolation-tuple) are the same
 //     Medium AST tier: Go cannot make the ABSENCE of a future node-identity
-//     parameter, nor the PRESENCE of every isolation reference, type-system-Hard.
+//     parameter, nor the FLOW of every isolation input into (ns,key), type-system-Hard.
 //     The Hard upgrade path for BOTH is a single sealed typed IdempotencyKey
 //     constructor funnel (Option C in the #1449 plan, deliberately out of scope
 //     for this PR) — derived once from (tenant, subject, method, path, idemKey)
@@ -80,13 +80,15 @@ package archtest
 //     provider.Node.ID (whose selector base x.X is itself a SelectorExpr, not the
 //     principal Ident) → caught by the "non-principal source" branch; (5) dropping
 //     an isolation dimension — hard-coding ns to a literal (drops p.TenantID),
-//     omitting p.Subject (cross-user replay), or never reading method/path/idemKey
-//     (cross-endpoint collision) → caught by checkBuildNamespaceKeyRequiredUse,
-//     which asserts each of {p.TenantID, p.Subject, method, path, idemKey} is
-//     referenced in the body. Non-vacuity proven by
+//     omitting p.Subject (cross-user replay), or never putting method/path/idemKey
+//     into the key (cross-endpoint collision), INCLUDING a dummy read like
+//     `_ = method` that references the input but never flows it into the key →
+//     caught by checkBuildNamespaceKeyRequiredUse, which taint-tracks each of
+//     {p.TenantID, p.Subject, method, path, idemKey} from its source to the
+//     ns/key result sink (not mere presence). Non-vacuity proven by
 //     TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot against inline
 //     malformed source (chained-selector + one missing-dimension fixture per
-//     isolation field). Residual (NOT caught,
+//     isolation field + a dummy-read-bypass fixture). Residual (NOT caught,
 //     documented): a *type alias* of auth.Principal used as `*P` makes param[0] an
 //     *ast.Ident rather than *ast.SelectorExpr, so isPrincipalPtr returns false and
 //     the param-type freeze rejects it as "not *auth.Principal" — i.e. a false
@@ -396,99 +398,159 @@ func checkBuildNamespaceKeyBody(fn *ast.FuncDecl) []string {
 	return violations
 }
 
+// isolationToken is a bit in the set of sanctioned isolation inputs that must
+// flow into the (ns,key) outputs.
+type isolationToken uint8
+
+const (
+	tokTenant  isolationToken = 1 << iota // p.TenantID → must reach ns
+	tokSubject                            // p.Subject  → must reach key
+	tokMethod                             // method     → must reach key
+	tokPath                               // path       → must reach key
+	tokIdemKey                            // idemKey    → must reach key
+)
+
 // checkBuildNamespaceKeyRequiredUse is the require-isolation-tuple half of the β
 // gate (checkBuildNamespaceKeyBody is the ban-external-source half). It asserts
-// the body actually CONSUMES every sanctioned isolation dimension, so the key
-// cannot silently drop one while still passing the node-agnostic checks:
+// every sanctioned isolation input actually FLOWS INTO the right output, so the
+// key cannot silently drop a dimension while still passing the node-agnostic
+// checks:
 //
-//   - p.TenantID — the tenant isolation namespace. Omitting it (e.g. hard-coding
-//     ns to a string literal) collapses cross-tenant isolation: two tenants'
-//     identical Idempotency-Key would share one replay record.
-//   - p.Subject — per-subject identity. Omitting it collapses cross-user
-//     isolation: user A could replay user B's recorded response.
-//   - method, path, idemKey (params[1..3]) — each read at least once. Omitting
-//     method/path collapses cross-endpoint isolation (POST /orders and POST
-//     /payments with the same header collide); omitting idemKey makes the header
-//     value itself irrelevant.
+//   - p.TenantID must flow into the ns result (the tenant isolation namespace).
+//     Hard-coding ns to a literal collapses cross-tenant isolation.
+//   - p.Subject, method, path, idemKey must flow into the key result. Dropping
+//     subject collapses cross-user isolation; dropping method/path collapses
+//     cross-endpoint isolation (POST /orders and POST /payments with the same
+//     header would collide); dropping idemKey makes the header value irrelevant.
 //
-// Param identity is resolved positionally from the FuncDecl (not by name), so a
-// rename cannot fool it; the signature freeze guarantees the 4-param shape, and
-// this runs only when that holds (positional resolution otherwise undefined).
+// Why FLOW and not mere presence: an earlier version only checked that each input
+// was *referenced anywhere* in the body, on the false premise that
+// ban-external-source makes "referenced" ⟺ "flows into (ns,key)". It does not —
+// a dummy read like `_ = method; key = p.Subject` references method yet never
+// puts it in the key, silently dropping endpoint isolation (PR #1614 review
+// F1-partial). So this tracks taint: a per-variable token set seeded by the
+// sources (p.TenantID/Subject selectors + method/path/idemKey params),
+// propagated through assignments + named-result returns to a fixpoint, then
+// asserted at the ns/key sinks.
 //
-// Detection is "is the identifier/selector referenced anywhere in the body",
-// which is intentionally permissive about HOW it is used — the ban-external-source
-// half already guarantees the body is a call-free pure derivation over exactly
-// these inputs plus the noTenantSentinel const, so "referenced" there is
-// equivalent to "flows into (ns,key)". This AST-presence form is Medium (same as
-// the rest of β); the Hard form that makes a dropped dimension inexpressible is
-// the sealed typed key constructor funnel, #1610.
+// Completeness within the β grammar: ban-external-source bans calls, closures,
+// non-principal selectors, and free package symbols, so the body is necessarily
+// a flat composition of assignments + binary concatenation over exactly these
+// inputs + the noTenantSentinel const. Over THAT grammar the taint walk is
+// complete (every value path is an assignment or a concat this walk follows). If
+// the grammar widened (e.g. a call were allowed), the flow could be laundered —
+// but ban-external-source keeps it narrow. Param/result identity is resolved
+// positionally from the FuncDecl; this runs only when the 4-param/2-result
+// signature holds (the signature freeze reports the shape otherwise). Rating is
+// Medium (AST taint, same tier as β); the Hard form that makes a dropped
+// dimension inexpressible is the sealed typed key constructor funnel, #1610.
 func checkBuildNamespaceKeyRequiredUse(fn *ast.FuncDecl) []string {
 	if fn.Body == nil {
 		return []string{"missing body"}
 	}
 	params := flattenFieldList(fn.Type.Params)
-	if len(params) != 4 {
-		// The signature freeze reports the shape violation; positional
-		// resolution of method/path/idemKey is undefined without it.
+	results := flattenFieldList(fn.Type.Results)
+	if len(params) != 4 || len(results) != 2 {
+		// The signature freeze reports the shape; positional source/sink
+		// resolution is undefined without it.
 		return nil
 	}
 	principalName := params[0].name
 	if principalName == "" {
 		principalName = "p"
 	}
+	src := map[isolationToken]string{
+		tokMethod: params[1].name, tokPath: params[2].name, tokIdemKey: params[3].name,
+	}
+	// Sink keys: the named results when named, else positional placeholders so a
+	// (hypothetical) unnamed-result form is driven purely by return expressions.
+	nsSink, keySink := results[0].name, results[1].name
+	if nsSink == "" {
+		nsSink = "$res0"
+	}
+	if keySink == "" {
+		keySink = "$res1"
+	}
 
-	usedTenantID := false
-	usedSubject := false
-	usedIdent := map[string]struct{}{}
+	taint := map[string]isolationToken{}
+	// tokensOf returns the tokens an expression carries: direct sources plus the
+	// accumulated taint of any local/result variable it references.
+	tokensOf := func(expr ast.Expr) isolationToken {
+		var bits isolationToken
+		ast.Inspect(expr, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.SelectorExpr:
+				if base, ok := x.X.(*ast.Ident); ok && base.Name == principalName {
+					switch x.Sel.Name {
+					case "TenantID":
+						bits |= tokTenant
+					case "Subject":
+						bits |= tokSubject
+					}
+				}
+				return false // do not descend into the selector base ident
+			case *ast.Ident:
+				for tok, name := range src {
+					if name != "" && x.Name == name {
+						bits |= tok
+					}
+				}
+				bits |= taint[x.Name]
+			}
+			return true
+		})
+		return bits
+	}
 
-	// Selector field names (.Sel) are not value references; skip them in the
-	// bare-identifier pass so e.g. `p.method` never counts as using the `method`
-	// param. The principal selectors are detected in the SelectorExpr branch.
-	selFields := map[*ast.Ident]struct{}{}
+	// Collect assignment edges (lhsName ← rhsExpr) and return edges (resultN ←
+	// retExpr) once, then iterate to a fixpoint.
+	type edge struct {
+		sink string
+		rhs  ast.Expr
+	}
+	var edges []edge
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if sel, ok := n.(*ast.SelectorExpr); ok {
-			selFields[sel.Sel] = struct{}{}
-		}
-		return true
-	})
-
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.SelectorExpr:
-			if base, ok := x.X.(*ast.Ident); ok && base.Name == principalName {
-				switch x.Sel.Name {
-				case "TenantID":
-					usedTenantID = true
-				case "Subject":
-					usedSubject = true
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			if len(s.Lhs) == len(s.Rhs) {
+				for i, lhs := range s.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						edges = append(edges, edge{sink: id.Name, rhs: s.Rhs[i]})
+					}
 				}
 			}
-		case *ast.Ident:
-			if _, isField := selFields[x]; isField {
-				return true
+		case *ast.ReturnStmt:
+			if len(s.Results) == 2 {
+				edges = append(edges,
+					edge{sink: nsSink, rhs: s.Results[0]},
+					edge{sink: keySink, rhs: s.Results[1]})
 			}
-			usedIdent[x.Name] = struct{}{}
 		}
 		return true
 	})
+	for changed := true; changed; {
+		changed = false
+		for _, e := range edges {
+			if after := taint[e.sink] | tokensOf(e.rhs); after != taint[e.sink] {
+				taint[e.sink] = after
+				changed = true
+			}
+		}
+	}
 
 	var violations []string
-	if !usedTenantID {
+	if taint[nsSink]&tokTenant == 0 {
 		violations = append(violations, fmt.Sprintf(
-			"%s.TenantID is never read — the tenant isolation namespace would be lost (cross-tenant replay)", principalName))
+			"%s.TenantID never flows into the ns result — the tenant isolation namespace would be lost (cross-tenant replay)", principalName))
 	}
-	if !usedSubject {
-		violations = append(violations, fmt.Sprintf(
-			"%s.Subject is never read — per-subject isolation would be lost (cross-user replay)", principalName))
-	}
-	for _, p := range []struct {
-		idx   int
+	for _, want := range []struct {
+		tok   isolationToken
 		label string
-	}{{1, "method"}, {2, "path"}, {3, "idemKey"}} {
-		name := params[p.idx].name
-		if _, used := usedIdent[name]; name == "" || !used {
+	}{{tokSubject, principalName + ".Subject"}, {tokMethod, "method"}, {tokPath, "path"}, {tokIdemKey, "idemKey"}} {
+		if taint[keySink]&want.tok == 0 {
 			violations = append(violations, fmt.Sprintf(
-				"the %s parameter (param[%d]) is never used — that isolation dimension would be dropped from the key", p.label, p.idx))
+				"%s never flows into the key result — isolation dropped "+
+					"(dummy read `_ = %s` does not count)", want.label, want.label))
 		}
 	}
 	return violations
@@ -591,7 +653,7 @@ func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key
 			ruleHTTPIdemKeyNodeAgnostic01, sv, bv, uv)
 	}
 
-	bad := map[string]string{
+	bad := map[string]string{ //nolint:gosec // G101 false positive: map values are Go source fixtures, not credentials
 		"node-identity-param": `package p
 func buildNamespaceKey(p *auth.Principal, method, path, idemKey, podID string) (ns, key string) {
 	key = p.Subject + podID
@@ -649,6 +711,19 @@ func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key
 func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
 	ns = p.TenantID
 	key = p.Subject + "\x00" + method + "\x00" + path
+	return
+}`,
+		// dummy-read bypass: every isolation input is *referenced* (so the old
+		// presence check passed) but method/path/idemKey only flow into the blank
+		// identifier, never into key — endpoint/header isolation is silently lost.
+		// Caught only by the flow-based required-use detector (PR #1614 F1-partial).
+		"dummy-read-bypass": `package p
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
+	_ = method
+	_ = path
+	_ = idemKey
+	ns = p.TenantID
+	key = p.Subject
 	return
 }`,
 	}
