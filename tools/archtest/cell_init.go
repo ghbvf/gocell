@@ -6,24 +6,22 @@ package archtest
 // GoCell's own kernel/cell package layout (verifying that kernel/cell does not
 // import runtime/ or adapters/, and that the Registrar type lives in
 // kernel/cell). External Cell repos do not have a kernel/cell package, so the
-// rule is vacuous for external consumers.
+// rule is vacuous for external consumers — like the other gocell-internal cell
+// rules (cell_init_checknotnoop.go, cell_public_option_param.go,
+// cell_repo_readyz_probe.go, cell_test_no_adapter_import.go), none of which
+// ship in StandardCellRules().
 //
 // Platform symbol paths are anchored to [PlatformModulePath] so a module
 // rename updates exactly one place and no bare literal appears here.
 //
-// Style note — why the detector helpers stay in _test.go:
-//
-// The two Check* wrappers here share their package with cell_init_test.go
-// because their underlying scan helpers (the Go type-system queries) do not
-// need to be compiled into the importable surface for external repos. Unlike
-// cell_init_checknotnoop.go — which fully migrates its helpers out of the
-// _test.go so that external consumers can call CheckCellL2InitCheckNotNoop via
-// StandardCellRules — these two checks target GoCell's own kernel/cell layout
-// and are intentionally NOT in StandardCellRules (external repos have no
-// kernel/cell package to scan). Keeping the heavier type-query helpers in
-// _test.go avoids polluting the importable archtest surface with gocell-
-// internal symbols. New contributors: this is not a missed migration — it is
-// a deliberate scope boundary.
+// The exported Check* wrappers and their scan helpers
+// (scanPassForForbiddenImports / scanPassForRegistrarLocality) live in this
+// non-test file so both the dogfood tests (cell_init_test.go) and the RED
+// fixture self-checks call the identical detector — single source, no parallel
+// rule body. They are in a non-test file only for that in-repo linkability; the
+// rule is still gocell-internal and intentionally absent from StandardCellRules
+// (external repos have no kernel/cell package to scan). New contributors: this
+// is not a missed migration — it is a deliberate scope boundary.
 
 import (
 	"go/types"

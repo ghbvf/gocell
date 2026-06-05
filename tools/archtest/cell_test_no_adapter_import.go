@@ -9,9 +9,13 @@ package archtest
 // filesystem paths rather than go/types and is not needed by external Cell repos
 // in its current form.
 //
-// Registered in StandardCellRules(): this rule reasons about how cell test files
-// use the platform adapters/ layer — applicable to any Cell repository that
-// imports the GoCell platform.
+// NOT registered in StandardCellRules(): this rule reasons about how cell test
+// files use the platform adapters/ layer — portable in principle to any Cell
+// repository that imports the GoCell platform, but its scanner
+// (cellTestAdapterImportFindings, fileDefaultVisible, …) currently lives in the
+// _test.go file. A full Check* extraction (parallel to CheckPanicRegistered) is
+// tracked at #1302 and can land in a later M3 PR — same posture as
+// cell_public_option_param.go.
 
 const (
 	// platformAdapterPkgPath is the root import path of the GoCell platform
