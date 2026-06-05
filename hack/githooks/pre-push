@@ -307,6 +307,31 @@ if [[ ${go_changed} -eq 1 ]]; then
     run_bg "go build -tags=integration ./..."      go build -tags=integration ./...
     run_bg "go vet ./..."                          go vet ./...
     run_bg "go vet -tags=e2e ./tests/e2e/..."      go vet -tags=e2e ./tests/e2e/...
+    # examples/* are their own go.work modules (#1556); root ./... stops at the
+    # nested-module boundary. Enumerate every satellite from the SAME go.work
+    # funnel the CI build/test gates use (hack/lib/modules.sh → `go work edit
+    # -json`) and build/vet each with `go -C`. A hardcoded import-path wildcard
+    # (`github.com/ghbvf/gocell/examples/...`) silently narrows to examples/demo
+    # under an ambient GOWORK=off and never covers a future non-examples
+    # satellite — so iterate the funnel instead, fail-closed if it breaks.
+    # shellcheck source=../lib/util.sh
+    source "${ROOT}/hack/lib/util.sh"
+    # shellcheck source=../lib/modules.sh
+    source "${ROOT}/hack/lib/modules.sh"
+    if satellite_dirs_raw="$(gocell::modules::dirs)"; then
+        while IFS= read -r moddir; do
+            [[ -z "${moddir}" || "${moddir}" == "." ]] && continue
+            run_bg "go build (${moddir})"                   go -C "${moddir}" build ./...
+            run_bg "go build -tags=integration (${moddir})" go -C "${moddir}" build -tags=integration ./...
+            run_bg "go vet (${moddir})"                     go -C "${moddir}" vet ./...
+        done <<<"${satellite_dirs_raw}"
+    else
+        # Fail-closed: a broken go.work funnel (missing jq, malformed `use`) must
+        # not silently skip satellite coverage. The funnel already printed its
+        # error to stderr above; block the push.
+        note "FAIL: go.work module enumeration (hack/lib/modules.sh) failed — examples/* satellites NOT built/vetted; install jq and fix go.work, then re-push"
+        fail=1
+    fi
 
     run_bg "golangci-lint (CI-faithful; run: make fmt / fix lint)" lint_gate
 fi

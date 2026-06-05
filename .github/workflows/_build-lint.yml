@@ -78,12 +78,18 @@ jobs:
           # `others` was a single 140s shard covering adapters + cmd +
           # examples + tests + contracts. Splitting along compile cost:
           # `others-heavy` carries ./adapters/... (external SDK dependency
-          # surface — postgres / redis / rabbitmq / vault / otel) and
-          # ./examples/... (links every layer end-to-end). `others-light`
+          # surface — postgres / redis / rabbitmq / vault / otel). `others-light`
           # carries the remaining lightweight subtrees. The split brings the
           # heavier leg below the kernel-shard critical path.
+          #
+          # examples/* unit tests are NO LONGER in this shard: each example is its
+          # own go.work module (#1556), so a root `./examples/...` pattern would
+          # stop at the nested-module boundary and silently match zero packages.
+          # Per-module example unit tests run in hack/verify-workspace-test.sh
+          # (make verify → governance.yml); per-module example build runs in
+          # hack/verify-workspace.sh — both iterate the go.work module funnel.
           - shard: others-heavy
-            pkgs: ./adapters/... ./examples/...
+            pkgs: ./adapters/...
             static_checks: false
           - shard: others-light
             pkgs: ./cmd/... ./tests/... ./contracts/...
@@ -528,14 +534,35 @@ jobs:
           set -euo pipefail
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
+          # Module-aware discovery (#1556): examples/* are their own go.work
+          # modules, so a root `go list ./...` stops at the nested-module boundary
+          # and would SILENTLY DROP every example integration test. Enumerate every
+          # workspace member from the SAME go.work funnel the build/test gates use
+          # (hack/lib/modules.sh → `go work edit -json`) and run the bare-vs-tagged
+          # comm diff per module — a module added to go.work is covered with zero
+          # hardcoded list. CI-INTEGRATION-DISCOVERY-01 asserts this step sources
+          # that funnel (gocell::modules::dirs), so dropping it is a red archtest.
+          #
           # Include .GoFiles alongside .TestGoFiles / .XTestGoFiles so that
           # packages whose non-test //go:build integration files (e.g.,
           # tests/testutil/rabbitmq_integration.go) gain visibility under the
           # tag are also detected — defending against the comm -13 false-
           # identity case where TestGoFiles alone happens to be unchanged.
+          source hack/lib/util.sh
+          source hack/lib/modules.sh
           list_fmt='{{.ImportPath}}|{{join .GoFiles ","}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}'
-          go list -find -f "$list_fmt" ./... | sort >"$tmp/bare.txt"
-          go list -tags=integration -find -f "$list_fmt" ./... | sort >"$tmp/tagged.txt"
+          # Command substitution (NOT `while read < <(...)`) so a go.work path-
+          # validation failure in the funnel propagates under `set -e`.
+          module_dirs_raw="$(gocell::modules::dirs)"
+          : >"$tmp/bare.txt"
+          : >"$tmp/tagged.txt"
+          while IFS= read -r moddir; do
+            [ -n "$moddir" ] || continue
+            go -C "$moddir" list -find -f "$list_fmt" ./... >>"$tmp/bare.txt"
+            go -C "$moddir" list -tags=integration -find -f "$list_fmt" ./... >>"$tmp/tagged.txt"
+          done <<<"$module_dirs_raw"
+          sort -o "$tmp/bare.txt" "$tmp/bare.txt"
+          sort -o "$tmp/tagged.txt" "$tmp/tagged.txt"
           # Shard filter applies to the discovered import-path list — keeps
           # discovery as the build-tag-derived ground truth (CI-INTEGRATION-
           # DISCOVERY-01) and avoids hardcoded `./<path>/...` globs in the
@@ -918,7 +945,10 @@ jobs:
         # mandatory: without it `go test` may return a cached PASS from a prior
         # run with the same flags, silently skipping the subprocess that the
         # regression guard exists to exercise.
-        run: go test -tags=examples_smoke -count=1 -timeout 180s -run TestSSOBFFStartupSmoke ./examples/ssobff/...
+        # `-C examples/ssobff`: ssobff is its own go.work module (#1556), so a
+        # root `./examples/ssobff/...` pattern would match zero packages. Run from
+        # inside the module instead (workspace mode resolves core via go.work).
+        run: go test -C examples/ssobff -tags=examples_smoke -count=1 -timeout 180s -run TestSSOBFFStartupSmoke ./...
 
   # Fork-PR guard: fork PRs cannot access org secrets (secrets.SONAR_TOKEN is
   # empty for forks), which would cause this job to fail with an opaque auth
