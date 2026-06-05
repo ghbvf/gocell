@@ -128,75 +128,16 @@ import (
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
-// ─── package path / symbol constants ────────────────────────────────────
+// ─── Dogfood test: full rule (uses ruleCredentialAuthorityAssertFunnel01) ────
 
-const (
-	credAuthorityPkgPath = "github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
-	credAuthorityFnName  = "Assert"
-	credSessionPkgPath   = "github.com/ghbvf/gocell/runtime/auth/session"
-	credSessionType      = "Session"
-	credSessionViewType  = "ValidateView"
-	credCanAuthenticate  = "CanAuthenticate"
-	credPasswordVersion  = "PasswordVersion"
-	credRevokedAt        = "RevokedAt"
-)
-
-// assertCallerAllowlist limits callers of credentialauthority.Assert to
-// these slice prefixes + the funnel package itself. _test.go files always
-// pass (test helpers may call Assert to construct expectations).
-//
-// identitymanage is an allowed CALLER (downstream prong) but is deliberately
-// NOT in sliceFunnelScopes (upstream prong): changePasswordInTx legitimately
-// reads user.PasswordVersion for the CAS write, which the upstream prong would
-// false-positive on. Its gate PLACEMENT is governed independently by
-// CHANGEPASSWORD-INACTIVE-GATE-01. See ADR §A11.2 + §A16.
-var assertCallerAllowlist = []string{
-	"cells/accesscore/internal/credentialauthority/", // funnel itself
-	"cells/accesscore/slices/sessionlogin/",
-	"cells/accesscore/slices/sessionrefresh/",
-	"cells/accesscore/slices/sessionvalidate/",
-	"cells/accesscore/slices/identitymanage/", // #1017 pre-mutation inactive gate
-}
-
-// sliceFunnelScopes are the slice prefixes whose production files MUST route
-// CanAuthenticate / PasswordVersion / RevokedAt reads through Assert.
-var sliceFunnelScopes = []string{
-	"cells/accesscore/slices/sessionlogin/",
-	"cells/accesscore/slices/sessionrefresh/",
-	"cells/accesscore/slices/sessionvalidate/",
-}
-
-// The upstream prong scans only the three slice prefixes (sliceFunnelScopes),
-// so no broader "directReadAllowlist" enumeration is needed — packages outside
-// those scopes (credentialauthority, domain, runtime/auth/session, authzmutate,
-// credentialinvalidate) legitimately read CanAuthenticate / PasswordVersion /
-// RevokedAt because they are the field-defining or write-side-aggregate paths.
-// Confining the scan to sliceFunnelScopes makes the allowlist implicit and
-// avoids drift between two parallel lists.
-
-// isAssertCallerAllowlisted reports whether a module-relative path may call
-// credentialauthority.Assert directly. Test files always pass.
-func isAssertCallerAllowlisted(rel string) bool {
-	if strings.HasSuffix(rel, "_test.go") {
-		return true
-	}
-	for _, prefix := range assertCallerAllowlist {
-		if strings.HasPrefix(rel, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// isInSliceFunnelScope reports whether rel is under one of the three slice
-// prefixes that MUST route through Assert.
-func isInSliceFunnelScope(rel string) bool {
-	for _, prefix := range sliceFunnelScopes {
-		if strings.HasPrefix(rel, prefix) {
-			return true
-		}
-	}
-	return false
+// TestCredentialAuthorityAssertFunnel exercises the full
+// CheckCredentialAuthorityAssertFunnel01 rule in one shot, mirroring the
+// dogfood pattern used by other platform CellRules. It must produce zero
+// diagnostics on GoCell production code.
+func TestCredentialAuthorityAssertFunnel(t *testing.T) {
+	t.Parallel()
+	Report(t, ruleCredentialAuthorityAssertFunnel01,
+		CheckCredentialAuthorityAssertFunnel01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // ─── Downstream prong: caller allowlist ──────────────────────────────────
@@ -243,24 +184,6 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 		"./cells/accesscore/internal/credentialauthority/testdata/outside_caller_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 downstream RED fixture",
 	)
-}
-
-// scanAssertCallSites flags every CallExpr in file whose callee resolves via
-// ResolvePackageRef to credentialauthority.Assert.
-func scanAssertCallSites(p *Pass, file *ast.File, rel string) []string {
-	var out []string
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !IsCallToPkgFunc(p.TypesInfo, call, credAuthorityPkgPath, credAuthorityFnName) {
-			return
-		}
-		line := p.Fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: call to %s.%s "+
-				"outside slice allowlist (sessionlogin/, sessionrefresh/, sessionvalidate/)",
-			rel, line, credAuthorityPkgPath, credAuthorityFnName,
-		))
-	})
-	return out
 }
 
 func verifyAssertCallerRedFixtureDetected(t *testing.T, pattern, label string) {
@@ -338,73 +261,6 @@ func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 		"./cells/accesscore/internal/credentialauthority/testdata/direct_canauth_skip_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream RED fixture",
 	)
-}
-
-// scanDirectCanAuthCalls flags direct CallExpr to (*domain.User).CanAuthenticate
-// inside slice files that should route through Assert.
-func scanDirectCanAuthCalls(p *Pass, file *ast.File, rel string) []string {
-	var out []string
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != credCanAuthenticate {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok {
-			return
-		}
-		if fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg {
-			return
-		}
-		line := p.Fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: direct call to "+
-				"domain.(*User).CanAuthenticate outside credentialauthority.Assert",
-			rel, line,
-		))
-	})
-	return out
-}
-
-// scanDirectFieldReads flags SelectorExpr reads of domain.User.PasswordVersion
-// inside slice files. (RevokedAt is handled by SESSION-REVOKED-FIELD-ACCESS-01.)
-func scanDirectFieldReads(p *Pass, file *ast.File, rel string) []string {
-	var out []string
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if sel.Sel == nil || sel.Sel.Name != credPasswordVersion {
-			return
-		}
-		selection := p.TypesInfo.Selections[sel]
-		if selection == nil {
-			return
-		}
-		obj := selection.Obj()
-		field, ok := obj.(*types.Var)
-		if !ok || !field.IsField() {
-			return
-		}
-		recv := selection.Recv()
-		if recv == nil {
-			return
-		}
-		owner := typeOwner(recv)
-		if owner == nil {
-			return
-		}
-		ownerPkg := owner.Pkg()
-		if ownerPkg == nil ||
-			ownerPkg.Path() != domainUserPkg ||
-			owner.Name() != domainUserType {
-			return
-		}
-		line := p.Fset.Position(sel.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: direct read of "+
-				"%s.%s.%s outside credentialauthority.Assert",
-			rel, line, ownerPkg.Path(), owner.Name(), sel.Sel.Name,
-		))
-	})
-	return out
 }
 
 // verifyDirectReadRedFixtureDetectedPerBucket asserts that the fixture
@@ -720,25 +576,6 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 			"a Check through the factory function.")
 }
 
-// stripModuleRoot turns an absolute filename produced by p.Fset.Position
-// into a module-relative path for assert messages. Best-effort: if the
-// module-root marker is missing, returns the absolute path unchanged.
-func stripModuleRoot(abs string) string {
-	const marker = "/gocell/"
-	if i := strings.LastIndex(abs, marker); i >= 0 {
-		return abs[i+len(marker):]
-	}
-	// Worktree-aware fallback: file paths under worktrees/<NN>-<name>/
-	// strip the marker manually.
-	if i := strings.Index(abs, "/worktrees/"); i >= 0 {
-		rest := abs[i+len("/worktrees/"):]
-		if j := strings.Index(rest, "/"); j >= 0 {
-			return rest[j+1:]
-		}
-	}
-	return abs
-}
-
 // ─── Upstream prong: typed callee reference (P2-B Hard) ─────────────────
 
 // TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04 enforces
@@ -813,132 +650,6 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 		"./cells/accesscore/internal/credentialauthority/testdata/value_capture_red",
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 callee-reference RED fixture",
 	)
-}
-
-// scanFunnelCalleeReferences flags every SelectorExpr that typed-resolves
-// to a funnel-protected callee (credentialauthority.Assert or
-// domain.(*User).CanAuthenticate) and is NOT at CallExpr.Fun position.
-//
-// Implementation: pass 1 collects the AST node identity of every
-// CallExpr.Fun in the file into directCallFuns. Pass 2 walks every
-// SelectorExpr; if it resolves to a funnel callee and is NOT in
-// directCallFuns, it is a value-capture violation.
-//
-// This single check covers every Go expression position uniformly:
-// AssignStmt RHS, ValueSpec value, CallExpr argument, ReturnStmt result,
-// SendStmt value, IndexExpr, CompositeLit element, KeyValueExpr value,
-// type-assertion expr, type-conversion arg — all are non-CallExpr.Fun
-// positions and produce a violation. No syntactic-context enumeration.
-func scanFunnelCalleeReferences(p *Pass, file *ast.File, rel string) []string {
-	var out []string
-	for _, hit := range collectFunnelCalleeReferenceHits(p, file) {
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference): "+
-				"%s referenced as value (not direct call) — bypasses "+
-				"caller allowlist via deferred invocation",
-			rel, hit.Line, hit.Callee,
-		))
-	}
-	return out
-}
-
-// funnelCalleeHit is one value-capture reference of a funnel-protected callee.
-type funnelCalleeHit struct {
-	Line   int
-	Callee string // funnelCalleeAssert or funnelCalleeCanAuth
-}
-
-// collectFunnelCalleeReferenceHits is the single-source scan behind both the
-// production assertion (scanFunnelCalleeReferences) and the per-callee RED
-// fixture self-check. Pass 1 collects every CallExpr.Fun node identity; pass 2
-// reports every SelectorExpr that typed-resolves to a funnel callee and is NOT
-// at a CallExpr.Fun position (value capture in any expression slot).
-func collectFunnelCalleeReferenceHits(p *Pass, file *ast.File) []funnelCalleeHit {
-	directCallFuns := map[ast.Expr]struct{}{}
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		directCallFuns[call.Fun] = struct{}{}
-	})
-
-	var out []funnelCalleeHit
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if _, isDirect := directCallFuns[sel]; isDirect {
-			return
-		}
-		callee, ok := resolveFunnelCallee(p.TypesInfo, sel)
-		if !ok {
-			return
-		}
-		out = append(out, funnelCalleeHit{Line: p.Fset.Position(sel.Pos()).Line, Callee: callee})
-	})
-	return out
-}
-
-// resolveFunnelCallee reports whether sel typed-resolves to a funnel-
-// protected callee and returns a human-readable identifier for the
-// violation message. Covers two callees:
-//
-//   - credentialauthority.Assert — package-qualified function reference,
-//     resolved via *types.Info.Uses[sel.Sel].
-//   - domain.(*User).CanAuthenticate — method selector, resolved via
-//     *types.Info.Selections[sel] (handles value or pointer receiver
-//     and embedded promotion uniformly).
-//
-// funnel callee labels — single source shared by resolveFunnelCallee (message
-// + bucket key) and verifyFunnelCalleeReferenceRedFixtureDetected (per-callee
-// assertion), so the two cannot drift.
-const (
-	funnelCalleeAssert  = "credentialauthority.Assert"
-	funnelCalleeCanAuth = "domain.(*User).CanAuthenticate"
-)
-
-func resolveFunnelCallee(info *types.Info, sel *ast.SelectorExpr) (string, bool) {
-	if sel.Sel == nil {
-		return "", false
-	}
-	// Method selector first — *types.Info.Selections covers method values.
-	if selection := info.Selections[sel]; selection != nil {
-		if fn, ok := selection.Obj().(*types.Func); ok {
-			if isFunnelMethod(fn) {
-				return funnelCalleeCanAuth, true
-			}
-		}
-	}
-	// Package-qualified function reference: *types.Info.Uses[sel.Sel]
-	// returns the referenced *types.Func.
-	if obj := info.Uses[sel.Sel]; obj != nil {
-		if fn, ok := obj.(*types.Func); ok {
-			if isFunnelPackageFunc(fn) {
-				return funnelCalleeAssert, true
-			}
-		}
-	}
-	return "", false
-}
-
-func isFunnelPackageFunc(fn *types.Func) bool {
-	if fn.Pkg() == nil {
-		return false
-	}
-	return fn.Pkg().Path() == credAuthorityPkgPath && fn.Name() == credAuthorityFnName
-}
-
-func isFunnelMethod(fn *types.Func) bool {
-	if fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg || fn.Name() != credCanAuthenticate {
-		return false
-	}
-	sig, ok := fn.Type().(*types.Signature)
-	if !ok || sig.Recv() == nil {
-		return false
-	}
-	recvType := sig.Recv().Type()
-	if ptr, isPtr := recvType.(*types.Pointer); isPtr {
-		recvType = ptr.Elem()
-	}
-	named, ok := recvType.(*types.Named)
-	if !ok {
-		return false
-	}
-	return named.Obj().Name() == domainUserType
 }
 
 // verifyFunnelCalleeReferenceRedFixtureDetected asserts the RED fixture fires

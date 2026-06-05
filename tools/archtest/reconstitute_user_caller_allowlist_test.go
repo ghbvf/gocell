@@ -44,85 +44,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// ─── constants ──────────────────────────────────────────────────────────────
-
-const (
-	reconstituteUserPkg  = "github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	reconstituteUserName = "ReconstituteUser"
-)
-
-// reconstituteUserCallerAllowlistPrefixes lists module-relative path prefixes
-// whose production code is permitted to call domain.ReconstituteUser directly.
-//
-// Rationale:
-//   - cells/accesscore/internal/mem/: mem store implementations rebuild User
-//     aggregates from stored values; ReconstituteUser is the correct rehydration
-//     path for an in-memory store.
-//   - cells/accesscore/internal/adapters/postgres/: PG store implementations
-//     use scanUser → ReconstituteUser to rehydrate from DB rows; this is the
-//     canonical persistence boundary.
-//   - cells/accesscore/internal/domain/: the function is defined here; tests and
-//     internal helpers in the same package are allowed.
-//   - cells/accesscore/internal/ports/conformance/: the UserRepository
-//     conformance test suite (RunUserRepoConformance) uses ReconstituteUser to
-//     seed live fixtures for repository acceptance tests. The conformance package
-//     is a test infrastructure package, not a slice; it tests the persistence
-//     boundary and therefore belongs in the allowlist.
-//
-// _test.go files are always allowed (see isReconstituteCallerAllowlisted).
-var reconstituteUserCallerAllowlistPrefixes = []string{
-	"cells/accesscore/internal/mem/",
-	"cells/accesscore/internal/adapters/postgres/",
-	"cells/accesscore/internal/domain/",
-	"cells/accesscore/internal/ports/conformance/",
-}
-
-// isReconstituteCallerAllowlisted reports whether a module-relative path is
-// in the ReconstituteUser caller allowlist. Test files (*_test.go) always pass.
-func isReconstituteCallerAllowlisted(rel string) bool {
-	if strings.HasSuffix(rel, "_test.go") {
-		return true
-	}
-	for _, prefix := range reconstituteUserCallerAllowlistPrefixes {
-		if strings.HasPrefix(rel, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// scanReconstituteViolationsPass walks a single file's AST for CallExpr nodes
-// where the callee resolves to domain.ReconstituteUser via
-// ResolvePackageRef (facade over typeseval.ResolvePackageRef). Returns one
-// Diagnostic per disallowed call site.
-//
-// AST form covered: `domain.ReconstituteUser(...)` where `domain` is the
-// package alias resolving to reconstituteUserPkg via info.Uses[*ast.Ident]
-// → *types.PkgName. See ResolvePackageRef godoc for the exact lookup.
-func scanReconstituteViolationsPass(p *Pass, file *ast.File, rel string) []Diagnostic {
-	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-		if !ok {
-			return
-		}
-		if pkgPath != reconstituteUserPkg || name != reconstituteUserName {
-			return
-		}
-		line := p.Fset.Position(call.Pos()).Line
-		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: line,
-			Message: fmt.Sprintf(
-				"RECONSTITUTE-USER-CALLER-01: disallowed caller of domain.ReconstituteUser; "+
-					"allowed prefixes: %v",
-				reconstituteUserCallerAllowlistPrefixes,
-			),
-		})
-	})
-	return out
-}
-
 // ─── Rule: RECONSTITUTE-USER-CALLER-01 ──────────────────────────────────────
 
 // TestReconstituteUserCallerAllowlist enforces RECONSTITUTE-USER-CALLER-01:
@@ -141,41 +62,7 @@ func scanReconstituteViolationsPass(p *Pass, file *ast.File, rel string) []Diagn
 // by TestReconstituteUserCallerAllowlist_REDFixture.
 func TestReconstituteUserCallerAllowlist(t *testing.T) {
 	t.Parallel()
-
-	var allDiags []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/...", "./cmd/..."}),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil {
-				return nil
-			}
-			var diags []Diagnostic
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if isReconstituteCallerAllowlisted(rel) {
-					continue
-				}
-				diags = append(diags, scanReconstituteViolationsPass(p, file, rel)...)
-			}
-			allDiags = append(allDiags, diags...)
-			return nil
-		})
-
-	var violations []string
-	for _, d := range allDiags {
-		violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
-	}
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"RECONSTITUTE-USER-CALLER-01: domain.ReconstituteUser must only be called from "+
-			"cells/accesscore/internal/mem/, cells/accesscore/internal/adapters/postgres/, "+
-			"or cells/accesscore/internal/domain/. "+
-			"Slice code must use the UserRepository interface instead; "+
-			"add the new caller to reconstituteUserCallerAllowlistPrefixes only after "+
-			"confirming it is a legitimate persistence boundary.")
+	Report(t, ruleReconstituteUserCaller01, CheckReconstituteUserCallerAllowlist(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestReconstituteUserCallerAllowlist_REDFixture verifies the double-lock:

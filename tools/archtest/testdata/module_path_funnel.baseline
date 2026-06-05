@@ -14,17 +14,13 @@ tools/archtest/auth_keystest_boundary_test.go
 tools/archtest/auth_plan_test.go
 tools/archtest/bcrypt_cost_funnel_test.go
 tools/archtest/capability_provider_funnel_test.go
-tools/archtest/cas_protocol_composition_root_test.go
 tools/archtest/celltest_import_boundary_test.go
 tools/archtest/celltest_import_scope_test.go
 tools/archtest/clock_invariants_test.go
 tools/archtest/contract_path_query_coverage_test.go
 tools/archtest/contracttest_loadbyid_literal_test.go
-tools/archtest/credential_authority_assert_funnel_test.go
-tools/archtest/credential_invalidate_funnel_invariants_test.go
 tools/archtest/ctxkeys_principal_write_caller_test.go
 tools/archtest/distlock_lock_not_context_test.go
-tools/archtest/domain_authz_mutation_funnel_invariants_test.go
 tools/archtest/eval_predicate_centralization_test.go
 tools/archtest/fence_token_mint_funnel_test.go
 tools/archtest/fixture_cellid_typed_builder_test.go
@@ -52,8 +48,6 @@ tools/archtest/projection_apply_hook_funnel_test.go
 tools/archtest/projection_checkpoint_conformance_enroll_test.go
 tools/archtest/projection_checkpoint_tx_bound_test.go
 tools/archtest/prom_cell_label_funnel_test.go
-tools/archtest/reconstitute_user_caller_allowlist_test.go
-tools/archtest/refresh_invariants_test.go
 tools/archtest/relay_isolation_test.go
 tools/archtest/required_dep_nil_guard_test.go
 tools/archtest/reverse_coverage_invariants_test.go
@@ -65,10 +59,7 @@ tools/archtest/scaffold_derived_forceoverwrite_test.go
 tools/archtest/security_defaults_test.go
 tools/archtest/seed_role_iface_test.go
 tools/archtest/serviceowned_handler_owner_check_test.go
-tools/archtest/session_protocol_composition_root_test.go
-tools/archtest/sessionrefresh_no_session_create_test.go
 tools/archtest/svctoken_caller_cell_test.go
 tools/archtest/test_polling_external_reason_literal_test.go
-tools/archtest/user_repo_conformance_enrollment_test.go
 tools/archtest/webhook_hmac_funnel_test.go
 tools/archtest/wrapper_location_test.go

@@ -3,7 +3,6 @@
 package archtest
 
 import (
-	"go/types"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,21 +11,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
-
-// typeOwner unwraps a *T → T and returns the *types.TypeName for the owning
-// named type, or nil if the type isn't a *types.Named. Shared by the typed
-// field/method receiver checks across funnel and reflect blind-spot archtests
-// (credential_authority / session_revoked / reflect_string_arg).
-func typeOwner(t types.Type) *types.TypeName {
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return nil
-	}
-	return named.Obj()
-}
 
 // findAllGoFilesInDir walks dir and returns all .go files (including _test.go).
 // Skips vendor, .git, generated, and testdata directories.

@@ -21,32 +21,15 @@ package archtest
 // mutable 两个 sealed marker 由 composition root wrap，本 PR 范围外。
 //
 // 单条独立规则，按 ai-robust.md "{rule}_test.go" 命名。
+//
+// Detector logic (CheckSessionrefreshNoSessionCreate, scanSessionrefreshFile,
+// receiverNamedType, bannedSessionStoreMethods) lives in
+// sessionrefresh_no_session_create.go (non-test) so it can be compiled by
+// external Cell repositories. This file is the thin dogfood wrapper.
 
 import (
-	"fmt"
-	"go/ast"
-	"go/types"
-	"sort"
-	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
-
-const (
-	sessionrefreshPkgPath    = "github.com/ghbvf/gocell/cells/accesscore/slices/sessionrefresh"
-	sessionStorePkgPath      = "github.com/ghbvf/gocell/runtime/auth/session"
-	sessionStoreInterfaceTyp = "Store"
-)
-
-// bannedSessionStoreMethods is the closed set of mutating method names on
-// runtime/auth/session.Store. Refresh may call Get; everything that flips
-// or appends state is banned in the refresh path.
-var bannedSessionStoreMethods = map[string]struct{}{
-	"Create":           {},
-	"Revoke":           {},
-	"RevokeForSubject": {},
-}
 
 // TestSessionrefreshNoSessionStoreMutation_01 fires when any file in
 // cells/accesscore/slices/sessionrefresh (excluding _test.go) calls a banned
@@ -56,105 +39,5 @@ var bannedSessionStoreMethods = map[string]struct{}{
 // all collapse to the same *types.Func identity.
 func TestSessionrefreshNoSessionStoreMutation_01(t *testing.T) {
 	t.Parallel()
-
-	var violations []string
-	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./cells/accesscore/slices/sessionrefresh/..."}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		if p.Pkg.Path() != sessionrefreshPkgPath {
-			return nil
-		}
-		var ds []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			ds = append(ds, scanSessionrefreshFile(p, file, rel)...)
-		}
-		return ds
-	})
-
-	for _, d := range diags {
-		violations = append(violations, d.Message)
-	}
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Logf("%s", v)
-	}
-	const failMsg = "rule SESSIONREFRESH-NO-SESSION-CREATE-01: refresh path " +
-		"must not call mutating methods on session.Store (Create / Revoke / " +
-		"RevokeForSubject). session.ID is stable from login to logout " +
-		"(OAuth2 RFC 6749 §6 + OIDC Back-Channel Logout sid stability + " +
-		"ory/fosite / zitadel / keycloak alignment). Cross-store mutation " +
-		"in refresh is a recurrence of the design defect fixed by PR #482 " +
-		"review (commit fd954cb8 撤回)"
-	assert.Empty(t, violations, failMsg)
-}
-
-// scanSessionrefreshFile walks file's AST for CallExpr nodes whose method
-// receiver resolves to runtime/auth/session.Store and whose method name is
-// in bannedSessionStoreMethods. EachInSubtree[ast.CallExpr] traverses the
-// full file tree — nested function literals and closures are covered.
-func scanSessionrefreshFile(
-	p *Pass,
-	file *ast.File,
-	rel string,
-) []Diagnostic {
-	var ds []Diagnostic
-
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
-			return
-		}
-		methodName := sel.Sel.Name
-		if _, banned := bannedSessionStoreMethods[methodName]; !banned {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok {
-			return
-		}
-		// Filter by owning package = runtime/auth/session and that the
-		// receiver interface is named Store. Receiver inspection guards
-		// against shadowing the method name on an unrelated type.
-		if fn.Pkg() == nil || fn.Pkg().Path() != sessionStorePkgPath {
-			return
-		}
-		sig, ok := fn.Type().(*types.Signature)
-		if !ok || sig.Recv() == nil {
-			return
-		}
-		named, ok := receiverNamedType(sig.Recv().Type())
-		if !ok || named.Obj().Name() != sessionStoreInterfaceTyp {
-			return
-		}
-		line := p.Fset.Position(call.Pos()).Line
-		ds = append(ds, Diagnostic{
-			Rel:  rel,
-			Line: line,
-			Message: fmt.Sprintf(
-				"%s:%d: SESSIONREFRESH-NO-SESSION-CREATE-01: forbidden session.Store.%s call from refresh path",
-				rel, line, methodName,
-			),
-		})
-	})
-
-	return ds
-}
-
-// receiverNamedType unwraps pointer / alias layers to recover the *types.Named
-// the method is attached to. Method receivers on session.Store (an interface)
-// are interface-named, so the *types.Named lookup is straightforward.
-func receiverNamedType(t types.Type) (*types.Named, bool) {
-	switch v := t.(type) {
-	case *types.Pointer:
-		return receiverNamedType(v.Elem())
-	case *types.Named:
-		return v, true
-	}
-	return nil, false
+	Report(t, ruleSessionrefreshNoSessionCreate01, CheckSessionrefreshNoSessionCreate(t, ConfigForExternalCell{}))
 }

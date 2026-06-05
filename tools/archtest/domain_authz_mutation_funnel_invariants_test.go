@@ -145,79 +145,12 @@ package archtest
 
 import (
 	"fmt"
-	"go/ast"
-	"go/token"
-	"go/types"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
-
-// ─── package path / name constants ───────────────────────────────────────
-
-const (
-	domainUserPkg  = "github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	domainUserType = "User"
-
-	domainSetStatusMethod                = "SetStatus"
-	domainSetPasswordResetRequiredMethod = "SetPasswordResetRequired"
-)
-
-// authzFieldNames are the three authz-sensitive field names that must remain
-// private in production domain.User.
-var authzFieldNames = map[string]bool{
-	"Status":                true,
-	"PasswordResetRequired": true,
-	"AuthzEpoch":            true,
-}
-
-// sanctionedSetters are the two exported mutator methods that ARE permitted on
-// domain.User. Any other exported method whose name matches a setter-concept
-// prefix and is not in this map is a violation.
-var sanctionedSetters = map[string]bool{
-	domainSetStatusMethod:                true,
-	domainSetPasswordResetRequiredMethod: true,
-}
-
-// authzSetterPrefixes are method name prefixes that indicate a setter for
-// authz-sensitive state. Methods with these prefixes that are not in
-// sanctionedSetters are flagged.
-var authzSetterPrefixes = []string{"Set", "Mark", "Clear", "Lock", "Unlock"}
-
-// setMutatorCallsiteAllowlist enumerates the exact production callsites that
-// may invoke domain.User.SetStatus or domain.User.SetPasswordResetRequired
-// directly. Keys are *types.Func.FullName() values (canonical Go reflection
-// form for the enclosing FuncDecl); values document the rationale per entry.
-//
-// Adding an entry requires explicit reviewer acknowledgement: a new entry
-// means a function is bypassing authzmutate.Mutator.Apply, which is legitimate
-// only at creation time (no live sessions exist). Any other case must route
-// through Mutator.Apply.
-//
-// Removing the last code-level caller of an entry triggers
-// TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive (meta-invariant),
-// forcing the entry to be deleted in the same PR — no stale allowance.
-//
-// CI failure messages print the exact key to copy: look for
-// `direct call to domain.User.X from caller "<KEY>" not in setMutatorCallsiteAllowlist`.
-// Paste the quoted "<KEY>" verbatim into this map.
-//
-// Verified zero production CallExprs to these setters in authzmutate/ and
-// domain/ packages (PR #1196 issue #732 verification); package-level carve-outs
-// removed in this PR. The two creation-time entries are the only legitimate
-// callsites outside the authzmutate funnel.
-//
-// Test files (*_test.go) bypass this check unconditionally.
-var setMutatorCallsiteAllowlist = map[string]string{
-	"(*github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision.Provisioner).createAdminUser": "" +
-		"creation-time: brand-new user (epoch=1), no live sessions exist; " +
-		"authzmutate.Apply is for mutating existing principals",
-	"(*github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.Service).Create": "" +
-		"creation-time: brand-new user (epoch=1), no live sessions exist; " +
-		"same rationale as adminprovision",
-}
 
 // ─── Rule 1: DOMAIN-AUTHZ-FIELD-PRIVATE-01 ─────────────────────────────
 
@@ -242,25 +175,8 @@ var setMutatorCallsiteAllowlist = map[string]string{
 // AuthzEpoch fields and a SetStatusPublic method. The scanner must flag ≥ 1.
 func TestDomainAuthzFieldPrivate_01(t *testing.T) {
 	t.Parallel()
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{}, []string{"./cells/accesscore/internal/domain"}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != domainUserPkg {
-			return nil
-		}
-		violations = append(violations, scanDomainUserViolations(p.Pkg)...)
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"DOMAIN-AUTHZ-FIELD-PRIVATE-01: domain.User must not expose exported authz fields "+
-			"(Status, PasswordResetRequired, AuthzEpoch) or unauthorized exported setters "+
-			"(beyond SetStatus / SetPasswordResetRequired). Keep these fields private; "+
-			"mutate only through authzmutate.Mutator.Apply.")
+	Report(t, ruleDomainAuthzFieldPrivate01,
+		CheckDomainAuthzFieldPrivate01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
 	// RED fixture verification.
 	root := findModuleRoot(t)
@@ -269,85 +185,6 @@ func TestDomainAuthzFieldPrivate_01(t *testing.T) {
 		"./tools/archtest/testdata/authz_mutation_fixtures/domain_exported_authz_field_red",
 		"DOMAIN-AUTHZ-FIELD-PRIVATE-01 RED fixture",
 	)
-}
-
-// scanDomainUserViolations inspects the User named type in pkg for exported
-// authz fields and unauthorized exported setter methods.
-func scanDomainUserViolations(pkg *types.Package) []string {
-	obj := pkg.Scope().Lookup(domainUserType)
-	if obj == nil {
-		return []string{fmt.Sprintf(
-			"DOMAIN-AUTHZ-FIELD-PRIVATE-01: type %s not found in package %s",
-			domainUserType, pkg.Path(),
-		)}
-	}
-	named, ok := obj.Type().(*types.Named)
-	if !ok {
-		return []string{fmt.Sprintf(
-			"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s is not a named type in %s",
-			domainUserType, pkg.Path(),
-		)}
-	}
-
-	var out []string
-
-	// Check struct fields.
-	if strct, ok := named.Underlying().(*types.Struct); ok {
-		for i := 0; i < strct.NumFields(); i++ {
-			f := strct.Field(i)
-			if f.Exported() && authzFieldNames[f.Name()] {
-				out = append(out, fmt.Sprintf(
-					"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s.%s has exported authz field %q — must be private",
-					domainUserType, pkg.Path(), f.Name(),
-				))
-			}
-		}
-	}
-
-	// Check pointer-receiver method set (all public mutations use *User).
-	mset := types.NewMethodSet(types.NewPointer(named))
-	for i := 0; i < mset.Len(); i++ {
-		name := mset.At(i).Obj().Name()
-		if !token.IsExported(name) {
-			continue
-		}
-		if sanctionedSetters[name] {
-			continue
-		}
-		for _, prefix := range authzSetterPrefixes {
-			if strings.HasPrefix(name, prefix) {
-				out = append(out, fmt.Sprintf(
-					"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s.%s has unauthorized exported setter %q "+
-						"(prefix %q); only SetStatus and SetPasswordResetRequired are sanctioned",
-					domainUserType, pkg.Path(), name, prefix,
-				))
-				break
-			}
-		}
-	}
-
-	return out
-}
-
-// verifyDomainFieldRedFixtureDetected loads the RED fixture package and asserts
-// that the domain-field scanner finds ≥ 1 violation — proving the rule is not
-// permanently GREEN.
-func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, label string) {
-	t.Helper()
-	_ = root // root is the module root; Run(t, Typed(...)) resolves it via findModuleRoot internally
-	var found int
-	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
-			return nil
-		}
-		found += len(scanDomainUserViolations(p.Pkg))
-		return nil
-	})
-
-	assert.GreaterOrEqual(t, found, 1,
-		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
-			"Check that the fixture actually exports authz fields or unauthorized setters.",
-		label)
 }
 
 // ─── Rule 2: AUTHZ-MUTATION-APPLY-FUNNEL-01 ────────────────────────────
@@ -366,38 +203,8 @@ func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, lab
 // simulates an rbacassign caller invoking SetStatus directly — must detect ≥ 1.
 func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 	t.Parallel()
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{}, []string{
-		"./cells/accesscore/...",
-		"./cmd/...",
-	}),
-		func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil || p.Fset == nil {
-				return nil
-			}
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				violations = append(violations,
-					scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
-				violations = append(violations,
-					scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
-			}
-			return nil
-		})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"AUTHZ-MUTATION-APPLY-FUNNEL-01 (Rule a, callsite-level): domain.User.SetStatus "+
-			"and domain.User.SetPasswordResetRequired must only be called from enclosing "+
-			"functions explicitly listed in setMutatorCallsiteAllowlist. Route new "+
-			"live-aggregate mutations through authzmutate.Mutator.Apply.")
+	Report(t, ruleAuthzMutationApplyFunnel01,
+		CheckAuthzMutationApplyFunnel01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
 	// RED fixture: rbacassign caller directly invoking SetStatus.
 	// LOCATION: cells/accesscore/internal/domain/testdata/ because domain is an
@@ -409,86 +216,6 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 		domainSetStatusMethod,
 		"AUTHZ-MUTATION-APPLY-FUNNEL-01 Rule (a) RED fixture",
 	)
-}
-
-// scanSetMutatorViolationsPass walks a single file's AST for EVERY SelectorExpr
-// resolving to (domainUserPkg, targetMethod) — direct call AND function-value
-// capture alike. Each violation is keyed by the enclosing FuncDecl's canonical
-// *types.Func.FullName(); references outside any FuncDecl (package-level var
-// init) are automatic violations.
-//
-// Form-completeness rationale: ResolveMethodCall via info.Selections resolves a
-// SelectorExpr to the same *types.Func regardless of whether it sits in
-// CallExpr.Fun (direct call) or elsewhere (`fn := u.SetStatus`,
-// `return u.SetStatus`, `someFunc(u.SetStatus)`). Walking only CallExpr.Fun
-// would leave method-value capture as an AST-expressible bypass — failing the
-// AI-robust §"Hard 范本目录" form-uniqueness requirement. Mirrors
-// scanFunnelViolationsPass / scanUpstreamCallerViolationsPass in
-// credential_invalidate_funnel_invariants_test.go.
-func scanSetMutatorViolationsPass(
-	p *Pass,
-	file *ast.File,
-	rel string,
-	targetMethod string,
-) []string {
-	var out []string
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if sel.Sel == nil || sel.Sel.Name != targetMethod {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok {
-			return
-		}
-		if fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg {
-			return
-		}
-		line := p.Fset.Position(sel.Pos()).Line
-		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
-		if !ok {
-			out = append(out, fmt.Sprintf(
-				"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: reference to domain.User.%s "+
-					"outside any FuncDecl (package-level init or similar) — cannot be allowlisted",
-				rel, line, targetMethod,
-			))
-			return
-		}
-		callerID := caller.FullName()
-		if _, allowed := setMutatorCallsiteAllowlist[callerID]; allowed {
-			return
-		}
-		out = append(out, fmt.Sprintf(
-			"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: reference to domain.User.%s "+
-				"from caller %q not in setMutatorCallsiteAllowlist "+
-				"(direct call or function-value capture; copy the quoted key verbatim into the map to allow)",
-			rel, line, targetMethod, callerID,
-		))
-	})
-	return out
-}
-
-// verifySetMutatorRedFixtureDetected loads the given RED fixture and asserts
-// that the scanner finds ≥ 1 violation — proving the rule is not permanently GREEN.
-func verifySetMutatorRedFixtureDetected(
-	t *testing.T,
-	fixturePattern, targetMethod, label string,
-) {
-	t.Helper()
-	var found int
-	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			found += len(scanSetMutatorViolationsPass(p, file, label, targetMethod))
-		}
-		return nil
-	})
-
-	assert.GreaterOrEqual(t, found, 1,
-		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
-			"Check that the fixture calls the banned method and is type-checkable.",
-		label)
 }
 
 // ─── Rule 2 meta-invariant: stale-entry detection ──────────────────────
@@ -538,41 +265,6 @@ func TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive(t *testing.T) {
 		t.Errorf("AUTHZ-MUTATION-APPLY-FUNNEL-01 meta: allowlist entry %q has 0 production "+
 			"callsites — last caller removed; delete the entry in the same PR", s)
 	}
-}
-
-// countAllowlistHits increments hits[callerID] for each production SelectorExpr
-// in file that resolves to a domain.User setter AND has a resolvable enclosing
-// FuncDecl matching the allowlist. Mirrors scanSetMutatorViolationsPass'
-// form-complete SelectorExpr walk (direct call + function-value capture both
-// count). References outside any FuncDecl, or inside non-allowlisted callers,
-// are ignored — this counter is only used by the meta-invariant to detect
-// stale entries.
-//
-// Note: hits[callerID] accumulates across all references within a single
-// FuncDecl — if `Service.Create` calls SetStatus twice, or captures it once
-// and calls it once, hits["…Service.Create"] is 2. The meta-invariant only
-// asserts ≥1, so an entry is considered stale only when ALL references in
-// its FuncDecl are removed. This is intentional: the allowlist tracks "this
-// function is a legitimate caller", not "exactly N references within this
-// function".
-func countAllowlistHits(p *Pass, file *ast.File, targetMethod string, hits map[string]int) {
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if sel.Sel == nil || sel.Sel.Name != targetMethod {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg {
-			return
-		}
-		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
-		if !ok {
-			return
-		}
-		callerID := caller.FullName()
-		if _, allowed := setMutatorCallsiteAllowlist[callerID]; allowed {
-			hits[callerID]++
-		}
-	})
 }
 
 // ─── Form-completeness positive self-check ──────────────────────────────
@@ -819,4 +511,53 @@ func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
 			"setter calls as automatic violations when ResolveEnclosingFunc "+
 			"returns (nil, false). Got %d violation(s) without the expected substring.",
 		len(found))
+}
+
+// ─── verifyDomainFieldRedFixtureDetected ─────────────────────────────────────
+
+// verifyDomainFieldRedFixtureDetected loads the RED fixture package and asserts
+// that the domain-field scanner finds ≥ 1 violation — proving the rule is not
+// permanently GREEN.
+func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, label string) {
+	t.Helper()
+	_ = root // root is the module root; Run(t, Typed(...)) resolves it via findModuleRoot internally
+	var found int
+	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		found += len(scanDomainUserViolations(p.Pkg))
+		return nil
+	})
+
+	assert.GreaterOrEqual(t, found, 1,
+		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
+			"Check that the fixture actually exports authz fields or unauthorized setters.",
+		label)
+}
+
+// ─── verifySetMutatorRedFixtureDetected ──────────────────────────────────────
+
+// verifySetMutatorRedFixtureDetected loads the given RED fixture and asserts
+// that the scanner finds ≥ 1 violation — proving the rule is not permanently GREEN.
+func verifySetMutatorRedFixtureDetected(
+	t *testing.T,
+	fixturePattern, targetMethod, label string,
+) {
+	t.Helper()
+	var found int
+	_ = Run(t, Typed(TypedOpts{}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			found += len(scanSetMutatorViolationsPass(p, file, label, targetMethod))
+		}
+		return nil
+	})
+
+	assert.GreaterOrEqual(t, found, 1,
+		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
+			"Check that the fixture calls the banned method and is type-checkable.",
+		label)
 }
