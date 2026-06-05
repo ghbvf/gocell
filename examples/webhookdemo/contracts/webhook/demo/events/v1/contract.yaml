@@ -1,0 +1,29 @@
+id: webhook.demo.events.v1
+kind: webhook
+direction: inbound
+ownerCell: hooks
+lifecycle: active
+# Inbound receive is local processing (decode + log) in a single cell → L1.
+consistencyLevel: L1
+# Vendor-agnostic demo of GoCell's inbound webhook path. The signature scheme is
+# Svix / standard-webhooks (signed string "{deliveryID}.{timestamp}.{body}",
+# token form "v1,<base64(HMAC-SHA256)>"), so the header names are neutral rather
+# than borrowed from a real provider whose on-wire format differs.
+signature:
+  algorithm: hmac-sha256
+  toleranceSeconds: 300
+  deliveryIDHeader: Webhook-Delivery-Id
+  timestampHeader: Webhook-Timestamp
+  signatureHeader: Webhook-Signature
+  signedStringForm: "{deliveryID}.{timestamp}.{body}"
+endpoints:
+  inbound:
+    pathPattern: /api/webhooks/demo/events
+    sourceID: demosource
+payload:
+  schemaRef: ./payload.schema.json
+  contentType: application/json
+  maxBodyBytes: 1048576
+# codegen: true selects this contract for Generate(ScopeAll); webhook still emits
+# zero per-contract artifacts by design (registration goes through cellgen).
+codegen: true

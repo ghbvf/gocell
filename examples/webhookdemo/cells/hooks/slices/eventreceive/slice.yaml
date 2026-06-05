@@ -1,0 +1,16 @@
+id: eventreceive
+belongsToCell: hooks
+consistencyLevel: L0
+lifecycle: experimental
+contractUsages:
+  - contract: webhook.demo.events.v1
+    role: webhook-receive
+    handler: HandleEvent       # method on *eventreceive.Service, signature func(ctx, webhook.Delivery) error
+    sourceID: demosource       # secret-isolation key; must == contract.endpoints.inbound.sourceID
+verify:
+  unit:
+    - unit.eventreceive.service
+  contract:
+    - contract.webhook.demo.events.v1.webhook-receive
+allowedFiles:
+  - examples/webhookdemo/cells/hooks/slices/eventreceive/**

@@ -7,4 +7,5 @@ use (
 	./examples/orderfulfillment
 	./examples/ssobff
 	./examples/todoorder
+	./examples/webhookdemo
 )
