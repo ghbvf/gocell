@@ -27,9 +27,20 @@ package archtest
 //     runtime/http/idempotency.buildNamespaceKey takes ONLY
 //     (*auth.Principal, method, path, idemKey) and derives the (ns,key) pair
 //     purely from those — it has no pod/listener/cell input and makes no calls
-//     that could read node-local state. A pod/listener/cell parameter, or a
-//     call to a node-identity source (os.Hostname, getenv, a provider), would
-//     make the key node-specific and break assembly-wide dedup; both are caught.
+//     that could read node-local state. This gate is two-directional:
+//       · ban-external-source (checkBuildNamespaceKeyBody): a pod/listener/cell
+//         parameter, or a call to a node-identity source (os.Hostname, getenv, a
+//         provider), would make the key node-specific and break assembly-wide
+//         dedup — caught. ("nothing node-local may enter the key.")
+//       · require-isolation-tuple (checkBuildNamespaceKeyRequiredUse): every
+//         sanctioned isolation dimension — p.TenantID, p.Subject, and the
+//         method/path/idemKey params — MUST be consumed into (ns,key). Dropping
+//         one (e.g. hard-coding ns to a literal, or omitting method) would still
+//         satisfy ban-external-source yet silently collapse cross-tenant,
+//         cross-subject, or cross-endpoint isolation — caught. ("every isolation
+//         dimension must enter the key.")
+//     Together they pin the key to EXACTLY the isolation tuple — no less (the
+//     security property) and no more node-local (the assembly-scope property).
 //
 // The A-layer cross-pod integration test
 // (adapters/redis/http_idempotency_assembly_scope_test.go) is the behavioral
@@ -45,11 +56,16 @@ package archtest
 //     tuple). A field-set drift is inexpressible without a CI-visible failure.
 //     Sibling范本: PEER-IDENTITY-FIELDS-FROZEN-01 / MODULE-PROVIDE-NO-VALUE-HANDOFF-01.
 //   - β: Medium — AST signature + body form-lock (no string anchor; the param
-//     type list and the body's reference set are pinned). Go cannot make the
-//     ABSENCE of a future node-identity parameter type-system-Hard; the Hard
-//     upgrade path is a sealed typed IdempotencyKey constructor funnel (Option C
-//     in the #1449 plan, deliberately out of scope for this PR), tracked as the
-//     cross-cell follow-up issue #1610. Same ceiling family as #851/#893/#1282.
+//     type list, the body's reference set, AND the required-use set are pinned).
+//     Both halves (ban-external-source + require-isolation-tuple) are the same
+//     Medium AST tier: Go cannot make the ABSENCE of a future node-identity
+//     parameter, nor the PRESENCE of every isolation reference, type-system-Hard.
+//     The Hard upgrade path for BOTH is a single sealed typed IdempotencyKey
+//     constructor funnel (Option C in the #1449 plan, deliberately out of scope
+//     for this PR) — derived once from (tenant, subject, method, path, idemKey)
+//     so neither a dropped dimension nor an injected node-id is expressible —
+//     tracked as the cross-cell follow-up issue #1610. Same ceiling family as
+//     #851/#893/#1282.
 //
 // # Blind spots + reverse self-checks (ai-robust mandate)
 //
@@ -62,9 +78,15 @@ package archtest
 //     (3) leaking extra principal fields into the key → caught by the
 //     selector-allowlist {TenantID,Subject}; (4) a chained selector like
 //     provider.Node.ID (whose selector base x.X is itself a SelectorExpr, not the
-//     principal Ident) → caught by the "non-principal source" branch. Non-vacuity
-//     proven by TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot against inline
-//     malformed source (incl. a chained-selector fixture). Residual (NOT caught,
+//     principal Ident) → caught by the "non-principal source" branch; (5) dropping
+//     an isolation dimension — hard-coding ns to a literal (drops p.TenantID),
+//     omitting p.Subject (cross-user replay), or never reading method/path/idemKey
+//     (cross-endpoint collision) → caught by checkBuildNamespaceKeyRequiredUse,
+//     which asserts each of {p.TenantID, p.Subject, method, path, idemKey} is
+//     referenced in the body. Non-vacuity proven by
+//     TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot against inline
+//     malformed source (chained-selector + one missing-dimension fixture per
+//     isolation field). Residual (NOT caught,
 //     documented): a *type alias* of auth.Principal used as `*P` makes param[0] an
 //     *ast.Ident rather than *ast.SelectorExpr, so isPrincipalPtr returns false and
 //     the param-type freeze rejects it as "not *auth.Principal" — i.e. a false
@@ -258,6 +280,12 @@ func TestHTTPIdempotencyKeyNodeAgnostic01(t *testing.T) {
 			"method/path/idemKey) — no calls and no references to node-local state. If intentional, "+
 			"update ADR 202606051000-1449 + this gate in the same PR.", ruleHTTPIdemKeyNodeAgnostic01, v)
 	}
+	for _, v := range checkBuildNamespaceKeyRequiredUse(fn) {
+		t.Errorf("%s (required-use): %s. The key MUST consume every isolation dimension "+
+			"(p.TenantID + p.Subject + method/path/idemKey); dropping one collapses cross-tenant, "+
+			"cross-subject, or cross-endpoint isolation while still passing the node-agnostic body check. "+
+			"If intentional, update ADR 202606051000-1449 + this gate in the same PR.", ruleHTTPIdemKeyNodeAgnostic01, v)
+	}
 }
 
 // checkBuildNamespaceKeySignature pins the parameter list to exactly
@@ -368,6 +396,104 @@ func checkBuildNamespaceKeyBody(fn *ast.FuncDecl) []string {
 	return violations
 }
 
+// checkBuildNamespaceKeyRequiredUse is the require-isolation-tuple half of the β
+// gate (checkBuildNamespaceKeyBody is the ban-external-source half). It asserts
+// the body actually CONSUMES every sanctioned isolation dimension, so the key
+// cannot silently drop one while still passing the node-agnostic checks:
+//
+//   - p.TenantID — the tenant isolation namespace. Omitting it (e.g. hard-coding
+//     ns to a string literal) collapses cross-tenant isolation: two tenants'
+//     identical Idempotency-Key would share one replay record.
+//   - p.Subject — per-subject identity. Omitting it collapses cross-user
+//     isolation: user A could replay user B's recorded response.
+//   - method, path, idemKey (params[1..3]) — each read at least once. Omitting
+//     method/path collapses cross-endpoint isolation (POST /orders and POST
+//     /payments with the same header collide); omitting idemKey makes the header
+//     value itself irrelevant.
+//
+// Param identity is resolved positionally from the FuncDecl (not by name), so a
+// rename cannot fool it; the signature freeze guarantees the 4-param shape, and
+// this runs only when that holds (positional resolution otherwise undefined).
+//
+// Detection is "is the identifier/selector referenced anywhere in the body",
+// which is intentionally permissive about HOW it is used — the ban-external-source
+// half already guarantees the body is a call-free pure derivation over exactly
+// these inputs plus the noTenantSentinel const, so "referenced" there is
+// equivalent to "flows into (ns,key)". This AST-presence form is Medium (same as
+// the rest of β); the Hard form that makes a dropped dimension inexpressible is
+// the sealed typed key constructor funnel, #1610.
+func checkBuildNamespaceKeyRequiredUse(fn *ast.FuncDecl) []string {
+	if fn.Body == nil {
+		return []string{"missing body"}
+	}
+	params := flattenFieldList(fn.Type.Params)
+	if len(params) != 4 {
+		// The signature freeze reports the shape violation; positional
+		// resolution of method/path/idemKey is undefined without it.
+		return nil
+	}
+	principalName := params[0].name
+	if principalName == "" {
+		principalName = "p"
+	}
+
+	usedTenantID := false
+	usedSubject := false
+	usedIdent := map[string]struct{}{}
+
+	// Selector field names (.Sel) are not value references; skip them in the
+	// bare-identifier pass so e.g. `p.method` never counts as using the `method`
+	// param. The principal selectors are detected in the SelectorExpr branch.
+	selFields := map[*ast.Ident]struct{}{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			selFields[sel.Sel] = struct{}{}
+		}
+		return true
+	})
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			if base, ok := x.X.(*ast.Ident); ok && base.Name == principalName {
+				switch x.Sel.Name {
+				case "TenantID":
+					usedTenantID = true
+				case "Subject":
+					usedSubject = true
+				}
+			}
+		case *ast.Ident:
+			if _, isField := selFields[x]; isField {
+				return true
+			}
+			usedIdent[x.Name] = struct{}{}
+		}
+		return true
+	})
+
+	var violations []string
+	if !usedTenantID {
+		violations = append(violations, fmt.Sprintf(
+			"%s.TenantID is never read — the tenant isolation namespace would be lost (cross-tenant replay)", principalName))
+	}
+	if !usedSubject {
+		violations = append(violations, fmt.Sprintf(
+			"%s.Subject is never read — per-subject isolation would be lost (cross-user replay)", principalName))
+	}
+	for _, p := range []struct {
+		idx   int
+		label string
+	}{{1, "method"}, {2, "path"}, {3, "idemKey"}} {
+		name := params[p.idx].name
+		if _, used := usedIdent[name]; name == "" || !used {
+			violations = append(violations, fmt.Sprintf(
+				"the %s parameter (param[%d]) is never used — that isolation dimension would be dropped from the key", p.label, p.idx))
+		}
+	}
+	return violations
+}
+
 // noTenantSentinelConst is the only package-level identifier the key derivation
 // may reference (the empty-tenant namespace sentinel in middleware.go).
 const noTenantSentinelConst = "noTenantSentinel"
@@ -460,9 +586,9 @@ func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key
 	key = p.Subject + "\x00" + method + "\x00" + path + "\x00" + idemKey
 	return
 }`
-	if sv, bv := runBuildKeyDetectors(t, good); len(sv) != 0 || len(bv) != 0 {
-		t.Errorf("%s self-test: detectors flagged the conforming form (vacuous-pass risk): sig=%v body=%v",
-			ruleHTTPIdemKeyNodeAgnostic01, sv, bv)
+	if sv, bv, uv := runBuildKeyDetectors(t, good); len(sv) != 0 || len(bv) != 0 || len(uv) != 0 {
+		t.Errorf("%s self-test: detectors flagged the conforming form (vacuous-pass risk): sig=%v body=%v use=%v",
+			ruleHTTPIdemKeyNodeAgnostic01, sv, bv, uv)
 	}
 
 	bad := map[string]string{
@@ -492,29 +618,63 @@ func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key
 	key = p.Subject + provider.Node.ID
 	return
 }`,
+		// require-isolation-tuple half: each fixture drops exactly one isolation
+		// dimension while staying call-free + node-local-free, so it passes
+		// ban-external-source and is caught only by checkBuildNamespaceKeyRequiredUse.
+		"missing-tenant": `package p
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
+	ns = noTenantSentinel
+	key = p.Subject + "\x00" + method + "\x00" + path + "\x00" + idemKey
+	return
+}`,
+		"missing-subject": `package p
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
+	ns = p.TenantID
+	key = method + "\x00" + path + "\x00" + idemKey
+	return
+}`,
+		"missing-method": `package p
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
+	ns = p.TenantID
+	key = p.Subject + "\x00" + path + "\x00" + idemKey
+	return
+}`,
+		"missing-path": `package p
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
+	ns = p.TenantID
+	key = p.Subject + "\x00" + method + "\x00" + idemKey
+	return
+}`,
+		"missing-idemkey": `package p
+func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
+	ns = p.TenantID
+	key = p.Subject + "\x00" + method + "\x00" + path
+	return
+}`,
 	}
 	for name, src := range bad {
-		sv, bv := runBuildKeyDetectors(t, src)
-		if len(sv) == 0 && len(bv) == 0 {
+		sv, bv, uv := runBuildKeyDetectors(t, src)
+		if len(sv) == 0 && len(bv) == 0 && len(uv) == 0 {
 			t.Errorf("%s self-test: detectors passed malformed form %q (blind spot): expected ≥1 violation",
 				ruleHTTPIdemKeyNodeAgnostic01, name)
 		}
 	}
 }
 
-// runBuildKeyDetectors parses an inline buildNamespaceKey source and runs both
-// β detectors against it. Each malformed fixture trips ≥1 detector: a node-id
-// param trips the signature freeze; an os.Hostname call trips the no-call body
-// rule; a bare process-node-id reference trips the free-identifier closure; an
-// extra principal field trips the selector allowlist.
-func runBuildKeyDetectors(t *testing.T, src string) (sig, body []string) {
+// runBuildKeyDetectors parses an inline buildNamespaceKey source and runs all
+// three β detectors against it. Each malformed fixture trips ≥1 detector: a
+// node-id param trips the signature freeze; an os.Hostname call trips the no-call
+// body rule; a bare process-node-id reference trips the free-identifier closure;
+// an extra principal field trips the selector allowlist; and a dropped isolation
+// dimension trips the required-use detector.
+func runBuildKeyDetectors(t *testing.T, src string) (sig, body, use []string) {
 	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "inline.go", src, 0)
 	require.NoError(t, err, "parse inline fixture")
 	fn, ok := findTopLevelFuncDecl(f, buildNamespaceKeyFnName)
 	require.True(t, ok, "inline fixture missing buildNamespaceKey")
-	return checkBuildNamespaceKeySignature(fn), checkBuildNamespaceKeyBody(fn)
+	return checkBuildNamespaceKeySignature(fn), checkBuildNamespaceKeyBody(fn), checkBuildNamespaceKeyRequiredUse(fn)
 }
 
 // ---------------------------------------------------------------------------

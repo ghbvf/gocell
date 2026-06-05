@@ -139,11 +139,21 @@ the same Redis store and key space via the `(tenant, subject, method, path,
 header)` key. Because the key includes `path`, a request to `POST /api/v1/orders`
 (primary listener) and a hypothetical `POST /internal/v1/orders` (internal
 listener) carrying the same `Idempotency-Key` produce **different** keys and do
-not collide — sharing the store ≠ sharing a dedup slot across paths. *Cross-cell*
-dedup (routing one **logical command** to a single dedup slot regardless of
-path/listener/cell) is a different, stronger guarantee that requires an
-Idempotency-Key ↔ command_id bridge and remains deferred (#1610, blocked-by
-#1044).
+not collide — sharing the store ≠ sharing a dedup slot across paths.
+
+**Subject applicability**: only requests carrying an authenticated **user**
+principal (`PrincipalUser` with a non-empty subject) are tracked. `PrincipalService`
+(the 4-part service token on `/internal/v1/*`), anonymous, and unauthenticated
+requests **bypass idempotency entirely** — no Claim, no replay
+(`runtime/http/idempotency.extractIdentity`). "All listeners share the replay
+domain" therefore means the store and keyspace are shared, not that every
+listener's traffic is cached: an internal service-token call is never
+deduplicated even though it shares the store.
+
+*Cross-cell* dedup (routing one **logical command** to a single dedup slot
+regardless of path/listener/cell) is a different, stronger guarantee that
+requires an Idempotency-Key ↔ command_id bridge and remains deferred (#1610,
+blocked-by #1044).
 
 ## Operational notes
 
