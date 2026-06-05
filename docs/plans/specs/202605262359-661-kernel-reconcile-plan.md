@@ -215,7 +215,7 @@ B1 (PR-A1) ────────────────────┐
 | `Loop` clock 字段集（无 wall-clock 字段） | A4 | RECONCILE-LOOP-CLOCK-CARVEOUT-01（mirror PROD-CLOCK-INJECTION-01） |
 | `LeaderElector` 三方法签名 | A6 | RECONCILE-LEADER-INTERFACE-FROZEN-01 |
 | `Builder` funnel（消费方构造 Loop 必经 Builder） | A7 | RECONCILE-BUILDER-FUNNEL-01 |
-| 命名 frozen（删除 SweeperLifecycle / SweepTicker） | A8 | RECONCILE-NAMING-FROZEN-01 |
+| 命名 frozen（删除 SweeperLifecycle / SweepTicker） | A8 | ~~RECONCILE-NAMING-FROZEN-01~~ **WON'T-DO**（grep-of-deleted-name = Soft，ai-robust「Soft 严禁立项」）。改由类型删除（Hard，编译错误）+ 既有 RECONCILE-BUILDER-FUNNEL-01 + 编译期 `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 断言 + 一次性 merge-gate grep 守。详见 tasks T38 + 设计 ADR §8。 |
 
 ---
 

@@ -327,9 +327,14 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	return nil
 }
 
-// commandSweepInterval is both the TickerTrigger cadence (how often the sweep
-// pulse fires) and the Loop's requeue interval for a zero-value Result — they
-// are intentionally the same value, so the sweep is level-triggered every 30s.
+// commandSweepInterval is the TickerTrigger cadence — the SINGLE periodic
+// source driving the device-command expiry sweep. The Loop opts out of the
+// default-tick self-requeue (WithoutDefaultRequeue below), so a successful sweep
+// does NOT re-enqueue itself; the 30s ticker pulse is the only re-observation
+// driver. (Keeping the default-tick requeue on would add a second, independent
+// periodic source — the ticker pulse arrives via the Loop's work queue while the
+// self-requeue lands in the delaying-queue heap; they do not coalesce, so the
+// sweep would run ~twice per cycle.)
 const commandSweepInterval = 30 * time.Second
 
 // buildCommandSweeper constructs the device-command expiry reconcile.Loop. The
@@ -338,6 +343,11 @@ const commandSweepInterval = 30 * time.Second
 // and the Loop's sealed real-only control-plane clock owns the startup probe /
 // requeue timers. Business-plane "now" (expiry) comes from c.clk via the
 // Sweeper, so deadlines stay consistent with command-creation time.
+//
+// WithoutDefaultRequeue makes the TickerTrigger the SOLE periodic source: a
+// successful Reconcile returns the zero Result{} and the Loop does not
+// self-requeue it (see commandSweepInterval). Transient sweep errors still
+// back off and retry; only the redundant success default-tick is suppressed.
 //
 // Sweep outcomes are observable via the reconcile_total{reconciler,result}
 // family (result=transient for scan/Ack failures) when a metrics provider is
@@ -351,7 +361,7 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 		WithTrigger(reconcile.TickerTrigger(c.clk, commandSweepInterval)).
 		WithName("devicecommand.sweeper").
 		WithReconcilerID("devicecommand_sweeper"). // label-safe: [a-z0-9_], no dots
-		WithInterval(commandSweepInterval)
+		WithoutDefaultRequeue()                    // ticker is the sole periodic source
 	if c.metricsProvider != nil {
 		m, err := reconcile.RegisterMetrics(c.metricsProvider)
 		if err != nil {

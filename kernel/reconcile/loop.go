@@ -209,8 +209,15 @@ type Loop struct {
 	// into it, source (read end) feeds the work queue.
 	triggerCh chan Request
 	// interval is the requeue delay for Result{} (RequeueAfter == 0);
-	// defaults to defaultReconcileInterval via applyDefaults.
+	// defaults to defaultReconcileInterval via applyDefaults. Ignored when
+	// noDefaultRequeue is set.
 	interval time.Duration
+	// noDefaultRequeue, when true, suppresses the success default-tick
+	// self-requeue (success + RequeueAfter==0 → no requeue), making the Trigger
+	// the sole driver. Set via Builder.WithoutDefaultRequeue. Affects only the
+	// success/zero-Result branch; explicit RequeueAfter>0 and error backoff are
+	// unchanged. See builder.go WithoutDefaultRequeue for the full rationale.
+	noDefaultRequeue bool
 	// maxConcurrentReconciles bounds concurrent reconciles across distinct
 	// EntityIDs; defaults to defaultMaxConcurrentReconciles via applyDefaults.
 	maxConcurrentReconciles int
@@ -973,6 +980,14 @@ func (l *Loop) dispatchResult(
 		backoff.Forget(req.EntityID)
 		delay := res.normalizedRequeueAfter()
 		if delay <= 0 {
+			if l.noDefaultRequeue {
+				// Opted out of the default-tick self-requeue: the Trigger is the
+				// sole driver of re-observation, so a successful zero-Result does
+				// NOT enqueue a periodic requeue. An explicit RequeueAfter>0
+				// (delay>0 above) is still honored; this only suppresses the
+				// default tick. See Builder.WithoutDefaultRequeue.
+				return
+			}
 			delay = l.interval
 		}
 		l.enqueueDelayed(runCtx, req, delay, addCh)

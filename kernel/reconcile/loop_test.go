@@ -874,6 +874,74 @@ func TestDispatchResult_SuccessEnqueuesNotCancel(t *testing.T) {
 	assert.Empty(t, cancelCh, "success must NOT cancel")
 }
 
+// TestDispatchResult_NoDefaultRequeue proves WithoutDefaultRequeue (the F1
+// root-cause fix): when the Loop opts out of the default-tick self-requeue, a
+// successful zero Result{} enqueues NOTHING — the Trigger is the sole driver of
+// re-observation. An explicit RequeueAfter>0 and transient-error backoff are
+// unaffected (only the success+zero branch is suppressed). The final sub-case
+// is the contrast control: with the option OFF, the same zero Result{} DOES
+// self-requeue at the default tick — proving the assertion is non-vacuous.
+func TestDispatchResult_NoDefaultRequeue(t *testing.T) {
+	t.Parallel()
+
+	newLoop := func(noDefault bool) *Loop {
+		// interval set high so the contrast case enqueues a far-out item (never
+		// fires mid-test); applyDefaults wires the logger for the transient Warn.
+		l := &Loop{reconcilerID: "rc", interval: testtime.D1h, noDefaultRequeue: noDefault}
+		l.applyDefaults()
+		return l
+	}
+	type chans struct {
+		add    chan waitingItem
+		cancel chan string
+		bo     *entityBackoff
+	}
+	newChans := func() chans {
+		return chans{
+			add:    make(chan waitingItem, 1),
+			cancel: make(chan string, 1),
+			bo:     newEntityBackoff(defaultBackoffBase, defaultBackoffMax),
+		}
+	}
+
+	t.Run("opted out: success zero-Result does NOT self-requeue", func(t *testing.T) {
+		t.Parallel()
+		l := newLoop(true)
+		c := newChans()
+		l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{},
+			nil, resultSuccess, c.add, c.cancel, c.bo)
+		assert.Empty(t, c.add, "WithoutDefaultRequeue: success zero-Result must NOT self-requeue (Trigger is sole driver)")
+		assert.Empty(t, c.cancel, "success must NOT cancel")
+	})
+
+	t.Run("opted out: explicit RequeueAfter>0 still honored", func(t *testing.T) {
+		t.Parallel()
+		l := newLoop(true)
+		c := newChans()
+		l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{RequeueAfter: testtime.D30ms},
+			nil, resultSuccess, c.add, c.cancel, c.bo)
+		assert.Len(t, c.add, 1, "explicit RequeueAfter>0 must still enqueue even when opted out")
+	})
+
+	t.Run("opted out: transient error still backoff-requeues", func(t *testing.T) {
+		t.Parallel()
+		l := newLoop(true)
+		c := newChans()
+		l.dispatchResult(context.Background(), Request{EntityID: "boom"}, Result{},
+			errors.New("transient"), resultTransient, c.add, c.cancel, c.bo)
+		assert.Len(t, c.add, 1, "transient error must still backoff-requeue when opted out")
+	})
+
+	t.Run("default (option off): success zero-Result self-requeues at interval", func(t *testing.T) {
+		t.Parallel()
+		l := newLoop(false)
+		c := newChans()
+		l.dispatchResult(context.Background(), Request{EntityID: "ok"}, Result{},
+			nil, resultSuccess, c.add, c.cancel, c.bo)
+		assert.Len(t, c.add, 1, "default behavior: success zero-Result self-requeues at the default tick")
+	})
+}
+
 // TestLoop_BaseDelayExceedsMaxDelayFailsStart proves F6: an inverted backoff
 // window (BaseDelay > MaxDelay, both explicitly set) is rejected at Start.
 func TestLoop_BaseDelayExceedsMaxDelayFailsStart(t *testing.T) {

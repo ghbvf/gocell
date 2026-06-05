@@ -54,6 +54,7 @@ type Builder struct {
 	baseDelay               time.Duration
 	maxDelay                time.Duration
 	renewInterval           time.Duration
+	noDefaultRequeue        bool
 }
 
 // New creates a new Builder with the required Reconciler. The Reconciler is
@@ -108,9 +109,41 @@ func (b *Builder) WithMetrics(m Metrics) *Builder {
 }
 
 // WithInterval sets the requeue delay for Result{} (RequeueAfter == 0).
-// Defaults to 30s.
+// Defaults to 30s. Has no effect when WithoutDefaultRequeue is set (a
+// successful Result{} then triggers no self-requeue at all).
 func (b *Builder) WithInterval(d time.Duration) *Builder {
 	b.interval = d
+	return b
+}
+
+// WithoutDefaultRequeue makes a successful Reconcile that returns the zero
+// Result{} (RequeueAfter == 0) NOT self-requeue at the default tick — the
+// Loop's Trigger becomes the sole driver of re-observation. This is the
+// controller-runtime Result{} semantic (Result{} + nil err = "done, wait for
+// the next source event"), opted into per Loop.
+//
+// Use it for a reconciler whose Trigger is already periodic (e.g. a
+// TickerTrigger-driven bulk sweeper): the default-tick self-requeue and the
+// ticker pulse are two independent periodic sources of the same work — the
+// ticker pulse arrives via the Loop's source channel (feedFromSource → work
+// queue) while the success self-requeue lands in the delaying-queue heap, so
+// they do NOT coalesce, and steady state runs ~2 sweeps per cycle. Opting out
+// of the default-tick self-requeue leaves the ticker as the single source.
+//
+// Scope: this affects ONLY the success + RequeueAfter==0 branch. An explicit
+// RequeueAfter > 0 is still honored, and transient/permanent error handling is
+// unchanged (transient → backoff requeue, permanent → cancel) — a failed sweep
+// still retries on backoff rather than waiting for the next Trigger pulse.
+// A coalesced dirty re-run (a Trigger pulse that arrived mid-reconcile) is also
+// unaffected: it is a real Trigger signal, not a periodic self-requeue.
+//
+// Default (option unset): Result{} re-observes at the Loop's interval
+// (WithInterval / 30s) — GoCell's deliberate divergence for Trigger-less or
+// event-only (ChannelTrigger) reconcilers that rely on the default tick for
+// periodic re-check. See ADR 202605291600-661 §"Result 语义" and
+// kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go (Result).
+func (b *Builder) WithoutDefaultRequeue() *Builder {
+	b.noDefaultRequeue = true
 	return b
 }
 
@@ -182,5 +215,6 @@ func (b *Builder) Build() (*Loop, error) {
 		baseDelay:               b.baseDelay,
 		maxDelay:                b.maxDelay,
 		renewInterval:           b.renewInterval,
+		noDefaultRequeue:        b.noDefaultRequeue,
 	}, nil
 }
