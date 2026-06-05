@@ -20,6 +20,7 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -41,7 +42,7 @@ func asCaller(req *http.Request) *http.Request {
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	svc, err := configreader.NewService(repo, codec, slog.Default(), "configreadinternal", query.RunModeProd)
+	svc, err := configreader.NewService(repo, outbox.DemoCellTxManager(), codec, slog.Default(), "configreadinternal", query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}

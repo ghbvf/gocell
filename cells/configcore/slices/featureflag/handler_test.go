@@ -20,6 +20,7 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -114,7 +115,7 @@ func setupHandler() (http.Handler, *mem.FlagRepository) {
 func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCodec) {
 	repo := mem.NewFlagRepository(clock.Real())
 	codec, _ := query.NewCursorCodec(flagHandlerTestKey)
-	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, outbox.DemoCellTxManager(), codec, slog.Default(), query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}

@@ -22,6 +22,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/cells/configcore/internal/scopedread"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
@@ -36,7 +38,8 @@ var configSort = []query.SortColumn{
 // internal read slices.
 type Service struct {
 	repo      ports.ConfigRepository
-	codec     *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"configreader: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner  persistence.CellTxManager `gocell:"required" gocellErr:"configreader: TxRunner required (PR-3 RLS reads run in a tenant-scoped tx)"`                        //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	codec     *query.CursorCodec        `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"configreader: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger    *slog.Logger
 	runMode   query.RunMode
 	sliceName string
@@ -55,6 +58,7 @@ type Service struct {
 // so the cell Init() can propagate a structured error instead of a runtime panic.
 func NewService(
 	repo ports.ConfigRepository,
+	txRunner persistence.CellTxManager,
 	codec *query.CursorCodec,
 	logger *slog.Logger,
 	sliceName string,
@@ -65,6 +69,7 @@ func NewService(
 	}
 	s := &Service{
 		repo:      repo,
+		txRunner:  txRunner,
 		codec:     codec,
 		logger:    logger,
 		runMode:   runMode,
@@ -83,7 +88,11 @@ func NewService(
 // global config tier). Sourcing happens in the slice handler, never here, so
 // this shared Service stays tenant-source-agnostic.
 func (s *Service) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.ConfigEntry, error) {
-	entry, err := s.repo.GetByKey(ctx, t, key)
+	// PR-3 RLS: the read runs inside a tenant-scoped transaction so the DB sees
+	// SET LOCAL app.tenant_id = t before the SELECT (else FORCE RLS → 0 rows).
+	entry, err := scopedread.Do(ctx, s.txRunner, t, func(txCtx context.Context) (*domain.ConfigEntry, error) {
+		return s.repo.GetByKey(txCtx, t, key)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("config-read: get: %w", err)
 	}
@@ -93,23 +102,27 @@ func (s *Service) GetByKey(ctx context.Context, t tenant.TenantID, key string) (
 // List returns a paginated page of config entries within the tenant scope t.
 // See GetByKey for how t is sourced per trust boundary.
 func (s *Service) List(ctx context.Context, t tenant.TenantID, pageReq query.PageParams) (query.PageResult[*domain.ConfigEntry], error) {
-	qctx := query.QueryContext("endpoint", s.sliceName)
-	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.ConfigEntry]{
-		Codec:      s.codec,
-		PageParams: pageReq,
-		Sort:       configSort,
-		QueryCtx:   qctx,
-		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
-			entries, err := s.repo.List(ctx, t, params)
-			if err != nil {
-				return nil, fmt.Errorf("config-read: list: %w", err)
-			}
-			return entries, nil
-		},
-		Extract: func(e *domain.ConfigEntry) []any {
-			return []any{e.Key, e.ID}
-		},
-		OnCursorErr: query.LogCursorError(s.logger, s.sliceName),
-		RunMode:     s.runMode,
+	// PR-3 RLS: run the whole paged query inside a tenant-scoped transaction so
+	// the Fetch SELECT executes under SET LOCAL app.tenant_id = t.
+	return scopedread.Do(ctx, s.txRunner, t, func(txCtx context.Context) (query.PageResult[*domain.ConfigEntry], error) {
+		qctx := query.QueryContext("endpoint", s.sliceName)
+		return query.ExecutePagedQuery(txCtx, query.PagedQueryConfig[*domain.ConfigEntry]{
+			Codec:      s.codec,
+			PageParams: pageReq,
+			Sort:       configSort,
+			QueryCtx:   qctx,
+			Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
+				entries, err := s.repo.List(ctx, t, params)
+				if err != nil {
+					return nil, fmt.Errorf("config-read: list: %w", err)
+				}
+				return entries, nil
+			},
+			Extract: func(e *domain.ConfigEntry) []any {
+				return []any{e.Key, e.ID}
+			},
+			OnCursorErr: query.LogCursorError(s.logger, s.sliceName),
+			RunMode:     s.runMode,
+		})
 	})
 }

@@ -4,12 +4,17 @@ package featureflag
 
 import (
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // validateRequired verifies every required dependency on the Service struct
 // is present and non-typed-nil. Generated from gocell:"required" struct field
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"featureflag: TxRunner required (PR-3 RLS reads run in a tenant-scoped tx)")
+	}
 	if s.codec == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"featureflag: cursor codec is required")

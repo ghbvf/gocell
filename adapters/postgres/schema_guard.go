@@ -299,6 +299,12 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 	if err := verifyChecks(ctx, pool); err != nil {
 		return err
 	}
+	// Row-level security: each tenant table must have FORCE ROW LEVEL SECURITY
+	// enabled AND the tenant_isolation policy present, so a dropped/disabled RLS
+	// surfaces as a /readyz failure rather than a silent cross-tenant leak.
+	if err := verifyRLS(ctx, pool); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -387,6 +393,17 @@ type expectedFunction struct {
 type expectedCheck struct {
 	Table string
 	Name  string
+}
+
+// expectedRLS asserts a table has FORCE ROW LEVEL SECURITY (pg_class.relrowsecurity
+// AND relforcerowsecurity both true) and a named row-security policy present
+// (pg_policies). This is the schema-guard dimension for PR-3 tenant isolation
+// (#1341): a migration or operator that disables RLS or drops the policy would
+// otherwise silently re-open cross-tenant reads; pinning it here turns that into
+// a /readyz failure.
+type expectedRLS struct {
+	Table  string
+	Policy string
 }
 
 // pgTypeTSTZ is the PostgreSQL column type name for a timezone-aware timestamp.
@@ -841,6 +858,71 @@ var expectedTriggers = []expectedTrigger{
 // expectedFunctions is the PL/pgSQL function registry.
 var expectedFunctions = []expectedFunction{
 	{Name: "effective_admin_invariant_fn"},
+}
+
+// expectedRLSTables is the FORCE-ROW-LEVEL-SECURITY registry. PR-3a (#1341,
+// migration 052) covers the configcore tenant tables only. PR-3b adds
+// users/roles/role_assignments; audit_entries awaits its per-(namespace,tenant)
+// hash-chain re-architecture before it can be added (see migration 052 header).
+var expectedRLSTables = []expectedRLS{
+	{Table: "config_entries", Policy: "tenant_isolation"},
+	{Table: "config_versions", Policy: "tenant_isolation"},
+	{Table: "feature_flags", Policy: "tenant_isolation"},
+}
+
+// verifyRLS asserts FORCE ROW LEVEL SECURITY + named policy presence for every
+// table in expectedRLSTables.
+func verifyRLS(ctx context.Context, pool *Pool) error {
+	const flagsQ = `
+	SELECT c.relrowsecurity, c.relforcerowsecurity
+	  FROM pg_class c
+	  JOIN pg_namespace n ON n.oid = c.relnamespace
+	 WHERE n.nspname = current_schema()
+	   AND c.relname = $1`
+	const policyQ = `
+	SELECT EXISTS (
+	  SELECT 1 FROM pg_policies
+	   WHERE schemaname = current_schema()
+	     AND tablename  = $1
+	     AND policyname = $2
+	)`
+
+	for _, r := range expectedRLSTables {
+		var enabled, forced bool
+		if err := pool.inner.QueryRow(ctx, flagsQ, r.Table).Scan(&enabled, &forced); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: query row-level security flags", err)
+		}
+		if !enabled || !forced {
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: table missing FORCE ROW LEVEL SECURITY",
+				errcode.WithDetails(
+					errcode.PublicString("dimension", "rls"),
+					errcode.PublicString("table", r.Table),
+					errcode.PublicBool("rowsecurity", enabled),
+					errcode.PublicBool("forcerowsecurity", forced),
+				),
+			)
+		}
+		var hasPolicy bool
+		if err := pool.inner.QueryRow(ctx, policyQ, r.Table, r.Policy).Scan(&hasPolicy); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: query row-level security policy", err)
+		}
+		if !hasPolicy {
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: table missing row-security policy",
+				errcode.WithDetails(
+					errcode.PublicString("dimension", "rls_policy"),
+					errcode.PublicString("table", r.Table),
+					errcode.PublicString("policy", r.Policy),
+				),
+			)
+		}
+	}
+	return nil
 }
 
 // expectedChecks is the CHECK constraint registry.

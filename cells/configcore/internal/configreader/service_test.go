@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
@@ -28,7 +29,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	logger := slog.Default()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	svc, err := NewService(repo, codec, logger, "configread", query.RunModeProd)
+	svc, err := NewService(repo, outbox.DemoCellTxManager(), codec, logger, "configread", query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}
@@ -41,12 +42,24 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 // surfacing mid-request as a 500.
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, nil, slog.Default(), "configread", query.RunModeProd)
+	svc, err := NewService(repo, outbox.DemoCellTxManager(), nil, slog.Default(), "configread", query.RunModeProd)
 	require.Error(t, err)
 	assert.Nil(t, svc)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
+}
+
+// TestNewService_NilTxRunner_ReturnsError ensures construction fails fast when
+// the cell wires a nil TxRunner. PR-3 RLS reads must run in a tenant-scoped
+// transaction (SET LOCAL app.tenant_id), so a missing TxRunner is a fatal
+// wiring error, not a degraded-but-running mode.
+func TestNewService_NilTxRunner_ReturnsError(t *testing.T) {
+	repo := mem.NewConfigRepository(clock.Real())
+	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+	svc, err := NewService(repo, nil, codec, slog.Default(), "configread", query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
 }
 
 func seedEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {

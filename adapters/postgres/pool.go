@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
@@ -13,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // Compile-time assertions: Pool implements both lifecycle interfaces.
@@ -123,6 +125,9 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 	// Override DSN connect_timeout (if any). applyDefaults guarantees
 	// cfg.ConnectTimeout > 0 here, so this write is unconditional.
 	poolCfg.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
+	// Defense-in-depth tenant-checkout guard (PR-3 #1341): fail any tenant-scoped
+	// connection checkout that bypasses RunInTx (see tenantScopePrepareConn).
+	poolCfg.PrepareConn = tenantScopePrepareConn
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -142,6 +147,43 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 	)
 
 	return &Pool{inner: pool, config: cfg}, nil
+}
+
+// tenantScopePrepareConn is the pgxpool PrepareConn hook providing DEFENSE IN
+// DEPTH for PR-3 row-level security (#1341). It is NOT the primary enforcement —
+// that is the DB-side FORCE ROW LEVEL SECURITY policy (a checkout that never sets
+// app.tenant_id sees 0 rows, fail-closed) plus the PR-2 typed TenantID repo
+// parameter (compile-time). This hook turns one specific liveness bug LOUD: a
+// deliberately tenant-scoped context (tenant.WithScope was called) that acquires
+// a connection WITHOUT going through TxRunner.RunInTx — i.e. business code that
+// declared a tenant scope but then ran a statement on a raw pool connection,
+// skipping the SET LOCAL app.tenant_id injection.
+//
+// Keyed on tenant.ScopeFromContext (the deliberate scope signal), NOT on
+// ctxkeys.TenantID: a post-auth principal context legitimately reads non-RLS
+// tables on raw pool connections, so keying on the principal carrier would
+// false-positive. RunInTx stamps txAcquireMarker on its Begin context, so a
+// scoped checkout originating from RunInTx is allowed; only a scoped checkout
+// lacking the marker is rejected.
+//
+// PrepareConn return contract (pgx v5): returning (true, err) keeps the
+// connection healthy in the pool and fails ONLY the instigating query with err
+// — a clean fail-fast with no connection churn (unlike the deprecated
+// BeforeAcquire bool hook, whose false return destroys connections and yields a
+// generic "too many failed attempts" pool error).
+//
+// Feasibility note (honest, see ADR): this hook does NOT catch code that strips
+// the tenant scope and runs raw SQL — that path acquires unscoped and is allowed
+// here, with the DB RLS 0-row policy as the backstop. It is defense-in-depth, not
+// a replacement for the RLS policy or the typed parameter.
+func tenantScopePrepareConn(ctx context.Context, _ *pgx.Conn) (bool, error) {
+	if _, scoped := tenant.ScopeFromContext(ctx); scoped && !hasTxAcquireIntent(ctx) {
+		return true, errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
+			"postgres: tenant-scoped connection checkout outside RunInTx; tenant-scoped "+
+				"data access must go through TxRunner.RunInTx so the RLS app.tenant_id GUC "+
+				"(SET LOCAL) is set before any statement runs")
+	}
+	return true, nil
 }
 
 // DB returns the underlying pgxpool.Pool for direct access.
