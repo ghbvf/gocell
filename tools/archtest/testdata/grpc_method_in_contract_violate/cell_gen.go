@@ -9,6 +9,15 @@ import "github.com/ghbvf/gocell/kernel/cell"
 // banner. GRPC-METHOD-IN-CONTRACT-01/A must ALLOW this (no diagnostic) — it is
 // the single legitimate production callsite shape. Paired with healthz_gen.go
 // to prove the allowlist distinguishes cell_gen.go from sibling generated files.
+//
+// The inline composite literal form matches what gocell generate cell actually
+// emits, enabling the B-check AST extractor (extractGRPCContractIDs) to resolve
+// the ContractID string literal directly from the call site.
 func generatedCellRegister(reg cell.Registrar) {
-	_ = reg.GRPCService(fixtureSpec())
+	_ = reg.GRPCService(cell.GRPCServiceSpec{
+		ContractID: "grpc.fixture.v1",
+		CellID:     "fixturecell",
+		Listener:   cell.PrimaryListener,
+		Register:   func() {}, // intentionally wrong type (func() vs func(grpc.ServiceRegistrar)); fixture only feeds AST scan, never reaches runtime
+	})
 }

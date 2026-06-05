@@ -3,6 +3,25 @@
 // GRPC-METHOD-IN-CONTRACT-01 — reg.GRPCService caller allowlist + contract
 // bidirectional coverage.
 //
+// IMPORTANT — service-level vs method-level granularity
+//
+// This invariant operates at the SERVICE / CONTRACT level, NOT the per-RPC
+// method level. The generated cellgen call is:
+//
+//	reg.GRPCService(cell.GRPCServiceSpec{ContractID: "grpc.foo.v1", ...})
+//
+// Under the hood, runtime cellScopedRegistrar.RegisterService calls the
+// proto-generated Register<Svc>Server(grpc.ServiceRegistrar, impl), which maps
+// EVERY RPC method of that service to the same cellID in one shot. A single
+// contract.yaml declares one grpc service, covering all its RPCs.
+//
+// Consequence: the A/B/C enforcement here checks "registered grpc service's
+// ContractID ∈ declared grpc contracts" — it does NOT guarantee that every
+// individual RPC method ∈ a specific contract-declared method entry. The
+// per-method coverage gap is a deferred design decision tracked at
+// gh #1655 (sub-issue of epic #1099); until that issue is resolved the
+// archtest ID stays GRPC-METHOD-IN-CONTRACT-01 (renaming is churn).
+//
 // This rule has three sub-checks (A, B, C):
 //
 // # A — Caller allowlist (Downstream Medium)
@@ -23,16 +42,19 @@
 //
 // For every reg.GRPCService(cell.GRPCServiceSpec{ContractID: "...", ...}) call
 // found in a generated cell_gen.go, the ContractID must resolve to a real
-// contract.yaml with kind==grpc. Stale generated code referencing deleted or
-// renamed contracts fails immediately. (Vacuously green today — zero kind:grpc
-// contracts; #1151 will be the first consumer.)
+// contract.yaml with kind==grpc. Stale generated code referencing a deleted or
+// renamed contract fails immediately. Enforcement is at the contract/service
+// granularity — not at the individual RPC method level (see service-level note
+// above). (Vacuously green today — zero kind:grpc contracts; #1151 will be the
+// first consumer.)
 //
 // # C — No-orphan-contract (Coverage Medium)
 //
 // For every active kind:grpc contract with a non-empty endpoints.server, there
 // must exist a slice.yaml contractUsage with role=serve referencing that
-// contract ID. A contract with no serving cell is a dead declaration. (Vacuously
-// green today for the same reason.)
+// contract ID. A contract with no serving cell is a dead declaration. Enforcement
+// is at the contract/service granularity (see service-level note above).
+// (Vacuously green today for the same reason.)
 //
 // # AI-robust grading (Funnel 双向锁评级)
 //
@@ -48,9 +70,9 @@
 //     CTXKEYS-PRINCIPAL-WRITE-CALLER (#1282), PROJECTION-REGISTER-FUNNEL (#1372),
 //     grpc-registrar-field (#1582).
 //   - Coverage Medium (B, C — this file): YAML-load + go/types ContractID string
-//     extraction. Hard path = bidirectional golden lock between cellgen output and
-//     contract registry; not yet worth the tooling cost (tracked as
-//     future-nice-to-have under the same gh #1631 umbrella).
+//     extraction operates at contract/service granularity. Hard path = bidirectional
+//     golden lock between cellgen output and contract registry; not yet worth the
+//     tooling cost (tracked as future-nice-to-have under the same gh #1631 umbrella).
 //
 // # Blind spots
 //
@@ -567,6 +589,123 @@ func TestGRPCMethodInContract01_C_SyntheticOrphanContract(t *testing.T) {
 	greenDiags := detectOrphanContracts(contracts, served)
 	assert.Empty(t, greenDiags,
 		"detectOrphanContracts: served active grpc contract must produce no diagnostic")
+}
+
+// TestGRPCMethodInContract01_B_ASTExtractionRED proves that the real
+// extractGRPCContractIDs AST extractor (banner filter + basename check +
+// ContractID literal extraction) correctly surfaces a ContractID from the
+// violate fixture's cell_gen.go, and that detectOrphanRegs fires when that
+// ContractID is absent from the known-set.
+//
+// This covers the SCAN/EXTRACTION layer (packages.Load → Pass → AST walk),
+// not just the pure detectOrphanRegs logic that TestGRPCMethodInContract01_B_SyntheticOrphanReg
+// already exercises. A bug in extractGRPCContractIDs (banner check / basename
+// filter / ContractID literal resolution) would be caught here but not in the
+// synthetic test.
+func TestGRPCMethodInContract01_B_ASTExtractionRED(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "grpc_method_in_contract_violate")
+
+	// Run the real extractor over the violate fixture module.
+	var extracted []grpcRegRef
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				absPath := p.Abs(f)
+				// Mirror the production B-check: only scan cell_gen.go files with banner.
+				if filepath.Base(rel) != "cell_gen.go" || !grpcFileHasCellgenMarker(absPath) {
+					continue
+				}
+				for _, contractID := range extractGRPCContractIDs(f, p.TypesInfo) {
+					extracted = append(extracted, grpcRegRef{Rel: rel, ContractID: contractID})
+				}
+			}
+			return nil
+		})
+
+	// The fixture's cell_gen.go uses ContractID "grpc.fixture.v1" (see shared.go).
+	assert.NotEmpty(t, extracted,
+		"B AST extraction RED: extractGRPCContractIDs must find at least one ContractID "+
+			"in the violate fixture's cell_gen.go (banner check + basename filter + literal eval)")
+
+	// RED: feed extracted regs into detectOrphanRegs with a set that does NOT contain
+	// "grpc.fixture.v1" → every extracted ref must produce a diagnostic.
+	emptyKnown := map[string]bool{}
+	diags := detectOrphanRegs(emptyKnown, extracted)
+	assert.Len(t, diags, len(extracted),
+		"B AST extraction RED: detectOrphanRegs must fire for every extracted ContractID "+
+			"when known-set is empty")
+	for _, d := range diags {
+		assert.Contains(t, d.Message, "GRPC-METHOD-IN-CONTRACT-01/B",
+			"diagnostic must carry the sub-check ID")
+	}
+}
+
+// TestGRPCMethodInContract01_C_YAMLScanRED proves that the real contract-YAML
+// loader (loadContractDocs) and serve-usage scanner (loadSliceServeUsages)
+// correctly identify an active kind:grpc contract with no serving slice.yaml,
+// and that detectOrphanContracts fires for it.
+//
+// This covers the SCAN/EXTRACTION layer (YAML parse + DirsScope walk), not
+// just the pure detectOrphanContracts logic. A bug in the YAML parser, the
+// isActiveGRPCContractWithServer predicate, or the DirsScope walk would be
+// caught here but not in TestGRPCMethodInContract01_C_SyntheticOrphanContract.
+//
+// Fixture: testdata/grpc_orphan_contract/contracts/grpc/fixture/v1/contract.yaml
+// — kind:grpc, lifecycle:active, endpoints.server:fixturecell, no serving slice.
+func TestGRPCMethodInContract01_C_YAMLScanRED(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureRoot := filepath.Join(root, "tools", "archtest", "testdata", "grpc_orphan_contract")
+
+	// Run the real contract loader over the fixture root.
+	contracts, err := loadContractDocs(fixtureRoot)
+	if err != nil {
+		t.Fatalf("C YAML scan RED: loadContractDocs: %v", err)
+	}
+
+	grpcContracts := make([]contractDoc, 0)
+	for _, c := range contracts {
+		if isActiveGRPCContractWithServer(c) {
+			grpcContracts = append(grpcContracts, c)
+		}
+	}
+	assert.NotEmpty(t, grpcContracts,
+		"C YAML scan RED: loadContractDocs must find at least one active kind:grpc "+
+			"contract with endpoints.server in the orphan fixture root")
+
+	// Run the real serve-usage loader. The fixture root has no cells/ or examples/,
+	// so servedContracts will be empty — every grpc contract is unserved.
+	serveUsages, err := loadSliceServeUsages(fixtureRoot)
+	if err != nil {
+		t.Fatalf("C YAML scan RED: loadSliceServeUsages: %v", err)
+	}
+	servedContracts := buildServedContractSet(serveUsages)
+
+	// RED: detectOrphanContracts must fire for the unserved active grpc contract.
+	diags := detectOrphanContracts(contracts, servedContracts)
+	assert.NotEmpty(t, diags,
+		"C YAML scan RED: detectOrphanContracts must fire for the unserved active "+
+			"kind:grpc contract in the fixture (grpc.fixture.orphan.v1)")
+	for _, d := range diags {
+		assert.Contains(t, d.Message, "GRPC-METHOD-IN-CONTRACT-01/C",
+			"diagnostic must carry the sub-check ID")
+		assert.Contains(t, d.Message, "grpc.fixture.orphan.v1",
+			"diagnostic must name the orphaned contract ID")
+	}
 }
 
 // TestGRPCMethodInContract01_ReverseFixture loads the synthetic violation
