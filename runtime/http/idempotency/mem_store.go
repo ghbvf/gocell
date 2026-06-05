@@ -53,11 +53,11 @@ func NewMemStore(clk clock.Clock) *MemStore {
 }
 
 // Claim implements Store.
-func (ms *MemStore) Claim(ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) { //nolint:lll // Store.Claim signature mirrors the interface; cannot shorten without breaking the interface contract
+func (ms *MemStore) Claim(ctx context.Context, k IdempotencyKey, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) { //nolint:lll // Store.Claim signature mirrors the interface; cannot shorten without breaking the interface contract
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
-	composed := ns + "\x00" + key
+	composed := k.Namespace() + "\x00" + k.Key()
 	now := ms.clk.Now()
 
 	if e, ok := ms.entries[composed]; ok {

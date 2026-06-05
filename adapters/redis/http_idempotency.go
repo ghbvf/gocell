@@ -205,27 +205,28 @@ return 0
 `
 
 // Claim implements idemhttp.Store. It attempts to acquire a processing lease
-// for the given ns+key pair.
+// for the given sealed key k.
 //
 // The Redis keys are derived as:
 //
 //	<store-ns>:<ns>:{<key>}:lease  and  …:resp  and  …:fp
 //
 // where <store-ns> is the construction-time KeyNamespace (s.ns, owner
-// dimension) and <ns> is the Claim ns parameter. In the standard Middleware,
-// ns is the caller TenantID (or "_notenant" when absent); the interface
-// contract accepts any non-empty, brace-free string. <key> is the composed
-// idempotency key. Both prefix segments sit outside the hashtag so Redis
-// Cluster CRC16 only hashes {<key>}.
+// dimension), <ns> = k.Namespace() (the caller TenantID, or "_notenant" when
+// absent), and <key> = k.Key() (the composed idempotency key). Both prefix
+// segments sit outside the hashtag so Redis Cluster CRC16 only hashes {<key>}.
 //
-// Both ns and key must be non-empty and free of '{'/'}' characters so the
-// Redis Cluster hashtag boundary is unambiguous.
+// Both k.Namespace() and k.Key() must be non-empty and free of '{'/'}' so the
+// Redis Cluster hashtag boundary is unambiguous — a Redis-Cluster-specific
+// constraint validated here, deliberately NOT folded into the store-agnostic
+// DeriveKey (MemStore has no such constraint).
 //
 // fingerprint is hex(sha256(body)). If a previous Claim stored a different
 // fingerprint for the same key, ErrFingerprintMismatch is returned.
 func (s *HTTPIdempotencyStore) Claim(
-	ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration,
+	ctx context.Context, k idemhttp.IdempotencyKey, fingerprint string, leaseTTL time.Duration,
 ) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
+	ns, key := k.Namespace(), k.Key()
 	if ns == "" || strings.ContainsAny(ns, "{}") {
 		return 0, nil, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
 			"redis: http idempotency ns must be non-empty and free of curly-brace characters",

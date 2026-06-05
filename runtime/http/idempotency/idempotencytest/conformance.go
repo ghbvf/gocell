@@ -44,12 +44,18 @@ type Factory func(t *testing.T) (store idemhttp.Store, adv TimeAdvancer, cleanup
 
 // Package-level constants extracted per coding-standards duplication rules.
 const (
-	conformNS     = "conf-ns"
-	conformKey    = "conf-key-001"
-	conformAltNS  = "conf-alt-ns"
-	conformAltKey = "conf-alt-key-001"
-	shortLeaseTTL = 50 * time.Millisecond
-	shortDoneTTL  = 50 * time.Millisecond
+	// DeriveKey inputs for the conformance keys (assembled into IdempotencyKey
+	// vars below). The Main/AltNS/AltKey trio is chosen so AltNS differs from Main
+	// ONLY in namespace and AltKey ONLY in key — see conformKeyMain below.
+	conformTenant    = "conf-tenant"
+	conformTenantAlt = "conf-tenant-alt"
+	conformSubject   = "conf-subject"
+	conformMethod    = "POST"
+	conformPath      = "/conf"
+	conformIdem      = "conf-idem-001"
+	conformIdemAlt   = "conf-idem-alt-001"
+	shortLeaseTTL    = 50 * time.Millisecond
+	shortDoneTTL     = 50 * time.Millisecond
 	// conformLeaseTTL is a normal-length lease TTL used in conformance cases
 	// that do not exercise TTL expiry.
 	conformLeaseTTL = 30 * time.Second
@@ -62,6 +68,21 @@ const (
 	conformFP = "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222"
 	// conformFPAlt is a different fingerprint used to trigger mismatch cases.
 	conformFPAlt = "bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222cccc3333"
+)
+
+// conformKeyMain / conformKeyAltNS / conformKeyAltKey are the sealed keys the
+// suite claims, built via the real DeriveKey. There is NO test-only backdoor
+// constructor — package idempotencytest is external to idempotency, so it cannot
+// build an IdempotencyKey literal, and the sole-constructor freeze in
+// HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01 forbids adding one (precedent:
+// BuildRecordedResponse routes through the real UnmarshalRecordedResponse). The
+// trio is chosen so DifferentNamespaceKey_AreIndependent still proves
+// independence: AltNS differs from Main ONLY in namespace (different tenant,
+// identical key bytes); AltKey differs ONLY in key (same tenant, different idemKey).
+var (
+	conformKeyMain   = idemhttp.DeriveKey(conformTenant, conformSubject, conformMethod, conformPath, conformIdem)
+	conformKeyAltNS  = idemhttp.DeriveKey(conformTenantAlt, conformSubject, conformMethod, conformPath, conformIdem)
+	conformKeyAltKey = idemhttp.DeriveKey(conformTenant, conformSubject, conformMethod, conformPath, conformIdemAlt)
 )
 
 // RunConformanceSuite runs the full Store conformance suite against the
@@ -104,7 +125,7 @@ func conformFirstClaimAcquired(t *testing.T, factory Factory) {
 	store, _, cleanup := factory(t)
 	defer cleanup()
 
-	state, rec, receipt, err := store.Claim(context.Background(), conformNS, conformKey, conformFP, conformLeaseTTL)
+	state, rec, receipt, err := store.Claim(context.Background(), conformKeyMain, conformFP, conformLeaseTTL)
 	if err != nil {
 		t.Fatalf("Claim: unexpected error: %v", err)
 	}
@@ -130,7 +151,7 @@ func conformClaimDoneAfterRecord(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	ctx := context.Background()
-	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state, _, receipt, err := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
@@ -143,7 +164,7 @@ func conformClaimDoneAfterRecord(t *testing.T, factory Factory) {
 	}
 
 	// Second Claim must return ClaimDone with the stored response.
-	state2, rec2, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state2, rec2, _, err2 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("second Claim: unexpected error: %v", err2)
 	}
@@ -176,12 +197,12 @@ func conformClaimBusyWhileLeaseHeld(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	ctx := context.Background()
-	state, _, _, err := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state, _, _, err := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("first Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
 
-	state2, rec2, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state2, rec2, _, err2 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("second Claim: unexpected error: %v", err2)
 	}
@@ -201,7 +222,7 @@ func conformReleaseAllowsReClaim(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	ctx := context.Background()
-	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state, _, receipt, err := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
@@ -210,7 +231,7 @@ func conformReleaseAllowsReClaim(t *testing.T, factory Factory) {
 		t.Fatalf("Release: %v", err)
 	}
 
-	state2, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state2, _, _, err2 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("re-Claim after Release: unexpected error: %v", err2)
 	}
@@ -227,7 +248,7 @@ func conformLeaseTTLExpiry(t *testing.T, factory Factory) {
 	defer cleanup()
 
 	ctx := context.Background()
-	state, _, _, err := store.Claim(ctx, conformNS, conformKey, conformFP, shortLeaseTTL)
+	state, _, _, err := store.Claim(ctx, conformKeyMain, conformFP, shortLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
@@ -235,7 +256,7 @@ func conformLeaseTTLExpiry(t *testing.T, factory Factory) {
 	// Advance past the lease TTL so it expires.
 	adv.AdvancePast(shortLeaseTTL)
 
-	state2, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state2, _, _, err2 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("re-Claim after TTL expiry: unexpected error: %v", err2)
 	}
@@ -255,7 +276,7 @@ func conformStaleTokenRecord(t *testing.T, factory Factory) {
 	ctx := context.Background()
 
 	// Acquire lease A with a short TTL.
-	stateA, _, receiptA, err := store.Claim(ctx, conformNS, conformKey, conformFP, shortLeaseTTL)
+	stateA, _, receiptA, err := store.Claim(ctx, conformKeyMain, conformFP, shortLeaseTTL)
 	if err != nil || stateA != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (A): state=%v err=%v", stateA, err)
 	}
@@ -264,7 +285,7 @@ func conformStaleTokenRecord(t *testing.T, factory Factory) {
 	adv.AdvancePast(shortLeaseTTL)
 
 	// Acquire lease B (new owner).
-	stateB, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	stateB, _, _, err2 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err2 != nil || stateB != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (B): state=%v err=%v", stateB, err2)
 	}
@@ -287,13 +308,13 @@ func conformDifferentNsKeyIndependent(t *testing.T, factory Factory) {
 	ctx := context.Background()
 
 	// Claim under ns1.
-	state1, _, _, err1 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state1, _, _, err1 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err1 != nil || state1 != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (ns1): state=%v err=%v", state1, err1)
 	}
 
 	// Claim under ns2 (different namespace, same key) must be independent.
-	state2, _, _, err2 := store.Claim(ctx, conformAltNS, conformKey, conformFP, conformLeaseTTL)
+	state2, _, _, err2 := store.Claim(ctx, conformKeyAltNS, conformFP, conformLeaseTTL)
 	if err2 != nil {
 		t.Fatalf("Claim (ns2): unexpected error: %v", err2)
 	}
@@ -302,7 +323,7 @@ func conformDifferentNsKeyIndependent(t *testing.T, factory Factory) {
 	}
 
 	// Claim under ns1 with a different key must also be independent.
-	state3, _, _, err3 := store.Claim(ctx, conformNS, conformAltKey, conformFP, conformLeaseTTL)
+	state3, _, _, err3 := store.Claim(ctx, conformKeyAltKey, conformFP, conformLeaseTTL)
 	if err3 != nil {
 		t.Fatalf("Claim (ns1, altKey): unexpected error: %v", err3)
 	}
@@ -325,7 +346,7 @@ func conformDoneTTLExpiry(t *testing.T, factory Factory) {
 	ctx := context.Background()
 
 	// Claim and record with a very short done TTL.
-	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state, _, receipt, err := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
 	}
@@ -336,7 +357,7 @@ func conformDoneTTLExpiry(t *testing.T, factory Factory) {
 	}
 
 	// Verify it is in ClaimDone state immediately after Record.
-	statePre, recPre, _, errPre := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	statePre, recPre, _, errPre := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if errPre != nil {
 		t.Fatalf("pre-expiry Claim: unexpected error: %v", errPre)
 	}
@@ -351,7 +372,7 @@ func conformDoneTTLExpiry(t *testing.T, factory Factory) {
 	adv.AdvancePast(shortDoneTTL)
 
 	// After expiry the key must be re-claimable as ClaimAcquired.
-	statePost, _, _, errPost := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	statePost, _, _, errPost := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if errPost != nil {
 		t.Fatalf("post-expiry Claim: unexpected error: %v", errPost)
 	}
@@ -375,7 +396,7 @@ func conformStaleTokenRelease(t *testing.T, factory Factory) {
 	ctx := context.Background()
 
 	// Acquire lease A with a short TTL.
-	stateA, _, receiptA, err := store.Claim(ctx, conformNS, conformKey, conformFP, shortLeaseTTL)
+	stateA, _, receiptA, err := store.Claim(ctx, conformKeyMain, conformFP, shortLeaseTTL)
 	if err != nil || stateA != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (A): state=%v err=%v", stateA, err)
 	}
@@ -384,7 +405,7 @@ func conformStaleTokenRelease(t *testing.T, factory Factory) {
 	adv.AdvancePast(shortLeaseTTL)
 
 	// Acquire lease B (new owner, long TTL).
-	stateB, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	stateB, _, _, err2 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err2 != nil || stateB != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (B): state=%v err=%v", stateB, err2)
 	}
@@ -395,7 +416,7 @@ func conformStaleTokenRelease(t *testing.T, factory Factory) {
 	_ = receiptA.Release(ctx) // error is tolerated; the key assertion is below.
 
 	// A third Claim must return ClaimBusy because B's lease is still held.
-	stateC, _, _, err3 := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	stateC, _, _, err3 := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err3 != nil {
 		t.Fatalf("third Claim: unexpected error: %v", err3)
 	}
@@ -416,7 +437,7 @@ func conformFingerprintMismatchDone(t *testing.T, factory Factory) {
 	ctx := context.Background()
 
 	// Acquire and record with fingerprint A.
-	state, _, receipt, err := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state, _, receipt, err := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (fp=A): state=%v err=%v", state, err)
 	}
@@ -426,7 +447,7 @@ func conformFingerprintMismatchDone(t *testing.T, factory Factory) {
 	}
 
 	// Second Claim with a different fingerprint must return ErrFingerprintMismatch.
-	_, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFPAlt, conformLeaseTTL)
+	_, _, _, err2 := store.Claim(ctx, conformKeyMain, conformFPAlt, conformLeaseTTL)
 	if err2 == nil {
 		t.Fatal("Claim with mismatched fingerprint (Done state) must return an error, got nil")
 	}
@@ -463,14 +484,14 @@ func conformFingerprintMismatchBusy(t *testing.T, factory Factory) {
 	ctx := context.Background()
 
 	// Acquire lease with fingerprint A (do NOT record — leave busy).
-	state, _, _, err := store.Claim(ctx, conformNS, conformKey, conformFP, conformLeaseTTL)
+	state, _, _, err := store.Claim(ctx, conformKeyMain, conformFP, conformLeaseTTL)
 	if err != nil || state != idempotency.ClaimAcquired {
 		t.Fatalf("Claim (fp=A): state=%v err=%v", state, err)
 	}
 
 	// Second Claim with a different fingerprint must return ErrFingerprintMismatch
 	// (not ClaimBusy).
-	_, _, _, err2 := store.Claim(ctx, conformNS, conformKey, conformFPAlt, conformLeaseTTL)
+	_, _, _, err2 := store.Claim(ctx, conformKeyMain, conformFPAlt, conformLeaseTTL)
 	if err2 == nil {
 		t.Fatal("Claim with mismatched fingerprint (Busy state) must return an error, got nil")
 	}

@@ -149,7 +149,7 @@ func TestHTTPIdempotencyStore_Claim_EmptyNS(t *testing.T) {
 	s := mustNewHTTPIdempotencyStoreFromCmdable(t, newHTTPClaimerMock())
 	ctx := context.Background()
 
-	state, rec, receipt, err := s.Claim(ctx, "", "somekey", "", idempotency.DefaultLeaseTTL)
+	state, rec, receipt, err := s.Claim(ctx, idemhttp.IdempotencyKey{}, "", idempotency.DefaultLeaseTTL)
 
 	require.Error(t, err)
 	assert.Zero(t, state)
@@ -165,7 +165,7 @@ func TestHTTPIdempotencyStore_Claim_NSWithBraces(t *testing.T) {
 	s := mustNewHTTPIdempotencyStoreFromCmdable(t, newHTTPClaimerMock())
 	ctx := context.Background()
 
-	state, rec, receipt, err := s.Claim(ctx, "bad{ns}", "somekey", "", idempotency.DefaultLeaseTTL)
+	state, rec, receipt, err := s.Claim(ctx, httpKey("bad{ns}", "somekey"), "", idempotency.DefaultLeaseTTL)
 
 	require.Error(t, err)
 	assert.Zero(t, state)
@@ -173,28 +173,19 @@ func TestHTTPIdempotencyStore_Claim_NSWithBraces(t *testing.T) {
 	assert.Nil(t, receipt)
 }
 
-// TestHTTPIdempotencyStore_Claim_EmptyKey covers the "key must be non-empty" branch.
-func TestHTTPIdempotencyStore_Claim_EmptyKey(t *testing.T) {
-	s := mustNewHTTPIdempotencyStoreFromCmdable(t, newHTTPClaimerMock())
-	ctx := context.Background()
-
-	state, rec, receipt, err := s.Claim(ctx, "goodns", "", "", idempotency.DefaultLeaseTTL)
-
-	require.Error(t, err)
-	assert.Zero(t, state)
-	assert.Nil(t, rec)
-	assert.Nil(t, receipt)
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrAdapterRedisSet, ec.Code)
-}
+// NOTE: there is no Claim_EmptyKey test. With the sealed IdempotencyKey, a
+// "non-empty ns + empty key" input is structurally unconstructible: DeriveKey
+// always yields a key of ≥3 bytes, and the only empty sealed key is the zero
+// value (covered by Claim_EmptyNS, which trips the empty-ns guard first). The
+// adapter's empty-key guard remains as defense-in-depth but is unreachable from
+// a sealed key.
 
 // TestHTTPIdempotencyStore_Claim_KeyWithBraces covers the "key contains curly braces" branch.
 func TestHTTPIdempotencyStore_Claim_KeyWithBraces(t *testing.T) {
 	s := mustNewHTTPIdempotencyStoreFromCmdable(t, newHTTPClaimerMock())
 	ctx := context.Background()
 
-	state, rec, receipt, err := s.Claim(ctx, "goodns", "bad{key}", "", idempotency.DefaultLeaseTTL)
+	state, rec, receipt, err := s.Claim(ctx, httpKey("goodns", "bad{key}"), "", idempotency.DefaultLeaseTTL)
 
 	require.Error(t, err)
 	assert.Zero(t, state)
@@ -208,7 +199,7 @@ func TestHTTPIdempotencyStore_Claim_ZeroLeaseTTLClamped(t *testing.T) {
 	s := mustNewHTTPIdempotencyStoreFromCmdable(t, newHTTPClaimerMock())
 	ctx := context.Background()
 
-	state, _, _, err := s.Claim(ctx, "testns", "key:ttlclamp", "", 0)
+	state, _, _, err := s.Claim(ctx, httpKey("testns", "key:ttlclamp"), "", 0)
 
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
@@ -228,13 +219,13 @@ func TestNoopHTTPReceipt_RecordReturnsErrNoClaimLease(t *testing.T) {
 
 	// Pre-set the lease to simulate another consumer holding it.
 	mock.mu.Lock()
-	mock.store["ownerns:testns:{key:noop:001}:lease"] = mockEntry{
+	mock.store["ownerns:testns:{key:noop:001\x00\x00\x00}:lease"] = mockEntry{
 		value: "other-token",
 	}
 	mock.mu.Unlock()
 
 	s := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
-	state, _, receipt, err := s.Claim(ctx, "testns", "key:noop:001", "", idempotency.DefaultLeaseTTL)
+	state, _, receipt, err := s.Claim(ctx, httpKey("testns", "key:noop:001"), "", idempotency.DefaultLeaseTTL)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimBusy, state)
 	require.NotNil(t, receipt)
@@ -259,13 +250,13 @@ func TestNoopHTTPReceipt_ReleaseReturnsErrNoClaimLease(t *testing.T) {
 
 	// Pre-set the lease to simulate another consumer.
 	mock.mu.Lock()
-	mock.store["ownerns:testns:{key:noop:002}:lease"] = mockEntry{
+	mock.store["ownerns:testns:{key:noop:002\x00\x00\x00}:lease"] = mockEntry{
 		value: "other-token",
 	}
 	mock.mu.Unlock()
 
 	s := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
-	state, _, receipt, err := s.Claim(ctx, "testns", "key:noop:002", "", idempotency.DefaultLeaseTTL)
+	state, _, receipt, err := s.Claim(ctx, httpKey("testns", "key:noop:002"), "", idempotency.DefaultLeaseTTL)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimBusy, state)
 	require.NotNil(t, receipt)
@@ -284,7 +275,7 @@ func TestNoopHTTPReceipt_ViaClaimDone_RecordAndRelease(t *testing.T) {
 	s := mustNewHTTPIdempotencyStoreFromCmdable(t, mock)
 
 	// First: acquire and record a response so the second claim is ClaimDone.
-	_, _, firstReceipt, err := s.Claim(ctx, "testns", "key:noop:003", "", idempotency.DefaultLeaseTTL)
+	_, _, firstReceipt, err := s.Claim(ctx, httpKey("testns", "key:noop:003"), "", idempotency.DefaultLeaseTTL)
 	require.NoError(t, err)
 
 	raw := []byte(`{"status":200,"body":"dGVzdA==","header":{},"recordedAt":"2024-01-01T00:00:00Z"}`)
@@ -293,7 +284,7 @@ func TestNoopHTTPReceipt_ViaClaimDone_RecordAndRelease(t *testing.T) {
 	require.NoError(t, firstReceipt.Record(ctx, &rec, idempotency.DefaultTTL))
 
 	// Second claim returns ClaimDone with a noopHTTPReceipt.
-	state, _, noopR, err2 := s.Claim(ctx, "testns", "key:noop:003", "", idempotency.DefaultLeaseTTL)
+	state, _, noopR, err2 := s.Claim(ctx, httpKey("testns", "key:noop:003"), "", idempotency.DefaultLeaseTTL)
 	require.NoError(t, err2)
 	require.Equal(t, idempotency.ClaimDone, state)
 	require.NotNil(t, noopR)

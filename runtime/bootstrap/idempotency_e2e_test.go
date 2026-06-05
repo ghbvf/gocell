@@ -57,10 +57,10 @@ func newIdemSpyStore(clk clock.Clock) *idemSpyStore {
 }
 
 func (s *idemSpyStore) Claim(
-	ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration,
+	ctx context.Context, k idemhttp.IdempotencyKey, fingerprint string, leaseTTL time.Duration,
 ) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
-	s.claimKeys = append(s.claimKeys, ns+":"+key)
-	return s.inner.Claim(ctx, ns, key, fingerprint, leaseTTL)
+	s.claimKeys = append(s.claimKeys, k.Namespace()+":"+k.Key())
+	return s.inner.Claim(ctx, k, fingerprint, leaseTTL)
 }
 
 // claimKeyContains returns true if any recorded Claim call's composite key
@@ -88,7 +88,7 @@ var errStoreUnavailable = errors.New("store: simulated outage")
 type idemAlwaysErrorStore struct{}
 
 func (s *idemAlwaysErrorStore) Claim(
-	_ context.Context, _, _, _ string, _ time.Duration,
+	_ context.Context, _ idemhttp.IdempotencyKey, _ string, _ time.Duration,
 ) (idempotency.ClaimState, *idemhttp.RecordedResponse, idemhttp.Receipt, error) {
 	return 0, nil, nil, errStoreUnavailable
 }
