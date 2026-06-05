@@ -24,9 +24,11 @@ import (
 // the key, never by an empty TenantID reaching a repo.
 //
 // A non-empty TenantID MUST be a canonical (lowercase) UUID. GoCell issues
-// tenant identifiers itself and stores them in a PostgreSQL uuid column whose
-// RLS predicate casts the app.tenant_id setting to uuid (PR-3), so the type
-// boundary enforces the same UUID shape the database casts to.
+// tenant identifiers itself and stores them in a PostgreSQL TEXT column; the
+// PR-3 RLS predicate compares that TEXT column to the app.tenant_id GUC as TEXT
+// (an unset/empty GUC maps to NULL via NULLIF, yielding 0 rows — fail-closed),
+// so the canonical-UUID type boundary here is what makes that TEXT-to-TEXT
+// compare exact (both sides are the same canonical lowercase form).
 //
 // Empty/malformed rejection is RUNTIME fail-fast (Validate / ParseTenantID /
 // UnmarshalJSON), not type-system Hard — an empty string is a legal Go
@@ -52,7 +54,7 @@ func (t TenantID) String() string { return string(t) }
 // Validate does NOT normalize the receiver: it asserts the value is canonical
 // rather than coercing it. This makes Validate a true post-construction
 // invariant check (e.g. on a TenantID repo parameter) — a value that passes is
-// safe to use verbatim against the PostgreSQL uuid column / RLS predicate. To
+// safe to use verbatim against the PostgreSQL TEXT column / RLS predicate. To
 // obtain the canonical lowercase form from a raw (possibly uppercase) string,
 // use ParseTenantID, which normalizes.
 func (t TenantID) Validate() error {
@@ -124,7 +126,7 @@ func ParseTenantID(s string) (TenantID, error) {
 // The explicit length guard is load-bearing: github.com/google/uuid.Parse is
 // lenient — it also accepts 32-char compact ("3f25...3301"), brace-wrapped
 // ("{...}"), and "urn:uuid:..." forms. A tenant boundary identifier must have a
-// single canonical shape (the one the PostgreSQL uuid column / RLS cast round-
+// single canonical shape (the one the PostgreSQL TEXT column / RLS compare round-
 // trips), so anything that is not exactly 36 chars is rejected before Parse.
 func parseCanonical(s string) (TenantID, error) {
 	if s == "" {

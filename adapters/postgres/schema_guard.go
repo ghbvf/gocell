@@ -299,6 +299,16 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 	if err := verifyChecks(ctx, pool); err != nil {
 		return err
 	}
+	// Row-level security: each tenant table must have FORCE ROW LEVEL SECURITY
+	// enabled AND carry the tenant_isolation policy with its exact shape/predicate,
+	// so a dropped / disabled / weakened RLS policy surfaces as a /readyz failure.
+	// This validates the policy SHAPE only — it does NOT prove RLS is EFFECTIVE at
+	// runtime: a superuser / BYPASSRLS connecting role bypasses RLS even with a
+	// correct policy. That role precondition is a separate app-serving-pool
+	// readiness dimension deferred to #1617 (PR-3b); /readyz here does not assert it.
+	if err := verifyRLS(ctx, pool); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -387,6 +397,20 @@ type expectedFunction struct {
 type expectedCheck struct {
 	Table string
 	Name  string
+}
+
+// expectedRLS asserts a table has FORCE ROW LEVEL SECURITY (pg_class.relrowsecurity
+// AND relforcerowsecurity both true) and carries the named tenant_isolation policy
+// with its full security-load-bearing shape (verifyRLSPolicy: exactly one policy,
+// PERMISSIVE / ALL / PUBLIC, USING + WITH CHECK both referencing app.tenant_id).
+// This is the schema-guard dimension for PR-3 tenant isolation (#1341): a migration
+// or operator that disables RLS, drops the policy, weakens the predicate to
+// USING(true), drops the WITH CHECK, or adds an extra permissive policy would
+// otherwise silently re-open cross-tenant access; pinning it here turns that into
+// a /readyz failure (#1622 F1).
+type expectedRLS struct {
+	Table  string
+	Policy string
 }
 
 // pgTypeTSTZ is the PostgreSQL column type name for a timezone-aware timestamp.
@@ -841,6 +865,221 @@ var expectedTriggers = []expectedTrigger{
 // expectedFunctions is the PL/pgSQL function registry.
 var expectedFunctions = []expectedFunction{
 	{Name: "effective_admin_invariant_fn"},
+}
+
+// expectedRLSTables is the FORCE-ROW-LEVEL-SECURITY registry. PR-3a (#1341,
+// migration 052) covers the configcore tenant tables only. PR-3b adds
+// users/roles/role_assignments; audit_entries awaits its per-(namespace,tenant)
+// hash-chain re-architecture before it can be added (see migration 052 header).
+var expectedRLSTables = []expectedRLS{
+	{Table: "config_entries", Policy: "tenant_isolation"},
+	{Table: "config_versions", Policy: "tenant_isolation"},
+	{Table: "feature_flags", Policy: "tenant_isolation"},
+}
+
+// rlsPolicyRow is a single pg_policies row (the security-load-bearing attributes
+// of an RLS policy) for verifyRLSPolicy.
+type rlsPolicyRow struct {
+	name       string // policyname
+	permissive string // 'PERMISSIVE' | 'RESTRICTIVE'
+	cmd        string // 'ALL' | 'SELECT' | 'INSERT' | …
+	roles      string // pg_policies.roles comma-joined; PUBLIC renders to "public"
+	qual       string // USING expression (pg_get_expr); "" when NULL
+	withCheck  string // WITH CHECK expression (pg_get_expr); "" when NULL
+}
+
+// verifyRLS asserts, for every table in expectedRLSTables, that FORCE ROW LEVEL
+// SECURITY is on AND the tenant_isolation policy is present with its full
+// security-load-bearing shape (see verifyRLSPolicy).
+func verifyRLS(ctx context.Context, pool *Pool) error {
+	const flagsQ = `
+	SELECT c.relrowsecurity, c.relforcerowsecurity
+	  FROM pg_class c
+	  JOIN pg_namespace n ON n.oid = c.relnamespace
+	 WHERE n.nspname = current_schema()
+	   AND c.relname = $1`
+
+	for _, r := range expectedRLSTables {
+		var enabled, forced bool
+		if err := pool.inner.QueryRow(ctx, flagsQ, r.Table).Scan(&enabled, &forced); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: query row-level security flags", err)
+		}
+		if !enabled || !forced {
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: table missing FORCE ROW LEVEL SECURITY",
+				errcode.WithDetails(
+					errcode.PublicString("dimension", "rls"),
+					errcode.PublicString("table", r.Table),
+					errcode.PublicBool("rowsecurity", enabled),
+					errcode.PublicBool("forcerowsecurity", forced),
+				),
+			)
+		}
+		if err := verifyRLSPolicy(ctx, pool, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyRLSPolicy loads EVERY policy on r.Table and asserts the single expected
+// tenant_isolation policy with its full security-load-bearing shape:
+//
+//   - exactly one policy on the table — an EXTRA permissive policy is OR-ed into
+//     the USING filter, widening visible rows across tenants;
+//   - named r.Policy, PERMISSIVE, command ALL, applied to PUBLIC;
+//   - a USING predicate that is EXACTLY the tenant_isolation equality binding the
+//     tenant_id column to the app.tenant_id GUC via NULLIF (see
+//     predicateIsTenantIsolation / rlsTenantPredicateRe for the exact form); and
+//   - a non-NULL WITH CHECK predicate that is the SAME equality (the write-side
+//     cross-tenant guard — a dropped/weakened WITH CHECK would let an INSERT stamp
+//     another tenant's id).
+//
+// Presence-by-name only (the pre-#1622 form) passed all of the above defects.
+// pg_policies renders polcmd='*' as 'ALL', polpermissive as 'PERMISSIVE', PUBLIC
+// roles as "public", and the USING/WITH CHECK expressions via pg_get_expr; the
+// predicate is matched as a WHOLE against rlsTenantPredicateRe (anchored ^…$), so
+// it pins the tenant_id column ↔ app.tenant_id GUC equality and rejects a wrong
+// column, a missing NULLIF, or a vacuous `… OR true` — not merely a substring
+// mention of app.tenant_id (#1622 F1 round-2).
+//
+// SCOPE: this verifies the RLS schema/policy SHAPE only. It does NOT verify the
+// connecting role's runtime attributes — a superuser / BYPASSRLS role bypasses
+// RLS regardless of a correct policy, and that role precondition is a separate
+// app-serving-pool readiness dimension deferred to #1617 (PR-3b), NOT closed here.
+func verifyRLSPolicy(ctx context.Context, pool *Pool, r expectedRLS) error {
+	const policiesQ = `
+	SELECT policyname, permissive, cmd,
+	       COALESCE(array_to_string(roles, ','), ''),
+	       COALESCE(qual, ''),
+	       COALESCE(with_check, '')
+	  FROM pg_policies
+	 WHERE schemaname = current_schema()
+	   AND tablename  = $1`
+
+	rows, err := pool.inner.Query(ctx, policiesQ, r.Table)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: query row-level security policies", err)
+	}
+	var policies []rlsPolicyRow
+	for rows.Next() {
+		var p rlsPolicyRow
+		if scanErr := rows.Scan(&p.name, &p.permissive, &p.cmd, &p.roles, &p.qual, &p.withCheck); scanErr != nil {
+			rows.Close()
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: scan row-level security policy", scanErr)
+		}
+		policies = append(policies, p)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: iterate row-level security policies", rows.Err())
+	}
+	return checkRLSPolicyShape(r, policies)
+}
+
+// checkRLSPolicyShape is the pure (DB-free) validation core of verifyRLSPolicy,
+// asserting the loaded policy set has exactly the expected tenant_isolation shape.
+func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
+	if len(policies) != 1 {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: table must carry exactly one row-security policy",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("found %d policies %v; want exactly [%s]",
+				len(policies), policyNames(policies), r.Policy))...)
+	}
+	p := policies[0]
+	if p.name != r.Policy {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: row-security policy has unexpected name",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("got %q want %q", p.name, r.Policy))...)
+	}
+	if !strings.EqualFold(p.permissive, "PERMISSIVE") {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: row-security policy is not PERMISSIVE",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("permissive=%q", p.permissive))...)
+	}
+	if !strings.EqualFold(p.cmd, "ALL") {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: row-security policy does not cover ALL commands",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("cmd=%q want ALL", p.cmd))...)
+	}
+	if !strings.EqualFold(p.roles, "public") {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: row-security policy is not applied to PUBLIC",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("roles=%q want public", p.roles))...)
+	}
+	if !predicateIsTenantIsolation(p.qual) {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: row-security USING predicate is not the tenant_isolation equality",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("using=%q", p.qual))...)
+	}
+	if p.withCheck == "" {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: row-security policy is missing WITH CHECK",
+			rlsPolicyShapeDetails(r, "with_check is NULL")...)
+	}
+	if !predicateIsTenantIsolation(p.withCheck) {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"schema_guard: row-security WITH CHECK predicate is not the tenant_isolation equality",
+			rlsPolicyShapeDetails(r, fmt.Sprintf("with_check=%q", p.withCheck))...)
+	}
+	return nil
+}
+
+// rlsTenantPredicateRe pins a policy predicate to EXACTLY the migration-052
+// tenant_isolation equality, modulo PG's deparse rendering (whitespace, ::type
+// casts, an optional outer paren pair):
+//
+//	tenant_id = NULLIF(current_setting('app.tenant_id', true), '')
+//
+// The anchors (^…$) make it a WHOLE-predicate match, not a substring test, so it
+// rejects every weakening a substring check let through (#1622 F1 round-2):
+//
+//   - USING(true) / WITH CHECK(true)        — no tenant_id equality at all;
+//   - other_col = current_setting(…)        — binds the WRONG column;
+//   - tenant_id = current_setting(…)        — missing NULLIF (empty-GUC no longer
+//     maps to NULL → fail-closed semantics lost);
+//   - (tenant_id = NULLIF(…)) OR true       — vacuous; the trailing `OR true`
+//     breaks the ^…$ whole-match.
+//
+// It is deliberately tolerant of the cast/whitespace/outer-paren rendering that
+// varies across PG versions (so the positive case does not false-fail at /readyz)
+// while pinning the load-bearing token structure. A mismatch fails closed.
+var rlsTenantPredicateRe = regexp.MustCompile(
+	`^\s*\(?\s*tenant_id\s*=\s*nullif\(\s*current_setting\(\s*'app\.tenant_id'(::\w+)?\s*,\s*true\s*\)\s*,\s*''(::\w+)?\s*\)\s*\)?\s*$`)
+
+// predicateIsTenantIsolation reports whether a USING / WITH CHECK predicate is the
+// exact tenant_isolation equality (see rlsTenantPredicateRe). pg_get_expr lowercases
+// keywords inconsistently across versions, so the input is lowercased first.
+func predicateIsTenantIsolation(expr string) bool {
+	return rlsTenantPredicateRe.MatchString(strings.ToLower(expr))
+}
+
+// policyNames extracts the policy names for an error detail.
+func policyNames(ps []rlsPolicyRow) []string {
+	names := make([]string, 0, len(ps))
+	for _, p := range ps {
+		names = append(names, p.name)
+	}
+	return names
+}
+
+// rlsPolicyShapeDetails builds the shared option set for an RLS-policy shape
+// fault: table+policy as public details, the specific defect as a server-only
+// internal detail (5xx strips public details; the defect stays in slog).
+func rlsPolicyShapeDetails(r expectedRLS, internal string) []errcode.Option {
+	return []errcode.Option{
+		errcode.WithDetails(
+			errcode.PublicString("dimension", "rls_policy"),
+			errcode.PublicString("table", r.Table),
+			errcode.PublicString("policy", r.Policy),
+		),
+		errcode.WithInternal(errcode.InternalAttr("_", internal)),
+	}
 }
 
 // expectedChecks is the CHECK constraint registry.

@@ -9,8 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // Compile-time check: TxManager implements persistence.TxRunner.
@@ -43,6 +46,87 @@ func withSavepointDepth(ctx context.Context, depth int) context.Context {
 	return context.WithValue(ctx, savepointDepthKey{}, depth)
 }
 
+// txAcquireMarker is an UNEXPORTED ctx marker that RunInTx stamps on the context
+// it passes to pool.Begin. Because the type is package-private, no code outside
+// this package can construct or forge it — so "marker present" ⟺ "this pool
+// acquire originates from RunInTx" is a type-system Hard fact (same range-bound
+// idiom as savepointDepthKey). The pgxpool BeforeAcquire guard (pool.go) uses it
+// as defense-in-depth: a tenant-scoped ctx that acquires a connection WITHOUT
+// this marker is a business path bypassing RunInTx's SET LOCAL, and is rejected.
+type txAcquireMarker struct{}
+
+// withTxAcquireIntent stamps the RunInTx acquire marker. Sole caller is RunInTx.
+func withTxAcquireIntent(ctx context.Context) context.Context {
+	return context.WithValue(ctx, txAcquireMarker{}, true)
+}
+
+// hasTxAcquireIntent reports whether ctx was stamped by withTxAcquireIntent.
+func hasTxAcquireIntent(ctx context.Context) bool {
+	v, _ := ctx.Value(txAcquireMarker{}).(bool)
+	return v
+}
+
+// tenantScopeForTx resolves the tenant whose isolation boundary this transaction
+// runs under, for the RLS GUC. Precedence (single source of truth — do not
+// inline either lookup elsewhere):
+//
+//  1. tenant.ScopeFromContext — the dedicated PR-3 scope key, set by
+//     tenant.WithScope at pre-auth / service / control-plane sites that carry no
+//     authenticated-principal ctxkeys.TenantID.
+//  2. ctxkeys.TenantIDFrom — the authenticated-principal carrier, already set by
+//     the auth boundary for post-auth handlers and restored for event consumers.
+//     The fallback lets those paths get their GUC for free, keeping the
+//     WithScope caller-allowlist (TENANT-TXSCOPE-WRITE-CALLER-01) minimal.
+//  3. absent — no tenant scope (probe / migration / tenant-less framework path).
+//     The GUC is left unset; the RLS predicate sees NULL and returns 0 rows
+//     (fail-closed), so a tenant-less path can never read tenant-scoped data.
+func tenantScopeForTx(ctx context.Context) (tenant.TenantID, bool) {
+	if t, ok := tenant.ScopeFromContext(ctx); ok {
+		return t, true
+	}
+	if raw, ok := ctxkeys.TenantIDFrom(ctx); ok && raw != "" {
+		// Defense-in-depth: re-validate/normalize the principal tenant via
+		// ParseTenantID (same boundary tenant.FromContext uses) instead of a bare
+		// cast, so a malformed ctxkeys value fails closed (skip → GUC unset → 0
+		// rows) rather than reaching setLocalTenant as an aborting KindInternal.
+		// The auth boundary already ParseTenantID's the claim, so this is a no-op
+		// for legitimate values.
+		if tid, err := tenant.ParseTenantID(raw); err == nil {
+			return tid, true
+		}
+	}
+	return "", false
+}
+
+// setLocalTenant injects the transaction-local RLS GUC app.tenant_id from the
+// resolved tenant scope. It is the SOLE sanctioned writer of that GUC
+// (TENANT-TXSCOPE / PG-SETLOCAL-FUNNEL-01 lock the callsite).
+//
+// set_config(name, value, is_local=true) is used rather than a literal
+// `SET LOCAL app.tenant_id = '…'` because set_config is a planned function call
+// that accepts a BIND PARAMETER ($1) — zero string interpolation, zero SQL
+// injection surface — while is_local=true gives identical transaction-scoped,
+// auto-reset-on-COMMIT/ROLLBACK semantics to SET LOCAL.
+//
+// Fail-closed: a present-but-non-canonical tenant scope aborts the transaction
+// (it must never silently run with a malformed predicate). When no scope is
+// present the GUC is left unset and the RLS policy's NULLIF(...)→NULL→0-rows
+// branch enforces isolation.
+func setLocalTenant(ctx context.Context, tx pgx.Tx) error {
+	tid, present := tenantScopeForTx(ctx)
+	if !present {
+		return nil
+	}
+	if err := tid.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"tx: invalid tenant scope for RLS GUC injection", err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tid.String()); err != nil {
+		return classifyPGError(err, ErrAdapterPGQuery, "set local tenant scope")
+	}
+	return nil
+}
+
 // TxManager provides transactional execution with context-embedded pgx.Tx,
 // savepoint-based nesting, and automatic panic rollback.
 type TxManager struct {
@@ -70,10 +154,26 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 		return tm.runInSavepoint(ctx, existingTx, fn)
 	}
 
-	// Start a new top-level transaction.
-	tx, err := tm.pool.Begin(ctx)
+	// Start a new top-level transaction. The acquire ctx is stamped with the
+	// RunInTx marker so the pgxpool BeforeAcquire guard (pool.go) can tell a
+	// sanctioned tx acquire apart from a raw business pool checkout.
+	tx, err := tm.pool.Begin(withTxAcquireIntent(ctx))
 	if err != nil {
 		return classifyPGConnectError(err, "begin tx")
+	}
+
+	// Inject the transaction-local RLS tenant GUC before any statement runs.
+	// Top-level only: a nested savepoint reuses this tx, whose SET LOCAL already
+	// holds (SET LOCAL is transaction-scoped). Fail-closed: a malformed scope
+	// rolls back the just-opened tx rather than running unscoped.
+	if err := setLocalTenant(ctx, tx); err != nil {
+		if rbErr := tx.Rollback(context.WithoutCancel(ctx)); rbErr != nil {
+			slog.Error("postgres: rollback after SET LOCAL tenant failure failed",
+				slog.String("original_error", redaction.RedactError(err).Error()),
+				slog.String("rollback_error", redaction.RedactError(rbErr).Error()),
+			)
+		}
+		return err
 	}
 
 	txCtx := CtxWithTx(ctx, tx)

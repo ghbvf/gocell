@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
@@ -28,7 +29,7 @@ func newTestService() (*Service, *mem.FlagRepository) {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
 	codec, _ := query.NewCursorCodec(key)
-	svc, err := NewService(repo, codec, logger, query.RunModeProd)
+	svc, err := NewService(repo, outbox.DemoCellTxManager(), codec, logger, query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}
@@ -37,12 +38,22 @@ func newTestService() (*Service, *mem.FlagRepository) {
 
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
-	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, outbox.DemoCellTxManager(), nil, slog.Default(), query.RunModeProd)
 	require.Error(t, err)
 	assert.Nil(t, svc)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
+}
+
+func TestNewService_NilTxRunner_ReturnsError(t *testing.T) {
+	repo := mem.NewFlagRepository(clock.Real())
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	codec, _ := query.NewCursorCodec(key)
+	svc, err := NewService(repo, nil, codec, slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
 }
 
 func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, pct int) {
@@ -135,7 +146,7 @@ func TestService_List_InvalidCursor(t *testing.T) {
 func TestService_List_ScopeMismatch(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
-	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, outbox.DemoCellTxManager(), codec, slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 
 	differentSort := []query.SortColumn{
@@ -163,7 +174,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 func TestService_List_ContextMismatch(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
-	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, outbox.DemoCellTxManager(), codec, slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
 
 	cur := query.Cursor{

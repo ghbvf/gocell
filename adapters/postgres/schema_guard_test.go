@@ -84,9 +84,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 050 rebuilds users/roles/role_assignments (DROP+CREATE) adding tenant_id TEXT NOT NULL
 	// for Model-A multi-tenancy isolation (EPIC #1337 PR-2a — renumbered 047→049→050 on merges);
 	// 051 rebuilds config_entries/config_versions/feature_flags (DROP+CREATE) adding
-	// tenant_id TEXT NOT NULL for configcore multi-tenancy isolation (EPIC #1337 PR-2b, #1479).
-	assert.Equal(t, int64(51), v,
-		"expected version should be exactly 51 (current migration max — 051_configcore_tenant_id)")
+	// tenant_id TEXT NOT NULL for configcore multi-tenancy isolation (EPIC #1337 PR-2b, #1479);
+	// 052 enables FORCE ROW LEVEL SECURITY + tenant_isolation policy on the configcore
+	// tables (non-destructive DDL) for the PR-3a RLS backstop (EPIC #1337, #1341).
+	assert.Equal(t, int64(52), v,
+		"expected version should be exactly 52 (current migration max — 052_tenant_rls_force)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -517,4 +519,109 @@ func TestVerifyExpectedShape_Requires051FeatureFlagsRolloutCheck(t *testing.T) {
 		"expectedChecks must include feature_flags.feature_flags_rollout_percentage_range "+
 			"(migration 051 rebuild — rollout_percentage BETWEEN 0 AND 100)",
 	)
+}
+
+// rlsPolicyOK returns the well-formed tenant_isolation policy shape (as pg_policies
+// renders migration 052) — the positive control for checkRLSPolicyShape.
+func rlsPolicyOK() rlsPolicyRow {
+	const pred = "(tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text))"
+	return rlsPolicyRow{
+		name:       "tenant_isolation",
+		permissive: "PERMISSIVE",
+		cmd:        "ALL",
+		roles:      "public",
+		qual:       pred,
+		withCheck:  pred,
+	}
+}
+
+// rlsPolicyWith returns a single-policy slice with one field mutated from the
+// well-formed shape.
+func rlsPolicyWith(mut func(*rlsPolicyRow)) []rlsPolicyRow {
+	p := rlsPolicyOK()
+	mut(&p)
+	return []rlsPolicyRow{p}
+}
+
+// TestCheckRLSPolicyShape is the DB-free unit cover of verifyRLSPolicy's
+// validation core (#1622 F1): every semantic weakening of the tenant_isolation
+// policy that a name-presence-only check would have passed must be rejected, and
+// the well-formed shape must be accepted.
+func TestCheckRLSPolicyShape(t *testing.T) {
+	r := expectedRLS{Table: "feature_flags", Policy: "tenant_isolation"}
+	tests := []struct {
+		name     string
+		policies []rlsPolicyRow
+		wantErr  bool
+	}{
+		{name: "well_formed", policies: []rlsPolicyRow{rlsPolicyOK()}, wantErr: false},
+		{name: "no_policy", policies: nil, wantErr: true},
+		{
+			name: "extra_permissive_policy",
+			policies: []rlsPolicyRow{rlsPolicyOK(), {
+				name: "extra_visible", permissive: "PERMISSIVE", cmd: "SELECT", roles: "public", qual: "true",
+			}},
+			wantErr: true,
+		},
+		{name: "wrong_name", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.name = "other" }), wantErr: true},
+		{name: "restrictive", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.permissive = "RESTRICTIVE" }), wantErr: true},
+		{name: "cmd_not_all", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.cmd = "SELECT" }), wantErr: true},
+		{name: "roles_not_public", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.roles = "gocell_app" }), wantErr: true},
+		{name: "using_true", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.qual = "true" }), wantErr: true},
+		// #1622 F1 round-2: the predicate is matched as a WHOLE equality, so these
+		// weakenings that a mere `app.tenant_id` substring check let through are now
+		// rejected:
+		{
+			// Binds the WRONG column — still mentions app.tenant_id, so a substring
+			// check passed it, but it isolates on other_col, not tenant_id.
+			name: "using_wrong_column",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.qual = "(other_col = NULLIF(current_setting('app.tenant_id'::text, true), ''::text))"
+			}),
+			wantErr: true,
+		},
+		{
+			// Vacuous: `… OR true` is always true. Mentions app.tenant_id but the
+			// anchored ^…$ match rejects the trailing OR.
+			name: "using_or_true",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.qual = "((tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text)) OR true)"
+			}),
+			wantErr: true,
+		},
+		{
+			// Missing NULLIF: the empty-string GUC no longer maps to NULL, so the
+			// fail-closed (unset GUC → 0 rows) semantics are lost.
+			name: "using_missing_nullif",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.qual = "(tenant_id = current_setting('app.tenant_id'::text, true))"
+			}),
+			wantErr: true,
+		},
+		{
+			// WITH CHECK uses the same predicate funnel — a wrong-column write-side
+			// guard must also be rejected (would allow cross-tenant INSERT).
+			name: "with_check_wrong_column",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.withCheck = "(other_col = NULLIF(current_setting('app.tenant_id'::text, true), ''::text))"
+			}),
+			wantErr: true,
+		},
+		{name: "missing_with_check", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "" }), wantErr: true},
+		{name: "with_check_true", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "true" }), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkRLSPolicyShape(r, tt.policies)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "must wrap *errcode.Error")
+			assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code,
+				"a weakened RLS policy must surface as a schema-shape fault")
+		})
+	}
 }
