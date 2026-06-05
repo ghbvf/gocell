@@ -30,6 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
@@ -1064,19 +1065,19 @@ func TestDeadContractCover(t *testing.T) {
 		contractPathToGenPkg[contractPath] = genPkg
 	}
 
-	// For http contracts: build implemented Service set using a single typed Run
-	// call that loads generated/contracts/http/... + cells/... + examples/... in
-	// one packages.Load invocation. Collect both iface and impl types in the same
-	// callback pass to eliminate cross-pass type-identity assumptions.
+	// Build the implemented-Service set by loading generated Service interfaces +
+	// cell / example impls in ONE ModeWorkspace type universe. ModeWorkspace (via
+	// LoadProductionPackages) is mandatory — NOT the Typed/ModeModule loader:
+	// examples/* are go.work satellite modules (#1556), and a GOWORK=off load
+	// silently matches only the in-root examples/demo, dropping every satellite
+	// example impl and falsely flagging their contracts as unimplemented. .All()
+	// (not .Production()) keeps the generated/contracts/http packages whose
+	// Service interfaces drive the types.Implements match. iface + impl land in
+	// one type-check universe so ImplementsInterface compares identical packages.
+	// Mirrors the loadModule funnel in archtest_test.go.
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
 	cellsPrefix := modPath + "/cells/"
 	examplesPrefix := modPath + "/examples/"
-
-	combinedPatterns := []string{
-		modPath + "/generated/contracts/http/...",
-		modPath + "/cells/...",
-		modPath + "/examples/...",
-	}
 
 	type ifaceEntry struct {
 		pkgPath  string
@@ -1089,43 +1090,48 @@ func TestDeadContractCover(t *testing.T) {
 	var genServiceIfaces []ifaceEntry
 	var cellNamedTypes []namedEntry
 
-	_ = Run(t, Typed(TypedOpts{Tests: false}, combinedPatterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
+	modules := findWorkspaceModules(t, root)
+	resolver, lpErr := typeseval.LoadProductionPackages(root, modules, false /* tests */, nil)
+	if lpErr != nil {
+		t.Fatalf("DEAD-CONTRACT-01: LoadProductionPackages: %v", lpErr)
+	}
+	for _, pkg := range resolver.All() {
+		if pkg == nil || pkg.Types == nil {
+			continue
 		}
-		pkgPath := p.Pkg.Path()
+		pkgPath := pkg.PkgPath
 
 		if strings.HasPrefix(pkgPath, generatedHTTPPrefix) {
-			obj := p.Pkg.Scope().Lookup("Service")
+			obj := pkg.Types.Scope().Lookup("Service")
 			if obj == nil {
-				return nil
+				continue
 			}
 			tn, ok := obj.(*types.TypeName)
 			if !ok {
-				return nil
+				continue
 			}
 			named, ok := tn.Type().(*types.Named)
 			if !ok {
-				return nil
+				continue
 			}
 			iface, ok := named.Underlying().(*types.Interface)
 			if !ok {
-				return nil
+				continue
 			}
 			genServiceIfaces = append(genServiceIfaces, ifaceEntry{
 				pkgPath:  pkgPath,
 				ifaceTyp: iface.Complete(),
 			})
-			return nil
+			continue
 		}
 
 		isCells := strings.HasPrefix(pkgPath, cellsPrefix)
 		isExamples := strings.HasPrefix(pkgPath, examplesPrefix)
 		if !isCells && !isExamples {
-			return nil
+			continue
 		}
 
-		pkgScope := p.Pkg.Scope()
+		pkgScope := pkg.Types.Scope()
 		for _, name := range pkgScope.Names() {
 			obj := pkgScope.Lookup(name)
 			tn, ok := obj.(*types.TypeName)
@@ -1138,8 +1144,7 @@ func TestDeadContractCover(t *testing.T) {
 			}
 			cellNamedTypes = append(cellNamedTypes, namedEntry{named: named})
 		}
-		return nil
-	})
+	}
 
 	// Build implemented Service set from single-pass collected types.
 	implementedPkgPaths := make(map[string]bool)

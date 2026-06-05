@@ -114,8 +114,14 @@ func TestClassifier_MultiModule(t *testing.T) {
 		core      = "github.com/ghbvf/gocell"
 		mdm       = "github.com/ghbvf/gocell/mdm"
 		satellite = "example.test/satellite" // unrelated path (not a core subpath)
+		// Example go.work satellite modules nested under the core's examples/ dir
+		// (#1556). Unlike mdm (which mirrors the core layer structure beneath its
+		// own root), an example IS the leaf, so every package within it is the
+		// "examples" layer of the core repo.
+		exFlat = core + "/examples/ssobff"    // flat example (no cells/ subtree)
+		exCell = core + "/examples/iotdevice" // example that contains a cell
 	)
-	c := NewClassifier([]string{core, mdm, satellite})
+	c := NewClassifier([]string{core, mdm, satellite, exFlat, exCell})
 
 	tests := []struct {
 		name      string
@@ -135,6 +141,16 @@ func TestClassifier_MultiModule(t *testing.T) {
 		{"mdm_unknown_dir", mdm + "/oddbucket/x", mdm, LayerUnknown, "", ""},
 		// Satellite with an unrelated module path (not a core subpath).
 		{"satellite_cell", satellite + "/cells/sat", satellite, LayerCells, "sat", ""},
+		// Example satellites under core/examples/* classify as LayerExamples by
+		// their BASE(core)-relative first segment, even though OwningModule is the
+		// satellite itself — restoring the single-module classification once they
+		// become go.work modules (#1556). A flat example root is LayerExamples
+		// (NOT LayerRoot); an example's cell package is LayerExamples (NOT
+		// LayerCells), so example code stays exempt from cell layering rules.
+		{"example_flat_root", exFlat, exFlat, LayerExamples, "", ""},
+		{"example_flat_subpkg", exFlat + "/internal/auth", exFlat, LayerExamples, "", ""},
+		{"example_cell", exCell + "/cells/devicecell", exCell, LayerExamples, "devicecell", ""},
+		{"example_cell_slice", exCell + "/cells/devicecell/slices/deviceregister", exCell, LayerExamples, "devicecell", "deviceregister"},
 		// A package under no member module is third-party.
 		{"foreign", "github.com/other/mod/pkg", "", LayerThirdParty, "", ""},
 	}

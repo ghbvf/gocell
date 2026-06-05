@@ -901,13 +901,18 @@ func scanA5EmitterFailOpenPrefixBypass(
 // collectProbeNameConsts collects all healthz.ProbeName typed const entries
 // from the production tree and returns them sorted as
 // "<module-relative-pkg>.<ConstName>=<value>".
-func collectProbeNameConsts(t *testing.T, root string) []string {
+func collectProbeNameConsts(t *testing.T) []string {
 	t.Helper()
 
 	var entries []string
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(root)),
+	// Production (ModeWorkspace) — NOT Typed (ModeModule / GOWORK=off). The golden
+	// inventory includes per-cell repo probes declared in the examples/* go.work
+	// satellite modules (devicecell/ordercell/orderfulfillmentcell ProbeRepoReady);
+	// a ModeModule load resolves only the root module and would silently drop them
+	// (#1556). Production enumerates every go.work member via
+	// LoadProductionPackages, so satellite probe consts stay covered.
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -1030,7 +1035,7 @@ func TestProbenameSealedFunnel(t *testing.T) {
 
 	t.Run("A1_GoldenInventory", func(t *testing.T) {
 		t.Parallel()
-		got := collectProbeNameConsts(t, root)
+		got := collectProbeNameConsts(t)
 		want := goldenProbeNames()
 		assert.Equal(t, want, got,
 			"PROBENAME-SEALED-FUNNEL-01/A1: ProbeName const inventory mismatch — "+

@@ -21,16 +21,22 @@
 # producing a binary with the full package dep graph. Plain `go build ./...`
 # without the tag uses the stub (empty graph) so newcomers don't need to run
 # `go generate` before their first build. See docs/guides/devtools-catalog.md.
+# examples/* are their own go.work modules (#1556), so a root `./examples/...`
+# pattern matches zero packages here; their release-consistency build is covered
+# by hack/verify-workspace.sh (GOWORK=off per-module). `make build` ships core/cmd.
 build:
 	mkdir -p bin
 	go generate ./cmd/corebundle/
-	go build -tags=catalog_gen -o bin/ ./cmd/... ./examples/...
+	go build -tags=catalog_gen -o bin/ ./cmd/...
 
 check-build:
 	go build ./...
 
+# Root `./...` stops at the examples/* nested-module boundary; the
+# `github.com/ghbvf/gocell/examples/...` pattern expands across those go.work
+# member modules so `make test` still runs every example's unit tests (#1556).
 test:
-	go test ./... -count=1
+	go test ./... github.com/ghbvf/gocell/examples/... -count=1
 
 # fmt rewrites Go sources in place via every formatter declared under
 # .golangci.yml `formatters.enable` (currently gofmt + goimports + gofumpt).
@@ -145,7 +151,7 @@ test-integration:
 		./tests/integration/... \
 		./tests/e2e/internal/... \
 		./cmd/corebundle/... \
-		./examples/ssobff/... \
+		github.com/ghbvf/gocell/examples/ssobff/... \
 		./cells/accesscore/... \
 		./cells/configcore/... \
 		./cells/auditcore/... \
@@ -174,8 +180,9 @@ test-integration-cluster:
 # job; useful before pushing a main.go / option-wiring change.
 # ---------------------------------------------------------------------------
 
+# `-C examples/ssobff`: ssobff is its own go.work module (#1556); run from inside.
 test-examples-smoke:
-	go test ./examples/ssobff/... -tags=examples_smoke -count=1 -timeout 90s -run TestSSOBFFStartupSmoke -v
+	go test -C examples/ssobff -tags=examples_smoke -count=1 -timeout 90s -run TestSSOBFFStartupSmoke -v ./...
 
 # ---------------------------------------------------------------------------
 # Healthcheck verification  (T09)
