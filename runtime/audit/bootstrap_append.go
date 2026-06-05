@@ -87,9 +87,10 @@ type bootstrapAuthFailPayload struct {
 //
 // clientIPHash is typed string (not redaction.IPHash) by design: this is the
 // CONSUMER side — the sealed type that blocks plaintext lives on the producer
-// (cells/accesscore setup.Service), and runtime/audit must not import
-// pkg/redaction. Callers are responsible for passing an already-hashed value;
-// the only producer is the bootstrap observer, which hashes via redaction.HashIP.
+// (cells/accesscore setup.Service). This function still validates the untrusted
+// wire value at the trust boundary with redaction.IsIPHashString before writing
+// the ledger. Callers are responsible for passing an already-hashed value; the
+// only producer is the bootstrap observer, which hashes via redaction.HashIP.
 //
 // eventID is the stable source-event identity (the consuming slice passes
 // outbox.Entry.ID()). It becomes the ledger EventID, which is the SOLE
