@@ -45,10 +45,12 @@ type redisClientResult struct {
 //     internal listener's service-token replay protection — namespace
 //     names the role directly so wire keys read as
 //     "servicetoken-nonce:<nonce>".
+//
 //   - _runtime (consumer claimer): the IdempotencyClaimer is shared across
 //     all consumers; the "_runtime" sentinel mirrors the HTTP metrics
 //     convention for shared framework infrastructure where no cell context
 //     applies.
+//
 //   - _runtime (HTTP idempotency store): the HTTP replay store is also a
 //     shared-infra primitive with no per-cell context. The same sentinel
 //     value is reused intentionally (cf. observability §Redis Key Namespace):
@@ -58,6 +60,16 @@ type redisClientResult struct {
 //     See adapters/redis/http_idempotency.go (`_runtime:<tenant>:{key}:resp|lease|fp`)
 //     and adapters/redis/idempotency.go (`_runtime:{eventID}:lease|done`) for the
 //     format details proving no collision.
+//
+//     This `_runtime` value is the **assembly-wide** HTTP idempotency namespace
+//     (governance: ADR 202606051000-1449): it is deliberately not pod- or
+//     cell-specific, so all pods of an assembly that share this Redis form one
+//     idempotency replay domain (full-assembly scope). Do not derive a per-cell
+//     namespace for the HTTP store — HTTP idempotency is a cross-cutting concern
+//     keyed by (tenant, subject, method, path, header), not a per-cell resource.
+//     The "node-agnostic key" + "stateless store" facts that make this hold are
+//     frozen by archtests HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01 /
+//     HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01.
 const (
 	nonceStoreNamespace           adapterredis.KeyNamespace = "servicetoken-nonce"
 	consumerClaimerNamespace      adapterredis.KeyNamespace = "_runtime"

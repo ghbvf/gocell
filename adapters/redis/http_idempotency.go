@@ -14,19 +14,21 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// HTTPIdempotencyStore — dual-key Lua script model for HTTP idempotency
+// HTTPIdempotencyStore — three-key Lua script model for HTTP idempotency
 // ---------------------------------------------------------------------------
 
 // Compile-time interface check.
 var _ idemhttp.Store = (*HTTPIdempotencyStore)(nil)
 
-// HTTPIdempotencyStore implements idemhttp.Store using a dual-key Lua script
-// model that stores the full HTTP response blob for replay.
+// HTTPIdempotencyStore implements idemhttp.Store using a three-key Lua script
+// model that stores the full HTTP response blob for replay plus the request
+// fingerprint for key-reuse detection.
 //
 // Consistency: L1 (LocalTx) — each Lua script executes atomically within Redis.
 //
 //   - <store-ns>:<req-ns>:{key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
 //   - <store-ns>:<req-ns>:{key}:resp  — SET with doneTTL, value = MarshalRecordedResponse blob. Indicates "completed".
+//   - <store-ns>:<req-ns>:{key}:fp    — SET with max(leaseTTL,doneTTL), value = body fingerprint; flags same-key/different-body reuse.
 //
 // The key prefix has two segments, both OUTSIDE the hashtag:
 //
@@ -38,14 +40,15 @@ var _ idemhttp.Store = (*HTTPIdempotencyStore)(nil)
 //     "_notenant" sentinel), the tenant sub-partition.
 //
 // Cluster: keys are wrapped in a Redis Cluster hashtag so CRC16 hashes only
-// the business-key portion; lease and resp keys colocate on the same slot,
-// keeping multi-KEY EVAL safe under Cluster mode. Both prefix segments sit
-// outside the hashtag, so slot colocality is preserved regardless of either
-// namespace value.
+// the business-key portion; the lease, resp, and fp keys all colocate on the
+// same slot, keeping multi-KEY EVAL safe under Cluster mode. Both prefix
+// segments sit outside the hashtag, so slot colocality is preserved regardless
+// of either namespace value.
 //
-// Claim checks resp first (ClaimDone+replay), then attempts lease
-// (ClaimAcquired or ClaimBusy). Record sets resp + deletes lease.
-// Release deletes lease (token-guarded).
+// Claim checks fp first (FingerprintMismatch if the stored fp differs), then
+// resp (ClaimDone+replay), then attempts lease (ClaimAcquired — storing fp — or
+// ClaimBusy). Record sets resp + preserves fp + deletes lease. Release deletes
+// lease + fp (token-guarded); there is no response to protect.
 type HTTPIdempotencyStore struct {
 	rdb cmdable
 	ns  KeyNamespace

@@ -151,15 +151,16 @@ lease 机制本身已防止重复处理：`ClaimBusy` 时 Claim 不成功，hand
 `MarshalRecordedResponse(r RecordedResponse)` 是配套序列化器，通过内部 DTO
 `recordedResponseDTO` 解耦 wire schema 与 sealed type。
 
-### 8. Redis 实现 — 双键 Lua 原子模型
+### 8. Redis 实现 — 三键 Lua 原子模型
 
-`adapters/redis.HTTPIdempotencyStore` 用 dual-key Lua 脚本实现原子性：
+`adapters/redis.HTTPIdempotencyStore` 用 three-key Lua 脚本实现原子性：
 
 - `<ns>:{<key>}:lease` — `SET NX PX <leaseTTL>`，值为随机 token（UUID fencing）。表示"处理中"。
 - `<ns>:{<key>}:resp` — `SET PX <doneTTL>`，值为 `MarshalRecordedResponse` blob。表示"已完成"。
+- `<ns>:{<key>}:fp` — `SET PX max(<leaseTTL>,<doneTTL>)`，值为请求 body fingerprint。用于同 key／不同 body 的复用检测，生命周期与 resp 对齐（done 后仍存活以便后续 replay 校验指纹）。
 
-两个 key 共享 Redis Cluster hashtag `{<key>}`（hashtag 仅含业务 key，namespace 前缀在
-hashtag 外），保证 lease + resp 落在同一 slot，使 `EVAL` multi-key 在 Cluster 模式下
+三个 key 共享 Redis Cluster hashtag `{<key>}`（hashtag 仅含业务 key，namespace 前缀在
+hashtag 外），保证 lease + resp + fp 落在同一 slot，使 `EVAL` multi-key 在 Cluster 模式下
 合法。
 
 **Claim 流程**（`claimRespScript`）：先检查 resp key 是否存在（`ClaimDone` 回放路径），
@@ -184,20 +185,27 @@ Claim）→ 返回 0，抛出 permanent error（不重试）。
 `ns` 参数由 Middleware 生成，不走同一 funnel，但代码中对 `"{}` 字符做了额外 runtime
 guard（避免破坏 hashtag 边界）。
 
-### 9. 作用域范围 — 本 PR 仅覆盖单 listener
+### 9. 作用域范围
 
-本 PR 的幂等作用域是**单 listener 内** — 同一进程同一 listener 的重复请求被去重。
+> **Amendment 2026-06-05（#1449）**：full-assembly 行由 `❌ defer` 改为 `✅`，本节按
+> ai-robust「ADR amendment 落地必查：矛盾段同 PR 重写」重写为收口后形态。治理定调 +
+> 结构闸 + 三层证明测试见 ADR `202606051000-1449-adr-http-idempotency-assembly-scope-namespace.md`。
+> 威胁矩阵逐行重评：本 amendment **纯加性**（扩大「同一 key 跨 pod 共享」这一预期能力，
+> 隔离维度 `(tenant, subject, method, path, header)` 不变），原 ✅ 行无退化；ADR-1449 §威胁矩阵
+> 新增「跨 pod 回放越权 / 指纹绕过 / CROSSSLOT / 节点身份污染」四行，均 ✅。
 
-三种作用域及其差异：
+PR #1448（本 ADR 原始 PR）的幂等作用域是**单 listener 内**。full-assembly（多 pod 共享）经
+#1449 收口——其运行时机制本就就绪（`_runtime` 非 pod-specific 命名空间 + 跨 listener 共享 store +
+node-agnostic key + 无内存态 store + 共享 Redis），#1449 把它从偶然 wiring 升为被结构守卫的契约。
 
-| 作用域 | 描述 | 本 PR |
-|--------|------|-------|
-| single-listener | 同一进程同一 listener（Redis 共享） | ✅ 覆盖 |
-| cross-cell | 同一进程不同 listener（primary ↔ internal）共享同一幂等命名空间 | ❌ defer |
-| full-assembly | 多 pod 横向扩展共享幂等状态（Redis Cluster 必须） | ❌ defer |
+| 作用域 | 描述 | 状态 |
+|--------|------|------|
+| single-listener | 同一进程同一 listener（Redis 共享） | ✅ 覆盖（本 ADR / #1448） |
+| full-assembly | 多 pod 横向扩展共享幂等状态（Redis Cluster 必须） | ✅ 覆盖（#1449，治理 ADR `202606051000-1449`） |
+| cross-cell | 同一进程不同 listener（primary ↔ internal）共享**同一去重槽** | ❌ defer（#1610，blocked-by #1044 命令桥） |
 
-cross-cell 与 full-assembly 作用域需要统一的 namespace 命名约定 + 跨 listener 的
-Store 共享策略，设计复杂度较高，拆分到后续 epic（见 §Follow-ups）。
+cross-cell（跨 cell 同槽）仍延期：依赖 HTTP `Idempotency-Key` ↔ `command_id` 映射桥（ADR
+`202606040550-1044` §5 演进路径 ⑤ 延期子项）+ 新的共享 KeyNamespace 治理决策，跟踪于 #1610。
 
 ### 10. Route opt-out — `auth.Route.IdempotencyExempt`
 
@@ -295,7 +303,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 
 | 威胁 | 缓解措施 | 状态 |
 |------|---------|------|
-| **Replay 攻击**（攻击者用他人的 `Idempotency-Key` 触发 replay）| namespace = `(tenantID, userID)`，key 中含 `subject + "\x00" + method + "\x00" + path + "\x00" + header`；A 用户的幂等键不会与 B 用户碰撞，跨用户 replay 在 Claim 阶段因 namespace 不匹配而取不到 | ✅ |
+| **Replay 攻击**（攻击者用他人的 `Idempotency-Key` 触发 replay）| namespace = `(tenantID, userID)`，key 中含 `subject + "\x00" + method + "\x00" + path + "\x00" + header`；A 用户的幂等键不会与 B 用户碰撞，跨用户 replay 在 Claim 阶段因 namespace 不匹配而取不到。（注：multi-pod 下 Redis key 为 `_runtime:<tenantID>:{<key>}:resp\|lease\|fp`——`_runtime` 是 store-owner namespace（assembly-wide 层，#1449），`tenantID`/`_notenant` 是 request-scoped namespace（身份隔离层）；两层正交，均不含 pod/listener/cell 维度，本行隔离论证落在 request-scoped 层不变）| ✅ |
 | **回放跳过当前授权再校验**（同主体在权限被回收后仍能 replay 旧响应；对标 Envoy ext_authz 把"后续 filter 改变路由缓存绕过授权"列为提权风险）| **非提权 by-design**：(1) 回放只命中**同一已认证主体本人**的已录响应——key 含 `subject + tenant`，跨主体回放结构上不可能（见上行）；非 `PrincipalUser` 主体在 `extractIdentity` passthrough（service-token 不缓存）；凭据路由 `idempotencyExempt` 不缓存。(2) 回放返回的是该主体**先前在授权状态下已执行**操作的已录响应，**不重新执行任何副作用**；对一个已成功的幂等键在回放时再跑 route Policy，会让同一 key 后续转 403，**违反 IETF Idempotency-Key 语义**（同 key 必返回原响应）——因此"回放不再校验授权"是正确行为而非缺陷。Envoy 的路由缓存以 route 为键、与主体无关，故其绕过模型不迁移到这里（本实现以 principal 为键）。**残留面**：同主体在 24h TTL 内重收自己授权撤销前的旧响应体，bounded by per-principal key + TTL，非越权 | ✅ (by-design) |
 | **Cache poisoning**（伪造 response 污染 replay 缓存）| 只有原始请求者本人的成功响应被 Record；`httpRecordScript` token-guard 防止 stale-lease 的 Record 提交伪造 blob；`RecordedResponse` sealed 防止包外构造伪造结构 | ✅ |
 | **Thundering herd / 并发重复**（同 key 多个飞行请求）| `ClaimBusy` 即时 409，lease 在 `ClaimAcquired` 时原子 SET NX；Lua 脚本原子性防止两个请求同时 Claim 成功 | ✅ |
@@ -319,7 +327,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 
 - 框架级 HTTP 幂等：不再需要每个 cell 手写幂等逻辑，消除 004 缺口 1 的重复代码。
 - `RecordedResponse` sealed construction 提供 type-safe replay blob，无法从外部伪造。
-- Redis 双键 Lua 原子模型与 `kernel/idempotency.Claimer` 的 PG outbox fencing（`OUTBOX-LEASE-ID-CAS-01`）同一 token-guard 语义，一致性模型可预测。
+- Redis 三键 Lua 原子模型与 `kernel/idempotency.Claimer` 的 PG outbox fencing（`OUTBOX-LEASE-ID-CAS-01`）同一 token-guard 语义，一致性模型可预测。
 - `REDIS-KEY-NAMESPACE-01` 已有 archtest 自动覆盖新增的 `HTTPIdempotencyStore` 构造器，无需新 archtest 守卫 namespace 约束。
 - request body fingerprint 已实现：同一 key + 不同 body → 422 即时拒绝 + per-field diff，防止 mis-replay。
 - route opt-out **运行时机制**（`auth.Route.IdempotencyExempt` → matcher → `WithExemptMatcher`）已落地并有测试，允许敏感路由显式豁免 recording。
@@ -330,7 +338,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 
 - **回放 best-effort**：256 KiB cap 意味着大响应不可回放。客户端应对"无回放"设计防御（幂等键的第二次请求可能重新执行，而非 replay）。
 - **Service token 主体不追踪**：`PrincipalService` passthrough，service-to-service 调用的幂等需调用方自行保证。此为有意选择（§决策 2 解释）。
-- **单 listener 作用域**：跨 listener / 多 pod 场景不在本 PR 覆盖（§决策 9）。
+- **cross-cell 同槽延期**：full-assembly（多 pod + 跨 listener 共享同一去重域）已由 #1449 收口为治理契约（§决策 9，`✅`）。**唯一**仍未覆盖的是 cross-cell——把同一**逻辑命令**路由到跨 cell 的单一去重槽，依赖 `Idempotency-Key` ↔ `command_id` 桥（#1610，blocked-by #1044）。
 - **422 用于 fingerprint mismatch**（#1450）：引入 `errcode.KindUnprocessable` → 422，对齐 IETF idempotency-key draft §2.7。`ClaimBusy`（in-flight）仍 409。详见文末 §"Amendment 2026-06-04"。
 
 ---
@@ -341,7 +349,7 @@ PR #1448 落地的是 **运行时机制**（`auth.Route.IdempotencyExempt` → `
 
 **直接复用 `kernel/idempotency.Claimer`**（被拒绝）：Claimer 的 `Receipt.Commit(ctx)` 不携带 response blob；添加 blob 参数会改变 kernel 接口，影响消费侧事件幂等的所有调用方（22 个 service）。HTTP 幂等需要一个独立的 `Receipt` 形状，minimal specialization 比修改 kernel 接口更符合"不考虑向后兼容——直接演化"原则（即便演化成本高，也应走独立接口而非污染 kernel 抽象）。
 
-**独立 lease-store + blob-store（两个 Redis key 分开操作）**（被拒绝）：Claim 之后、Record 之前的窗口里，如果 lease-store 和 blob-store 不原子操作，存在"已 done 状态但 blob 为空"的间隙——后续 replay 会拿到空 blob 或 UnmarshalRecordedResponse 失败。Lua 双键原子脚本消除此间隙。
+**独立 lease-store + blob-store（lease / resp / fp 三个 Redis key 分开操作）**（被拒绝）：Claim 之后、Record 之前的窗口里，如果三个 key 不原子操作，存在"已 done 状态但 blob 为空"的间隙——后续 replay 会拿到空 blob 或 UnmarshalRecordedResponse 失败。Lua 三键原子脚本消除此间隙。
 
 **Opt-in env flag (`GOCELL_HTTP_IDEMPOTENCY_ENABLED`) vs. default-ON when Redis present**（被拒绝）：issue #1469 要求评估这两种激活方式。选择默认启用的核心理由：opt-in env flag 完全复现了 #1469 要修复的问题——"middleware 和 store 存在，但生产中从未连接"。框架机制如果需要额外 env flag 才能激活，实质上仍然是死代码：运维文档落后、env flag 被遗忘、staging 配置与 prod 不同步，都可能导致生产 store 始终缺席。`buildConsumerClaimer` 和 `buildServiceNonceStore` 已经证明了"按拓扑自动派生、Redis 存在即激活"模式在生产中稳定可靠——本 store 遵循相同范式。fail-closed 守卫（`CREDENTIAL-RESPONSE-IDEMPOTENCY-EXEMPT-FUNNEL-01`、`sensitiveResponseHeaders` header 过滤、`shouldRecord` 2xx/3xx 门控）的存在使 default-ON 在安全语义上与 opt-in 等价；opt-in 仅增加额外的运维配置复杂度，无额外安全收益。
 
@@ -390,7 +398,8 @@ Dependent contracts (governance scan): none — middleware 是 framework 横切�
 
 以下内容在本 PR 范围之外，按 `feedback_pr_scope_carveouts_must_backlog` 规则同步登记 backlog：
 
-- **cross-cell / full-assembly 幂等命名空间**（gh #1449）：多 listener 共享 Store + namespace 约定，需设计 Store 共享策略（wiring）和 namespace collision 防御。
+- **full-assembly 幂等命名空间** — ✅ **已实现**（gh #1449）：`_runtime` 定调为 assembly-wide 命名空间 + 两道结构闸（`HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01` Hard / `HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01` Medium）+ 三层证明测试，见 §9 Amendment + ADR `202606051000-1449`。
+- **cross-cell 跨 cell 同槽幂等**（gh #1610，blocked-by #1044）：同一 idempotency-key 在不同 cell/listener 间共享同一去重槽，需 HTTP `Idempotency-Key` ↔ `command_id` 映射桥（ADR-1044 §5 演进路径 ⑤）+ 新的共享 KeyNamespace 治理决策。
 - **request-payload fingerprinting + 422 + per-field diff** — ✅ **已实现**（gh #1450）：`Store.Claim` 接收 canonical fingerprint blob；同一 key + 不同 body → **422** `ERR_IDEMPOTENCY_KEY_REUSED`，响应 details 列出差异的顶层字段名（Stripe 式 per-field diff，只回字段名/不回值）。详见文末 §"Amendment 2026-06-04"。gh #1450 关闭。
 - **production wiring** — ✅ **已实现**（gh #1469）：`cmd/corebundle` 在 `shared.Redis != nil` 时默认接通 `bootstrap.WithIdempotencyStore(redis.NewHTTPIdempotencyStore(client, "_runtime"))`（`buildHTTPIdempotencyStore` + `defaultRuntimeOptions`）。HARD 前置三件套（codegen 入口 + 3 凭据路由豁免 + fail-closed 守卫）同 PR 落地，见 §"敏感 body route 豁免（✅ 已收口，gh #1469）"。bootstrap e2e replay + exempt-never-recorded 测试覆盖。
 - **Block-and-wait 并发**（gh #1451，可选增强）：如果 409 + Retry-After 被产品侧确认为可接受，此项关闭；否则可作为 opt-in `WithWaitOnBusy(timeout)` 选项。

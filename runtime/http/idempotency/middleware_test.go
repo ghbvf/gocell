@@ -1475,3 +1475,63 @@ func TestMiddleware_ExemptMatcher_ShortCircuitsBeforeBodyRead(t *testing.T) {
 		t.Errorf("body must be intact for exempt routes (not consumed by middleware); got %q", bodyReceived)
 	}
 }
+
+// TestBuildNamespaceKey_IsolationMatrix is the behavioral proof of the isolation
+// contract that the archtest HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01 freezes
+// structurally: every isolation dimension (tenant, subject, method, path,
+// idemKey) must change the derived (ns, key) so two distinct logical requests
+// never share one replay record, while identical inputs reproduce the same pair
+// (assembly-wide cross-pod dedup). The archtest proves the derivation cannot
+// drop a dimension; this proves the current derivation actually separates them.
+func TestBuildNamespaceKey_IsolationMatrix(t *testing.T) {
+	user := func(tenant, subject string) *auth.Principal {
+		return &auth.Principal{Kind: auth.PrincipalUser, TenantID: tenant, Subject: subject}
+	}
+	const (
+		tenant = "11111111-1111-1111-1111-111111111111"
+		other  = "22222222-2222-2222-2222-222222222222"
+	)
+	base := user(tenant, "alice")
+	baseNS, baseKey := buildNamespaceKey(base, "POST", "/api/v1/orders", "idem-1")
+
+	t.Run("deterministic — identical inputs reproduce the pair (cross-pod dedup)", func(t *testing.T) {
+		ns, key := buildNamespaceKey(user(tenant, "alice"), "POST", "/api/v1/orders", "idem-1")
+		if ns != baseNS || key != baseKey {
+			t.Errorf("identical inputs must yield identical (ns,key): got (%q,%q) want (%q,%q)", ns, key, baseNS, baseKey)
+		}
+	})
+
+	// Each dimension, changed in isolation, must alter (ns,key).
+	cases := []struct {
+		name      string
+		p         *auth.Principal
+		method    string
+		path      string
+		idemKey   string
+		wantNSneq bool // tenant change moves the namespace; the others move the key
+	}{
+		{"tenant", user(other, "alice"), "POST", "/api/v1/orders", "idem-1", true},
+		{"subject", user(tenant, "bob"), "POST", "/api/v1/orders", "idem-1", false},
+		{"method", base, "PUT", "/api/v1/orders", "idem-1", false},
+		{"path", base, "POST", "/api/v1/payments", "idem-1", false},
+		{"idemKey", base, "POST", "/api/v1/orders", "idem-2", false},
+	}
+	for _, tc := range cases {
+		t.Run("isolated by "+tc.name, func(t *testing.T) {
+			ns, key := buildNamespaceKey(tc.p, tc.method, tc.path, tc.idemKey)
+			if ns == baseNS && key == baseKey {
+				t.Errorf("changing %s must change (ns,key); both still %q/%q — isolation collapsed", tc.name, ns, key)
+			}
+			if tc.wantNSneq && ns == baseNS {
+				t.Errorf("changing %s must change the namespace; ns still %q", tc.name, ns)
+			}
+		})
+	}
+
+	t.Run("empty tenant maps to the _notenant sentinel", func(t *testing.T) {
+		ns, _ := buildNamespaceKey(user("", "alice"), "POST", "/api/v1/orders", "idem-1")
+		if ns != noTenantSentinel {
+			t.Errorf("empty tenant must map to %q sentinel; got %q", noTenantSentinel, ns)
+		}
+	})
+}

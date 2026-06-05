@@ -99,6 +99,62 @@ cluster-safety. The archtest gate `IDEMPOTENCY-LUA-HASHTAG-01` (in
 `tools/archtest/`) statically checks the existing claimer key construction;
 extend it (or add a sibling gate) when introducing new multi-key call sites.
 
+## Full-assembly HTTP idempotency (multi-pod replay scope)
+
+Every pod of an assembly that points at the **same** Redis backend (standalone
+or cluster) shares **one** HTTP idempotency replay domain: a mutating request
+recorded by any pod is replayed by every other pod. This is the assembly-wide
+scope established by ADR `202606051000-1449`.
+
+It holds because the replay key carries no per-node identity:
+
+- The store namespace is the `_runtime` sentinel (`cmd/corebundle` →
+  `httpIdempotencyStoreNamespace`), which is **not** pod- or cell-specific.
+- The per-request key is `(tenantID | "_notenant") · subject · method · path ·
+  Idempotency-Key` — derived only from request + principal data, never from the
+  serving pod / listener / cell (`runtime/http/idempotency.buildNamespaceKey`).
+- The `HTTPIdempotencyStore` holds no in-memory replay state — all
+  Claim/Record/Release state lives in Redis — so any pod's store instance sees
+  the same state.
+
+These two structural facts are frozen by archtests
+`HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01` (key node-agnostic) and
+`HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01` (store stateless); the cross-pod
+replay behavior is covered by the cross-pod integration test
+`adapters/redis/http_idempotency_assembly_scope_test.go` (run with
+`go test -tags=integration ./adapters/redis/...` — it is `//go:build integration`,
+so a plain `go test` skips it) and, on a live cluster, the `integration_cluster`
+test `…_cluster_real_test.go`.
+
+**Multi-pod requires Redis** (fail-closed): `Topology.RequiresDistributedReplay()`
+makes `cmd/corebundle` refuse to start a multi-pod deployment in `real` adapter
+mode without `GOCELL_REDIS_ADDR` or `GOCELL_REDIS_CLUSTER_ADDRS`. The single-pod
+escape is explicit: set `GOCELL_SINGLE_POD=1` to acknowledge a single-pod
+deployment (in-memory replay state is then sufficient and no Redis is required);
+default `memory` / dev mode likewise has no cross-pod replay need and skips the
+Redis store.
+
+**Scope note**: this is *assembly-wide* — all pods **and all listeners** share
+the same Redis store and key space via the `(tenant, subject, method, path,
+header)` key. Because the key includes `path`, a request to `POST /api/v1/orders`
+(primary listener) and a hypothetical `POST /internal/v1/orders` (internal
+listener) carrying the same `Idempotency-Key` produce **different** keys and do
+not collide — sharing the store ≠ sharing a dedup slot across paths.
+
+**Subject applicability**: only requests carrying an authenticated **user**
+principal (`PrincipalUser` with a non-empty subject) are tracked. `PrincipalService`
+(the 4-part service token on `/internal/v1/*`), anonymous, and unauthenticated
+requests **bypass idempotency entirely** — no Claim, no replay
+(`runtime/http/idempotency.extractIdentity`). "All listeners share the replay
+domain" therefore means the store and keyspace are shared, not that every
+listener's traffic is cached: an internal service-token call is never
+deduplicated even though it shares the store.
+
+*Cross-cell* dedup (routing one **logical command** to a single dedup slot
+regardless of path/listener/cell) is a different, stronger guarantee that
+requires an Idempotency-Key ↔ command_id bridge and remains deferred (#1610,
+blocked-by #1044).
+
 ## Operational notes
 
 - **MOVED / ASK redirection** is handled transparently by go-redis. Business
