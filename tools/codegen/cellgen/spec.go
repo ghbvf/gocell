@@ -61,6 +61,45 @@ type CellGenSpec struct {
 	// subscribe CUs that carry a non-empty projection: field. Each entry emits
 	// one reg.RegisterProjection() call.
 	Projections []ProjectionGenSpec
+	// GrpcServices holds the per-slice gRPC serve registrations derived from
+	// contractUsages[role=serve] with kind=grpc. Each entry emits one
+	// reg.GRPCService() call.
+	GrpcServices []GrpcServiceGenSpec
+}
+
+// GrpcServiceGenSpec describes one reg.GRPCService() call derived from a
+// contractUsage[role=serve] on a grpc contract.
+type GrpcServiceGenSpec struct {
+	// ContractID is the gRPC contract id, e.g. "grpc.device.command.v1".
+	ContractID string
+	// SliceID identifies the slice owning the server implementation — primary
+	// sort key (mirrors SubscriptionGenSpec).
+	SliceID string
+	// HandlerField is the cell struct field name holding the gRPC server
+	// implementation, e.g. "commandServer".
+	HandlerField string
+	// RegisterFunc is the protoc-gen-go-grpc generated registration function,
+	// e.g. "RegisterDeviceCommandServiceServer". Derived from the last
+	// dot-segment of the proto service FQN + "Server".
+	RegisterFunc string
+	// ListenerConst is the Go constant reference for the gRPC listener;
+	// always "cell.PrimaryListener" for grpc-serve (rendered verbatim).
+	ListenerConst string
+	// ProtoRel is the contracts-relative path of the .proto file,
+	// e.g. "contracts/grpc/device/command/v1/device_command.proto".
+	// Used by EnrichGrpcServicesWithProtoInfo to resolve the import path.
+	ProtoRel string
+	// Service is the proto fully-qualified service name,
+	// e.g. "device.command.v1.DeviceCommandService".
+	Service string
+	// Method is the proto method name, e.g. "IssueCommand".
+	Method string
+	// PbImportPath is the Go import path of the generated proto package.
+	// Populated by EnrichGrpcServicesWithProtoInfo (post-build, FS-derived).
+	PbImportPath string
+	// PbAlias is the import alias for PbImportPath in cell_gen.go,
+	// e.g. "grpc0", "grpc1". Set by EnrichGrpcServicesWithProtoInfo.
+	PbAlias string
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.
