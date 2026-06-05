@@ -103,10 +103,15 @@ const commandRegistryTypeName = "Registry"
 // # Anti-vacuity / stale allowlist check
 //
 // Every non-empty allowlist entry must be observed hosting a live call; stale
-// entries are surfaced as diagnostics. The generated package (which contains the
-// real Register and Dispatch calls) is expected to appear. If codegen renames or
-// removes the generated call, this check fails and prompts a reviewer to update
-// the allowlist — preventing a dead entry from becoming a silent bypass slot.
+// entries are surfaced as diagnostics. The generated command packages (which
+// contain the real Register and Dispatch calls) are expected to appear. Phase 2
+// scans the generated/contracts/command/** glob — NOT a single hardcoded package
+// (#1580: the prior single-package form went vacuous the moment that one funnel
+// was renamed; the glob auto-covers every present and future codegen command and
+// only re-vacuates when ALL command funnels disappear). If codegen renames or
+// removes every generated call, this check fails and prompts a reviewer to verify
+// the funnel is still wired — preventing a dead entry from becoming a silent
+// bypass slot.
 func TestCommandDispatchRegisterCaller01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -155,15 +160,18 @@ func TestCommandDispatchRegisterCaller01(t *testing.T) {
 		return d
 	})
 
-	// Phase 2: anti-vacuity check — scan the generated package directly (outside
-	// Production scope) to confirm the sanctioned caller actually calls the
-	// guarded methods. Production() excludes generated/ by design, so we use
-	// Typed() with the specific generated package pattern.
-	// If the generated file is removed or renamed, this check fails immediately,
-	// forcing a reviewer to verify the funnel is still wired.
-	const generatedPkg = "./generated/contracts/command/device-command/enqueue/v1"
+	// Phase 2: anti-vacuity check — scan ALL generated command packages (outside
+	// Production scope) to confirm the sanctioned caller actually calls the guarded
+	// methods. Production() excludes generated/ by design, so we use Typed() with
+	// the generated/contracts/command/** glob (#1580: was a single hardcoded
+	// device-command/enqueue/v1 package; generalized so a second codegen command
+	// auto-joins coverage and removing only one funnel never silently re-vacuates
+	// this check). At least one generated package must contain a guarded call;
+	// none means the scanner regressed or every generated funnel was
+	// renamed/removed, leaving the downstream caller-allowlist vacuously safe.
+	const generatedPkgGlob = "./generated/contracts/command/..."
 	var generatedCallFound bool
-	_ = Run(t, Typed(TypedOpts{}, []string{generatedPkg}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{generatedPkgGlob}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
@@ -178,11 +186,11 @@ func TestCommandDispatchRegisterCaller01(t *testing.T) {
 	})
 	if !generatedCallFound {
 		diags = append(diags, Diagnostic{
-			Message: "COMMAND-DISPATCH-REGISTER-CALLER-01 anti-vacuity: generated package " +
-				generatedPkg + " does NOT contain any call to RegisterHandler or " +
+			Message: "COMMAND-DISPATCH-REGISTER-CALLER-01 anti-vacuity: NO package under " +
+				generatedPkgGlob + " contains a call to RegisterHandler or " +
 				"LookupHandler. Either the scanner regressed (check isCommandRegistryMethod) " +
-				"or the generated file was renamed/removed. The funnel is vacuous — " +
-				"the sanctioned caller must be verifiably present.",
+				"or every generated command funnel was renamed/removed. The funnel is " +
+				"vacuous — at least one sanctioned generated caller must be verifiably present.",
 		})
 	}
 
