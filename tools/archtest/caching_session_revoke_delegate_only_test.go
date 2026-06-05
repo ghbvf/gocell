@@ -26,15 +26,20 @@
 //   forbid the cache DEL, it forbids it from running in the tx body. The
 //   sanctioned shape fires the DEL only after the revoke commit is durable.
 //
-// AI-robust grade: Hard (both rules; single-axis, not a funnel). The guards are
-// archtest-bound (Go does not make the violated forms uncompilable), but form
-// uniqueness is total:
-//   - Delegate-only: "exactly one ReturnStmt whose callee is
-//     s.inner.RevokeForSubject" has no gray zone.
-//   - After-commit-DEL: "every s.cache.{Delete,Set} CallExpr is lexically within
-//     a persistence.RegisterAfterCommit hook FuncLit body" is a position-
-//     containment fact (token.Pos ∈ [Lbrace, Rbrace]) over a type-resolved
-//     callee (RegisterAfterCommit via TypesInfo, alias-proof) — no gray zone.
+// AI-robust grade (per-rule, single-axis — not a funnel; both archtest-bound):
+//   - DELEGATE-ONLY-01 (RevokeForSubject): Hard. "the body is exactly one
+//     ReturnStmt whose callee is s.inner.RevokeForSubject(params...)" is total
+//     form-uniqueness — there is no gray zone, every other shape fails (same
+//     grading as the pre-rework single rule).
+//   - AFTERCOMMIT-DEL-01 (Revoke): Medium (NOT over-claimed as Hard). The check
+//     is type-aware (RegisterAfterCommit resolved via TypesInfo.ObjectOf,
+//     alias-proof) + AST position-containment (cache-mutation token.Pos ∈ the
+//     hook FuncLit [Lbrace, Rbrace]); but it is a gate-based check with the
+//     documented blind spots below (helper-one-level, TypesInfo==nil fixture
+//     path), and Go does not make an out-of-hook cache mutation uncompilable —
+//     so this is honestly Medium. Hard-upgrade path = sealed construction making
+//     out-of-hook cache writes type-system-unrepresentable (e.g. the cache field
+//     exposes only an after-commit-scoped handle); tracked gh #1615.
 //   The hook body's own purity (no tx / outbox writer) is enforced independently
 //   and in parallel by AFTERCOMMIT-HOOK-PURE-TRANSIENT-01.
 //
@@ -63,6 +68,13 @@
 //     appear lexically in the Revoke body). This is the same documented Medium
 //     residual as AFTERCOMMIT-HOOK-PURE-TRANSIENT-01/B4 and is structurally
 //     defanged by RunAfterCommitHooks stripping the tx from the hook ctx.
+//  5. registerAfterCommitHookLit callee resolution falls back to name-only
+//     ("RegisterAfterCommit") when p.TypesInfo == nil. This is constrained to
+//     Fixture(...)-mode passes; production Typed(...) runs always carry
+//     TypesInfo, so the package-path check (suffix /kernel/persistence) is
+//     always active for production scanning. A fixture declaring its own local
+//     RegisterAfterCommit would be mis-resolved, but the fixture set here is
+//     curated and uses the real kernel/persistence funnel.
 
 package archtest
 

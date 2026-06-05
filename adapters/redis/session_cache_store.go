@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
@@ -98,12 +99,20 @@ import (
 // # Ops guidance
 //
 // Single-session logout invalidates the cache near-instantly via the
-// after-commit DEL (#796); a short TTL is no longer required for prompt logout
-// effect — it now only bounds the residual exposure if Redis is unreachable at
-// the moment the after-commit hook runs (the hook is best-effort, and a failed
-// DEL falls back to TTL expiry). For maximum-security session-compromise
-// response you may still disable the cache (leave GOCELL_SESSION_CACHE_TTL
-// empty) to remove the cache from the trust path entirely.
+// after-commit DEL (#796) — the residual stale window is only the
+// commit→hook gap (effectively zero; the hook runs synchronously on the
+// committing goroutine before RunInTx returns). Any concurrent Get that arrives
+// between inner.Revoke and commit cannot re-populate the cache (the row is
+// still uncommitted) and will fall through to inner; a Get after commit
+// reads the revoked row and skips lazyPopulate. Should the DEL itself fail
+// (best-effort, logged at Warn), the AuthzEpochAtIssue check in sessionvalidate
+// provides an independent epoch-based fail-closed safety net, and the entry
+// expires at TTL. Together these two layers make disabling the cache
+// unnecessary for normal security postures. For zero-tolerance stale cache
+// requirements (e.g. an ongoing breach investigation where every session must be
+// invalidated atomically), you may disable the cache by leaving
+// GOCELL_SESSION_CACHE_TTL empty — this removes the cache entirely from the
+// trust path.
 //
 // ref: alexedwards/scs redisstore/redisstore.go@master (PEXPIREAT object-level
 // expiry alignment — we use fixed Duration TTL because ValidateView hides
@@ -145,6 +154,18 @@ func (nopCacheMetrics) RecordError(context.Context) {}
 // KeyNamespace. Final Redis key = "<namespace>:session:<sessionID>".
 const sessionCacheKey = "session:"
 
+// sessionCacheLogPrefix is the slog / errors message prefix for all
+// session-cache log lines. Kept separate from sessionCacheKey (Redis key
+// prefix) — the two constants serve orthogonal purposes.
+const sessionCacheLogPrefix = "session-cache: "
+
+// sessionCacheRevokeDELTimeout is the per-call deadline for the post-commit
+// cache.Delete issued by Revoke's after-commit hook. DEL is best-effort; this
+// cap prevents a slow or unavailable Redis from blocking the committing
+// goroutine / RunInTx return for an unbounded time.
+// Aligns with bootstrapAppendDetachedTimeout = 2s (pkg/ctxutil).
+const sessionCacheRevokeDELTimeout = 2 * time.Second
+
 // sessionCacheEntry is the on-wire JSON shape persisted in Redis. It mirrors
 // the four fields of session.ValidateView verbatim; using a dedicated struct
 // makes field addition an explicit code change rather than an automatic
@@ -181,16 +202,16 @@ func (e sessionCacheEntry) toView() *session.ValidateView {
 // views are written to cache). Failure → fall through to inner.
 func (e sessionCacheEntry) validate(wantID string) error {
 	if e.ID != wantID {
-		return errors.New("session-cache: id mismatch")
+		return errors.New(sessionCacheLogPrefix + "id mismatch")
 	}
 	if e.SubjectID == "" {
-		return errors.New("session-cache: empty SubjectID")
+		return errors.New(sessionCacheLogPrefix + "empty SubjectID")
 	}
 	if e.AuthzEpochAtIssue <= 0 {
-		return errors.New("session-cache: non-positive AuthzEpochAtIssue")
+		return errors.New(sessionCacheLogPrefix + "non-positive AuthzEpochAtIssue")
 	}
 	if e.RevokedAt != nil {
-		return errors.New("session-cache: cached revoked session")
+		return errors.New(sessionCacheLogPrefix + "cached revoked session")
 	}
 	return nil
 }
@@ -277,8 +298,8 @@ func (s *CachingSessionStore) readCacheEntry(ctx context.Context, key, id string
 	raw, err := s.cache.Get(ctx, key)
 	if err != nil {
 		s.metrics.RecordError(ctx)
-		s.logger.Warn("session-cache: get failed; falling through",
-			slog.String("sid", id),
+		s.logger.Warn(sessionCacheLogPrefix+"get failed; falling through",
+			slog.String("session_id", id),
 			slog.Any("error", err))
 		return nil
 	}
@@ -305,13 +326,13 @@ func (s *CachingSessionStore) evictBadEntry(ctx context.Context, key, id, kind s
 	// secondary Delete failure below is not separately counted — the bad entry
 	// is the meaningful event).
 	s.metrics.RecordError(ctx)
-	s.logger.Warn("session-cache: bad cached entry; falling through",
-		slog.String("sid", id),
+	s.logger.Warn(sessionCacheLogPrefix+"bad cached entry; falling through",
+		slog.String("session_id", id),
 		slog.String("kind", kind),
 		slog.Any("error", cause))
 	if delErr := s.cache.Delete(ctx, key); delErr != nil {
-		s.logger.Warn("session-cache: failed to clean bad cached entry",
-			slog.String("sid", id),
+		s.logger.Warn(sessionCacheLogPrefix+"failed to clean bad cached entry",
+			slog.String("session_id", id),
 			slog.String("kind", kind),
 			slog.Any("error", delErr))
 	}
@@ -328,15 +349,15 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 	payload, err := json.Marshal(entryFromView(view))
 	if err != nil {
 		s.metrics.RecordError(ctx)
-		s.logger.Warn("session-cache: marshal failed; skipping populate",
-			slog.String("sid", sid),
+		s.logger.Warn(sessionCacheLogPrefix+"marshal failed; skipping populate",
+			slog.String("session_id", sid),
 			slog.Any("error", err))
 		return
 	}
 	if err := s.cache.Set(ctx, key, string(payload), s.ttl); err != nil {
 		s.metrics.RecordError(ctx)
-		s.logger.Warn("session-cache: set failed; skipping populate",
-			slog.String("sid", sid),
+		s.logger.Warn(sessionCacheLogPrefix+"set failed; skipping populate",
+			slog.String("session_id", sid),
 			slog.Any("error", err))
 	}
 }
@@ -353,7 +374,9 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 // the race — the row is already revoked when the hook runs, so any racing
 // lazyPopulate reads the revoked state and skips the write (revoked views are
 // never cached). The DEL is best-effort: a failure is logged at Warn and the
-// entry then expires at TTL (the TTL is the fail-safe backstop).
+// entry then expires at TTL (the TTL is the fail-safe backstop). DEL is wrapped
+// in ctxutil.WithDetachedTimeout(2s) so a slow Redis cannot block the
+// committing goroutine / RunInTx return.
 //
 // Contract: Revoke MUST be invoked within a RunInTx scope (sessionlogout's
 // persistRevoke wraps it). RegisterAfterCommit panics if no ambient after-commit
@@ -371,10 +394,12 @@ func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
 	}
 	key := sessionCacheKey + id
 	persistence.RegisterAfterCommit(ctx, func(hookCtx context.Context) {
+		hookCtx, cancel := ctxutil.WithDetachedTimeout(hookCtx, sessionCacheRevokeDELTimeout)
+		defer cancel()
 		if delErr := s.cache.Delete(hookCtx, key); delErr != nil {
 			s.metrics.RecordError(hookCtx)
-			s.logger.Warn("session-cache: post-commit revoke DEL failed; entry expires at TTL",
-				slog.String("sid", id),
+			s.logger.Warn(sessionCacheLogPrefix+"post-commit revoke DEL failed; entry expires at TTL",
+				slog.String("session_id", id),
 				slog.Any("error", delErr))
 		}
 	})

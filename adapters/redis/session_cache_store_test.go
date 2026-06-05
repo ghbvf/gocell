@@ -332,18 +332,22 @@ func TestCachingSessionStore_Revoke_AfterCommitDeletesCache(t *testing.T) {
 // TestCachingSessionStore_Revoke_AfterCommitDelFailure_FallsBackToTTL — a failed
 // post-commit DEL is best-effort: it is swallowed (logged at Warn) and the entry
 // is left to expire at TTL. The hook must not panic or surface to the caller.
+// The DEL failure is additionally recorded as a cache error metric (RecordError).
 func TestCachingSessionStore_Revoke_AfterCommitDelFailure_FallsBackToTTL(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
 	mock.delErr = errMock // Redis DEL fails inside the after-commit hook
 	inner := &fakeSessionStore{}
-	store := newTestCachingStore(t, inner, mock)
+	rec := &spyCacheMetrics{}
+	store := newTestCachingStoreWithMetrics(t, inner, mock, rec)
 
 	ctx, drain := persistence.WithAfterCommitRegistry(context.Background())
 	require.True(t, drain)
 	require.NoError(t, store.Revoke(ctx, scsTestSID))
 	// Draining must not panic even though the DEL errors.
 	assert.NotPanics(t, func() { persistence.RunAfterCommitHooks(ctx) })
+	// The DEL failure must be counted as a cache error.
+	assert.Equal(t, 1, rec.errs, "DEL failure in after-commit hook must record one cache error")
 }
 
 // TestCachingSessionStore_Revoke_InnerError_Propagates — inner errors flow
@@ -622,6 +626,73 @@ func TestCachingSessionStore_Get_CorruptCacheEntry_DeletesAndFallsThrough(t *tes
 	assert.Equal(t, int64(1), inner.getCalls.Load(),
 		"second Get must hit the re-primed cache (corrupt entry was deleted and lazyPopulated with valid entry); "+
 			"inner.getCalls==2 means corrupt entry was NOT deleted")
+}
+
+// TestCachingSessionStore_ConcurrentGetAndRevoke exercises Get and Revoke
+// running concurrently to verify the implementation is data-race free under
+// -race. Goroutines call Get in a tight loop while the main goroutine executes
+// a Revoke with a simulated transaction scope. Once all goroutines finish, a
+// Revoke is performed in isolation and the after-commit hook is drained; the
+// cache entry must then be absent.
+func TestCachingSessionStore_ConcurrentGetAndRevoke(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockCmdable()
+	view := newTestView()
+	// Pre-populate the cache with a valid entry so readers start hitting it.
+	payload, err := json.Marshal(entryFromView(view))
+	require.NoError(t, err)
+	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+
+	inner := &fakeSessionStore{view: view}
+	store := newTestCachingStore(t, inner, mock)
+
+	const goroutines = 8
+	const iters = 16
+
+	// Phase 1: concurrent readers running alongside a concurrent Revoke call
+	// (registers hook, does not yet fire it). This phase validates -race safety.
+	ctx1, drain1 := persistence.WithAfterCommitRegistry(context.Background())
+	require.True(t, drain1, "test must own the after-commit registry")
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines + 1) // readers + revoke goroutine
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			ctx := context.Background()
+			for j := 0; j < iters; j++ {
+				_, gerr := store.Get(ctx, scsTestSID)
+				if gerr != nil {
+					t.Errorf("concurrent Get error: %v", gerr)
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer wg.Done()
+		if rerr := store.Revoke(ctx1, scsTestSID); rerr != nil {
+			t.Errorf("concurrent Revoke error: %v", rerr)
+		}
+	}()
+	wg.Wait()
+
+	// Fire the first hook (may or may not find the key, depending on reader
+	// re-population timing — that is acceptable for best-effort DEL).
+	assert.NotPanics(t, func() { persistence.RunAfterCommitHooks(ctx1) })
+
+	// Phase 2: isolated Revoke + drain. After all concurrent readers have
+	// stopped, a second Revoke and hook drain must reliably remove the entry.
+	ctx2, drain2 := persistence.WithAfterCommitRegistry(context.Background())
+	require.True(t, drain2)
+	require.NoError(t, store.Revoke(ctx2, scsTestSID))
+	assert.NotPanics(t, func() { persistence.RunAfterCommitHooks(ctx2) })
+
+	// Now no readers are running; the cache entry must be absent.
+	_, gerr := mock.Get(context.Background(), scsCachedKey).Result()
+	assert.ErrorIs(t, gerr, goredis.Nil,
+		"after-commit DEL must have removed the cache entry")
 }
 
 // TestNewCachingSessionStore_TypedNilInner_Rejected — T3.

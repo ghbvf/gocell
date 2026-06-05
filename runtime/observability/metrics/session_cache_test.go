@@ -58,6 +58,9 @@ func TestNewSessionCacheCollector_AtomicRollback(t *testing.T) {
 	assert.Contains(t, err.Error(), "session_cache_misses_total")
 	// hits (registered first) must have been unregistered LIFO.
 	assert.Equal(t, 1, p.unregisterCount, "the first counter must be rolled back")
+	// The rolled-back counter must no longer appear in the registered map.
+	assert.NotContains(t, p.counterNames, "session_cache_hits_total",
+		"rolled-back counter must not remain registered")
 }
 
 // TestSessionCacheCollector_RecordsEmitWithCellLabel asserts each Record* method

@@ -69,15 +69,17 @@ func NewSessionCacheCollector(p kernelmetrics.Provider, cellID string) (*Session
 	c := &SessionCacheCollector{cellID: cellID}
 	var err error
 	if c.hits, err = registerCounterVec(p, kernelmetrics.CounterOpts{
-		Name:       "session_cache_hits_total",
-		Help:       "Total session-cache hits (valid entry served from Redis without consulting the inner store).",
+		Name: "session_cache_hits_total",
+		Help: "Total session-cache hits (valid entry served from Redis without consulting the inner store). " +
+			"hits + misses = total Get() calls; errors are a subset of misses.",
 		LabelNames: []string{"cell"},
 	}, &registered); err != nil {
 		return nil, err
 	}
 	if c.misses, err = registerCounterVec(p, kernelmetrics.CounterOpts{
-		Name:       "session_cache_misses_total",
-		Help:       "Total session-cache misses (no Redis entry; inner store consulted and result lazily populated).",
+		Name: "session_cache_misses_total",
+		Help: "Total session-cache misses (no Redis entry; inner store consulted and result lazily populated). " +
+			"hits + misses = total Get() calls; errors are a subset of misses.",
 		LabelNames: []string{"cell"},
 	}, &registered); err != nil {
 		return nil, err

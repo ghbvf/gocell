@@ -283,13 +283,13 @@ metrics:
       file: runtime/observability/metrics/session_cache.go
     - name: session_cache_hits_total
       type: counter
-      help: Total session-cache hits (valid entry served from Redis without consulting the inner store).
+      help: Total session-cache hits (valid entry served from Redis without consulting the inner store). hits + misses = total Get() calls; errors are a subset of misses.
       labels:
         - cell
       file: runtime/observability/metrics/session_cache.go
     - name: session_cache_misses_total
       type: counter
-      help: Total session-cache misses (no Redis entry; inner store consulted and result lazily populated).
+      help: Total session-cache misses (no Redis entry; inner store consulted and result lazily populated). hits + misses = total Get() calls; errors are a subset of misses.
       labels:
         - cell
       file: runtime/observability/metrics/session_cache.go

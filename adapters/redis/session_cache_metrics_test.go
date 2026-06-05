@@ -100,6 +100,25 @@ func TestCachingSessionStore_Metrics_Errors(t *testing.T) {
 				mock.setErr = errMock // miss → inner → lazyPopulate Set fails
 			},
 		},
+		{
+			// schema_invalid: valid JSON but entry.validate() rejects it because
+			// the stored entry.ID does not match the requested session ID. This
+			// exercises the evictBadEntry "invalid" branch → RecordError + RecordMiss.
+			name: "schema_invalid",
+			setup: func(t *testing.T, mock *mockCmdable) {
+				t.Helper()
+				// Construct an entry whose ID deliberately mismatches the requested
+				// session ID (scsTestSID = "sess-test-1") so validate() fails.
+				badEntry := sessionCacheEntry{
+					ID:                "wrong-id",
+					SubjectID:         scsTestSubj,
+					AuthzEpochAtIssue: scsTestEpoch,
+				}
+				payload, err := json.Marshal(badEntry)
+				require.NoError(t, err)
+				require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c

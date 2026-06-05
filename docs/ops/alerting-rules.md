@@ -1162,6 +1162,62 @@ specified series).
 
 ---
 
+## Session Cache 可观测性（#794 / #795）
+
+三个计数器由 `runtime/observability/metrics.SessionCacheCollector`（`session_cache.go`）注册，
+每个 `CachingSessionStore` 实例对应一个 Collector（一 cell 一实例，今日只有 `accesscore`）。
+
+### 计数器语义
+
+| 指标 | 语义 |
+|------|------|
+| `gocell_session_cache_hits_total{cell}` | 命中：Redis 返回合法 entry，无需查内层 store |
+| `gocell_session_cache_misses_total{cell}` | 未命中：Redis 无数据或数据无效，回落内层 store；**error 是 miss 的子集** |
+| `gocell_session_cache_errors_total{cell}` | 缓存访问错误（Redis GET/SET/DEL 失败、JSON 损坏、schema 校验失败）；fail-safe，不传播给调用方 |
+
+关键等式：`hits + misses = Get() 总调用次数`；`errors ⊆ misses`（每次 error 同时计一次 miss）。
+
+### PromQL 示例
+
+```promql
+# 缓存命中率（近 5 分钟窗口）
+rate(gocell_session_cache_hits_total{cell="accesscore"}[5m])
+  /
+(rate(gocell_session_cache_hits_total{cell="accesscore"}[5m])
+  + rate(gocell_session_cache_misses_total{cell="accesscore"}[5m]))
+
+# 错误率（绝对值；突增表示 Redis 降级）
+rate(gocell_session_cache_errors_total{cell="accesscore"}[5m])
+
+# 错误在 miss 中占比（区分"缓存冷"与"Redis 故障"）
+rate(gocell_session_cache_errors_total{cell="accesscore"}[5m])
+  /
+rate(gocell_session_cache_misses_total{cell="accesscore"}[5m])
+```
+
+### 告警建议
+
+```yaml
+- alert: SessionCacheErrorRateHigh
+  expr: |
+    rate(gocell_session_cache_errors_total{cell="accesscore"}[5m]) > 0.1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: Session cache error rate elevated for {{ $labels.cell }}
+    description: |
+      session_cache_errors_total spike may indicate Redis degradation.
+      Errors are fail-safe (fall through to inner store), but sustained
+      errors bypass the cache entirely and increase inner-store load.
+```
+
+> **golden 行为**：metrics-schema golden（`assemblies/corebundle/generated/metrics-schema.yaml`
+> 及各 example assembly）在每次 `go run ./cmd/gocell generate metrics-schema --all`
+> 后由工具重新生成；Help 文本变更会反映在 golden diff 中，CI 以 byte-exact 比对守卫。
+
+---
+
 ## 注意事项
 
 1. **fqName 单前缀**：所有规则中的指标名已包含 `gocell_` 前缀。若部署时 Prometheus

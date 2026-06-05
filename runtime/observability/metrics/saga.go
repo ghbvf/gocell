@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"fmt"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -66,26 +65,6 @@ type SagaCollector struct {
 
 // compile-time interface check.
 var _ executor.Observer = (*SagaCollector)(nil)
-
-// registerCounterVec registers one counter and appends it to *registered on
-// success. On failure it tears down every previously-registered counter LIFO
-// (#1181 F11 atomic registration: the provider registry must not retain orphans
-// so a retry can re-register under the same names — mirrors
-// prometheus/client_golang Registry.Unregister) and wraps the error with the
-// metric name. Shared by SagaCollector and SessionCacheCollector (session_cache.go).
-func registerCounterVec(
-	p kernelmetrics.Provider, opts kernelmetrics.CounterOpts, registered *[]kernelmetrics.Collector,
-) (kernelmetrics.CounterVec, error) {
-	cv, err := p.CounterVec(opts)
-	if err != nil {
-		for i := len(*registered) - 1; i >= 0; i-- {
-			_ = p.Unregister((*registered)[i])
-		}
-		return nil, fmt.Errorf("runtime/observability/metrics: register %s: %w", opts.Name, err)
-	}
-	*registered = append(*registered, cv)
-	return cv, nil
-}
 
 // NewSagaCollector registers the six saga counters on the given provider.
 // cellID is the owner cell of the Coordinator wiring this collector; empty is
