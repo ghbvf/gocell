@@ -1,7 +1,7 @@
 // session_revoke_caller_intx_test.go — closes the DOWNSTREAM side of the
 // session.Store.Revoke caller funnel.
 //
-//   - INVARIANT: SESSION-REVOKE-CALLER-INTX-01
+// INVARIANT: SESSION-REVOKE-CALLER-INTX-01
 //
 // # What this guards
 //
@@ -125,9 +125,12 @@ const sessionPkgPath = PlatformModulePath + "/runtime/auth/session"
 //     bridge does exactly that (suite.go godoc).
 //
 //   - runtime/auth/session/storetest/bench.go: the store benchmark helper
-//     (non-_test.go, caught by the production scan). Same contract as the suite:
-//     a benchmark targeting a narrowing store supplies the unit-of-work scope;
-//     bare-store (mem) benchmarks need none.
+//     (non-_test.go, caught by the production scan). Today's storetest.Bench
+//     callers are the mem and PG stores, whose Revoke does NOT depend on
+//     persistence.RegisterAfterCommit. CachingSessionStore is NOT benchmarked
+//     via storetest.Bench; if it ever is, the bench factory must supply a
+//     txScopedRevokeStore-style wrapper (as the conformance suite does) so
+//     Revoke executes inside a RunInTx scope.
 var sessionRevokeAllowlist = map[string]struct{}{
 	"cells/accesscore/slices/sessionlogout/service.go": {},
 	"cells/accesscore/slices/sessionlogin/service.go":  {},
@@ -227,8 +230,9 @@ func sessionRevokeSymbol(info *types.Info, sel *ast.SelectorExpr) bool {
 }
 
 // isSessionStoreReceiver reports whether fn's receiver base type is
-// runtime/auth/session.Store (interface), so an unrelated future Revoke method
-// on another type in the package does not accidentally match.
+// runtime/auth/session.Store (interface), verified by both package path and
+// type name, so an unrelated future Revoke method on another type (even one
+// also named "Store" in a different package) does not accidentally match.
 func isSessionStoreReceiver(fn *types.Func) bool {
 	sig, ok := fn.Type().(*types.Signature)
 	if !ok || sig.Recv() == nil {
@@ -242,5 +246,7 @@ func isSessionStoreReceiver(fn *types.Func) bool {
 	if !ok || named.Obj() == nil {
 		return false
 	}
-	return named.Obj().Name() == "Store"
+	return named.Obj().Name() == "Store" &&
+		named.Obj().Pkg() != nil &&
+		named.Obj().Pkg().Path() == sessionPkgPath
 }

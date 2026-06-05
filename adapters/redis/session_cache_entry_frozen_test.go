@@ -20,12 +20,15 @@
 //     the comparison, forcing the change to land on an explicit frozen-list
 //     review checkpoint.
 //
-//   - [TestSessionCacheEntryNoLiveAuthzEpoch01]: security-specific guard with
-//     non-vacuity — asserts that NO field's name equals (case-insensitive)
-//     "AuthzEpoch", and no field's JSON key (stripped of modifiers) is
-//     "authzepoch" or "authz_epoch".  Positive control (non-vacuity): asserts
-//     that AuthzEpochAtIssue IS present, so the test fails loudly if the
-//     snapshot field is renamed — proving the scan is live.
+//   - [TestSessionCacheEntryNoLiveAuthzEpoch01]: security-specific defense-in-depth
+//     guard with non-vacuity — asserts that NO field's name equals exactly
+//     "authzepoch" (case-insensitive), and no field's JSON key (stripped of
+//     modifiers) is exactly "authzepoch" or "authz_epoch".  These exact-equality
+//     checks catch the specific bare-AuthzEpoch / authz_epoch mistake; the
+//     primary gate for ANY new field (including name variants) is the
+//     NumField()==4 freeze in [TestSessionCacheEntryFieldsFrozen01].  Positive
+//     control (non-vacuity): asserts that AuthzEpochAtIssue IS present, so the
+//     test fails loudly if the snapshot field is renamed — proving the scan is live.
 //
 // # AI-robust grade: Hard
 //
@@ -47,9 +50,12 @@
 // alone cannot catch is a *semantic* rename that keeps the same type and tag
 // while introducing a field that does carry live-epoch data under a different
 // name.  [TestSessionCacheEntryNoLiveAuthzEpoch01] is the defense-in-depth
-// guard: it scans for any field whose name or JSON key resembles "AuthzEpoch"
-// (case-insensitive), so even a careless frozen-tuple edit that re-adds such a
-// field is caught by the dedicated assertion.
+// guard: its exact-equality checks catch the specific bare-AuthzEpoch /
+// authz_epoch mistake.  The PRIMARY protection against ANY new field
+// (including variants such as AuthzEpochLive or AuthzEpochCurrent) is the
+// NumField()==4 + ordered-tuple freeze in [TestSessionCacheEntryFieldsFrozen01]:
+// adding any field — regardless of name — forces an explicit update to the
+// frozen list under reviewer attention.
 package redis
 
 import (
@@ -153,7 +159,9 @@ func TestSessionCacheEntryNoLiveAuthzEpoch01(t *testing.T) {
 		f := st.Field(i)
 		nameLower := strings.ToLower(f.Name)
 
-		// Detect any "bare" AuthzEpoch field (live epoch).
+		// Detect the bare "AuthzEpoch" field name (exact equality, case-insensitive).
+		// Defense-in-depth for that specific mistake; primary gate for all name variants
+		// is the NumField()+tuple freeze in TestSessionCacheEntryFieldsFrozen01.
 		if nameLower == "authzepoch" {
 			t.Errorf(
 				"SESSION-CACHE-EPOCH-NOT-CACHED-01: field %q has name equal to 'authzepoch' (case-insensitive).\n"+
@@ -163,7 +171,8 @@ func TestSessionCacheEntryNoLiveAuthzEpoch01(t *testing.T) {
 			)
 		}
 
-		// Detect any JSON tag key that looks like the live epoch.
+		// Detect the exact JSON tag keys "authzepoch" and "authz_epoch" (exact equality).
+		// Exact equality avoids false-positives on the legitimate "authzEpochAtIssue" key.
 		rawTag := f.Tag.Get("json")
 		jsonKey := strings.ToLower(strings.SplitN(rawTag, ",", 2)[0])
 		if jsonKey == "authzepoch" || jsonKey == "authz_epoch" {
