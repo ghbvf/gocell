@@ -207,6 +207,11 @@ ADR `docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md` 
 完整盲区清单 + 反向自检（RED/GREEN fixture）活在 `tools/archtest/projection_event_carrier_typed_test.go` 的
 package godoc（单源）。
 
+> **运维注意（rebuild lag 盲区，单源 `kernel/projection/rebuild.go::advanceOffsetPastForeign` godoc）**：
+> rebuild 期 foreign-stream 条目只推进 checkpoint、不更新 `projection_event_replay_lag_seconds`（lag 是 own-stream
+> apply 信号）。journal 被 foreign 流主导时 lag gauge 可能长时间平直但 rebuild 仍在进展——排查 rebuild 进度看
+> checkpoint / `pending_events`，不看 lag。
+
 ## Stream 命名
 
 - 新建 stream 前搜索已有常量，禁止重复定义

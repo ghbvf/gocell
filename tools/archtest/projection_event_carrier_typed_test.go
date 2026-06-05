@@ -45,11 +45,32 @@
 //
 //   - go/types resolution sees only what compiles; a carrier param typed as a
 //     local alias of outbox.Entry is still resolved via types.Unalias (covered).
-//   - The broad A2 scan resolves param types via TypesInfo.Types and recurses ONE
-//     level into func-typed params (Replay's fn). A carrier hidden two func levels
-//     deep (func() func(outbox.Entry)) is out of the declared scan depth — no such
-//     shape exists in the projection harness; the targeted A1 lock covers the real
-//     surface. Reverse self-check: TestProjectionEventCarrierTyped01_ScannerCatchesViolation
+//   - Alias transparency (intended, not a gap): projection.ProjectionEvent /
+//     projection.Apply / cell.ProjectionApply are Go type ALIASES of the
+//     cellvocab.* types, so types.Unalias collapses them to one canonical. A1
+//     resolves the carrier param to the same canonical regardless of which alias
+//     spelling a callsite uses; an outbox.Entry smuggled in via any alias is still
+//     caught at A1 / A2.
+//   - A2 scope is deliberately kernel/projection + kernel/cellvocab ONLY (NOT
+//     kernel/cell): kernel/cell legitimately carries outbox.Entry via
+//     outbox.EntryHandler / subscription APIs, so a blanket ban there would
+//     false-positive. cell.ProjectionApply is instead covered by A1's exact-symbol
+//     lock (it resolves the alias's carrier param to ProjectionEvent). A NEW
+//     outbox.Entry-typed projection symbol added under kernel/cell would NOT be
+//     caught by A2 — but a NEW such NAMED func type is caught at its TypeSpec
+//     declaration wherever it lives in the A2 scope, and any carrier reverting
+//     cell.ProjectionApply itself trips A1. A genuinely new projection carrier
+//     symbol minted under kernel/cell (outside the four A1-locked symbols) is the
+//     residual blind spot; it is fail-closed in the common forms and out of the
+//     current carrier surface.
+//   - typeContainsOutboxEntry recurses ONLY into ANONYMOUS func-typed params
+//     (Replay's fn), NOT named func types used as params (outbox.EntryHandler is
+//     the legitimate bus-delivery contract). A future named projection-carrier func
+//     type on outbox.Entry is caught at its own TypeSpec declaration (direct-param
+//     shape), not at its use site. A carrier hidden two func levels deep
+//     (func() func(outbox.Entry)) is out of the declared scan depth — no such shape
+//     exists in the projection harness; the targeted A1 lock covers the real surface.
+//   - Reverse self-check: TestProjectionEventCarrierTyped01_ScannerCatchesViolation
 //     loads internal/projcarrierfixture (archtest_fixture build tag — real source
 //     AST capture, not a hand-rolled string) and asserts the scanner reports the
 //     three planted carrier violations (named func type / interface method /
