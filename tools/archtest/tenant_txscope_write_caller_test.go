@@ -38,11 +38,14 @@
 // The two axes are separate; do not conflate the sealed key (an upstream
 // property) with the caller-allowlist (the downstream one):
 //
-//   - Downstream (who may CALL WithScope): HARD. The archtest caller-allowlist
-//     resolves the callee via go/types (ResolvePackageRef), so import aliases /
-//     dot-imports resolve to the same symbol and any WithScope reference outside
-//     the allowlist fails CI — the same downstream form as
-//     CTXKEYS-PRINCIPAL-WRITE-CALLER-01.
+//   - Downstream (who may CALL WithScope): HARD. The detector resolves every
+//     identifier USE to the tenant.WithScope *types.Func via go/types (info.Uses),
+//     so the package-qualified form (tenant.WithScope — the Sel ident), an
+//     import-aliased form, AND the dot-imported bare-identifier form all resolve
+//     to the same object; any WithScope reference outside the allowlist fails CI,
+//     no import shape excepted. (#1622 F3 closed the prior SelectorExpr-only gap,
+//     where a dot-import bare ident was a documented-but-unenforced blind spot
+//     that contradicted this Hard claim.)
 //   - Upstream (can the scope be SET without WithScope): HARD. The scope is read
 //     only via tenant.ScopeFromContext, whose key (scopeKey) is UNEXPORTED — no
 //     package outside pkg/tenant can construct it, so the tx scope cannot be set
@@ -53,18 +56,24 @@
 //
 // # Detection + anti-vacuity
 //
-// Reference-based (matches the SelectorExpr whether called or passed as a value),
-// alias-proof via go/types. The anti-vacuity reverse check requires the
+// Use-based (info.Uses), so it matches WithScope whether called or passed as a
+// value, and is invariant to import form (qualified / alias / dot-import). The
+// dot-import path additionally carries a RED fixture
+// (internal/tenantscopefixture, exercised by TestTenantTxScopeWriteCaller01_
+// FixtureCatchesDotImport) proving the detector fires on a bare-identifier scope
+// write outside the allowlist. The anti-vacuity reverse check requires the
 // allowlisted file to actually reference WithScope at least once, so a scanner
 // regression or a removed call (which would make the funnel vacuously pass)
 // fails CI.
 //
 // # Tool blind spot (charter §"强制盲区自检")
 //
-//   - Dot-import bare-identifier form (import . ".../pkg/tenant"; WithScope(…))
-//     references the symbol as a bare *ast.Ident, not a SelectorExpr — not matched.
-//     Dot-importing pkg/tenant is absent and conspicuous; documented, not enforced
-//     (identical blind spot to CTXKEYS-PRINCIPAL-WRITE-CALLER-01).
+//   - A scope write assembled by reflection, or otherwise without a compile-time
+//     reference to the WithScope symbol, is invisible — the same known limit as
+//     every identifier-resolution funnel in this suite. Both the package-qualified
+//     and dot-import textual forms ARE covered (see the RED fixture); dot-importing
+//     pkg/tenant is additionally banned by revive `dot-imports` (.golangci.yml) as
+//     defense-in-depth.
 package archtest
 
 import (
@@ -72,6 +81,8 @@ import (
 	"go/ast"
 	"go/types"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // tenantPkgPath ("github.com/ghbvf/gocell/pkg/tenant") is declared in
@@ -105,13 +116,13 @@ func TestTenantTxScopeWriteCaller01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-				if !isTenantWithScopeRef(p.TypesInfo, sel) {
+			EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+				if !isTenantWithScopeRef(p.TypesInfo, id) {
 					return
 				}
 				observed[rel] = struct{}{}
 				if _, allowed := tenantTxScopeAllowlist[rel]; !allowed {
-					pos := p.Fset.Position(sel.Pos())
+					pos := p.Fset.Position(id.Pos())
 					d = append(d, Diagnostic{
 						Rel:  rel,
 						Line: pos.Line,
@@ -148,9 +159,60 @@ func TestTenantTxScopeWriteCaller01(t *testing.T) {
 	Report(t, "TENANT-TXSCOPE-WRITE-CALLER-01", diags)
 }
 
-// isTenantWithScopeRef resolves a SelectorExpr REFERENCE (call or function value)
-// to tenant.WithScope in pkg/tenant (alias-proof via go/types).
-func isTenantWithScopeRef(info *types.Info, sel *ast.SelectorExpr) bool {
-	pkgPath, name, ok := ResolvePackageRef(info, sel)
-	return ok && pkgPath == tenantPkgPath && name == tenantWithScopeSetter
+// TestTenantTxScopeWriteCaller01_FixtureCatchesDotImport is the reverse self-check
+// for the dot-import path (#1622 F3): the RED fixture dot-imports pkg/tenant and
+// writes a scope via a BARE `WithScope` ident. The Use-based detector must resolve
+// that bare ident (info.Uses) and flag the fixture file — it is outside the
+// allowlist. A 0 result means the detector regressed to a SelectorExpr-only form,
+// reopening dot-import as a silent bypass.
+func TestTenantTxScopeWriteCaller01_FixtureCatchesDotImport(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+
+	fixturePkg := modPath + "/tools/archtest/internal/tenantscopefixture"
+	pattern := "./tools/archtest/internal/tenantscopefixture/..."
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{pattern}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != fixturePkg || p.TypesInfo == nil {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+				if !isTenantWithScopeRef(p.TypesInfo, id) {
+					return
+				}
+				pos := p.Fset.Position(id.Pos())
+				d = append(d, Diagnostic{Rel: rel, Line: pos.Line, Message: "dot-import WithScope reference"})
+			})
+		}
+		return d
+	})
+	for _, dd := range diags {
+		t.Log(dd.Message)
+	}
+	require.Len(t, diags, 1,
+		"the Use-based detector must resolve the dot-imported bare WithScope ident; "+
+			"a 0 result means it regressed to SelectorExpr-only and dot-import is a bypass")
+}
+
+// isTenantWithScopeRef resolves an identifier USE to tenant.WithScope in pkg/tenant
+// via go/types (info.Uses). It matches every import form: the package-qualified
+// `tenant.WithScope` (the Sel ident resolves through Uses), an import-aliased form,
+// AND the dot-imported bare `WithScope` ident — all resolve to the same *types.Func,
+// so no import shape can slip a scope write past the allowlist (#1622 F3). A bare
+// ident that is NOT this func (package names, other symbols) resolves to a
+// different object (or none) and is skipped.
+func isTenantWithScopeRef(info *types.Info, id *ast.Ident) bool {
+	fn, ok := info.Uses[id].(*types.Func)
+	if !ok {
+		return false
+	}
+	return fn.Name() == tenantWithScopeSetter &&
+		fn.Pkg() != nil && fn.Pkg().Path() == tenantPkgPath
 }

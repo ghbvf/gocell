@@ -520,3 +520,69 @@ func TestVerifyExpectedShape_Requires051FeatureFlagsRolloutCheck(t *testing.T) {
 			"(migration 051 rebuild — rollout_percentage BETWEEN 0 AND 100)",
 	)
 }
+
+// rlsPolicyOK returns the well-formed tenant_isolation policy shape (as pg_policies
+// renders migration 052) — the positive control for checkRLSPolicyShape.
+func rlsPolicyOK() rlsPolicyRow {
+	const pred = "(tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text))"
+	return rlsPolicyRow{
+		name:       "tenant_isolation",
+		permissive: "PERMISSIVE",
+		cmd:        "ALL",
+		roles:      "public",
+		qual:       pred,
+		withCheck:  pred,
+	}
+}
+
+// rlsPolicyWith returns a single-policy slice with one field mutated from the
+// well-formed shape.
+func rlsPolicyWith(mut func(*rlsPolicyRow)) []rlsPolicyRow {
+	p := rlsPolicyOK()
+	mut(&p)
+	return []rlsPolicyRow{p}
+}
+
+// TestCheckRLSPolicyShape is the DB-free unit cover of verifyRLSPolicy's
+// validation core (#1622 F1): every semantic weakening of the tenant_isolation
+// policy that a name-presence-only check would have passed must be rejected, and
+// the well-formed shape must be accepted.
+func TestCheckRLSPolicyShape(t *testing.T) {
+	r := expectedRLS{Table: "feature_flags", Policy: "tenant_isolation"}
+	tests := []struct {
+		name     string
+		policies []rlsPolicyRow
+		wantErr  bool
+	}{
+		{name: "well_formed", policies: []rlsPolicyRow{rlsPolicyOK()}, wantErr: false},
+		{name: "no_policy", policies: nil, wantErr: true},
+		{
+			name: "extra_permissive_policy",
+			policies: []rlsPolicyRow{rlsPolicyOK(), {
+				name: "extra_visible", permissive: "PERMISSIVE", cmd: "SELECT", roles: "public", qual: "true",
+			}},
+			wantErr: true,
+		},
+		{name: "wrong_name", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.name = "other" }), wantErr: true},
+		{name: "restrictive", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.permissive = "RESTRICTIVE" }), wantErr: true},
+		{name: "cmd_not_all", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.cmd = "SELECT" }), wantErr: true},
+		{name: "roles_not_public", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.roles = "gocell_app" }), wantErr: true},
+		{name: "using_true", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.qual = "true" }), wantErr: true},
+		{name: "missing_with_check", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "" }), wantErr: true},
+		{name: "with_check_true", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "true" }), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkRLSPolicyShape(r, tt.policies)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "must wrap *errcode.Error")
+			assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code,
+				"a weakened RLS policy must surface as a schema-shape fault")
+		})
+	}
+}

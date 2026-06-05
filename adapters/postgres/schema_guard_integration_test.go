@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1115,46 +1116,73 @@ func TestVerifyExpectedShape_DetectsWrongFKLocalColumns(t *testing.T) {
 // Migration 050 up-down-up idempotency and DestructiveDownPermit rejection (U12)
 // ---------------------------------------------------------------------------
 
-// TestMigration050_UpDownUpIdempotency verifies that running migration 050 Up,
-// then Down (with a DestructiveDownPermit), then Up again leaves the schema in
-// the expected post-050 shape — i.e., users/roles/role_assignments have tenant_id
-// and the sessions FK is present. This ensures the Down + Up cycle is safe for
-// dev-reset workflows.
-func TestMigration050_UpDownUpIdempotency(t *testing.T) {
+// pgColumnExists reports whether table.column exists in the current schema.
+func pgColumnExists(t *testing.T, pool *Pool, table, column string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, pool.DB().QueryRow(context.Background(), `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2
+)`, table, column).Scan(&exists))
+	return exists
+}
+
+// assertMigrationUpDownUpIdempotent exercises migration targetVersion's destructive
+// forward-rebuild up-down-up cycle and asserts it is idempotent.
+//
+// It loads a TRUNCATED migration FS (only migrations ≤ targetVersion) so
+// targetVersion is the HIGHEST migration — i.e. the one a single Down rolls back.
+// This pins the test to its named target regardless of higher migrations added
+// later (#1622 F5: once migration 052 existed, a full-FS single Down rolled back
+// 052 — not the named 050/051 — silently dropping the destructive-rebuild coverage
+// while the test still reported green).
+//
+// The cycle is verified through the migration's signature column (the column
+// targetVersion adds): present after Up → GONE after the single Down (proving the
+// Down targeted exactly targetVersion, not a higher migration) → present again
+// after re-Up. The full VerifyExpectedShape is NOT usable here because it pins the
+// LATEST shape (including migration 052 RLS), which a truncated FS stops short of;
+// HEAD shape/RLS is covered by the dedicated VerifyExpectedShape positive tests.
+func assertMigrationUpDownUpIdempotent(t *testing.T, targetVersion int64, sigTable, sigColumn string) {
+	t.Helper()
 	pool := emptyPool(t)
 	ctx := context.Background()
+	fsys := migrationsUpToFS(t, targetVersion)
+	tracking := fmt.Sprintf("schema_migrations_%d_idem", targetVersion)
 
-	// First Up pass: apply all migrations (tables are empty, no permit needed).
-	m1, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	m1, err := newMigratorForTable(pool, fsys, tracking)
 	require.NoError(t, err)
-	require.NoError(t, m1.Up(ctx), "initial Up() through all migrations must succeed")
+	require.NoError(t, m1.Up(ctx), "initial Up() through migration %d must succeed", targetVersion)
+	require.True(t, pgColumnExists(t, pool, sigTable, sigColumn),
+		"%s.%s must exist after Up() to migration %d", sigTable, sigColumn, targetVersion)
 
-	// Verify post-050 shape is correct before Down.
-	require.NoError(t, VerifyExpectedShape(ctx, pool),
-		"VerifyExpectedShape must pass after initial Up()")
-
-	// Down: requires an explicit DestructiveDownPermit.
-	downPermit, dpErr := AllowDestructiveDown("050 up-down-up idempotency test")
+	// Down requires an explicit DestructiveDownPermit (the forward-rebuild gate).
+	downPermit, dpErr := AllowDestructiveDown(
+		fmt.Sprintf("migration %d up-down-up idempotency test", targetVersion))
 	require.NoError(t, dpErr)
 
-	// Down rolls back the most-recently-applied migration. With 050 as the highest
-	// migration, a single Down rolls it back to version 049, so 050 is the next
-	// pending migration for the second Up pass.
-	m2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	m2, err := newMigratorForTable(pool, fsys, tracking)
 	require.NoError(t, err)
+	require.NoError(t, m2.Down(ctx, downPermit), "Down() of migration %d must succeed", targetVersion)
+	require.False(t, pgColumnExists(t, pool, sigTable, sigColumn),
+		"%s.%s must be GONE after the single Down rolled back exactly migration %d "+
+			"(proves the Down targeted %d, not a higher migration)",
+		sigTable, sigColumn, targetVersion, targetVersion)
 
-	// Roll back migration 050 (the destructive users/roles/role_assignments rebuild).
-	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 050 must succeed")
-
-	// Second Up pass: from version 049 → re-applies 050 (empty tables → no permit).
-	m3, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_050_idem")
+	// Second Up pass: empty tables → no permit needed; re-applies targetVersion.
+	m3, err := newMigratorForTable(pool, fsys, tracking)
 	require.NoError(t, err)
-	require.NoError(t, m3.Up(ctx),
-		"second Up() (after Down through 050) must succeed (empty tables, no permit needed)")
+	require.NoError(t, m3.Up(ctx), "second Up() re-applying migration %d must succeed", targetVersion)
+	require.True(t, pgColumnExists(t, pool, sigTable, sigColumn),
+		"%s.%s must exist again after the up-down-up cycle through migration %d",
+		sigTable, sigColumn, targetVersion)
+}
 
-	// VerifyExpectedShape must pass after the second Up pass.
-	require.NoError(t, VerifyExpectedShape(ctx, pool),
-		"VerifyExpectedShape must pass after up-down-up cycle through migration 050")
+// TestMigration050_UpDownUpIdempotency verifies migration 050's destructive
+// users/roles/role_assignments rebuild (adding tenant_id) is up-down-up idempotent.
+func TestMigration050_UpDownUpIdempotency(t *testing.T) {
+	assertMigrationUpDownUpIdempotent(t, 50, "users", "tenant_id")
 }
 
 // TestMigration050_DestructiveDownPermitRejection verifies that Migrator.Down
@@ -1182,50 +1210,12 @@ func TestMigration050_DestructiveDownPermitRejection(t *testing.T) {
 // Migration 051 up-down-up idempotency and DestructiveDownPermit rejection
 // ---------------------------------------------------------------------------
 
-// TestMigration051_UpDownUpIdempotency verifies that running migration 051 Up,
-// then Down (with a DestructiveDownPermit), then Up again leaves the schema in
-// the expected post-051 shape — i.e., config_entries/config_versions/feature_flags
-// have tenant_id and all composite constraints are present. This ensures the
-// Down + Up cycle is safe for dev-reset workflows.
-//
-// Migration 051 is a destructive forward-rebuild (DROP+CREATE) of the three
-// configcore tables; Down drops and recreates the pre-051 schema, so a second
-// Up re-applies the rebuild starting from empty tables (no permit needed on Up).
+// TestMigration051_UpDownUpIdempotency verifies migration 051's destructive
+// config_entries/config_versions/feature_flags rebuild (adding tenant_id) is
+// up-down-up idempotent. The truncated-FS helper pins the single Down to 051 even
+// though migration 052 (RLS) now sits above it (#1622 F5).
 func TestMigration051_UpDownUpIdempotency(t *testing.T) {
-	pool := emptyPool(t)
-	ctx := context.Background()
-
-	// First Up pass: apply all migrations (tables are empty, no permit needed).
-	m1, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_051_idem")
-	require.NoError(t, err)
-	require.NoError(t, m1.Up(ctx), "initial Up() through all migrations must succeed")
-
-	// Verify post-051 shape is correct before Down.
-	require.NoError(t, VerifyExpectedShape(ctx, pool),
-		"VerifyExpectedShape must pass after initial Up()")
-
-	// Down: requires an explicit DestructiveDownPermit.
-	downPermit, dpErr := AllowDestructiveDown("051 up-down-up idempotency test")
-	require.NoError(t, dpErr)
-
-	// Down rolls back the most-recently-applied migration. With 051 as the highest
-	// migration, a single Down rolls it back to version 050, so 051 is the next
-	// pending migration for the second Up pass.
-	m2, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_051_idem")
-	require.NoError(t, err)
-
-	// Roll back migration 051 (the destructive config_entries/config_versions/feature_flags rebuild).
-	require.NoError(t, m2.Down(ctx, downPermit), "Down() migration 051 must succeed")
-
-	// Second Up pass: from version 050 → re-applies 051 (empty tables → no permit).
-	m3, err := newMigratorForTable(pool, testMigrationsFS(t), "schema_migrations_051_idem")
-	require.NoError(t, err)
-	require.NoError(t, m3.Up(ctx),
-		"second Up() (after Down through 051) must succeed (empty tables, no permit needed)")
-
-	// VerifyExpectedShape must pass after the second Up pass.
-	require.NoError(t, VerifyExpectedShape(ctx, pool),
-		"VerifyExpectedShape must pass after up-down-up cycle through migration 051")
+	assertMigrationUpDownUpIdempotent(t, 51, "config_entries", "tenant_id")
 }
 
 // TestMigration051_DestructiveDownPermitRejection verifies that Migrator.Down

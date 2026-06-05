@@ -164,6 +164,43 @@ func TestPGSetLocalFunnel01_FixtureCatchesBareSet(t *testing.T) {
 	assert.Contains(t, diags[0].Message, "bare session-scope SET")
 }
 
+// scanPGTenantGUCWrite reports every app.tenant_id GUC-write string literal NOT in
+// writerFile (the sole sanctioned writer), and separately whether writerFile itself
+// was observed (anti-vacuity). Reused over both adapters/postgres production
+// (writerFile = tx_manager.go → expect zero offenders, writer seen) and the RED
+// fixture (the production writerFile never matches a fixture rel → every GUC write
+// is reported).
+func scanPGTenantGUCWrite(p *Pass, writerFile string) (offenders []Diagnostic, writerSeen bool) {
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
+			if lit.Kind != token.STRING {
+				return
+			}
+			val, err := strconv.Unquote(lit.Value)
+			if err != nil || !isTenantGUCWrite(val) {
+				return
+			}
+			if rel == writerFile {
+				writerSeen = true
+				return
+			}
+			pos := p.Fset.Position(lit.Pos())
+			offenders = append(offenders, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"PG-SETLOCAL-FUNNEL-01: app.tenant_id GUC write in %s:%d is outside the sole sanctioned "+
+						"writer (%s::setLocalTenant). The tenant RLS GUC injection is the isolation boundary and "+
+						"must be funneled through one helper; do not write app.tenant_id elsewhere.",
+					rel, pos.Line, pgSetLocalGUCWriterFile,
+				),
+			})
+		})
+	}
+	return offenders, writerSeen
+}
+
 // TestPGSetLocalFunnel01_TenantGUCWriterFunnel asserts the app.tenant_id GUC
 // write appears only in tx_manager.go (Prong 2) and that the sole writer is
 // actually observed (anti-vacuity).
@@ -177,39 +214,55 @@ func TestPGSetLocalFunnel01_TenantGUCWriterFunnel(t *testing.T) {
 		if p.Pkg == nil || p.Pkg.Path() != adaptersPostgresPkgPath {
 			return nil
 		}
-		var d []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			EachInSubtree[ast.BasicLit](file, func(lit *ast.BasicLit) {
-				if lit.Kind != token.STRING {
-					return
-				}
-				val, err := strconv.Unquote(lit.Value)
-				if err != nil || !isTenantGUCWrite(val) {
-					return
-				}
-				if rel == pgSetLocalGUCWriterFile {
-					observedWriter = true
-					return
-				}
-				pos := p.Fset.Position(lit.Pos())
-				d = append(d, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						"PG-SETLOCAL-FUNNEL-01: app.tenant_id GUC write in %s:%d is outside the sole sanctioned "+
-							"writer (%s::setLocalTenant). The tenant RLS GUC injection is the isolation boundary and "+
-							"must be funneled through one helper; do not write app.tenant_id elsewhere.",
-						rel, pos.Line, pgSetLocalGUCWriterFile,
-					),
-				})
-			})
+		offenders, writerSeen := scanPGTenantGUCWrite(p, pgSetLocalGUCWriterFile)
+		if writerSeen {
+			observedWriter = true
 		}
-		return d
+		return offenders
 	})
 	Report(t, "PG-SETLOCAL-FUNNEL-01", diags)
 	if !observedWriter {
 		t.Errorf("PG-SETLOCAL-FUNNEL-01 anti-vacuity: expected an app.tenant_id GUC write in %s but found none — "+
 			"the scanner regressed or setLocalTenant moved; the funnel would be silently vacuous.", pgSetLocalGUCWriterFile)
 	}
+}
+
+// TestPGSetLocalFunnel01_FixtureCatchesGUCWrite is the reverse self-check for
+// prong 2 (#1622 F4): the RED fixture holds an allowlist-external
+// set_config('app.tenant_id', …) write — the CANONICAL production GUC-write form —
+// alongside the bare-SET / SET-LOCAL forms. The prong-2 scanner must report all
+// three (none is in the sanctioned writer file). Before this fixture, prong 2 had
+// only production + anti-vacuity coverage, so a scanner regression that stopped
+// matching the set_config shape would have passed silently as long as production
+// itself stayed clean.
+func TestPGSetLocalFunnel01_FixtureCatchesGUCWrite(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+
+	fixturePkg := modPath + "/tools/archtest/internal/pgsetlocalfixture"
+	pattern := "./tools/archtest/internal/pgsetlocalfixture/..."
+	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{pattern}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != fixturePkg {
+			return nil
+		}
+		// pgSetLocalGUCWriterFile (adapters/postgres/tx_manager.go) never matches a
+		// fixture rel, so every app.tenant_id GUC write in the fixture is reported.
+		offenders, _ := scanPGTenantGUCWrite(p, pgSetLocalGUCWriterFile)
+		return offenders
+	})
+	for _, d := range diags {
+		t.Log(d.Message)
+	}
+	// The fixture holds exactly three app.tenant_id GUC writes — bare SET, SET LOCAL,
+	// and set_config — all outside the sanctioned writer. A count of 2 means the
+	// set_config production form was dropped (fixture regression) or the scanner
+	// stopped matching it.
+	require.Len(t, diags, 3,
+		"prong-2 scanner must report all three allowlist-external app.tenant_id GUC writes "+
+			"(bare SET / SET LOCAL / set_config), proving the canonical set_config form is covered")
 }

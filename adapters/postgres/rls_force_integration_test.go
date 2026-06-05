@@ -203,4 +203,43 @@ func TestRLSForce_SchemaGuardVerifyRLS(t *testing.T) {
 				"VerifyExpectedShape must fail once tenant_isolation is dropped on "+table)
 		})
 	}
+
+	// Negative (#1622 F1): a policy that EXISTS BY NAME but is semantically
+	// weakened must still fail verifyRLSPolicy — name presence alone is not the
+	// security property. Each case rebuilds tenant_isolation on feature_flags (a
+	// fresh clone per sub-test) with a specific defect class.
+	const okUsing = `(tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))`
+	semanticDefects := []struct {
+		name  string
+		setup string // SQL run after a fresh migratedPool, replacing/adding policy on feature_flags
+	}{
+		{
+			// USING(true): the tenant filter is gone — every tenant's rows are visible.
+			name: "using_true",
+			setup: `DROP POLICY tenant_isolation ON feature_flags;
+			        CREATE POLICY tenant_isolation ON feature_flags
+			          USING (true) WITH CHECK (true)`,
+		},
+		{
+			// Missing WITH CHECK: reads are scoped but an INSERT can stamp another
+			// tenant's id (the write-side guard is gone).
+			name: "missing_with_check",
+			setup: `DROP POLICY tenant_isolation ON feature_flags;
+			        CREATE POLICY tenant_isolation ON feature_flags USING ` + okUsing,
+		},
+		{
+			// Extra permissive policy: OR-ed into the USING filter, re-widening rows.
+			name:  "extra_permissive_policy",
+			setup: `CREATE POLICY extra_visible ON feature_flags FOR SELECT USING (true)`,
+		},
+	}
+	for _, dc := range semanticDefects {
+		t.Run("semantic_"+dc.name, func(t *testing.T) {
+			pool := migratedPool(t)
+			_, err := pool.DB().Exec(ctx, dc.setup)
+			require.NoError(t, err)
+			require.Error(t, VerifyExpectedShape(ctx, pool),
+				"VerifyExpectedShape must fail for a semantically weakened tenant_isolation policy ("+dc.name+")")
+		})
+	}
 }
