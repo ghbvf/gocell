@@ -105,7 +105,8 @@ func (s *MigrationSet) addNamespace(ns migration.Namespace, fsys fs.FS) error {
 	if _, err := ExpectedVersion(fsys); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, ErrAdapterPGMigrate,
 			"postgres: migration set namespace has a malformed migration file", err,
-			errcode.WithDetails(errcode.PublicString("namespace", ns.String())))
+			errcode.WithInternal(errcode.InternalAttr("_",
+				fmt.Sprintf("postgres: migration set namespace %q has a malformed migration file", ns))))
 	}
 	for _, e := range s.entries {
 		if e.ns == ns {

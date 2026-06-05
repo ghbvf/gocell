@@ -186,7 +186,7 @@ app, err := builder.Build(ctx, shared, runtimeOpts)
 
 | 限制 | 影响 | 解锁条件 |
 |------|------|---------|
-| archtest 不能 import 进外部仓库做 nightly 守卫 | 外部仓库自定 invariant 需自己写 | M3 #1084 |
+| 平台标准规则（PANIC-REGISTERED-01 / ERRCODE-KIND-LITERAL-01 / MESSAGE-CONST-LITERAL-01 / EXPORTED-ERROR-NEW-01 / DETAILS-SEALED-FIELD-FROZEN-01）已可通过 `archtest.RunStandardCellRules` 在外部仓库直接使用；外部自定规则通过 `cfg.ExtraRules` 追加 | 仅限上述 5 条平台规则；依赖 GoCell 内部 allowlist 的规则（ERROR-FIRST-API-01 / ERROR-FIRST-TYPED-NIL-01）仍不在 StandardCellRules 内 | M3 #1084 已部分落地，剩余规则迁移追踪 #1302 |
 | `CellModule` 接口在 `cmd/` 包内私有 | 外部仓库无法 wire 进 corebundle | M4 #1085 |
 | 没有 starter repo template | 上面步骤全手抄 | M11 #1092 |
 

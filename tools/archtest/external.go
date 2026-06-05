@@ -121,16 +121,26 @@ type ConfigForExternalCell struct {
 // PR-2..N, tracked at issue #1302); the ratchet meta-archtest
 // ARCHTEST-MODULE-PATH-FUNNEL-01 guarantees that migration converges.
 //
-// PR-1 intentionally ships exactly ONE rule (PANIC-REGISTERED-01) as the
-// migration exemplar — do NOT treat the current set size as final. An external
-// consumer gets the rules migrated so far plus any cfg.ExtraRules they add.
+// Rules intentionally NOT registered (register=no) because they depend on a
+// GoCell-internal positive allowlist (errorFirstEnforcedFiles) and produce
+// vacuous no-op results in external modules with zero matching files:
+//
+//   - ERROR-FIRST-API-01 (CheckErrorFirstAPI01): gated by errorFirstEnforcedFiles,
+//     a hardcoded 22-path positive allowlist of GoCell-specific files. An external
+//     module has no files matching those paths → zero scan → vacuous green-pass
+//     with no safety signal. The invariant is still enforced in GoCell itself via
+//     TestErrorFirstAPI01.
+//   - ERROR-FIRST-TYPED-NIL-01 (CheckErrorFirstTypedNil01): similarly gated by
+//     errorFirstEnforcedFiles via errorFirstPackagePatterns(). Same false-safety
+//     concern for external modules. Enforced in GoCell via TestErrorFirstTypedNil01.
+//
+// An external consumer gets the rules migrated so far plus any cfg.ExtraRules
+// they add. The set expands as additional portable rules land in #1302.
 func StandardCellRules() []*CellRule {
 	return []*CellRule{
 		{ID: rulePanicRegistered01, Run: CheckPanicRegistered},
 		{ID: ruleErrcodeKindLiteral01, Run: CheckErrcodeKindLiteralBanned},
 		{ID: ruleMessageConstLiteral01, Run: CheckErrcodeMessageConstLiteral},
-		{ID: ruleErrorFirstAPI01, Run: CheckErrorFirstAPI01},
-		{ID: ruleErrorFirstTypedNil01, Run: CheckErrorFirstTypedNil01},
 		{ID: ruleExportedErrorNew01, Run: CheckExportedErrorNew},
 		{ID: ruleDetailsSealedFieldFrozen, Run: CheckDetailsSealedFieldFrozen01},
 	}

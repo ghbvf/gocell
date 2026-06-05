@@ -816,16 +816,11 @@ linters:
       # errcode_invariants.go: detector functions migrated from _test.go (#1302 M3).
       # resolveGatedCallee / resolveCodeGatedCallee are intentionally parallel
       # (message-gated vs code-gated callee dispatch); merging into a generic
-      # would hide the semantic distinction. scanErrcodeErrorLiteralsInAST /
-      # scanExportedErrorNewASTDiags / scanErrcodePrefixOwnershipDiags /
-      # CheckDetailsSealedFieldFrozen01 have inherently high structural complexity
-      # (multi-axis AST scanner loops) — the same reason *_test.go is exempt.
+      # would hide the semantic distinction between message-arg and code-arg
+      # scanning (F4: funlen/gocognit/cyclop exemptions removed after refactor).
       - path: ^tools/archtest/errcode_invariants\.go
         linters:
           - dupl
-          - funlen
-          - gocognit
-          - cyclop
       # token_pair.go: ToTokenPairResponse uses an explicit struct literal to
       # create a wire/model boundary that prevents accidental field
       # auto-leakage when either struct evolves. Source comment documents the

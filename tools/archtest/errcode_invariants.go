@@ -61,12 +61,11 @@ const (
 // ─── platform-symbol path constants (no bare literals) ───────────────────────
 
 // errcodeImportPath is the canonical import path of the errcode package.
-// Anchored to PlatformModulePath — a single-source update point.
+// Anchored to PlatformModulePath — a single-source update point. Used for
+// both import-path matching (errcodeImportNames) and go/types package-path
+// resolution in message/code gating helpers (messageGatedCallees,
+// codeGatedCallees).
 const errcodeImportPath = PlatformModulePath + "/pkg/errcode"
-
-// errcodePackagePath is the canonical import path of the errcode package
-// used by message/code gating helpers.
-const errcodePackagePath = PlatformModulePath + "/pkg/errcode"
 
 const (
 	httputilPackagePath  = PlatformModulePath + "/pkg/httputil"
@@ -106,8 +105,8 @@ type gatedCallee struct {
 }
 
 var messageGatedCallees = []gatedCallee{
-	{pkgPath: errcodePackagePath, name: "New", messageArgIndex: 2, displayName: "errcode.New"},
-	{pkgPath: errcodePackagePath, name: "Wrap", messageArgIndex: 2, displayName: "errcode.Wrap"},
+	{pkgPath: errcodeImportPath, name: "New", messageArgIndex: 2, displayName: "errcode.New"},
+	{pkgPath: errcodeImportPath, name: "Wrap", messageArgIndex: 2, displayName: "errcode.Wrap"},
 	{pkgPath: httputilPackagePath, name: "WritePublic", messageArgIndex: 4, displayName: "httputil.WritePublic"},
 	{pkgPath: ctxcancelPackagePath, name: "WrapOrInfra", messageArgIndex: 4, displayName: "ctxcancel.WrapOrInfra"},
 }
@@ -129,9 +128,9 @@ type codeGatedCallee struct {
 }
 
 var codeGatedCallees = []codeGatedCallee{
-	{pkgPath: errcodePackagePath, name: "New", codeArgIndex: 1, displayName: "errcode.New"},
-	{pkgPath: errcodePackagePath, name: "Wrap", codeArgIndex: 1, displayName: "errcode.Wrap"},
-	{pkgPath: errcodePackagePath, name: "WrapInfra", codeArgIndex: 0, displayName: "errcode.WrapInfra"},
+	{pkgPath: errcodeImportPath, name: "New", codeArgIndex: 1, displayName: "errcode.New"},
+	{pkgPath: errcodeImportPath, name: "Wrap", codeArgIndex: 1, displayName: "errcode.Wrap"},
+	{pkgPath: errcodeImportPath, name: "WrapInfra", codeArgIndex: 0, displayName: "errcode.WrapInfra"},
 	{pkgPath: httputilPackagePath, name: "WritePublic", codeArgIndex: 3, displayName: "httputil.WritePublic"},
 	{pkgPath: ctxcancelPackagePath, name: "WrapOrInfra", codeArgIndex: 3, displayName: "ctxcancel.WrapOrInfra"},
 }
@@ -252,43 +251,37 @@ func scanErrcodeErrorLiteralsInAST(fset *token.FileSet, f *ast.File, rel string,
 	if len(errcodeNames) == 0 {
 		return nil
 	}
-
+	inCarvedRange := buildCarvedRangeChecker(f, rel, carveOuts)
 	var hits []errcodeErrorHit
-
-	type posRange struct{ lo, hi token.Pos }
-	var carvedRanges []posRange
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Body == nil {
-			return
-		}
-		if fd.Recv != nil {
-			return
-		}
-		key := carveOut{rel: rel, fn: fd.Name.Name}
-		if _, ok := carveOuts[key]; ok {
-			carvedRanges = append(carvedRanges, posRange{fd.Body.Pos(), fd.Body.End()})
+	scanner.EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+		if isErrcodeErrorType(lit.Type, errcodeNames) && !inCarvedRange(lit.Pos()) {
+			hits = append(hits, errcodeErrorHit{fset.Position(lit.Pos()).Line})
 		}
 	})
+	return hits
+}
 
-	inCarvedRange := func(pos token.Pos) bool {
-		for _, r := range carvedRanges {
+// buildCarvedRangeChecker returns a function that reports whether a token.Pos
+// falls inside one of the function-level carve-out ranges in f.
+func buildCarvedRangeChecker(f *ast.File, rel string, carveOuts map[carveOut]struct{}) func(token.Pos) bool {
+	type posRange struct{ lo, hi token.Pos }
+	var ranges []posRange
+	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Body == nil || fd.Recv != nil {
+			return
+		}
+		if _, ok := carveOuts[carveOut{rel: rel, fn: fd.Name.Name}]; ok {
+			ranges = append(ranges, posRange{fd.Body.Pos(), fd.Body.End()})
+		}
+	})
+	return func(pos token.Pos) bool {
+		for _, r := range ranges {
 			if pos >= r.lo && pos < r.hi {
 				return true
 			}
 		}
 		return false
 	}
-
-	scanner.EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
-		if !isErrcodeErrorType(lit.Type, errcodeNames) {
-			return
-		}
-		if inCarvedRange(lit.Pos()) {
-			return
-		}
-		hits = append(hits, errcodeErrorHit{fset.Position(lit.Pos()).Line})
-	})
-	return hits
 }
 
 // ─── MESSAGE-CONST-LITERAL-01 ────────────────────────────────────────────────
@@ -378,23 +371,35 @@ func resolveGatedCallee(call *ast.CallExpr, info *types.Info) (gatedCallee, bool
 		return gatedCallee{}, false
 	}
 	if info != nil {
-		obj := info.Uses[sel.Sel]
-		if obj == nil {
-			return gatedCallee{}, false
-		}
-		fn, ok := obj.(*types.Func)
-		if !ok || fn.Pkg() == nil {
-			return gatedCallee{}, false
-		}
-		pkgPath := fn.Pkg().Path()
-		name := fn.Name()
-		for _, c := range messageGatedCallees {
-			if c.pkgPath == pkgPath && c.name == name {
-				return c, true
-			}
-		}
+		return matchGatedCalleeTyped(sel, info)
+	}
+	return matchGatedCalleeAST(sel)
+}
+
+// matchGatedCalleeTyped resolves a selector expression against messageGatedCallees
+// using full type information.
+func matchGatedCalleeTyped(sel *ast.SelectorExpr, info *types.Info) (gatedCallee, bool) {
+	obj := info.Uses[sel.Sel]
+	if obj == nil {
 		return gatedCallee{}, false
 	}
+	fn, ok := obj.(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return gatedCallee{}, false
+	}
+	pkgPath := fn.Pkg().Path()
+	name := fn.Name()
+	for _, c := range messageGatedCallees {
+		if c.pkgPath == pkgPath && c.name == name {
+			return c, true
+		}
+	}
+	return gatedCallee{}, false
+}
+
+// matchGatedCalleeAST resolves a selector expression against messageGatedCallees
+// using AST-only heuristics (fixture scan fallback).
+func matchGatedCalleeAST(sel *ast.SelectorExpr) (gatedCallee, bool) {
 	xIdent, ok := sel.X.(*ast.Ident)
 	if !ok {
 		return gatedCallee{}, false
@@ -403,8 +408,7 @@ func resolveGatedCallee(call *ast.CallExpr, info *types.Info) (gatedCallee, bool
 		return gatedCallee{}, false
 	}
 	for _, c := range messageGatedCallees {
-		shortName := lastPathSegment(c.pkgPath)
-		if shortName == xIdent.Name && sel.Sel.Name == c.name {
+		if lastPathSegment(c.pkgPath) == xIdent.Name && sel.Sel.Name == c.name {
 			return c, true
 		}
 	}
@@ -419,23 +423,35 @@ func resolveCodeGatedCallee(call *ast.CallExpr, info *types.Info) (codeGatedCall
 		return codeGatedCallee{}, false
 	}
 	if info != nil {
-		obj := info.Uses[sel.Sel]
-		if obj == nil {
-			return codeGatedCallee{}, false
-		}
-		fn, ok := obj.(*types.Func)
-		if !ok || fn.Pkg() == nil {
-			return codeGatedCallee{}, false
-		}
-		pkgPath := fn.Pkg().Path()
-		name := fn.Name()
-		for _, c := range codeGatedCallees {
-			if c.pkgPath == pkgPath && c.name == name {
-				return c, true
-			}
-		}
+		return matchCodeGatedCalleeTyped(sel, info)
+	}
+	return matchCodeGatedCalleeAST(sel)
+}
+
+// matchCodeGatedCalleeTyped resolves a selector expression against codeGatedCallees
+// using full type information.
+func matchCodeGatedCalleeTyped(sel *ast.SelectorExpr, info *types.Info) (codeGatedCallee, bool) {
+	obj := info.Uses[sel.Sel]
+	if obj == nil {
 		return codeGatedCallee{}, false
 	}
+	fn, ok := obj.(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return codeGatedCallee{}, false
+	}
+	pkgPath := fn.Pkg().Path()
+	name := fn.Name()
+	for _, c := range codeGatedCallees {
+		if c.pkgPath == pkgPath && c.name == name {
+			return c, true
+		}
+	}
+	return codeGatedCallee{}, false
+}
+
+// matchCodeGatedCalleeAST resolves a selector expression against codeGatedCallees
+// using AST-only heuristics (fixture scan fallback).
+func matchCodeGatedCalleeAST(sel *ast.SelectorExpr) (codeGatedCallee, bool) {
 	xIdent, ok := sel.X.(*ast.Ident)
 	if !ok {
 		return codeGatedCallee{}, false
@@ -444,8 +460,7 @@ func resolveCodeGatedCallee(call *ast.CallExpr, info *types.Info) (codeGatedCall
 		return codeGatedCallee{}, false
 	}
 	for _, c := range codeGatedCallees {
-		shortName := lastPathSegment(c.pkgPath)
-		if shortName == xIdent.Name && sel.Sel.Name == c.name {
+		if lastPathSegment(c.pkgPath) == xIdent.Name && sel.Sel.Name == c.name {
 			return c, true
 		}
 	}
@@ -1019,28 +1034,41 @@ func scanExportedErrorNewASTDiags(
 			return
 		}
 		EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
-			for i, name := range vs.Names {
-				if !isExportedErrSentinelName(name.Name) {
-					continue
-				}
-				if i >= len(vs.Values) {
-					continue
-				}
-				if !isErrorsNewCall(vs.Values[i], info) {
-					continue
-				}
-				pos := fset.Position(name.Pos())
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						"%s = errors.New(...) — migrate to errcode.New(code, message)",
-						name.Name,
-					),
-				})
-			}
+			out = append(out, scanValueSpecExportedErrors(fset, rel, info, vs)...)
 		})
 	})
+	return out
+}
+
+// scanValueSpecExportedErrors checks a single var ValueSpec for exported Err*
+// sentinels initialized with errors.New and returns diagnostics for each hit.
+func scanValueSpecExportedErrors(
+	fset *token.FileSet,
+	rel string,
+	info *types.Info,
+	vs *ast.ValueSpec,
+) []Diagnostic {
+	var out []Diagnostic
+	for i, name := range vs.Names {
+		if !isExportedErrSentinelName(name.Name) {
+			continue
+		}
+		if i >= len(vs.Values) {
+			continue
+		}
+		if !isErrorsNewCall(vs.Values[i], info) {
+			continue
+		}
+		pos := fset.Position(name.Pos())
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"%s = errors.New(...) — migrate to errcode.New(code, message)",
+				name.Name,
+			),
+		})
+	}
 	return out
 }
 
@@ -1099,63 +1127,27 @@ func isErrorsNewCall(expr ast.Expr, info *types.Info) bool {
 // for any external Cell that imports GoCell as a module.
 func CheckDetailsSealedFieldFrozen01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
+	var diags []Diagnostic
+	diags = append(diags, checkPublicDetailInvariants(t)...)
+	diags = append(diags, checkInternalDetailInvariants()...)
+	return diags
+}
 
+// checkPublicDetailInvariants verifies the shape of errcode.PublicDetail.
+func checkPublicDetailInvariants(t *testing.T) []Diagnostic {
+	t.Helper()
+	const detailsRel = "pkg/errcode/details.go"
 	var diags []Diagnostic
 
-	// PublicDetail checks.
 	dt := reflect.TypeOf(errcode.PublicDetail{})
 	for _, v := range checkSealedKeyValueShape("PublicDetail", dt) {
-		diags = append(diags, Diagnostic{
-			Rel:     "pkg/errcode/details.go",
-			Line:    0,
-			Message: "DETAILS-SEALED-FIELD-FROZEN-01: " + v,
-		})
+		diags = append(diags, Diagnostic{Rel: detailsRel, Line: 0, Message: "DETAILS-SEALED-FIELD-FROZEN-01: " + v})
 	}
+	diags = append(diags, checkPublicDetailValueField(dt, detailsRel)...)
 
-	valueField, ok := dt.FieldByName("value")
-	if !ok {
-		diags = append(diags, Diagnostic{
-			Rel:     "pkg/errcode/details.go",
-			Line:    0,
-			Message: "DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail has no value field",
-		})
-	} else {
-		if valueField.Type.Kind() != reflect.Interface {
-			diags = append(diags, Diagnostic{
-				Rel:  "pkg/errcode/details.go",
-				Line: 0,
-				Message: fmt.Sprintf(
-					"DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value Kind = %s, want Interface",
-					valueField.Type.Kind()),
-			})
-		}
-		if got := valueField.Type.Name(); got != "publicValue" {
-			diags = append(diags, Diagnostic{
-				Rel:  "pkg/errcode/details.go",
-				Line: 0,
-				Message: fmt.Sprintf(
-					"DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value type name = %q, want %q",
-					got, "publicValue"),
-			})
-		}
-		probe := reflect.ValueOf(errcode.PublicString("k", "v"))
-		probeValue := probe.FieldByName("value")
-		if probeValue.Kind() != reflect.Interface {
-			diags = append(diags, Diagnostic{
-				Rel:  "pkg/errcode/details.go",
-				Line: 0,
-				Message: fmt.Sprintf(
-					"DETAILS-SEALED-FIELD-FROZEN-01: PublicString(...) produced value Kind %s, want Interface",
-					probeValue.Kind()),
-			})
-		}
-	}
-
-	// AST-based implementer/constructor set check requires findModuleRoot.
 	root := findModuleRoot(t)
 	detailsPath := filepath.Join(root, "pkg", "errcode", "details.go")
-	detailsFile := errcodeParseGoFile(t, detailsPath)
-	if detailsFile != nil {
+	if detailsFile := errcodeParseGoFile(t, detailsPath); detailsFile != nil {
 		errcodeAssertExactStringSet(t, &diags, "DETAILS-SEALED-FIELD-FROZEN-01 publicValue implementers",
 			errcodeCollectPublicValueImplementers(detailsFile),
 			[]string{"publicBool", "publicDuration", "publicInt", "publicString", "publicTime"})
@@ -1163,28 +1155,61 @@ func CheckDetailsSealedFieldFrozen01(t *testing.T, cfg ConfigForExternalCell) []
 			errcodeCollectPublicDetailConstructors(detailsFile),
 			[]string{"PublicBool", "PublicDuration", "PublicInt", "PublicString", "PublicTime"})
 	}
+	return diags
+}
 
-	// InternalDetail checks.
+// checkPublicDetailValueField verifies the value field of errcode.PublicDetail.
+func checkPublicDetailValueField(dt reflect.Type, detailsRel string) []Diagnostic {
+	var diags []Diagnostic
+	valueField, ok := dt.FieldByName("value")
+	if !ok {
+		return append(diags, Diagnostic{
+			Rel: detailsRel, Line: 0,
+			Message: "DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail has no value field",
+		})
+	}
+	if valueField.Type.Kind() != reflect.Interface {
+		diags = append(diags, Diagnostic{
+			Rel: detailsRel, Line: 0,
+			Message: fmt.Sprintf("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value Kind = %s, want Interface",
+				valueField.Type.Kind()),
+		})
+	}
+	if got := valueField.Type.Name(); got != "publicValue" {
+		diags = append(diags, Diagnostic{
+			Rel: detailsRel, Line: 0,
+			Message: fmt.Sprintf("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value type name = %q, want %q",
+				got, "publicValue"),
+		})
+	}
+	probe := reflect.ValueOf(errcode.PublicString("k", "v"))
+	if probeValue := probe.FieldByName("value"); probeValue.Kind() != reflect.Interface {
+		diags = append(diags, Diagnostic{
+			Rel: detailsRel, Line: 0,
+			Message: fmt.Sprintf("DETAILS-SEALED-FIELD-FROZEN-01: PublicString(...) produced value Kind %s, want Interface",
+				probeValue.Kind()),
+		})
+	}
+	return diags
+}
+
+// checkInternalDetailInvariants verifies the shape of errcode.InternalDetail.
+func checkInternalDetailInvariants() []Diagnostic {
+	const detailsRel = "pkg/errcode/details.go"
+	var diags []Diagnostic
 	idt := reflect.TypeOf(errcode.InternalDetail{})
 	for _, v := range checkSealedKeyValueShape("InternalDetail", idt) {
-		diags = append(diags, Diagnostic{
-			Rel:     "pkg/errcode/details.go",
-			Line:    0,
-			Message: "DETAILS-SEALED-FIELD-FROZEN-01: " + v,
-		})
+		diags = append(diags, Diagnostic{Rel: detailsRel, Line: 0, Message: "DETAILS-SEALED-FIELD-FROZEN-01: " + v})
 	}
 	if ivField, ok := idt.FieldByName("value"); ok {
 		if ivField.Type.Kind() != reflect.Interface || ivField.Type.Name() != "" {
 			diags = append(diags, Diagnostic{
-				Rel:  "pkg/errcode/details.go",
-				Line: 0,
-				Message: fmt.Sprintf(
-					"DETAILS-SEALED-FIELD-FROZEN-01: InternalDetail.value type = %s, want untyped any",
+				Rel: detailsRel, Line: 0,
+				Message: fmt.Sprintf("DETAILS-SEALED-FIELD-FROZEN-01: InternalDetail.value type = %s, want untyped any",
 					ivField.Type.String()),
 			})
 		}
 	}
-
 	return diags
 }
 
@@ -1328,124 +1353,175 @@ func scanErrcodePrefixOwnershipDiags(
 	info *types.Info,
 	scanTargetA bool,
 ) (diags []Diagnostic, seen []string) {
+	if scanTargetA {
+		var callDiags []Diagnostic
+		var callSeen []string
+		callDiags, callSeen = scanCallsiteCodeArgs(fset, file, rel, info)
+		diags = append(diags, callDiags...)
+		seen = append(seen, callSeen...)
+	}
+	sentinelDiags, sentinelSeen := scanSentinelDeclCodeArgs(fset, file, rel)
+	diags = append(diags, sentinelDiags...)
+	seen = append(seen, sentinelSeen...)
+	return diags, seen
+}
+
+// scanCallsiteCodeArgs scans call expressions for ERRCODE-PREFIX-OWNERSHIP-01
+// (target A: mint callsites).
+func scanCallsiteCodeArgs(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) (diags []Diagnostic, seen []string) {
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !scanTargetA {
-			return
-		}
 		callee, ok := resolveCodeGatedCallee(call, info)
-		if !ok {
-			return
-		}
-		if len(call.Args) <= callee.codeArgIndex {
+		if !ok || len(call.Args) <= callee.codeArgIndex {
 			return
 		}
 		codeArg := call.Args[callee.codeArgIndex]
-
-		if info != nil {
-			codeStr, constOK := EvaluateConstString(info, codeArg)
-			if !constOK {
-				if isRuntimeAssembledCodeArg(codeArg) {
-					line := fset.Position(call.Pos()).Line
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: line,
-						Message: fmt.Sprintf(
-							"%s code arg is a runtime-assembled Code value — "+
-								"constructing Code via type-conversion or string concatenation "+
-								"breaks the closed-set invariant "+
-								"(ERRCODE-PREFIX-OWNERSHIP-01); use a named sentinel from pkg/errcode",
-							callee.displayName,
-						),
-					})
-				}
-				return
-			}
-			seen = append(seen, codeStr)
-			if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
-				line := fset.Position(call.Pos()).Line
-				diags = append(diags, Diagnostic{
-					Rel:  rel,
-					Line: line,
-					Message: fmt.Sprintf(
-						"%s code %q prefix not registered "+
-							errcodeRegisterPrefixHint,
-						callee.displayName, codeStr,
-					),
-				})
-			}
-			return
-		}
-
-		if isRuntimeAssembledCodeArg(codeArg) {
-			line := fset.Position(call.Pos()).Line
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: fmt.Sprintf(
-					"%s code arg is a runtime-assembled Code value — "+
-						"constructing Code via type-conversion or string concatenation "+
-						"breaks the closed-set invariant "+
-						"(ERRCODE-PREFIX-OWNERSHIP-01); use a named sentinel from pkg/errcode",
-					callee.displayName,
-				),
-			})
-			return
-		}
-		lit, ok := codeArg.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return
-		}
-		codeStr := strings.Trim(lit.Value, `"`)
-		seen = append(seen, codeStr)
-		if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
-			line := fset.Position(call.Pos()).Line
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: fmt.Sprintf(
-					"%s code %q prefix not registered "+
-						errcodeRegisterPrefixHint,
-					callee.displayName, codeStr,
-				),
-			})
-		}
+		d, s := scanOneCallsiteCodeArg(fset, call, codeArg, rel, callee.displayName, info)
+		diags = append(diags, d...)
+		seen = append(seen, s...)
 	})
+	return diags, seen
+}
 
+// scanOneCallsiteCodeArg checks a single call-expression code argument.
+func scanOneCallsiteCodeArg(
+	fset *token.FileSet,
+	call *ast.CallExpr,
+	codeArg ast.Expr,
+	rel, displayName string,
+	info *types.Info,
+) (diags []Diagnostic, seen []string) {
+	if info != nil {
+		return scanOneCallsiteTyped(fset, call, codeArg, rel, displayName, info)
+	}
+	return scanOneCallsiteAST(fset, call, codeArg, rel, displayName)
+}
+
+// scanOneCallsiteTyped handles a callsite with type information available.
+func scanOneCallsiteTyped(
+	fset *token.FileSet,
+	call *ast.CallExpr,
+	codeArg ast.Expr,
+	rel, displayName string,
+	info *types.Info,
+) (diags []Diagnostic, seen []string) {
+	codeStr, constOK := EvaluateConstString(info, codeArg)
+	if !constOK {
+		if isRuntimeAssembledCodeArg(codeArg) {
+			diags = append(diags, errcodeRuntimeAssembledDiag(fset, call.Pos(), rel, displayName))
+		}
+		return diags, seen
+	}
+	seen = append(seen, codeStr)
+	if d, bad := errcodeOwnershipDiag(fset, call.Pos(), rel, displayName, codeStr); bad {
+		diags = append(diags, d)
+	}
+	return diags, seen
+}
+
+// scanOneCallsiteAST handles a callsite without type information (AST-only mode).
+func scanOneCallsiteAST(
+	fset *token.FileSet,
+	call *ast.CallExpr,
+	codeArg ast.Expr,
+	rel, displayName string,
+) (diags []Diagnostic, seen []string) {
+	if isRuntimeAssembledCodeArg(codeArg) {
+		diags = append(diags, errcodeRuntimeAssembledDiag(fset, call.Pos(), rel, displayName))
+		return diags, seen
+	}
+	lit, ok := codeArg.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return diags, seen
+	}
+	codeStr := strings.Trim(lit.Value, `"`)
+	seen = append(seen, codeStr)
+	if d, bad := errcodeOwnershipDiag(fset, call.Pos(), rel, displayName, codeStr); bad {
+		diags = append(diags, d)
+	}
+	return diags, seen
+}
+
+// errcodeRuntimeAssembledDiag returns a Diagnostic for a runtime-assembled code argument.
+func errcodeRuntimeAssembledDiag(fset *token.FileSet, pos token.Pos, rel, displayName string) Diagnostic {
+	return Diagnostic{
+		Rel:  rel,
+		Line: fset.Position(pos).Line,
+		Message: fmt.Sprintf(
+			"%s code arg is a runtime-assembled Code value — "+
+				"constructing Code via type-conversion or string concatenation "+
+				"breaks the closed-set invariant "+
+				"(ERRCODE-PREFIX-OWNERSHIP-01); use a named sentinel from pkg/errcode",
+			displayName,
+		),
+	}
+}
+
+// errcodeOwnershipDiag returns a Diagnostic (and true) when codeStr's prefix is not registered.
+func errcodeOwnershipDiag(fset *token.FileSet, pos token.Pos, rel, displayName, codeStr string) (Diagnostic, bool) {
+	if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); owned {
+		return Diagnostic{}, false
+	}
+	return Diagnostic{
+		Rel:  rel,
+		Line: fset.Position(pos).Line,
+		Message: fmt.Sprintf(
+			"%s code %q prefix not registered "+errcodeRegisterPrefixHint,
+			displayName, codeStr,
+		),
+	}, true
+}
+
+// scanSentinelDeclCodeArgs scans package-scope sentinel declarations for
+// ERRCODE-PREFIX-OWNERSHIP-01 (target B: exported Err* sentinels).
+func scanSentinelDeclCodeArgs(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+) (diags []Diagnostic, seen []string) {
 	EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
 		if gen.Tok != token.CONST && gen.Tok != token.VAR {
 			return
 		}
 		EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
-			for i, name := range vs.Names {
-				if !isExportedErrSentinelName(name.Name) {
-					continue
-				}
-				if i >= len(vs.Values) {
-					continue
-				}
-				lit, ok := vs.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				codeStr := strings.Trim(lit.Value, `"`)
-				if !strings.HasPrefix(codeStr, "ERR_") {
-					continue
-				}
-				seen = append(seen, codeStr)
-				if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
-					pos := fset.Position(name.Pos())
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"%s = %q prefix not registered "+
-								errcodeRegisterPrefixHint,
-							name.Name, codeStr,
-						),
-					})
-				}
-			}
+			d, s := scanSentinelValueSpec(fset, vs, rel)
+			diags = append(diags, d...)
+			seen = append(seen, s...)
 		})
 	})
+	return diags, seen
+}
+
+// scanSentinelValueSpec checks one ValueSpec for exported Err* sentinels.
+func scanSentinelValueSpec(fset *token.FileSet, vs *ast.ValueSpec, rel string) (diags []Diagnostic, seen []string) {
+	for i, name := range vs.Names {
+		if !isExportedErrSentinelName(name.Name) || i >= len(vs.Values) {
+			continue
+		}
+		lit, ok := vs.Values[i].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		codeStr := strings.Trim(lit.Value, `"`)
+		if !strings.HasPrefix(codeStr, "ERR_") {
+			continue
+		}
+		seen = append(seen, codeStr)
+		if _, owned := errcode.OwnerOfCode(errcode.Code(codeStr)); !owned {
+			pos := fset.Position(name.Pos())
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"%s = %q prefix not registered "+errcodeRegisterPrefixHint,
+					name.Name, codeStr,
+				),
+			})
+		}
+	}
 	return diags, seen
 }

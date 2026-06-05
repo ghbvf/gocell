@@ -44,7 +44,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -726,89 +725,6 @@ func TestDetailsSealedFieldFrozen01(t *testing.T) {
 		BuildTags: FlatNonDefaultTags(),
 	})
 	Report(t, ruleDetailsSealedFieldFrozen, diags)
-
-	t.Run("PublicDetail", func(t *testing.T) {
-		dt := reflect.TypeOf(errcode.PublicDetail{})
-		errcodeAssertSealedKeyValueShape(t, "PublicDetail", dt)
-
-		// PublicDetail.value MUST be the publicValue sealed interface
-		// — name check pins the marker identity; an in-package rename
-		// surfaces visibly here.
-		valueField, ok := dt.FieldByName("value")
-		if !ok {
-			t.Fatal("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail has no value field (caught by shape assertion above)")
-		}
-		if valueField.Type.Kind() != reflect.Interface {
-			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value Kind = %s, want Interface "+
-				"(widening to a concrete type, or to a non-marker interface, breaks the typed-value funnel)",
-				valueField.Type.Kind())
-		}
-		if got := valueField.Type.Name(); got != "publicValue" {
-			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value type name = %q, want %q "+
-				"(if you renamed the marker, update this archtest and the ADR amendment table)",
-				got, "publicValue")
-		}
-
-		// Confirm the typed constructors land on the same value field type
-		// (defense-in-depth: if PublicString were rewired to return a
-		// PublicDetail with a different value kind, this test fires).
-		probe := reflect.ValueOf(errcode.PublicString("k", "v"))
-		probeValue := probe.FieldByName("value")
-		if probeValue.Kind() != reflect.Interface {
-			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: PublicString(...) produced value Kind %s, want Interface",
-				probeValue.Kind())
-		}
-
-		root := findModuleRoot(t)
-		detailsPath := filepath.Join(root, "pkg", "errcode", "details.go")
-		file := errcodeParseGoFile(t, detailsPath)
-		errcodeAssertExactStringSetT(t, "DETAILS-SEALED-FIELD-FROZEN-01 publicValue implementers",
-			errcodeCollectPublicValueImplementers(file),
-			[]string{"publicBool", "publicDuration", "publicInt", "publicString", "publicTime"})
-		errcodeAssertExactStringSetT(t, "DETAILS-SEALED-FIELD-FROZEN-01 PublicDetail constructors",
-			errcodeCollectPublicDetailConstructors(file),
-			[]string{"PublicBool", "PublicDuration", "PublicInt", "PublicString", "PublicTime"})
-	})
-
-	t.Run("InternalDetail", func(t *testing.T) {
-		dt := reflect.TypeOf(errcode.InternalDetail{})
-		errcodeAssertSealedKeyValueShape(t, "InternalDetail", dt)
-
-		// InternalDetail.value is intentionally untyped any (server-only
-		// channel; runtime data including fmt.Sprintf output is the
-		// documented use case). Lock the asymmetry so a future refactor
-		// that "harmonizes" both carriers must update the ADR first.
-		valueField, ok := dt.FieldByName("value")
-		if !ok {
-			t.Fatal("DETAILS-SEALED-FIELD-FROZEN-01: InternalDetail has no value field (caught by shape assertion above)")
-		}
-		if valueField.Type.Kind() != reflect.Interface || valueField.Type.Name() != "" {
-			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: InternalDetail.value type = %s, want untyped any "+
-				"(InternalDetail is server-only; tightening to a marker interface needs an ADR amendment)",
-				valueField.Type.String())
-		}
-	})
-}
-
-// errcodeAssertSealedKeyValueShape adapts checkSealedKeyValueShape to *testing.T
-// so the production assertion (TestDetailsSealedFieldFrozen01) can share
-// the same logic as the reverse self-check below.
-func errcodeAssertSealedKeyValueShape(t *testing.T, name string, dt reflect.Type) {
-	t.Helper()
-	for _, v := range checkSealedKeyValueShape(name, dt) {
-		t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: %s", v)
-	}
-}
-
-// errcodeAssertExactStringSetT adapts errcodeAssertExactStringSet for test-only
-// usage where *testing.T is the error reporter rather than a Diagnostic slice.
-func errcodeAssertExactStringSetT(t *testing.T, name string, got, want []string) {
-	t.Helper()
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("%s = %v, want %v. Adding/removing a public detail scalar kind must update "+
-			"details.go, error-response-v1.schema.json, the ADR, and this archtest together.",
-			name, got, want)
-	}
 }
 
 // TestDetailsSealedFieldFrozen01_ScannerFires proves the field-shape
