@@ -99,7 +99,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const platformAdapterImportPrefix = "github.com/ghbvf/gocell/adapters"
+// platformAdapterImportPrefix aliases platformAdapterPkgPath (declared in the
+// non-test cell_test_no_adapter_import.go), removing the bare literal from this
+// _test.go file. The single source of the adapters package path is now
+// cell_test_no_adapter_import.go derived from PlatformModulePath.
+const platformAdapterImportPrefix = platformAdapterPkgPath
 
 // TestCellTestNoAdapterImport asserts no cell (or example-cell) unit test file
 // imports the platform adapters/ layer. Integration/e2e tests (build-tag gated)

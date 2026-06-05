@@ -15,11 +15,6 @@ tools/archtest/auth_plan_test.go
 tools/archtest/bcrypt_cost_funnel_test.go
 tools/archtest/capability_provider_funnel_test.go
 tools/archtest/cas_protocol_composition_root_test.go
-tools/archtest/cell_init_checknotnoop_test.go
-tools/archtest/cell_init_test.go
-tools/archtest/cell_public_option_param_test.go
-tools/archtest/cell_repo_readyz_probe_test.go
-tools/archtest/cell_test_no_adapter_import_test.go
 tools/archtest/celltest_import_boundary_test.go
 tools/archtest/celltest_import_scope_test.go
 tools/archtest/clock_invariants_test.go
@@ -30,7 +25,6 @@ tools/archtest/credential_invalidate_funnel_invariants_test.go
 tools/archtest/ctxkeys_principal_write_caller_test.go
 tools/archtest/distlock_lock_not_context_test.go
 tools/archtest/domain_authz_mutation_funnel_invariants_test.go
-tools/archtest/errcode_invariants_test.go
 tools/archtest/eval_predicate_centralization_test.go
 tools/archtest/fence_token_mint_funnel_test.go
 tools/archtest/fixture_cellid_typed_builder_test.go

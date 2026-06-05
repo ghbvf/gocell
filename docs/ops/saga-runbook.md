@@ -118,7 +118,7 @@ GROUP BY definition_id ORDER BY events DESC;
 **处置**：
 
 - 单事件已有 `Event.MaxPayloadBytes`（64 KiB）上限，单行不会无界。
-- 整表归档 / 截断是 **W10 Projection / Replay**（从 `saga_events` replay 任意时点状态）的范畴，独立 wave，当前未实现——在它落地前不要手工 `DELETE` 终态实例的事件（会破坏 replay/forensic 能力）。
+- 整表归档 / 截断属 **EPIC #1609 Projection / Replay**（从 `saga_events` replay，ADR `202606051200-1609-adr-saga-journal-projection-source.md`，model-a）的范畴：**replay 投影源设计已立项（accepted），能力待 PR-02..06 落地**；**归档/截断本身仍未实现**。归档能力落地前不要手工 `DELETE` 终态实例的事件（破坏 replay/forensic）；落地后截断亦须 **≥ 最慢投影 checkpoint**（#1609 D7），否则丢未投影事件。
 - 短期容量压力：扩 PG 存储 / 调整 retention 策略，不删 saga_events。
 - **告警引导**：无专属增长指标；用 PG 表体积监控（`pg_total_relation_size('saga_events')`）设容量阈值告警，或监控 `saga_instances` 中长期非终态行数（`status IN (1,2,3)` 且 `updated_at` 老化）作为驱动停滞的间接信号。
 

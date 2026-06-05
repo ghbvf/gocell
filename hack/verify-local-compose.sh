@@ -48,6 +48,7 @@ else
     AUDITCORE_HMAC_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxxxx \
     AUDITCORE_CURSOR_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
     ACCESSCORE_CURSOR_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
+    ACCESSCORE_IP_HASH_SALT=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
     SERVICE_SECRET=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxxxxxxxx \
     METRICS_TOKEN=placeholder \
     READYZ_VERBOSE_TOKEN=placeholder \

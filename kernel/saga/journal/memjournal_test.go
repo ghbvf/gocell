@@ -39,6 +39,13 @@ func TestMemJournal_Conformance(t *testing.T) {
 	sagajournaltest.RunConformanceSuite(t, newMemFactory)
 }
 
+// TestMemJournal_GlobalReaderConformance runs the GlobalReader
+// global-ordered-scan conformance suite against MemJournal (#1609 PR-02).
+// Enrollment here is required by archtest SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01.
+func TestMemJournal_GlobalReaderConformance(t *testing.T) {
+	sagajournaltest.RunGlobalReaderConformance(t, newMemFactory)
+}
+
 // ---------------------------------------------------------------------------
 // White-box / coverage-extension tests
 // ---------------------------------------------------------------------------

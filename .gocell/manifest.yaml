@@ -1,4 +1,5 @@
-# GoCell root module manifest — declares the monorepo's metadata footprint.
+# GoCell workspace manifest — declares the monorepo's metadata footprint across
+# every go.work member module that carries GoCell metadata.
 #
 # WHY EXPLICIT includes: the Locator auto-detects this file and switches every
 # `gocell` command (validate / generate / codegen-drift gates) from conventional
@@ -13,27 +14,68 @@
 # `gocell validate` FAILS (hard error) — so deleting the last file of a kind
 # requires removing the corresponding `includes:` entry from this manifest.
 #
-# go.work-style extension point: when a future module is added (Plan D /
-# docs/plans/product-roadmap/202604300950-plan-d-go-workspace-multimodule-migration.md),
-# append a second `modules:` entry alongside the new go.work `use` directive.
+# MULTI-MODULE (#1556, go.work P1): each example that carries metadata AND is its
+# own go.work member declares its own module entry below with module-RELATIVE
+# include globs (the Locator joins them onto modules[].path). go.work is the
+# authoritative Go module set; tools/workspace cross-checks BOTH directions and
+# fails closed: manifest.modules ⊆ go.work.use, AND every go.work member carrying
+# GoCell metadata MUST appear here. So extracting a metadata-bearing example into
+# a module requires (1) a go.work `use` line and (2) a module entry here — in the
+# SAME change, or the cross-check goes red.
+#   - examples/ssobff + examples/corebundlestarter are go.work members but carry
+#     NO GoCell metadata (hand-wired assemblies), so they legitimately stay out
+#     of this manifest (the reverse cross-check exempts metadata-free members).
+#   - examples/demo carries one cell.yaml but has no compilable Go (no go.mod),
+#     so it is NOT a go.work member; its cell stays in the root module entry's
+#     examples/demo glob below.
 version: v1
 modules:
   - path: .
     includes:
       cells:
         - "cells/*/cell.yaml"
-        - "examples/*/cells/*/cell.yaml"
+        - "examples/demo/cells/*/cell.yaml"
       slices:
         - "cells/*/slices/*/slice.yaml"
-        - "examples/*/cells/*/slices/*/slice.yaml"
       contracts:
         - "contracts/**/contract.yaml"
-        - "examples/*/contracts/**/contract.yaml"
       journeys:
         - "journeys/J-*.yaml"
-        - "examples/*/journeys/J-*.yaml"
       assemblies:
         - "assemblies/*/assembly.yaml"
-        - "examples/*/assembly.yaml"
       actors: "actors.yaml"
       statusBoard: "journeys/status-board.yaml"
+  - path: examples/todoorder
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+      contracts:
+        - "contracts/**/contract.yaml"
+      journeys:
+        - "journeys/J-*.yaml"
+      assemblies:
+        - "assembly.yaml"
+  - path: examples/iotdevice
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+      contracts:
+        - "contracts/**/contract.yaml"
+      assemblies:
+        - "assembly.yaml"
+  - path: examples/orderfulfillment
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+      contracts:
+        - "contracts/**/contract.yaml"
+      journeys:
+        - "journeys/J-*.yaml"
+      assemblies:
+        - "assembly.yaml"

@@ -93,7 +93,7 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 				bootstrapWrapped, clk,
 				uuid.NewString(),
 				audit.ReasonWrongCredentials,
-				fmt.Sprintf("192.0.2.%d", i+1),
+				fmt.Sprintf("%064x", i+1), // valid 64-hex clientIpHash (observer hashes the IP)
 			); err != nil {
 				errs <- fmt.Errorf("bootstrap append %d: %w", i, err)
 			}

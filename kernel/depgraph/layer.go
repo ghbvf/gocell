@@ -121,6 +121,17 @@ func (c Classifier) OwningModule(importPath string) string {
 //
 // Packages owned by no member module classify as LayerStdlib (no dot in first
 // segment) or LayerThirdParty.
+//
+// Satellite example modules (#1556): a package like
+// "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell" classifies as
+// LayerExamples (NOT LayerCells), because the base-relative first segment
+// (examples/) is what places it in the examples layer of the core repo. This
+// means cell-layering governance rules that test Layer()==LayerCells must NOT
+// rely on that comparison alone to identify all cell packages — example cells
+// return LayerExamples. Use Cell() to obtain the cell ID regardless of layer;
+// downstream rules needing to distinguish example cells from platform cells
+// must check Layer()==LayerExamples (or equivalently Layer()!=LayerCells) in
+// addition to Cell()!="".
 func (c Classifier) Layer(importPath string) string {
 	if importPath == "" {
 		return ""
@@ -132,18 +143,59 @@ func (c Classifier) Layer(importPath string) string {
 		}
 		return LayerThirdParty
 	}
+	// Base-relative classification first: a package's layer is its position under
+	// the BASE (shortest owning) module — the repo's core module. This keeps a
+	// satellite go.work module nested under a known layer dir IN that layer:
+	// github.com/ghbvf/gocell/examples/ssobff is its own module, but it is the
+	// "examples" layer of the core repo — not LayerRoot/LayerUnknown that the
+	// longest-owner view below would assign (an example IS the leaf; it does not
+	// mirror the core layer structure beneath its own module root). Restores the
+	// single-module classification once examples/* become satellite modules (#1556).
+	if base := c.baseOwningModule(importPath); base != "" && importPath != base {
+		if layer, ok := layerByFirstSegment(strings.TrimPrefix(importPath, base+"/")); ok {
+			return layer
+		}
+	}
+	// Longest-owner-relative fallback: a satellite that DOES mirror the core layer
+	// structure beneath its own root (e.g. a future mdm module with mdm/cells/foo)
+	// classifies LayerCells by its module-internal first segment when the
+	// base-relative segment above was not itself a known layer dir.
 	if importPath == owner {
 		return LayerRoot
 	}
-	rel := strings.TrimPrefix(importPath, owner+"/")
+	if layer, ok := layerByFirstSegment(strings.TrimPrefix(importPath, owner+"/")); ok {
+		return layer
+	}
+	return LayerUnknown
+}
+
+// baseOwningModule returns the SHORTEST member module that owns importPath (the
+// repo core module for in-repo packages), or "" when none owns it. Distinct from
+// [Classifier.OwningModule] (longest): the base is what [Classifier.Layer] uses
+// to classify a package by its position in the core repo tree, so a satellite
+// module nested under examples/ lands in the examples layer rather than its own
+// LayerRoot.
+func (c Classifier) baseOwningModule(importPath string) string {
+	base := ""
+	for _, m := range c.modules {
+		if importPath == m || strings.HasPrefix(importPath, m+"/") {
+			if base == "" || len(m) < len(base) {
+				base = m
+			}
+		}
+	}
+	return base
+}
+
+// layerByFirstSegment maps rel's first path segment to a layer via
+// internalLayerByDir.
+func layerByFirstSegment(rel string) (string, bool) {
 	seg := rel
 	if i := strings.IndexByte(rel, '/'); i >= 0 {
 		seg = rel[:i]
 	}
-	if layer, ok := internalLayerByDir[seg]; ok {
-		return layer
-	}
-	return LayerUnknown
+	layer, ok := internalLayerByDir[seg]
+	return layer, ok
 }
 
 // Cell returns the cell ID for a package under <owningModule>/cells/<id>/...,

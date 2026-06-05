@@ -9,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -125,7 +128,7 @@ func newTestView() *session.ValidateView {
 func newTestCachingStore(t *testing.T, inner session.Store, mock *mockCmdable) *CachingSessionStore {
 	t.Helper()
 	cache := mustNewCacheFromCmdable(t, mock)
-	store, err := NewCachingSessionStore(inner, cache, scsTestTTL, nil)
+	store, err := NewCachingSessionStore(inner, cache, scsTestTTL, nil, nil)
 	if err != nil {
 		t.Fatalf("NewCachingSessionStore: %v", err)
 	}
@@ -155,7 +158,7 @@ func TestNewCachingSessionStore_FailFast(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			store, err := NewCachingSessionStore(c.inner, c.cache, c.ttl, nil)
+			store, err := NewCachingSessionStore(c.inner, c.cache, c.ttl, nil, nil)
 			assert.Nil(t, store)
 			var coded *errcode.Error
 			require.ErrorAs(t, err, &coded)
@@ -284,14 +287,15 @@ func TestCachingSessionStore_Create_DoesNotTouchCache(t *testing.T) {
 // inner only; cache must remain untouched (TTL-floor contract, see type godoc
 // §Threat model and archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01).
 //
-// Security floor for single-session Revoke is the cache TTL (max 30s, wiring
-// fail-fast) because single-session sessionlogout does NOT bump
-// user.AuthzEpoch. Mechanically the body shape matches
-// TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache (both pure inner
-// delegates with no cache ops), but the security-floor reasoning is asymmetric:
-// RevokeForSubject relies on the co-tx epoch bump, not the TTL — see that
-// test's godoc.
-func TestCachingSessionStore_Revoke_DoesNotTouchCache(t *testing.T) {
+// Single-session Revoke (#796) registers a post-commit cache eviction rather
+// than touching the cache in-line. The entry survives the Revoke call itself
+// (no in-tx delete → no 2×TTL re-population race) and is purged only when the
+// after-commit hooks drain (simulating durable commit). This is the
+// asymmetric counterpart to TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache:
+// RevokeForSubject still does NO cache op (it relies on the co-tx epoch bump),
+// whereas single-session Revoke has no epoch bump and so needs the after-commit
+// DEL to reach near-zero staleness.
+func TestCachingSessionStore_Revoke_AfterCommitDeletesCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
 	view := newTestView()
@@ -302,22 +306,59 @@ func TestCachingSessionStore_Revoke_DoesNotTouchCache(t *testing.T) {
 	inner := &fakeSessionStore{view: view}
 	store := newTestCachingStore(t, inner, mock)
 
-	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
+	// Simulate the ambient RunInTx scope sessionlogout wraps Revoke in.
+	ctx, drain := persistence.WithAfterCommitRegistry(context.Background())
+	require.True(t, drain, "test owns the after-commit registry")
+
+	require.NoError(t, store.Revoke(ctx, scsTestSID))
 	assert.Equal(t, int64(1), inner.revokeCalls.Load())
 	if args := inner.lastRevoke.Load(); assert.NotNil(t, args, "lastRevoke must be set") {
 		assert.Equal(t, scsTestSID, args.id, "Revoke must delegate exact id")
 	}
 
-	// Cache entry must still be present — wrapper must not have invalidated.
-	cmd := mock.Get(context.Background(), scsCachedKey)
-	val, err := cmd.Result()
-	require.NoError(t, err, "cache entry must still exist after Revoke (TTL-floor contract)")
-	assert.NotEmpty(t, val)
+	// Pre-commit: the hook has NOT fired — the entry must still be present.
+	// This is the property that defeats the 2×TTL re-population race.
+	if val, gerr := mock.Get(context.Background(), scsCachedKey).Result(); assert.NoError(t, gerr) {
+		assert.NotEmpty(t, val, "cache entry must survive until commit (no in-tx delete)")
+	}
+
+	// Commit: drain the after-commit hooks.
+	persistence.RunAfterCommitHooks(ctx)
+
+	// Post-commit: the entry is gone.
+	_, gerr := mock.Get(context.Background(), scsCachedKey).Result()
+	assert.ErrorIs(t, gerr, goredis.Nil, "cache entry must be deleted by the after-commit hook")
+}
+
+// TestCachingSessionStore_Revoke_AfterCommitDelFailure_FallsBackToTTL — a failed
+// post-commit DEL is best-effort: it is swallowed (logged at Warn) and the entry
+// is left to expire at TTL. The hook must not panic or surface to the caller.
+// The DEL failure is recorded on the DISTINCT revoke-DEL series
+// (RecordRevokeDelError), NOT the read-path RecordError — folding it into the
+// latter would break the read-path errors ⊆ misses contract (this DEL failure
+// fires outside any Get and has no paired miss).
+func TestCachingSessionStore_Revoke_AfterCommitDelFailure_FallsBackToTTL(t *testing.T) {
+	t.Parallel()
+	mock := newMockCmdable()
+	mock.delErr = errMock // Redis DEL fails inside the after-commit hook
+	inner := &fakeSessionStore{}
+	rec := &spyCacheMetrics{}
+	store := newTestCachingStoreWithMetrics(t, inner, mock, rec)
+
+	ctx, drain := persistence.WithAfterCommitRegistry(context.Background())
+	require.True(t, drain)
+	require.NoError(t, store.Revoke(ctx, scsTestSID))
+	// Draining must not panic even though the DEL errors.
+	assert.NotPanics(t, func() { persistence.RunAfterCommitHooks(ctx) })
+	// The DEL failure must be counted on the distinct revoke-DEL series only.
+	assert.Equal(t, 1, rec.revokeDelErrs, "DEL failure in after-commit hook must record one revoke-DEL error")
+	assert.Equal(t, 0, rec.errs, "revoke DEL failure must NOT pollute the read-path errors_total series")
 }
 
 // TestCachingSessionStore_Revoke_InnerError_Propagates — inner errors flow
-// through unchanged; no cache operation is attempted (TTL-floor contract per
-// CACHING-SESSION-REVOKE-DELEGATE-ONLY-01).
+// through unchanged and short-circuit BEFORE the after-commit hook is
+// registered (so no eviction is scheduled for a revoke that did not happen).
+// No ambient tx is required because the early return precedes RegisterAfterCommit.
 func TestCachingSessionStore_Revoke_InnerError_Propagates(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -331,6 +372,75 @@ func TestCachingSessionStore_Revoke_InnerError_Propagates(t *testing.T) {
 	assert.True(t, errcode.IsInfraError(err))
 }
 
+// TestCachingSessionStore_Revoke_DrivenByRunInTx exercises the after-commit DEL
+// through a REAL transaction runner (kernel/outbox.DemoTxRunner) rather than the
+// hand-rolled WithAfterCommitRegistry/RunAfterCommitHooks the other tests use.
+// DemoTxRunner.RunInTx is the production drain/truncate driver: it installs the
+// after-commit registry, runs the fn, and either drains the hooks (fn success →
+// durable commit) or truncates them (fn error → rollback). This closes the gap
+// flagged in PR #1613 review F6: the rollback→hook-discarded path — the property
+// that a logout whose refresh-cascade or outbox write fails AFTER Revoke must
+// NOT evict the cache (the unit of work rolled back, the session is still live).
+//
+// sessionlogout.Service.Logout is the production caller; it cannot be combined
+// with the real CachingSessionStore in this package (adapters must not import
+// cells, and cellmodules — the only layer that may import both — has no
+// observable in-memory Redis). DemoTxRunner reproduces the exact RunInTx
+// contract sessionlogout relies on, so driving Revoke through it covers the same
+// integration invariant against the real store + observable mockCmdable.
+func TestCachingSessionStore_Revoke_DrivenByRunInTx(t *testing.T) {
+	t.Parallel()
+
+	seedCache := func(t *testing.T, mock *mockCmdable) {
+		t.Helper()
+		payload, err := json.Marshal(entryFromView(newTestView()))
+		require.NoError(t, err)
+		require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+	}
+
+	t.Run("commit_fires_del", func(t *testing.T) {
+		t.Parallel()
+		mock := newMockCmdable()
+		seedCache(t, mock)
+		inner := &fakeSessionStore{}
+		store := newTestCachingStore(t, inner, mock)
+
+		// fn succeeds → DemoTxRunner drains the after-commit hooks (durable commit).
+		err := outbox.DemoTxRunner{}.RunInTx(context.Background(), func(txCtx context.Context) error {
+			return store.Revoke(txCtx, scsTestSID)
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), inner.revokeCalls.Load())
+		_, gerr := mock.Get(context.Background(), scsCachedKey).Result()
+		assert.ErrorIs(t, gerr, goredis.Nil, "successful commit must drain the after-commit hook and DEL the cache entry")
+	})
+
+	t.Run("rollback_discards_hook", func(t *testing.T) {
+		t.Parallel()
+		mock := newMockCmdable()
+		seedCache(t, mock)
+		inner := &fakeSessionStore{}
+		store := newTestCachingStore(t, inner, mock)
+
+		// fn registers the eviction hook (via Revoke) then fails AFTER it (modeling
+		// refreshStore.RevokeSession / outbox.Emit failing post-Revoke) →
+		// DemoTxRunner truncates the hook; the rolled-back logout must leave the
+		// session cache-valid.
+		rollbackErr := errors.New("refresh cascade failed after revoke")
+		err := outbox.DemoTxRunner{}.RunInTx(context.Background(), func(txCtx context.Context) error {
+			if rerr := store.Revoke(txCtx, scsTestSID); rerr != nil {
+				return rerr
+			}
+			return rollbackErr
+		})
+		require.ErrorIs(t, err, rollbackErr)
+		assert.Equal(t, int64(1), inner.revokeCalls.Load(), "inner Revoke still ran inside the tx")
+		val, gerr := mock.Get(context.Background(), scsCachedKey).Result()
+		require.NoError(t, gerr, "cache entry must survive a rolled-back logout")
+		assert.NotEmpty(t, val, "after-commit DEL hook must be discarded on rollback (session still live)")
+	})
+}
+
 // TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache — cache layer
 // receives no Del / Get; only inner is invoked. Defends the epoch-fallback
 // contract: after RevokeForSubject the cached ValidateView's AuthzEpochAtIssue
@@ -339,12 +449,12 @@ func TestCachingSessionStore_Revoke_InnerError_Propagates(t *testing.T) {
 // of cache state. See ADR docs/architecture/202605101400-adr-credential-
 // session-protocol.md §A8 and archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
 //
-// Mechanically the body shape matches
-// TestCachingSessionStore_Revoke_DoesNotTouchCache (both pure inner delegates
-// with no cache ops, from the third-round review), but the security-floor
-// reasoning is asymmetric: single-session Revoke relies on the TTL because no
-// epoch bump fires; RevokeForSubject relies on the co-tx epoch bump and is
-// TTL-independent.
+// Unlike single-session Revoke (which now schedules an after-commit cache DEL,
+// #796), RevokeForSubject stays a pure inner delegate with NO cache op: its
+// security floor is the co-tx user.AuthzEpoch bump, which fail-closes any stale
+// cached view regardless of cache state, so no eviction is needed. (Subject-wide
+// cache purge for the future case where user state IS cached is deferred to
+// AUTH-CACHE-SUBJECT-REVERSE-INDEX-01 / gh #793.)
 func TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -592,6 +702,73 @@ func TestCachingSessionStore_Get_CorruptCacheEntry_DeletesAndFallsThrough(t *tes
 			"inner.getCalls==2 means corrupt entry was NOT deleted")
 }
 
+// TestCachingSessionStore_ConcurrentGetAndRevoke exercises Get and Revoke
+// running concurrently to verify the implementation is data-race free under
+// -race. Goroutines call Get in a tight loop while the main goroutine executes
+// a Revoke with a simulated transaction scope. Once all goroutines finish, a
+// Revoke is performed in isolation and the after-commit hook is drained; the
+// cache entry must then be absent.
+func TestCachingSessionStore_ConcurrentGetAndRevoke(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockCmdable()
+	view := newTestView()
+	// Pre-populate the cache with a valid entry so readers start hitting it.
+	payload, err := json.Marshal(entryFromView(view))
+	require.NoError(t, err)
+	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+
+	inner := &fakeSessionStore{view: view}
+	store := newTestCachingStore(t, inner, mock)
+
+	const goroutines = 8
+	const iters = 16
+
+	// Phase 1: concurrent readers running alongside a concurrent Revoke call
+	// (registers hook, does not yet fire it). This phase validates -race safety.
+	ctx1, drain1 := persistence.WithAfterCommitRegistry(context.Background())
+	require.True(t, drain1, "test must own the after-commit registry")
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines + 1) // readers + revoke goroutine
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			ctx := context.Background()
+			for j := 0; j < iters; j++ {
+				_, gerr := store.Get(ctx, scsTestSID)
+				if gerr != nil {
+					t.Errorf("concurrent Get error: %v", gerr)
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer wg.Done()
+		if rerr := store.Revoke(ctx1, scsTestSID); rerr != nil {
+			t.Errorf("concurrent Revoke error: %v", rerr)
+		}
+	}()
+	wg.Wait()
+
+	// Fire the first hook (may or may not find the key, depending on reader
+	// re-population timing — that is acceptable for best-effort DEL).
+	assert.NotPanics(t, func() { persistence.RunAfterCommitHooks(ctx1) })
+
+	// Phase 2: isolated Revoke + drain. After all concurrent readers have
+	// stopped, a second Revoke and hook drain must reliably remove the entry.
+	ctx2, drain2 := persistence.WithAfterCommitRegistry(context.Background())
+	require.True(t, drain2)
+	require.NoError(t, store.Revoke(ctx2, scsTestSID))
+	assert.NotPanics(t, func() { persistence.RunAfterCommitHooks(ctx2) })
+
+	// Now no readers are running; the cache entry must be absent.
+	_, gerr := mock.Get(context.Background(), scsCachedKey).Result()
+	assert.ErrorIs(t, gerr, goredis.Nil,
+		"after-commit DEL must have removed the cache entry")
+}
+
 // TestNewCachingSessionStore_TypedNilInner_Rejected — T3.
 //
 // A typed-nil session.Store interface (concrete type is non-nil, pointer value
@@ -605,7 +782,7 @@ func TestNewCachingSessionStore_TypedNilInner_Rejected(t *testing.T) {
 	// Construct a typed-nil: interface is non-nil (has a type), pointer value is nil.
 	var typedNilInner session.Store = (*fakeSessionStore)(nil)
 
-	store, err := NewCachingSessionStore(typedNilInner, cache, scsTestTTL, nil)
+	store, err := NewCachingSessionStore(typedNilInner, cache, scsTestTTL, nil, nil)
 
 	assert.Nil(t, store, "constructor must return nil store for typed-nil inner")
 	require.Error(t, err, "constructor must return an error for typed-nil inner")

@@ -200,11 +200,11 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 	// LogCursorError slice tag) can be attributed to the correct slice.
 	// The two instances share no mutable state — reads are stateless — so the
 	// per-instance overhead is negligible.
-	publicSvc, err := configreader.NewService(c.configRepo, c.cursorCodec, c.logger, "configread", runMode)
+	publicSvc, err := configreader.NewService(c.configRepo, c.txRunner, c.cursorCodec, c.logger, "configread", runMode)
 	if err != nil {
 		return fmt.Errorf("config-read: %w", err)
 	}
-	internalSvc, err := configreader.NewService(c.configRepo, c.cursorCodec, c.logger, "configreadinternal", runMode)
+	internalSvc, err := configreader.NewService(c.configRepo, c.txRunner, c.cursorCodec, c.logger, "configreadinternal", runMode)
 	if err != nil {
 		return fmt.Errorf("config-read-internal: %w", err)
 	}
@@ -246,7 +246,7 @@ func (c *ConfigCore) initSubscribeSlice() error {
 }
 
 func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
-	flagSvc, err := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
+	flagSvc, err := featureflag.NewService(c.flagRepo, c.txRunner, c.cursorCodec, c.logger, runMode)
 	if err != nil {
 		return fmt.Errorf("feature-flag: %w", err)
 	}

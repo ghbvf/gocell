@@ -1,14 +1,39 @@
 package redis
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
 )
+
+// txScopedRevokeStore wraps a session.Store so Revoke runs inside an ambient
+// after-commit registry (modeling sessionlogout's RunInTx) and drains the
+// registered hooks immediately after. CachingSessionStore.Revoke registers its
+// post-commit cache-eviction hook there (#796), so it panics if called outside
+// a transaction — the ambient-transaction precondition the session.Store.Revoke
+// contract documents as a permitted decorator narrowing (see store.go), which
+// storetest.Run requires Factories to satisfy. The shared suite calls Revoke
+// bare; production never does (always within RunInTx), so this test-only wrapper
+// supplies the unit-of-work scope the suite omits. It must stay in a _test.go
+// file: WithAfterCommitRegistry / RunAfterCommitHooks are A3-allowlisted to
+// _test.go + the TxRunner implementations (AFTERCOMMIT-HOOK-PURE-TRANSIENT-01),
+// so the bridge cannot move into the storetest package's non-test .go.
+type txScopedRevokeStore struct{ session.Store }
+
+func (s txScopedRevokeStore) Revoke(ctx context.Context, id string) error {
+	ctx, drain := persistence.WithAfterCommitRegistry(ctx)
+	err := s.Store.Revoke(ctx, id)
+	if drain {
+		persistence.RunAfterCommitHooks(ctx)
+	}
+	return err
+}
 
 // conformanceCacheTTL is the cache TTL used during conformance runs. It is
 // long enough that storetest cases that advance the clock past session
@@ -46,7 +71,7 @@ func TestCachingSessionStore_RepoReadinessConformance(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	cache := mustNewCacheFromCmdable(t, newMockCmdable())
-	store, err := NewCachingSessionStore(inner, cache, conformanceCacheTTL, nil)
+	store, err := NewCachingSessionStore(inner, cache, conformanceCacheTTL, nil, nil)
 	if err != nil {
 		t.Fatalf("NewCachingSessionStore: %v", err)
 	}
@@ -67,10 +92,13 @@ func cachingMemFactory(protocol *session.Protocol) storetest.Factory {
 			t.Fatalf("cachingMemFactory: NewMemStore: %v", err)
 		}
 		cache := mustNewCacheFromCmdable(t, newMockCmdable())
-		store, err := NewCachingSessionStore(inner, cache, conformanceCacheTTL, nil)
+		store, err := NewCachingSessionStore(inner, cache, conformanceCacheTTL, nil, nil)
 		if err != nil {
 			t.Fatalf("cachingMemFactory: NewCachingSessionStore: %v", err)
 		}
-		return store, fc, func() {}
+		// Wrap so Revoke runs within a unit-of-work tx scope (see
+		// txScopedRevokeStore) — CachingSessionStore.Revoke schedules a
+		// post-commit hook and requires an ambient registry (#796).
+		return txScopedRevokeStore{store}, fc, func() {}
 	}
 }

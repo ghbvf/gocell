@@ -13,7 +13,9 @@ All three cells use PostgreSQL for persistence. A running PostgreSQL instance an
 ## Quick Start
 
 PostgreSQL is required. Start the bundled Docker Compose stack first (see
-[Docker Infrastructure](#docker-infrastructure)), then:
+[Docker Infrastructure](#docker-infrastructure)), then run from the **repository
+root** — ssobff is its own `go.work` module (#1556) and the workspace resolves
+the `./examples/ssobff` path automatically:
 
 ```bash
 export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"  # database name matches docker-compose.yml POSTGRES_DB=sso_bff; sslmode=disable is local-demo only — use sslmode=require for any non-localhost PostgreSQL
@@ -41,6 +43,7 @@ export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
 # wait for postgres to become healthy, then set DATABASE_URL
 export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"
+cd ../..  # back to the repo root — the Quick Start `go run ./examples/ssobff` resolves from there
 ```
 
 ## First Admin Provisioning
@@ -321,6 +324,7 @@ tracked in the backlog. The current PR provides the middleware primitives.
 |----------|---------|---------|
 | `DATABASE_URL` | (required) | PostgreSQL DSN. With the bundled docker-compose: `postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable`. The process fails fast when absent. |
 | `GOCELL_SSOBFF_SERVICE_SECRET` | (required) | Internal listener service-token shared secret. ≥ 32 bytes; missing or short value fails the process at startup. |
+| `GOCELL_SSOBFF_IP_HASH_SALT` | `dev-ip-hash-salt-ssobff-32-byte!` | Salt for the bootstrap-failed client-IP keyed hash (#1488). Demo-only default; the plaintext IP never leaves the observer. |
 | `GOCELL_SSOBFF_PRIMARY_ADDR` | `:8081` | Primary listener bind address (public business API). |
 | `GOCELL_SSOBFF_INTERNAL_ADDR` | `127.0.0.1:9081` | Internal listener bind (control-plane / service-token). Loopback default keeps it off the public network until the operator opts in. |
 | `GOCELL_SSOBFF_HEALTH_ADDR` | `127.0.0.1:9091` | Health listener bind (`/healthz`, `/readyz`, `/metrics`). Loopback default. |

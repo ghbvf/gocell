@@ -263,3 +263,73 @@ type Heartbeater interface {
 	// cannot distinguish it from a stale lease.
 	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 }
+
+// GlobalReader is the projection-facing global scan interface (#1609 PR-02):
+// a cross-instance, append-order read of the event log, distinct from [Reader]
+// (per-instance Load). A model-A CQRS projection (Axon Tracking Event Processor
+// style) replays and tails the whole journal through it — the only way to
+// observe saga terminal states (succeeded / compensated / failed), which are
+// written ONLY to saga_events and never emitted to the outbox.
+//
+// It is deliberately NOT folded into [JournalCore]: the single-sanctioned-holder
+// seal (SAGA-JOURNAL-HOLDER-SEAL-01) restricts JournalCore field holders to the
+// Coordinator, whereas the PR-04 projection Tailer must hold a global reader
+// without driving sagas. The narrow type is therefore a CONSUMER view (it lets
+// the Tailer hold a 2-method reader, structurally unable to claim/append/commit)
+// — NOT a contract for read-only backends. Every GlobalReader implementation is
+// itself the append-only saga_events store and hence a full [Journal] (MemJournal
+// today; PGJournal at PR-PG); there is no store-less, read-only-only
+// implementation in this design.
+//
+// Events are ordered by [Event.GlobalSeq], a stable total order across all
+// instances. MemJournal assigns it from an in-process counter; the PG backend
+// assigns it from a BIGINT IDENTITY column (PR-PG, deferred — until then PG does
+// not implement GlobalReader). Every GlobalReader implementation is enrolled in
+// the sagajournaltest.RunGlobalReaderConformance suite, enforced by archtest
+// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01.
+//
+// Position 0 is reserved: a conforming implementation never returns an event
+// with GlobalSeq==0 (the counter starts at 1). The zero value only ever appears
+// on events written by a backend that does not yet maintain a global sequence
+// (none today — PG, the only such backend, does not implement GlobalReader until
+// PR-PG). Consumers therefore use 0 as the "from the beginning" cursor and
+// HeadSeq==0 as the empty-journal sentinel; they must never checkpoint a real
+// position of 0.
+type GlobalReader interface {
+	// LoadSince returns events whose GlobalSeq is strictly greater than
+	// afterGlobalSeq (exclusive lower bound = projection-checkpoint cursor
+	// semantics), in ascending GlobalSeq order, at most limit events. Passing
+	// afterGlobalSeq=0 scans from the beginning.
+	//
+	// Caught-up signal: a cursor equal to or greater than HeadSeq returns an
+	// empty slice and a NIL error (so does an empty store) — a tailing loop polls
+	// this to detect "no new events" and back off, distinguishing it from the
+	// error cases purely by the nil error. limit MUST be > 0 and afterGlobalSeq
+	// MUST be >= 0; a non-positive limit or negative cursor returns a KindInvalid
+	// error (fail-closed, like ClaimPending's batchSize).
+	LoadSince(ctx context.Context, afterGlobalSeq int64, limit int) ([]GlobalEvent, error)
+
+	// HeadSeq returns the highest GlobalSeq currently assigned across all
+	// instances — the upper bound a projection has yet to consume. An empty
+	// journal returns 0 (no event ever carries GlobalSeq 0; the counter starts
+	// at 1), so a fresh projection cursor of 0 means "caught up" iff HeadSeq==0.
+	HeadSeq(ctx context.Context) (int64, error)
+}
+
+// GlobalEvent is one event returned by [GlobalReader], carrying the global
+// position and the owning instance ID alongside the [Event] itself. InstanceID
+// is surfaced here because Event deliberately omits its owning instance (it is
+// addressed by the Append argument in the per-instance API); a cross-instance
+// scan must report it.
+//
+// GlobalSeq is intentionally exposed at the envelope level (and mirrors the
+// inner Event.GlobalSeq — the two are always equal) so a tailing consumer can
+// read its cursor position without descending into the embedded Event, the same
+// convention as a Kafka ConsumerRecord.offset or an outbox seq on the record
+// wrapper. The downstream PR-03 SagaJournalSource cursor MUST read
+// GlobalEvent.GlobalSeq (the public envelope path), not GlobalEvent.Event.GlobalSeq.
+type GlobalEvent struct {
+	GlobalSeq  int64         // == Event.GlobalSeq; the stable total-order position (cursor reads this)
+	InstanceID idutil.SafeID // the saga instance this event belongs to
+	Event      Event         // the durable event (Event.GlobalSeq == GlobalSeq)
+}

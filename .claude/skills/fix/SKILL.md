@@ -184,6 +184,16 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 - 最后两项固定：`commit + push` + `闭合/创建 GitHub issues`
 - 创建后立即执行，不等确认
 
+### 3.6 决策自检信号（3.4 → 4.x hook 锚点）
+
+进阶段 4 改代码前，发一次决策自检信号：
+
+```
+bash "$CLAUDE_PROJECT_DIR/.claude/hooks/fix-self-audit.sh" emit
+```
+
+`PreToolUse(Bash)` hook 锚定该命令：本次 fix 首次发信号会 deny 并回喂「措施符合彻底、不向后兼容 措施优雅简洁、AI HARD的原则吗」。收到后**真正**按四原则复审本次 fix 方案（彻底 / 不向后兼容 / 优雅简洁 / AI-HARD），按需回调 3.1–3.4 决策，再重发同一命令即放行、进入阶段 4。机制同 ExitPlanMode 的 `.claude/hooks/exitplan-self-audit.sh`，但**每个 /fix 都自检**（消费式 toggle，非每会话一次）。这是自检提醒，**不是**新的 AskUserQuestion 闸门（不重复 §沟通规则）。
+
 ---
 
 ## 阶段 4: 执行修复

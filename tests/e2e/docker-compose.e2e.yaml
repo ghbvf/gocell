@@ -92,6 +92,8 @@ services:
 
       # accesscore cell: cursor key.
       GOCELL_ACCESSCORE_CURSOR_KEY: access-cursor-key-32b-e2e-padx!!
+      # accesscore cell: client-IP hash salt (≥32 bytes, #1488). Real-mode required.
+      GOCELL_ACCESSCORE_IP_HASH_SALT: access-ip-hash-salt-32b-e2e-pad!!
 
       # Redis for distributed replay protection and outbox claimer. Loopback
       # host under host-network topology — ValidateTLSEndpoint loopback exception.

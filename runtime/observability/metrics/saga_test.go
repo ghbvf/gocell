@@ -465,8 +465,14 @@ func (p *sagaSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *sagaSpyProvider) Unregister(_ kernelmetrics.Collector) error {
+func (p *sagaSpyProvider) Unregister(c kernelmetrics.Collector) error {
 	p.unregisterCount++
+	// Remove from counterNames so that NotContains assertions work correctly
+	// after a partial-registration rollback (mirrors real provider Unregister
+	// semantics where the counter is removed from the registry).
+	if cv, ok := c.(*sagaSpyCounterVec); ok {
+		delete(p.counterNames, cv.name)
+	}
 	return nil
 }
 

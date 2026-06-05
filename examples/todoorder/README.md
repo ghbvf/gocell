@@ -35,6 +35,11 @@ No external dependencies required. Uses an in-memory repository and in-process e
 The primary listener verifies RS256 JWTs from the `GOCELL_JWT_*` environment,
 and the internal listener requires a service-token secret.
 
+Run these commands from the **repository root** — todoorder is its own `go.work`
+module (#1556) and the workspace resolves the `./examples/todoorder/…` paths
+automatically. (The Docker Mode block below `cd`s into the module for `docker
+compose`, then `cd ../..` back before `go run`.)
+
 ```bash
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
   -out /tmp/gocell-todoorder-jwt.key

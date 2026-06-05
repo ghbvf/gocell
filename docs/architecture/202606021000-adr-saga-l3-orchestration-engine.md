@@ -107,11 +107,11 @@ D7 是**单向**：用 saga 编排 ⟹ L3；但 L3 不等价于 saga。`accessco
 | Compensate 读外部 state / 持事务 | `SAGA-STEP-COMPENSATE-PURE-01` Hard | ✅ | — |
 | 补偿本身失败 | `StatusCompensationFailed` 终态 + `KindStepCompensationFailed`/`KindSagaCompensationFailed`；运维经 `saga_events` 人工介入（runbook `docs/ops/saga-runbook.md`） | ⚠️ | 无自动二级补偿（刻意）——人工 runbook 兜底；自动重试入口未做 |
 | step 在持锁事务内长执行 | `SAGA-STEP-RUN-OUTSIDE-TX-01` A1 Hard | ✅ | A2 closure 传递链 Medium（gh #980） |
-| journal 无界增长 | `Event.MaxPayloadBytes` 64KiB cap；append-only 增长需归档 | ⚠️ | 归档/replay 截断 = W10 独立 wave，未做 |
+| journal 无界增长 | `Event.MaxPayloadBytes` 64KiB cap；append-only 增长需归档 | ⚠️ | **replay 设计已立项（accepted）**——ADR `202606051200-1609-adr-saga-journal-projection-source.md`（EPIC #1609，model-a）锁定 `saga_events` 投影源设计，**能力本身待 PR-02..06 落地**（#1609 PR-00 仅 ADR，尚未实现/可运维）；**归档/截断** 仍未做，且 #1609 D7 增约束「归档须 ≥ 最慢投影 checkpoint」 |
 | Coordinator 无 leader 误并发 | `WithLeaderElect` option 注入 distlock；缺省 unsafe 模式 `Start()` 打 `UnsafeModeLabel` 警告 | ⚠️ | 刻意设计取舍（非待修缺陷，故无 issue）：unsafe 模式供单进程/开发；生产装配契约 = 必须经 `WithLeaderElect` 注入 leader |
 | coordinator readiness 不可观测 | `ProbeCoordinatorReady` (`saga_coordinator_ready`) 已声明 | ❌ | **未 wired**——coordinator 尚非一等 Cell，cell-side `RegisterReadiness` 待 saga-as-cell 迁移（gh **#978**） |
 
-> ⚠️/❌ 行的遗留项均有 gh issue 跟踪、属显式 out-of-scope（W10 / 人工 runbook），或为刻意设计取舍（unsafe-mode leader）；无 silent 缺口。
+> ⚠️/❌ 行的遗留项均有 gh issue 跟踪、属显式 out-of-scope（#1609 replay 设计已立项/能力待落地 + 归档未做 / 人工 runbook），或为刻意设计取舍（unsafe-mode leader）；无 silent 缺口。
 
 ---
 
@@ -129,7 +129,7 @@ D7 是**单向**：用 saga 编排 ⟹ L3；但 L3 不等价于 saga。`accessco
 | 声明式 Saga DSL（D1 v2） | 业务场景 ≥ 3 个相似 saga 后立项 |
 | 跨 cell child workflow / nested saga | v1.2+ ADR（outbox 触发新 saga 已覆盖，parent-child 引用 + 联合 compensate 待做） |
 | Activity / Workflow worker pool 分层 | step concurrency 出现明确瓶颈再做 |
-| Projection / Replay（从 `saga_events` replay 任意时点状态） | W10 独立 wave |
+| Projection / Replay（从 `saga_events` replay 任意时点状态） | **已立项 → ADR `202606051200-1609-adr-saga-journal-projection-source.md`（EPIC #1609，model-a）**；原「W10 独立 wave」由该 ADR superseded |
 
 ---
 

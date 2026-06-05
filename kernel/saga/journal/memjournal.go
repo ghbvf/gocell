@@ -26,6 +26,14 @@ type MemJournal struct {
 	mu        sync.Mutex
 	instances map[idutil.SafeID]*instanceRow
 	events    map[idutil.SafeID][]Event
+	// globalSeq is the monotonic cross-instance counter (0 = none assigned yet);
+	// every appendLocked bumps it and stamps the event's GlobalSeq. globalLog is
+	// the append-ordered cross-instance view GlobalReader scans (globalLog[i]
+	// carries GlobalSeq i+1), the in-memory counterpart of the PG saga_events
+	// global_seq IDENTITY column (PR-PG). Both are owned by MemJournal and
+	// mutated only while mu is held.
+	globalSeq int64
+	globalLog []GlobalEvent
 }
 
 // instanceRow holds both the saga state machine projection and the lease fence
@@ -273,6 +281,60 @@ func (m *MemJournal) RepoReady(_ context.Context) error {
 	return nil
 }
 
+// LoadSince implements GlobalReader.LoadSince. GlobalSeq is assigned densely
+// from 1 (globalLog[i].GlobalSeq == i+1), so the exclusive lower bound
+// afterGlobalSeq maps directly to slice index afterGlobalSeq.
+func (m *MemJournal) LoadSince(_ context.Context, afterGlobalSeq int64, limit int) ([]GlobalEvent, error) {
+	if limit <= 0 {
+		return nil, errNonPositiveLimit(limit)
+	}
+	if afterGlobalSeq < 0 {
+		return nil, errNegativeGlobalSeq(afterGlobalSeq)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Dense 1-indexed (globalLog[i].GlobalSeq == i+1), so events with
+	// GlobalSeq > afterGlobalSeq begin at slice index afterGlobalSeq. Two clamps,
+	// both fail-closed to an empty/short page:
+	//   - start := min(afterGlobalSeq, len) — a cursor at/past head → empty.
+	//   - end   := min(start+limit, len) — the final short page.
+	// end is computed WITHOUT evaluating start+limit when that could overflow
+	// int64 (a pathologically large limit): the addition runs only when it is
+	// provably < n-start (hence start+limit < n ≤ MaxInt64), so end stays in
+	// range and globalLog[start:end] / make(cap=end-start) never panic.
+	n := int64(len(m.globalLog))
+	start := afterGlobalSeq
+	if start > n {
+		start = n
+	}
+	end := n
+	if int64(limit) < n-start {
+		end = start + int64(limit)
+	}
+
+	out := make([]GlobalEvent, 0, end-start)
+	for _, ge := range m.globalLog[start:end] {
+		// Deep-copy the payload so callers cannot mutate journal state through
+		// the shared backing slice (same discipline as Load).
+		cp := ge
+		if ge.Event.Payload != nil {
+			cp.Event.Payload = append([]byte(nil), ge.Event.Payload...)
+		}
+		out = append(out, cp)
+	}
+	return out, nil
+}
+
+// HeadSeq implements GlobalReader.HeadSeq: the highest GlobalSeq assigned so far
+// (== len(globalLog), dense 1..N), or 0 for an empty journal.
+func (m *MemJournal) HeadSeq(_ context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.globalSeq, nil
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
@@ -290,15 +352,32 @@ func (m *MemJournal) fenced(row *instanceRow, leaseID idutil.SafeID, now time.Ti
 	return !row.leaseExpiresAt.Before(now)
 }
 
-// appendLocked appends a pre-built Event to the event log, assigns it the next
-// version number, sets its Version field, and bumps row.currentVersion.
-// The event's Version and CreatedAt are expected to be set by the caller
-// (CreatedAt to now, Version to 0 as a placeholder). Returns the assigned version.
-// Must be called with m.mu held.
+// appendLocked appends a pre-built Event to both the per-instance event log and
+// the cross-instance global log, assigning it the next per-instance version
+// (Version) and the next cross-instance position (GlobalSeq). It bumps both
+// row.currentVersion and m.globalSeq. The event's Version and GlobalSeq are
+// expected to be 0 placeholders on the way in; CreatedAt is set by the caller
+// (to now). Returns the assigned version. Every event sink — forward Append and
+// terminal MarkTerminal both route through here — so terminal events also get a
+// GlobalSeq and are visible to GlobalReader. Must be called with m.mu held.
+//
+// e.Payload was already defensively copied by the caller (Append) and is owned
+// by the Journal, so sharing the same backing slice between the per-instance log
+// and the global log is safe: neither is mutated after storage, and Load and
+// LoadSince each copy the payload INDEPENDENTLY on read. (MarkTerminal's payload
+// is nil, so it has no shared slice at all.) Invariant: if either read-path copy
+// is ever removed, this shared backing slice reintroduces a mutation vector.
 func (m *MemJournal) appendLocked(row *instanceRow, instanceID idutil.SafeID, e Event) int64 {
 	version := row.currentVersion + 1
 	e.Version = version
+	m.globalSeq++
+	e.GlobalSeq = m.globalSeq
 	m.events[instanceID] = append(m.events[instanceID], e)
+	m.globalLog = append(m.globalLog, GlobalEvent{
+		GlobalSeq:  e.GlobalSeq,
+		InstanceID: instanceID,
+		Event:      e,
+	})
 	row.currentVersion = version
 	return version
 }

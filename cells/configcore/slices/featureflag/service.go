@@ -9,6 +9,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/cells/configcore/internal/scopedread"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
@@ -29,10 +31,11 @@ type EvaluateResult struct {
 
 // Service implements feature flag business logic.
 type Service struct {
-	repo    ports.FlagRepository
-	codec   *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"featureflag: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	logger  *slog.Logger
-	runMode query.RunMode
+	repo     ports.FlagRepository
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"featureflag: TxRunner required (PR-3 RLS reads run in a tenant-scoped tx)"`                        //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	codec    *query.CursorCodec        `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"featureflag: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	logger   *slog.Logger
+	runMode  query.RunMode
 }
 
 // NewService creates a feature-flag Service. runMode controls cursor
@@ -42,12 +45,19 @@ type Service struct {
 // codec must be non-nil — pagination cannot be served without a cursor codec.
 // Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
 // so the cell Init() can propagate a structured error instead of a runtime panic.
-func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+func NewService(
+	repo ports.FlagRepository,
+	txRunner persistence.CellTxManager,
+	codec *query.CursorCodec,
+	logger *slog.Logger,
+	runMode query.RunMode,
+) (*Service, error) {
 	s := &Service{
-		repo:    repo,
-		codec:   codec,
-		logger:  logger,
-		runMode: runMode,
+		repo:     repo,
+		txRunner: txRunner,
+		codec:    codec,
+		logger:   logger,
+		runMode:  runMode,
 	}
 	if err := s.validateRequired(); err != nil {
 		return nil, err
@@ -57,7 +67,10 @@ func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slo
 
 // GetByKey retrieves a feature flag by key within the tenant scope t.
 func (s *Service) GetByKey(ctx context.Context, t tenant.TenantID, key string) (*domain.FeatureFlag, error) {
-	flag, err := s.repo.GetByKey(ctx, t, key)
+	// PR-3 RLS: read inside a tenant-scoped tx (SET LOCAL app.tenant_id = t).
+	flag, err := scopedread.Do(ctx, s.txRunner, t, func(txCtx context.Context) (*domain.FeatureFlag, error) {
+		return s.repo.GetByKey(txCtx, t, key)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("feature-flag: get: %w", err)
 	}
@@ -66,24 +79,27 @@ func (s *Service) GetByKey(ctx context.Context, t tenant.TenantID, key string) (
 
 // List returns a paginated page of feature flags within the tenant scope t.
 func (s *Service) List(ctx context.Context, t tenant.TenantID, pageReq query.PageParams) (query.PageResult[*domain.FeatureFlag], error) {
-	qctx := query.QueryContext("endpoint", "feature-flag")
-	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.FeatureFlag]{
-		Codec:      s.codec,
-		PageParams: pageReq,
-		Sort:       flagSort,
-		QueryCtx:   qctx,
-		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
-			flags, err := s.repo.List(ctx, t, params)
-			if err != nil {
-				return nil, fmt.Errorf("feature-flag: list: %w", err)
-			}
-			return flags, nil
-		},
-		Extract: func(f *domain.FeatureFlag) []any {
-			return []any{f.Key, f.ID}
-		},
-		OnCursorErr: query.LogCursorError(s.logger, "featureflag"),
-		RunMode:     s.runMode,
+	// PR-3 RLS: run the paged query inside a tenant-scoped tx.
+	return scopedread.Do(ctx, s.txRunner, t, func(txCtx context.Context) (query.PageResult[*domain.FeatureFlag], error) {
+		qctx := query.QueryContext("endpoint", "feature-flag")
+		return query.ExecutePagedQuery(txCtx, query.PagedQueryConfig[*domain.FeatureFlag]{
+			Codec:      s.codec,
+			PageParams: pageReq,
+			Sort:       flagSort,
+			QueryCtx:   qctx,
+			Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
+				flags, err := s.repo.List(ctx, t, params)
+				if err != nil {
+					return nil, fmt.Errorf("feature-flag: list: %w", err)
+				}
+				return flags, nil
+			},
+			Extract: func(f *domain.FeatureFlag) []any {
+				return []any{f.Key, f.ID}
+			},
+			OnCursorErr: query.LogCursorError(s.logger, "featureflag"),
+			RunMode:     s.runMode,
+		})
 	})
 }
 
@@ -96,7 +112,11 @@ func (s *Service) Evaluate(ctx context.Context, t tenant.TenantID, key, subject 
 		return nil, err
 	}
 
-	flag, err := s.repo.GetByKey(ctx, t, key)
+	// PR-3 RLS: the flag lookup runs inside a tenant-scoped tx; the empty-input
+	// validation above stays outside (no DB access needed).
+	flag, err := scopedread.Do(ctx, s.txRunner, t, func(txCtx context.Context) (*domain.FeatureFlag, error) {
+		return s.repo.GetByKey(txCtx, t, key)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("feature-flag: evaluate: %w", err)
 	}

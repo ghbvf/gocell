@@ -225,8 +225,22 @@ func findImportedPackage(root *types.Package, path string) *types.Package {
 // types.Implements, so sealed wrappers (outbox.CellWriter) and other
 // implementers are caught, not just the exact named interface.
 func bannedReceiverLabel(info *types.Info, sel *ast.SelectorExpr, ifaces []bannedReceiver) (string, bool) {
+	// A package-qualified function call (e.g. slog.Any, fmt.Sprintf) is NOT a
+	// method on a value: sel.X is a package name, whose object Type() is
+	// Typ[Invalid], and an Invalid type spuriously "implements" any interface
+	// under types.Implements. Skip it — only method calls on a typed value can
+	// touch a banned receiver. (A hook calling outbox.SomeWriterVar.Write is
+	// still caught: sel.X is then a value, not a package name.)
+	if id, isID := sel.X.(*ast.Ident); isID {
+		if _, isPkg := info.Uses[id].(*types.PkgName); isPkg {
+			return "", false
+		}
+	}
 	t := info.TypeOf(sel.X)
 	if t == nil {
+		return "", false
+	}
+	if basic, isBasic := t.(*types.Basic); isBasic && basic.Kind() == types.Invalid {
 		return "", false
 	}
 	// 1. Exact concrete match (deref one pointer level for *sql.Tx).

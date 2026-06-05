@@ -397,6 +397,17 @@ func newClientFromCmdable(rdb cmdable, cfg Config) *Client {
 	return &Client{rdb: rdb, config: cfg}
 }
 
+// NewClientForTest wraps a pre-constructed go-redis universal client in a
+// *Client WITHOUT the construction-time Ping that NewClient performs. It is a
+// test-support seam (AUTH-CACHE-HAPPY-PATH-WIRING-TEST-01 / #795): the
+// composition-root session-cache wiring (cellmodules/accesscore) asserts the
+// happy path by injecting a lazily-connected client that never dials — the wrap
+// helper issues no Redis command, so no live server is required. Production code
+// MUST use NewClient (which validates config + verifies connectivity).
+func NewClientForTest(rdb goredis.UniversalClient) *Client {
+	return newClientFromCmdable(rdb, Config{Mode: ModeStandalone, Addr: "test"})
+}
+
 // buildStandaloneOptions converts cfg into goredis.Options. When cfg.Addr is a
 // URL form (`rediss://...` or `redis://...`), the URL is parsed via
 // goredis.ParseURL so that TLSConfig populated by `rediss` reaches go-redis;

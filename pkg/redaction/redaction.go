@@ -13,6 +13,7 @@
 package redaction
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -412,23 +413,97 @@ func redactValue(v any) any {
 	}
 }
 
-// HashIPForLog returns a short stable SHA-256 prefix of ip suitable for
-// slog observability fields (client_ip_hash). The first 8 hex characters
-// (32 bits) provide enough uniqueness to correlate log lines from the same
-// source while avoiding plaintext IP logging.
+// IPHash is a sealed, keyed, non-reversible hash of a client IP address. It is
+// the single sanctioned carrier for client-IP values that cross a replayable
+// boundary — outbox rows, broker messages, the DLX, and the audit ledger
+// payload — as well as the slog client_ip_hash field.
 //
-// An empty ip returns "" — callers can use the empty string as a signal that
-// no IP was available and omit the field entirely.
+// The unexported field makes a populated IPHash impossible to construct outside
+// this package: a plaintext IP string cannot be assigned where an IPHash is
+// required (compile error), so an event-payload producer physically cannot emit
+// a raw client IP. The only constructor is [HashIP]. The zero value (IsEmpty)
+// marshals to "" and signals that no IP was available. There is deliberately no
+// UnmarshalJSON: consumers read the already-hashed value as a plain string in
+// their own DTOs, keeping the only IPHash-producing path the keyed HashIP — a
+// plaintext value cannot be laundered into an IPHash via json.Unmarshal.
 //
-// The real IP is preserved in the ledger payload (RecordBootstrapAuthFail →
-// AppendBootstrapAuthFail) for compliance purposes; only the slog path is
-// hashed.
-func HashIPForLog(ip string) string {
+// Why keyed (HMAC) rather than a bare hash: the IPv4 space is only 2^32, so an
+// unsalted SHA-256 of an IP is reversible by brute force (precompute every IP).
+// A per-deployment secret salt makes the hash non-reversible while remaining
+// deterministic, so "same source IP" correlation across entries is preserved
+// without retaining plaintext PII. Mirrors HashiCorp Vault's audit device
+// default (HMAC-SHA256 of sensitive fields unless log_raw).
+//
+// Field set + constructor set + the producer DTO field type are frozen by the
+// CLIENT-IP-HASH-FUNNEL-01 archtest. See ADR
+// docs/architecture/...-1488-adr-replayable-payload-pii-hash-funnel.md.
+type IPHash struct {
+	v string
+}
+
+// MinIPHashSaltBytes is the minimum salt length composition roots must enforce
+// before calling [HashIP] in production. 32 bytes matches the other GoCell HMAC
+// secrets (auth.MinHMACKeyBytes); a shorter salt weakens the keyed-hash secrecy.
+const MinIPHashSaltBytes = 32
+
+// HashIP returns a keyed HMAC-SHA256 hash of ip, hex-encoded, as a sealed
+// [IPHash]. An empty ip returns the zero IPHash (IsEmpty, marshals to "") —
+// HMAC of the empty string is non-empty, so the empty case is special-cased to
+// preserve the "no IP available" signal end to end.
+//
+// salt is a per-deployment secret loaded from the environment (see
+// cellmodules/cellsecrets). HashIP itself does not validate the salt (it cannot
+// return an error). An empty/short salt still produces a valid-looking digest but
+// offers NO secrecy — with a known or empty salt the whole IPv4 space (2^32) is
+// brute-forceable, so the hash is effectively reversible. Composition roots MUST
+// inject a real secret of at least [MinIPHashSaltBytes] bytes in production
+// (enforced at the wiring site, e.g. cellmodules/accesscore).
+func HashIP(salt []byte, ip string) IPHash {
 	if ip == "" {
-		return ""
+		return IPHash{}
 	}
-	sum := sha256.Sum256([]byte(ip))
-	return hex.EncodeToString(sum[:4]) // first 8 hex chars = 32 bits
+	mac := hmac.New(sha256.New, salt)
+	mac.Write([]byte(ip))
+	return IPHash{v: hex.EncodeToString(mac.Sum(nil))}
+}
+
+// String returns the hex digest, or "" for the zero value. Use it for the slog
+// client_ip_hash field.
+func (h IPHash) String() string { return h.v }
+
+// IsEmpty reports whether no IP was hashed (the zero value).
+func (h IPHash) IsEmpty() bool { return h.v == "" }
+
+// MarshalJSON encodes the hash as a JSON string ("" for the zero value), so an
+// IPHash is wire-compatible with the schema's {"type": "string"} field.
+func (h IPHash) MarshalJSON() ([]byte, error) { return json.Marshal(h.v) }
+
+// IsIPHashString reports whether s is a valid wire form of an IPHash digest:
+// either empty (no IP was available) or a 64-character lowercase-hex
+// HMAC-SHA256 digest. It is the runtime counterpart of the clientIpHash
+// JSON-schema pattern "^$|^[a-f0-9]{64}$" and the single source of the IP-hash
+// wire shape.
+//
+// The sealed IPHash type guards the PRODUCER (a plaintext string cannot be
+// assigned where an IPHash is required), but a consumer reading the hash from an
+// UNTRUSTED wire event (broker / replay / DLX) decodes into a plain string and
+// has no such protection — a malformed or plaintext-laundered value could
+// otherwise reach the audit ledger. Consumers call IsIPHashString to fail closed
+// at that trust boundary (#1488).
+func IsIPHashString(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // RedactAny scrubs sensitive substrings from arbitrary panic-style payloads

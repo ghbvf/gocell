@@ -30,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -439,9 +440,9 @@ func NewAccessCore(clk clock.Clock, opts ...Option) *AccessCore {
 // called) or if emitting the event fails. Callers (the observer closure) log
 // the error and continue — the compliance chain is best-effort for the observer
 // path, durable via outbox row persistence.
-func (c *AccessCore) RecordBootstrapAuthFail(ctx context.Context, reason, clientIP string) error {
+func (c *AccessCore) RecordBootstrapAuthFail(ctx context.Context, reason string, clientIPHash redaction.IPHash) error {
 	if c.setupSvc == nil {
 		return fmt.Errorf("accesscore: RecordBootstrapAuthFail called before Init")
 	}
-	return c.setupSvc.RecordBootstrapAuthFail(ctx, reason, clientIP)
+	return c.setupSvc.RecordBootstrapAuthFail(ctx, reason, clientIPHash)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,7 +166,7 @@ func TestHandleEvent_ValidReasons_Ack(t *testing.T) {
 	for _, reason := range []string{"missing_header", "wrong_credentials", "rate_limited"} {
 		reason := reason
 		t.Run(reason, func(t *testing.T) {
-			payload, err := json.Marshal(map[string]string{"reason": reason, "clientIp": "1.2.3.4"})
+			payload, err := json.Marshal(map[string]string{"reason": reason, "clientIpHash": strings.Repeat("a1b2c3d4", 8)})
 			require.NoError(t, err)
 			entry := mustNewEntry(t, payload)
 			result := svc.HandleEvent(context.Background(), entry)
@@ -257,7 +258,7 @@ func TestHandleEvent_DuplicateDelivery_BothAck(t *testing.T) {
 		auditappendbootstrap.WithBootstrapStore(bs))
 	require.NoError(t, err)
 
-	payload, _ := json.Marshal(map[string]string{"reason": "wrong_credentials", "clientIp": "10.0.0.1"})
+	payload, _ := json.Marshal(map[string]string{"reason": "wrong_credentials", "clientIpHash": strings.Repeat("deadbeef", 8)})
 	entry := mustNewEntry(t, payload)
 
 	result1 := svc.HandleEvent(context.Background(), entry)
