@@ -907,22 +907,21 @@ func (v *Validator) validateFMT37ForContract(c *metadata.ContractMeta) []Validat
 	return results
 }
 
-// validateFMT37Proto enforces that endpoints.grpc.proto is present and rooted
-// under metadata.GRPCProtoPathPrefix (contracts/grpc/). Mirrors the schema
-// proto.pattern; the prefix is the single source shared with contractspec.
+// validateFMT37Proto enforces that endpoints.grpc.proto is present, rooted
+// under metadata.GRPCProtoPathPrefix (contracts/grpc/), free of control runes,
+// and a local path (no traversal). Delegates to metadata.ValidateGRPCProtoPath
+// — the single-source 4-guard validator shared with contractgen — so governance
+// and codegen cannot diverge on which checks are applied.
 func (v *Validator) validateFMT37Proto(c *metadata.ContractMeta, g *metadata.GRPCTransportMeta, file string) []ValidationResult {
-	if g.Proto == "" {
+	if err := metadata.ValidateGRPCProtoPath(g.Proto); err != nil {
+		issue := IssueInvalid
+		if g.Proto == "" {
+			issue = IssueRequired
+		}
 		return []ValidationResult{v.newError(
-			codeFMT37, IssueRequired, file, "endpoints.grpc.proto",
-			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.proto", c.ID),
-			"add proto: the contracts-relative .proto path under contracts/grpc/",
-		)}
-	}
-	if !strings.HasPrefix(g.Proto, metadata.GRPCProtoPathPrefix) {
-		return []ValidationResult{v.newError(
-			codeFMT37, IssueInvalid, file, "endpoints.grpc.proto",
-			fmt.Sprintf("grpc contract %q proto %q must be rooted under %q", c.ID, g.Proto, metadata.GRPCProtoPathPrefix),
-			"set proto to a path under contracts/grpc/",
+			codeFMT37, issue, file, "endpoints.grpc.proto",
+			fmt.Sprintf("grpc contract %q endpoints.grpc.proto: %s", c.ID, err.Error()),
+			"set proto to a local, control-rune-free path under contracts/grpc/ (no .. traversal)",
 		)}
 	}
 	return nil

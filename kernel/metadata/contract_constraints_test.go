@@ -1,6 +1,7 @@
 package metadata_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -143,6 +144,92 @@ func TestIsValidMetadataText(t *testing.T) {
 			got := metadata.IsValidMetadataText(tc.in)
 			if got != tc.want {
 				t.Fatalf("IsValidMetadataText(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateGRPCProtoPath exercises the single-source 4-guard validator that
+// both governance FMT-37 and contractgen share. Coverage target: all four guard
+// branches (empty / no-prefix / control-rune / traversal) and the happy path.
+// kernel/ coverage requirement: ≥ 90% (table-driven, per CLAUDE.md).
+func TestValidateGRPCProtoPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		proto   string
+		wantErr string // substring that must appear in the error; "" = expect nil
+	}{
+		// Happy paths.
+		{
+			name:  "valid minimal path",
+			proto: "contracts/grpc/device/command/v1/device_command.proto",
+		},
+		{
+			name:  "valid nested path",
+			proto: "contracts/grpc/access/session/verify/v1/session_verify.proto",
+		},
+
+		// Guard 1: non-empty.
+		{
+			name:    "empty proto rejected",
+			proto:   "",
+			wantErr: "requires proto",
+		},
+
+		// Guard 2: must be rooted under contracts/grpc/.
+		{
+			name:    "wrong prefix rejected",
+			proto:   "contracts/http/x.proto",
+			wantErr: "must be rooted under",
+		},
+		{
+			name:    "absolute path rejected by prefix check",
+			proto:   "/contracts/grpc/x.proto",
+			wantErr: "must be rooted under",
+		},
+
+		// Guard 3: no control rune.
+		{
+			name:    "control rune in path rejected",
+			proto:   "contracts/grpc/x\n.proto",
+			wantErr: "control character",
+		},
+		{
+			name:    "null byte rejected",
+			proto:   "contracts/grpc/x\x00.proto",
+			wantErr: "control character",
+		},
+
+		// Guard 4: filepath.IsLocal (no .. traversal escaping the repo root).
+		// Note: "contracts/grpc/../secret.proto" cleans to "contracts/secret.proto"
+		// which is still local — IsLocal only rejects paths that escape the root.
+		// The path "contracts/grpc/../../../etc/x" cleans to "../etc/x" which IS
+		// non-local (escapes repo root).
+		{
+			name:    "traversal escaping root rejected",
+			proto:   "contracts/grpc/../../../etc/x",
+			wantErr: "local path",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := metadata.ValidateGRPCProtoPath(tc.proto)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateGRPCProtoPath(%q) = %v, want nil", tc.proto, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateGRPCProtoPath(%q) = nil, want error containing %q", tc.proto, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("ValidateGRPCProtoPath(%q) = %q, want substring %q", tc.proto, err.Error(), tc.wantErr)
 			}
 		})
 	}

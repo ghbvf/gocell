@@ -1111,29 +1111,12 @@ func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 }
 
 // validateGRPCProtoPath fail-closes on a grpc contract's endpoints.grpc.proto
-// path before it is filepath.Join-ed onto rootDir and read. Shared by
-// buildGRPCSpec and the checkGRPCProtoCollisions pre-pass so both read sites
-// apply the same guards (mirrors governance FMT-37, which codegen never runs):
-//   - non-empty + rooted under metadata.GRPCProtoPathPrefix (contracts/grpc/);
-//   - no control rune (would corrupt the generated doc comment);
-//   - filepath.IsLocal — HasPrefix alone does not stop a "contracts/grpc/../.."
-//     traversal escaping rootDir on the os.ReadFile (same guard as buildSagaStep
-//     applies to step output paths). This makes the readProtoTypeInfo #nosec
-//     G304 justification self-consistent.
+// path before it is filepath.Join-ed onto rootDir and read. Delegates to
+// metadata.ValidateGRPCProtoPath (the single-source 4-guard validator shared
+// with governance FMT-37) and wraps the error with contract-identity context.
 func validateGRPCProtoPath(contractID, proto string) error {
-	if proto == "" {
-		return fmt.Errorf("contractgen build: contract %q grpc block requires proto", contractID)
-	}
-	if !strings.HasPrefix(proto, metadata.GRPCProtoPathPrefix) {
-		return fmt.Errorf(
-			"contractgen build: contract %q grpc proto %q must be rooted under %q",
-			contractID, proto, metadata.GRPCProtoPathPrefix)
-	}
-	if i := strings.IndexFunc(proto, unicode.IsControl); i >= 0 {
-		return fmt.Errorf("contractgen build: contract %q grpc proto path contains a control character at byte %d", contractID, i)
-	}
-	if !filepath.IsLocal(filepath.FromSlash(proto)) {
-		return fmt.Errorf("contractgen build: contract %q grpc proto %q must be a local path (no traversal)", contractID, proto)
+	if err := metadata.ValidateGRPCProtoPath(proto); err != nil {
+		return fmt.Errorf("contractgen build: contract %q %w", contractID, err)
 	}
 	return nil
 }
