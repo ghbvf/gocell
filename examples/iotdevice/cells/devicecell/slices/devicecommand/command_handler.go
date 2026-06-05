@@ -20,6 +20,11 @@ import (
 // cmdenqueue.Register is the SOLE sanctioned registration path; calling
 // command.Registry.RegisterHandler directly is rejected by archtest
 // COMMAND-DISPATCH-REGISTER-CALLER-01.
+//
+// Naming convention within this slice: the HTTP entry-point bridge is
+// <Op>Adapter (e.g. EnqueueAdapter), the command-bus entry-point bridge is
+// <Op>CommandAdapter — the two suffixes distinguish the two entry points that
+// share one domain Service.
 type EnqueueCommandAdapter struct{ S *Service }
 
 // Compile-time proof the adapter satisfies the generated Handler interface.

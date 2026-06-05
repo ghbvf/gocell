@@ -128,6 +128,26 @@ func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
 	assert.Contains(t, err.Error(), "command queue")
 }
 
+func TestDeviceCell_InitNoCommandRegistry_FailsFast(t *testing.T) {
+	// Symmetric with the commandQueue case: the sync command-bus registry is a
+	// required cell dep (#1580). Omitting WithCommandRegistry must fail fast in
+	// Init rather than silently leaving the generated funnel unregistered
+	// (dead-but-compiles). Full deps minus the registry so initSlices reaches the
+	// registry guard (which sits after the commandQueue guard).
+	c := NewDeviceCell(
+		clock.Real(),
+		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+	)
+	c.RegisterCommandQueue(commandtest.NewInMemQueue())
+	err := c.Init(context.Background(), newTestRec())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, err.Error(), "command registry")
+}
+
 func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	// No publisher injected; Init should fail-fast (NIL-PUB-P1).
 	c := NewDeviceCell(

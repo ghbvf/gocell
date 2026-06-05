@@ -1065,7 +1065,14 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 //   - Command Handler-lookup regression / loader dropping generated/contracts/command/*:
 //     caught by the anti-vacuity guard (codegen command source map non-empty ⟹
 //     ≥1 generated Handler iface must load).
-//   - Command-impl detection itself is exercised by TestDeadContractCover_DetectsUnimplementedCommand.
+//   - Positive command-impl detection (the real types.Implements path) is exercised
+//     by THIS test's main assertion: command.device-command.enqueue.v1 is active +
+//     codegen:true, so if types.Implements failed to match the satellite-module
+//     EnqueueCommandAdapter, the command branch would flag it and the test would FAIL.
+//     A loader regression to root-only (GOWORK=off, dropping examples/* satellites
+//     #1556) therefore surfaces as a false-positive RED here (impl appears absent),
+//     never a silent pass. TestDeadContractCover_DetectsUnimplementedCommand
+//     additionally locks the diagnostic-emission decision in isolation.
 func TestDeadContractCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

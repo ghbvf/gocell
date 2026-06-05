@@ -158,6 +158,23 @@ resp, err := cmdenqueue.Dispatch(ctx, commandReg, &cmdenqueue.Request{
 - `ErrCommandNotFound` (`KindNotFound`) if no handler is registered;
 - `ErrValidationFailed` (`KindInvalid`) for a nil registry/request.
 
+> **Field mapping.** `Request.DeviceID` is a body field on the command contract;
+> the HTTP enqueue path carries the same device identifier as the `{id}` URL path
+> parameter (mapped to the HTTP `Request.ID`), not a body field. A bridge that
+> translates HTTP→command must extract the path param and set `DeviceID`.
+
+> **⚠️ Authz and validation are the caller's job — the sync path runs neither.**
+> Per ADR §D8, `Dispatch` does **not** authenticate, authorize, or value-validate
+> the request: the registered handler delegates straight to the domain service
+> (the device-command handler runs with **no role check** — the role gate
+> `auth.AnyRole(admin, operator)` only exists on the HTTP enqueue *handler*, not on
+> the command path). Any production front-end for this command bus (HTTP→command,
+> async outbox→command) **MUST**, before calling `Dispatch`: (a) authenticate +
+> authorize the caller, including device-ownership/IDOR checks, and (b) validate
+> request values (e.g. non-empty `commandType`) against the request schema. When a
+> bridge lands, populate the contract's `endpoints.invokers` so callers are
+> accountable.
+
 As of this writing there is **no production `Dispatch` caller** for device-command
 enqueue: the production entry points that front the command bus — an
 HTTP→command bridge and an async outbox→command relay — are later #1044 PRs (ADR
@@ -190,3 +207,6 @@ unregistered codegen command becomes compile-unexpressible — upgrading
 - [ ] Composition root constructs `command.NewRegistry()` and injects it via `With*`.
 - [ ] `slice.yaml` `verify.contract` has `contract.<id>.handle`; add an executable test.
 - [ ] `go run ./cmd/gocell validate` + the command archtests pass.
+- [ ] (When the first production `Dispatch` caller / bridge lands) the bridge
+      enforces authz + value validation before `Dispatch`; populate
+      `endpoints.invokers`; update this guide to drop the "no production caller" caveat.

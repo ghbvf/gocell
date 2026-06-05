@@ -88,6 +88,10 @@ func WithCursorCodec(c *query.CursorCodec) Option {
 // state #1580 fixes. Same "no soft fallback" rationale as WithDeviceRepository /
 // RegisterCommandQueue. The composition root constructs it via
 // command.NewRegistry().
+//
+// One-shot wiring option (like WithDeviceRepository), not accumulative: a nil
+// registry is stored as-is and rejected by the initSlices fail-fast guard — it
+// does not preserve a previously-set value. Intentional; the dependency is required.
 func WithCommandRegistry(reg *commandruntime.Registry) Option {
 	return func(c *DeviceCell) { c.commandRegistry = reg }
 }
@@ -344,7 +348,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	// This import is what makes the generated command funnel a live entry point
 	// (#1580) rather than dead-but-compiles.
 	if err := cmdenqueue.Register(c.commandRegistry, devicecommand.EnqueueCommandAdapter{S: pubSvc}); err != nil {
-		return fmt.Errorf("device-command register: %w", err)
+		return fmt.Errorf("device-command register (id=%s): %w", cmdenqueue.DispatchID, err)
 	}
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	c.commandInternalHandler = devicecommandinternal.NewHandler(intSvc)
