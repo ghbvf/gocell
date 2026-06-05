@@ -127,6 +127,12 @@ type ConfigForExternalCell struct {
 func StandardCellRules() []*CellRule {
 	return []*CellRule{
 		{ID: rulePanicRegistered01, Run: CheckPanicRegistered},
+		{ID: ruleErrcodeKindLiteral01, Run: CheckErrcodeKindLiteralBanned},
+		{ID: ruleMessageConstLiteral01, Run: CheckErrcodeMessageConstLiteral},
+		{ID: ruleErrorFirstAPI01, Run: CheckErrorFirstAPI01},
+		{ID: ruleErrorFirstTypedNil01, Run: CheckErrorFirstTypedNil01},
+		{ID: ruleExportedErrorNew01, Run: CheckExportedErrorNew},
+		{ID: ruleDetailsSealedFieldFrozen, Run: CheckDetailsSealedFieldFrozen01},
 	}
 }
 
