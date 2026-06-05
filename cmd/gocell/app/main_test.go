@@ -90,10 +90,9 @@ func TestFindRoot(t *testing.T) {
 }
 
 func TestReadModule(t *testing.T) {
-	root, err := findRoot()
-	if err != nil {
-		t.Fatalf("findRoot() error: %v", err)
-	}
+	// repoRoot (workspace root) not findRoot(): post-#1557 split findRoot() would
+	// resolve cmd/gocell/, whose module path is .../cmd/gocell, not the core module.
+	root := repoRoot(t)
 
 	mod, err := readModule(root)
 	if err != nil {

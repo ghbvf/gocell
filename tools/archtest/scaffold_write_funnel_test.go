@@ -102,15 +102,30 @@ func scaffoldFunnelPred(rel string) bool {
 	if strings.HasSuffix(base, "_test.go") {
 		return false
 	}
-	if strings.HasPrefix(rel, "cmd/gocell/app/") {
+	switch {
+	case strings.HasPrefix(rel, "cmd/gocell/app/"):
 		return strings.HasPrefix(base, "scaffold")
-	}
-	if strings.HasPrefix(rel, "tools/codegen/cellgen/") {
+	case strings.HasPrefix(rel, "tools/codegen/cellgen/"):
 		return strings.HasPrefix(base, "scaffold") ||
 			strings.HasPrefix(base, "generate_") ||
 			base == "stage_render.go"
+	case strings.HasPrefix(rel, "tools/codegen/"):
+		// tools/codegen/contractgen, top-level writer.go, and the other codegen
+		// sub-packages: all non-test .go files (matches the original
+		// ./tools/codegen/... Typed scope).
+		return true
+	case strings.HasPrefix(rel, "kernel/assembly/"):
+		// kernel/assembly/Generator.PlanAssemblyScaffold: all non-test .go files.
+		return true
+	default:
+		// The load was switched from Typed(3 patterns) to Production (#1557) because
+		// cmd/gocell is now its own go.work module that Typed(GOWORK=off) cannot cross.
+		// Production loads EVERY workspace package, so the default flips to false (was
+		// true under the bounded Typed scope) — only the scaffold paths above are in
+		// scope; everything else (incl examples/* satellites, kernel/, runtime/, …) is
+		// excluded, preserving the original bounded scope exactly.
+		return false
 	}
-	return true
 }
 
 // canonicalOSWriteCall returns the banned os function name if the given
@@ -167,11 +182,15 @@ func canonicalOSWriteCall(info *types.Info, call *ast.CallExpr) string {
 func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 	t.Parallel()
 
-	diags := Run(t, Typed(TypedOpts{}, []string{
-		"./tools/codegen/...",
-		"./kernel/assembly/...",
-		"./cmd/gocell/app/...",
-	}),
+	// Production (workspace) scan, filtered by scaffoldFunnelPred: cmd/gocell is its
+	// own go.work module (#1557), so the original Typed(GOWORK=off) load of
+	// ./cmd/gocell/app/... can no longer cross the satellite boundary. Production loads
+	// every workspace member; scaffoldFunnelPred (default flipped to false) restores
+	// the exact bounded scope (cmd/gocell/app/scaffold*, tools/codegen/*, kernel/assembly/*).
+	// runRulePasses iterates packages sequentially, so the sawCmdScaffold closure write
+	// is race-free.
+	var sawCmdScaffold bool
+	diags := Run(t, Production(TypedOpts{}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
@@ -181,6 +200,9 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 				rel := p.Rel(file)
 				if !scaffoldFunnelPred(rel) {
 					continue
+				}
+				if strings.HasPrefix(filepath.ToSlash(rel), "cmd/gocell/app/") {
+					sawCmdScaffold = true
 				}
 				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 					name := canonicalOSWriteCall(p.TypesInfo, call)
@@ -198,5 +220,11 @@ func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 			return out
 		})
 
+	// Anti-vacuity: if the cmd/gocell satellite ever drops out of the Production
+	// workspace scan, the funnel would pass vacuously over its scaffold*.go files.
+	if !sawCmdScaffold {
+		t.Error("anti-vacuity: no cmd/gocell/app/scaffold*.go file was scanned — the " +
+			"Production workspace load no longer reaches the cmd/gocell satellite module")
+	}
 	Report(t, "SCAFFOLD-WRITE-FUNNEL-01", diags)
 }

@@ -3,20 +3,40 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// repoRoot returns the gocell repo root by walking up from the test's working
-// directory until a go.mod is found. This makes the graph tests independent
-// of the working directory that `go test` is invoked from.
+// repoRoot returns the gocell repo (workspace) root by walking up from the
+// test's working directory until the directory holding go.work is found.
+//
+// cmd/gocell is its own go.work module (#1557), so the production findRoot()
+// ("nearest go.mod wins") now stops at cmd/gocell/go.mod. These self-referential
+// CLI tests scan the OUTER gocell repo (cells/, journeys/, assemblies/,
+// tools/archtest/testdata, …), which lives at the workspace root — the only
+// directory holding go.work (cmd/gocell/ holds go.mod but not go.work). Walking
+// up to go.work therefore skips the cmd/gocell module boundary and resolves the
+// real repo root, independent of the working directory `go test` runs from.
+// Production findRoot() keeps its "nearest module" contract (correct for the CLI
+// invoked from the repo root at runtime).
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	root, err := findRoot()
+	dir, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("repoRoot: %v", err)
+		t.Fatalf("repoRoot: getwd: %v", err)
 	}
-	return root
+	for {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.work")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("repoRoot: no go.work found walking up from %s", dir)
+		}
+		dir = parent
+	}
 }
 
 // TestRunGraphJSON exercises the same code path as `gocell graph

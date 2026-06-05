@@ -22,6 +22,9 @@ import (
 // tools/codegen/sharedschema package.
 func TestVerifyCodegenSharedSchema_HappyPath(t *testing.T) {
 	// Not parallel: uses os.Getwd via findRoot() which is process-global.
+	// chdir to the real repo root: post-#1557 split findRoot() from the cmd/gocell
+	// module dir resolves cmd/gocell/, where the shared-schema mirrors do not live.
+	chdirToRoot(t, repoRoot(t))
 	if err := verifyCodegenSharedSchema(context.Background(), nil); err != nil {
 		t.Fatalf("verifyCodegenSharedSchema on in-sync repo: %v", err)
 	}

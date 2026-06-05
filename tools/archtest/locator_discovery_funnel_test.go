@@ -215,6 +215,26 @@ func locatorConsumerScanPatterns() []string {
 	}
 }
 
+// locatorInScanScope reports whether rel (repo-relative) falls under one of the
+// directory prefixes derived from the given "./dir/..." package patterns
+// (e.g. "./kernel/metadata/..." → "kernel/metadata/").
+//
+// cmd/gocell became its own go.work module (#1557), so the A2/A5 rules switched
+// from a bounded Typed(GOWORK=off) load — which can no longer cross the satellite
+// module boundary — to a Production (ModeWorkspace) load that spans every
+// workspace member. This guard re-bounds the per-file scan to the exact file set
+// the original Typed patterns covered, so the rule scope is unchanged.
+func locatorInScanScope(rel string, patterns []string) bool {
+	rel = filepath.ToSlash(rel)
+	for _, p := range patterns {
+		pre := strings.TrimSuffix(strings.TrimPrefix(p, "./"), "...")
+		if strings.HasPrefix(rel, pre) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist enforces that
 // fs.WalkDir / filepath.Walk / fs.ReadDir are only called from within the
 // Locator's discover{Conventional,Manifest} bodies (and the manifest glob
@@ -271,7 +291,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
-	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}),
+	patterns := []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}
+	var sawCmdGocell bool
+	diags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -279,6 +301,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
+				if !locatorInScanScope(rel, patterns) {
+					continue
+				}
+				if strings.HasPrefix(filepath.ToSlash(rel), "cmd/gocell/") {
+					sawCmdGocell = true
+				}
 				if locatorIsAllowedFile(rel) {
 					continue
 				}
@@ -306,6 +334,10 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 			return d
 		})
 
+	if !sawCmdGocell {
+		t.Error("anti-vacuity: A2a scanned no cmd/gocell file — the Production workspace " +
+			"load no longer reaches the cmd/gocell satellite module (#1557)")
+	}
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2a", diags)
 }
 
@@ -326,7 +358,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *testing.T) {
-	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}),
+	patterns := []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}
+	var sawCmdGocell bool
+	diags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -334,6 +368,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
+				if !locatorInScanScope(rel, patterns) {
+					continue
+				}
+				if strings.HasPrefix(filepath.ToSlash(rel), "cmd/gocell/") {
+					sawCmdGocell = true
+				}
 				if locatorIsAllowedFile(rel) {
 					continue
 				}
@@ -365,6 +405,10 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 			return d
 		})
 
+	if !sawCmdGocell {
+		t.Error("anti-vacuity: A2b scanned no cmd/gocell file — the Production workspace " +
+			"load no longer reaches the cmd/gocell satellite module (#1557)")
+	}
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2b", diags)
 }
 
@@ -829,7 +873,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 //   - kernel/assembly/generator.go: write path; "assemblies"/"cmd" are the
 //     conventional scaffold output directory names, not discovery tokens.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
-	diags := Run(t, Typed(TypedOpts{Tests: false}, locatorConsumerScanPatterns()),
+	patterns := locatorConsumerScanPatterns()
+	var sawCmdGocell bool
+	diags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -837,6 +883,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
+				if !locatorInScanScope(rel, patterns) {
+					continue
+				}
+				if strings.HasPrefix(filepath.ToSlash(rel), "cmd/gocell/") {
+					sawCmdGocell = true
+				}
 
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
@@ -877,6 +929,10 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 			return d
 		})
 
+	if !sawCmdGocell {
+		t.Error("anti-vacuity: A5 scanned no cmd/gocell file — the Production workspace " +
+			"load no longer reaches the cmd/gocell satellite module (#1557)")
+	}
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5", diags)
 }
 
@@ -893,8 +949,10 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 //
 // Both are required reverse negative tests per ai-robust §"工具选定后强制盲区自检".
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
+	patterns := locatorConsumerScanPatterns()
+	var sawCmdGocell bool
 	// Blind-spot A5-BS1: path.Join (not filepath.Join) with banned token.
-	pathJoinDiags := Run(t, Typed(TypedOpts{Tests: false}, locatorConsumerScanPatterns()),
+	pathJoinDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -902,6 +960,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
+				if !locatorInScanScope(rel, patterns) {
+					continue
+				}
+				if strings.HasPrefix(filepath.ToSlash(rel), "cmd/gocell/") {
+					sawCmdGocell = true
+				}
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
@@ -949,7 +1013,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 	// filepath.Join args. EvaluateConstString handles BinaryExpr ADD via
 	// go/types constant folding, so "ce"+"lls" would be resolved to "cells"
 	// and caught by A5. This negative test confirms no such form exists.
-	concatDiags := Run(t, Typed(TypedOpts{Tests: false}, locatorConsumerScanPatterns()),
+	concatDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -957,6 +1021,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
+				if !locatorInScanScope(rel, patterns) {
+					continue
+				}
+				if strings.HasPrefix(filepath.ToSlash(rel), "cmd/gocell/") {
+					sawCmdGocell = true
+				}
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
@@ -1003,6 +1073,11 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 		})
 
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5.BLINDSPOT.CONCAT", concatDiags)
+
+	if !sawCmdGocell {
+		t.Error("anti-vacuity: A5 blind-spot scans reached no cmd/gocell file — the Production " +
+			"workspace load no longer reaches the cmd/gocell satellite module (#1557)")
+	}
 }
 
 // --- internal helpers ---

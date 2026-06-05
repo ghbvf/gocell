@@ -70,6 +70,7 @@ func TestCheckContractHealth_JSONFormat(t *testing.T) {
 // carry the data, so dashboards can read transport metadata directly from
 // `gocell check contract-health` output.
 func TestCheckContractHealth_TextFormat_HasMethodPathColumns(t *testing.T) {
+	chdirToRoot(t, repoRoot(t)) // runCheck derives root via findRoot() from CWD; scan the real repo, not cmd/gocell/ (#1557)
 	out := captureStdout(t, func() {
 		_ = runCheck(context.Background(), []string{"contract-health"})
 	})
@@ -146,8 +147,9 @@ func TestCheckUnconditionalSkip_UnknownFormat(t *testing.T) {
 // "./..." against the caller's CWD and a sub-tree scan can silently mask
 // violations elsewhere in the repo.
 func TestRunUnconditionalSkipAnalyzer_BoundedToRoot(t *testing.T) {
-	root, err := findRoot()
-	require.NoError(t, err)
+	// repoRoot (workspace root) not findRoot(): post-#1557 split findRoot() from
+	// the cmd/gocell module dir resolves cmd/gocell/, not the real repo root.
+	root := repoRoot(t)
 
 	// Switch CWD to a sub-directory and confirm the analyzer still scans
 	// the whole repo — i.e. the Config.Dir override is in effect.
@@ -234,6 +236,7 @@ func TestRelativeToRoot(t *testing.T) {
 // TestCheckSliceCoverage_HappyPath exercises the real accesscore cell —
 // its slices/ directory is well-formed so the check should pass.
 func TestCheckSliceCoverage_HappyPath(t *testing.T) {
+	chdirToRoot(t, repoRoot(t)) // scan the real repo, not the cmd/gocell module dir (#1557)
 	err := runCheck(context.Background(), []string{"slice-coverage", "--cell=accesscore"})
 	assert.NoError(t, err, "slice-coverage on a well-formed cell must pass")
 }
@@ -275,6 +278,7 @@ func TestCheckSliceCoverage_EmptyDirViolation(t *testing.T) {
 
 // TestCheckAssemblyCompleteness_HappyPath checks the real corebundle assembly.
 func TestCheckAssemblyCompleteness_HappyPath(t *testing.T) {
+	chdirToRoot(t, repoRoot(t)) // scan the real repo, not the cmd/gocell module dir (#1557)
 	err := runCheck(context.Background(), []string{"assembly-completeness", "--id=corebundle"})
 	assert.NoError(t, err, "assembly-completeness on corebundle must pass")
 }
@@ -321,6 +325,7 @@ func TestCheckAssemblyCompleteness_MissingCell(t *testing.T) {
 
 // TestCheckJourneyReadiness_HappyPath checks a single known-good journey.
 func TestCheckJourneyReadiness_HappyPath(t *testing.T) {
+	chdirToRoot(t, repoRoot(t)) // scan the real repo, not the cmd/gocell module dir (#1557)
 	err := runCheck(context.Background(), []string{"journey-readiness", "--journey=J-ssologin"})
 	assert.NoError(t, err, "J-ssologin must pass journey-readiness")
 }
@@ -375,6 +380,7 @@ func TestCheckL0Imports_NoL0Cells(t *testing.T) {
 // TestCheckL0Imports_NonL0CellSkipsWithSuccess verifies that requesting --cell
 // for a non-L0 cell prints an informational message and exits 0 (success).
 func TestCheckL0Imports_NonL0CellSkipsWithSuccess(t *testing.T) {
+	chdirToRoot(t, repoRoot(t)) // scan the real repo, not the cmd/gocell module dir (#1557)
 	out := captureStdout(t, func() {
 		err := runCheck(context.Background(), []string{"l0-imports", "--cell=accesscore"})
 		assert.NoError(t, err, "non-L0 cell must exit 0 with skip message")

@@ -24,10 +24,15 @@
 # examples/* are their own go.work modules (#1556), so a root `./examples/...`
 # pattern matches zero packages here; their release-consistency build is covered
 # by hack/verify-workspace.sh (GOWORK=off per-module). `make build` ships core/cmd.
+# cmd/gocell is its own go.work module too (#1557), so the `./cmd/...` wildcard
+# below stops at its nested-module boundary and no longer emits bin/gocell — it
+# is built explicitly via its module path (the explicit dir path resolves the
+# satellite under go.work; CWD stays the repo root so bin/ is the repo bin/).
 build:
 	mkdir -p bin
 	go generate ./cmd/corebundle/
 	go build -tags=catalog_gen -o bin/ ./cmd/...
+	go build -o bin/ ./cmd/gocell
 
 # check-build is the full-repo compile check (no artefacts). Module-aware
 # (#1556): iterate every go.work member from the single funnel
