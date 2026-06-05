@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// protoTypeInfo is the proto identity resolved from a .proto file for one rpc
+// ProtoTypeInfo is the proto identity resolved from a .proto file for one rpc
 // method: the Go import binding (from the file's go_package option) plus the
 // request/response message type simple names (from the rpc declaration). The
 // .proto is the single source of truth for these — codegen never hand-derives
 // them, so the rendered stub's import + signature provably track the proto
 // (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
-type protoTypeInfo struct {
+type ProtoTypeInfo struct {
 	// ProtoPackage is the proto `package` declaration, e.g. "device.command.v1".
 	ProtoPackage string
 	// ImportPath is the go_package import path (the part before ';'),
@@ -45,24 +45,24 @@ var (
 	blockCommentRE = regexp.MustCompile(`(?s)/\*.*?\*/`)
 )
 
-// readProtoTypeInfo reads protoAbsPath and resolves the proto identity for the
+// ReadProtoTypeInfo reads protoAbsPath and resolves the proto identity for the
 // rpc method within the contract's declared service (fully-qualified, e.g.
 // "device.command.v1.DeviceCommandService"). Comments are stripped first so a
 // commented-out option or rpc declaration is never matched.
-func readProtoTypeInfo(protoAbsPath, service, method string) (protoTypeInfo, error) {
+func ReadProtoTypeInfo(protoAbsPath, service, method string) (ProtoTypeInfo, error) {
 	raw, err := os.ReadFile(protoAbsPath) // #nosec G304 — codegen reads a contracts-relative .proto resolved by the builder
 	if err != nil {
-		return protoTypeInfo{}, fmt.Errorf("read proto %q: %w", protoAbsPath, err)
+		return ProtoTypeInfo{}, fmt.Errorf("read proto %q: %w", protoAbsPath, err)
 	}
 	text := stripProtoComments(string(raw))
 
 	pkg, err := parseProtoPackage(text)
 	if err != nil {
-		return protoTypeInfo{}, err
+		return ProtoTypeInfo{}, err
 	}
 	importPath, alias, err := parseGoPackage(text)
 	if err != nil {
-		return protoTypeInfo{}, err
+		return ProtoTypeInfo{}, err
 	}
 	// Scope to the service the contract declares (service FQN = <pkg>.<Name>),
 	// then resolve the method only within that service block — a method name is
@@ -71,17 +71,17 @@ func readProtoTypeInfo(protoAbsPath, service, method string) (protoTypeInfo, err
 	// protogen.Service → method.Input/Output rather than globbing the file).
 	simpleService, err := serviceSimpleName(service, pkg)
 	if err != nil {
-		return protoTypeInfo{}, err
+		return ProtoTypeInfo{}, err
 	}
 	block, err := extractServiceBlock(text, simpleService)
 	if err != nil {
-		return protoTypeInfo{}, err
+		return ProtoTypeInfo{}, err
 	}
 	req, resp, err := parseRPCMethod(block, method, pkg)
 	if err != nil {
-		return protoTypeInfo{}, err
+		return ProtoTypeInfo{}, err
 	}
-	return protoTypeInfo{
+	return ProtoTypeInfo{
 		ProtoPackage: pkg,
 		ImportPath:   importPath,
 		Alias:        alias,

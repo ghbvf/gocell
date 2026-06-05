@@ -1091,7 +1091,7 @@ func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 			contract.ID, g.StreamingType)
 	}
 
-	info, err := readProtoTypeInfo(filepath.Join(rootDir, filepath.FromSlash(g.Proto)), g.Service, g.Method)
+	info, err := ReadProtoTypeInfo(filepath.Join(rootDir, filepath.FromSlash(g.Proto)), g.Service, g.Method)
 	if err != nil {
 		return fmt.Errorf("contractgen build: contract %q grpc proto: %w", contract.ID, err)
 	}
