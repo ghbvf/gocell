@@ -138,8 +138,11 @@ examples-exclusion convention, not a silent gap.
   injection form (positional param) replaces three (option / struct-field /
   positional); ~14 `WithClock` options + ~13 input `Config.Clock` fields + the
   `CLOCK-INJECTION-TEST-CALLSITE-01` / `-PROD-CALLSITE-01` archtests + the
-  control-plane comment-marker + its allowlist map are deleted — net reduction of
-  governance surface.
+  control-plane comment-marker + the old `CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01`
+  rule are deleted — net reduction of governance surface. (The
+  `controlPlaneClockCarveOut` host→method map is **retained** as the host-scoping
+  half of the sealed-`controlPlaneClock` funnel — see §619 above; only the
+  comment-marker and the live-rule are gone.)
 - Negative: large mechanical sweep (~1000 callsites: composition roots pass
   `clock.Real()`, tests pass `clockmock.New(...)`). No backwards-compat shim
   (project has no external consumers).
