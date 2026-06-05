@@ -11,6 +11,7 @@
 //   - INVARIANT: SAGA-CONSTRUCTOR-NIL-GUARD-01
 //   - INVARIANT: SAGA-METRIC-LABEL-VALUES-FROZEN-01
 //   - INVARIANT: SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
+//   - INVARIANT: SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01
 //
 // saga_invariants_test.go — consolidated saga-theme archtest invariants.
 //
@@ -24,10 +25,15 @@
 //   - saga_status_fanout_coverage_test.go         (SAGA-STATUS-FANOUT-COVERAGE-01)
 //   - saga_step_run_outside_tx_test.go            (SAGA-STEP-RUN-OUTSIDE-TX-01)
 //
-// The 9th invariant, SAGA-INVARIANTS-FILE-CONSOLIDATED-01, is this file's own
-// consolidation guard (defined inline at the end): the machine guard that keeps
-// the saga theme from re-fragmenting. Its repo-wide generalization to every
-// theme is tracked in #1279.
+// SAGA-INVARIANTS-FILE-CONSOLIDATED-01 is this file's own consolidation guard
+// (defined inline at the end): the machine guard that keeps the saga theme from
+// re-fragmenting. Its repo-wide generalization to every theme is tracked in #1279.
+//
+// Invariants added after the #1213 merge are defined directly in this file (not
+// merged from a standalone file): SAGA-CONSTRUCTOR-NIL-GUARD-01,
+// SAGA-METRIC-LABEL-VALUES-FROZEN-01, SAGA-SLOG-INSTANCE-FIELDS-CALLER-01, and
+// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01 (#1609 PR-02). The authoritative
+// per-file invariant list is the `// invariants:` header at the top.
 package archtest
 
 import (
@@ -1393,13 +1399,14 @@ func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T)
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware；identifies every
 //     concrete named type (exported AND unexported) that satisfies
 //     kernel/saga/journal.Journal (value or pointer receivers).
-//   - conformance 调用扫描 (impl-level): ResolvePackageRef + _test.go path filter
-//     plus per-call return-type unwrap — type-aware callee resolution via
-//     *types.Info. For every _test.go file that calls
-//     sagajournaltest.RunConformanceSuite, walk every CallExpr in the file and
-//     unwrap its return tuple; impls whose key matches the impl set are marked
-//     enrolled. Package co-location alone no longer credits enrollment — the
-//     test file must actually construct the impl.
+//   - conformance 调用扫描 (factory-bound): ResolvePackageRef resolves each
+//     sagajournaltest.RunConformanceSuite(t, factory) call type-aware via
+//     *types.Info, then creditEnrollmentsFromFactory credits ONLY the impls the
+//     FACTORY argument constructs (resolving FuncLit / named-func Ident / local
+//     var bound to a FuncLit, then unwrapping constructor return tuples in that
+//     body). Package co-location and "any constructor in the file" no longer
+//     credit enrollment — the factory passed to the suite must build the impl
+//     (#1641 review F1 closed the file-level false-credit gap).
 //   - 综合 Medium 天花板: Go cannot require a _test.go file to exist for a type at
 //     compile time. The enforcement is archtest-bound (CI fails), not
 //     compile-time. The Hard upgrade path is a codegen funnel + golden that
@@ -1515,18 +1522,11 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 				return nil
 			}
 			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if !strings.HasSuffix(rel, "_test.go") {
+				if !strings.HasSuffix(p.Rel(f), "_test.go") {
 					continue
 				}
-				if !hasSagaConformanceCall(f, p.TypesInfo) {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					for _, implKey := range extractEnrolledImpls(call, p.TypesInfo, implSet) {
-						enrolledImpls[implKey] = true
-					}
-				})
+				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
+					sagaConformancePkg, sagaConformanceFuncName, implSet, enrolledImpls)
 			}
 			return nil
 		})
@@ -1682,6 +1682,300 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 		"B1 reverse: no production non-test file outside saga packages should contain string literal %q", sagaJournalIfaceName)
 }
 
+// ============================================================================
+// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01   (#1609 PR-02)
+// ============================================================================
+// INVARIANT: SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01
+//
+// AI-robust: Medium
+//
+//   - 实现扫描: types.Implements(*types.Interface) — type-aware; identifies every
+//     concrete named type (exported AND unexported) that satisfies
+//     kernel/saga/journal.GlobalReader (value or pointer receivers).
+//   - conformance 调用扫描 (factory-bound): ResolvePackageRef resolves each
+//     sagajournaltest.RunGlobalReaderConformance(t, factory) call, then the
+//     shared creditEnrollmentsFromFactory credits ONLY the impls the FACTORY
+//     argument constructs (FuncLit / named-func Ident / local var bound to a
+//     FuncLit → unwrap constructor returns in that body). An unrelated
+//     constructor elsewhere in the file does NOT credit enrollment (#1641 review
+//     F1) — the factory passed to the suite must build the impl.
+//   - 综合 Medium 天花板: Go cannot require a _test.go file to exist for a type at
+//     compile time; enforcement is archtest-bound (CI fails), not compile-time.
+//     The Hard upgrade path is a codegen funnel + golden that enumerates the
+//     GlobalReader impls from one source and diff-locks the registry — the SAME
+//     cross-PR governance effort already tracked for
+//     SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 at gh #1003 (this rule shares it; do
+//     NOT open a second issue). This is the sibling read-side rule to that one:
+//     same type-aware mechanism, applied to the narrow GlobalReader interface
+//     instead of the full Journal.
+//
+// Enforces: every concrete type in the production source tree that implements
+// kernel/saga/journal.GlobalReader must have at least one
+// sagajournaltest.RunGlobalReaderConformance call in a _test.go file of its
+// package. Today the only impl is journal.MemJournal; the PG GlobalReader is
+// deferred to PR-PG (#1630) — until then PGJournal does not implement
+// GlobalReader and is not required here. When PR-PG lands the PG global_seq
+// column, PGJournal becomes a GlobalReader impl and is automatically required to
+// enroll (no archtest change needed).
+//
+// # Blind-spot catalog (forms not reachable by *types.Info)
+//
+//   - B1. reflect-based implicit implementations: no production saga code uses
+//     this pattern; confirmed by
+//     TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl.
+//   - B2. generated mock implementations in _test.go are excluded (Tests=false in
+//     the production load pass); a mock in a production non-test file would be
+//     flagged — intentionally.
+//   - B3. embedded interface forwarding (struct embedding journal.GlobalReader)
+//     structurally satisfies the interface; such helpers live in _test.go (out of
+//     the impl scan). A production struct embedding it is treated as an impl and
+//     must enroll.
+//   - B4. pointer-receiver-only impl whose constructor returns *T: collectSagaJournalImpls
+//     keys impls by value-type name (pkg.T), and extractEnrolledImpls unwraps the
+//     constructor's *T return to T, so the keys match. Confirmed by MemJournal
+//     (NewMemJournal returns *MemJournal; the test load unwraps to journal.MemJournal).
+//     The PG impl (PR-PG #1630) must follow the same constructor shape.
+//
+// B2/B3/B4 have no dedicated reverse self-test (only B1 does, via
+// ...ReverseBlindSpot_NoReflectImpl): they are accepted Medium ceilings, not
+// gaps. The single Hard upgrade that closes all of them at once is the codegen
+// golden enumeration shared with SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 at
+// gh #1003 — do NOT open a separate issue.
+//
+// ref: SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (sibling rule, same mechanism)
+// ref: docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md §6
+
+const (
+	sagaGlobalReaderIfaceName       = "GlobalReader"
+	sagaGlobalReaderConformanceFunc = "RunGlobalReaderConformance"
+)
+
+// TestSagaGlobalReaderConformanceEnrollment enforces
+// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01: every concrete type implementing
+// kernel/saga/journal.GlobalReader in the production tree must have a
+// sagajournaltest.RunGlobalReaderConformance call in a _test.go file of its
+// package that also constructs the impl.
+func TestSagaGlobalReaderConformanceEnrollment(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+
+	// ─── Step 1: resolve journal.GlobalReader interface ─────────────────────
+	prodPatterns := prodscan.Patterns(root)
+	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
+
+	var iface *types.Interface
+	var implPkgs []*types.Package
+
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			if p.Pkg.Path() == sagaJournalIfacePkg {
+				if obj := p.Pkg.Scope().Lookup(sagaGlobalReaderIfaceName); obj != nil {
+					if named, ok := obj.Type().(*types.Named); ok {
+						if i, ok := named.Underlying().(*types.Interface); ok {
+							iface = i.Complete()
+						}
+					}
+				}
+			}
+			implPkgs = append(implPkgs, p.Pkg)
+			return nil
+		})
+
+	require.NotNil(t, iface,
+		"SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01: failed to resolve journal.GlobalReader interface; "+
+			"check import path %s", sagaJournalIfacePkg)
+
+	// ─── Step 2: collect all concrete implementations ───────────────────────
+	implSet := make(map[string]bool)
+	implPkgSet := make(map[string]bool)
+	for _, pkg := range implPkgs {
+		if pkg == nil {
+			continue
+		}
+		collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
+	}
+
+	require.NotEmpty(t, implSet,
+		"SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01: zero GlobalReader implementations collected — "+
+			"likely a type-universe regression (iface and impls must share one packages.Load). "+
+			"Expect at least journal.MemJournal.")
+
+	// ─── Step 3: scan test corpus for RunGlobalReaderConformance call sites
+	// with impl-level enrollment (constructs the impl AND calls the suite). ──
+	enrolledImpls := make(map[string]bool)
+	testPatterns := prodscan.Patterns(root)
+	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				if !strings.HasSuffix(p.Rel(f), "_test.go") {
+					continue
+				}
+				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
+					sagaConformancePkg, sagaGlobalReaderConformanceFunc, implSet, enrolledImpls)
+			}
+			return nil
+		})
+
+	// ─── Step 4: flag unenrolled implementations ────────────────────────────
+	var diags []Diagnostic
+	for implKey := range implSet {
+		if enrolledImpls[implKey] {
+			continue
+		}
+		dotIdx := strings.LastIndex(implKey, ".")
+		if dotIdx < 0 {
+			continue
+		}
+		pkgPath := implKey[:dotIdx]
+		diags = append(diags, Diagnostic{
+			Rel:  implKey,
+			Line: 0,
+			Message: fmt.Sprintf(
+				"archtest: kernel/saga/journal.GlobalReader impl %q not enrolled "+
+					"(SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01). "+
+					"Add a _test.go in package %s (or its external _test) that "+
+					"both calls sagajournaltest.RunGlobalReaderConformance(t, factory) "+
+					"AND constructs %s inside the factory closure (impl-level "+
+					"enrollment).",
+				implKey, pkgPath, implKey,
+			),
+		})
+	}
+	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
+	Report(t, "SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01", diags)
+}
+
+// TestSagaGlobalReaderConformanceEnrollment_REDFixture simulates an impl-level
+// "missing enrollment" by dropping one impl from the enrolled set and asserts
+// the diagnostic logic produces at least one violation.
+func TestSagaGlobalReaderConformanceEnrollment_REDFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	prodPatterns := prodscan.Patterns(root)
+	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
+
+	var iface *types.Interface
+	var implPkgs []*types.Package
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			if p.Pkg.Path() == sagaJournalIfacePkg {
+				if obj := p.Pkg.Scope().Lookup(sagaGlobalReaderIfaceName); obj != nil {
+					if named, ok := obj.Type().(*types.Named); ok {
+						if i, ok := named.Underlying().(*types.Interface); ok {
+							iface = i.Complete()
+						}
+					}
+				}
+			}
+			implPkgs = append(implPkgs, p.Pkg)
+			return nil
+		})
+
+	require.NotNil(t, iface, "REDFixture: could not resolve GlobalReader interface")
+
+	implSet := make(map[string]bool)
+	implPkgSet := make(map[string]bool)
+	for _, pkg := range implPkgs {
+		if pkg != nil {
+			collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
+		}
+	}
+	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty")
+
+	// Pick an arbitrary impl as the "missing enrollment" target.
+	var targetImplKey string
+	for k := range implSet {
+		targetImplKey = k
+		break
+	}
+
+	// Build enrolled impls = all impls EXCEPT the target; the diagnostic logic
+	// must flag the target.
+	enrolledImpls := make(map[string]bool)
+	for k := range implSet {
+		if k != targetImplKey {
+			enrolledImpls[k] = true
+		}
+	}
+
+	var diags []Diagnostic
+	for implKey := range implSet {
+		if !enrolledImpls[implKey] {
+			diags = append(diags, Diagnostic{Rel: implKey, Message: implKey + " not enrolled"})
+		}
+	}
+	assert.GreaterOrEqual(t, len(diags), 1,
+		"REDFixture: removing impl %q from enrolledImpls must produce ≥1 violation, got 0", targetImplKey)
+}
+
+// TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl (B1)
+// confirms no production non-test file outside the saga packages uses the string
+// literal "GlobalReader" as a reflect target that could construct an implicit
+// impl bypassing types.Implements.
+func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	scope := ModuleScope(root)
+
+	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
+		var out []Diagnostic
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			if strings.HasPrefix(rel, "kernel/saga/journal/") ||
+				strings.HasPrefix(rel, "kernel/saga/sagajournaltest/") ||
+				strings.HasPrefix(rel, "adapters/postgres/saga/") ||
+				strings.HasPrefix(rel, "runtime/saga/") {
+				continue
+			}
+			EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
+				val, ok := StringLitValue(lit)
+				if !ok {
+					return
+				}
+				if val == sagaGlobalReaderIfaceName {
+					const b1msg = "blind-spot B1: string literal \"GlobalReader\" in production code " +
+						"outside saga packages may indicate reflect-based impl " +
+						"(SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01)"
+					out = append(out, Diagnostic{
+						Rel:     rel,
+						Line:    p.Fset.Position(lit.Pos()).Line,
+						Message: b1msg,
+					})
+				}
+			})
+		}
+		return out
+	})
+
+	assert.Empty(t, diags,
+		"B1 reverse: no production non-test file outside saga packages should contain string literal %q", sagaGlobalReaderIfaceName)
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 // collectSagaJournalImpls adds to implSet all concrete types in pkg (exported
@@ -1752,17 +2046,195 @@ func extractEnrolledImpls(call *ast.CallExpr, info *types.Info, implSet map[stri
 	return out
 }
 
-// hasSagaConformanceCall returns true when file contains at least one call to
-// sagajournaltest.RunConformanceSuite resolved via TypesInfo.
-func hasSagaConformanceCall(file *ast.File, info *types.Info) bool {
+// creditEnrollmentsFromFactory walks file for calls to confPkg.confFunc(t, factory)
+// and credits ONLY the impls the FACTORY argument constructs (call.Args[1]),
+// binding enrollment to the factory actually passed rather than to any
+// constructor elsewhere in the file. Shared by the Journal and GlobalReader
+// enrollment rules (#1641 review F1 — closes the file-level false-credit gap
+// where an unrelated NewXxx() in a conformance-calling file falsely credited Xxx).
+func creditEnrollmentsFromFactory(
+	info *types.Info, files []*ast.File, file *ast.File,
+	confPkg, confFunc string, implSet, enrolled map[string]bool,
+) {
 	if info == nil {
-		return false
+		return
 	}
-	_, ok := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
-		pkgPath, name, resolved := ResolvePackageRef(info, call.Fun)
-		return resolved && pkgPath == sagaConformancePkg && name == sagaConformanceFuncName
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+		if !ok || pkgPath != confPkg || name != confFunc {
+			return
+		}
+		for _, implKey := range factoryConstructedImpls(call, info, files, implSet) {
+			enrolled[implKey] = true
+		}
 	})
-	return ok
+}
+
+// factoryConstructedImpls returns the impl keys constructed inside the factory
+// argument (call.Args[1]) of a conformance call. Resolves three factory forms:
+// an inline FuncLit, a named-func Ident (its FuncDecl in the package), and a
+// local var bound to a FuncLit. Any other form resolves to no body and credits
+// nothing — fail-closed: an unrecognized factory shape flags its impl as
+// UNENROLLED (CI-visible) rather than silently crediting it.
+func factoryConstructedImpls(call *ast.CallExpr, info *types.Info, files []*ast.File, implSet map[string]bool) []string {
+	if len(call.Args) < 2 {
+		return nil
+	}
+	body := factoryBody(call.Args[1], info, files)
+	if body == nil {
+		return nil
+	}
+	var out []string
+	EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {
+		out = append(out, extractEnrolledImpls(c, info, implSet)...)
+	})
+	return out
+}
+
+// factoryBody resolves a conformance factory argument to the function body that
+// constructs the impl: a direct FuncLit, a named-func Ident (its FuncDecl), or a
+// local var Ident bound to a FuncLit (`factory := func(){…}`). Returns nil for
+// any other form.
+func factoryBody(arg ast.Expr, info *types.Info, files []*ast.File) *ast.BlockStmt {
+	switch a := arg.(type) {
+	case *ast.FuncLit:
+		return a.Body
+	case *ast.Ident:
+		obj := info.ObjectOf(a)
+		if obj == nil {
+			return nil
+		}
+		switch obj.(type) {
+		case *types.Func:
+			if fd := findFuncDeclFor(info, files, obj); fd != nil {
+				return fd.Body
+			}
+		case *types.Var:
+			if fl := findVarFuncLit(info, files, obj); fl != nil {
+				return fl.Body
+			}
+		}
+	}
+	return nil
+}
+
+// findFuncDeclFor finds the FuncDecl in files whose name identifier defines obj.
+func findFuncDeclFor(info *types.Info, files []*ast.File, obj types.Object) *ast.FuncDecl {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			if info.Defs[fd.Name] == obj {
+				return fd
+			}
+		}
+	}
+	return nil
+}
+
+// TestSagaEnrollment_FactoryBinding_RED is the reverse self-test for the
+// factory-bound enrollment credit (#1641 review F1). It type-checks a synthetic
+// package and asserts factoryConstructedImpls credits the impl ONLY when the
+// factory argument constructs it — across the three resolvable factory forms
+// (named func, inline FuncLit, local var bound to a FuncLit) — and NOT when an
+// unrelated constructor sits elsewhere while the factory builds nothing (the
+// exact false-credit the old file-level scan allowed).
+func TestSagaEnrollment_FactoryBinding_RED(t *testing.T) {
+	t.Parallel()
+	const src = `package p
+
+type Impl struct{}
+
+func NewImpl() *Impl { return &Impl{} }
+
+func namedFactory() *Impl { return NewImpl() }
+
+func emptyFactory() *Impl { return nil }
+
+func run(_ int, _ func() *Impl) {}
+
+func useNamed()     { run(0, namedFactory) }
+func useLit()       { run(0, func() *Impl { return NewImpl() }) }
+func useVar()       { f := func() *Impl { return NewImpl() }; run(0, f) }
+func useUnrelated() { _ = NewImpl(); run(0, emptyFactory) }
+`
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, "p.go", src, 0)
+	require.NoError(t, err)
+	info := &types.Info{
+		Defs:  map[*ast.Ident]types.Object{},
+		Uses:  map[*ast.Ident]types.Object{},
+		Types: map[ast.Expr]types.TypeAndValue{},
+	}
+	_, err = (&types.Config{}).Check("p", fset, []*ast.File{af}, info)
+	require.NoError(t, err)
+
+	files := []*ast.File{af}
+	implSet := map[string]bool{"p.Impl": true}
+
+	// Collect the impls credited for each enclosing function's run(0, factory) call.
+	got := map[string][]string{}
+	for _, decl := range af.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+			if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "run" {
+				return
+			}
+			got[fd.Name.Name] = factoryConstructedImpls(call, info, files, implSet)
+		})
+	}
+
+	// The three resolvable factory forms each credit Impl.
+	for _, fn := range []string{"useNamed", "useLit", "useVar"} {
+		assert.Equal(t, []string{"p.Impl"}, got[fn],
+			"factory in %s constructs Impl → must credit p.Impl", fn)
+	}
+	// Factory builds nothing; an unrelated NewImpl() elsewhere must NOT be credited
+	// — this is the file-level false-credit gap the factory binding closes.
+	assert.Empty(t, got["useUnrelated"],
+		"unrelated NewImpl() outside the factory must not credit p.Impl (false-credit gap)")
+}
+
+// findVarFuncLit finds the FuncLit a local var (obj) is bound to via
+// `v := func(){…}` or `var v = func(){…}`.
+func findVarFuncLit(info *types.Info, files []*ast.File, obj types.Object) *ast.FuncLit {
+	for _, f := range files {
+		var found *ast.FuncLit
+		EachInSubtree[ast.AssignStmt](f, func(s *ast.AssignStmt) {
+			if found != nil || len(s.Lhs) != 1 || len(s.Rhs) != 1 {
+				return
+			}
+			if id, ok := s.Lhs[0].(*ast.Ident); ok && info.Defs[id] == obj {
+				if fl, ok := s.Rhs[0].(*ast.FuncLit); ok {
+					found = fl
+				}
+			}
+		})
+		if found != nil {
+			return found
+		}
+		EachInSubtree[ast.ValueSpec](f, func(s *ast.ValueSpec) {
+			if found != nil {
+				return
+			}
+			for i, name := range s.Names {
+				if info.Defs[name] == obj && i < len(s.Values) {
+					if fl, ok := s.Values[i].(*ast.FuncLit); ok {
+						found = fl
+					}
+				}
+			}
+		})
+		if found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 // ============================================================================
@@ -4971,6 +5443,7 @@ var knownSagaInvariantIDs = []string{
 	"SAGA-CONSTRUCTOR-NIL-GUARD-01",
 	"SAGA-METRIC-LABEL-VALUES-FROZEN-01",
 	"SAGA-SLOG-INSTANCE-FIELDS-CALLER-01",
+	"SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01",
 }
 
 // TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent closes blind-spot B1:
