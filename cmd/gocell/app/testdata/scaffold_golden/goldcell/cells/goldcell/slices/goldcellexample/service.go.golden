@@ -1,0 +1,19 @@
+// Package goldcellexample implements the goldcellexample example slice for
+// the goldcell cell. Replace the Echo skeleton with real business logic.
+package goldcellexample
+
+// Service is the example slice business logic. NewService returns a fresh
+// instance; it carries no dependencies because the K#09 scaffold targets
+// the simplest passing-test outcome. Wire repository / event publisher
+// dependencies in via constructor parameters as the slice grows.
+type Service struct{}
+
+// NewService returns a new example Service.
+func NewService() *Service {
+	return &Service{}
+}
+
+// Echo returns the input message unchanged. Replace with real domain logic.
+func (s *Service) Echo(message string) string {
+	return message
+}

@@ -1,0 +1,60 @@
+// Package goldcell implements the goldcell cell.
+//
+// TODO: write a one-paragraph description of the cell's responsibility.
+package goldcell
+
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// init registers this cell's error-code prefix so it never collides with the
+// gocell platform or other cells (issue #1091). RegisterPrefix fail-fast panics
+// at startup on a conflicting prefix; declare your codes under this namespace.
+// The second argument is your Go module path (as declared in go.mod).
+// External modules only need this init() call — do NOT touch gocell's
+// gocellPlatformPrefixes or regenerate the platform golden (that is only for
+// the gocell platform itself).
+func init() {
+	errcode.RegisterPrefix("ERR_GOLDCELL_", "github.com/ghbvf/gocell")
+}
+
+// // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
+// TODO: declare additional listeners (e.g. cell.InternalListener) by
+// adding more listener markers (same format as the line above) above this
+// struct, or remove the marker if this cell has no HTTP routes.
+type GoldCell struct {
+	*cell.BaseCell
+
+	// TODO: add handler/service fields. Example for HTTP routes:
+	//
+	//   // +slice:route:slice=foo,subPath=/foo
+	//   fooHandler *foo.Handler
+	//
+	// For event subscriptions, declare them in the slice's slice.yaml under
+	// contractUsages with role: subscribe and a handler: field — cellgen
+	// generates the reg.Subscribe call into cell_gen.go automatically. The
+	// cell struct only needs the *<sliceID>.Service (or .Consumer) field:
+	//
+	//   fooSvc *foo.Service
+}
+
+// NewGoldCell creates a new GoldCell.
+func NewGoldCell() *GoldCell {
+	return &GoldCell{
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+	}
+}
+
+// initInternal is the K#04 codegen escape hatch for business init that
+// cell_gen.go cannot generate. cell_gen.go::Init invokes this hook
+// after BaseCell.Init and before mounting generated route groups.
+//
+//nolint:unparam // ctx is part of the K#04 initInternal contract
+func (c *GoldCell) initInternal(ctx context.Context, reg cell.Registrar) error {
+	// TODO: construct services and handlers, c.AddSlice(...), register
+	// health probes via reg.Health, lifecycle hooks via reg.Lifecycle.
+	return nil
+}
