@@ -907,22 +907,21 @@ func (v *Validator) validateFMT37ForContract(c *metadata.ContractMeta) []Validat
 	return results
 }
 
-// validateFMT37Proto enforces that endpoints.grpc.proto is present and rooted
-// under metadata.GRPCProtoPathPrefix (contracts/grpc/). Mirrors the schema
-// proto.pattern; the prefix is the single source shared with contractspec.
+// validateFMT37Proto enforces that endpoints.grpc.proto is present, rooted
+// under metadata.GRPCProtoPathPrefix (contracts/grpc/), free of control runes,
+// and a local path (no traversal). Delegates to metadata.ValidateGRPCProtoPath
+// — the single-source 4-guard validator shared with contractgen — so governance
+// and codegen cannot diverge on which checks are applied.
 func (v *Validator) validateFMT37Proto(c *metadata.ContractMeta, g *metadata.GRPCTransportMeta, file string) []ValidationResult {
-	if g.Proto == "" {
+	if err := metadata.ValidateGRPCProtoPath(g.Proto); err != nil {
+		issue := IssueInvalid
+		if g.Proto == "" {
+			issue = IssueRequired
+		}
 		return []ValidationResult{v.newError(
-			codeFMT37, IssueRequired, file, "endpoints.grpc.proto",
-			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.proto", c.ID),
-			"add proto: the contracts-relative .proto path under contracts/grpc/",
-		)}
-	}
-	if !strings.HasPrefix(g.Proto, metadata.GRPCProtoPathPrefix) {
-		return []ValidationResult{v.newError(
-			codeFMT37, IssueInvalid, file, "endpoints.grpc.proto",
-			fmt.Sprintf("grpc contract %q proto %q must be rooted under %q", c.ID, g.Proto, metadata.GRPCProtoPathPrefix),
-			"set proto to a path under contracts/grpc/",
+			codeFMT37, issue, file, "endpoints.grpc.proto",
+			fmt.Sprintf("grpc contract %q endpoints.grpc.proto: %s", c.ID, err.Error()),
+			"set proto to a local, control-rune-free path under contracts/grpc/ (no .. traversal)",
 		)}
 	}
 	return nil
@@ -2126,6 +2125,8 @@ func (v *Validator) sliceMixesHTTPVisibility(s *metadata.SliceMeta) bool {
 //   - subscribe:        handler required; group/field/projection/onReset optional; sourceID/targetSelector forbidden
 //   - webhook-receive:  handler+sourceID required; field optional; group/targetSelector/projection/onReset forbidden
 //   - webhook-dispatch: targetSelector+sourceID required; field optional; handler/group/projection/onReset forbidden
+//   - serve (grpc):     field optional; all other columns forbidden
+//   - serve (http):     all seven columns forbidden
 //   - any other role:   all seven columns forbidden
 //
 // NOTE: the group-forbidden-when-projection-set coupling (a cross-column
@@ -2141,10 +2142,20 @@ func (v *Validator) validateFMT35() []ValidationResult {
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			field := fmt.Sprintf("contractUsages[%d]", i)
-			results = append(results, v.checkFMT35Columns(s, cu, field)...)
+			contractKind := v.contractKindFor(cu.Contract)
+			results = append(results, v.checkFMT35Columns(s, cu, field, contractKind)...)
 		}
 	}
 	return results
+}
+
+// contractKindFor returns the Kind string of the contract identified by id, or
+// an empty string when the contract is not found (REF-05 covers dangling refs).
+func (v *Validator) contractKindFor(id string) string {
+	if c, ok := v.project.Contracts[id]; ok {
+		return c.Kind
+	}
+	return ""
 }
 
 // fmt35Placement is the disposition of a single contractUsage placement column
@@ -2159,9 +2170,15 @@ const (
 
 // fmt35RoleColumns returns the placement rule for each of the seven placement
 // columns (handler, group, field, sourceID, targetSelector, projection, onReset)
-// for the given role. The matrix mirrors the if/then conditionals in
-// slice.schema.json; any role not listed forbids all seven columns.
-func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelector, projection, onReset fmt35Placement) {
+// for the given role and contract kind. The matrix mirrors the if/then
+// conditionals in slice.schema.json; any role/kind combination not listed
+// forbids all seven columns.
+//
+// The contractKind parameter is used to distinguish grpc serve from http serve:
+// a grpc serve CU may set the optional field column (for struct-field
+// disambiguation when a cell owns multiple *sliceID.T fields), while http serve
+// forbids all columns.
+func fmt35RoleColumns(role, contractKind string) (handler, group, field, sourceID, targetSelector, projection, onReset fmt35Placement) {
 	switch role {
 	case string(cellvocab.RoleSubscribe):
 		return fmt35Required, fmt35Optional, fmt35Optional, fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Optional
@@ -2169,6 +2186,14 @@ func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelec
 		return fmt35Required, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
 	case string(cellvocab.RoleWebhookDispatch):
 		return fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Required, fmt35Forbidden, fmt35Forbidden
+	case string(cellvocab.RoleServe):
+		if contractKind == string(cellvocab.ContractGRPC) {
+			// grpc serve: field is optional for struct-field disambiguation;
+			// all other placement columns are forbidden.
+			return fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
+		}
+		// http serve (and any other non-grpc serve): all columns forbidden.
+		return fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
 	default:
 		return fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
 	}
@@ -2177,9 +2202,9 @@ func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelec
 // checkFMT35Columns reports a FMT-35 finding for every placement column whose
 // presence/absence violates the role's matrix entry.
 func (v *Validator) checkFMT35Columns(
-	s *metadata.SliceMeta, cu metadata.ContractUsage, field string,
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field, contractKind string,
 ) []ValidationResult {
-	hRule, gRule, fRule, sRule, tRule, projRule, resetRule := fmt35RoleColumns(cu.Role)
+	hRule, gRule, fRule, sRule, tRule, projRule, resetRule := fmt35RoleColumns(cu.Role, contractKind)
 	cols := []struct {
 		name  string
 		value string

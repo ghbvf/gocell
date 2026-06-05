@@ -2,7 +2,7 @@
 
 import (
 	"context"
-{{- if or .Subscriptions .WebhookReceivers .WebhookDispatches .Projections }}
+{{- if or .Subscriptions .WebhookReceivers .WebhookDispatches .Projections .GrpcServices }}
 	"fmt"
 {{- end }}
 
@@ -16,6 +16,12 @@ import (
 {{- end }}
 {{- range .Projections }}
 	{{.SpecAlias}} "{{.SpecPackage}}"
+{{- end }}
+{{- if .GrpcServices }}
+	"google.golang.org/grpc"
+{{- end }}
+{{- range .GrpcServices }}
+	{{.PbAlias}} "{{.PbImportPath}}"
 {{- end }}
 )
 
@@ -105,6 +111,18 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 		{{.ApplyExpr}}, {{ printf "%q" .ProjectionID }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }}, {{ if .OnResetExpr }}{{ .OnResetExpr }}{{ else }}nil{{ end }},
 	)); err != nil {
 		return fmt.Errorf({{ printf "%q" (printf "%s: projection %s: %%w" $.CellID .ProjectionID) }}, err)
+	}
+{{ end }}
+{{- range .GrpcServices }}
+	if err := reg.GRPCService(cell.GRPCServiceSpec{
+		ContractID: {{ printf "%q" .ContractID }},
+		CellID:     {{ printf "%q" $.CellID }},
+		Listener:   {{ .ListenerConst }},
+		Register: func(r grpc.ServiceRegistrar) {
+			{{.PbAlias}}.{{.RegisterFunc}}(r, c.{{.HandlerField}})
+		},
+	}); err != nil {
+		return fmt.Errorf({{ printf "%q" (printf "%s: grpc-serve %s: %%w" $.CellID .ContractID) }}, err)
 	}
 {{ end }}
 	return nil
