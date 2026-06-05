@@ -7,6 +7,8 @@
 #   消费、少自检一轮（之后恢复）——预期降级，非 bug。
 # 机制参照 exitplan-self-audit.sh（PreToolUse(ExitPlanMode) 同款 deny 回喂）；注册于 committed
 #   .claude/settings.json（团队共享，#1599 刻意选择；exitplan 在 settings.local.json 是历史差异）。
+# 两层过滤：settings.json 的 hook `if: Bash(bash *fix-self-audit.sh*)` 粗筛——只在 bash 调用本脚本时
+#   spawn（go test/ls/cat/chmod 等不触发、无误导 statusMessage）；下面的 case 精筛 emit 实参。
 # AI-robust：与 exitplan-self-audit.sh 同类的「自检提醒」hook，本质 Soft（按命令名锚定 + deny 回喂），
 #   非约束 enforcement（不 enforce 不变式），不落 ai-robust.md「Soft 严禁立项」范围；属对既有先例的复制。
 set -euo pipefail

@@ -9,6 +9,7 @@
         "hooks": [
           {
             "type": "command",
+            "if": "Bash(bash *fix-self-audit.sh*)",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/fix-self-audit.sh\"",
             "statusMessage": "fix 决策自检…"
           }
