@@ -230,19 +230,29 @@ func TestArchtest_CIIntegrationDiscovery_WorkflowUsesGoList(t *testing.T) {
 // go.work funnel (hack/lib/modules.sh → `gocell::modules::dirs`, derived from
 // `go work edit -json`): a module added to go.work is covered with zero hardcoded
 // list, and dropping the funnel is a red archtest rather than silent coverage loss.
+//
+// AI-robust rating: Medium (YAML/bash step content has no Go type system; regex
+// form-match — requiring source/invocation on a non-comment line — is the ceiling,
+// tracked alongside the existing CI-INTEGRATION-DISCOVERY-01 string-anchor design).
 func TestArchtest_CIIntegrationDiscovery_IteratesModuleFunnel(t *testing.T) {
 	step := readIntegrationTestStep(t)
 	require.NotEmpty(t, step.Run, "integration-test main step run block missing")
 
-	assert.Contains(t, step.Run, "hack/lib/modules.sh",
-		"integration-test step must source the go.work module funnel "+
-			"(hack/lib/modules.sh) so every workspace member — including each "+
+	// Require hack/lib/modules.sh to be sourced on a non-comment line (i.e.
+	// `source` or `.` — not merely mentioned in a comment).
+	sourcedRE := regexp.MustCompile(`(?m)^[^#\n]*\b(source|\.)\s+\S*hack/lib/modules\.sh`)
+	assert.Regexp(t, sourcedRE, step.Run,
+		"integration-test step must source hack/lib/modules.sh on a non-comment line "+
+			"(e.g. `source hack/lib/modules.sh`) so every workspace member — including each "+
 			"examples/* go.work module — is enumerated for discovery; a root "+
 			"`go list ./...` stops at the nested-module boundary and silently "+
 			"drops example integration tests (#1556). See CI-INTEGRATION-DISCOVERY-01.")
-	assert.Contains(t, step.Run, "gocell::modules::dirs",
-		"integration-test step must iterate `gocell::modules::dirs` (the go.work "+
-			"`use`-derived member list) so per-module discovery covers every module")
+
+	// Require gocell::modules::dirs to be invoked on a non-comment line.
+	invokedRE := regexp.MustCompile(`(?m)^[^#\n]*gocell::modules::dirs`)
+	assert.Regexp(t, invokedRE, step.Run,
+		"integration-test step must invoke `gocell::modules::dirs` on a non-comment line "+
+			"(the go.work `use`-derived member list) so per-module discovery covers every module")
 }
 
 // TestArchtest_CIIntegrationDiscovery_GuardsEmptyDiscovery asserts that the

@@ -121,6 +121,17 @@ func (c Classifier) OwningModule(importPath string) string {
 //
 // Packages owned by no member module classify as LayerStdlib (no dot in first
 // segment) or LayerThirdParty.
+//
+// Satellite example modules (#1556): a package like
+// "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell" classifies as
+// LayerExamples (NOT LayerCells), because the base-relative first segment
+// (examples/) is what places it in the examples layer of the core repo. This
+// means cell-layering governance rules that test Layer()==LayerCells must NOT
+// rely on that comparison alone to identify all cell packages — example cells
+// return LayerExamples. Use Cell() to obtain the cell ID regardless of layer;
+// downstream rules needing to distinguish example cells from platform cells
+// must check Layer()==LayerExamples (or equivalently Layer()!=LayerCells) in
+// addition to Cell()!="".
 func (c Classifier) Layer(importPath string) string {
 	if importPath == "" {
 		return ""

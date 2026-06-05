@@ -206,7 +206,7 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 // uses it to load a satellite example assembly against its own module under
 // GOWORK=off, since a repo-root load cannot see a nested module's packages (#1556).
 func containingModuleDir(projectRoot, dir string) string {
-	for d := filepath.Clean(dir); d != "." && d != "" && d != string(filepath.Separator); d = filepath.Dir(d) {
+	for d := filepath.Clean(dir); d != "." && d != ""; d = filepath.Dir(d) {
 		if _, err := os.Stat(filepath.Join(projectRoot, d, "go.mod")); err == nil {
 			return d
 		}

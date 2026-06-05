@@ -1095,6 +1095,10 @@ func TestDeadContractCover(t *testing.T) {
 	if lpErr != nil {
 		t.Fatalf("DEAD-CONTRACT-01: LoadProductionPackages: %v", lpErr)
 	}
+	// NOTE: .All() (NOT .Production()) is required here — generated/contracts/http
+	// packages carry the Service interfaces for the types.Implements match;
+	// .Production() filters generated/ and would make every http contract look
+	// unimplemented.
 	for _, pkg := range resolver.All() {
 		if pkg == nil || pkg.Types == nil {
 			continue

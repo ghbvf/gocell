@@ -131,6 +131,7 @@ func TestClassifier_MultiModule(t *testing.T) {
 		wantCell  string
 		wantSlice string
 	}{
+		{"core_root", core, core, LayerRoot, "", ""},
 		{"core_kernel", core + "/kernel/cell", core, LayerKernel, "", ""},
 		{"core_cell", core + "/cells/accesscore", core, LayerCells, "accesscore", ""},
 		// Longest-prefix: mdm wins over core for an mdm-owned package.
