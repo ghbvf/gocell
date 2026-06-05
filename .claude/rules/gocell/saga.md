@@ -80,6 +80,7 @@ GoCell 中有三个 L3 cell 并非 saga 编排：
 
 - 实施计划：`docs/plans/202605230231-046-saga-l3-workflow-implementation-plan.md` §4 PR-08（governance + archtest 落地 PR）
 - Saga 专属 ADR：`docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`（决策 D1–D10 + enforcement 档位映射 + 威胁矩阵 + 演进路径）；本文件是 archtest / governance 导航索引，决策权威以该 ADR 为准
+- EPIC #1609 投影源 ADR（**设计已立项，能力待 PR-02..06 落地**）：`docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md`（`saga_events` model-a 投影源 / 独立 `Tailer` / `journal.GlobalReader` + `global_seq`）；三条新 enforcement——`PROJECTION-EVENT-CARRIER-TYPED-01`（PR-01）/ `SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01`（PR-04，落 `saga_invariants_test.go`，受 `SAGA-INVARIANTS-FILE-CONSOLIDATED-01` 约束）/ `SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01`（PR-02）——随各落地 PR 增量入上方 Archtest Invariants 表
 - 运维故障 runbook：`docs/ops/saga-runbook.md`（lease 卡死 / 补偿失败 / journal 增长三场景诊断 SQL + 决策树）
 - 契约变更扇出闭环：`.claude/rules/gocell/contract-fanout.md`（`saga.Status` / `journal.EventKind` 新常量触发扇出规则）
 - AI-robust 治理章程：`.claude/rules/gocell/ai-robust.md`（评级定义、archtest 文件命名约定）

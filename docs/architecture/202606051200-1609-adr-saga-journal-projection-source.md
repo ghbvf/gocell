@@ -7,7 +7,7 @@
   - `docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md`（投影 harness Q1–Q5：Coordinator / CheckpointStore / ReplaySource / Cursor / Apply）
   - `docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`（saga journal 设计 D2/D4/D5 + 终态模型）
 - Amends：`docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md` §8 演进路径「Projection / Replay」行（同 PR 内原地重写）+ §7 威胁矩阵 row6 逐行重评
-- 范围：EPIC #1609 的 **PR-00**（ADR）。PR-01..06 + PR-PG 见 §9 子 PR 映射；本 ADR 是该 EPIC 的设计权威源，规则导航回灌 `.claude/rules/gocell/saga.md`。
+- 范围：EPIC #1609 的 **PR-00**（ADR）。PR-01..06 + PR-PG 见 §9 子 PR 映射；本 ADR 是该 EPIC 的设计权威源，已在 `.claude/rules/gocell/saga.md` §参考 登记本 ADR 的导航指针；三条新 enforcement invariant（`PROJECTION-EVENT-CARRIER-TYPED-01` / `SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01` / `SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01`）**尚未落地**，随各实现 PR（PR-01 / PR-04 / PR-02）增量回灌 saga.md 的 Archtest Invariants 表。
 
 > **真值边界**：本 ADR 决策以本文为准。`202606021000` §8 的「Projection / Replay（从 `saga_events` replay）」行在同 PR 内重写为指向本 ADR 的指针（per `ai-robust.md` §"ADR amendment 落地必查"——原文与 amendment 不得两套真理源共存）。
 
@@ -74,10 +74,10 @@ ref: akka/akka-projection ShardedDaemonProcess（per-ProjectionId offset）
 | # | 决策 | enforcement 载体 | AI-robust 档位 |
 |---|------|-----------------|----------------|
 | D1 | **model-a**：`saga_events` 作 durable 投影源，投影 replay + tail journal 派生读模型；**不**让引擎发终态事件（否决 model-b） | 设计决策；下游由 D2–D4 载体守 | — |
-| D2 | **载体 SHARED-INTERFACE**：harness `Apply`/`ReplaySource`/`Cursor` 的 event 载体泛化为最小 typed 只读接口 `projection.ProjectionEvent`（多态 `RestoreContext`/`Stream`，非 type-assert）；`outbox.Entry` 与 saga 事件各自实现；**同 PR 迁移 todoorder，无双路径、不伪造 `outbox.Entry`**（否决 UNIFY，否决 sealed-Entry 桥接 shim） | 接口 = type-system Hard；下游 archtest 禁投影公开 API 裸收 `outbox.Entry` | 下游 **Hard**（type-system）+ 上游 **Hard**（载体接口替换了签名，旧形态编译不可表达） |
+| D2 | **载体 SHARED-INTERFACE**：harness `Apply`/`ReplaySource`/`Cursor` 的 event 载体泛化为最小 typed 只读接口 `projection.ProjectionEvent`（多态 `RestoreContext`/`Stream`，非 type-assert）；`outbox.Entry` 与 saga 事件各自实现；**同 PR 迁移 todoorder，无双路径、不伪造 `outbox.Entry`**（否决 UNIFY，否决 sealed-Entry 桥接 shim） | 接口 = type-system Hard；下游 archtest 禁投影公开 API 裸收 `outbox.Entry` | **type-system Hard（API shape，单轴非 funnel）**：公开 API 形参 = `ProjectionEvent` 接口，archtest 下游禁裸收 `outbox.Entry`。**不是 carrier-source-sealing funnel**——`ProjectionEvent` 全导出方法、任意包可实现，载体来源不封闭；forge 保护在 wiring 层（§5 forge 行 + §6 F4 评级），无 sealed-carrier 上游 Hard 可声明 |
 | D3 | **saga journal 全局有序扫描**：新增窄接口 `journal.GlobalReader`（**不并入 `JournalCore`**，保 `SAGA-JOURNAL-HOLDER-SEAL-01`）+ `saga_events` 全局有序序列（PG `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`；mem 全局计数器；`Event.GlobalSeq` additive） | 接口 + conformance enroll | conformance = Medium（Hard 路径 = codegen golden 枚举实现，**gh #1003** 同源） |
 | D4 | **tailing = 独立 `Tailer`（Option B）**：自有 `Start/Stop/tickLoop`，持 `journal.GlobalReader`，**共享同一 `distlock.Locker` 实例但用 per-projection key**（如 `saga-journal-tailer:{projection}`）；**不** piggyback 进 saga `Coordinator.tickOnce`（saga distlock 是 per-instance 粒度、无 process-level global leader 可复用；5 框架对标一致） | 单 checkpoint-advancer funnel + leader-gate | advancer funnel 下游 **Hard**（caller-allowlist，go/types 解析）+ 上游 **Medium**（Go 可见性天花板；Hard 化追踪 **gh #1612**） |
-| D5 | **exactly-once**：复用 `projection.CheckpointStore`；apply 与 checkpoint advance 同事务提交；leader 交接安全经 lease-token CAS（同 `OUTBOX-LEASE-ID-CAS-01` 范式）；position = `global_seq` 稳定全序（**非 `created_at`**——同毫秒两实例无稳定序） | checkpoint tx-bound（复用 `PROJECTION-CHECKPOINT-TX-BOUND-01`）+ advancer funnel（D4） | 复用既有 Hard + D4 |
+| D5 | **exactly-once**，分两层独立机制——**(a) 同 owner 内 exactly-once**：apply 与 checkpoint advance 同事务提交，**复用**现有 `projection.CheckpointStore.SaveOffset`（`PROJECTION-CHECKPOINT-TX-BOUND-01` 守）。**(b) leader 交接 fencing**：现有 `CheckpointStore` 仅 `LoadOffset`/`SaveOffset`（无条件 upsert，无 CAS；`projection_checkpoints.owner` 列 v1.1 预留、写侧刻意不写），**无法**表达「旧 leader advance 必败」——故 lease-token CAS **是新契约、非复用**：扩 `CheckpointStore` 加谓词式 `AdvanceIfOwner(ctx, cellID, projectionID, token, offset)`（或激活 owner 列 + CAS 谓词），token 源 = D4 per-projection distlock lease 的 fencing token；语义对齐 `OUTBOX-LEASE-ID-CAS-01` 但**载体不同**。position = `global_seq` 稳定全序（**非 `created_at`**——同毫秒两实例无稳定序） | (a) `PROJECTION-CHECKPOINT-TX-BOUND-01`（复用）；(b) 新 CAS API + advancer funnel（D4），PR-04/PR-PG 定义 | (a) 复用既有 Hard；(b) **新契约**——落地前 leader-交接威胁行降 ⚠️（见 §5） |
 | D6 | **增量 per-event apply**（非终态缓冲）：投影 fold 每条 saga 事件（含 Running 期 step 事件），语义等价当前 `deriveStatus` fold，但物化、异步、可重放 | 设计决策 | — |
 | D7 | **retention 约束**：`saga_events` append-only 永不截断到任何投影 checkpoint 之下；归档/截断须 ≥ 最慢投影 checkpoint（投影引入后 journal retention 多一约束） | 设计约束（归档能力本身仍 out-of-scope，见 §5/§7） | — |
 
@@ -97,12 +97,13 @@ type ProjectionEvent interface {
     Payload() []byte                                       // 事件体原始 JSON
     OccurredAt() time.Time                                 // 域时间戳
     Stream() string                                        // 路由/主题等价（outbox: RoutingTopic；saga: 流 id）
-    RestoreContext(ctx context.Context) context.Context    // outbox: 还原 obs+principal；saga: 原样返回（无 wire envelope）
+    RestoreContext(ctx context.Context) context.Context    // outbox: 还原 obs+principal；saga: 安装 system/saga-projection 身份 + 清空 ambient principal（见下「身份安全约束」）
 }
 ```
 
 - `Apply`、`ReplaySource.Replay` 的 fn、`Cursor.Position` 均改收 `ProjectionEvent`（替换 `outbox.Entry`），`kernel/cell.ProjectionApply` 同步。**codegen 扇出（PR-01 主体量）**：`cell.ProjectionApply` 被 contractgen 为**每个 event contract** 派生的 `generated/contracts/event/*/v*/projection_gen.go::NewProjectionRequest(apply cell.ProjectionApply, …)` 引用——当前 **18 个** `projection_gen.go`（不止 todoorder 用到的 2 个）。PR-01 必须重跑 contractgen 重生成全部 18 个；若 18-file 重生成 + 载体迁移超 ~2000 行，PR-01 拆为 PR-01a（kernel/projection 载体接口 + 手写迁移）/ PR-01b（codegen 重生成 byte-diff）两子 PR。
 - rebuild 路径 `rebuild.go` 的 `entry.Observability().RestoreToContext` / `Principal().RestoreToContext` / `RoutingTopic()==spec.Topic` 三处 outbox-only 调用，改走载体多态：`evt.RestoreContext(ctx)` + `evt.Stream()==spec.Topic`（**避免 explorer 建议的 type-assert 两层**——多态优于 type-switch）。
+- **身份安全约束（saga）**：saga journal 事件**无 wire principal**，saga `RestoreContext` **绝不能原样返回 ctx**。否则身份穿透 Apply：① **rebuild 路径** `drainGap` 的 ctx 经 `context.WithoutCancel(triggerReq)` 继承**触发 rebuild 的 admin 身份**（且 outbox `Principal().RestoreToContext` 设计为不覆盖既有 principal，no-op restore 留住 admin）；② **live-tail 路径** Tailer 跑在后台 ctx、**无任何 principal**。两种情形下 Apply 若 emit/audit，前者归因到 admin（**审计 impersonation，P1**，见 `pkg/ctxkeys` principal 伪造风险），后者归因空。故 saga `RestoreContext` **主动清空 ctx 既有 principal 并安装显式 `projection.SystemPrincipal`**（system actor/subject、无 session、无 tenant），使 saga 投影 Apply 始终以稳定的 system/saga-projection 身份运行、与触发者彻底解耦。`projection.SystemPrincipal` helper + archtest（限定 saga carrier 为该身份唯一安装点）随 **PR-01** 落地。备选「身份作 Tailer/Processor 配置而非 carrier 方法」（更解耦）记录于拒绝表脚注，PR-01 实现时复核。
 - **同 PR 迁移 todoorder** `orderprojection`（`HandleOrderCreated(ctx, ProjectionEvent)`，`entry.Payload()` 不变）+ 重生成受影响 `generated/contracts/event/*/projection_gen.go`；删 `outbox.Entry` 专用签名。无双路径。
 
 ### 4.2 全局有序扫描（D3）
@@ -128,8 +129,13 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 
 ### 4.3 Tailer（D4）+ SagaJournalSource（接 harness）
 
-- `runtime/saga/tailer.Tailer`：`Start(ctx)`/`Stop()`，持 `journal.GlobalReader` + `distlock.Locker`（per-projection key）+ `projection.CheckpointStore`；per-tick：acquire 锁 → `LoadSince(checkpoint, batch)` → 逐事件 apply（同事务 advance checkpoint，lease-token CAS）→ release/续期。
+- `runtime/saga/tailer.Tailer`：`Start(ctx)`/`Stop()`，持 `journal.GlobalReader` + `distlock.Locker`（per-projection key）+ `projection.CheckpointStore`；per-tick：acquire 锁 → `LoadSince(checkpoint, batch)` → 逐事件 apply（同事务 advance checkpoint，lease-token CAS = D5(b) **新契约**，token = distlock lease）→ release/续期。
 - `SagaJournalSource` 实现 `projection.ReplaySource`（`Replay` 经 `LoadSince` 喂 `ProjectionEvent`）+ `projection.Cursor`（`Position` = 事件自带 `GlobalSeq`，**无 #1504 式删行查找**），入 `RunReplaySourceConformance` / `PROJECTION-CURSOR-CONFORMANCE-ENROLL-01`。
+- **Tailer 运行面（observability，PR-04 验收项，非可选）**：Tailer 是新长驻组件、**不经 ConsumerBase / Coordinator 路径**，运维信号**不自动继承**（既有投影 readiness/lag 在 `kernel/projection/probe.go`、saga 告警/runbook 在 `docs/ops/alerting-rules.md` / `saga-runbook.md`，Tailer 都触达不到）。故必须自带数据面之外的运行面：
+  - **readiness probe**：`saga_journal_tailer_ready`，形态对齐 `kernel/projection/probe.go` 投影 readiness/lag probe，经 healthz typed funnel 注册（`PROBENAME-SEALED-FUNNEL-01`）。
+  - **metrics**：lock-acquire-failure / drain-error / last-success-timestamp / pending-lag（`HeadSeq − checkpoint`）/ checkpoint-advance-failure，label 值集冻结（沿用 `SAGA-METRIC-LABEL-VALUES-FROZEN-01` 范式）。
+  - **alerting + runbook**：tailer 停摆（checkpoint 长期不动 / lock 反复抢占失败 / lag 持续增长）→ `docs/ops/alerting-rules.md`（毗邻既有 saga coordinator 告警）+ `docs/ops/saga-runbook.md` 新增「投影 tailer 停滞」诊断场景（`HeadSeq` vs checkpoint SQL + lease 持有方排查）。
+  - **失败语义**：缺 probe/metric/alert 会让「checkpoint 静默停摆」退化成无一等诊断入口的故障——这正是把本 checklist 列为 PR-04 验收项的原因。
 
 ---
 
@@ -137,12 +143,14 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 
 | 威胁 | 机制 | 覆盖 | 遗留 |
 |------|------|------|------|
-| leader 交接 mid-drain，checkpoint 推进不安全 | per-projection distlock + apply/advance 同事务 + lease-token CAS（旧 leader advance 失败，同 `OUTBOX-LEASE-ID-CAS-01`） | ✅ | — |
+| leader 交接 mid-drain，checkpoint 推进不安全 | per-projection distlock + apply/advance 同事务（复用 `CheckpointStore`）+ lease-token CAS（旧 leader advance 必败，语义同 `OUTBOX-LEASE-ID-CAS-01`） | ⚠️ | **CAS 谓词待新契约**：现有 `CheckpointStore.SaveOffset` 仅无条件 upsert（无 CAS、owner 列 v1.1 预留未写），`AdvanceIfOwner` / owner-列 CAS + token 源（distlock lease）在 **PR-04（Tailer）/ PR-PG（PG owner 列激活）** 定义并验收。此前 leader 交接仅 distlock 互斥（无 fencing token），stale-leader 窗口可致 checkpoint 回退 + 重复 apply（idempotent upsert 兜底正确性，但非 exactly-once） |
 | 乱序 / 非 exactly-once | `global_seq` 稳定全序（非 `created_at`）；投影按 `global_seq` 序处理；idempotent upsert | ✅ | — |
 | Running saga 的部分 step 事件先于终态到达 | 增量 per-event apply（D6），投影 fold 容忍中间态 | ✅ | — |
+| rebuild 触发者（admin）/ 后台 Tailer 身份穿透进 saga 投影 Apply（审计 impersonation） | saga `RestoreContext` 清空 ambient principal + 安装显式 `projection.SystemPrincipal`（不继承触发请求身份，见 §4.1 身份安全约束）；archtest 限定 saga carrier 为该身份唯一安装点（PR-01） | ✅ | — |
 | checkpoint advance 多写入路径 | 单 advancer funnel（caller-allowlist 下游 Hard） | ⚠️ | 上游 Medium（Go 可见性天花板，开 gh 跟踪 Hard 化，同 #851/#893/#1282 族） |
-| `saga_events` 无界增长 + 归档截断到投影 checkpoint 之下丢事件 | D7：归档须 ≥ 最慢投影 checkpoint | ⚠️ | 归档能力本身仍未做（saga ADR §7 row6 的归档部分；本 ADR 只交付 replay，不交付归档/截断） |
-| 越界/伪造 saga 事件进投影 | 载体 `ProjectionEvent` 只读 + 源自 sealed journal；无 producer-facing 构造 | ✅ | — |
+| 长驻 Tailer 故障无诊断入口（checkpoint 静默停摆） | Tailer 自带 readiness probe + lag/drain/lock/advance metrics + alerting + runbook（不继承 ConsumerBase/Coordinator 信号，见 §4.3 运行面 checklist） | ✅ | 实现 PR-04（checklist = 验收项） |
+| `saga_events` 无界增长 + 归档截断到投影 checkpoint 之下丢事件 | D7：归档须 ≥ 最慢投影 checkpoint | ⚠️ | 归档能力本身仍未做（saga ADR §7 row6 的归档部分；本 ADR 只交付 replay 设计，不交付归档/截断） |
+| 越界/伪造 saga 事件进投影 | 载体 `ProjectionEvent` 只读；事件唯一源 = sealed append-only `saga_events`（经 `GlobalReader`），Tailer 是 Apply 的唯一 feeder 且只从 journal 读 → 业务包无法注入伪造事件（**保护在 wiring 层、非接口构造层**——`ProjectionEvent` 接口全导出可实现，见 §6 F4 评级） | ✅ | — |
 
 ---
 
@@ -150,7 +158,7 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 
 | ID（占位，落地 PR 定型） | 摘要 | 评级（双向锁分轴） |
 |---|---|---|
-| `PROJECTION-EVENT-CARRIER-TYPED-01` | 投影公开 API（`Apply`/`ReplaySource.Replay` fn/`Cursor.Position`）只收 `ProjectionEvent`，禁裸 `outbox.Entry` | 下游 **Hard**（archtest 禁公开 API 裸收 `outbox.Entry`）+ 上游 **Hard**（机制 = Go 接口类型形参：签名为 `ProjectionEvent` 后，传不实现该接口的实参即编译错误——type-system gate，非 sealed-construction 概念） |
+| `PROJECTION-EVENT-CARRIER-TYPED-01` | 投影公开 API（`Apply`/`ReplaySource.Replay` fn/`Cursor.Position`）只收 `ProjectionEvent`，禁裸 `outbox.Entry` | **type-system Hard（API shape，单轴——非 funnel 双向锁）**：公开 API 形参类型 = `ProjectionEvent` 接口，archtest 下游禁裸收 `outbox.Entry`（go/types）。**不是 carrier-source-sealing funnel**——`ProjectionEvent` 全导出方法、任意包可实现，载体来源**不封闭**；它只 gate「公开 API 不再收具体 `outbox.Entry`」，**不** gate「只有 sanctioned outbox/saga carrier 可进入」。投影载体是只读 carrier、无 `outbox.Entry` 式跨边界身份信任（forge 保护在 Tailer 唯一从 sealed journal 喂 Apply 的 wiring 层，§5 forge 行），故**不声明** sealed-carrier 上游 Hard。如未来需封闭载体来源，须在 `ProjectionEvent` 加 unexported marker method（sealed interface）后再升上游 Hard |
 | `SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01` | saga 投影 checkpoint advance 只在单一 sanctioned 函数（Tailer drain）调用。落地于 `tools/archtest/saga_invariants_test.go`（`SAGA-INVARIANTS-FILE-CONSOLIDATED-01` 要求 `SAGA-*` 同文件） | 下游 **Hard**（caller-allowlist，go/types）+ 上游 **Medium**（Go 天花板；Hard 化追踪 **gh #1612**，PR-04 archtest godoc 点名该 issue） |
 | `SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01` | 每个 `journal.GlobalReader` 实现 + `SagaJournalSource` 入 conformance（全局序单调 + replay/cursor 一致） | **Medium**（Hard 路径 = codegen golden 枚举实现，gh #1003 同源） |
 
@@ -185,13 +193,13 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 | PR | 范围 | 本 ADR 决策 |
 |----|------|------------|
 | PR-00（本 PR） | 本 ADR + saga ADR §8/§7 同 PR 重写 | D1–D7 |
-| PR-01 | 载体泛化 `ProjectionEvent` + 迁移 todoorder + `PROJECTION-EVENT-CARRIER-TYPED-01` | D2 |
+| PR-01 | 载体泛化 `ProjectionEvent` + 迁移 todoorder + `PROJECTION-EVENT-CARRIER-TYPED-01` + `projection.SystemPrincipal`（saga `RestoreContext` 安装的 system 身份 + 唯一安装点 archtest，D2 身份安全约束） | D2 |
 | PR-02 | `journal.GlobalReader` + `global_seq`（mem + PG migration）+ conformance | D3 |
 | PR-03 | `SagaJournalSource`（ReplaySource + Cursor）+ conformance enroll。**依赖 PR-01 已落**（`projection.ReplaySource`/`Cursor` 此时已 `ProjectionEvent` 化，否则 `SagaJournalSource` 编译失败）+ PR-02 已落（`GlobalReader`） | D3/D5 |
-| PR-04 | `Tailer`（Option B）+ per-projection distlock + 单 advancer funnel | D4/D5 |
+| PR-04 | `Tailer`（Option B）+ per-projection distlock + 单 advancer funnel + **checkpoint CAS API**（`AdvanceIfOwner` / owner-列 CAS，token = distlock lease；D5(b)）+ **Tailer 运行面**（probe / metrics / alert / runbook，见 §4.3 observability checklist） | D4/D5 |
 | PR-05 | wiring：扩展 subscribe 角色加 projection-source 选择子（单一路径）+ cellgen 派生 | D2/D4 |
 | PR-06 | #1391 落地：orderfulfillment 读投影 + 删 `deriveStatus` + dev guide | D6 |
-| PR-PG（deferred） | PG saga-journal source 生产化，gated on 真实生产消费者 | D3 |
+| PR-PG（deferred） | PG saga-journal source 生产化 + 激活 `projection_checkpoints.owner` 列 CAS（D5(b) PG 侧 fencing），gated on 真实生产消费者 | D3/D5 |
 
 ---
 
@@ -211,4 +219,4 @@ ref: docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md D2/D4/D5
 per `ai-robust.md` §"ADR amendment 落地必查"，本 PR 在 `202606021000-adr-saga-l3-orchestration-engine.md` 内**原地重写**：
 
 1. **§8 演进路径**「Projection / Replay（从 `saga_events` replay 任意时点状态）」行：`W10 独立 wave` → 指向本 ADR（#1609）。
-2. **§7 威胁矩阵 row6**（journal 无界增长 ⚠️「归档/replay 截断 = W10 独立 wave，未做」）逐行重评：**replay** 部分由本 ADR（model-a 投影源）交付；**归档/截断** 部分仍未做（保 ⚠️，且本 ADR D7 增「归档须 ≥ 最慢投影 checkpoint」约束）。rows 1–5、7–8 不受本 ADR 影响（本 ADR 只加 `saga_events` 读路径 + 一个全局有序列，写侧 Coordinator/heartbeat/lease fencing 不变），标 unchanged。
+2. **§7 威胁矩阵 row6**（journal 无界增长 ⚠️「归档/replay 截断 = W10 独立 wave，未做」）逐行重评：**replay** 部分的**设计由本 ADR（model-a 投影源）立项（accepted）**，**能力本身待 EPIC #1609 PR-02..06 落地**（PR-00 仅 ADR，未实现）；**归档/截断** 部分仍未做（保 ⚠️，且本 ADR D7 增「归档须 ≥ 最慢投影 checkpoint」约束）。故该行**保持 ⚠️**（replay 设计 accepted ≠ 能力 delivered；归档未做）——`saga-runbook.md` §journal 增长场景同步改 #1609 引用 + D7 截断下界。rows 1–5、7–8 不受本 ADR 影响（本 ADR 只加 `saga_events` 读路径 + 一个全局有序列，写侧 Coordinator/heartbeat/lease fencing 不变），标 unchanged。
