@@ -1399,13 +1399,14 @@ func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T)
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware；identifies every
 //     concrete named type (exported AND unexported) that satisfies
 //     kernel/saga/journal.Journal (value or pointer receivers).
-//   - conformance 调用扫描 (impl-level): ResolvePackageRef + _test.go path filter
-//     plus per-call return-type unwrap — type-aware callee resolution via
-//     *types.Info. For every _test.go file that calls
-//     sagajournaltest.RunConformanceSuite, walk every CallExpr in the file and
-//     unwrap its return tuple; impls whose key matches the impl set are marked
-//     enrolled. Package co-location alone no longer credits enrollment — the
-//     test file must actually construct the impl.
+//   - conformance 调用扫描 (factory-bound): ResolvePackageRef resolves each
+//     sagajournaltest.RunConformanceSuite(t, factory) call type-aware via
+//     *types.Info, then creditEnrollmentsFromFactory credits ONLY the impls the
+//     FACTORY argument constructs (resolving FuncLit / named-func Ident / local
+//     var bound to a FuncLit, then unwrapping constructor return tuples in that
+//     body). Package co-location and "any constructor in the file" no longer
+//     credit enrollment — the factory passed to the suite must build the impl
+//     (#1641 review F1 closed the file-level false-credit gap).
 //   - 综合 Medium 天花板: Go cannot require a _test.go file to exist for a type at
 //     compile time. The enforcement is archtest-bound (CI fails), not
 //     compile-time. The Hard upgrade path is a codegen funnel + golden that
@@ -1521,18 +1522,11 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 				return nil
 			}
 			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if !strings.HasSuffix(rel, "_test.go") {
+				if !strings.HasSuffix(p.Rel(f), "_test.go") {
 					continue
 				}
-				if !hasSagaConformanceCall(f, p.TypesInfo) {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					for _, implKey := range extractEnrolledImpls(call, p.TypesInfo, implSet) {
-						enrolledImpls[implKey] = true
-					}
-				})
+				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
+					sagaConformancePkg, sagaConformanceFuncName, implSet, enrolledImpls)
 			}
 			return nil
 		})
@@ -1698,12 +1692,13 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware; identifies every
 //     concrete named type (exported AND unexported) that satisfies
 //     kernel/saga/journal.GlobalReader (value or pointer receivers).
-//   - conformance 调用扫描 (impl-level): ResolvePackageRef + _test.go path filter
-//     plus per-call return-type unwrap. For every _test.go file that calls
-//     sagajournaltest.RunGlobalReaderConformance, walk every CallExpr and unwrap
-//     its return tuple; impls whose key matches the impl set are marked enrolled.
-//     Package co-location alone does not credit enrollment — the test file must
-//     actually construct the impl (constructor return type unwraps to it).
+//   - conformance 调用扫描 (factory-bound): ResolvePackageRef resolves each
+//     sagajournaltest.RunGlobalReaderConformance(t, factory) call, then the
+//     shared creditEnrollmentsFromFactory credits ONLY the impls the FACTORY
+//     argument constructs (FuncLit / named-func Ident / local var bound to a
+//     FuncLit → unwrap constructor returns in that body). An unrelated
+//     constructor elsewhere in the file does NOT credit enrollment (#1641 review
+//     F1) — the factory passed to the suite must build the impl.
 //   - 综合 Medium 天花板: Go cannot require a _test.go file to exist for a type at
 //     compile time; enforcement is archtest-bound (CI fails), not compile-time.
 //     The Hard upgrade path is a codegen funnel + golden that enumerates the
@@ -1822,18 +1817,11 @@ func TestSagaGlobalReaderConformanceEnrollment(t *testing.T) {
 				return nil
 			}
 			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if !strings.HasSuffix(rel, "_test.go") {
+				if !strings.HasSuffix(p.Rel(f), "_test.go") {
 					continue
 				}
-				if !hasSagaGlobalReaderConformanceCall(f, p.TypesInfo) {
-					continue
-				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					for _, implKey := range extractEnrolledImpls(call, p.TypesInfo, implSet) {
-						enrolledImpls[implKey] = true
-					}
-				})
+				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
+					sagaConformancePkg, sagaGlobalReaderConformanceFunc, implSet, enrolledImpls)
 			}
 			return nil
 		})
@@ -2058,31 +2046,195 @@ func extractEnrolledImpls(call *ast.CallExpr, info *types.Info, implSet map[stri
 	return out
 }
 
-// hasSagaConformanceCall returns true when file contains at least one call to
-// sagajournaltest.RunConformanceSuite resolved via TypesInfo.
-func hasSagaConformanceCall(file *ast.File, info *types.Info) bool {
+// creditEnrollmentsFromFactory walks file for calls to confPkg.confFunc(t, factory)
+// and credits ONLY the impls the FACTORY argument constructs (call.Args[1]),
+// binding enrollment to the factory actually passed rather than to any
+// constructor elsewhere in the file. Shared by the Journal and GlobalReader
+// enrollment rules (#1641 review F1 — closes the file-level false-credit gap
+// where an unrelated NewXxx() in a conformance-calling file falsely credited Xxx).
+func creditEnrollmentsFromFactory(
+	info *types.Info, files []*ast.File, file *ast.File,
+	confPkg, confFunc string, implSet, enrolled map[string]bool,
+) {
 	if info == nil {
-		return false
+		return
 	}
-	_, ok := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
-		pkgPath, name, resolved := ResolvePackageRef(info, call.Fun)
-		return resolved && pkgPath == sagaConformancePkg && name == sagaConformanceFuncName
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+		if !ok || pkgPath != confPkg || name != confFunc {
+			return
+		}
+		for _, implKey := range factoryConstructedImpls(call, info, files, implSet) {
+			enrolled[implKey] = true
+		}
 	})
-	return ok
 }
 
-// hasSagaGlobalReaderConformanceCall returns true when file contains at least one
-// call to sagajournaltest.RunGlobalReaderConformance resolved via TypesInfo.
-// Sibling of hasSagaConformanceCall for the GlobalReader enrollment rule.
-func hasSagaGlobalReaderConformanceCall(file *ast.File, info *types.Info) bool {
-	if info == nil {
-		return false
+// factoryConstructedImpls returns the impl keys constructed inside the factory
+// argument (call.Args[1]) of a conformance call. Resolves three factory forms:
+// an inline FuncLit, a named-func Ident (its FuncDecl in the package), and a
+// local var bound to a FuncLit. Any other form resolves to no body and credits
+// nothing — fail-closed: an unrecognized factory shape flags its impl as
+// UNENROLLED (CI-visible) rather than silently crediting it.
+func factoryConstructedImpls(call *ast.CallExpr, info *types.Info, files []*ast.File, implSet map[string]bool) []string {
+	if len(call.Args) < 2 {
+		return nil
 	}
-	_, ok := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
-		pkgPath, name, resolved := ResolvePackageRef(info, call.Fun)
-		return resolved && pkgPath == sagaConformancePkg && name == sagaGlobalReaderConformanceFunc
+	body := factoryBody(call.Args[1], info, files)
+	if body == nil {
+		return nil
+	}
+	var out []string
+	EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {
+		out = append(out, extractEnrolledImpls(c, info, implSet)...)
 	})
-	return ok
+	return out
+}
+
+// factoryBody resolves a conformance factory argument to the function body that
+// constructs the impl: a direct FuncLit, a named-func Ident (its FuncDecl), or a
+// local var Ident bound to a FuncLit (`factory := func(){…}`). Returns nil for
+// any other form.
+func factoryBody(arg ast.Expr, info *types.Info, files []*ast.File) *ast.BlockStmt {
+	switch a := arg.(type) {
+	case *ast.FuncLit:
+		return a.Body
+	case *ast.Ident:
+		obj := info.ObjectOf(a)
+		if obj == nil {
+			return nil
+		}
+		switch obj.(type) {
+		case *types.Func:
+			if fd := findFuncDeclFor(info, files, obj); fd != nil {
+				return fd.Body
+			}
+		case *types.Var:
+			if fl := findVarFuncLit(info, files, obj); fl != nil {
+				return fl.Body
+			}
+		}
+	}
+	return nil
+}
+
+// findFuncDeclFor finds the FuncDecl in files whose name identifier defines obj.
+func findFuncDeclFor(info *types.Info, files []*ast.File, obj types.Object) *ast.FuncDecl {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			if info.Defs[fd.Name] == obj {
+				return fd
+			}
+		}
+	}
+	return nil
+}
+
+// TestSagaEnrollment_FactoryBinding_RED is the reverse self-test for the
+// factory-bound enrollment credit (#1641 review F1). It type-checks a synthetic
+// package and asserts factoryConstructedImpls credits the impl ONLY when the
+// factory argument constructs it — across the three resolvable factory forms
+// (named func, inline FuncLit, local var bound to a FuncLit) — and NOT when an
+// unrelated constructor sits elsewhere while the factory builds nothing (the
+// exact false-credit the old file-level scan allowed).
+func TestSagaEnrollment_FactoryBinding_RED(t *testing.T) {
+	t.Parallel()
+	const src = `package p
+
+type Impl struct{}
+
+func NewImpl() *Impl { return &Impl{} }
+
+func namedFactory() *Impl { return NewImpl() }
+
+func emptyFactory() *Impl { return nil }
+
+func run(_ int, _ func() *Impl) {}
+
+func useNamed()     { run(0, namedFactory) }
+func useLit()       { run(0, func() *Impl { return NewImpl() }) }
+func useVar()       { f := func() *Impl { return NewImpl() }; run(0, f) }
+func useUnrelated() { _ = NewImpl(); run(0, emptyFactory) }
+`
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, "p.go", src, 0)
+	require.NoError(t, err)
+	info := &types.Info{
+		Defs:  map[*ast.Ident]types.Object{},
+		Uses:  map[*ast.Ident]types.Object{},
+		Types: map[ast.Expr]types.TypeAndValue{},
+	}
+	_, err = (&types.Config{}).Check("p", fset, []*ast.File{af}, info)
+	require.NoError(t, err)
+
+	files := []*ast.File{af}
+	implSet := map[string]bool{"p.Impl": true}
+
+	// Collect the impls credited for each enclosing function's run(0, factory) call.
+	got := map[string][]string{}
+	for _, decl := range af.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+			if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "run" {
+				return
+			}
+			got[fd.Name.Name] = factoryConstructedImpls(call, info, files, implSet)
+		})
+	}
+
+	// The three resolvable factory forms each credit Impl.
+	for _, fn := range []string{"useNamed", "useLit", "useVar"} {
+		assert.Equal(t, []string{"p.Impl"}, got[fn],
+			"factory in %s constructs Impl → must credit p.Impl", fn)
+	}
+	// Factory builds nothing; an unrelated NewImpl() elsewhere must NOT be credited
+	// — this is the file-level false-credit gap the factory binding closes.
+	assert.Empty(t, got["useUnrelated"],
+		"unrelated NewImpl() outside the factory must not credit p.Impl (false-credit gap)")
+}
+
+// findVarFuncLit finds the FuncLit a local var (obj) is bound to via
+// `v := func(){…}` or `var v = func(){…}`.
+func findVarFuncLit(info *types.Info, files []*ast.File, obj types.Object) *ast.FuncLit {
+	for _, f := range files {
+		var found *ast.FuncLit
+		EachInSubtree[ast.AssignStmt](f, func(s *ast.AssignStmt) {
+			if found != nil || len(s.Lhs) != 1 || len(s.Rhs) != 1 {
+				return
+			}
+			if id, ok := s.Lhs[0].(*ast.Ident); ok && info.Defs[id] == obj {
+				if fl, ok := s.Rhs[0].(*ast.FuncLit); ok {
+					found = fl
+				}
+			}
+		})
+		if found != nil {
+			return found
+		}
+		EachInSubtree[ast.ValueSpec](f, func(s *ast.ValueSpec) {
+			if found != nil {
+				return
+			}
+			for i, name := range s.Names {
+				if info.Defs[name] == obj && i < len(s.Values) {
+					if fl, ok := s.Values[i].(*ast.FuncLit); ok {
+						found = fl
+					}
+				}
+			}
+		})
+		if found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 // ============================================================================

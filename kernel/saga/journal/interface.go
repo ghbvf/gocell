@@ -274,9 +274,12 @@ type Heartbeater interface {
 // It is deliberately NOT folded into [JournalCore]: the single-sanctioned-holder
 // seal (SAGA-JOURNAL-HOLDER-SEAL-01) restricts JournalCore field holders to the
 // Coordinator, whereas the PR-04 projection Tailer must hold a global reader
-// without driving sagas. Keeping GlobalReader separate lets the Tailer hold it
-// (and a future read-only global-scan backend implement only it) without
-// touching the coordination surface or the holder seal.
+// without driving sagas. The narrow type is therefore a CONSUMER view (it lets
+// the Tailer hold a 2-method reader, structurally unable to claim/append/commit)
+// — NOT a contract for read-only backends. Every GlobalReader implementation is
+// itself the append-only saga_events store and hence a full [Journal] (MemJournal
+// today; PGJournal at PR-PG); there is no store-less, read-only-only
+// implementation in this design.
 //
 // Events are ordered by [Event.GlobalSeq], a stable total order across all
 // instances. MemJournal assigns it from an in-process counter; the PG backend

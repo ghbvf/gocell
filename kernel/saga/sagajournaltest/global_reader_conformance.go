@@ -21,11 +21,23 @@ import (
 // suite gives archtest SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01 a precise anchor
 // to require every GlobalReader implementation to enroll.
 //
-// The factory returns a journal.Journal (the suite drives appends through the
-// full coordination surface to generate a global sequence) which MUST also
-// implement journal.GlobalReader; a journal that does not is a programmer error
-// and fails the suite immediately (the enrollment archtest only routes
-// GlobalReader implementations here).
+// It reuses [Factory] (returning journal.Journal) on purpose: generating a global
+// sequence to scan requires driving appends through the full write surface
+// (Enqueue/ClaimPending/Append/MarkTerminal), and in this design every
+// GlobalReader implementation IS the saga_events store and therefore a full
+// Journal (see the GlobalReader godoc — the narrow type is a consumer view, not a
+// read-only-backend contract). The factory's Journal MUST also implement
+// journal.GlobalReader; one that does not is a programmer error and fails the
+// suite immediately (the enrollment archtest only routes GlobalReader
+// implementations here).
+//
+// A dedicated GlobalReaderFactory returning a separate (driver Journal, reader
+// GlobalReader) pair was considered and rejected: with driver==reader for every
+// real store its only payoff would be a standalone read-only-backend conformance,
+// which is unreachable anyway (a read-only store still needs some Journal writer
+// to seed the very events it scans). It would add a speculative abstraction for a
+// backend that does not exist — so the conformance binds to Journal, the honest
+// shape of every GlobalReader implementation.
 func RunGlobalReaderConformance(t *testing.T, factory Factory) {
 	t.Helper()
 
