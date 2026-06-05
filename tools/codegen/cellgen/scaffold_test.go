@@ -76,6 +76,10 @@ func TestScaffoldCell_CellGoNoSubscribeMarker(t *testing.T) {
 
 // TestScaffoldCell_CellGoContainsListenerMarker verifies the scaffolded
 // cell.go includes the K#05 // +cell:listener: stub marker.
+//
+// INVARIANT: SCAFFOLD-BUNDLE-MARKER-01 (single-cell path) — the bundle path is
+// asserted in TestScaffoldCellBundle_HTTP; both were migrated here from the
+// retired archtest scaffold_bundle_invariants_test.go (M3 #1302).
 func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{

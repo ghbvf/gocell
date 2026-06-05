@@ -60,8 +60,6 @@ tools/archtest/reverse_coverage_invariants_test.go
 tools/archtest/rmq_invariants_test.go
 tools/archtest/safeid_funnel_test.go
 tools/archtest/saga_invariants_test.go
-tools/archtest/scaffold_bundle_invariants_test.go
-tools/archtest/scaffold_derived_forceoverwrite_test.go
 tools/archtest/security_defaults_test.go
 tools/archtest/seed_role_iface_test.go
 tools/archtest/serviceowned_handler_owner_check_test.go
