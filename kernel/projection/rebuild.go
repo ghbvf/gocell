@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
@@ -224,21 +223,21 @@ var errDrainDone = errors.New("projection.rebuild: drain reached cutoff head")
 // it — the rebuild ctx is derived via context.WithoutCancel, which strips the
 // parent deadline so a detached rebuild outlives the short-lived 202 request.
 func (c *Coordinator) drainGap(ctx context.Context, from, through int64) error {
-	err := c.replay.Replay(ctx, from, func(entry outbox.Entry) error {
+	err := c.replay.Replay(ctx, from, func(entry ProjectionEvent) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-			// Restore the event's observability + principal into ctx before Apply,
-			// matching the live consumer path (SubscriberWithMiddleware) so a
-			// rebuild's Apply sees the same trace/audit identity as live delivery
-			// (#1368 review F4). RestoreToContext is idempotent and does not strip
-			// the ambient tx carried in txCtx.
-			rctx := entry.Observability().RestoreToContext(txCtx)
-			rctx = entry.Principal().RestoreToContext(rctx)
+			// Restore the event's ambient identity into ctx before Apply, matching
+			// the live consumer path (SubscriberWithMiddleware) so a rebuild's Apply
+			// sees the same trace/audit identity as live delivery (#1368 review F4).
+			// RestoreContext is idempotent and does not strip the ambient tx carried
+			// in txCtx. (For an outbox carrier this restores observability +
+			// principal; the carrier owns the per-source restore semantics.)
+			rctx := entry.RestoreContext(txCtx)
 			// Per-spec replay filter (#1482): apply only this projection's stream;
 			// advance the checkpoint past foreign streams without applying.
-			if entry.RoutingTopic() == c.spec.Topic {
+			if entry.Stream() == c.spec.Topic {
 				return c.applyOne(rctx, entry, c.apply)
 			}
 			return c.advanceOffsetPastForeign(rctx, entry)
@@ -284,7 +283,7 @@ func (c *Coordinator) drainGap(ctx context.Context, from, through int64) error {
 // journal dominated by foreign streams the lag gauge can therefore stay flat for
 // stretches of a rebuild even though work is progressing — the checkpoint and
 // pending_events still move; watch those for rebuild progress, not lag.
-func (c *Coordinator) advanceOffsetPastForeign(ctx context.Context, entry outbox.Entry) error {
+func (c *Coordinator) advanceOffsetPastForeign(ctx context.Context, entry ProjectionEvent) error {
 	pos, proceed, err := c.resolvePosition(ctx, entry)
 	if err != nil || !proceed {
 		return err

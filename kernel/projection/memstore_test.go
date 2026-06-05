@@ -28,15 +28,15 @@ func TestMemCheckpointStore_Conformance(t *testing.T) {
 func TestMemReplaySource_Conformance(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	src := projection.NewMemReplaySource()
-	seed := func(n int) []outbox.Entry {
-		entries := make([]outbox.Entry, n)
-		for i := range entries {
+	seed := func(n int) []projection.ProjectionEvent {
+		entries := make([]projection.ProjectionEvent, 0, n)
+		for i := 0; i < n; i++ {
 			e, err := outbox.NewEntry(clk, context.Background(), "topic.v1", []byte(`{}`))
 			if err != nil {
 				t.Fatalf("outbox.NewEntry: %v", err)
 			}
 			src.Append(e)
-			entries[i] = e
+			entries = append(entries, e)
 		}
 		return entries
 	}
@@ -55,19 +55,19 @@ func TestMemCursor_Conformance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMemCursor: %v", err)
 	}
-	newEntry := func() outbox.Entry {
+	newEntry := func() projection.ProjectionEvent {
 		e, err := outbox.NewEntry(clk, context.Background(), "topic.v1", []byte(`{}`))
 		if err != nil {
 			t.Fatalf("outbox.NewEntry: %v", err)
 		}
 		return e
 	}
-	seed := func(n int) []outbox.Entry {
-		entries := make([]outbox.Entry, n)
-		for i := range entries {
+	seed := func(n int) []projection.ProjectionEvent {
+		entries := make([]projection.ProjectionEvent, 0, n)
+		for i := 0; i < n; i++ {
 			e := newEntry()
 			src.Append(e)
-			entries[i] = e
+			entries = append(entries, e)
 		}
 		return entries
 	}

@@ -233,7 +233,7 @@ func checkIdempotentReSave(t *testing.T, store projection.CheckpointStore) {
 // This conformance helper is intended for external packages (e.g. adapters) that
 // provide their own ReplaySource implementations. Calling it from within the
 // projection package itself would create an import cycle.
-func RunReplaySourceConformance(t *testing.T, src projection.ReplaySource, seed func(n int) []outbox.Entry) {
+func RunReplaySourceConformance(t *testing.T, src projection.ReplaySource, seed func(n int) []projection.ProjectionEvent) {
 	t.Helper()
 	t.Run("HeadAccounting", func(t *testing.T) {
 		checkReplayHeadAccounting(t, src, seed)
@@ -252,7 +252,7 @@ func RunReplaySourceConformance(t *testing.T, src projection.ReplaySource, seed 
 // checkReplayHeadAccounting asserts Head advances by at least n after seeding n
 // entries. ">=" (not "==") tolerates a shared backing store accumulating entries
 // from earlier sub-tests or concurrent callers.
-func checkReplayHeadAccounting(t *testing.T, src projection.ReplaySource, seed func(n int) []outbox.Entry) {
+func checkReplayHeadAccounting(t *testing.T, src projection.ReplaySource, seed func(n int) []projection.ProjectionEvent) {
 	t.Helper()
 	before, err := src.Head(context.Background())
 	if err != nil {
@@ -270,7 +270,7 @@ func checkReplayHeadAccounting(t *testing.T, src projection.ReplaySource, seed f
 
 // checkReplayDeliversInOrder seeds entries after recording the current head and
 // asserts Replay(head) delivers them as an ordered subsequence.
-func checkReplayDeliversInOrder(t *testing.T, src projection.ReplaySource, seed func(n int) []outbox.Entry) {
+func checkReplayDeliversInOrder(t *testing.T, src projection.ReplaySource, seed func(n int) []projection.ProjectionEvent) {
 	t.Helper()
 	before, err := src.Head(context.Background())
 	if err != nil {
@@ -285,7 +285,7 @@ func checkReplayDeliversInOrder(t *testing.T, src projection.ReplaySource, seed 
 // checkReplayFromOffsetSkips seeds a first batch, captures the head, seeds a
 // second batch, and asserts Replay(head) excludes the first batch and delivers
 // the second in order. This is the resume-from-checkpoint contract.
-func checkReplayFromOffsetSkips(t *testing.T, src projection.ReplaySource, seed func(n int) []outbox.Entry) {
+func checkReplayFromOffsetSkips(t *testing.T, src projection.ReplaySource, seed func(n int) []projection.ProjectionEvent) {
 	t.Helper()
 	firstIDs := toSet(idsOf(seed(2)))
 	mid, err := src.Head(context.Background())
@@ -304,7 +304,7 @@ func checkReplayFromOffsetSkips(t *testing.T, src projection.ReplaySource, seed 
 
 // checkReplayStable asserts two Replay(before) calls deliver an identical ID
 // sequence (deterministic, stable positions — not ephemeral).
-func checkReplayStable(t *testing.T, src projection.ReplaySource, seed func(n int) []outbox.Entry) {
+func checkReplayStable(t *testing.T, src projection.ReplaySource, seed func(n int) []projection.ProjectionEvent) {
 	t.Helper()
 	before, err := src.Head(context.Background())
 	if err != nil {
@@ -337,8 +337,8 @@ func checkReplayStable(t *testing.T, src projection.ReplaySource, seed func(n in
 func RunCursorConformance(
 	t *testing.T,
 	cursor projection.Cursor,
-	seed func(n int) []outbox.Entry,
-	newUnseeded func() outbox.Entry,
+	seed func(n int) []projection.ProjectionEvent,
+	newUnseeded func() projection.ProjectionEvent,
 ) {
 	t.Helper()
 	t.Run("OneBasedMonotonicGapAllowed", func(t *testing.T) {
@@ -351,7 +351,7 @@ func RunCursorConformance(
 
 // checkCursorOneBasedMonotonic seeds distinct entries in order and asserts their
 // resolved positions are >= 1 and strictly increasing (gaps allowed).
-func checkCursorOneBasedMonotonic(t *testing.T, cursor projection.Cursor, seed func(n int) []outbox.Entry) {
+func checkCursorOneBasedMonotonic(t *testing.T, cursor projection.Cursor, seed func(n int) []projection.ProjectionEvent) {
 	t.Helper()
 	entries := seed(4)
 	var prev int64
@@ -374,7 +374,7 @@ func checkCursorOneBasedMonotonic(t *testing.T, cursor projection.Cursor, seed f
 // checkCursorPermanentOnUnknown asserts the cursor returns a permanent error for
 // an entry the backing store has never seen (cursor.go invariant #4: an
 // unresolvable entry is unrecoverable, not a transient retry).
-func checkCursorPermanentOnUnknown(t *testing.T, cursor projection.Cursor, newUnseeded func() outbox.Entry) {
+func checkCursorPermanentOnUnknown(t *testing.T, cursor projection.Cursor, newUnseeded func() projection.ProjectionEvent) {
 	t.Helper()
 	unknown := newUnseeded()
 	_, err := cursor.Position(unknown)
@@ -391,10 +391,10 @@ func checkCursorPermanentOnUnknown(t *testing.T, cursor projection.Cursor, newUn
 // ─── shared ID-based ordering helpers ──────────────────────────────────────────
 
 // idsOf returns the Entry.ID() of each entry, preserving order.
-func idsOf(entries []outbox.Entry) []string {
+func idsOf(entries []projection.ProjectionEvent) []string {
 	ids := make([]string, len(entries))
 	for i, e := range entries {
-		ids[i] = e.ID()
+		ids[i] = e.EventID()
 	}
 	return ids
 }
@@ -404,8 +404,8 @@ func idsOf(entries []outbox.Entry) []string {
 func collectReplayIDs(t *testing.T, src projection.ReplaySource, fromOffset int64) []string {
 	t.Helper()
 	var ids []string
-	if err := src.Replay(context.Background(), fromOffset, func(e outbox.Entry) error {
-		ids = append(ids, e.ID())
+	if err := src.Replay(context.Background(), fromOffset, func(e projection.ProjectionEvent) error {
+		ids = append(ids, e.EventID())
 		return nil
 	}); err != nil {
 		t.Fatalf("Replay(from=%d): %v", fromOffset, err)

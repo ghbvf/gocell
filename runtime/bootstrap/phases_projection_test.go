@@ -60,7 +60,7 @@ func projTestSpec() contractspec.ContractSpec {
 // 1-based invariant).
 type fakeProjectionCursor struct{}
 
-func (fakeProjectionCursor) Position(_ outbox.Entry) (int64, error) { return 1, nil }
+func (fakeProjectionCursor) Position(_ projection.ProjectionEvent) (int64, error) { return 1, nil }
 
 // fakeProjectionTxRunner is a pass-through TxRunner (the mem checkpoint store
 // ignores the ambient tx).
@@ -102,7 +102,7 @@ func newProjectionCell() *projectionTestCell {
 		BaseCell:     cell.MustNewBaseCell(&metadata.CellMeta{ID: projTestCellID, Type: "core"}),
 		spec:         projTestSpec(),
 		projectionID: projTestProjID,
-		apply:        func(context.Context, outbox.Entry) error { return nil },
+		apply:        func(context.Context, projection.ProjectionEvent) error { return nil },
 	}
 }
 
@@ -266,7 +266,7 @@ func TestBuildProjectionCoordinators_CapturedHandlerRunsApply(t *testing.T) {
 	t.Parallel()
 	var applied atomic.Int32
 	pc := newProjectionCell()
-	pc.apply = func(context.Context, outbox.Entry) error { applied.Add(1); return nil }
+	pc.apply = func(context.Context, projection.ProjectionEvent) error { applied.Add(1); return nil }
 	s := buildProjectionPhaseState(t, pc)
 
 	b := newProjectionBootstrap(t)
@@ -419,7 +419,7 @@ func TestPhase6_ProjectionDrain_PublishApplyRoundTrip(t *testing.T) {
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-e2e-apply", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	pc := newProjectionCell()
-	pc.apply = func(_ context.Context, _ outbox.Entry) error {
+	pc.apply = func(_ context.Context, _ projection.ProjectionEvent) error {
 		select {
 		case applied <- struct{}{}:
 		default:
@@ -825,7 +825,7 @@ func newProjectionCellNamed(cellID, projID string) *projectionTestCell {
 		BaseCell:     cell.MustNewBaseCell(&metadata.CellMeta{ID: cellID, Type: "core"}),
 		spec:         projTestSpec(),
 		projectionID: projID,
-		apply:        func(context.Context, outbox.Entry) error { return nil },
+		apply:        func(context.Context, projection.ProjectionEvent) error { return nil },
 	}
 }
 
@@ -846,7 +846,7 @@ func (c *multiProjectionCell) Init(ctx context.Context, reg cell.Registrar) erro
 			Spec:         projTestSpec(),
 			ProjectionID: pid,
 			CellID:       c.ID(),
-			Apply:        func(context.Context, outbox.Entry) error { return nil },
+			Apply:        func(context.Context, projection.ProjectionEvent) error { return nil },
 		}); err != nil {
 			return err
 		}

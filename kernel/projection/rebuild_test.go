@@ -120,7 +120,7 @@ func subscribeWithDefaults(t *testing.T, c *Coordinator, apply Apply, opts ...Op
 }
 
 // applyNoop is a no-op apply function.
-func applyNoop(_ context.Context, _ outbox.Entry) error { return nil }
+func applyNoop(_ context.Context, _ ProjectionEvent) error { return nil }
 
 // ---------------------------------------------------------------------------
 // TestRebuild_ColdFull — cold rebuild replays all events and ends PhaseLive
@@ -195,10 +195,10 @@ func TestRebuild_PerSpecTopicFilter(t *testing.T) {
 
 	store := NewMemCheckpointStore()
 	var applied int32
-	apply := func(_ context.Context, e outbox.Entry) error {
+	apply := func(_ context.Context, e ProjectionEvent) error {
 		atomic.AddInt32(&applied, 1)
-		if e.RoutingTopic() != testEventTopic {
-			t.Errorf("business Apply called with foreign topic %q; per-spec filter must gate it out", e.RoutingTopic())
+		if e.Stream() != testEventTopic {
+			t.Errorf("business Apply called with foreign topic %q; per-spec filter must gate it out", e.Stream())
 		}
 		return nil
 	}
@@ -331,7 +331,7 @@ type growHeadReplaySource struct {
 	head0    int64
 }
 
-func (s *growHeadReplaySource) Replay(ctx context.Context, from int64, fn func(outbox.Entry) error) error {
+func (s *growHeadReplaySource) Replay(ctx context.Context, from int64, fn func(ProjectionEvent) error) error {
 	return s.inner.Replay(ctx, from, fn)
 }
 
@@ -370,10 +370,10 @@ func TestRebuild_ForeignDuringCatchup(t *testing.T) {
 	store := NewMemCheckpointStore()
 
 	var applied int32
-	apply := func(_ context.Context, e outbox.Entry) error {
+	apply := func(_ context.Context, e ProjectionEvent) error {
 		atomic.AddInt32(&applied, 1)
-		if e.RoutingTopic() != testEventTopic {
-			t.Errorf("business Apply called with foreign topic %q; per-spec filter must gate it out", e.RoutingTopic())
+		if e.Stream() != testEventTopic {
+			t.Errorf("business Apply called with foreign topic %q; per-spec filter must gate it out", e.Stream())
 		}
 		return nil
 	}
@@ -486,7 +486,7 @@ func TestRebuild_ReplayErrorReturnLive(t *testing.T) {
 	// applyErr after entry 2 to simulate mid-replay error.
 	var applyCalls int32
 	errApply := errors.New("apply error")
-	apply := func(ctx context.Context, e outbox.Entry) error {
+	apply := func(ctx context.Context, e ProjectionEvent) error {
 		n := atomic.AddInt32(&applyCalls, 1)
 		if n == 3 {
 			return errApply
@@ -845,7 +845,7 @@ type errHeadReplaySource struct {
 }
 
 func (e *errHeadReplaySource) Head(_ context.Context) (int64, error) { return 0, e.headErr }
-func (e *errHeadReplaySource) Replay(_ context.Context, _ int64, _ func(outbox.Entry) error) error {
+func (e *errHeadReplaySource) Replay(_ context.Context, _ int64, _ func(ProjectionEvent) error) error {
 	return nil
 }
 
@@ -1035,7 +1035,7 @@ func (s *catchupErrReplaySource) Head(_ context.Context) (int64, error) {
 	return 0, nil
 }
 
-func (s *catchupErrReplaySource) Replay(_ context.Context, _ int64, _ func(outbox.Entry) error) error {
+func (s *catchupErrReplaySource) Replay(_ context.Context, _ int64, _ func(ProjectionEvent) error) error {
 	return nil
 }
 
@@ -1328,7 +1328,7 @@ func TestRebuild_PanicRecovered(t *testing.T) {
 	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, reg: reg, txr: txr, store: store, cursor: cur, replay: src})
 
 	// apply panics on the first entry.
-	panicApply := func(_ context.Context, _ outbox.Entry) error {
+	panicApply := func(_ context.Context, _ ProjectionEvent) error {
 		panic("business-apply-panic")
 	}
 	subscribeWithDefaults(t, c, panicApply)
@@ -1387,7 +1387,7 @@ func (s *ctxRecordingReplaySource) Head(ctx context.Context) (int64, error) {
 	return 0, nil
 }
 
-func (s *ctxRecordingReplaySource) Replay(_ context.Context, _ int64, _ func(outbox.Entry) error) error {
+func (s *ctxRecordingReplaySource) Replay(_ context.Context, _ int64, _ func(ProjectionEvent) error) error {
 	return nil
 }
 
@@ -1439,7 +1439,7 @@ type blockingReplaySource struct {
 	unblock chan struct{}
 }
 
-func (b *blockingReplaySource) Replay(ctx context.Context, _ int64, _ func(outbox.Entry) error) error {
+func (b *blockingReplaySource) Replay(ctx context.Context, _ int64, _ func(ProjectionEvent) error) error {
 	select {
 	case <-b.unblock:
 		return nil

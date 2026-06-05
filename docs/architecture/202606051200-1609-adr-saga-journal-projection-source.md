@@ -87,8 +87,27 @@ ref: akka/akka-projection ShardedDaemonProcess（per-ProjectionId offset）
 
 ### 4.1 载体（D2，SHARED-INTERFACE）
 
+> **§Amendment 2026-06-06（PR-01 落地，原地修订，per `ai-robust.md` §"ADR amendment 落地必查"）**：
+> 1. **接口/func-type 家 = `kernel/cellvocab`，非本节原写的 `kernel/projection`**。原因：`kernel/cell.ProjectionApply`
+>    须引用载体，而 bootstrap 对 `cell.ProjectionApply` → `projection.Apply` 做具名类型转换（要求底层类型一致）；接口
+>    放 `kernel/projection` 会逼 `kernel/cell` import `kernel/projection` 成环（`kernel/projection` 已 import
+>    `kernel/cell`）。`cellvocab` 是纯叶子（cell + projection + outbox 均可 import 而无环），故 `ProjectionEvent` +
+>    `ProjectionApply` + `ProjectionResetHook` 三类型定义在 `cellvocab`；`projection.ProjectionEvent` / `projection.Apply` /
+>    `projection.OnReset` 与 `cell.ProjectionApply` / `cell.ProjectionResetHook` 全部是 `cellvocab.*` 的 **type alias**
+>    （保 ADR 的 `projection.ProjectionEvent` 拼写）。
+> 2. **镜像塌缩**：上述 alias 使 `cell.ProjectionApply` 与 `projection.Apply` 成为同一底层类型，故 PR-01 顺带删除
+>    bootstrap 的两处具名转换（`projection.Apply(req.Apply)` / `projection.OnReset(req.OnReset)`）——这两个镜像类型
+>    本只为绕环存在，cellvocab 从根上解环后即冗余。
+> 3. **codegen 0 文本 diff**：`projection.tmpl` 按*名字*引用 `cell.ProjectionApply`，底层签名变化不改 18 个
+>    `projection_gen.go` 与 todoorder `cell_gen.go` 的生成文本——PR-01 实际改动 ~450 行，**不拆 PR-01a/01b**（下方第 1
+>    bullet 的拆分条件未触发）。
+> 4. **`projection.SystemPrincipal` + saga 身份 archtest 推迟 PR-03**（非本节/§9 原写的 PR-01）：唯一消费者是 saga 载体的
+>    `RestoreContext`（PR-03 才落地）；PR-01 无 saga 事件流经 Apply，impersonation 威胁尚不存在，现加 = 无消费者死代码 +
+>    vacuous archtest（违 anti-vacuity）。本节下方「身份安全约束」末句「随 PR-01 落地」+ §9 PR-01 行 + §5 威胁矩阵 impersonation 行
+>    的「(PR-01)」据此同改 PR-03。本节「备选 carrier-vs-config 复核」结论：维持 carrier-method 方案（PR-03 实现时仍可复核）。
+
 ```go
-// package kernel/projection
+// package kernel/cellvocab  (§Amendment 2026-06-06: was kernel/projection — cycle-forced move)
 //
 // ProjectionEvent 是投影 Apply 的最小只读载体。outbox.Entry（live 总线投递 +
 // outbox-store replay）与 saga journal 事件（saga-log replay）各自实现它。
@@ -146,7 +165,7 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 | leader 交接 mid-drain，checkpoint 推进不安全 | per-projection distlock + apply/advance 同事务（复用 `CheckpointStore`）+ lease-token CAS（旧 leader advance 必败，语义同 `OUTBOX-LEASE-ID-CAS-01`） | ⚠️ | **CAS 谓词待新契约**：现有 `CheckpointStore.SaveOffset` 仅无条件 upsert（无 CAS、owner 列 v1.1 预留未写），`AdvanceIfOwner` / owner-列 CAS + token 源（distlock lease）在 **PR-04（Tailer）/ PR-PG（PG owner 列激活）** 定义并验收。此前 leader 交接仅 distlock 互斥（无 fencing token），stale-leader 窗口可致 checkpoint 回退 + 重复 apply（idempotent upsert 兜底正确性，但非 exactly-once） |
 | 乱序 / 非 exactly-once | `global_seq` 稳定全序（非 `created_at`）；投影按 `global_seq` 序处理；idempotent upsert | ✅ | — |
 | Running saga 的部分 step 事件先于终态到达 | 增量 per-event apply（D6），投影 fold 容忍中间态 | ✅ | — |
-| rebuild 触发者（admin）/ 后台 Tailer 身份穿透进 saga 投影 Apply（审计 impersonation） | saga `RestoreContext` 清空 ambient principal + 安装显式 `projection.SystemPrincipal`（不继承触发请求身份，见 §4.1 身份安全约束）；archtest 限定 saga carrier 为该身份唯一安装点（PR-01） | ✅ | — |
+| rebuild 触发者（admin）/ 后台 Tailer 身份穿透进 saga 投影 Apply（审计 impersonation） | saga `RestoreContext` 清空 ambient principal + 安装显式 `projection.SystemPrincipal`（不继承触发请求身份，见 §4.1 身份安全约束）；archtest 限定 saga carrier 为该身份唯一安装点（PR-03——§Amendment 2026-06-06 从 PR-01 移入，PR-01 无 saga 事件流经 Apply 故 impersonation 面尚不存在） | ✅（缓解与威胁同在 PR-03 出现） | — |
 | checkpoint advance 多写入路径 | 单 advancer funnel（caller-allowlist 下游 Hard） | ⚠️ | 上游 Medium（Go 可见性天花板，开 gh 跟踪 Hard 化，同 #851/#893/#1282 族） |
 | 长驻 Tailer 故障无诊断入口（checkpoint 静默停摆） | Tailer 自带 readiness probe + lag/drain/lock/advance metrics + alerting + runbook（不继承 ConsumerBase/Coordinator 信号，见 §4.3 运行面 checklist） | ✅ | 实现 PR-04（checklist = 验收项） |
 | `saga_events` 无界增长 + 归档截断到投影 checkpoint 之下丢事件 | D7：归档须 ≥ 最慢投影 checkpoint | ⚠️ | 归档能力本身仍未做（saga ADR §7 row6 的归档部分；本 ADR 只交付 replay 设计，不交付归档/截断） |
@@ -193,9 +212,9 @@ PG：`saga_events` 加 `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`（migrat
 | PR | 范围 | 本 ADR 决策 |
 |----|------|------------|
 | PR-00（本 PR） | 本 ADR + saga ADR §8/§7 同 PR 重写 | D1–D7 |
-| PR-01 | 载体泛化 `ProjectionEvent` + 迁移 todoorder + `PROJECTION-EVENT-CARRIER-TYPED-01` + `projection.SystemPrincipal`（saga `RestoreContext` 安装的 system 身份 + 唯一安装点 archtest，D2 身份安全约束） | D2 |
+| PR-01（已落，#1625） | 载体泛化 `ProjectionEvent`（家=`cellvocab`，§Amendment 2026-06-06）+ 迁移 todoorder + PG impl + `PROJECTION-EVENT-CARRIER-TYPED-01` + 塌缩 `cell.ProjectionApply`↔`projection.Apply` 镜像。**`projection.SystemPrincipal` + saga 身份 archtest 移 PR-03**（真实 blocker：消费者 saga `RestoreContext` 在 PR-03，PR-01 无 impersonation 面） | D2 |
 | PR-02 | `journal.GlobalReader` + `global_seq`（mem + PG migration）+ conformance | D3 |
-| PR-03 | `SagaJournalSource`（ReplaySource + Cursor）+ conformance enroll。**依赖 PR-01 已落**（`projection.ReplaySource`/`Cursor` 此时已 `ProjectionEvent` 化，否则 `SagaJournalSource` 编译失败）+ PR-02 已落（`GlobalReader`） | D3/D5 |
+| PR-03 | `SagaJournalSource`（ReplaySource + Cursor）+ conformance enroll **+ `projection.SystemPrincipal`（saga `RestoreContext` 安装的 system 身份 + 唯一安装点 archtest，D2 身份安全约束——从 PR-01 移入，此时 saga carrier 才存在）**。**依赖 PR-01 已落**（`projection.ReplaySource`/`Cursor` 此时已 `ProjectionEvent` 化，否则 `SagaJournalSource` 编译失败）+ PR-02 已落（`GlobalReader`） | D2/D3/D5 |
 | PR-04 | `Tailer`（Option B）+ per-projection distlock + 单 advancer funnel + **checkpoint CAS API**（`AdvanceIfOwner` / owner-列 CAS，token = distlock lease；D5(b)）+ **Tailer 运行面**（probe / metrics / alert / runbook，见 §4.3 observability checklist） | D4/D5 |
 | PR-05 | wiring：扩展 subscribe 角色加 projection-source 选择子（单一路径）+ cellgen 派生 | D2/D4 |
 | PR-06 | #1391 落地：orderfulfillment 读投影 + 删 `deriveStatus` + dev guide | D6 |

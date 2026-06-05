@@ -13,7 +13,7 @@ type spec struct{ Topic string }
 
 type entry struct{}
 
-func (entry) RoutingTopic() string { return "" }
+func (entry) Stream() string { return "" }
 
 type coord struct {
 	spec  spec
@@ -29,7 +29,7 @@ func (c *coord) advanceOffsetPastForeign(_ entry) error { return nil }
 // the checkpoint.
 func (c *coord) drainGap(entries []entry) error {
 	for _, e := range entries {
-		if e.RoutingTopic() == c.spec.Topic {
+		if e.Stream() == c.spec.Topic {
 			if err := c.applyOne(e, c.apply); err != nil {
 				return err
 			}

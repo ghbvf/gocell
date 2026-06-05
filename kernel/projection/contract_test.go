@@ -3,8 +3,6 @@ package projection
 import (
 	"context"
 	"testing"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // This file is the PR-00 "implementability proof" for the projection lifecycle
@@ -48,7 +46,7 @@ func (f *fakeCheckpointStore) Noop() bool { return f.noop }
 var _ CheckpointStore = (*fakeCheckpointStore)(nil)
 
 // sampleApply proves the Apply function type is usable for a real hook shape.
-func sampleApply(_ context.Context, _ outbox.Entry) error { return nil }
+func sampleApply(_ context.Context, _ ProjectionEvent) error { return nil }
 
 var _ Apply = sampleApply
 

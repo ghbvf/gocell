@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
 )
 
@@ -19,8 +20,8 @@ import (
 func TestEnrolledReplaySourceConformance(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	src := newEnrolledReplaySource()
-	seed := func(n int) []outbox.Entry {
-		entries := make([]outbox.Entry, n)
+	seed := func(n int) []projection.ProjectionEvent {
+		entries := make([]projection.ProjectionEvent, n)
 		for i := range entries {
 			e, err := outbox.NewEntry(clk, context.Background(), "topic.v1", []byte(`{}`))
 			if err != nil {

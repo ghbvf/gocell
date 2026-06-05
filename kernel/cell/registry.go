@@ -474,21 +474,23 @@ type WebhookDispatchRequest struct {
 	Selector webhook.WebhookDispatchSelector
 }
 
-// ProjectionApply is the cell-local mirror of the kernel/projection.Apply
-// event→state hook signature. It is declared here (not imported from
-// kernel/projection) because kernel/projection imports kernel/cell — its
-// Coordinator's SubscribeRegistrar references cell.SubscriptionOption — so
-// importing kernel/projection back into kernel/cell would be a compile-time
-// cycle. The bootstrap projection drain
-// performs the named-type conversion to projection.Apply (identical underlying
-// signature), exactly as SubscriptionRequest.Handler carries the kernel
-// primitive outbox.EntryHandler and is converted by the event-router drain.
-type ProjectionApply func(ctx context.Context, event outbox.Entry) error
+// ProjectionApply is the cell-local registry surface for the event→state hook.
+// It is an alias of cellvocab.ProjectionApply (the single underlying type, also
+// aliased by kernel/projection.Apply), so a recorded hook reaches
+// Coordinator.Subscribe through the bootstrap drain with NO named-type conversion.
+// The carrier is the typed cellvocab.ProjectionEvent interface, not the concrete
+// outbox.Entry (EPIC #1609 PR-01 / PROJECTION-EVENT-CARRIER-TYPED-01).
+//
+// It lives behind an alias here (rather than a distinct mirror type) because
+// kernel/projection imports kernel/cell — the carrier and hook types therefore
+// live in the cellvocab leaf, which both packages import without a cycle. The
+// behavioral contract godoc is on the projection.Apply alias.
+type ProjectionApply = cellvocab.ProjectionApply
 
-// ProjectionResetHook is the cell-local mirror of kernel/projection.OnReset,
-// the optional rebuild Reset-phase hook. Same cycle-avoidance rationale as
-// ProjectionApply; a nil value is valid (no read-model table to clear).
-type ProjectionResetHook func(ctx context.Context) error
+// ProjectionResetHook is the cell-local registry surface for the optional rebuild
+// Reset-phase hook. Alias of cellvocab.ProjectionResetHook (also aliased by
+// kernel/projection.OnReset); a nil value is valid (no read-model table to clear).
+type ProjectionResetHook = cellvocab.ProjectionResetHook
 
 // ProjectionRequest holds everything needed to register one L3 CQRS projection.
 // RegistryRecorder accumulates these via Registrar.RegisterProjection; the

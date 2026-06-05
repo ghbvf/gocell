@@ -6,7 +6,7 @@
 // must hold:
 //
 //	(a) the business Apply reach (the applyOne call) MUST be guarded by the
-//	    per-spec topic gate `entry.RoutingTopic() == c.spec.Topic`; and
+//	    per-spec topic gate `entry.Stream() == c.spec.Topic`; and
 //	(b) the foreign fall-through MUST call advanceOffsetPastForeign OUTSIDE that
 //	    gate, so a foreign-stream entry advances the checkpoint without applying.
 //
@@ -30,7 +30,7 @@
 // AI-robust: Medium (NOT a double-locked funnel — the gate is enforced by a
 // single archtest, not by the type system).
 //   - The enforcement is NAME-ANCHORED AST containment: the applyOne CallExpr
-//     must sit inside the `entry.RoutingTopic() == c.spec.Topic` IfStmt body
+//     must sit inside the `entry.Stream() == c.spec.Topic` IfStmt body
 //     (token.Pos containment + structural-name gate form). This mirrors the
 //     Medium CHANGEPASSWORD-INACTIVE-GATE-01 dominance-lite shape — it is NOT
 //     typed callsite-uniqueness (no TypesInfo.ObjectOf) and NOT control-flow
@@ -55,10 +55,10 @@
 // CHANGEPASSWORD-INACTIVE-GATE-01's mutation anchor):
 //
 //   - Anchor by name (drainGap / applyOne / advanceOffsetPastForeign /
-//     RoutingTopic / spec.Topic): renaming drainGap makes the production scan fail
+//     Stream / spec.Topic): renaming drainGap makes the production scan fail
 //     loudly (sawTarget=false → t.Fatal), not silently no-op. Renaming applyOne or
 //     removing the gate trips sawApply / sawGate anti-vacuity fatals; removing the
-//     foreign advance trips the sawForeignAdvance fatal. A rename of RoutingTopic
+//     foreign advance trips the sawForeignAdvance fatal. A rename of Stream
 //     or the spec.Topic field would make isPerSpecTopicGate miss the gate →
 //     sawGate fatal. Every drift direction is fail-closed.
 //
@@ -112,8 +112,10 @@ const (
 	// (#1574 C1).
 	psfForeignAdvanceMethod = "advanceOffsetPastForeign"
 	// psfTopicAccessor / psfSpecField / psfSpecTopicField form the gate shape
-	// `entry.RoutingTopic() == c.spec.Topic`.
-	psfTopicAccessor  = "RoutingTopic"
+	// `entry.Stream() == c.spec.Topic`. The accessor is Stream — the projection
+	// carrier's routing-topic accessor on cellvocab.ProjectionEvent (EPIC #1609
+	// PR-01 generalized the former concrete outbox.Entry accessor).
+	psfTopicAccessor  = "Stream"
 	psfSpecField      = "spec"
 	psfSpecTopicField = "Topic"
 )
@@ -316,18 +318,18 @@ func perSpecFilterScan(
 	return diags, foundFunc, sawApply, sawGate, sawForeignAdvance
 }
 
-// isPerSpecTopicGate reports whether cond is the `<x>.RoutingTopic() == <y>.spec.Topic`
+// isPerSpecTopicGate reports whether cond is the `<x>.Stream() == <y>.spec.Topic`
 // equality gate (operand order independent).
 func isPerSpecTopicGate(cond ast.Expr) bool {
 	bin, ok := cond.(*ast.BinaryExpr)
 	if !ok || bin.Op != token.EQL {
 		return false
 	}
-	return psfHasRoutingTopicCall(bin) && psfHasSpecTopicSelector(bin)
+	return psfHasStreamCall(bin) && psfHasSpecTopicSelector(bin)
 }
 
-// psfHasRoutingTopicCall reports whether n's subtree contains a `*.RoutingTopic()` call.
-func psfHasRoutingTopicCall(n ast.Node) bool {
+// psfHasStreamCall reports whether n's subtree contains a `*.Stream()` call.
+func psfHasStreamCall(n ast.Node) bool {
 	_, found := FindFirstInSubtree[ast.CallExpr](n, func(call *ast.CallExpr) bool {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		return ok && sel.Sel != nil && sel.Sel.Name == psfTopicAccessor

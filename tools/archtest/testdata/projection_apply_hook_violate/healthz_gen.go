@@ -6,7 +6,6 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/contractspec"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 )
 
@@ -16,7 +15,7 @@ import (
 // Coordinator.Subscribe callsite. A marker-only allowlist would wrongly permit
 // this; PROJECTION-APPLY-HOOK-FUNNEL-01 must FIRE here (basename != cell_gen.go).
 func generatedHealthzSubscribe(coord *projection.Coordinator) {
-	var apply projection.Apply = func(_ context.Context, _ outbox.Entry) error { return nil }
+	var apply projection.Apply = func(_ context.Context, _ projection.ProjectionEvent) error { return nil }
 	// VIOLATION: Coordinator.Subscribe from a non-cell_gen generated file.
 	_ = coord.Subscribe(context.Background(), contractspec.ContractSpec{
 		ID:        "event.test.v1",
