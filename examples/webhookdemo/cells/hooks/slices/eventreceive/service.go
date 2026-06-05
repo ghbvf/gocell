@@ -68,6 +68,14 @@ func (s *Service) HandleEvent(ctx context.Context, d webhook.Delivery) error {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"eventreceive: decode webhook payload", err)
 	}
+	// The contract's payload.schema.json declares eventId + type required; the
+	// runtime receiver verifies HMAC/timestamp/idempotency but does not validate
+	// the payload schema, so the handler enforces the required fields here. A
+	// signed-but-schema-invalid body is a permanent KindInvalid (→ 400), not a 200.
+	if evt.EventID == "" || evt.Type == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"eventreceive: webhook payload missing required eventId/type")
+	}
 	s.logger.InfoContext(ctx, "webhookdemo: received verified webhook delivery",
 		slog.String("source_id", string(d.SourceID)),
 		slog.String("delivery_id", string(d.DeliveryID)),

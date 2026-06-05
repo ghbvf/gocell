@@ -36,9 +36,14 @@ runs. `WithWebhookSourceStore` seeds the per-sender secret and
 
 ```bash
 go run ./examples/webhookdemo
-# webhook listener  :8084   (POST signed webhooks here)
-# health  listener  127.0.0.1:9099  (/healthz /readyz /metrics)
+# webhook listener  127.0.0.1:8084   (POST signed webhooks here)
+# health  listener  127.0.0.1:9099   (/healthz /readyz /metrics)
 ```
+
+> Both listeners default to loopback (`127.0.0.1`): the webhook listener is
+> `AuthNone` (the HMAC signature is the auth) and the demo HMAC secret is public
+> in this repo, so binding all interfaces would expose a signable endpoint. A real
+> deployment binds it explicitly with a non-demo per-sender secret.
 
 > Demo mode wires **no metrics provider**, so the webhook instruments listed in
 > `generated/metrics-schema.yaml` (e.g. `webhook_signature_failures_total`) are
@@ -60,17 +65,18 @@ Signed string: `"{deliveryID}.{timestamp}.{body}"`.
 
 ### Producing a signed request
 
-The signer lives in the framework — `kernel/webhook.NewHMACSigner(source)`.
-The canonical, executable example of building a signed request is the e2e test
-`webhook_e2e_test.go` (`newSignedReq`). In short:
+The signer lives in the framework — `kernel/webhook.NewHMACSigner(source)`. The
+**runnable, error-handled reference is `webhook_e2e_test.go` (`signReqBody`)** —
+that is the canonical executable signer. The sketch below is illustrative only
+(it elides error handling and the surrounding `req`/`body`/`secret` setup):
 
 ```go
-// error-first constructors (the same calls the e2e test uses — copy-pasteable)
-sourceID, _ := webhook.NewSourceID("demosource")
-src, _ := webhook.NewSource(sourceID, []byte(secret))
-signer, _ := webhook.NewHMACSigner(src)
-did, _ := webhook.NewDeliveryID("delivery-1")
-headers, _ := signer.Sign(body, time.Now(), did)
+// illustrative — see webhook_e2e_test.go for the complete, error-handled version
+sourceID, err := webhook.NewSourceID("demosource")          // handle err
+src, err := webhook.NewSource(sourceID, secret)             // handle err
+signer, err := webhook.NewHMACSigner(src)                   // handle err
+did, err := webhook.NewDeliveryID("delivery-1")             // handle err
+headers, err := signer.Sign(body, time.Now(), did)         // handle err
 req.Header.Set("Webhook-Delivery-Id", string(headers.DeliveryID))
 req.Header.Set("Webhook-Timestamp", headers.Timestamp)
 req.Header.Set("Webhook-Signature", headers.Signature)
@@ -79,8 +85,7 @@ req.Header.Set("Webhook-Signature", headers.Signature)
 > The demo seeds a single hardcoded source secret in `run.go` for convenience.
 > A real deployment loads each sender's secret from a secret manager and seeds it
 > into the `SourceStore` — never hardcodes one. There is no standalone sender CLI:
-> `curl` cannot compute the HMAC inline, so `webhook_e2e_test.go` is the runnable,
-> copy-pasteable signer reference.
+> `curl` cannot compute the HMAC inline, so the e2e test is the executable signer.
 
 ## Next steps
 

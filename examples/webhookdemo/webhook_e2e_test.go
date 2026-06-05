@@ -100,20 +100,24 @@ func TestWebhookdemoE2E(t *testing.T) {
 
 	body := []byte(`{"eventId":"evt-1","type":"order.created","data":{"orderId":"o-9"}}`)
 
-	// newSignedReq builds a POST carrying a fresh in-window signature for the
-	// given delivery id, with the signature headers under the contract's names.
-	newSignedReq := func(t *testing.T, deliveryID string) *http.Request {
+	// signReqBody builds a POST carrying a fresh in-window signature over the given
+	// payload, with the signature headers under the contract's names.
+	signReqBody := func(t *testing.T, deliveryID string, payload []byte) *http.Request {
 		t.Helper()
 		did, err := kwh.NewDeliveryID(deliveryID)
 		require.NoError(t, err)
-		headers, err := signer.Sign(body, time.Now(), did)
+		headers, err := signer.Sign(payload, time.Now(), did)
 		require.NoError(t, err)
-		req, err := http.NewRequest(http.MethodPost, webhookURL+e2ePath, bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, webhookURL+e2ePath, bytes.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set(hdrDeliveryID, string(headers.DeliveryID))
 		req.Header.Set(hdrTimestamp, headers.Timestamp)
 		req.Header.Set(hdrSignature, headers.Signature)
 		return req
+	}
+	newSignedReq := func(t *testing.T, deliveryID string) *http.Request {
+		t.Helper()
+		return signReqBody(t, deliveryID, body)
 	}
 
 	do := func(t *testing.T, req *http.Request) int {
@@ -137,6 +141,14 @@ func TestWebhookdemoE2E(t *testing.T) {
 	t.Run("missing signature header is rejected (400)", func(t *testing.T) {
 		req := newSignedReq(t, "delivery-missing")
 		req.Header.Del(hdrSignature)
+		assert.Equal(t, http.StatusBadRequest, do(t, req))
+	})
+
+	t.Run("signed but schema-invalid payload is rejected (400)", func(t *testing.T) {
+		// Valid HMAC over a body missing the contract-required eventId/type: the
+		// signature passes but the handler returns KindInvalid → 400 (proves the
+		// receiver does not 200 a signed-but-business-invalid delivery).
+		req := signReqBody(t, "delivery-invalid", []byte(`{}`))
 		assert.Equal(t, http.StatusBadRequest, do(t, req))
 	})
 

@@ -72,9 +72,13 @@ type webhookdemoAddrs struct {
 // generated main.go entrypoint (go run ./examples/webhookdemo).
 func defaultWebhookdemoAddrs() webhookdemoAddrs {
 	return webhookdemoAddrs{
-		// :8084 — distinct from the other examples' default ports (todoorder :8082,
-		// iotdevice primary :8083) so several demos can run side by side.
-		webhook: listenerBinding{addr: ":8084"},
+		// Loopback-only by default: the webhook listener is AuthNone (HMAC is the
+		// auth) and the demo HMAC secret is public in this repo, so binding all
+		// interfaces would let anyone on the network craft a valid signed request.
+		// A real deployment exposes it explicitly with a non-demo secret. Port 8084
+		// is distinct from the other examples (todoorder :8082, iotdevice :8083) so
+		// several demos can run side by side.
+		webhook: listenerBinding{addr: "127.0.0.1:8084"},
 		health:  listenerBinding{addr: "127.0.0.1:9099"},
 	}
 }
