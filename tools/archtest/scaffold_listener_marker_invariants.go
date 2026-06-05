@@ -154,5 +154,18 @@ func checkListenerTemplate(rel, content string) []Diagnostic {
 				"; remove the literal and rely solely on the typed-const reference",
 		})
 	}
+	// ListenerMarker already includes the `// ` comment lead, so prefixing the
+	// template reference with `// ` renders a double-commented
+	// `// // +cell:listener:` that markergen.splitMarker (which requires a `// +`
+	// prefix) does NOT recognize — a silently broken marker in scaffold output.
+	if strings.Contains(content, "// "+listenerMarkerTmplRef) {
+		out = append(out, Diagnostic{
+			Rel: rel, Line: 0,
+			Message: "SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01: scaffold-cell.tmpl prefixes " +
+				listenerMarkerTmplRef + " with `// ` — ListenerMarker already carries the comment " +
+				"lead, so this renders a double-commented `// // +cell:listener:` that markergen does " +
+				"not parse; drop the leading `// `",
+		})
+	}
 	return out
 }

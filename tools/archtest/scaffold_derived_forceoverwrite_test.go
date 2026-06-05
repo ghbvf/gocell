@@ -62,3 +62,33 @@ func TestScaffoldDerivedForceOverwrite_FixtureGate(t *testing.T) {
 		})
 	}
 }
+
+// TestIsDerivedCtorSite proves the allowlist is bound to the PLATFORM package
+// identity, not just a repo-relative path + function name. The critical case is
+// "consumer module forges path+name": a consumer module that recreates the exact
+// tools/codegen/cellgen/stage_render.go::planDerivedArtifact must STILL be
+// flagged (false), because its package path differs from cellgenPkgPath — closing
+// the pure-ban bypass the registered rule would otherwise have.
+func TestIsDerivedCtorSite(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name             string
+		pkgPath, rel, fn string
+		want             bool
+	}{
+		{"sanctioned platform site", cellgenPkgPath, derivedCtorRel, derivedCtorFuncName, true},
+		{"consumer module forges path+name", "consumer.example/app/tools/codegen/cellgen", derivedCtorRel, derivedCtorFuncName, false},
+		{"right pkg, wrong rel", cellgenPkgPath, "some/other/file.go", derivedCtorFuncName, false},
+		{"right pkg+rel, wrong func", cellgenPkgPath, derivedCtorRel, "someOtherFunc", false},
+		{"unresolved pkg", "", derivedCtorRel, derivedCtorFuncName, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isDerivedCtorSite(tc.pkgPath, tc.rel, tc.fn); got != tc.want {
+				t.Errorf("isDerivedCtorSite(%q, %q, %q) = %v, want %v", tc.pkgPath, tc.rel, tc.fn, got, tc.want)
+			}
+		})
+	}
+}

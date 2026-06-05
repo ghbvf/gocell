@@ -39,14 +39,18 @@ func TestCheckListenerTemplate_PrecisionGate(t *testing.T) {
 		content   string
 		wantDiags int
 	}{
-		// GREEN: references the typed const, no hand-typed literal.
-		{"green_typed_ref", "package {{.Package}}\n\t// {{.ListenerMarker}} stub\n", 0},
+		// GREEN: references the typed const at line start (no `// ` lead, since
+		// ListenerMarker already carries the comment lead), no hand-typed literal.
+		{"green_typed_ref", "package {{.Package}}\n{{.ListenerMarker}}ref=cell.PrimaryListener\n", 0},
 		// RED: missing the {{.ListenerMarker}} reference entirely.
 		{"red_missing_ref", "package {{.Package}}\n", 1},
 		// RED: hand-typed bare marker literal AND missing the typed reference.
 		{"red_handtyped_only", "// +cell:listener:\n", 2},
 		// RED: has the typed reference but ALSO hand-types the bare literal.
 		{"red_handtyped_plus_ref", "{{.ListenerMarker}}\n// +cell:listener:\n", 1},
+		// RED: double-commented `// {{.ListenerMarker}}` renders the broken
+		// `// // +cell:listener:` marker (ref present, no bare literal → 1 diag).
+		{"red_double_comment", "package {{.Package}}\n// {{.ListenerMarker}}ref=x\n", 1},
 	}
 	for _, tc := range cases {
 		tc := tc

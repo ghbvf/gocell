@@ -162,8 +162,8 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 	// TestScaffoldBundle_CellMarkerEmbedded (M3 #1302) — covers the bundle path
 	// the cellgen single-cell TestScaffoldCell_CellGoContainsListenerMarker did not.
 	// INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
-	if !strings.Contains(string(cellGo), ListenerMarker) {
-		t.Errorf("scaffold bundle cell.go missing %s marker; got:\n%s", ListenerMarker, cellGo)
+	if !cellGoHasListenerMarker(string(cellGo)) {
+		t.Errorf("scaffold bundle cell.go missing a markergen-parseable %s marker line; got:\n%s", ListenerMarker, cellGo)
 	}
 	if !strings.Contains(string(cellGo), `errcode.RegisterPrefix(`) {
 		t.Errorf("cell.go must call errcode.RegisterPrefix in init(); got:\n%s", cellGo)

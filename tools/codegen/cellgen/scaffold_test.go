@@ -97,9 +97,24 @@ func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 
 	content := fileutil.MustReadFile(t, filepath.Join(dir, "cells", "barcell", "cell.go"))
 
-	if !strings.Contains(string(content), "// +cell:listener:") {
-		t.Error("cell.go missing // +cell:listener: stub marker")
+	if !cellGoHasListenerMarker(string(content)) {
+		t.Errorf("cell.go missing a markergen-parseable %s marker line; got:\n%s", ListenerMarker, content)
 	}
+}
+
+// cellGoHasListenerMarker reports whether content has a line that, after
+// trimming, begins with the canonical listener marker (ListenerMarker =
+// "// +cell:listener:"). This mirrors markergen.splitMarker's "// +" prefix
+// gate, so a double-commented "// // +cell:listener:" (which markergen does NOT
+// recognize) correctly fails — unlike a bare strings.Contains, which is
+// false-green on that broken render.
+func cellGoHasListenerMarker(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), ListenerMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestScaffoldCell_CellYAMLContainsGoStructName verifies the scaffolded

@@ -49,6 +49,8 @@ import (
 	"go/types"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const ruleScaffoldDerivedForceOverwrite01 = "SCAFFOLD-DERIVED-FORCEOVERWRITE-01"
@@ -65,6 +67,15 @@ const (
 	derivedCtorRel = "tools/codegen/cellgen/stage_render.go"
 )
 
+// derivedOverwriteExternalNote is the consumer-action clause appended to every
+// SCAFFOLD-DERIVED-FORCEOVERWRITE-01 diagnostic (forward call + both indirect
+// reference forms) so an external Cell repo gets the same actionable message: in
+// a consumer module there is no sanctioned site, so the fix is always to remove
+// the reference — never to "make it a direct call" (which is also banned).
+const derivedOverwriteExternalNote = " (pathsafe.DerivedOverwrite is a GoCell " +
+	"platform-internal codegen primitive; external Cell code must never call it — " +
+	"remove this reference)"
+
 // CheckScaffoldDerivedForceOverwrite enforces SCAFFOLD-DERIVED-FORCEOVERWRITE-01
 // downstream: pathsafe.DerivedOverwrite in any production package may be
 // referenced only as a direct call from planDerivedArtifact
@@ -80,7 +91,18 @@ const (
 // code; a clean external repo simply has zero references (vacuous-green).
 func CheckScaffoldDerivedForceOverwrite(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	return Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), collectDerivedOverwriteViolations)
+	// Scan twice per the ConfigForExternalCell.BuildTags contract: the default
+	// build config first (so files behind //go:build !<tag> are not missed), then
+	// the tagged config when cfg.BuildTags is non-empty (so files behind
+	// //go:build <tag> are covered). A tagged-only load EXCLUDES default-only
+	// files, so a single tagged pass would leave a hole — same default+tagged
+	// shape as CheckPanicRegistered. scanner.Canonical dedups the overlap (an
+	// unconstrained file is loaded by both passes).
+	out := Run(t, Production(TypedOpts{}), collectDerivedOverwriteViolations)
+	if len(cfg.BuildTags) > 0 {
+		out = append(out, Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), collectDerivedOverwriteViolations)...)
+	}
+	return scanner.Canonical(out)
 }
 
 // collectDerivedOverwriteViolations is the single per-Pass scanner shared by the
@@ -103,6 +125,22 @@ func collectDerivedOverwriteViolations(p *Pass) []Diagnostic {
 	return out
 }
 
+// isDerivedCtorSite reports whether (pkgPath, rel, fnName) identifies the single
+// sanctioned planDerivedArtifact site in GoCell's own cellgen package.
+//
+// The allowlist is bound to the PLATFORM package path (cellgenPkgPath, derived
+// from PlatformModulePath), not merely a repo-relative path + function name. A
+// repo-relative path + name is NOT a trustworthy identity in a consumer module:
+// without the package-path bind, an external Cell repo could recreate
+// tools/codegen/cellgen/stage_render.go::planDerivedArtifact and get whitelisted,
+// defeating the registered rule's pure-ban guarantee. A forged site in a consumer
+// module has pkgPath = <consumer-module>/tools/codegen/cellgen ≠ cellgenPkgPath,
+// so it is correctly NOT exempt. ref: go/analysis Pass carries Pkg identity for
+// exactly this kind of provenance check.
+func isDerivedCtorSite(pkgPath, rel, fnName string) bool {
+	return pkgPath == cellgenPkgPath && rel == derivedCtorRel && fnName == derivedCtorFuncName
+}
+
 // derivedForwardViolations flags DerivedOverwrite CallExprs outside the
 // sanctioned planDerivedArtifact@stage_render.go site.
 func derivedForwardViolations(p *Pass, file *ast.File, rel string) []Diagnostic {
@@ -115,7 +153,7 @@ func derivedForwardViolations(p *Pass, file *ast.File, rel string) []Diagnostic 
 			if !callsDerivedOverwrite(p.TypesInfo, call) {
 				return
 			}
-			if fn.Name != nil && fn.Name.Name == derivedCtorFuncName && rel == derivedCtorRel {
+			if fn.Name != nil && p.Pkg != nil && isDerivedCtorSite(p.Pkg.Path(), rel, fn.Name.Name) {
 				return
 			}
 			out = append(out, Diagnostic{
@@ -123,9 +161,8 @@ func derivedForwardViolations(p *Pass, file *ast.File, rel string) []Diagnostic 
 				Line: p.Fset.Position(call.Pos()).Line,
 				Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: pathsafe.DerivedOverwrite called outside " +
 					"tools/codegen/cellgen/stage_render.go::planDerivedArtifact — " +
-					"derived writes must go through the governance.IsGoCellGenerated overwrite gate " +
-					"(pathsafe.DerivedOverwrite is a GoCell platform-internal codegen primitive; " +
-					"external Cell code must never call it — remove this reference)",
+					"derived writes must go through the governance.IsGoCellGenerated overwrite gate" +
+					derivedOverwriteExternalNote,
 			})
 		})
 	})
@@ -150,7 +187,8 @@ func derivedIndirectViolations(p *Pass, file *ast.File, rel string) []Diagnostic
 			Line: p.Fset.Position(sel.Pos()).Line,
 			Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: indirect SelectorExpr reference to " +
 				"pathsafe.DerivedOverwrite (function value / pointer) defeats the " +
-				"caller-allowlist archtest — must always appear inside a direct CallExpr",
+				"caller-allowlist archtest — must always appear inside a direct CallExpr" +
+				derivedOverwriteExternalNote,
 		})
 	})
 	EachInSubtree[ast.Ident](file, func(ident *ast.Ident) {
@@ -165,7 +203,8 @@ func derivedIndirectViolations(p *Pass, file *ast.File, rel string) []Diagnostic
 			Line: p.Fset.Position(ident.Pos()).Line,
 			Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: indirect dot-imported Ident reference to " +
 				"pathsafe.DerivedOverwrite defeats the caller-allowlist archtest — " +
-				"must always appear inside a direct CallExpr",
+				"must always appear inside a direct CallExpr" +
+				derivedOverwriteExternalNote,
 		})
 	})
 	return out
