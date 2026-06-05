@@ -143,7 +143,21 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 	}
 	entrypoint := asm.Build.Entrypoint
 	pattern := "./" + filepath.ToSlash(filepath.Dir(entrypoint))
-	pkgs, err := loadReachablePackages(ctx, projectRoot, pattern)
+	// A go.work satellite module (examples/<id> extracted to its own module,
+	// #1556) must load under ModeWorkspace: the metrics reachable from its
+	// assembly live in the CORE module — a separate go.work member. A repo-root
+	// ModeModule (GOWORK=off) load can't see the satellite at all ("main module
+	// does not contain package ..."), and loading from the satellite's own dir
+	// drops core (a replace-resolved foreign module excluded by the
+	// packageHasProjectFile(projectRoot, …) filter) → an empty schema.
+	// ModeWorkspace resolves the satellite AND core as workspace members under
+	// projectRoot in ONE graph, matching the in-root classification develop
+	// produced. Root assemblies keep the go.work-agnostic ModeModule load.
+	loadMode := packagesload.ModeModule
+	if containingModuleDir(projectRoot, filepath.Dir(entrypoint)) != "" {
+		loadMode = packagesload.ModeWorkspace
+	}
+	pkgs, err := loadReachablePackages(ctx, projectRoot, loadMode, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +200,20 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 	return schema, nil
 }
 
+// containingModuleDir returns the deepest directory at or above dir (a
+// projectRoot-relative path) that holds a go.mod — i.e. the go.work satellite
+// module that owns dir — or "" when dir belongs to the repo root module. Build
+// uses it to load a satellite example assembly against its own module under
+// GOWORK=off, since a repo-root load cannot see a nested module's packages (#1556).
+func containingModuleDir(projectRoot, dir string) string {
+	for d := filepath.Clean(dir); d != "." && d != "" && d != string(filepath.Separator); d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(projectRoot, d, "go.mod")); err == nil {
+			return d
+		}
+	}
+	return ""
+}
+
 // Marshal serializes schema with the generated-file header.
 func Marshal(schema *Schema) ([]byte, error) {
 	body, err := yaml.Marshal(schema)
@@ -196,14 +224,16 @@ func Marshal(schema *Schema) ([]byte, error) {
 }
 
 func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(ctx, root, false, patterns...)
+	return loadPackagesWithMode(ctx, root, false, packagesload.ModeModule, patterns...)
 }
 
-func loadReachablePackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(ctx, root, true, patterns...)
+func loadReachablePackages(ctx context.Context, root string, mode packagesload.Mode, patterns ...string) ([]*packages.Package, error) {
+	return loadPackagesWithMode(ctx, root, true, mode, patterns...)
 }
 
-func loadPackagesWithMode(ctx context.Context, root string, includeDeps bool, patterns ...string) ([]*packages.Package, error) {
+func loadPackagesWithMode(
+	ctx context.Context, root string, includeDeps bool, mode packagesload.Mode, patterns ...string,
+) ([]*packages.Package, error) {
 	if !includeDeps && len(patterns) > 1 {
 		return loadPatternScopedPackages(ctx, root, patterns...)
 	}
@@ -212,8 +242,9 @@ func loadPackagesWithMode(ctx context.Context, root string, includeDeps bool, pa
 		Mode:    packageLoadMode(includeDeps),
 		Dir:     root,
 	}
-	// ModeModule (GOWORK=off): uniform go.work-agnostic loading. See tools/packagesload.
-	roots, err := packagesload.Load(packagesload.ModeModule, cfg, patterns...)
+	// mode is ModeModule (GOWORK=off, go.work-agnostic) for root-module assemblies
+	// and ModeWorkspace for go.work satellite assemblies (#1556); see Build.
+	roots, err := packagesload.Load(mode, cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("packages.Load: %w", err)
 	}
@@ -235,7 +266,7 @@ func loadPatternScopedPackages(ctx context.Context, root string, patterns ...str
 	byPath := map[string]*packages.Package{}
 	var paths []string
 	for _, pattern := range patterns {
-		pkgs, err := loadPackagesWithMode(ctx, root, false, pattern)
+		pkgs, err := loadPackagesWithMode(ctx, root, false, packagesload.ModeModule, pattern)
 		if err != nil {
 			return nil, err
 		}
