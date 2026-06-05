@@ -112,6 +112,12 @@ func NewSessionFixture(t *testing.T, subjectID, jti string, epoch int64, ttl tim
 // runs the always-on cases unconditionally and derives one case per declared
 // CredentialEvent in protocol.RevokeOn(). Fingerprint shape conformance keys
 // off the runtime type of protocol.Fingerprint().
+//
+// The suite calls Revoke bare. A Factory whose Store narrows Revoke with an
+// ambient-transaction precondition — e.g. a cache decorator that registers a
+// post-commit eviction hook, per the session.Store.Revoke contract — must
+// return a Store that supplies the unit-of-work scope, as adapters/redis's
+// txScopedRevokeStore conformance bridge does.
 func Run(t *testing.T, factory Factory, protocol *session.Protocol) {
 	t.Helper()
 	if factory == nil {

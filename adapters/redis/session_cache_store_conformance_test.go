@@ -16,10 +16,14 @@ import (
 // after-commit registry (modeling sessionlogout's RunInTx) and drains the
 // registered hooks immediately after. CachingSessionStore.Revoke registers its
 // post-commit cache-eviction hook there (#796), so it panics if called outside
-// a transaction. The shared storetest suite calls Revoke bare; production never
-// does (it is always within RunInTx), so this test-only wrapper supplies the
-// unit-of-work scope the suite omits. WithAfterCommitRegistry /
-// RunAfterCommitHooks are A3-allowlisted to _test.go (AFTERCOMMIT-HOOK-PURE-TRANSIENT-01).
+// a transaction — the ambient-transaction precondition the session.Store.Revoke
+// contract documents as a permitted decorator narrowing (see store.go), which
+// storetest.Run requires Factories to satisfy. The shared suite calls Revoke
+// bare; production never does (always within RunInTx), so this test-only wrapper
+// supplies the unit-of-work scope the suite omits. It must stay in a _test.go
+// file: WithAfterCommitRegistry / RunAfterCommitHooks are A3-allowlisted to
+// _test.go + the TxRunner implementations (AFTERCOMMIT-HOOK-PURE-TRANSIENT-01),
+// so the bridge cannot move into the storetest package's non-test .go.
 type txScopedRevokeStore struct{ session.Store }
 
 func (s txScopedRevokeStore) Revoke(ctx context.Context, id string) error {

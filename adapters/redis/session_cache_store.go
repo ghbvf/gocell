@@ -399,10 +399,10 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 // committing goroutine / RunInTx return.
 //
 // Contract (decorator-specific LSP narrowing): Revoke MUST be invoked within a
-// RunInTx scope (sessionlogout's persistRevoke wraps it). This is STRICTER than
-// the general session.Store.Revoke contract (runtime/auth/session.Store) — the
-// bare PG / mem store has no tx-only precondition — so this decorator narrows
-// the interface for its own implementations only. RegisterAfterCommit panics if
+// RunInTx scope (sessionlogout's persistRevoke wraps it). This is the canonical
+// narrowing the general session.Store.Revoke contract (runtime/auth/session.Store)
+// now documents as permitted for decorators — the bare PG / mem store has no
+// tx-only precondition. RegisterAfterCommit panics if
 // no ambient after-commit registry is present: calling Revoke outside a
 // transaction is a programmer error, surfaced loudly rather than silently
 // dropping the eviction. The shared storetest conformance suite, which calls
