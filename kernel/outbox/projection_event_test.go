@@ -17,7 +17,7 @@ import (
 var _ cellvocab.ProjectionEvent = Entry{}
 
 // TestEntry_ProjectionEvent_EventIDMatchesID asserts EventID() is the polymorphic
-// rename of ID() — the same underlying id field, the carrier's stream-unique
+// rename of ID() — the same underlying id field, the carrier's source-global-unique
 // identity accessor.
 func TestEntry_ProjectionEvent_EventIDMatchesID(t *testing.T) {
 	e, err := NewEntry(clock.Real(), context.Background(), "test.v1", []byte(`{}`))

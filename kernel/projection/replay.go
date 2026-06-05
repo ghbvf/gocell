@@ -66,10 +66,11 @@ type ReplaySource interface {
 //
 // # Event identity
 //
-// Position resolution matches events by their stream-unique EventID (the
-// ProjectionEvent carrier's identity accessor), so the lookup is collision-free
-// even when test events are created in the same nanosecond — it does not rely on
-// any pointer or timestamp identity.
+// Position resolution matches events by their EventID (the ProjectionEvent
+// carrier's identity accessor), which the carrier contract requires to be unique
+// across the whole replay source — so the lookup is collision-free even when test
+// events are created in the same nanosecond and does not rely on any pointer or
+// timestamp identity.
 //
 // Thread-safe: all methods are protected by a RWMutex.
 type MemReplaySource struct {

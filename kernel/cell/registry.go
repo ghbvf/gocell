@@ -211,15 +211,14 @@ type Registrar interface {
 	// only called from test files — PROJECTION-REGISTER-FUNNEL-01 confines every call
 	// to cell_gen.go + _test.go. ProjectionRequest carries identifiers known at
 	// code-generation time (CellID injected from cell metadata exactly like
-	// Subscribe's positional cellID). The Apply / OnReset function types are
-	// cell-local ([ProjectionApply] / [ProjectionResetHook]) rather than
-	// kernel/projection types: kernel/projection imports kernel/cell (its
+	// Subscribe's positional cellID). The Apply / OnReset function types
+	// ([ProjectionApply] / [ProjectionResetHook]) are aliases of the cellvocab
+	// leaf types (which kernel/projection.Apply / OnReset also alias), so the
+	// bootstrap drain passes a recorded hook straight to Coordinator.Subscribe
+	// with NO named-type conversion. The carrier and hook types live in the
+	// cellvocab leaf because kernel/projection imports kernel/cell (its
 	// Coordinator's SubscribeRegistrar references cell.SubscriptionOption), so a
-	// reverse import here would be a compile-time cycle. The bootstrap drain
-	// converts these to the identical projection.Apply / projection.OnReset
-	// signatures (a legal named-type conversion). This mirrors
-	// SubscriptionRequest.Handler carrying the kernel primitive outbox.EntryHandler
-	// rather than a runtime/eventrouter type.
+	// reverse import here would be a compile-time cycle (EPIC #1609 PR-01).
 	//
 	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
 	//

@@ -177,6 +177,7 @@ func TestRegisterProjection_SpecValidate_RejectsInvalidSpec(t *testing.T) {
 	assert.Empty(t, rec.Snapshot().Projections, "rejected request must not be recorded")
 }
 
-// Compile-time anchor: ProjectionRequest.Apply has the same underlying signature
-// as projection.Apply so the bootstrap drain's named-type conversion is legal.
+// Compile-time anchor: ProjectionApply is an alias of cellvocab.ProjectionApply
+// (carrier = cellvocab.ProjectionEvent), so a recorded hook is passed straight to
+// the bootstrap drain → Coordinator.Subscribe with no named-type conversion.
 var _ ProjectionApply = (func(context.Context, cellvocab.ProjectionEvent) error)(nil)

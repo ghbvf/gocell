@@ -122,6 +122,60 @@ func subscribeWithDefaults(t *testing.T, c *Coordinator, apply Apply, opts ...Op
 // applyNoop is a no-op apply function.
 func applyNoop(_ context.Context, _ ProjectionEvent) error { return nil }
 
+// TestRebuild_AmbientPrincipalWins_F1Baseline pins the CURRENT (pre-#1609)
+// rebuild-context identity behavior flagged by Codex review F1 (PR #1649): on the
+// rebuild path the trigger's ambient principal WINS over the replayed event's own
+// principal, because RestoreContext is no-overwrite (an event's identity does not
+// clobber an already-set ctx value). With an admin/operator ambient principal (as
+// an AdminListener-triggered rebuild carries), the business Apply therefore runs
+// under the OPERATOR identity, not the event's.
+//
+// This is intentional baseline documentation, NOT an endorsement: ADR
+// `202606051200-1609` §5 assigns the mitigation (clean-event-context /
+// projection.SystemPrincipal so the event/source identity owns the Apply ctx) to
+// PR-03, where saga-journal events make it security-sensitive. PR-01 is pure
+// carrier generalization and does not change this behavior. When PR-03 flips it,
+// this test's assertion must be inverted (capturedActor == event identity).
+func TestRebuild_AmbientPrincipalWins_F1Baseline(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+
+	// Seed one own-stream entry whose OWN principal actor is "event-actor".
+	eventCtx := ctxkeys.WithActorID(context.Background(), "event-actor")
+	entry, err := outbox.NewEntry(clk, eventCtx, testEventTopic, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("NewEntry: %v", err)
+	}
+	src := NewMemReplaySource()
+	src.Append(entry)
+	cur := newMemCursor(src)
+
+	var capturedActor string
+	capture := func(ctx context.Context, _ ProjectionEvent) error {
+		capturedActor, _ = ctxkeys.ActorIDFrom(ctx)
+		return nil
+	}
+
+	c := newCoordinatorFull(t, coordinatorFullParams{clk: clk, cursor: cur, replay: src})
+	subscribeWithDefaults(t, c, capture)
+
+	// Rebuild is triggered with an ambient operator principal (the AdminListener
+	// caller), as runtime/bootstrap forwards request values via context.WithoutCancel.
+	triggerCtx := ctxkeys.WithActorID(context.Background(), "admin-operator")
+	if err := c.Rebuild(triggerCtx); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitForPhase(t, c, PhaseLive)
+
+	// BASELINE (pre-PR-03): ambient operator wins; the event's own "event-actor" is
+	// shadowed. PR-03 (SystemPrincipal / clean-event-context) must invert this.
+	if capturedActor != "admin-operator" {
+		t.Errorf("rebuild Apply actor = %q, want %q (baseline: ambient trigger principal wins, "+
+			"no-overwrite RestoreContext shadows the event's own principal — see ADR #1609 §5, F1, fix in PR-03)",
+			capturedActor, "admin-operator")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestRebuild_ColdFull — cold rebuild replays all events and ends PhaseLive
 // ---------------------------------------------------------------------------

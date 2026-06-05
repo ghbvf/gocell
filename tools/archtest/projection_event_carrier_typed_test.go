@@ -19,13 +19,14 @@
 //     mirror, an alias). Locking to the exact interface (not merely "not
 //     outbox.Entry") prevents a silent swap to a different wrong carrier type.
 //   - A2 (broad future-proof ban): no exported FuncDecl / interface method /
-//     named func type in kernel/projection or kernel/cellvocab has any carrier
-//     parameter (incl. a one-level func-typed parameter such as Replay's fn)
-//     resolving to outbox.Entry. This catches a NEWLY-added projection API that
-//     reintroduces the concrete coupling, even one A1 does not enumerate. Scope
-//     is deliberately the two carrier-owning packages: kernel/cell legitimately
-//     handles outbox.Entry via outbox.EntryHandler/subscriptions, so cell's
-//     ProjectionApply is covered by A1's exact-symbol lock instead.
+//     named func type in scope has any carrier parameter (incl. a one-level
+//     func-typed parameter such as Replay's fn) resolving to outbox.Entry. This
+//     catches a NEWLY-added projection API that reintroduces the concrete coupling,
+//     even one A1 does not enumerate. Scope = kernel/projection + kernel/cellvocab
+//     in full, plus kernel/cell gated to Projection*-prefixed symbols
+//     (projCarrierSymbolInScope) — so kernel/cell's legitimate outbox.EntryHandler
+//     bus/subscription APIs are not false-flagged while a future kernel/cell
+//     Projection* carrier on outbox.Entry IS caught.
 //
 // # AI-robust rating — type-system Hard (API shape, single axis; NOT a funnel)
 //
@@ -51,18 +52,16 @@
 //     resolves the carrier param to the same canonical regardless of which alias
 //     spelling a callsite uses; an outbox.Entry smuggled in via any alias is still
 //     caught at A1 / A2.
-//   - A2 scope is deliberately kernel/projection + kernel/cellvocab ONLY (NOT
-//     kernel/cell): kernel/cell legitimately carries outbox.Entry via
-//     outbox.EntryHandler / subscription APIs, so a blanket ban there would
-//     false-positive. cell.ProjectionApply is instead covered by A1's exact-symbol
-//     lock (it resolves the alias's carrier param to ProjectionEvent). A NEW
-//     outbox.Entry-typed projection symbol added under kernel/cell would NOT be
-//     caught by A2 — but a NEW such NAMED func type is caught at its TypeSpec
-//     declaration wherever it lives in the A2 scope, and any carrier reverting
-//     cell.ProjectionApply itself trips A1. A genuinely new projection carrier
-//     symbol minted under kernel/cell (outside the four A1-locked symbols) is the
-//     residual blind spot; it is fail-closed in the common forms and out of the
-//     current carrier surface.
+//   - A2 scope = kernel/projection + kernel/cellvocab (full) + kernel/cell (gated
+//     to Projection*-prefixed exported symbols via projCarrierSymbolInScope). The
+//     prefix gate on kernel/cell is required because that package legitimately
+//     carries outbox.Entry via the NAMED outbox.EntryHandler bus/subscription APIs
+//     (Subscribe, SubscriptionRequest, …); scanning only Projection*-named symbols
+//     there catches a future kernel/cell Projection* carrier minted on outbox.Entry
+//     without false-flagging the bus API. (The named-type detector already excludes
+//     EntryHandler, but the prefix gate also protects against a future NON-projection
+//     cell API that took a bare outbox.Entry directly.) The scope predicate itself
+//     is reverse-self-checked by TestProjectionEventCarrierTyped01_SymbolScope.
 //   - typeContainsOutboxEntry recurses ONLY into ANONYMOUS func-typed params
 //     (Replay's fn), NOT named func types used as params (outbox.EntryHandler is
 //     the legitimate bus-delivery contract). A future named projection-carrier func
@@ -99,8 +98,11 @@ const (
 
 	projectionPkgPath = PlatformModulePath + "/kernel/projection"
 	cellvocabPkgPath  = PlatformModulePath + "/kernel/cellvocab"
-	// cellPkgPath ("…/kernel/cell") is declared in prom_cell_label_funnel_test.go
-	// (same archtest package) and reused here.
+	// projectionCarrierCellPkgPath is this rule's own kernel/cell path constant
+	// (rule self-contained — does not borrow prom_cell_label_funnel_test.go's
+	// cellPkgPath, so the carrier archtest carries no implicit dependency on an
+	// unrelated rule file's constant).
+	projectionCarrierCellPkgPath = PlatformModulePath + "/kernel/cell"
 )
 
 // expectedProjCarrierFixtureViolations is the number of
@@ -109,13 +111,35 @@ const (
 // BadSource.Replay-fn / BadCursor.Position). Update first when changing the fixture.
 const expectedProjCarrierFixtureViolations = 3
 
-// projCarrierBroadScanPkgs is the closed set of carrier-owning packages whose
-// exported decls A2 forbids from any outbox.Entry carrier param. kernel/cell is
-// intentionally excluded (it legitimately carries outbox.Entry via
-// EntryHandler/subscriptions; its ProjectionApply is locked by A1 instead).
+// projCarrierBroadScanPkgs is the closed set of carrier-owning packages A2
+// scans for bare outbox.Entry carrier params. kernel/projection + kernel/cellvocab
+// are scanned in full; kernel/cell is scanned but gated to Projection*-prefixed
+// exported symbols (see projCarrierSymbolInScope) so its legitimate
+// outbox.EntryHandler bus/subscription APIs (Subscribe, SubscriptionRequest, …)
+// are never false-flagged while a future kernel/cell Projection* carrier on
+// outbox.Entry is still caught.
 var projCarrierBroadScanPkgs = map[string]bool{
-	projectionPkgPath: true,
-	cellvocabPkgPath:  true,
+	projectionPkgPath:            true,
+	cellvocabPkgPath:             true,
+	projectionCarrierCellPkgPath: true,
+}
+
+// projCarrierSymbolInScope reports whether an exported symbol named symbolName in
+// package pkgPath is within the A2 carrier scan scope. kernel/projection and
+// kernel/cellvocab are carrier-only packages → every exported symbol is in scope.
+// kernel/cell hosts both projection carriers AND the outbox.EntryHandler bus API,
+// so only Projection*-prefixed symbols (ProjectionApply / ProjectionResetHook /
+// any future Projection* carrier type) are in scope there. Used only in the
+// real-repo (restrict) scan; the fixture scan (restrict=false) checks every symbol.
+func projCarrierSymbolInScope(pkgPath, symbolName string) bool {
+	switch pkgPath {
+	case projectionPkgPath, cellvocabPkgPath:
+		return true
+	case projectionCarrierCellPkgPath:
+		return strings.HasPrefix(symbolName, "Projection")
+	default:
+		return false
+	}
 }
 
 type projCarrierViolation struct {
@@ -221,10 +245,16 @@ func scanProjectionCarrierViolations(p *Pass, restrict bool) []projCarrierViolat
 			if !fn.Name.IsExported() || fn.Type.Params == nil {
 				return
 			}
+			if restrict && !projCarrierSymbolInScope(p.Pkg.Path(), fn.Name.Name) {
+				return
+			}
 			checkParams(p, fn.Type.Params, fn.Name.Name, rel, &out)
 		})
 		EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 			if !ts.Name.IsExported() {
+				return
+			}
+			if restrict && !projCarrierSymbolInScope(p.Pkg.Path(), ts.Name.Name) {
 				return
 			}
 			switch t := ts.Type.(type) {
@@ -273,7 +303,7 @@ func carrierParamCanonicals(p *Pass) map[string]string {
 		if c, ok := ifaceMethodCarrier(scope, "Cursor", "Position"); ok {
 			out["projection.Cursor.Position"] = c
 		}
-	case cellPkgPath:
+	case projectionCarrierCellPkgPath:
 		if c, ok := namedFuncCarrier(scope, "ProjectionApply"); ok {
 			out["cell.ProjectionApply"] = c
 		}
@@ -418,4 +448,33 @@ func TestProjectionEventCarrierTyped01_ScannerCatchesViolation(t *testing.T) {
 	assert.True(t, gotSymbols["BadCursor.Position"], "interface-method carrier violation must be caught")
 	assert.False(t, gotSymbols["GoodApply"], "interface-carrier control must NOT be flagged")
 	assert.False(t, gotSymbols["GoodCursor.Position"], "interface-carrier control must NOT be flagged")
+}
+
+// INVARIANT: PROJECTION-EVENT-CARRIER-TYPED-01
+//
+// A2 scope reverse self-check: projCarrierSymbolInScope gates the broad scan to
+// carrier-only packages in full and to Projection*-prefixed symbols in kernel/cell
+// (so the bus API is not false-flagged, while a future cell Projection* carrier is).
+func TestProjectionEventCarrierTyped01_SymbolScope(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		pkg, sym string
+		want     bool
+	}{
+		{projectionPkgPath, "Apply", true},
+		{projectionPkgPath, "AnythingExported", true},
+		{cellvocabPkgPath, "ProjectionEvent", true},
+		{cellvocabPkgPath, "AnythingExported", true},
+		{projectionCarrierCellPkgPath, "ProjectionApply", true},
+		{projectionCarrierCellPkgPath, "ProjectionResetHook", true},
+		{projectionCarrierCellPkgPath, "ProjectionFutureCarrier", true},
+		{projectionCarrierCellPkgPath, "Subscribe", false}, // bus API — out of scope
+		{projectionCarrierCellPkgPath, "SubscriptionRequest", false},
+		{projectionCarrierCellPkgPath, "RegisterProjection", false},              // not Projection*-prefixed (RegisterP…)
+		{PlatformModulePath + "/runtime/bootstrap", "ProjectionAnything", false}, // outside scan set
+	}
+	for _, c := range cases {
+		assert.Equalf(t, c.want, projCarrierSymbolInScope(c.pkg, c.sym),
+			"projCarrierSymbolInScope(%q, %q)", c.pkg, c.sym)
+	}
 }

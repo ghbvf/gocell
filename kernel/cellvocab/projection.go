@@ -38,8 +38,13 @@ import (
 // (outbox.Entry.ID / outbox.Entry.RoutingTopic), chosen so the saga carrier's
 // distinct identity/stream semantics are unambiguous on the shared interface.
 type ProjectionEvent interface {
-	// EventID is the stream-unique identifier (outbox: the entry id UUID). The
-	// harness/cursor use it to resolve a stable position.
+	// EventID is the event's identifier, which MUST be unique across the entire
+	// replay source (not merely within a Stream): the harness Cursor resolves a
+	// stable position by matching EventID over the whole source (mem scans all
+	// entries; PG does `SELECT seq … WHERE id = $1`), so two distinct events
+	// sharing an EventID would resolve to the same position and corrupt the
+	// checkpoint. outbox.Entry satisfies this with its global UUID; a future
+	// saga-journal carrier (PR-03) must likewise expose a source-global-unique id.
 	EventID() string
 	// Payload is the raw event body JSON consumed by the business Apply hook.
 	Payload() []byte
