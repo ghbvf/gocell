@@ -96,6 +96,7 @@ survived the prior exact-match check.
 comment-marker mechanism (A1-6, previously Medium) is eliminated. In its place, the
 control-plane real-time clock calls (`time.NewTicker`, `time.NewTimer`) are confined
 to methods on the unexported `controlPlaneClock` struct in `runtime/command/lifecycle.go`.
+（Amendment PR-A8 #1169: controlPlaneClock moved to kernel/reconcile/; runtime/command/lifecycle.go deleted）
 The archtest now grants the exemption only to methods whose receiver type is
 `controlPlaneClock` and whose file is under `runtime/command/` — removing the
 AI-abusable comment-marker from production source. The AI-robust grade of the

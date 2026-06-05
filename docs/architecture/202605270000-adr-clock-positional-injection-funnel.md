@@ -74,6 +74,7 @@ test, so the WithClock-presence scans are vacuous).
 ticker + the 50 ms startup probe) must use real wall-clock time — a frozen fake
 would deadlock `Start()`. The former carve-out used a `//archtest:allow:clock-injection:control-plane`
 comment-marker + a hand-maintained `controlPlaneClockCarveOut` allowlist map (AI-abusable Soft/Medium).
+（Amendment PR-A8 #1169: this file is deleted; the sole control-plane clock carve-out host is now kernel/reconcile/）
 
 This is replaced by a package-private sealed type `controlPlaneClock struct{}`
 whose two methods (`newTicker` / `newProbeTimer`) are the only sanctioned

@@ -124,3 +124,55 @@ func TestNewSweeper_NilClockPanics(t *testing.T) {
 		_, _ = command.NewSweeper(&mockScanner{}, &mockAckQueue{}, nil)
 	})
 }
+
+// TestCommandSweeper_ReconcileAckErrorTransient verifies that an Ack error returned
+// by the queue is propagated as a transient (non-permanent) error so the
+// reconcile.Loop backs off and retries on the next tick.
+func TestCommandSweeper_ReconcileAckErrorTransient(t *testing.T) {
+	t.Parallel()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := created.Add(testtime.D5min) // past the 1m overall deadline
+	expired := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: testtime.D1min,
+	}, created)
+
+	ackErr := errors.New("ack rejected")
+	scanner := &mockScanner{entries: []command.Entry{expired}}
+	q := &mockAckQueue{err: ackErr}
+	clk := clockmock.New(now)
+
+	s, err := command.NewSweeper(scanner, q, clk)
+	require.NoError(t, err)
+
+	res, err := s.Reconcile(context.Background(), reconcile.Request{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ackErr)
+	assert.False(t, reconcile.IsPermanent(err), "Ack errors are transient, never permanent")
+	assert.Equal(t, reconcile.Result{}, res)
+}
+
+// TestSweeper_Validate covers the three sentinel states the Validate readiness
+// gate is designed to catch: (a) properly constructed via NewSweeper, (b)
+// zero-value literal (built==false), (c) nil receiver.
+func TestSweeper_Validate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("constructed via NewSweeper", func(t *testing.T) {
+		t.Parallel()
+		s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clock.Real())
+		require.NoError(t, err)
+		require.NoError(t, s.Validate())
+	})
+
+	t.Run("zero-value literal (built==false)", func(t *testing.T) {
+		t.Parallel()
+		var z command.Sweeper
+		require.Error(t, z.Validate())
+	})
+
+	t.Run("nil receiver", func(t *testing.T) {
+		t.Parallel()
+		var n *command.Sweeper
+		require.Error(t, n.Validate())
+	})
+}

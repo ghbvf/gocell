@@ -256,7 +256,11 @@ func (s *Sweeper) SweepTick(ctx context.Context, now time.Time) error {
 // reconcile.New(...).Build() can never be in that state (Build rejects a
 // typed-nil reconciler), so this is defense-in-depth.
 func (s *Sweeper) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
-	if s == nil || !s.built {
+	if s == nil {
+		return reconcile.Result{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper: nil receiver; use NewSweeper to construct")
+	}
+	if !s.built {
 		return reconcile.Result{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command.Sweeper must be constructed via NewSweeper")
 	}

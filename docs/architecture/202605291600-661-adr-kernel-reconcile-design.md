@@ -725,5 +725,5 @@ ref: kubernetes-sigs/controller-runtime pkg/internal/controller/controller.go
 ref: kubernetes-sigs/controller-runtime pkg/builder/controller.go
 ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
 ref: kubernetes/client-go tools/leaderelection/leaderelection.go
-ref: gocell runtime/command/lifecycle.go（SweeperLifecycle，调度骨架平移源）
+ref: gocell runtime/command/lifecycle.go（SweeperLifecycle，调度骨架平移源）（deleted in PR-A8 #1169; scheduling now lives in kernel/reconcile.Loop）
 ref: gocell kernel/command/sweeper.go（既有 L4 控制环）

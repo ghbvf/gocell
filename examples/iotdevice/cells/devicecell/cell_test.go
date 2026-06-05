@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -453,6 +454,36 @@ func TestDeviceCell_LifecycleHookRegistered(t *testing.T) {
 
 	require.Len(t, snap.LifecycleHooks, 1, "Init must register exactly one lifecycle hook (command sweeper)")
 	assert.Equal(t, "devicecommand.sweeper", snap.LifecycleHooks[0].Name)
+	assert.NotNil(t, snap.LifecycleHooks[0].OnStart)
+	assert.NotNil(t, snap.LifecycleHooks[0].OnStop)
+}
+
+// TestDeviceCell_CommandSweeper_MetricsBranches verifies that Init (and
+// therefore Loop construction) succeeds both when no metrics provider is set
+// (the default NopProvider path) and when WithMetricsProvider is explicitly
+// supplied with a non-nil provider.
+func TestDeviceCell_CommandSweeper_MetricsBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("without metrics provider (default NopProvider)", func(t *testing.T) {
+		t.Parallel()
+		c := newTestCell() // no WithMetricsProvider — uses NopProvider{} internally
+		rec := newTestRec()
+		require.NoError(t, c.Init(context.Background(), rec))
+	})
+
+	t.Run("with explicit NopProvider", func(t *testing.T) {
+		t.Parallel()
+		c := NewDeviceCell(
+			clock.Real(),
+			WithDeviceRepository(mem.NewDeviceRepository()),
+			WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+			WithMetricsProvider(metrics.NopProvider{}),
+		)
+		c.RegisterCommandQueue(commandtest.NewInMemQueue())
+		rec := newTestRec()
+		require.NoError(t, c.Init(context.Background(), rec))
+	})
 }
 
 func mustNewRouter(t *testing.T) *router.Router {

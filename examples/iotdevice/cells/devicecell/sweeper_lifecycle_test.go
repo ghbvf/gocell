@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 // sweeperOnStartSettleDelay is the time given to the reconcile loop to either
@@ -34,6 +35,7 @@ const sweeperOnStartReturnTimeout = 2 * time.Second
 // goroutine. The Sweeper now holds a mandatory business clock (NewSweeper) and
 // the Loop owns the control-plane scheduling, so Start settles cleanly.
 func TestDeviceCell_CommandSweeperLoop_OnStartClean(t *testing.T) {
+	defer goleak.VerifyNone(t)
 	c := newTestCell()
 	rec := newTestRec()
 	require.NoError(t, c.Init(context.Background(), rec))

@@ -23,9 +23,9 @@ const (
 	defaultLoopName                = "reconcile.loop"
 	// reconcilerIDSentinel labels metrics when ReconcilerID is unset. It reuses
 	// the observability.md "_runtime" framework/unknown-owner sentinel (same as
-	// the HTTP metrics cell label and the transplant source's cellID default) so
-	// owner-dimension filters stay consistent across metrics — e.g. a dashboard
-	// can exclude unowned series with reconciler!="_runtime" exactly as it does
+	// the HTTP metrics cell label's `_runtime` sentinel) so owner-dimension
+	// filters stay consistent across metrics — e.g. a dashboard can exclude
+	// unowned series with reconciler!="_runtime" exactly as it does
 	// cell!="_runtime".
 	reconcilerIDSentinel = "_runtime"
 	// startProbeTimeout bounds how long Start waits for the worker pool to
