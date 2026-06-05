@@ -33,7 +33,7 @@
 **Constraints**:
 - kernel/reconcile 不依赖 runtime/ / adapters/ / cells/（CLAUDE.md 分层）
 - LeaderElector 接口在 kernel 声明 / 实现在 adapter
-- 不向后兼容（`SweeperLifecycle` 命名整体删除，由 archtest 守名 frozen）
+- 不向后兼容（`SweeperLifecycle` 命名整体删除；name-frozen 由类型删除 Hard 守——引用即编译错误，非 standing archtest，见 enforcement 表 A8 won't-do）
 **Scale/Scope**:
 - 短期消费方 ≤ 5（pkicell.rotation / mdmcell.command / devicelifecycle.cronsweep / zerotrust.trustscore + example）
 - 单 reconciler 处理 entity 上限：1M 行（与 PG/Redis 上限对齐，不引入额外限制）
@@ -47,7 +47,7 @@
 | 分层约束 | kernel/ 不依赖 runtime/adapters/cells/ | ✅ kernel/reconcile 仅依赖 pkg/errcode + pkg/validation + kernel/metautil |
 | 一致性级别 | 明确 L0-L4 归属 | ✅ L4 DeviceLatent（issue 第一性原理重评结论） |
 | AI-robust 评级 | 新增 enforcement 机制 ≥ Medium | ✅ 接口字段 frozen + carve-out 走 Hard archtest；funnel 评级见 PR-A5/A6 |
-| 不向后兼容 | 删字段/改签名直接做 | ✅ `SweeperLifecycle` / `SweepTicker` 命名完全删除，由 archtest 锁 frozen |
+| 不向后兼容 | 删字段/改签名直接做 | ✅ `SweeperLifecycle` / `SweepTicker` 命名完全删除；name-frozen 由类型删除 Hard 守（引用即编译错误）+ `RECONCILE-BUILDER-FUNNEL-01` + 编译期 `var _ reconcile.Reconciler` 断言，`RECONCILE-NAMING-FROZEN-01` won't-do（grep-of-deleted-name = Soft） |
 | 优雅简洁 | 不引入新抽象层 | ✅ 删 6 个 K8s 特有抽象（Source/Predicate/Manager/Leader/Builder.For/Priority） |
 | 测试覆盖 | kernel/ ≥ 90% | ✅ Conformance harness + table-driven，每 PR TDD |
 | 文档命名 | yyyyMMddHHmm-编号-描述.md | ✅ 本目录全部满足 |

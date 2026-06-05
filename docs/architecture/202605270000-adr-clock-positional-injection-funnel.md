@@ -68,20 +68,33 @@ This retires `CLOCK-INJECTION-TEST-CALLSITE-01` and `CLOCK-INJECTION-PROD-CALLSI
 (both subsumed — the compiler now enforces presence at every callsite, prod and
 test, so the WithClock-presence scans are vacuous).
 
-### #619 — control-plane clock (receiver-type confinement)
+### #619 — control-plane clock (sealed type + host→method allowlist)
 
-`runtime/command/lifecycle.go`'s control-plane scheduling primitives (the sweeper
-ticker + the 50 ms startup probe) must use real wall-clock time — a frozen fake
-would deadlock `Start()`. The former carve-out used a `//archtest:allow:clock-injection:control-plane`
-comment-marker + a hand-maintained `controlPlaneClockCarveOut` allowlist map (AI-abusable Soft/Medium).
-（Amendment PR-A8 #1169: this file is deleted; the sole control-plane clock carve-out host is now kernel/reconcile/）
+The control-plane scheduling primitives (startup probe / delayed requeue / leader-
+lease renew) must use real wall-clock time — a frozen fake would deadlock
+`Start()`. The original carve-out used a `//archtest:allow:clock-injection:control-plane`
+comment-marker (AI-abusable Soft/Medium).
 
-This is replaced by a package-private sealed type `controlPlaneClock struct{}`
-whose two methods (`newTicker` / `newProbeTimer`) are the only sanctioned
-`time.NewTicker` / `time.NewTimer` sites; `PROD-CLOCK-INJECTION-01` confines those
-stdlib calls to receiver type `controlPlaneClock` (receiver-type confinement). The
-marker, the allowlist map, and the `CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01` rule
-are deleted.
+> **Amendment PR-A8 #1169**: the original carve-out lived in `runtime/command/lifecycle.go`
+> (the now-deleted `SweeperLifecycle`). It moved to `kernel/reconcile/` when the sweep
+> migrated to a generic `reconcile.Loop`. Read the current-tense description below as
+> host = `kernel/reconcile/`.
+
+The comment-marker is replaced by a package-private sealed type `controlPlaneClock
+struct{}`, gated by `PROD-CLOCK-INJECTION-01` two ways (BOTH required):
+
+1. **Receiver-type confinement** — `time.NewTimer` / `time.NewTicker` may only be
+   called from methods whose receiver type is the package-private `controlPlaneClock`
+   (unexported → no external constructor; the gate checks the receiver *type*, not
+   the method name).
+2. **Host→method allowlist** — `controlPlaneClockCarveOut` maps each sanctioned host
+   prefix to the exact `{controlPlaneClock method → sanctioned time.* callee}` set.
+   The single host is `kernel/reconcile/`, with methods `newProbeTimer`→`NewTimer`,
+   `newRequeueTimer`→`NewTimer`, `newRenewTicker`→`NewTicker`. (The map is NOT
+   deleted — it is the host-scoping half of the funnel; only the comment-marker and
+   the old `CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01` rule are gone.) Adding a
+   `controlPlaneClock` method without a map entry, or any other `time.*` call inside
+   such a method (or a closure within it), is flagged.
 
 **AI-robust grade: Medium (permanent ceiling).** `time.NewTicker` / `time.NewTimer`
 are stdlib free functions and cannot be made uncallable in Go — same ceiling as
@@ -96,7 +109,7 @@ item.
 | Issue | Decision | Landing |
 |-------|----------|---------|
 | #682 (P1) — struct-field clock injection not statically covered | **ABSORBED** | resolved structurally: the struct-field form is deleted; positional param makes presence compile-enforced; form-lock locks it. |
-| #619 (P3) — control-plane clock comment-marker → Hard | **ABSORBED** | sealed `controlPlaneClock` + receiver-type confinement (Medium ceiling, documented). |
+| #619 (P3) — control-plane clock comment-marker → Hard | **ABSORBED** | sealed `controlPlaneClock` + `controlPlaneClockCarveOut` host→method allowlist (host `kernel/reconcile/` since PR-A8 #1169; Medium ceiling, documented). |
 | #1022 (P3) — FMT-23 boundary test wall-clock flake | **ABSORBED** | `TestFMT23_DeprecatedCleanup_BoundaryCheck` + `TestContractDeprecatedCleanup01` anchored to a fixed `clockmock.New` instant. (No `fmt23DeprecationDaysRemaining` metric exists — the issue's reference was never built.) |
 | #883 (P3) — fold MustHaveClock into required-dep funnel? | **Option A confirmed** | `MustHaveClock` stays a panic-style guard (programmer-error, caller-controlled construct-time invariant); not folded into the `gocell:"required"` errcode funnel. Already ratified in `go-standards.md`; the positional param now makes *presence* compile-enforced, leaving `MustHaveClock` solely for the typed-nil axis. |
 
@@ -135,7 +148,7 @@ examples-exclusion convention, not a silent gap.
 
 - `tools/archtest/clock_invariants_test.go` — `CLOCK-POSITIONAL-INJECTION-01`,
   `PROD-CLOCK-INJECTION-01` (receiver-type confinement), `KERNEL-CLOCK-LEAF-FALLBACK-01`
-- `runtime/command/lifecycle.go` — `controlPlaneClock` sealed type
+- `kernel/reconcile/` — `controlPlaneClock` sealed type + `controlPlaneClockCarveOut` host→method allowlist (was `runtime/command/lifecycle.go` pre-PR-A8 #1169)
 - `kernel/clock/guard.go` — `MustHaveClock`
 - `.claude/rules/gocell/ai-robust.md` §Hard 范本目录 ("sealed construction")
 - benbjohnson/clock, uber-go/fx — required-dep-not-in-optional-options reference
