@@ -317,7 +317,7 @@ func TestRenderCell_GRPCImportsPresent(t *testing.T) {
 //   - a role:serve CU on a kind:http contract is silently skipped (HTTP route,
 //     handled by markergen), producing no spec and no error.
 //   - a role:serve CU on an unknown contract id is NOT skipped and returns an
-//     explicit "unknown contract" error (mirrors the subscribe-path behaviour).
+//     explicit "unknown contract" error (mirrors the subscribe-path behavior).
 func TestBuildGrpcServicesFromSlices_SkipAndError(t *testing.T) {
 	t.Parallel()
 
