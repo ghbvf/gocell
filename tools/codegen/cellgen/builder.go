@@ -840,13 +840,19 @@ func buildProjectionSpecFromCU(
 // buildGrpcServicesFromSlices scans all slices belonging to cellID and
 // converts each contractUsage[role=serve] with kind=grpc into a
 // GrpcServiceGenSpec, sorted by SliceID then ContractID.
+//
+// Skip predicate: only skip when the contract IS KNOWN and is NOT grpc (e.g. a
+// role:serve CU on a kind:http contract is a valid HTTP route handled by
+// markergen — skipping it here is correct). A nil lookup (unknown contract id)
+// is NOT skipped; instead buildGrpcServiceSpecFromCU / validateGrpcContractEndpoint
+// returns an explicit "unknown contract" error, mirroring the subscribe path.
 func buildGrpcServicesFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]GrpcServiceGenSpec, error) {
 	return buildSpecsFromSlices(p, cellID, roleServe, fieldIndex, buildGrpcServiceSpecFromCU,
 		func(s GrpcServiceGenSpec) string { return s.SliceID },
 		func(s GrpcServiceGenSpec) string { return s.ContractID },
 		func(cu metadata.ContractUsage) bool {
 			c := p.Contracts[cu.Contract]
-			return c == nil || c.Kind != "grpc"
+			return c != nil && c.Kind != "grpc"
 		})
 }
 
@@ -940,14 +946,24 @@ func validateGrpcContractEndpoint(
 				errcode.PublicString("contract", contractID),
 			))
 	}
-	if g.Proto == "" {
+	if g.Method == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: grpc contract endpoints.grpc.proto is empty",
+			"cellgen build: grpc contract endpoints.grpc.method is empty",
 			errcode.WithDetails(
 				errcode.PublicString("cellID", cellID),
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("contract", contractID),
 			))
+	}
+	if err := metadata.ValidateGRPCProtoPath(g.Proto); err != nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc contract endpoints.grpc.proto is invalid",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+			),
+			errcode.WithInternal(errcode.InternalAttr("cause", err)))
 	}
 	return g, nil
 }
@@ -974,7 +990,7 @@ func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
 		protoAbs := filepath.Join(root, filepath.FromSlash(gs.ProtoRel))
 		info, err := contractgen.ReadProtoTypeInfo(protoAbs, gs.Service, gs.Method)
 		if err != nil {
-			return fmt.Errorf("cellgen enrich grpc-serve %s: %w", gs.ContractID, err)
+			return fmt.Errorf("cellgen enrich grpc-serve contract=%s slice=%s: %w", gs.ContractID, gs.SliceID, err)
 		}
 		gs.PbImportPath = info.ImportPath
 		gs.PbAlias = fmt.Sprintf("grpc%d", i)

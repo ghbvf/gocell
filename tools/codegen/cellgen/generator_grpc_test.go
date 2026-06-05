@@ -312,6 +312,185 @@ func TestRenderCell_GRPCImportsPresent(t *testing.T) {
 	mustContain(t, got, `"fmt"`)
 }
 
+// TestBuildGrpcServicesFromSlices_SkipAndError exercises the skip predicate
+// of buildGrpcServicesFromSlices:
+//   - a role:serve CU on a kind:http contract is silently skipped (HTTP route,
+//     handled by markergen), producing no spec and no error.
+//   - a role:serve CU on an unknown contract id is NOT skipped and returns an
+//     explicit "unknown contract" error (mirrors the subscribe-path behaviour).
+func TestBuildGrpcServicesFromSlices_SkipAndError(t *testing.T) {
+	t.Parallel()
+
+	cell := &metadata.CellMeta{
+		ID:           "demo",
+		Dir:          "demo",
+		File:         "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+
+	t.Run("http contract is silently skipped", func(t *testing.T) {
+		t.Parallel()
+		slc := &metadata.SliceMeta{
+			ID:            "webapi",
+			BelongsToCell: "demo",
+			Dir:           "webapi",
+			File:          "cells/demo/slices/webapi/slice.yaml",
+			ContractUsages: []metadata.ContractUsage{
+				{Contract: "http.device.v1", Role: "serve"},
+			},
+		}
+		httpContract := &metadata.ContractMeta{ID: "http.device.v1", Kind: "http"}
+		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{httpContract})
+		idx := idxOf(map[string]string{"webapi": "webSvc"})
+		specs, err := buildGrpcServicesFromSlices(p, "demo", idx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(specs) != 0 {
+			t.Fatalf("expected 0 specs for http contract, got %d: %+v", len(specs), specs)
+		}
+	})
+
+	t.Run("unknown contract returns error", func(t *testing.T) {
+		t.Parallel()
+		slc := &metadata.SliceMeta{
+			ID:            "command",
+			BelongsToCell: "demo",
+			Dir:           "command",
+			File:          "cells/demo/slices/command/slice.yaml",
+			ContractUsages: []metadata.ContractUsage{
+				{Contract: "grpc.typo.v1", Role: "serve"},
+			},
+		}
+		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{})
+		idx := idxOf(map[string]string{"command": "commandServer"})
+		_, err := buildGrpcServicesFromSlices(p, "demo", idx)
+		if err == nil {
+			t.Fatal("expected error for unknown contract, got nil")
+		}
+		if !strings.Contains(err.Error(), "unknown contract") {
+			t.Fatalf("error %q does not contain %q", err, "unknown contract")
+		}
+	})
+}
+
+// TestValidateGrpcContractEndpoint_Guards exercises the individual guards added
+// to validateGrpcContractEndpoint: traversal path rejection and empty Method.
+func TestValidateGrpcContractEndpoint_Guards(t *testing.T) {
+	t.Parallel()
+
+	baseGRPC := func(service, method, proto string) *metadata.ContractMeta {
+		return &metadata.ContractMeta{
+			ID:   "grpc.device.command.v1",
+			Kind: "grpc",
+			Endpoints: metadata.EndpointsMeta{
+				GRPC: &metadata.GRPCTransportMeta{
+					Service: service,
+					Method:  method,
+					Proto:   proto,
+				},
+			},
+		}
+	}
+
+	cases := []struct {
+		name     string
+		contract *metadata.ContractMeta
+		wantErr  string
+	}{
+		{
+			name:     "traversal path rejected",
+			contract: baseGRPC("device.command.v1.DeviceCommandService", "IssueCommand", "contracts/grpc/../../../etc/x"),
+			wantErr:  "local path",
+		},
+		{
+			name:     "path outside contracts/grpc/ rejected",
+			contract: baseGRPC("device.command.v1.DeviceCommandService", "IssueCommand", "etc/passwd"),
+			wantErr:  "rooted under",
+		},
+		{
+			name:     "empty Method rejected",
+			contract: baseGRPC("device.command.v1.DeviceCommandService", "", "contracts/grpc/device/command/v1/device_command.proto"),
+			wantErr:  "method",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &metadata.ProjectMeta{
+				Contracts: map[string]*metadata.ContractMeta{
+					"grpc.device.command.v1": tc.contract,
+				},
+			}
+			_, err := validateGrpcContractEndpoint(p, "demo", "command", "grpc.device.command.v1")
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestEnrichGrpcServicesWithProtoInfo_ErrorPath verifies that when ProtoRel
+// points at a non-existent file the returned error message contains both the
+// contractID and sliceID for diagnostics.
+func TestEnrichGrpcServicesWithProtoInfo_ErrorPath(t *testing.T) {
+	t.Parallel()
+
+	spec := &CellGenSpec{
+		GrpcServices: []GrpcServiceGenSpec{
+			{
+				ContractID:   "grpc.device.command.v1",
+				SliceID:      "command",
+				HandlerField: "commandServer",
+				RegisterFunc: "RegisterDeviceCommandServiceServer",
+				ProtoRel:     "contracts/grpc/device/command/v1/does_not_exist.proto",
+				Service:      "device.command.v1.DeviceCommandService",
+				Method:       "IssueCommand",
+			},
+		},
+	}
+
+	err := EnrichGrpcServicesWithProtoInfo(spec, "/tmp/nonexistent_root_for_cellgen_test")
+	if err == nil {
+		t.Fatal("expected error for non-existent proto file, got nil")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "grpc.device.command.v1") {
+		t.Errorf("error %q does not contain contractID %q", errStr, "grpc.device.command.v1")
+	}
+	if !strings.Contains(errStr, "command") {
+		t.Errorf("error %q does not contain sliceID %q", errStr, "command")
+	}
+}
+
+// TestGrpcLastSegment covers the FQN → simple-name extraction used to derive
+// RegisterFunc from the proto service FQN.
+func TestGrpcLastSegment(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"a.b.C", "C"},
+		{"DeviceCommandService", "DeviceCommandService"},
+		{"", ""},
+		{"device.command.v1.DeviceCommandService", "DeviceCommandService"},
+		{"a.b.c.d", "d"},
+	}
+
+	for _, tc := range cases {
+		got := grpcLastSegment(tc.input)
+		if got != tc.want {
+			t.Errorf("grpcLastSegment(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 // contractsSlice converts a map to a slice for use with fixtureProject.
 func contractsSlice(m map[string]*metadata.ContractMeta) []*metadata.ContractMeta {
 	out := make([]*metadata.ContractMeta, 0, len(m))

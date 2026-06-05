@@ -49,6 +49,12 @@ var (
 // rpc method within the contract's declared service (fully-qualified, e.g.
 // "device.command.v1.DeviceCommandService"). Comments are stripped first so a
 // commented-out option or rpc declaration is never matched.
+//
+// Usage: callers must pass an absolute proto path that already exists on disk.
+// Prefer the cellgen.EnrichGrpcServicesWithProtoInfo / contractgen builder paths
+// over calling ReadProtoTypeInfo directly — those paths enforce the proto-path
+// traversal guard (metadata.ValidateGRPCProtoPath) and provide cell/slice/
+// contract context in error messages.
 func ReadProtoTypeInfo(protoAbsPath, service, method string) (ProtoTypeInfo, error) {
 	raw, err := os.ReadFile(protoAbsPath) // #nosec G304 — codegen reads a contracts-relative .proto resolved by the builder
 	if err != nil {
