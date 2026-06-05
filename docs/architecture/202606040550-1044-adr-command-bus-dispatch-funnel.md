@@ -12,7 +12,7 @@
 
 ## 1. 上下文与问题
 
-`kernel/cellvocab.ContractCommand = "command"` 这个 contract kind 早已在闭集中，`runtime/command` 却只有 `SweeperLifecycle`（L4 设备命令超时生命周期），`kernel/command` 是 L4 设备队列状态机——**两者都不是 dispatcher**。CQRS 写侧（命令 → 单一 handler → 响应）无框架支持，业务只能手撕。004 缺口 4「Command Bus 半空壳」/ 005 W3 要求补齐：`Dispatcher` + handler registry + codegen `kind:command` 派生 typed Command/Handler + 与 outbox/idempotency 协同，**立项门 = funnel 双向锁（上游 codegen Hard + 下游 callsite Hard）**。
+`kernel/cellvocab.ContractCommand = "command"` 这个 contract kind 早已在闭集中，`runtime/command` 却只有 dispatch registry + queue discovery（原 `SweeperLifecycle` 已于 PR-A8 #1169 删除，L4 设备命令超时生命周期迁至 `kernel/reconcile.Loop`），`kernel/command` 是 L4 设备队列状态机——**两者都不是 dispatcher**。CQRS 写侧（命令 → 单一 handler → 响应）无框架支持，业务只能手撕。004 缺口 4「Command Bus 半空壳」/ 005 W3 要求补齐：`Dispatcher` + handler registry + codegen `kind:command` 派生 typed Command/Handler + 与 outbox/idempotency 协同，**立项门 = funnel 双向锁（上游 codegen Hard + 下游 callsite Hard）**。
 
 PR-1 交付其中的**同步 in-process 核心**：codegen 派生 typed `Handler`/`Register`/`Dispatch` + sealed `runtime/command.Registry` + funnel 双向锁 archtest + governance 校验。异步（写 command outbox、relay 触发）与 idempotency 桥拆为 #1044 子 issue。
 
@@ -28,7 +28,7 @@ PR-1 交付其中的**同步 in-process 核心**：codegen 派生 typed `Handler
 | **D4** | **同步 type-assert，不用 JSON round-trip**：生成 `Dispatch` 把 boxed handler 断言回 typed `Handler` 后直调。零序列化、in-process 惯用。saga 用 JSON 是因跨异步 step 边界；PR-1 同步不跨边界。JSON 统一性留 ④ 异步。 | 生成码形态（golden 锁） | 形态由 golden 锁（上游 Hard） |
 | **D5** | **「编译期注册唯一性」= sole-emitter funnel + runtime KindConflict**。issue ③ 字面「编译期 Handler 注册唯一性」中**「编译期阻止第二次 runtime `Register` 调用」Go 不可表达**（运行时多次调用无法编译期拦）。落地 = (a) 编译期：typed `Register` 唯一来源（sole-emitter）；(b) 运行时：`RegisterHandler` 第二次同 id → `KindConflict`（对标 Watermill `DuplicateCommandHandlerError`）。 | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（a）+ `Registry.RegisterHandler` runtime guard（b） | a 上游 Hard / b runtime guard（Medium） |
 | **D6** | **codegen fail-closed，无 stub 降级**：`kind:command,codegen:true` 缺 request **或** response schemaRef → `buildCommandSpec` 硬错（不静默生成空包）。governance `COMMAND-CONTRACT-SCHEMA-REF-01` 在 validate 期并行兜底。schemaRef 的作用 = **派生 typed `*Request`/`*Response` 签名**，**非**运行时值约束门；sync `Dispatch` 不执行 request value-validation（见 §Amendment 2026-06-04）。 | `contractgen.buildCommandSpec`（codegen Hard 半边）+ `COMMAND-CONTRACT-SCHEMA-REF-01`（governance Medium 兜底） | **codegen 上游 Hard + governance Medium**（同 saga step-schema-ref 范式） |
-| **D7** | **layer = `runtime/command`**：dispatcher 核心入 `runtime/command`（已有 SweeperLifecycle），依赖 `kernel/+pkg/`，不依赖 cells/adapters。生成码在 `generated/contracts/command/**` import `runtime/command`（`generated/` 可 import 任意层，无环）。 | 分层依赖规则（`go-standards.md`）+ build | 结构性（build 守） |
+| **D7** | **layer = `runtime/command`**：dispatcher 核心入 `runtime/command`（已有 dispatch registry + queue discovery；原 SweeperLifecycle 已于 PR-A8 #1169 删除），依赖 `kernel/+pkg/`，不依赖 cells/adapters。生成码在 `generated/contracts/command/**` import `runtime/command`（`generated/` 可 import 任意层，无环）。 | 分层依赖规则（`go-standards.md`）+ build | 结构性（build 守） |
 
 ---
 

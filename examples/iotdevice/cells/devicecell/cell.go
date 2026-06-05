@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -25,10 +26,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/reconcile"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
-	commandruntime "github.com/ghbvf/gocell/runtime/command"
 )
 
 // Role constants re-exported from internal/dto for use by the assembly root
@@ -89,34 +90,20 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 	return func(c *DeviceCell) { c.metricsProvider = mp }
 }
 
-// WithSweepErrorCounter wires a pre-bound CounterVec for C.3 observable sweep
-// errors. The counter must have a "cell" label; it is incremented with
-// Labels{"cell": devicecell.ID()} on every SweepTick error. Leave unset to
-// disable counter tracking (appropriate for demo/test deployments where a full
-// metrics provider is unavailable).
-func WithSweepErrorCounter(cv metrics.CounterVec) Option {
-	return func(c *DeviceCell) {
-		if cv != nil {
-			c.sweepErrorCounter = cv
-		}
-	}
-}
-
 // DeviceCell is the devicecell Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=
 // +cell:listener:ref=cell.InternalListener,prefix=
 type DeviceCell struct {
 	*cell.BaseCell
-	deviceRepo        domain.DeviceRepository
-	publisher         outbox.CellPublisher
-	emitter           outbox.CellEmitter // set during initInternal; retained for Probes
-	cursorCodec       *query.CursorCodec
-	logger            *slog.Logger
-	metricsProvider   metrics.Provider
-	commandQueue      commandQueueStore
-	commandSweeper    *commandruntime.SweeperLifecycle
-	sweepErrorCounter metrics.CounterVec // optional; injected at composition root for C.3 observability
-	clk               clock.Clock        // injected from reg.Config during initInternal
+	deviceRepo      domain.DeviceRepository
+	publisher       outbox.CellPublisher
+	emitter         outbox.CellEmitter // set during initInternal; retained for Probes
+	cursorCodec     *query.CursorCodec
+	logger          *slog.Logger
+	metricsProvider metrics.Provider
+	commandQueue    commandQueueStore
+	commandSweeper  *reconcile.Loop // device-command expiry sweep, driven on a TickerTrigger cadence
+	clk             clock.Clock     // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
@@ -313,20 +300,9 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	c.commandHandler = devicecommand.NewHandler(pubSvc)
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	c.commandInternalHandler = devicecommandinternal.NewHandler(intSvc)
-	// C.1: kernel Sweeper has no clock field — control-plane tick is real-time
-	// (controlPlaneTicker). Business-plane now (expiry) uses the cell clock
-	// (c.clk) so deadlines stay consistent with command-creation time under a
-	// fake-clock assembly (review P2-2).
-	// C.3: SweepTick errors are logged + counted by SweeperLifecycle.
-	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue)
-	if err != nil {
-		return fmt.Errorf("device-command sweeper: %w", err)
+	if err := c.buildCommandSweeper(cmdQueue); err != nil {
+		return err
 	}
-	// interval=0 lets NewSweeperLifecycle apply defaultCommandSweeperInterval (30s).
-	lc := commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, 0, c.clk)
-	lc.CellID = c.ID()
-	lc.SweepErrorCounter = c.sweepErrorCounter // nil-safe: runLoop guards with != nil
-	c.commandSweeper = lc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommand.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandinternal.SliceMetadata()))
 
@@ -351,6 +327,56 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	return nil
 }
 
+// commandSweepInterval is the TickerTrigger cadence — the SINGLE periodic
+// source driving the device-command expiry sweep. The Loop opts out of the
+// default-tick self-requeue (WithoutDefaultRequeue below), so a successful sweep
+// does NOT re-enqueue itself; the 30s ticker pulse is the only re-observation
+// driver. (Keeping the default-tick requeue on would add a second, independent
+// periodic source — the ticker pulse arrives via the Loop's work queue while the
+// self-requeue lands in the delaying-queue heap; they do not coalesce, so the
+// sweep would run ~twice per cycle.)
+const commandSweepInterval = 30 * time.Second
+
+// buildCommandSweeper constructs the device-command expiry reconcile.Loop. The
+// kernel Sweeper implements reconcile.Reconciler; a TickerTrigger off the cell's
+// business clock (c.clk) drives a resync-all pulse every commandSweepInterval,
+// and the Loop's sealed real-only control-plane clock owns the startup probe /
+// requeue timers. Business-plane "now" (expiry) comes from c.clk via the
+// Sweeper, so deadlines stay consistent with command-creation time.
+//
+// WithoutDefaultRequeue makes the TickerTrigger the SOLE periodic source: a
+// successful Reconcile returns the zero Result{} and the Loop does not
+// self-requeue it (see commandSweepInterval). Transient sweep errors still
+// back off and retry; only the redundant success default-tick is suppressed.
+//
+// Sweep outcomes are observable via the reconcile_total{reconciler,result}
+// family (result=transient for scan/Ack failures) when a metrics provider is
+// wired; this supersedes the old single sweep-error counter.
+func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
+	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue, c.clk)
+	if err != nil {
+		return fmt.Errorf("device-command sweeper: %w", err)
+	}
+	b := reconcile.New(sweeper).
+		WithTrigger(reconcile.TickerTrigger(c.clk, commandSweepInterval)).
+		WithName("devicecommand.sweeper").
+		WithReconcilerID("devicecommand_sweeper"). // label-safe: [a-z0-9_], no dots
+		WithoutDefaultRequeue()                    // ticker is the sole periodic source
+	if c.metricsProvider != nil {
+		m, err := reconcile.RegisterMetrics(c.metricsProvider)
+		if err != nil {
+			return fmt.Errorf("device-command reconcile metrics: %w", err)
+		}
+		b = b.WithMetrics(m)
+	}
+	loop, err := b.Build()
+	if err != nil {
+		return fmt.Errorf("device-command reconcile loop: %w", err)
+	}
+	c.commandSweeper = loop
+	return nil
+}
+
 // registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.
 func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
 	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
@@ -366,6 +392,13 @@ func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
 			return err
 		}
 	}
-	reg.Lifecycle(c.commandSweeper.Hook())
+	// reconcile.Loop.Start/Stop have the exact cell.LifecycleHook OnStart/OnStop
+	// shape (func(context.Context) error): Start spawns the worker pool + a fast
+	// startup probe and returns; Stop drains. No adapter needed.
+	reg.Lifecycle(cell.LifecycleHook{
+		Name:    "devicecommand.sweeper",
+		OnStart: c.commandSweeper.Start,
+		OnStop:  c.commandSweeper.Stop,
+	})
 	return nil
 }

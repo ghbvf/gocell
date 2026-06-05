@@ -5,7 +5,7 @@ package bootstrap
 // TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop verifies the C.2
 // owner-ctx contract at bootstrap-layer depth.
 //
-// Three assertions:
+// Two assertions:
 //
 //  1. Worker goroutine exits via ownerCtx.Done(): a goroutine spawned inside
 //     OnStart that blocks on <-ctx.Done() exits when bootstrap teardown cancels
@@ -17,13 +17,10 @@ package bootstrap
 //     bootstrap.go: lifecycle.Stop registered first (runs second), ownerCancel
 //     registered second (runs first).
 //
-//  3. Equivalent coverage for SweeperLifecycle: SweeperLifecycle.Start receives
-//     the bootstrap-issued ownerCtx (C.2 contract). A dedicated sub-case wires
-//     a real SweeperLifecycle (with a fake SweepTicker) through WithLifecycle into
-//     bootstrap and verifies goroutine-exit via goleak after cancel. The unit-level
-//     runtime/command.TestSweeperLifecycle_OwnerCancel_ExitsWithoutOnStop already
-//     pins the per-component contract; this bootstrap-layer sub-case confirms the
-//     end-to-end wire (ownerCtx propagation through lifecycle.Start → SweeperLifecycle.Start).
+// The generic hook sub-case covers any real lifecycle component wired through
+// WithLifecycle (including the device-command reconcile.Loop, whose own
+// goroutine lifecycle is pinned by kernel/reconcile/loop_test.go); no
+// component-specific bootstrap sub-case is needed.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-B
 // ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go — internalCtx cancel before Stop.
@@ -43,23 +40,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/command"
 )
-
-// fakeSweepTicker is a minimal SweepTicker that records ticks without doing
-// any real work. Safe for bootstrap integration tests where we do not want
-// the sweeper to perform actual command processing.
-type fakeSweepTicker struct {
-	mu    sync.Mutex
-	ticks int
-}
-
-func (f *fakeSweepTicker) SweepTick(_ context.Context, _ time.Time) error {
-	f.mu.Lock()
-	f.ticks++
-	f.mu.Unlock()
-	return nil
-}
 
 // TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop pins the C.2
 // owner-ctx and LIFO teardown order at bootstrap integration depth.
@@ -168,63 +149,5 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 		mu.Unlock()
 		assert.Equal(t, context.Canceled, capturedErr,
 			"OnStop must observe ownerCtx already cancelled (ownerCancel fires before lifecycle.Stop in LIFO order)")
-	})
-
-	// Assertion 3: SweeperLifecycle receives bootstrap-issued ownerCtx via the
-	// normal WithLifecycle → lifecycle.Start path. Owner cancel exits the sweeper
-	// goroutine; no leak survives.
-	//
-	// Why generic hook is sufficient as complement: the unit-level test
-	// runtime/command.TestSweeperLifecycle_OwnerCancel_ExitsWithoutOnStop already
-	// pins the per-component SweeperLifecycle.Start(ownerCtx) → goroutine-exit
-	// contract in isolation. This sub-case confirms the end-to-end wire: bootstrap
-	// passes its ownerCtx (not a separate background ctx) through lifecycle.Start
-	// into SweeperLifecycle.Start. The generic hook sub-case above pins the LIFO
-	// teardown order (ownerCancel before lifecycle.Stop) which applies equally to
-	// SweeperLifecycle — no duplicate LIFO assertion is needed here.
-	t.Run("sweeper_lifecycle_via_bootstrap_wire_no_goroutine_leak", func(t *testing.T) {
-		// IgnoreCurrent captures the goroutine set at sub-test entry to avoid
-		// flagging sibling-test background goroutines (hookDispatcher, etc.).
-		defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
-		ticker := &fakeSweepTicker{}
-		// Use a large interval so SweepTick is never called during the test;
-		// we only care about goroutine lifecycle, not tick behaviour.
-		sl := command.NewSweeperLifecycle("owner-cancel-sweeper", ticker, testtime.D1h, clock.Real())
-
-		ln := newIntegrationListener(t)
-		addr := ln.Addr().String()
-		healthLn := newIntegrationListener(t)
-
-		b := New(
-			clock.Real(),
-			WithListener(cell.PrimaryListener, addr, []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
-			WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
-			WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
-			WithShutdownTimeout(testtime.D3s),
-			WithLifecycle(func(lc Lifecycle) {
-				hook := sl.Hook()
-				_ = lc.Append(Hook{
-					Name:    hook.Name,
-					OnStart: hook.OnStart,
-					OnStop:  hook.OnStop,
-				})
-			}),
-		)
-
-		runCtx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() { done <- b.Run(runCtx) }()
-
-		waitForIntegrationHealthy(t, healthLn.Addr().String())
-		cancel()
-
-		select {
-		case err := <-done:
-			require.NoError(t, err)
-		case <-time.After(testtime.SelectShutdown):
-			t.Fatal("b.Run did not return after cancel (sweeper sub-case)")
-		}
-		// goleak (deferred above) asserts the sweeper goroutine exited cleanly.
 	})
 }

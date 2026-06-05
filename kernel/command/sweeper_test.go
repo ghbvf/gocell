@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -326,7 +327,7 @@ func TestSweepTick_ScannerError(t *testing.T) {
 	scanner := &mockScanner{err: scanErr}
 	q := &mockAckQueue{}
 
-	s, err := command.NewSweeper(scanner, q)
+	s, err := command.NewSweeper(scanner, q, clock.Real())
 	require.NoError(t, err)
 
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -347,7 +348,7 @@ func TestSweepTick_AckError(t *testing.T) {
 	ackErr := errors.New("ack rejected")
 	q := &mockAckQueue{err: ackErr}
 
-	s, err := command.NewSweeper(scanner, q)
+	s, err := command.NewSweeper(scanner, q, clock.Real())
 	require.NoError(t, err)
 
 	now := created.Add(testtime.D5min) // past deadline
@@ -371,7 +372,7 @@ func TestSweepTick_MultipleAckErrors(t *testing.T) {
 	ackErr := errors.New("ack rejected")
 	q := &mockAckQueue{err: ackErr}
 
-	s, err := command.NewSweeper(scanner, q)
+	s, err := command.NewSweeper(scanner, q, clock.Real())
 	require.NoError(t, err)
 
 	now := created.Add(testtime.D5min)
@@ -391,7 +392,7 @@ func TestSweepTick_ScannerErrorShortCircuits(t *testing.T) {
 	scanner := &mockScanner{err: scanErr}
 	q := &mockAckQueue{}
 
-	s, err := command.NewSweeper(scanner, q)
+	s, err := command.NewSweeper(scanner, q, clock.Real())
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -423,7 +424,7 @@ func TestSweepTick_MixedAckErrors(t *testing.T) {
 	ackErr := errors.New("cmd-2 ack rejected")
 	q := &mockAckQueuePartialFail{failID: "cmd-2", err: ackErr}
 
-	s, err := command.NewSweeper(scanner, q)
+	s, err := command.NewSweeper(scanner, q, clock.Real())
 	require.NoError(t, err)
 
 	now := created.Add(testtime.D5min) // all past deadline
@@ -445,7 +446,7 @@ func TestSweepTick_NoExpiredEntries(t *testing.T) {
 	scanner := &mockScanner{entries: []command.Entry{e}}
 	q := &mockAckQueue{}
 
-	s, err := command.NewSweeper(scanner, q)
+	s, err := command.NewSweeper(scanner, q, clock.Real())
 	require.NoError(t, err)
 
 	now := created.Add(testtime.D30min) // before deadline
@@ -470,11 +471,13 @@ func TestSweepTick_ZeroValueLiteralReturnsError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestNewSweeper_NewSignatureNoClockParam verifies the new signature
-// (scanner, queue, opts...) — no clock parameter.
-func TestNewSweeper_NewSignatureNoClockParam(t *testing.T) {
+// TestNewSweeper_ClockPositional verifies the signature
+// (scanner, queue, clk, opts...) — clk is a required positional dependency
+// (Reconcile sources "now" from it). See sweeper_reconcile_test.go for the
+// nil-clk panic guard.
+func TestNewSweeper_ClockPositional(t *testing.T) {
 	t.Parallel()
-	s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{})
+	s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clock.Real())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 }
@@ -485,7 +488,7 @@ func TestNewSweeper_TypedNilScannerRejected(t *testing.T) {
 	t.Parallel()
 	var s *mockScanner
 	var scanner command.ActiveScanner = s
-	_, err := command.NewSweeper(scanner, &mockAckQueue{})
+	_, err := command.NewSweeper(scanner, &mockAckQueue{}, clock.Real())
 	require.Error(t, err, "NewSweeper must reject typed-nil scanner")
 }
 
@@ -493,7 +496,7 @@ func TestNewSweeper_TypedNilQueueRejected(t *testing.T) {
 	t.Parallel()
 	var q *mockAckQueue
 	var queue command.Queue = q
-	_, err := command.NewSweeper(&mockScanner{}, queue)
+	_, err := command.NewSweeper(&mockScanner{}, queue, clock.Real())
 	require.Error(t, err, "NewSweeper must reject typed-nil queue")
 }
 
@@ -507,7 +510,7 @@ func TestSweepTick_AcksExpiredEntries(t *testing.T) {
 	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
 	q := &mockAckQueue{}
 
-	s, err := command.NewSweeper(scanner, q)
+	s, err := command.NewSweeper(scanner, q, clock.Real())
 	require.NoError(t, err)
 
 	now := created.Add(testtime.D5min) // past deadline
@@ -525,7 +528,7 @@ func TestSweepTick_FilterPropagated(t *testing.T) {
 	q := &mockAckQueue{}
 	filter := command.ScanFilter{DeviceID: "dev-42", Statuses: []command.Status{command.StatusPending}}
 
-	s, err := command.NewSweeper(scanner, q, command.WithSweeperFilter(filter))
+	s, err := command.NewSweeper(scanner, q, clock.Real(), command.WithSweeperFilter(filter))
 	require.NoError(t, err)
 
 	require.NoError(t, s.SweepTick(context.Background(), time.Now()))

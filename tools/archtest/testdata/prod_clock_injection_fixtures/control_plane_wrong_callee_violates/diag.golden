@@ -1,1 +1,1 @@
-runtime/command/lifecycle.go:17: time.Sleep — must use injected clock.Clock.Sleep instead
+kernel/reconcile/loop.go:18: time.Sleep — must use injected clock.Clock.Sleep instead

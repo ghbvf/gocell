@@ -317,7 +317,7 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 
 **Goal**: 删除 SweeperLifecycle / SweepTicker 命名，kernel/command.Sweeper 改为实现 reconcile.Reconciler；archtest 守 frozen 命名。
 
-**Independent Test**: `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 编译通过；`grep -r SweeperLifecycle` 在 production 0 命中；archtest `RECONCILE-NAMING-FROZEN-01` 在 nightly 跑过。
+**Independent Test**: `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 编译通过；`grep -r SweeperLifecycle` 在 production 0 命中。（`RECONCILE-NAMING-FROZEN-01` won't-do — see T38 annotation below）
 
 #### Tests for PR-A8 (TDD)
 
@@ -341,6 +341,7 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 - [ ] **T38** [PR-A8] `tools/archtest/reconcile_naming_frozen_test.go`：
   - `RECONCILE-NAMING-FROZEN-01`：grep production 不得出现 SweeperLifecycle / SweepTicker
   - 估算：80 LoC
+  - **WON'T-DO (PR-A8 decision)**: a grep-of-deleted-name archtest is Soft per ai-robust.md（"Soft 严禁立项"）. The frozen-naming guarantee is instead type-system Hard — the SweeperLifecycle/SweepTicker TYPES are deleted, so any production reference is a compile error — backed by the existing RECONCILE-BUILDER-FUNNEL-01 (Hard) + a compile-time `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` assertion. A one-time merge-gate grep of production source is empty. No standing Soft archtest is added.
 - [ ] **T39** [PR-A8] 更新 `tools/archtest/command_projection_explicit_test.go`：
   - 加 reconcile contract kind 枚举到 `COMMAND-PROJECTION-EXPLICIT-01`
   - 估算：50 LoC（diff）

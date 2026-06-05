@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -14,7 +15,7 @@ import (
 // invalid Sweeper via struct literal (fields are unexported).
 func TestNewSweeper_NilScanner_FailFast(t *testing.T) {
 	t.Parallel()
-	_, err := command.NewSweeper(nil, &mockAckQueue{})
+	_, err := command.NewSweeper(nil, &mockAckQueue{}, clock.Real())
 	if err == nil {
 		t.Fatal("NewSweeper(nil scanner) must return error")
 	}
@@ -26,17 +27,17 @@ func TestNewSweeper_NilScanner_FailFast(t *testing.T) {
 
 func TestNewSweeper_NilQueue_FailFast(t *testing.T) {
 	t.Parallel()
-	_, err := command.NewSweeper(&mockScanner{}, nil)
+	_, err := command.NewSweeper(&mockScanner{}, nil, clock.Real())
 	if err == nil {
 		t.Fatal("NewSweeper(nil queue) must return error")
 	}
 }
 
-// TestNewSweeper_AllRequired_OK verifies construction succeeds with valid deps.
-// Clock is intentionally absent — control-plane timing is owned by SweeperLifecycle.
+// TestNewSweeper_AllRequired_OK verifies construction succeeds with valid deps,
+// including the required business clock (Reconcile sources "now" from it).
 func TestNewSweeper_AllRequired_OK(t *testing.T) {
 	t.Parallel()
-	s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{},
+	s, err := command.NewSweeper(&mockScanner{}, &mockAckQueue{}, clock.Real(),
 		command.WithSweeperFilter(command.ScanFilter{DeviceID: "dev-1"}))
 	if err != nil {
 		t.Fatalf("NewSweeper err: %v", err)
