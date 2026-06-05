@@ -16,6 +16,7 @@ import (
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
+	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/device-command/enqueue/v1"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
@@ -77,6 +78,20 @@ func WithCursorCodec(c *query.CursorCodec) Option {
 	return func(dc *DeviceCell) { dc.cursorCodec = c }
 }
 
+// WithCommandRegistry wires the process command.Registry into which the cell
+// registers its synchronous command-bus handlers (today:
+// command.device-command.enqueue.v1, via cmdenqueue.Register in initSlices).
+//
+// REQUIRED, not optional: devicecell declares command handle contracts, so an
+// assembly that omits this fails fast in Init (initSlices) rather than silently
+// leaving the generated command funnel unregistered — the dead-but-compiles
+// state #1580 fixes. Same "no soft fallback" rationale as WithDeviceRepository /
+// RegisterCommandQueue. The composition root constructs it via
+// command.NewRegistry().
+func WithCommandRegistry(reg *commandruntime.Registry) Option {
+	return func(c *DeviceCell) { c.commandRegistry = reg }
+}
+
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *DeviceCell) { c.logger = l }
@@ -114,6 +129,7 @@ type DeviceCell struct {
 	logger            *slog.Logger
 	metricsProvider   metrics.Provider
 	commandQueue      commandQueueStore
+	commandRegistry   *commandruntime.Registry // required; sync command-bus handler registry (#1580)
 	commandSweeper    *commandruntime.SweeperLifecycle
 	sweepErrorCounter metrics.CounterVec // optional; injected at composition root for C.3 observability
 	clk               clock.Clock        // injected from reg.Config during initInternal
@@ -290,6 +306,16 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 				"call RegisterCommandQueue(commandtest.NewInMemQueue()) for demo mode or "+
 				"RegisterCommandQueue(postgres.NewCommandQueue(...)) for durable mode")
 	}
+	// The sync command-bus registry is required: devicecell declares command
+	// handle contracts (command.device-command.enqueue.v1), so the generated
+	// funnel must be wired to a real handler. Fail fast rather than silently
+	// leaving it unregistered (the dead-but-compiles state #1580 fixes) — same
+	// "no soft fallback" rationale as the commandQueue guard above.
+	if c.commandRegistry == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"devicecell requires a command registry; from the composition root, "+
+				"call WithCommandRegistry(command.NewRegistry())")
+	}
 	cmdQueue := c.commandQueue
 	runMode := query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
 	// Public slice service: sliceName "devicecommand" for observability labels.
@@ -311,6 +337,15 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		return fmt.Errorf("device-command-internal: %w", err)
 	}
 	c.commandHandler = devicecommand.NewHandler(pubSvc)
+	// Register the sync command-bus enqueue handler into the process registry.
+	// EnqueueCommandAdapter bridges the generated cmdenqueue.Handler to the same
+	// devicecmd.Service.Enqueue logic the HTTP enqueue path uses; cmdenqueue.Register
+	// is the sole sanctioned registration path (COMMAND-DISPATCH-REGISTER-CALLER-01).
+	// This import is what makes the generated command funnel a live entry point
+	// (#1580) rather than dead-but-compiles.
+	if err := cmdenqueue.Register(c.commandRegistry, devicecommand.EnqueueCommandAdapter{S: pubSvc}); err != nil {
+		return fmt.Errorf("device-command register: %w", err)
+	}
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	c.commandInternalHandler = devicecommandinternal.NewHandler(intSvc)
 	// C.1: kernel Sweeper has no clock field — control-plane tick is real-time

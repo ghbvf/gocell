@@ -3,9 +3,10 @@
   "title": "command.device-command.enqueue.v1.request",
   "type": "object",
   "properties": {
+    "deviceId": { "type": "string", "minLength": 1, "maxLength": 256 },
     "commandType": { "type": "string", "minLength": 1, "maxLength": 64 },
     "payload": { "type": "string", "minLength": 0, "maxLength": 4096 }
   },
-  "required": ["payload"],
+  "required": ["deviceId", "payload"],
   "additionalProperties": false
 }

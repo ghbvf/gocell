@@ -181,13 +181,16 @@ func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.device-command.enqueue.v1")
 
-	// payload required; commandType optional
-	c.ValidateRequest(t, []byte(`{"payload":"reboot"}`))
-	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"firmware-update"}`))
+	// deviceId + payload required; commandType optional (#1580: deviceId added so
+	// the sync command-bus handler can target a device — see EnqueueCommandAdapter).
+	c.ValidateRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot"}`))
+	c.ValidateRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot","commandType":"firmware-update"}`))
+	c.MustRejectRequest(t, []byte(`{"payload":"reboot"}`))          // missing required deviceId
+	c.MustRejectRequest(t, []byte(`{"deviceId":"","payload":"x"}`)) // deviceId minLength 1
 	enqueueResp := `{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
 		`"payload":"reboot","status":"pending","attempt":0,"createdAt":"2026-01-01T00:00:00Z"}}`
 	c.ValidateResponse(t, []byte(enqueueResp))
-	c.MustRejectRequest(t, []byte(`{"payload":"x","extra":"bad"}`))
+	c.MustRejectRequest(t, []byte(`{"deviceId":"d-1","payload":"x","extra":"bad"}`))
 }
 
 func TestCommandDeviceCommandDequeueV1Handle(t *testing.T) {

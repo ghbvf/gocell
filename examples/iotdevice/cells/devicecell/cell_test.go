@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	commandruntime "github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -33,6 +34,7 @@ func newTestCell() *DeviceCell {
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	return c
@@ -398,6 +400,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
 
 		WithCursorCodec(newTestCursorCodec(t)),
+		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
@@ -416,6 +419,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
+		WithCommandRegistry(commandruntime.NewRegistry()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))

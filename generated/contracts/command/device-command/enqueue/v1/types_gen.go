@@ -5,6 +5,7 @@ package enqueue
 
 // Request — command.device-command.enqueue.v1.request
 type Request struct {
+	DeviceID    string `json:"deviceId"`
 	CommandType string `json:"commandType,omitempty"`
 	Payload     string `json:"payload"`
 }
