@@ -85,7 +85,15 @@ func tenantScopeForTx(ctx context.Context) (tenant.TenantID, bool) {
 		return t, true
 	}
 	if raw, ok := ctxkeys.TenantIDFrom(ctx); ok && raw != "" {
-		return tenant.TenantID(raw), true
+		// Defense-in-depth: re-validate/normalize the principal tenant via
+		// ParseTenantID (same boundary tenant.FromContext uses) instead of a bare
+		// cast, so a malformed ctxkeys value fails closed (skip → GUC unset → 0
+		// rows) rather than reaching setLocalTenant as an aborting KindInternal.
+		// The auth boundary already ParseTenantID's the claim, so this is a no-op
+		// for legitimate values.
+		if tid, err := tenant.ParseTenantID(raw); err == nil {
+			return tid, true
+		}
 	}
 	return "", false
 }

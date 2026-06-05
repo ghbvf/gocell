@@ -75,6 +75,12 @@ func scopedInsertFlag(t *testing.T, tm *TxManager, tid tenant.TenantID, id, key 
 	return tm.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
 		tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
 		require.True(t, ok, "ambient tx must be present")
+		// Only (id, tenant_id, key) are supplied; the remaining NOT NULL columns
+		// rely on their migration-051 DEFAULTs (enabled=false, rollout_percentage=0,
+		// description='', version=1, created_at/updated_at=now()). These RLS tests
+		// assert isolation, not schema completeness — if a future migration drops a
+		// default this INSERT fails NOT NULL (not RLS), which is the intended loud
+		// signal to revisit this helper.
 		_, err := tx.Exec(ctx, `INSERT INTO feature_flags (id, tenant_id, key) VALUES ($1, $2, $3)`, id, string(tid), key)
 		return err
 	})
@@ -180,15 +186,21 @@ func TestRLSForce_SystemTenantStrictEquality(t *testing.T) {
 
 func TestRLSForce_SchemaGuardVerifyRLS(t *testing.T) {
 	ctx := context.Background()
-	pool := migratedPool(t)
 
 	// Positive: after migration 052 the config tables are FORCE RLS + policy.
-	require.NoError(t, VerifyExpectedShape(ctx, pool),
+	require.NoError(t, VerifyExpectedShape(ctx, migratedPool(t)),
 		"VerifyExpectedShape must pass with RLS enabled on the config tables")
 
-	// Negative: drop one policy → verifyRLS dimension fails.
-	_, err := pool.DB().Exec(ctx, `DROP POLICY tenant_isolation ON feature_flags`)
-	require.NoError(t, err)
-	err = VerifyExpectedShape(ctx, pool)
-	require.Error(t, err, "VerifyExpectedShape must fail once the tenant_isolation policy is dropped")
+	// Negative: dropping the tenant_isolation policy on ANY of the three config
+	// tables must make verifyRLS fail — each on its own fresh clone so the drops
+	// don't interfere (proves verifyRLS checks every table, not just the first).
+	for _, table := range []string{"config_entries", "config_versions", "feature_flags"} {
+		t.Run("drop_policy_"+table, func(t *testing.T) {
+			pool := migratedPool(t)
+			_, err := pool.DB().Exec(ctx, `DROP POLICY tenant_isolation ON `+table)
+			require.NoError(t, err)
+			require.Error(t, VerifyExpectedShape(ctx, pool),
+				"VerifyExpectedShape must fail once tenant_isolation is dropped on "+table)
+		})
+	}
 }

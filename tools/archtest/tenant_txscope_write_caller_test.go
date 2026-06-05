@@ -33,19 +33,23 @@
 // eroding that key's "authenticated JWT tenant" meaning. The two funnels are
 // orthogonal.
 //
-// # AI-robust rating (charter §"Funnel 双向锁评级")
+// # AI-robust rating (charter §"Funnel 双向锁评级") — fully closed (Hard/Hard)
 //
-//   - Downstream: HARD by archtest caller-allowlist. The callee is resolved via
-//     go/types (ResolvePackageRef), so import aliases / dot-imports resolve to the
-//     same symbol; any WithScope reference outside the allowlist fails CI. The
-//     scope KEY itself is unexported, so the only way to write the scope at all is
-//     through this exported func (sealed construction on the key).
-//   - Upstream: MEDIUM, a Go-language ceiling. Hard upstream would require
-//     WithScope to be unreachable outside scopedread — impossible because
-//     pkg/tenant must export it for the (different-package) configcore caller. Same
-//     permanent ceiling as CTXKEYS-PRINCIPAL-WRITE-CALLER-01 (#1282) /
-//     SPAN-SETATTR-HOLDER-SEAL (#851). The Hard-upgrade path (a sealed scoped-tx
-//     handle) is a deferred won't-do-now tracked in gh #1619.
+// The two axes are separate; do not conflate the sealed key (an upstream
+// property) with the caller-allowlist (the downstream one):
+//
+//   - Downstream (who may CALL WithScope): HARD. The archtest caller-allowlist
+//     resolves the callee via go/types (ResolvePackageRef), so import aliases /
+//     dot-imports resolve to the same symbol and any WithScope reference outside
+//     the allowlist fails CI — the same downstream form as
+//     CTXKEYS-PRINCIPAL-WRITE-CALLER-01.
+//   - Upstream (can the scope be SET without WithScope): HARD. The scope is read
+//     only via tenant.ScopeFromContext, whose key (scopeKey) is UNEXPORTED — no
+//     package outside pkg/tenant can construct it, so the tx scope cannot be set
+//     except through WithScope (sealed construction; "包外不可表达跳过"). There is
+//     NO alternative scope-write path, so — unlike the principal-write funnel
+//     (#1282, Medium upstream because identities have other forge paths) — this
+//     funnel is closed on both axes; no Hard-upgrade issue is needed.
 //
 // # Detection + anti-vacuity
 //
