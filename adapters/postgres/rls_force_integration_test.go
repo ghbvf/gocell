@@ -232,6 +232,25 @@ func TestRLSForce_SchemaGuardVerifyRLS(t *testing.T) {
 			name:  "extra_permissive_policy",
 			setup: `CREATE POLICY extra_visible ON feature_flags FOR SELECT USING (true)`,
 		},
+		{
+			// #1622 F1 round-2 — WRONG column: still reads app.tenant_id (a substring
+			// check passed it) but isolates on `id`, not tenant_id. Validates the
+			// whole-predicate regex against real pg_get_expr deparse.
+			name: "using_wrong_column",
+			setup: `DROP POLICY tenant_isolation ON feature_flags;
+			        CREATE POLICY tenant_isolation ON feature_flags
+			          USING (id = NULLIF(current_setting('app.tenant_id', true), ''))
+			          WITH CHECK (id = NULLIF(current_setting('app.tenant_id', true), ''))`,
+		},
+		{
+			// #1622 F1 round-2 — VACUOUS `… OR true`: mentions app.tenant_id but is
+			// always true. The anchored ^…$ regex must reject the real-pg-rendered OR.
+			name: "using_or_true",
+			setup: `DROP POLICY tenant_isolation ON feature_flags;
+			        CREATE POLICY tenant_isolation ON feature_flags
+			          USING (` + okUsing + ` OR true)
+			          WITH CHECK ` + okUsing,
+		},
 	}
 	for _, dc := range semanticDefects {
 		t.Run("semantic_"+dc.name, func(t *testing.T) {

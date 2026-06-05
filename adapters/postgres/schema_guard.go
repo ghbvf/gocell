@@ -300,8 +300,12 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 		return err
 	}
 	// Row-level security: each tenant table must have FORCE ROW LEVEL SECURITY
-	// enabled AND the tenant_isolation policy present, so a dropped/disabled RLS
-	// surfaces as a /readyz failure rather than a silent cross-tenant leak.
+	// enabled AND carry the tenant_isolation policy with its exact shape/predicate,
+	// so a dropped / disabled / weakened RLS policy surfaces as a /readyz failure.
+	// This validates the policy SHAPE only — it does NOT prove RLS is EFFECTIVE at
+	// runtime: a superuser / BYPASSRLS connecting role bypasses RLS even with a
+	// correct policy. That role precondition is a separate app-serving-pool
+	// readiness dimension deferred to #1617 (PR-3b); /readyz here does not assert it.
 	if err := verifyRLS(ctx, pool); err != nil {
 		return err
 	}
@@ -926,18 +930,25 @@ func verifyRLS(ctx context.Context, pool *Pool) error {
 //   - exactly one policy on the table — an EXTRA permissive policy is OR-ed into
 //     the USING filter, widening visible rows across tenants;
 //   - named r.Policy, PERMISSIVE, command ALL, applied to PUBLIC;
-//   - a USING predicate that references the app.tenant_id GUC (rejects a silently
-//     weakened USING(true)); and
-//   - a non-NULL WITH CHECK predicate that also references app.tenant_id (the
-//     write-side cross-tenant guard — a dropped WITH CHECK would let an INSERT
-//     stamp another tenant's id).
+//   - a USING predicate that is EXACTLY the tenant_isolation equality binding the
+//     tenant_id column to the app.tenant_id GUC via NULLIF (see
+//     predicateIsTenantIsolation / rlsTenantPredicateRe for the exact form); and
+//   - a non-NULL WITH CHECK predicate that is the SAME equality (the write-side
+//     cross-tenant guard — a dropped/weakened WITH CHECK would let an INSERT stamp
+//     another tenant's id).
 //
 // Presence-by-name only (the pre-#1622 form) passed all of the above defects.
 // pg_policies renders polcmd='*' as 'ALL', polpermissive as 'PERMISSIVE', PUBLIC
 // roles as "public", and the USING/WITH CHECK expressions via pg_get_expr; the
-// 'app.tenant_id' substring is the stable rendering of
-// current_setting('app.tenant_id', …), so this is a semantic check, not a
-// version-brittle exact-string match (#1622 F1).
+// predicate is matched as a WHOLE against rlsTenantPredicateRe (anchored ^…$), so
+// it pins the tenant_id column ↔ app.tenant_id GUC equality and rejects a wrong
+// column, a missing NULLIF, or a vacuous `… OR true` — not merely a substring
+// mention of app.tenant_id (#1622 F1 round-2).
+//
+// SCOPE: this verifies the RLS schema/policy SHAPE only. It does NOT verify the
+// connecting role's runtime attributes — a superuser / BYPASSRLS role bypasses
+// RLS regardless of a correct policy, and that role precondition is a separate
+// app-serving-pool readiness dimension deferred to #1617 (PR-3b), NOT closed here.
 func verifyRLSPolicy(ctx context.Context, pool *Pool, r expectedRLS) error {
 	const policiesQ = `
 	SELECT policyname, permissive, cmd,
@@ -1001,9 +1012,9 @@ func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
 			"schema_guard: row-security policy is not applied to PUBLIC",
 			rlsPolicyShapeDetails(r, fmt.Sprintf("roles=%q want public", p.roles))...)
 	}
-	if !referencesTenantGUC(p.qual) {
+	if !predicateIsTenantIsolation(p.qual) {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
-			"schema_guard: row-security USING predicate does not reference app.tenant_id",
+			"schema_guard: row-security USING predicate is not the tenant_isolation equality",
 			rlsPolicyShapeDetails(r, fmt.Sprintf("using=%q", p.qual))...)
 	}
 	if p.withCheck == "" {
@@ -1011,20 +1022,41 @@ func checkRLSPolicyShape(r expectedRLS, policies []rlsPolicyRow) error {
 			"schema_guard: row-security policy is missing WITH CHECK",
 			rlsPolicyShapeDetails(r, "with_check is NULL")...)
 	}
-	if !referencesTenantGUC(p.withCheck) {
+	if !predicateIsTenantIsolation(p.withCheck) {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
-			"schema_guard: row-security WITH CHECK predicate does not reference app.tenant_id",
+			"schema_guard: row-security WITH CHECK predicate is not the tenant_isolation equality",
 			rlsPolicyShapeDetails(r, fmt.Sprintf("with_check=%q", p.withCheck))...)
 	}
 	return nil
 }
 
-// referencesTenantGUC reports whether a policy predicate reads the app.tenant_id
-// GUC. pg_get_expr renders current_setting('app.tenant_id', …) with the literal
-// 'app.tenant_id' (a stable substring across PG versions); a vacuous USING(true)
-// / WITH CHECK(true) renders without it, so this rejects a disabled tenant filter.
-func referencesTenantGUC(expr string) bool {
-	return strings.Contains(strings.ToLower(expr), "app.tenant_id")
+// rlsTenantPredicateRe pins a policy predicate to EXACTLY the migration-052
+// tenant_isolation equality, modulo PG's deparse rendering (whitespace, ::type
+// casts, an optional outer paren pair):
+//
+//	tenant_id = NULLIF(current_setting('app.tenant_id', true), '')
+//
+// The anchors (^…$) make it a WHOLE-predicate match, not a substring test, so it
+// rejects every weakening a substring check let through (#1622 F1 round-2):
+//
+//   - USING(true) / WITH CHECK(true)        — no tenant_id equality at all;
+//   - other_col = current_setting(…)        — binds the WRONG column;
+//   - tenant_id = current_setting(…)        — missing NULLIF (empty-GUC no longer
+//     maps to NULL → fail-closed semantics lost);
+//   - (tenant_id = NULLIF(…)) OR true       — vacuous; the trailing `OR true`
+//     breaks the ^…$ whole-match.
+//
+// It is deliberately tolerant of the cast/whitespace/outer-paren rendering that
+// varies across PG versions (so the positive case does not false-fail at /readyz)
+// while pinning the load-bearing token structure. A mismatch fails closed.
+var rlsTenantPredicateRe = regexp.MustCompile(
+	`^\s*\(?\s*tenant_id\s*=\s*nullif\(\s*current_setting\(\s*'app\.tenant_id'(::\w+)?\s*,\s*true\s*\)\s*,\s*''(::\w+)?\s*\)\s*\)?\s*$`)
+
+// predicateIsTenantIsolation reports whether a USING / WITH CHECK predicate is the
+// exact tenant_isolation equality (see rlsTenantPredicateRe). pg_get_expr lowercases
+// keywords inconsistently across versions, so the input is lowercased first.
+func predicateIsTenantIsolation(expr string) bool {
+	return rlsTenantPredicateRe.MatchString(strings.ToLower(expr))
 }
 
 // policyNames extracts the policy names for an error detail.

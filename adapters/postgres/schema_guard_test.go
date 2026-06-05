@@ -568,6 +568,45 @@ func TestCheckRLSPolicyShape(t *testing.T) {
 		{name: "cmd_not_all", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.cmd = "SELECT" }), wantErr: true},
 		{name: "roles_not_public", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.roles = "gocell_app" }), wantErr: true},
 		{name: "using_true", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.qual = "true" }), wantErr: true},
+		// #1622 F1 round-2: the predicate is matched as a WHOLE equality, so these
+		// weakenings that a mere `app.tenant_id` substring check let through are now
+		// rejected:
+		{
+			// Binds the WRONG column — still mentions app.tenant_id, so a substring
+			// check passed it, but it isolates on other_col, not tenant_id.
+			name: "using_wrong_column",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.qual = "(other_col = NULLIF(current_setting('app.tenant_id'::text, true), ''::text))"
+			}),
+			wantErr: true,
+		},
+		{
+			// Vacuous: `… OR true` is always true. Mentions app.tenant_id but the
+			// anchored ^…$ match rejects the trailing OR.
+			name: "using_or_true",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.qual = "((tenant_id = NULLIF(current_setting('app.tenant_id'::text, true), ''::text)) OR true)"
+			}),
+			wantErr: true,
+		},
+		{
+			// Missing NULLIF: the empty-string GUC no longer maps to NULL, so the
+			// fail-closed (unset GUC → 0 rows) semantics are lost.
+			name: "using_missing_nullif",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.qual = "(tenant_id = current_setting('app.tenant_id'::text, true))"
+			}),
+			wantErr: true,
+		},
+		{
+			// WITH CHECK uses the same predicate funnel — a wrong-column write-side
+			// guard must also be rejected (would allow cross-tenant INSERT).
+			name: "with_check_wrong_column",
+			policies: rlsPolicyWith(func(p *rlsPolicyRow) {
+				p.withCheck = "(other_col = NULLIF(current_setting('app.tenant_id'::text, true), ''::text))"
+			}),
+			wantErr: true,
+		},
 		{name: "missing_with_check", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "" }), wantErr: true},
 		{name: "with_check_true", policies: rlsPolicyWith(func(p *rlsPolicyRow) { p.withCheck = "true" }), wantErr: true},
 	}
