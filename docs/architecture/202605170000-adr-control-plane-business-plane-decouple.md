@@ -13,7 +13,7 @@
 >   map to receiver-type confinement (controlPlaneClock struct). See §Amendment A2.
 > Amended: 2026-06-06 — PR-A8 #1169 (Sweeper → reconcile.Reconciler): the
 >   `runtime/command.SweeperLifecycle` control shell that embodied this ADR's C.1
->   clock split is DELETED; the device-command sweep now runs on a generic
+>   clock split is DELETED; the devicecommand sweep now runs on a generic
 >   `kernel/reconcile.Loop` (kernel Sweeper implements `reconcile.Reconciler`).
 >   The control-plane/business-plane clock split itself is unchanged in substance
 >   but its carrier MOVED: the sealed `controlPlaneClock` + the
