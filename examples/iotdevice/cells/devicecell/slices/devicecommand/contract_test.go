@@ -62,9 +62,12 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 		ID: "dev-1", Name: "sensor-a", Status: "online",
 	})
 
-	// request schema: payload required, commandType optional
+	// request schema: payload required + non-empty (matches Service.Enqueue, which
+	// rejects empty payload — schema must not declare what the handler rejects),
+	// commandType optional
 	c.ValidateRequest(t, []byte(`{"payload":"reboot"}`))
 	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"firmware-update"}`))
+	c.MustRejectRequest(t, []byte(`{"payload":""}`)) // payload minLength 1
 	c.MustRejectRequest(t, []byte(`{"payload":"x","extra":"bad"}`))
 
 	rec := httptest.NewRecorder()
@@ -185,8 +188,9 @@ func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 	// the sync command-bus handler can target a device — see EnqueueCommandAdapter).
 	c.ValidateRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot"}`))
 	c.ValidateRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot","commandType":"firmware-update"}`))
-	c.MustRejectRequest(t, []byte(`{"payload":"reboot"}`))          // missing required deviceId
-	c.MustRejectRequest(t, []byte(`{"deviceId":"","payload":"x"}`)) // deviceId minLength 1
+	c.MustRejectRequest(t, []byte(`{"payload":"reboot"}`))            // missing required deviceId
+	c.MustRejectRequest(t, []byte(`{"deviceId":"","payload":"x"}`))   // deviceId minLength 1
+	c.MustRejectRequest(t, []byte(`{"deviceId":"d-1","payload":""}`)) // payload minLength 1 (Service.Enqueue rejects empty)
 	enqueueResp := `{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
 		`"payload":"reboot","status":"pending","attempt":0,"createdAt":"2026-01-01T00:00:00Z"}}`
 	c.ValidateResponse(t, []byte(enqueueResp))

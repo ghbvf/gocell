@@ -30,6 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
@@ -52,10 +53,59 @@ type contractDoc struct {
 // contractEndpoints mirrors kernel/metadata.EndpointsMeta: actorSubscribers
 // lives under endpoints (not at the top level). Confirmed by all 4 contracts
 // using this field today (event.audit.appended.v1 + 3 example events).
+//
+// The per-kind provider field differs (server/publisher/handler/provider); the
+// DEAD-CONTRACT-01 provider check must read the SAME field metadata's
+// ContractMeta.ProviderEndpoint reads for that kind — see contractProviderEndpoint.
 type contractEndpoints struct {
 	Server           string   `yaml:"server"`
 	Publisher        string   `yaml:"publisher"`
+	Handler          string   `yaml:"handler"`  // kind:command provider (mirrors metadata)
+	Provider         string   `yaml:"provider"` // kind:projection provider (mirrors metadata)
+	Invokers         []string `yaml:"invokers"`
 	ActorSubscribers []string `yaml:"actorSubscribers"`
+}
+
+// contractProviderEndpoint returns the provider endpoint for a contract, reading
+// the per-kind provider field exactly as kernel/metadata.ContractMeta.ProviderEndpoint
+// does (http/grpc/saga→server, event→publisher, command→handler,
+// projection→provider, webhook→ownerCell). DEAD-CONTRACT-01 uses this instead of a
+// hardcoded endpoints.server fallback so a valid contract declaring only its
+// kind-correct provider (e.g. a kind:command with endpoints.handler and no ownerCell)
+// is not false-flagged. Parity with metadata is locked by
+// TestDeadContractCover_ProviderEndpointMirrorsMetadata — if metadata's per-kind
+// provider semantics change, that test fails until this mirror is updated.
+func contractProviderEndpoint(c contractDoc) string {
+	switch c.Kind {
+	case "http", "grpc", "saga":
+		return c.Endpoints.Server
+	case "event":
+		return c.Endpoints.Publisher
+	case "command":
+		return c.Endpoints.Handler
+	case "projection":
+		return c.Endpoints.Provider
+	case "webhook":
+		return c.OwnerCell
+	default:
+		return ""
+	}
+}
+
+// contractProviderFieldLabel names the provider endpoint field for a kind, for
+// human-readable DEAD-CONTRACT-01 diagnostics (keeps the message pointing at the
+// exact field a fix should populate).
+func contractProviderFieldLabel(kind string) string {
+	switch kind {
+	case "command":
+		return "endpoints.handler"
+	case "projection":
+		return "endpoints.provider"
+	case "event":
+		return "endpoints.publisher"
+	default:
+		return "endpoints.server"
+	}
 }
 
 var (
@@ -1018,9 +1068,12 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 // Every lifecycle: active contract.yaml must have an entry point:
 //   - http → a cell impl of its generated Service interface (reuses HANDLER logic)
 //   - event → endpoints.publisher != "" OR ≥1 subscriber slice OR ≥1 actorSubscriber
-//   - command → ownerCell/server non-empty AND (when codegen:true) a cell impl of
-//     its generated Handler interface (the #1580 reverse-coverage strengthening).
-//   - All other kinds → ownerCell or endpoints.server non-empty.
+//   - command → ownerCell or endpoints.handler non-empty AND (when codegen:true)
+//     a cell impl of its generated Handler interface (the #1580 reverse-coverage
+//     strengthening).
+//   - All other kinds → ownerCell or the kind-correct provider endpoint
+//     (projection→endpoints.provider, grpc/saga→endpoints.server), resolved via
+//     contractProviderEndpoint to mirror metadata ProviderEndpoint (the #1647 F2 fix).
 //
 // Floor scan: asserts ≥40 contracts loaded (defense against broken YAML scan).
 // Today's count: 47 active contracts (2026-05-28); floor is conservative to
@@ -1362,17 +1415,17 @@ func TestDeadContractCover(t *testing.T) {
 				})
 			}
 		case "command":
-			// Every command contract still needs an ownerCell/server (covers
-			// codegen:false siblings too).
-			ownerCell := c.OwnerCell
-			if ownerCell == "" {
-				ownerCell = c.Endpoints.Server
-			}
-			if ownerCell == "" {
+			// Every command contract needs a provider: ownerCell or the command's
+			// provider endpoint (endpoints.handler, per metadata ProviderEndpoint —
+			// covers codegen:false siblings too). Using contractProviderEndpoint
+			// rather than endpoints.server avoids false-flagging a kind:command that
+			// declares only endpoints.handler (ownerCell deriving from handler).
+			if c.OwnerCell == "" && contractProviderEndpoint(c) == "" {
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
 					Line: 1,
-					Message: "active command contract " + c.ID + " has no ownerCell or endpoints.server declared " +
+					Message: "active command contract " + c.ID + " has no ownerCell or " +
+						contractProviderFieldLabel(c.Kind) + " declared " +
 						"(change lifecycle to draft/deprecated if unused)",
 				})
 			}
@@ -1391,16 +1444,16 @@ func TestDeadContractCover(t *testing.T) {
 				})
 			}
 		default:
-			// projection or any other kind: require ownerCell or server
-			ownerCell := c.OwnerCell
-			if ownerCell == "" {
-				ownerCell = c.Endpoints.Server
-			}
-			if ownerCell == "" {
+			// projection / grpc / saga / any other kind: require ownerCell or the
+			// kind-correct provider endpoint (projection→endpoints.provider,
+			// grpc/saga→endpoints.server), read via contractProviderEndpoint so the
+			// per-kind provider field matches metadata ProviderEndpoint.
+			if c.OwnerCell == "" && contractProviderEndpoint(c) == "" {
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
 					Line: 1,
-					Message: "active " + c.Kind + " contract " + c.ID + " has no ownerCell or endpoints.server declared " +
+					Message: "active " + c.Kind + " contract " + c.ID + " has no ownerCell or " +
+						contractProviderFieldLabel(c.Kind) + " declared " +
 						"(change lifecycle to draft/deprecated if unused)",
 				})
 			}
@@ -1460,6 +1513,49 @@ func TestDeadContractCover_DetectsUnimplementedCommand(t *testing.T) {
 		if !strings.Contains(d.Message, "no cell implementation of its generated Handler") {
 			t.Errorf("DEAD-CONTRACT-01 unimplemented-command self-check: diagnostic missing expected text, got: %q", d.Message)
 		}
+	}
+}
+
+// TestDeadContractCover_ProviderEndpointMirrorsMetadata locks contractProviderEndpoint
+// (the DEAD-CONTRACT-01 per-kind provider resolution) to
+// kernel/metadata.ContractMeta.ProviderEndpoint. DEAD-CONTRACT-01 does a lightweight
+// YAML content scan with its own contractDoc struct rather than parsing full
+// metadata, so the provider-field-per-kind mapping is duplicated; this parity test
+// prevents that local mirror from drifting from the canonical semantics — the #1647
+// F2 root cause was the command (and projection) provider field silently diverging to
+// endpoints.server, false-flagging a valid kind:command/projection that declares only
+// its kind-correct provider. If metadata's per-kind provider changes, this fails until
+// contractProviderEndpoint (+ the contractEndpoints field) is updated to match.
+func TestDeadContractCover_ProviderEndpointMirrorsMetadata(t *testing.T) {
+	t.Parallel()
+	const owner, ep = "owner-cell", "provider-cell"
+	for _, kind := range []string{"http", "grpc", "saga", "event", "command", "projection", "webhook", "unknownkind"} {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			// Populate the kind-correct provider field on both the local contractDoc
+			// and the canonical ContractMeta; both must resolve to the same provider.
+			doc := contractDoc{Kind: kind, OwnerCell: owner}
+			meta := metadata.ContractMeta{Kind: kind, OwnerCell: owner}
+			switch kind {
+			case "http", "grpc", "saga":
+				doc.Endpoints.Server, meta.Endpoints.Server = ep, ep
+			case "event":
+				doc.Endpoints.Publisher, meta.Endpoints.Publisher = ep, ep
+			case "command":
+				doc.Endpoints.Handler, meta.Endpoints.Handler = ep, ep
+			case "projection":
+				doc.Endpoints.Provider, meta.Endpoints.Provider = ep, ep
+			case "webhook", "unknownkind":
+				// webhook provider = ownerCell; unknownkind → "" both sides.
+			}
+			got, want := contractProviderEndpoint(doc), meta.ProviderEndpoint()
+			if got != want {
+				t.Errorf("contractProviderEndpoint(kind=%s)=%q but metadata ProviderEndpoint()=%q — "+
+					"the DEAD-CONTRACT-01 provider mirror drifted from kernel/metadata; update "+
+					"contractProviderEndpoint (+ contractEndpoints field) to match", kind, got, want)
+			}
+		})
 	}
 }
 
