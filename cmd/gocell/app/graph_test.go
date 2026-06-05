@@ -44,12 +44,18 @@ func repoRoot(t *testing.T) string {
 // runs in the worktree root). We assert on shape rather than counts to
 // keep the test stable as new packages land.
 func TestRunGraphJSON(t *testing.T) {
-	t.Parallel()
+	// Not parallel (t.Setenv): `gocell graph` loads the real-repo package graph in
+	// ModeWorkspace, which fail-closes under GOWORK=off. Post-#1557 cmd/gocell is a
+	// go.work satellite whose tests run via hack/verify-workspace-test.sh under
+	// GOWORK=off; point GOWORK at the repo's own go.work so the workspace load works
+	// regardless of the ambient GOWORK (same pattern as useWorkspaceMultiModuleFixture).
+	root := repoRoot(t)
+	t.Setenv("GOWORK", filepath.Join(root, "go.work"))
 	var buf bytes.Buffer
 	if err := executeGraph(graphOptions{
 		Format:  graphFormatJSON,
 		Pattern: "github.com/ghbvf/gocell/tools/depgraph/...",
-		Root:    repoRoot(t),
+		Root:    root,
 		Out:     &buf,
 	}); err != nil {
 		t.Fatalf("executeGraph: %v", err)
@@ -89,12 +95,15 @@ func TestRunGraphJSON(t *testing.T) {
 }
 
 func TestRunGraphDOT(t *testing.T) {
-	t.Parallel()
+	// Not parallel (t.Setenv): see TestRunGraphJSON — graph uses ModeWorkspace which
+	// fail-closes under hack/verify-workspace-test.sh's GOWORK=off (#1557 satellite).
+	root := repoRoot(t)
+	t.Setenv("GOWORK", filepath.Join(root, "go.work"))
 	var buf bytes.Buffer
 	if err := executeGraph(graphOptions{
 		Format:  graphFormatDOT,
 		Pattern: "github.com/ghbvf/gocell/tools/depgraph/...",
-		Root:    repoRoot(t),
+		Root:    root,
 		Out:     &buf,
 	}); err != nil {
 		t.Fatalf("executeGraph: %v", err)
