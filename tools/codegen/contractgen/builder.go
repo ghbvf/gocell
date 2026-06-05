@@ -1079,8 +1079,8 @@ func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	if !token.IsIdentifier(g.Method) || !token.IsExported(g.Method) {
 		return fmt.Errorf("contractgen build: contract %q grpc method %q must be an exported Go identifier", contract.ID, g.Method)
 	}
-	if i := strings.IndexFunc(g.Service, unicode.IsControl); i >= 0 {
-		return fmt.Errorf("contractgen build: contract %q grpc service contains a control character at byte %d", contract.ID, i)
+	if _, err := metadata.GRPCServiceGoName(g.Service); err != nil {
+		return fmt.Errorf("contractgen build: contract %q grpc service: %w", contract.ID, err)
 	}
 	if err := validateGRPCProtoPath(contract.ID, g.Proto); err != nil {
 		return err

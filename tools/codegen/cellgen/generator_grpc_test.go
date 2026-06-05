@@ -467,8 +467,10 @@ func TestEnrichGrpcServicesWithProtoInfo_ErrorPath(t *testing.T) {
 	}
 }
 
-// TestGrpcLastSegment covers the FQN → simple-name extraction used to derive
-// RegisterFunc from the proto service FQN.
+// TestGrpcLastSegment covers the FQN → simple-name extraction (pure segment
+// extraction, no Go-identifier validation). Note: "a.b.c.d" correctly extracts
+// "d" here; whether "d" is a valid exported Go identifier is validated separately
+// by metadata.GRPCServiceGoName (see TestGRPCServiceGoName in kernel/metadata).
 func TestGrpcLastSegment(t *testing.T) {
 	t.Parallel()
 
@@ -480,6 +482,8 @@ func TestGrpcLastSegment(t *testing.T) {
 		{"DeviceCommandService", "DeviceCommandService"},
 		{"", ""},
 		{"device.command.v1.DeviceCommandService", "DeviceCommandService"},
+		// "d" is the correct last segment; metadata.GRPCServiceGoName rejects it
+		// as unexported — grpcLastSegment itself is a pure extractor.
 		{"a.b.c.d", "d"},
 	}
 

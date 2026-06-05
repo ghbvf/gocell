@@ -100,19 +100,54 @@ service S {
 	}
 }
 
-func TestReadProtoTypeInfo_GoPackagePathWhitespace(t *testing.T) {
+// TestReadProtoTypeInfo_GoPackagePathInvalid covers module.CheckImportPath rejection.
+// Whitespace (space) is invalid per module.CheckImportPath; the error text now
+// comes from that authoritative checker rather than our prior whitespace-only guard.
+func TestReadProtoTypeInfo_GoPackagePathInvalid(t *testing.T) {
 	t.Parallel()
-	src := `syntax = "proto3";
+
+	cases := []struct {
+		name    string
+		path    string
+		wantErr string
+	}{
+		{
+			name:    "whitespace in path",
+			path:    "github.com/ghbvf/gocell/generated/ grpc",
+			wantErr: "invalid",
+		},
+		{
+			name:    "backslash in path",
+			path:    `github.com/ghbvf/gocell/generated\grpc`,
+			wantErr: "invalid",
+		},
+		{
+			name:    "leading dot segment",
+			path:    "./github.com/ghbvf/gocell/generated/grpc",
+			wantErr: "invalid",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src := `syntax = "proto3";
 package device.command.v1;
-option go_package = "github.com/ghbvf/gocell/generated/ grpc;commandv1";
+option go_package = "` + tc.path + `;commandv1";
 service S {
   rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
 }
 `
-	path := writeTempProto(t, src)
-	_, err := ReadProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
-	if err == nil || !strings.Contains(err.Error(), "whitespace") {
-		t.Fatalf("expected import-path whitespace error, got %v", err)
+			path := writeTempProto(t, src)
+			_, err := ReadProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
+			if err == nil {
+				t.Fatalf("expected error for invalid import path %q, got nil", tc.path)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
 	}
 }
 

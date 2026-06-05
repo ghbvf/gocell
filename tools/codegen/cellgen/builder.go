@@ -889,11 +889,23 @@ func buildGrpcServiceSpecFromCU(
 			))
 	}
 
+	simpleName, err := metadata.GRPCServiceGoName(g.Service)
+	if err != nil {
+		return GrpcServiceGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: grpc contract endpoints.grpc.service is not a valid exported Go name",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", cu.Contract),
+			),
+			errcode.WithInternal(errcode.InternalAttr("cause", err)))
+	}
+
 	return GrpcServiceGenSpec{
 		ContractID:    cu.Contract,
 		SliceID:       sliceID,
 		HandlerField:  fieldName,
-		RegisterFunc:  "Register" + grpcLastSegment(g.Service) + "Server",
+		RegisterFunc:  "Register" + simpleName + "Server",
 		ListenerConst: "cell.PrimaryListener",
 		ProtoRel:      g.Proto,
 		Service:       g.Service,

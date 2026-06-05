@@ -6,6 +6,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"golang.org/x/mod/module"
 )
 
 // ProtoTypeInfo is the proto identity resolved from a .proto file for one rpc
@@ -168,8 +170,8 @@ func parseGoPackage(text string) (importPath, alias string, err error) {
 	if !ok || path == "" || alias == "" {
 		return "", "", fmt.Errorf(`proto: option go_package %q must be "<import-path>;<alias>"`, m[1])
 	}
-	if strings.ContainsAny(path, " \t\r\n") {
-		return "", "", fmt.Errorf("proto: go_package import path %q must not contain whitespace", path)
+	if err := module.CheckImportPath(path); err != nil {
+		return "", "", fmt.Errorf("proto: go_package import path %q invalid: %w", path, err)
 	}
 	if !token.IsIdentifier(alias) {
 		return "", "", fmt.Errorf("proto: go_package alias %q must be a valid Go identifier", alias)

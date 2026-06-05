@@ -149,9 +149,10 @@ func TestIsValidMetadataText(t *testing.T) {
 	}
 }
 
-// TestValidateGRPCProtoPath exercises the single-source 4-guard validator that
-// both governance FMT-37 and contractgen share. Coverage target: all four guard
-// branches (empty / no-prefix / control-rune / traversal) and the happy path.
+// TestValidateGRPCProtoPath exercises the single-source 5-guard validator that
+// both governance FMT-37 and contractgen share. Coverage target: all five guard
+// branches (empty / no-prefix / control-rune / traversal / subtree-escape) and
+// the happy paths including benign intra-subtree "..".
 // kernel/ coverage requirement: ≥ 90% (table-driven, per CLAUDE.md).
 func TestValidateGRPCProtoPath(t *testing.T) {
 	t.Parallel()
@@ -169,6 +170,13 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 		{
 			name:  "valid nested path",
 			proto: "contracts/grpc/access/session/verify/v1/session_verify.proto",
+		},
+		// Guard 5 benign case: intra-subtree ".." that cleans to a valid path
+		// inside contracts/grpc/ must NOT be rejected.
+		{
+			name:  "intra-subtree dotdot accepted",
+			proto: "contracts/grpc/device/../device/x.proto",
+			// cleans to "contracts/grpc/device/x.proto" — still inside subtree → nil
 		},
 
 		// Guard 1: non-empty.
@@ -212,6 +220,15 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 			proto:   "contracts/grpc/../../../etc/x",
 			wantErr: "local path",
 		},
+
+		// Guard 5: subtree escape after lexical clean. Passes HasPrefix (guard 2)
+		// and IsLocal (guard 4), but cleans to contracts/http/x.proto which is
+		// OUTSIDE the contracts/grpc/ subtree.
+		{
+			name:    "cross-subtree dotdot rejected",
+			proto:   "contracts/grpc/../http/x.proto",
+			wantErr: "escapes the",
+		},
 	}
 
 	for _, tc := range cases {
@@ -230,6 +247,91 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("ValidateGRPCProtoPath(%q) = %q, want substring %q", tc.proto, err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestGRPCServiceGoName exercises the single-source helper that extracts and
+// validates the Go-exported simple name from a proto service FQN.
+// kernel/ coverage requirement: ≥ 90% (table-driven, per CLAUDE.md).
+func TestGRPCServiceGoName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		service  string
+		wantName string
+		wantErr  string // substring; "" = expect nil error
+	}{
+		// Valid — exported Go identifiers.
+		{
+			name:     "FQN exported service",
+			service:  "device.command.v1.DeviceCommandService",
+			wantName: "DeviceCommandService",
+		},
+		{
+			name:     "unqualified exported name",
+			service:  "DeviceCommandService",
+			wantName: "DeviceCommandService",
+		},
+		{
+			name:     "short FQN",
+			service:  "a.B",
+			wantName: "B",
+		},
+
+		// Invalid — unexported (lowercase start).
+		{
+			name:    "lowercase start rejected",
+			service: "device.command.v1.fooService",
+			wantErr: "not exported",
+		},
+		{
+			name:    "all lowercase rejected",
+			service: "foo",
+			wantErr: "not exported",
+		},
+
+		// Invalid — not a valid identifier.
+		{
+			name:    "hyphenated name rejected",
+			service: "Foo-Bar",
+			wantErr: "not a valid Go identifier",
+		},
+
+		// Invalid — empty simple name.
+		{
+			name:    "empty service rejected",
+			service: "",
+			wantErr: "empty",
+		},
+		{
+			name:    "trailing dot yields empty simple name",
+			service: "device.command.v1.",
+			wantErr: "empty",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := metadata.GRPCServiceGoName(tc.service)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("GRPCServiceGoName(%q) = %v, want nil", tc.service, err)
+				}
+				if got != tc.wantName {
+					t.Fatalf("GRPCServiceGoName(%q) = %q, want %q", tc.service, got, tc.wantName)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("GRPCServiceGoName(%q) = %q, want error containing %q", tc.service, got, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("GRPCServiceGoName(%q) error = %q, want substring %q", tc.service, err.Error(), tc.wantErr)
 			}
 		})
 	}
