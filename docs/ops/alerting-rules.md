@@ -1172,10 +1172,11 @@ specified series).
 | 指标 | 语义 |
 |------|------|
 | `gocell_session_cache_hits_total{cell}` | 命中：Redis 返回合法 entry，无需查内层 store |
-| `gocell_session_cache_misses_total{cell}` | 未命中：Redis 无数据或数据无效，回落内层 store；**error 是 miss 的子集** |
-| `gocell_session_cache_errors_total{cell}` | 缓存访问错误（Redis GET/SET/DEL 失败、JSON 损坏、schema 校验失败）；fail-safe，不传播给调用方 |
+| `gocell_session_cache_misses_total{cell}` | 未命中：Redis 无数据或数据无效，回落内层 store；**读路径 error 是 miss 的子集** |
+| `gocell_session_cache_errors_total{cell}` | **读路径**缓存访问错误（Redis GET/SET 失败、JSON 损坏、schema 校验失败）；fail-safe，不传播给调用方 |
+| `gocell_session_cache_revoke_del_errors_total{cell}` | **单 session logout（#796）的 post-commit cache-DEL 失败**——与读路径错误正交的独立序列（DEL 在 commit 后的 hook 里触发、不在任何 Get 内，无配对 miss）。非零速率是**安全相关**信号：被登出 session 的失效延迟从近零退化到 ≤ TTL（stale ≤ TTL，#796 已接受的兜底窗口） |
 
-关键等式：`hits + misses = Get() 总调用次数`；`errors ⊆ misses`（每次 error 同时计一次 miss）。
+关键等式：`hits + misses = Get() 总调用次数`；`errors ⊆ misses`（每次**读路径** error 同时计一次 miss）。`revoke_del_errors` **不**计入 `errors` / `misses`——它是独立序列，刻意如此以保持读路径 `errors ⊆ misses` 不变式（折进 `errors` 会让 `errors/misses` 可 >1）。
 
 ### PromQL 示例
 
@@ -1193,6 +1194,9 @@ rate(gocell_session_cache_errors_total{cell="accesscore"}[5m])
 rate(gocell_session_cache_errors_total{cell="accesscore"}[5m])
   /
 rate(gocell_session_cache_misses_total{cell="accesscore"}[5m])
+
+# 单 session logout 失效降级率（#796 post-commit DEL 失败；安全相关，独立序列）
+rate(gocell_session_cache_revoke_del_errors_total{cell="accesscore"}[5m])
 ```
 
 ### 告警建议
@@ -1208,8 +1212,28 @@ rate(gocell_session_cache_misses_total{cell="accesscore"}[5m])
     summary: Session cache error rate elevated for {{ $labels.cell }}
     description: |
       session_cache_errors_total spike may indicate Redis degradation.
-      Errors are fail-safe (fall through to inner store), but sustained
+      Read-path errors are fail-safe (fall through to inner store), but sustained
       errors bypass the cache entirely and increase inner-store load.
+
+# 安全相关：单 session logout 的 post-commit DEL 失败（#796）。任何非零持续速率都意味着
+# 被登出的 session 在 cache 中 stale ≤ TTL（失效从近零退化到 TTL 兜底）。阈值设为 0 +
+# 短 for，因为这是安全降级而非普通 cache 抖动。
+- alert: SessionCacheRevokeDelFailures
+  expr: |
+    rate(gocell_session_cache_revoke_del_errors_total{cell="accesscore"}[5m]) > 0
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: Session logout cache-eviction (DEL) failing for {{ $labels.cell }}
+    description: |
+      session_cache_revoke_del_errors_total is non-zero: single-session logout's
+      post-commit Redis DEL is failing, so logged-out sessions remain cache-valid
+      until TTL expiry (stale ≤ GOCELL_SESSION_CACHE_TTL — the accepted #796
+      backstop, NOT epoch fail-closed: single-session Revoke does not bump
+      users.authz_epoch). Investigate Redis availability. For zero-tolerance stale
+      requirements (e.g. active breach response) disable the cache entirely by
+      unsetting GOCELL_SESSION_CACHE_TTL.
 ```
 
 > **golden 行为**：metrics-schema golden（`assemblies/corebundle/generated/metrics-schema.yaml`

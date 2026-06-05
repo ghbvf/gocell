@@ -25,9 +25,9 @@ func TestNewSessionCacheCollector_RejectsEmptyCellID(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestNewSessionCacheCollector_RegistersThreeCounters asserts exactly the three
+// TestNewSessionCacheCollector_RegistersFourCounters asserts exactly the four
 // session-cache counters are registered, each with the single `cell` label.
-func TestNewSessionCacheCollector_RegistersThreeCounters(t *testing.T) {
+func TestNewSessionCacheCollector_RegistersFourCounters(t *testing.T) {
 	p := newSagaSpyProvider()
 	_, err := obmetrics.NewSessionCacheCollector(p, "accesscore")
 	require.NoError(t, err)
@@ -36,6 +36,7 @@ func TestNewSessionCacheCollector_RegistersThreeCounters(t *testing.T) {
 		"session_cache_hits_total",
 		"session_cache_misses_total",
 		"session_cache_errors_total",
+		"session_cache_revoke_del_errors_total",
 	}
 	for _, name := range want {
 		_, ok := p.counterNames[name]
@@ -75,10 +76,12 @@ func TestSessionCacheCollector_RecordsEmitWithCellLabel(t *testing.T) {
 	c.RecordHit(ctx)
 	c.RecordMiss(ctx)
 	c.RecordError(ctx)
+	c.RecordRevokeDelError(ctx)
 
 	assert.Len(t, p.counterOps["session_cache_hits_total"], 2)
 	assert.Len(t, p.counterOps["session_cache_misses_total"], 1)
 	assert.Len(t, p.counterOps["session_cache_errors_total"], 1)
+	assert.Len(t, p.counterOps["session_cache_revoke_del_errors_total"], 1)
 	for _, rec := range p.counterOps["session_cache_hits_total"] {
 		assert.Equal(t, "accesscore", rec.labels["cell"])
 	}
@@ -92,5 +95,6 @@ func TestSessionCacheCollector_NilReceiverSafe(t *testing.T) {
 		c.RecordHit(context.Background())
 		c.RecordMiss(context.Background())
 		c.RecordError(context.Background())
+		c.RecordRevokeDelError(context.Background())
 	})
 }

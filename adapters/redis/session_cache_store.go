@@ -81,7 +81,10 @@ import (
 //     row is already revoked when the hook runs, so any concurrent lazyPopulate
 //     reads the revoked state and skips the write (revoked views are never
 //     cached). The TTL remains a fail-safe backstop: if the after-commit DEL
-//     itself fails (best-effort, logged at Warn) the entry still expires at TTL.
+//     itself fails (best-effort, logged at Warn + counted as
+//     session_cache_revoke_del_errors_total) the entry still expires at TTL —
+//     a stale ≤ TTL window that is the accepted degraded behavior on this path
+//     (single-session Revoke does not bump the epoch, so TTL is the only floor).
 //     RevokeForSubject paths (credentialinvalidate.Apply) have an independent,
 //     equally-near-zero floor — the co-tx user.AuthzEpoch bump fails the cached
 //     AuthzEpochAtIssue check in sessionvalidate.go regardless of cache state.
@@ -104,13 +107,22 @@ import (
 // committing goroutine before RunInTx returns). Any concurrent Get that arrives
 // between inner.Revoke and commit cannot re-populate the cache (the row is
 // still uncommitted) and will fall through to inner; a Get after commit
-// reads the revoked row and skips lazyPopulate. Should the DEL itself fail
-// (best-effort, logged at Warn), the AuthzEpochAtIssue check in sessionvalidate
-// provides an independent epoch-based fail-closed safety net, and the entry
-// expires at TTL. Together these two layers make disabling the cache
-// unnecessary for normal security postures. For zero-tolerance stale cache
-// requirements (e.g. an ongoing breach investigation where every session must be
-// invalidated atomically), you may disable the cache by leaving
+// reads the revoked row and skips lazyPopulate.
+//
+// DEL-failure backstop is TTL, not epoch. Should the after-commit DEL itself
+// fail (best-effort, logged at Warn + counted as
+// session_cache_revoke_del_errors_total), the logged-out session's cached active
+// ValidateView can still satisfy sessionvalidate (RevokedAt == nil, epoch
+// unchanged) and be served on a cache HIT until the entry expires at TTL.
+// Single-session Revoke does NOT bump users.authz_epoch, so the epoch-based
+// fail-closed net does NOT apply on this path — that net is exclusive to
+// RevokeForSubject / credential invalidation (which bumps the epoch co-tx, see
+// §Threat model). The bounded residual (stale ≤ TTL, capped by
+// GOCELL_SESSION_CACHE_TTL) is the accepted degraded behavior of #796's TTL
+// backstop; operators alert on session_cache_revoke_del_errors_total to detect
+// sustained DEL failures (docs/ops/alerting-rules.md). For zero-tolerance stale
+// cache requirements (e.g. an ongoing breach investigation where every session
+// must be invalidated atomically), disable the cache by leaving
 // GOCELL_SESSION_CACHE_TTL empty — this removes the cache entirely from the
 // trust path.
 //
@@ -139,6 +151,12 @@ type cacheMetricsRecorder interface {
 	RecordHit(ctx context.Context)
 	RecordMiss(ctx context.Context)
 	RecordError(ctx context.Context)
+	// RecordRevokeDelError records a post-commit revoke cache-DEL failure
+	// (#796). It is a DISTINCT signal from RecordError: a read-path error is
+	// always paired with a miss (errors ⊆ misses), whereas a revoke DEL
+	// failure fires outside any Get and has no paired miss, so it must not
+	// pollute the read-path errors_total series.
+	RecordRevokeDelError(ctx context.Context)
 }
 
 // nopCacheMetrics is the disabled-metrics fallback. Metrics are an optional
@@ -146,9 +164,10 @@ type cacheMetricsRecorder interface {
 // recorder) must still function — these no-ops carry that decision.
 type nopCacheMetrics struct{}
 
-func (nopCacheMetrics) RecordHit(context.Context)   {}
-func (nopCacheMetrics) RecordMiss(context.Context)  {}
-func (nopCacheMetrics) RecordError(context.Context) {}
+func (nopCacheMetrics) RecordHit(context.Context)            {}
+func (nopCacheMetrics) RecordMiss(context.Context)           {}
+func (nopCacheMetrics) RecordError(context.Context)          {}
+func (nopCacheMetrics) RecordRevokeDelError(context.Context) {}
 
 // sessionCacheKey is the per-id key prefix written under the Cache's
 // KeyNamespace. Final Redis key = "<namespace>:session:<sessionID>".
@@ -275,8 +294,9 @@ func (s *CachingSessionStore) Get(ctx context.Context, id string) (*session.Vali
 		return view, nil
 	}
 	// Every non-hit (empty, Redis error, corrupt, invalid) is a miss for
-	// hit-rate purposes; readCacheEntry has already recorded an error metric
-	// for the error sub-cases (errors ⊆ misses, orthogonal series).
+	// hit-rate purposes; readCacheEntry has already recorded a read-path error
+	// metric for the error sub-cases (read-path errors ⊆ misses; the revoke DEL
+	// failure is a separate series — see RecordRevokeDelError).
 	s.metrics.RecordMiss(ctx)
 	view, err := s.inner.Get(ctx, id)
 	if err != nil {
@@ -378,10 +398,18 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 // in ctxutil.WithDetachedTimeout(2s) so a slow Redis cannot block the
 // committing goroutine / RunInTx return.
 //
-// Contract: Revoke MUST be invoked within a RunInTx scope (sessionlogout's
-// persistRevoke wraps it). RegisterAfterCommit panics if no ambient after-commit
-// registry is present — calling Revoke outside a transaction is a programmer
-// error, surfaced loudly rather than silently dropping the eviction.
+// Contract (decorator-specific LSP narrowing): Revoke MUST be invoked within a
+// RunInTx scope (sessionlogout's persistRevoke wraps it). This is STRICTER than
+// the general session.Store.Revoke contract (runtime/auth/session.Store) — the
+// bare PG / mem store has no tx-only precondition — so this decorator narrows
+// the interface for its own implementations only. RegisterAfterCommit panics if
+// no ambient after-commit registry is present: calling Revoke outside a
+// transaction is a programmer error, surfaced loudly rather than silently
+// dropping the eviction. The shared storetest conformance suite, which calls
+// Revoke bare, supplies the unit-of-work scope via the test-only
+// txScopedRevokeStore bridge (session_cache_store_conformance_test.go). Making
+// this precondition compile-enforced (a typed tx-scoped revoke capability rather
+// than a runtime panic) is the deferred Hard-upgrade tracked at gh #1615.
 //
 // archtest CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01 locks the shape: the body
 // must delegate to s.inner.Revoke, and any s.cache.Delete/Set must be lexically
@@ -397,7 +425,11 @@ func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
 		hookCtx, cancel := ctxutil.WithDetachedTimeout(hookCtx, sessionCacheRevokeDELTimeout)
 		defer cancel()
 		if delErr := s.cache.Delete(hookCtx, key); delErr != nil {
-			s.metrics.RecordError(hookCtx)
+			// Distinct from the read-path RecordError: a revoke DEL failure has
+			// no paired RecordMiss (it fires outside any Get), so counting it
+			// here keeps the read-path errors ⊆ misses contract intact while
+			// still surfacing the security-relevant degraded invalidation.
+			s.metrics.RecordRevokeDelError(hookCtx)
 			s.logger.Warn(sessionCacheLogPrefix+"post-commit revoke DEL failed; entry expires at TTL",
 				slog.String("session_id", id),
 				slog.Any("error", delErr))

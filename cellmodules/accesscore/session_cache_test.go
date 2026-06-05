@@ -163,6 +163,7 @@ func TestWrapSessionStoreWithCache_ValidTTLWithRedis_ReturnsCachingStore(t *test
 		"session_cache_hits_total",
 		"session_cache_misses_total",
 		"session_cache_errors_total",
+		"session_cache_revoke_del_errors_total",
 	} {
 		_, registered := spy.counterNames[name]
 		assert.Truef(t, registered, "counter %q must be registered by NewSessionCacheCollector", name)

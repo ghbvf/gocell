@@ -15,12 +15,13 @@ import (
 // decorator's hit/miss/error wiring is observable without a real metrics
 // provider.
 type spyCacheMetrics struct {
-	hits, misses, errs int
+	hits, misses, errs, revokeDelErrs int
 }
 
-func (s *spyCacheMetrics) RecordHit(context.Context)   { s.hits++ }
-func (s *spyCacheMetrics) RecordMiss(context.Context)  { s.misses++ }
-func (s *spyCacheMetrics) RecordError(context.Context) { s.errs++ }
+func (s *spyCacheMetrics) RecordHit(context.Context)            { s.hits++ }
+func (s *spyCacheMetrics) RecordMiss(context.Context)           { s.misses++ }
+func (s *spyCacheMetrics) RecordError(context.Context)          { s.errs++ }
+func (s *spyCacheMetrics) RecordRevokeDelError(context.Context) { s.revokeDelErrs++ }
 
 func newTestCachingStoreWithMetrics(
 	t *testing.T, inner session.Store, mock *mockCmdable, rec cacheMetricsRecorder,

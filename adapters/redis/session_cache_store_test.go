@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
@@ -332,7 +333,10 @@ func TestCachingSessionStore_Revoke_AfterCommitDeletesCache(t *testing.T) {
 // TestCachingSessionStore_Revoke_AfterCommitDelFailure_FallsBackToTTL — a failed
 // post-commit DEL is best-effort: it is swallowed (logged at Warn) and the entry
 // is left to expire at TTL. The hook must not panic or surface to the caller.
-// The DEL failure is additionally recorded as a cache error metric (RecordError).
+// The DEL failure is recorded on the DISTINCT revoke-DEL series
+// (RecordRevokeDelError), NOT the read-path RecordError — folding it into the
+// latter would break the read-path errors ⊆ misses contract (this DEL failure
+// fires outside any Get and has no paired miss).
 func TestCachingSessionStore_Revoke_AfterCommitDelFailure_FallsBackToTTL(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -346,8 +350,9 @@ func TestCachingSessionStore_Revoke_AfterCommitDelFailure_FallsBackToTTL(t *test
 	require.NoError(t, store.Revoke(ctx, scsTestSID))
 	// Draining must not panic even though the DEL errors.
 	assert.NotPanics(t, func() { persistence.RunAfterCommitHooks(ctx) })
-	// The DEL failure must be counted as a cache error.
-	assert.Equal(t, 1, rec.errs, "DEL failure in after-commit hook must record one cache error")
+	// The DEL failure must be counted on the distinct revoke-DEL series only.
+	assert.Equal(t, 1, rec.revokeDelErrs, "DEL failure in after-commit hook must record one revoke-DEL error")
+	assert.Equal(t, 0, rec.errs, "revoke DEL failure must NOT pollute the read-path errors_total series")
 }
 
 // TestCachingSessionStore_Revoke_InnerError_Propagates — inner errors flow
@@ -365,6 +370,75 @@ func TestCachingSessionStore_Revoke_InnerError_Propagates(t *testing.T) {
 	err := store.Revoke(context.Background(), scsTestSID)
 	require.Error(t, err)
 	assert.True(t, errcode.IsInfraError(err))
+}
+
+// TestCachingSessionStore_Revoke_DrivenByRunInTx exercises the after-commit DEL
+// through a REAL transaction runner (kernel/outbox.DemoTxRunner) rather than the
+// hand-rolled WithAfterCommitRegistry/RunAfterCommitHooks the other tests use.
+// DemoTxRunner.RunInTx is the production drain/truncate driver: it installs the
+// after-commit registry, runs the fn, and either drains the hooks (fn success →
+// durable commit) or truncates them (fn error → rollback). This closes the gap
+// flagged in PR #1613 review F6: the rollback→hook-discarded path — the property
+// that a logout whose refresh-cascade or outbox write fails AFTER Revoke must
+// NOT evict the cache (the unit of work rolled back, the session is still live).
+//
+// sessionlogout.Service.Logout is the production caller; it cannot be combined
+// with the real CachingSessionStore in this package (adapters must not import
+// cells, and cellmodules — the only layer that may import both — has no
+// observable in-memory Redis). DemoTxRunner reproduces the exact RunInTx
+// contract sessionlogout relies on, so driving Revoke through it covers the same
+// integration invariant against the real store + observable mockCmdable.
+func TestCachingSessionStore_Revoke_DrivenByRunInTx(t *testing.T) {
+	t.Parallel()
+
+	seedCache := func(t *testing.T, mock *mockCmdable) {
+		t.Helper()
+		payload, err := json.Marshal(entryFromView(newTestView()))
+		require.NoError(t, err)
+		require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+	}
+
+	t.Run("commit_fires_del", func(t *testing.T) {
+		t.Parallel()
+		mock := newMockCmdable()
+		seedCache(t, mock)
+		inner := &fakeSessionStore{}
+		store := newTestCachingStore(t, inner, mock)
+
+		// fn succeeds → DemoTxRunner drains the after-commit hooks (durable commit).
+		err := outbox.DemoTxRunner{}.RunInTx(context.Background(), func(txCtx context.Context) error {
+			return store.Revoke(txCtx, scsTestSID)
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), inner.revokeCalls.Load())
+		_, gerr := mock.Get(context.Background(), scsCachedKey).Result()
+		assert.ErrorIs(t, gerr, goredis.Nil, "successful commit must drain the after-commit hook and DEL the cache entry")
+	})
+
+	t.Run("rollback_discards_hook", func(t *testing.T) {
+		t.Parallel()
+		mock := newMockCmdable()
+		seedCache(t, mock)
+		inner := &fakeSessionStore{}
+		store := newTestCachingStore(t, inner, mock)
+
+		// fn registers the eviction hook (via Revoke) then fails AFTER it (modeling
+		// refreshStore.RevokeSession / outbox.Emit failing post-Revoke) →
+		// DemoTxRunner truncates the hook; the rolled-back logout must leave the
+		// session cache-valid.
+		rollbackErr := errors.New("refresh cascade failed after revoke")
+		err := outbox.DemoTxRunner{}.RunInTx(context.Background(), func(txCtx context.Context) error {
+			if rerr := store.Revoke(txCtx, scsTestSID); rerr != nil {
+				return rerr
+			}
+			return rollbackErr
+		})
+		require.ErrorIs(t, err, rollbackErr)
+		assert.Equal(t, int64(1), inner.revokeCalls.Load(), "inner Revoke still ran inside the tx")
+		val, gerr := mock.Get(context.Background(), scsCachedKey).Result()
+		require.NoError(t, gerr, "cache entry must survive a rolled-back logout")
+		assert.NotEmpty(t, val, "after-commit DEL hook must be discarded on rollback (session still live)")
+	})
 }
 
 // TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache — cache layer
