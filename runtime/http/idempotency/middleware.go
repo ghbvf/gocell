@@ -265,8 +265,9 @@ func (c middlewareConfig) observeState(ctx context.Context, state RequestState) 
 // If either is absent, or if the Principal is not a user principal, the
 // request passes through without idempotency tracking.
 //
-// Key composition: ns = tenantID (or "_notenant" when empty),
-// key = method + "\x00" + path + "\x00" + subject + "\x00" + Idempotency-Key header value.
+// Key composition (namespace, key) is derived by DeriveKey (key.go) from
+// (tenantID, subject, method, path, idemKey); see it for the exact byte layout,
+// NUL-separator rationale, and node-agnostic invariant.
 // Including method+path in the key means the same client-supplied header value
 // is independent per endpoint — a key for POST /orders does NOT collide with
 // POST /payments. (Stripe / IETF idempotency-key draft §3 aligned.)
@@ -459,7 +460,7 @@ func handleWithIdempotency(
 
 	default: // ClaimAcquired
 		cfg.observeState(ctx, StateAcquired)
-		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns)
+		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns, p.Subject)
 	}
 }
 
@@ -510,6 +511,7 @@ func recordOrRelease(
 	cfg middlewareConfig,
 	keyHash string,
 	ns string,
+	subject string,
 ) {
 	bw := newBufferingWriter(w, cfg.maxBodyBytes)
 
@@ -523,6 +525,7 @@ func recordOrRelease(
 				slog.WarnContext(ctx, "idempotency: lease release failed (will expire via TTL)",
 					"err", err,
 					"idempotency_key_hash", keyHash,
+					"subject", subject,
 					"tenant_id", ns,
 				)
 			}
@@ -540,6 +543,7 @@ func recordOrRelease(
 			slog.ErrorContext(ctx, "idempotency: receipt record failed",
 				"err", err,
 				"idempotency_key_hash", keyHash,
+				"subject", subject,
 				"tenant_id", ns,
 			)
 			// Fall through to Release via defer.
@@ -550,6 +554,7 @@ func recordOrRelease(
 		slog.WarnContext(ctx, "idempotency: response body oversized, not recorded",
 			"max_body_bytes", cfg.maxBodyBytes,
 			"idempotency_key_hash", keyHash,
+			"subject", subject,
 			"tenant_id", ns,
 		)
 		cfg.observeState(ctx, StateOversize)

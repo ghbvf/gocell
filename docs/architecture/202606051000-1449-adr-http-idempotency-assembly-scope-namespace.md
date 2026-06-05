@@ -22,7 +22,7 @@
 **探索发现（本 ADR 的事实基础）**：full-assembly 的运行时机制其实**已经就绪**——
 
 1. `cmd/corebundle` 用 `_runtime`（非 pod-specific）`KeyNamespace` 构造唯一一个 `HTTPIdempotencyStore`，经 `bootstrap.WithIdempotencyStore` → `b.routerOpts` → `phases_http.go` 的 per-listener 循环 append 给**每个** listener router，故 store 已跨 listener 共享。
-2. `runtime/http/idempotency.buildNamespaceKey` 把身份元组编码为 `ns = tenantID（或 "_notenant"）`、`key = subject \x00 method \x00 path \x00 Idempotency-Key`——**不含 pod / cell / listener / instance 维度**。
+2. `runtime/http/idempotency.DeriveKey` 把身份元组编码为 `ns = tenantID（或 "_notenant"）`、`key = subject \x00 method \x00 path \x00 Idempotency-Key`——**不含 pod / cell / listener / instance 维度**。
 3. `HTTPIdempotencyStore` 仅持 `{rdb cmdable, ns KeyNamespace}`，**无内存回放态**（Claim/Record/Release 全态在 Redis）。
 4. Redis Cluster + 多 pod 拓扑（`loadRedisConfigFromEnv` / `Topology.RequiresDistributedReplay`）已接线；三个 Redis key（resp/lease/fp）已用 hashtag `{<key>}` 做 Cluster slot colocation。
 

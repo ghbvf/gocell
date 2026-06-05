@@ -78,9 +78,18 @@ package archtest
 //     ReverseBlindSpot test (synthetic reflect shapes + a package-level
 //     method-bearing fixture, since Go forbids method decls inside a func).
 //   - β prong-1b/2 go/types blind spots: a 2nd package-level producer (func or
-//     function-typed var) → sole-producer diff; reverting Store.Claim to raw
-//     strings → param-type freeze; both fail loud via the visited-guard if the
-//     package path moves.
+//     function-typed var) → sole-producer diff (scan is exported-only — an
+//     unexported package-level func/var returning IdempotencyKey is NOT caught;
+//     the upstream-external Hard construction seal via unexported fields is the
+//     backstop there); reverting Store.Claim to raw strings → param-type freeze;
+//     both fail loud via the visited-guard if the package path moves.
+//   - β prong-1b/2 method blind spot: checkIdempotencyKeyMethods only scans
+//     methods of IdempotencyKey itself (via reflect.PointerTo), and the go/types
+//     sole-producer scan skips methods (Recv != nil) — so a method on ANOTHER
+//     package type that returns IdempotencyKey (e.g. func (b keyBuilder) Build()
+//     IdempotencyKey) is caught by neither. It is bounded by the
+//     upstream-external Hard seal: such a method still cannot populate the
+//     unexported fields except via DeriveKey. Known in-package Medium blind spot.
 //   - β prong-3 taint walk blind spots: a 6th DeriveKey param (node-id vector) →
 //     signature freeze; dropping any isolation dimension from the body, INCLUDING
 //     a dummy read `_ = method` that references the input but never flows it into

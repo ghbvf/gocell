@@ -178,7 +178,7 @@ Claim）→ 返回 0，抛出 permanent error（不重试）。
 `NewHTTPIdempotencyStore` 在构造期调用 `ns.Validate()` + nil client 检查，满足
 `REDIS-KEY-NAMESPACE-01` archtest 约束（构造器 body 顶部强制 `ns.Validate()`）。
 
-注意：`HTTPIdempotencyStore.Claim` 中 `ns` 参数（来自 Middleware 的 `buildNamespaceKey`
+注意：`HTTPIdempotencyStore.Claim` 中 `ns` 参数（来自 Middleware 的 `DeriveKey`
 输出，值为 tenantID 或 `_notenant`）作为 Redis key namespace 的**运行时部分**，与构造器
 注入的 `KeyNamespace`（标识 adapter owner，如 `"http-idempotency"`）是两个正交概念——
 `KeyNamespace` 在 `REDIS-KEY-NAMESPACE-01` archtest 的 `ns.Validate()` 守卫下；Claim 的
@@ -368,7 +368,7 @@ Implementations:
                                             Store.Claim now takes fingerprint string)
   [x] runtime/http/idempotency/recorded_response.go (sealed RecordedResponse + Marshal/Unmarshal)
   [x] runtime/http/idempotency/middleware.go (Middleware + shouldIntercept + extractIdentity
-                                             + buildNamespaceKey (method+path in key)
+                                             + DeriveKey (method+path in key)
                                              + readBodyFingerprint + WithExemptMatcher
                                              + recordOrRelease + shouldRecord)
   [x] runtime/http/idempotency/buffer_writer.go (bufferingWriter — response capture)

@@ -174,11 +174,12 @@ func TestHTTPIdempotencyStore_Claim_NSWithBraces(t *testing.T) {
 }
 
 // NOTE: there is no Claim_EmptyKey test. With the sealed IdempotencyKey, a
-// "non-empty ns + empty key" input is structurally unconstructible: DeriveKey
-// always yields a key of ≥3 bytes, and the only empty sealed key is the zero
-// value (covered by Claim_EmptyNS, which trips the empty-ns guard first). The
-// adapter's empty-key guard remains as defense-in-depth but is unreachable from
-// a sealed key.
+// "non-empty ns + empty key" input is structurally unconstructible: a key
+// produced by DeriveKey is always ≥3 bytes (3 NUL separators), so key==""
+// is unreachable via DeriveKey. The only empty sealed key is the zero value
+// IdempotencyKey{}, which has an empty ns too and is caught by the empty-ns
+// guard first (see Claim_EmptyNS). The adapter's empty-key guard remains as
+// defense-in-depth but is unreachable from a properly constructed sealed key.
 
 // TestHTTPIdempotencyStore_Claim_KeyWithBraces covers the "key contains curly braces" branch.
 func TestHTTPIdempotencyStore_Claim_KeyWithBraces(t *testing.T) {
