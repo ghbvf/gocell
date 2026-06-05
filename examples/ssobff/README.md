@@ -13,7 +13,9 @@ All three cells use PostgreSQL for persistence. A running PostgreSQL instance an
 ## Quick Start
 
 PostgreSQL is required. Start the bundled Docker Compose stack first (see
-[Docker Infrastructure](#docker-infrastructure)), then:
+[Docker Infrastructure](#docker-infrastructure)), then run from the **repository
+root** — ssobff is its own `go.work` module (#1556) and the workspace resolves
+the `./examples/ssobff` path automatically:
 
 ```bash
 export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"  # database name matches docker-compose.yml POSTGRES_DB=sso_bff; sslmode=disable is local-demo only — use sslmode=require for any non-localhost PostgreSQL
@@ -41,6 +43,7 @@ export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
 # wait for postgres to become healthy, then set DATABASE_URL
 export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"
+cd ../..  # back to the repo root — the Quick Start `go run ./examples/ssobff` resolves from there
 ```
 
 ## First Admin Provisioning

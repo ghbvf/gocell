@@ -29,14 +29,37 @@ build:
 	go generate ./cmd/corebundle/
 	go build -tags=catalog_gen -o bin/ ./cmd/...
 
+# check-build is the full-repo compile check (no artefacts). Module-aware
+# (#1556): iterate every go.work member from the single funnel
+# (hack/lib/modules.sh) and `go -C "$$dir" build ./...` each, so root AND the
+# satellite example modules compile (a bare root `./...` stops at the
+# nested-module boundary). The CodeQL security workflow runs this as its trace
+# build, so its extractor follows automatically; the deliberately-broken
+# archtest fixtures under tools/archtest/testdata/ stay out because they are not
+# go.work members. Fail-closed: a broken funnel aborts under `set -e`.
 check-build:
-	go build ./...
+	@bash -c 'set -euo pipefail; \
+	source hack/lib/util.sh; source hack/lib/modules.sh; \
+	dirs="$$(gocell::modules::dirs)"; \
+	while IFS= read -r d; do [ -n "$$d" ] || continue; \
+	  echo "+++ go build ($$d)"; go -C "$$d" build ./...; \
+	done <<< "$$dirs"'
 
-# Root `./...` stops at the examples/* nested-module boundary; the
-# `github.com/ghbvf/gocell/examples/...` pattern expands across those go.work
-# member modules so `make test` still runs every example's unit tests (#1556).
+# Root `./...` stops at the examples/* nested-module boundary. Iterate every
+# go.work member from the single funnel (hack/lib/modules.sh → `go work edit
+# -json`) and `go -C "$$dir" test ./...` each — covers root + every satellite
+# (#1556) with zero hardcoded list, and an ambient GOWORK=off can't silently
+# narrow the set to examples/demo the way the old hardcoded
+# `github.com/ghbvf/gocell/examples/...` wildcard did. Fail-closed: a broken
+# funnel (missing jq / malformed go.work) aborts under `set -e` rather than
+# skipping satellites. Mirrors hack/verify-workspace-test.sh + the CI lanes.
 test:
-	go test ./... github.com/ghbvf/gocell/examples/... -count=1
+	@bash -c 'set -euo pipefail; \
+	source hack/lib/util.sh; source hack/lib/modules.sh; \
+	dirs="$$(gocell::modules::dirs)"; \
+	while IFS= read -r d; do [ -n "$$d" ] || continue; \
+	  echo "+++ go test ($$d)"; go -C "$$d" test ./... -count=1; \
+	done <<< "$$dirs"'
 
 # fmt rewrites Go sources in place via every formatter declared under
 # .golangci.yml `formatters.enable` (currently gofmt + goimports + gofumpt).

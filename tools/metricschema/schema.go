@@ -203,8 +203,10 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 // containingModuleDir returns the deepest directory at or above dir (a
 // projectRoot-relative path) that holds a go.mod — i.e. the go.work satellite
 // module that owns dir — or "" when dir belongs to the repo root module. Build
-// uses it to load a satellite example assembly against its own module under
-// GOWORK=off, since a repo-root load cannot see a nested module's packages (#1556).
+// uses a non-empty result to recognize a satellite example entrypoint and switch
+// the package load to ModeWorkspace (NOT GOWORK=off): ModeWorkspace resolves the
+// satellite AND core as workspace members in one graph, whereas a repo-root
+// ModeModule load cannot see a nested module's packages at all (#1556).
 func containingModuleDir(projectRoot, dir string) string {
 	for d := filepath.Clean(dir); d != "." && d != ""; d = filepath.Dir(d) {
 		if _, err := os.Stat(filepath.Join(projectRoot, d, "go.mod")); err == nil {

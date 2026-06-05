@@ -43,7 +43,10 @@ The `Coordinator` and `placeorder.Service` share the **same `MemJournal` instanc
 
 ## Quick Start
 
-No external dependencies required.
+No external dependencies required. Run from the **repository root** —
+orderfulfillment is its own `go.work` module (#1556) and the workspace resolves
+the `./examples/orderfulfillment/…` paths (including the integration-test
+commands below) automatically.
 
 ```bash
 go run ./examples/orderfulfillment

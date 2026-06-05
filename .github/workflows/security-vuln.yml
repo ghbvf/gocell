@@ -37,7 +37,10 @@ jobs:
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Module-aware traversal (#1556) runs govulncheck once per go.work member
+    # (root + 5 satellite examples) × 2 passes (text gate + SARIF); the 5-minute
+    # single-module budget no longer fits, so raised to 12.
+    timeout-minutes: 12
     permissions:
       contents: read
       security-events: write   # required by upload-sarif
@@ -55,19 +58,51 @@ jobs:
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       - name: govulncheck (text — gate)
-        # Text mode exits non-zero on findings — this is the actual gate.
-        # No -skip / --ignore: bypass surface is closed.
-        run: govulncheck ./...
+        # Module-aware (#1556): examples/* are their own go.work modules, so a
+        # root `govulncheck ./...` stops at the nested-module boundary and never
+        # scans the 5 satellite example modules (govulncheck's call-graph
+        # reachability is per-module — each example main wires a distinct
+        # reachable set). Enumerate every workspace member from the SAME go.work
+        # funnel the build/test gates use (hack/lib/modules.sh → `go work edit
+        # -json`) and run govulncheck per module. Text mode exits non-zero on
+        # findings — this is the actual gate; the loop fails on the first module
+        # with a finding. No -skip / --ignore: bypass surface stays closed
+        # (verify-supply-chain-clean.sh forbids those flags in this file).
+        run: |
+          set -euo pipefail
+          source hack/lib/util.sh
+          source hack/lib/modules.sh
+          # Command substitution (NOT `while read < <(...)`) so a go.work path-
+          # validation failure in the funnel propagates under `set -e`.
+          module_dirs="$(gocell::modules::dirs)"
+          while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            echo "+++ govulncheck (text) in module: $dir"
+            ( cd "$dir" && govulncheck ./... )
+          done <<<"$module_dirs"
 
       - name: govulncheck (SARIF — for Security tab)
         if: always()
         # SARIF mode always exits 0 (per govulncheck docs); always run so the
-        # SARIF report uploads even when the text-mode gate above failed.
-        run: govulncheck -format sarif ./... > govulncheck.sarif
+        # SARIF reports upload even when the text-mode gate above failed. One
+        # SARIF per workspace member (same funnel as the gate); the upload step
+        # below points at the directory.
+        run: |
+          set -euo pipefail
+          source hack/lib/util.sh
+          source hack/lib/modules.sh
+          mkdir -p govulncheck-sarif
+          module_dirs="$(gocell::modules::dirs)"
+          while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            if [ "$dir" = "." ]; then slug=root; else slug="$(printf '%s' "${dir#./}" | tr '/' '-')"; fi
+            echo "+++ govulncheck (sarif) in module: $dir -> govulncheck-sarif/govulncheck-$slug.sarif"
+            ( cd "$dir" && govulncheck -format sarif ./... ) > "govulncheck-sarif/govulncheck-$slug.sarif"
+          done <<<"$module_dirs"
 
       - name: Upload SARIF to GitHub Security
-        if: always() && hashFiles('govulncheck.sarif') != ''
+        if: always() && hashFiles('govulncheck-sarif/*.sarif') != ''
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v3
         with:
-          sarif_file: govulncheck.sarif
+          sarif_file: govulncheck-sarif
           category: govulncheck

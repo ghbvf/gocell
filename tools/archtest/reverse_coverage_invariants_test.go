@@ -527,21 +527,30 @@ import (
 // contracts/http/.../Service interface must trace to an existing
 // contracts/<id-path>/contract.yaml.
 //
-// Mechanism: A single typed Run call loads generated/contracts/http/... plus
-// cells/... plus examples/... in one packages.Load invocation. In a single
-// callback, the code collects both the generated Service interfaces (when
-// visiting generated/* pkgs) and the concrete impl types (when visiting
-// cells/* / examples/* pkgs) into separate slices, then performs the
-// types.Implements cross-check after the pass completes.
+// Mechanism: typeseval.LoadProductionPackages(root, workspaceModules, …).All()
+// loads every go.work member — root + the examples/* satellite modules (#1556) —
+// into one ModeWorkspace type universe. A single pass over resolver.All() collects
+// the generated Service interfaces (when visiting generated/contracts/http/* pkgs)
+// and the concrete impl types (when visiting cells/* / examples/* pkgs) into
+// separate slices, then performs the types.Implements cross-check after the pass.
+// .All() (NOT .Production()) is required so the generated/ Service interface pkgs
+// stay in the set. A satellite anti-vacuity sentinel asserts ≥1 examples/* package
+// beyond demo was actually loaded, so a root-only loader regression fails loudly.
 //
-// This single-pass design eliminates the cross-pass type-identity assumption:
-// types.Implements uses pointer-identical *types.Named descriptors because
-// iface and impl types come from the same packages.Load invocation.
+// ModeWorkspace is mandatory, not cosmetic: the prior Typed/ModeModule (GOWORK=off)
+// loader matched only the in-root examples/demo and dropped every satellite example
+// impl — their HTTP Service contracts then looked unimplemented (false orphan), and
+// the inverse (a genuinely orphaned satellite impl) escaped this gate entirely.
+//
+// This single-universe load also eliminates the cross-pass type-identity assumption:
+// types.Implements uses pointer-identical *types.Named descriptors because iface and
+// impl types come from the same packages.Load invocation.
 //
 // AI-robust funnel evaluation:
-//   - upstream: Medium — relies on SharedResolver resolving all three pattern
-//     sets in one packages.Load so *types.Package pointers are identical.
-//     Tracked for Hard upgrade via sealed-iface wrapper (if feasible).
+//   - upstream: Medium — relies on LoadProductionPackages resolving all members in
+//     one ModeWorkspace packages.Load so *types.Package pointers are identical; the
+//     satellite sentinel backstops a silent root-only regression. Tracked for Hard
+//     upgrade via sealed-iface wrapper (if feasible).
 //   - downstream: Hard — typesutil.ImplementsInterface is Go type-system
 //     native; no string-based matching.
 //
@@ -549,7 +558,8 @@ import (
 //   - Pointer vs value receiver: typesutil.ImplementsInterface handles both *T and T.
 //   - Unnamed embedded structs: typesutil.ImplementsInterface checks the full method set.
 //   - Non-exported types: types.TypeName.Exported() check skips private helpers.
-//   - Cross-load identity: eliminated by the single-pass design above.
+//   - Cross-load identity: eliminated by the single ModeWorkspace universe above.
+//   - Satellite-module invisibility: caught by the sawSatelliteExamplePkg sentinel.
 func TestHandlerDeclCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -589,14 +599,6 @@ func TestHandlerDeclCover(t *testing.T) {
 	cellsPrefix := modPath + "/cells/"
 	examplesPrefix := modPath + "/examples/"
 
-	// Single combined load: generated/contracts/http/... + cells/... + examples/...
-	// This ensures the iface and impl types are pointer-identical (same packages.Load).
-	combinedPatterns := []string{
-		modPath + "/generated/contracts/http/...",
-		modPath + "/cells/...",
-		modPath + "/examples/...",
-	}
-
 	type ifaceEntry struct {
 		pkgPath  string
 		ifaceTyp *types.Interface
@@ -611,48 +613,69 @@ func TestHandlerDeclCover(t *testing.T) {
 
 	var genServiceIfaces []ifaceEntry
 	var cellImplTypes []implEntry
+	// Anti-vacuity: prove the workspace load actually reached a satellite example
+	// module (examples/* beyond the in-root demo). If the ModeWorkspace loader
+	// ever regresses to root-only, this stays false and the test fails loudly
+	// rather than silently passing with every satellite HTTP Service impl invisible.
+	demoExamplePrefix := examplesPrefix + "demo/"
+	sawSatelliteExamplePkg := false
 
-	// Single pass: collect Service interfaces AND cell/example concrete types.
-	// After the pass, do the cross-check.
-	_ = Run(t, Typed(TypedOpts{Tests: false}, combinedPatterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
+	// Build the iface + impl type sets in ONE ModeWorkspace type universe via
+	// LoadProductionPackages — NOT the Typed/ModeModule loader. ModeWorkspace is
+	// mandatory: examples/* are go.work satellite modules (#1556), and a GOWORK=off
+	// load silently matches only the in-root examples/demo, dropping every satellite
+	// example impl so its HTTP Service contracts look unimplemented (false orphan).
+	// .All() (NOT .Production()) keeps the generated/contracts/http packages whose
+	// Service interfaces drive the types.Implements match; iface + impl land in one
+	// type-check universe so ImplementsInterface compares identical packages. Mirrors
+	// DEAD-CONTRACT-01 below + the loadModule funnel in archtest_test.go.
+	modules := findWorkspaceModules(t, root)
+	resolver, lpErr := typeseval.LoadProductionPackages(root, modules, false /* tests */, nil)
+	if lpErr != nil {
+		t.Fatalf("HANDLER-DECL-COVER-01: LoadProductionPackages: %v", lpErr)
+	}
+	for _, pkg := range resolver.All() {
+		if pkg == nil || pkg.Types == nil {
+			continue
 		}
-		pkgPath := p.Pkg.Path()
+		pkgPath := pkg.PkgPath
 
 		if strings.HasPrefix(pkgPath, generatedHTTPPrefix) {
-			obj := p.Pkg.Scope().Lookup("Service")
+			obj := pkg.Types.Scope().Lookup("Service")
 			if obj == nil {
-				return nil
+				continue
 			}
 			tn, ok := obj.(*types.TypeName)
 			if !ok {
-				return nil
+				continue
 			}
 			named, ok := tn.Type().(*types.Named)
 			if !ok {
-				return nil
+				continue
 			}
 			iface, ok := named.Underlying().(*types.Interface)
 			if !ok {
-				return nil
+				continue
 			}
-			pos := p.Fset.Position(tn.Pos())
+			pos := pkg.Fset.Position(tn.Pos())
 			genServiceIfaces = append(genServiceIfaces, ifaceEntry{
 				pkgPath:  pkgPath,
 				ifaceTyp: iface.Complete(),
 				pos:      pos,
 			})
-			return nil
+			continue
 		}
 
 		isCells := strings.HasPrefix(pkgPath, cellsPrefix)
 		isExamples := strings.HasPrefix(pkgPath, examplesPrefix)
 		if !isCells && !isExamples {
-			return nil
+			continue
+		}
+		if isExamples && !strings.HasPrefix(pkgPath, demoExamplePrefix) {
+			sawSatelliteExamplePkg = true
 		}
 
-		pkgScope := p.Pkg.Scope()
+		pkgScope := pkg.Types.Scope()
 		for _, name := range pkgScope.Names() {
 			obj := pkgScope.Lookup(name)
 			tn, ok := obj.(*types.TypeName)
@@ -663,7 +686,7 @@ func TestHandlerDeclCover(t *testing.T) {
 			if !ok {
 				continue
 			}
-			pos := p.Fset.Position(tn.Pos())
+			pos := pkg.Fset.Position(tn.Pos())
 			cellImplTypes = append(cellImplTypes, implEntry{
 				named:   named,
 				pkgPath: pkgPath,
@@ -671,11 +694,15 @@ func TestHandlerDeclCover(t *testing.T) {
 				pos:     pos,
 			})
 		}
-		return nil
-	})
+	}
 
 	if len(genServiceIfaces) == 0 {
 		t.Fatal("HANDLER-DECL-COVER-01: no generated http Service interfaces found — scanner may be broken")
+	}
+	if !sawSatelliteExamplePkg {
+		t.Fatal("HANDLER-DECL-COVER-01: workspace load surfaced no satellite example package " +
+			"(examples/* beyond demo) — the ModeWorkspace loader regressed to root-only and satellite " +
+			"HTTP Service impls would be invisible to this orphan-impl cross-check (#1556)")
 	}
 
 	// Cross-check: every impl that satisfies a Service iface must have an active contract.
