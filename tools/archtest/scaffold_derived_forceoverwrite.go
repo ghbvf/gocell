@@ -71,6 +71,13 @@ const (
 // (tools/codegen/cellgen/stage_render.go). It scans the running module's
 // production code (Production → findModuleRoot), covering tag-gated files via
 // cfg.BuildTags, and returns the diagnostics it observes.
+//
+// External Cell repo semantics (this rule is registered in StandardCellRules):
+// the sanctioned planDerivedArtifact site lives in GoCell's own cellgen and does
+// not exist in a consumer module, so the allowlist never matches there — the
+// rule degrades to a PURE BAN. That is intended: pathsafe.DerivedOverwrite is a
+// GoCell platform-internal codegen primitive with no valid use in external Cell
+// code; a clean external repo simply has zero references (vacuous-green).
 func CheckScaffoldDerivedForceOverwrite(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return Run(t, Production(TypedOpts{Tags: cfg.BuildTags}), collectDerivedOverwriteViolations)
@@ -116,7 +123,9 @@ func derivedForwardViolations(p *Pass, file *ast.File, rel string) []Diagnostic 
 				Line: p.Fset.Position(call.Pos()).Line,
 				Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: pathsafe.DerivedOverwrite called outside " +
 					"tools/codegen/cellgen/stage_render.go::planDerivedArtifact — " +
-					"derived writes must go through the governance.IsGoCellGenerated overwrite gate",
+					"derived writes must go through the governance.IsGoCellGenerated overwrite gate " +
+					"(pathsafe.DerivedOverwrite is a GoCell platform-internal codegen primitive; " +
+					"external Cell code must never call it — remove this reference)",
 			})
 		})
 	})
@@ -202,6 +211,13 @@ func callsDerivedOverwrite(info *types.Info, call *ast.CallExpr) bool {
 }
 
 // isCallExprFun reports whether sel appears as the Fun of some CallExpr in file.
+//
+// Identity is by AST node pointer (call.Fun == sel). This is exact for the
+// single-parse AST the typed Run façade produces (go/parser yields one node
+// instance per source position), which is the only mode this rule runs in. It
+// would NOT hold for a cloned/transformed AST that copies nodes — a constraint
+// that does not arise here. isIdentCallExprFun / isInsideSelectorExpr share the
+// same single-parse-AST assumption.
 func isCallExprFun(file *ast.File, sel *ast.SelectorExpr) bool {
 	_, ok := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
 		return call.Fun == sel

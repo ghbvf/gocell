@@ -29,7 +29,9 @@ func TestScaffoldDerivedForceOverwrite(t *testing.T) {
 // expected output (Rel:Line: Message). GREEN fixtures have an empty golden.
 //
 //   - red_outside_ctor: a direct DerivedOverwrite call outside
-//     planDerivedArtifact (forward caller-allowlist violation).
+//     planDerivedArtifact (forward caller-allowlist violation, SelectorExpr form).
+//   - red_dot_import_call: a dot-imported direct call (forward violation, bare
+//     *ast.Ident form — covers callsDerivedOverwrite's Ident branch).
 //   - red_indirect_ref: taking the DerivedOverwrite function value (reverse
 //     indirect-reference blind-spot violation).
 //   - green_compliant: imports pathsafe and uses the sanctioned NewPlanSet
@@ -38,6 +40,7 @@ func TestScaffoldDerivedForceOverwrite_FixtureGate(t *testing.T) {
 	t.Parallel()
 	dirs := []string{
 		"red_outside_ctor",
+		"red_dot_import_call",
 		"red_indirect_ref",
 		"green_compliant",
 	}

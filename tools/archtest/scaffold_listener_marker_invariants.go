@@ -26,9 +26,11 @@
 package archtest
 
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/types"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,35 +60,38 @@ func CheckScaffoldListenerMarkerTypedConst(t *testing.T, cfg ConfigForExternalCe
 	root := findModuleRoot(t)
 	//nolint:gosec // repo-relative asset path, not user-supplied
 	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scaffoldCellTmplRel)))
-	if err != nil {
-		// Template absent (e.g. external Cell repo) → nothing to validate.
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Template absent (external Cell repo) → nothing to validate (vacuous).
 		return out
+	case err != nil:
+		// A genuine read error in GoCell's own tree (permission / IO) must not be
+		// swallowed — surface it so the dogfood fails loud instead of silently
+		// dropping the template check.
+		return append(out, Diagnostic{
+			Rel:     scaffoldCellTmplRel,
+			Line:    0,
+			Message: "SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01: failed to read scaffold-cell template: " + err.Error(),
+		})
 	}
 	return append(out, checkListenerTemplate(scaffoldCellTmplRel, string(content))...)
 }
 
 // checkListenerMarkerConst verifies cellgen.ListenerMarker is an exported string
-// const equal to the canonical marker literal, via the typed Run façade.
+// const equal to the canonical marker literal, via the typed Run façade. If the
+// cellgen package is not in scope (external Cell repo, or no cellgen), there is
+// nothing to verify — it returns no diagnostics (vacuous), symmetric with an
+// absent template.
 func checkListenerMarkerConst(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	var out []Diagnostic
-	found := false
 	_ = Run(t, Typed(TypedOpts{Tags: cfg.BuildTags}, []string{"./tools/codegen/cellgen/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != cellgenPkgPath {
 				return nil
 			}
-			found = true
 			out = append(out, listenerMarkerConstDiags(p)...)
 			return nil
 		})
-	if !found {
-		out = append(out, Diagnostic{
-			Rel:  cellgenPkgPath,
-			Line: 0,
-			Message: "SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01: package " + cellgenPkgPath +
-				" not found in scope; cannot verify the ListenerMarker typed const",
-		})
-	}
 	return out
 }
 
