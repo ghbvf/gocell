@@ -74,6 +74,25 @@ func NewNonPositiveLeaseDurationError(d time.Duration) error {
 	)
 }
 
+// NewNonPositiveLimitError reports that GlobalReader.LoadSince received a
+// limit ≤ 0 (a non-positive page size cannot bound a scan).
+func NewNonPositiveLimitError(limit int) error {
+	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"saga journal: LoadSince limit must be positive",
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("limit=%d", limit))),
+	)
+}
+
+// NewNegativeGlobalSeqError reports that GlobalReader.LoadSince received a
+// negative afterGlobalSeq cursor (a checkpoint position is never negative;
+// 0 means "scan from the beginning").
+func NewNegativeGlobalSeqError(afterGlobalSeq int64) error {
+	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"saga journal: LoadSince afterGlobalSeq must not be negative",
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("afterGlobalSeq=%d", afterGlobalSeq))),
+	)
+}
+
 // NewEventPhaseError reports that an event kind was appended in a status that
 // does not permit it (e.g. a forward step while Compensating, or
 // KindStepCompensated while not Compensating). The projection is a fold of
@@ -112,6 +131,14 @@ func errNonPositiveBatchSize(n int) error {
 
 func errNonPositiveLeaseDuration(d time.Duration) error {
 	return NewNonPositiveLeaseDurationError(d)
+}
+
+func errNonPositiveLimit(limit int) error {
+	return NewNonPositiveLimitError(limit)
+}
+
+func errNegativeGlobalSeq(afterGlobalSeq int64) error {
+	return NewNegativeGlobalSeqError(afterGlobalSeq)
 }
 
 func errEventPhase(id idutil.SafeID, kind EventKind, status saga.Status) error {
