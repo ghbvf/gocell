@@ -91,7 +91,8 @@ package archtest
 //     package type that returns IdempotencyKey (e.g. func (b keyBuilder) Build()
 //     IdempotencyKey) is caught by neither. It is bounded by the
 //     upstream-external Hard seal: such a method still cannot populate the
-//     unexported fields except via DeriveKey. Known in-package Medium blind spot.
+//     unexported fields except via the sanctioned constructors. Known in-package
+//     Medium blind spot.
 //   - β prong-3 taint walk blind spots: an extra constructor param (node-id
 //     vector) → signature freeze; dropping any isolation dimension from the body,
 //     INCLUDING a dummy read `_ = commandID` that references the input but never
@@ -340,9 +341,9 @@ var deriveKeyProducerAllowed = func() map[string]struct{} {
 }()
 
 // idempotencyKeyForbiddenMethods are deserialization entries that would let an
-// external package populate a sealed IdempotencyKey from bytes, bypassing
-// DeriveKey. They return error (not IdempotencyKey), so a returns-IdempotencyKey
-// scan never catches them — they are banned by name (#1488 F4 lesson).
+// external package populate a sealed IdempotencyKey from bytes, bypassing the
+// sanctioned constructors. They return error (not IdempotencyKey), so a
+// returns-IdempotencyKey scan never catches them — banned by name (#1488 F4 lesson).
 var idempotencyKeyForbiddenMethods = map[string]bool{
 	"UnmarshalJSON":   true,
 	"UnmarshalText":   true,
@@ -456,8 +457,10 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink(t *testing.T) {
 			}
 			ikType := ikObj.Type()
 
-			// (1) sole producer: package-level funcs AND function-typed vars whose
-			// signature returns IdempotencyKey must be exactly {DeriveKey}.
+			// (1) sole producers: package-level funcs AND function-typed vars whose
+			// signature returns IdempotencyKey must be exactly the sanctioned set
+			// {DeriveKey, DeriveCommandKey} (deriveKeyProducerAllowed, single-sourced
+			// from idempotencyKeyConstructors).
 			producers := idempotencyKeyProducerNames(scope, ikType)
 			diags = append(diags, diffHTTPIdempotencyExpectedSet(
 				"package-level surfaces producing IdempotencyKey",
@@ -539,12 +542,15 @@ func checkStoreClaimParamType(scope *types.Scope, ikType types.Type) []Diagnosti
 
 // TestHTTPIdempotencyKeyNodeAgnostic01_RequiredUse is the require-isolation-tuple
 // half (Medium residual, gh #1650): the sealed type makes "external code injects
-// a node id" inexpressible, but Go CANNOT make "DeriveKey's body consumes all
-// five isolation dimensions into the key" type-system-Hard. This AST taint walk on
-// DeriveKey is the Medium backstop: each of (tenantID→ns, subject/method/path/
-// idemKey→key) must FLOW (not merely be referenced) into the returned
-// IdempotencyKey literal; a dropped dimension or a `_ = method` dummy read is
-// caught. A 6th parameter (a node-id injection vector) trips the signature freeze.
+// a node id" inexpressible, but Go CANNOT make "a sanctioned constructor's body
+// consumes all its isolation dimensions into the key" type-system-Hard. This AST
+// taint walk over every constructor in idempotencyKeyConstructors (DeriveKey:
+// tenantID→ns, subject/method/path/idemKey→key; DeriveCommandKey: tenantID→ns,
+// subject/commandID→key) is the Medium backstop: each dimension must FLOW (not
+// merely be referenced) into the returned IdempotencyKey literal; a dropped
+// dimension, a `_ = commandID` dummy read, or a laundering call / param-rebind
+// (rejected by checkFlatComposition) is caught. An extra parameter (a node-id
+// injection vector) trips the signature freeze.
 func TestHTTPIdempotencyKeyNodeAgnostic01_RequiredUse(t *testing.T) {
 	t.Parallel()
 
