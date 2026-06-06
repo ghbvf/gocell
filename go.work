@@ -2,6 +2,7 @@ go 1.25.11
 
 use (
 	.
+	./cmd/gocell
 	./examples/corebundlestarter
 	./examples/iotdevice
 	./examples/orderfulfillment

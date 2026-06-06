@@ -25,6 +25,13 @@ import (
 //
 // When the intended root is ambiguous (e.g. both a go.mod sub-module and a
 // go.work workspace are in scope), use --root to specify the root explicitly.
+//
+// Tests that must scan the OUTER monorepo root (not the nearest module) use the
+// repoRoot(t) test helper in graph_test.go, which walks up to go.work instead of
+// the nearest go.mod. Since #1557 split cmd/gocell into its own go.work module,
+// findRoot() invoked from within cmd/gocell/ resolves cmd/gocell/, not the repo
+// root — correct for the runtime CLI (always invoked from the project root), but
+// wrong for the self-referential CLI tests that scan the gocell repo itself.
 func findRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {

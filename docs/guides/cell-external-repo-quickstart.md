@@ -6,8 +6,17 @@
 
 ## 前置
 
-- Go 1.22+
-- `go install github.com/ghbvf/gocell/cmd/gocell@latest`（M7 #1088 之前用 `go install ...@develop`）
+- Go 1.25.11+
+- `gocell` CLI：M7 #1088 发布独立安装入口前，先从本仓源码安装：
+
+  ```bash
+  git clone https://github.com/ghbvf/gocell.git
+  cd gocell
+  go install ./cmd/gocell
+  ```
+
+  `go install github.com/ghbvf/gocell/cmd/gocell@latest` 需要等 #1088
+  补齐版本化发布策略后再作为稳定入口。
 
 ## 步骤
 
