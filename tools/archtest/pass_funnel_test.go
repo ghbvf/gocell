@@ -18,6 +18,14 @@ package archtest
 // FlatNonDefaultTags / KnownNonDefaultTags / Pass.IsFileInScope /
 // Pass.IsGenerated instead of importing internal/typeseval directly.
 //
+// Module-path-agnostic note (#1639 M3 PR-8b): this file's platform symbol-path
+// consts derive from PlatformModulePath (cleared from module_path_funnel.baseline),
+// but its rule body stays in _test.go — it is itself in passFunnelPermanentExempt
+// and reaches the raw typeseval loaders the funnel bans for everyone else, so a
+// move into a pass-funnel-unscanned .go would open an unenforced loader bypass
+// (an AI-HARD regression). The full move to a .go Check* (after extending the
+// Pass funnel to scan .go / a whole-module-graph mode) is deferred to #1705.
+//
 // PASS-FUNNEL-FIXTURE-TAG-01 closes the façade-bypass leg of the
 // archtest_fixture funnel: Fixture's outward Hard (FixtureOpts has
 // no Tags field) prevents typed expression of "load fixture with custom
@@ -65,10 +73,10 @@ import (
 )
 
 const (
-	scannerPkgPath        = "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	archtestPkgPath       = "github.com/ghbvf/gocell/tools/archtest"
-	typesevalPkgPath      = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	callresolverPkgPath   = "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
+	scannerPkgPath        = PlatformModulePath + "/tools/archtest/internal/scanner"
+	archtestPkgPath       = PlatformModulePath + "/tools/archtest"
+	typesevalPkgPath      = PlatformModulePath + "/tools/archtest/internal/typeseval"
+	callresolverPkgPath   = PlatformModulePath + "/tools/archtest/internal/callresolver"
 	packagesPkgPath       = "golang.org/x/tools/go/packages"
 	usage02FixturesRelDir = "tools/archtest/internal/usage02fixtures"
 )

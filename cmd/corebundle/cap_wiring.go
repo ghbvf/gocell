@@ -80,6 +80,14 @@ func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, loca
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"corebundle postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
 	}
+	// This is the assembly's SERVING pool. Its schema (migrations 052/053) places
+	// the six tenant tables under FORCE ROW LEVEL SECURITY, which is only enforced
+	// at runtime when the connecting role is neither a superuser nor BYPASSRLS.
+	// Opt into the postgres_app_role_restricted_ready precondition probe so a
+	// superuser-served deployment reports /readyz 503 instead of silently leaking
+	// across tenants (#1676 [F-B11]). Migrations are applied by a separate admin
+	// pool (tools/pg-migrate), which does not set this flag.
+	pgCfg.RequireRestrictedRole = true
 	pool, err := adapterpg.NewPool(ctx, pgCfg)
 	if err != nil {
 		return fmt.Errorf("assembly PG pool: %w", err)

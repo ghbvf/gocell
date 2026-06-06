@@ -6,6 +6,7 @@ version: v2
 # as a second module root for the first cell-owned proto (#1151).
 modules:
   - path: contracts/grpc
+  - path: examples/iotdevice/contracts/grpc
 lint:
   use:
     - STANDARD

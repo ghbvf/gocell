@@ -26,10 +26,12 @@ import (
 //   - schemaRef parsing fails
 //   - kind=http but http endpoint missing
 //   - kind=event but payload schemaRef missing
-//   - kind=grpc but endpoints.grpc missing, service/method empty, method not an
-//     exported Go identifier, proto empty or not rooted under
-//     metadata.GRPCProtoPathPrefix, service/proto carrying a control character,
-//     or a non-unary streamingType (streaming codegen deferred to PR 10)
+//
+// kind=grpc and kind=webhook are recognized but build no spec and emit zero
+// contractgen artifacts by design (see the kind switch). grpc's server contract
+// is buf's generated pb.<Svc>Server (#1688); its proto is validated by the
+// checkGRPCProtoCollisions pre-pass + governance FMT-37 (service-level, #1655),
+// not here.
 func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen build: project is nil")
@@ -73,7 +75,8 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		return nil, fmt.Errorf(
 			"contractgen build: contract %q has empty transports (parser defaults per kind; "+
 				"an unknown kind yields none — governance FMT-39 should have rejected this)",
-			contractID)
+			contractID,
+		)
 	}
 
 	contractDir := filepath.Dir(contract.File)
@@ -95,22 +98,24 @@ func buildKindSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return buildEventSpec(spec, rootDir, contract, contractDir)
 	case "saga":
 		return buildSagaSpec(spec, rootDir, contract, contractDir)
-	case "grpc":
-		return buildGRPCSpec(spec, rootDir, contract)
 	case "projection":
 		return validateProjectionLevel(contract.ID, contract.ConsistencyLevel)
 	case "command":
 		return buildCommandSpec(spec, rootDir, contract, contractDir)
-	case "webhook":
-		// webhook: recognized, zero artifacts by design — registration uses
-		// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
+	case "webhook", "grpc":
+		// webhook / grpc: recognized, zero contractgen artifacts by design — no
+		// per-contract spec to build. webhook registration uses
+		// kernel/webhook.ReceiverSpec literals via cellgen; grpc's server contract
+		// is buf's generated pb.<Svc>Server (#1688), and its proto is validated by
+		// the checkGRPCProtoCollisions pre-pass + governance FMT-37, not here.
 		// generateOneContract and RenderContractArtifacts skip all artifact emission
-		// for this kind; the early-return branches in those functions are the
+		// for these kinds; the early-return branches in those functions are the
 		// enforcement point.
 	default:
 		return fmt.Errorf(
 			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection|webhook|grpc|saga)",
-			contract.ID, contract.Kind)
+			contract.ID, contract.Kind,
+		)
 	}
 
 	return nil
@@ -128,7 +133,8 @@ func validateProjectionLevel(contractID, level string) error {
 	if _, err := cellvocab.ParseLevel(level); err != nil {
 		return fmt.Errorf(
 			"contractgen build: projection contract %q has invalid consistencyLevel %q (must be L0..L4): %w",
-			contractID, level, err)
+			contractID, level, err,
+		)
 	}
 	return nil
 }
@@ -146,7 +152,8 @@ func validateCommandLevel(contractID, level string) error {
 	if _, err := cellvocab.ParseLevel(level); err != nil {
 		return fmt.Errorf(
 			"contractgen build: command contract %q has invalid consistencyLevel %q (must be L0..L4): %w",
-			contractID, level, err)
+			contractID, level, err,
+		)
 	}
 	return nil
 }
@@ -429,7 +436,8 @@ func validateAuthServiceOwned(contractID string, auth metadata.HTTPAuthMeta) err
 		"contractgen build: contract %q declares auth.serviceOwned:true with auth.public/auth.bootstrap/auth.clientsOnly; "+
 			"serviceOwned keeps listener JWT auth and delegates ownership authorization to the service, "+
 			"so it cannot be combined with auth modes that replace or bypass that route shape",
-		contractID)
+		contractID,
+	)
 }
 
 // validateAuthOnInternalPath is the codegen-side upstream Hard funnel for
@@ -457,7 +465,8 @@ func validateAuthOnInternalPath(contractID, path string, auth metadata.HTTPAuthM
 				"internal endpoints must not bypass JWT "+
 				"(use auth.serviceOwned or auth.clientsOnly instead)"+
 				"; fix: remove auth.public or move the endpoint off /internal/v1/",
-			contractID, path))
+			contractID, path,
+		))
 	}
 	if auth.PasswordResetExempt {
 		errs = append(errs, fmt.Errorf(
@@ -466,7 +475,8 @@ func validateAuthOnInternalPath(contractID, path string, auth metadata.HTTPAuthM
 				"internal endpoints are cell-to-cell only and must "+
 				"not accept the password-reset bypass token"+
 				"; fix: remove auth.passwordResetExempt or move the endpoint off /internal/v1/",
-			contractID, path))
+			contractID, path,
+		))
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
@@ -488,20 +498,23 @@ func validateAuthClientsOnly(
 		return fmt.Errorf(
 			"contractgen build: contract %q declares auth.clientsOnly:true with auth.public/auth.bootstrap/auth.passwordResetExempt; "+
 				"clientsOnly relies on caller-cell identity only and cannot be combined with listener-bypass or password-reset auth modes",
-			contractID)
+			contractID,
+		)
 	}
 	if !isInternalPath {
 		return fmt.Errorf(
 			"contractgen build: contract %q declares auth.clientsOnly:true but path %q is "+
 				"not an internal path (must match /internal/v1 or /internal/v1/...); "+
 				"clientsOnly is only meaningful for internal endpoints where caller-cell identity is verifiable",
-			contractID, path)
+			contractID, path,
+		)
 	}
 	if len(declaredClients) == 0 {
 		return fmt.Errorf(
 			"contractgen build: contract %q declares auth.clientsOnly:true but endpoints.clients is empty; "+
 				"clientsOnly requires at least one declared client cell so RequireCallerCell has an allowlist to enforce",
-			contractID)
+			contractID,
+		)
 	}
 	return nil
 }
@@ -591,7 +604,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 	if http.SuccessStatus == 0 && len(http.Responses) == 0 {
 		return nil, fmt.Errorf(
 			"contractgen: contract %q declares no SuccessStatus and no responses[]; HTTP endpoint must declare at least one response",
-			contractID)
+			contractID,
+		)
 	}
 
 	statuses := make([]int, 0, len(http.Responses)+1)
@@ -600,7 +614,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 		if http.SuccessStatus < 100 || http.SuccessStatus > 399 {
 			return nil, fmt.Errorf(
 				"contractgen: contract %q success status %d invalid: must be 1xx/2xx/3xx",
-				contractID, http.SuccessStatus)
+				contractID, http.SuccessStatus,
+			)
 		}
 		statuses = append(statuses, http.SuccessStatus)
 	}
@@ -613,7 +628,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 		if s < 400 || s > 599 {
 			return nil, fmt.Errorf(
 				"contractgen: contract %q response status %d invalid: must be 4xx/5xx (success status %d declared via SuccessStatus)",
-				contractID, s, http.SuccessStatus)
+				contractID, s, http.SuccessStatus,
+			)
 		}
 		statuses = append(statuses, s)
 		hasError = true
@@ -622,7 +638,8 @@ func collectAndValidateStatuses(http *metadata.HTTPTransportMeta, contractID str
 		return nil, fmt.Errorf(
 			"contractgen: contract %q HTTP endpoint must declare at least one 4xx/5xx response;"+
 				" typed error envelope requires an explicit error response declaration",
-			contractID)
+			contractID,
+		)
 	}
 	return statuses, nil
 }
@@ -885,7 +902,8 @@ func checkSagaStepIdentCollision(seen map[string]int, contract *metadata.Contrac
 			return fmt.Errorf(
 				"contractgen build: contract %q saga steps[%d] %q and steps[%d] %q produce the same Go identifier %q "+
 					"(names collapse after PascalCase, e.g. \"reserve\"/\"Reserve\"); rename one step",
-				contract.ID, prev, steps[prev].Name, i, steps[i].Name, id)
+				contract.ID, prev, steps[prev].Name, i, steps[i].Name, id,
+			)
 		}
 		seen[id] = i
 	}
@@ -905,7 +923,8 @@ func buildSagaStep(
 	if strings.TrimSpace(st.Output) == "" {
 		return SagaStepSpec{}, nil, fmt.Errorf(
 			"contractgen build: contract %q saga step %d (%q) missing output schema $ref",
-			contract.ID, i, st.Name)
+			contract.ID, i, st.Name,
+		)
 	}
 	// The output ref must be a contract-relative path; reject absolute paths and
 	// ".." traversal so a contract.yaml cannot drive the schema loader outside
@@ -915,7 +934,8 @@ func buildSagaStep(
 	if !filepath.IsLocal(st.Output) {
 		return SagaStepSpec{}, nil, fmt.Errorf(
 			"contractgen build: contract %q saga step %d (%q) output %q must be a contract-relative path (no '..' or absolute)",
-			contract.ID, i, st.Name, st.Output)
+			contract.ID, i, st.Name, st.Output,
+		)
 	}
 	goName := goPascalCase(st.Name)
 	outType := goName + "Output"
@@ -923,23 +943,27 @@ func buildSagaStep(
 	schema, err := Parse(rootDir, filepath.Join(contractDir, st.Output))
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) output schema: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) output schema: %w", contract.ID, i, st.Name, err,
+		)
 	}
 	dtos, err := schemaToDTOs(outType, schema)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) output DTOs: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) output DTOs: %w", contract.ID, i, st.Name, err,
+		)
 	}
 
 	timeoutExpr, err := durationExpr(st.Timeout)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) timeout: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) timeout: %w", contract.ID, i, st.Name, err,
+		)
 	}
 	retry, err := sagaRetrySpec(st.Retries)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %d (%q) retries: %w", contract.ID, i, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) retries: %w", contract.ID, i, st.Name, err,
+		)
 	}
 
 	compensate := true
@@ -1072,67 +1096,6 @@ func sagaNeedsTime(s *SagaSpec) bool {
 // retryNeedsTime reports whether a RetryPolicySpec carries a duration expr.
 func retryNeedsTime(r *RetryPolicySpec) bool {
 	return r != nil && (r.BaseIntervalExpr != "" || r.MaxIntervalExpr != "")
-}
-
-// buildGRPCSpec projects metadata.GRPCTransportMeta into spec.GRPC for the
-// server-interface generator. The proto file is read (ReadProtoServiceInfo) to
-// resolve the request/response proto-generated message types + the go_package
-// import path emitted into the stub; the proto is the single source of that
-// identity (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
-//
-// All guards are fail-closed at codegen time (the golden test path does not run
-// governance FMT-37, so this is the funnel's own defense against malformed
-// endpoints.grpc):
-//   - nil endpoints.grpc / empty service (mirrors buildHTTPSpec).
-//   - Proto must be present and rooted under metadata.GRPCProtoPathPrefix
-//     (contracts/grpc/). This mirrors governance FMT-37 (validateFMT37Proto):
-//     codegen never runs FMT-37, so the funnel rejects the same proto paths the
-//     governance rule would, keeping the generated doc comment's proto reference
-//     a real contracts-relative path rather than an empty or stray string.
-//   - Service is rendered into the interface doc comment; a control rune
-//     (notably a newline) would break out of the // comment and inject arbitrary
-//     text into the generated source that goimports/gofumpt accept silently.
-//     Reject control runes so the comment stays a comment.
-//   - Each rpc method name must be an exported Go identifier and the rpc must be
-//     unary — ReadProtoServiceInfo enforces both fail-closed at proto-read time.
-func buildGRPCSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta) error {
-	g := contract.Endpoints.GRPC
-	if g == nil {
-		return fmt.Errorf("contractgen build: contract %q is kind=grpc but has no endpoints.grpc block", contract.ID)
-	}
-	if g.Service == "" {
-		return fmt.Errorf("contractgen build: contract %q grpc block requires service", contract.ID)
-	}
-	if _, err := metadata.GRPCServiceGoName(g.Service); err != nil {
-		return fmt.Errorf("contractgen build: contract %q grpc service: %w", contract.ID, err)
-	}
-	if err := validateGRPCProtoPath(contract.ID, g.Proto); err != nil {
-		return err
-	}
-
-	svcInfo, err := ReadProtoServiceInfo(filepath.Join(rootDir, filepath.FromSlash(g.Proto)), g.Service)
-	if err != nil {
-		return fmt.Errorf("contractgen build: contract %q grpc proto: %w", contract.ID, err)
-	}
-
-	methods := make([]GRPCMethodSpec, len(svcInfo.Methods))
-	for i, m := range svcInfo.Methods {
-		methods[i] = GRPCMethodSpec{
-			MethodName:   m.Name,
-			RequestType:  m.RequestType,
-			ResponseType: m.ResponseType,
-		}
-	}
-
-	spec.GRPC = &GRPCEndpointSpec{
-		InterfaceName:   "Server",
-		ServiceFQN:      g.Service,
-		ProtoPath:       g.Proto,
-		ProtoImportPath: svcInfo.ImportPath,
-		ProtoAlias:      svcInfo.Alias,
-		Methods:         methods,
-	}
-	return nil
 }
 
 // validateGRPCProtoPath fail-closes on a grpc contract's endpoints.grpc.proto

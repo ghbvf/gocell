@@ -6,22 +6,16 @@
 # migrated file must be DELETED from this list (ratchet-down). Empty = Hard
 # terminal pure ban. Migration tracked by #1302; Hard-ization by #1304.
 # blank lines and # comments are ignored.
-tools/archtest/adapter_returns_declared_types_test.go
-tools/archtest/archtest_test.go
 tools/archtest/audit_hash_input_frozen_test.go
-tools/archtest/capability_provider_funnel_test.go
 tools/archtest/celltest_import_boundary_test.go
 tools/archtest/celltest_import_scope_test.go
 tools/archtest/clock_invariants_test.go
 tools/archtest/contract_path_query_coverage_test.go
 tools/archtest/contracttest_loadbyid_literal_test.go
 tools/archtest/distlock_lock_not_context_test.go
-tools/archtest/eval_predicate_centralization_test.go
-tools/archtest/fixture_cellid_typed_builder_test.go
 tools/archtest/governance_rules_invariants_test.go
 tools/archtest/notfound_test_strict_test.go
 tools/archtest/parser_matcher_examples_symmetry_test.go
-tools/archtest/pass_funnel_test.go
 tools/archtest/pg_repo_ambient_tx_test.go
 tools/archtest/required_dep_nil_guard_test.go
 tools/archtest/reverse_coverage_invariants_test.go

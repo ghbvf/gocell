@@ -424,7 +424,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 ### Milestones
 
 - **PR 4 complete**: framework grpc transport runtime functional in isolation (no codegen integration yet)
-- **PR 8 complete**: ⚡ FIRST USABLE gRPC HANDLER end-to-end (spec User Story 1 acceptance: cell author can ship a unary RPC)
+- **PR 8 complete**: ⚡ FIRST USABLE gRPC HANDLER end-to-end (spec User Story 1 **scenario 1** acceptance: cell author can ship a unary RPC — client dial → interceptor chain → handler → ack). US1 **scenario 2** (observability shape parity: metric/log/trace) defers to PR-9; **scenario 3** (errcode redaction layers / codes.Code mapping) defers to PR-12. Until then a returned `*errcode.Error` surfaces as `codes.Unknown` and grpc metrics are not exported.
 - **PR 9 complete**: spec User Story 2 acceptance (operator observability parity)
 - **PR 11 complete**: spec User Story 3 acceptance (platform-cell service-to-service)
 - **PR 10 complete**: spec User Story 4 acceptance (streaming patterns)

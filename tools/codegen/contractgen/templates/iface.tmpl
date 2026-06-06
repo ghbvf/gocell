@@ -25,26 +25,4 @@ import "context"
 type Service interface {
 	{{.Endpoint.HandlerMethod}}(ctx context.Context, req *Request) ({{.Endpoint.HandlerMethod}}ResponseObject, error)
 }
-{{- else if eq .Kind "grpc"}}
-
-import (
-	"context"
-
-	{{.GRPC.ProtoAlias}} "{{.GRPC.ProtoImportPath}}"
-)
-
-// {{.GRPC.InterfaceName}} is the gRPC business interface that the
-// {{.ContractID}} server cell must implement.
-//
-// Request and response are the proto-generated message types for service
-// {{.GRPC.ServiceFQN}} (proto: {{.GRPC.ProtoPath}}); the import path is resolved
-// from the proto go_package option via the contractgen ProtoRegistry
-// (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01) — no hand-written import literal.
-//
-// ref: grpc/grpc-go protoc-gen-go-grpc {Service}Server interface
-type {{.GRPC.InterfaceName}} interface {
-{{- range .GRPC.Methods}}
-	{{.MethodName}}(ctx context.Context, req *{{$.GRPC.ProtoAlias}}.{{.RequestType}}) (*{{$.GRPC.ProtoAlias}}.{{.ResponseType}}, error)
-{{- end}}
-}
 {{- end}}

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
@@ -168,6 +169,30 @@ func TestRLSForce_AppRoleNotBypassRLS(t *testing.T) {
 		`SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&bypass, &super))
 	assert.False(t, bypass, "[F-B11] application role must NOT have BYPASSRLS")
 	assert.False(t, super, "[F-B11] application role must NOT be a superuser")
+}
+
+// TestRLSForce_AppRoleRestrictedProbe exercises the runtime readyz precondition
+// probe (#1676, postgres_app_role_restricted_ready): the restricted serving role
+// must PASS (RLS effective), while the admin/superuser pool — which bypasses RLS —
+// must FAIL with ErrAdapterPGRoleBypassRLS. This is the production wiring of the
+// rolbypassrls=false assertion the suite has proved structurally above; corebundle
+// registers it via Config.RequireRestrictedRole so a superuser-served deployment
+// reports /readyz 503 (RLS is a runtime no-op there).
+func TestRLSForce_AppRoleRestrictedProbe(t *testing.T) {
+	dsn := sharedPG.CloneDSN(t)
+	admin := openPerTestPool(t, dsn)
+	app := restrictedAppPool(t, dsn, admin)
+	ctx := context.Background()
+
+	require.NoError(t, app.AppRoleRestrictedCheck(ctx),
+		"[F-B11] restricted (NOSUPERUSER NOBYPASSRLS) serving role must pass the precondition probe")
+
+	err := admin.AppRoleRestrictedCheck(ctx)
+	require.Error(t, err,
+		"[F-B11] superuser/BYPASSRLS role must fail the precondition probe (RLS not enforced at runtime)")
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded, "probe failure must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGRoleBypassRLS, coded.Code)
 }
 
 func TestRLSForce_SystemTenantStrictEquality(t *testing.T) {

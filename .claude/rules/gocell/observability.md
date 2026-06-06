@@ -178,6 +178,17 @@ ref: `runtime/observability/logging/logging.go`；archtest `SLOG-HANDLER-SEALED-
 | accesscore | `accesscore_repo_ready` | `session.Store.RepoReady` — 探测 `sessions` 表 |
 | auditcore | `auditcore_repo_ready` | `ledger.Store.RepoReady` — 复用 `Tail` 探测 `audit_entries` 表 |
 
+**adapter-level：serving-role capability probe（#1676）**：`postgres_app_role_restricted_ready`
+是 adapter 级别 probe（由 `adapters/postgres` 注册，非 cell-level），失败域与上述所有 probe
+均不同：它查询 `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`，
+当 serving role 是 superuser 或带 BYPASSRLS 时 fail（→ /readyz 503）。这是 `FORCE ROW LEVEL SECURITY`
+运行时实际生效的前提——`schema_guard.verifyRLS` 只验 policy shape（在 schema 上定义正确），
+该 probe 验 serving-role capability（在运行时 bypass 与否）。两者正交，合并会混淆两类不同失败域。
+ProbeName typed const = `postgres.ProbeAppRoleRestrictedReady`（`adapters/postgres/pool.go`），
+纳入 `PROBENAME-SEALED-FUNNEL-01` golden inventory。仅当 `Config.RequireRestrictedRole`
+为 true 时注册（serving pool；corebundle 置 true，admin/migration pool 如 `tools/pg-migrate` 不置）。
+ref: ADR `docs/architecture/202606071200-1676-adr-restricted-app-serving-pool.md`。
+
 **为何不与 `postgres_ready` 合并**：pool 级 `postgres_ready`（`adapters/postgres.*Pool` 注册，bare `Ping`）只覆盖连接活性；cell-level repo probe 执行各 cell 自己关系表上的代表性查询，能捕获 schema/migration 漂移、表级权限丢失、缺失表等 pool Ping 检测不到的失败模式——失败域不同，非同义重复，不在"禁止暴露多个同义 ready probe"范围内。
 
 **注册方式约束**：cell-level repo readiness probe **必须**通过 cellgen 生成的 `<cellpkg>.RegisterReadiness(reg, prober)` 有类型 funnel 注册（`healthz_gen.go` 生成产物）；`reg.RegisterReadiness` 是唯一写面（`Registrar.Healthz()` 已移除，调用是编译错误）；以匿名 duck-type 形式绕过同样不可编译（参数类型 `healthz.Probe` 必须经 `healthz.NewProbe(name ProbeName, ...)` 构造）。enforcement：archtest `PROBENAME-SEALED-FUNNEL-01`（A1/A2/A3 覆盖声明 + 构造 + write 入口）；`kernel/cell/celltest.RunRepoReadinessConformance` 提供 real-failure-injection 合规测试（healthy → nil；PG 表删除 → non-nil；mem → skip）。conformance 入列（每个 `healthz.RepoProber` 实现必须出现在 `RunRepoReadinessConformance` 调用点）由 archtest `CELL-REPO-READYZ-PROBE-01`（Medium，`tools/archtest/cell_repo_readyz_probe_test.go`）守卫——范围 cells/+adapters/+runtime/+examples/，kernel/ 因 CELLTEST-B（`CELLTEST-IMPORT-BOUNDARY-01`：kernel/ 禁 import `kernel/cell/celltest`）层级不变式排除。

@@ -289,6 +289,13 @@ func StandardCellRules() []*CellRule {
 // the per-rule Tests already dogfood the same Check* functions. This entry
 // exists for external consumers and is exercised in-repo by
 // TestRunStandardCellRules.
+//
+// Beyond the curated set, additional module-path-agnostic Check* functions are
+// exported for direct use (e.g. CheckAdapterReturnsDeclaredTypes,
+// CheckCapabilityProviderFunnel, CheckEvalPredicateCentralization01,
+// CheckFixtureCellIDTypedBuilder) — they are intentionally NOT in
+// [StandardCellRules] (see its godoc for the register-vs-not rationale; an
+// external repo can still wire any of them in via cfg.ExtraRules).
 func RunStandardCellRules(t *testing.T, cfg ConfigForExternalCell) {
 	t.Helper()
 	rules := StandardCellRules()

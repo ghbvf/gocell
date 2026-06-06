@@ -652,15 +652,15 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_GRPCKind_ProtoTypedInterface verifies that a kind=grpc
-// contract projects endpoints.grpc into spec.GRPC with the derived Go interface
-// name ("Server"), enumerates all RPC methods from the .proto file into
-// spec.GRPC.Methods, resolves proto-typed fields (import path, alias) from the
-// .proto go_package option, leaves HTTP/event fields nil, and resolves the
-// generated package path/name kind-generically. The proto is the single source
-// of truth for the method set (#1655). Uses the committed synth_grpc_minimal
-// fixture (one RPC: IssueCommand) as the root so the proto resolves.
-func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
+// TestBuildContractSpec_GRPCKind_NoIR verifies that a kind=grpc contract builds a
+// spec with NO grpc-specific IR (#1688): buildContractSpec succeeds, marks
+// spec.Kind=="grpc", leaves every kind-specific IR field nil (Endpoint / Event /
+// Command / Saga — and there is no longer a GRPC field), and resolves the
+// generated package path kind-generically. contractgen emits nothing for grpc —
+// buf's generated pb.<Svc>Server is the sole server contract — so there is no
+// interface name / method set to project here. Uses the committed
+// synth_grpc_minimal fixture as the root so parsing succeeds.
+func TestBuildContractSpec_GRPCKind_NoIR(t *testing.T) {
 	t.Parallel()
 	root, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
 	if err != nil {
@@ -697,41 +697,14 @@ func TestBuildContractSpec_GRPCKind_ProtoTypedInterface(t *testing.T) {
 	if spec.Event != nil {
 		t.Errorf("spec.Event should be nil for kind=grpc, got non-nil")
 	}
-	if spec.GRPC == nil {
-		t.Fatal("spec.GRPC should be non-nil for kind=grpc")
+	if spec.Command != nil {
+		t.Errorf("spec.Command should be nil for kind=grpc, got non-nil")
 	}
-	if spec.GRPC.InterfaceName != "Server" {
-		t.Errorf("spec.GRPC.InterfaceName = %q, want %q", spec.GRPC.InterfaceName, "Server")
+	if spec.Saga != nil {
+		t.Errorf("spec.Saga should be nil for kind=grpc, got non-nil")
 	}
-	if spec.GRPC.ServiceFQN != "device.command.v1.DeviceCommandService" {
-		t.Errorf("spec.GRPC.ServiceFQN = %q, want %q", spec.GRPC.ServiceFQN, "device.command.v1.DeviceCommandService")
-	}
-	if spec.GRPC.ProtoPath != "contracts/grpc/device/command/v1/device_command.proto" {
-		t.Errorf("spec.GRPC.ProtoPath = %q", spec.GRPC.ProtoPath)
-	}
-	if spec.GRPC.ProtoImportPath != "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1" {
-		t.Errorf("spec.GRPC.ProtoImportPath = %q", spec.GRPC.ProtoImportPath)
-	}
-	if spec.GRPC.ProtoAlias != "commandv1" {
-		t.Errorf("spec.GRPC.ProtoAlias = %q, want %q", spec.GRPC.ProtoAlias, "commandv1")
-	}
-	// The .proto is the single source of truth for the method set (#1655).
-	// synth_grpc_minimal declares one RPC: IssueCommand.
-	if len(spec.GRPC.Methods) != 1 {
-		t.Fatalf("spec.GRPC.Methods len = %d, want 1; got %+v", len(spec.GRPC.Methods), spec.GRPC.Methods)
-	}
-	if spec.GRPC.Methods[0].MethodName != "IssueCommand" {
-		t.Errorf("spec.GRPC.Methods[0].MethodName = %q, want %q", spec.GRPC.Methods[0].MethodName, "IssueCommand")
-	}
-	if spec.GRPC.Methods[0].RequestType != "IssueCommandRequest" {
-		t.Errorf("spec.GRPC.Methods[0].RequestType = %q, want %q", spec.GRPC.Methods[0].RequestType, "IssueCommandRequest")
-	}
-	if spec.GRPC.Methods[0].ResponseType != "IssueCommandResponse" {
-		t.Errorf("spec.GRPC.Methods[0].ResponseType = %q, want %q", spec.GRPC.Methods[0].ResponseType, "IssueCommandResponse")
-	}
-	if spec.PackageName != "command" {
-		t.Errorf("spec.PackageName = %q, want %q", spec.PackageName, "command")
-	}
+	// Package path is still computed kind-generically (used by the
+	// generated/contracts/ prefix guard) even though grpc writes no file there.
 	if spec.PackagePath != "generated/contracts/grpc/device/command/v1" {
 		t.Errorf("spec.PackagePath = %q, want %q", spec.PackagePath, "generated/contracts/grpc/device/command/v1")
 	}
@@ -769,78 +742,14 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_GRPCKind_MissingEndpoint verifies the fail-closed guard:
-// kind=grpc with no endpoints.grpc block is an error, not a silent empty stub.
-func TestBuildContractSpec_GRPCKind_MissingEndpoint(t *testing.T) {
-	t.Parallel()
-	p := &metadata.ProjectMeta{
-		Contracts: map[string]*metadata.ContractMeta{
-			"grpc.device.command.v1": {
-				ID:         "grpc.device.command.v1",
-				Kind:       "grpc",
-				Codegen:    true,
-				Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
-				File:       "contracts/grpc/device/command/v1/contract.yaml",
-			},
-		},
-	}
-	_, err := buildContractSpec("", p, "grpc.device.command.v1")
-	if err == nil {
-		t.Fatal("buildContractSpec should error for kind=grpc with no endpoints.grpc block")
-	}
-}
-
-// TestBuildContractSpec_GRPCKind_RejectsMalformed exercises the fail-closed
-// buildGRPCSpec guards (the golden path does not run governance FMT-37, so these
-// are the funnel's own defense). Empty service, an empty proto path, a proto
-// path not rooted under metadata.GRPCProtoPathPrefix, and a control character
-// (newline) in service or proto — each must error rather than emit a
-// silently-broken or injected stub. The empty/outside-prefix proto cases mirror
-// governance FMT-37 (validateFMT37Proto) so the codegen funnel rejects the same
-// proto paths the governance rule would, even though codegen does not run FMT-37.
-// Method/streamingType validation cases were removed in #1655: the .proto file
-// is now the single source of truth for the RPC method set.
-func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		grpc metadata.GRPCTransportMeta
-	}{
-		{"empty service", metadata.GRPCTransportMeta{Service: "", Proto: "contracts/grpc/d/c/v1/c.proto"}},
-		{"empty proto", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Proto: ""}},
-		{"proto outside prefix", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Proto: "proto/d/c/v1/c.proto"}},
-		{"newline in service", metadata.GRPCTransportMeta{
-			Service: "S\nimport \"os\"", Proto: "contracts/grpc/d/c/v1/c.proto",
-		}},
-		{"newline in proto", metadata.GRPCTransportMeta{
-			Service: "d.c.v1.S", Proto: "contracts/grpc/d/c/v1/c.proto\nvar _ = 1",
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			grpc := tc.grpc
-			p := &metadata.ProjectMeta{
-				Contracts: map[string]*metadata.ContractMeta{
-					"grpc.device.command.v1": {
-						ID:         "grpc.device.command.v1",
-						Kind:       "grpc",
-						Codegen:    true,
-						Transports: []string{"grpc"}, // mirrors parser defaultTransportsForKind("grpc")
-						File:       "contracts/grpc/device/command/v1/contract.yaml",
-						Endpoints: metadata.EndpointsMeta{
-							Server: "devicecell",
-							GRPC:   &grpc,
-						},
-					},
-				},
-			}
-			if _, err := buildContractSpec("", p, "grpc.device.command.v1"); err == nil {
-				t.Fatalf("buildContractSpec should reject malformed grpc input %q", tc.name)
-			}
-		})
-	}
-}
+// grpc structural validation (kind=grpc requires endpoints.grpc with a valid
+// service + proto, no control runes, proto rooted under contracts/grpc/) is NOT
+// a buildContractSpec concern since #1688 — contractgen builds no grpc IR. It is
+// owned by governance FMT-37 (validateFMT37, the gocell validate gate) and, at
+// the codegen layer, by the checkGRPCProtoCollisions pre-pass: proto-path guards
+// via TestValidateGRPCProtoPath (above) + production rejection via
+// TestCheckGRPCProtoCollisions_RejectsBadProtoPath (generator_test.go); service
+// validity via the protoreader_test.go ReadProtoServiceInfo suite.
 
 // --- BuildHTTPEndpointSpec HasBody tests ---
 

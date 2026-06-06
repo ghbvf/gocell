@@ -110,12 +110,18 @@ func RealIPFrom(ctx context.Context) (string, bool) {
 // setters carry audit identity end-to-end: forging a principal is an audit
 // impersonation (P1), unlike forging a trace id (harmless). Their production
 // reference sites are therefore pinned by archtest CTXKEYS-PRINCIPAL-WRITE-CALLER-01
-// to at most two callers — the auth request-boundary bridge
+// to at most three callers — the auth request-boundary bridge
 // (runtime/auth/middleware.go::injectPrincipalCtxKeys, shared by JWT +
-// service-token) and the consumer-side restore (kernel/outbox.RestoreToContext).
-// All four setters — including WithTenantID — now have both writers: the auth
+// service-token), the consumer-side restore (kernel/outbox.RestoreToContext),
+// and the saga projection system principal installer
+// (kernel/projection/system_principal.go): InstallSystemPrincipal overwrites
+// ambient principal with the "system" sentinel at saga Rebuild boundary, and
+// clearAmbientPrincipal zeros all four keys at the Rebuild detach boundary so the
+// triggering admin identity cannot leak into projection Apply (#1609 PR-03 #1627).
+// All four setters — including WithTenantID — now have all three writers: the auth
 // bridge populates TenantID from the JWT "tenant_id" claim (multi-tenancy epic
-// #1337), and the consumer restore re-hydrates it after the async hop.
+// #1337), the consumer restore re-hydrates it after the async hop, and the saga
+// projection installer clears it at the system-principal boundary.
 // Business producers (cells/, examples/) must never call them: principal injection
 // is the framework's responsibility (#1229; ADR 202605281200-1042 §Amendment
 // 2026-05-29 round-2). Read side (the XxxIDFrom getters) is unrestricted.

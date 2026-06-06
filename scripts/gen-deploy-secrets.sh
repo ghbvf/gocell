@@ -30,7 +30,10 @@ trap 'rm -f "${_tmp_out}"' EXIT
 # persistence see docs/ops/local-docker-deploy.md §Production differences.
 
 # Generate random secrets.
+# PG passwords use hex (not base64): both are embedded in DSN userinfo
+# (postgres://role:pw@host/db), where base64's '/' '+' '=' break URL parsing.
 _pg_password="$(openssl rand -hex 16)"
+_gocell_app_password="$(openssl rand -hex 16)"
 _master_key="$(openssl rand -hex 32)"
 _cursor_key_config="$(openssl rand -base64 32)"
 _hmac_key="$(openssl rand -base64 32)"
@@ -48,6 +51,7 @@ cat >"${_tmp_out}" <<EOF
 # Run the script again (after deleting this file) to rotate all secrets.
 
 PG_PASSWORD=${_pg_password}
+GOCELL_APP_PASSWORD=${_gocell_app_password}
 CONFIGCORE_MASTER_KEY=${_master_key}
 CONFIGCORE_CURSOR_KEY=${_cursor_key_config}
 AUDITCORE_HMAC_KEY=${_hmac_key}
