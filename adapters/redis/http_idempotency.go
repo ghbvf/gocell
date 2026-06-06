@@ -28,7 +28,7 @@ var _ idemhttp.Store = (*HTTPIdempotencyStore)(nil)
 //
 //   - <store-ns>:<req-ns>:{key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
 //   - <store-ns>:<req-ns>:{key}:resp  — SET with doneTTL, value = MarshalRecordedResponse blob. Indicates "completed".
-//   - <store-ns>:<req-ns>:{key}:fp    — SET with max(leaseTTL,doneTTL), value = body fingerprint; flags same-key/different-body reuse.
+//   - <store-ns>:<req-ns>:{key}:fp    — SET with leaseTTL while processing; Record extends it to doneTTL. Value = body fingerprint; flags same-key/different-body reuse.
 //
 // The key prefix has two segments, both OUTSIDE the hashtag:
 //
@@ -45,10 +45,12 @@ var _ idemhttp.Store = (*HTTPIdempotencyStore)(nil)
 // segments sit outside the hashtag, so slot colocality is preserved regardless
 // of either namespace value.
 //
-// Claim checks fp first (FingerprintMismatch if the stored fp differs), then
-// resp (ClaimDone+replay), then attempts lease (ClaimAcquired — storing fp — or
-// ClaimBusy). Record sets resp + preserves fp + deletes lease. Release deletes
-// lease + fp (token-guarded); there is no response to protect.
+// Claim compares fp only while resp or lease is active. With resp present it
+// returns ClaimDone+replay after validating fp; with lease present it returns
+// ClaimBusy after validating fp; when neither exists it acquires lease and
+// stores fp for the leaseTTL. Record sets resp + extends fp to doneTTL + deletes
+// lease. Release deletes lease + fp (token-guarded); there is no response to
+// protect.
 type HTTPIdempotencyStore struct {
 	rdb cmdable
 	ns  KeyNamespace

@@ -157,7 +157,7 @@ lease 机制本身已防止重复处理：`ClaimBusy` 时 Claim 不成功，hand
 
 - `<ns>:{<key>}:lease` — `SET NX PX <leaseTTL>`，值为随机 token（UUID fencing）。表示"处理中"。
 - `<ns>:{<key>}:resp` — `SET PX <doneTTL>`，值为 `MarshalRecordedResponse` blob。表示"已完成"。
-- `<ns>:{<key>}:fp` — `SET PX max(<leaseTTL>,<doneTTL>)`，值为请求 body fingerprint。用于同 key／不同 body 的复用检测，生命周期与 resp 对齐（done 后仍存活以便后续 replay 校验指纹）。
+- `<ns>:{<key>}:fp` — Claim 获得 lease 时 `SET PX <leaseTTL>`，值为请求 body fingerprint；Record 成功后延长为 `doneTTL`，Release 删除。用于 active lease 或 done resp 下同 key／不同 body 的复用检测；abandoned lease 过期后不再保留 stale fingerprint。
 
 三个 key 共享 Redis Cluster hashtag `{<key>}`（hashtag 仅含业务 key，namespace 前缀在
 hashtag 外），保证 lease + resp + fp 落在同一 slot，使 `EVAL` multi-key 在 Cluster 模式下
