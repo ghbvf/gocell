@@ -12,6 +12,13 @@ dist/
 /corebundle
 /pg-migrate
 
+# Example module binaries produced by running `go build` inside examples/<name>/.
+/examples/corebundlestarter/corebundlestarter
+/examples/iotdevice/iotdevice
+/examples/orderfulfillment/orderfulfillment
+/examples/ssobff/ssobff
+/examples/todoorder/todoorder
+
 # Test
 *.test
 *.out

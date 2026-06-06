@@ -3,8 +3,6 @@ package projection
 import (
 	"context"
 	"sync"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // ReplaySource is the read-model event store interface consumed by a Coordinator
@@ -35,9 +33,9 @@ import (
 // forwarded as the runRebuild ctx). Per-batch limiting is deferred to a future
 // version when large-history projections require it.
 //
-// PR-03 ships this interface and the MemReplaySource fake. A production
-// journal-backed implementation (reading from the outbox event store or a
-// separate event log) lands in PR-04 (#1176) alongside the cellgen wiring.
+// The carrier is the typed [ProjectionEvent] interface (EPIC #1609 PR-01): the
+// outbox-backed source (adapters/postgres.PGProjectionReplaySource) and a future
+// saga-journal source both satisfy it; neither leaks the concrete outbox.Entry.
 //
 // ref: AxonFramework EventStore — ordered event stream replay by position/token.
 // ref: JasperFx/marten IDocumentSession.Events.QueryAllRawEvents — append-only
@@ -47,7 +45,7 @@ type ReplaySource interface {
 	// ascending position order, calling fn for each. fromOffset==0 replays all
 	// events. If fn returns an error, Replay stops immediately and returns that
 	// error; events already passed to fn are NOT retried.
-	Replay(ctx context.Context, fromOffset int64, fn func(outbox.Entry) error) error
+	Replay(ctx context.Context, fromOffset int64, fn func(ProjectionEvent) error) error
 
 	// Head returns the highest available position in the source, or 0 if the
 	// source is empty. Head is used to determine the rebuild cutoff and to
@@ -66,23 +64,18 @@ type ReplaySource interface {
 // and agrees with the paired test memCursor.Position(e) implementation that uses
 // positionOf(e) to look up the 1-based index.
 //
-// # Entry identity
+// # Event identity
 //
-// Entry identity for positionOf is determined by the index in the entries slice
-// that was stored at Append time. To avoid OccurredAt/CreatedAt nanosecond
-// collisions between rapidly-created test entries, MemReplaySource stores entries
-// paired with their index using an indexed wrapper, and the outbox.Entry passed
-// to Replay fn is tagged via the entryIndex map keyed on the entry's pointer
-// identity from the slice.
+// Position resolution matches events by their EventID (the ProjectionEvent
+// carrier's identity accessor), which the carrier contract requires to be unique
+// across the whole replay source — so the lookup is collision-free even when test
+// events are created in the same nanosecond and does not rely on any pointer or
+// timestamp identity.
 //
 // Thread-safe: all methods are protected by a RWMutex.
 type MemReplaySource struct {
 	mu      sync.RWMutex
-	entries []outbox.Entry
-	// index maps the position returned by Replay fn back to the 1-based
-	// insertion index. Because outbox.Entry is a value type (no stable pointer),
-	// we use OccurredAt+CreatedAt+type as composite key. For cases where those
-	// collide (same-nanosecond test entries), positionOf iterates sequentially.
+	entries []ProjectionEvent
 }
 
 // NewMemReplaySource returns a ready-to-use MemReplaySource.
@@ -92,7 +85,7 @@ func NewMemReplaySource() *MemReplaySource {
 
 // Append adds entry to the source at the next 1-based insertion position.
 // This is a test helper — production code does not call Append directly.
-func (m *MemReplaySource) Append(entry outbox.Entry) {
+func (m *MemReplaySource) Append(entry ProjectionEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.entries = append(m.entries, entry)
@@ -101,9 +94,9 @@ func (m *MemReplaySource) Append(entry outbox.Entry) {
 // Replay iterates entries with 1-based position > fromOffset in insertion order,
 // calling fn for each. Returns fn's error immediately if non-nil. ctx.Done is
 // checked at the start of each iteration to respect cancellation.
-func (m *MemReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(outbox.Entry) error) error {
+func (m *MemReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(ProjectionEvent) error) error {
 	m.mu.RLock()
-	snapshot := make([]outbox.Entry, len(m.entries))
+	snapshot := make([]ProjectionEvent, len(m.entries))
 	copy(snapshot, m.entries)
 	m.mu.RUnlock()
 
@@ -131,9 +124,8 @@ func (m *MemReplaySource) Head(_ context.Context) (int64, error) {
 }
 
 // positionOf returns the 1-based insertion index of entry in the source by its
-// entry ID (UUID), or 0 if not found. Entry.ID() is unique per entry so this
-// comparison is collision-free even when entries are created in the same
-// nanosecond.
+// EventID, or 0 if not found. EventID is unique per event so this comparison is
+// collision-free even when events are created in the same nanosecond.
 //
 // This is a test helper — production code should not call this method.
 //
@@ -144,19 +136,19 @@ func (m *MemReplaySource) Head(_ context.Context) (int64, error) {
 //
 // Note: Position (public) is the stable cross-package alias used by projectiontest
 // conformance helpers and test cursors; both are identical.
-func (m *MemReplaySource) positionOf(e outbox.Entry) int64 {
+func (m *MemReplaySource) positionOf(e ProjectionEvent) int64 {
 	return m.Position(e)
 }
 
 // Position returns the 1-based insertion index of entry in the source by its
-// entry ID (UUID), or 0 if not found. Used by the projectiontest conformance
-// helper and test cursors which need a stable cross-package API. Entry.ID() is
-// unique per entry so this lookup is collision-free even for same-nanosecond entries.
-func (m *MemReplaySource) Position(e outbox.Entry) int64 {
+// EventID, or 0 if not found. Used by the projectiontest conformance helper and
+// test cursors which need a stable cross-package API. EventID is unique per event
+// so this lookup is collision-free even for same-nanosecond events.
+func (m *MemReplaySource) Position(e ProjectionEvent) int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for i, stored := range m.entries {
-		if stored.ID() == e.ID() {
+		if stored.EventID() == e.EventID() {
 			return int64(i + 1)
 		}
 	}

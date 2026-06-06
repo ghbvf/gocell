@@ -24,32 +24,39 @@
 # examples/* are their own go.work modules (#1556), so a root `./examples/...`
 # pattern matches zero packages here; their release-consistency build is covered
 # by hack/verify-workspace.sh (GOWORK=off per-module). `make build` ships core/cmd.
+# cmd/gocell is its own go.work module too (#1557), so the `./cmd/...` wildcard
+# below stops at its nested-module boundary and no longer emits bin/gocell — it
+# is built explicitly via its module path (the explicit dir path resolves the
+# satellite under go.work; CWD stays the repo root so bin/ is the repo bin/).
 build:
 	mkdir -p bin
 	go generate ./cmd/corebundle/
 	go build -tags=catalog_gen -o bin/ ./cmd/...
+	go build -o bin/ ./cmd/gocell
 
 # check-build is the full-repo compile check (no artefacts). Module-aware
-# (#1556): iterate every go.work member from the single funnel
-# (hack/lib/modules.sh) and build each, so root AND the satellite example
-# modules compile (a bare root `./...` stops at the nested-module boundary).
+# (#1556/#1557): iterate every go.work member from the single funnel
+# (hack/lib/modules.sh) and build each, so root AND satellite modules compile
+# (a bare root `./...` stops at the nested-module boundary).
 # The CodeQL security workflow runs this as its trace build, so its extractor
 # follows automatically; the deliberately-broken archtest fixtures under
 # tools/archtest/testdata/ stay out because they are not go.work members.
-# Uses `( cd "$$d" && go build ./... )` rather than `go -C "$$d" build`: under
-# CodeQL's Go build-tracer the canonical `go build ./...` command form is what
+# Uses `( cd "$$d" && go build ... ./... )` rather than `go -C "$$d" build`:
+# under CodeQL's Go build-tracer the canonical `go build` command form is what
 # the tracing shim recognizes — a leading `-C` flag makes it miss the build and
-# the database ends up empty ("no source code seen during build"). Fail-closed:
-# a broken funnel aborts under `set -e`.
+# the database ends up empty ("no source code seen during build"). `-o` points at
+# a temp directory so main packages do not leave binaries in satellite dirs.
+# Fail-closed: a broken funnel aborts under `set -e`.
 check-build:
 	@bash -c 'set -euo pipefail; \
+	build_out="$$(mktemp -d)"; trap '\''rm -rf "$$build_out"'\'' EXIT; \
 	source hack/lib/util.sh; source hack/lib/modules.sh; \
 	dirs="$$(gocell::modules::dirs)"; \
 	while IFS= read -r d; do [ -n "$$d" ] || continue; \
-	  echo "+++ go build ($$d)"; ( cd "$$d" && go build ./... ); \
+	  echo "+++ go build ($$d)"; ( cd "$$d" && go build -o "$$build_out/" ./... ); \
 	done <<< "$$dirs"'
 
-# Root `./...` stops at the examples/* nested-module boundary. Iterate every
+# Root `./...` stops at nested-module boundaries. Iterate every
 # go.work member from the single funnel (hack/lib/modules.sh → `go work edit
 # -json`) and `go -C "$$dir" test ./...` each — covers root + every satellite
 # (#1556) with zero hardcoded list, and an ambient GOWORK=off can't silently
@@ -145,6 +152,11 @@ clean:
 	rm -rf bin/
 	rm -f coverage.out
 	rm -f gocell corebundle iotdevice ssobff todoorder
+	rm -f examples/corebundlestarter/corebundlestarter \
+		examples/iotdevice/iotdevice \
+		examples/orderfulfillment/orderfulfillment \
+		examples/ssobff/ssobff \
+		examples/todoorder/todoorder
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle

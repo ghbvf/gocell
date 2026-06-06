@@ -45,12 +45,18 @@ func TestStandardCellRulesComposition(t *testing.T) {
 		seen[r.ID] = true
 	}
 
-	// wantRuleIDs is the adjudicated standard set. PR-1 ships PANIC-REGISTERED-01
-	// as the sole migration exemplar; the cell-family rules are gocell-internal
-	// and NOT registered. A new entry here must be a rule portable to external
-	// Cell repos (it reasons about platform-API usage, not GoCell's own package
-	// layout) — see external.go's StandardCellRules godoc.
-	wantRuleIDs := map[string]bool{rulePanicRegistered01: true}
+	// wantRuleIDs is the adjudicated standard set — it must match StandardCellRules
+	// exactly. A new entry must be a rule portable to external Cell repos (it
+	// reasons about platform-API usage, not GoCell's own package layout) — see
+	// external.go's StandardCellRules godoc, which also documents the rules
+	// deliberately NOT registered because they are gocell-internal-layout.
+	wantRuleIDs := map[string]bool{
+		rulePanicRegistered01:               true,
+		ruleErrcodeKindLiteral01:            true,
+		ruleMessageConstLiteral01:           true,
+		ruleExportedErrorNew01:              true,
+		ruleScaffoldDerivedForceOverwrite01: true,
+	}
 	for id := range seen {
 		if !wantRuleIDs[id] {
 			t.Errorf("StandardCellRules() contains undeclared rule %q; if intended, add it to "+

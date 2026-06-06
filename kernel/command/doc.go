@@ -45,7 +45,7 @@
 // distinct from Queue.Dequeue (the claim-with-lease primary consumer path).
 //
 // [QueueRegistrar] is an optional Cell-side interface; the runtime consumer
-// lives in runtime/command (discovery + SweeperLifecycle wiring).
+// lives in runtime/command (queue discovery + dispatch registry).
 //
 // # Testing
 //

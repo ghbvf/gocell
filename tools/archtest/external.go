@@ -141,6 +141,12 @@ type ConfigForExternalCell struct {
 //     (findModuleRoot), where that file does not exist → false-red in a clean
 //     external repo. It constrains GoCell's own errcode package shape, so it stays a
 //     GoCell-internal self-check enforced via TestDetailsSealedFieldFrozen01.
+//   - SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01 (CheckScaffoldListenerMarkerTypedConst):
+//     scans the platform's own tools/codegen/cellgen package + the
+//     templates/scaffold-cell.tmpl asset (neither exists in an external Cell repo)
+//     → vacuous-green there. Migrated for the unified PlatformModulePath
+//     parameterization + fork-safety only; enforced in GoCell via
+//     TestScaffoldListenerMarkerTypedConst.
 //
 // An external consumer gets the rules migrated so far plus any cfg.ExtraRules
 // they add. The set expands as additional portable rules land in #1302.
@@ -150,6 +156,11 @@ func StandardCellRules() []*CellRule {
 		{ID: ruleErrcodeKindLiteral01, Run: CheckErrcodeKindLiteralBanned},
 		{ID: ruleMessageConstLiteral01, Run: CheckErrcodeMessageConstLiteral},
 		{ID: ruleExportedErrorNew01, Run: CheckExportedErrorNew},
+		// SCAFFOLD-DERIVED-FORCEOVERWRITE-01: bans consumer code from calling the
+		// internal codegen primitive pathsafe.DerivedOverwrite outside the
+		// sanctioned planDerivedArtifact site (no such site in an external repo →
+		// pure ban). Cell-applicable; Hard downstream (types.Info caller-allowlist).
+		{ID: ruleScaffoldDerivedForceOverwrite01, Run: CheckScaffoldDerivedForceOverwrite},
 	}
 }
 

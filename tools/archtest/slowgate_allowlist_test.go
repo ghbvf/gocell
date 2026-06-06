@@ -82,7 +82,15 @@ func TestSlowgateAllowlist(t *testing.T) {
 	loaded := map[string]bool{}           // pkgPath → found
 	funcs := map[string]map[string]bool{} // pkgPath → funcName → true
 
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns), func(p *Pass) []Diagnostic {
+	// Production (workspace) not Typed(patterns): the allowlist now references
+	// cmd/gocell/app, which became its own go.work module (#1557) that a
+	// Typed(GOWORK=off) import-path load can no longer reach ("no required module
+	// provides package …/cmd/gocell/app"). Production spans every workspace member;
+	// the violations loop below already filters to the allowlist packages (`patterns`),
+	// and its `!loaded[pkgPath]` orphan check is itself the anti-vacuity guard — a
+	// satellite silently dropping from the scan surfaces as an orphan-entry violation,
+	// not a vacuous pass.
+	_ = Run(t, Production(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}

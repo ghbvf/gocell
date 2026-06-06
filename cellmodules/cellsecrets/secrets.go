@@ -68,6 +68,12 @@ var wellKnownDemoKeys = []string{
 	// #nosec G101 -- known public demo values; presence here is the security mechanism.
 	"dev-ip-hash-salt-accesscore-32b!",
 	"dev-ip-hash-salt-ssobff-32-byte!",
+	// webhookdemo HMAC source secret (#1567). examples/webhookdemo hardcodes this
+	// in run.go for the demo; it is public in git, so real mode must reject it if
+	// it is ever fed to a cellsecrets-loaded webhook source.
+	//
+	// #nosec G101 -- known public demo value; presence here is the security mechanism.
+	"webhookdemo-demo-hmac-secret-key",
 }
 
 // WellKnownDemoKeys returns a copy of the demo-key denylist for callers that

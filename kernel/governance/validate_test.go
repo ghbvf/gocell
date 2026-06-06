@@ -921,6 +921,67 @@ func TestTOPO05(t *testing.T) {
 			},
 			wantCount: 1,
 		},
+		{
+			name: "L0 inbound webhook receiver is allowed",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells[metadatatest.CellIDSharedCrypto] = &metadata.CellMeta{
+					ID:               metadatatest.CellIDSharedCrypto,
+					Type:             "edge",
+					ConsistencyLevel: "L0",
+				}
+				pm.Contracts["webhook.crypto.receive.v1"] = &metadata.ContractMeta{
+					ID:               "webhook.crypto.receive.v1",
+					Kind:             "webhook",
+					Direction:        "inbound",
+					OwnerCell:        metadatatest.CellIDSharedCrypto,
+					ConsistencyLevel: "L0",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Receivers: []string{metadatatest.CellIDSharedCrypto},
+					},
+				}
+				pm.Slices["sharedcrypto/receive"] = &metadata.SliceMeta{
+					ID:            "receive",
+					BelongsToCell: metadatatest.CellIDSharedCrypto,
+					ContractUsages: []metadata.ContractUsage{{
+						Contract: "webhook.crypto.receive.v1",
+						Role:     "webhook-receive",
+						Handler:  "HandleWebhook",
+						SourceID: "demosource",
+					}},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "L0 outbound webhook dispatcher is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells[metadatatest.CellIDSharedCrypto] = &metadata.CellMeta{
+					ID:               metadatatest.CellIDSharedCrypto,
+					Type:             "edge",
+					ConsistencyLevel: "L0",
+				}
+				pm.Contracts["webhook.crypto.dispatch.v1"] = &metadata.ContractMeta{
+					ID:               "webhook.crypto.dispatch.v1",
+					Kind:             "webhook",
+					Direction:        "outbound",
+					OwnerCell:        metadatatest.CellIDSharedCrypto,
+					ConsistencyLevel: "L0",
+					Lifecycle:        "active",
+				}
+				pm.Slices["sharedcrypto/dispatch"] = &metadata.SliceMeta{
+					ID:            "dispatch",
+					BelongsToCell: metadatatest.CellIDSharedCrypto,
+					ContractUsages: []metadata.ContractUsage{{
+						Contract:       "webhook.crypto.dispatch.v1",
+						Role:           "webhook-dispatch",
+						TargetSelector: "Target",
+						SourceID:       "demosource",
+					}},
+				}
+			},
+			wantCount: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2376,6 +2437,81 @@ func TestFMT37(t *testing.T) {
 			if tt.wantField != "" {
 				require.Len(t, got, 1)
 				assert.Equal(t, tt.wantField, got[0].Field)
+			}
+		})
+	}
+}
+
+// TestFMT37Proto_TraversalAndControlRune exercises the two guards that were
+// missing from governance before the single-source metadata.ValidateGRPCProtoPath
+// was introduced (#1601 findings #2/#3): filepath.IsLocal traversal rejection
+// and control-rune rejection. These cases used to pass governance silently.
+func TestFMT37Proto_TraversalAndControlRune(t *testing.T) {
+	t.Parallel()
+
+	const validProto = "contracts/grpc/access/session/verify/v1/session_verify.proto"
+	grpcContract := func(proto string) *metadata.ContractMeta {
+		return &metadata.ContractMeta{
+			ID:               "grpc.access.session.verify.v1",
+			Kind:             "grpc",
+			OwnerCell:        metadatatest.CellIDAccessCore,
+			ConsistencyLevel: "L1",
+			Lifecycle:        "active",
+			Endpoints: metadata.EndpointsMeta{
+				Server:  metadatatest.CellIDAccessCore,
+				Clients: []string{metadatatest.CellIDSvcB},
+				GRPC: &metadata.GRPCTransportMeta{
+					Service: "access.session.v1.SessionVerifyService",
+					Method:  "Verify",
+					Proto:   proto,
+				},
+			},
+			File: "contracts/grpc/access/session/verify/v1/contract.yaml",
+		}
+	}
+
+	cases := []struct {
+		name      string
+		proto     string
+		wantCount int
+		wantIssue IssueType
+	}{
+		// GREEN: valid path still produces zero findings.
+		{
+			name:      "valid proto path — no finding",
+			proto:     validProto,
+			wantCount: 0,
+		},
+		// RED: traversal path that passes HasPrefix but fails filepath.IsLocal.
+		{
+			name:      "traversal escape contracts/grpc/../../../etc/x — must fire FMT-37",
+			proto:     "contracts/grpc/../../../etc/x",
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+		},
+		// RED: control rune in proto path.
+		{
+			name:      "control rune in proto path — must fire FMT-37",
+			proto:     "contracts/grpc/x\n.proto",
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pm := validProject()
+			pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(tc.proto)
+			val := NewValidator(pm, "", clock.Real())
+			got := findByCode(val.validateFMT37(), "FMT-37")
+			assert.Len(t, got, tc.wantCount)
+			if tc.wantCount > 0 {
+				require.Len(t, got, 1)
+				assert.Equal(t, tc.wantIssue, got[0].IssueType)
+				assert.Equal(t, "endpoints.grpc.proto", got[0].Field)
+				assert.Equal(t, SeverityError, got[0].Severity)
 			}
 		})
 	}

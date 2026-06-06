@@ -10,6 +10,7 @@ require (
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
+	go.uber.org/goleak v1.3.0
 )
 
 require (

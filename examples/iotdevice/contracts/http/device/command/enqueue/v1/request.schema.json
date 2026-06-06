@@ -4,7 +4,7 @@
   "type": "object",
   "properties": {
     "commandType": { "type": "string", "minLength": 1, "maxLength": 64 },
-    "payload": { "type": "string", "minLength": 0, "maxLength": 4096 }
+    "payload": { "type": "string", "minLength": 1, "maxLength": 4096 }
   },
   "required": ["payload"],
   "additionalProperties": false

@@ -15,7 +15,7 @@ import (
 	"errors"
 	"testing"
 
-	enqueue "github.com/ghbvf/gocell/generated/contracts/command/device-command/enqueue/v1"
+	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/command"

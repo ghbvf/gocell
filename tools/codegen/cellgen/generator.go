@@ -175,6 +175,9 @@ func generateOneCell(
 		EnrichSubscriptionsWithModulePath(spec, opts.ModulePath)
 	}
 	EnrichProjectionsWithModulePath(spec, opts.ModulePath)
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		return err
+	}
 	if err := renderAndWrite(
 		root, opts.ModulePath, "cell.tmpl", spec, cellGenPath(root, cell),
 		opts, res, "cellgen generate: render "+cell.ID,
@@ -287,6 +290,9 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID, mod
 		EnrichSubscriptionsWithModulePath(cellSpec, modulePath)
 	}
 	EnrichProjectionsWithModulePath(cellSpec, modulePath)
+	if err := EnrichGrpcServicesWithProtoInfo(cellSpec, root); err != nil {
+		return nil, err
+	}
 	cellAbs := cellGenPath(root, cell)
 	cellContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 		TemplateName: "cell.tmpl",

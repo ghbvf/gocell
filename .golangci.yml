@@ -346,6 +346,13 @@ linters:
             - github.com/google/uuid
             - github.com/jackc/pgx
             - golang.org/x/crypto
+            # A cell serving a gRPC contract has cellgen-generated cell_gen.go
+            # calling reg.GRPCService(... Register: func(r grpc.ServiceRegistrar){
+            # pb.Register<Svc>Server(r, c.field) }) (#1601 grpc-serve). That callback
+            # names the grpc transport lib (the kernel-side Register is an `any`).
+            # The interceptor chain + adapters/grpc stay denied (deny below /
+            # composition-root concern, #1148).
+            - google.golang.org/grpc
           deny:
             - pkg: github.com/ghbvf/gocell/cellmodules
               desc: |
@@ -382,6 +389,9 @@ linters:
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/examples/demo
             - github.com/ghbvf/gocell/generated/contracts
+            # grpc-serve cell_gen.go references the grpc transport lib (#1601);
+            # interceptor/adapter wiring stays denied below.
+            - google.golang.org/grpc
           deny:
             - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
               desc: |
@@ -405,6 +415,10 @@ linters:
             # internal/adapters/postgres mirroring cells-isolation. pgx is the
             # underlying SDK — same allowance as platform cells-isolation.
             - github.com/jackc/pgx
+            # grpc-serve cell_gen.go references the grpc transport lib (#1601, the
+            # iotdevice grpc handler is the #1151 consumer); interceptor/adapter
+            # wiring stays denied below.
+            - google.golang.org/grpc
           deny:
             - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
               desc: |
@@ -425,6 +439,9 @@ linters:
             - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
             - github.com/go-chi/chi/v5
+            # grpc-serve cell_gen.go references the grpc transport lib (#1601);
+            # interceptor/adapter wiring stays denied below.
+            - google.golang.org/grpc
           deny:
             - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
               desc: |

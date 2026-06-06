@@ -317,7 +317,7 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 
 **Goal**: 删除 SweeperLifecycle / SweepTicker 命名，kernel/command.Sweeper 改为实现 reconcile.Reconciler；archtest 守 frozen 命名。
 
-**Independent Test**: `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 编译通过；`grep -r SweeperLifecycle` 在 production 0 命中；archtest `RECONCILE-NAMING-FROZEN-01` 在 nightly 跑过。
+**Independent Test**: `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 编译通过；`grep -r SweeperLifecycle` 在 production 0 命中。（`RECONCILE-NAMING-FROZEN-01` won't-do — see T38 annotation below）
 
 #### Tests for PR-A8 (TDD)
 
@@ -341,6 +341,7 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 - [ ] **T38** [PR-A8] `tools/archtest/reconcile_naming_frozen_test.go`：
   - `RECONCILE-NAMING-FROZEN-01`：grep production 不得出现 SweeperLifecycle / SweepTicker
   - 估算：80 LoC
+  - **WON'T-DO (PR-A8 decision)**: a grep-of-deleted-name archtest is Soft per ai-robust.md（"Soft 严禁立项"）. The frozen-naming guarantee is instead type-system Hard — the SweeperLifecycle/SweepTicker TYPES are deleted, so any production reference is a compile error — backed by the existing RECONCILE-BUILDER-FUNNEL-01 (Hard) + a compile-time `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` assertion. A one-time merge-gate grep of production source is empty. No standing Soft archtest is added.
 - [ ] **T39** [PR-A8] 更新 `tools/archtest/command_projection_explicit_test.go`：
   - 加 reconcile contract kind 枚举到 `COMMAND-PROJECTION-EXPLICIT-01`
   - 估算：50 LoC（diff）
@@ -359,28 +360,40 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 
 **Independent Test**: `go test ./examples/iotdevice/...` 全绿；`devicecell.commandSweeper` 字段类型为 `*reconcile.Loop` 而非 `*kcommand.SweeperLifecycle`。
 
+> **STATUS（#1170 — closed as spec-reconcile, no new code）**：PR-A9 的全部实质已被 **PR-A8（#1169）吸收**。
+> `devicecell` 是 `SweeperLifecycle` 唯一生产消费方，删 `runtime/command/lifecycle.go` 的强制编译前置即要求同 PR 切换
+> wiring（OSS 标准形态：controller-runtime 把"接入 reconciler"当作 consumer 自身代码内联几行，不抽独立迁移 PR）。
+> #1170 原列的 T41/T42 两个 net-new 测试在激进自审 + 开源对标下判定为 **Soft 冗余 / 跨层重复，按 AI-robust 否决**——
+> 详见 #1170 的 pm:ship 评论（含 controller-runtime / fx primary-source 论据）。**Independent Test 判据在 develop 已满足**。
+
 #### Tests for PR-A9 (TDD)
 
-- [ ] **T41** [P] [PR-A9] `examples/iotdevice/cells/devicecell/cell_reconcile_test.go`：
-  - `TestDevicecell_ReconcileLoopWiring`：cell.Init 后 commandSweeper 字段是 *reconcile.Loop
-  - 估算：100 LoC
-- [ ] **T42** [P] [PR-A9] `examples/iotdevice/e2e_test.go`：
-  - `TestIotDevice_E2EReconcileCommand`：完整流程（Enqueue 命令 → 超时 → Loop 触发 Reconcile → 状态推进 Expired）
-  - 估算：300 LoC
+- [x] **T41** [PR-A9] ~~`examples/iotdevice/cells/devicecell/cell_reconcile_test.go`~~ — **NOT ADDED（superseded）**：
+  - "commandSweeper 字段是 `*reconcile.Loop`" 是**编译期事实**（字段声明 `commandSweeper *reconcile.Loop` @ `cell.go`
+    + `*kcommand.SweeperLifecycle` 类型已删 → 任何其它类型是编译错误）；非 nil 已由 `sweeper_lifecycle_test.go`
+    （`Init` NoError + `OnStart` NoError）证明。运行期再断言一个编译期事实 = AI-robust Soft，「Soft 严禁立项」。
+    OSS 对标：controller-runtime 对 reconciler 满足契约的唯一断言 = 编译期 `var _ Reconciler = Func(nil)`，无运行期字段类型扫描。
+- [x] **T42** [PR-A9] ~~`examples/iotdevice/e2e_test.go`~~ — **NOT ADDED（已被覆盖，跨层 duplicate）**：
+  - "Enqueue → 超时 → Loop Reconcile → Expired" 已由 **#1169 `command_sweep_behavior_test.go`** 覆盖（cell 级
+    real Loop+TickerTrigger→`StatusExpired` + ticker 单源 + `reconcile_total{result=success}`）；"no-deadline 命令不被扫"
+    与"未到期不动"已由 `kernel/command/sweeper_test.go::TestSweepOnce_NoTimeoutsConfigured_NoTransitions` /
+    `TestSweepOnce_NotYetExpired` / `TestSweepOnce_OverallExpired` 覆盖。OSS 对标：循环机制由无 domain 逻辑的
+    `fakeReconciler` 在框架层（`pkg/internal/controller/controller_test.go`）一次测，consumer 不重测"循环驱动我的 Reconcile"。
+  - 注：公开 `devicecmd.Enqueue` 写 `command.Timeouts{}`（无 OverallDeadline → 永不到期），任何到期 e2e 须显式 seed deadline。
 
 #### Implementation for PR-A9
 
-- [ ] **T43** [PR-A9] `examples/iotdevice/cells/devicecell/cell.go`：
-  - 从 `runtime/command.NewSweeperLifecycle(...)` 切换到 `reconcile.New(sweeper).WithTrigger(reconcile.TickerTrigger(clk, 30*time.Second)).Build()`（clk 为 cell 注入的业务时钟）
-  - 估算：200 LoC（含 wiring 重写）
-- [ ] **T44** [PR-A9] `examples/iotdevice/cells/devicecell/sweeper_lifecycle_test.go`：
-  - 删除（被 cell_reconcile_test.go 取代）
-  - 估算：-100 LoC
-- [ ] **T45** [PR-A9] `examples/iotdevice/run.go`：
-  - 如需 wiring leader（多副本测试），加 fake LeaderElector wiring
-  - 估算：100 LoC
+- [x] **T43** [PR-A9] `examples/iotdevice/cells/devicecell/cell.go` — **delivered by #1169（PR-A8 吸收 + 强制编译前置）**：
+  - `buildCommandSweeper` = `reconcile.New(sweeper).WithTrigger(reconcile.TickerTrigger(c.clk, commandSweepInterval)).WithoutDefaultRequeue().Build()`；
+    字段 `commandSweeper *reconcile.Loop`，经 `reg.Lifecycle` 挂 `Loop.Start/Stop`。
+- [x] **T44** [PR-A9] `examples/iotdevice/cells/devicecell/sweeper_lifecycle_test.go` — **delivered by #1169（重写，非删除）**：
+  - #1169 未按原计划删除，而是重写为 `TestDeviceCell_CommandSweeperLoop_OnStartClean`（OnStart 不 panic + OnStop 幂等 +
+    goleak），作为 reconcile 迁移的 cell 级回归守卫——比"删除"更优的结果。
+- [x] **T45** [PR-A9] `examples/iotdevice/run.go` — **skipped（YAGNI）**：
+  - devicecell 命令扫描器是单副本，无多副本需求；`reconcile.Loop` 默认无 leader 即正确形态，故不加 fake LeaderElector wiring。
 
-**Checkpoint A9**: examples/iotdevice 全绿；reconcile 端到端验证
+**Checkpoint A9**: ✅ 达成——examples/iotdevice 全绿；reconcile 端到端验证由 #1169 cell 级 e2e（`command_sweep_behavior_test.go`）
++ kernel 级 sweeper 逻辑测试（`kernel/command/sweeper_test.go`）共同覆盖；#1170 关闭为 spec reconciliation（无 net-new 代码）。
 
 ---
 
@@ -475,8 +488,8 @@ worktrees/661-05-backoff     ← developer B: PR-A5 任务集（T17-T20）
 
 ### Incremental Migration (PR-A8 + PR-A9)
 
-4. PR-A8: kernel/command.Sweeper 迁为 reconcile.Reconciler；删除 SweeperLifecycle
-5. PR-A9: examples/iotdevice 切换到 reconcile.Loop 端到端
+4. PR-A8 (#1169): kernel/command.Sweeper 迁为 reconcile.Reconciler；删除 SweeperLifecycle；**并吸收 PR-A9 的 devicecell 切换**（删除唯一消费方的强制编译前置）
+5. PR-A9 (#1170): examples/iotdevice 切换到 reconcile.Loop 端到端 —— **实质已随 #1169 落地；#1170 关闭为 spec reconciliation（见上 PR-A9 §STATUS）**
 6. 此时只有 reconcile 一个 control loop 抽象，无双轨
 
 ### Documentation Closure (PR-A10)

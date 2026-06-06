@@ -190,6 +190,14 @@ const sessionCacheRevokeDELTimeout = 2 * time.Second
 // makes field addition an explicit code change rather than an automatic
 // propagation from session.ValidateView. Adding a sensitive field to
 // ValidateView must be a deliberate decision to also land here.
+//
+// The field set is frozen by INVARIANT SESSION-CACHE-EPOCH-NOT-CACHED-01
+// (session_cache_entry_frozen_test.go): it must NOT carry the live
+// users.authz_epoch — only AuthzEpochAtIssue (the at-issue snapshot). The
+// RevokeForSubject fail-closed floor depends on the live epoch never being
+// cached (sessionvalidate compares the live PG epoch against this snapshot); a
+// reflect freeze prevents a future field addition from silently removing that
+// premise.
 type sessionCacheEntry struct {
 	ID                string     `json:"id"`
 	SubjectID         string     `json:"subjectId"`
@@ -407,9 +415,20 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 // transaction is a programmer error, surfaced loudly rather than silently
 // dropping the eviction. The shared storetest conformance suite, which calls
 // Revoke bare, supplies the unit-of-work scope via the test-only
-// txScopedRevokeStore bridge (session_cache_store_conformance_test.go). Making
-// this precondition compile-enforced (a typed tx-scoped revoke capability rather
-// than a runtime panic) is the deferred Hard-upgrade tracked at gh #1615.
+// txScopedRevokeStore bridge (session_cache_store_conformance_test.go).
+// Compile-enforcing this precondition (a typed tx-scoped revoke capability
+// rather than a runtime panic) was evaluated as gh #1615's F3 and resolved
+// won't-do: a same-package seal is unreachable because the read path's
+// evictBadEntry / lazyPopulate legitimately need a synchronous s.cache.Delete /
+// s.cache.Set, so the cache-mutation capability must live on a struct field that
+// every method (Revoke included) can reach — Go has no per-method field scoping.
+// A cross-package internal-subpackage seal could reach Hard but is
+// disproportionate for this single-caller P3 and has zero industry precedent
+// (Spring TransactionSynchronization, Hibernate AfterTransactionCompletionProcess,
+// ent CommitHook, Watermill forwarder all rely on runtime registration +
+// convention, never a type seal). The "second production caller" risk is instead
+// caught statically by archtest SESSION-REVOKE-CALLER-INTX-01, which allowlists
+// the production callers of session.Store.Revoke (each verified RunInTx-wrapped).
 //
 // archtest CACHING-SESSION-REVOKE-AFTERCOMMIT-DEL-01 locks the shape: the body
 // must delegate to s.inner.Revoke, and any s.cache.Delete/Set must be lexically

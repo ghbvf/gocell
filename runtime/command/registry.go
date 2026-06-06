@@ -1,3 +1,8 @@
+// Package command wires kernel command workers (queue discovery + dispatch
+// registry) into the runtime. The periodic command-expiry sweep is no longer a
+// runtime control shell here — the kernel Sweeper implements reconcile.Reconciler
+// and is driven by a kernel/reconcile.Loop at the cell (see
+// examples/iotdevice/cells/devicecell).
 package command
 
 import (
@@ -9,7 +14,7 @@ import (
 )
 
 // CommandID is the registry key — the command contract id (e.g.
-// "command.device-command.enqueue.v1").
+// "command.devicecommand.enqueue.v1").
 //
 // It is a type alias (not a defined type) for idutil.SafeID so that:
 //   - idutil.SafeID.Validate() is available for id validation without conversion.

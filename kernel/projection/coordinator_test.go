@@ -48,7 +48,7 @@ type fakeCursor struct {
 	err error
 }
 
-func (f *fakeCursor) Position(_ outbox.Entry) (int64, error) {
+func (f *fakeCursor) Position(_ ProjectionEvent) (int64, error) {
 	return f.pos, f.err
 }
 
@@ -58,7 +58,7 @@ type recordingApply struct {
 	err   error
 }
 
-func (r *recordingApply) fn(_ context.Context, _ outbox.Entry) error {
+func (r *recordingApply) fn(_ context.Context, _ ProjectionEvent) error {
 	r.calls++
 	return r.err
 }
@@ -719,7 +719,7 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		{
 			name:         "happy path",
 			projectionID: "myproj",
-			applyFn:      func(_ context.Context, _ outbox.Entry) error { return nil },
+			applyFn:      func(_ context.Context, _ ProjectionEvent) error { return nil },
 			wantErr:      false,
 			wantSubCalls: 1,
 			wantCG:       "testcell-myproj",
@@ -728,7 +728,7 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		{
 			name:         "empty projectionID",
 			projectionID: "",
-			applyFn:      func(_ context.Context, _ outbox.Entry) error { return nil },
+			applyFn:      func(_ context.Context, _ ProjectionEvent) error { return nil },
 			wantErr:      true,
 			wantSubCalls: 0,
 		},
@@ -742,7 +742,7 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		{
 			name:         "reg.Subscribe returns error",
 			projectionID: "myproj",
-			applyFn:      func(_ context.Context, _ outbox.Entry) error { return nil },
+			applyFn:      func(_ context.Context, _ ProjectionEvent) error { return nil },
 			regErr:       errRegister,
 			wantErr:      true,
 			wantSubCalls: 1,
@@ -780,7 +780,7 @@ func TestCoordinator_Subscribe(t *testing.T) {
 			// Topic intentionally absent
 		}
 		subscribeErr := c.Subscribe(context.Background(), badSpec,
-			func(_ context.Context, _ outbox.Entry) error { return nil },
+			func(_ context.Context, _ ProjectionEvent) error { return nil },
 		)
 		if subscribeErr == nil {
 			t.Fatal("expected error for non-event spec, got nil")

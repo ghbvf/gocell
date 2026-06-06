@@ -1528,6 +1528,126 @@ func collectFMT34Fields(matches []ValidationResult) map[string]bool {
 	return out
 }
 
+// --- FMT-35: contractUsage placement columns per role ---
+//
+// FMT-35 enforces which of the seven placement columns (handler, group, field,
+// sourceID, targetSelector, projection, onReset) may or must be set for each
+// contractUsage role. The matrix is role×kind sensitive: grpc serve allows the
+// optional field column (struct-field disambiguation) while http serve forbids it.
+
+// buildFMT35Project returns a ProjectMeta with one cell, one slice and a single
+// contractUsage entry. contractKind selects which contract kind is created ("http"
+// or "grpc"); cu is the usage to validate.
+func buildFMT35Project(contractKind string, cu metadata.ContractUsage) *metadata.ProjectMeta {
+	const contractID = "test.serve.v1"
+	cu.Contract = contractID
+	return &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			metadatatest.CellIDTestCell: {
+				ID:    metadatatest.CellIDTestCell,
+				Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Dir:   "testcell",
+				File:  "cells/testcell/cell.yaml",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"testcell/testslice": {
+				ID:             "testslice",
+				BelongsToCell:  metadatatest.CellIDTestCell,
+				ContractUsages: []metadata.ContractUsage{cu},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.testslice.service"},
+					Contract: []string{},
+				},
+				AllowedFiles: []string{"cells/testcell/slices/testslice/**"},
+				Dir:          "testslice",
+				CellDir:      "testcell",
+				File:         "cells/testcell/slices/testslice/slice.yaml",
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			contractID: {
+				ID:               contractID,
+				Kind:             contractKind,
+				OwnerCell:        metadatatest.CellIDTestCell,
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDTestCell},
+				Dir:              "contracts/" + contractKind + "/test/serve/v1",
+				File:             "contracts/" + contractKind + "/test/serve/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+}
+
+// TestFMT35_GRPCServe_FieldOptional_NoFinding verifies that a grpc serve CU
+// with field set produces 0 FMT-35 findings (field is optional for grpc serve).
+func TestFMT35_GRPCServe_FieldOptional_NoFinding(t *testing.T) {
+	cu := metadata.ContractUsage{Role: "serve", Field: "myGrpcSvc"}
+	project := buildFMT35Project("grpc", cu)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT35(), codeFMT35)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-35: grpc serve with field set must produce 0 findings, got %d: %v", len(matches), matches)
+	}
+}
+
+// TestFMT35_GRPCServe_NoOptionalColumns_NoFinding verifies that a grpc serve CU
+// with no optional columns set also produces 0 FMT-35 findings.
+func TestFMT35_GRPCServe_NoOptionalColumns_NoFinding(t *testing.T) {
+	cu := metadata.ContractUsage{Role: "serve"}
+	project := buildFMT35Project("grpc", cu)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT35(), codeFMT35)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-35: grpc serve with no optional columns must produce 0 findings, got %d: %v", len(matches), matches)
+	}
+}
+
+// TestFMT35_GRPCServe_HandlerForbidden verifies that a grpc serve CU with
+// handler set produces a FMT-35 finding (handler is forbidden for grpc serve).
+func TestFMT35_GRPCServe_HandlerForbidden(t *testing.T) {
+	cu := metadata.ContractUsage{Role: "serve", Handler: "HandleRPC"}
+	project := buildFMT35Project("grpc", cu)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT35(), codeFMT35)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-35: grpc serve with handler set must produce 1 finding, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Field != "contractUsages[0].handler" {
+		t.Errorf("FMT-35: expected Field=contractUsages[0].handler, got %q", matches[0].Field)
+	}
+	if matches[0].Severity != SeverityError {
+		t.Errorf("FMT-35: expected SeverityError, got %v", matches[0].Severity)
+	}
+	if matches[0].Fix == "" {
+		t.Errorf("FMT-35: Fix field must be non-empty")
+	}
+}
+
+// TestFMT35_HTTPServe_FieldForbidden is a regression guard: a http serve CU
+// with field set must still produce a FMT-35 finding (http serve forbids field).
+func TestFMT35_HTTPServe_FieldForbidden(t *testing.T) {
+	cu := metadata.ContractUsage{Role: "serve", Field: "someField"}
+	project := buildFMT35Project("http", cu)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT35(), codeFMT35)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-35: http serve with field set must produce 1 finding, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Field != "contractUsages[0].field" {
+		t.Errorf("FMT-35: expected Field=contractUsages[0].field, got %q", matches[0].Field)
+	}
+	if matches[0].Severity != SeverityError {
+		t.Errorf("FMT-35: expected SeverityError, got %v", matches[0].Severity)
+	}
+	if matches[0].Fix == "" {
+		t.Errorf("FMT-35: Fix field must be non-empty")
+	}
+}
+
 // --- FMT-36: cell.requires must be known capability enum values, no duplicates ---
 //
 // Design Y (#855): capability dependency is declared per-cell via cell.yaml

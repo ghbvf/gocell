@@ -52,7 +52,7 @@ func TestMemReplaySource_ReplayEmpty(t *testing.T) {
 	t.Parallel()
 	src := NewMemReplaySource()
 	var calls int
-	err := src.Replay(context.Background(), 0, func(outbox.Entry) error {
+	err := src.Replay(context.Background(), 0, func(ProjectionEvent) error {
 		calls++
 		return nil
 	})
@@ -76,7 +76,7 @@ func TestMemReplaySource_ReplayAll(t *testing.T) {
 	}
 
 	var received []int64
-	err := src.Replay(context.Background(), 0, func(e outbox.Entry) error {
+	err := src.Replay(context.Background(), 0, func(e ProjectionEvent) error {
 		pos := src.positionOf(e)
 		received = append(received, pos)
 		return nil
@@ -107,7 +107,7 @@ func TestMemReplaySource_ReplayFromOffset(t *testing.T) {
 	}
 
 	var received []int64
-	err := src.Replay(context.Background(), 3, func(e outbox.Entry) error {
+	err := src.Replay(context.Background(), 3, func(e ProjectionEvent) error {
 		received = append(received, src.positionOf(e))
 		return nil
 	})
@@ -136,7 +136,7 @@ func TestMemReplaySource_ReplayOffsetAtHead(t *testing.T) {
 	src.Append(mustNewTestEntry(t, clk, "topic.v1"))
 
 	var calls int
-	err := src.Replay(context.Background(), 2, func(outbox.Entry) error {
+	err := src.Replay(context.Background(), 2, func(ProjectionEvent) error {
 		calls++
 		return nil
 	})
@@ -160,7 +160,7 @@ func TestMemReplaySource_ReplayAbortOnError(t *testing.T) {
 
 	errStop := errors.New("stop")
 	var calls int
-	err := src.Replay(context.Background(), 0, func(outbox.Entry) error {
+	err := src.Replay(context.Background(), 0, func(ProjectionEvent) error {
 		calls++
 		if calls == 2 {
 			return errStop
@@ -184,7 +184,7 @@ func TestMemReplaySource_PositionIs1Based(t *testing.T) {
 	src.Append(mustNewTestEntry(t, clk, "topic.v1"))
 
 	var firstPos int64 = -1
-	err := src.Replay(context.Background(), 0, func(e outbox.Entry) error {
+	err := src.Replay(context.Background(), 0, func(e ProjectionEvent) error {
 		firstPos = src.positionOf(e)
 		return nil
 	})
@@ -217,7 +217,7 @@ func TestMemReplaySource_PositionConsistency(t *testing.T) {
 	// as Replay delivers entries with.
 	cur := newMemCursor(src)
 	var i int
-	err := src.Replay(context.Background(), 0, func(e outbox.Entry) error {
+	err := src.Replay(context.Background(), 0, func(e ProjectionEvent) error {
 		i++
 		pos := src.positionOf(e)
 		wantPos := int64(i) // 1-based

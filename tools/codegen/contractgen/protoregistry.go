@@ -37,7 +37,7 @@ func newProtoRegistry() *protoRegistry {
 // resolved import path, failing fast on two collision classes:
 //   - the same (package, service) mapped to divergent import paths;
 //   - a duplicate (package, service, method) across contracts.
-func (r *protoRegistry) register(contractID, service, method string, info protoTypeInfo) error {
+func (r *protoRegistry) register(contractID, service, method string, info ProtoTypeInfo) error {
 	key := protoServiceKey{pkg: info.ProtoPackage, service: service}
 	e, ok := r.entries[key]
 	if !ok {

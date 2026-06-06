@@ -144,6 +144,17 @@ func TerminalError(wrapped error) error // prevents retry, still logs + metrics
 > GoCell 语义偏离一处：上游 `Result{}`（无 requeue）= 「done，等 watch/resync 再触发」；
 > GoCell `Result{}`（`RequeueAfter==0`）= 「按 default tick interval 重入」。因为 GoCell 是
 > level-triggered 周期扫描模型（承自 Sweeper），无 watch 源，需周期性重观察。
+>
+> **Amendment PR-A8 #1169 — per-Loop opt-out `Builder.WithoutDefaultRequeue()`**：
+> 上述偏离对**事件驱动**消费者（`ChannelTrigger`）是刚需——default tick 给它们免费的
+> 周期 re-check。但对**已自带周期 Trigger** 的消费者（`TickerTrigger` 驱动的 bulk
+> sweeper，首个真实消费者 `examples/iotdevice` devicecell 即是）它是**第二个独立周期源**：
+> TickerTrigger 脉冲经 Loop source channel → 工作队列，而 success 自重排落在 delaying-queue
+> heap，二者**不合并**（不同路径），稳态会 ~2 次/周期。`WithoutDefaultRequeue()` 让一个 Loop
+> 选择 controller-runtime 原义（`Result{}`+nil = 「done，等下次 Trigger」），使 Trigger 成为
+> 唯一周期源。**加性、不反转本偏离**：默认仍是 default-tick 重入；仅 success+`RequeueAfter==0`
+> 分支受影响——显式 `RequeueAfter>0` 与 error backoff/permanent 不变。`Result` 字段集仍冻结
+> （`RECONCILE-RESULT-FIELDS-FROZEN-01` 不受影响——这是 Loop 选项，非 Result 字段）。
 
 ### 2.2 `pkg/internal/controller/controller.go` — worker loop
 
@@ -357,6 +368,7 @@ func (*Builder) WithConcurrency(int) *Builder
 func (*Builder) WithBackoff(base, max time.Duration) *Builder
 func (*Builder) WithMetrics(Metrics) *Builder
 func (*Builder) WithInterval(time.Duration) *Builder
+func (*Builder) WithoutDefaultRequeue() *Builder // PR-A8 #1169: opt out of success default-tick self-requeue (Trigger = sole source); see §2.1 amendment
 func (*Builder) WithName(string) *Builder
 func (*Builder) WithReconcilerID(string) *Builder
 func (*Builder) WithRenewInterval(time.Duration) *Builder
@@ -708,8 +720,13 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：
 
-- **不留 alias / 不留 deprecation**——`SweeperLifecycle` / `SweepTicker` 名字完全删除，由
-  `RECONCILE-NAMING-FROZEN-01`（A8）grep production 0 命中守 frozen。
+- **不留 alias / 不留 deprecation**——`SweeperLifecycle` / `SweepTicker` 名字完全删除。
+  > **Amendment PR-A8 #1169 — `RECONCILE-NAMING-FROZEN-01` 不立项（won't-do）**：
+  > 原计划的「grep production 对已删名字 0 命中」archtest 是 **Soft**（字符串锚点），
+  > 按 ai-robust.md「Soft 严禁立项」不建。实际护栏全是 Hard / 既有：(1) 类型删除使任何
+  > 生产引用 = 编译错误（Hard）；(2) 既有 `RECONCILE-BUILDER-FUNNEL-01` 漏斗 Loop 构造；
+  > (3) 编译期 `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 断言。一次性 merge-gate
+  > `grep -rn 'SweeperLifecycle\|SweepTicker'` 生产源为空（非常驻 test）。
 - **不留双轨**——A8 后只有 `reconcile.Loop` 一个 control-loop 抽象（A9 把 `examples/iotdevice`
   端到端切换验证）。
 - `runtime/command/lifecycle.go`（446 LoC）整包删除，调用方（`runtime/command/bootstrap_phase.go`
@@ -725,5 +742,5 @@ ref: kubernetes-sigs/controller-runtime pkg/internal/controller/controller.go
 ref: kubernetes-sigs/controller-runtime pkg/builder/controller.go
 ref: kubernetes/client-go util/workqueue/default_rate_limiters.go
 ref: kubernetes/client-go tools/leaderelection/leaderelection.go
-ref: gocell runtime/command/lifecycle.go（SweeperLifecycle，调度骨架平移源）
+ref: gocell runtime/command/lifecycle.go（SweeperLifecycle，调度骨架平移源）（deleted in PR-A8 #1169; scheduling now lives in kernel/reconcile.Loop）
 ref: gocell kernel/command/sweeper.go（既有 L4 控制环）

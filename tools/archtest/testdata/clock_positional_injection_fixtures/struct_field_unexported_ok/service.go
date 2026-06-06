@@ -14,10 +14,10 @@
 //	    cmd/corebundle.SharedDeps. The threading source is allowed to hold
 //	    the canonical Clock instance per ADR 202605270000 §Decision #4.
 //
-//	(c) Internal state struct with positional constructor — runtime types
-//	    such as runtime/command.SweeperLifecycle.BusinessClock. The field is
-//	    not part of an input struct name; the constructor takes positional
-//	    clock and assigns it into the state.
+//	(c) Internal state struct with positional constructor — such as an
+//	    unexported clock field on a service struct. The field is not part of
+//	    an input struct name; the constructor takes positional clock and
+//	    assigns it into the state.
 //
 // All three shapes are GREEN (empty diag.golden).
 package struct_field_unexported_ok

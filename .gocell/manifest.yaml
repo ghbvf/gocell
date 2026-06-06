@@ -88,3 +88,13 @@ modules:
         - "contracts/**/contract.yaml"
       assemblies:
         - "assembly.yaml"
+  - path: examples/webhookdemo
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+      contracts:
+        - "contracts/**/contract.yaml"
+      assemblies:
+        - "assembly.yaml"

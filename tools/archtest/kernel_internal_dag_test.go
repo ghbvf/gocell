@@ -84,13 +84,18 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // but nothing imports them back, so no cycle is introduced. governance→saga
 // (rules_saga.go validates saga contract shape) is likewise acyclic (saga does
 // not import governance).
+// command→reconcile + command→clock (PR-A8 #1169): kernel/command.Sweeper now
+// implements reconcile.Reconciler (driven by a kernel/reconcile.Loop instead of
+// the deleted runtime/command control shell) and holds a business clock for
+// Reconcile's "now". reconcile does not import command, so command→reconcile is
+// acyclic; clock is a leaf.
 var allowedKernelEdges = map[string][]string{
 	"assembly":      {"cell", "clock", "metadata", "observability", "outbox", "registry"},
 	"auth":          {"cell"},
 	"cell":          {"cellvocab", "contractspec", "healthz", "metadata", "outbox", "webhook"},
 	"cellvocab":     nil,
 	"clock":         nil,
-	"command":       {"metautil"},
+	"command":       {"clock", "metautil", "reconcile"},
 	"contractspec":  {"cellvocab", "metadata"},
 	"crypto":        nil,
 	"ctxkeys":       nil,

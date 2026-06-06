@@ -27,12 +27,6 @@ import (
 )
 
 const (
-	// noTenantSentinel is the namespace substituted when the authenticated
-	// principal carries no TenantID. Single-tenant deployments and contexts
-	// where tenancy is not yet wired produce an empty TenantID; using a
-	// named sentinel keeps the namespace non-empty and distinguishable.
-	noTenantSentinel = "_notenant"
-
 	// headerIdempotencyKey is the request header carrying the client-chosen key.
 	headerIdempotencyKey = "Idempotency-Key"
 
@@ -271,8 +265,9 @@ func (c middlewareConfig) observeState(ctx context.Context, state RequestState) 
 // If either is absent, or if the Principal is not a user principal, the
 // request passes through without idempotency tracking.
 //
-// Key composition: ns = tenantID (or "_notenant" when empty),
-// key = method + "\x00" + path + "\x00" + subject + "\x00" + Idempotency-Key header value.
+// Key composition (namespace, key) is derived by DeriveKey (key.go) from
+// (tenantID, subject, method, path, idemKey); see it for the exact byte layout,
+// NUL-separator rationale, and node-agnostic invariant.
 // Including method+path in the key means the same client-supplied header value
 // is independent per endpoint — a key for POST /orders does NOT collide with
 // POST /payments. (Stripe / IETF idempotency-key draft §3 aligned.)
@@ -401,11 +396,12 @@ func handleWithIdempotency(
 	store Store,
 	cfg middlewareConfig,
 ) {
-	ns, key := buildNamespaceKey(p, r.Method, r.URL.Path, idemKey)
+	k := DeriveKey(p.TenantID, p.Subject, r.Method, r.URL.Path, idemKey)
+	ns := k.Namespace() // for slog correlation + recordOrRelease below
 	ctx := r.Context()
 	keyHash := keyShortHash(idemKey)
 
-	state, rec, receipt, err := store.Claim(ctx, ns, key, fingerprint, cfg.leaseTTL)
+	state, rec, receipt, err := store.Claim(ctx, k, fingerprint, cfg.leaseTTL)
 	if err != nil {
 		if errors.Is(err, ErrFingerprintMismatch) {
 			slog.WarnContext(ctx, "idempotency: fingerprint mismatch — key reused with different body",
@@ -437,7 +433,7 @@ func handleWithIdempotency(
 		// Replay returns this principal's own previously-recorded response WITHOUT
 		// re-running the route Policy. This is by-design and not an authz bypass:
 		// the cache key includes subject+tenant (cross-principal replay is
-		// structurally impossible — see buildNamespaceKey), and the recorded
+		// structurally impossible — see DeriveKey), and the recorded
 		// response is from an operation this same principal already performed while
 		// authorized. Re-checking authz on replay would let a previously-succeeded
 		// key later return 403, violating Idempotency-Key semantics (same key →
@@ -464,7 +460,7 @@ func handleWithIdempotency(
 
 	default: // ClaimAcquired
 		cfg.observeState(ctx, StateAcquired)
-		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns)
+		recordOrRelease(ctx, w, r, next, clk, receipt, cfg, keyHash, ns, p.Subject)
 	}
 }
 
@@ -482,45 +478,6 @@ func extractIdentity(ctx context.Context) (*auth.Principal, bool) {
 		return nil, false
 	}
 	return p, true
-}
-
-// buildNamespaceKey encodes the isolation tuple (tenantID, method, path, subject, idemKey)
-// into the (ns, key) pair expected by Store.Claim.
-//
-// ns  = tenantID, or noTenantSentinel when empty.
-// key = subject + "\x00" + method + "\x00" + path + "\x00" + idemKey
-//
-// Including method+path in the key means the same Idempotency-Key header value
-// is independent per endpoint — e.g. POST /orders and POST /payments with the
-// same header value are stored as separate idempotency records. This is aligned
-// with Stripe's idempotency design and IETF idempotency-key draft §3.
-//
-// The NUL byte (\x00) separator prevents key-space collision: it cannot appear
-// in HTTP header values (RFC 7230 §3.2.6 limits field-value to VCHAR and obs-text,
-// neither of which includes NUL), so subject="alic",key="e:x" is always distinct
-// from subject="alice",key="x". A colon separator (:) would collide on those inputs.
-//
-// Using tenantID as the namespace means the Redis key for a cluster-aware
-// adapter would be "{<tenantID>}:<subject>\x00<method>\x00<path>\x00<idemKey>",
-// which colocates all keys for the same tenant on the same hash slot — good for
-// single-slot transactions.
-//
-// Assembly-scope (node-agnostic) invariant: the (ns, key) pair is derived ONLY
-// from request + principal data — it carries no pod / listener / cell / instance
-// dimension. That is what makes the framework idempotency replay domain
-// assembly-wide (every pod sharing one Redis deduplicates the same logical
-// request). This is frozen by archtest HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01 and
-// governed by ADR docs/architecture/202606051000-1449-adr-http-idempotency-assembly-scope-namespace.md.
-// Do not add a node/listener/cell parameter here — that would make the key
-// node-specific and break assembly-wide dedup. (Routing one logical command to a
-// single dedup slot across cells is the deferred cross-cell concern, #1610.)
-func buildNamespaceKey(p *auth.Principal, method, path, idemKey string) (ns, key string) {
-	ns = p.TenantID
-	if ns == "" {
-		ns = noTenantSentinel
-	}
-	key = p.Subject + "\x00" + method + "\x00" + path + "\x00" + idemKey
-	return
 }
 
 // replayResponse writes the stored RecordedResponse to w with the
@@ -554,6 +511,7 @@ func recordOrRelease(
 	cfg middlewareConfig,
 	keyHash string,
 	ns string,
+	subject string,
 ) {
 	bw := newBufferingWriter(w, cfg.maxBodyBytes)
 
@@ -567,6 +525,7 @@ func recordOrRelease(
 				slog.WarnContext(ctx, "idempotency: lease release failed (will expire via TTL)",
 					"err", err,
 					"idempotency_key_hash", keyHash,
+					"subject", subject,
 					"tenant_id", ns,
 				)
 			}
@@ -584,6 +543,7 @@ func recordOrRelease(
 			slog.ErrorContext(ctx, "idempotency: receipt record failed",
 				"err", err,
 				"idempotency_key_hash", keyHash,
+				"subject", subject,
 				"tenant_id", ns,
 			)
 			// Fall through to Release via defer.
@@ -594,6 +554,7 @@ func recordOrRelease(
 		slog.WarnContext(ctx, "idempotency: response body oversized, not recorded",
 			"max_body_bytes", cfg.maxBodyBytes,
 			"idempotency_key_hash", keyHash,
+			"subject", subject,
 			"tenant_id", ns,
 		)
 		cfg.observeState(ctx, StateOversize)

@@ -23,9 +23,9 @@ const (
 	defaultLoopName                = "reconcile.loop"
 	// reconcilerIDSentinel labels metrics when ReconcilerID is unset. It reuses
 	// the observability.md "_runtime" framework/unknown-owner sentinel (same as
-	// the HTTP metrics cell label and the transplant source's cellID default) so
-	// owner-dimension filters stay consistent across metrics — e.g. a dashboard
-	// can exclude unowned series with reconciler!="_runtime" exactly as it does
+	// the HTTP metrics cell label's `_runtime` sentinel) so owner-dimension
+	// filters stay consistent across metrics — e.g. a dashboard can exclude
+	// unowned series with reconciler!="_runtime" exactly as it does
 	// cell!="_runtime".
 	reconcilerIDSentinel = "_runtime"
 	// startProbeTimeout bounds how long Start waits for the worker pool to
@@ -74,22 +74,21 @@ const (
 // sites for stdlib time.NewTimer / time.NewTicker / time.Now in this package;
 // newRenewTicker handles the lease renew cadence ticker.
 //
-// kernel/reconcile is a sanctioned control-plane host alongside runtime/command:
-// PROD-CLOCK-INJECTION-01's path gate accepts both, and the (method, callee)
+// kernel/reconcile is the sanctioned control-plane host:
+// PROD-CLOCK-INJECTION-01's path gate accepts it, and the (method, callee)
 // pairs below are registered in that archtest's exactSanctionedTimeCalls map
 // (RECONCILE-LOOP-CLOCK-CARVEOUT-01). A new method here without a matching map
 // entry — or any other time.* call in a method body — is a violation.
 //
-// Carve-out rationale (mirrors runtime/command): control-plane scheduling and
-// the framework's own duration observability must use real wall-clock time.
-// Injecting a frozen fake clock with no Advance would deadlock Start (the
-// startup probe never fires) and freeze every requeue.
+// Carve-out rationale: control-plane scheduling and the framework's own
+// duration observability must use real wall-clock time. Injecting a frozen
+// fake clock with no Advance would deadlock Start (the startup probe never
+// fires) and freeze every requeue.
 //
 // AI-robust grade: Medium (permanent ceiling). The stdlib time free functions
 // cannot be made uncallable in Go, so receiver-type confinement + (method,
 // callee) form-uniqueness is the achievable ceiling — identical to the
-// runtime/command controlPlaneClock and the SPAN-SETATTR-REDACT-01
-// package-internal axis.
+// SPAN-SETATTR-REDACT-01 package-internal axis.
 type controlPlaneClock struct{}
 
 // newProbeTimer creates a real-time timer for the startup probe window.
@@ -123,7 +122,7 @@ func (controlPlaneClock) newRenewTicker(d time.Duration) *time.Ticker {
 // reconcilerReadinessChecker is the optional no-side-effect readiness contract a
 // Reconciler may implement. Loop.Start invokes it before spawning workers so a
 // misconstructed reconciler fails at OnStart (bootstrap rolls back) instead of
-// erroring on every reconcile. Mirrors runtime/command.sweeperReadinessChecker.
+// erroring on every reconcile. Implemented via the reconcilerReadinessChecker seam.
 type reconcilerReadinessChecker interface {
 	Validate() error
 }
@@ -169,8 +168,8 @@ func (h *waitingHeap) Pop() any {
 // dispatches each to the Reconciler across a bounded worker pool (serializing
 // per EntityID), and requeues per the returned Result. Its lifecycle skeleton
 // (Start fast-return + startup probe, owner-ctx derivation, graceful Stop) is
-// transplanted from runtime/command.SweeperLifecycle; the per-entity worker
-// dispatch and requeue are reconcile-specific.
+// the scheduling loop's own control shell; the per-entity worker dispatch and
+// requeue are reconcile-specific.
 //
 // Construct via the Builder (reconcile.New(r).With*().Build()) in production.
 // All configuration fields are unexported; the Builder is the sole public
@@ -210,8 +209,15 @@ type Loop struct {
 	// into it, source (read end) feeds the work queue.
 	triggerCh chan Request
 	// interval is the requeue delay for Result{} (RequeueAfter == 0);
-	// defaults to defaultReconcileInterval via applyDefaults.
+	// defaults to defaultReconcileInterval via applyDefaults. Ignored when
+	// noDefaultRequeue is set.
 	interval time.Duration
+	// noDefaultRequeue, when true, suppresses the success default-tick
+	// self-requeue (success + RequeueAfter==0 → no requeue), making the Trigger
+	// the sole driver. Set via Builder.WithoutDefaultRequeue. Affects only the
+	// success/zero-Result branch; explicit RequeueAfter>0 and error backoff are
+	// unchanged. See builder.go WithoutDefaultRequeue for the full rationale.
+	noDefaultRequeue bool
 	// maxConcurrentReconciles bounds concurrent reconciles across distinct
 	// EntityIDs; defaults to defaultMaxConcurrentReconciles via applyDefaults.
 	maxConcurrentReconciles int
@@ -974,6 +980,14 @@ func (l *Loop) dispatchResult(
 		backoff.Forget(req.EntityID)
 		delay := res.normalizedRequeueAfter()
 		if delay <= 0 {
+			if l.noDefaultRequeue {
+				// Opted out of the default-tick self-requeue: the Trigger is the
+				// sole driver of re-observation, so a successful zero-Result does
+				// NOT enqueue a periodic requeue. An explicit RequeueAfter>0
+				// (delay>0 above) is still honored; this only suppresses the
+				// default tick. See Builder.WithoutDefaultRequeue.
+				return
+			}
 			delay = l.interval
 		}
 		l.enqueueDelayed(runCtx, req, delay, addCh)

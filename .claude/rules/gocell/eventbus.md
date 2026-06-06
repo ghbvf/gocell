@@ -148,16 +148,41 @@ ADV-06（contract.subscribers ↔ slice CU 双向对齐）已退役——cell �
 
 > **同范式：webhook 双角色**。`contractUsages[role=webhook-receive|webhook-dispatch]` 走与 subscribe 完全一致的「slice.yaml 单源 → cellgen 派生进 cell_gen.go」范式，派生出 `reg.RegisterWebhookReceiver(webhook.ReceiverSpec{...}, handler)` / `reg.RegisterWebhookDispatch(...)`；contract.yaml 的 `endpoints.receivers` / `dispatchers` 是派生字段（`yaml:"-"`，禁手写）。守卫见 `CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01` / `WEBHOOK-MARKER-RETIRED-01`。字段集、派生形态、演化策略见 `contracts/webhook/README.md`。**运行时**（`reg.RegisterWebhookReceiver/Dispatch` 方法本体 + HTTP 接收 / dispatcher consumer）在 PR-3/PR-5 落地——PR-2 只覆盖契约识别 + cellgen 派生层。
 
+> **同范式：grpc 服务注册（#1601）**。`contractUsages[role=serve]` 当其 contract `kind: grpc` 时，走与 subscribe/webhook 一致的「slice.yaml 单源 → cellgen 派生进 cell_gen.go」范式，派生 `reg.GRPCService(cell.GRPCServiceSpec{ContractID, CellID, Listener: cell.PrimaryListener, Register: func(r grpc.ServiceRegistrar){ <pb>.Register<Svc>Server(r, c.<field>) }})`（PR-7 #1150 registrar API）。派生规则：proto import path + alias 经 `contractgen.ReadProtoTypeInfo` 从 proto `go_package` 单源派生；`Register<Svc>Server` 名 = `Register` + grpc service FQN 末段 + `Server`；handler 字段按「字段指针类型包名 == sliceID」解析（`field:` 消歧，0/>1 fail-fast），其指向 struct 须实现 buf 生成的 `<Svc>Server` 接口。listener 固定 `cell.PrimaryListener`（多 listener override 待真实需求，YAGNI）。`field:` 在 grpc serve CU 上的放行由 FMT-35 kind-aware 守（kind=grpc 时 field optional，其余列仍 forbidden；http serve 不放行 field）。守卫见 archtest `GRPC-METHOD-IN-CONTRACT-01`：**上游 Hard**（生成的 `reg.GRPCService` 经 cellgen golden 字节锁定到 contract.yaml）+ **下游 Medium**（caller-allowlist：`reg.GRPCService` 仅限生成的 `cell_gen.go` + `_test.go`；external-cell 自证为永久 Go 可见性天花板，won't-do gh #1631，同 #851/#893/#1282/#1582 族）+ **覆盖 Medium**（无孤儿 reg / 无孤儿 active grpc contract）。今日 0 生产 grpc cell，故 vacuous green；首个消费者 = #1151（PR-8 iotdevice）。**运行时**（`reg.GRPCService` 方法本体 + bootstrap drain + interceptor chain）已随 PR-5/PR-7 落地。
+
+```yaml
+# slice.yaml — grpc serve slice 最小声明
+contractUsages:
+  - contract: grpc.device.command.v1
+    role: serve
+    # handler: forbidden（FMT-35：grpc serve 不允许 handler 列）
+    # field: commandServer   # 可选——仅当 cell struct 有多个 *<sliceID>.T 字段时消歧
+```
+
+cell.go 须声明一个指针类型包名 == sliceID 的字段（如 `*devicecommand.Server`），该字段类型须实现 buf 生成的 `<Svc>Server` 接口（含 `mustEmbedUnimplemented...`）；cellgen 生成 `Register: func(r grpc.ServiceRegistrar){ <pb>.Register<Svc>Server(r, c.<field>) }`。**当前限制**：grpc serve 固定挂 `cell.PrimaryListener`——slice.yaml grpc serve CU **无 `listener:` 字段**，archtest 又禁手写 `reg.GRPCService`，故暂不支持把 grpc 服务挂到 `InternalListener` 等其它 listener（YAGNI，#1151 只用 primary）；真有需求时同 PR 扩 `GrpcServiceGenSpec.Listener` 字段 + slice.yaml `listener:` + FMT-35 放行 + cell.tmpl。
+
 ### 常见错误排查
 
-- **`gocell generate cell` 报 "no cell.go struct field for subscribing slice"**：cell.go
-  结构体缺少对应 slice 的字段。在 cell struct 添加 `*<sliceID>.Service`（或
-  `*<sliceID>.Consumer`）字段后重新运行。该字段必须在 `generate` 执行前已存在于
-  cell.go。
+> 下列 fieldIndex 解析错误对 subscribe / grpc-serve 两种 CU **同源**（都走
+> `resolveSliceField`）；错误正文引文与 `tools/codegen/cellgen/fieldindex.go` 实际
+> 字符串精确对齐。
 
-- **`gocell generate cell` 报 "ambiguous field for slice <sliceID>"**：cell struct 中有
-  多个字段的指针类型包名与 sliceID 相同。在 slice.yaml 的 subscribe CU 中添加
-  `field: <fieldName>` 消歧（参见 sessionlogout 场景）。
+- **`gocell generate cell` 报 "no cell.go struct field for slice"**：cell.go 结构体缺少
+  对应 slice 的字段。subscribe slice 添加 `*<sliceID>.Service`（或 `*<sliceID>.Consumer`）
+  字段；grpc-serve slice 添加一个实现 buf 生成的 `<Svc>Server` 接口的 `*<sliceID>.T`
+  指针字段。该字段必须在 `generate` 执行前已存在于 cell.go。
+
+- **`gocell generate cell` 报 "slice has multiple `*<sliceID>.T` cell-struct fields"**：cell
+  struct 中有多个字段的指针类型包名与 sliceID 相同。在 slice.yaml 对应 CU（subscribe 或
+  grpc-serve）添加 `field: <fieldName>` 消歧（subscribe 参见 sessionlogout 场景）。
+
+- **`gocell generate cell` grpc-serve 报 unknown / non-grpc contract**：grpc-serve CU 的
+  `contract:` 打字错误或指向不存在的合约。注意 `role: serve` 指向 `kind: http` 合约是
+  **正常 HTTP 路由**（由 markergen 处理），会被 grpc 派生分支静默跳过、不报错——只有指向
+  不存在的合约 id 才报错。
+
+- **grpc-serve CU 不要写 `handler:`**：FMT-35 在 grpc-serve 上 forbid `handler`（整个 server
+  struct 经 `Register<Svc>Server` 注册，无单 handler 方法名）。可选 `field:` 用于消歧。
 
 ## 死信路由
 
@@ -189,6 +214,28 @@ projection coordinator 驱动；因此任何注册 projection 的 assembly，其
 完整盲区清单 + 反向自检活在 `tools/archtest/projection_consumerbase_wiring_test.go` 的 package
 godoc（单源）；运行时 defense-in-depth = `examples/todoorder/run_smoke_test.go` 启动 smoke
 （真启动过 phase6，抓任意 boot 失败）。
+
+## Projection 载体接口（`ProjectionEvent`）
+
+投影 harness 的 `Apply` / `ReplaySource.Replay` 的 fn / `Cursor.Position` 收 **最小 typed 只读载体接口
+`cellvocab.ProjectionEvent`**（`projection.ProjectionEvent` / `cell.ProjectionApply` 为同型 alias），而非具体
+`outbox.Entry`——`outbox.Entry` 与（PR-03）saga journal 事件各自实现它，走同一 typed 漏斗（EPIC #1609 PR-01 /
+ADR `docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md` §D2）。接口 5 方法：`EventID()` /
+`Payload()` / `OccurredAt()` / `Stream()` / `RestoreContext(ctx)`（`EventID`/`Stream` 是 outbox `ID`/`RoutingTopic`
+的多态重命名）。接口家在 `kernel/cellvocab`（纯叶子）而非 ADR §4.1 写的 `kernel/projection`——cell↔projection 环
+使后者编译不可表达（ADR §4.1/§6 amendment 记录）。
+
+| Archtest ID | 摘要 | 评级 |
+|---|---|---|
+| `PROJECTION-EVENT-CARRIER-TYPED-01` | 投影公开载体 API（`projection.Apply` / `ReplaySource.Replay` fn / `Cursor.Position` / `cell.ProjectionApply`）只收 `cellvocab.ProjectionEvent`，禁裸 `outbox.Entry`；A2 broad scan 兜 kernel/projection+cellvocab 导出符号未来新增 | **type-system Hard（API shape，单轴非 funnel）**：签名即接口（编译期）+ archtest 下游禁裸收 `outbox.Entry`。**非** carrier-source-sealing funnel——`ProjectionEvent` 全导出可实现、载体来源不封闭（forge 防护在 wiring 层），故不声明 sealed-carrier 上游 Hard |
+
+完整盲区清单 + 反向自检（RED/GREEN fixture）活在 `tools/archtest/projection_event_carrier_typed_test.go` 的
+package godoc（单源）。
+
+> **运维注意（rebuild lag 盲区，单源 `kernel/projection/rebuild.go::advanceOffsetPastForeign` godoc）**：
+> rebuild 期 foreign-stream 条目只推进 checkpoint、不更新 `projection_event_replay_lag_seconds`（lag 是 own-stream
+> apply 信号）。journal 被 foreign 流主导时 lag gauge 可能长时间平直但 rebuild 仍在进展——排查 rebuild 进度看
+> checkpoint / `pending_events`，不看 lag。
 
 ## Stream 命名
 

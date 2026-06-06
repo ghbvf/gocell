@@ -117,8 +117,8 @@ func TestPGProjectionReplaySource_Replay(t *testing.T) {
 		s, ctx := newReplaySourceWithTx(tx)
 
 		var got []string
-		err := s.Replay(ctx, 0, func(e kout.Entry) error {
-			got = append(got, e.ID())
+		err := s.Replay(ctx, 0, func(e projection.ProjectionEvent) error {
+			got = append(got, e.EventID())
 			return nil
 		})
 		require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestPGProjectionReplaySource_Replay(t *testing.T) {
 		tx := &mockProjTx{rows: &mockProjRows{specs: []rowSpec{{seq: 1, entry: e1}}}}
 		s, ctx := newReplaySourceWithTx(tx)
 		sentinel := errors.New("apply boom")
-		err := s.Replay(ctx, 0, func(kout.Entry) error { return sentinel })
+		err := s.Replay(ctx, 0, func(projection.ProjectionEvent) error { return sentinel })
 		assert.ErrorIs(t, err, sentinel)
 	})
 	t.Run("query error wrapped", func(t *testing.T) {
@@ -140,7 +140,7 @@ func TestPGProjectionReplaySource_Replay(t *testing.T) {
 		sentinel := errors.New("query boom")
 		tx := &mockProjTx{queryErr: sentinel}
 		s, ctx := newReplaySourceWithTx(tx)
-		err := s.Replay(ctx, 5, func(kout.Entry) error { return nil })
+		err := s.Replay(ctx, 5, func(projection.ProjectionEvent) error { return nil })
 		require.Error(t, err)
 		assert.ErrorIs(t, err, sentinel)
 		assert.Equal(t, ErrAdapterPGQuery, codeOf(t, err))
@@ -150,7 +150,7 @@ func TestPGProjectionReplaySource_Replay(t *testing.T) {
 		sentinel := errors.New("iterate boom")
 		tx := &mockProjTx{rows: &mockProjRows{iterErr: sentinel}}
 		s, ctx := newReplaySourceWithTx(tx)
-		err := s.Replay(ctx, 0, func(kout.Entry) error { return nil })
+		err := s.Replay(ctx, 0, func(projection.ProjectionEvent) error { return nil })
 		require.Error(t, err)
 		assert.ErrorIs(t, err, sentinel)
 		assert.Equal(t, ErrAdapterPGQuery, codeOf(t, err))

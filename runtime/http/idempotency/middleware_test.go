@@ -203,7 +203,7 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 	ctx := context.Background()
 	// Pre-seed a lease directly via MemStore to simulate in-flight request.
 	// Key composed by Middleware: subject + "\x00" + method + "\x00" + path + "\x00" + idemKey.
-	_, _, _, err := ms.Claim(ctx, "tenant1", "user-b\x00POST\x00/\x00in-flight", "", idempotency.DefaultLeaseTTL)
+	_, _, _, err := ms.Claim(ctx, memKey("tenant1", "user-b\x00POST\x00/\x00in-flight"), "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("pre-seed claim: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
 // failingStore always returns an error from Claim.
 type failingStore struct{}
 
-func (failingStore) Claim(_ context.Context, _, _, _ string, _ time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
+func (failingStore) Claim(_ context.Context, _ IdempotencyKey, _ string, _ time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) { //nolint:lll // Store.Claim signature mirrors the interface; cannot shorten without breaking the interface contract
 	return idempotency.ClaimAcquired, nil, nil, errors.New("store unavailable")
 }
 
@@ -642,7 +642,7 @@ func TestMiddleware_RetryAfterReflectsLeaseTTL(t *testing.T) {
 	ctx := context.Background()
 	// Pre-seed a lease with the custom TTL to simulate in-flight request.
 	// Key composed by Middleware: subject + "\x00" + method + "\x00" + path + "\x00" + idemKey.
-	_, _, _, err := ms.Claim(ctx, "tenant1", "user-m\x00POST\x00/\x00retry-after-key", "", testLeaseTTL2m)
+	_, _, _, err := ms.Claim(ctx, memKey("tenant1", "user-m\x00POST\x00/\x00retry-after-key"), "", testLeaseTTL2m)
 	if err != nil {
 		t.Fatalf("pre-seed claim: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestMiddleware_Metrics_Busy(t *testing.T) {
 
 	ctx := context.Background()
 	// Pre-seed a lease to simulate in-flight request.
-	_, _, _, err := ms.Claim(ctx, "t1", "user-busy\x00POST\x00/\x00key-busy", "", idempotency.DefaultLeaseTTL)
+	_, _, _, err := ms.Claim(ctx, memKey("t1", "user-busy\x00POST\x00/\x00key-busy"), "", idempotency.DefaultLeaseTTL)
 	if err != nil {
 		t.Fatalf("pre-seed claim: %v", err)
 	}
@@ -995,7 +995,7 @@ func TestMiddleware_Metrics_Oversize(t *testing.T) {
 type fingerprintMismatchStore struct{}
 
 func (fingerprintMismatchStore) Claim(
-	_ context.Context, _, _, _ string, _ time.Duration,
+	_ context.Context, _ IdempotencyKey, _ string, _ time.Duration,
 ) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
 	// Return the typed error wrapping the sentinel, matching the Store contract
 	// (Implementations MUST return a *FingerprintMismatchError). Stored is empty
@@ -1476,26 +1476,23 @@ func TestMiddleware_ExemptMatcher_ShortCircuitsBeforeBodyRead(t *testing.T) {
 	}
 }
 
-// TestBuildNamespaceKey_IsolationMatrix is the behavioral proof of the isolation
-// contract that the archtest HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01 freezes
-// structurally: every isolation dimension (tenant, subject, method, path,
-// idemKey) must change the derived (ns, key) so two distinct logical requests
-// never share one replay record, while identical inputs reproduce the same pair
-// (assembly-wide cross-pod dedup). The archtest proves the derivation cannot
-// drop a dimension; this proves the current derivation actually separates them.
-func TestBuildNamespaceKey_IsolationMatrix(t *testing.T) {
-	user := func(tenant, subject string) *auth.Principal {
-		return &auth.Principal{Kind: auth.PrincipalUser, TenantID: tenant, Subject: subject}
-	}
+// TestDeriveKey_IsolationMatrix proves DeriveKey actually separates every
+// isolation dimension: identical inputs reproduce the (ns,key) pair (cross-pod
+// dedup), and changing any one dimension changes the pair. A regression that
+// dropped a dimension would collapse one of these; this matrix proves it does not.
+func TestDeriveKey_IsolationMatrix(t *testing.T) {
 	const (
 		tenant = "11111111-1111-1111-1111-111111111111"
 		other  = "22222222-2222-2222-2222-222222222222"
 	)
-	base := user(tenant, "alice")
-	baseNS, baseKey := buildNamespaceKey(base, "POST", "/api/v1/orders", "idem-1")
+	derive := func(tenantID, subject, method, path, idemKey string) (ns, key string) {
+		k := DeriveKey(tenantID, subject, method, path, idemKey)
+		return k.Namespace(), k.Key()
+	}
+	baseNS, baseKey := derive(tenant, "alice", "POST", "/api/v1/orders", "idem-1")
 
 	t.Run("deterministic — identical inputs reproduce the pair (cross-pod dedup)", func(t *testing.T) {
-		ns, key := buildNamespaceKey(user(tenant, "alice"), "POST", "/api/v1/orders", "idem-1")
+		ns, key := derive(tenant, "alice", "POST", "/api/v1/orders", "idem-1")
 		if ns != baseNS || key != baseKey {
 			t.Errorf("identical inputs must yield identical (ns,key): got (%q,%q) want (%q,%q)", ns, key, baseNS, baseKey)
 		}
@@ -1504,21 +1501,23 @@ func TestBuildNamespaceKey_IsolationMatrix(t *testing.T) {
 	// Each dimension, changed in isolation, must alter (ns,key).
 	cases := []struct {
 		name      string
-		p         *auth.Principal
+		tenantID  string
+		subject   string
 		method    string
 		path      string
 		idemKey   string
 		wantNSneq bool // tenant change moves the namespace; the others move the key
 	}{
-		{"tenant", user(other, "alice"), "POST", "/api/v1/orders", "idem-1", true},
-		{"subject", user(tenant, "bob"), "POST", "/api/v1/orders", "idem-1", false},
-		{"method", base, "PUT", "/api/v1/orders", "idem-1", false},
-		{"path", base, "POST", "/api/v1/payments", "idem-1", false},
-		{"idemKey", base, "POST", "/api/v1/orders", "idem-2", false},
+		{"tenant", other, "alice", "POST", "/api/v1/orders", "idem-1", true},
+		{"subject", tenant, "bob", "POST", "/api/v1/orders", "idem-1", false},
+		{"method", tenant, "alice", "PUT", "/api/v1/orders", "idem-1", false},
+		{"path", tenant, "alice", "POST", "/api/v1/payments", "idem-1", false},
+		{"idemKey", tenant, "alice", "POST", "/api/v1/orders", "idem-2", false},
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run("isolated by "+tc.name, func(t *testing.T) {
-			ns, key := buildNamespaceKey(tc.p, tc.method, tc.path, tc.idemKey)
+			ns, key := derive(tc.tenantID, tc.subject, tc.method, tc.path, tc.idemKey)
 			if ns == baseNS && key == baseKey {
 				t.Errorf("changing %s must change (ns,key); both still %q/%q — isolation collapsed", tc.name, ns, key)
 			}
@@ -1529,7 +1528,7 @@ func TestBuildNamespaceKey_IsolationMatrix(t *testing.T) {
 	}
 
 	t.Run("empty tenant maps to the _notenant sentinel", func(t *testing.T) {
-		ns, _ := buildNamespaceKey(user("", "alice"), "POST", "/api/v1/orders", "idem-1")
+		ns, _ := derive("", "alice", "POST", "/api/v1/orders", "idem-1")
 		if ns != noTenantSentinel {
 			t.Errorf("empty tenant must map to %q sentinel; got %q", noTenantSentinel, ns)
 		}
