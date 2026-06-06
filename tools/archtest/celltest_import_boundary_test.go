@@ -84,7 +84,6 @@ package archtest
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -92,134 +91,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCelltestImportBoundary enforces three sub-rules that together ensure
-// kernel/cell/celltest is never imported from production (non-_test.go) code
-// outside the celltest package itself, never imported from kernel/ packages
-// (including their _test.go files), and never imported from examples/ production
-// files.
+// TestCelltestImportBoundary enforces CELLTEST-IMPORT-BOUNDARY-01 (A/B/C) via
+// CheckCelltestImportBoundary (celltest_import_boundary.go). The scanner logic
+// lives in the non-test file so external Cell repositories can import and run
+// the rule without needing GoCell's _test.go compilation.
 func TestCelltestImportBoundary(t *testing.T) {
-	root := findModuleRoot(t)
-	modPath := readModulePath(t, root)
-	celltestImport := modPath + "/kernel/cell/celltest"
-
-	allGoFiles, err := collectGoFiles(root)
-	require.NoError(t, err, "failed to collect .go files")
-	require.NotEmpty(t, allGoFiles, "no .go files found — module root may be wrong")
-
-	celltestPkgDir := filepath.Join(root, "kernel", "cell", "celltest")
-
-	// CELLTEST-A: non-_test.go files must not import celltest (any layer).
-	// Exemptions: the celltest package's own source files; _test.go files.
-	t.Run("CELLTEST-A_nontest_files_no_celltest_import", func(t *testing.T) {
-		var violations []string
-		for _, f := range allGoFiles {
-			// _test.go files are explicitly allowed.
-			if strings.HasSuffix(f, "_test.go") {
-				continue
-			}
-			// celltest package's own source files are exempt.
-			if filepath.Dir(f) == celltestPkgDir {
-				continue
-			}
-			imports, err := parseImports(f)
-			require.NoError(t, err, "failed to parse %s", f)
-			for _, imp := range imports {
-				if imp == celltestImport {
-					rel, _ := filepath.Rel(root, f)
-					rel = filepath.ToSlash(rel)
-					violations = append(violations,
-						fmt.Sprintf("CELLTEST-A: %s (non-test file) imports %s — "+
-							"production code must use auth.NewAuthJWT / auth.NewAuthJWTFromAssembly / "+
-							"auth.NewAuthServiceToken (error-first) instead", rel, imp))
-				}
-			}
-		}
-		for _, v := range violations {
-			t.Logf("%s", v)
-		}
-		assert.Empty(t, violations,
-			"non-test .go files must not import kernel/cell/celltest; "+
-				"use auth.NewAuth* (kernel/auth, error-first) constructors in production paths")
-	})
-
-	// CELLTEST-B: kernel/** must not import celltest, including _test.go files.
-	// Exemptions:
-	//   - the celltest package's own source files (they ARE the package);
-	//   - kernel/cell/ _test.go files (the direct parent package of celltest)
-	//     because Go's standard model for testing a sub-package includes the
-	//     parent package's _test.go verifying the sub-package's panic/error
-	//     behavior (net/http testing httptest helpers pattern).
-	// All other kernel packages — including _test.go — must not import celltest.
-	celltestParentDir := filepath.Join(root, "kernel", "cell")
-	t.Run("CELLTEST-B_kernel_no_celltest_import", func(t *testing.T) {
-		var violations []string
-		for _, f := range allGoFiles {
-			// Exempt the celltest package itself.
-			if filepath.Dir(f) == celltestPkgDir {
-				continue
-			}
-			// Exempt kernel/cell/ _test.go files (direct parent of celltest).
-			if filepath.Dir(f) == celltestParentDir && strings.HasSuffix(f, "_test.go") {
-				continue
-			}
-			rel, _ := filepath.Rel(root, f)
-			rel = filepath.ToSlash(rel)
-			if !strings.HasPrefix(rel, "kernel/") {
-				continue
-			}
-			imports, err := parseImports(f)
-			require.NoError(t, err, "failed to parse %s", f)
-			for _, imp := range imports {
-				if imp == celltestImport {
-					violations = append(violations,
-						fmt.Sprintf("CELLTEST-B: %s imports %s — "+
-							"kernel packages (including _test.go) must not import "+
-							"kernel/cell/celltest; layering rule: kernel must not depend on "+
-							"test-fixture sub-packages defined within itself", rel, imp))
-				}
-			}
-		}
-		for _, v := range violations {
-			t.Logf("%s", v)
-		}
-		assert.Empty(t, violations,
-			"kernel/ packages (other than kernel/cell parent + celltest itself) must not import "+
-				"kernel/cell/celltest; define test helpers locally in the package's own _test.go instead")
-	})
-
-	// CELLTEST-C: examples/** non-_test.go files must not import celltest.
-	// Mirrors AUTH-KEYSTEST-D: examples/ production files must use
-	// auth.NewAuthJWT / auth.NewAuthJWTFromAssembly (error-first), not
-	// the Must* panic helpers in celltest.
-	t.Run("CELLTEST-C_examples_nontest_no_celltest_import", func(t *testing.T) {
-		var violations []string
-		for _, f := range allGoFiles {
-			if strings.HasSuffix(f, "_test.go") {
-				continue
-			}
-			rel, _ := filepath.Rel(root, f)
-			rel = filepath.ToSlash(rel)
-			if !strings.HasPrefix(rel, "examples/") {
-				continue
-			}
-			imports, err := parseImports(f)
-			require.NoError(t, err, "failed to parse %s", f)
-			for _, imp := range imports {
-				if imp == celltestImport {
-					violations = append(violations,
-						fmt.Sprintf("CELLTEST-C: %s (non-test file) imports %s — "+
-							"examples production code must use auth.NewAuth* (kernel/auth, error-first) "+
-							"instead of celltest panic helpers", rel, imp))
-				}
-			}
-		}
-		for _, v := range violations {
-			t.Logf("%s", v)
-		}
-		assert.Empty(t, violations,
-			"examples/ non-test files must not import kernel/cell/celltest; "+
-				"use auth.NewAuth* (kernel/auth, error-first) constructors in production and demo code")
-	})
+	Report(t, "CELLTEST-IMPORT-BOUNDARY-01", CheckCelltestImportBoundary(t, ConfigForExternalCell{}))
 }
 
 // TestCelltestImportBoundary_NegativeProbes validates that the detection logic
@@ -227,8 +104,7 @@ func TestCelltestImportBoundary(t *testing.T) {
 func TestCelltestImportBoundary_NegativeProbes(t *testing.T) {
 	t.Parallel()
 
-	const modPath = "github.com/ghbvf/gocell"
-	celltestImport := modPath + "/kernel/cell/celltest"
+	celltestImport := PlatformModulePath + "/kernel/cell/celltest"
 
 	// Probe A: parseImports must detect a celltest import in a non-test file.
 	t.Run("A_detects_nontest_celltest_import", func(t *testing.T) {
