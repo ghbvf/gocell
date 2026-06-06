@@ -49,9 +49,13 @@
 // production code drags init-time panics into runtime and contradicts its
 // test-only purpose. [CheckMetadatatestImportScope] is the importable rule body.
 //
-// AI-robust: Medium (archtest path-based scope; Go cannot express "test-only
-// package" at the type level). Upgrade tracked alongside the broader go
-// test-only-package proposal.
+// AI-robust: Medium, single-axis (path-based archtest scope — NOT a funnel, so
+// no caller-allowlist / sealed-construction double-lock applies). Go cannot
+// express a "test-only package" at the type level, so the sole Hard-upgrade
+// path is a Go language feature that does not exist — a permanent Go-ceiling
+// won't-do (no GoCell-side issue; same ceiling family as #851 / #893 / #1282).
+// The AST import-scan (production .go importing metadatatest) is the canonical
+// enforcement; dot-import is resolved via importsMetadatatest.
 package archtest
 
 import (
@@ -226,7 +230,7 @@ func CheckMetadatatestImportScope(t *testing.T, _ ConfigForExternalCell) []Diagn
 // fixtures and will be migrated via mirror backlog issues; once each
 // such package is migrated, its path prefix is added to the scan scope
 // list below and its allowlist entry (if any) removed.
-func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[string]struct{}) []string { //nolint:gocognit,lll // archtest AST scanner: per-file carve-out + composite-literal walk over kernel/ tags×2; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 A1 (relocated verbatim from _test.go)
+func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[string]struct{}) []string { //nolint:gocognit,lll // archtest AST scanner: per-file carve-out + composite-literal walk over kernel/ tags×2; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 A1's exhaustive composite-literal walk
 	t.Helper()
 	scopePrefixes := []string{"kernel/"}
 	var violations []string
@@ -363,7 +367,7 @@ func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *type
 	return out
 }
 
-func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t types.Type) []string { //nolint:gocognit,lll // archtest AST scanner: keyed/positional struct-literal field-position resolution; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 (relocated verbatim from _test.go)
+func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t types.Type) []string { //nolint:gocognit,lll // archtest AST scanner: keyed/positional struct-literal field-position resolution; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's keyed/positional struct handling
 	named, ok := t.(*types.Named)
 	if !ok {
 		// pointer to named?
@@ -442,7 +446,7 @@ func lookupCellIDFieldPosition(structName, fieldName string) (cellIDFieldPositio
 // resolving to a metadatatest package-level Var. Any other shape — bare
 // BasicLit, Ident→BasicLit chain, dynamic NewCellID arg, third-party
 // const ref — is rejected.
-func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyclop,lll // archtest AST scanner: enumerates sanctioned NewCellID/typed-var expr forms (selector/ident/call); complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 (relocated verbatim from _test.go)
+func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyclop,lll // archtest AST scanner: enumerates sanctioned NewCellID/typed-var expr forms (selector/ident/call); complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's sanctioned-form enumeration
 	switch e := expr.(type) {
 	case *ast.CallExpr:
 		sel, ok := e.Fun.(*ast.SelectorExpr)
@@ -610,7 +614,7 @@ func dedupCellIDStrings(in []string) []string {
 // ADR's §2 carveout registry markdown table. The table is recognized by
 // a header line starting with "| Carved-out function" and ending at the
 // next blank line / non-table line.
-func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) { //nolint:gocognit,lll // archtest ADR-table parser: markdown row-state machine for A4 carve-out consistency; complexity inherent (relocated verbatim from _test.go)
+func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) { //nolint:gocognit,lll // archtest ADR-table parser: markdown row-state machine for A4 carve-out consistency; complexity inherent to the markdown row-state parse
 	out := map[string]struct{}{}
 	lines := strings.Split(content, "\n")
 	inTable := false

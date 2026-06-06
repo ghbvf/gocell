@@ -54,7 +54,9 @@
 //
 // Run(t, Typed(TypedOpts{Tests: false}, ...)) loads only production-variant packages, so
 // _test.go files are not in pass.Files; the scanner additionally filters by
-// rel suffix.
+// rel suffix as defense-in-depth — so the rule stays correct if a future
+// caller passes Tests: true or runs it over a fixture (Run(t, Fixture(...)))
+// load path where _test.go files would be present.
 //
 // # Blind spots (BS)
 //

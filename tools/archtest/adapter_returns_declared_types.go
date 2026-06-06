@@ -29,6 +29,24 @@
 //     Status ∉ declared → Diagnostic.
 //  4. nil / ident (non-CompositeLit) returns → skip (ceiling guard).
 //
+// # Blind spots (BS) — declared per ai-robust.md §"工具选定后强制盲区自检"
+//
+// This is a CEILING guard: it must never false-positive, so it tolerates the
+// false negatives below (each skips, never mis-flags). A1 (FIXTURE-CELLID) /
+// floor guards (roadmap GOCELL-INVARIANT-AUDIT-V1) close the other direction.
+//
+//   - BS-1 Multi-import ambiguity: contractIDForTypeName resolves the owning
+//     contract by best-effort method-name-prefix match across the file's
+//     contract imports; a file importing several contracts whose generated
+//     struct prefixes collide may resolve to the wrong contract → that return
+//     is checked against the wrong declared set (skipped, not mis-flagged).
+//   - BS-2 Dot / aliased contract import: importAlias falls back to the last
+//     import-path segment, which can collide; an unresolved alias yields
+//     contractID == "" → skip.
+//   - BS-3 Reflection / dynamically-built response value (non-CompositeLit
+//     return): out of scope per ai-robust.md §3 — only inline CompositeLit
+//     returns are inspected.
+//
 // ref: goa goagen/codegen/types/types.go
 // ref: connect-go cmd/protoc-gen-connect-go
 package archtest

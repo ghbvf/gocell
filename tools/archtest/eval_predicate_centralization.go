@@ -56,13 +56,17 @@
 // arbitrary func(string)bool to constraint.Expr.Eval at compile time;
 // static archtest at CI is the canonical Hard enforcement.
 //
+// Covered (NOT a blind spot — listed to preempt the question): indirection
+// through a var binding (`var f = func(...) bool { return false }; expr.Eval(f)`)
+// resolves the arg to an *ast.Ident — neither the canonical BuildContextPredicate(...)
+// call nor an all-false FuncLit — so it is REJECTED, forcing the inline canonical
+// form (intentional strictness, not a gap).
+//
 // # Blind spots (BS)
 //
-//   - BS-1 Indirection through a var binding (`var f = func(...) bool { return false }; expr.Eval(f)`)
-//     resolves the call's arg to an *ast.Ident (not a FuncLit), which is flagged correctly.
-//   - BS-2 Reflection / code generation producing constraint.Expr.Eval calls:
+//   - BS-1 Reflection / code generation producing constraint.Expr.Eval calls:
 //     out of scope per ai-robust.md §3.
-//   - BS-3 Scope: only top-level tools/archtest/ _test.go files are checked
+//   - BS-2 Scope: only top-level tools/archtest/ _test.go files are checked
 //     (internal/ sub-packages are excluded per the rule intent).
 package archtest
 

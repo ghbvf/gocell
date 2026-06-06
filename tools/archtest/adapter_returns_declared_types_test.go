@@ -10,7 +10,8 @@
 // adapterReturn type + responseStructPattern var + adapterReturnsDeclaredRule const,
 // all module-path-agnostic via moduleImportPath) lives in the non-test companion
 // adapter_returns_declared_types.go (M3 #1639) so it is fork-safe — single
-// source, no parallel rule body.
+// source, no parallel rule body. Registration in StandardCellRules (this rule is
+// external-applicable) is deferred to #1706; see that .go's godoc for rationale.
 package archtest
 
 import (
