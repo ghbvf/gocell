@@ -490,6 +490,29 @@ func TestL0ImportsForCell_NoDeclaredDeps(t *testing.T) {
 	assert.True(t, foundMissing, "L0 cell with no declared deps must produce CHECK-L0-MISSING-L0DEPS")
 }
 
+func TestL0ImportsForCell_EmptyDeclaredDepsAllowed(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/ghbvf/gocell\n\ngo "+goModVersion()+"\n"), 0o644))
+	cellDir := filepath.Join(root, "cells", "my-l0-cell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte(`id: my-l0-cell
+type: edge
+consistencyLevel: L0
+l0Dependencies: []
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.go"), []byte("package myl0cell\n"), 0o644))
+
+	cm := &metadata.CellMeta{
+		ID:               "my-l0-cell",
+		ConsistencyLevel: "L0",
+		File:             "cells/my-l0-cell/cell.yaml",
+	}
+	results := l0ImportsForCell(root, cm)
+	for _, r := range results {
+		assert.NotEqual(t, governance.RuleCode("CHECK-L0-MISSING-L0DEPS"), r.Code)
+	}
+}
+
 // TestLoadCellImports_NonExistentDir verifies that loadCellImports returns a
 // fatal load error when the cell directory does not exist.
 func TestLoadCellImports_NonExistentDir(t *testing.T) {

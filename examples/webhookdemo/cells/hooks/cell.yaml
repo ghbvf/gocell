@@ -1,0 +1,17 @@
+id: hooks
+type: edge
+# L0 LocalOnly: the runtime webhook.Receiver owns HMAC verification, the
+# timestamp window, and idempotency; this cell's HandleEvent only validates,
+# decodes, and structured-logs the already verified delivery. Inbound webhook
+# receive is the sanctioned TOPO-05 exception where an L0 owner cell implements
+# the contract via webhook-receive.
+consistencyLevel: L0
+l0Dependencies: []
+lifecycle: experimental
+owner:
+  team: examples
+  role: webhook-owner
+verify:
+  smoke:
+    - smoke.hooks.startup
+goStructName: HooksCell
