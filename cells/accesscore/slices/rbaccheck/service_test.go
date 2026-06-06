@@ -206,6 +206,30 @@ func (r *scopeCapturingRoleRepo) EffectiveAdminExists(ctx context.Context, t ten
 	return r.inner.EffectiveAdminExists(ctx, t)
 }
 
+// TestListRoles_IsRLSScoped asserts that ListRoles wraps the ListByUserID call
+// in a scoped transaction so the RLS tenant_isolation policy on role_assignments
+// is satisfied (Site 5 RLS fix, paired with TestHasRole_IsRLSScoped).
+func TestListRoles_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real()).RoleRepository()
+	inner.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	inner.SeedUserRoleAssignment(testTenantID, "usr-rls-list", "admin")
+
+	cap := &scopeCapturingRoleRepo{inner: inner}
+	svc, err := NewService(cap, newTestCodec(t), slog.Default(), query.RunModeDemo,
+		WithTxManager(outbox.DemoCellTxManager()))
+	require.NoError(t, err)
+
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	result, err := svc.ListRoles(ctx, "usr-rls-list", query.PageParams{Limit: 10})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 1)
+
+	assert.True(t, cap.capturedOK,
+		"ListByUserID must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"ListByUserID scope must equal the request tenant")
+}
+
 // TestHasRole_IsRLSScoped asserts that HasRole wraps the GetByUserID call in a
 // scoped transaction so the RLS tenant_isolation policy on role_assignments is
 // satisfied (Site 5 RLS fix).

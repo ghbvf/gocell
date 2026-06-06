@@ -5,6 +5,7 @@ package sessionrefresh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -245,6 +246,10 @@ func (s *Service) handlePeekError(outerCtx context.Context, presented *refresh.T
 // Mid-flight scoping is safe here: every statement above the ApplyScope call
 // touched only non-RLS tables (refresh store, sessions); the users/roles reads
 // that need the GUC all happen after it returns.
+//
+// Params: ctx is the ambient RunInTx transaction context (used for the scoped
+// reads + the mid-tx ApplyScope); outerCtx is the caller's pre-tx context, used
+// only by handlePeekError to run the reuse cascade in a DETACHED tx.
 func (s *Service) peekVerifyAndScope(
 	ctx context.Context,
 	outerCtx context.Context,
@@ -280,9 +285,13 @@ func (s *Service) peekVerifyAndScope(
 			slog.Any("error", err), slog.String("subject_id", sess.SubjectID))
 		return nil, nil, authRefreshRejected()
 	}
+	// Preserve the underlying error Kind (%w) rather than masking everything as
+	// 503: ApplyTenantScope returns KindInternal for a programmer error (no ambient
+	// tx — impossible here, we are inside RunInTx) and propagates writeTenantGUC's
+	// classified Kind for a genuine DB fault. Forcing KindUnavailable would
+	// mislead on-call about an infra outage when it is actually an internal fault.
 	if err := scopedtx.ApplyScope(ctx, s.txRunner, refreshTenantID); err != nil {
-		return nil, nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable,
-			"session-refresh: apply tenant scope", err)
+		return nil, nil, fmt.Errorf("session-refresh: apply tenant scope: %w", err)
 	}
 	return presented, sess, nil
 }

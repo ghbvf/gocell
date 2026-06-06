@@ -305,7 +305,8 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 	// This validates the policy SHAPE only — it does NOT prove RLS is EFFECTIVE at
 	// runtime: a superuser / BYPASSRLS connecting role bypasses RLS even with a
 	// correct policy. That role precondition is a separate app-serving-pool
-	// readiness dimension deferred to #1617 (PR-3b); /readyz here does not assert it.
+	// readiness dimension tracked in backlog #1676 (restricted app-serving pool +
+	// current_user probe); /readyz here does not assert it.
 	if err := verifyRLS(ctx, pool); err != nil {
 		return err
 	}
@@ -961,7 +962,8 @@ func verifyRLS(ctx context.Context, pool *Pool) error {
 // SCOPE: this verifies the RLS schema/policy SHAPE only. It does NOT verify the
 // connecting role's runtime attributes — a superuser / BYPASSRLS role bypasses
 // RLS regardless of a correct policy, and that role precondition is a separate
-// app-serving-pool readiness dimension deferred to #1617 (PR-3b), NOT closed here.
+// app-serving-pool readiness dimension tracked in backlog #1676 (restricted
+// app-serving pool + current_user probe), NOT in this PR.
 func verifyRLSPolicy(ctx context.Context, pool *Pool, r expectedRLS) error {
 	const policiesQ = `
 	SELECT policyname, permissive, cmd,

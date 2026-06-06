@@ -61,6 +61,12 @@ func Do[T any](
 // already be inside the RunInTx whose tx is being scoped, and every prior
 // statement in that tx MUST have touched only non-RLS tables. Non-RLS backends
 // (mem / demo) no-op. Thin funnel over CellTxManager.ApplyTenantScope.
+//
+// t.String() converts tenant.TenantID → canonical UUID string: kernel/persistence
+// defines CellTxManager with a plain string parameter to keep the kernel layer
+// free of the pkg/tenant transitive dependency (kernel/ must not import cells/ or
+// the broader platform packages). ApplyTenantScope on the postgres side re-validates
+// the string as a UUID before writing the GUC.
 func ApplyScope(ctx context.Context, tx persistence.CellTxManager, t tenant.TenantID) error {
 	return tx.ApplyTenantScope(ctx, t.String())
 }

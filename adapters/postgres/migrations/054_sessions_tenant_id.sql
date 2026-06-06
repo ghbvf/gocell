@@ -46,6 +46,20 @@
 
 -- +goose Up
 
+-- 0. Defense-in-depth: the FK rebuild below requires sessions to be empty (a
+--    non-empty table would get tenant_id='' on every row, then the composite FK
+--    REFERENCES users(tenant_id, id) would fail mid-migration, leaving a
+--    half-applied state). The "sessions empty at deploy" project invariant is thus
+--    enforced at runtime here, not only in the comments above.
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM sessions) > 0 THEN
+        RAISE EXCEPTION 'migration 054: sessions must be empty at deploy (composite-FK rebuild requires it); found existing rows';
+    END IF;
+END $$;
+-- +goose StatementEnd
+
 -- 1. Add the carrier column. DEFAULT '' is a DDL-compat device for ADD COLUMN
 --    NOT NULL on a (provably empty) table; dropped immediately below.
 ALTER TABLE sessions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '';

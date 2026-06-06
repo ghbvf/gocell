@@ -1,10 +1,9 @@
 //go:build archtest_fixture
 
-// Package tenantrepoparamfixture provides deliberate RED fixtures for
-// TENANT-REPO-PARAM-FUNNEL-01 and TENANT-REPO-CALLSITE-FUNNEL-01 archtests.
-// Loaded only when the archtest_fixture build tag is set (the tag literal must
-// agree with the unexported fixtureBuildTag const in tools/archtest/fixture.go;
-// Go build directives cannot reference a Go const).
+// Package tenantrepoparamfixture provides deliberate RED fixtures for the
+// TENANT-REPO-PARAM-FUNNEL-01 archtest. Loaded only when the archtest_fixture
+// build tag is set (the tag literal must agree with the unexported fixtureBuildTag
+// const in tools/archtest/fixture.go; Go build directives cannot reference a Go const).
 //
 // The build tag excludes this package from `go build ./...` / `go test ./...`,
 // so it never pollutes real-repo scans.
@@ -17,9 +16,11 @@
 //     non-ctx string param), not position 1; TENANT-REPO-PARAM-FUNNEL-01 position
 //     assertion MUST flag this.
 //   - FakeRepo.GoodMethod — tenant.TenantID at position 1 (after ctx); MUST NOT flag.
-//   - FakeUserRepository / FakeGetByIDCaller — callsite violation fixture: a fake
-//     slice package calling the tenant-less GetByID-shaped method from outside the
-//     sanctioned allowlist; TENANT-REPO-CALLSITE-FUNNEL-01 MUST flag this.
+//
+// Note: TENANT-REPO-CALLSITE-FUNNEL-01 was retired in PR-3b (#1617) — the
+// tenant-less UserRepository.GetByID was deleted (all user-repo methods now have
+// a typed tenant.TenantID position param), so there is no tenant-less method left
+// to lock. FakeUserRepository and FakeGetByIDCaller have been removed accordingly.
 package tenantrepoparamfixture
 
 import (
@@ -47,23 +48,4 @@ type FakeRepo interface {
 	// OK: a real tenant.TenantID positional parameter at position 1. The scanner
 	// MUST NOT flag this — it is the sanctioned shape.
 	GoodMethod(ctx context.Context, t tenant.TenantID, id string) error
-}
-
-// FakeUserRepository is a minimal interface that mimics the tenant-less GetByID
-// carve-out shape — used by the TENANT-REPO-CALLSITE-FUNNEL-01 callsite fixture.
-type FakeUserRepository interface {
-	// GetByID is the tenant-less by-PK carve-out shape.
-	GetByID(ctx context.Context, id string) (string, error)
-}
-
-// FakeGetByIDCaller is an unsanctioned caller of the tenant-less GetByID. This
-// is the RED fixture for TENANT-REPO-CALLSITE-FUNNEL-01: a call from a package
-// outside the sanctioned allowlist MUST be flagged.
-//
-//nolint:all // intentional violation for archtest RED fixture — F3
-func FakeGetByIDCaller(ctx context.Context, repo FakeUserRepository) (string, error) {
-	// VIOLATION: calling the tenant-less GetByID from an unsanctioned package.
-	// In production, only the explicit allowlist packages (sessionrefresh /
-	// sessionvalidate / rbacassign + adapter-internal self-calls) are permitted.
-	return repo.GetByID(ctx, "some-id") //nolint:all // RED fixture
 }

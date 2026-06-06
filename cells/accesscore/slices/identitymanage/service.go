@@ -183,6 +183,14 @@ type Service struct {
 // §Option-范式 builder-noop (累加式 builder: nil入参 = no new data, final
 // nil resolved at factory; here the factory auto-constructs rather than
 // fail-fast because the inputs are provably valid).
+//
+// PR-3b (RLS) tenant scope: identitymanage is a POST-AUTH cell (admin/self
+// endpoints behind the JWT listener). Its users/roles reads+writes run inside
+// bare txRunner.RunInTx and get the app.tenant_id GUC from the authenticated
+// principal's ctxkeys.TenantID (JWT claim) via TxManager.tenantScopeForTx
+// fallback — it deliberately does NOT use cells/accesscore/internal/scopedtx
+// (that funnel is for PRE-AUTH / service paths that carry no ctxkeys.TenantID).
+// Callers must therefore invoke these methods only on a JWT-authenticated ctx.
 func NewService(
 	clk clock.Clock,
 	repo ports.UserRepository,

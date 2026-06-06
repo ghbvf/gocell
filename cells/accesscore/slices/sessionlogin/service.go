@@ -368,6 +368,16 @@ type loginOutcome struct {
 	failureErr error // non-nil = credential-domain 401 to return after the tx commits
 }
 
+// issueForUserResult carries the result of the scoped read+mint closure inside
+// IssueForUser back to the outer caller, replacing the previous anonymous
+// struct{} with outer-scope variable mutation. Fields mirror the three pieces of
+// state needed after the scope exits.
+type issueForUserResult struct {
+	minted                sessionmint.Result
+	authzEpoch            int64
+	passwordResetRequired bool
+}
+
 // loginInTx is the FOR-UPDATE-locked body of Login. It re-fetches the user
 // inside the ambient transaction (acquiring the user-row write lock),
 // invokes lazy-unlock if applicable, checks CanAuthenticate + password-version
@@ -798,16 +808,13 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	// in its own scoped tx below (persistSessionWithRefresh), preserving the
 	// pre-existing transaction boundary — read+mint were never in the persist tx.
 	sessionID := uuid.NewString()
-	var minted sessionmint.Result
-	var authzEpoch int64
-	var passwordResetRequired bool
-	if _, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (struct{}, error) {
+	read, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (issueForUserResult, error) {
 		user, err := s.userRepo.GetByIDInTenant(txCtx, tid, userID)
 		if err != nil {
-			return struct{}{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
+			return issueForUserResult{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
 		}
 		if err := credentialauthority.Assert(user); err != nil {
-			return struct{}{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			return issueForUserResult{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 				"account is not active",
 				errcode.WithInternal(errcode.InternalAttr("_", "sessionlogin:IssueForUser credential not authoritative")))
 		}
@@ -823,13 +830,15 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		if err != nil {
 			s.logger.Error("sessionlogin:IssueForUser token issuance failed",
 				slog.Any("error", err), slog.String("user_id", userID))
-			return struct{}{}, err
+			return issueForUserResult{}, err
 		}
-		minted = m
-		authzEpoch = user.AuthzEpoch()
-		passwordResetRequired = user.PasswordResetRequired()
-		return struct{}{}, nil
-	}); err != nil {
+		return issueForUserResult{
+			minted:                m,
+			authzEpoch:            user.AuthzEpoch(),
+			passwordResetRequired: user.PasswordResetRequired(),
+		}, nil
+	})
+	if err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -844,12 +853,12 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	sess := &session.Session{
 		ID:                sessionID,
 		SubjectID:         userID,
-		JTI:               minted.JTI,
-		AuthzEpochAtIssue: authzEpoch,
+		JTI:               read.minted.JTI,
+		AuthzEpochAtIssue: read.authzEpoch,
 		CreatedAt:         now,
 		ExpiresAt:         now.Add(s.sessionTTL),
 	}
-	refreshWire, err := s.persistSessionWithRefresh(ctx, tid, sess, userID, authzEpoch)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, tid, sess, userID, read.authzEpoch)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -858,11 +867,11 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		slog.String("user_id", userID), slog.String("session_id", sessionID))
 
 	return dto.TokenPair{
-		AccessToken:           minted.AccessToken,
+		AccessToken:           read.minted.AccessToken,
 		RefreshToken:          refreshWire,
-		ExpiresAt:             minted.ExpiresAt,
+		ExpiresAt:             read.minted.ExpiresAt,
 		SessionID:             sessionID,
 		UserID:                userID,
-		PasswordResetRequired: passwordResetRequired,
+		PasswordResetRequired: read.passwordResetRequired,
 	}, nil
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -480,4 +482,106 @@ func TestRevoke_FunnelFail_ReturnsError(t *testing.T) {
 	err = svc.Revoke(tenantCtx(), testTenantID, "usr-1", "admin")
 	require.Error(t, err, "Revoke must fail-closed when credential invalidation fails")
 	assert.Contains(t, err.Error(), "invalidate credentials")
+}
+
+// scopeCapturingRoleRepo wraps a RoleRepository and records whether the
+// context passed to AssignToUser or RemoveFromUserIfNotLast carries a tenant
+// scope injected by scopedtx.Do. Used by TestAssignRole_IsRLSScoped and
+// TestRevokeRole_IsRLSScoped.
+type scopeCapturingRoleRepo struct {
+	inner         ports.RoleRepository
+	capturedScope tenant.TenantID
+	capturedOK    bool
+}
+
+var _ ports.RoleRepository = (*scopeCapturingRoleRepo)(nil)
+
+func (r *scopeCapturingRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error) {
+	return r.inner.GetByID(ctx, t, id)
+}
+
+func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+	return r.inner.GetByUserID(ctx, t, userID)
+}
+
+func (r *scopeCapturingRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
+	return r.inner.Create(ctx, t, role)
+}
+
+func (r *scopeCapturingRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.AssignToUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error {
+	return r.inner.RemoveFromUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.RemoveFromUserIfNotLast(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error) {
+	return r.inner.CountByRole(ctx, t, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
+	return r.inner.CountEffectiveAdmins(ctx, t)
+}
+
+func (r *scopeCapturingRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
+	return r.inner.EffectiveAdminExists(ctx, t)
+}
+
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test stub matching interface signature
+	return r.inner.ListByUserID(ctx, t, userID, params)
+}
+
+// TestAssignRole_IsRLSScoped asserts that Assign wraps the AssignToUser call in
+// a scoped transaction so the RLS tenant_isolation policy on role_assignments is
+// satisfied (persistChange → scopedtx.Do).
+func TestAssignRole_IsRLSScoped(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "editor", Name: "editor"})
+	seedActiveUser(t, store, "usr-rls-assign")
+
+	cap := &scopeCapturingRoleRepo{inner: store.RoleRepository()}
+	inv := newTestInvalidator(t, store.UserRepository(), testutil.RealSessionRepo(t))
+	svc, err := NewService(clock.Real(), cap, store.UserRepository(), inv, slog.Default(),
+		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
+	require.NoError(t, err)
+
+	err = svc.Assign(tenantCtx(), testTenantID, "usr-rls-assign", "editor")
+	require.NoError(t, err)
+
+	assert.True(t, cap.capturedOK,
+		"AssignToUser must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"Assign scope must equal the request tenant")
+}
+
+// TestRevokeRole_IsRLSScoped asserts that Revoke wraps the
+// RemoveFromUserIfNotLast call in a scoped transaction so the RLS
+// tenant_isolation policy on role_assignments is satisfied.
+func TestRevokeRole_IsRLSScoped(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "editor", Name: "editor"})
+	seedActiveUser(t, store, "usr-rls-revoke")
+	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-rls-revoke", "editor")
+	require.NoError(t, err)
+
+	cap := &scopeCapturingRoleRepo{inner: store.RoleRepository()}
+	inv := newTestInvalidator(t, store.UserRepository(), testutil.RealSessionRepo(t))
+	svc, err := NewService(clock.Real(), cap, store.UserRepository(), inv, slog.Default(),
+		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
+	require.NoError(t, err)
+
+	err = svc.Revoke(tenantCtx(), testTenantID, "usr-rls-revoke", "editor")
+	require.NoError(t, err)
+
+	assert.True(t, cap.capturedOK,
+		"RemoveFromUserIfNotLast must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"Revoke scope must equal the request tenant")
 }

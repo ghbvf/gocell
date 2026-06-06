@@ -194,7 +194,7 @@ func scanPGTenantGUCWrite(p *Pass, writerFile string) (offenders []Diagnostic, w
 				Line: pos.Line,
 				Message: fmt.Sprintf(
 					"PG-SETLOCAL-FUNNEL-01: app.tenant_id GUC write in %s:%d is outside the sole sanctioned "+
-						"writer (%s::setLocalTenant). The tenant RLS GUC injection is the isolation boundary and "+
+						"writer (%s::writeTenantGUC). The tenant RLS GUC injection is the isolation boundary and "+
 						"must be funneled through one helper; do not write app.tenant_id elsewhere.",
 					rel, pos.Line, pgSetLocalGUCWriterFile,
 				),
@@ -226,7 +226,7 @@ func TestPGSetLocalFunnel01_TenantGUCWriterFunnel(t *testing.T) {
 	Report(t, "PG-SETLOCAL-FUNNEL-01", diags)
 	if !observedWriter {
 		t.Errorf("PG-SETLOCAL-FUNNEL-01 anti-vacuity: expected an app.tenant_id GUC write in %s but found none — "+
-			"the scanner regressed or setLocalTenant moved; the funnel would be silently vacuous.", pgSetLocalGUCWriterFile)
+			"the scanner regressed or writeTenantGUC moved; the funnel would be silently vacuous.", pgSetLocalGUCWriterFile)
 	}
 }
 

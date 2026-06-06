@@ -6,8 +6,29 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
+
+// capturingTxRunner is a TxRunner that also satisfies the tenantScoper
+// interface checked by internalCellTxManager.ApplyTenantScope. RunInTx
+// delegates to outbox.DemoTxRunner; ApplyTenantScope records its argument.
+// Wrap with persistence.WrapForCell to get a sealed CellTxManager.
+type capturingTxRunner struct {
+	outbox.DemoTxRunner
+	capturedTenantStr string
+	applyErr          error
+	captureMode       bool
+}
+
+func (r *capturingTxRunner) ApplyTenantScope(_ context.Context, tenantStr string) error {
+	if r.captureMode {
+		r.capturedTenantStr = tenantStr
+		return nil
+	}
+	return r.applyErr
+}
 
 const testTenant tenant.TenantID = "11111111-1111-1111-1111-111111111111"
 
@@ -50,5 +71,33 @@ func TestDoPropagatesError(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("Do result on error = %q, want zero value", got)
+	}
+}
+
+// TestApplyScope_PassesTenantString verifies that ApplyScope forwards the
+// correct canonical UUID string (t.String()) to the underlying
+// CellTxManager.ApplyTenantScope.
+func TestApplyScope_PassesTenantString(t *testing.T) {
+	t.Parallel()
+	runner := &capturingTxRunner{captureMode: true}
+	tx := persistence.WrapForCell(runner)
+	if err := ApplyScope(context.Background(), tx, testTenant); err != nil {
+		t.Fatalf("ApplyScope err = %v, want nil", err)
+	}
+	if runner.capturedTenantStr != testTenant.String() {
+		t.Fatalf("tenantStr = %q, want %q", runner.capturedTenantStr, testTenant.String())
+	}
+}
+
+// TestApplyScope_PropagatesError verifies that an error from
+// CellTxManager.ApplyTenantScope is returned unchanged.
+func TestApplyScope_PropagatesError(t *testing.T) {
+	t.Parallel()
+	wantErr := errcode.New(errcode.KindInternal, errcode.ErrInternal, "no ambient tx")
+	runner := &capturingTxRunner{applyErr: wantErr}
+	tx := persistence.WrapForCell(runner)
+	err := ApplyScope(context.Background(), tx, testTenant)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ApplyScope err = %v, want wrapped sentinel", err)
 	}
 }

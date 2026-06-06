@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // testTenantIDStr is the string form of the canonical test tenant UUID, used
@@ -859,6 +860,96 @@ func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *
 	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code,
 		"already provisioned must return 410 ErrSetupAlreadyInitialized")
 	assert.Empty(t, w.entries, "no event emitted on 410 path")
+}
+
+// TestService_CreateAdmin_IsRLSScoped asserts that CreateAdmin wraps the repo
+// calls in a scoped transaction so the RLS tenant_isolation policy on users /
+// roles / role_assignments is satisfied (PR-3b Site 3 — setup RLS scope).
+//
+// A scopeCapturingUserRepo intercepts the first Create call and records
+// whether tenant.ScopeFromContext was set in the context.
+// outbox.DemoCellTxManager is a pass-through that preserves WithScope values
+// (same approach as TestHasRole_IsRLSScoped in rbaccheck).
+func TestService_CreateAdmin_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real())
+	cap := &scopeCapturingUserRepo{inner: inner.UserRepository()}
+	roleRepo := inner.RoleRepository()
+
+	svc := newService(t, cap, roleRepo, nil,
+		setup.WithTxManager(outbox.DemoCellTxManager()),
+	)
+
+	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr,
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.NoError(t, err)
+
+	assert.True(t, cap.capturedOK,
+		"Create must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"Create scope must equal the request tenant")
+}
+
+// scopeCapturingUserRepo wraps a UserRepository and records whether the
+// context passed to Create carries a tenant scope.
+type scopeCapturingUserRepo struct {
+	inner         ports.UserRepository
+	capturedScope tenant.TenantID
+	capturedOK    bool
+}
+
+var _ ports.UserRepository = (*scopeCapturingUserRepo)(nil)
+
+func (r *scopeCapturingUserRepo) Create(ctx context.Context, t tenant.TenantID, u *domain.User) error {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.Create(ctx, t, u)
+}
+
+func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	return r.inner.GetByIDInTenant(ctx, t, id)
+}
+
+func (r *scopeCapturingUserRepo) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
+	return r.inner.GetByUsername(ctx, t, username)
+}
+
+func (r *scopeCapturingUserRepo) Delete(ctx context.Context, t tenant.TenantID, id string) error {
+	return r.inner.Delete(ctx, t, id)
+}
+
+func (r *scopeCapturingUserRepo) UpdateProfile(ctx context.Context, t tenant.TenantID, userID string, name, email *domain.NonEmpty, now time.Time) (*domain.User, error) { //nolint:lll // test stub matching interface signature
+	return r.inner.UpdateProfile(ctx, t, userID, name, email, now)
+}
+
+func (r *scopeCapturingUserRepo) UpdateLockState(ctx context.Context, t tenant.TenantID, userID string, status domain.UserStatus, now time.Time) error { //nolint:lll // test stub matching interface signature
+	return r.inner.UpdateLockState(ctx, t, userID, status, now)
+}
+
+func (r *scopeCapturingUserRepo) UpdatePasswordResetFlag(ctx context.Context, t tenant.TenantID, userID string, required bool, now time.Time) error { //nolint:lll // test stub matching interface signature
+	return r.inner.UpdatePasswordResetFlag(ctx, t, userID, required, now)
+}
+
+func (r *scopeCapturingUserRepo) UpdatePassword(ctx context.Context, t tenant.TenantID, userID, newHash string, resetRequired bool, expectedPasswordVersion int64) (int64, error) { //nolint:lll // test stub matching interface signature
+	return r.inner.UpdatePassword(ctx, t, userID, newHash, resetRequired, expectedPasswordVersion)
+}
+
+func (r *scopeCapturingUserRepo) BumpAuthzEpoch(ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken) (int64, error) { //nolint:lll // test stub matching interface signature
+	return r.inner.BumpAuthzEpoch(ctx, t, userID, tok)
+}
+
+func (r *scopeCapturingUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+	return r.inner.GetByIDForUpdate(ctx, t, id)
+}
+
+func (r *scopeCapturingUserRepo) GetByUsernameForUpdate(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
+	return r.inner.GetByUsernameForUpdate(ctx, t, username)
+}
+
+func (r *scopeCapturingUserRepo) UpdateLockoutFields(ctx context.Context, t tenant.TenantID, u *domain.User) error {
+	return r.inner.UpdateLockoutFields(ctx, t, u)
 }
 
 // --- RecordBootstrapAuthFail ------------------------------------------------
