@@ -140,7 +140,7 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 		return res, err
 	}
 
-	// Cross-contract gate: (proto package, service, method) global uniqueness +
+	// Cross-contract gate: (proto package, service) global uniqueness +
 	// single import path per proto service. Scans ALL grpc contracts (not just
 	// the selected scope) so collisions surface regardless of scope. Iterates the
 	// empty set until the first real grpc contract lands (PR 8).
