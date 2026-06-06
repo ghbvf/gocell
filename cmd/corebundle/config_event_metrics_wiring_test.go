@@ -27,23 +27,45 @@ func newConfigEventEntry(t *testing.T, id string) outbox.Entry {
 	return entry
 }
 
-func TestConfigEventConsumerMiddlewareUsesSubscriptionOwnerMetadata(t *testing.T) {
+// TestConfigEventSettlement_RecordsOwnerMetadataOnAck verifies the config-event
+// settlement metric carries subscription owner metadata (cell + slice) on the
+// success path. Post-#663 the settlement observer is appended at the
+// SubscriberHandler layer by WrapConfigEventSubscriber (mirroring
+// eventrouter.contractTracingSubscriber), not by the EntryHandler-layer
+// ConfigEventMiddleware (which now only injects owner ctx).
+func TestConfigEventSettlement_RecordsOwnerMetadataOnAck(t *testing.T) {
 	collector := &recordingCoreConfigEventCollector{}
-	mw := configEventConsumerMiddleware(collector)
+	shared, _ := buildTestSharedDepsAndLocals(t)
+	shared.ConfigEventCollector = collector
+	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(clock.Real()), outbox.ConsumerBaseConfig{
+		RetryCount:     2,
+		RetryBaseDelay: time.Millisecond,
+	}, clock.Real())
+	require.NoError(t, err)
+
+	var capturedHandler outbox.SubscriberHandler
+	inner := &captureSubscriberHandler{onSubscribe: func(h outbox.SubscriberHandler) { capturedHandler = h }}
+
 	sub := outbox.Subscription{
-		Topic:         "event.config.entry-upserted.v1",
-		ConsumerGroup: "accesscore",
-		CellID:        "accesscore",
-		SliceID:       "configreceive",
+		Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
+		CellID: "accesscore", SliceID: "configreceive",
+		ContractID: "event.config.entry-upserted.v1", ContractKind: "event", ContractTransport: "memory",
 	}
-	entry := newConfigEventEntry(t, "evt-target")
-	wrapped := mw(sub, func(context.Context, outbox.Entry) outbox.HandleResult {
-		return outbox.Ack()
-	})
 
-	result := wrapped(context.Background(), entry)
-	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(inner, consumerBase, consumerMiddlewares()...)
+	require.NoError(t, err)
+	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
+		func(context.Context, outbox.Entry) outbox.HandleResult { return outbox.Ack() }))
+	require.NotNil(t, capturedHandler)
 
+	// Mirror eventrouter.contractTracingSubscriber: the settlement observer lives
+	// at the SubscriberHandler layer via WrapConfigEventSubscriber.
+	settleHandler := obmetrics.WrapConfigEventSubscriber(collector, sub, capturedHandler)
+	entry := newConfigEventEntry(t, "evt-ack")
+	result, _ := settleHandler(context.Background(), entry)
+	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultSuccess, nil)
+
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	require.Equal(t, []coreConfigEventSettlementRecord{{
 		cell: "accesscore", slice: "configreceive", disposition: "ack", result: outbox.SettlementResultSuccess,
 	}}, collector.settlementRecords)
@@ -84,7 +106,7 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	}
 
 	attempts := 0
-	wrappedSub, err := outbox.NewSubscriberWithMiddleware(inner, consumerBase, consumerMiddlewares(shared)...)
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(inner, consumerBase, consumerMiddlewares()...)
 	require.NoError(t, err)
 	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -94,7 +116,8 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	require.NotNil(t, capturedHandler)
 
 	entry := newConfigEventEntry(t, "evt-retry-exhausted")
-	result, _ := capturedHandler(context.Background(), entry)
+	settleHandler := obmetrics.WrapConfigEventSubscriber(collector, sub, capturedHandler)
+	result, _ := settleHandler(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultRetryExhausted, nil)
 
 	assert.Equal(t, 2, attempts)
@@ -123,7 +146,7 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 		ContractID: "event.config.entry-upserted.v1", ContractKind: "event", ContractTransport: "memory",
 	}
 
-	wrappedSub, err := outbox.NewSubscriberWithMiddleware(inner, consumerBase, consumerMiddlewares(shared)...)
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(inner, consumerBase, consumerMiddlewares()...)
 	require.NoError(t, err)
 	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -132,7 +155,8 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 	require.NotNil(t, capturedHandler)
 
 	entry := newConfigEventEntry(t, "evt-permanent")
-	result, _ := capturedHandler(context.Background(), entry)
+	settleHandler := obmetrics.WrapConfigEventSubscriber(collector, sub, capturedHandler)
+	result, _ := settleHandler(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultSuccess, nil)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)

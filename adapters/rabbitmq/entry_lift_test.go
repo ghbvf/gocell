@@ -14,7 +14,8 @@ import (
 // This helper replaces the deleted outbox.EntryToSubscriberHandler in test-only
 // code. Production callers use SubscriberWithMiddleware.SubscribeEntry instead.
 func entryToSubHandler(h outbox.EntryHandler) outbox.SubscriberHandler {
-	return func(ctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return h(ctx, entry), nil
+	return func(ctx context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		r := h(ctx, entry)
+		return outbox.DeliveryOutcome{Disposition: r.Disposition, Err: r.Err}, nil
 	}
 }

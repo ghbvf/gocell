@@ -8,17 +8,16 @@
 // Production code (non-_test.go) must use kernel/outbox factories
 // Ack/Requeue/Reject instead of constructing outbox.HandleResult{...}
 // composite literals, except for the files in handleResultLiteralAllowlist
-// (factories themselves, kernel internal plumbing, shared conformance harness).
+// (factories themselves + shared conformance harness).
 //
 // External Cell repo semantics: the allowlist is consulted by
 // isHandleResultLiteralAllowed, which FIRST requires the constructing package to
 // be a GoCell platform package (isGoCellPlatformPkgPath). The allowlist entries
-// (kernel/outbox/result.go, kernel/outbox/consumer_base.go,
-// kernel/outbox/outboxtest/conformance.go) belong to the GoCell platform module;
-// a consumer module that forges one of these rel paths has a non-platform package
-// path and is correctly NOT exempt, so the rule degrades to a PURE BAN on
-// HandleResult{} literals — the intended behavior: business handlers must use the
-// typed factories.
+// (kernel/outbox/result.go, kernel/outbox/outboxtest/conformance.go) belong to the
+// GoCell platform module; a consumer module that forges one of these rel paths has
+// a non-platform package path and is correctly NOT exempt, so the rule degrades to
+// a PURE BAN on HandleResult{} literals — the intended behavior: business handlers
+// must use the typed factories.
 //
 // # OUTBOX-TOPIC-FAILOPEN-01
 //
@@ -138,9 +137,11 @@ func CheckOutboxHandleResultFactoryPreferred01(t *testing.T, cfg ConfigForExtern
 const handleResultFactoryViolationMessage = "OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: " +
 	"outbox.HandleResult{...} composite literal — business handlers must return " +
 	"outbox.Ack() / outbox.Requeue(err) / outbox.Reject(err) instead of constructing " +
-	"the struct literal. (The ProcessReason / SettlementObservers fallback-literal " +
-	"escape hatch is reserved for kernel-internal plumbing via the GoCell-internal " +
-	"handleResultLiteralAllowlist — not a consumer extension point.)"
+	"the struct literal. The slim HandleResult{Disposition, Err} is fully covered by " +
+	"these factories (post #663 ProcessReason / SettlementObservers live on " +
+	"DeliveryOutcome, not HandleResult); literal construction is reserved for the " +
+	"GoCell-internal kernel sites in handleResultLiteralAllowlist — not a consumer " +
+	"extension point."
 
 // isHandleResultLiteralAllowed reports whether a outbox.HandleResult{...} literal
 // in the package pkgPath / file rel is sanctioned: the constructing package must
@@ -236,20 +237,23 @@ func collectOutboxTopicFailopenViolations(p *Pass) []Diagnostic {
 // production file must use the Ack/Requeue/Reject factories from
 // kernel/outbox/result.go.
 //
-// Why these three:
-//   - kernel/outbox/result.go         — defines the factories themselves.
-//   - kernel/outbox/consumer_base.go  — kernel internal retry/settle plumbing
-//     constructs HandleResult with ProcessReason / SettlementObservers, which
-//     the factories do not expose (see eventbus.md "回落字面量").
-//   - kernel/outbox/outboxtest/conformance.go — shared conformance harness;
+// Why these two (post #663 type-split):
+//   - kernel/outbox/result.go                  — defines the factories themselves.
+//   - kernel/outbox/outboxtest/conformance.go  — shared conformance harness;
 //     non-_test.go by package convention but used only from test binaries.
+//
+// kernel/outbox/consumer_base.go was removed from this allowlist by the #663
+// type-split: consumer_base.go now constructs DeliveryOutcome (not HandleResult)
+// for its internal retry/settle plumbing — the slim HandleResult{Disposition, Err}
+// carries no kernel-only field, so the Ack/Requeue/Reject factories fully cover it.
+// DeliveryOutcome literals are governed by the separate
+// OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01 archtest.
 //
 // Adding a new entry requires the justification to live **next to the map
 // entry below as a Go comment** (not in the file being scanned, since that
 // file is the subject of the rule).
 var handleResultLiteralAllowlist = map[string]struct{}{
 	"kernel/outbox/result.go":                 {},
-	"kernel/outbox/consumer_base.go":          {},
 	"kernel/outbox/outboxtest/conformance.go": {},
 }
 

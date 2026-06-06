@@ -149,6 +149,46 @@ that was explicitly accepted in K#03.
   deleted; `SubscriberHandler` now returns `(HandleResult, Settlement)` as
   second value; `adapters/rabbitmq` no longer imports `kernel/idempotency`.
 
+## Amendment 2026-06-06 — #663 HandleResult business-slim + DeliveryOutcome carrier
+
+[OUTBOX-HANDLERESULT-SLIM-01] splits the dual-purpose `HandleResult` into two
+types so the business handler return surface is minimal:
+
+- **Business face** — `HandleResult` is now `{Disposition, Err}` only. The
+  `EntryHandler` signature is unchanged (`func(ctx, Entry) HandleResult`); only
+  the return type is slimmer. Business handlers were already 100% factory
+  (`Ack/Requeue/Reject`) and touched neither removed field, so no cell handler
+  changed.
+- **Subscriber face** — new `DeliveryOutcome{Disposition, Err, ProcessReason,
+  SettlementObservers}` carries the kernel-internal `ProcessReason` (today only
+  `"retry_exhausted"`) plus the settlement-observer channel. `ConsumerBase.Wrap`
+  is the sole `HandleResult → DeliveryOutcome` promotion point; `retryLoop` no
+  longer threads observers through its return paths (the EntryHandler return no
+  longer carries them — the propagation plumbing is deleted outright).
+- **`SubscriberHandler` now returns `(DeliveryOutcome, Settlement)`** — this
+  supersedes the `(HandleResult, Settlement)` wording in Decision 3, Trade-off
+  Q1, and the Future-Work K#12 note above. `NotifySettlement` takes a
+  `DeliveryOutcome`.
+- **Settlement observers move to the subscriber layer**, extending Decision 3's
+  "settle is a subscriber-layer boundary, not a middleware concern" principle
+  (Watermill `handleMessage` ack/nack monopoly). The config-event settlement
+  observer is no longer appended by the EntryHandler-layer `ConfigEventMiddleware`
+  (which now only injects owner ctx for process metrics); it is appended at the
+  SubscriberHandler layer by `obmetrics.WrapConfigEventSubscriber`, applied by
+  `eventrouter.contractTracingSubscriber` next to `wrapper.WrapSubscriber`.
+
+Enforcement: `OUTBOX-HANDLERESULT-FIELDS-FROZEN-01` now freezes the 2-field
+business set; new `OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01` freezes the 4-field
+carrier. `OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01`'s allowlist drops
+`consumer_base.go` (it now constructs `DeliveryOutcome`, not `HandleResult`). No
+`DeliveryOutcome` literal-construction archtest is added: business code has no
+use for the type (it cannot return it from `EntryHandler` nor hand it to a
+subscriber), so the business-face collapse is already type-system Hard. This ADR
+carries no threat matrix, so there is no security-model row to re-evaluate.
+
+ref: ThreeDotsLabs/watermill components/metrics/handler.go — instrumentation via
+middleware/defer over the handler error, never an observer carried in the return
+
 ## References
 
 - `ref: ThreeDotsLabs/watermill message/router.go` — handler returns

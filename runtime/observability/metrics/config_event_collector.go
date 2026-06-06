@@ -117,22 +117,17 @@ func RecordConfigEventProcess(ctx context.Context, collector ConfigEventCollecto
 	collector.RecordEventProcess(ctx, owner.cellID, owner.sliceID, reason)
 }
 
-// ConfigEventMiddleware installs config-event owner metadata for process
-// metrics and appends a settlement observer for final broker disposition.
+// ConfigEventMiddleware installs config-event owner metadata into the handler
+// context so that RecordConfigEventProcess can retrieve it inside the
+// EntryHandler. Settlement observation is handled at the SubscriberHandler
+// layer by WrapConfigEventSubscriber; this middleware only injects owner ctx.
+//
 // The non-config-prefix fast path (isConfigEventSubscription == false) is
 // legitimate: non-config subscriptions and audit/command topics pass through
 // without instrumentation. Config subscriptions missing owner metadata are
 // intercepted at registration time by ConfigEventOwnerValidator and never
 // reach this middleware.
-//
-// Settlement is not visible here — it flows inside the Subscriber layer
-// (ConsumerBase.Wrap → Inner.Subscribe). Settlement observation is achieved
-// by appending a SettlementObserver to HandleResult.SettlementObservers;
-// the Subscriber layer calls NotifySettlement after final broker settlement.
-func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMiddleware {
-	if collector == nil {
-		collector = NoopConfigEventCollector{}
-	}
+func ConfigEventMiddleware() outbox.SubscriptionMiddleware {
 	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		if !isConfigEventSubscription(sub) {
 			// Fast path: non-config-prefix or non-config topic — skip instrumentation.
@@ -141,13 +136,35 @@ func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMi
 		owner := configEventOwner{cellID: sub.ObservabilityID(), sliceID: sub.SliceID}
 		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			ctx = context.WithValue(ctx, configEventOwnerContextKey{}, owner)
-			result := next(ctx, entry)
-			result.SettlementObservers = append(result.SettlementObservers, configEventSettlementObserver{
-				collector: collector,
-				owner:     owner,
-			})
-			return result
+			return next(ctx, entry)
 		}
+	}
+}
+
+// WrapConfigEventSubscriber wraps a SubscriberHandler to append a settlement
+// observer that records final broker disposition via ConfigEventCollector. This
+// is the SubscriberHandler-layer counterpart to ConfigEventMiddleware (which
+// handles the EntryHandler layer).
+//
+// Non-config subscriptions take the fast path and return next unchanged.
+// ConfigEventCollector nil is replaced with NoopConfigEventCollector.
+func WrapConfigEventSubscriber(
+	collector ConfigEventCollector, sub outbox.Subscription, next outbox.SubscriberHandler,
+) outbox.SubscriberHandler {
+	if collector == nil {
+		collector = NoopConfigEventCollector{}
+	}
+	if !isConfigEventSubscription(sub) {
+		return next
+	}
+	owner := configEventOwner{cellID: sub.ObservabilityID(), sliceID: sub.SliceID}
+	return func(ctx context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		out, settlement := next(ctx, entry)
+		out.SettlementObservers = append(out.SettlementObservers, configEventSettlementObserver{
+			collector: collector,
+			owner:     owner,
+		})
+		return out, settlement
 	}
 }
 

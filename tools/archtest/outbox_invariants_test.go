@@ -15,6 +15,9 @@
 //   - INVARIANT: OUTBOX-HANDLERESULT-FIELDS-FROZEN-01
 //   - INVARIANT: OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01
 //   - INVARIANT: OUTBOXTEST-CLOSE-VIA-BUDGET-01
+//   - INVARIANT: OUTBOX-HANDLERESULT-FIELDS-FROZEN-01
+//   - INVARIANT: OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01
+//   - INVARIANT: OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01
 //
 // Package archtest — outbox invariants.
 //
@@ -1212,37 +1215,39 @@ func repoRootFromTestPath(t *testing.T) string {
 // ---------------------------------------------------------------------------
 
 // handleResultAllowedFields is the verbatim field set of kernel/outbox.HandleResult.
-// Adding a fifth field requires extending this allowlist deliberately, which
-// is the moment to (a) re-read ADR 202605031900-adr-handler-vocabulary-collapse.md,
+// HandleResult is the slim business-handler return type (#663 type-split).
+// Adding a field requires extending this allowlist deliberately, which is
+// the moment to (a) re-read ADR 202605031900-adr-handler-vocabulary-collapse.md,
 // (b) decide whether the new field belongs on the EntryHandler return contract
-// or in ConsumerBase internal state, and (c) extend the Ack/Requeue/Reject
-// factories in kernel/outbox/result.go if the field can be carried by them.
+// or in DeliveryOutcome (subscriber-layer carrier), and (c) extend the
+// Ack/Requeue/Reject factories in kernel/outbox/result.go if the field can be
+// carried by them.
+//
+// ProcessReason and SettlementObservers were moved to DeliveryOutcome by the
+// #663 type-split and are guarded by OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01.
 var handleResultAllowedFields = map[string]struct{}{
-	"Disposition":         {},
-	"Err":                 {},
-	"ProcessReason":       {},
-	"SettlementObservers": {},
+	"Disposition": {},
+	"Err":         {},
 }
 
 // INVARIANT: OUTBOX-HANDLERESULT-FIELDS-FROZEN-01
 //
 // TestOutboxHandleResultFieldsFrozen enforces OUTBOX-HANDLERESULT-FIELDS-FROZEN-01:
-// kernel/outbox.HandleResult must declare exactly the four fields listed in
-// handleResultAllowedFields. The factories Ack/Requeue/Reject cover the two
-// stable axes (Disposition, Err); ProcessReason and SettlementObservers are
-// intentional fallback-literal escape hatches for kernel internal retry
-// plumbing and middleware-handler protocol (see eventbus.md "回落字面量").
+// kernel/outbox.HandleResult must declare exactly the two fields listed in
+// handleResultAllowedFields. HandleResult is the slim business-handler return
+// type (#663 type-split): Disposition and Err are the only axes a business
+// handler can express. ProcessReason and SettlementObservers now live in
+// DeliveryOutcome (subscriber-layer carrier), enforced separately by
+// OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01.
 //
 // Drift in this field set silently changes what every cell handler can/must
-// produce, so freezing the set keeps the fallback intentional.
+// produce, so freezing the set keeps the interface intentional.
 //
 // Cannot funnel: HandleResult is a kernel-owned type whose literal construction
-// is required by consumer_base.go internal plumbing — making fields unexported
-// to force factory-only access would break that intra-package construction and
-// the typed-test conformance harness. No schema/marker source can express
-// "exactly these field names" as a Go compile-time constraint without
-// regenerating the type itself, which loses hand-tuned tags and comments.
-// Archtest is the minimum-friction gate.
+// is required by result.go (factories) and the conformance harness. No schema/
+// marker source can express "exactly these field names" as a Go compile-time
+// constraint without regenerating the type itself, which loses hand-tuned tags
+// and comments. Archtest is the minimum-friction gate.
 func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "kernel", "outbox", "outbox.go")
@@ -1315,6 +1320,119 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01
+// ---------------------------------------------------------------------------
+
+// deliveryOutcomeAllowedFields is the verbatim field set of
+// kernel/outbox.DeliveryOutcome (#663 type-split).
+//
+// DeliveryOutcome is the subscriber-layer carrier (returned by SubscriberHandler,
+// consumed by NotifySettlement). Its fields are frozen to prevent silent
+// protocol drift that would break broker settlement or observability:
+//   - Disposition / Err      — ack/nack semantics (mirrors slim HandleResult)
+//   - ProcessReason          — kernel-internal tag set only by ConsumerBase
+//     on the retry_exhausted path; rabbitmq subscriber reads it for logging.
+//   - SettlementObservers    — subscriber-layer observer chain appended by
+//     WrapConfigEventSubscriber (and similar future wrappers) at the
+//     SubscriberHandler layer; NotifySettlement fans out to all observers.
+//
+// Adding or removing a field silently changes the subscriber-layer protocol.
+var deliveryOutcomeAllowedFields = map[string]struct{}{
+	"Disposition":         {},
+	"Err":                 {},
+	"ProcessReason":       {},
+	"SettlementObservers": {},
+}
+
+// INVARIANT: OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01
+//
+// TestOutboxDeliveryOutcomeFieldsFrozen enforces OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01:
+// kernel/outbox.DeliveryOutcome must declare exactly the four fields listed in
+// deliveryOutcomeAllowedFields (#663 type-split from HandleResult).
+//
+// DeliveryOutcome is the subscriber-layer carrier: ConsumerBase.Wrap lifts a
+// slim HandleResult into a DeliveryOutcome, SubscriberHandler returns it, and
+// NotifySettlement consumes it. Fields must not drift silently — adding a field
+// changes the SubscriberHandler protocol and requires deliberate review of all
+// Subscriber implementations (rabbitmq/mqtt/eventbus/wrapper).
+//
+// Grading: Medium (AST field-NAME freeze). The scan parses outbox.go and
+// compares DeliveryOutcome's declared field names against the allowlist —
+// add/remove/rename of a field fails the comparison and forces the change
+// through this explicit review checkpoint. Blind spot: a field TYPE change
+// (e.g. Err error -> Err string) is NOT caught, since only names are checked.
+// Hard-upgrade path: reflect-based enumeration (field count + name + type
+// identity), the same ceiling as the sibling OUTBOX-HANDLERESULT-FIELDS-FROZEN-01;
+// kept name-only here so the two sibling freezes stay structurally identical.
+func TestOutboxDeliveryOutcomeFieldsFrozen(t *testing.T) {
+	root := findModuleRoot(t)
+	path := filepath.Join(root, "kernel", "outbox", "outbox.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	var (
+		found   bool
+		seen    = make(map[string]struct{})
+		unknown []string
+	)
+	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Name == nil || ts.Name.Name != "DeliveryOutcome" {
+			return
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return
+		}
+		found = true
+		for _, field := range st.Fields.List {
+			if len(field.Names) == 0 {
+				line := fset.Position(field.Type.Pos()).Line
+				unknown = append(unknown, fmt.Sprintf("kernel/outbox/outbox.go:%d: <embedded field>", line))
+				continue
+			}
+			for _, name := range field.Names {
+				seen[name.Name] = struct{}{}
+				if _, ok := deliveryOutcomeAllowedFields[name.Name]; !ok {
+					line := fset.Position(name.Pos()).Line
+					unknown = append(unknown, fmt.Sprintf("kernel/outbox/outbox.go:%d: %s", line, name.Name))
+				}
+			}
+		}
+	})
+
+	if !found {
+		t.Fatalf("DeliveryOutcome struct definition not found in kernel/outbox/outbox.go " +
+			"— if the type was relocated to another file in package outbox, update " +
+			"this test's hardcoded path along with the move")
+	}
+
+	var missing []string
+	for k := range deliveryOutcomeAllowedFields {
+		if _, ok := seen[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+
+	sort.Strings(unknown)
+	sort.Strings(missing)
+	for _, u := range unknown {
+		t.Errorf("OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01: %s — field not in allowlist; "+
+			"to add a field, update deliveryOutcomeAllowedFields and review "+
+			"ADR 202605031900-adr-handler-vocabulary-collapse.md plus all "+
+			"Subscriber implementations (rabbitmq/mqtt/eventbus/wrapper)", u)
+	}
+	for _, m := range missing {
+		t.Errorf("OUTBOX-DELIVERYOUTCOME-FIELDS-FROZEN-01: required field %s missing from "+
+			"kernel/outbox.DeliveryOutcome — removing a field changes the SubscriberHandler "+
+			"protocol; review ADR 202605031900 and update deliveryOutcomeAllowedFields "+
+			"deliberately if the removal is intentional", m)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01
 // handleResultLiteralAllowlist is defined in outbox_invariants.go (non-test),
 // shared between the production Check and this test file.
@@ -1345,12 +1463,14 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 //  2. Bare `HandleResult{...}` when the file's package itself is the
 //     kernel/outbox package (covers any future kernel/outbox/*.go file).
 //
-// Cannot funnel: ProcessReason and SettlementObservers are runtime-determined
-// fields populated by handler code paths and middleware, with no schema /
-// marker source from which a literal-vs-factory choice can be derived. Type
-// system cannot express "callers in cells/ must use these three function
-// names" without unexporting HandleResult itself, which would break the
-// kernel-internal literal construction the allowlist exists to permit.
+// Cannot funnel to the type system: expressing "callers in cells/ must use
+// these three function names" requires unexporting HandleResult, which would
+// break the kernel-internal literal construction the allowlist exists to permit
+// (the result.go factories + the conformance harness). Post-#663 HandleResult
+// is the slim {Disposition, Err}; the kernel-injected ProcessReason and the
+// subscriber-layer SettlementObservers moved to DeliveryOutcome, so the factory
+// trio (Ack/Requeue/Reject) fully covers every business HandleResult value —
+// there is no field a business literal could carry that a factory cannot.
 // Archtest enforces the path discipline that no other layer can.
 //
 // Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01 for this rule.
@@ -1406,7 +1526,8 @@ func TestIsHandleResultLiteralAllowed(t *testing.T) {
 		want         bool
 	}{
 		{"sanctioned platform factory file", PlatformModulePath + "/kernel/outbox", "kernel/outbox/result.go", true},
-		{"sanctioned platform plumbing file", PlatformModulePath + "/kernel/outbox", "kernel/outbox/consumer_base.go", true},
+		{"conformance harness", PlatformModulePath + "/kernel/outbox/outboxtest", "kernel/outbox/outboxtest/conformance.go", true},
+		{"consumer_base.go no longer allowlisted (#663 split)", PlatformModulePath + "/kernel/outbox", "kernel/outbox/consumer_base.go", false},
 		{"consumer module forges allowlisted rel", "consumer.example/app/kernel/outbox", "kernel/outbox/result.go", false},
 		{"platform pkg, non-allowlisted rel", PlatformModulePath + "/cells/foo", "cells/foo/handler.go", false},
 		{"unresolved pkg", "", "kernel/outbox/result.go", false},

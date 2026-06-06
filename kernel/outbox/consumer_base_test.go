@@ -1151,12 +1151,13 @@ func TestConsumerBase_LeaseHeld_NormalAck(t *testing.T) {
 // SettlementObservers transparency tests (Wave 4 review finding #1 + #2)
 // =============================================================================
 
-// TestConsumerBase_LeaseLostPath_PreservesSettlementObservers guards finding #1:
-// when runWithRenewal detects leaseLost and force-downgrades DispositionAck →
-// DispositionRequeue, the handler's SettlementObservers must be preserved in
-// the returned HandleResult. Previously the hard-fence code path silently
-// dropped them.
-func TestConsumerBase_LeaseLostPath_PreservesSettlementObservers(t *testing.T) {
+// TestConsumerBase_LeaseLostPath_ReturnsRequeueWithLeaseExpiredErr guards the
+// hard-fence behavior in runWithRenewal: when leaseLost is detected and
+// DispositionAck is downgraded to DispositionRequeue, the returned
+// DeliveryOutcome must carry ErrLeaseExpired. Slim HandleResult has no
+// SettlementObservers field — observer injection belongs to the SubscriberHandler
+// layer (WrapSubscriber / WrapConfigEventSubscriber), not the handler return value.
+func TestConsumerBase_LeaseLostPath_ReturnsRequeueWithLeaseExpiredErr(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	interval := testtime.D20ms
@@ -1180,43 +1181,28 @@ func TestConsumerBase_LeaseLostPath_PreservesSettlementObservers(t *testing.T) {
 	}, clock.Real())
 	require.NoError(t, err)
 
-	// Capture the observer call via SettlementObserverFunc.
-	var observerCalled bool
-	testObserver := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
-		observerCalled = true
-	})
-
-	// Handler ignores ctx.Done() (stale holder), returns Ack with an observer.
+	// Handler ignores ctx.Done() (stale holder), returns slim Ack.
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		// Block long enough for the renewal goroutine to fire and set leaseLost.
 		time.Sleep(renewalIntervalMultiplier5 * interval) //archtest:allow:test-sleep Renew extends TTL — polling defeats test
-		return HandleResult{
-			Disposition:         DispositionAck,
-			SettlementObservers: []SettlementObserver{testObserver},
-		}
+		return Ack()
 	})
 
 	res, _ := handler(context.Background(), Entry{id: "evt-lease-lost-observers"})
 
-	// Hard fence must downgrade to Requeue and preserve SettlementObservers.
+	// Hard fence must downgrade to Requeue and set ErrLeaseExpired.
 	assert.Equal(t, DispositionRequeue, res.Disposition,
 		"leaseLost hard fence must downgrade DispositionAck to DispositionRequeue")
-	require.Len(t, res.SettlementObservers, 1,
-		"leaseLost downgrade path must preserve handler SettlementObservers")
-
-	// Invoke observer to confirm it is functional.
-	res.SettlementObservers[0].ObserveSettlement(context.Background(), SettlementObservation{})
-	assert.True(t, observerCalled,
-		"preserved SettlementObserver must be callable after leaseLost downgrade")
+	assert.ErrorIs(t, res.Err, idempotency.ErrLeaseExpired,
+		"leaseLost downgrade path must set ErrLeaseExpired on DeliveryOutcome")
 }
 
-// TestConsumerBase_CtxCancelDuringBackoff_PreservesSettlementObservers guards
-// finding #2: when retryLoop aborts via ctx.Done() during waitBackoff, the
-// requeueResult must carry SettlementObservers from lastResult so
-// business-middleware observers (e.g. ConfigEventMiddleware) are notified on
-// graceful shutdown. Previously requeueResult had no observers parameter and
-// silently dropped them.
-func TestConsumerBase_CtxCancelDuringBackoff_PreservesSettlementObservers(t *testing.T) {
+// TestConsumerBase_CtxCancelDuringBackoff_ReturnsRequeueWithCtxErr guards the
+// ctx-cancel abort path in retryLoop: when context is canceled during backoff,
+// the returned DeliveryOutcome must have DispositionRequeue and carry ctx.Err().
+// Slim HandleResult has no SettlementObservers field — the SubscriberHandler
+// layer owns observer injection, so no observer preservation is required here.
+func TestConsumerBase_CtxCancelDuringBackoff_ReturnsRequeueWithCtxErr(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
@@ -1227,12 +1213,6 @@ func TestConsumerBase_CtxCancelDuringBackoff_PreservesSettlementObservers(t *tes
 	}, clock.Real())
 	require.NoError(t, err)
 
-	// Capture the observer call via SettlementObserverFunc.
-	var observerCalled bool
-	testObserver := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
-		observerCalled = true
-	})
-
 	// Signal channel: handler sends when first called (before backoff sleep).
 	started := make(chan struct{}, 1)
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
@@ -1240,11 +1220,7 @@ func TestConsumerBase_CtxCancelDuringBackoff_PreservesSettlementObservers(t *tes
 		case started <- struct{}{}:
 		default:
 		}
-		return HandleResult{
-			Disposition:         DispositionRequeue,
-			Err:                 errors.New("transient"),
-			SettlementObservers: []SettlementObserver{testObserver},
-		}
+		return Requeue(errors.New("transient"))
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1261,15 +1237,8 @@ func TestConsumerBase_CtxCancelDuringBackoff_PreservesSettlementObservers(t *tes
 	assert.Less(t, elapsed, time.Second, "ctx cancel must short-circuit retry backoff")
 	assert.Equal(t, DispositionRequeue, res.Disposition,
 		"ctx-cancel abort path must return DispositionRequeue")
-
-	// SettlementObservers from lastResult must be preserved.
-	require.Len(t, res.SettlementObservers, 1,
-		"ctx-cancel abort path must preserve lastResult.SettlementObservers")
-
-	// Invoke observer to confirm it is functional.
-	res.SettlementObservers[0].ObserveSettlement(context.Background(), SettlementObservation{})
-	assert.True(t, observerCalled,
-		"preserved SettlementObserver must be callable after ctx-cancel abort")
+	assert.ErrorIs(t, res.Err, context.Canceled,
+		"ctx-cancel abort path must carry context.Canceled as the error")
 }
 
 // =============================================================================

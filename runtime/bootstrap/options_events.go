@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -154,5 +155,22 @@ func WithRelay(r *runtimeoutbox.Relay) Option {
 		}
 		b.relay = r
 		b.managedResources = append(b.managedResources, newRelayAdapter(r)) // auto-lifecycle via sole sanctioned holder
+	}
+}
+
+// WithConfigEventCollector injects a ConfigEventCollector for config-event
+// settlement observability. The collector is applied at the SubscriberHandler
+// layer via WrapConfigEventSubscriber inside buildEventRouter, so settlement
+// metrics are recorded after final broker disposition rather than inside the
+// EntryHandler.
+//
+// Nil inputs are silently ignored (cumulative builder noop pattern). When this
+// option is not called, NoopConfigEventCollector is used.
+func WithConfigEventCollector(c obmetrics.ConfigEventCollector) Option {
+	return func(b *Bootstrap) {
+		if c == nil {
+			return
+		}
+		b.configEventCollector = c
 	}
 }

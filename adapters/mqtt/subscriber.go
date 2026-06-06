@@ -435,7 +435,7 @@ func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, hand
 // dispatchDisposition routes a handler result to the broker (ack / leave-unacked)
 // and settles the idempotency receipt. Mirrors adapters/rabbitmq dispatchDisposition.
 func (s *Subscriber) dispatchDisposition(
-	ctx context.Context, pb *paho.Publish, res outbox.HandleResult,
+	ctx context.Context, pb *paho.Publish, res outbox.DeliveryOutcome,
 	settlement outbox.Settlement, entry outbox.Entry, start time.Time,
 ) {
 	switch res.Disposition {
@@ -464,7 +464,7 @@ func (s *Subscriber) dispatchDisposition(
 		if ackErr != nil {
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultAckFailed, ackErr)
 		} else {
-			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.RejectSettlementResult(res), nil)
 		}
 	case outbox.DispositionRequeue:
 		// Option C (ADR-050 §6): MQTT is a transport, not a work queue. Leave the
@@ -504,7 +504,7 @@ func (s *Subscriber) dispatchDisposition(
 // expired), the message is left unacked (broker redelivers) and the claim is
 // released so another holder retries — mirroring rabbitmq dispatchAck.
 func (s *Subscriber) dispatchAck(
-	ctx context.Context, pb *paho.Publish, res outbox.HandleResult,
+	ctx context.Context, pb *paho.Publish, res outbox.DeliveryOutcome,
 	settlement outbox.Settlement, entry outbox.Entry, start time.Time,
 ) {
 	if settlement != nil {

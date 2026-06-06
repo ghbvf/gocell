@@ -241,8 +241,8 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired: token mismatch")}
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -299,8 +299,8 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 
 	receipt := &mockReceipt{} // commitErr = nil → success
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -433,9 +433,9 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		receipt := &countingReceipt{counter: &commitCount}
-		return outbox.Ack(), receipt
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -791,8 +791,8 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 	commitErr := errors.New("lease expired")
 	receipt := &mockReceipt{commitErr: commitErr}
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -856,8 +856,8 @@ func TestDispatchAck_CommitFailed_ReleasesBeforeNack(t *testing.T) {
 		commitErr: errors.New("lease expired"),
 		recorder:  rec,
 	}
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -922,8 +922,8 @@ func TestDispatchAck_AckFail(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{} // commitErr nil → Commit succeeds
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1147,8 +1147,8 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 
 	receipt := &mockReceipt{releaseErr: errors.New("release store unavailable")}
 
-	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Reject(nil), receipt
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionReject}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1209,6 +1209,16 @@ func (s *spySettlementObserver) len() int {
 	return len(s.obs)
 }
 
+// subHandlerWithObserver returns a SubscriberHandler yielding disposition d with
+// obs attached as a settlement observer. Settlement is nil: these tests drive
+// final broker settlement through the subscriber's NotifySettlement, not the
+// handler return.
+func subHandlerWithObserver(d outbox.Disposition, obs outbox.SettlementObserver) outbox.SubscriberHandler {
+	return func(context.Context, outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: d, SettlementObservers: []outbox.SettlementObserver{obs}}, nil
+	}
+}
+
 // TestDispatchAck_AckErr_NotifiesAckFailed verifies that when ch.Ack returns an
 // error, the spy settlement observer receives AckFailed with the broker error.
 func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
@@ -1228,12 +1238,7 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition:         outbox.DispositionAck,
-			SettlementObservers: []outbox.SettlementObserver{spy},
-		}
-	}
+	handler := subHandlerWithObserver(outbox.DispositionAck, spy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1243,7 +1248,7 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, handler)
 	}()
 
 	testwait.External(t, "amqp-delivery-acked", func() bool {
@@ -1284,12 +1289,7 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition:         outbox.DispositionReject,
-			SettlementObservers: []outbox.SettlementObserver{spy},
-		}
-	}
+	handler := subHandlerWithObserver(outbox.DispositionReject, spy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1299,7 +1299,7 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, handler)
 	}()
 
 	testwait.External(t, "amqp-delivery-nacked", func() bool {
@@ -1342,12 +1342,7 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition:         outbox.DispositionRequeue,
-			SettlementObservers: []outbox.SettlementObserver{spy},
-		}
-	}
+	handler := subHandlerWithObserver(outbox.DispositionRequeue, spy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1357,7 +1352,7 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, handler)
 	}()
 
 	testwait.External(t, "amqp-delivery-nacked", func() bool {

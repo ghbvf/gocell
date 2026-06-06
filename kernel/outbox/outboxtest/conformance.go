@@ -58,6 +58,14 @@ const subscribeReadyTimeout = 50 * time.Millisecond
 // rather than tweaking individual tests.
 const negativeAssertionWindow = 200 * time.Millisecond
 
+// asDelivery converts a slim HandleResult from Ack/Requeue/Reject factory
+// functions to a DeliveryOutcome for use in SubscriberHandler closures.
+// Only for use in conformance test helpers where the test author knows the
+// result comes from a factory (no ProcessReason or SettlementObservers needed).
+func asDelivery(r outbox.HandleResult) outbox.DeliveryOutcome {
+	return outbox.DeliveryOutcome{Disposition: r.Disposition, Err: r.Err}
+}
+
 // TestPubSub runs the full conformance test suite against the given
 // Publisher/Subscriber implementation. Features control which tests are
 // executed; unsupported features are skipped with t.Skip(). Each batch is
@@ -276,7 +284,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	go func() {
 		defer close(subDone)
 		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA, CellID: "_outboxtest"},
-			func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			func(_ context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 				select {
 				case deliveryA <- struct{}{}:
 				default:
@@ -287,7 +295,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 					closeOnceA.Do(func() { close(doneA) })
 				}
 				mu.Unlock()
-				return outbox.Ack(), nil
+				return asDelivery(outbox.Ack()), nil
 			})
 	}()
 	waitForSubscription(t, ctx, sub, topicA, "")
@@ -349,16 +357,16 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: broadcastCG2, CellID: broadcastCG2}
 
 	wg.Go(func() {
-		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 			sub1Received.Add(1)
-			return outbox.Ack(), nil
+			return asDelivery(outbox.Ack()), nil
 		})
 	})
 
 	wg.Go(func() {
-		_ = sub.Subscribe(subCtx, sub2Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		_ = sub.Subscribe(subCtx, sub2Spec, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 			sub2Received.Add(1)
-			return outbox.Ack(), nil
+			return asDelivery(outbox.Ack()), nil
 		})
 	})
 
@@ -402,13 +410,13 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 	for range 2 {
 		wg.Go(func() {
 			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
-				func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 					select {
 					case delivery <- struct{}{}:
 					default:
 					}
 					totalReceived.Add(1)
-					return outbox.Ack(), nil
+					return asDelivery(outbox.Ack()), nil
 				})
 		})
 	}
@@ -577,9 +585,9 @@ func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubS
 	// Settlement is now returned as the second value from SubscriberHandler,
 	// not embedded in HandleResult. subscribeWithHandler accepts SubscriberHandler
 	// directly so the conformance test can inject a mock Settlement.
-	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		h.signalDone()
-		return outbox.Ack(), receipt
+		return asDelivery(outbox.Ack()), receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-ack"}`))
@@ -600,9 +608,9 @@ func testReceiptReleasedOnReject(t *testing.T, features Features, constructor Pu
 	h := newHarness(t, constructor)
 	receipt := NewMockReceipt()
 
-	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		h.signalDone()
-		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("bad"))), receipt
+		return asDelivery(outbox.Reject(outbox.NewPermanentError(fmt.Errorf("bad")))), receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-reject"}`))
@@ -624,13 +632,13 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 	receipt := NewMockReceipt()
 	var callCount atomic.Int32
 
-	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		n := callCount.Add(1)
 		if n == 1 {
 			h.signalDone()
-			return outbox.Requeue(fmt.Errorf("transient")), receipt
+			return asDelivery(outbox.Requeue(fmt.Errorf("transient"))), receipt
 		}
-		return outbox.Ack(), nil
+		return asDelivery(outbox.Ack()), nil
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-requeue"}`))
@@ -661,12 +669,12 @@ func testReceiptCommitFailureDoesNotAck(t *testing.T, features Features, constru
 	receipt := NewMockReceiptWithErrors(errors.New("commit fails (test)"), nil)
 
 	var deliveries atomic.Int32
-	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 		n := deliveries.Add(1)
 		if n == 1 {
 			h.signalDone() // wake publisher after first delivery
 		}
-		return outbox.Ack(), receipt
+		return asDelivery(outbox.Ack()), receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"commit-fail"}`))
@@ -700,8 +708,8 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 	subscribeReturned := make(chan error, 1)
 	go func() {
 		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t), CellID: "_outboxtest"},
-			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.Ack(), nil
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return asDelivery(outbox.Ack()), nil
 			})
 		subscribeReturned <- err
 	}()
@@ -733,8 +741,8 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	go func() {
 		defer close(subscribeReturned)
 		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
-			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.Ack(), nil
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return asDelivery(outbox.Ack()), nil
 			})
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")

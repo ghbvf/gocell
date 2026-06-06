@@ -425,8 +425,8 @@ func itestRunDispositionCase(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		_ = sub.Subscribe(ctx, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return result, settlement
+		_ = sub.Subscribe(ctx, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: result.Disposition, Err: result.Err}, settlement
 		})
 	}()
 	itestWaitSubscribeReady(t, sub, subscription)
@@ -617,8 +617,8 @@ func itestSessionPhase1Subscribe(t *testing.T, mkCfg func() Config, ns TopicName
 	// sub1.Subscribe runs under ctx1: canceling ctx1 both drops the autopaho
 	// manager uncleanly (broker retains session) and unblocks Subscribe.
 	go func() {
-		_ = sub1.Subscribe(ctx1, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.Ack(), nil
+		_ = sub1.Subscribe(ctx1, subscription, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		})
 	}()
 	select {
@@ -680,13 +680,13 @@ func itestSessionPhase2Subscribe(t *testing.T, mkCfg func() Config, ns TopicName
 	subCtx2, subCancel2 := context.WithCancel(ctx2)
 	defer subCancel2()
 	go func() {
-		_ = sub2.Subscribe(subCtx2, subscription, func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		_ = sub2.Subscribe(subCtx2, subscription, func(_ context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
 			if isOfflineTaggedPayload(entry.Payload()) {
 				offlineReceived.Add(1)
 			} else {
 				onlineReceived.Add(1)
 			}
-			return outbox.Ack(), nil
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		})
 	}()
 	select {
@@ -1013,8 +1013,8 @@ func TestIntegration_Subscriber_DLTCapture(t *testing.T) {
 	defer subCancel()
 	go func() {
 		_ = sub.Subscribe(subCtx, subscription,
-			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.Reject(errors.New("permanent-test")), nil
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionReject, Err: errors.New("permanent-test")}, nil
 			})
 	}()
 	select {

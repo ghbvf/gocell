@@ -9,6 +9,26 @@ import (
 	"github.com/ghbvf/gocell/runtime/internal/contractbuild"
 )
 
+// SubscriberWrapperFunc is applied at Subscribe time after wrapper.WrapSubscriber.
+// It allows composition-root layers to inject per-subscription instrumentation
+// (e.g. settlement observers) at the SubscriberHandler layer without
+// requiring eventrouter to import observability packages.
+type SubscriberWrapperFunc func(sub outbox.Subscription, next outbox.SubscriberHandler) outbox.SubscriberHandler
+
+// TracingSubscriberOption configures a contractTracingSubscriber.
+type TracingSubscriberOption func(*contractTracingSubscriber)
+
+// WithSubscriberWrapper adds a SubscriberHandler-layer wrapper applied after
+// wrapper.WrapSubscriber inside Subscribe. The wrapper receives the validated
+// Subscription and the tracing-wrapped handler; it may append
+// DeliveryOutcome.SettlementObservers or perform other SubscriberHandler-layer
+// instrumentation.
+func WithSubscriberWrapper(fn SubscriberWrapperFunc) TracingSubscriberOption {
+	return func(s *contractTracingSubscriber) {
+		s.subWrapper = fn
+	}
+}
+
 // NewContractTracingSubscriber decorates an outbox.Subscriber so every
 // contract-bound delivery attempt gets one span that ends after final broker
 // settlement. It delegates lifecycle methods unchanged and wraps Subscribe
@@ -25,13 +45,18 @@ import (
 // cannot signal validation errors; callers that drive lifecycle directly
 // must call Setup first to surface validation failures (Watermill /
 // Kratos pattern: registration-time validation owned by the decorator).
-func NewContractTracingSubscriber(inner outbox.Subscriber, tr wrapper.Tracer) outbox.Subscriber {
-	return &contractTracingSubscriber{inner: inner, tracer: tr}
+func NewContractTracingSubscriber(inner outbox.Subscriber, tr wrapper.Tracer, opts ...TracingSubscriberOption) outbox.Subscriber {
+	s := &contractTracingSubscriber{inner: inner, tracer: tr}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 type contractTracingSubscriber struct {
-	inner  outbox.Subscriber
-	tracer wrapper.Tracer
+	inner      outbox.Subscriber
+	tracer     wrapper.Tracer
+	subWrapper SubscriberWrapperFunc
 }
 
 func (s *contractTracingSubscriber) Setup(ctx context.Context, sub outbox.Subscription) error {
@@ -74,6 +99,9 @@ func (s *contractTracingSubscriber) Subscribe(
 	wrapped, err := wrapper.WrapSubscriber(s.tracer, spec, handler)
 	if err != nil {
 		return fmt.Errorf("eventrouter: contract tracing subscriber: %w", err)
+	}
+	if s.subWrapper != nil {
+		wrapped = s.subWrapper(sub, wrapped)
 	}
 	return s.inner.Subscribe(ctx, sub, wrapped)
 }

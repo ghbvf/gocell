@@ -77,8 +77,8 @@ func TestNewContractTracingSubscriber_WrapsSubscribeAndDelegatesLifecycle(t *tes
 	assert.True(t, inner.stopIntakeCalled)
 
 	require.NoError(t, decorated.Subscribe(context.Background(), sub,
-		func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.Ack(), nil
+		func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		}))
 	require.NotNil(t, inner.capturedHandler)
 
@@ -110,8 +110,8 @@ func subscribeCapturingPanic(t *testing.T, decorated outbox.Subscriber, sub outb
 	func() {
 		defer func() { panicked = recover() }()
 		subscribeErr = decorated.Subscribe(context.Background(), sub,
-			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-				return outbox.Ack(), nil
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 			})
 	}()
 	return panicked, subscribeErr
@@ -224,8 +224,8 @@ func TestContractTracingSubscriber_NilInnerLifecycle(t *testing.T) {
 	}
 
 	require.Error(t, decorated.Subscribe(context.Background(), sub,
-		func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.Ack(), nil
+		func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 		}),
 		"Subscribe must error when inner is nil")
 
@@ -332,8 +332,8 @@ func TestContractTracingSubscriber_Subscribe_PropagatesWrapSubscriberError(t *te
 		ContractID:        "event.bad-kind.v1",
 		ContractKind:      "command", // WrapSubscriber rejects non-"event" kinds.
 		ContractTransport: "amqp",
-	}, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.Ack(), nil
+	}, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		return outbox.DeliveryOutcome{Disposition: outbox.DispositionAck}, nil
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be \"event\"",

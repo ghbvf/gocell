@@ -835,7 +835,7 @@ func (s *Subscriber) processDelivery(
 	// adapter transport-only.
 	deliveryCtx := ctx
 
-	// SubscriberHandler returns (HandleResult, Settlement). Settlement is the
+	// SubscriberHandler returns (DeliveryOutcome, Settlement). Settlement is the
 	// idempotency commit/release handle from ConsumerBase.Wrap (nil when no
 	// idempotency state is present — ClaimDone, ClaimBusy, fail-open errors).
 	res, settlement := handler(deliveryCtx, entry)
@@ -868,7 +868,7 @@ func (s *Subscriber) dispatchDisposition(
 	ctx context.Context,
 	ch AMQPChannel,
 	tag uint64,
-	res outbox.HandleResult,
+	res outbox.DeliveryOutcome,
 	settlement outbox.Settlement,
 	topic string,
 	entry outbox.Entry,
@@ -878,10 +878,7 @@ func (s *Subscriber) dispatchDisposition(
 	case outbox.DispositionAck:
 		s.dispatchAck(ctx, ch, tag, res, settlement, topic, entry)
 	case outbox.DispositionReject:
-		rejectResult := outbox.SettlementResultSuccess
-		if res.ProcessReason == "retry_exhausted" {
-			rejectResult = outbox.SettlementResultRetryExhausted
-		}
+		rejectResult := outbox.RejectSettlementResult(res)
 		if nackErr := ch.Nack(tag, false, false); nackErr != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(reject) failed",
 				slog.String(logKeyTopic, topic),
@@ -930,7 +927,7 @@ func (s *Subscriber) dispatchAck(
 	ctx context.Context,
 	ch AMQPChannel,
 	tag uint64,
-	res outbox.HandleResult,
+	res outbox.DeliveryOutcome,
 	settlement outbox.Settlement,
 	topic string,
 	entry outbox.Entry,
