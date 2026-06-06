@@ -135,6 +135,11 @@ func applyNoop(_ context.Context, _ ProjectionEvent) error { return nil }
 // marks the intentional security-semantic flip; the flip is the PR-03 deliverable
 // for the outbox (event-actor) path. For the saga-journal path Apply runs under
 // SystemPrincipalActor ("system"), exercised in sagaprojection package tests.
+//
+// Cross-reference: TestSagaJournalSource_RebuildWiring_FoldsEventsUnderSystemPrincipal
+// in kernel/saga/sagaprojection exercises the same clearAmbientPrincipal detach
+// boundary with a real Coordinator + MemJournal, verifying the saga variant of
+// the same invariant (actors must always be "system", never the trigger admin).
 func TestRebuild_EventPrincipalWins(t *testing.T) {
 	t.Parallel()
 	clk := clockmock.New(time.Now())

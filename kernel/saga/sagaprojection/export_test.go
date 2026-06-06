@@ -1,6 +1,9 @@
 package sagaprojection
 
-import "github.com/ghbvf/gocell/kernel/cellvocab"
+import (
+	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/saga"
+)
 
 // NewUnseededEventForTest returns a *sagaProjectionEvent with globalSeq == 0
 // (the unseeded sentinel). This value is never returned by a conforming
@@ -14,3 +17,8 @@ import "github.com/ghbvf/gocell/kernel/cellvocab"
 func NewUnseededEventForTest() cellvocab.ProjectionEvent {
 	return &sagaProjectionEvent{globalSeq: 0}
 }
+
+// StatusSucceededForTest exposes saga.StatusSucceeded for the external test
+// package (sagaprojection_test) which needs to call j.MarkTerminal with a
+// terminal status. Compiled ONLY in test binaries.
+const StatusSucceededForTest = saga.StatusSucceeded

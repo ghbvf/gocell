@@ -49,6 +49,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"strings"
 	"testing"
 )
 
@@ -145,4 +146,74 @@ func staleInstallAllowlistDiags(observed map[string]struct{}) []Diagnostic {
 		})
 	}
 	return diags
+}
+
+// TestProjectionSystemPrincipalInstallCaller01_NoDotImport is the dot-import
+// blind-spot anti-vacuity guard for PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01.
+//
+// # Why this sub-test is needed
+//
+// TestProjectionSystemPrincipalInstallCaller01 uses EachInSubtree[ast.SelectorExpr]
+// which only matches qualified `pkg.Func` call forms. A file using dot-import
+// (import . "…/kernel/projection") can call InstallSystemPrincipal as a bare
+// identifier — an *ast.Ident, not an *ast.SelectorExpr — and would be invisible
+// to the main scanner.
+//
+// This sub-test closes that vector by scanning all production ImportSpec nodes
+// for the dot-import form (Name == ".") pointing at the kernel/projection package.
+// Any such file would be a hard-to-detect bypass; the test fails CI immediately
+// rather than waiting for the SelectorExpr scanner to miss it.
+//
+// # Scope
+//
+// Scans all production files (excluding _test.go). kernel/projection itself is
+// excluded: it is the package owner and legitimately declares its own symbols.
+//
+// # Blind spots of this sub-test
+//
+// Transitive dot-import via an intermediate package is not detected (would require
+// full import graph traversal). No such file exists today; this test covers direct
+// dot-import of kernel/projection, which is the realistic bypass vector.
+func TestProjectionSystemPrincipalInstallCaller01_NoDotImport(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const projectionPkgSuffix = "kernel/projection"
+
+	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		// Exclude the kernel/projection package itself.
+		if p.Pkg != nil && strings.HasSuffix(p.Pkg.Path(), projectionPkgSuffix) {
+			return nil
+		}
+		var fileDiags []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.ImportSpec](file, func(spec *ast.ImportSpec) {
+				if spec.Name == nil || spec.Name.Name != "." {
+					return
+				}
+				path := strings.Trim(spec.Path.Value, `"`)
+				if !strings.HasSuffix(path, projectionPkgSuffix) {
+					return
+				}
+				fileDiags = append(fileDiags, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(spec.Pos()).Line,
+					Message: fmt.Sprintf(
+						"PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01 (dot-import blind spot): "+
+							"%s uses dot-import of kernel/projection "+
+							"(import . %q). This form makes InstallSystemPrincipal callable as a "+
+							"bare identifier, bypassing the SelectorExpr scanner. "+
+							"Use a qualified import instead: "+
+							"import \"…/kernel/projection\" and call projection.InstallSystemPrincipal.",
+						rel, spec.Path.Value,
+					),
+				})
+			})
+		}
+		return fileDiags
+	})
+	Report(t, "PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01/dot-import", diags)
 }

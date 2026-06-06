@@ -40,6 +40,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // batchSize is the number of events fetched per LoadSince call in Replay.
@@ -50,6 +52,9 @@ const batchSize = 256
 // SagaJournalStream is the stream name reported by sagaProjectionEvent.Stream().
 // The value is stable across restarts so it can be used as a projection filter
 // or checkpoint namespace key.
+//
+// pre-v1.0 GA: this stream name may evolve directly; ".v1" is a naming
+// convention, not a wire-contract lock. Post-GA evolution requires a version bump.
 const SagaJournalStream = "saga.journal.v1"
 
 // sagaProjectionEvent is the unexported carrier that adapts one journal.GlobalEvent
@@ -76,13 +81,12 @@ func (e *sagaProjectionEvent) EventID() string {
 
 // Payload returns the raw opaque bytes appended by the saga step. May be empty or
 // nil for events that carry no step output.
+//
+// The returned slice MUST NOT be mutated by the caller. MemJournal.LoadSince
+// already deep-copies payload on read, so the carrier holds an independent
+// copy with no alias to the journal's internal storage.
 func (e *sagaProjectionEvent) Payload() []byte {
-	if e.payload == nil {
-		return nil
-	}
-	cp := make([]byte, len(e.payload))
-	copy(cp, e.payload)
-	return cp
+	return e.payload
 }
 
 // OccurredAt returns the wall-clock time at which the journal backend stamped the
@@ -133,10 +137,21 @@ type SagaJournalSource struct {
 	gr journal.GlobalReader
 }
 
-// NewSagaJournalSource returns a SagaJournalSource backed by the given GlobalReader.
-// gr must not be nil; passing nil will cause a nil-pointer panic on first use.
-func NewSagaJournalSource(gr journal.GlobalReader) *SagaJournalSource {
-	return &SagaJournalSource{gr: gr}
+// NewSagaJournalSource returns a SagaJournalSource backed by the given GlobalReader,
+// or a non-nil error if gr is nil.
+//
+// The returned source implements both projection.ReplaySource and projection.Cursor;
+// the SAME instance must be wired into both CoordinatorConfig.Replay and
+// CoordinatorConfig.Cursor to ensure the Position encoding (GlobalSeq) is consistent
+// across the two interfaces.
+//
+// ref: kernel/projection.NewCoordinator (error-return pattern for required deps)
+func NewSagaJournalSource(gr journal.GlobalReader) (*SagaJournalSource, error) {
+	if validation.IsNilInterface(gr) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.NewSagaJournalSource: GlobalReader required")
+	}
+	return &SagaJournalSource{gr: gr}, nil
 }
 
 // Head returns the highest GlobalSeq in the journal, or 0 if the journal is empty.

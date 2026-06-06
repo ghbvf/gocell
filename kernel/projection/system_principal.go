@@ -54,7 +54,9 @@ func InstallSystemPrincipal(ctx context.Context) context.Context {
 // (the overwrite would win regardless).
 //
 // This function is unexported: it is ONLY called at the Rebuild detach boundary
-// in this package. No other call site is valid.
+// in this package (rebuild.go). No other call site is valid.
+// 仅 rebuild.go detach 边界调用；包内 unexported = 上游 Hard gate（Go 可见性即封闭，
+// 无需 archtest caller-allowlist 补强上游）。
 func clearAmbientPrincipal(ctx context.Context) context.Context {
 	ctx = ctxkeys.WithActorID(ctx, "")
 	ctx = ctxkeys.WithSubjectID(ctx, "")

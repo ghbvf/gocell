@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -16,6 +15,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/sagaprojection"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // wiringTxRunner is a synchronous no-tx TxRunner: it runs fn under the same ctx.
@@ -74,7 +75,10 @@ func TestSagaJournalSource_RebuildWiring_FoldsEventsUnderSystemPrincipal(t *test
 	if !ok {
 		t.Fatalf("journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	var (
 		mu      sync.Mutex
@@ -147,14 +151,14 @@ func TestSagaJournalSource_RebuildWiring_FoldsEventsUnderSystemPrincipal(t *test
 // waitForLive polls the coordinator phase until it returns to PhaseLive (rebuild
 // complete) or a generous real-time deadline elapses. The mem-backed rebuild is
 // synchronous and fast; the deadline only guards against a hang.
+//
+// Uses testwait.External (TEST-SLEEP-DISCIPLINE-01) because the rebuild state
+// machine runs on a background goroutine with no exported channel signal — polling
+// is the only viable synchronization mechanism here.
 func waitForLive(t *testing.T, c *projection.Coordinator) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Phase() == projection.PhaseLive {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("rebuild did not reach PhaseLive within deadline (current phase %v)", c.Phase())
+	testwait.External(t, "sagaprojection-rebuild-wait-live",
+		func() bool { return c.Phase() == projection.PhaseLive },
+		testtime.EventuallyLong, testtime.FastPoll,
+		"phase != PhaseLive (current: %v)", c.Phase())
 }

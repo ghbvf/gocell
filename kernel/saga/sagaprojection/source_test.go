@@ -6,6 +6,8 @@ package sagaprojection_test
 
 import (
 	"context"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,7 +52,10 @@ func TestSagaJournalSource_ReplaySourceConformance(t *testing.T) {
 	if !ok {
 		t.Fatalf("factory journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	seed := func(n int) []projection.ProjectionEvent {
 		return seedGlobalEvents(t, j, clk, n)
@@ -71,7 +76,10 @@ func TestSagaJournalSource_CursorConformance(t *testing.T) {
 	if !ok {
 		t.Fatalf("factory journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	seed := func(n int) []projection.ProjectionEvent {
 		return seedGlobalEvents(t, j, clk, n)
@@ -102,7 +110,10 @@ func TestSagaProjectionEvent_RestoreContext_InstallsSystemPrincipal(t *testing.T
 	if !ok {
 		t.Fatalf("factory journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	// Append one journal event so we have something to Replay.
 	events := seedGlobalEvents(t, j, clk, 1)
@@ -113,7 +124,7 @@ func TestSagaProjectionEvent_RestoreContext_InstallsSystemPrincipal(t *testing.T
 	// Replay from offset 0 and capture the ctx actor after RestoreContext.
 	var capturedActor string
 	ambientCtx := ctxkeys.WithActorID(context.Background(), "ambient-admin")
-	err := src.Replay(ambientCtx, 0, func(e projection.ProjectionEvent) error {
+	err = src.Replay(ambientCtx, 0, func(e projection.ProjectionEvent) error {
 		restored := e.RestoreContext(ambientCtx)
 		capturedActor, _ = ctxkeys.ActorIDFrom(restored)
 		return nil
@@ -146,7 +157,10 @@ func TestSagaJournalSource_HeadMatchesGlobalSeq(t *testing.T) {
 	if !ok {
 		t.Fatalf("factory journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	head0, err := src.Head(context.Background())
 	if err != nil {
@@ -180,7 +194,10 @@ func TestSagaJournalSource_PositionMatchesGlobalSeq(t *testing.T) {
 	if !ok {
 		t.Fatalf("factory journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	const n = 4
 	events := seedGlobalEvents(t, j, clk, n)
@@ -213,7 +230,10 @@ func TestSagaJournalSource_ReplayPagination(t *testing.T) {
 	if !ok {
 		t.Fatalf("factory journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	const n = 5
 	want := seedGlobalEvents(t, j, clk, n)
@@ -222,7 +242,7 @@ func TestSagaJournalSource_ReplayPagination(t *testing.T) {
 	}
 
 	var got []projection.ProjectionEvent
-	err := src.Replay(context.Background(), 0, func(e projection.ProjectionEvent) error {
+	err = src.Replay(context.Background(), 0, func(e projection.ProjectionEvent) error {
 		got = append(got, e)
 		return nil
 	})
@@ -273,7 +293,10 @@ func seedGlobalEvents(t *testing.T, j journal.Journal, clk *clockmock.FakeClock,
 	if !ok {
 		t.Fatalf("journal %T does not implement journal.GlobalReader", j)
 	}
-	src := sagaprojection.NewSagaJournalSource(gr)
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
+	}
 
 	beforeHead, err := src.Head(context.Background())
 	if err != nil {
@@ -303,26 +326,105 @@ func seedGlobalEvents(t *testing.T, j journal.Journal, clk *clockmock.FakeClock,
 }
 
 // seedCounter is a monotonic counter for generating unique instance IDs across
-// multiple seedGlobalEvents calls in the same test binary. It is intentionally
-// non-atomic: seedGlobalEvents is always called from a single goroutine (the test
-// runner sequential driver), and each parallel sub-test uses its own journal.
-var seedCounter int
+// multiple seedGlobalEvents calls in the same test binary. Declared as atomic.Int64
+// to avoid a data race when parallel sub-tests call seedGlobalEvents concurrently
+// (each sub-test uses its own journal, but all share the counter).
+var seedCounter atomic.Int64
 
 // uniqueInstID returns a unique instance ID string for each call.
 func uniqueInstID() string {
-	seedCounter++
-	return "seed-inst-" + itoa(seedCounter)
+	n := seedCounter.Add(1)
+	return "seed-inst-" + strconv.Itoa(int(n))
 }
 
-// itoa converts an int to its decimal string without importing strconv.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// ---------------------------------------------------------------------------
+// TestSagaJournalSource_ReplayIncludesTerminalEvents
+// ---------------------------------------------------------------------------
+
+// TestSagaJournalSource_ReplayIncludesTerminalEvents verifies that MarkTerminal
+// emits a terminal event (KindSagaSucceeded) that is visible to SagaJournalSource
+// Replay. This covers the core semantic of the saga projection source: a projection
+// of saga completion state must be able to observe final outcomes, not just step
+// events.
+//
+// Relation to the conformance suite: the conformance suite (seedGlobalEvents) only
+// seeds KindStepStarted events; this test seeds a full saga lifecycle ending with
+// MarkTerminal so that the GlobalReader's terminal-kind ordering guarantee is
+// exercised via Replay.
+func TestSagaJournalSource_ReplayIncludesTerminalEvents(t *testing.T) {
+	t.Parallel()
+
+	factory := newMemJournalFactory()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	gr, ok := j.(journal.GlobalReader)
+	if !ok {
+		t.Fatalf("journal %T does not implement journal.GlobalReader", j)
 	}
-	buf := make([]byte, 0, 10)
-	for n > 0 {
-		buf = append([]byte{byte('0' + n%10)}, buf...)
-		n /= 10
+	src, err := sagaprojection.NewSagaJournalSource(gr)
+	if err != nil {
+		t.Fatalf("NewSagaJournalSource: %v", err)
 	}
-	return string(buf)
+
+	// Enqueue and claim a fresh instance.
+	instID := uniqueInstID()
+	inst := sagajournaltest.NewInstanceFixture(t, instID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	_, leaseID, err := j.ClaimPending(context.Background(), 100, time.Hour)
+	if err != nil || leaseID == "" {
+		t.Fatalf("ClaimPending: err=%v leaseID=%v", err, leaseID)
+	}
+
+	// Append one step event so the instance is in a Running state (required
+	// before MarkTerminal can transition to StatusSucceeded).
+	if _, err := j.Append(context.Background(), inst.ID, leaseID, journal.Event{
+		Kind:     journal.KindStepStarted,
+		StepName: "step-one",
+	}); err != nil {
+		t.Fatalf("Append step: %v", err)
+	}
+
+	// Record the head position before MarkTerminal so we can Replay only the
+	// new terminal event.
+	beforeTerminal, err := src.Head(context.Background())
+	if err != nil {
+		t.Fatalf("Head before MarkTerminal: %v", err)
+	}
+
+	// Commit the terminal state. This appends KindSagaSucceeded to the journal.
+	ok, err = j.MarkTerminal(context.Background(), inst.ID, leaseID, sagaprojection.StatusSucceededForTest)
+	if err != nil {
+		t.Fatalf("MarkTerminal: %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal returned ok=false; lease may have been stale")
+	}
+
+	// Replay from beforeTerminal and collect all delivered events.
+	var got []projection.ProjectionEvent
+	if err := src.Replay(context.Background(), beforeTerminal, func(e projection.ProjectionEvent) error {
+		got = append(got, e)
+		return nil
+	}); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	// At least one event must have been delivered (the terminal event).
+	if len(got) == 0 {
+		t.Fatal("Replay delivered 0 events after MarkTerminal; terminal event must be visible via GlobalReader")
+	}
+
+	// The last delivered event's EventID must be distinct and the position must
+	// be > beforeTerminal (it has a higher GlobalSeq).
+	lastPos, err := src.Position(got[len(got)-1])
+	if err != nil {
+		t.Fatalf("Position(last): %v", err)
+	}
+	if lastPos <= beforeTerminal {
+		t.Errorf("Position(last)=%d want > beforeTerminal=%d; terminal event must have a higher GlobalSeq",
+			lastPos, beforeTerminal)
+	}
 }
