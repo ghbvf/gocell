@@ -1,8 +1,10 @@
 // Package devicecommandrpc implements the gRPC server for the
 // grpc.device.command.v1 contract — the iotdevice example's first end-to-end
 // unary RPC (#1151). It is the grpc-serve counterpart of the HTTP devicecommand
-// slice: a control-plane caller issues a command to a device over gRPC and
-// receives an acknowledgement.
+// slice: a control-plane caller issues a command to a device over gRPC and the
+// handler enqueues it into the L4 device command queue — reusing the same
+// devicecmd.Service.Enqueue domain path as the HTTP enqueue slice — then returns
+// the enqueued command id as the acknowledgement.
 //
 // The server contract is buf's generated commandv1.DeviceCommandServiceServer
 // interface — contractgen emits no Go for kind=grpc (#1688). Server embeds
@@ -16,39 +18,51 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/google/uuid"
-
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Server implements commandv1.DeviceCommandServiceServer.
 type Server struct {
 	commandv1.UnimplementedDeviceCommandServiceServer
-	clk clock.Clock
+	clk    clock.Clock
+	cmdSvc *devicecmd.Service
 }
 
 // NewServer constructs the gRPC command server. clock is a mandatory positional
 // dependency (CLOCK-POSITIONAL-INJECTION-01); the acknowledgement timestamp is
-// stamped from it so it stays consistent with the cell's business clock.
-func NewServer(clk clock.Clock) *Server {
+// stamped from it so it stays consistent with the cell's business clock. cmdSvc
+// is the shared device-command domain service — the gRPC handler enqueues
+// through the same Enqueue path the HTTP devicecommand slice uses.
+func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service) *Server {
 	clock.MustHaveClock(clk, "devicecommandrpc.NewServer")
-	return &Server{clk: clk}
+	return &Server{clk: clk, cmdSvc: cmdSvc}
 }
 
-// IssueCommand validates the request and returns a server-minted acknowledgement.
+// IssueCommand authorizes the caller, validates the request, enqueues the
+// command into the L4 device command queue, and returns the enqueued command id
+// as the acknowledgement.
 //
-// This is the first end-to-end milestone (#1151): the handler is intentionally
-// thin — it validates input and acks. Enqueuing the command into the L4 device
-// command queue (the HTTP devicecommand slice's path) is follow-up enrichment,
-// tracked separately. A domain error is returned as an *errcode.Error; the gRPC
-// interceptor chain maps it to a status code (the full errcode→codes table is
-// PR-12, the Kratos GRPCStatus() model).
+// Authorization mirrors the HTTP devicecommand enqueue route policy
+// (auth.AnyRole(admin, operator)). gRPC has no route-policy layer, so the role
+// gate runs at the handler edge, before any field validation or device lookup,
+// preserving the 403-before-404 ordering so an unauthorized caller cannot probe
+// device existence (per-method gRPC auth is #1675). A domain error is returned
+// as an *errcode.Error; the gRPC interceptor chain maps it to a status code (the
+// full errcode→codes table is PR-12, the Kratos GRPCStatus() model).
 func (s *Server) IssueCommand(
 	ctx context.Context,
 	req *commandv1.IssueCommandRequest,
 ) (*commandv1.IssueCommandResponse, error) {
+	if p, ok := auth.FromContext(ctx); !ok ||
+		(!p.HasRole(dto.RoleAdmin) && !p.HasRole(dto.RoleOperator)) {
+		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"device-command: requires admin or operator role")
+	}
 	if req.GetDeviceId() == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"device_id is required",
@@ -59,13 +73,16 @@ func (s *Server) IssueCommand(
 			"command_type is required",
 			errcode.WithDetails(errcode.PublicString("field", "command_type")))
 	}
-	ackID := uuid.NewString()
-	slog.InfoContext(ctx, "devicecommandrpc: command issued",
-		slog.String("device_id", req.GetDeviceId()),
-		slog.String("command_type", req.GetCommandType()),
-		slog.String("ack_id", ackID))
+	entry, err := s.cmdSvc.Enqueue(ctx, req.GetDeviceId(), req.GetCommandType(), string(req.GetPayload()))
+	if err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "devicecommandrpc: command enqueued",
+		slog.String("device_id", entry.DeviceID),
+		slog.String("command_type", entry.CommandType),
+		slog.String("command_id", entry.ID))
 	return &commandv1.IssueCommandResponse{
-		AckId:                  ackID,
+		AckId:                  entry.ID,
 		AcknowledgedAtUnixNano: s.clk.Now().UnixNano(),
 	}, nil
 }

@@ -26,10 +26,12 @@ import (
 //   - schemaRef parsing fails
 //   - kind=http but http endpoint missing
 //   - kind=event but payload schemaRef missing
-//   - kind=grpc but endpoints.grpc missing, service/method empty, method not an
-//     exported Go identifier, proto empty or not rooted under
-//     metadata.GRPCProtoPathPrefix, service/proto carrying a control character,
-//     or a non-unary streamingType (streaming codegen deferred to PR 10)
+//
+// kind=grpc and kind=webhook are recognized but build no spec and emit zero
+// contractgen artifacts by design (see the kind switch). grpc's server contract
+// is buf's generated pb.<Svc>Server (#1688); its proto is validated by the
+// checkGRPCProtoCollisions pre-pass + governance FMT-37 (service-level, #1655),
+// not here.
 func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen build: project is nil")

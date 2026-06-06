@@ -337,10 +337,21 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		return fmt.Errorf("device-command-internal: %w", err)
 	}
 	c.commandHandler = devicecommand.NewHandler(pubSvc)
-	// device-command grpc slice: first end-to-end unary RPC (#1151). The
+	// device-command grpc slice: first end-to-end unary RPC (#1151). It reuses
+	// the same devicecmd.Service.Enqueue domain path as the HTTP devicecommand
+	// slice (its own Service instance for observability attribution) so a gRPC
+	// IssueCommand actually enqueues an L4 command rather than only acking. The
 	// cell_gen.go reg.GRPCService(...) call (derived from slice.yaml) registers
-	// c.commandRPCServer with the gRPC listener; construct it here.
-	c.commandRPCServer = devicecommandrpc.NewServer(c.clk)
+	// c.commandRPCServer with the gRPC listener.
+	grpcSvc, err := devicecmd.NewService(
+		c.clk, cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
+		runMode,
+		devicecmd.WithSliceName("devicecommandrpc"),
+	)
+	if err != nil {
+		return fmt.Errorf("device-command-grpc: %w", err)
+	}
+	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandrpc.SliceMetadata()))
 	// Register the sync command-bus enqueue handler into the process registry.
 	// EnqueueCommandAdapter bridges the generated cmdenqueue.Handler to the same

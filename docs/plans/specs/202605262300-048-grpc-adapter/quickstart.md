@@ -85,12 +85,12 @@ Update the cell's `slice.yaml` to add the contractUsage. Both `provider` (the ce
 id: ordercommand
 belongsToCell: todoorder
 contractUsages:
-  - contract: grpc.todoorder.command.v1.OrderCommandService
+  - contract: grpc.todoorder.command.v1
     role: serve              # NEW: serve / call (analogous to http server / clients)
     # field: orderCommandServer   # optional, only needed to disambiguate multiple *ordercommand.Service fields
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.OrderCommandService.serve
+    - contract.grpc.todoorder.command.v1.serve
 ```
 
 For a consuming cell:
@@ -98,11 +98,11 @@ For a consuming cell:
 ```yaml
 # cells/todoorder/slices/orderconsumer/slice.yaml
 contractUsages:
-  - contract: grpc.todoorder.command.v1.OrderCommandService
+  - contract: grpc.todoorder.command.v1
     role: call
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.OrderCommandService.call
+    - contract.grpc.todoorder.command.v1.call
 ```
 
 ---

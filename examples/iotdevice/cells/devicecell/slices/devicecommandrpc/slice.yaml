@@ -1,6 +1,6 @@
 id: devicecommandrpc
 belongsToCell: devicecell
-consistencyLevel: L0
+consistencyLevel: L4
 lifecycle: experimental
 contractUsages:
   - contract: grpc.device.command.v1

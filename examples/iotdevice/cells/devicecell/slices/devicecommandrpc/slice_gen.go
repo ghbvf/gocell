@@ -14,7 +14,7 @@ import (
 var sliceMeta = &metadata.SliceMeta{
 	ID:               "devicecommandrpc",
 	BelongsToCell:    "devicecell",
-	ConsistencyLevel: "L0",
+	ConsistencyLevel: "L4",
 	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "grpc.device.command.v1", Role: "serve"},

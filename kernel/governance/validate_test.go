@@ -2342,6 +2342,17 @@ func TestFMT37(t *testing.T) {
 			wantField: "endpoints.grpc.proto",
 		},
 		{
+			name: "grpc missing endpoints.clients",
+			setup: func(pm *metadata.ProjectMeta) {
+				c := grpcContract(nil)
+				c.Endpoints.Clients = nil // absent key (nil), not an explicit empty list
+				pm.Contracts["grpc.access.session.verify.v1"] = c
+			},
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.clients",
+		},
+		{
 			name: "grpc proto outside contracts/grpc rejected",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {

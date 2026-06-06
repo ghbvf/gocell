@@ -21,7 +21,6 @@ import (
 
 	"google.golang.org/grpc"
 
-	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
@@ -169,29 +168,25 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// listener refs live in separate bootstrap namespaces, so the shared ref is not
 	// a conflict.
 	//
-	// TLS: AllowInsecure (plaintext), matching the HTTP demo posture. Binding :8084
-	// (non-loopback) plaintext logs a startup Warn (warnIfInsecureNonLoopback);
-	// production must terminate TLS at a sidecar or set CertPEM/KeyPEM.
-	//
-	// The interceptor chain mirrors the HTTP primary listener's JWT auth: every RPC
-	// is authenticated (per-method public is deferred to #1675). The metrics
-	// collector is backed by a Nop provider — the iotdevice demo exports no metrics
-	// (HTTP path is Nop too); real grpc metric export + cell attribution are PR-9 /
-	// #1383, and the grpc_ready readyz probe wiring is PR-9 (plan §"PR 9").
+	// Address + TLS/mTLS are resolved from the environment by newGRPCServerFromEnv
+	// (see grpc.go): the demo runs plaintext out of the box (the adapter logs a
+	// startup Warn for a non-loopback plaintext bind), durable mode must set TLS
+	// or an explicit insecure opt-in. The interceptor chain mirrors the HTTP
+	// primary listener's JWT auth: every RPC is authenticated (per-method public
+	// is deferred to #1675). The metrics collector is backed by a Nop provider —
+	// the iotdevice demo exports no metrics (HTTP path is Nop too); real grpc
+	// metric export + cell attribution are PR-9 / #1383, and the grpc_ready readyz
+	// probe wiring is PR-9 (plan §"PR 9").
 	grpcCollector, err := rtmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, rtmetrics.ProviderCollectorConfig{})
 	if err != nil {
 		return fmt.Errorf("build grpc metrics collector: %w", err)
 	}
-	grpcServer, err := adaptersgrpc.New(adaptersgrpc.Config{
-		Addr: ":8084",
-		TLS:  adaptersgrpc.TLSConfig{AllowInsecure: true},
-		ServerOptions: []grpc.ServerOption{
-			interceptor.NewUnaryChain(interceptor.Deps{
-				Verifier:  jwtVerifier,
-				Clock:     clk,
-				Collector: grpcCollector,
-			}),
-		},
+	grpcServer, err := newGRPCServerFromEnv(durabilityMode, []grpc.ServerOption{
+		interceptor.NewUnaryChain(interceptor.Deps{
+			Verifier:  jwtVerifier,
+			Clock:     clk,
+			Collector: grpcCollector,
+		}),
 	})
 	if err != nil {
 		return fmt.Errorf("build grpc server: %w", err)
