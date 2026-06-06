@@ -265,6 +265,26 @@ service DeviceCommandService {
 	}
 }
 
+// TestReadProtoServiceInfo_ExternalResponseMessageRejected proves the guard is
+// symmetric: a RESPONSE message qualified with a foreign proto package is
+// rejected fail-closed, mirroring the request-side rejection (the generated stub
+// fixes one import alias, so a foreign response type would be mis-bound).
+func TestReadProtoServiceInfo_ExternalResponseMessageRejected(t *testing.T) {
+	t.Parallel()
+	src := `syntax = "proto3";
+package device.command.v1;
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1;commandv1";
+service DeviceCommandService {
+  rpc IssueCommand(IssueCommandRequest) returns (other.pkg.ForeignResponse) {}
+}
+`
+	path := writeTempProto(t, src)
+	_, err := ReadProtoServiceInfo(path, fixtureFQService)
+	if err == nil || !strings.Contains(err.Error(), "external package") {
+		t.Fatalf("expected external-package rejection on response type, got %v", err)
+	}
+}
+
 // --- Existing ReadProtoServiceInfo tests (service-level, #1655) ---
 
 // TestReadProtoServiceInfo_SingleMethod verifies synth_grpc_minimal (one RPC):

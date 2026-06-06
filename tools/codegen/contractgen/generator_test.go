@@ -1117,3 +1117,39 @@ func TestCheckGRPCProtoCollisions_SkipsDisabled(t *testing.T) {
 		t.Fatalf("disabled grpc draft must be skipped, got %v", err)
 	}
 }
+
+// TestCheckGRPCProtoCollisions_RegistersEnabled drives the pre-pass happy path:
+// an enabled (codegen:true) grpc contract pointing at the real multi-RPC synth
+// proto is read via ReadProtoServiceInfo and registered, exercising the loop
+// body (the ReadProtoServiceInfo + reg.register calls) plus parseAllRPCMethods'
+// multi-method enumeration — the path TestCheckGRPCProtoCollisions_SkipsDisabled
+// deliberately never reaches.
+func TestCheckGRPCProtoCollisions_RegistersEnabled(t *testing.T) {
+	t.Parallel()
+	// root = the synth_grpc_multimethod project dir; the contract's relative
+	// proto path joins back onto it (root + contracts/grpc/.../device_command.proto).
+	root := fixtureMultiProtoPath(t)
+	for i := 0; i < 6; i++ { // strip device_command.proto/v1/command/device/grpc/contracts
+		root = filepath.Dir(root)
+	}
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc.device.command.v1": {
+				ID:      "grpc.device.command.v1",
+				Kind:    "grpc",
+				Codegen: true,
+				File:    "contracts/grpc/device/command/v1/contract.yaml",
+				Endpoints: metadata.EndpointsMeta{
+					Server: "devicecell",
+					GRPC: &metadata.GRPCTransportMeta{
+						Service: "device.command.v1.DeviceCommandService",
+						Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+					},
+				},
+			},
+		},
+	}
+	if err := checkGRPCProtoCollisions(root, p); err != nil {
+		t.Fatalf("enabled grpc contract pre-pass must succeed, got %v", err)
+	}
+}
