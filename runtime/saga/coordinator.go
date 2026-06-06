@@ -115,14 +115,25 @@ type Config struct {
 	HeartbeatInterval time.Duration
 	// MaxConcurrentDrives bounds how many claimed instances tickOnce drives
 	// concurrently within a single tick (semaphore-limited fan-out). Default 16
-	// (= ClaimBatchSize), so a full claimed batch drives concurrently. Each
-	// concurrent drive that reaches a step also runs one Executor heartbeat
-	// goroutine, so this also bounds peak goroutines + concurrent external
-	// step IO; lower it when steps open many connections. A tick still waits
-	// for its whole batch to finish before returning (the "one batch at a time"
-	// semantics are unchanged — only the per-instance driving within a batch is
-	// parallelized), so Stop's inflight drain is unaffected. MUST be positive:
-	// a zero value would deadlock the semaphore.
+	// (= ClaimBatchSize), so a full claimed batch drives concurrently. Lower it
+	// when steps open many external connections.
+	//
+	// Scope: this bounds concurrent driveOne *execution*, NOT goroutine spawn
+	// count — tickOnce spawns one goroutine per led instance (up to
+	// ClaimBatchSize) and the excess park on the semaphore, so peak goroutines
+	// per tick ≈ ClaimBatchSize regardless of this value; to bound peak
+	// goroutines, reduce ClaimBatchSize. Each in-flight drive that reaches a
+	// step also runs one Executor heartbeat goroutine. A semaphore slot is held
+	// for the whole driveOne AND the subsequent ObserveDrive observer call
+	// (bounded by observerCallDeadline), so a slow observer lowers effective
+	// drive throughput. Runtime drive pressure is not currently exposed as a
+	// metric; if saturation is suspected, lower this and watch tick latency as
+	// a proxy.
+	//
+	// A tick still waits for its whole batch to finish before returning (the
+	// "one batch at a time" semantics are unchanged — only per-instance driving
+	// within a batch is parallelized), so Stop's inflight drain is unaffected.
+	// MUST be positive: a zero value would deadlock the semaphore.
 	MaxConcurrentDrives int
 }
 

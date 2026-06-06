@@ -90,6 +90,7 @@ func newConcurrencyProbe(t *testing.T, maxConcurrent, nInstances int) *concProbe
 // time, so peak would never reach N and the testwait below would time out — this
 // test is red without the fan-out.
 func TestTickOnce_DrivesConcurrently(t *testing.T) {
+	t.Parallel()
 	const n = 4
 	p := newConcurrencyProbe(t, 16, n) // 16 = default, ≥ n
 	defer p.releaseAll()
@@ -119,6 +120,7 @@ func TestTickOnce_DrivesConcurrently(t *testing.T) {
 // run at once (the other 2 block on the semaphore) while all 4 are eventually
 // driven within the single tick.
 func TestTickOnce_BoundedByMaxConcurrentDrives(t *testing.T) {
+	t.Parallel()
 	const (
 		maxConcurrent = 2
 		n             = 4
