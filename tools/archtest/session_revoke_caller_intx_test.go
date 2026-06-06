@@ -18,11 +18,12 @@
 //
 // This archtest moves the "a future caller forgets the RunInTx scope" risk from a
 // runtime panic to a CI failure. It allowlists every production reference to the
-// interface method (session.Store).Revoke per ENCLOSING FUNCTION (not per file):
-// tx-scope is a per-function property; a new function must trigger review, but a
-// second Revoke inside an already-blessed function is automatically safe. Any new
-// (rel, func) pair outside the allowlist fails CI until a reviewer verifies the
-// new caller is RunInTx-wrapped and adds it.
+// interface method (session.Store).Revoke per EXACT CALLSITE (file + enclosing
+// function + ordinal + context expression). A new Revoke call in an already
+// blessed function still triggers review. The rule also allowlists the production
+// call edges into tx-scoped helpers that hide the Revoke selector
+// (cleanupIssuedSession / revokeAndPublish), so a future non-transaction helper
+// reuse cannot silently bypass the Revoke callsite scan.
 //
 // Note on tx verification: the human-verified fact is that each allowlisted
 // caller wraps the Revoke call in a RunInTx scope.  go/types CANNOT prove
@@ -34,11 +35,11 @@
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
-//   - Downstream: MEDIUM by archtest caller-allowlist at PER-FUNCTION granularity.
+//   - Downstream: MEDIUM by archtest caller-allowlist at PER-CALLSITE granularity.
 //     The callee is resolved via go/types (ResolveMethodCall), so import aliases
 //     and dot-imports resolve to the same symbol. The scan is REFERENCE-based (not
 //     call-based), so passing the method as a function value is also caught. Any
-//     reference in a function not in the allowlist fails in CI.
+//     new reference not in the allowlist fails in CI.
 //   - Upstream: MEDIUM, a GO-LANGUAGE CEILING (not a deferred TODO). Hard
 //     upstream would require a typed tx-scoped revoke capability so calling
 //     Revoke outside a tx is uncompilable. That path — gh #1615 F3 — was
@@ -54,19 +55,20 @@
 //     HEALTHZ-HOLDER-SEAL (#893 won't-do) / principal-write (#1282). Medium is
 //     the honest ceiling for the upstream direction.
 //
-// # Per-function granularity rationale
+// # Per-callsite granularity rationale
 //
 // The prior file-level allowlist was a coarser unit than the safety property it
-// guards: tx-scope is a PER-FUNCTION property, not a per-file one. An already-
-// allowlisted file such as sessionlogin/service.go holds multiple callers; adding
-// a SECOND bare Revoke to that file in a NEW function would have passed CI without
-// review. The per-function allowlist (rel, funcName) tightens the gate to the
-// correct unit:
+// guards, and function-level allowlisting still misses two cases:
+// (1) a second Revoke call added to an already-blessed function, and
+// (2) a tx-scoped helper (whose body contains Revoke) called from a new non-tx
+// path. The per-callsite allowlist (rel, funcName, ordinal, ctx expression) plus
+// helper-call-edge allowlist tightens the gate to the correct review unit:
 //
-//   - A second Revoke inside an ALREADY-BLESSED function is automatically safe
-//     (same function, same ambient tx, no review required).
-//   - A Revoke in a NEW function forces a red CI until a reviewer verifies the
-//     function wraps it in RunInTx and adds the (rel, func) entry.
+//   - A second Revoke inside an ALREADY-BLESSED function gets a new ordinal and
+//     forces red CI until reviewer verifies ctx shape / RunInTx scope.
+//   - A Revoke in a NEW function likewise forces review.
+//   - A new call to cleanupIssuedSession / revokeAndPublish must be allowlisted
+//     as a helper edge, so helper reuse cannot hide non-tx execution.
 //
 // # Detection is REFERENCE-based, not call-based
 //
@@ -91,15 +93,17 @@
 //   - Import aliases and dot-imports are immune BECAUSE ResolveMethodCall
 //     resolves via types.Info.Selections (symbol identity), not syntactic name.
 //     This is a strength, not a blind spot.
-//   - The anti-vacuity guard (every allowlisted (rel,fn) must have ≥1 observed
-//     reference) proves the scanner actually resolves the real references (not a
-//     vacuous pass) AND forbids stale allowlist entries — a dead entry is a
-//     latent bypass slot.
+//   - The anti-vacuity guard (every allowlisted callsite / helper edge must have
+//     ≥1 observed reference) proves the scanner actually resolves the real
+//     references (not a vacuous pass) AND forbids stale allowlist entries — a
+//     dead entry is a latent bypass slot.
 package archtest
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/types"
 	"sort"
 	"testing"
@@ -107,19 +111,41 @@ import (
 
 const sessionPkgPath = PlatformModulePath + "/runtime/auth/session"
 
-// sessionRevokeCallsite identifies a production reference to (session.Store).Revoke
-// by the module-relative source file and the name of the enclosing FuncDecl.
-// Using the enclosing function as the allowlist key rather than the file is the
-// correct granularity: tx-scope is a per-function property. A new function in an
-// already-allowlisted file must still pass review before its (rel, fn) entry is added.
-// A reference outside any FuncDecl (top-level var init) maps to fn=="" and will
-// always violate — top-level init code cannot hold a RunInTx scope.
+const sessionRevokeMethodValueCtx = "<method-value>"
+
+// sessionRevokeCallsite identifies one production reference to
+// (session.Store).Revoke by exact callsite.
+//
+// ordinal is 1-based within the enclosing function among Revoke references;
+// ctx is the formatted context argument expression for calls, or
+// sessionRevokeMethodValueCtx for method-value references.
+// A reference outside any FuncDecl maps to fn=="" and always violates unless
+// deliberately allowlisted (top-level init code cannot hold a RunInTx scope).
 type sessionRevokeCallsite struct {
-	rel string // module-relative path, e.g. "cells/accesscore/slices/sessionlogout/service.go"
-	fn  string // enclosing FuncDecl name; "" means outside any function (top-level)
+	rel     string
+	fn      string
+	ordinal int
+	ctx     string
 }
 
-// sessionRevokeAllowlist maps (rel, enclosingFunc) callsite pairs that may
+// sessionRevokeHelperCallsite identifies one production call edge into a helper
+// whose body contains a sanctioned (session.Store).Revoke call. The helper call
+// itself must stay tx-scoped, otherwise the hidden Revoke call can execute
+// outside RunInTx without producing a new Revoke selector.
+type sessionRevokeHelperCallsite struct {
+	rel     string
+	fn      string
+	helper  string
+	ordinal int
+	ctx     string
+}
+
+var sessionRevokeTxScopedHelpers = map[string]bool{
+	"cleanupIssuedSession": true,
+	"revokeAndPublish":     true,
+}
+
+// sessionRevokeAllowlist maps exact callsites that may
 // reference the (session.Store).Revoke interface method.
 //
 // Each entry is human-verified to execute Revoke inside a RunInTx scope (the
@@ -176,21 +202,30 @@ type sessionRevokeCallsite struct {
 //     a txScopedRevokeStore-style wrapper (as the conformance suite does) so Revoke
 //     executes inside a RunInTx scope.
 var sessionRevokeAllowlist = map[sessionRevokeCallsite]struct{}{
-	{rel: "cells/accesscore/slices/sessionlogout/service.go", fn: "revokeAndPublish"}:         {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "mintAndPersistSession"}:     {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "persistSessionWithRefresh"}: {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "cleanupIssuedSession"}:      {},
-	{rel: "adapters/redis/session_cache_store.go", fn: "Revoke"}:                              {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeDirect"}:                   {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeIdempotent"}:               {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeNotFoundNoop"}:             {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "seedRevokeForSubjectFixtures"}:      {},
-	{rel: "runtime/auth/session/storetest/bench.go", fn: "benchMixedConcurrent"}:              {},
+	{rel: "cells/accesscore/slices/sessionlogout/service.go", fn: "revokeAndPublish", ordinal: 1, ctx: "txCtx"}:                                {},
+	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "mintAndPersistSession", ordinal: 1, ctx: "context.WithoutCancel(txCtx)"}:     {},
+	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "persistSessionWithRefresh", ordinal: 1, ctx: "context.WithoutCancel(txCtx)"}: {},
+	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "cleanupIssuedSession", ordinal: 1, ctx: "cleanupCtx"}:                        {},
+	{rel: "adapters/redis/session_cache_store.go", fn: "Revoke", ordinal: 1, ctx: "ctx"}:                                                       {},
+	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeDirect", ordinal: 1, ctx: "context.Background()"}:                           {},
+	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeIdempotent", ordinal: 1, ctx: "context.Background()"}:                       {},
+	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeIdempotent", ordinal: 2, ctx: "context.Background()"}:                       {},
+	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeNotFoundNoop", ordinal: 1, ctx: "context.Background()"}:                     {},
+	{rel: "runtime/auth/session/storetest/suite.go", fn: "seedRevokeForSubjectFixtures", ordinal: 1, ctx: "ctx"}:                               {},
+	{rel: "runtime/auth/session/storetest/bench.go", fn: "benchMixedConcurrent", ordinal: 1, ctx: "ctx"}:                                       {},
+}
+
+// sessionRevokeHelperAllowlist maps production call edges into tx-scoped helper
+// methods that contain Revoke callsites.
+var sessionRevokeHelperAllowlist = map[sessionRevokeHelperCallsite]struct{}{
+	{rel: "cells/accesscore/slices/sessionlogout/service.go", fn: "Logout", helper: "revokeAndPublish", ordinal: 1, ctx: "txCtx"}:                       {},
+	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "mintAndPersistSession", helper: "cleanupIssuedSession", ordinal: 1, ctx: "txCtx"}:     {},
+	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "persistSessionWithRefresh", helper: "cleanupIssuedSession", ordinal: 1, ctx: "txCtx"}: {},
 }
 
 // scanSessionRevokeCallsites walks all FuncDecls in p's files (excluding
-// _test.go), finds every SelectorExpr that resolves to (session.Store).Revoke,
-// attributes each to its enclosing FuncDecl (or fn="" if outside any function),
+// _test.go), finds every reference that resolves to (session.Store).Revoke,
+// attributes each to its exact callsite (or fn="" if outside any function),
 // and emits a Diagnostic for any callsite not in the allowlist.
 //
 // Also records each observed callsite into the provided observed map so the
@@ -212,88 +247,162 @@ func scanSessionRevokeCallsites(
 		if len(rel) > 8 && rel[len(rel)-8:] == "_test.go" {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-			if fd.Body == nil {
-				return
-			}
-			fnName := fd.Name.Name
-			EachInSubtree[ast.SelectorExpr](fd.Body, func(sel *ast.SelectorExpr) {
-				if !sessionRevokeSymbol(p.TypesInfo, sel) {
-					return
-				}
-				cs := sessionRevokeCallsite{rel: rel, fn: fnName}
-				if observed != nil {
-					observed[cs] = struct{}{}
-				}
-				if _, allowed := allowlist[cs]; !allowed {
-					pos := p.Fset.Position(sel.Pos())
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"SESSION-REVOKE-CALLER-INTX-01: (session.Store).Revoke is referenced "+
-								"from %s in function %q, which is not in the sanctioned caller allowlist. "+
-								"adapters/redis.CachingSessionStore.Revoke registers a post-commit "+
-								"cache DEL via persistence.RegisterAfterCommit, which PANICS if "+
-								"called outside a RunInTx scope. Before adding (%q, %q) to "+
-								"sessionRevokeAllowlist, a reviewer MUST verify that this function "+
-								"wraps the Revoke call in a RunInTx closure.",
-							rel, fnName, rel, fnName,
-						),
-					})
-				}
-			})
-		})
-		// Also catch references outside any FuncDecl (top-level var/init).
-		// We do this by scanning the whole file for Revoke selectors and
-		// subtracting those already attributed to a FuncDecl body.
-		// (Top-level references are so rare that a simpler approach is fine:
-		// just scan the full file and check whether the position is inside any
-		// FuncDecl body range — but for simplicity we rely on the fact that
-		// EachInSubtree[ast.FuncDecl] covers all function bodies, and any
-		// reference NOT inside a FuncDecl body is by definition top-level.)
-		topLevelObserved := map[int]bool{} // position offset → true, recorded inside funcs
+		funcRefOffsets := map[int]bool{}
 		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fd.Body == nil {
 				return
 			}
 			EachInSubtree[ast.SelectorExpr](fd.Body, func(sel *ast.SelectorExpr) {
 				if sessionRevokeSymbol(p.TypesInfo, sel) {
-					topLevelObserved[p.Fset.Position(sel.Pos()).Offset] = true
+					funcRefOffsets[p.Fset.Position(sel.Pos()).Offset] = true
 				}
 			})
+			d = append(d, scanSessionRevokeCallsitesInNode(p, rel, fd.Name.Name, fd.Body, nil, allowlist, observed)...)
 		})
-		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-			if !sessionRevokeSymbol(p.TypesInfo, sel) {
+		d = append(d, scanSessionRevokeCallsitesInNode(p, rel, "", file, funcRefOffsets, allowlist, observed)...)
+	}
+	return d
+}
+
+func scanSessionRevokeCallsitesInNode(
+	p *Pass,
+	rel string,
+	fnName string,
+	node ast.Node,
+	skipOffsets map[int]bool,
+	allowlist map[sessionRevokeCallsite]struct{},
+	observed map[sessionRevokeCallsite]struct{},
+) []Diagnostic {
+	var d []Diagnostic
+	callSelectorOffsets := map[int]bool{}
+	ordinal := 0
+
+	EachInSubtree[ast.CallExpr](node, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || !sessionRevokeSymbol(p.TypesInfo, sel) {
+			return
+		}
+		pos := p.Fset.Position(sel.Pos())
+		if skipOffsets[pos.Offset] {
+			return
+		}
+		callSelectorOffsets[pos.Offset] = true
+		ordinal++
+		cs := sessionRevokeCallsite{
+			rel:     rel,
+			fn:      fnName,
+			ordinal: ordinal,
+			ctx:     sessionRevokeCallContextExpr(p, sel, call),
+		}
+		d = append(d, recordSessionRevokeCallsite(allowlist, observed, cs, pos.Line)...)
+	})
+
+	EachInSubtree[ast.SelectorExpr](node, func(sel *ast.SelectorExpr) {
+		if !sessionRevokeSymbol(p.TypesInfo, sel) {
+			return
+		}
+		pos := p.Fset.Position(sel.Pos())
+		if skipOffsets[pos.Offset] || callSelectorOffsets[pos.Offset] {
+			return
+		}
+		ordinal++
+		cs := sessionRevokeCallsite{
+			rel:     rel,
+			fn:      fnName,
+			ordinal: ordinal,
+			ctx:     sessionRevokeMethodValueCtx,
+		}
+		d = append(d, recordSessionRevokeCallsite(allowlist, observed, cs, pos.Line)...)
+	})
+
+	return d
+}
+
+func recordSessionRevokeCallsite(
+	allowlist map[sessionRevokeCallsite]struct{},
+	observed map[sessionRevokeCallsite]struct{},
+	cs sessionRevokeCallsite,
+	line int,
+) []Diagnostic {
+	if observed != nil {
+		observed[cs] = struct{}{}
+	}
+	if _, allowed := allowlist[cs]; allowed {
+		return nil
+	}
+	return []Diagnostic{{
+		Rel:  cs.rel,
+		Line: line,
+		Message: fmt.Sprintf(
+			"SESSION-REVOKE-CALLER-INTX-01: (session.Store).Revoke reference "+
+				"at callsite (%q, %q, ordinal=%d, ctx=%q) is not in the sanctioned "+
+				"caller allowlist. adapters/redis.CachingSessionStore.Revoke registers "+
+				"a post-commit cache DEL via persistence.RegisterAfterCommit, which "+
+				"PANICS if called outside a RunInTx scope. Before adding this exact "+
+				"callsite to sessionRevokeAllowlist, a reviewer MUST verify that the "+
+				"call executes inside RunInTx and that the ctx argument carries the "+
+				"after-commit registry.",
+			cs.rel, cs.fn, cs.ordinal, cs.ctx,
+		),
+	}}
+}
+
+func scanSessionRevokeHelperCallsites(
+	p *Pass,
+	allowlist map[sessionRevokeHelperCallsite]struct{},
+	observed map[sessionRevokeHelperCallsite]struct{},
+) []Diagnostic {
+	var d []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if len(rel) > 8 && rel[len(rel)-8:] == "_test.go" {
+			continue
+		}
+		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			if fd.Body == nil {
 				return
 			}
-			pos := p.Fset.Position(sel.Pos())
-			if topLevelObserved[pos.Offset] {
-				return // already attributed to a FuncDecl
-			}
-			cs := sessionRevokeCallsite{rel: rel, fn: ""}
-			if observed != nil {
-				observed[cs] = struct{}{}
-			}
-			if _, allowed := allowlist[cs]; !allowed {
+			ordinals := map[string]int{}
+			EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !sessionRevokeTxScopedHelpers[sel.Sel.Name] {
+					return
+				}
+				ordinals[sel.Sel.Name]++
+				pos := p.Fset.Position(sel.Pos())
+				cs := sessionRevokeHelperCallsite{
+					rel:     rel,
+					fn:      fd.Name.Name,
+					helper:  sel.Sel.Name,
+					ordinal: ordinals[sel.Sel.Name],
+					ctx:     sessionRevokeHelperContextExpr(p, sel, call),
+				}
+				if observed != nil {
+					observed[cs] = struct{}{}
+				}
+				if _, allowed := allowlist[cs]; allowed {
+					return
+				}
 				d = append(d, Diagnostic{
 					Rel:  rel,
 					Line: pos.Line,
 					Message: fmt.Sprintf(
-						"SESSION-REVOKE-CALLER-INTX-01: (session.Store).Revoke referenced outside "+
-							"any function in %s (top-level init/var). Top-level code cannot hold a "+
-							"RunInTx scope. This is always a violation.",
-						rel,
+						"SESSION-REVOKE-CALLER-INTX-01: tx-scoped helper %s called "+
+							"from (%q, %q, ordinal=%d, ctx=%q) without a sanctioned "+
+							"helper-edge allowlist entry. This helper hides a "+
+							"(session.Store).Revoke call, so every production caller "+
+							"must be reviewed to ensure it passes a RunInTx ctx.",
+						cs.helper, cs.rel, cs.fn, cs.ordinal, cs.ctx,
 					),
 				})
-			}
+			})
 		})
 	}
 	return d
 }
 
 // TestSessionRevokeCallerInTx01 asserts that every production reference to
-// (session.Store).Revoke is in the per-function allowlist, and that no allowlist
+// (session.Store).Revoke is in the per-callsite allowlist, and that no allowlist
 // entry is stale (anti-vacuity reverse check).
 func TestSessionRevokeCallerInTx01(t *testing.T) {
 	t.Parallel()
@@ -302,12 +411,15 @@ func TestSessionRevokeCallerInTx01(t *testing.T) {
 	}
 
 	observed := map[sessionRevokeCallsite]struct{}{}
+	observedHelpers := map[sessionRevokeHelperCallsite]struct{}{}
 
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
-		return scanSessionRevokeCallsites(p, sessionRevokeAllowlist, observed)
+		out := scanSessionRevokeCallsites(p, sessionRevokeAllowlist, observed)
+		out = append(out, scanSessionRevokeHelperCallsites(p, sessionRevokeHelperAllowlist, observedHelpers)...)
+		return out
 	})
 
 	// Anti-vacuity / no-stale reverse self-check: every allowlisted (rel, fn)
@@ -327,10 +439,39 @@ func TestSessionRevokeCallerInTx01(t *testing.T) {
 			diags = append(diags, Diagnostic{
 				Message: fmt.Sprintf(
 					"SESSION-REVOKE-CALLER-INTX-01: allowlist entry (%q, %q) is STALE — no live "+
-						"reference to (session.Store).Revoke was observed in function %q of %q. "+
+						"reference to (session.Store).Revoke was observed at ordinal %d with ctx %q in function %q of %q. "+
 						"Either the scanner stopped detecting the call (regression) or the call was "+
 						"removed; drop the dead allowlist entry so it cannot become a silent bypass slot.",
-					cs.rel, cs.fn, cs.fn, cs.rel,
+					cs.rel, cs.fn, cs.ordinal, cs.ctx, cs.fn, cs.rel,
+				),
+			})
+		}
+	}
+	allowedHelpers := make([]sessionRevokeHelperCallsite, 0, len(sessionRevokeHelperAllowlist))
+	for cs := range sessionRevokeHelperAllowlist {
+		allowedHelpers = append(allowedHelpers, cs)
+	}
+	sort.Slice(allowedHelpers, func(i, j int) bool {
+		if allowedHelpers[i].rel != allowedHelpers[j].rel {
+			return allowedHelpers[i].rel < allowedHelpers[j].rel
+		}
+		if allowedHelpers[i].fn != allowedHelpers[j].fn {
+			return allowedHelpers[i].fn < allowedHelpers[j].fn
+		}
+		if allowedHelpers[i].helper != allowedHelpers[j].helper {
+			return allowedHelpers[i].helper < allowedHelpers[j].helper
+		}
+		return allowedHelpers[i].ordinal < allowedHelpers[j].ordinal
+	})
+	for _, cs := range allowedHelpers {
+		if _, seen := observedHelpers[cs]; !seen {
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"SESSION-REVOKE-CALLER-INTX-01: helper allowlist entry "+
+						"(%q, %q, %q, ordinal=%d, ctx=%q) is STALE — no live helper call was observed. "+
+						"Either the scanner stopped detecting the helper edge (regression) or the call was "+
+						"removed; drop the dead allowlist entry so it cannot become a silent bypass slot.",
+					cs.rel, cs.fn, cs.helper, cs.ordinal, cs.ctx,
 				),
 			})
 		}
@@ -502,6 +643,77 @@ func TestSessionRevokeCaller_RedFixture(t *testing.T) {
 	}
 }
 
+// TestSessionRevokeCaller_RedFixture_AllowlistedFunctionExtraCall reproduces
+// the function-level allowlist blind spot: the enclosing function is sanctioned,
+// but it contains a second Revoke call with a non-transaction context.
+func TestSessionRevokeCaller_RedFixture_AllowlistedFunctionExtraCall(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const (
+		fixturePkg = "./tools/archtest/testdata/session_revoke_caller_fixtures/allowlisted_function_extra_call_red"
+		fixtureRel = "tools/archtest/testdata/session_revoke_caller_fixtures/allowlisted_function_extra_call_red/red.go"
+	)
+
+	observed := map[sessionRevokeCallsite]struct{}{}
+	allowlist := map[sessionRevokeCallsite]struct{}{
+		{rel: fixtureRel, fn: "allowedButBad", ordinal: 1, ctx: "txCtx"}: {},
+	}
+
+	var diags []Diagnostic
+	_ = Run(t, Typed(TypedOpts{}, []string{fixturePkg}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		d := scanSessionRevokeCallsites(p, allowlist, observed)
+		diags = append(diags, d...)
+		return nil
+	})
+
+	if len(diags) == 0 {
+		t.Errorf("TestSessionRevokeCaller_RedFixture_AllowlistedFunctionExtraCall: expected violation " +
+			"from the second Revoke call in an otherwise allowlisted function, but got 0. " +
+			"The scanner is still function-granular instead of callsite-granular.")
+	}
+}
+
+// TestSessionRevokeCaller_RedFixture_HelperNonTxCall proves helper-edge
+// scanning catches a tx-scoped helper reused with a non-transaction context.
+func TestSessionRevokeCaller_RedFixture_HelperNonTxCall(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const (
+		fixturePkg = "./tools/archtest/testdata/session_revoke_caller_fixtures/helper_nontx_call_red"
+		fixtureRel = "tools/archtest/testdata/session_revoke_caller_fixtures/helper_nontx_call_red/red.go"
+	)
+
+	observed := map[sessionRevokeHelperCallsite]struct{}{}
+	allowlist := map[sessionRevokeHelperCallsite]struct{}{
+		{rel: fixtureRel, fn: "caller", helper: "cleanupIssuedSession", ordinal: 1, ctx: "txCtx"}: {},
+	}
+
+	var diags []Diagnostic
+	_ = Run(t, Typed(TypedOpts{}, []string{fixturePkg}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		d := scanSessionRevokeHelperCallsites(p, allowlist, observed)
+		diags = append(diags, d...)
+		return nil
+	})
+
+	if len(diags) == 0 {
+		t.Errorf("TestSessionRevokeCaller_RedFixture_HelperNonTxCall: expected violation " +
+			"from the second cleanupIssuedSession call with context.Background(), but got 0. " +
+			"The scanner is not guarding tx-scoped helper call edges.")
+	}
+}
+
 // sessionRevokeSymbol reports whether sel is a reference (call or value) to the
 // interface method (session.Store).Revoke, alias-proof via go/types.
 // Returns false for any other selector.
@@ -539,4 +751,39 @@ func isSessionStoreReceiver(fn *types.Func) bool {
 	return named.Obj().Name() == "Store" &&
 		named.Obj().Pkg() != nil &&
 		named.Obj().Pkg().Path() == sessionPkgPath
+}
+
+func sessionRevokeCallContextExpr(p *Pass, sel *ast.SelectorExpr, call *ast.CallExpr) string {
+	return callContextExpr(p, sel, call, 0)
+}
+
+func sessionRevokeHelperContextExpr(p *Pass, sel *ast.SelectorExpr, call *ast.CallExpr) string {
+	return callContextExpr(p, sel, call, 0)
+}
+
+func callContextExpr(p *Pass, sel *ast.SelectorExpr, call *ast.CallExpr, methodValIndex int) string {
+	if call == nil {
+		return ""
+	}
+	idx := methodValIndex
+	if p != nil && p.TypesInfo != nil && sel != nil {
+		if selection := p.TypesInfo.Selections[sel]; selection != nil && selection.Kind() == types.MethodExpr {
+			idx++
+		}
+	}
+	if idx < 0 || idx >= len(call.Args) {
+		return ""
+	}
+	return formatSessionRevokeExpr(p, call.Args[idx])
+}
+
+func formatSessionRevokeExpr(p *Pass, expr ast.Expr) string {
+	if p == nil || p.Fset == nil || expr == nil {
+		return ""
+	}
+	var b bytes.Buffer
+	if err := format.Node(&b, p.Fset, expr); err != nil {
+		return fmt.Sprintf("<unprintable:%T>", expr)
+	}
+	return b.String()
 }
