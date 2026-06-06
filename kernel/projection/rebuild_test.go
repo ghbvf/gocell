@@ -122,21 +122,25 @@ func subscribeWithDefaults(t *testing.T, c *Coordinator, apply Apply, opts ...Op
 // applyNoop is a no-op apply function.
 func applyNoop(_ context.Context, _ ProjectionEvent) error { return nil }
 
-// TestRebuild_AmbientPrincipalWins_F1Baseline pins the CURRENT (pre-#1609)
-// rebuild-context identity behavior flagged by Codex review F1 (PR #1649): on the
-// rebuild path the trigger's ambient principal WINS over the replayed event's own
-// principal, because RestoreContext is no-overwrite (an event's identity does not
-// clobber an already-set ctx value). With an admin/operator ambient principal (as
-// an AdminListener-triggered rebuild carries), the business Apply therefore runs
-// under the OPERATOR identity, not the event's.
+// TestRebuild_EventPrincipalWins asserts the PR-03 (ADR #1609 §5 F1) fix: on the
+// rebuild path the replayed event's own principal WINS over the triggering
+// admin's ambient principal, because Rebuild now clears the ambient principal at
+// the context.WithoutCancel detach boundary (clearAmbientPrincipal). The
+// no-overwrite outbox RestoreContext then installs the event's own identity from
+// the wire envelope, so the business Apply runs under "event-actor", not under
+// the admin-operator who triggered the rebuild.
 //
-// This is intentional baseline documentation, NOT an endorsement: ADR
-// `202606051200-1609` §5 assigns the mitigation (clean-event-context /
-// projection.SystemPrincipal so the event/source identity owns the Apply ctx) to
-// PR-03, where saga-journal events make it security-sensitive. PR-01 is pure
-// carrier generalization and does not change this behavior. When PR-03 flips it,
-// this test's assertion must be inverted (capturedActor == event identity).
-func TestRebuild_AmbientPrincipalWins_F1Baseline(t *testing.T) {
+// This is the INVERTED form of the pre-PR-03 baseline documented in git history.
+// The test name change (AmbientPrincipalWins_F1Baseline → EventPrincipalWins)
+// marks the intentional security-semantic flip; the flip is the PR-03 deliverable
+// for the outbox (event-actor) path. For the saga-journal path Apply runs under
+// SystemPrincipalActor ("system"), exercised in sagaprojection package tests.
+//
+// Cross-reference: TestSagaJournalSource_RebuildWiring_FoldsEventsUnderSystemPrincipal
+// in kernel/saga/sagaprojection exercises the same clearAmbientPrincipal detach
+// boundary with a real Coordinator + MemJournal, verifying the saga variant of
+// the same invariant (actors must always be "system", never the trigger admin).
+func TestRebuild_EventPrincipalWins(t *testing.T) {
 	t.Parallel()
 	clk := clockmock.New(time.Now())
 
@@ -167,12 +171,13 @@ func TestRebuild_AmbientPrincipalWins_F1Baseline(t *testing.T) {
 	}
 	waitForPhase(t, c, PhaseLive)
 
-	// BASELINE (pre-PR-03): ambient operator wins; the event's own "event-actor" is
-	// shadowed. PR-03 (SystemPrincipal / clean-event-context) must invert this.
-	if capturedActor != "admin-operator" {
-		t.Errorf("rebuild Apply actor = %q, want %q (baseline: ambient trigger principal wins, "+
-			"no-overwrite RestoreContext shadows the event's own principal — see ADR #1609 §5, F1, fix in PR-03)",
-			capturedActor, "admin-operator")
+	// PR-03: event's own principal wins; the admin-operator ambient is cleared at
+	// the detach boundary by clearAmbientPrincipal, so no-overwrite RestoreContext
+	// can install "event-actor". See ADR #1609 §5 (F1 flip).
+	if capturedActor != "event-actor" {
+		t.Errorf("rebuild Apply actor = %q, want %q (PR-03: event principal wins after "+
+			"clearAmbientPrincipal at Rebuild detach boundary — see ADR #1609 §5, F1)",
+			capturedActor, "event-actor")
 	}
 }
 
