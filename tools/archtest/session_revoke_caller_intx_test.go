@@ -202,25 +202,98 @@ var sessionRevokeTxScopedHelpers = map[string]bool{
 //     a txScopedRevokeStore-style wrapper (as the conformance suite does) so Revoke
 //     executes inside a RunInTx scope.
 var sessionRevokeAllowlist = map[sessionRevokeCallsite]struct{}{
-	{rel: "cells/accesscore/slices/sessionlogout/service.go", fn: "revokeAndPublish", ordinal: 1, ctx: "txCtx"}:                                {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "mintAndPersistSession", ordinal: 1, ctx: "context.WithoutCancel(txCtx)"}:     {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "persistSessionWithRefresh", ordinal: 1, ctx: "context.WithoutCancel(txCtx)"}: {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "cleanupIssuedSession", ordinal: 1, ctx: "cleanupCtx"}:                        {},
-	{rel: "adapters/redis/session_cache_store.go", fn: "Revoke", ordinal: 1, ctx: "ctx"}:                                                       {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeDirect", ordinal: 1, ctx: "context.Background()"}:                           {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeIdempotent", ordinal: 1, ctx: "context.Background()"}:                       {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeIdempotent", ordinal: 2, ctx: "context.Background()"}:                       {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "runRevokeNotFoundNoop", ordinal: 1, ctx: "context.Background()"}:                     {},
-	{rel: "runtime/auth/session/storetest/suite.go", fn: "seedRevokeForSubjectFixtures", ordinal: 1, ctx: "ctx"}:                               {},
-	{rel: "runtime/auth/session/storetest/bench.go", fn: "benchMixedConcurrent", ordinal: 1, ctx: "ctx"}:                                       {},
+	{
+		rel:     "cells/accesscore/slices/sessionlogout/service.go",
+		fn:      "revokeAndPublish",
+		ordinal: 1,
+		ctx:     "txCtx",
+	}: {},
+	{
+		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		fn:      "mintAndPersistSession",
+		ordinal: 1,
+		ctx:     "context.WithoutCancel(txCtx)",
+	}: {},
+	{
+		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		fn:      "persistSessionWithRefresh",
+		ordinal: 1,
+		ctx:     "context.WithoutCancel(txCtx)",
+	}: {},
+	{
+		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		fn:      "cleanupIssuedSession",
+		ordinal: 1,
+		ctx:     "cleanupCtx",
+	}: {},
+	{
+		rel:     "adapters/redis/session_cache_store.go",
+		fn:      "Revoke",
+		ordinal: 1,
+		ctx:     "ctx",
+	}: {},
+	{
+		rel:     "runtime/auth/session/storetest/suite.go",
+		fn:      "runRevokeDirect",
+		ordinal: 1,
+		ctx:     "context.Background()",
+	}: {},
+	{
+		rel:     "runtime/auth/session/storetest/suite.go",
+		fn:      "runRevokeIdempotent",
+		ordinal: 1,
+		ctx:     "context.Background()",
+	}: {},
+	{
+		rel:     "runtime/auth/session/storetest/suite.go",
+		fn:      "runRevokeIdempotent",
+		ordinal: 2,
+		ctx:     "context.Background()",
+	}: {},
+	{
+		rel:     "runtime/auth/session/storetest/suite.go",
+		fn:      "runRevokeNotFoundNoop",
+		ordinal: 1,
+		ctx:     "context.Background()",
+	}: {},
+	{
+		rel:     "runtime/auth/session/storetest/suite.go",
+		fn:      "seedRevokeForSubjectFixtures",
+		ordinal: 1,
+		ctx:     "ctx",
+	}: {},
+	{
+		rel:     "runtime/auth/session/storetest/bench.go",
+		fn:      "benchMixedConcurrent",
+		ordinal: 1,
+		ctx:     "ctx",
+	}: {},
 }
 
 // sessionRevokeHelperAllowlist maps production call edges into tx-scoped helper
 // methods that contain Revoke callsites.
 var sessionRevokeHelperAllowlist = map[sessionRevokeHelperCallsite]struct{}{
-	{rel: "cells/accesscore/slices/sessionlogout/service.go", fn: "Logout", helper: "revokeAndPublish", ordinal: 1, ctx: "txCtx"}:                       {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "mintAndPersistSession", helper: "cleanupIssuedSession", ordinal: 1, ctx: "txCtx"}:     {},
-	{rel: "cells/accesscore/slices/sessionlogin/service.go", fn: "persistSessionWithRefresh", helper: "cleanupIssuedSession", ordinal: 1, ctx: "txCtx"}: {},
+	{
+		rel:     "cells/accesscore/slices/sessionlogout/service.go",
+		fn:      "Logout",
+		helper:  "revokeAndPublish",
+		ordinal: 1,
+		ctx:     "txCtx",
+	}: {},
+	{
+		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		fn:      "mintAndPersistSession",
+		helper:  "cleanupIssuedSession",
+		ordinal: 1,
+		ctx:     "txCtx",
+	}: {},
+	{
+		rel:     "cells/accesscore/slices/sessionlogin/service.go",
+		fn:      "persistSessionWithRefresh",
+		helper:  "cleanupIssuedSession",
+		ordinal: 1,
+		ctx:     "txCtx",
+	}: {},
 }
 
 // scanSessionRevokeCallsites walks all FuncDecls in p's files (excluding
