@@ -1,13 +1,13 @@
 // INVARIANT: AUTH-AUTHTEST-BOUNDARY-01: authtest sub-package is test-only; auth.Authenticated() must stay deleted
+//
+// Rule logic + helpers live in auth_authtest_boundary.go (CheckAuthAuthtestBoundary)
+// so they are importable by an external Cell repo; this _test.go dogfoods the same
+// Check (single source) and carries the negative probes proving the detectors are
+// not vacuously green. Full rule rationale: auth_authtest_boundary.go.
 package archtest
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,259 +15,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	scannerPkg "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// TestAuthAuthtestBoundary enforces two rules around the two test-only authtest
-// packages in the module:
-//
-//   - `runtime/internal/authtest` — policy fixture (RequireAuthenticated; the
-//     PR #267 substrate moved to internal/ by issue #638)
-//   - `kernel/auth/authtest` — AuthPlan factory fixture (MustAuthJWT, etc.;
-//     test-only Must* helpers used by composition-root test wiring)
-//
-// Rules:
-//
-//   - AUTH-AUTHTEST-A: no Go file anywhere in the module may contain the
-//     literal call expression "auth.Authenticated()" — this seals the deleted
-//     export and prevents accidental reintroduction.
-//
-//   - AUTH-AUTHTEST-C: non-test Go files (files not ending in _test.go) must
-//     not import EITHER authtest package anywhere in the module — both
-//     packages are exclusively for _test.go consumers.
-//
-// Each authtest package's own implementation files are exempt from
-// AUTH-AUTHTEST-C (they ARE the implementation, not importers).
-//
-// # B retired (issue #638)
-//
-// Pre-#638 this file also enforced AUTH-AUTHTEST-B ("cells/**, examples/**,
-// kernel/** must not import runtime/auth/authtest"). After moving the package
-// to runtime/internal/authtest the Go compiler's internal/ rule refuses imports
-// from outside the runtime/ subtree at compile time (cells/, examples/, kernel/,
-// cmd/, adapters/, tools/, tests/ all blocked) — a Hard upgrade per
-// ai-robust.md §Hard 范本目录 → "internal/ wrap 包". The archtest B subtest +
-// its negative probe are removed as redundant.
-//
-// Note: kernel/auth/authtest does NOT have an equivalent Hard upgrade path —
-// its consumers span cmd/, runtime/, kernel/, tests/ subtrees, so no single
-// internal/ placement can cover them. AUTH-AUTHTEST-C remains the boundary
-// (Medium archtest, terminal grade per ai-robust §Funnel 双向锁评级).
+// TestAuthAuthtestBoundary dogfoods CheckAuthAuthtestBoundary against the GoCell
+// tree (sub-rules AUTH-AUTHTEST-A + AUTH-AUTHTEST-C).
 func TestAuthAuthtestBoundary(t *testing.T) {
-	root := findModuleRoot(t)
-	modPath := readModulePath(t, root)
-	authtestImports := []string{
-		modPath + "/runtime/internal/authtest",
-		modPath + "/kernel/auth/authtest",
-	}
-
-	// Collect all .go files once and share across rules.
-	allGoFiles, err := collectGoFiles(root)
-	require.NoError(t, err, "failed to collect .go files")
-	require.NotEmpty(t, allGoFiles, "no .go files found — module root may be wrong")
-
-	// AUTH-AUTHTEST-A: ban auth.Authenticated() *call expressions* in all .go
-	// files. Detection is AST-based (go/parser → scanner.EachInSubtree[ast.CallExpr]
-	// with SelectorExpr Fun X.auth, Sel.Authenticated) so that comments, doc strings,
-	// commit-message-style log messages, and unrelated identical strings inside
-	// string literals are not misclassified as violations. Exclude tools/archtest
-	// itself (this file references the symbol in test names and probe content)
-	// and runtime/internal/authtest (the replacement package's doc comment names
-	// the deleted function — comments are AST-stripped so this is precaution only).
-	t.Run("AUTH-AUTHTEST-A_no_auth_Authenticated_call", func(t *testing.T) {
-		var hits []string
-		for _, f := range allGoFiles {
-			rel, _ := filepath.Rel(root, f)
-			rel = filepath.ToSlash(rel)
-			if strings.HasPrefix(rel, "tools/archtest/") ||
-				strings.HasPrefix(rel, "runtime/internal/authtest/") ||
-				strings.HasPrefix(rel, "kernel/auth/authtest/") {
-				continue
-			}
-			callHits, err := findCallExpr(f, "auth", "Authenticated")
-			require.NoErrorf(t, err, "failed to AST-scan %s", f)
-			for _, line := range callHits {
-				hits = append(hits, fmt.Sprintf("%s:%d", rel, line))
-			}
-		}
-		if len(hits) > 0 {
-			for _, h := range hits {
-				t.Logf("AUTH-AUTHTEST-A violation (real call expression): %s", h)
-			}
-		}
-		assert.Empty(t, hits,
-			"auth.Authenticated() must not be called anywhere in the codebase; "+
-				"the function has been deleted — use auth.AnyRole(...) in production, "+
-				"authtest.RequireAuthenticated() in runtime _test.go files")
-	})
-
-	// AUTH-AUTHTEST-C: non-test Go files must not import EITHER authtest package
-	// (runtime/internal/authtest, kernel/auth/authtest). Exception: each
-	// authtest package's own source files are excluded (they are the
-	// implementation, not consumers).
-	t.Run("AUTH-AUTHTEST-C_only_test_files_may_import_authtest", func(t *testing.T) {
-		authtestPkgDirs := []string{
-			filepath.Join(root, "runtime", "internal", "authtest"),
-			filepath.Join(root, "kernel", "auth", "authtest"),
-		}
-		isAuthtestPkgDir := func(dir string) bool {
-			for _, p := range authtestPkgDirs {
-				if dir == p {
-					return true
-				}
-			}
-			return false
-		}
-		isAuthtestImport := func(imp string) bool {
-			for _, p := range authtestImports {
-				if imp == p {
-					return true
-				}
-			}
-			return false
-		}
-
-		var violations []string
-		for _, f := range allGoFiles {
-			// Skip _test.go files — they are permitted by this rule.
-			if strings.HasSuffix(f, "_test.go") {
-				continue
-			}
-			// Skip the authtest packages' own implementation files.
-			if isAuthtestPkgDir(filepath.Dir(f)) {
-				continue
-			}
-			imports, err := parseImports(f)
-			require.NoError(t, err, "failed to parse %s", f)
-			for _, imp := range imports {
-				if isAuthtestImport(imp) {
-					rel, _ := filepath.Rel(root, f)
-					rel = filepath.ToSlash(rel)
-					violations = append(violations,
-						fmt.Sprintf("AUTH-AUTHTEST-C: %s (non-test file) imports %s (only _test.go files may import authtest)", rel, imp))
-				}
-			}
-		}
-		if len(violations) > 0 {
-			for _, v := range violations {
-				t.Logf("%s", v)
-			}
-		}
-		assert.Empty(t, violations,
-			"non-test .go files must not import runtime/internal/authtest or kernel/auth/authtest; "+
-				"move your auth policy helper into a _test.go file, or use "+
-				"auth.TestContext(subject, roles) for cell handler tests")
-	})
-}
-
-// collectGoFiles returns absolute paths to all *.go files in the module,
-// including _test.go files, skipping vendor, hidden directories, generated,
-// testdata, worktrees, and node_modules (the mechanical exclusions performed
-// by scannerPkg.ModuleScope).
-//
-// Rule-specific exclusions live in each subtest, not here:
-//
-//   - AUTH-AUTHTEST-A inlines `strings.HasPrefix(rel, "tools/archtest/")` plus
-//     the two authtest package dirs to suppress AST false positives caused by
-//     archtest's own fixture content / doc comments naming the deleted symbol.
-//   - AUTH-AUTHTEST-C does NOT exclude tools/archtest — it scans imports, not
-//     symbol names, so non-_test.go files at the top level of tools/archtest/
-//     must obey the boundary. (tools/archtest/internal/** is framework-excluded
-//     by scannerPkg.ModuleScope.archtestInternalRel — a documented fail-closed
-//     decision so archtest fixtures can deliberately contain forbidden patterns;
-//     see scanner/scope.go.) C's own scope exclusions are just _test.go and the
-//     authtest packages' own implementation dirs.
-func collectGoFiles(root string) ([]string, error) {
-	// IncludeGenerated honors the rule's "anywhere in the module" docstring:
-	// codegen output (generated/contracts/**) must also obey the boundary;
-	// otherwise a regenerated handler reintroducing auth.Authenticated() or
-	// importing runtime/internal/authtest would silently bypass the rule.
-	scope := scannerPkg.ModuleScope(root, scannerPkg.IncludeTests(), scannerPkg.IncludeGenerated())
-	return scope.Files()
-}
-
-// parseImports parses a single Go source file and returns the list of import
-// paths it declares. Uses go/parser for correctness; does not execute any Go
-// toolchain commands.
-func parseImports(path string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.ImportsOnly|parser.SkipObjectResolution)
-	if err != nil {
-		return rawScanImports(data, path), err
-	}
-	var imports []string
-	for _, imp := range f.Imports {
-		path := strings.Trim(imp.Path.Value, `"`)
-		imports = append(imports, path)
-	}
-	return imports, nil
-}
-
-// findCallExpr parses path with full AST and returns the line numbers of every
-// call expression of the form "<pkg>.<sel>(...)" where the receiver matches
-// pkgIdent and the selector matches selName. Comments and string literals do
-// not match because they are not represented as ast.CallExpr nodes — the entire
-// point of moving rule A from text grep to AST detection is to avoid those
-// false positives. Parse failures are returned to make malformed files fail
-// the archtest directly.
-func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	var lines []int
-	scannerPkg.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return
-		}
-		if ident.Name == pkgIdent && sel.Sel.Name == selName {
-			lines = append(lines, fset.Position(call.Lparen).Line)
-		}
-	})
-	return lines, nil
-}
-
-// rawScanImports is a line-scanner fallback used when go/parser fails (e.g.
-// build-tag-only files). It extracts quoted import paths from import blocks.
-func rawScanImports(data []byte, _ string) []string {
-	var imports []string
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	inImport := false
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == `import (` || line == "import(" {
-			inImport = true
-			continue
-		}
-		if inImport && line == ")" {
-			inImport = false
-			continue
-		}
-		if inImport || strings.HasPrefix(line, `import "`) {
-			// Extract the quoted path.
-			start := strings.Index(line, `"`)
-			end := strings.LastIndex(line, `"`)
-			if start >= 0 && end > start {
-				imports = append(imports, line[start+1:end])
-			}
-		}
-	}
-	return imports
+	t.Parallel()
+	Report(t, "AUTH-AUTHTEST-BOUNDARY-01",
+		CheckAuthAuthtestBoundary(t, ConfigForExternalCell{}))
 }
 
 // TestAuthAuthtestBoundary_NegativeProbes validates that the rule checks
@@ -275,7 +30,7 @@ func rawScanImports(data []byte, _ string) []string {
 func TestAuthAuthtestBoundary_NegativeProbes(t *testing.T) {
 	t.Parallel()
 
-	const modPath = "github.com/ghbvf/gocell"
+	modPath := PlatformModulePath
 	runtimeAuthtestImport := modPath + "/runtime/internal/authtest"
 	kernelAuthtestImport := modPath + "/kernel/auth/authtest"
 
