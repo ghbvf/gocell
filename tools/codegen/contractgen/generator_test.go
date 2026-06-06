@@ -1007,6 +1007,88 @@ func TestGenerate_Options_ScopeAllProcessesAll(t *testing.T) {
 	}
 }
 
+// synthGRPCMultiMethodFixture returns the absolute path to the
+// synth_grpc_multimethod testdata fixture (a two-RPC kind=grpc contract with NO
+// method: field — tests service-level enumeration, #1655).
+func synthGRPCMultiMethodFixture(t *testing.T) string {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_multimethod"))
+	if err != nil {
+		t.Fatalf("abs path synth_grpc_multimethod: %v", err)
+	}
+	return abs
+}
+
+// setupGRPCMultiMethodRoot copies the synth_grpc_multimethod fixture into a
+// fresh t.TempDir() and parses it. Returns (root, project).
+func setupGRPCMultiMethodRoot(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+	fixture := synthGRPCMultiMethodFixture(t)
+	root := t.TempDir()
+	copyDirIntoTemp(t, fixture, root)
+	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("parse synth_grpc_multimethod from tmp: %v", err)
+	}
+	return root, p
+}
+
+// TestBuildContractSpec_GRPCKind_MultiMethod asserts that a grpc contract with
+// NO method: field (service-level granularity, #1655) generates a spec whose
+// GRPC.Methods contains BOTH IssueCommand and GetCommandStatus with the correct
+// request/response types. This test is RED on current code because the current
+// builder requires method: and only renders a single-method spec.
+func TestBuildContractSpec_GRPCKind_MultiMethod(t *testing.T) {
+	t.Parallel()
+	root, p := setupGRPCMultiMethodRoot(t)
+
+	spec, err := buildContractSpec(root, p, "grpc.device.command.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	if spec.GRPC == nil {
+		t.Fatal("spec.GRPC is nil")
+	}
+
+	// Service-level spec must enumerate ALL RPCs from the proto.
+	if len(spec.GRPC.Methods) != 2 {
+		t.Fatalf("expected 2 GRPC methods, got %d: %+v", len(spec.GRPC.Methods), spec.GRPC.Methods)
+	}
+
+	byName := make(map[string]GRPCMethodSpec, len(spec.GRPC.Methods))
+	for _, m := range spec.GRPC.Methods {
+		byName[m.MethodName] = m
+	}
+
+	issue, ok := byName["IssueCommand"]
+	if !ok {
+		t.Error("IssueCommand not found in spec.GRPC.Methods")
+	} else {
+		if issue.RequestType != "IssueCommandRequest" {
+			t.Errorf("IssueCommand.RequestType = %q, want IssueCommandRequest", issue.RequestType)
+		}
+		if issue.ResponseType != "IssueCommandResponse" {
+			t.Errorf("IssueCommand.ResponseType = %q, want IssueCommandResponse", issue.ResponseType)
+		}
+	}
+
+	status, ok := byName["GetCommandStatus"]
+	if !ok {
+		t.Error("GetCommandStatus not found in spec.GRPC.Methods")
+	} else {
+		if status.RequestType != "GetCommandStatusRequest" {
+			t.Errorf("GetCommandStatus.RequestType = %q, want GetCommandStatusRequest", status.RequestType)
+		}
+		if status.ResponseType != "GetCommandStatusResponse" {
+			t.Errorf("GetCommandStatus.ResponseType = %q, want GetCommandStatusResponse", status.ResponseType)
+		}
+	}
+}
+
 // TestCheckGRPCProtoCollisions_SkipsDisabled (F3 regression) proves the
 // collision pre-pass honors codegen:false: a disabled grpc draft whose proto
 // file does not exist must NOT be read (which would error and block generation
