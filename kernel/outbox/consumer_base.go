@@ -626,7 +626,7 @@ func (cb *ConsumerBase) retryLoop(
 		slog.String(logKeyTopic, topic),
 		slog.String(logKeyConsumerGroup, consumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
-		slog.String("process_reason", "retry_exhausted"),
+		slog.String("process_reason", ProcessReasonRetryExhausted),
 		slog.Any("error", lastResult.Err))
 	observability.SafeObserve(slog.Default().With(
 		slog.String("cell", cellID),
@@ -638,7 +638,7 @@ func (cb *ConsumerBase) retryLoop(
 	return DeliveryOutcome{
 		Disposition:   DispositionReject,
 		Err:           lastResult.Err,
-		ProcessReason: "retry_exhausted",
+		ProcessReason: ProcessReasonRetryExhausted,
 	}
 }
 

@@ -508,7 +508,7 @@ func (b *InMemoryEventBus) processResult(
 			slog.Any("error", res.Err),
 		)
 		b.appendDeadLetter(topic, entry, res.Err)
-		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.RejectSettlementResult(res), nil)
 		return true, nil
 	case outbox.DispositionRequeue:
 		return b.handleRequeue(ctx, topic, entry, res, settlement, attempt, finalAttempt)

@@ -878,10 +878,7 @@ func (s *Subscriber) dispatchDisposition(
 	case outbox.DispositionAck:
 		s.dispatchAck(ctx, ch, tag, res, settlement, topic, entry)
 	case outbox.DispositionReject:
-		rejectResult := outbox.SettlementResultSuccess
-		if res.ProcessReason == "retry_exhausted" {
-			rejectResult = outbox.SettlementResultRetryExhausted
-		}
+		rejectResult := outbox.RejectSettlementResult(res)
 		if nackErr := ch.Nack(tag, false, false); nackErr != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(reject) failed",
 				slog.String(logKeyTopic, topic),

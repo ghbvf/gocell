@@ -1779,12 +1779,14 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 //  2. Bare `HandleResult{...}` when the file's package itself is the
 //     kernel/outbox package (covers any future kernel/outbox/*.go file).
 //
-// Cannot funnel: ProcessReason and SettlementObservers are runtime-determined
-// fields populated by handler code paths and middleware, with no schema /
-// marker source from which a literal-vs-factory choice can be derived. Type
-// system cannot express "callers in cells/ must use these three function
-// names" without unexporting HandleResult itself, which would break the
-// kernel-internal literal construction the allowlist exists to permit.
+// Cannot funnel to the type system: expressing "callers in cells/ must use
+// these three function names" requires unexporting HandleResult, which would
+// break the kernel-internal literal construction the allowlist exists to permit
+// (the result.go factories + the conformance harness). Post-#663 HandleResult
+// is the slim {Disposition, Err}; the kernel-injected ProcessReason and the
+// subscriber-layer SettlementObservers moved to DeliveryOutcome, so the factory
+// trio (Ack/Requeue/Reject) fully covers every business HandleResult value —
+// there is no field a business literal could carry that a factory cannot.
 // Archtest enforces the path discipline that no other layer can.
 //
 // Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01 for this rule.
@@ -1814,8 +1816,10 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	for _, v := range violations {
 		t.Errorf("OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: %s — use outbox.Ack() / "+
 			"outbox.Requeue(err) / outbox.Reject(err) instead of constructing the "+
-			"struct literal; if you genuinely need ProcessReason or SettlementObservers, "+
-			"extend handleResultLiteralAllowlist with a code-comment justification", v)
+			"HandleResult{...} struct literal; the slim HandleResult{Disposition, Err} is "+
+			"fully covered by these factories (ProcessReason / SettlementObservers now live "+
+			"on DeliveryOutcome, not HandleResult). Literal construction is reserved for the "+
+			"kernel-internal sites in handleResultLiteralAllowlist", v)
 	}
 }
 

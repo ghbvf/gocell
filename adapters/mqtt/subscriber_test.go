@@ -828,6 +828,23 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 			wantResult: outbox.SettlementResultSuccess,
 		},
 		{
+			// ConsumerBase exhausts its retry budget and returns a terminal
+			// Reject tagged ProcessReason=retry_exhausted; the MQTT settle loop
+			// must classify the settlement as RetryExhausted (parity with
+			// rabbitmq + eventbus), not Success.
+			name: "reject-retry-exhausted",
+			result: func(o outbox.SettlementObserver) outbox.DeliveryOutcome {
+				return outbox.DeliveryOutcome{
+					Disposition:         outbox.DispositionReject,
+					Err:                 errors.New("retry budget exhausted"),
+					ProcessReason:       outbox.ProcessReasonRetryExhausted,
+					SettlementObservers: []outbox.SettlementObserver{o},
+				}
+			},
+			wantDisp:   outbox.DispositionReject,
+			wantResult: outbox.SettlementResultRetryExhausted,
+		},
+		{
 			name: "requeue",
 			result: func(o outbox.SettlementObserver) outbox.DeliveryOutcome {
 				return outbox.DeliveryOutcome{

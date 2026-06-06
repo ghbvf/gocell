@@ -730,6 +730,13 @@ const (
 	SettlementResultNackFailed     SettlementResult = "nack_failed"
 )
 
+// ProcessReasonRetryExhausted marks a DeliveryOutcome whose Reject was produced
+// by ConsumerBase exhausting its retry budget (as opposed to a handler's
+// explicit Reject). It is the sole value ConsumerBase injects into
+// DeliveryOutcome.ProcessReason. Subscriber settle loops classify the final
+// SettlementResult from it via RejectSettlementResult — see that helper.
+const ProcessReasonRetryExhausted = "retry_exhausted"
+
 // SettlementObservation is emitted by subscribers after the final delivery
 // settlement action is known.
 type SettlementObservation struct {
@@ -824,6 +831,21 @@ func NotifySettlement(
 			observer.ObserveSettlement(ctx, obs)
 		}()
 	}
+}
+
+// RejectSettlementResult classifies the SettlementResult of a Reject disposition
+// from the DeliveryOutcome's ProcessReason. It is the single source every
+// subscriber settle loop (rabbitmq / mqtt / eventbus) routes its Reject branch
+// through, so retry-budget exhaustion is reported as
+// SettlementResultRetryExhausted on every transport instead of drifting per
+// adapter. A handler's explicit Reject (empty ProcessReason) stays
+// SettlementResultSuccess — the broker settlement action itself succeeded; only
+// the process outcome was a rejection.
+func RejectSettlementResult(outcome DeliveryOutcome) SettlementResult {
+	if outcome.ProcessReason == ProcessReasonRetryExhausted {
+		return SettlementResultRetryExhausted
+	}
+	return SettlementResultSuccess
 }
 
 // EntryHandler is the business handler signature. Business handlers return a

@@ -1407,6 +1407,54 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 	assert.Equal(t, 1, bus.DeadLetterLen(), "one entry must be dead-lettered")
 }
 
+// TestSubscribe_RejectWithRetryExhaustedProcessReason_NotifiesRetryExhausted
+// covers the PRODUCTION path (distinct from the eventbus-internal retry loop
+// asserted above): ConsumerBase.Wrap exhausts its OWN retry budget in-process
+// and hands the eventbus a TERMINAL Reject already tagged
+// ProcessReason=retry_exhausted on the first delivery. The eventbus Reject
+// branch never reaches its own notifyRetryExhausted, so it must classify the
+// settlement from ProcessReason (via outbox.RejectSettlementResult) instead of
+// hard-coding Success — otherwise retry-budget exhaustion is silently observed
+// as a successful settlement on the in-mem transport.
+func TestSubscribe_RejectWithRetryExhaustedProcessReason_NotifiesRetryExhausted(t *testing.T) {
+	bus := New(clock.Real(), WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	spy := &spySettlementObserver{}
+	rejectErr := errors.New("retry budget exhausted by ConsumerBase")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.terminalreject"},
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return outbox.DeliveryOutcome{
+					Disposition:         outbox.DispositionReject,
+					Err:                 rejectErr,
+					ProcessReason:       outbox.ProcessReasonRetryExhausted,
+					SettlementObservers: []outbox.SettlementObserver{spy},
+				}, nil
+			})
+	}()
+
+	<-bus.Ready(outbox.Subscription{Topic: "spy.terminalreject"})
+	require.NoError(t, bus.Publish(context.Background(), "spy.terminalreject", makeSimpleEnvelope(t, "spy.terminalreject")))
+
+	testwait.External(t, "eventbus-terminal-reject-settled", func() bool {
+		last := spy.last()
+		return last.Disposition == outbox.DispositionReject &&
+			last.Result == outbox.SettlementResultRetryExhausted
+	}, busEventually10x, testtime.D10ms, "spy must receive Reject/RetryExhausted for a terminal retry-exhausted reject")
+
+	cancel()
+	<-done
+
+	last := spy.last()
+	assert.Equal(t, outbox.DispositionReject, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultRetryExhausted, last.Result)
+	assert.Equal(t, 1, bus.DeadLetterLen(), "terminal reject must dead-letter exactly once")
+}
+
 func TestSubscribe_RetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
 	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()

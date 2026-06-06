@@ -1324,6 +1324,41 @@ func TestNotifySettlement_NilObserverInList_Skipped(t *testing.T) {
 	assert.Equal(t, 1, called, "non-nil observer must run exactly once; nil entries skipped")
 }
 
+// TestRejectSettlementResult is the single-source classification every
+// subscriber settle loop (rabbitmq / mqtt / eventbus) routes its Reject branch
+// through. A Reject carrying ProcessReason="retry_exhausted" (injected by
+// ConsumerBase on retry-budget exhaustion) must report RetryExhausted; any
+// other Reject (handler explicit reject, empty/unknown ProcessReason) reports
+// Success because the broker settlement action itself succeeded.
+func TestRejectSettlementResult(t *testing.T) {
+	tests := []struct {
+		name string
+		out  DeliveryOutcome
+		want SettlementResult
+	}{
+		{
+			name: "retry_exhausted_process_reason",
+			out:  DeliveryOutcome{Disposition: DispositionReject, ProcessReason: ProcessReasonRetryExhausted},
+			want: SettlementResultRetryExhausted,
+		},
+		{
+			name: "empty_process_reason_handler_reject",
+			out:  DeliveryOutcome{Disposition: DispositionReject},
+			want: SettlementResultSuccess,
+		},
+		{
+			name: "unknown_process_reason",
+			out:  DeliveryOutcome{Disposition: DispositionReject, ProcessReason: "something_else"},
+			want: SettlementResultSuccess,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, RejectSettlementResult(tc.out))
+		})
+	}
+}
+
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
 	// Typed nil: interface is non-nil but underlying pointer is nil.
 	// Must not panic — this is the key regression from value→pointer migration.

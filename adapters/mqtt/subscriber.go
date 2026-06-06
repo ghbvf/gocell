@@ -464,7 +464,7 @@ func (s *Subscriber) dispatchDisposition(
 		if ackErr != nil {
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultAckFailed, ackErr)
 		} else {
-			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.RejectSettlementResult(res), nil)
 		}
 	case outbox.DispositionRequeue:
 		// Option C (ADR-050 §6): MQTT is a transport, not a work queue. Leave the
