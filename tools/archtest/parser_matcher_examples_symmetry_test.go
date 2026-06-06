@@ -1,6 +1,6 @@
 // INVARIANT: PARSER-MATCHER-EXAMPLES-SYMMETRY-01
 //
-// Every match{Kind}YAML function in kernel/metadata/locator_conventional.go must accept both
+// Every match{Kind}Path function in kernel/metadata/locator_conventional.go must accept both
 // the root form (<root>/<kind>/...) and the examples form
 // (examples/*/<kind>/...). The archtest uses typed AST const evaluation to walk
 // each matcher body (and its directly-called package-private helper functions

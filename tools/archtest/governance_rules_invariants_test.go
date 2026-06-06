@@ -4,6 +4,7 @@
 //   - INVARIANT: GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01
 //   - INVARIANT: GOVERNANCE-RULE-ERROR-FIX-FIELD-01
 //   - INVARIANT: GOVERNANCE-RULE-CODE-DETECT-BINDING-01
+//   - INVARIANT: GOVERNANCE-RULE-EMITTER-CONSTRUCTORS-NEVER-FUNCVALUE-01
 //
 // G-13 elevates governance rule registration from a hand-edited slice to an
 // archtest-guarded contract. The three invariants together catch:
@@ -189,7 +190,7 @@ func badSprintf()  string { return fmt.Sprintf("X-%d", 99) }
 
 	// Test that a BasicLit node fails the shape check.
 	lit := &ast.BasicLit{Kind: token.STRING, Value: `"X-99"`}
-	assert.False(t, ruleCodeArgShapeIsValid(lit, nil, "", ""),
+	assert.False(t, ruleCodeArgShapeIsValid(lit),
 		"BasicLit must fail INV-2 shape check")
 
 	// Test that a BinaryExpr (concat) fails.
@@ -198,7 +199,7 @@ func badSprintf()  string { return fmt.Sprintf("X-%d", 99) }
 		X:  &ast.BasicLit{Kind: token.STRING, Value: `"X"`},
 		Y:  &ast.BasicLit{Kind: token.STRING, Value: `"-99"`},
 	}
-	assert.False(t, ruleCodeArgShapeIsValid(binExpr, nil, "", ""),
+	assert.False(t, ruleCodeArgShapeIsValid(binExpr),
 		"BinaryExpr concat must fail INV-2 shape check")
 
 	_ = f // parsed but not used beyond proving compilation

@@ -461,7 +461,7 @@ func isCellsContractTestFile(rel string) bool {
 // *contracttest.Contract with the given method name.
 func isContractPQReceiverMethod(sel *ast.SelectorExpr, info *types.Info, methodName string) bool {
 	if info == nil {
-		return sel.Sel.Name == methodName
+		return false // fail-closed: cannot confirm receiver type without type info
 	}
 	obj := info.Uses[sel.Sel]
 	if obj == nil {

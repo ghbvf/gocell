@@ -578,7 +578,7 @@ func scanINV2CallExprs(
 			return
 		}
 		codeArg := call.Args[0]
-		if !ruleCodeArgShapeIsValid(codeArg, info, "", "RuleCode") ||
+		if !ruleCodeArgShapeIsValid(codeArg) ||
 			!ruleCodeArgResolvesToConst(codeArg, info, ruleCodeConsts) {
 			pos := fset.Position(codeArg.Pos())
 			violations = append(violations,
@@ -641,7 +641,7 @@ func checkINV2CompositeLit(
 		return []string{relPath + ":" + strconv.Itoa(pos.Line) +
 			": ValidationResult literal omits Code: field — every result must reference a RuleCode const from rulecodes.go"}
 	}
-	if !ruleCodeArgShapeIsValid(codeValue, info, "", "RuleCode") ||
+	if !ruleCodeArgShapeIsValid(codeValue) ||
 		!ruleCodeArgResolvesToConst(codeValue, info, ruleCodeConsts) {
 		pos := fset.Position(codeValue.Pos())
 		return []string{relPath + ":" + strconv.Itoa(pos.Line) +
@@ -650,8 +650,8 @@ func checkINV2CompositeLit(
 	return nil
 }
 
-// ruleCodeArgShapeIsValid returns true when expr is an *ast.Ident.
-func ruleCodeArgShapeIsValid(expr ast.Expr, _ *types.Info, _, _ string) bool {
+// ruleCodeArgShapeIsValid reports whether expr is an *ast.Ident (INV-2 code-arg shape).
+func ruleCodeArgShapeIsValid(expr ast.Expr) bool {
 	_, ok := expr.(*ast.Ident)
 	return ok
 }
@@ -664,7 +664,7 @@ func ruleCodeArgResolvesToConst(expr ast.Expr, info *types.Info, ruleCodeConsts 
 		return false
 	}
 	if info == nil {
-		return true
+		return false // fail-closed: cannot confirm const identity without type info
 	}
 	obj, ok := info.Uses[ident]
 	if !ok {

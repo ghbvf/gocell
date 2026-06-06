@@ -233,11 +233,6 @@ func TestHandlerDeclCover_DetectsOrphanImpl(t *testing.T) {
 	}
 }
 
-// contractIDToGenPkg converts a contract ID like "http.auth.login.v1" into
-// the generated package import path like
-// "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1".
-// Dots in the ID are mapped to path separators.
-//
 // ---------------------------------------------------------------------------
 // EMIT-DECL-COVER-01
 // ---------------------------------------------------------------------------
