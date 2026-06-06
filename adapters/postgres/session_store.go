@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -34,17 +35,17 @@ var (
 // revoked_at is a one-way flip — set exactly once, never cleared.
 const (
 	insertSessionSQL = `
-INSERT INTO sessions (id, subject_id, jti, created_at, expires_at, authz_epoch_at_issue)
-VALUES ($1, $2::uuid, $3, $4, $5, $6)`
+INSERT INTO sessions (id, subject_id, jti, created_at, expires_at, authz_epoch_at_issue, tenant_id)
+VALUES ($1, $2::uuid, $3, $4, $5, $6, $7)`
 
 	// selectSessionByIDSQL projects the columns ValidateView exposes
-	// (ID, SubjectID, RevokedAt, AuthzEpochAtIssue). S4d adds
+	// (ID, SubjectID, RevokedAt, AuthzEpochAtIssue, TenantID). S4d adds
 	// authz_epoch_at_issue — sessionvalidate compares it with the live
-	// users.authz_epoch (not the JWT claim, which was removed). GC-only
-	// metadata (jti, created_at, expires_at) still doesn't leak to validate
-	// callers.
+	// users.authz_epoch (not the JWT claim, which was removed). PR-3b adds
+	// tenant_id for RLS scope derivation in refresh/validate paths.
+	// GC-only metadata (jti, created_at, expires_at) still doesn't leak.
 	selectSessionByIDSQL = `
-SELECT id, subject_id::text, revoked_at, authz_epoch_at_issue
+SELECT id, subject_id::text, revoked_at, authz_epoch_at_issue, tenant_id
 FROM sessions
 WHERE id = $1`
 
@@ -133,11 +134,17 @@ func (s *PGSessionStore) validateFingerprintShape(sess *session.Session) error {
 	return nil
 }
 
-// Create persists a new session row. Nil session, empty Session.ID, or empty
-// Session.SubjectID return ErrValidationFailed. FingerprintMode shape violations
-// (e.g. empty JTI under FingerprintJTIRef) return ErrValidationFailed.
-// Duplicate Session.ID returns ErrSessionConflict (SQLSTATE 23505).
-func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) error {
+// Create persists a new session row with the given tenant t. t must be a
+// non-empty canonical UUID; empty TenantID returns ErrValidationFailed. Nil
+// session, empty Session.ID, or empty Session.SubjectID return
+// ErrValidationFailed. FingerprintMode shape violations (e.g. empty JTI under
+// FingerprintJTIRef) return ErrValidationFailed. Duplicate Session.ID returns
+// ErrSessionConflict (SQLSTATE 23505).
+func (s *PGSessionStore) Create(ctx context.Context, t tenant.TenantID, sess *session.Session) error {
+	if err := t.Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session: Create requires valid TenantID")
+	}
 	if sess == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: Create requires non-nil Session")
@@ -175,6 +182,7 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 		sess.CreatedAt.UTC(),
 		sess.ExpiresAt.UTC(),
 		sess.AuthzEpochAtIssue,
+		t.String(),
 	)
 	if err != nil {
 		return sessionCreateError(err, sess.ID, sess.SubjectID)
@@ -203,11 +211,13 @@ func sessionCreateError(err error, sessionID, subjectID string) error {
 // validate paths must not gate on it.
 func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.ValidateView, error) {
 	var v session.ValidateView
+	var tenantIDStr string
 	err := s.db.QueryRow(ctx, selectSessionByIDSQL, id).Scan(
 		&v.ID,
 		&v.SubjectID,
 		&v.RevokedAt,
 		&v.AuthzEpochAtIssue,
+		&tenantIDStr,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
@@ -222,6 +232,12 @@ func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.ValidateV
 		t := v.RevokedAt.UTC()
 		v.RevokedAt = &t
 	}
+	tid, parseErr := tenant.ParseTenantID(tenantIDStr)
+	if parseErr != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"session store: invalid tenant_id in sessions row", parseErr)
+	}
+	v.TenantID = tid
 	return &v, nil
 }
 

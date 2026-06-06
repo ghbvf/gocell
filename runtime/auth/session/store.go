@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
@@ -76,6 +77,13 @@ type Session struct {
 	// dead. Once set it must never be cleared (append-only revoke semantics
 	// — ADR-Session D3 fail-closed).
 	RevokedAt *time.Time
+
+	// TenantID is the tenant that owns this session. It is the carrier for
+	// the sessions.tenant_id column (migration 054) and is required at
+	// Create time — the PG composite FK (tenant_id, subject_id) → users
+	// proves that session.tenant_id is trustworthy for deriving RLS scope
+	// in refresh/validate paths. Empty TenantID is rejected by Store.Create.
+	TenantID tenant.TenantID
 }
 
 // ValidateView is the narrow projection of a Session exposed by Store.Get.
@@ -99,6 +107,13 @@ type ValidateView struct {
 	// removed in S4d — view.AuthzEpochAtIssue is the only credential
 	// provenance source-of-truth.
 	AuthzEpochAtIssue int64
+
+	// TenantID exposes Session.TenantID to the validate / refresh paths.
+	// sessionrefresh uses this as the scope for the accesscore RLS SET LOCAL
+	// (PR-3b): the composite FK (tenant_id, subject_id) → users in the DB
+	// guarantees this value is consistent with the user row. sessionvalidate
+	// uses it to call GetByIDInTenant on the scoped tx path.
+	TenantID tenant.TenantID
 }
 
 // Store persists session records and exposes a differentiated repository
@@ -158,7 +173,11 @@ type ValidateView struct {
 //     return nil (always ready, MemStore convention). Satisfies
 //     kernel/healthz.RepoProber; registered via cellgen RegisterReadiness.
 type Store interface {
-	Create(ctx context.Context, s *Session) error
+	// Create persists s with the given tenant t. t must be a valid non-empty
+	// canonical UUID; empty TenantID returns ErrValidationFailed. t is stored
+	// on the sessions.tenant_id column (migration 054) and exposed through
+	// ValidateView.TenantID for downstream RLS scope derivation.
+	Create(ctx context.Context, t tenant.TenantID, s *Session) error
 	Get(ctx context.Context, id string) (*ValidateView, error)
 	Revoke(ctx context.Context, id string) error
 	RevokeForSubject(ctx context.Context, subjectID string, event CredentialEvent, tok credentialfence.FenceToken) error

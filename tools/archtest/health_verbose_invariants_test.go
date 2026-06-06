@@ -148,13 +148,11 @@ const (
 	ruleHealthRedactedErrorMsgFunnel     = "HEALTH-REDACTED-ERROR-MSG-FUNNEL-01"
 	healthPackageRelativeRoot            = "runtime/http/health"
 	healthPackagePattern                 = "./runtime/http/health"
-	healthPackageImportPath              = "github.com/ghbvf/gocell/runtime/http/health"
 	healthVerboseShapeName               = "verboseDependencyEntry"
 	healthSlogShapeName                  = "SlogDependencyEntry"
 	healthRedactedErrorMsgTypeName       = "redactedErrorMsg"
 	healthRedactedErrorMsgFunnelFuncName = "newRedactedErrorMsg"
 	healthRedactedErrorMsgFieldName      = "errorMsg"
-	redactionPkgPath                     = "github.com/ghbvf/gocell/pkg/redaction"
 	redactionPkgName                     = "redaction"
 	redactStringFuncName                 = "RedactString"
 )

@@ -141,6 +141,8 @@ type ConfigForExternalCell struct {
 // GoCell platform (they reason about how the consumer uses platform APIs like
 // errcode / panicregister, not about GoCell's own internal package layout).
 //
+// Registered saga rule: SAGA-STEP-COMPENSATE-PURE-01 (CheckSagaStepCompensatePure).
+//
 // This is the GoCell analog of the []*analysis.Analyzer slice handed to
 // multichecker.Main: a flat, registry-free list. The set grows as more rules
 // are migrated from their legacy _test.go form into importable CellRules (M3
@@ -193,6 +195,36 @@ type ConfigForExternalCell struct {
 //     fixturetest/outbox fake-package fixtures under testdata/. Migrated for
 //     PlatformModulePath parameterization + fork-safety only; enforced in GoCell
 //     via the dogfood + fixture sub-tests in outbox_invariants_test.go.
+//   - SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 (CheckSagaCoordinatorNoHeartbeatLoop):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-EXECUTOR-RAND-INJECTED-01 (CheckSagaExecutorRandInjected): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (CheckSagaJournalConformanceEnrollment):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01 (CheckSagaGlobalReaderConformanceEnrollment):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-JOURNAL-HOLDER-SEAL-01 (CheckSagaJournalHolderSeal): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-DRIVE-BEHIND-LEADER-GATE-01 (CheckSagaDriveBehindLeaderGate): reasons
+//     about GoCell-internal runtime/saga layout (or conformance enrollment) →
+//     vacuous/false-red in an external module.
+//   - SAGA-STEP-RUN-OUTSIDE-TX-01 (CheckSagaStepRunOutsideTx): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-CONSTRUCTOR-NIL-GUARD-01 (CheckSagaConstructorNilGuard): reasons about
+//     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
+//     false-red in an external module.
+//   - SAGA-SLOG-INSTANCE-FIELDS-CALLER-01 (CheckSagaSlogInstanceFieldsCaller):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
+//   - SAGA-METRIC-LABEL-VALUES-FROZEN-01 (CheckSagaMetricLabelValuesFrozen):
+//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
+//     → vacuous/false-red in an external module.
 //
 // An external consumer gets the rules migrated so far plus any cfg.ExtraRules
 // they add. The set expands as additional portable rules land in #1302.
@@ -231,6 +263,10 @@ func StandardCellRules() []*CellRule {
 		// constructible, so this is a real consumer-usage constraint).
 		// Cell-applicable; Medium downstream (types.Info type-identity scan).
 		{ID: ruleOutboxHandleResultFactoryPreferred01, Run: CheckOutboxHandleResultFactoryPreferred01},
+		// SAGA-STEP-COMPENSATE-PURE-01: bans consumer Compensate funcs from calling
+		// persistence interfaces (Compensate must be pure reverse rollback). See
+		// saga_invariants.go godoc.
+		{ID: sagaCompensatePureRuleID, Run: CheckSagaStepCompensatePure},
 	}
 }
 

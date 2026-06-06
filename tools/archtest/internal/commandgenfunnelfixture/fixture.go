@@ -62,3 +62,15 @@ func Dispatch(ctx context.Context, reg *command.Registry, req *BadRequest) (*Bad
 	_ = req
 	return nil, nil
 }
+
+// DispatchAsync is a hand-written look-alike of the generated async dispatch
+// function (#1667). It accepts *command.Registry — exactly the generated shape.
+// The archtest must detect this name too (isCommandSoleEmitterFuncName includes
+// DispatchAsync), so a hand-written Handler + DispatchAsync trio cannot bypass
+// COMMAND-GEN-FUNNEL-SOLE-EMITTER-01.
+func DispatchAsync(ctx context.Context, reg *command.Registry, req *BadRequest) error {
+	_ = ctx
+	_ = reg
+	_ = req
+	return nil
+}

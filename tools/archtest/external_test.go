@@ -59,6 +59,7 @@ func TestStandardCellRulesComposition(t *testing.T) {
 		ruleOutboxReconstructionCaller01:         true,
 		ruleProjectionApplyHookFunnel01:          true,
 		ruleOutboxHandleResultFactoryPreferred01: true,
+		sagaCompensatePureRuleID:                 true,
 	}
 	for id := range seen {
 		if !wantRuleIDs[id] {
@@ -129,5 +130,29 @@ func TestValidateCellRule(t *testing.T) {
 				t.Errorf("validateCellRule(%s) error = %v, want %v", c.name, gotErr, c.wantErr)
 			}
 		})
+	}
+}
+
+// TestPlatformModulePathMatchesGoMod guards the one hardcoded module path — the
+// PlatformModulePath const — against the go.mod module declaration that
+// moduleImportPath reads dynamically. They MUST be equal: every funnel that
+// derives a platform symbol path as PlatformModulePath+"/…" compares it against
+// types.Pkg().Path() from the loaded packages. If the const drifted (module
+// rename / a /v2 bump) it would never match, so every such scan would silently
+// go vacuous-green AND its RED fixtures (which build paths from the SAME const)
+// would also pass — zero CI signal across the whole module-path-agnostic funnel
+// family. This is the assertion moduleImportPath's own godoc presumes when it
+// warns that "hardcoding the path would silently mis-resolve on a module rename".
+func TestPlatformModulePathMatchesGoMod(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	got, err := moduleImportPath(root)
+	if err != nil {
+		t.Fatalf("read go.mod module path: %v", err)
+	}
+	if got != PlatformModulePath {
+		t.Fatalf("PlatformModulePath = %q, but go.mod declares module %q; the const must "+
+			"track go.mod or every PlatformModulePath-derived funnel scan goes vacuous-green",
+			PlatformModulePath, got)
 	}
 }

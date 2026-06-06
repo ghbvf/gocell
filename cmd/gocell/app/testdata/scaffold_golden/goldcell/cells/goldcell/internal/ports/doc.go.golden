@@ -1,0 +1,5 @@
+// Package ports defines the repository and service interfaces for the goldcell cell.
+//
+// Adapters (mem here, plus on-demand postgres/etc.) depend inward on these
+// interfaces; the cell wires a concrete implementation at construction time.
+package ports

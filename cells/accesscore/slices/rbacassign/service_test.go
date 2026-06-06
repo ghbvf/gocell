@@ -18,6 +18,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -93,7 +95,7 @@ func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 	// Idempotent: a roster pre-seed (seedTestUserRoster) plus explicit per-test
 	// seeds (assignActiveAdmin, table-case setups) can both target the same user;
 	// skip if already present so the second Create does not hit ErrAuthUserDuplicate.
-	if _, err := store.UserRepository().GetByID(context.Background(), userID); err == nil {
+	if _, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, userID); err == nil {
 		return
 	}
 	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
@@ -103,11 +105,13 @@ func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 }
 
 // seedTestUserRoster idempotently seeds the standard active users that rbacassign
-// tests assign/revoke roles to. Option B (#1337 PR-2a) derives the assignment
-// tenant from the TARGET user via GetByID, so every Assign/Revoke target must
-// exist; seeding the roster in the test-service constructors keeps individual
-// tests free of user-existence boilerplate. Roster users hold no role, so they
-// are invisible to the effective-admin count until a test assigns admin.
+// tests assign/revoke roles to. Since #1617 PR-3b the tenant comes from the
+// request body, but both Assign (repo composite-FK / mem user guard) and Revoke
+// (the target-tenant ownership guard, review F4) still require the target user
+// to exist in the tenant, so every Assign/Revoke target must exist; seeding the
+// roster in the test-service constructors keeps individual tests free of
+// user-existence boilerplate. Roster users hold no role, so they are invisible
+// to the effective-admin count until a test assigns admin.
 func seedTestUserRoster(t testing.TB, store *mem.Store) {
 	t.Helper()
 	for _, id := range []string{
@@ -238,7 +242,7 @@ func TestService_Assign(t *testing.T) {
 				tc.setup(t, store)
 			}
 
-			err := svc.Assign(tenantCtx(), tc.userID, tc.roleID)
+			err := svc.Assign(tenantCtx(), testTenantID, tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				assertRoleAssigned(t, store, tc.userID, tc.roleID)
@@ -350,8 +354,8 @@ func TestService_Revoke(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, store, _ := newTestService(t)
-			// Option B: Revoke derives the tenant from the target user (GetByID),
-			// so the user must exist. Seed it for non-validation cases.
+			// The target user must exist in the tenant for the Revoke ownership
+			// guard (#1617 PR-3b review F4) to pass; seed it for non-validation cases.
 			if tc.userID != "" {
 				seedActiveUser(t, store, tc.userID)
 			}
@@ -359,7 +363,7 @@ func TestService_Revoke(t *testing.T) {
 				tc.setup(t, store)
 			}
 
-			err := svc.Revoke(tenantCtx(), tc.userID, tc.roleID)
+			err := svc.Revoke(tenantCtx(), testTenantID, tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				// Verify removal persisted.
@@ -388,9 +392,9 @@ func TestRevoke_CallsFunnel_InvalidatesSessions(t *testing.T) {
 	assignActiveAdmin(t, store, "usr-1")
 	assignActiveAdmin(t, store, "usr-2")
 	sess := &session.Session{ID: "sess-1", SubjectID: "usr-1", JTI: "jti-sess-1", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
-	require.NoError(t, svc.Revoke(ctx, "usr-1", "admin"))
+	require.NoError(t, svc.Revoke(ctx, testTenantID, "usr-1", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-1")
 	require.NoError(t, err)
@@ -406,9 +410,9 @@ func TestAssign_DoesNotInvalidateSessions(t *testing.T) {
 	seedActiveUser(t, store, "usr-2") // Option B: Assign derives tenant from the target user
 
 	sess := &session.Session{ID: "sess-2", SubjectID: "usr-2", JTI: "jti-sess-2", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
-	require.NoError(t, svc.Assign(ctx, "usr-2", "admin"))
+	require.NoError(t, svc.Assign(ctx, testTenantID, "usr-2", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-2")
 	require.NoError(t, err)
@@ -422,10 +426,10 @@ func TestRevoke_NoOp_DoesNotCallFunnel(t *testing.T) {
 	ctx := tenantCtx()
 
 	sess := &session.Session{ID: "sess-noop-r", SubjectID: "usr-noop", JTI: "jti-noop-r", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
 	// usr-noop does not hold admin role — Revoke is a no-op.
-	require.NoError(t, svc.Revoke(ctx, "usr-noop", "admin"))
+	require.NoError(t, svc.Revoke(ctx, testTenantID, "usr-noop", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-noop-r")
 	require.NoError(t, err)
@@ -443,9 +447,9 @@ func TestAssign_NoOp_DoesNotEmit(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := &session.Session{ID: "sess-noop-a", SubjectID: "usr-3", JTI: "jti-noop-a", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
-	require.NoError(t, svc.Assign(ctx, "usr-3", "admin"))
+	require.NoError(t, svc.Assign(ctx, testTenantID, "usr-3", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-noop-a")
 	require.NoError(t, err)
@@ -477,7 +481,147 @@ func TestRevoke_FunnelFail_ReturnsError(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
 	require.NoError(t, err)
 
-	err = svc.Revoke(tenantCtx(), "usr-1", "admin")
+	err = svc.Revoke(tenantCtx(), testTenantID, "usr-1", "admin")
 	require.Error(t, err, "Revoke must fail-closed when credential invalidation fails")
 	assert.Contains(t, err.Error(), "invalidate credentials")
+}
+
+// scopeCapturingRoleRepo wraps a RoleRepository and records whether the
+// context passed to AssignToUser or RemoveFromUserIfNotLast carries a tenant
+// scope injected by scopedtx.Do. Used by TestAssignRole_IsRLSScoped and
+// TestRevokeRole_IsRLSScoped.
+type scopeCapturingRoleRepo struct {
+	inner         ports.RoleRepository
+	capturedScope tenant.TenantID
+	capturedOK    bool
+}
+
+var _ ports.RoleRepository = (*scopeCapturingRoleRepo)(nil)
+
+func (r *scopeCapturingRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error) {
+	return r.inner.GetByID(ctx, t, id)
+}
+
+func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+	return r.inner.GetByUserID(ctx, t, userID)
+}
+
+func (r *scopeCapturingRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
+	return r.inner.Create(ctx, t, role)
+}
+
+func (r *scopeCapturingRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.AssignToUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error {
+	return r.inner.RemoveFromUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.RemoveFromUserIfNotLast(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error) {
+	return r.inner.CountByRole(ctx, t, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
+	return r.inner.CountEffectiveAdmins(ctx, t)
+}
+
+func (r *scopeCapturingRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
+	return r.inner.EffectiveAdminExists(ctx, t)
+}
+
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test stub matching interface signature
+	return r.inner.ListByUserID(ctx, t, userID, params)
+}
+
+// TestAssignRole_IsRLSScoped asserts that Assign wraps the AssignToUser call in
+// a scoped transaction so the RLS tenant_isolation policy on role_assignments is
+// satisfied (persistChange → scopedtx.Do).
+func TestAssignRole_IsRLSScoped(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "editor", Name: "editor"})
+	seedActiveUser(t, store, "usr-rls-assign")
+
+	cap := &scopeCapturingRoleRepo{inner: store.RoleRepository()}
+	inv := newTestInvalidator(t, store.UserRepository(), testutil.RealSessionRepo(t))
+	svc, err := NewService(clock.Real(), cap, store.UserRepository(), inv, slog.Default(),
+		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
+	require.NoError(t, err)
+
+	err = svc.Assign(tenantCtx(), testTenantID, "usr-rls-assign", "editor")
+	require.NoError(t, err)
+
+	assert.True(t, cap.capturedOK,
+		"AssignToUser must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"Assign scope must equal the request tenant")
+}
+
+// TestRevokeRole_IsRLSScoped asserts that Revoke wraps the
+// RemoveFromUserIfNotLast call in a scoped transaction so the RLS
+// tenant_isolation policy on role_assignments is satisfied.
+func TestRevokeRole_IsRLSScoped(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	store.RoleRepository().SeedRole(testTenantID, &domain.Role{ID: "editor", Name: "editor"})
+	seedActiveUser(t, store, "usr-rls-revoke")
+	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-rls-revoke", "editor")
+	require.NoError(t, err)
+
+	cap := &scopeCapturingRoleRepo{inner: store.RoleRepository()}
+	inv := newTestInvalidator(t, store.UserRepository(), testutil.RealSessionRepo(t))
+	svc, err := NewService(clock.Real(), cap, store.UserRepository(), inv, slog.Default(),
+		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
+	require.NoError(t, err)
+
+	err = svc.Revoke(tenantCtx(), testTenantID, "usr-rls-revoke", "editor")
+	require.NoError(t, err)
+
+	assert.True(t, cap.capturedOK,
+		"RemoveFromUserIfNotLast must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"Revoke scope must equal the request tenant")
+}
+
+// TestRevoke_WrongTenant_Returns404NotSilentSuccess (PR-3b review F4) verifies
+// that revoking a role for a user that does not exist in the REQUEST's tenant
+// returns a clean ErrAuthUserNotFound (404), not a silent revoked:true. The
+// tenant now comes from the request body (not the target user), so a wrong
+// tenant makes RemoveFromUserIfNotLast a (false, nil) no-op — which the handler
+// would report as revoked:true while the role survives in the user's real
+// tenant. The target-tenant ownership guard turns that into a 404, matching the
+// Assign path (composite FK / mem userByIDInTenant).
+func TestRevoke_WrongTenant_Returns404NotSilentSuccess(t *testing.T) {
+	svc, store, _ := newTestService(t)
+
+	// Seed the user + role assignment in testTenantID (the user's REAL tenant).
+	seedActiveUser(t, store, "usr-wrongtenant")
+	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-wrongtenant", "editor")
+	require.NoError(t, err)
+
+	// Revoke with a DIFFERENT tenant where the user does not exist.
+	otherTenant, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000002")
+	require.NoError(t, err)
+	err = svc.Revoke(tenantCtx(), otherTenant, "usr-wrongtenant", "editor")
+	require.Error(t, err, "wrong-tenant revoke must not be a silent success")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, ecErr.Code,
+		"wrong-tenant revoke must surface ErrAuthUserNotFound (404), matching the Assign path")
+
+	// Proof the no-op did not leak as success: the role still exists in the
+	// user's real tenant.
+	roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, "usr-wrongtenant")
+	stillHeld := false
+	for _, r := range roles {
+		if r.ID == "editor" {
+			stillHeld = true
+		}
+	}
+	assert.True(t, stillHeld, "role must survive in the real tenant after a wrong-tenant revoke")
 }

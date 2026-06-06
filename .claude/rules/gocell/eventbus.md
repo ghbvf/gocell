@@ -148,7 +148,7 @@ ADV-06（contract.subscribers ↔ slice CU 双向对齐）已退役——cell �
 
 > **同范式：webhook 双角色**。`contractUsages[role=webhook-receive|webhook-dispatch]` 走与 subscribe 完全一致的「slice.yaml 单源 → cellgen 派生进 cell_gen.go」范式，派生出 `reg.RegisterWebhookReceiver(webhook.ReceiverSpec{...}, handler)` / `reg.RegisterWebhookDispatch(...)`；contract.yaml 的 `endpoints.receivers` / `dispatchers` 是派生字段（`yaml:"-"`，禁手写）。守卫见 `CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01` / `WEBHOOK-MARKER-RETIRED-01`。字段集、派生形态、演化策略见 `contracts/webhook/README.md`。**运行时**（`reg.RegisterWebhookReceiver/Dispatch` 方法本体 + HTTP 接收 / dispatcher consumer）在 PR-3/PR-5 落地——PR-2 只覆盖契约识别 + cellgen 派生层。
 
-> **同范式：grpc 服务注册（#1601）**。`contractUsages[role=serve]` 当其 contract `kind: grpc` 时，走与 subscribe/webhook 一致的「slice.yaml 单源 → cellgen 派生进 cell_gen.go」范式，派生 `reg.GRPCService(cell.GRPCServiceSpec{ContractID, CellID, Listener: cell.PrimaryListener, Register: func(r grpc.ServiceRegistrar){ <pb>.Register<Svc>Server(r, c.<field>) }})`（PR-7 #1150 registrar API）。派生规则：proto import path + alias 经 `contractgen.ReadProtoTypeInfo` 从 proto `go_package` 单源派生；`Register<Svc>Server` 名 = `Register` + grpc service FQN 末段 + `Server`；handler 字段按「字段指针类型包名 == sliceID」解析（`field:` 消歧，0/>1 fail-fast），其指向 struct 须实现 buf 生成的 `<Svc>Server` 接口。listener 固定 `cell.PrimaryListener`（多 listener override 待真实需求，YAGNI）。`field:` 在 grpc serve CU 上的放行由 FMT-35 kind-aware 守（kind=grpc 时 field optional，其余列仍 forbidden；http serve 不放行 field）。守卫见 archtest `GRPC-METHOD-IN-CONTRACT-01`：**上游 Hard**（生成的 `reg.GRPCService` 经 cellgen golden 字节锁定到 contract.yaml）+ **下游 Medium**（caller-allowlist：`reg.GRPCService` 仅限生成的 `cell_gen.go` + `_test.go`；external-cell 自证为永久 Go 可见性天花板，won't-do gh #1631，同 #851/#893/#1282/#1582 族）+ **覆盖 Medium**（无孤儿 reg / 无孤儿 active grpc contract）。今日 0 生产 grpc cell，故 vacuous green；首个消费者 = #1151（PR-8 iotdevice）。**运行时**（`reg.GRPCService` 方法本体 + bootstrap drain + interceptor chain）已随 PR-5/PR-7 落地。
+> **同范式：grpc 服务注册（#1601）**。`contractUsages[role=serve]` 当其 contract `kind: grpc` 时，走与 subscribe/webhook 一致的「slice.yaml 单源 → cellgen 派生进 cell_gen.go」范式，派生 `reg.GRPCService(cell.GRPCServiceSpec{ContractID, CellID, Listener: cell.PrimaryListener, Register: func(r grpc.ServiceRegistrar){ <pb>.Register<Svc>Server(r, c.<field>) }})`（PR-7 #1150 registrar API）。派生规则：proto import path + alias 经 `contractgen.ReadProtoServiceInfo`（#1655 替换已删除的 `ReadProtoTypeInfo`）从 proto `go_package` 单源派生；生成的 `Server` interface 枚举该 proto service 的**所有 RPC**（service-level granularity，ADR D5 / #1655）；`Register<Svc>Server` 名 = `Register` + grpc service FQN 末段 + `Server`；handler 字段按「字段指针类型包名 == sliceID」解析（`field:` 消歧，0/>1 fail-fast），其指向 struct 须实现 buf 生成的 `<Svc>Server` 接口。contract.yaml `endpoints.grpc` 块不再有 `method:` 字段（整个 service 级别；#1655 删除）。listener 固定 `cell.PrimaryListener`（多 listener override 待真实需求，YAGNI）。`field:` 在 grpc serve CU 上的放行由 FMT-35 kind-aware 守（kind=grpc 时 field optional，其余列仍 forbidden；http serve 不放行 field）。守卫见 archtest `GRPC-SERVICE-IN-CONTRACT-01`（#1655 由 `GRPC-METHOD-IN-CONTRACT-01` 重命名）：**上游 Hard**（生成的 `reg.GRPCService` 经 cellgen golden 字节锁定到 contract.yaml）+ **下游 Medium**（caller-allowlist：`reg.GRPCService` 仅限生成的 `cell_gen.go` + `_test.go`；external-cell 自证为永久 Go 可见性天花板，won't-do gh #1631，同 #851/#893/#1282/#1582 族）+ **覆盖 Medium**（无孤儿 reg / 无孤儿 active grpc contract）。今日 0 生产 grpc cell，故 vacuous green；首个消费者 = #1151（PR-8 iotdevice）。**运行时**（`reg.GRPCService` 方法本体 + bootstrap drain + interceptor chain）已随 PR-5/PR-7 落地。
 
 ```yaml
 # slice.yaml — grpc serve slice 最小声明
@@ -198,6 +198,37 @@ cell.go 须声明一个指针类型包名 == sliceID 的字段（如 `*devicecom
 - 业务 middleware 签名为 `func(sub Subscription, next EntryHandler) EntryHandler`（不接触 Settlement）——对齐 Watermill router/Kratos transport/sarama session 业界共识：settle 由 transport 层独立决策（K#12 二轮深度修复，删 `AsMiddleware`）。
 - Claim 获取处理租约 → handler 执行 → broker Ack 后 Settlement.Commit / 失败时 Settlement.Release（由 Subscriber delivery loop 完成）。
 - 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护。
+
+## Relay 命令分发（async command 桥，#1667）
+
+W3 Command Bus 的异步路径复用 outbox relay：业务把命令写成 `eventType = command id`
+的普通 `outbox.Entry`（`outbox.Emit(ctx, clk, emitter, "command.<domain>.<name>.v1", req)`），
+relay 消费时按 **routing-topic** 在 composition-root 注入的 dispatcher-map 中匹配——命中
+则在**进程内**触发生成的 `DispatchAsync`（decode payload → `LookupHandler` → typed `Handler`），
+否则照常发 broker。判别器 = dispatcher-map 成员资格（`command.*.v1` 命名空间 + 闭合 map
+天然隔离事件 topic），**不改 sealed `outbox.Entry`、不带 metadata 标记**。命令 settle 复用事件
+writeBack：成功 `MarkPublished` = 命令已消费；失败分两类——生成 `DispatchAsync` 的**确定性框架错误**
+（reg nil / routing-topic ≠ DispatchID / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
+标记 → relay 直接 `MarkDead`（不耗重试预算，错配 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
+至耗尽（#1673 F3；值校验失败分类随 #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
+`entry.RoutingTopic() == string(DispatchID)`，错配 entry 不被错 handler 消费。
+
+composition root 注入（dispatch 值**必须**是生成 `DispatchAsync` 直接符号——archtest
+`COMMAND-ASYNC-DISPATCH-CALLER-01` 锁定）：
+
+```go
+reg := command.NewRegistry()
+_ = enqueue.Register(reg, handler)
+relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
+    enqueue.DispatchID: enqueue.DispatchAsync, // 生成符号，不可 wrap 闭包
+})
+```
+
+`DispatchAsync` 不执行 schema 值约束（typed struct 即结构契约）；untrusted-payload 值校验
+funnel = #1588。真实 binary producer 接线（devicecell 异步 enqueue）随后续 PR 落地。设计单源 =
+ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5 ④ +
+§Amendment 2026-06-06；funnel 双向锁 = `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（上游 Hard）+
+`COMMAND-ASYNC-DISPATCH-CALLER-01`（下游 Hard）。
 
 ## Projection ↔ ConsumerBase 装配（composition root）
 

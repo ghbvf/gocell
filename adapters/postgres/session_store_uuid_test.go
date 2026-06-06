@@ -14,10 +14,19 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
 )
+
+var pgTestTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("session_store_uuid_test: invalid pgTestTenantID: " + err.Error())
+	}
+	return t
+}()
 
 // TestPGSessionStore_NonUUIDSubjectRejected verifies that PGSessionStore.Create
 // returns ErrValidationFailed when SubjectID is not a valid UUID string. This
@@ -46,7 +55,7 @@ func TestPGSessionStore_NonUUIDSubjectRejected(t *testing.T) {
 		CreatedAt: storetest.EpochAnchor(),
 		ExpiresAt: storetest.EpochAnchor().Add(60 * 60 * 1e9), // 1h
 	}
-	createErr := store.Create(context.Background(), sess)
+	createErr := store.Create(context.Background(), pgTestTenantID, sess)
 	require.Error(t, createErr, "non-UUID SubjectID must be rejected")
 
 	var coded *errcode.Error

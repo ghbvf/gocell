@@ -141,7 +141,10 @@ func TestService_WithTxManager(t *testing.T) {
 
 	_, err := svc.Login(context.Background(), LoginInput{TenantID: testTenantIDStr, Username: "bob", Password: string(testCredential)})
 	require.NoError(t, err)
-	assert.Equal(t, 1, tx.calls)
+	// PR-3b: Login now uses two RunInTx calls per attempt:
+	//   tx[0] = pre-bcrypt read-tx (GetByUsername, RLS requires GUC)
+	//   tx[1] = write-tx (loginInTx: FOR UPDATE + counter + session + outbox)
+	assert.Equal(t, 2, tx.calls)
 }
 
 // failingEmitter returns an error on every Emit call.

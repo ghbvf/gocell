@@ -1,0 +1,15 @@
+id: goldcellexample
+belongsToCell: goldcell
+# L0=local L1=localTx L2=outboxFact (publish 角色必须≥L2) L3=eventual L4=device
+consistencyLevel: L1
+lifecycle: experimental
+contractUsages:
+  - contract: http.goldcell.example.v1
+    role: serve
+verify:
+  unit:
+    - unit.goldcellexample.service
+  contract:
+    - contract.http.goldcell.example.v1.serve
+allowedFiles:
+  - cells/goldcell/slices/goldcellexample/**

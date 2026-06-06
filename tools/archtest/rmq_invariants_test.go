@@ -16,13 +16,11 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"go/types"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/typesutil"
@@ -32,142 +30,10 @@ import (
 // RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01
 // ---------------------------------------------------------------------------
 
-// allowedChannelCloseFuncs is the exhaustive whitelist of function names that
-// are permitted to contain a direct ch.Close() call on an AMQPChannel.
-// All other sites must call Connection.CloseEphemeralChannel instead.
-var allowedChannelCloseFuncs = map[string]bool{
-	// CloseEphemeralChannel is the canonical single-path API itself.
-	"CloseEphemeralChannel": true,
-	// waitAndClose contains a nil-conn guard (r.conn == nil branch) that calls
-	// r.ch.Close() directly for unit tests that construct subscriptionRun without
-	// a real Connection. The guard is unreachable in production (subscribeOnce
-	// always passes s.conn). The archtest whitelist entry is intentional and
-	// narrowly scoped to this one function.
-	"waitAndClose": true,
-}
-
-// INVARIANT: RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01
-//
-// TestRMQChannelDestructionViaConn01 enforces RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01:
-// every AMQPChannel destruction site in adapters/rabbitmq/ MUST go through
-// Connection.CloseEphemeralChannel.
-//
-// Direct ch.Close() calls outside of CloseEphemeralChannel or waitAndClose
-// bypass the inUseChannels.Add(-1) decrement and permanently leak
-// MaxChannelsPerConn slots, causing spurious ERR_ADAPTER_AMQP_CHANNEL_MAX_EXCEEDED
-// false-positives after enough reconnect cycles or subscription teardowns.
-//
-// Implementation: go/types-backed receiver classification. The receiver of
-// every `Close()` call is resolved via packages.Package.TypesInfo.TypeOf, then
-// matched against the AMQPChannel interface declared in the same package via
-// types.Implements. This is naming-immune: renaming `ch` to `channel` or
-// shuffling field names does not change the verdict.
-//
-// ref: golang/tools go/analysis/passes/copylock — types.Implements idiom
-// ref: golang/tools go/analysis/passes/lostcancel — TypesInfo.TypeOf pipeline
-// ref: docs/plans/202605011500-029-master-roadmap.md B12 PR-V1-RMQ-LIFECYCLE-HARDEN P1
-// ref: adapters/rabbitmq/doc.go — AMQPChannel destruction contract
+// TestRMQChannelDestructionViaConn01 dogfoods CheckRMQChannelDestructionViaConn.
 func TestRMQChannelDestructionViaConn01(t *testing.T) {
 	t.Parallel()
-
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./adapters/rabbitmq/..."}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		if p.Pkg.Path() != "github.com/ghbvf/gocell/adapters/rabbitmq" {
-			return nil
-		}
-		chanIface := lookupInterfaceTypeFromPkg(t, p.Pkg, "AMQPChannel")
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			checkFileForDirectChannelClose(t, p, file, chanIface, rel)
-		}
-		return nil
-	})
-}
-
-// lookupInterfaceTypeFromPkg resolves a top-level interface declaration by name
-// from a *types.Package and returns its types.Interface. Fail-closed when the
-// type vanishes or is no longer an interface.
-func lookupInterfaceTypeFromPkg(t *testing.T, pkg *types.Package, name string) *types.Interface {
-	t.Helper()
-	obj := pkg.Scope().Lookup(name)
-	if obj == nil {
-		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s not declared in %s", name, pkg.Path())
-	}
-	tn, ok := obj.(*types.TypeName)
-	if !ok {
-		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s is not a type", name)
-	}
-	iface, ok := tn.Type().Underlying().(*types.Interface)
-	if !ok {
-		t.Fatalf("RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s is not an interface", name)
-	}
-	return iface
-}
-
-// checkFileForDirectChannelClose walks every function in f and flags any
-// `Close()` call whose receiver type implements AMQPChannel — regardless of
-// the receiver variable's name. AMQPConnection close calls slip through
-// because AMQPConnection's method set (4 methods) is a strict subset of
-// AMQPChannel's (16 methods), so types.Implements rejects it.
-func checkFileForDirectChannelClose(
-	t *testing.T,
-	p *Pass,
-	f *ast.File,
-	chanIface *types.Interface,
-	rel string,
-) {
-	t.Helper()
-
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Body == nil {
-			return
-		}
-		funcName := fd.Name.Name
-		if allowedChannelCloseFuncs[funcName] {
-			return
-		}
-
-		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Close" {
-				return
-			}
-			recvType := p.TypesInfo.TypeOf(sel.X)
-			if recvType == nil {
-				return
-			}
-			if !typesutil.ImplementsInterface(recvType, chanIface) {
-				return
-			}
-
-			pos := p.Fset.Position(call.Pos())
-			receiverHint := receiverHint(sel.X)
-			t.Errorf(
-				"RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01: %s:%d: %s() contains direct %s.Close() call (receiver type %s implements AMQPChannel).\n"+
-					"  All AMQPChannel destruction MUST go through Connection.CloseEphemeralChannel\n"+
-					"  to keep inUseChannels in sync with MaxChannelsPerConn.\n"+
-					"  Replace: %s.Close() → conn.CloseEphemeralChannel(%s)",
-				rel, pos.Line, funcName, receiverHint, recvType.String(), receiverHint, receiverHint,
-			)
-		})
-	})
-}
-
-// receiverHint reproduces the source-level receiver expression for use in
-// error messages only. Decisions never depend on this string.
-func receiverHint(x ast.Expr) string {
-	switch e := x.(type) {
-	case *ast.Ident:
-		return e.Name
-	case *ast.SelectorExpr:
-		return receiverHint(e.X) + "." + e.Sel.Name
-	}
-	return "<expr>"
+	Report(t, "RMQ-CHANNEL-DESTRUCTION-VIA-CONN-01", CheckRMQChannelDestructionViaConn(t, ConfigForExternalCell{}))
 }
 
 // TestRMQChannelDestructionViaConn01_NamingImmunity is a positive/negative
@@ -284,515 +150,50 @@ func waitAndClose() {
 // RMQ-CHANNEL-MAX-PER-CONN-01
 // ---------------------------------------------------------------------------
 
-const expectedDefaultMaxChannelsPerConnConst = "defaultRMQMaxChannelsPerConn"
-
-// INVARIANT: RMQ-CHANNEL-MAX-PER-CONN-01-A
-//
-// TestRMQChannelMaxPerConn01_ConfigFieldExists enforces
-// RMQ-CHANNEL-MAX-PER-CONN-01-A: Config struct must declare MaxChannelsPerConn int.
-//
-// ref: docs/plans/202605011500-029-master-roadmap.md B12 PR-V1-RMQ-LIFECYCLE-HARDEN
-// ref: rabbitmq/amqp091-go connection.go openTune — broker channel_max negotiation
+// TestRMQChannelMaxPerConn01_ConfigFieldExists dogfoods CheckRMQChannelMaxPerConn (sub-rule A).
 func TestRMQChannelMaxPerConn01_ConfigFieldExists(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "connection.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	var hasField bool
-	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-		if ts.Name.Name != "Config" {
-			return
-		}
-		st, ok := ts.Type.(*ast.StructType)
-		if !ok {
-			return
-		}
-		for _, field := range st.Fields.List {
-			for _, name := range field.Names {
-				if name.Name == "MaxChannelsPerConn" {
-					hasField = true
-				}
-			}
-		}
-	})
-
-	if !hasField {
-		t.Errorf(
-			"RMQ-CHANNEL-MAX-PER-CONN-01-A: rabbitmq.Config must declare " +
-				"`MaxChannelsPerConn int` so callers can bound channel allocation per " +
-				"physical AMQP connection. Default 256 prevents broker channel_max " +
-				"(default 2047) exhaustion.",
-		)
-	}
+	Report(t, "RMQ-CHANNEL-MAX-PER-CONN-01", CheckRMQChannelMaxPerConn(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-CHANNEL-MAX-PER-CONN-01-B
-//
-// TestRMQChannelMaxPerConn01_SetDefaultsPopulatesField enforces
-// RMQ-CHANNEL-MAX-PER-CONN-01-B: setDefaults must populate MaxChannelsPerConn
-// with the documented default constant (defaultRMQMaxChannelsPerConn = 256).
+// TestRMQChannelMaxPerConn01_SetDefaultsPopulatesField dogfoods CheckRMQChannelMaxPerConn (sub-rule B).
 func TestRMQChannelMaxPerConn01_SetDefaultsPopulatesField(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "connection.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	var setDefaults *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Name.Name == "setDefaults" && fd.Recv != nil {
-			setDefaults = fd
-		}
-	})
-	if setDefaults == nil {
-		t.Fatalf("RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults not found in %s", src)
-	}
-
-	// Look for an if-statement whose condition is `<recv>.MaxChannelsPerConn <= 0`
-	// and whose body assigns MaxChannelsPerConn from the documented default constant.
-	//
-	// The condition must be <= 0 (not == 0) so that negative values are also
-	// treated as "not configured" and receive the fail-closed default.
-	// Accepting == 0 only would allow callers to pass -1 and silently skip the cap.
-	var assigns bool
-	var conditionIsLEQ bool
-	EachInSubtree[ast.IfStmt](setDefaults.Body, func(ifStmt *ast.IfStmt) {
-		// Check if the condition is `<recv>.MaxChannelsPerConn <= 0`.
-		bin, ok := ifStmt.Cond.(*ast.BinaryExpr)
-		if !ok {
-			return
-		}
-		if bin.Op != token.LEQ {
-			return
-		}
-		// LHS must be a selector ending in MaxChannelsPerConn.
-		lhsSel, ok := bin.X.(*ast.SelectorExpr)
-		if !ok || lhsSel.Sel.Name != "MaxChannelsPerConn" {
-			return
-		}
-		// RHS must be the literal 0.
-		rhs, ok := bin.Y.(*ast.BasicLit)
-		if !ok || rhs.Kind != token.INT || rhs.Value != "0" {
-			return
-		}
-		// Found if MaxChannelsPerConn <= 0 — now verify body assigns default constant.
-		conditionIsLEQ = true
-		if !assigns {
-			if _, ok := FindFirstInSubtree[ast.AssignStmt](ifStmt.Body, func(assign *ast.AssignStmt) bool {
-				if len(assign.Lhs) != 1 {
-					return false
-				}
-				sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "MaxChannelsPerConn" {
-					return false
-				}
-				if len(assign.Rhs) != 1 {
-					return false
-				}
-				ident, ok := assign.Rhs[0].(*ast.Ident)
-				if !ok {
-					return false
-				}
-				return ident.Name == expectedDefaultMaxChannelsPerConnConst
-			}); ok {
-				assigns = true
-			}
-		}
-	})
-
-	if !conditionIsLEQ {
-		t.Errorf(
-			"RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults must guard the " +
-				"MaxChannelsPerConn assignment with `<= 0` (not `== 0`). " +
-				"A negative value passed by a caller must also fall back to the " +
-				"default (256) — accepting only == 0 allows -1 to bypass the cap " +
-				"and produce a production outage.",
-		)
-	}
-	if !assigns {
-		t.Errorf(
-			"RMQ-CHANNEL-MAX-PER-CONN-01-B: Config.setDefaults must assign "+
-				"MaxChannelsPerConn from the documented default constant `%s` (=256). "+
-				"Hardcoded literals defeat the single-source default and drift from "+
-				"the godoc on Config.MaxChannelsPerConn.",
-			expectedDefaultMaxChannelsPerConnConst,
-		)
-	}
+	Report(t, "RMQ-CHANNEL-MAX-PER-CONN-01", CheckRMQChannelMaxPerConn(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-CHANNEL-MAX-PER-CONN-01-C
-//
-// TestRMQChannelMaxPerConn01_AcquireChannelGuardsCounter enforces
-// RMQ-CHANNEL-MAX-PER-CONN-01-C: AcquireChannel must reference an inUseChannels
-// counter (the atomic guard that returns ErrAdapterAMQPChannelMaxExceeded when
-// the cap is reached).
+// TestRMQChannelMaxPerConn01_AcquireChannelGuardsCounter dogfoods CheckRMQChannelMaxPerConn (sub-rule C).
 func TestRMQChannelMaxPerConn01_AcquireChannelGuardsCounter(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "connection.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	var acquire *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Name.Name == "AcquireChannel" && fd.Recv != nil {
-			acquire = fd
-		}
-	})
-	if acquire == nil {
-		t.Fatalf("RMQ-CHANNEL-MAX-PER-CONN-01-C: AcquireChannel method not found in %s", src)
-	}
-
-	var refersToCounter bool
-	EachInSubtree[ast.SelectorExpr](acquire.Body, func(sel *ast.SelectorExpr) {
-		if sel.Sel.Name == "inUseChannels" {
-			refersToCounter = true
-		}
-	})
-
-	if !refersToCounter {
-		t.Errorf(
-			"RMQ-CHANNEL-MAX-PER-CONN-01-C: AcquireChannel must reference the " +
-				"`inUseChannels` atomic counter to bound new-channel creation against " +
-				"Config.MaxChannelsPerConn; current source has no such reference. " +
-				"Without the counter, pool-miss paths can silently exceed broker " +
-				"channel_max and cause a connection-level shutdown.",
-		)
-	}
+	Report(t, "RMQ-CHANNEL-MAX-PER-CONN-01", CheckRMQChannelMaxPerConn(t, ConfigForExternalCell{}))
 }
 
 // ---------------------------------------------------------------------------
 // RMQ-PUBLISHER-FAILURE-HANDLING-01
 // ---------------------------------------------------------------------------
 
-// INVARIANT: RMQ-PUBLISHER-FAILURE-HANDLING-01-A
-//
-// TestRMQPublisherFailureHandling01_NackErrcodeReferenced enforces
-// RMQ-PUBLISHER-FAILURE-HANDLING-01-A: Publish must reference ErrAdapterAMQPNack
-// somewhere in its body (NACK errcode is distinct from ErrAdapterAMQPConfirmTimeout).
-//
-// ref: docs/plans/202605011500-029-master-roadmap.md B12 PR-V1-RMQ-LIFECYCLE-HARDEN
-// ref: ThreeDotsLabs/watermill-amqp publisher.go — NACK returns hard error
+// TestRMQPublisherFailureHandling01_NackErrcodeReferenced dogfoods CheckRMQPublisherFailureHandling (sub-rule A).
 func TestRMQPublisherFailureHandling01_NackErrcodeReferenced(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "publisher.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	publish := findMethod(f, "Publish")
-	if publish == nil {
-		t.Fatalf("RMQ-PUBLISHER-FAILURE-HANDLING-01-A: Publish method not found in %s", src)
-	}
-
-	var found bool
-	EachInSubtree[ast.Ident](publish.Body, func(ident *ast.Ident) {
-		if ident.Name == "ErrAdapterAMQPNack" {
-			found = true
-		}
-	})
-
-	if !found {
-		rel, _ := filepath.Rel(root, src)
-		if rel == "" {
-			rel = src
-		}
-		t.Errorf(
-			"RMQ-PUBLISHER-FAILURE-HANDLING-01-A: Publish in %s must reference "+
-				"ErrAdapterAMQPNack to mark broker-NACK as a distinct error code (vs "+
-				"ErrAdapterAMQPConfirmTimeout). Sharing a code makes alerting rules "+
-				"unable to tell broker rejection from network timeout.",
-			rel,
-		)
-	}
+	Report(t, "RMQ-PUBLISHER-FAILURE-HANDLING-01", CheckRMQPublisherFailureHandling(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-PUBLISHER-FAILURE-HANDLING-01-B
-//
-// TestRMQPublisherFailureHandling01_AllBranchesEmitWarn enforces
-// RMQ-PUBLISHER-FAILURE-HANDLING-01-B: Publish must call slog.Warn at least 3 times
-// (one for each of NACK / timeout / confirmCh closed).
+// TestRMQPublisherFailureHandling01_AllBranchesEmitWarn dogfoods CheckRMQPublisherFailureHandling (sub-rule B).
 func TestRMQPublisherFailureHandling01_AllBranchesEmitWarn(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "publisher.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	publish := findMethod(f, "Publish")
-	if publish == nil {
-		t.Fatalf("RMQ-PUBLISHER-FAILURE-HANDLING-01-B: Publish method not found in %s", src)
-	}
-
-	const requiredWarnCalls = 3
-	var warnCount int
-	EachInSubtree[ast.CallExpr](publish.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		if sel.Sel.Name != "Warn" {
-			return
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return
-		}
-		if ident.Name == "slog" {
-			warnCount++
-		}
-	})
-
-	if warnCount < requiredWarnCalls {
-		t.Errorf(
-			"RMQ-PUBLISHER-FAILURE-HANDLING-01-B: Publish in %s must call slog.Warn at "+
-				"least %d times (NACK / confirm timeout / confirm-channel-closed); "+
-				"found %d. Silent failure branches make on-call diagnosis impossible.",
-			src, requiredWarnCalls, warnCount,
-		)
-	}
+	Report(t, "RMQ-PUBLISHER-FAILURE-HANDLING-01", CheckRMQPublisherFailureHandling(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-PUBLISHER-FAILURE-HANDLING-01-C
-//
-// TestRMQPublisherFailureHandling01_RecordsFailureMetric enforces
-// RMQ-PUBLISHER-FAILURE-HANDLING-01-C: Publish must call a publisher-collector
-// RecordPublishFailure method at least once so a metric records the failure reason.
+// TestRMQPublisherFailureHandling01_RecordsFailureMetric dogfoods CheckRMQPublisherFailureHandling (sub-rule C).
 func TestRMQPublisherFailureHandling01_RecordsFailureMetric(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "publisher.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	publish := findMethod(f, "Publish")
-	if publish == nil {
-		t.Fatalf("RMQ-PUBLISHER-FAILURE-HANDLING-01-C: Publish method not found in %s", src)
-	}
-
-	var calls int
-	EachInSubtree[ast.CallExpr](publish.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		if sel.Sel.Name == "RecordPublishFailure" {
-			calls++
-		}
-	})
-
-	if calls < 1 {
-		rel, _ := filepath.Rel(root, src)
-		if rel == "" {
-			rel = src
-		}
-		t.Errorf(
-			"RMQ-PUBLISHER-FAILURE-HANDLING-01-C: Publish in %s must call "+
-				"RecordPublishFailure on the injected PublisherCollector so the failure "+
-				"reason is queryable as a metric. Defaulting to NoopPublisherCollector "+
-				"keeps the call cheap; production wiring injects the provider-backed "+
-				"collector at the composition root.",
-			rel,
-		)
-	}
+	Report(t, "RMQ-PUBLISHER-FAILURE-HANDLING-01", CheckRMQPublisherFailureHandling(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-PUBLISHER-FAILURE-HANDLING-01-D
-//
-// TestRMQPublisherFailureHandling01_AllReturnsMustRecord verifies that every
-// non-success, non-exempt return in Publish is preceded in its enclosing block
-// by a RecordPublishFailure call.
-//
-// Exemptions (not required to record):
-//   - The final success `return nil` (no error, no metric needed)
-//   - Any return inside a `ctx.Done()` select case (caller-initiated cancel,
-//     documented as not a wire-level failure)
-//   - The early "publisher is closed" return (precedes wg.Add; not a wire failure)
-//
-// This prevents a future developer from adding a new failure branch and
-// forgetting to record the failure metric — a regression that would create a
-// silent gap in the alerting coverage.
+// TestRMQPublisherFailureHandling01_AllReturnsMustRecord dogfoods CheckRMQPublisherFailureHandling (sub-rule D).
 func TestRMQPublisherFailureHandling01_AllReturnsMustRecord(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "publisher.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	publish := findMethod(f, "Publish")
-	if publish == nil {
-		t.Fatalf("RMQ-PUBLISHER-FAILURE-HANDLING-01-D: Publish method not found in %s", src)
-	}
-
-	violations := scanPublishMissingFailureRecord(publish, fset)
-	for _, v := range violations {
-		t.Errorf(
-			"RMQ-PUBLISHER-FAILURE-HANDLING-01-D: Publish in %s: %s. "+
-				"All error-returning if-blocks must contain collector.RecordPublishFailure "+
-				"so alerting rules can observe the failure reason without log-parsing. "+
-				"Exemptions: success `return nil` and returns inside ctx.Done() case.",
-			src, v,
-		)
-	}
-}
-
-// scanPublishMissingFailureRecord walks every if-block and select-case in the
-// Publish FuncDecl. For each block with a non-nil return that lacks a
-// RecordPublishFailure call, it appends a "line N: ..." violation string.
-// Exemptions: ctx.Done() cases, nil returns, and the publisher-closed guard.
-//
-// Extracted to file-level so PR445-FU finding F3's RED sub-test can exercise
-// the same checker against fixture files without duplicating the closure
-// logic. The behavior is unchanged from the prior in-test closure form;
-// Wave 4 extends checkPublishStmtViolations' switch to cover ForStmt,
-// RangeStmt, SwitchStmt, TypeSwitchStmt and inlines SelectStmt's CommClause
-// iteration to direct-child semantics.
-func scanPublishMissingFailureRecord(publish *ast.FuncDecl, fset *token.FileSet) []string {
-	var violations []string
-	for _, stmt := range publish.Body.List {
-		checkPublishStmtViolations(stmt, fset, false, &violations)
-	}
-	return violations
-}
-
-// checkPublishStmtViolations recursively walks stmt searching for if-blocks
-// whose top-level Body.List contains an error return without a paired
-// RecordPublishFailure call. The switch covers every Go statement container
-// that may legally contain an *ast.IfStmt: BlockStmt and the explicit
-// container forms (For, Range, Switch, TypeSwitch, Select).
-func checkPublishStmtViolations(stmt ast.Stmt, fset *token.FileSet, inCtxDone bool, violations *[]string) {
-	switch s := stmt.(type) {
-	case *ast.IfStmt:
-		checkPublishIfBlockViolations(s, fset, inCtxDone, violations)
-	case *ast.SelectStmt:
-		if s.Body != nil {
-			EachInChildren[ast.CommClause](s.Body, func(comm *ast.CommClause) {
-				isCtxDone := inCtxDone || isCtxDoneCase(comm)
-				for _, inner := range comm.Body {
-					checkPublishStmtViolations(inner, fset, isCtxDone, violations)
-				}
-			})
-		}
-	case *ast.BlockStmt:
-		for _, inner := range s.List {
-			checkPublishStmtViolations(inner, fset, inCtxDone, violations)
-		}
-	case *ast.ForStmt:
-		if s.Body != nil {
-			for _, inner := range s.Body.List {
-				checkPublishStmtViolations(inner, fset, inCtxDone, violations)
-			}
-		}
-	case *ast.RangeStmt:
-		if s.Body != nil {
-			for _, inner := range s.Body.List {
-				checkPublishStmtViolations(inner, fset, inCtxDone, violations)
-			}
-		}
-	case *ast.SwitchStmt:
-		if s.Body != nil {
-			EachInChildren[ast.CaseClause](s.Body, func(cc *ast.CaseClause) {
-				for _, inner := range cc.Body {
-					checkPublishStmtViolations(inner, fset, inCtxDone, violations)
-				}
-			})
-		}
-	case *ast.TypeSwitchStmt:
-		if s.Body != nil {
-			EachInChildren[ast.CaseClause](s.Body, func(cc *ast.CaseClause) {
-				for _, inner := range cc.Body {
-					checkPublishStmtViolations(inner, fset, inCtxDone, violations)
-				}
-			})
-		}
-	}
-}
-
-// checkPublishIfBlockViolations is the per-if-block worker for the
-// RMQ-PUBLISHER-FAILURE-HANDLING-01-D scan. See scanPublishMissingFailureRecord.
-func checkPublishIfBlockViolations(ifStmt *ast.IfStmt, fset *token.FileSet, inCtxDone bool, violations *[]string) {
-	if ifStmt == nil || ifStmt.Body == nil {
-		return
-	}
-	body := ifStmt.Body.List
-
-	// Does THIS if-block (top-level Body.List only) contain a non-nil
-	// return? Nested returns inside an inner for/if/select are this
-	// block's child statements' concern — checkStmt will recurse and
-	// reach them via the inner if/select being its own checkIfBlock /
-	// SelectStmt handler. Counting them here would double-attribute the
-	// violation to two ancestor blocks. FindFirstChild visits only direct
-	// children of ifStmt.Body (depth-1).
-	_, hasNonNilReturn := FindFirstChild[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) bool {
-		return !isNilReturn(ret)
-	})
-
-	// Exempt: if-block guarding the "publisher is closed" early exit.
-	// This is not a wire-level failure, so no metric is required.
-	// Detected by checking if the condition references a field/method named "closed".
-	isClosedGuard := ifCondRefersTo(ifStmt.Cond, "closed")
-
-	if hasNonNilReturn && !inCtxDone && !isClosedGuard {
-		// Does this block contain a RecordPublishFailure call?
-		hasRecord := blockContainsRecordPublishFailure(body)
-		if !hasRecord {
-			// Report the first top-level non-nil return.
-			if ret, found := FindFirstChild[ast.ReturnStmt](ifStmt.Body, func(ret *ast.ReturnStmt) bool {
-				return !isNilReturn(ret)
-			}); found {
-				pos := fset.Position(ret.Pos())
-				*violations = append(*violations,
-					fmt.Sprintf("line %d: if-block with error return has no RecordPublishFailure", pos.Line))
-			}
-		}
-	}
-
-	// Recurse into nested if/select within this block.
-	for _, inner := range body {
-		checkPublishStmtViolations(inner, fset, inCtxDone, violations)
-	}
-
-	// Check else branch.
-	if ifStmt.Else != nil {
-		checkPublishStmtViolations(ifStmt.Else, fset, inCtxDone, violations)
-	}
+	Report(t, "RMQ-PUBLISHER-FAILURE-HANDLING-01", CheckRMQPublisherFailureHandling(t, ConfigForExternalCell{}))
 }
 
 // TestRMQPublisherFailureHandling01_ContainerCoverage_Wave4_RED is a RED-step
@@ -849,471 +250,112 @@ func TestRMQPublisherFailureHandling01_ContainerCoverage_Wave4_RED(t *testing.T)
 	}
 }
 
-// isCtxDoneCase returns true if the CommClause is a `case <-ctx.Done():` or
-// `case v := <-ctx.Done():` arm (both ExprStmt and AssignStmt forms).
-func isCtxDoneCase(cc *ast.CommClause) bool {
-	if cc.Comm == nil {
-		return false
-	}
-	var unary *ast.UnaryExpr
-	switch comm := cc.Comm.(type) {
-	case *ast.ExprStmt:
-		// case <-ctx.Done():
-		u, ok := comm.X.(*ast.UnaryExpr)
-		if !ok || u.Op != token.ARROW {
-			return false
-		}
-		unary = u
-	case *ast.AssignStmt:
-		// case v := <-ctx.Done():
-		if len(comm.Rhs) != 1 {
-			return false
-		}
-		u, ok := comm.Rhs[0].(*ast.UnaryExpr)
-		if !ok || u.Op != token.ARROW {
-			return false
-		}
-		unary = u
-	default:
-		return false
-	}
-	call, ok := unary.X.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	ident, ok := sel.X.(*ast.Ident)
-	return ok && ident.Name == "ctx" && sel.Sel.Name == "Done"
-}
-
-// isNilReturn returns true if the ReturnStmt returns a single nil literal.
-func isNilReturn(ret *ast.ReturnStmt) bool {
-	if len(ret.Results) != 1 {
-		return false
-	}
-	ident, ok := ret.Results[0].(*ast.Ident)
-	return ok && ident.Name == "nil"
-}
-
-// ifCondRefersTo returns true if the condition expression contains an identifier
-// or selector with the given name. Used to detect exempted guard patterns like
-// `if p.closed.Load()` without full type resolution.
-func ifCondRefersTo(cond ast.Expr, name string) bool {
-	var found bool
-	EachInSubtree[ast.Ident](cond, func(id *ast.Ident) {
-		if id.Name == name {
-			found = true
-		}
-	})
-	return found
-}
-
-// blockContainsRecordPublishFailure returns true if any statement in stmts
-// (at any nesting level) is a call to RecordPublishFailure.
-func blockContainsRecordPublishFailure(stmts []ast.Stmt) bool {
-	for _, s := range stmts {
-		var found bool
-		EachInSubtree[ast.CallExpr](s, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if ok && sel.Sel.Name == "RecordPublishFailure" {
-				found = true
-			}
-		})
-		if found {
-			return true
-		}
-	}
-	return false
-}
-
-// findMethod returns the FuncDecl for a method whose name matches `name` and
-// which has a non-nil receiver. Returns nil if not found.
-//
-//nolint:unparam // name is "Publish" in all callers; kept as param for readability
-func findMethod(f *ast.File, name string) *ast.FuncDecl {
-	var result *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if result == nil && fd.Name.Name == name && fd.Recv != nil {
-			result = fd
-		}
-	})
-	return result
-}
-
 // ---------------------------------------------------------------------------
 // RMQ-PUBLISHER-RELEASES-CHANNEL-01
 // ---------------------------------------------------------------------------
 
-// INVARIANT: RMQ-PUBLISHER-RELEASES-CHANNEL-01
-//
-// TestRMQPublisherReleasesChannel01 verifies that Publisher.Publish acquires a
-// channel and pairs it with a defer that calls either
-// p.conn.CloseEphemeralChannel or p.conn.ReleaseChannel.
-//
-// Without this pairing, each Publish increments inUseChannels but never
-// rolls it back; after MaxChannelsPerConn (default 256) calls all
-// subsequent publishes fail with ErrAdapterAMQPChannelMaxExceeded.
-//
-// AST strategy:
-//  1. Parse adapters/rabbitmq/publisher.go.
-//  2. Find the Publish method on *Publisher.
-//  3. Verify that the method body contains an AcquireChannel call site.
-//  4. Verify that the method body contains at least one defer statement whose
-//     call expression is p.conn.CloseEphemeralChannel or p.conn.ReleaseChannel.
-//
-// ref: docs/plans/202605011500-029-master-roadmap.md B12 PR-V1-RMQ-LIFECYCLE-HARDEN
-// ref: adapters/rabbitmq/connection.go CloseEphemeralChannel
+// TestRMQPublisherReleasesChannel01 dogfoods CheckRMQPublisherReleasesChannel.
 func TestRMQPublisherReleasesChannel01(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "publisher.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("RMQ-PUBLISHER-RELEASES-CHANNEL-01: parse %s: %v", src, err)
-	}
-
-	// Locate Publisher.Publish method.
-	var publishMethod *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if publishMethod == nil && fd.Recv != nil && fd.Name.Name == "Publish" {
-			publishMethod = fd
-		}
-	})
-	if publishMethod == nil {
-		t.Fatalf("RMQ-PUBLISHER-RELEASES-CHANNEL-01: Publisher.Publish method not found in %s", src)
-	}
-
-	// Check that AcquireChannel is called in the method body.
-	var hasAcquire bool
-	EachInSubtree[ast.CallExpr](publishMethod.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		if sel.Sel.Name == "AcquireChannel" {
-			hasAcquire = true
-		}
-	})
-	if !hasAcquire {
-		t.Errorf(
-			"RMQ-PUBLISHER-RELEASES-CHANNEL-01: Publisher.Publish must call " +
-				"conn.AcquireChannel to obtain a channel for confirm-mode publish.",
-		)
-	}
-
-	// Check that there is a defer calling CloseEphemeralChannel or ReleaseChannel.
-	//
-	// We accept two forms:
-	//   defer p.conn.CloseEphemeralChannel(ch)   — direct call expr
-	//   defer func() { ... p.conn.CloseEphemeralChannel(ch) ... }()  — closure
-	//
-	// The AST check inspects all DeferStmt nodes in the method body for a
-	// selector expression whose name is CloseEphemeralChannel or ReleaseChannel.
-	releaseSelectors := map[string]bool{
-		"CloseEphemeralChannel": true,
-		"ReleaseChannel":        true,
-	}
-
-	_, hasRelease := FindFirstInSubtree[ast.DeferStmt](publishMethod.Body, func(ds *ast.DeferStmt) bool {
-		// Walk the entire defer statement subtree for the release selector.
-		_, ok := FindFirstInSubtree[ast.SelectorExpr](ds, func(sel *ast.SelectorExpr) bool {
-			return releaseSelectors[sel.Sel.Name]
-		})
-		return ok
-	})
-
-	if !hasRelease {
-		t.Errorf(
-			"RMQ-PUBLISHER-RELEASES-CHANNEL-01: Publisher.Publish must pair " +
-				"AcquireChannel with a deferred p.conn.CloseEphemeralChannel " +
-				"(or p.conn.ReleaseChannel) call. Without this pairing every Publish " +
-				"leaks one inUseChannels slot; after MaxChannelsPerConn (=256) " +
-				"publishes all subsequent calls fail with " +
-				"ErrAdapterAMQPChannelMaxExceeded.",
-		)
-	}
+	Report(t, "RMQ-PUBLISHER-RELEASES-CHANNEL-01", CheckRMQPublisherReleasesChannel(t, ConfigForExternalCell{}))
 }
 
 // ---------------------------------------------------------------------------
 // RMQ-STOPINTAKE-INFLIGHT-WAIT-01
 // ---------------------------------------------------------------------------
 
-// INVARIANT: RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A
-//
-// TestRMQStopIntakeInflightWait01_StopIntakeWaitsForInflight enforces
-// RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A: Subscriber.StopIntake must wait for in-flight
-// processDelivery goroutines to settle before returning, so callers that follow
-// StopIntake with Close() do not race with active broker ack/nack work.
-//
-// ref: docs/plans/202605011500-029-master-roadmap.md B12 PR-V1-RMQ-LIFECYCLE-HARDEN
-// ref: ThreeDotsLabs/watermill subscriber.Close — wg.Wait inside close path
-// ref: rabbitmq/amqp091-go channel.go — Cancel→drain→wg.Wait→ch.Close ordering
+// TestRMQStopIntakeInflightWait01_StopIntakeWaitsForInflight dogfoods CheckRMQStopIntakeInflightWait (sub-rule A).
 func TestRMQStopIntakeInflightWait01_StopIntakeWaitsForInflight(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "subscriber.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	var stopIntake *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
-			stopIntake = fd
-		}
-	})
-	if stopIntake == nil {
-		t.Fatalf("RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A: StopIntake method not found in %s", src)
-	}
-
-	// Look for an inflight-wait sentinel in the function body. Accept any of:
-	//   - a call ending in `.localWg.Wait()` / `.inflightWg.Wait()` (waitgroup style)
-	//   - a call to `run.waitInflight(...)` / `r.waitInflight(...)` helper
-	//   - a call to a wgDone() helper on a subscriptionRun
-	//   - a call to `inflightCount()` / `r.inflightCount()` (atomic-poll style)
-	//   - a call to the package-level `waitInflightDrain(...)` helper
-	//
-	// The atomic-poll style is the canonical implementation today: it avoids
-	// the Add-after-Wait race that direct localWg.Wait suffers when
-	// drainRemaining concurrently calls registerDelivery (= Add(1)). The Wait
-	// helpers are kept in the accepted set so that future refactors that
-	// re-introduce a wait-style API (e.g. behind a sync.Cond) still satisfy
-	// the gate without needing to update this test.
-	var found bool
-	EachInSubtree[ast.CallExpr](stopIntake.Body, func(call *ast.CallExpr) {
-		// Bare identifier call form, e.g. `waitInflightDrain(...)`.
-		if id, ok := call.Fun.(*ast.Ident); ok {
-			if id.Name == "waitInflightDrain" {
-				found = true
-			}
-			return
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		switch sel.Sel.Name {
-		case "Wait":
-			// Accept any selector ending in localWg.Wait or inflightWg.Wait.
-			inner, ok := sel.X.(*ast.SelectorExpr)
-			if !ok {
-				return
-			}
-			if inner.Sel.Name == "localWg" || inner.Sel.Name == "inflightWg" {
-				found = true
-			}
-		case "waitInflight", "waitDrained", "wgDone", "inflightCount":
-			found = true
-		}
-	})
-
-	if !found {
-		rel, _ := filepath.Rel(root, src)
-		if rel == "" {
-			rel = src
-		}
-		t.Errorf(
-			"RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A: StopIntake in %s must wait for in-flight "+
-				"processDelivery goroutines (run.localWg.Wait / run.waitInflight / run.wgDone) "+
-				"before returning, otherwise Close() can race with active broker I/O.",
-			rel,
-		)
-	}
+	Report(t, "RMQ-STOPINTAKE-INFLIGHT-WAIT-01", CheckRMQStopIntakeInflightWait(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B (no parent ctx.Done)
-//
-// TestRMQStopIntakeInflightWait01_DrainNoParentCtxDone enforces
-// RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining body must NOT contain a
-// bare `case <-ctx.Done()` arm; drain runs on a detached context bounded by
-// currentDrainDeadline so prefetch is fully drained even if the parent ctx
-// is canceled mid-shutdown.
+// TestRMQStopIntakeInflightWait01_DrainNoParentCtxDone dogfoods CheckRMQStopIntakeInflightWait (sub-rule B, no ctx.Done).
 func TestRMQStopIntakeInflightWait01_DrainNoParentCtxDone(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "subscriber.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	var drain *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Name.Name == "drainRemaining" && fd.Recv != nil {
-			drain = fd
-		}
-	})
-	if drain == nil {
-		t.Fatalf("RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining method not found in %s", src)
-	}
-
-	// Reject any select case clause containing `<-ctx.Done()`. Drain must run on
-	// a detached context (context.WithoutCancel) so a parent ctx cancel does not
-	// silently drop prefetched-but-unacked deliveries.
-	var violations []token.Pos
-	EachInSubtree[ast.CommClause](drain.Body, func(comm *ast.CommClause) {
-		// CommClause.Comm is one of: SendStmt, AssignStmt, ExprStmt (for receive-only).
-		// The "case <-ctx.Done():" appears as ExprStmt with UnaryExpr Op=ARROW
-		// and X=CallExpr(ctx.Done).
-		expr, ok := comm.Comm.(*ast.ExprStmt)
-		if !ok {
-			return
-		}
-		unary, ok := expr.X.(*ast.UnaryExpr)
-		if !ok || unary.Op != token.ARROW {
-			return
-		}
-		call, ok := unary.X.(*ast.CallExpr)
-		if !ok {
-			return
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return
-		}
-		if ident.Name == "ctx" && sel.Sel.Name == "Done" {
-			violations = append(violations, comm.Pos())
-		}
-	})
-
-	for _, p := range violations {
-		t.Errorf(
-			"RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining at %s contains `case <-ctx.Done()`; "+
-				"drain MUST run on a detached context (context.WithoutCancel) bounded by "+
-				"currentDrainDeadline timer, otherwise parent ctx cancel drops prefetched messages.",
-			fset.Position(p),
-		)
-	}
+	Report(t, "RMQ-STOPINTAKE-INFLIGHT-WAIT-01", CheckRMQStopIntakeInflightWait(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B (detached context cross-check)
-//
-// TestRMQStopIntakeInflightWait01_DrainUsesDetachedContext verifies that
-// drainRemaining (or consumeLoop) creates a detached context via
-// context.WithoutCancel so the test above cannot be satisfied by simply
-// removing the ctx.Done arm while still passing the parent ctx unchanged.
+// TestRMQStopIntakeInflightWait01_DrainUsesDetachedContext dogfoods CheckRMQStopIntakeInflightWait (sub-rule B, detached ctx).
 func TestRMQStopIntakeInflightWait01_DrainUsesDetachedContext(t *testing.T) {
 	t.Parallel()
-
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "subscriber.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
-	}
-
-	bodyHasWithoutCancel := func(body *ast.BlockStmt) bool {
-		var found bool
-		EachInSubtree[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return
-			}
-			if ident.Name == "context" && sel.Sel.Name == "WithoutCancel" {
-				found = true
-			}
-		})
-		return found
-	}
-
-	_, found := FindFirstInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) bool {
-		if fd.Recv == nil || fd.Body == nil {
-			return false
-		}
-		if fd.Name.Name != "drainRemaining" && fd.Name.Name != "consumeLoop" {
-			return false
-		}
-		return bodyHasWithoutCancel(fd.Body)
-	})
-
-	if !found {
-		rel, _ := filepath.Rel(root, src)
-		if rel == "" {
-			rel = src
-		}
-		t.Errorf(
-			"RMQ-STOPINTAKE-INFLIGHT-WAIT-01-B: drainRemaining or consumeLoop in %s must "+
-				"use `context.WithoutCancel` to derive the drain ctx, so prefetched "+
-				"deliveries are processed independently of the parent ctx cancel.",
-			strings.TrimPrefix(rel, "./"),
-		)
-	}
+	Report(t, "RMQ-STOPINTAKE-INFLIGHT-WAIT-01", CheckRMQStopIntakeInflightWait(t, ConfigForExternalCell{}))
 }
 
-// INVARIANT: RMQ-STOPINTAKE-INFLIGHT-WAIT-01 (negative: no localWg.Wait)
-//
-// TestRMQStopIntakeInflightWait01_StopIntakeAvoidsLocalWgWait reinforces 01-A
-// by inverting the assertion: StopIntake's body must NOT contain a textual
-// `localWg.Wait()` call. The Add-after-Wait race is fundamentally caused by
-// invoking Wait while drainRemaining can still register new deliveries; the
-// only correct shape today is to poll inflightCount(). 01-A already accepts
-// inflightCount, but a future refactor that adds a Wait alongside the poll
-// would silently re-introduce the race without tripping 01-A. This negative
-// test closes that loophole.
+// TestRMQStopIntakeInflightWait01_StopIntakeAvoidsLocalWgWait dogfoods CheckRMQStopIntakeInflightWait (negative: no localWg.Wait).
 func TestRMQStopIntakeInflightWait01_StopIntakeAvoidsLocalWgWait(t *testing.T) {
 	t.Parallel()
+	Report(t, "RMQ-STOPINTAKE-INFLIGHT-WAIT-01", CheckRMQStopIntakeInflightWait(t, ConfigForExternalCell{}))
+}
 
-	root := findModuleRoot(t)
-	src := filepath.Join(root, "adapters", "rabbitmq", "subscriber.go")
+// ---------------------------------------------------------------------------
+// Diagnostic-location reverse self-check (F1)
+// ---------------------------------------------------------------------------
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
+// TestRMQDiagnostics_StructuralAbsenceLocated is the F1 reverse self-check
+// (ai-robust 强制反向自检). The structural-absence and violation branches of the
+// RMQ checks are never reached by the GREEN dogfood (production satisfies every
+// rule), so a regression that drops Diagnostic.Rel/Line — degrading Report to
+// ":0:" — would otherwise pass CI undetected. It drives each sub-check with a
+// minimal violating in-memory source and asserts every emitted Diagnostic
+// carries a clickable Rel and a 1-based Line (and that the violation actually
+// fires — fail-closed, not vacuous).
+func TestRMQDiagnostics_StructuralAbsenceLocated(t *testing.T) {
+	t.Parallel()
+
+	const rel = "adapters/rabbitmq/fixture.go"
+	parse := func(src string) (*ast.File, *token.FileSet) {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		return f, fset
+	}
+	assertLocated := func(name string, diags []Diagnostic) {
+		if len(diags) == 0 {
+			t.Errorf("%s: expected ≥1 diagnostic from violating fixture, got none (vacuous)", name)
+		}
+		for i, d := range diags {
+			if d.Rel != rel {
+				t.Errorf("%s[%d]: Rel = %q, want %q (Diagnostic must be clickable, not \":0:\")", name, i, d.Rel, rel)
+			}
+			if d.Line <= 0 {
+				t.Errorf("%s[%d]: Line = %d, want > 0", name, i, d.Line)
+			}
+		}
 	}
 
-	var stopIntake *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
-			stopIntake = fd
-		}
-	})
-	if stopIntake == nil {
-		t.Fatalf("StopIntake method not found in %s", src)
-	}
+	// CHANNEL-MAX-PER-CONN-01: Config without the field; no setDefaults; no AcquireChannel.
+	f, fset := parse("package rabbitmq\ntype Config struct{ Other int }\n")
+	assertLocated("checkChannelMaxConfigField", checkChannelMaxConfigField(f, fset, rel))
+	assertLocated("checkChannelMaxSetDefaults", checkChannelMaxSetDefaults(f, fset, rel))
+	assertLocated("checkChannelMaxAcquireGuard", checkChannelMaxAcquireGuard(f, fset, rel))
 
-	rel, _ := filepath.Rel(root, src)
-	if rel == "" {
-		rel = src
+	// PUBLISHER-FAILURE-HANDLING-01: Publish lacks Nack ref / slog.Warn /
+	// RecordPublishFailure and has an unrecorded error return.
+	f, fset = parse(`package rabbitmq
+type P struct{}
+func (p *P) Publish() error {
+	if true {
+		return errBoom
 	}
-	EachInSubtree[ast.CallExpr](stopIntake.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Wait" {
-			return
-		}
-		inner, ok := sel.X.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		if inner.Sel.Name != "localWg" {
-			return
-		}
-		t.Errorf(
-			"RMQ-STOPINTAKE-INFLIGHT-WAIT-01: %s:%s — StopIntake body must not call "+
-				"localWg.Wait(); poll inflightCount() instead. drainRemaining "+
-				"concurrently calls localWg.Add(1) on every prefetched delivery, "+
-				"and Wait racing that Add panics with "+
-				"\"WaitGroup misuse: Add called concurrently with Wait\".",
-			rel, fset.Position(call.Pos()),
-		)
-	})
+	return nil
+}
+`)
+	publish := findMethod(f, "Publish")
+	if publish == nil {
+		t.Fatal("fixture Publish method not found")
+	}
+	pubLine := fset.Position(publish.Pos()).Line
+	assertLocated("checkPublisherNackErrcode", checkPublisherNackErrcode(publish, rel, pubLine))
+	assertLocated("checkPublisherWarnCount", checkPublisherWarnCount(publish, rel, pubLine))
+	assertLocated("checkPublisherRecordsFailureMetric", checkPublisherRecordsFailureMetric(publish, rel, pubLine))
+	assertLocated("checkPublisherAllReturnsMustRecord", checkPublisherAllReturnsMustRecord(publish, fset, rel))
+
+	// STOPINTAKE-INFLIGHT-WAIT-01: no StopIntake; no drainRemaining; no WithoutCancel.
+	f, fset = parse("package rabbitmq\ntype S struct{}\nfunc (s *S) Other() {}\n")
+	assertLocated("checkStopIntakeWaitsForInflight", checkStopIntakeWaitsForInflight(f, fset, rel))
+	assertLocated("checkDrainNoParentCtxDone", checkDrainNoParentCtxDone(f, fset, rel))
+	assertLocated("checkDrainUsesDetachedContext", checkDrainUsesDetachedContext(f, fset, rel))
 }

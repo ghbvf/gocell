@@ -870,6 +870,58 @@ func TestRender_Golden_Synth_GRPC(t *testing.T) {
 	}
 }
 
+// TestRender_Golden_Synth_GRPC_MultiMethod golden-locks the iface_gen.go
+// rendered for the synth_grpc_multimethod fixture (two RPCs). This byte-locks
+// the {{- range .GRPC.Methods}} multi-method render path in iface.tmpl and
+// confirms that both IssueCommand and GetCommandStatus appear in the output
+// with the shared ProtoAlias import (C2 carrier for
+// GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
+func TestRender_Golden_Synth_GRPC_MultiMethod(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_grpc_multimethod")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["grpc.device.command.v1"]
+	if contract == nil {
+		t.Fatal("grpc.device.command.v1 not found in synth_grpc_multimethod fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "grpc.device.command.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	// Verify the spec has exactly 2 methods before golden-locking the render.
+	if spec.GRPC == nil {
+		t.Fatal("spec.GRPC is nil")
+	}
+	if len(spec.GRPC.Methods) != 2 {
+		t.Fatalf("spec.GRPC.Methods len=%d, want 2 (IssueCommand + GetCommandStatus)", len(spec.GRPC.Methods))
+	}
+	if spec.GRPC.Methods[0].MethodName != "IssueCommand" {
+		t.Errorf("Methods[0].MethodName = %q, want IssueCommand", spec.GRPC.Methods[0].MethodName)
+	}
+	if spec.GRPC.Methods[1].MethodName != "GetCommandStatus" {
+		t.Errorf("Methods[1].MethodName = %q, want GetCommandStatus", spec.GRPC.Methods[1].MethodName)
+	}
+
+	content := renderFile(t, spec, "iface_gen.go")
+	goldenFile := goldenFilePath("synth_grpc_multimethod", "iface_gen.go")
+
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
 // TestBuildContractSpec_Saga asserts the saga IR: step output DTOs, the
 // chained input types (step N input = step N-1 output; step 0 has none), and
 // per-step compensate derivation (createShipment opts out with compensate:false).

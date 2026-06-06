@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
 )
@@ -56,8 +57,11 @@ func TestJSsologinSessionDb(t *testing.T) {
 		"user-ssologin-fixture", "jti-ssologin-fixture",
 		authzEpoch, time.Hour, anchor)
 
+	testTenantID, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	require.NoError(t, err)
+
 	ctx := context.Background()
-	require.NoError(t, store.Create(ctx, sess), "session must persist on Create")
+	require.NoError(t, store.Create(ctx, testTenantID, sess), "session must persist on Create")
 
 	view, err := store.Get(ctx, sess.ID)
 	require.NoError(t, err, "freshly created session must be retrievable")

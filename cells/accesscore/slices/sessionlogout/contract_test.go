@@ -67,7 +67,7 @@ var _ persistence.TxRunner = noopTxRunner{}
 
 func seedContractSession(store session.Store) string {
 	id := testutil.TestID("sess-1")
-	_ = store.Create(context.Background(), &session.Session{
+	_ = store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                id,
 		SubjectID:         testutil.TestID("usr-1"),
 		JTI:               "jti-" + id,
@@ -101,7 +101,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	require.NoError(t, err)
 
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		t.Fatalf("RegisterRoutes: %v", err)
 	}
 

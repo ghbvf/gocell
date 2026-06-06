@@ -10,26 +10,6 @@ import (
 	"golang.org/x/mod/module"
 )
 
-// ProtoTypeInfo is the proto identity resolved from a .proto file for one rpc
-// method: the Go import binding (from the file's go_package option) plus the
-// request/response message type simple names (from the rpc declaration). The
-// .proto is the single source of truth for these — codegen never hand-derives
-// them, so the rendered stub's import + signature provably track the proto
-// (GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01).
-type ProtoTypeInfo struct {
-	// ProtoPackage is the proto `package` declaration, e.g. "device.command.v1".
-	ProtoPackage string
-	// ImportPath is the go_package import path (the part before ';'),
-	// e.g. "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1".
-	ImportPath string
-	// Alias is the go_package import alias (the part after ';'), e.g. "commandv1".
-	Alias string
-	// RequestType is the rpc request message simple name, e.g. "IssueCommandRequest".
-	RequestType string
-	// ResponseType is the rpc response message simple name.
-	ResponseType string
-}
-
 var (
 	// protoPackageRE matches `package device.command.v1;`.
 	protoPackageRE = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z][A-Za-z0-9_.]*)\s*;`)
@@ -47,55 +27,117 @@ var (
 	blockCommentRE = regexp.MustCompile(`(?s)/\*.*?\*/`)
 )
 
-// ReadProtoTypeInfo reads protoAbsPath and resolves the proto identity for the
-// rpc method within the contract's declared service (fully-qualified, e.g.
-// "device.command.v1.DeviceCommandService"). Comments are stripped first so a
-// commented-out option or rpc declaration is never matched.
+// ProtoServiceInfo is the proto service identity resolved from a .proto file:
+// the Go import binding (from the file's go_package option) plus every RPC
+// method declared in the service block. Used by contractgen's service-level
+// codegen path (#1655) where one contract owns a whole proto service.
+type ProtoServiceInfo struct {
+	// ProtoPackage is the proto `package` declaration, e.g. "device.command.v1".
+	ProtoPackage string
+	// ImportPath is the go_package import path (the part before ';'),
+	// e.g. "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1".
+	ImportPath string
+	// Alias is the go_package import alias (the part after ';'), e.g. "commandv1".
+	Alias string
+	// Methods lists every unary RPC in the service block; streaming RPCs and
+	// unexported-identifier method names are rejected (see parseAllRPCMethods).
+	Methods []ProtoMethodInfo
+}
+
+// ProtoMethodInfo is the name + request/response type for one RPC.
+type ProtoMethodInfo struct {
+	// Name is the rpc method name, e.g. "IssueCommand".
+	Name string
+	// RequestType is the request message simple name, e.g. "IssueCommandRequest".
+	RequestType string
+	// ResponseType is the response message simple name, e.g. "IssueCommandResponse".
+	ResponseType string
+}
+
+// ReadProtoServiceInfo reads protoAbsPath and returns all unary RPC methods for
+// the named service (fully-qualified, e.g. "device.command.v1.DeviceCommandService").
+// It enumerates ALL methods in the service block; the proto is the single source
+// of truth for the method set (#1655).
 //
 // Usage: callers must pass an absolute proto path that already exists on disk.
-// Prefer the cellgen.EnrichGrpcServicesWithProtoInfo / contractgen builder paths
-// over calling ReadProtoTypeInfo directly — those paths enforce the proto-path
-// traversal guard (metadata.ValidateGRPCProtoPath) and provide cell/slice/
-// contract context in error messages.
-func ReadProtoTypeInfo(protoAbsPath, service, method string) (ProtoTypeInfo, error) {
+// Contract-context errors should be wrapped by the caller.
+func ReadProtoServiceInfo(protoAbsPath, service string) (ProtoServiceInfo, error) {
 	raw, err := os.ReadFile(protoAbsPath) // #nosec G304 — codegen reads a contracts-relative .proto resolved by the builder
 	if err != nil {
-		return ProtoTypeInfo{}, fmt.Errorf("read proto %q: %w", protoAbsPath, err)
+		return ProtoServiceInfo{}, fmt.Errorf("read proto %q: %w", protoAbsPath, err)
 	}
 	text := stripProtoComments(string(raw))
 
 	pkg, err := parseProtoPackage(text)
 	if err != nil {
-		return ProtoTypeInfo{}, err
+		return ProtoServiceInfo{}, err
 	}
 	importPath, alias, err := parseGoPackage(text)
 	if err != nil {
-		return ProtoTypeInfo{}, err
+		return ProtoServiceInfo{}, err
 	}
-	// Scope to the service the contract declares (service FQN = <pkg>.<Name>),
-	// then resolve the method only within that service block — a method name is
-	// unique per service, not per file, so a whole-file scan would mis-match a
-	// same-named rpc in a sibling service (mirrors protoc-gen-go-grpc walking
-	// protogen.Service → method.Input/Output rather than globbing the file).
 	simpleService, err := serviceSimpleName(service, pkg)
 	if err != nil {
-		return ProtoTypeInfo{}, err
+		return ProtoServiceInfo{}, err
 	}
 	block, err := extractServiceBlock(text, simpleService)
 	if err != nil {
-		return ProtoTypeInfo{}, err
+		return ProtoServiceInfo{}, err
 	}
-	req, resp, err := parseRPCMethod(block, method, pkg)
+	methods, err := parseAllRPCMethods(block, pkg)
 	if err != nil {
-		return ProtoTypeInfo{}, err
+		return ProtoServiceInfo{}, err
 	}
-	return ProtoTypeInfo{
+	return ProtoServiceInfo{
 		ProtoPackage: pkg,
 		ImportPath:   importPath,
 		Alias:        alias,
-		RequestType:  req,
-		ResponseType: resp,
+		Methods:      methods,
 	}, nil
+}
+
+// parseAllRPCMethods enumerates every rpc declaration in a service block,
+// returning a ProtoMethodInfo for each. Streaming rpcs are rejected (unary
+// only). Each method name must be an exported Go identifier — codegen renders
+// it directly as a Go interface method. Duplicate method names within the
+// service are rejected here rather than left to surface as a duplicate-method
+// Go compile error in the generated interface (this regex reader does not get
+// protoc's own duplicate-rpc check, so a malformed proto generated without buf
+// would otherwise emit an uncompilable interface). The returned slice preserves
+// proto declaration order.
+func parseAllRPCMethods(block, protoPkg string) ([]ProtoMethodInfo, error) {
+	var methods []ProtoMethodInfo
+	seen := make(map[string]struct{})
+	for _, m := range rpcLineRE.FindAllStringSubmatch(block, -1) {
+		name := m[1]
+		if m[2] != "" || m[4] != "" {
+			return nil, fmt.Errorf("proto: rpc %q is streaming; codegen supports unary only (streaming tracked at gh #1099)", name)
+		}
+		if !token.IsIdentifier(name) || !token.IsExported(name) {
+			return nil, fmt.Errorf("proto: rpc method %q must be an exported Go identifier", name)
+		}
+		if _, dup := seen[name]; dup {
+			return nil, fmt.Errorf("proto: duplicate rpc method %q in service block", name)
+		}
+		seen[name] = struct{}{}
+		req, err := localMessageName(m[3], protoPkg)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := localMessageName(m[5], protoPkg)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, ProtoMethodInfo{
+			Name:         name,
+			RequestType:  req,
+			ResponseType: resp,
+		})
+	}
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("proto: service block contains no rpc declarations")
+	}
+	return methods, nil
 }
 
 // serviceSimpleName derives the proto service's simple name from the contract's
@@ -122,7 +164,7 @@ func serviceSimpleName(fqService, protoPkg string) (string, error) {
 // Blind spot (accepted, same class as stripProtoComments): a `{`/`}` inside a
 // proto string literal (e.g. an rpc/service option value) would mis-count brace
 // depth. Service-block option strings do not contain braces in practice, and
-// readProtoTypeInfo only reads in-repo proto files.
+// ReadProtoServiceInfo only reads in-repo proto files.
 func extractServiceBlock(text, serviceName string) (string, error) {
 	head := regexp.MustCompile(`(?m)\bservice\s+` + regexp.QuoteMeta(serviceName) + `\s*\{`)
 	loc := head.FindStringIndex(text)
@@ -159,8 +201,7 @@ func parseProtoPackage(text string) (string, error) {
 // both are injected verbatim into generated Go (the import line + the
 // *alias.Type signature): the import path must carry no whitespace (goimports
 // would reject it downstream, but with an opaque parse error rather than a
-// proto-pointing one), and the alias must be a Go identifier — same guard the
-// rpc method already gets in buildGRPCSpec.
+// proto-pointing one), and the alias must be a valid Go identifier.
 func parseGoPackage(text string) (importPath, alias string, err error) {
 	m := goPackageRE.FindStringSubmatch(text)
 	if m == nil {
@@ -177,31 +218,6 @@ func parseGoPackage(text string) (importPath, alias string, err error) {
 		return "", "", fmt.Errorf("proto: go_package alias %q must be a valid Go identifier", alias)
 	}
 	return path, alias, nil
-}
-
-// parseRPCMethod finds the rpc declaration for method within a service block and
-// returns its request / response message simple names. Streaming rpcs are
-// rejected (unary only until PR 10); message types must resolve to protoPkg
-// (see localMessageName).
-func parseRPCMethod(block, method, protoPkg string) (req, resp string, err error) {
-	for _, m := range rpcLineRE.FindAllStringSubmatch(block, -1) {
-		if m[1] != method {
-			continue
-		}
-		if m[2] != "" || m[4] != "" {
-			return "", "", fmt.Errorf("proto: rpc %q is streaming; codegen supports unary only (PR 10)", method)
-		}
-		req, err := localMessageName(m[3], protoPkg)
-		if err != nil {
-			return "", "", err
-		}
-		resp, err := localMessageName(m[5], protoPkg)
-		if err != nil {
-			return "", "", err
-		}
-		return req, resp, nil
-	}
-	return "", "", fmt.Errorf("proto: rpc method %q not found in service block", method)
 }
 
 // localMessageName resolves a proto message reference to its simple Go type
@@ -224,7 +240,7 @@ func localMessageName(ref, protoPkg string) (string, error) {
 	if qualifier != protoPkg {
 		return "", fmt.Errorf(
 			"proto: message %q is in external package %q (not %q); cross-package message types are not supported yet "+
-				"(would require go_package import resolution)",
+				"(would require go_package import resolution; tracked at gh #1099)",
 			ref, qualifier, protoPkg)
 	}
 	return name, nil
@@ -239,7 +255,7 @@ func localMessageName(ref, protoPkg string) (string, error) {
 // would be mis-stripped; likewise an escaped quote (\") inside a string toggles
 // indexLineComment's inStr state and may misclassify a following "//". Proto
 // option strings (go_package, etc.) do not contain these sequences, and the
-// fixture controls the grammar; readProtoTypeInfo only reads contracts-relative
+// fixture controls the grammar; ReadProtoServiceInfo only reads contracts-relative
 // proto files authored in-repo.
 func stripProtoComments(src string) string {
 	src = blockCommentRE.ReplaceAllString(src, " ")

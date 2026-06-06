@@ -15,5 +15,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"authorizationdecide: roleRepo is required")
 	}
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"authorizationdecide: TxRunner required; use WithTxManager")
+	}
 	return nil
 }

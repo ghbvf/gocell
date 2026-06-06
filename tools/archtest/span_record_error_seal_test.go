@@ -103,17 +103,6 @@ func redactionLocalName(file *ast.File) string {
 	return ""
 }
 
-// posInRanges reports whether p is inside any of the flat [start,end] pairs
-// in ranges. Pairs are flat: even indices are start, odd are end positions.
-func posInRanges(p token.Pos, ranges []token.Pos) bool {
-	for i := 0; i+1 < len(ranges); i += 2 {
-		if p >= ranges[i] && p <= ranges[i+1] {
-			return true
-		}
-	}
-	return false
-}
-
 // recordErrorSinkFile is the module-relative path to the adapter file whose
 // otelSpan.RecordError body is the single sanctioned funnel for all
 // oteltrace.Span.RecordError calls in adapters/otel.

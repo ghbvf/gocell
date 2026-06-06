@@ -184,13 +184,6 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	t.Run("InvalidTenant_Rejected", func(t *testing.T) {
 		conformUserInvalidTenantRejected(t, factory, features)
 	})
-	// U15: positive assertion for the GetByID by-PK tenant-deriving carve-out:
-	// GetByID resolves by global UUID PK with no tenant predicate. If someone
-	// later adds a tenant filter, the seeded-tenant lookup returns nil and
-	// this test fails.
-	t.Run("GetByID_ByPK_NoTenantPredicate", func(t *testing.T) {
-		conformGetByIDByPKCarveOut(t, factory)
-	})
 	runNarrowWriteSurfaceConformance(t, factory)
 }
 
@@ -454,9 +447,9 @@ func conformUpdatePasswordInactiveRejected(t *testing.T, factory UserRepoFactory
 		t.Fatalf("UpdatePassword_InactiveRejected: want ErrAuthUserNotActive, got %v", err)
 	}
 
-	got, gerr := repo.GetByID(context.Background(), u.ID)
+	got, gerr := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if gerr != nil {
-		t.Fatalf("UpdatePassword_InactiveRejected: GetByID: %v", gerr)
+		t.Fatalf("UpdatePassword_InactiveRejected: GetByIDInTenant: %v", gerr)
 	}
 	if got.PasswordHash != u.PasswordHash {
 		t.Error("UpdatePassword_InactiveRejected: password_hash must be unchanged on a frozen account")
@@ -626,7 +619,7 @@ func conformBumpAuthzEpochMonotonic(t *testing.T, factory UserRepoFactory) {
 	}
 }
 
-// conformNotFoundPropagates: GetByID / GetByUsername on unknown IDs return ErrAuthUserNotFound.
+// conformNotFoundPropagates: GetByIDInTenant / GetByUsername on unknown IDs return ErrAuthUserNotFound.
 func conformNotFoundPropagates(t *testing.T, factory UserRepoFactory) {
 	t.Helper()
 	repo, _, cleanup := factory(t)
@@ -634,12 +627,12 @@ func conformNotFoundPropagates(t *testing.T, factory UserRepoFactory) {
 
 	phantom := uuid.NewString()
 
-	_, err := repo.GetByID(context.Background(), phantom)
+	_, err := repo.GetByIDInTenant(context.Background(), testTenantID, phantom)
 	if err == nil {
-		t.Fatal("NotFound: GetByID on unknown ID must return error, got nil")
+		t.Fatal("NotFound: GetByIDInTenant on unknown ID must return error, got nil")
 	}
 	if !isErrAuthUserNotFound(err) {
-		t.Errorf("NotFound: GetByID must return ErrAuthUserNotFound, got %v", err)
+		t.Errorf("NotFound: GetByIDInTenant must return ErrAuthUserNotFound, got %v", err)
 	}
 
 	_, err = repo.GetByUsername(context.Background(), testTenantID, "nobody_"+phantom)
@@ -656,10 +649,6 @@ func conformNotFoundPropagates(t *testing.T, factory UserRepoFactory) {
 // tenant-scoped reads/writes issued under a different tenant B, while remaining
 // visible under its own tenant. This is the behavioral backstop for the mem
 // tenant-membership guard and the PG `WHERE tenant_id = $N` predicate.
-//
-// GetByID is intentionally EXCLUDED: it is the by-global-UUID-PK tenant-deriving
-// carve-out (returns the row regardless of tenant, by design — sessionrefresh
-// has no pre-auth tenant); DB-layer RLS is its cross-tenant backstop in PR-3.
 func conformCrossTenantIsolation(t *testing.T, factory UserRepoFactory, features Features) {
 	t.Helper()
 	repo, txRunner, cleanup := factory(t)
@@ -787,7 +776,7 @@ func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 			var err error
 			switch idx % 3 {
 			case 0:
-				_, err = repo.GetByID(ctx, u.ID)
+				_, err = repo.GetByIDInTenant(ctx, testTenantID, u.ID)
 			case 1:
 				// Intentionally stale version — conflict is expected (and tolerated below).
 				_, err = repo.UpdatePassword(ctx, testTenantID, u.ID, "$2a$12$concurrent", false, 0)
@@ -876,7 +865,7 @@ func conformUpdateLockoutFieldsSucceeds(t *testing.T, factory UserRepoFactory) {
 		t.Fatalf("UpdateLockoutFields_Succeeds: UpdateLockoutFields: %v", err)
 	}
 
-	got, err := repo.GetByID(context.Background(), u.ID)
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateLockoutFields_Succeeds: GetByID: %v", err)
 	}
@@ -1057,7 +1046,7 @@ func conformUpdateProfileSucceeds(t *testing.T, factory UserRepoFactory) {
 	}
 
 	// Re-read and verify the same columns persisted and untouched columns held.
-	got, err := repo.GetByID(context.Background(), u.ID)
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateProfile_Succeeds: GetByID: %v", err)
 	}
@@ -1101,7 +1090,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	if _, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nePtr(newName), nil, now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: name-only: %v", err)
 	}
-	got, err := repo.GetByID(context.Background(), u.ID)
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: GetByID after name-only: %v", err)
 	}
@@ -1118,7 +1107,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	if _, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nil, nePtr(newEmail), now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: email-only: %v", err)
 	}
-	got, err = repo.GetByID(context.Background(), u.ID)
+	got, err = repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: GetByID after email-only: %v", err)
 	}
@@ -1138,7 +1127,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	if _, err := repo.UpdateProfile(context.Background(), testTenantID, u.ID, nil, nil, now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: nil+nil must not error: %v", err)
 	}
-	got, err = repo.GetByID(context.Background(), u.ID)
+	got, err = repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: GetByID after nil+nil: %v", err)
 	}
@@ -1251,7 +1240,7 @@ func conformUpdateLockStateSucceeds(t *testing.T, factory UserRepoFactory) {
 		t.Fatalf("UpdateLockState_Succeeds: UpdateLockState: %v", err)
 	}
 
-	got, err := repo.GetByID(context.Background(), u.ID)
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateLockState_Succeeds: GetByID: %v", err)
 	}
@@ -1313,7 +1302,7 @@ func conformUpdateLockStateActivateClearsLockout(t *testing.T, factory UserRepoF
 	if err := repo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusLocked, now); err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: UpdateLockState(Locked): %v", err)
 	}
-	mid, err := repo.GetByID(context.Background(), u.ID)
+	mid, err := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: GetByID after Lock: %v", err)
 	}
@@ -1327,7 +1316,7 @@ func conformUpdateLockStateActivateClearsLockout(t *testing.T, factory UserRepoF
 	if err := repo.UpdateLockState(context.Background(), testTenantID, u.ID, domain.StatusActive, now2); err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: UpdateLockState(Active): %v", err)
 	}
-	got, err := repo.GetByID(context.Background(), u.ID)
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdateLockState_ActivateClearsLockout: GetByID after Activate: %v", err)
 	}
@@ -1365,7 +1354,7 @@ func conformUpdatePasswordResetFlagSucceeds(t *testing.T, factory UserRepoFactor
 	if err := repo.UpdatePasswordResetFlag(context.Background(), testTenantID, u.ID, true, now); err != nil {
 		t.Fatalf("UpdatePasswordResetFlag_Succeeds: set true: %v", err)
 	}
-	got, err := repo.GetByID(context.Background(), u.ID)
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdatePasswordResetFlag_Succeeds: GetByID after true: %v", err)
 	}
@@ -1391,7 +1380,7 @@ func conformUpdatePasswordResetFlagSucceeds(t *testing.T, factory UserRepoFactor
 	if err := repo.UpdatePasswordResetFlag(context.Background(), testTenantID, u.ID, false, now2); err != nil {
 		t.Fatalf("UpdatePasswordResetFlag_Succeeds: set false: %v", err)
 	}
-	got, err = repo.GetByID(context.Background(), u.ID)
+	got, err = repo.GetByIDInTenant(context.Background(), testTenantID, u.ID)
 	if err != nil {
 		t.Fatalf("UpdatePasswordResetFlag_Succeeds: GetByID after false: %v", err)
 	}
@@ -1520,37 +1509,6 @@ func conformUserInvalidTenantRejected(t *testing.T, factory UserRepoFactory, fea
 		t.Fatalf("conformUserInvalidTenantRejected: ReconstituteUser: %v", err)
 	}
 	wantInvalidTenantErr(t, "UpdateLockoutFields", repo.UpdateLockoutFields(ctx, invalid, ghost))
-}
-
-// conformGetByIDByPKCarveOut (U15): positive regression guard for the
-// GetByID tenant-deriving by-PK carve-out. Asserts GetByID resolves by global
-// UUID PK with no tenant predicate — GetByID has no tenant param and must not
-// apply any tenant filter internally. If someone later adds a tenant predicate,
-// the seeded-tenant lookup in this test returns nil and the test fails.
-//
-// Cross-tenant isolation of GetByID (the PG RLS backstop) is a PR-3 concern;
-// this test only asserts that the carve-out does NOT filter by tenant.
-func conformGetByIDByPKCarveOut(t *testing.T, factory UserRepoFactory) {
-	t.Helper()
-	repo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	id := uuid.NewString()
-	username := "bypk_carveout_" + uuid.NewString()
-	// Seed the user under testTenantID.
-	seedActiveInTenant(t, txRunner, repo, testTenantID, id, username)
-
-	// GetByID must return the row using its global UUID PK alone — no tenant arg.
-	got, err := repo.GetByID(context.Background(), id)
-	if err != nil {
-		t.Fatalf("GetByID_ByPK_ReturnsRowRegardlessOfTenant: GetByID: %v", err)
-	}
-	if got == nil {
-		t.Fatal("GetByID_ByPK_ReturnsRowRegardlessOfTenant: got nil, want non-nil user")
-	}
-	if got.ID != id {
-		t.Errorf("GetByID_ByPK_ReturnsRowRegardlessOfTenant: got ID %q, want %q", got.ID, id)
-	}
 }
 
 // ─── RoleRepository conformance ───────────────────────────────────────────────

@@ -30,11 +30,11 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, testTenantID, user))
 
-	// GetByID should preserve the flag.
-	got, err := repo.GetByID(ctx, "usr-test-001")
+	// GetByIDInTenant should preserve the flag.
+	got, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-test-001")
 	require.NoError(t, err)
-	assert.True(t, got.PasswordResetRequired(), "GetByID must preserve PasswordResetRequired")
-	assert.Equal(t, domain.UserSourceSetup, got.CreationSource, "GetByID must preserve CreationSource")
+	assert.True(t, got.PasswordResetRequired(), "GetByIDInTenant must preserve PasswordResetRequired")
+	assert.Equal(t, domain.UserSourceSetup, got.CreationSource, "GetByIDInTenant must preserve CreationSource")
 
 	// GetByUsername should preserve the flag.
 	got2, err := repo.GetByUsername(ctx, testTenantID, "testuser")
@@ -45,7 +45,7 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	// UpdatePasswordResetFlag should persist changes to the flag.
 	require.NoError(t, repo.UpdatePasswordResetFlag(ctx, testTenantID, got.ID, false, time.Now()))
 
-	got3, err := repo.GetByID(ctx, "usr-test-001")
+	got3, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-test-001")
 	require.NoError(t, err)
 	assert.False(t, got3.PasswordResetRequired(), "Update must persist SetPasswordResetRequired(false)")
 }
@@ -64,7 +64,7 @@ func TestUserRepo_UpdatePassword_Match(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), newPV, "new password_version must be 1")
 
-	got, err := repo.GetByID(ctx, "usr-alice")
+	got, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-alice")
 	require.NoError(t, err)
 	assert.Equal(t, "$2a$12$newhash", got.PasswordHash)
 	assert.Equal(t, int64(1), got.PasswordVersion)
@@ -90,7 +90,7 @@ func TestUserRepo_UpdatePassword_VersionMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrVersionConflict, ce.Code, "stale version must yield ErrVersionConflict")
 
 	// Original hash must be unchanged.
-	got, err := repo.GetByID(ctx, "usr-bob")
+	got, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-bob")
 	require.NoError(t, err)
 	assert.Equal(t, "$2a$12$oldhash", got.PasswordHash)
 	assert.Equal(t, int64(0), got.PasswordVersion)
@@ -122,7 +122,7 @@ func TestUserRepo_UpdatePassword_ResetRequiredFlag(t *testing.T) {
 	_, err = repo.UpdatePassword(ctx, testTenantID, "usr-carol", "$2a$12$newhash", false, 0)
 	require.NoError(t, err)
 
-	got, err := repo.GetByID(ctx, "usr-carol")
+	got, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-carol")
 	require.NoError(t, err)
 	assert.False(t, got.PasswordResetRequired(), "UpdatePassword must apply the resetRequired argument")
 }
@@ -150,10 +150,10 @@ func TestUserRepo_BumpAuthzEpoch_IncrementsAndReturns(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), epoch2, "second BumpAuthzEpoch must return 3")
 
-	// GetByID must reflect the updated epoch.
-	got, err := repo.GetByID(ctx, "usr-epoch-001")
+	// GetByIDInTenant must reflect the updated epoch.
+	got, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-epoch-001")
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), got.AuthzEpoch(), "GetByID must return updated AuthzEpoch")
+	assert.Equal(t, int64(3), got.AuthzEpoch(), "GetByIDInTenant must return updated AuthzEpoch")
 }
 
 func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
@@ -187,7 +187,7 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	got, err := repo.GetByID(ctx, "usr-concurrent-001")
+	got, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-concurrent-001")
 	require.NoError(t, err)
 	assert.Equal(t, int64(goroutines)+1, got.AuthzEpoch(),
 		"100 concurrent BumpAuthzEpoch calls starting from epoch=1 must result in epoch == 101")

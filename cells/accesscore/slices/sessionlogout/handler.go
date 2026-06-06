@@ -3,11 +3,14 @@ package sessionlogout
 import (
 	"context"
 	"errors"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/httpcookie"
 	deletegen "github.com/ghbvf/gocell/generated/contracts/http/auth/session/delete/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
 
 // DeleteAdapter implements deletegen.Service for http.auth.session.delete.v1.
@@ -61,30 +64,38 @@ func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (dele
 		}
 		return nil, err
 	}
+	httpcookie.ClearRefresh(ctx)
 	return deletegen.Delete204NoContentResponse{}, nil
 }
 
 // Handler is the route handler for the sessionlogout slice.
 type Handler struct {
-	deleteH *deletegen.Handler
+	deleteH   *deletegen.Handler
+	cookieTTL time.Duration
 }
 
 // NewHandler creates a sessionlogout Handler using the generated session-delete handler.
+// cookieTTL is the refresh-token lifetime; it is forwarded to [httpcookie.Middleware]
+// so the wrapper can emit a properly-aged Set-Cookie (for a clear, Middleware
+// hard-codes Max-Age=0 regardless of this value).
 // No per-route policy: contract.yaml declares auth.serviceOwned:true, so the
 // generated handler keeps listener JWT auth and PasswordResetExempt routing while
 // ownership enforcement stays inside the service.
-func NewHandler(svc *Service) *Handler {
+func NewHandler(svc *Service, cookieTTL time.Duration) *Handler {
 	return &Handler{
-		deleteH: deletegen.NewHandler(DeleteAdapter{svc}),
+		deleteH:   deletegen.NewHandler(DeleteAdapter{svc}),
+		cookieTTL: cookieTTL,
 	}
 }
 
-// RegisterRoutes mounts the session-delete contract handler on mux.
+// RegisterRoutes mounts the session-delete contract handler on mux, wrapped with
+// [httpcookie.Middleware] so that a successful 204 response carries
+// Set-Cookie: __Host-gocell_rt=; ...; Max-Age=0 to delete the refresh cookie.
 // The parameter type is cell.RouteHandler (not cell.RouteMux) because the
 // generated handler_gen.go declares RegisterRoutes(mux cell.RouteHandler) — the
 // minimum interface that both production RouteMux and stdlib *http.ServeMux
 // satisfy. Using the narrower type keeps the slice composable with both
 // chi-based routers and the bare ServeMux used in tests.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
-	return h.deleteH.RegisterRoutes(mux)
+	return h.deleteH.RegisterRoutes(cellmw.NewHeaderInjectMux(mux, httpcookie.Middleware(h.cookieTTL)))
 }

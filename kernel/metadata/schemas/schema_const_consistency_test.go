@@ -78,19 +78,6 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 			got, metadata.CapabilityEnum)
 	})
 
-	// gRPC streamingType enum: the schema if/then literal is locked byte-equal
-	// to metadata.GRPCStreamingTypeEnum so schema, governance FMT-37, and runtime
-	// contractspec.validateGRPC share one source for the accepted streaming
-	// patterns.
-	t.Run("contract.schema.json#GRPCStreamingTypeEnum", func(t *testing.T) {
-		t.Parallel()
-		leaf := walkGRPCEndpointField(t, "streamingType", "enum")
-		got := asStringSlice(t, leaf)
-		require.True(t, reflect.DeepEqual(metadata.GRPCStreamingTypeEnum, got),
-			"schemas/contract.schema.json grpc streamingType enum drifted from metadata.GRPCStreamingTypeEnum: schema=%v const=%v",
-			got, metadata.GRPCStreamingTypeEnum)
-	})
-
 	// gRPC proto path prefix: the schema proto.pattern is an anchored literal
 	// prefix ("^"+prefix). GRPCProtoPathPrefix contains no regex metacharacters,
 	// so equality with "^"+const is an exact byte lock.
@@ -265,20 +252,6 @@ func descend(t *testing.T, cur any, keys ...string) any {
 		require.True(t, ok, "key %q missing", key)
 	}
 	return cur
-}
-
-// asStringSlice coerces a JSON array leaf into []string.
-func asStringSlice(t *testing.T, leaf any) []string {
-	t.Helper()
-	arr, ok := leaf.([]any)
-	require.True(t, ok, "leaf is not an array: %T", leaf)
-	out := make([]string, 0, len(arr))
-	for i, v := range arr {
-		s, ok := v.(string)
-		require.True(t, ok, "leaf[%d] is not a string: %T", i, v)
-		out = append(out, s)
-	}
-	return out
 }
 
 // TestBuildMetaFieldsCoveredBySchema guards BuildMeta ↔ assembly.schema.json

@@ -27,8 +27,9 @@ trap 'rm -rf "${bindir}"' EXIT
 gocell_bin="${bindir}/gocell"
 go build -o "${gocell_bin}" ./cmd/gocell
 
-# Root module: examples/* nested modules are naturally excluded by the ./...
-# module boundary; the in-root examples/demo cell IS still scanned.
+# Root module: examples/* are their own go.work satellites (#1556, incl. demo
+# since #1644), naturally excluded by the ./... module boundary here and scanned
+# in the GOWORK=off satellite loop below.
 "${gocell_bin}" check unconditional-skip ./...
 
 # Satellite modules: enumerate from the go.work funnel and scan each from inside

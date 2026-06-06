@@ -834,19 +834,20 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 //     block's internal consistency for grpc contracts.
 //
 // Internal consistency mirrors the contract.schema.json grpc if/then block and
-// kernel/contractspec.validateGRPC; the streamingType enum and proto prefix are
-// single-sourced from metadata.GRPCStreamingTypeEnum / metadata.GRPCProtoPathPrefix
-// so schema, governance, and runtime never drift on the accepted value sets.
+// kernel/contractspec.validateGRPC. The proto prefix is single-sourced from
+// metadata.GRPCProtoPathPrefix so schema, governance, and runtime never drift.
+// A single contract now owns a whole proto service (#1655); method and
+// streamingType fields are deleted — the .proto is the single source of truth.
 //
 // Without this rule, schema-aware tooling validates endpoints.grpc but
-// `gocell validate` accepts any grpc block (service/method/proto missing,
-// out-of-enum streamingType, proto outside contracts/grpc/), and a non-grpc
-// contract could silently carry endpoints.grpc — leaving CLI users a different
-// contract than the schema declares (review C1).
+// `gocell validate` accepts any grpc block (service/proto missing, proto
+// outside contracts/grpc/), and a non-grpc contract could silently carry
+// endpoints.grpc — leaving CLI users a different contract than the schema
+// declares (review C1).
 //
 // AI-robust: Medium (governance YAML-metadata validate layer, same tier as
-// FMT-13). Value-presence ceiling; the streamingType/proto value sets are
-// Hard-locked to the schema literal via TestSchemaConstantsMatchSchemaLiterals.
+// FMT-13). Value-presence ceiling; the proto prefix is Hard-locked to the
+// schema literal via TestSchemaConstantsMatchSchemaLiterals.
 func (v *Validator) validateFMT37() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -857,7 +858,7 @@ func (v *Validator) validateFMT37() []ValidationResult {
 				contractFile(c),
 				"endpoints.grpc",
 				fmt.Sprintf("grpc contract %q must declare endpoints.grpc", c.ID),
-				"add endpoints.grpc with service, method, and proto",
+				"add endpoints.grpc with service and proto",
 			))
 			continue
 		}
@@ -895,15 +896,7 @@ func (v *Validator) validateFMT37ForContract(c *metadata.ContractMeta) []Validat
 			"add service: the proto fully-qualified service name (e.g. device.command.v1.DeviceCommandService)",
 		))
 	}
-	if g.Method == "" {
-		results = append(results, v.newError(
-			codeFMT37, IssueRequired, file, "endpoints.grpc.method",
-			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.method", c.ID),
-			"add method: the proto method name (e.g. IssueCommand)",
-		))
-	}
 	results = append(results, v.validateFMT37Proto(c, g, file)...)
-	results = append(results, v.validateFMT37Streaming(c, g, file)...)
 	return results
 }
 
@@ -925,20 +918,6 @@ func (v *Validator) validateFMT37Proto(c *metadata.ContractMeta, g *metadata.GRP
 		)}
 	}
 	return nil
-}
-
-// validateFMT37Streaming enforces that endpoints.grpc.streamingType, when
-// present, is one of metadata.GRPCStreamingTypeEnum. An omitted/empty value is
-// the unary default and is accepted.
-func (v *Validator) validateFMT37Streaming(c *metadata.ContractMeta, g *metadata.GRPCTransportMeta, file string) []ValidationResult {
-	if g.StreamingType == "" || metadata.IsKnownGRPCStreamingType(g.StreamingType) {
-		return nil
-	}
-	return []ValidationResult{v.newError(
-		codeFMT37, IssueInvalid, file, "endpoints.grpc.streamingType",
-		fmt.Sprintf("grpc contract %q streamingType %q is not one of %v", c.ID, g.StreamingType, metadata.GRPCStreamingTypeEnum),
-		"use one of unary, server-stream, client-stream, bidi (or omit for unary)",
-	)}
 }
 
 // validateFMT26 checks that auth.public and auth.passwordResetExempt are not

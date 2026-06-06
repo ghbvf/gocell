@@ -110,18 +110,19 @@ func TestContractSpec_CommandProjectionSaga_Validate(t *testing.T) {
 }
 
 // TestContractSpec_GRPCSpec_Validate verifies ContractSpec validation for
-// grpc kind: Service + Method + Proto are required (nested GRPCEndpointSpec),
-// Proto must be rooted under contracts/grpc/, StreamingType (when present) must
-// be one of the metadata enum, and HTTP/event fields are rejected on a grpc
-// spec. These mirror the contract.schema.json grpc if/then block and governance
-// FMT-37 so the three validation surfaces agree.
+// grpc kind: Service + Proto are required (nested GRPCEndpointSpec),
+// Proto must be rooted under contracts/grpc/. These mirror the
+// contract.schema.json grpc if/then block. The method/streamingType fields
+// were removed in #1655 (service-level granularity; the .proto is the single
+// source of truth for the RPC method set — Service + Proto are the only
+// required fields).
 func TestContractSpec_GRPCSpec_Validate(t *testing.T) {
 	t.Parallel()
 	const proto = "contracts/grpc/device/command/v1/device_command.proto"
 	full := func() *contractspec.GRPCEndpointSpec {
 		return &contractspec.GRPCEndpointSpec{
 			Service: "device.command.v1.DeviceCommandService",
-			Method:  "IssueCommand", Proto: proto,
+			Proto:   proto,
 		}
 	}
 	cases := []struct {
@@ -133,42 +134,20 @@ func TestContractSpec_GRPCSpec_Validate(t *testing.T) {
 			ID: "grpc.device.command.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
 			GRPC: full(),
 		}, false},
-		{"happy — explicit streamingType", contractspec.ContractSpec{
-			ID: "grpc.device.command.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
-			GRPC: &contractspec.GRPCEndpointSpec{
-				Service: "s.v1.S", Method: "M", Proto: proto, StreamingType: "server-stream",
-			},
-		}, false},
-		{"happy — explicit unary streamingType", contractspec.ContractSpec{
-			// "unary" is a real enum member, distinct from the omitted default;
-			// both must be accepted (see metadata.GRPCStreamingTypeEnum).
-			ID: "grpc.device.command.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
-			GRPC: &contractspec.GRPCEndpointSpec{
-				Service: "s.v1.S", Method: "M", Proto: proto, StreamingType: "unary",
-			},
-		}, false},
 		{"grpc kind requires GRPC block", contractspec.ContractSpec{
 			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
 		}, true},
 		{"grpc kind requires service", contractspec.ContractSpec{
 			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
-			GRPC: &contractspec.GRPCEndpointSpec{Method: "IssueCommand", Proto: proto},
-		}, true},
-		{"grpc kind requires method", contractspec.ContractSpec{
-			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
-			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Proto: proto},
+			GRPC: &contractspec.GRPCEndpointSpec{Proto: proto},
 		}, true},
 		{"grpc kind requires proto", contractspec.ContractSpec{
 			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
-			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Method: "M"},
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S"},
 		}, true},
 		{"grpc proto must be rooted under contracts/grpc/", contractspec.ContractSpec{
 			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
-			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Method: "M", Proto: "proto/x.proto"},
-		}, true},
-		{"grpc invalid streamingType rejected", contractspec.ContractSpec{
-			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
-			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Method: "M", Proto: proto, StreamingType: "duplex"},
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Proto: "proto/x.proto"},
 		}, true},
 		{"grpc spec with http Method rejected", contractspec.ContractSpec{
 			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc", Method: "POST",
@@ -204,7 +183,7 @@ func TestContractSpec_GRPCSpec_Validate(t *testing.T) {
 // grpc endpoint spec for a grpc contract and nil otherwise.
 func TestContractSpec_GRPCInfo(t *testing.T) {
 	t.Parallel()
-	grpcSpec := &contractspec.GRPCEndpointSpec{Service: "s", Method: "m"}
+	grpcSpec := &contractspec.GRPCEndpointSpec{Service: "s"}
 	withGRPC := contractspec.ContractSpec{
 		ID: "grpc.x.y.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc", GRPC: grpcSpec,
 	}

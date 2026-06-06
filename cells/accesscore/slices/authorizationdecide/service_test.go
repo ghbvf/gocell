@@ -12,8 +12,10 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
@@ -30,6 +32,9 @@ var testTenantID = func() tenant.TenantID {
 	}
 	return t
 }()
+
+// testTenantIDStr is the string form for use with ctxkeys.WithTenantID.
+const testTenantIDStr = "00000000-0000-0000-0000-000000000001"
 
 // TestNewService_NilRoleRepo verifies that NewService rejects a nil roleRepo
 // with a non-nil errcode.Error of KindInternal (wiring failure → 5xx).
@@ -57,7 +62,8 @@ func TestNewService_NilRoleRepo(t *testing.T) {
 
 func newTestService() (*Service, *mem.RoleRepository) {
 	repo := mem.NewStore(clock.Real()).RoleRepository()
-	svc, err := NewService(repo, slog.Default())
+	svc, err := NewService(repo, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	if err != nil {
 		panic(err)
 	}
@@ -117,4 +123,87 @@ func TestService_Authorize(t *testing.T) {
 			assert.Equal(t, tt.want, allowed)
 		})
 	}
+}
+
+// scopeCapturingRoleRepo wraps a RoleRepository and records whether the
+// context passed to GetByUserID carries a tenant scope.
+// Used by TestAuthorize_IsRLSScoped (Site 6).
+type scopeCapturingRoleRepo struct {
+	inner         ports.RoleRepository
+	capturedScope tenant.TenantID
+	capturedOK    bool
+}
+
+var _ ports.RoleRepository = (*scopeCapturingRoleRepo)(nil)
+
+func (r *scopeCapturingRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error) {
+	return r.inner.GetByID(ctx, t, id)
+}
+
+func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	return r.inner.GetByUserID(ctx, t, userID)
+}
+
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return r.inner.ListByUserID(ctx, t, userID, params)
+}
+
+func (r *scopeCapturingRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
+	return r.inner.Create(ctx, t, role)
+}
+
+func (r *scopeCapturingRoleRepo) AssignToUser(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	return r.inner.AssignToUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUser(ctx context.Context, t tenant.TenantID, userID, roleID string) error {
+	return r.inner.RemoveFromUser(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, t tenant.TenantID, userID, roleID string) (bool, error) {
+	return r.inner.RemoveFromUserIfNotLast(ctx, t, userID, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountByRole(ctx context.Context, t tenant.TenantID, roleID string) (int, error) {
+	return r.inner.CountByRole(ctx, t, roleID)
+}
+
+func (r *scopeCapturingRoleRepo) CountEffectiveAdmins(ctx context.Context, t tenant.TenantID) (int, error) {
+	return r.inner.CountEffectiveAdmins(ctx, t)
+}
+
+func (r *scopeCapturingRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
+	return r.inner.EffectiveAdminExists(ctx, t)
+}
+
+// TestAuthorize_IsRLSScoped asserts that Authorize wraps the GetByUserID call
+// in a scoped transaction so the RLS tenant_isolation policy on role_assignments
+// is satisfied (Site 6 RLS fix).
+//
+// This is a RED test until Site 6 (authorizationdecide scopedtx.Do) is
+// implemented.
+func TestAuthorize_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real()).RoleRepository()
+	inner.SeedRole(testTenantID, &domain.Role{
+		ID: "admin", Name: "admin",
+		Permissions: []domain.Permission{{Resource: "/api/v1/config", Action: "write"}},
+	})
+	inner.SeedUserRoleAssignment(testTenantID, "usr-rls", "admin")
+
+	cap := &scopeCapturingRoleRepo{inner: inner}
+	svc, err := NewService(cap, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
+	require.NoError(t, err)
+
+	// Use a context that carries ctxkeys.TenantID (post-auth path).
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	allowed, err := svc.Authorize(ctx, "usr-rls", "/api/v1/config", "write")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+
+	assert.True(t, cap.capturedOK,
+		"GetByUserID must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, cap.capturedScope,
+		"GetByUserID scope must equal the request tenant")
 }

@@ -4,12 +4,14 @@ import "fmt"
 
 // protoRegistry detects proto-service collisions across the grpc contracts in
 // one generate run and pins each proto service to a single import path. It is
-// the codegen-time enforcement of data-model.md's "(package, service, method)
-// globally unique" rule and a carrier of GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01
-// (C4). The collision logic is unit-tested directly; the production pre-pass
-// (checkGRPCProtoCollisions) iterates the empty grpc-contract set until the
-// first real grpc contract lands (PR 8), at which point it becomes live without
-// any wiring change.
+// the codegen-time enforcement of data-model.md's "(package, service) globally
+// unique" rule and a carrier of GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01 (C4).
+//
+// With service-level contract granularity (#1655) the ownership unit is a whole
+// proto service (not an individual rpc), so the only collision class that
+// matters is two different contracts claiming the same (proto package, service).
+// Per-method collision tracking is no longer needed — a service's method set is
+// fully determined by the .proto file, and a single contract owns the service.
 type protoRegistry struct {
 	entries map[protoServiceKey]*protoServiceEntry
 }
@@ -23,27 +25,25 @@ type protoServiceKey struct {
 
 type protoServiceEntry struct {
 	importPath string
-	// methods is the set of rpc method names already seen for this service;
-	// values are always the empty struct (membership/existence check only, never
-	// read back out — it drives the duplicate-method collision branch).
-	methods map[string]struct{}
+	contractID string // first contract that registered this service (for diagnostics)
 }
 
 func newProtoRegistry() *protoRegistry {
 	return &protoRegistry{entries: make(map[protoServiceKey]*protoServiceEntry)}
 }
 
-// register records one grpc contract's (proto package, service, method) and its
+// register records one grpc contract's (proto package, service) and its
 // resolved import path, failing fast on two collision classes:
 //   - the same (package, service) mapped to divergent import paths;
-//   - a duplicate (package, service, method) across contracts.
-func (r *protoRegistry) register(contractID, service, method string, info ProtoTypeInfo) error {
+//   - a duplicate (package, service) across contracts (two contracts claiming
+//     ownership of the same proto service).
+func (r *protoRegistry) register(contractID, service string, info ProtoServiceInfo) error {
 	key := protoServiceKey{pkg: info.ProtoPackage, service: service}
 	e, ok := r.entries[key]
 	if !ok {
 		r.entries[key] = &protoServiceEntry{
 			importPath: info.ImportPath,
-			methods:    map[string]struct{}{method: {}},
+			contractID: contractID,
 		}
 		return nil
 	}
@@ -52,11 +52,7 @@ func (r *protoRegistry) register(contractID, service, method string, info ProtoT
 			"contractgen: grpc proto service %q (package %q) maps to divergent import paths %q and %q (contract %q)",
 			service, info.ProtoPackage, e.importPath, info.ImportPath, contractID)
 	}
-	if _, dup := e.methods[method]; dup {
-		return fmt.Errorf(
-			"contractgen: grpc (package %q, service %q, method %q) already registered; duplicate in contract %q",
-			info.ProtoPackage, service, method, contractID)
-	}
-	e.methods[method] = struct{}{}
-	return nil
+	return fmt.Errorf(
+		"contractgen: grpc service %q (package %q) already registered by contract %q; duplicate ownership in contract %q",
+		service, info.ProtoPackage, e.contractID, contractID)
 }

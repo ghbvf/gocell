@@ -19,5 +19,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"session-validate: UserRepository required")
 	}
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session-validate: TxRunner required; use WithTxManager")
+	}
 	return nil
 }

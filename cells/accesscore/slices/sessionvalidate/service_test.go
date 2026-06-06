@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
@@ -95,7 +96,7 @@ func TestService_VerifyIntent(t *testing.T) {
 	store := newTestStore(t)
 
 	// Seed an active session for revocation tests.
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                "sess-active",
 		SubjectID:         "usr-1",
 		JTI:               "jti-active",
@@ -106,7 +107,7 @@ func TestService_VerifyIntent(t *testing.T) {
 
 	// Seed a revoked session.
 	revokedAt := time.Now()
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                "sess-revoked",
 		SubjectID:         "usr-2",
 		JTI:               "jti-revoked",
@@ -221,7 +222,7 @@ func TestService_VerifyIntent(t *testing.T) {
 // (lease ExpireTime not reachable from token lookup path).
 func TestService_VerifyIntent_PastSessionExpiresAt_StillValidates(t *testing.T) {
 	store := newTestStore(t)
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                "sess-row-past",
 		SubjectID:         "usr-row-past",
 		JTI:               "jti-row-past",
@@ -259,7 +260,10 @@ func TestService_VerifyIntent_NilSessionStore(t *testing.T) {
 // errorSessionStore simulates infrastructure failures (DB timeout, connection reset).
 type errorSessionStore struct{}
 
-func (errorSessionStore) Create(_ context.Context, _ *session.Session) error { return nil }
+func (errorSessionStore) Create(_ context.Context, _ tenant.TenantID, _ *session.Session) error {
+	return nil
+}
+
 func (errorSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, fmt.Errorf("db connection timeout")
 }
@@ -299,12 +303,12 @@ func TestService_VerifyIntent_NilSessionStore_NoSid(t *testing.T) {
 }
 
 // stubUserRepo is a minimal ports.UserRepository for epoch tests.
-// Only GetByID is exercised by sessionvalidate; other methods panic so that
+// Only GetByIDInTenant is exercised by sessionvalidate; other methods panic so that
 // accidentally-invoked paths fail loudly in tests.
 type stubUserRepo struct {
-	// user is returned on GetByID when getErr is nil.
+	// user is returned on GetByIDInTenant when getErr is nil.
 	user *domain.User
-	// getErr, if non-nil, is returned from GetByID.
+	// getErr, if non-nil, is returned from GetByIDInTenant.
 	getErr error
 }
 
@@ -355,8 +359,15 @@ func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ st
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
-	panic("not implemented")
+func (r *stubUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, id string) (*domain.User, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	if r.user != nil {
+		return r.user, nil
+	}
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		errcode.WithCategory(errcode.CategoryDomain))
 }
 
 func (r *stubUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
@@ -376,7 +387,8 @@ func (r *stubUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID,
 // use newTestSvc (nil userRepo) via the sessionStore-only path.
 func newSvcWithUserRepo(t testing.TB, store session.Store, userRepo ports.UserRepository) *Service {
 	t.Helper()
-	svc, err := NewService(testVerifier, store, userRepo, slog.Default())
+	svc, err := NewService(testVerifier, store, userRepo, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 	return svc
 }
@@ -387,26 +399,47 @@ func TestNewService_NilGuards(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
 	userRepo := &stubUserRepo{user: &domain.User{ID: "usr-1"}}
+	txRunner := outbox.DemoCellTxManager()
 
 	cases := []struct {
 		name     string
 		verifier kauth.IntentTokenVerifier
 		userRepo ports.UserRepository
+		opts     []Option
+		wantKind errcode.Kind
+		wantCode errcode.Code
 	}{
 		{
 			name:     "nil verifier returns error",
 			verifier: nil,
 			userRepo: userRepo,
+			opts:     []Option{WithTxManager(txRunner)},
+			wantKind: errcode.KindInternal,
+			wantCode: errcode.ErrCellInvalidConfig,
 		},
 		{
 			name:     "typed-nil verifier returns error",
 			verifier: (*auth.JWTVerifier)(nil),
 			userRepo: userRepo,
+			opts:     []Option{WithTxManager(txRunner)},
+			wantKind: errcode.KindInternal,
+			wantCode: errcode.ErrCellInvalidConfig,
 		},
 		{
 			name:     "nil userRepo returns error",
 			verifier: testVerifier,
 			userRepo: nil,
+			opts:     []Option{WithTxManager(txRunner)},
+			wantKind: errcode.KindInternal,
+			wantCode: errcode.ErrCellInvalidConfig,
+		},
+		{
+			name:     "nil txRunner returns error",
+			verifier: testVerifier,
+			userRepo: userRepo,
+			opts:     nil, // no WithTxManager → txRunner stays nil
+			wantKind: errcode.KindInvalid,
+			wantCode: errcode.ErrValidationFailed,
 		},
 	}
 
@@ -414,13 +447,13 @@ func TestNewService_NilGuards(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			svc, err := NewService(tc.verifier, store, tc.userRepo, slog.Default())
+			svc, err := NewService(tc.verifier, store, tc.userRepo, slog.Default(), tc.opts...)
 			require.Error(t, err, "NewService must fail on nil dep: %s", tc.name)
 			assert.Nil(t, svc)
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
-			assert.Equal(t, errcode.KindInternal, ec.Kind)
-			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+			assert.Equal(t, tc.wantKind, ec.Kind)
+			assert.Equal(t, tc.wantCode, ec.Code)
 		})
 	}
 }
@@ -428,7 +461,7 @@ func TestNewService_NilGuards(t *testing.T) {
 // seedActiveSession seeds a session in store and returns its ID.
 func seedActiveSession(t testing.TB, store *session.MemStore, sid, subject string) {
 	t.Helper()
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                sid,
 		SubjectID:         subject,
 		JTI:               sid + "-jti",
@@ -444,7 +477,10 @@ type capturingStore struct {
 	getErr error
 }
 
-func (r capturingStore) Create(_ context.Context, _ *session.Session) error { return nil }
+func (r capturingStore) Create(_ context.Context, _ tenant.TenantID, _ *session.Session) error {
+	return nil
+}
+
 func (r capturingStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, r.getErr
 }
@@ -454,7 +490,7 @@ func (r capturingStore) RevokeForSubject(_ context.Context, _ string, _ session.
 }
 func (r capturingStore) RepoReady(_ context.Context) error { return nil }
 
-// capturingUserRepo is a ports.UserRepository whose GetByID injects a
+// capturingUserRepo is a ports.UserRepository whose GetByIDInTenant injects a
 // configurable error for infra-error-path tests.
 type capturingUserRepo struct {
 	getErr error
@@ -508,8 +544,15 @@ func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID,
 	return 0, nil
 }
 
-func (r *capturingUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
-	panic("not implemented")
+func (r *capturingUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, id string) (*domain.User, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	if r.user != nil {
+		return r.user, nil
+	}
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		errcode.WithCategory(errcode.CategoryDomain))
 }
 
 func (r *capturingUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
@@ -564,7 +607,7 @@ func TestEnforce_StaleEpoch_Rejected(t *testing.T) {
 func TestEnforce_EqualEpoch_Accepted(t *testing.T) {
 	store := newTestStore(t)
 	// Seed session with AuthzEpochAtIssue=5 to match user.AuthzEpoch=5.
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                "sess-epoch-equal",
 		SubjectID:         "usr-ep-equal",
 		JTI:               "sess-epoch-equal-jti",
@@ -610,7 +653,7 @@ func TestEnforce_InitialEpochCompat(t *testing.T) {
 func TestEnforce_RowEpochAheadOfUser_Rejected(t *testing.T) {
 	store := newTestStore(t)
 	// Seed session with epoch=10, but user is at epoch=5.
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                "sess-epoch-high",
 		SubjectID:         "usr-ep-high",
 		JTI:               "sess-epoch-high-jti",
@@ -707,7 +750,7 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 
 	// Seed a revoked session.
 	revokedAt := time.Now()
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                "sess-revoked-uniform",
 		SubjectID:         "usr-uniform",
 		JTI:               "jti-revoked-uniform",
@@ -807,7 +850,7 @@ func TestEnforce_NonActiveUser_Rejected_P1_3b(t *testing.T) {
 			sid := "sess-noactive-" + string(tt.status)
 			sub := "usr-noactive-" + string(tt.status)
 
-			require.NoError(t, store.Create(context.Background(), &session.Session{
+			require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 				ID:                sid,
 				SubjectID:         sub,
 				JTI:               sid + "-jti",
@@ -850,7 +893,7 @@ func TestEnforce_ActiveUser_EpochMatch_Allowed_P1_3b_Control(t *testing.T) {
 	sid := "sess-active-control"
 	sub := "usr-active-control"
 
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                sid,
 		SubjectID:         sub,
 		JTI:               sid + "-jti",
@@ -923,7 +966,8 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			svc, svcErr := NewService(testVerifier, capturingStore{getErr: tt.storeErr}, &stubUserRepo{}, logger)
+			svc, svcErr := NewService(testVerifier, capturingStore{getErr: tt.storeErr}, &stubUserRepo{}, logger,
+				WithTxManager(outbox.DemoCellTxManager()))
 			require.NoError(t, svcErr)
 
 			tok, err := IssueTestToken(testPrivKey, "usr-log", nil, time.Hour, "sess-log-test")
@@ -972,7 +1016,7 @@ func TestEnforce_RevokedSession_UserRepoUnavailable_Returns401_Uniform(t *testin
 
 	// Seed a revoked session.
 	revokedAt := time.Now()
-	require.NoError(t, store.Create(context.Background(), &session.Session{
+	require.NoError(t, store.Create(context.Background(), testTenantID, &session.Session{
 		ID:                "sess-revoked-userrepo-down",
 		SubjectID:         "usr-revoked-503",
 		JTI:               "jti-revoked-userrepo-down",
@@ -1003,4 +1047,99 @@ func TestEnforce_RevokedSession_UserRepoUnavailable_Returns401_Uniform(t *testin
 			"not ErrAuthServiceUnavailable (single-envelope 防枚举).")
 	assert.Contains(t, verifyErr.Error(), errMsgAuthFailed,
 		"wire message must remain the uniform errMsgAuthFailed.")
+}
+
+// scopeCapturingUserRepo is a fake ports.UserRepository that records the
+// RLS scope set on the context when GetByIDInTenant is called.
+// Used in TestEnforce_UserLookup_IsRLSScoped to assert that the user lookup
+// runs under the expected tenant scope (Site 4 RLS fix).
+type scopeCapturingUserRepo struct {
+	user          *domain.User
+	capturedScope tenant.TenantID
+	capturedOK    bool
+}
+
+var _ ports.UserRepository = (*scopeCapturingUserRepo)(nil)
+
+func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
+	if r.user == nil {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			errcode.WithCategory(errcode.CategoryDomain))
+	}
+	return r.user, nil
+}
+
+func (r *scopeCapturingUserRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
+	return nil
+}
+
+func (r *scopeCapturingUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
+}
+
+func (r *scopeCapturingUserRepo) UpdateProfile(_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
+}
+
+func (r *scopeCapturingUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
+	return nil
+}
+
+func (r *scopeCapturingUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
+	return nil
+}
+
+func (r *scopeCapturingUserRepo) Delete(_ context.Context, _ tenant.TenantID, _ string) error {
+	return nil
+}
+
+func (r *scopeCapturingUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
+	return 0, nil
+}
+
+func (r *scopeCapturingUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return 0, nil
+}
+
+func (r *scopeCapturingUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
+}
+
+func (r *scopeCapturingUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
+}
+
+func (r *scopeCapturingUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
+	return nil
+}
+
+// TestEnforce_UserLookup_IsRLSScoped asserts that the GetByIDInTenant call in
+// enforceSessionState runs with tenant.ScopeFromContext set to the session's
+// TenantID, so that under a restricted PG role the user read hits the correct
+// RLS-protected row rather than returning 0 rows.
+//
+// This is a RED test until Site 4 (sessionvalidate scopedtx.Do) is implemented.
+func TestEnforce_UserLookup_IsRLSScoped(t *testing.T) {
+	store := newTestStore(t)
+	seedActiveSession(t, store, "sess-rls-scope", "usr-rls")
+
+	user := mustBuildUser(t, "usr-rls", 1)
+	repo := &scopeCapturingUserRepo{user: user}
+
+	svc, err := NewService(testVerifier, store, repo, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
+	require.NoError(t, err)
+
+	tok, err := IssueTestToken(testPrivKey, "usr-rls", nil, time.Hour, "sess-rls-scope")
+	require.NoError(t, err)
+
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
+	require.NoError(t, verifyErr)
+
+	// The scope set inside GetByIDInTenant must match the session's TenantID.
+	assert.True(t, repo.capturedOK,
+		"GetByIDInTenant must run inside a scoped tx (tenant.ScopeFromContext must be set)")
+	assert.Equal(t, testTenantID, repo.capturedScope,
+		"GetByIDInTenant scope must equal the session's TenantID")
 }

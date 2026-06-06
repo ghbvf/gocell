@@ -81,7 +81,7 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc, _, sessionStore := newDurableTestService(t, ow, tx)
 
-	err := svc.Assign(tenantCtx(), "alice", "admin")
+	err := svc.Assign(tenantCtx(), testTenantID, "alice", "admin")
 	require.NoError(t, err)
 
 	// Exactly one outbox entry.
@@ -118,7 +118,7 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	assignActiveAdmin(t, store, "alice")
 	assignActiveAdmin(t, store, "bob")
 
-	err := svc.Revoke(tenantCtx(), "alice", "admin")
+	err := svc.Revoke(tenantCtx(), testTenantID, "alice", "admin")
 	require.NoError(t, err)
 
 	require.Len(t, ow.Entries, 1)
@@ -149,7 +149,7 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc, _, _ := newDurableTestService(t, ow, tx)
 
-	err := svc.Assign(tenantCtx(), "alice", "admin")
+	err := svc.Assign(tenantCtx(), testTenantID, "alice", "admin")
 	require.Error(t, err, "Assign must return error when outbox write fails")
 	assert.ErrorIs(t, err, outboxErr, "original outbox error must be in the chain")
 
@@ -165,7 +165,7 @@ func TestService_Assign_DoesNotCallFunnel(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc, _, sessionStore := newDurableTestService(t, ow, tx)
 
-	require.NoError(t, svc.Assign(tenantCtx(), "u1", "admin"))
+	require.NoError(t, svc.Assign(tenantCtx(), testTenantID, "u1", "admin"))
 
 	assert.Equal(t, 0, sessionStore.revokeCalls,
 		"HIGH-3: Assign must never call the credential invalidation funnel")
@@ -180,10 +180,10 @@ func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc, _, sessionStore := newDurableTestService(t, ow, tx)
 
-	require.NoError(t, svc.Assign(tenantCtx(), "alice", "admin"))
+	require.NoError(t, svc.Assign(tenantCtx(), testTenantID, "alice", "admin"))
 	require.Len(t, ow.Entries, 1, "first assign must publish exactly one event")
 
-	require.NoError(t, svc.Assign(tenantCtx(), "alice", "admin"))
+	require.NoError(t, svc.Assign(tenantCtx(), testTenantID, "alice", "admin"))
 	assert.Len(t, ow.Entries, 1, "repeat assign must not publish a second event")
 	assert.Equal(t, 0, sessionStore.revokeCalls,
 		"durable mode repeat assign must not call session revoke either")
@@ -205,7 +205,7 @@ func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 	assignActiveAdmin(t, store, "bob")
 	assignActiveAdmin(t, store, "carol")
 
-	require.NoError(t, svc.Revoke(tenantCtx(), "alice", "admin"))
+	require.NoError(t, svc.Revoke(tenantCtx(), testTenantID, "alice", "admin"))
 	assert.Empty(t, ow.Entries, "revoke of non-member must not publish any event")
 	assert.Equal(t, 0, sessionStore.revokeCalls,
 		"durable mode revoke of non-member must not call session revoke")
@@ -227,11 +227,11 @@ func TestService_Assign_RepeatIsNoop_NeverCallsFunnel(t *testing.T) {
 	sessionStore := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
 	svc := mustNewService(t, store.RoleRepository(), store.UserRepository(), sessionStore, slog.Default())
 
-	require.NoError(t, svc.Assign(tenantCtx(), "alice", "admin"))
+	require.NoError(t, svc.Assign(tenantCtx(), testTenantID, "alice", "admin"))
 	assert.Equal(t, 0, sessionStore.revokeCalls,
 		"HIGH-3: Assign must never call the credential funnel (first call)")
 
-	require.NoError(t, svc.Assign(tenantCtx(), "alice", "admin"))
+	require.NoError(t, svc.Assign(tenantCtx(), testTenantID, "alice", "admin"))
 	assert.Equal(t, 0, sessionStore.revokeCalls,
 		"HIGH-3: Assign must never call the credential funnel (repeat call)")
 }

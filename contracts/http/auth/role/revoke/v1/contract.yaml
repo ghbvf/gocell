@@ -20,7 +20,7 @@ endpoints:
         - 503
     responses:
       400:
-        description: "Bad request — request body decode failure or userId/roleId blank (ErrAuthRBACInvalidInput)"
+        description: "Bad request — request body decode failure, or userId/roleId/tenantId blank or malformed (tenantId must be a valid UUID) (ErrAuthRBACInvalidInput)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid service token"

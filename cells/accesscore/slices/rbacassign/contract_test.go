@@ -91,13 +91,14 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 	handler := newContractHandler(t)
 
 	// Validate request schema.
-	c.ValidateRequest(t, []byte(`{"userId":"usr-2","roleId":"admin"}`))
-	c.MustRejectRequest(t, []byte(`{"userId":"usr-2"}`))
-	c.MustRejectRequest(t, []byte(`{"userId":"usr-2","roleId":"admin","extra":"bad"}`))
+	c.ValidateRequest(t, []byte(`{"userId":"usr-2","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`))
+	c.MustRejectRequest(t, []byte(`{"userId":"usr-2","tenantId":"00000000-0000-0000-0000-000000000001"}`))
+	c.MustRejectRequest(t, []byte(`{"userId":"usr-2","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001","extra":"bad"}`))
 
 	// Execute real handler.
 	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-2","roleId":"admin"}`))
+	const assignBody = `{"userId":"usr-2","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(assignBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(testAuthServiceCtx("accesscore"))
 	rec := httptest.NewRecorder()
@@ -116,13 +117,14 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	handler := newContractHandler(t)
 
 	// Validate request schema.
-	c.ValidateRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin"}`))
-	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed"}`))
-	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin","extra":"bad"}`))
+	c.ValidateRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`))
+	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed","tenantId":"00000000-0000-0000-0000-000000000001"}`))
+	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001","extra":"bad"}`))
 
 	// Execute real handler.
 	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-seed","roleId":"admin"}`))
+	const revokeBody = `{"userId":"usr-seed","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(revokeBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(testAuthServiceCtx("accesscore"))
 	rec := httptest.NewRecorder()
@@ -146,7 +148,7 @@ func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc, _, _ := newDurableTestService(t, ow, tx)
 
-	require.NoError(t, svc.Assign(tenantCtx(), "alice", "admin"))
+	require.NoError(t, svc.Assign(tenantCtx(), testTenantID, "alice", "admin"))
 
 	require.Len(t, ow.Entries, 1, "Assign must emit exactly one outbox entry")
 	entry := ow.Entries[0]
@@ -181,7 +183,7 @@ func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
 	assignActiveAdmin(t, store, "alice")
 	assignActiveAdmin(t, store, "bob")
 
-	require.NoError(t, svc.Revoke(tenantCtx(), "alice", "admin"))
+	require.NoError(t, svc.Revoke(tenantCtx(), testTenantID, "alice", "admin"))
 
 	require.Len(t, ow.Entries, 1, "Revoke must emit exactly one outbox entry")
 	entry := ow.Entries[0]

@@ -120,10 +120,7 @@ func TestRenderInlineContractYAML_GRPCDraft(t *testing.T) {
 	if cm.Endpoints.GRPC == nil {
 		t.Fatalf("endpoints.grpc subtree is nil; grpc draft must emit it\noutput was:\n%s", out)
 	}
-	if cm.Endpoints.GRPC.Service == "" || cm.Endpoints.GRPC.Method == "" || cm.Endpoints.GRPC.Proto == "" {
-		t.Errorf("endpoints.grpc must have service/method/proto, got %+v", cm.Endpoints.GRPC)
-	}
-	if cm.Endpoints.GRPC.Auth.Public {
-		t.Error("grpc draft must default to auth.public=false (secure default)")
+	if cm.Endpoints.GRPC.Service == "" || cm.Endpoints.GRPC.Proto == "" {
+		t.Errorf("endpoints.grpc must have service/proto, got %+v", cm.Endpoints.GRPC)
 	}
 }

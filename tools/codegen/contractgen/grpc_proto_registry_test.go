@@ -2,13 +2,13 @@
 //
 // Package-internal archtest: it lives in tools/codegen/contractgen (not
 // tools/archtest) because the truth source — buildContractSpec + renderFile +
-// ReadProtoTypeInfo — is reachable only from inside this package (same reason
+// ReadProtoServiceInfo — is reachable only from inside this package (same reason
 // the deleted GRPC-CODEGEN-NO-PROTO-DEP-01 was co-located here). It is therefore
 // NOT in scope for ARCHTEST-VERIFY-COVERAGE-01, which scans tools/archtest only.
 //
 // The proto import path + request/response message type names emitted into a
 // grpc stub's iface_gen.go MUST come from the .proto file (resolved by the
-// ProtoRegistry / ReadProtoTypeInfo), never from a hand-written literal in
+// ProtoRegistry / ReadProtoServiceInfo), never from a hand-written literal in
 // iface.tmpl or a divergent field write. Carriers (downstream Hard + supporting
 // Medium + a tracked Go ceiling):
 //
@@ -20,7 +20,7 @@
 //	C3 (Hard, render-compare to an INDEPENDENT proto oracle) —
 //	   TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle renders
 //	   the stub fresh, AST-walks its imports, and asserts the single non-context
-//	   import byte-equals ReadProtoTypeInfo(proto).ImportPath, and that the
+//	   import byte-equals ReadProtoServiceInfo(proto).ImportPath, and that each
 //	   method signature references the oracle's alias.RequestType / .ResponseType.
 //	   The oracle is computed straight from the .proto, NOT from spec.GRPC, so a
 //	   template that hard-codes a divergent import OR a builder that fills the
@@ -38,10 +38,11 @@
 //
 //	C4 (Medium, collision uniqueness) —
 //	   TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_Collision* feed two synthesized
-//	   specs and assert protoRegistry.register rejects a duplicate
-//	   (proto-package, service, method) and a divergent import for the same
-//	   service. Non-vacuous despite the single synth fixture (which alone never
-//	   collides).
+//	   service registrations and assert protoRegistry.register rejects a duplicate
+//	   (proto-package, service) and a divergent import for the same service.
+//	   Non-vacuous despite the single synth fixture (which alone never collides).
+//	   Method-level collision tracking was removed in #1655 (one contract owns the
+//	   whole service; the .proto is the source of truth for the method set).
 //
 // Funnel two-way rating: downstream Hard (C2 + C3) + supporting Medium (C1, C4).
 //
@@ -81,11 +82,17 @@ const grpcSingleSourceContractID = "grpc.device.command.v1"
 
 // --- C3: rendered import + type names match the independent proto oracle ------
 
+// TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle (C3) renders
+// the stub for the synth_grpc_minimal contract and verifies the emitted proto
+// import path + every method signature come from the .proto oracle (not from a
+// hard-coded template literal). The oracle is now service-level (#1655):
+// ReadProtoServiceInfo gives the full method set; each method's request/response
+// types are checked in the rendered source.
 func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle(t *testing.T) {
 	t.Parallel()
-	oracle, err := ReadProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
+	oracle, err := ReadProtoServiceInfo(fixtureProtoPath(t), fixtureFQService)
 	if err != nil {
-		t.Fatalf("oracle ReadProtoTypeInfo: %v", err)
+		t.Fatalf("oracle ReadProtoServiceInfo: %v", err)
 	}
 
 	testDir, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
@@ -111,20 +118,24 @@ func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_ImportMatchesProtoOracle(t *testin
 			imports[0], oracle.ImportPath)
 	}
 
-	wantReq := "*" + oracle.Alias + "." + oracle.RequestType
-	wantResp := "*" + oracle.Alias + "." + oracle.ResponseType
-	if !strings.Contains(string(src), wantReq) || !strings.Contains(string(src), wantResp) {
-		t.Errorf("GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01: rendered signature missing oracle types %q / %q\n--- src ---\n%s",
-			wantReq, wantResp, src)
+	// Every oracle method's request/response types must appear in the rendered source.
+	for _, m := range oracle.Methods {
+		wantReq := "*" + oracle.Alias + "." + m.RequestType
+		wantResp := "*" + oracle.Alias + "." + m.ResponseType
+		if !strings.Contains(string(src), wantReq) || !strings.Contains(string(src), wantResp) {
+			t.Errorf("GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01: rendered signature missing oracle types %q / %q\n--- src ---\n%s",
+				wantReq, wantResp, src)
+		}
 	}
 }
 
 // TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_PopulatesProtoFields asserts the
 // builder fills spec.GRPC's proto fields from the proto oracle (the single write
-// site C1 locks).
+// site C1 locks). The oracle is now service-level (#1655): import path, alias,
+// and the full Methods slice must all derive from the .proto.
 func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_PopulatesProtoFields(t *testing.T) {
 	t.Parallel()
-	oracle, err := ReadProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
+	oracle, err := ReadProtoServiceInfo(fixtureProtoPath(t), fixtureFQService)
 	if err != nil {
 		t.Fatalf("oracle: %v", err)
 	}
@@ -144,10 +155,21 @@ func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_PopulatesProtoFields(t *testing.T)
 	if g == nil {
 		t.Fatal("spec.GRPC is nil")
 	}
-	if g.ProtoImportPath != oracle.ImportPath || g.ProtoAlias != oracle.Alias ||
-		g.RequestType != oracle.RequestType || g.ResponseType != oracle.ResponseType {
-		t.Errorf("spec.GRPC proto fields != oracle:\n got: %+v\nwant import=%q alias=%q req=%q resp=%q",
-			g, oracle.ImportPath, oracle.Alias, oracle.RequestType, oracle.ResponseType)
+	if g.ProtoImportPath != oracle.ImportPath || g.ProtoAlias != oracle.Alias {
+		t.Errorf("spec.GRPC import/alias != oracle:\n got: import=%q alias=%q\nwant: import=%q alias=%q",
+			g.ProtoImportPath, g.ProtoAlias, oracle.ImportPath, oracle.Alias)
+	}
+	// Methods must derive from the proto oracle — length and each entry.
+	if len(g.Methods) != len(oracle.Methods) {
+		t.Fatalf("spec.GRPC.Methods len=%d, oracle len=%d", len(g.Methods), len(oracle.Methods))
+	}
+	for i, om := range oracle.Methods {
+		gm := g.Methods[i]
+		if gm.MethodName != om.Name || gm.RequestType != om.RequestType || gm.ResponseType != om.ResponseType {
+			t.Errorf("Methods[%d]: got {%q %q %q}, want {%q %q %q}",
+				i, gm.MethodName, gm.RequestType, gm.ResponseType,
+				om.Name, om.RequestType, om.ResponseType)
+		}
 	}
 }
 
@@ -249,49 +271,62 @@ func grpcSpecConstructorsOutside(fset *token.FileSet, files []*ast.File, allowed
 }
 
 // --- C4: registry collision uniqueness ----------------------------------------
+//
+// With service-level granularity (#1655) the ownership unit is a whole proto
+// service. The collision classes are:
+//   - two different contracts claiming the same (proto-package, service) → "already registered"
+//   - two contracts pointing the same service to divergent import paths → "divergent import"
 
-func sampleProtoInfo() ProtoTypeInfo {
-	return ProtoTypeInfo{
+func sampleProtoServiceInfo() ProtoServiceInfo {
+	return ProtoServiceInfo{
 		ProtoPackage: "device.command.v1",
 		ImportPath:   "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1",
 		Alias:        "commandv1",
-		RequestType:  "IssueCommandRequest",
-		ResponseType: "IssueCommandResponse",
+		Methods: []ProtoMethodInfo{
+			{Name: "IssueCommand", RequestType: "IssueCommandRequest", ResponseType: "IssueCommandResponse"},
+		},
 	}
 }
 
-func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_CollisionDistinctMethodsOK(t *testing.T) {
+func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_CollisionDistinctServicesOK(t *testing.T) {
 	t.Parallel()
 	r := newProtoRegistry()
-	if err := r.register("grpc.a", "device.command.v1.DeviceCommandService", "IssueCommand", sampleProtoInfo()); err != nil {
+	infoA := sampleProtoServiceInfo()
+	if err := r.register("grpc.a", "device.command.v1.DeviceCommandService", infoA); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	if err := r.register("grpc.b", "device.command.v1.DeviceCommandService", "RevokeCommand", sampleProtoInfo()); err != nil {
-		t.Fatalf("distinct method on same service must be allowed: %v", err)
+	infoB := ProtoServiceInfo{
+		ProtoPackage: "device.command.v1",
+		ImportPath:   "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1",
+		Alias:        "commandv1",
+		Methods:      []ProtoMethodInfo{{Name: "RevokeCommand"}},
+	}
+	if err := r.register("grpc.b", "device.command.v1.StatusService", infoB); err != nil {
+		t.Fatalf("distinct service in same package must be allowed: %v", err)
 	}
 }
 
-func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_CollisionSameMethod(t *testing.T) {
+func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_CollisionSameService(t *testing.T) {
 	t.Parallel()
 	r := newProtoRegistry()
-	if err := r.register("grpc.a", "device.command.v1.DeviceCommandService", "IssueCommand", sampleProtoInfo()); err != nil {
+	if err := r.register("grpc.a", "device.command.v1.DeviceCommandService", sampleProtoServiceInfo()); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	err := r.register("grpc.b", "device.command.v1.DeviceCommandService", "IssueCommand", sampleProtoInfo())
+	err := r.register("grpc.b", "device.command.v1.DeviceCommandService", sampleProtoServiceInfo())
 	if err == nil || !strings.Contains(err.Error(), "already registered") {
-		t.Fatalf("expected duplicate (package,service,method) collision, got %v", err)
+		t.Fatalf("expected duplicate (package,service) collision, got %v", err)
 	}
 }
 
 func TestGRPC_PROTO_REGISTRY_SINGLE_SOURCE_01_CollisionDivergentImport(t *testing.T) {
 	t.Parallel()
 	r := newProtoRegistry()
-	if err := r.register("grpc.a", "device.command.v1.DeviceCommandService", "IssueCommand", sampleProtoInfo()); err != nil {
+	if err := r.register("grpc.a", "device.command.v1.DeviceCommandService", sampleProtoServiceInfo()); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	other := sampleProtoInfo()
+	other := sampleProtoServiceInfo()
 	other.ImportPath = "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1/evil"
-	err := r.register("grpc.b", "device.command.v1.DeviceCommandService", "RevokeCommand", other)
+	err := r.register("grpc.b", "device.command.v1.DeviceCommandService", other)
 	if err == nil || !strings.Contains(err.Error(), "divergent import") {
 		t.Fatalf("expected divergent-import collision, got %v", err)
 	}
