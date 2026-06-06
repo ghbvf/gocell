@@ -8,31 +8,16 @@ package democell
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	helloslice "github.com/ghbvf/gocell/examples/demo/cells/democell/slices/hello"
 	hellov1 "github.com/ghbvf/gocell/generated/contracts/http/demo/hello/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
-// Option configures a DemoCell.
-type Option func(*DemoCell)
-
-// WithLogger sets the structured logger. A nil value is a silent noop.
-func WithLogger(l *slog.Logger) Option {
-	return func(c *DemoCell) {
-		if l != nil {
-			c.logger = l
-		}
-	}
-}
-
 // DemoCell is the democell Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type DemoCell struct {
 	*cell.BaseCell
-
-	logger *slog.Logger
 
 	// helloHandler is built in initInternal and mounted on the PrimaryListener
 	// by the cellgen-generated RouteGroup in cell_gen.go, driven by the marker
@@ -44,16 +29,12 @@ type DemoCell struct {
 	helloSvc *helloslice.Service
 }
 
-// NewDemoCell creates a new DemoCell.
-func NewDemoCell(opts ...Option) *DemoCell {
-	c := &DemoCell{
-		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
-		logger:   slog.Default(),
-	}
-	for _, o := range opts {
-		o(c)
-	}
-	return c
+// NewDemoCell creates a new DemoCell. The hello cell has no injectable
+// dependencies (pure compute), so the constructor takes no functional options —
+// it logs (when it needs to) via the process-global slog default, which the
+// generated main.go has already sealed with the redacting handler.
+func NewDemoCell() *DemoCell {
+	return &DemoCell{BaseCell: cell.MustNewBaseCell(loadCellMetadata())}
 }
 
 // initInternal is the K#04 codegen escape hatch: it constructs the hello slice

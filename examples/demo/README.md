@@ -12,9 +12,13 @@ compute, so it stays L0.)
 
 ## Run it
 
+From the **repo root**:
+
 ```sh
 go run ./examples/demo
 ```
+
+(or, from inside this directory: `go run .`)
 
 The binary binds two loopback listeners:
 
@@ -23,14 +27,14 @@ The binary binds two loopback listeners:
 | Primary  | `127.0.0.1:8086` | `GET /api/v1/hello`          |
 | Health   | `127.0.0.1:9096` | `/healthz`, `/readyz`        |
 
-In another terminal:
+In another terminal (responses are the standard GoCell JSON envelope):
 
 ```sh
-curl 127.0.0.1:8086/api/v1/hello
+curl -s 127.0.0.1:8086/api/v1/hello
 # {"data":{"message":"hello, gocell"}}
 
-curl 127.0.0.1:9096/healthz   # ok
-curl 127.0.0.1:9096/readyz    # ok (the demo registers zero readiness probes)
+curl -s 127.0.0.1:9096/healthz   # {"data":{"status":"healthy"}}
+curl -s 127.0.0.1:9096/readyz    # {"data":{"status":"healthy"}}  (zero readiness probes registered)
 ```
 
 Press `Ctrl-C` to trigger graceful shutdown.
