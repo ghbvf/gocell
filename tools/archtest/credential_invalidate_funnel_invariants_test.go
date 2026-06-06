@@ -131,10 +131,6 @@ package archtest
 
 import (
 	"fmt"
-	"go/ast"
-	"go/token"
-	"go/types"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -142,154 +138,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// ─── package path constants ────────────────────────────────────────────────
-
-const (
-	sessionStorePkg     = "github.com/ghbvf/gocell/runtime/auth/session"
-	sessionStoreType    = "Store"
-	sessionRevokeMethod = "RevokeForSubject"
-
-	userRepoPkg    = "github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	userRepoType   = "UserRepository"
-	userBumpMethod = "BumpAuthzEpoch"
-
-	refreshStorePkg     = "github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshStoreType    = "Store"
-	refreshRevokeMethod = "RevokeUser"
-
-	// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (S4d).
-	invalidatorPkg    = "github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
-	invalidatorMethod = "Apply"
-)
-
-// upstreamCallerCallsiteAllowlist enumerates the exact production callsites
-// (enclosing FuncDecl identities) permitted to invoke or capture
-// credentialinvalidate.(*Invalidator).Apply. Keys are *types.Func.FullName()
-// values (canonical Go reflection form); values document the rationale.
-//
-// Issue #732 upgrade (this file, 2026-05-27): replaces the prior file-level
-// upstreamCallerAllowlistPrefixes []string. callsite-level keying eliminates
-// the "same file / different function" slip path — any new function in an
-// already-allowed slice MUST explicitly add a callsite entry.
-//
-// As of S4e (PR #494), the legitimate callers are:
-//
-//   - authzmutate/ — Mutator.ApplyInTx routes all live-aggregate authz
-//     mutations through Invalidator.Apply.
-//   - identitymanage/ — Delete + changePasswordInTx call Invalidator.Apply
-//     directly for co-tx atomicity (user-row delete and revoke, or password
-//     write and revoke, must be one transaction). Routing through authzmutate
-//     would split these transactions.
-//   - sessionrefresh/ — handleReuseDetected owns the reuse / stale-epoch
-//     cascade entry point.
-//   - rbacassign/ — persistChange calls Invalidator.Apply co-tx with the
-//     role-row write. Same atomicity reason as identitymanage.
-//
-// The funnel package itself (credentialinvalidate/) contains only the Apply
-// implementation — no internal call site exists today, so no entry is
-// needed. If a future helper inside the funnel calls Apply on a sibling
-// receiver, an entry must be added explicitly (no silent package allowance).
-//
-// S4e note: setup/ and adminprovision/ are NOT in this list. Neither calls
-// Invalidator.Apply in production code (provisioner.go only calls
-// SetPasswordResetRequired on a freshly constructed aggregate at creation
-// time). The canonical allowlist is documented in ADR §A10.
-//
-// Test files (*_test.go) bypass this check unconditionally. Removing the last
-// production caller of an entry triggers
-// TestCredentialInvalidateFunnel_AllowlistEntriesAreLive (meta-invariant),
-// forcing same-PR cleanup.
-// Allowlist keys are types.Func.FullName() values; split via string concat
-// to keep lines under the lll limit while preserving the literal key.
-//
-// CI failure messages print the exact key to copy: look for
-// `reference to credentialinvalidate.Apply from caller "<KEY>" not in
-// upstreamCallerCallsiteAllowlist`. Paste the quoted "<KEY>" verbatim into
-// this map.
-//
-// All five production callers are now scanner-detectable. The pre-#1196
-// sessionrefresh blind spot (local invalidatorApplier interface in the
-// caller package made info.Selections resolve Apply outside
-// credentialinvalidate) is closed structurally by moving the interface to
-// credentialinvalidate.Applier; sessionrefresh.Service.invalidator now has
-// type credentialinvalidate.Applier, so info.Selections resolves Apply with
-// fn.Pkg().Path() == credentialinvalidate and the scanner reaches the
-// callsite check uniformly.
-var upstreamCallerCallsiteAllowlist = map[string]string{
-	"(*github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate.Mutator).ApplyInTx": "" +
-		"primary funnel — routes all live-aggregate authz mutations",
-	"(*github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.Service).deleteUserAndRevokeTokens": "" +
-		"co-tx atomicity: user-row delete + revoke in one transaction",
-	"(*github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.Service).changePasswordInTx": "" +
-		"co-tx atomicity: password write + revoke in one transaction",
-	"(*github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign.Service).persistChange": "" +
-		"co-tx atomicity: role-row write + revoke in one transaction",
-	"(*github.com/ghbvf/gocell/cells/accesscore/slices/sessionrefresh.Service).handleReuseDetected": "" +
-		"reuse / stale-epoch cascade entry point (interface routing via credentialinvalidate.Applier)",
-}
-
-// funnelAllowlistPathPrefixes lists the module-relative path prefixes that
-// are permitted to call each banned method directly (store implementations
-// and the funnel itself). Names like "cells/accesscore/internal/credentialinvalidate/"
-// are prefixes of every Go file under that directory subtree; matching uses
-// strings.HasPrefix in isAllowlisted below. (The earlier "Suffixes" name was
-// historic shorthand for "suffix of the Go import root"; the actual operation
-// is prefix matching on the module-relative path, so the name is now aligned.)
-var funnelAllowlistPathPrefixes = []string{
-	// The funnel itself is the only permitted non-impl caller.
-	"cells/accesscore/internal/credentialinvalidate/",
-	// session.Store implementations.
-	"runtime/auth/session/",
-	// refresh.Store implementations.
-	"runtime/auth/refresh/",
-	// adapters/postgres session store + refresh store implementations.
-	"adapters/postgres/",
-	// adapters/redis hosts a single session.Store decorator implementation
-	// (CachingSessionStore — AUTH-CACHE-01). The decorator delegates
-	// RevokeForSubject to its inner store verbatim; cache invalidation is
-	// intentionally NOT performed there — the wrapper relies on the co-tx
-	// user.AuthzEpoch bump (executed by credentialinvalidate.Apply) +
-	// sessionvalidate's epoch invariant to neutralize stale cached views.
-	// The allowlist is narrowed to the single file (not the whole package) so
-	// any future *.go added under adapters/redis/ that names RevokeForSubject
-	// directly is caught — only this decorator is permitted.
-	"adapters/redis/session_cache_store.go",
-	// accesscore internal mem implementations.
-	"cells/accesscore/internal/mem/",
-	"cells/accesscore/internal/adapters/postgres/",
-	// storetest suites (conformance test helpers for store impls).
-	"runtime/auth/refresh/storetest/",
-	"runtime/auth/session/storetest/",
-	// ports.UserRepository conformance helper (FU-3 H1/K-B). Same role as the
-	// runtime/auth/*/storetest packages: conformance suite covers every method
-	// of the contract (including BumpAuthzEpoch / UpdatePassword) so every impl
-	// is held to the same behavior — direct method calls are intentional.
-	"cells/accesscore/internal/ports/conformance/",
-}
-
-// isAllowlisted reports whether a module-relative path is in the funnel
-// allowlist. Test files (*_test.go) are always allowed.
-//
-// Implementation note (Finding #1): this function previously used
-// strings.Contains(rel, "/"+suffix) as a fallback. That branch was removed
-// because it could match any path segment containing the suffix string, which
-// would incorrectly allowlist paths like "examples/cells/accesscore/" if
-// examples were ever added to the scan patterns. The scan patterns above
-// (cells/..., runtime/..., adapters/..., cmd/...) are relative paths that
-// SharedResolver returns as module-relative strings; HasPrefix is
-// sufficient and does not have the Contains ambiguity.
-func isAllowlisted(rel string) bool {
-	if strings.HasSuffix(rel, "_test.go") {
-		return true
-	}
-	for _, prefix := range funnelAllowlistPathPrefixes {
-		if strings.HasPrefix(rel, prefix) {
-			return true
-		}
-	}
-	return false
-}
 
 // ─── Rule 1: CREDENTIAL-INVALIDATE-FUNNEL-01 ─────────────────────────────
 
@@ -304,42 +152,8 @@ func isAllowlisted(rel string) bool {
 // is not a permanently-passing no-op.
 func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 	t.Parallel()
-
-	// Scan production packages that could plausibly call RevokeForSubject.
-	patterns := []string{
-		"./cells/accesscore/...",
-		"./runtime/auth/...",
-		"./adapters/...",
-		"./cmd/...",
-	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isAllowlisted(rel) {
-				continue
-			}
-			violations = append(violations, scanFunnelViolationsPass(
-				p, file, rel,
-				sessionStorePkg, sessionRevokeMethod,
-				"CREDENTIAL-INVALIDATE-FUNNEL-01",
-			)...)
-		}
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"CREDENTIAL-INVALIDATE-FUNNEL-01: session.Store.RevokeForSubject must only be called "+
-			"from cells/accesscore/internal/credentialinvalidate/ or store implementations. "+
-			"Route new callers through credentialinvalidate.Invalidator.Apply instead.")
+	Report(t, ruleCredentialInvalidateFunnel01,
+		CheckCredentialInvalidateFunnel01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
 	// RED fixture verification: the scanner must detect ≥ 1 violation in the
 	// rbacassign_direct_revoke_for_subject_red fixture package.
@@ -365,40 +179,8 @@ func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 // RED fixture: testdata/credential_invalidate_fixtures/identitymanage_direct_bump_epoch_red.
 func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 	t.Parallel()
-
-	patterns := []string{
-		"./cells/accesscore/...",
-		"./adapters/...",
-		"./cmd/...",
-	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isAllowlisted(rel) {
-				continue
-			}
-			violations = append(violations, scanFunnelViolationsPass(
-				p, file, rel,
-				userRepoPkg, userBumpMethod,
-				"USER-AUTHZ-EPOCH-BUMP-FUNNEL-01",
-			)...)
-		}
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"USER-AUTHZ-EPOCH-BUMP-FUNNEL-01: ports.UserRepository.BumpAuthzEpoch must only be called "+
-			"from cells/accesscore/internal/credentialinvalidate/ or repository implementations. "+
-			"Route callers through credentialinvalidate.Invalidator.Apply instead.")
+	Report(t, ruleUserAuthzEpochBumpFunnel01,
+		CheckUserAuthzEpochBumpFunnel01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
 	verifyRedFixtureDetectedPass(
 		t,
@@ -424,41 +206,8 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 // RED fixture: testdata/credential_invalidate_fixtures/identitymanage_direct_revoke_refresh_red.
 func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 	t.Parallel()
-
-	patterns := []string{
-		"./cells/accesscore/...",
-		"./runtime/auth/...",
-		"./adapters/...",
-		"./cmd/...",
-	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isAllowlisted(rel) {
-				continue
-			}
-			violations = append(violations, scanFunnelViolationsPass(
-				p, file, rel,
-				refreshStorePkg, refreshRevokeMethod,
-				"REFRESH-REVOKE-USER-FUNNEL-01",
-			)...)
-		}
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"REFRESH-REVOKE-USER-FUNNEL-01: refresh.Store.RevokeUser must only be called "+
-			"from cells/accesscore/internal/credentialinvalidate/ or store implementations. "+
-			"Route callers through credentialinvalidate.Invalidator.Apply instead.")
+	Report(t, ruleRefreshRevokeUserFunnel01,
+		CheckRefreshRevokeUserFunnel01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
 	verifyRedFixtureDetectedPass(
 		t,
@@ -506,47 +255,8 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // allowlist; calling invalidator.Apply from there must be detected.
 func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 	t.Parallel()
-
-	// Scan production packages where someone might plausibly add a new
-	// Invalidator.Apply call. We do NOT include runtime/auth/... or
-	// adapters/... — Apply is a cells/accesscore-internal funnel; calls
-	// from those layers would be a deeper architectural violation caught
-	// by the existing LAYER-* archtests.
-	patterns := []string{
-		"./cells/accesscore/...",
-		"./cmd/...",
-	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			violations = append(violations, scanUpstreamCallerViolationsPass(
-				p, file, rel,
-				invalidatorPkg, invalidatorMethod,
-				"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01",
-			)...)
-		}
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (callsite-level): "+
-			"credentialinvalidate.Invalidator.Apply must only be called from enclosing "+
-			"functions explicitly listed in upstreamCallerCallsiteAllowlist. "+
-			"Adding a new caller requires adding a callsite entry; "+
-			"this puts the funnel surface on the reviewer's diff. "+
-			"See ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A10.")
+	Report(t, ruleCredentialInvalidateUpstreamCaller01,
+		CheckCredentialInvalidateUpstreamCaller01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
 	verifyRedFixtureDetectedPass(
 		t,
@@ -555,59 +265,6 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 RED fixture",
 		1,
 	)
-}
-
-// scanUpstreamCallerViolationsPass walks file's AST for every SelectorExpr
-// resolving to (targetPkg, targetMethod) and emits a violation when the
-// SelectorExpr's enclosing FuncDecl identity is NOT in
-// upstreamCallerCallsiteAllowlist. Catches direct call AND function-value
-// capture forms (same form-completeness as scanFunnelViolationsPass — see
-// that function's godoc).
-//
-// A SelectorExpr located outside any FuncDecl (package-level var/const init)
-// is an automatic violation: it has no allowlistable identity. Test files
-// must be skipped by the caller (this function operates per-file but does
-// not filter *_test.go itself).
-func scanUpstreamCallerViolationsPass(
-	p *Pass,
-	file *ast.File,
-	rel string,
-	targetPkg, targetMethod, ruleID string,
-) []string {
-	var out []string
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if sel.Sel == nil || sel.Sel.Name != targetMethod {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok {
-			return
-		}
-		if fn.Pkg() == nil || fn.Pkg().Path() != targetPkg {
-			return
-		}
-		line := p.Fset.Position(sel.Pos()).Line
-		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
-		if !ok {
-			out = append(out, fmt.Sprintf(
-				"%s:%d: %s: reference to %s.%s outside any FuncDecl "+
-					"(package-level init or similar) — cannot be allowlisted",
-				rel, line, ruleID, filepath.Base(targetPkg), targetMethod,
-			))
-			return
-		}
-		callerID := caller.FullName()
-		if _, allowed := upstreamCallerCallsiteAllowlist[callerID]; allowed {
-			return
-		}
-		out = append(out, fmt.Sprintf(
-			"%s:%d: %s: reference to %s.%s from caller %q not in "+
-				"upstreamCallerCallsiteAllowlist (direct call or function-value capture) "+
-				"(copy the quoted key verbatim into the map to allow)",
-			rel, line, ruleID, filepath.Base(targetPkg), targetMethod, callerID,
-		))
-	})
-	return out
 }
 
 // TestCredentialInvalidateFunnel_AllowlistEntriesAreLive enforces that every
@@ -654,27 +311,55 @@ func TestCredentialInvalidateFunnel_AllowlistEntriesAreLive(t *testing.T) {
 	}
 }
 
-// countUpstreamAllowlistHits increments hits[callerID] for each production
-// SelectorExpr in file that resolves to credentialinvalidate.Invalidator.Apply
-// AND has a resolvable enclosing FuncDecl matching the allowlist.
-func countUpstreamAllowlistHits(p *Pass, file *ast.File, hits map[string]int) {
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if sel.Sel == nil || sel.Sel.Name != invalidatorMethod {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != invalidatorPkg {
-			return
-		}
-		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
-		if !ok {
-			return
-		}
-		callerID := caller.FullName()
-		if _, allowed := upstreamCallerCallsiteAllowlist[callerID]; allowed {
-			hits[callerID]++
-		}
+// ─── Rule 5: CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01 ──────
+
+// TestCredentialInvalidateApplierInterfaceCanonical_01 enforces that the
+// `Apply(ctx context.Context, subjectID string, event session.CredentialEvent)
+// error` method signature appears in EXACTLY ONE production interface:
+// credentialinvalidate.Applier. A caller package redeclaring an interface
+// with the same signature would re-create the pre-#1196 sessionrefresh
+// "interface-routed Soft channel" — info.Selections would resolve Apply to
+// the caller-package interface, hiding the callsite from the
+// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 scan.
+//
+// Mechanism: load credentialinvalidate.Applier.Apply's *types.Func via the
+// package scope; scan caller production packages (./cells/... ./runtime/...
+// ./cmd/...) for any *types.TypeName whose underlying type is an interface
+// that explicitly declares a method Apply whose *types.Signature is
+// types.Identical to the canonical one. Skip the credentialinvalidate
+// package itself; skip *_test.go (Tests:false).
+//
+// AI-robust grade: Medium (archtest-bound; type-resolved via go/types
+// identity comparison — no string anchor, no name pattern). Hard upstream
+// would require a sealed Applier (unexported marker method) but that
+// breaks the spy-injection testability pattern; this archtest is the
+// pragmatic backstop. Form-uniqueness: types.Identical on the method
+// signature object — any other shape (same name + different signature, or
+// same signature on a renamed method) does not match and is not the
+// regression vector this rule guards.
+//
+// RED fixture: tools/archtest/testdata/credential_invalidate_fixtures/
+// noncanonical_applier_interface_red declares
+// `type LocalApplier interface { Apply(ctx, string, event) error }` in a
+// non-credentialinvalidate package; the scanner must flag it.
+func TestCredentialInvalidateApplierInterfaceCanonical_01(t *testing.T) {
+	t.Parallel()
+
+	// Production scan uses the shared Check* (single typed load).
+	Report(t, ruleCredentialInvalidateApplierCanonical01,
+		CheckCredentialInvalidateApplierCanonical01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+
+	// RED fixture: same dual-scan pattern (canonical + fixture together).
+	redViolations := scanApplierInterfaceCanonical(t, ConfigForExternalCell{}, []string{
+		"./cells/accesscore/internal/credentialinvalidate",
+		"./tools/archtest/testdata/credential_invalidate_fixtures/noncanonical_applier_interface_red",
 	})
+	require.GreaterOrEqual(t, len(redViolations), 1,
+		"RED fixture self-check FAILED: noncanonical_applier_interface_red — "+
+			"expected ≥ 1 violation, got %d. Check that the fixture declares an "+
+			"interface with method Apply(ctx, string, session.CredentialEvent) error "+
+			"and that ./cells/accesscore/internal/credentialinvalidate is in the same Load.",
+		len(redViolations))
 }
 
 // ─── Blind-spot self-check tests ─────────────────────────────────────────
@@ -729,214 +414,7 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 			"the archtest cannot see reflect-based invocations. Refactor to use direct calls.")
 }
 
-// ─── Rule 5: CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01 ──────
-
-// TestCredentialInvalidateApplierInterfaceCanonical_01 enforces that the
-// `Apply(ctx context.Context, subjectID string, event session.CredentialEvent)
-// error` method signature appears in EXACTLY ONE production interface:
-// credentialinvalidate.Applier. A caller package redeclaring an interface
-// with the same signature would re-create the pre-#1196 sessionrefresh
-// "interface-routed Soft channel" — info.Selections would resolve Apply to
-// the caller-package interface, hiding the callsite from the
-// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 scan.
-//
-// Mechanism: load credentialinvalidate.Applier.Apply's *types.Func via the
-// package scope; scan caller production packages (./cells/... ./runtime/...
-// ./cmd/...) for any *types.TypeName whose underlying type is an interface
-// that explicitly declares a method Apply whose *types.Signature is
-// types.Identical to the canonical one. Skip the credentialinvalidate
-// package itself; skip *_test.go (Tests:false).
-//
-// AI-robust grade: Medium (archtest-bound; type-resolved via go/types
-// identity comparison — no string anchor, no name pattern). Hard upstream
-// would require a sealed Applier (unexported marker method) but that
-// breaks the spy-injection testability pattern; this archtest is the
-// pragmatic backstop. Form-uniqueness: types.Identical on the method
-// signature object — any other shape (same name + different signature, or
-// same signature on a renamed method) does not match and is not the
-// regression vector this rule guards.
-//
-// RED fixture: tools/archtest/testdata/credential_invalidate_fixtures/
-// noncanonical_applier_interface_red declares
-// `type LocalApplier interface { Apply(ctx, string, event) error }` in a
-// non-credentialinvalidate package; the scanner must flag it.
-func TestCredentialInvalidateApplierInterfaceCanonical_01(t *testing.T) {
-	t.Parallel()
-
-	// Production scan: load credentialinvalidate (canonical home) + caller
-	// trees in ONE typed Run, so types.Identical sees matching stdlib
-	// *types.Named instances. The canonical *types.Type is captured during
-	// the same pass that records candidate interfaces; comparison runs
-	// AFTER the typed Run returns (every package has been visited and canonical
-	// is set).
-	prodViolations := scanApplierInterfaceCanonical(t, []string{
-		"./cells/accesscore/internal/credentialinvalidate",
-		"./cells/...",
-		"./runtime/...",
-		"./cmd/...",
-	})
-
-	sort.Strings(prodViolations)
-	for _, v := range prodViolations {
-		t.Log(v)
-	}
-	assert.Empty(t, prodViolations,
-		"CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01: non-canonical "+
-			"interface redeclares credentialinvalidate.Applier's Apply signature — "+
-			"info.Selections would resolve Apply outside credentialinvalidate, "+
-			"hiding the callsite from CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 scan. "+
-			"Move the interface to the credentialinvalidate package "+
-			"(or rename/reshape the method if the use case is unrelated).")
-
-	// RED fixture: same single-Load pattern (canonical + fixture together).
-	redViolations := scanApplierInterfaceCanonical(t, []string{
-		"./cells/accesscore/internal/credentialinvalidate",
-		"./tools/archtest/testdata/credential_invalidate_fixtures/noncanonical_applier_interface_red",
-	})
-	assert.GreaterOrEqual(t, len(redViolations), 1,
-		"RED fixture self-check FAILED: noncanonical_applier_interface_red — "+
-			"expected ≥ 1 violation, got %d. Check that the fixture declares an "+
-			"interface with method Apply(ctx, string, session.CredentialEvent) error "+
-			"and that ./cells/accesscore/internal/credentialinvalidate is in the same Load.",
-		len(redViolations))
-}
-
-// applierInterfaceCandidate records a *types.TypeName whose underlying type
-// is an interface with an explicitly declared Apply method, captured during
-// a single typed Run pass. methodType is the *types.Signature of that Apply
-// method, comparable via types.Identical against the canonical signature
-// loaded by the same pass.
-type applierInterfaceCandidate struct {
-	pkgPath    string
-	typeName   string
-	methodType types.Type
-	pos        token.Position
-}
-
-// scanApplierInterfaceCanonical loads the canonical credentialinvalidate
-// package together with the scan-target patterns in a SINGLE Run(t, Typed(...)) call,
-// then compares each candidate interface's Apply signature against the
-// canonical via types.Identical.
-//
-// Single-Load constraint: types.Identical requires matching *types.Named
-// instances for embedded stdlib types (e.g. context.Context). Separate
-// packages.Load invocations produce distinct *types.Named for the same
-// import path, defeating the comparison. Always pass the
-// credentialinvalidate package together with scan targets in the same
-// patterns slice.
-func scanApplierInterfaceCanonical(t *testing.T, patterns []string) []string {
-	t.Helper()
-	var canonical types.Type
-	var candidates []applierInterfaceCandidate
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
-			return nil
-		}
-		if p.Pkg.Path() == invalidatorPkg {
-			applier := p.Pkg.Scope().Lookup("Applier")
-			if applier == nil {
-				return nil
-			}
-			iface, ok := applier.Type().Underlying().(*types.Interface)
-			if !ok || iface.NumExplicitMethods() != 1 {
-				return nil
-			}
-			canonical = iface.ExplicitMethod(0).Type()
-			return nil
-		}
-		scope := p.Pkg.Scope()
-		for _, name := range scope.Names() {
-			obj := scope.Lookup(name)
-			tn, ok := obj.(*types.TypeName)
-			if !ok || tn.IsAlias() {
-				continue
-			}
-			iface, ok := tn.Type().Underlying().(*types.Interface)
-			if !ok {
-				continue
-			}
-			for i := 0; i < iface.NumExplicitMethods(); i++ {
-				m := iface.ExplicitMethod(i)
-				if m.Name() != "Apply" {
-					continue
-				}
-				candidates = append(candidates, applierInterfaceCandidate{
-					pkgPath:    p.Pkg.Path(),
-					typeName:   tn.Name(),
-					methodType: m.Type(),
-					pos:        p.Fset.Position(tn.Pos()),
-				})
-			}
-		}
-		return nil
-	})
-
-	require.NotNil(t, canonical,
-		"credentialinvalidate.Applier signature not captured — ensure "+
-			"./cells/accesscore/internal/credentialinvalidate is in the patterns slice")
-
-	var violations []string
-	for _, c := range candidates {
-		if types.Identical(c.methodType, canonical) {
-			violations = append(violations, fmt.Sprintf(
-				"%s: interface %s.%s declares Apply with the same signature "+
-					"as credentialinvalidate.Applier — interface must live in "+
-					"credentialinvalidate package",
-				c.pos, c.pkgPath, c.typeName,
-			))
-		}
-	}
-	return violations
-}
-
-// ─── shared helpers ──────────────────────────────────────────────────────
-
-// scanFunnelViolationsPass walks a single file's AST for EVERY SelectorExpr
-// that resolves to the method (targetPkg, targetMethod) — regardless of whether
-// it is the Fun of a CallExpr. It returns a violation string for each. Walking
-// all selectors (not just call.Fun) makes the scan form-complete: it catches
-// the direct call (`store.RevokeForSubject(...)`) AND the function-value
-// capture forms (`fn := store.RevokeForSubject`, `var fn = store.RevokeForSubject`,
-// `return store.RevokeForSubject`, pass-through as an argument) that a
-// CallExpr-only scan misses (the later `fn(...)` has Fun = *ast.Ident, invisible
-// to ResolveMethodCall). info.Selections records a MethodVal selection for a
-// method value even when it is not immediately invoked, so ResolveMethodCall
-// resolves the capture forms to the same *types.Func identity.
-//
-// The `sel.Sel.Name != targetMethod` pre-filter keeps ResolveMethodCall off the
-// hot path for unrelated selectors. Receiver type check: fn.Pkg().Path() ==
-// targetPkg (same identity pattern as sessionrefresh_no_session_create_test.go).
-//
-// Residual blindspot (asserted absent by TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName):
-// reflect.Value.MethodByName("RevokeForSubject") names the method by string, so
-// no SelectorExpr resolves to it. //go:linkname / unsafe are the universal class.
-func scanFunnelViolationsPass(
-	p *Pass,
-	file *ast.File,
-	rel string,
-	targetPkg, targetMethod, ruleID string,
-) []string {
-	var out []string
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if sel.Sel == nil || sel.Sel.Name != targetMethod {
-			return
-		}
-		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-		if !ok {
-			return
-		}
-		if fn.Pkg() == nil || fn.Pkg().Path() != targetPkg {
-			return
-		}
-		line := p.Fset.Position(sel.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: %s: reference to %s.%s outside credentialinvalidate funnel "+
-				"(direct call or function-value capture)",
-			rel, line, ruleID, filepath.Base(targetPkg), targetMethod,
-		))
-	})
-	return out
-}
+// ─── verifyRedFixtureDetectedPass ────────────────────────────────────────────
 
 // verifyRedFixtureDetectedPass loads the given fixture pattern via Run(t, Typed(...)) and
 // asserts the scanner finds ≥ wantMin violations — proving the rule is not
@@ -952,6 +430,9 @@ func scanFunnelViolationsPass(
 // disable the RED self-check, leaving the production scan permanently GREEN with
 // no warning. The fixture is in-tree and its build health is part of the
 // archtest contract, so a load failure must fail the test and surface in CI.
+//
+// NOTE: this helper is also used by fence_token_mint_funnel_test.go — keep it
+// in this _test.go file (do NOT move it to the non-test .go file).
 func verifyRedFixtureDetectedPass(
 	t *testing.T,
 	fixturePattern, targetPkg, targetMethod, label string,
@@ -965,7 +446,7 @@ func verifyRedFixtureDetectedPass(
 			return nil
 		}
 		for _, file := range p.Files {
-			found += len(scanFunnelViolationsPass(p, file, label, targetPkg, targetMethod, label))
+			found += len(scanFunnelViolationsPass(p, file, label, targetPkg, targetMethod))
 		}
 		return nil
 	})
