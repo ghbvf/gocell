@@ -37,9 +37,21 @@
 //     hook FuncLit [Lbrace, Rbrace]); but it is a gate-based check with the
 //     documented blind spots below (helper-one-level, TypesInfo==nil fixture
 //     path), and Go does not make an out-of-hook cache mutation uncompilable —
-//     so this is honestly Medium. Hard-upgrade path = sealed construction making
-//     out-of-hook cache writes type-system-unrepresentable (e.g. the cache field
-//     exposes only an after-commit-scoped handle); tracked gh #1615.
+//     so this is honestly Medium — and a PERMANENT ceiling, not a deferred
+//     upgrade. The "sealed construction" Hard path (the cache field exposes only
+//     an after-commit-scoped handle, making out-of-hook cache writes
+//     type-system-unrepresentable) was evaluated as gh #1615's F3 and resolved
+//     won't-do: the read path's evictBadEntry / lazyPopulate legitimately need a
+//     synchronous (*CachingSessionStore).cache.Delete / .Set, so the cache
+//     capability must live on a struct field Revoke can always reach (Go has no
+//     per-method field scoping). A cross-package internal-subpackage seal could
+//     reach Hard but is disproportionate for this single-caller P3 and has zero
+//     industry precedent (Spring/Hibernate/ent/Watermill all use runtime
+//     registration + convention, never a type seal — GoCell already exceeds them
+//     via the RegisterAfterCommit panic + RunAfterCommitHooks TxCtxKey strip +
+//     this archtest). Same permanent-Go-ceiling family as #851/#893/#1282. The
+//     "second production caller outside a tx" risk that motivated the upgrade is
+//     now caught at CI by SESSION-REVOKE-CALLER-INTX-01 (caller-allowlist).
 //   The hook body's own purity (no tx / outbox writer) is enforced independently
 //   and in parallel by AFTERCOMMIT-HOOK-PURE-TRANSIENT-01.
 //
