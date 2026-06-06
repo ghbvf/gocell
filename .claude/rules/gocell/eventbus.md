@@ -207,7 +207,11 @@ relay 消费时按 **routing-topic** 在 composition-root 注入的 dispatcher-m
 则在**进程内**触发生成的 `DispatchAsync`（decode payload → `LookupHandler` → typed `Handler`），
 否则照常发 broker。判别器 = dispatcher-map 成员资格（`command.*.v1` 命名空间 + 闭合 map
 天然隔离事件 topic），**不改 sealed `outbox.Entry`、不带 metadata 标记**。命令 settle 复用事件
-writeBack（成功 `MarkPublished` = 命令已消费 / 失败 `MarkRetry`）。
+writeBack：成功 `MarkPublished` = 命令已消费；失败分两类——生成 `DispatchAsync` 的**确定性框架错误**
+（reg nil / routing-topic ≠ DispatchID / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
+标记 → relay 直接 `MarkDead`（不耗重试预算，错配 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
+至耗尽（#1673 F3；值校验失败分类随 #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
+`entry.RoutingTopic() == string(DispatchID)`，错配 entry 不被错 handler 消费。
 
 composition root 注入（dispatch 值**必须**是生成 `DispatchAsync` 直接符号——archtest
 `COMMAND-ASYNC-DISPATCH-CALLER-01` 锁定）：

@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // non-crypto outbox relay jitter; gosec G404 already silenced at usage sites
@@ -602,7 +603,10 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 		}
 		payload, marshalErr := kout.MarshalEnvelope(e.Entry)
 		if marshalErr != nil {
-			results[i] = publishResult{entry: e, err: marshalErr}
+			// MarshalEnvelope failure is deterministic (the entry can never encode):
+			// tag it permanent so handleFailedEntry dead-letters it immediately
+			// instead of retrying to budget exhaustion.
+			results[i] = publishResult{entry: e, err: kout.NewPermanentError(marshalErr)}
 			continue
 		}
 		results[i] = publishResult{
@@ -679,7 +683,14 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	newAttempts := res.entry.Attempts + 1
 	errMsg := SanitizeError(res.err.Error(), 1000)
 
-	if newAttempts >= r.cfg.MaxAttempts {
+	// Permanent failures (deterministic command-dispatch framework errors +
+	// MarshalEnvelope failures, tagged via kout.PermanentError) can never recover
+	// by retry, so dead-letter them immediately instead of burning the retry
+	// budget. Handler business errors are returned unwrapped and fall through to
+	// the normal attempt-budget retry path. ref: ADR §Amendment 2026-06-06 r2.
+	permanent := isPermanentDispatch(res.err)
+
+	if permanent || newAttempts >= r.cfg.MaxAttempts {
 		if err := kout.Transition(kout.StateClaiming, kout.StateDead); err != nil {
 			return err
 		}
@@ -704,6 +715,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 			slog.String("event_type", res.entry.EventType()),
 			slog.String("aggregate_id", res.entry.AggregateID()),
 			slog.Int("attempts", newAttempts),
+			slog.Bool("permanent", permanent),
 			slog.String("last_error", errMsg),
 		)
 		return nil
@@ -732,6 +744,19 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	}
 	stats.retried++
 	return nil
+}
+
+// isPermanentDispatch reports whether err is tagged as a permanent (non-retryable)
+// failure via kernel/outbox.PermanentError. Generated command DispatchAsync wraps
+// its deterministic framework errors (reg nil, routing-topic ≠ DispatchID, payload
+// decode failure, no handler, wrong-typed handler) this way, and publishBatch wraps
+// MarshalEnvelope failures, so the relay dead-letters them immediately rather than
+// retrying to budget exhaustion. Handler business errors are returned unwrapped and
+// stay transient (MarkRetry) by default; a handler that knows its failure is
+// unrecoverable can itself return a kout.PermanentError to opt in.
+func isPermanentDispatch(err error) bool {
+	var pe *kout.PermanentError
+	return errors.As(err, &pe)
 }
 
 // ---------------------------------------------------------------------------

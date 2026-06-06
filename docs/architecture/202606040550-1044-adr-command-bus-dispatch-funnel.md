@@ -49,7 +49,7 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 |-----------|------|------|------|
 | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` | typed Handler/Register/Dispatch**/DispatchAsync**（#1667 起含 async）仅由 `command.tmpl` 派生（生产包外无手写 look-alike trio 声明） | **Hard**（codegen funnel + golden regenerate-and-diff 字节锁；`command.tmpl` 单一 emitter） | Medium（AST/types 声明扫描 + 反向 synth fixture） |
 | `COMMAND-DISPATCH-REGISTER-CALLER-01` | `(*command.Registry).RegisterHandler`/`LookupHandler` 调用方 ⊆ `generated/contracts/command/**` + `runtime/command` 自测 | Medium（Go 无 friend-package：「仅生成码可调」不可编译期表达；archtest caller-allowlist 兜底） | **Hard**（`ResolveMethodCall` 按 pkg path + receiver type 绑定 callee，alias/同名异型不匹配） |
-| `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1667） | `(*outbox.Relay).WithCommandDispatch` 的 dispatch-map 值 ⊆ 生成 `DispatchAsync`（`generated/contracts/command/**`），异步路径下游半边 | Medium（Go 无 friend-package：「relay 只接生成 DispatchAsync」不可编译期表达；archtest value-allowlist 兜底。forwarded func-var = #1508-family data-flow 残留。与同步 `…REGISTER-CALLER-01` 共用 gh #1575） | **Hard**（go/types value-resolution 绑 `*types.Func` 身份 = pkg path + name，alias-proof，form-unique：仅 Ident/SelectorExpr，func-lit/wrapper 即违例） |
+| `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1667 / #1673） | `(*outbox.Relay).WithCommandDispatch` 必须是直接 method-call，其 dispatch-map 把生成 `DispatchID` const 映射到**同包**生成 `DispatchAsync`（`generated/contracts/command/**`），异步路径下游半边 | Medium（Go 无 friend-package：「relay 只接生成 DispatchAsync」不可编译期表达；archtest value-allowlist 兜底。forwarded func-var = #1508-family data-flow 残留。与同步 `…REGISTER-CALLER-01` 共用 gh #1575） | **Hard**（go/types 绑 value 的 `*types.Func` + key 的 `DispatchID *types.Const` 身份 = pkg path + name，alias-proof；**form-complete**：扫全部 WithCommandDispatch selector，method-value capture / method-expression 即违例（#1673 F2 闭 call-only 盲区）；key↔value 同源校验（#1673 F1，今日单包 vacuous，第 2 个 codegen command 自动 bites）） |
 
 **闭环论证**：codegen-Hard 上游（typed funnel 不可手写，D1/D2）+ caller-allowlist-Hard 下游（raw `RegisterHandler` 在生成码外被调即 CI 红，D3）= 业务**既不能手写 typed funnel、也不能在 funnel 外用 raw registry** → 达成立项门「Hard 双向锁」。
 
@@ -119,7 +119,7 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 
 **D9：DispatchAsync 镜像同步 Dispatch，复用 `Handler`，`LookupHandler` 留生成码内**。codegen 为每个 `kind:command,codegen:true` 契约派生 `DispatchAsync(ctx, reg, entry kout.Entry) error`（生成码内 `var _ command.AsyncDispatchFunc = DispatchAsync` 编译期自证），与同步 `Dispatch` 同构、唯一差异 = 从 `entry.Payload()` JSON unmarshal 回 typed `*Request`（同步直收 typed），其余 `LookupHandler` → type-assert `Handler` → 调 handler 一致。**复用同一 `Handler` 接口**（不新增 `HandlerAsync`）；async 丢弃 `*Response`、只回 `error` 供 relay settle/retry。`ctx = entry.RestoreContext(ctx)` 在调 handler 前还原 principal/observability 身份（跨 async 边界）。
 
-**D10：判别器 = routing-topic + dispatcher-map 成员（零 Entry 改动、零 metadata）**。command entry 即 `eventType = command id` 的普通 `outbox.Entry`（`NewEntry(clk, ctx, commandID, payload)`，`RoutingTopic()` = command id）。relay 持 composition-root 经 `(*outbox.Relay).WithCommandDispatch(reg, map[CommandID]AsyncDispatchFunc)` 注入的 dispatcher-map + registry；`publishBatch` 每条 entry：命中 map → 进程内 `fn(ctx, reg, e.Entry)`（跳过 marshal + broker），否则发 broker。settle（成功 `MarkPublished` = 命令已消费 / 失败 `MarkRetry`）复用 broker 路径 writeBack。**未改 sealed `kernel/outbox.Entry`、未引入 metadata 约定 → 未触发 contract-fanout 5 载体**；判别器 = 闭合 dispatcher-map 成员资格（命名空间 `command.*.v1` + 闭合 map 天然隔离事件 topic），比 metadata 标记更优（无 business-writable 伪造面）。reg 作为 `AsyncDispatchFunc` 位置参（非 composition-root 闭包捕获），使 map 值是 archtest 可静态解析的**直接生成符号**。
+**D10：判别器 = routing-topic + dispatcher-map 成员（零 Entry 改动、零 metadata）**。command entry 即 `eventType = command id` 的普通 `outbox.Entry`（`NewEntry(clk, ctx, commandID, payload)`，`RoutingTopic()` = command id）。relay 持 composition-root 经 `(*outbox.Relay).WithCommandDispatch(reg, map[CommandID]AsyncDispatchFunc)` 注入的 dispatcher-map + registry；`publishBatch` 每条 entry：命中 map → 进程内 `fn(ctx, reg, e.Entry)`（跳过 marshal + broker），否则发 broker。settle 复用 broker 路径 writeBack，但**失败分两类**（#1673 F3 / §Amendment 2026-06-06 round-2）：成功 `MarkPublished` = 命令已消费；**确定性框架错误**（reg nil / routing-topic ≠ DispatchID / decode 失败 / no-handler / wrong-type）由生成 `DispatchAsync` 经 `kout.NewPermanentError` 标记，relay `handleFailedEntry` 识别 → 直接 `MarkDead`（不耗重试预算，错配 entry fail-closed 不被错 handler 消费）；**handler 业务 error** 透传不 wrap → `MarkRetry` 至预算耗尽。**未改 sealed `kernel/outbox.Entry`、未引入 metadata 约定 → 未触发 contract-fanout 5 载体**；判别器 = 闭合 dispatcher-map 成员资格（命名空间 `command.*.v1` + 闭合 map 天然隔离事件 topic），比 metadata 标记更优（无 business-writable 伪造面）。reg 作为 `AsyncDispatchFunc` 位置参（非 composition-root 闭包捕获），使 map 值是 archtest 可静态解析的**直接生成符号**。
 
 **§4 评级矩阵逐行重评（无格降级）**：
 
@@ -129,6 +129,34 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 
 **无 ✅→⚠️/❌ 降格，无补偿措施**：D10 未改 `Entry`，OUTBOX-ENTRY 系列封装与 §4 同步双向锁均不受影响；新增 async funnel 是**净增**覆盖。
 
-**范围（显式 backlog，不 silent）**：本 PR = 机制（codegen DispatchAsync + relay 分支 + 注入 option + archtest + ADR）+ relay-level E2E（mem outbox store 绑生成 `enqueue.DispatchAsync` 扮演 composition root，`examples/iotdevice`）。**真实 binary async producer 接线**（devicecell 异步 enqueue + iotdevice durable relay 接线）→ gh backlog（area-eventing/type-feat/pri-p2，Blocked-by #1667）；值校验 = #1588；permanent/transient 分类随 #1588 细化。注：5 个 `command` 契约中仅 `enqueue` 为 `codegen:true`（其余 4 个 `codegen:false`），故仅 `enqueue/v1/command_gen.go` 生成 DispatchAsync。
+**范围（显式 backlog，不 silent）**：本 PR = 机制（codegen DispatchAsync + relay 分支 + 注入 option + archtest + ADR）+ relay-level E2E（mem outbox store 绑生成 `enqueue.DispatchAsync` 扮演 composition root，`examples/iotdevice`）。**真实 binary async producer 接线**（devicecell 异步 enqueue + iotdevice durable relay 接线）→ gh backlog（area-eventing/type-feat/pri-p2，Blocked-by #1667）；值校验 = #1588；**确定性框架错误的 permanent 分类（→ MarkDead）已随 #1673 F3 落地**（与值校验正交——框架错误 100% 不可恢复），**值校验失败分类 + handler 显式 permanent 能力**随 #1588 细化（复用本 PR 落地的 `kout.NewPermanentError` settle 机制，无需重做）。注：5 个 `command` 契约中仅 `enqueue` 为 `codegen:true`（其余 4 个 `codegen:false`），故仅 `enqueue/v1/command_gen.go` 生成 DispatchAsync。
 
 enforcement 索引（§7）新增：archtest `COMMAND-ASYNC-DISPATCH-CALLER-01`（`tools/archtest/command_dispatch_funnel_test.go`）。
+
+---
+
+## Amendment 2026-06-06 round-2（#1673 review fix：F1 同源 + F2 form-complete + F3 permanent settle）
+
+**触发**：#1673（④ async dispatch 落地 PR）codex review，3 条 Cx3 闭环。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 重写矛盾原文（D10「失败 `MarkRetry`」+ §"范围"「permanent/transient 分类随 #1588 细化」均已就地改写）。
+
+**F1（identity 错配闭环，Cx3）**：原 ④ 的 `WithCommandDispatch(reg, map[CommandID]AsyncDispatchFunc)` 把 command-id（key）与 dispatcher（value）作为 composition-root 两个自由输入，可错配；生成 `DispatchAsync` 用写死的 `LookupHandler(DispatchID)`、不校验 entry topic。两层闭环：
+
+- **上游 Hard（codegen funnel + golden）**：`command.tmpl` 的 `DispatchAsync` 体首加 trust-boundary 自检 `if entry.RoutingTopic() != string(DispatchID) { return permanent }`——错配 entry 消费时 fail-closed（永久错误 → MarkDead，配 F3），不被错 handler 消费。模板单源 + golden 字节锁，所有 `codegen:true` command 自动获得。
+- **下游 Medium→Hard（archtest 同源）**：`COMMAND-ASYNC-DISPATCH-CALLER-01` 扩展校验 map key 是**同包**生成 `DispatchID` const（不只 value 是 `DispatchAsync`）。今日单包 vacuous，第 2 个 codegen command 自动 bites。
+
+**不引入 `AsyncDispatchBinding`**：topic guard 已在 trust boundary 消除「错配 → 错 handler 消费」的安全后果；binding 仅把 wiring 错配从 CI-catch 提前到 compile-catch、边际收益递减且增新类型——按「优雅简洁」放弃（topic guard = runtime 自证，archtest 同源 = wiring CI 兜底，两者已闭环）。
+
+**F2（archtest form-complete，Cx2）**：§4 第 3 行原下游 Hard 声称「form-unique」，但实现 `isWithCommandDispatchCall` 只匹配 `call.Fun` 直接 SelectorExpr——method-value capture（`f := r.WithCommandDispatch; f(reg, badMap)`，间接 call 的 Fun 是 Ident）与 method-expression（args 偏移）绕过整个 map 扫描，**实现未达声称**。修复：改扫**全部** `WithCommandDispatch` selector（`EachInSubtree[SelectorExpr]` + `ResolveMethodCall`），非直接-method-call 形态即违例，对齐已验证的 `COMMAND-DISPATCH-REGISTER-CALLER-01` 范式；RED fixture 补 capture + method-expression 两形态，self-check 分别断言 `total≥4` + `form≥2`。下游 Hard 由此名副其实。
+
+**F3（permanent/transient settle，Cx3）**：见上 D10 重写。生成 `DispatchAsync` 5 类确定性框架错误经 `kout.NewPermanentError` 标记；relay `publishBatch` 对 `MarshalEnvelope` 失败同样 wrap permanent（搭车，同类确定性永久）；`handleFailedEntry` 入口 `isPermanentDispatch(err)`（`errors.As(*kout.PermanentError)`）→ permanent 直接 `MarkDead`，handler 业务 error（不 wrap）走既有 retry 预算；dead-letter slog 加 `permanent` 布尔区分 permanent-dead 与 budget-exhausted-dead。
+
+**§4 矩阵逐行重评（无格降级）**：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：**不变**（golden 字节锁随 `DispatchAsync` topic-guard + permanent-wrap 更新，仍 codegen 单源；上游 Hard / 下游 Medium）。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：**不变**。
+- `COMMAND-ASYNC-DISPATCH-CALLER-01`：覆盖**增强**（key 同源 F1 + form-complete F2），评级**保持** Medium 上游 / Hard 下游——F2 把下游 Hard 从「声称」变「名副其实」（非降级），F1 同源是净增覆盖。
+- **无 ✅→⚠️/❌ 降格**：D10 未改 `Entry` wire envelope，OUTBOX-ENTRY 系列与同步双向锁不受影响；settle 行为变更（permanent → `MarkDead`）是 outbox store 状态机内事件、非 wire 契约扇出（未触发 contract-fanout 5 载体——无 interface 签名 / schema / migration / errcode 新增）。
+
+**F4（可观测维度）不在本轮**：命令 dispatch 与 broker publish 共享 `published` stat/metric 的 sink 维度区分，因今日 0 命令 producer（dead observability，sink 维度命名需真实流量决定），完整并入 **#1674**（已含 F4/F5/F6）随真实 producer 接线统一落地。
+
+**eventbus.md「Relay 命令分发」节**同步重写 settle 语义（原「失败 `MarkRetry`」）。

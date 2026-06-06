@@ -39,6 +39,10 @@ const (
 	relayTypeName             = "Relay"
 	withCommandDispatchMethod = "WithCommandDispatch"
 	dispatchAsyncFuncName     = "DispatchAsync"
+	// dispatchIDConstName is the generated command-id const each command package
+	// declares; the dispatch-map KEY must be this const from the SAME generated
+	// package as the DispatchAsync value (#1673 F1 key↔value same-source check).
+	dispatchIDConstName = "DispatchID"
 )
 
 // isCommandSoleEmitterFuncName reports whether name is one of the generated
@@ -695,14 +699,17 @@ func TestCommandGenFunnelSoleEmitter01_RedFixture(t *testing.T) {
 // INVARIANT: COMMAND-ASYNC-DISPATCH-CALLER-01
 // ---------------------------------------------------------------------------
 
-// isWithCommandDispatchCall reports whether call is a call to
-// (*outbox.Relay).WithCommandDispatch, resolved alias-proof via go/types
-// (ResolveMethodCall handles pointer/value/promoted/alias receivers and
-// method-value forms; only the exact *types.Named "Relay" in runtime/outbox
-// matches).
-func isWithCommandDispatchCall(info *types.Info, call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil || sel.Sel.Name != withCommandDispatchMethod {
+// isWithCommandDispatchSelector reports whether sel REFERENCES
+// (*outbox.Relay).WithCommandDispatch in ANY form — a direct call selector, a
+// method-value capture (`f := r.WithCommandDispatch`), or a method expression
+// (`(*outbox.Relay).WithCommandDispatch`). Resolution is alias-proof via go/types
+// (ResolveMethodCall handles pointer/value/promoted/alias receivers); only the
+// exact *types.Named "Relay" in runtime/outbox matches. Form discrimination
+// (direct call vs capture vs method-expression) is the caller's job
+// (scanAsyncDispatchViolations) — #1673 F2 closed the call-only blind spot that
+// let `f := r.WithCommandDispatch; f(reg, badMap)` bypass the scan entirely.
+func isWithCommandDispatchSelector(info *types.Info, sel *ast.SelectorExpr) bool {
+	if sel.Sel == nil || sel.Sel.Name != withCommandDispatchMethod {
 		return false
 	}
 	fn, ok := ResolveMethodCall(info, sel)
@@ -724,40 +731,85 @@ func isWithCommandDispatchCall(info *types.Info, call *ast.CallExpr) bool {
 	return named.Obj().Name() == relayTypeName
 }
 
-// isGeneratedDispatchAsync reports whether v is a DIRECT reference (Ident or
-// SelectorExpr) to a func named DispatchAsync declared under
-// generated/contracts/command/**. Func literals, wrapper calls, and forwarded
-// func vars deliberately do NOT resolve to a generated *types.Func here and are
-// therefore reported as violations — the funnel requires the relay's
-// command-dispatch values to be the generated symbols themselves. reg is carried
-// as a parameter (command.AsyncDispatchFunc takes *Registry) precisely so no
-// composition-root closure is needed and the map value stays a direct symbol.
-func isGeneratedDispatchAsync(info *types.Info, v ast.Expr) bool {
-	var ident *ast.Ident
+// isMethodExpressionSelector reports whether sel is a method EXPRESSION
+// (`(*outbox.Relay).WithCommandDispatch`) rather than a method value
+// (`r.WithCommandDispatch`): its X operand denotes a TYPE, so a call shifts the
+// receiver into Args[0] and the dispatch map is no longer at Args[1]. go/types
+// records sel.X as a type via TypeAndValue.IsType(). Both the capture and the
+// method-expression form are forbidden outright so the dispatch map always stays
+// at a statically verifiable fixed arg slot.
+func isMethodExpressionSelector(info *types.Info, sel *ast.SelectorExpr) bool {
+	tv, ok := info.Types[sel.X]
+	return ok && tv.IsType()
+}
+
+// identOf extracts the trailing identifier from a direct value reference: the
+// Sel of a SelectorExpr (`enqueue.DispatchAsync` → DispatchAsync) or a bare
+// Ident. Func literals, calls, and other expressions yield nil — the funnel
+// requires direct generated symbols on both the key and the value.
+func identOf(v ast.Expr) *ast.Ident {
 	switch e := v.(type) {
 	case *ast.SelectorExpr:
-		ident = e.Sel
+		return e.Sel
 	case *ast.Ident:
-		ident = e
+		return e
 	default:
-		return false
+		return nil
+	}
+}
+
+// generatedDispatchAsyncPkg resolves v to a func named DispatchAsync declared
+// under generated/contracts/command/** and returns its package path. ok is false
+// for func literals, wrappers, forwarded vars, or any non-generated symbol — the
+// funnel requires the relay's command-dispatch VALUES to be the generated symbols
+// themselves. The returned pkg path feeds the key↔value same-source check (F1).
+func generatedDispatchAsyncPkg(info *types.Info, v ast.Expr) (string, bool) {
+	ident := identOf(v)
+	if ident == nil {
+		return "", false
 	}
 	fn, ok := info.ObjectOf(ident).(*types.Func)
 	if !ok || fn.Pkg() == nil || fn.Name() != dispatchAsyncFuncName {
-		return false
+		return "", false
 	}
 	rel := strings.TrimPrefix(fn.Pkg().Path(), PlatformModulePath+"/")
-	return strings.HasPrefix(rel, commandGeneratedPrefix)
+	if !strings.HasPrefix(rel, commandGeneratedPrefix) {
+		return "", false
+	}
+	return fn.Pkg().Path(), true
 }
 
-// asyncDispatchMapViolations returns a short description of each value in the
-// WithCommandDispatch dispatch-map argument that is NOT a direct generated
-// DispatchAsync reference. A non-literal map argument is itself one violation
-// (its values cannot be statically verified — forward the map as a literal).
+// generatedDispatchIDPkg resolves k to the const DispatchID declared under
+// generated/contracts/command/** and returns its package path. ok is false for a
+// string literal, a non-DispatchID const, or any non-generated symbol — the
+// dispatch-map KEY must be a generated DispatchID const (not a free string), so a
+// key bound to the wrong command id is caught at the type level (#1673 F1).
+func generatedDispatchIDPkg(info *types.Info, k ast.Expr) (string, bool) {
+	ident := identOf(k)
+	if ident == nil {
+		return "", false
+	}
+	cnst, ok := info.ObjectOf(ident).(*types.Const)
+	if !ok || cnst.Pkg() == nil || cnst.Name() != dispatchIDConstName {
+		return "", false
+	}
+	rel := strings.TrimPrefix(cnst.Pkg().Path(), PlatformModulePath+"/")
+	if !strings.HasPrefix(rel, commandGeneratedPrefix) {
+		return "", false
+	}
+	return cnst.Pkg().Path(), true
+}
+
+// asyncDispatchMapViolations returns a short description of each dispatch-map
+// entry in the WithCommandDispatch argument that breaks the funnel: a VALUE that
+// is not a direct generated DispatchAsync, a KEY that is not a generated
+// DispatchID const, or a key/value pair drawn from DIFFERENT generated command
+// packages (a mis-wired map — #1673 F1). A non-literal map argument is itself one
+// violation (its entries cannot be statically verified — forward it as a literal).
 func asyncDispatchMapViolations(info *types.Info, arg ast.Expr) []string {
 	lit, ok := arg.(*ast.CompositeLit)
 	if !ok {
-		return []string{"non-literal dispatch map (cannot verify values are generated DispatchAsync)"}
+		return []string{"non-literal dispatch map (cannot verify keys/values are generated symbols)"}
 	}
 	var bad []string
 	for _, elt := range lit.Elts {
@@ -765,8 +817,23 @@ func asyncDispatchMapViolations(info *types.Info, arg ast.Expr) []string {
 		if !ok {
 			continue
 		}
-		if !isGeneratedDispatchAsync(info, kv.Value) {
-			bad = append(bad, asyncDispatchValueText(kv.Value))
+		valuePkg, valueOK := generatedDispatchAsyncPkg(info, kv.Value)
+		if !valueOK {
+			bad = append(bad, "value is not a generated DispatchAsync: "+asyncDispatchValueText(kv.Value))
+		}
+		keyPkg, keyOK := generatedDispatchIDPkg(info, kv.Key)
+		if !keyOK {
+			bad = append(bad, "key is not a generated DispatchID const: "+asyncDispatchValueText(kv.Key))
+		}
+		// Same-source: a valid key + valid value drawn from different command
+		// packages is a mis-wire (one command's id mapped to another's dispatch).
+		// Vacuous today (only enqueue is codegen:true); auto-bites at the 2nd
+		// generated command. The key-is-DispatchID + value-is-DispatchAsync checks
+		// above are the primary enforcement until then.
+		if valueOK && keyOK && keyPkg != valuePkg {
+			bad = append(bad, fmt.Sprintf(
+				"key %s and value %s are from different command packages (%s vs %s)",
+				asyncDispatchValueText(kv.Key), asyncDispatchValueText(kv.Value), keyPkg, valuePkg))
 		}
 	}
 	return bad
@@ -788,31 +855,105 @@ func asyncDispatchValueText(v ast.Expr) string {
 		return e.Name
 	case *ast.FuncLit:
 		return "func literal"
+	case *ast.BasicLit:
+		return e.Value
 	default:
 		return fmt.Sprintf("%T", v)
 	}
 }
 
-// TestCommandAsyncDispatchCaller01 asserts that every value bound into
-// (*outbox.Relay).WithCommandDispatch's dispatch map is a direct generated
-// DispatchAsync symbol from generated/contracts/command/**. This is the
-// DOWNSTREAM half of the async dispatch funnel double-lock: the relay can only
-// dispatch a command in-process through the generated DispatchAsync (which
-// decodes the payload, LookupHandler-s, type-asserts the typed Handler, and
-// invokes it). A composition root that bound a hand-rolled func or a wrapper
-// closure would bypass the typed Handler + registry single-handler guarantee.
-// The UPSTREAM half is COMMAND-GEN-FUNNEL-SOLE-EMITTER-01 (DispatchAsync is
-// codegen sole-emitted + golden byte-locked, so it cannot be hand-written).
+// scanAsyncDispatchViolations is the single source for both the production scan
+// and the RED-fixture self-check. It reports every COMMAND-ASYNC-DISPATCH-CALLER-01
+// violation in file:
+//
+//	(form)  WithCommandDispatch referenced in ANY form other than a direct
+//	        method-value call — a method-value capture (`f := r.WithCommandDispatch;
+//	        f(reg, m)`) or a method expression (`(*outbox.Relay).WithCommandDispatch
+//	        (r, reg, m)`). Both make the dispatch map un-analyzable or shift it off
+//	        Args[1], so they are forbidden outright (#1673 F2).
+//	(map)   for a direct call, any dispatch-map entry whose value is not a generated
+//	        DispatchAsync, whose key is not a generated DispatchID const, or whose
+//	        key and value come from different command packages (#1673 F1).
+//
+// Form-violation messages contain "must be a direct method call" so the RED
+// fixture can assert the form half specifically (not just total count).
+func scanAsyncDispatchViolations(p *Pass, file *ast.File) []Diagnostic {
+	rel := p.Rel(file)
+	// Selectors used directly as a call's Fun are direct method calls; every other
+	// reference to WithCommandDispatch is a capture/expression to be rejected.
+	directCallFun := map[*ast.SelectorExpr]*ast.CallExpr{}
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			directCallFun[sel] = call
+		}
+	})
+	var d []Diagnostic
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if !isWithCommandDispatchSelector(p.TypesInfo, sel) {
+			return
+		}
+		call, direct := directCallFun[sel]
+		if !direct || isMethodExpressionSelector(p.TypesInfo, sel) {
+			pos := p.Fset.Position(sel.Pos())
+			d = append(d, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: "COMMAND-ASYNC-DISPATCH-CALLER-01: WithCommandDispatch must be a " +
+					"direct method call r.WithCommandDispatch(reg, map{enqueue.DispatchID: " +
+					"enqueue.DispatchAsync}); capturing it as a method value or using a method " +
+					"expression bypasses static verification of the dispatch map.",
+			})
+			return
+		}
+		if len(call.Args) < 2 {
+			return
+		}
+		for _, bad := range asyncDispatchMapViolations(p.TypesInfo, call.Args[1]) {
+			pos := p.Fset.Position(call.Pos())
+			d = append(d, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"COMMAND-ASYNC-DISPATCH-CALLER-01: Relay.WithCommandDispatch dispatch map "+
+						"is mis-wired (%s). Each entry MUST map a generated DispatchID const to "+
+						"the generated DispatchAsync from the SAME generated/contracts/command/** "+
+						"package (e.g. enqueue.DispatchID: enqueue.DispatchAsync) so every async "+
+						"command crosses the typed Handler + registry funnel. Do not wrap, "+
+						"hand-roll, or cross-wire the entries.",
+					bad,
+				),
+			})
+		}
+	})
+	return d
+}
+
+// TestCommandAsyncDispatchCaller01 asserts that every WithCommandDispatch call is
+// a direct method call whose dispatch map maps a generated DispatchID const to the
+// generated DispatchAsync from the SAME generated/contracts/command/** package.
+// This is the DOWNSTREAM half of the async dispatch funnel double-lock: the relay
+// can only dispatch a command in-process through the generated DispatchAsync (which
+// decodes the payload, LookupHandler-s, type-asserts the typed Handler, and invokes
+// it). Two bypasses are rejected outright: a composition root that bound a
+// hand-rolled func / wrapper closure / cross-wired key→value (the MAP shape — #1673
+// F1 added the key-is-DispatchID + key↔value same-source checks), and one that
+// captured WithCommandDispatch as a method value or method expression to dodge the
+// map scan (the FORM shape — #1673 F2 closed the call-only blind spot). The UPSTREAM
+// half is COMMAND-GEN-FUNNEL-SOLE-EMITTER-01 (DispatchAsync is codegen sole-emitted
+// + golden byte-locked, so it cannot be hand-written).
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
 //   - Downstream: HARD — go/types value-resolution binds each map value's
-//     *types.Func identity (pkg path + name), alias-proof and form-unique
-//     (Ident / SelectorExpr only; func literals and wrappers are violations).
-//     Residual: a forwarded func var (`var f command.AsyncDispatchFunc = …;
-//     map{id: f}`) resolves to a var, not the generated func — reported as a
-//     violation, so the only escape is laundering through an intermediate that
-//     still does not name DispatchAsync, the #1508-family data-flow ceiling.
+//     *types.Func identity and each key's DispatchID *types.Const identity (pkg
+//     path + name), alias-proof and form-unique. The scan walks EVERY
+//     WithCommandDispatch selector (#1673 F2), so a method-value capture
+//     (`f := r.WithCommandDispatch; f(reg, m)`) or method expression no longer
+//     slips past a call-only check — both are rejected outright. Residual: a
+//     forwarded func var (`var f command.AsyncDispatchFunc = …; map{id: f}`)
+//     resolves to a var, not the generated func — reported as a violation, so the
+//     only escape is laundering through an intermediate that still does not name
+//     DispatchAsync, the #1508-family data-flow ceiling.
 //   - Upstream: MEDIUM — Go has no friend-package; it cannot make "only the
 //     relay may receive an AsyncDispatchFunc, and only a generated one"
 //     compile-time. Mirrors COMMAND-DISPATCH-REGISTER-CALLER-01 and the
@@ -853,32 +994,10 @@ func TestCommandAsyncDispatchCaller01(t *testing.T) {
 		}
 		var d []Diagnostic
 		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
+			if strings.HasSuffix(p.Rel(file), "_test.go") {
 				continue // production composition-root wiring only; see godoc
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if !isWithCommandDispatchCall(p.TypesInfo, call) || len(call.Args) < 2 {
-					return
-				}
-				for _, bad := range asyncDispatchMapViolations(p.TypesInfo, call.Args[1]) {
-					pos := p.Fset.Position(call.Pos())
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"COMMAND-ASYNC-DISPATCH-CALLER-01: Relay.WithCommandDispatch is bound "+
-								"a non-generated dispatch value (%s). Relay command-dispatch values "+
-								"MUST be a generated DispatchAsync symbol from "+
-								"generated/contracts/command/** (e.g. enqueue.DispatchAsync) so every "+
-								"async command crosses the typed Handler + registry funnel. Do not "+
-								"wrap it in a closure or hand-roll a func — bind the generated "+
-								"DispatchAsync directly.",
-							bad,
-						),
-					})
-				}
-			})
+			d = append(d, scanAsyncDispatchViolations(p, file)...)
 		}
 		return d
 	})
@@ -918,18 +1037,19 @@ func TestCommandAsyncDispatchCaller01(t *testing.T) {
 }
 
 // TestCommandAsyncDispatchCaller01_RedFixture verifies the scanner fires against
-// the deliberate violations in commandasyncdispatchfixture, where
-// WithCommandDispatch is bound two non-generated values: a package-level local
-// func reference AND an inline func literal. Asserting ≥ 2 locks both shapes —
-// a regression that only flagged func literals (or only named funcs) would drop
-// to 1 and fail. found==0 means the scanner is fail-open.
+// every deliberate violation shape in commandasyncdispatchfixture, asserting both
+// the MAP half (non-generated value / non-DispatchID key) and the FORM half
+// (#1673 F2: method-value capture + method-expression). The form count is asserted
+// separately so a regression that re-introduced the call-only blind spot — letting
+// `f := r.WithCommandDispatch; f(...)` slip through — drops formViolations below 2
+// and fails even if the map-shape count stays healthy. total==0 means fail-open.
 func TestCommandAsyncDispatchCaller01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	var found int
+	var total, formViolations int
 	_ = Run(t, Fixture(FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/commandasyncdispatchfixture"}),
 		func(p *Pass) []Diagnostic {
@@ -937,23 +1057,29 @@ func TestCommandAsyncDispatchCaller01_RedFixture(t *testing.T) {
 				return nil
 			}
 			for _, file := range p.Files {
-				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-					if !isWithCommandDispatchCall(p.TypesInfo, call) || len(call.Args) < 2 {
-						return
+				for _, diag := range scanAsyncDispatchViolations(p, file) {
+					total++
+					if strings.Contains(diag.Message, "must be a direct method call") {
+						formViolations++
 					}
-					found += len(asyncDispatchMapViolations(p.TypesInfo, call.Args[1]))
-				})
+				}
 			}
 			return nil
 		})
 
-	assert.GreaterOrEqual(t, found, 2,
-		"COMMAND-ASYNC-DISPATCH-CALLER-01 RED fixture self-check FAILED: expected ≥ 2 "+
-			"violations from commandasyncdispatchfixture (a local-func value + a func-literal "+
-			"value bound into WithCommandDispatch); got %d. If found==0 the scanner is "+
-			"fail-open — check isWithCommandDispatchCall / isGeneratedDispatchAsync / "+
-			"asyncDispatchMapViolations resolve under the archtest_fixture build tag.",
-		found)
+	assert.GreaterOrEqual(t, total, 4,
+		"COMMAND-ASYNC-DISPATCH-CALLER-01 RED fixture self-check FAILED: expected ≥ 4 total "+
+			"violations from commandasyncdispatchfixture (non-generated value + non-DispatchID "+
+			"key on the bad map, plus the two form shapes); got %d. total==0 means the scanner "+
+			"is fail-open — check isWithCommandDispatchSelector / generatedDispatchAsyncPkg / "+
+			"generatedDispatchIDPkg resolve under the archtest_fixture build tag.",
+		total)
+	assert.GreaterOrEqual(t, formViolations, 2,
+		"COMMAND-ASYNC-DISPATCH-CALLER-01 RED fixture FORM self-check FAILED: expected ≥ 2 "+
+			"form violations (method-value capture + method-expression, #1673 F2); got %d. A drop "+
+			"here means the call-only blind spot regressed and WithCommandDispatch can again be "+
+			"captured as a function value to bypass the dispatch-map scan.",
+		formViolations)
 }
 
 // TestCommandSoleEmitterFuncName_IncludesDispatchAsync locks DispatchAsync into

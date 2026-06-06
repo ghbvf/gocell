@@ -122,31 +122,46 @@ var _ command.AsyncDispatchFunc = DispatchAsync
 // value validation at the async command-entry boundary is the command-entry
 // validation funnel tracked as #1588 (ADR §5 / Amendment 2026-06-04).
 //
-// Returns KindInvalid / ErrValidationFailed when reg is nil or the payload does
-// not decode into *Request; KindNotFound / ErrCommandNotFound
-// when no handler has been registered; KindInternal / ErrInternal when the
-// registered value has an unexpected type (invariant violation — should never
-// fire in production).
+// # Settle classification (relay)
+//
+// Deterministic framework errors — reg nil, routing-topic ≠ DispatchID (a
+// mis-wired dispatcher map), payload decode failure, no handler registered, or a
+// wrong-typed registered value — are wrapped with kout.NewPermanentError. None
+// can recover by retry, so the relay's handleFailedEntry routes them straight to
+// MarkDead instead of burning the retry budget (ADR §Amendment 2026-06-06 r2).
+// The handler's own business error is returned UNWRAPPED: it is transient by
+// default (relay → MarkRetry until the attempt budget is exhausted); a handler
+// that knows a failure is unrecoverable can itself return a kout.PermanentError.
+// Untrusted-payload value-validation classification stays deferred to #1588.
 func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry) error {
 	if reg == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.synth.do.v1 dispatch async: registry must not be nil")
+		return kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.synth.do.v1 dispatch async: registry must not be nil"))
+	}
+	// Trust-boundary self-check: the relay routes by dispatcher-map membership on
+	// entry.RoutingTopic(), so re-assert here that the claimed entry's topic is
+	// THIS command id before decoding/handling. A mis-wired dispatcher map (a
+	// topic bound to the wrong DispatchAsync) thus fails closed instead of feeding
+	// one command's payload to another command's handler.
+	if entry.RoutingTopic() != string(DispatchID) {
+		return kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.synth.do.v1 dispatch async: entry routing topic does not match DispatchID"))
 	}
 	var req Request
 	if err := json.Unmarshal(entry.Payload(), &req); err != nil {
-		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command.synth.do.v1 dispatch async: decode request payload", err)
+		return kout.NewPermanentError(errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.synth.do.v1 dispatch async: decode request payload", err))
 	}
 	ctx = entry.RestoreContext(ctx)
 	boxed, ok := reg.LookupHandler(DispatchID)
 	if !ok {
-		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-			"command.synth.do.v1 dispatch async: no handler registered")
+		return kout.NewPermanentError(errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
+			"command.synth.do.v1 dispatch async: no handler registered"))
 	}
 	h, ok := boxed.(Handler)
 	if !ok {
-		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			"command.synth.do.v1 dispatch async: registered handler has wrong type")
+		return kout.NewPermanentError(errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"command.synth.do.v1 dispatch async: registered handler has wrong type"))
 	}
 	_, err := h.HandleDo(ctx, &req)
 	return err
