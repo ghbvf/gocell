@@ -1246,11 +1246,13 @@ func TestMigration051_DestructiveDownPermitRejection(t *testing.T) {
 // Migration 053 up-down-up idempotency (RLS ENABLE + FORCE on users/roles/role_assignments)
 // ---------------------------------------------------------------------------
 
-// pgRLSEnabled reports whether the named table has both relrowsecurity AND
-// relforcerowsecurity set (i.e. ENABLE + FORCE ROW LEVEL SECURITY).
-func pgRLSEnabled(t *testing.T, pool *Pool, table string) bool {
+// pgRLSFlags returns the two INDEPENDENT pg_class row-security flags for the
+// named table: relrowsecurity (the ENABLE flag) and relforcerowsecurity (the
+// FORCE flag). They are separate columns — DISABLE ROW LEVEL SECURITY clears
+// only the former — so the Down-symmetry assertion must check both, otherwise a
+// dormant FORCE flag (enabled=false, forced=true) passes unnoticed (#1617 review F5).
+func pgRLSFlags(t *testing.T, pool *Pool, table string) (enabled, forced bool) {
 	t.Helper()
-	var enabled, forced bool
 	err := pool.DB().QueryRow(context.Background(), `
 SELECT c.relrowsecurity, c.relforcerowsecurity
 FROM   pg_class c
@@ -1258,8 +1260,16 @@ JOIN   pg_namespace n ON n.oid = c.relnamespace
 WHERE  n.nspname = current_schema()
   AND  c.relname  = $1`, table).Scan(&enabled, &forced)
 	if err != nil {
-		return false
+		return false, false
 	}
+	return enabled, forced
+}
+
+// pgRLSEnabled reports whether the named table has both relrowsecurity AND
+// relforcerowsecurity set (i.e. ENABLE + FORCE ROW LEVEL SECURITY).
+func pgRLSEnabled(t *testing.T, pool *Pool, table string) bool {
+	t.Helper()
+	enabled, forced := pgRLSFlags(t, pool, table)
 	return enabled && forced
 }
 
@@ -1306,8 +1316,16 @@ func TestMigration053_UpDownUpIdempotency(t *testing.T) {
 	require.NoError(t, m2.Down(ctx, downPermit), "Down() of migration 053 must succeed")
 
 	for _, tbl := range []string{"users", "roles", "role_assignments"} {
-		assert.False(t, pgRLSEnabled(t, pool, tbl),
-			"%s must NOT have FORCE RLS after migration 053 Down", tbl)
+		// Assert BOTH flags are cleared, separately (#1617 review F5): the Down
+		// must restore the pre-migration catalog state, not leave a dormant FORCE
+		// flag. `enabled && forced` aggregation cannot distinguish
+		// (enabled=false, forced=true) from a true reset.
+		enabled, forced := pgRLSFlags(t, pool, tbl)
+		assert.False(t, enabled,
+			"%s.relrowsecurity (ENABLE) must be false after migration 053 Down", tbl)
+		assert.False(t, forced,
+			"%s.relforcerowsecurity (FORCE) must be false after migration 053 Down — "+
+				"DISABLE does not clear FORCE; Down must state NO FORCE explicitly", tbl)
 		assert.False(t, pgPolicyExists(t, pool, tbl, "tenant_isolation"),
 			"%s must NOT have tenant_isolation policy after migration 053 Down", tbl)
 	}

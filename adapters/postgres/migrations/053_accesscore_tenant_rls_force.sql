@@ -38,7 +38,7 @@
 -- Non-destructive DDL (ENABLE / FORCE / CREATE POLICY add no column, drop
 -- nothing, rewrite no row): NO `+gocell forward-rebuild` annotation and NO Go
 -- destructive permit (contrast 050). The Down section is a true reversible
--- rollback (DROP POLICY + DISABLE RLS; no data loss).
+-- rollback (DROP POLICY + DISABLE RLS + NO FORCE RLS; no data loss).
 --
 -- [F-B11] DEPLOYMENT REQUIREMENT (NOT enforced by this migration — role/GRANT is
 -- provisioning, not a schema migration): the application PG role MUST NOT own
@@ -75,14 +75,23 @@ CREATE POLICY tenant_isolation ON role_assignments
     WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
 -- +goose Down
--- Reversible, non-destructive: drop the policy and disable RLS. DISABLE ROW LEVEL
--- SECURITY clears both the ENABLE and FORCE flags. No data is touched.
+-- Reversible, non-destructive: drop the policy, disable RLS, and clear FORCE.
+-- DISABLE ROW LEVEL SECURITY only flips relrowsecurity (the ENABLE flag) — it
+-- does NOT clear relforcerowsecurity (these are two independent pg_class
+-- columns in PostgreSQL). NO FORCE ROW LEVEL SECURITY is therefore stated
+-- explicitly so the Down truly restores the pre-migration catalog state
+-- (relrowsecurity=false AND relforcerowsecurity=false); otherwise a dormant
+-- FORCE flag would survive and re-applying ENABLE later (without re-FORCE)
+-- would unexpectedly subject the table owner to RLS. No data is touched.
 
 DROP POLICY IF EXISTS tenant_isolation ON role_assignments;
-ALTER TABLE role_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE role_assignments NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE role_assignments DISABLE  ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS tenant_isolation ON roles;
-ALTER TABLE roles            DISABLE ROW LEVEL SECURITY;
+ALTER TABLE roles            NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE roles            DISABLE  ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS tenant_isolation ON users;
-ALTER TABLE users            DISABLE ROW LEVEL SECURITY;
+ALTER TABLE users            NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE users            DISABLE  ROW LEVEL SECURITY;

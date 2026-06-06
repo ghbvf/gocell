@@ -2340,24 +2340,6 @@ func TestCascadeFailClosed_StaleEpoch_401(t *testing.T) {
 	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
 }
 
-// emptyTenantUserRepo wraps a real *mem.UserRepository but returns a user with
-// an empty TenantID from GetByID. Used by U5 reuse-path tests to simulate a
-// data-integrity anomaly where a session row was stored without a tenant.
-type emptyTenantUserRepo struct {
-	*mem.UserRepository
-}
-
-func (r emptyTenantUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
-	u, err := r.UserRepository.GetByIDInTenant(ctx, t, id)
-	if err != nil {
-		return nil, err
-	}
-	// Return a copy of the user with TenantID cleared to simulate the anomaly.
-	stripped := *u
-	stripped.TenantID = ""
-	return &stripped, nil
-}
-
 // emptyTenantSessionStore wraps a real *session.MemStore but strips TenantID
 // from every ValidateView returned by Get. Used by U5 tests to simulate a
 // data-integrity anomaly where a session row has an empty tenant_id (should
@@ -2421,13 +2403,18 @@ func TestRefreshInTx_EmptyDerivedTenant_FailsClosed(t *testing.T) {
 
 // TestHandleReuseDetected_EmptyDerivedTenant_FailsClosed (U5 reuse path) verifies
 // that handleReuseDetected fails closed with 401 ErrAuthRefreshFailed when the
-// user row returned by GetByID has an empty TenantID (#1337 PR-2a review F6).
-// This mirrors TestRefreshInTx_EmptyDerivedTenant_FailsClosed but drives the
-// reuse-detection code path (Rotate returning ErrReused) rather than the normal
-// mint path. The emptyTenantUserRepo wrapper strips TenantID from the GetByID
-// response, causing reuseTenantID.Validate() to reject it.
+// tenant it derives from the session row is empty (#1337 PR-3b review F6).
+//
+// The reuse cascade derives its tenant from sessions.tenant_id (its own
+// s.sessionStore.Get), NOT from the user repo — so the anomaly is injected via
+// emptyTenantSessionStore (the prior emptyTenantUserRepo wrapper was dead: the
+// reuse path never reads the user repo for the tenant). reuseOnPeekRefreshStore
+// makes Peek return ErrReused so handleReuseDetected("peek") runs BEFORE the
+// normal-path tenant validate (peekVerifyAndScope line 283); its empty-tenant
+// Get then drives reuseTenantID.Validate() to the rejection branch — which a
+// Rotate-time reuse could not reach (the normal validate would fire first).
 func TestHandleReuseDetected_EmptyDerivedTenant_FailsClosed(t *testing.T) {
-	sessionStore := newTestSessionStore(t)
+	baseSessionStore := newTestSessionStore(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	baseRepo := mem.NewStore(clock.Real()).UserRepository()
 
@@ -2436,31 +2423,33 @@ func TestHandleReuseDetected_EmptyDerivedTenant_FailsClosed(t *testing.T) {
 	u.ID = "usr-reuse-emptytenant"
 	require.NoError(t, baseRepo.Create(context.Background(), testTenantID, u))
 
-	// Wrap so GetByID returns the user with empty TenantID (simulating data-integrity anomaly).
-	userRepo := emptyTenantUserRepo{UserRepository: baseRepo}
+	// Inject the anomaly at the real source: strip TenantID from the session row
+	// the reuse cascade reads (handleReuseDetected derives tenant from it).
+	sessionStore := emptyTenantSessionStore{MemStore: baseSessionStore}
 
-	// reuseOnRotateRefreshStore causes Rotate to return ErrReused, triggering
-	// handleReuseDetected which calls userRepo.GetByID → reuseTenantID.Validate().
 	innerStore := newTestRefreshStore()
-	reuseStore := &reuseOnRotateRefreshStore{
+	reuseStore := &reuseOnPeekRefreshStore{
 		Store: innerStore, subjectID: u.ID, sessionID: "sess-reuse-emptytenant",
 	}
 
-	// Use a real invalidator backed by baseRepo (not userRepo) so Apply would
-	// succeed if it were reached; the test asserts we fail-closed before Apply.
+	// A spy invalidator so the test can assert the cascade Apply is NEVER reached.
+	// This is the non-vacuity anchor: handleReuseDetected always returns 401, so
+	// asserting only the status code would pass even if reuseTenantID.Validate()
+	// were removed. Asserting Apply did not run pins the empty-tenant validate
+	// branch as the cause (it fails-closed BEFORE the scoped cascade Apply).
+	spy := &spyInvalidator{}
 	svc := mustNewServiceWithInvalidator(invalidatorServiceDeps{
-		sessionStore: sessionStore, roleRepo: roleRepo, userRepo: userRepo,
+		sessionStore: sessionStore, roleRepo: roleRepo, userRepo: baseRepo,
 		refreshStore: reuseStore, issuer: testIssuer, logger: slog.Default(),
-		inv: newTestInvalidator(baseRepo, sessionStore, innerStore),
+		inv: spy,
 	}, WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
 
+	// The cascade Get must FIND the session row (so the empty-tenant strip — not a
+	// missing row — is what fails validate); seed it in the base store.
 	sess := newTestSession(u.ID, "sess-reuse-emptytenant")
-	require.NoError(t, sessionStore.Create(context.Background(), testTenantID, sess))
+	require.NoError(t, baseSessionStore.Create(context.Background(), testTenantID, sess))
 
-	wireToken, _, err := innerStore.Issue(context.Background(), "sess-reuse-emptytenant", u.ID, int64(1))
-	require.NoError(t, err)
-
-	pair, err := svc.Refresh(tenantCtx(), wireToken)
+	pair, err := svc.Refresh(tenantCtx(), "any-wire-token")
 	require.Error(t, err, "empty derived TenantID in reuse path must cause fail-closed 401")
 	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
@@ -2468,6 +2457,9 @@ func TestHandleReuseDetected_EmptyDerivedTenant_FailsClosed(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
 		"empty derived TenantID in reuse path must surface uniform 401 ErrAuthRefreshFailed (U5 reuse defense-in-depth)")
 	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+	assert.Empty(t, spy.calls,
+		"empty derived tenant must fail-closed at reuseTenantID.Validate() BEFORE the scoped "+
+			"cascade invalidator.Apply — proves the validate branch, not just the always-401 reuse exit")
 }
 
 // TestCascadeFailClosed_RotatedSubjectMismatch_401 verifies that a

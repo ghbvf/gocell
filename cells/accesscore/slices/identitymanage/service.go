@@ -334,14 +334,30 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 
 // GetByID retrieves a user by ID. Tenant-scoped: uses GetByIDInTenant so an
 // admin cannot read a user from a different tenant even if they know the UUID.
+//
+// The read runs inside txRunner.RunInTx (#1617 PR-3b review F1): users is under
+// FORCE ROW LEVEL SECURITY (migration 053), so a bare-pool SELECT would be
+// fail-closed to 0 rows under the restricted app-serving pool (#1676) unless the
+// app.tenant_id GUC is set. RunInTx injects that GUC from the authenticated
+// principal's ctxkeys.TenantID (the post-auth fallback documented on NewService)
+// — the SAME tid GetByIDInTenant filters on, so GUC and predicate are consistent.
+// Every other identitymanage method already wraps its repo access this way;
+// GetByID was the lone read that bypassed it.
 func (s *Service) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	tid, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: get: tenant: %w", err)
 	}
-	user, err := s.repo.GetByIDInTenant(ctx, tid, id)
-	if err != nil {
-		return nil, fmt.Errorf("identity-manage: get: %w", err)
+	var user *domain.User
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		u, gerr := s.repo.GetByIDInTenant(txCtx, tid, id)
+		if gerr != nil {
+			return fmt.Errorf("identity-manage: get: %w", gerr)
+		}
+		user = u
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return user, nil
 }

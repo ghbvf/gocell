@@ -803,11 +803,14 @@ func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
 	// #1337 PR-3b: tenantId is supplied in the request body by the service-token
-	// caller (InternalListener, no JWT). Revoke is idempotent: revoking a role from
-	// a non-existent user returns 200 with revoked=true (no role to remove is a
-	// no-op success, changed=false). The user-not-found 404 path was an artifact of
-	// the pre-PR-3b Option B design (which derived tenant via GetByID and found no
-	// user first); PR-3b passes tenantId in the body and skips the user pre-check.
+	// caller (InternalListener, no JWT). usr-1 is not seeded in newTestCell(t), so
+	// the target-tenant ownership guard (review F4) fails the user lookup →
+	// domain-level 404 (user not found), SYMMETRIC with the Assign route above.
+	// Before F4, Revoke skipped this check and returned a misleading 200
+	// revoked:true for a user absent from the tenant (the role survived in its
+	// real tenant); the guard turns that silent no-op into a clean 404. The
+	// idempotent role-not-held no-op (user EXISTS, role absent → 200) is covered at
+	// the rbacassign slice level (TestRevoke_NoOp_*, with a seeded user).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"tenantId":"00000000-0000-0000-0000-000000000001","userId":"usr-1","roleId":"admin"}`))
@@ -816,9 +819,10 @@ func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-	assert.Contains(t, rec.Body.String(), `"revoked":true`)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
+		"response should be JSON (handler reached, not router 404)")
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_USER_NOT_FOUND")
 }
 
 func TestAccessCore_RouteRoleRevoke_NoAuth_Returns401(t *testing.T) {

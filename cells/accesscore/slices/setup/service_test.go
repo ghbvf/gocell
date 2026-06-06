@@ -952,6 +952,75 @@ func (r *scopeCapturingUserRepo) UpdateLockoutFields(ctx context.Context, t tena
 	return r.inner.UpdateLockoutFields(ctx, t, u)
 }
 
+// scopeCapturingRoleRepo records the tenant scope observed on every
+// EffectiveAdminExists call (the admin-existence probe that provisioner.Status
+// runs). Embedding ports.RoleRepository satisfies the unobserved methods.
+type scopeCapturingRoleRepo struct {
+	ports.RoleRepository
+	scopes []scopeObservation
+}
+
+type scopeObservation struct {
+	scope tenant.TenantID
+	ok    bool
+}
+
+func (r *scopeCapturingRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error) {
+	s, ok := tenant.ScopeFromContext(ctx)
+	r.scopes = append(r.scopes, scopeObservation{scope: s, ok: ok})
+	return r.RoleRepository.EffectiveAdminExists(ctx, t)
+}
+
+// assertAllScoped fails unless at least one EffectiveAdminExists call was
+// observed and EVERY observation carried the expected tenant scope.
+func (r *scopeCapturingRoleRepo) assertAllScoped(t *testing.T, want tenant.TenantID) {
+	t.Helper()
+	require.NotEmpty(t, r.scopes, "EffectiveAdminExists was never called — scope assertion is vacuous")
+	for i, obs := range r.scopes {
+		assert.True(t, obs.ok, "EffectiveAdminExists call #%d ran without a tenant scope (RLS GUC would be unset)", i)
+		assert.Equal(t, want, obs.scope, "EffectiveAdminExists call #%d scoped to the wrong tenant", i)
+	}
+}
+
+// TestService_Status_IsRLSScoped (PR-3b review F1, Site 2) asserts that the
+// public GET /setup/status admin-existence read runs inside a tenant-scoped tx,
+// so under the restricted app-serving pool (#1676) EffectiveAdminExists is not
+// fail-closed to 0 rows by an unset app.tenant_id GUC (which would falsely
+// report hasAdmin:false). DemoCellTxManager is a pass-through that preserves the
+// WithScope value scopedtx.Do sets.
+func TestService_Status_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real())
+	roleCap := &scopeCapturingRoleRepo{RoleRepository: inner.RoleRepository()}
+	svc := newService(t, inner.UserRepository(), roleCap, nil,
+		setup.WithTxManager(outbox.DemoCellTxManager()),
+	)
+
+	_, err := svc.Status(context.Background(), testTenantID)
+	require.NoError(t, err)
+	roleCap.assertAllScoped(t, testTenantID)
+}
+
+// TestService_CreateAdmin_FastPathStatus_IsRLSScoped (PR-3b review F1, Site 3)
+// asserts that the pre-bcrypt fast-path admin-existence check in CreateAdmin
+// reads role_assignments inside a scoped tx. It runs BEFORE the write-tx
+// scopedtx.Do, so it needs its own scope — otherwise the restricted pool (#1676)
+// fail-closes it to 0 rows and every flood request falls through to bcrypt.
+func TestService_CreateAdmin_FastPathStatus_IsRLSScoped(t *testing.T) {
+	inner := mem.NewStore(clock.Real())
+	roleCap := &scopeCapturingRoleRepo{RoleRepository: inner.RoleRepository()}
+	svc := newService(t, inner.UserRepository(), roleCap, nil,
+		setup.WithTxManager(outbox.DemoCellTxManager()),
+	)
+
+	// Fresh store has no admin → the fast-path EffectiveAdminExists check runs
+	// (and so does the in-tx Ensure check); assertAllScoped proves BOTH are scoped.
+	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		TenantID: testTenantIDStr, Username: "root", Email: "root@local", Password: "SecretPass!23",
+	})
+	require.NoError(t, err)
+	roleCap.assertAllScoped(t, testTenantID)
+}
+
 // --- RecordBootstrapAuthFail ------------------------------------------------
 
 // bootstrapTestIPSalt is the keyed-hash salt used by RecordBootstrapAuthFail

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -98,7 +99,12 @@ import (
 //   - JSON wire schema: a dedicated sessionCacheEntry struct (not the full
 //     session.ValidateView) is the on-wire shape. Adding a sensitive field
 //     to ValidateView does NOT automatically propagate into Redis — the
-//     copy is explicit, providing an audit gate.
+//     copy is explicit, providing an audit gate. The flip side of that gate
+//     (alexedwards/scs store contract: a cache projection must stay equivalent
+//     to the source-of-record for every field the validate path consumes): an
+//     authentication-DECISION field added to ValidateView MUST also land in
+//     sessionCacheEntry, or a cache HIT silently degrades the decision. TenantID
+//     (#1337 PR-3b: the RLS scope carrier) is such a field and is cached.
 //
 // # Ops guidance
 //
@@ -187,10 +193,17 @@ const sessionCacheLogPrefix = "session-cache: "
 const sessionCacheRevokeDELTimeout = 2 * time.Second
 
 // sessionCacheEntry is the on-wire JSON shape persisted in Redis. It mirrors
-// the four fields of session.ValidateView verbatim; using a dedicated struct
+// the five fields of session.ValidateView verbatim; using a dedicated struct
 // makes field addition an explicit code change rather than an automatic
 // propagation from session.ValidateView. Adding a sensitive field to
 // ValidateView must be a deliberate decision to also land here.
+//
+// TenantID is a first-class authentication-decision carrier (#1337 PR-3b):
+// sessionvalidate/sessionrefresh derive the RLS tenant scope from view.TenantID,
+// so a cache entry that dropped it would, on a cache HIT, hand the consumer a
+// zero-value tenant and break the scoped read (tenant.TenantID.Validate fails or
+// the scope is wrong). It is therefore part of the cached projection, not an
+// optional extra — see the SCS store-contract note in the type godoc above.
 //
 // The field set is frozen by INVARIANT SESSION-CACHE-EPOCH-NOT-CACHED-01
 // (session_cache_entry_frozen_test.go): it must NOT carry the live
@@ -200,16 +213,18 @@ const sessionCacheRevokeDELTimeout = 2 * time.Second
 // reflect freeze prevents a future field addition from silently removing that
 // premise.
 type sessionCacheEntry struct {
-	ID                string     `json:"id"`
-	SubjectID         string     `json:"subjectId"`
-	RevokedAt         *time.Time `json:"revokedAt,omitempty"`
-	AuthzEpochAtIssue int64      `json:"authzEpochAtIssue"`
+	ID                string          `json:"id"`
+	SubjectID         string          `json:"subjectId"`
+	TenantID          tenant.TenantID `json:"tenantId"`
+	RevokedAt         *time.Time      `json:"revokedAt,omitempty"`
+	AuthzEpochAtIssue int64           `json:"authzEpochAtIssue"`
 }
 
 func entryFromView(v *session.ValidateView) sessionCacheEntry {
 	return sessionCacheEntry{
 		ID:                v.ID,
 		SubjectID:         v.SubjectID,
+		TenantID:          v.TenantID,
 		RevokedAt:         v.RevokedAt,
 		AuthzEpochAtIssue: v.AuthzEpochAtIssue,
 	}
@@ -219,6 +234,7 @@ func (e sessionCacheEntry) toView() *session.ValidateView {
 	return &session.ValidateView{
 		ID:                e.ID,
 		SubjectID:         e.SubjectID,
+		TenantID:          e.TenantID,
 		RevokedAt:         e.RevokedAt,
 		AuthzEpochAtIssue: e.AuthzEpochAtIssue,
 	}
@@ -226,14 +242,24 @@ func (e sessionCacheEntry) toView() *session.ValidateView {
 
 // validate enforces the wire-schema invariants the producer (lazyPopulate)
 // upholds: ID must match the requested id, SubjectID must be non-empty,
-// AuthzEpochAtIssue must be positive, and RevokedAt must be nil (only active
-// views are written to cache). Failure → fall through to inner.
+// TenantID must be a valid (non-empty, canonical-UUID) tenant, AuthzEpochAtIssue
+// must be positive, and RevokedAt must be nil (only active views are written to
+// cache). Failure → fall through to inner.
+//
+// The TenantID check doubles as the migration backstop: a pre-PR-3b cache entry
+// (written without tenantId) deserializes to the empty TenantID, fails
+// Validate, and falls through to the inner store — which returns the row with
+// the correct tenant and re-populates the cache. No stale tenant-less entry can
+// be served as a cache hit.
 func (e sessionCacheEntry) validate(wantID string) error {
 	if e.ID != wantID {
 		return errors.New(sessionCacheLogPrefix + "id mismatch")
 	}
 	if e.SubjectID == "" {
 		return errors.New(sessionCacheLogPrefix + "empty SubjectID")
+	}
+	if err := e.TenantID.Validate(); err != nil {
+		return fmt.Errorf(sessionCacheLogPrefix+"invalid TenantID: %w", err)
 	}
 	if e.AuthzEpochAtIssue <= 0 {
 		return errors.New(sessionCacheLogPrefix + "non-positive AuthzEpochAtIssue")

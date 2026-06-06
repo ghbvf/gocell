@@ -1628,6 +1628,27 @@ func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
 	assert.True(t, repo.updInTx, "Update.Update must run inside the same tx")
 }
 
+// TestService_GetByID_RunsInsideTx (PR-3b review F1, Site 1) asserts GetByID
+// reads the user inside a RunInTx so the RLS app.tenant_id GUC is injected from
+// the authenticated principal's ctxkeys.TenantID. users is under FORCE ROW LEVEL
+// SECURITY (migration 053); a bare-pool read would be fail-closed to 0 rows
+// under the restricted app-serving pool (#1676). GetByID was the lone
+// identitymanage read that bypassed the tx wrapping every other method uses.
+func TestService_GetByID_RunsInsideTx(t *testing.T) {
+	svc, repo, runner := newAtomicitySvc(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "get-scoped", Email: "g@s.t", Password: "hash",
+	})
+	require.NoError(t, err)
+	repo.getInTx, runner.runs = false, 0
+
+	got, err := svc.GetByID(adminCtxForService(), user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, got.ID)
+	assert.Equal(t, 1, runner.runs, "GetByID must run inside exactly one tx")
+	assert.True(t, repo.getInTx, "GetByID must read inside RunInTx so the RLS GUC is set (F1)")
+}
+
 // TestService_Update_InvalidStatusFailsBeforeTx asserts that the cheap
 // status string validation rejects invalid values before opening a tx —
 // invalid input is not a database concern.

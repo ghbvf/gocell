@@ -105,11 +105,13 @@ func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 }
 
 // seedTestUserRoster idempotently seeds the standard active users that rbacassign
-// tests assign/revoke roles to. Option B (#1337 PR-2a) derives the assignment
-// tenant from the TARGET user via GetByID, so every Assign/Revoke target must
-// exist; seeding the roster in the test-service constructors keeps individual
-// tests free of user-existence boilerplate. Roster users hold no role, so they
-// are invisible to the effective-admin count until a test assigns admin.
+// tests assign/revoke roles to. Since #1617 PR-3b the tenant comes from the
+// request body, but both Assign (repo composite-FK / mem user guard) and Revoke
+// (the target-tenant ownership guard, review F4) still require the target user
+// to exist in the tenant, so every Assign/Revoke target must exist; seeding the
+// roster in the test-service constructors keeps individual tests free of
+// user-existence boilerplate. Roster users hold no role, so they are invisible
+// to the effective-admin count until a test assigns admin.
 func seedTestUserRoster(t testing.TB, store *mem.Store) {
 	t.Helper()
 	for _, id := range []string{
@@ -352,8 +354,8 @@ func TestService_Revoke(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, store, _ := newTestService(t)
-			// Option B: Revoke derives the tenant from the target user (GetByID),
-			// so the user must exist. Seed it for non-validation cases.
+			// The target user must exist in the tenant for the Revoke ownership
+			// guard (#1617 PR-3b review F4) to pass; seed it for non-validation cases.
 			if tc.userID != "" {
 				seedActiveUser(t, store, tc.userID)
 			}
@@ -584,4 +586,42 @@ func TestRevokeRole_IsRLSScoped(t *testing.T) {
 		"RemoveFromUserIfNotLast must run inside a scoped tx (tenant.ScopeFromContext must be set)")
 	assert.Equal(t, testTenantID, cap.capturedScope,
 		"Revoke scope must equal the request tenant")
+}
+
+// TestRevoke_WrongTenant_Returns404NotSilentSuccess (PR-3b review F4) verifies
+// that revoking a role for a user that does not exist in the REQUEST's tenant
+// returns a clean ErrAuthUserNotFound (404), not a silent revoked:true. The
+// tenant now comes from the request body (not the target user), so a wrong
+// tenant makes RemoveFromUserIfNotLast a (false, nil) no-op — which the handler
+// would report as revoked:true while the role survives in the user's real
+// tenant. The target-tenant ownership guard turns that into a 404, matching the
+// Assign path (composite FK / mem userByIDInTenant).
+func TestRevoke_WrongTenant_Returns404NotSilentSuccess(t *testing.T) {
+	svc, store, _ := newTestService(t)
+
+	// Seed the user + role assignment in testTenantID (the user's REAL tenant).
+	seedActiveUser(t, store, "usr-wrongtenant")
+	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-wrongtenant", "editor")
+	require.NoError(t, err)
+
+	// Revoke with a DIFFERENT tenant where the user does not exist.
+	otherTenant, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000002")
+	require.NoError(t, err)
+	err = svc.Revoke(tenantCtx(), otherTenant, "usr-wrongtenant", "editor")
+	require.Error(t, err, "wrong-tenant revoke must not be a silent success")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, ecErr.Code,
+		"wrong-tenant revoke must surface ErrAuthUserNotFound (404), matching the Assign path")
+
+	// Proof the no-op did not leak as success: the role still exists in the
+	// user's real tenant.
+	roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, "usr-wrongtenant")
+	stillHeld := false
+	for _, r := range roles {
+		if r.ID == "editor" {
+			stillHeld = true
+		}
+	}
+	assert.True(t, stillHeld, "role must survive in the real tenant after a wrong-tenant revoke")
 }

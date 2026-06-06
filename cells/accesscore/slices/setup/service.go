@@ -154,8 +154,18 @@ type StatusOutput struct {
 }
 
 // Status returns whether the given tenant already has at least one admin.
+//
+// The admin-existence check reads role_assignments / users, which are under
+// FORCE ROW LEVEL SECURITY (migration 053). setup is a PRE-AUTH endpoint (no JWT
+// → no ctxkeys.TenantID fallback), so the read is scoped explicitly through
+// scopedtx.Do (#1617 PR-3b review F1): under the restricted app-serving pool
+// (#1676) a bare-pool read would be fail-closed to 0 rows by the unset
+// app.tenant_id GUC, falsely reporting hasAdmin:false.
 func (s *Service) Status(ctx context.Context, t tenant.TenantID) (StatusOutput, error) {
-	has, err := s.provisioner.Status(ctx, t)
+	has, err := scopedtx.Do(ctx, s.txRunner, t,
+		func(txCtx context.Context) (bool, error) {
+			return s.provisioner.Status(txCtx, t)
+		})
 	if err != nil {
 		return StatusOutput{}, fmt.Errorf("setup: status: %w", err)
 	}
@@ -218,8 +228,15 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 	}
 
 	// Fast-path: if admin already exists for this tenant, return 410 without
-	// touching bcrypt. This keeps anonymous floods in O(1) roundtrip.
-	hasAdmin, err := s.provisioner.Status(ctx, tid)
+	// touching bcrypt. This keeps anonymous floods in O(1) roundtrip. The check
+	// reads role_assignments (RLS, migration 053) and runs BEFORE the write-tx
+	// scopedtx.Do below, so it needs its own tenant scope (#1617 PR-3b review F1)
+	// — otherwise the restricted app-serving pool (#1676) fail-closes it to 0
+	// rows and the flood path would always fall through to bcrypt.
+	hasAdmin, err := scopedtx.Do(ctx, s.txRunner, tid,
+		func(txCtx context.Context) (bool, error) {
+			return s.provisioner.Status(txCtx, tid)
+		})
 	if err != nil {
 		return nil, fmt.Errorf("setup: status: %w", err)
 	}

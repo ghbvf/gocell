@@ -129,8 +129,10 @@ func NewService(
 // topic out of this function lets EMIT-DECL-COVER-01's literal-site scan see
 // each caller's const, rather than an opaque `topic string` parameter.
 //
-// tid scopes the credential invalidation to the correct tenant. Callers derive
-// it from the target user (GetByID by-PK carve-out) before calling persistChange.
+// tid scopes the credential invalidation to the correct tenant. Callers take it
+// from the request body (#1617 PR-3b): the InternalListener / service-token
+// caller has no JWT, so the tenant is supplied explicitly rather than derived
+// from the target user (the tenant-less GetByID carve-out was deleted in PR-3b).
 func (s *Service) persistChange(
 	ctx context.Context,
 	tid tenant.TenantID,
@@ -222,6 +224,19 @@ func (s *Service) Revoke(ctx context.Context, tenantID tenant.TenantID, userID, 
 	tid := tenantID
 	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionRevoked, ActorID: actorFromContext(ctx)}
 	writeFn := func(txCtx context.Context) (bool, error) {
+		// Target-tenant ownership guard (#1617 PR-3b review F4). The tenant now
+		// comes from the request body, not from the target user, so a caller that
+		// supplies the WRONG tenant would make RemoveFromUserIfNotLast a silent
+		// (false, nil) no-op below — the DELETE matches 0 rows in the wrong tenant
+		// — which the handler would report as revoked:true while the role survives
+		// in the user's real tenant (credentials never invalidated). Asserting the
+		// target exists in this tenant first turns that into a clean 404
+		// (ErrAuthUserNotFound), mirroring the Assign path's repo-level user guard
+		// (PG composite FK / mem userByIDInTenant). A user that DOES exist here but
+		// does not hold the role still revokes idempotently (no-op success below).
+		if _, err := s.userRepo.GetByIDInTenant(txCtx, tid, userID); err != nil {
+			return false, fmt.Errorf("rbac-assign: revoke: %w", err)
+		}
 		// Atomic count-check + removal eliminates TOCTOU race for last-admin guard.
 		changed, err := s.roleRepo.RemoveFromUserIfNotLast(txCtx, tid, userID, roleID)
 		if err != nil {

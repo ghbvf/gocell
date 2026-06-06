@@ -105,7 +105,7 @@ type UserRepository interface {
 	// effective admin.
 	//
 	// Returns only error (not the updated aggregate); callers that need the
-	// post-write User state should call GetByID after the mutation.
+	// post-write User state should call GetByIDInTenant after the mutation.
 	//
 	// Errors:
 	//   - ErrAuthUserNotFound (KindNotFound / 404) — userID does not exist
@@ -125,7 +125,7 @@ type UserRepository interface {
 	// status / authz_epoch / failed_login_count / last_failed_at / locked_until.
 	//
 	// Returns only error (not the updated aggregate); callers that need the
-	// post-write User state should call GetByID after the mutation.
+	// post-write User state should call GetByIDInTenant after the mutation.
 	//
 	// Errors:
 	//   - ErrAuthUserNotFound (KindNotFound / 404) — userID does not exist

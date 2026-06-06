@@ -37,7 +37,8 @@ func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 	require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, u1))
 	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-1", "admin")
 	require.NoError(t, err)
-	// Option B: Assign/Revoke derive the tenant from the target user (GetByID),
+	// Assign/Revoke require the target user to exist in the tenant (#1617 PR-3b:
+	// repo composite-FK / mem user guard for Assign, ownership guard for Revoke),
 	// so seed the roster of users the handler tests operate on (idempotent — usr-1
 	// above is skipped).
 	seedTestUserRoster(t, store)

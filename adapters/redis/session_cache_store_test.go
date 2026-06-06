@@ -130,6 +130,7 @@ func newTestView() *session.ValidateView {
 	return &session.ValidateView{
 		ID:                scsTestSID,
 		SubjectID:         scsTestSubj,
+		TenantID:          scsTestTenantID,
 		RevokedAt:         nil,
 		AuthzEpochAtIssue: scsTestEpoch,
 	}
@@ -194,8 +195,43 @@ func TestCachingSessionStore_Get_CacheHit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, view.ID, got.ID)
 	assert.Equal(t, view.SubjectID, got.SubjectID)
+	assert.Equal(t, view.TenantID, got.TenantID,
+		"TenantID must round-trip through the cache (#1337 PR-3b: it is the RLS scope carrier; "+
+			"a HIT that dropped it would scope the downstream read to a zero tenant)")
 	assert.Equal(t, view.AuthzEpochAtIssue, got.AuthzEpochAtIssue)
 	assert.Zero(t, inner.getCalls.Load(), "cache hit must not delegate to inner")
+}
+
+// TestCachingSessionStore_Get_StaleEntryWithoutTenantID_FallsThrough verifies
+// that a pre-#1337-PR-3b cache entry (written WITHOUT tenantId) is rejected by
+// validate() — its empty TenantID fails tenant.TenantID.Validate — and falls
+// through to inner, which returns the row with the correct tenant. No tenant-less
+// entry is ever served as a cache hit, and the cache is re-primed with the
+// tenant-bearing view on the way out.
+func TestCachingSessionStore_Get_StaleEntryWithoutTenantID_FallsThrough(t *testing.T) {
+	t.Parallel()
+	mock := newMockCmdable()
+
+	// Hand-craft the legacy on-wire shape: the four pre-PR-3b fields, no tenantId.
+	legacy := struct {
+		ID                string `json:"id"`
+		SubjectID         string `json:"subjectId"`
+		AuthzEpochAtIssue int64  `json:"authzEpochAtIssue"`
+	}{ID: scsTestSID, SubjectID: scsTestSubj, AuthzEpochAtIssue: scsTestEpoch}
+	payload, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+
+	inner := &fakeSessionStore{view: newTestView()} // inner carries the correct tenant
+	store := newTestCachingStore(t, inner, mock)
+
+	got, err := store.Get(context.Background(), scsTestSID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, scsTestTenantID, got.TenantID,
+		"stale tenant-less cache entry must fall through to inner, which carries the correct tenant")
+	assert.Equal(t, int64(1), inner.getCalls.Load(),
+		"the empty-tenant cache entry must NOT satisfy the hit; inner.Get must run exactly once")
 }
 
 // TestCachingSessionStore_Get_CacheMiss_PrimesCache — first Get misses the

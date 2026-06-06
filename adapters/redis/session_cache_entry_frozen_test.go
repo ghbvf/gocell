@@ -15,8 +15,8 @@
 // # Two test functions
 //
 //   - [TestSessionCacheEntryFieldsFrozen01]: reflect-schema freeze — pins
-//     NumField == 4 and an exact ordered tuple of (name, json-tag, Go-type)
-//     for all four fields.  Any drift in field count, name, tag, or type fails
+//     NumField == 5 and an exact ordered tuple of (name, json-tag, Go-type)
+//     for all five fields.  Any drift in field count, name, tag, or type fails
 //     the comparison, forcing the change to land on an explicit frozen-list
 //     review checkpoint.
 //
@@ -26,7 +26,7 @@
 //     modifiers) is exactly "authzepoch" or "authz_epoch".  These exact-equality
 //     checks catch the specific bare-AuthzEpoch / authz_epoch mistake; the
 //     primary gate for ANY new field (including name variants) is the
-//     NumField()==4 freeze in [TestSessionCacheEntryFieldsFrozen01].  Positive
+//     NumField()==5 freeze in [TestSessionCacheEntryFieldsFrozen01].  Positive
 //     control (non-vacuity): asserts that AuthzEpochAtIssue IS present, so the
 //     test fails loudly if the snapshot field is renamed — proving the scan is live.
 //
@@ -53,7 +53,7 @@
 // guard: its exact-equality checks catch the specific bare-AuthzEpoch /
 // authz_epoch mistake.  The PRIMARY protection against ANY new field
 // (including variants such as AuthzEpochLive or AuthzEpochCurrent) is the
-// NumField()==4 + ordered-tuple freeze in [TestSessionCacheEntryFieldsFrozen01]:
+// NumField()==5 + ordered-tuple freeze in [TestSessionCacheEntryFieldsFrozen01]:
 // adding any field — regardless of name — forces an explicit update to the
 // frozen list under reviewer attention.
 package redis
@@ -74,14 +74,20 @@ type sessionCacheEntryField struct {
 	GoType  string
 }
 
-// expectedSessionCacheEntryFields is the authoritative 4-field frozen schema
+// expectedSessionCacheEntryFields is the authoritative 5-field frozen schema
 // for sessionCacheEntry.  Changing any entry requires updating this list under
 // explicit reviewer attention AND ensuring that the live users.authz_epoch is
 // still not being cached (which would break the RevokeForSubject fail-closed
 // security floor described in the file-level godoc).
+//
+// TenantID (#1337 PR-3b) is the fifth field: it is an authentication-decision
+// carrier (the RLS tenant scope source) that sessionvalidate/sessionrefresh read
+// off the cached view, so it MUST be part of the cached projection — a cache HIT
+// that dropped it would scope the downstream read to a zero tenant.
 var expectedSessionCacheEntryFields = []sessionCacheEntryField{
 	{Name: "ID", JSONTag: "id", GoType: "string"},
 	{Name: "SubjectID", JSONTag: "subjectId", GoType: "string"},
+	{Name: "TenantID", JSONTag: "tenantId", GoType: "tenant.TenantID"},
 	{Name: "RevokedAt", JSONTag: "revokedAt,omitempty", GoType: "*time.Time"},
 	{Name: "AuthzEpochAtIssue", JSONTag: "authzEpochAtIssue", GoType: "int64"},
 }
@@ -89,8 +95,8 @@ var expectedSessionCacheEntryFields = []sessionCacheEntryField{
 // TestSessionCacheEntryFieldsFrozen01 reflects over [sessionCacheEntry] and
 // asserts that the field set has not drifted from [expectedSessionCacheEntryFields].
 //
-// The four assertions are:
-//  1. NumField() == 4: adding a 5th field re-opens the live-epoch-not-cached
+// The two assertions are:
+//  1. NumField() == 5: adding a 6th field re-opens the live-epoch-not-cached
 //     invariant (the new field might carry the live epoch); update this frozen
 //     list AND the godoc / issue #1616 deliberately.
 //  2. Exact ordered tuple comparison: name, json-tag, and Go-type for each
