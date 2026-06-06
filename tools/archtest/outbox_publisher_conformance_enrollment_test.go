@@ -57,9 +57,9 @@ import (
 // INVARIANT: OUTBOX-PUBLISHER-CONFORMANCE-ENROLLMENT-01
 
 const (
-	outboxPublisherIfacePkg  = "github.com/ghbvf/gocell/kernel/outbox"
+	outboxPublisherIfacePkg  = PlatformModulePath + "/kernel/outbox"
 	outboxPublisherIfaceName = "Publisher"
-	outboxtestPkg            = "github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	outboxtestPkg            = PlatformModulePath + "/kernel/outbox/outboxtest"
 )
 
 // outboxPublisherEnrollmentWaivers maps a production package path → the reason
@@ -67,10 +67,10 @@ const (
 // Each entry is auditable and principled; a flagged impl whose package is NOT
 // here fails CI, forcing a conscious decision (no silent additions).
 var outboxPublisherEnrollmentWaivers = map[string]string{
-	"github.com/ghbvf/gocell/kernel/outbox": "kernel noop sink outbox.DiscardPublisher (Noop()==true, rejected by cell.CheckNotNoop " +
+	PlatformModulePath + "/kernel/outbox": "kernel noop sink outbox.DiscardPublisher (Noop()==true, rejected by cell.CheckNotNoop " +
 		"in durable mode) — it discards rather than delivers, so a pub→sub roundtrip " +
 		"(outboxtest.TestPubSub) is N/A by design.",
-	"github.com/ghbvf/gocell/cells/configcore/internal/testutil": "test-double publishers " +
+	PlatformModulePath + "/cells/configcore/internal/testutil": "test-double publishers " +
 		"(StubPublisher / FailingPublisher) — not a real transport; outboxtest.TestPubSub " +
 		"roundtrip is N/A for in-memory stubs.",
 	// adapters/mqtt waiver removed in PR-4 (#1142): adapters/mqtt/conformance_test.go

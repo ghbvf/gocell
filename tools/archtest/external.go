@@ -2,6 +2,7 @@ package archtest
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,31 @@ import (
 // supplied by the driver (the Run typed scopes Typed/Production → findModuleRoot),
 // which resolves the consumer's own go.mod for external repos.
 const PlatformModulePath = "github.com/ghbvf/gocell"
+
+// isGoCellPlatformPkgPath reports whether pkgPath is a package inside the GoCell
+// platform module ([PlatformModulePath] itself or any subpackage).
+//
+// The registered CellRules in [StandardCellRules] that carry a file allowlist
+// (OUTBOX-RECONSTRUCTION-CALLER-01, PROJECTION-APPLY-HOOK-FUNNEL-01,
+// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01) key their sanctioned sites by
+// module-RELATIVE path (e.g. "kernel/outbox/result.go"). A repo-relative path is
+// NOT a trustworthy identity in a CONSUMER module: an external Cell repo could
+// recreate the same relative path and claim the GoCell-internal exemption,
+// defeating the rule's pure-ban guarantee. Binding each allowlist to platform
+// package identity closes that bypass — a forged site in a consumer module has
+// pkgPath = <consumer-module>/… which is not under [PlatformModulePath], so it is
+// correctly never exempt and the rule stays a true pure ban there. In GoCell's
+// own dogfood every production package is under [PlatformModulePath], so the bind
+// is transparent: the relative-path allowlist still discriminates among GoCell
+// files (rel→file is a bijection within a single module).
+//
+// ref: scaffold_derived_forceoverwrite.go::isDerivedCtorSite — the same
+// package-identity bind for SCAFFOLD-DERIVED-FORCEOVERWRITE-01, with the same
+// "consumer module forges path" threat; go/analysis Pass carries Pkg identity for
+// exactly this kind of provenance check.
+func isGoCellPlatformPkgPath(pkgPath string) bool {
+	return pkgPath == PlatformModulePath || strings.HasPrefix(pkgPath, PlatformModulePath+"/")
+}
 
 // CellRule is a reusable, importable architecture invariant — the GoCell
 // analog of golang.org/x/tools/go/analysis.Analyzer. ID is the stable rule
@@ -123,6 +149,18 @@ type ConfigForExternalCell struct {
 // PR-2..N, tracked at issue #1302); the ratchet meta-archtest
 // ARCHTEST-MODULE-PATH-FUNNEL-01 guarantees that migration converges.
 //
+// Classification (form follows function): a rule migrates to a Check* + a
+// StandardCellRules entry only when it yields a meaningful PURE BAN for an
+// external repo — its allowlist / sanctioned sites are GoCell-internal packages
+// absent from a consumer module, so the constraint genuinely fires on consumer
+// code. A rule whose scan targets GoCell-specific paths / sealed types / floors /
+// waivers (vacuous-green or false-red externally) is NOT registered: it either
+// stays a Check* that GoCell dogfoods but does not register (listed below), or —
+// for a pure self-check with no portable value — keeps its logic in its _test.go
+// with only platform paths derived from PlatformModulePath (e.g. this PR's L2
+// atomicity, publisher/checkpoint conformance enrollment, outboxtest import
+// boundary, relay isolation, checkpoint tx-bound rules).
+//
 // Rules intentionally NOT registered (register=no) because they reason about
 // GoCell's own internal package layout / source, not about how a consumer uses
 // platform APIs — so they are vacuous-green or false-red in an external module:
@@ -149,6 +187,14 @@ type ConfigForExternalCell struct {
 //     → vacuous-green there. Migrated for the unified PlatformModulePath
 //     parameterization + fork-safety only; enforced in GoCell via
 //     TestScaffoldListenerMarkerTypedConst.
+//   - OUTBOX-TOPIC-FAILOPEN-01 (CheckOutboxTopicFailopen01): kernel/outbox.Entry
+//     is sealed — a populated outbox.Entry{...} composite literal outside
+//     kernel/outbox is a compile error (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01), so
+//     the production scan for fail-open security-topic literals is vacuous in
+//     GoCell AND in any external repo; the rule's real coverage is the
+//     fixturetest/outbox fake-package fixtures under testdata/. Migrated for
+//     PlatformModulePath parameterization + fork-safety only; enforced in GoCell
+//     via the dogfood + fixture sub-tests in outbox_invariants_test.go.
 //   - SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 (CheckSagaCoordinatorNoHeartbeatLoop):
 //     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
 //     → vacuous/false-red in an external module.
@@ -193,6 +239,33 @@ func StandardCellRules() []*CellRule {
 		// sanctioned planDerivedArtifact site (no such site in an external repo →
 		// pure ban). Cell-applicable; Hard downstream (types.Info caller-allowlist).
 		{ID: ruleScaffoldDerivedForceOverwrite01, Run: CheckScaffoldDerivedForceOverwrite},
+		// OUTBOX-RECONSTRUCTION-CALLER-01: bans consumer code from calling the
+		// kernel reconstruction primitives outbox.UnmarshalEnvelope /
+		// (outbox.EntryScan).ToEntry — the sanctioned storage/wire-decode callers
+		// are GoCell-internal packages absent from a consumer module → pure ban.
+		// Cell-applicable; Hard downstream (types.Info caller-allowlist bound to
+		// platform package identity via isGoCellPlatformPkgPath, so a forged
+		// consumer rel path is not exempt; SelectorExpr + bare-Ident dot-import
+		// walk leaves no looks-like-but-isn't gap). See outbox_reconstruction_caller.go godoc.
+		{ID: ruleOutboxReconstructionCaller01, Run: CheckOutboxReconstructionCaller01},
+		// PROJECTION-APPLY-HOOK-FUNNEL-01: bans consumer code from calling
+		// projection.Coordinator.Subscribe outside the sanctioned bootstrap drain
+		// (no such site in an external repo → pure ban). Cell-applicable; Medium
+		// downstream (archtest caller-allowlist; function-value forms are caught by
+		// a separate reverse blind-spot self-check, not the forward rule — permanent
+		// Go-language ceiling, gh #1372). See projection_apply_hook_funnel.go godoc.
+		{ID: ruleProjectionApplyHookFunnel01, Run: CheckProjectionApplyHookFunnel01},
+		// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: business handlers must return
+		// outbox.Ack()/Requeue()/Reject() rather than construct outbox.HandleResult{}
+		// composite literals; the 3-file kernel/outbox allowlist is bound to platform
+		// package identity (isGoCellPlatformPkgPath), so a forged consumer rel path is
+		// not exempt → pure ban on the literal form (HandleResult is exported and
+		// constructible, so this is a real consumer-usage constraint).
+		// Cell-applicable; Medium downstream (types.Info type-identity scan).
+		{ID: ruleOutboxHandleResultFactoryPreferred01, Run: CheckOutboxHandleResultFactoryPreferred01},
+		// SAGA-STEP-COMPENSATE-PURE-01: bans consumer Compensate funcs from calling
+		// persistence interfaces (Compensate must be pure reverse rollback). See
+		// saga_invariants.go godoc.
 		{ID: sagaCompensatePureRuleID, Run: CheckSagaStepCompensatePure},
 	}
 }
