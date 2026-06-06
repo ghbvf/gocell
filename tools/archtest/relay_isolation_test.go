@@ -89,9 +89,9 @@ import (
 )
 
 const (
-	relayIsoOutboxPkgPath    = "github.com/ghbvf/gocell/runtime/outbox"
-	relayIsoLifecyclePkgPath = "github.com/ghbvf/gocell/kernel/lifecycle"
-	relayIsoBootstrapPkgPath = "github.com/ghbvf/gocell/runtime/bootstrap"
+	relayIsoOutboxPkgPath    = PlatformModulePath + "/runtime/outbox"
+	relayIsoLifecyclePkgPath = PlatformModulePath + "/kernel/lifecycle"
+	relayIsoBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
 	relayIsoRelayTypeName    = "Relay"
 	relayIsoMRTypeName       = "ManagedResource"
 	relayIsoAdapterTypeName  = "relayAdapter"

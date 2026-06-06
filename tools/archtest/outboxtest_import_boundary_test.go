@@ -138,7 +138,7 @@ func TestOutboxtestImportPath_PatternTable(t *testing.T) {
 		// Positive: should match (violation when imported by production code).
 		{
 			name:      "kernel outboxtest direct",
-			path:      "github.com/ghbvf/gocell/kernel/outbox/outboxtest",
+			path:      PlatformModulePath + "/kernel/outbox/outboxtest",
 			wantMatch: true,
 		},
 		{
@@ -149,27 +149,27 @@ func TestOutboxtestImportPath_PatternTable(t *testing.T) {
 		// Negative: out of this narrow rule's declared scope.
 		{
 			name:      "runtime outboxtest (different package; deferred to #986 broad rule)",
-			path:      "github.com/ghbvf/gocell/runtime/outbox/outboxtest",
+			path:      PlatformModulePath + "/runtime/outbox/outboxtest",
 			wantMatch: false,
 		},
 		{
 			name:      "distlock locktest (deferred to #986 broad rule)",
-			path:      "github.com/ghbvf/gocell/runtime/distlock/locktest",
+			path:      PlatformModulePath + "/runtime/distlock/locktest",
 			wantMatch: false,
 		},
 		{
 			name:      "kernel outbox (production package)",
-			path:      "github.com/ghbvf/gocell/kernel/outbox",
+			path:      PlatformModulePath + "/kernel/outbox",
 			wantMatch: false,
 		},
 		{
 			name:      "outboxtest sub-package (blind spot — anchored out)",
-			path:      "github.com/ghbvf/gocell/kernel/outbox/outboxtest/sub",
+			path:      PlatformModulePath + "/kernel/outbox/outboxtest/sub",
 			wantMatch: false,
 		},
 		{
 			name:      "cells celltest (covered by CELLTEST-IMPORT-SCOPE-01)",
-			path:      "github.com/ghbvf/gocell/cells/configcore/configcoretest",
+			path:      PlatformModulePath + "/cells/configcore/configcoretest",
 			wantMatch: false,
 		},
 		{

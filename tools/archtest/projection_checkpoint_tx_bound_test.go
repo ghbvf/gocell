@@ -76,7 +76,7 @@ import (
 )
 
 const (
-	checkpointStoreIfacePkg  = "github.com/ghbvf/gocell/kernel/projection"
+	checkpointStoreIfacePkg  = PlatformModulePath + "/kernel/projection"
 	checkpointStoreIfaceName = "CheckpointStore"
 )
 
