@@ -21,7 +21,7 @@ func init() {
 	errcode.RegisterPrefix("ERR_GOLDCELL_", "github.com/ghbvf/gocell")
 }
 
-// // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 // TODO: declare additional listeners (e.g. cell.InternalListener) by
 // adding more listener markers (same format as the line above) above this
 // struct, or remove the marker if this cell has no HTTP routes.

@@ -44,20 +44,40 @@ func goldenTreeSpec(t *testing.T) cellgen.ScaffoldSpec {
 
 const scaffoldGoldenDir = "testdata/scaffold_golden/goldcell"
 
+// scaffoldGoldenRepoRoot returns the workspace (repo) root — the directory
+// containing go.work — by walking up from the test working directory. findRoot
+// is deliberately NOT used: since #1557 split cmd/gocell into its own go.work
+// satellite module, findRoot stops at cmd/gocell/go.mod, but the canonical
+// shared error schema lives at the OUTER repo root (the go.work directory).
+func scaffoldGoldenRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.work")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("scaffold golden: repo root (directory containing go.work) not found above the test working dir")
+		}
+		dir = parent
+	}
+}
+
 // setupScaffoldGoldenProject builds a self-contained temp project for the golden
 // gate: a go.mod fixing the module path (so generated import grouping is stable)
 // plus the canonical shared error schema copied from the repo root (contractgen
 // resolves the scaffolded contract.yaml's SchemaRef link to it). Unlike the
 // sibling setupBundleTestProject helper — which t.Skipf's when its hardcoded
 // relative schema path does not resolve from the package working dir — this one
-// locates the repo root via findRoot and t.Fatal's on any setup failure: a Hard
+// locates the repo root via go.work and t.Fatal's on any setup failure: a Hard
 // anti-drift gate must never silently skip.
 func setupScaffoldGoldenProject(t *testing.T) string {
 	t.Helper()
-	repoRoot, err := findRoot()
-	if err != nil {
-		t.Fatalf("findRoot: %v", err)
-	}
+	repoRoot := scaffoldGoldenRepoRoot(t)
 	canonical := filepath.Join(repoRoot, "contracts", "shared", "errors", "error-response-v1.schema.json")
 	schema, err := os.ReadFile(canonical) //nolint:gosec // canonical in-repo schema, not user input
 	if err != nil {
