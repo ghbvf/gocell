@@ -1,0 +1,14 @@
+id: hello
+belongsToCell: democell
+consistencyLevel: L0
+lifecycle: experimental
+contractUsages:
+  - contract: http.demo.hello.v1
+    role: serve
+verify:
+  unit:
+    - unit.hello.service
+  contract:
+    - contract.http.demo.hello.v1.serve
+allowedFiles:
+  - examples/demo/cells/democell/slices/hello/**

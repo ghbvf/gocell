@@ -20,7 +20,11 @@
 //   - runtime/websocket — ProbeReady
 //   - runtime/saga — ProbeCoordinatorReady
 //   - cells/{configcore,auditcore,accesscore}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
-//   - examples/{iotdevice/cells/devicecell,todoorder/cells/ordercell}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/demo/cells/democell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/iotdevice/cells/devicecell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/orderfulfillment/cells/orderfulfillmentcell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/todoorder/cells/ordercell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/webhookdemo/cells/hooks/healthz_gen.go — ProbeRepoReady (cellgen marker required)
 //
 // # Golden inventory (sorted "<module-relative-pkg>.<ConstName>=<value>")
 //
@@ -140,83 +144,13 @@ import (
 )
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const (
-	// healthzPkgPath is the import path of the kernel/healthz package.
-	// Named without a "probename" prefix because it is the single authoritative
-	// package for all healthz concepts (ProbeName, Probe, Aggregator).
-	healthzPkgPath = "github.com/ghbvf/gocell/kernel/healthz"
-
-	// cellRegistrarPkgPath is the import path of the kernel/cell package,
-	// which defines the Registrar interface and RegisterReadiness method.
-	cellRegistrarPkgPath = "github.com/ghbvf/gocell/kernel/cell"
-
-	// adapterutilPkgPath is the import path of the adapterutil package,
-	// which provides HealthToProbe (consumes ProbeName as first arg).
-	adapterutilPkgPath = "github.com/ghbvf/gocell/adapters/adapterutil"
-
-	// bootstrapPkgPath is the import path of the runtime/bootstrap package,
-	// which provides WithHealthChecker (4th sanctioned ProbeName funnel
-	// ingress — composition-root option pattern; consumes ProbeName as
-	// first arg).
-	bootstrapPkgPath = "github.com/ghbvf/gocell/runtime/bootstrap"
-)
-
-// probeNameSanctionedPkgs is the closed set of packages allowed to declare
-// a healthz.ProbeName typed const.  A const appearing in any other package
-// is rejected by A1.
-var probeNameSanctionedPkgs = map[string]bool{
-	// Framework-level (kernel owns the typed concept)
-	"github.com/ghbvf/gocell/kernel/healthz": true,
-	// Adapter dependency probes
-	"github.com/ghbvf/gocell/adapters/grpc":     true,
-	"github.com/ghbvf/gocell/adapters/postgres": true,
-	"github.com/ghbvf/gocell/adapters/redis":    true,
-	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
-	"github.com/ghbvf/gocell/adapters/s3":       true,
-	"github.com/ghbvf/gocell/adapters/vault":    true,
-	"github.com/ghbvf/gocell/adapters/mqtt":     true,
-	"github.com/ghbvf/gocell/adapters/oidc":     true,
-	// Runtime-level probe owners
-	"github.com/ghbvf/gocell/runtime/outbox":    true,
-	"github.com/ghbvf/gocell/runtime/websocket": true,
-	"github.com/ghbvf/gocell/runtime/saga":      true,
-	// Platform cells (cellgen healthz_gen.go — marker required)
-	"github.com/ghbvf/gocell/cells/configcore": true,
-	"github.com/ghbvf/gocell/cells/auditcore":  true,
-	"github.com/ghbvf/gocell/cells/accesscore": true,
-	// Example cells (cellgen healthz_gen.go — marker required)
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell":                  true,
-	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell": true,
-	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":                   true,
-}
-
-// cellgenSanctionedPkgs is the subset of probeNameSanctionedPkgs that requires
-// the cellgen marker — any ProbeName const in these packages must live in a
-// file with the cellgenMarkerLine header.
-var cellgenSanctionedPkgs = map[string]bool{
-	"github.com/ghbvf/gocell/cells/configcore":                                     true,
-	"github.com/ghbvf/gocell/cells/auditcore":                                      true,
-	"github.com/ghbvf/gocell/cells/accesscore":                                     true,
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell":                  true,
-	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell": true,
-	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":                   true,
-}
-
-// adapterSanctionedPkgs requires that all ProbeName values in these packages
-// end with the "_ready" suffix (adapter dependency-availability convention).
-var adapterSanctionedPkgs = map[string]bool{
-	"github.com/ghbvf/gocell/adapters/grpc":     true,
-	"github.com/ghbvf/gocell/adapters/postgres": true,
-	"github.com/ghbvf/gocell/adapters/redis":    true,
-	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
-	"github.com/ghbvf/gocell/adapters/s3":       true,
-	"github.com/ghbvf/gocell/adapters/vault":    true,
-	"github.com/ghbvf/gocell/adapters/mqtt":     true,
-	"github.com/ghbvf/gocell/adapters/oidc":     true,
-	"github.com/ghbvf/gocell/runtime/websocket": true,
-	"github.com/ghbvf/gocell/runtime/saga":      true,
-}
+//
+// healthzPkgPath, cellRegistrarPkgPath, adapterutilPkgPath, bootstrapPkgPath,
+// probeNameSanctionedPkgs, cellgenSanctionedPkgs, adapterSanctionedPkgs,
+// probenameModPrefix, probenameInRepoLayerPrefixes, and probenameIsInRepoPkg
+// are declared in probename_sealed_funnel.go (non-test, same package) so that
+// all "github.com/ghbvf/gocell/..." literals are derived from PlatformModulePath
+// (Shape B, M3 #1302).  Only non-path constants remain here.
 
 // aggregatorRegisterAllowlist is the set of module-relative path suffixes that
 // are allowed to call healthz.Aggregator.Register directly.  All other
@@ -304,9 +238,11 @@ func goldenProbeNames() []string {
 		"cells/accesscore.ProbeRepoReady=accesscore_repo_ready",
 		"cells/auditcore.ProbeRepoReady=auditcore_repo_ready",
 		"cells/configcore.ProbeRepoReady=configcore_repo_ready",
+		"examples/demo/cells/democell.ProbeRepoReady=democell_repo_ready",
 		"examples/iotdevice/cells/devicecell.ProbeRepoReady=devicecell_repo_ready",
 		"examples/orderfulfillment/cells/orderfulfillmentcell.ProbeRepoReady=orderfulfillmentcell_repo_ready",
 		"examples/todoorder/cells/ordercell.ProbeRepoReady=ordercell_repo_ready",
+		"examples/webhookdemo/cells/hooks.ProbeRepoReady=hooks_repo_ready",
 	}
 	sort.Strings(names)
 	return names
@@ -918,7 +854,7 @@ func collectProbeNameConsts(t *testing.T) []string {
 				return nil
 			}
 
-			modPrefix := "github.com/ghbvf/gocell/"
+			modPrefix := probenameModPrefix
 			pkgPath := p.Pkg.Path()
 			if !strings.HasPrefix(pkgPath, modPrefix) {
 				return nil
@@ -1001,12 +937,7 @@ func TestProbenameSealedFunnel(t *testing.T) {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
-			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&
-				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/examples/") {
+			if !probenameIsInRepoPkg(pkgPath) {
 				return nil
 			}
 			for _, f := range p.Files {
@@ -1416,9 +1347,9 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoNewProbeImpl(t *testing.T) {
 	var found []string
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"github.com/ghbvf/gocell/kernel/healthz/..."}),
+		[]string{healthzPkgPath + "/..."}),
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.Pkg.Path() != "github.com/ghbvf/gocell/kernel/healthz" {
+			if p.Pkg == nil || p.Pkg.Path() != healthzPkgPath {
 				return nil
 			}
 

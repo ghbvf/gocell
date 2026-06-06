@@ -44,6 +44,8 @@ newErrorAt(codeDOCNAME01, IssueForbidden,
 
 > `msg` 是问题陈述，`fix` 是「怎么改」。两者都可用 `fmt.Sprintf`（插值参数各自分配）。CLI 输出把 `fix` 渲染成独立的 `fix:` 行 / JSON `"fix"` 字段，不再拼进 message。typed-Fix 契约 **severity-agnostic**：四个构造函数（含 `newWarning`）全部强制 `fix`，INV-3 对全部检查 fix 非空。severity 只管 blocking(error) vs advisory(warning)，不管"指导是否结构化"——warning 的"怎么改"也进 Fix，不留 Message。详见 ADR `docs/architecture/202605241730-adr-governance-error-fix-field-funnel.md`。
 
+> **`msg`/`fix` 不受 `MESSAGE-CONST-LITERAL-01` 约束**：governance `ValidationResult.{Message,Fix}` 是 CLI/JSON 诊断文本，**不是** errcode wire message——可（且通常应）用 `fmt.Sprintf` 注入 runtime 数据（契约 ID、字段值、level 等）以定位违规对象。`MESSAGE-CONST-LITERAL-01` archtest 只扫 `errcode.New`/`errcode.Wrap` 的 message 参数，**不扫** governance `newError`/`newWarning`，二者无冲突（全部现存规则均如此用法）。
+
 ## 规则编号体系
 
 | 系列 | 范围 | 职责 |

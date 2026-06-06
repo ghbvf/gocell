@@ -10,13 +10,20 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
-// TestScaffoldCell_GoldenCellGo is an anti-drift gate for the scaffold-cell
-// template (tools/codegen/cellgen/templates/scaffold-cell.tmpl). It scaffolds
-// a cell with a fixed spec and asserts that the generated cell.go contains
-// every marker and pattern required by the K#04/K#05 conventions.
+// TestScaffoldCell_GoldenCellGo is a fast, human-readable pattern-match gate for
+// the scaffold-cell template (tools/codegen/cellgen/templates/scaffold-cell.tmpl).
+// It scaffolds a cell with a fixed spec and asserts that the generated cell.go
+// contains every marker and pattern required by the K#04/K#05 conventions.
+//
+// This is an EXPLAINER, not the authoritative lock: TestScaffoldCell_GoldenTree
+// (scaffold_golden_tree_test.go) byte-for-byte locks the FULL scaffold output and
+// is the authoritative anti-drift gate. These pattern-match assertions surface a
+// readable reason (which load-bearing marker broke) when both gates go red on the
+// same template change.
 //
 // Failures here mean the scaffold template drifted from the required patterns;
-// update the template — not this test.
+// update the template — not this test — and run -update-scaffold-golden to refresh
+// the byte golden tree.
 func TestScaffoldCell_GoldenCellGo(t *testing.T) {
 	t.Parallel()
 

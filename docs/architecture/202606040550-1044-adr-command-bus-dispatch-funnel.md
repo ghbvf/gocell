@@ -64,7 +64,7 @@ PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 fun
 - **④ async outbox 桥（#1667，已落地——见 §Amendment 2026-06-06）**：codegen 派生单态 `DispatchAsync(ctx, reg, entry)`（从 `entry.Payload()` JSON unmarshal 回 typed `*Request` → `LookupHandler` → 复用同一 `Handler`，丢弃 `*Response` 回 `error`）；relay 按 routing-topic 在 composition-root 注入的 dispatcher-map 中匹配 command → 在进程内触发 `DispatchAsync`，否则发 broker。JSON marshal 在 outbox 边界发生（D4 同步 type-assert 路径不变）。**判别器 = routing-topic + dispatcher-map 成员，未改 sealed `Entry` wire envelope、未引入 metadata 约定 → 未触发 contract-fanout 5 载体**（原文「携带 command kind——触及 sealed Entry wire envelope 或 topic 约定，触发 contract-fanout」+「relay 消费按 command id LookupHandler」实现为：command entry 即 `eventType = command id` 的普通 entry，`LookupHandler` 留在生成 `DispatchAsync` 体内、relay 不直接调）。
 - **⑤ idempotency 桥（#1044 子 issue）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` Claimer 两阶段）。Blocked-by ④。
 - **command-entry 值校验 funnel（#1588，Blocked-by ④）**：`DispatchAsync` 只做 typed JSON unmarshal（typed struct 即结构契约），不执行 schema 值约束（minLength/required/…）；untrusted-payload 值校验在此不可信 async 边界落地（Amendment 2026-06-04 已点名归属）。
-- **command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level（命令跨 L1 同步..L4 设备；现有 active L4 `devicecommand` slice 不能被锁 L3 误伤）。
+- ~~**command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level~~ **已交付（#1668，双层）**：`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 下界约束 `consistencyLevel ≥ L1`，仅拒 `L0`（命令跨本地边界至少需 L1 LocalTx 原子性，L0 LocalOnly 结构上不适用）。**双层**（同 PROJECTION-CONSISTENCY-01 单 ID 双层范式）：Hard = `types.tmpl` 编译期 `const _ = uint(cellvocab.<level> - cellvocab.L1)` 对 codegen:true 命令契约 uint 下溢拦 L0；Medium = governance rule 兜底 codegen:false + in-memory fixture。下界（非 exact-lock）使现有 active L4 `devicecommand` 契约全部通过、零误伤。详见 §Amendment 2026-06-06（#1668）。
 - **真实 binary async producer 接线（#1044 子 issue，gh backlog，Blocked-by ④）**：④ 交付机制 + relay-level E2E（mem outbox store 绑生成 `enqueue.DispatchAsync` 扮演 composition root）；devicecell 异步 enqueue 命令 + iotdevice durable-mode relay `WithCommandDispatch` 接线随真实 producer 落地（给无 producer 的 consumer 接 binary wiring = dead wiring，故 defer）。
 
 amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：见 §Amendment 2026-06-06。
@@ -86,8 +86,8 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 | 载体 | ID / 名 | 文件 |
 |------|---------|------|
 | archtest | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` | `tools/archtest/command_dispatch_funnel_test.go` |
-| governance | `COMMAND-CONTRACT-SCHEMA-REF-01` | `kernel/governance/rules_command.go` |
-| codegen | `kind:command` 生成器 + golden | `tools/codegen/contractgen/{builder,generator}.go` + `templates/command.tmpl` |
+| governance | `COMMAND-CONTRACT-SCHEMA-REF-01` / `COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` | `kernel/governance/rules_command.go` |
+| codegen | `kind:command` 生成器 + golden；`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 编译期 const-guard | `tools/codegen/contractgen/{builder,generator}.go`（`validateCommandLevel`）+ `templates/{command,types}.tmpl` |
 | runtime | sealed `Registry` | `runtime/command/registry.go` |
 
 ---
@@ -132,6 +132,32 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 **范围（显式 backlog，不 silent）**：本 PR = 机制（codegen DispatchAsync + relay 分支 + 注入 option + archtest + ADR）+ relay-level E2E（mem outbox store 绑生成 `enqueue.DispatchAsync` 扮演 composition root，`examples/iotdevice`）。**真实 binary async producer 接线**（devicecell 异步 enqueue + iotdevice durable relay 接线）→ gh backlog（area-eventing/type-feat/pri-p2，Blocked-by #1667）；值校验 = #1588；**确定性框架错误的 permanent 分类（→ MarkDead）已随 #1673 F3 落地**（与值校验正交——框架错误 100% 不可恢复），**值校验失败分类 + handler 显式 permanent 能力**随 #1588 细化（复用本 PR 落地的 `kout.NewPermanentError` settle 机制，无需重做）。注：5 个 `command` 契约中仅 `enqueue` 为 `codegen:true`（其余 4 个 `codegen:false`），故仅 `enqueue/v1/command_gen.go` 生成 DispatchAsync。
 
 enforcement 索引（§7）新增：archtest `COMMAND-ASYNC-DISPATCH-CALLER-01`（`tools/archtest/command_dispatch_funnel_test.go`）。
+
+---
+
+## Amendment 2026-06-06（#1668：command consistencyLevel governance — 双层下界交付）
+
+**触发**：§5 演进路径子项「command consistencyLevel governance」落地（#1668，拆自 #1044）。
+
+**交付**：`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` —— `kind:command` 契约声明的 `consistencyLevel` 必须 **≥ L1**（LocalTx），`L0` 拒。命令跨本地边界（HTTP / async entry → cell）至少需单 cell 事务原子性；`L0 LocalOnly` 为纯 in-slice 计算语义，结构上不适用于命令。**下界**约束（非 exact-level lock），故现有 active L4 `devicecommand` 五契约 + synth_command（L4）全部通过，零误伤。
+
+**双层形态（同 PROJECTION-CONSISTENCY-01 单 invariant ID 双层范式）**：
+
+| 层 | 载体 | 覆盖 | 评级 |
+|----|------|------|------|
+| Hard 主门控 | `types.tmpl` 编译期 `const _ = uint(cellvocab.{{.ConsistencyLevel}} - cellvocab.L1)`（L0 → uint 下溢 → `go build` 失败）+ `builder.go::validateCommandLevel`（ParseLevel 守，使模板渲染合法 cellvocab identifier） | codegen:true 命令契约 | **上游 Hard**（codegen funnel + golden 字节锁；L0 不可表达为可编译树） |
+| Medium 兜底 | governance `validateCOMMANDCONTRACTCONSISTENCYLEVEL01`（`gocell validate` PhaseBase CI gate） | 所有命令契约（codegen:false + in-memory ProjectMeta fixture） | **Medium**（archtest/runtime guard 不可达的 in-memory 向量兜底） |
+
+empty / 非法 level 不由本规则报——由 `FMT-03`（contract consistencyLevel validity）+ parser 非空拒兜底，避免双报同一根因。
+
+**为何前移而非延后（issue 原文 deferral 前提已失效）**：#1668 issue body 将 Hard 编译期门列为「未来，随 ④/⑤ codegen 形态稳定」。但 command codegen（D1 `command.tmpl`/`command_gen.go` golden + D6 `buildCommandSpec` + `types.tmpl`）在 PR-1 即已交付并 golden-lock——延后前提已蒸发。Hard 半边是 `types.tmpl` 现成 const-guard idiom 的复制（projection L3 → command L1），低成本且与 projection 结构对齐，故同 PR 双层交付（彻底 + AI-Hard）。
+
+**§4 评级矩阵逐行重评（ai-robust.md ADR amendment 必查）**：本 amendment **不改 §4 任一格**。§4 双向锁矩阵约束的是 *dispatch/register funnel*（typed Handler/Register/Dispatch 仅由 codegen 派生 + raw `RegisterHandler`/`LookupHandler` 调用方收口）。`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 约束的是 *contract consistencyLevel 下界*，与之**正交**——既不放宽 funnel 上游/下游任一 Hard，也不新增伪造面。§4 两行 invariant **逐行重评**：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：✅ 评级不变（上游 Hard / 下游 Medium）——本规则不触及 typed Handler/Register/Dispatch 派生。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：✅ 评级不变（上游 Medium / 下游 Hard）——本规则不触及 `RegisterHandler`/`LookupHandler` caller-allowlist。
+
+无 ✅→⚠️/❌ 降格，无需补偿措施。**不触发 contract-fanout**（`consistencyLevel` 既有字段，新增对它的约束 ≠ wire schema 改动）。
 
 ---
 

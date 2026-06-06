@@ -388,6 +388,7 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/examples/demo
+            - github.com/ghbvf/gocell/generated/contracts
             # grpc-serve cell_gen.go references the grpc transport lib (#1601);
             # interceptor/adapter wiring stays denied below.
             - google.golang.org/grpc
