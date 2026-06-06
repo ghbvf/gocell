@@ -76,7 +76,7 @@ a/d 是 wiring/config（留本 ADR + review 守，强行 archtest 化属过度�
 | ID | 不变式 | 载体（範本） | 评级 |
 |----|--------|-------------|------|
 | `HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01`（α） | store 无内存回放态（事实 c） | reflect-freeze `adapters/redis.HTTPIdempotencyStore` 字段元组 `{rdb cmdable, ns KeyNamespace}`（reflect schema freeze） | **Hard** |
-| `HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01`（β） | 请求 key 无节点身份（事实 b） | sealed typed `IdempotencyKey` 构造器 funnel：reflect 字段冻结 `{ns,key}` 未导出 string + go/types `DeriveKey` 唯一 producer + Unmarshal/Scan ban + `Store.Claim` 形参类型 = `IdempotencyKey`；require-isolation-tuple 由 `DeriveKey` 体 AST taint walk 守 | **node-agnostic：Hard 下游 + Hard 上游-external + Medium 上游-in-package；require-isolation：Medium（#1650）** |
+| `HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01`（β） | 请求 key 无节点身份（事实 b） | sealed typed `IdempotencyKey` 构造器 funnel：reflect 字段冻结 `{ns,key}` 未导出 string + go/types sole-producer = `{DeriveKey, DeriveCommandKey}`（单源自 `idempotencyKeyConstructors` 表，#1669）+ Unmarshal/Scan ban + `Store.Claim` 形参类型 = `IdempotencyKey`；require-isolation-tuple 由各构造器体 table-driven AST taint walk 守 | **node-agnostic：Hard 下游 + Hard 上游-external + Medium 上游-in-package；require-isolation：Medium（#1650）** |
 
 - 两道闸的完整盲区清单 + 反向自检活在 `tools/archtest/http_idempotency_assembly_scope_test.go` 的 package godoc（ai-robust 单源约定）。
 - 闸 β 已由 **#1610 funnel slice** 从 Medium AST **升级为 sealed typed `IdempotencyKey` 构造器 funnel**（详见 §Amendment 2026-06-06）。**node-agnostic / ban-external-source 现为 Hard**：下游 = `Store.Claim` 收 `IdempotencyKey`，裸 `(ns,key)` 串在 store 边界编译不可表达；上游-external = `IdempotencyKey{ns,key}` 未导出字段，包外不可 mint key（无法把 node-id 塞入）。**upstream-in-package 维持 Medium**——包内字面量 / 第二 producer 编译器不拦，reflect 字段冻结 + go/types sole-producer 扫描兜底（同 CellLabel / holder-seal #893 的 Hard 下游 + Medium 上游-in-package 分轴）。**require-isolation-tuple 维持 Medium**——Go 无法表达「`DeriveKey` 体消费全部 5 个隔离维度」，且 5 个同型 string 参可在唯一 callsite 转置；`DeriveKey` 体 taint walk 兜底，**won't-do 天花板跟踪 gh #1650**（同 #851/#893/#1282/#1552 family；**非** typestate-builder 可升级——builder 只锁「全部 setter 被调用」，positional 参已给该保证，不锁 body-flow）。cross-cell 同槽（key↔command_id 桥）仍 **out-of-scope，跟踪 #1610**（blocked-by #1044），与本 funnel 正交。
@@ -103,7 +103,7 @@ ADR-1043 威胁矩阵全部 ✅ 行在 assembly scope 下**不退化**（key 隔
 | 跨 pod 回放越权（A pod 录的响应被 B pod 回放给他人） | key 仍含 `subject + tenant`；跨 pod 共享的是**同一认证主体本人**先前在授权下已执行操作的已录响应，跨主体回放结构上不可能（同 ADR-1043「回放跳过授权再校验」by-design 行）。多 pod 不放宽隔离，只共享去重域 | ✅ (by-design) |
 | 跨 pod 指纹绕过（B pod 用不同 body 劫持 A pod 录的 key） | 指纹 blob 在 Redis（共享底物），任意 pod Claim 同 key 异 fp → `ErrFingerprintMismatch` → 422；A 层集成测试 `CrossPodFingerprintMismatch` 覆盖 | ✅ |
 | Cluster CROSSSLOT（多 KEY EVAL 跨 slot 失败 → 幂等静默失效） | 三键共 hashtag `{<key>}` colocate；B 层单元静态守 + C 层真 cluster 守 | ✅ |
-| 节点身份污染 key（未来改动把 pod/cell id 拼进 key → 破坏跨 pod 去重） | 闸 β（sealed `IdempotencyKey`：包外无法 mint key / 无法把 node-id 塞入；`Store.Claim` 收 sealed 类型）+ 闸 α（无内存态）结构拦截；#1610 funnel slice 后 node-agnostic 轴由 Medium AST **升级为 type-system Hard** | ✅（Hard 强化） |
+| 节点身份污染 key（未来改动把 pod/cell id 拼进 key → 破坏跨 pod 去重） | 闸 β（sealed `IdempotencyKey`：包外无法 mint key / 无法把 node-id 塞入；`Store.Claim` 收 sealed 类型）+ 闸 α（无内存态）结构拦截；#1610 funnel slice 后 node-agnostic 轴由 Medium AST **升级为 type-system Hard**；#1669 起覆盖 `{DeriveKey, DeriveCommandKey}` 两 producer（单源表，加 producer 不可逃过 signature/taint 门） | ✅（Hard 强化） |
 | 单租户→多租户迁移 namespace 碰撞（`_notenant` 期录的 key 在分配 tenant UUID 后被误回放） | 结构性无碰撞——request-ns 前缀 `_notenant:…` 与任何 `<uuid>:…` 字节不相等，是不同 Redis key；旧 `_notenant` key 在 24h `done` TTL 内自然过期，无需主动清理 | ✅ (结构性) |
 | 日志 `tenant_id` 明文（replay/busy/mismatch 路径 slog 携带 `tenant_id=ns`） | by-design——对齐 outbox observability 规范「actor/subject/tenant opaque 明文」；`tenant_id` 非密钥（opaque UUID 或 `_notenant`），`pkg/redaction.IsSensitiveKey` 刻意不含 `tenant_id`；assembly scope 未改变该日志面 | ✅ (by-design，不变) |
 
@@ -184,4 +184,23 @@ Out-of-scope: cross-cell (idempotency-key ↔ command_id) → #1610 (blocked-by 
 
 **威胁矩阵重评**：「节点身份污染 key」格 Medium→Hard 强化，无 ✅→⚠️/❌ 退化（见 §威胁矩阵）。
 
-**演进缺口**：cross-cell 落地（#1044 桥就绪后）将新增兄弟构造器（如 `DeriveCommandKey`）产出同一 sealed `IdempotencyKey`——funnel 基建是耐久层，届时只需把新构造器加入 β archtest 的 sole-producer allowlist。设计真值源仍为本 ADR + ai-robust 章程；funnel 符号清单 + 完整盲区清单活在 `tools/archtest/http_idempotency_assembly_scope_test.go` package godoc。
+**演进缺口**：cross-cell 同槽的桥原语（兄弟构造器 `DeriveCommandKey`）随 #1669 PR-A 落地（见 §Amendment 2026-06-07）；funnel 基建是耐久层，证明了「新构造器只需进单源表」的预期。cross-cell 路由消费半（key↔command_id 实际接线）仍 open，跟踪 #1610。设计真值源仍为本 ADR + ai-robust 章程；funnel 符号清单 + 完整盲区清单活在 `tools/archtest/http_idempotency_assembly_scope_test.go` package godoc。
+
+---
+
+## Amendment 2026-06-07 — #1669 PR-A（兄弟构造器 `DeriveCommandKey`，纯编译期形态）
+
+ADR-1044 §5 演进路径 **⑤**（HTTP `Idempotency-Key` ↔ `command_id` 映射 + Claimer 复用）的**映射原语半**落地：sealed `IdempotencyKey` funnel 新增第二 sanctioned 构造器 `DeriveCommandKey(tenantID, subject, commandID string)`，产出**同一** sealed 类型、流经**同一** `Store.Claim` sink。`#1610` 的 cross-cell 同槽路由消费它。**因此本 PR `Refs #1669`（⑤ 映射半，非 Closes）+ `Refs #1610`。**
+
+**改动**（零 wire / 零 store 改动；纯新增 + archtest 泛化）：
+
+- `runtime/http/idempotency/key.go`：新增 `DeriveCommandKey`（`ns = tenant-or-sentinel`，`key = subject + "\x00" + commandID`，**无 method/path**——command 已是单一逻辑操作，跨 cell 同槽要求去掉 endpoint 维度，commandID 是 per-instance 幂等身份）。godoc 显式澄清 `commandID` = **opaque per-instance 身份**，**非** contract 级 `runtime/command.CommandID`（handler 路由键）——同 contract 命令两次调用须不同 commandID、占不同去重槽。
+- `Store.Claim` / `MemStore` / `adapters/redis.HTTPIdempotencyStore` / middleware / conformance：**全不动**（sealed 类型 + sink 已是耐久层，stores 已处理任意 `(ns,key)`）。
+
+**enforcement-shape Hardening**：β archtest 的 sole-producer allowlist 现**单源派生自 `idempotencyKeyConstructors` 表**（`{DeriveKey, DeriveCommandKey}`），signature-freeze + taint-walk 也 table-driven over 同表。两 list 漂移盲区因此结构关闭——加 producer = 加 1 行表 = sole-producer + signature-freeze（拒 node-id 额外参）+ taint-walk（全维度须 flow）**三检自动覆盖**，无法只进一门逃另一门。比 #1610 slice（DeriveKey-only 硬编）**更 Hard**。
+
+**评级重评**（逐轴，零降格）：`DeriveCommandKey` 继承 β 同档——node-agnostic = **Hard 下游**（typed `Store.Claim` sink）+ **Hard 上游-external**（未导出字段）+ **Medium 上游-in-package**（reflect 冻结 + go/types sole-producer 兜底，#893 族）；require-isolation-tuple = **Medium**（各构造器体 taint walk，Go 天花板 gh #1650）。第二构造器只**扩大同一门的覆盖**，不动任一轴。
+
+**威胁矩阵重评**：「节点身份污染 key」格保持 ✅（Hard），现对两 producer 共同生效。其余各行（跨 pod 回放 / 指纹绕过 / Cluster CROSSSLOT / namespace 碰撞 / 日志明文）不涉——`DeriveCommandKey` 不引入新隔离面（同携 `subject + tenant` 隔离；去掉 method/path 是 cross-cell 同槽的刻意设计；command key 与 HTTP key 同居 `(ns,key)` 空间，stores 已处理）。**显式声明无 ✅→⚠️/❌ 退化。**
+
+**延期（→ #1698，需真实 producer 锚定）**：⑤ 的 **Claimer-wrap 消费半**（`kernel/idempotency.Claimer` 两阶段包裹 relay 命令分发 + 三态生命周期）——今日 0 个生产 `WithCommandDispatch` 调用点（`tools/archtest/command_dispatch_funnel_test.go` 自证），且 sealed-key→Claimer string-key 扁平化 + per-instance 身份如何随 `outbox.Entry` 承载有真实设计缺口，须随 devicecell 异步 command producer 落地，避免 speculative 键布局。该消费半与 producer 接线绑定，由 **#1698** 承载。

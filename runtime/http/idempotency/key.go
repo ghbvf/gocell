@@ -30,15 +30,17 @@ package idempotency
 //     walk is the Medium backstop. Won't-do ceiling tracked at gh #1650 (same
 //     family as #851/#893/#1282/#1552).
 //
-// # Forward compatibility (cross-cell, #1610 / blocked-by #1044)
+// # Two sanctioned constructors (HTTP record + cross-cell command, #1669)
 //
-// Routing one logical command to a single dedup slot ACROSS cells (the cross-cell
-// half of #1610) needs an Idempotency-Key ↔ command_id bridge that does not yet
-// exist (deferred to #1044's Command Bus). When it lands, a sibling constructor
-// (e.g. DeriveCommandKey) will produce this SAME sealed IdempotencyKey from
-// (tenant, subject, command_id) — the sealed type + Store.Claim funnel are the
-// durable infra and need no change; only the archtest sole-producer allowlist
-// gains the new constructor.
+// DeriveKey mints the HTTP record key. DeriveCommandKey (#1669) mints the command
+// dedup key from (tenant, subject, command_id) — the bridge primitive the
+// cross-cell same-slot half of #1610 consumes (routing one logical command to a
+// single dedup slot across cells). Both produce this SAME sealed IdempotencyKey
+// and flow through the SAME Store.Claim sink — the sealed type + funnel are the
+// durable infra and need no change. The archtest sole-producer allowlist + the
+// per-constructor signature/taint gate are single-sourced from one table
+// (idempotencyKeyConstructors), so both constructors are locked identically and a
+// third producer cannot be added to one gate while skipping the other.
 type IdempotencyKey struct {
 	ns  string
 	key string
@@ -93,5 +95,52 @@ func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
 	return IdempotencyKey{
 		ns:  ns,
 		key: subject + "\x00" + method + "\x00" + path + "\x00" + idemKey,
+	}
+}
+
+// DeriveCommandKey is the SECOND sanctioned constructor of an IdempotencyKey
+// (sibling of DeriveKey, pre-blessed in this file's type godoc). It encodes the
+// cross-cell command isolation tuple (tenantID, subject, commandID) into the
+// (namespace, key) pair stores expect — the #1610 cross-cell same-slot mapping
+// primitive (ADR docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md
+// §5 ⑤):
+//
+//	ns  = tenantID, or noTenantSentinel when empty.
+//	key = subject + "\x00" + commandID
+//
+// commandID is the per-instance idempotency identity of a dispatched command — an
+// OPAQUE string that uniquely names one logical command instance. It is NOT the
+// contract-level command identifier (the kind:command contract id /
+// runtime/command.CommandID used to route a command to its handler): two distinct
+// invocations of the same contract command carry DIFFERENT commandID values and
+// MUST occupy different dedup slots. Sourcing a stable per-instance commandID is
+// the caller's job (the deferred relay-side Claimer wrap, ⑤ PR-B).
+//
+// Why no method/path (unlike DeriveKey): DeriveKey scopes an HTTP record per
+// endpoint so the same Idempotency-Key header on POST /orders and POST /payments
+// stays independent. A command is ALREADY one logical operation named by
+// commandID; routing it to ONE dedup slot across cells is the whole point of
+// #1610, so folding method/path back in would re-partition the slot per
+// listener/endpoint and defeat cross-cell same-slot. commandID IS the per-instance
+// identity that method+path+idemKey jointly play for HTTP. The NUL (\x00)
+// separator is unambiguous: command ids are opaque tokens free of NUL, so
+// subject="alic",commandID="e:x" never collides with subject="alice",commandID="x"
+// (a colon separator would) — same rationale as DeriveKey.
+//
+// Assembly-scope (node-agnostic) invariant — identical to DeriveKey: the result is
+// derived ONLY from its three parameters; there is no pod/listener/cell input and
+// no call reading node-local state. Do NOT add a node/listener/cell parameter (a
+// 4th param is the node-id injection vector the β archtest signature freeze
+// rejects). All three params MUST flow into the result; dropping one collapses
+// cross-tenant / cross-subject / cross-command isolation (the Medium taint-walk
+// backstop, gh #1650).
+func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
+	ns := tenantID
+	if ns == "" {
+		ns = noTenantSentinel
+	}
+	return IdempotencyKey{
+		ns:  ns,
+		key: subject + "\x00" + commandID,
 	}
 }
