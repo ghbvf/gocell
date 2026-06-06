@@ -269,7 +269,7 @@ func seedGlobalEvents(t *testing.T, j journal.Journal, clk *clockmock.FakeClock,
 		t.Fatalf("Enqueue(%s): %v", instID, err)
 	}
 	_, leaseID, err := j.ClaimPending(context.Background(), 100, time.Hour)
-	if err != nil || leaseID.IsZero() {
+	if err != nil || leaseID == "" {
 		t.Fatalf("ClaimPending: err=%v leaseID=%v", err, leaseID)
 	}
 
@@ -286,7 +286,8 @@ func seedGlobalEvents(t *testing.T, j journal.Journal, clk *clockmock.FakeClock,
 
 	for range n {
 		if _, err := j.Append(context.Background(), inst.ID, leaseID, journal.Event{
-			Kind: journal.KindStepStarted,
+			Kind:     journal.KindStepStarted,
+			StepName: "step-one", // KindStepStarted requires a non-empty StepName (ValidateForAppend)
 		}); err != nil {
 			t.Fatalf("Append(%s): %v", instID, err)
 		}

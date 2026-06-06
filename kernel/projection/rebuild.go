@@ -45,7 +45,13 @@ func (c *Coordinator) Rebuild(ctx context.Context) error {
 	// WithoutCancel detaches from the request's cancellation/deadline (a rebuild
 	// must outlive the short-lived 202 request) while preserving its values for
 	// log correlation; WithCancel layers the Close-driven cancellation on top.
-	rctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	// clearAmbientPrincipal strips any principal carried by the triggering
+	// request context (e.g. the admin who called POST /rebuild) so the replay
+	// carrier can install the correct per-event identity without the no-overwrite
+	// guard (outbox.RestoreToContext) silently losing to the ambient admin identity.
+	// ADR #1609 §5 (F1 flip): event principal wins on the outbox path; system
+	// principal wins on the saga-journal path (InstallSystemPrincipal overwrite).
+	rctx, cancel := context.WithCancel(clearAmbientPrincipal(context.WithoutCancel(ctx)))
 	c.rebuildCancel.Store(&cancel)
 	c.rebuildWG.Add(1)
 	go c.runRebuild(rctx)
