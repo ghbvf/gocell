@@ -110,12 +110,12 @@ func TestContractSpec_CommandProjectionSaga_Validate(t *testing.T) {
 }
 
 // TestContractSpec_GRPCSpec_Validate verifies ContractSpec validation for
-// grpc kind: Service + Method + Proto are required (nested GRPCEndpointSpec),
-// Proto must be rooted under contracts/grpc/, StreamingType (when present) must
-// be rejected on a grpc spec. These mirror the contract.schema.json grpc
-// if/then block. The method/streamingType fields were removed in #1655
-// (service-level granularity; the .proto is the single source of truth for
-// the method set).
+// grpc kind: Service + Proto are required (nested GRPCEndpointSpec),
+// Proto must be rooted under contracts/grpc/. These mirror the
+// contract.schema.json grpc if/then block. The method/streamingType fields
+// were removed in #1655 (service-level granularity; the .proto is the single
+// source of truth for the RPC method set — Service + Proto are the only
+// required fields).
 func TestContractSpec_GRPCSpec_Validate(t *testing.T) {
 	t.Parallel()
 	const proto = "contracts/grpc/device/command/v1/device_command.proto"

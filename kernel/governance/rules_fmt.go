@@ -858,7 +858,7 @@ func (v *Validator) validateFMT37() []ValidationResult {
 				contractFile(c),
 				"endpoints.grpc",
 				fmt.Sprintf("grpc contract %q must declare endpoints.grpc", c.ID),
-				"add endpoints.grpc with service, method, and proto",
+				"add endpoints.grpc with service and proto",
 			))
 			continue
 		}

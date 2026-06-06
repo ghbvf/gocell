@@ -223,7 +223,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 - **TDD**: `contract_test.go` table-driven for grpc kind parse (valid/invalid); `contractspec_test.go` for `ContractSpec.GRPCInfo()` accessor & validation boundaries.
 - **archtest (same PR)**:
   - `CONTRACT-KINDS-CLOSED-SET-01` — extend closed set to include `grpc` (Hard: governance builder.go switch exhaustive)
-  - `GRPC-KIND-PARSE-01` — `kind=grpc` requires `grpc.service` + `grpc.method` non-empty (Medium: AST scan of decode logic)
+  - `GRPC-KIND-PARSE-01` — `kind=grpc` requires `grpc.service` + `grpc.proto` non-empty (method field deleted in #1655; see ADR D4 — not added, D5 — method field removed)
 - **Est.**: 440 lines
 - **Risk**: downstream exhaustive `switch contract.Kind` callsites — grep-verified at PR-1 time; any missed case is a same-PR fix (no follow-up PR).
 

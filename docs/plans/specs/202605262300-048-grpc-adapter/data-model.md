@@ -44,8 +44,6 @@ type ContractSpec struct {
 ```go
 type GRPCEndpointSpec struct {
     Service       string            // proto fully-qualified service name, e.g. "device.command.v1.DeviceCommandService"
-    Method        string            // proto method name, e.g. "IssueCommand"
-    StreamingType StreamingType     // unary | server-stream | client-stream | bidi
     ProtoFile     string            // contracts-relative path, e.g. "contracts/grpc/device/command/v1/device_command.proto"
     ProtoPackage  string            // proto file's `package` declaration, e.g. "device.command.v1"
     Auth          GRPCAuthSpec

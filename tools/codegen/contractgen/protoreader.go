@@ -106,7 +106,7 @@ func parseAllRPCMethods(block, protoPkg string) ([]ProtoMethodInfo, error) {
 	for _, m := range rpcLineRE.FindAllStringSubmatch(block, -1) {
 		name := m[1]
 		if m[2] != "" || m[4] != "" {
-			return nil, fmt.Errorf("proto: rpc %q is streaming; codegen supports unary only (PR 10)", name)
+			return nil, fmt.Errorf("proto: rpc %q is streaming; codegen supports unary only (streaming tracked at gh #1099)", name)
 		}
 		if !token.IsIdentifier(name) || !token.IsExported(name) {
 			return nil, fmt.Errorf("proto: rpc method %q must be an exported Go identifier", name)
@@ -231,7 +231,7 @@ func localMessageName(ref, protoPkg string) (string, error) {
 	if qualifier != protoPkg {
 		return "", fmt.Errorf(
 			"proto: message %q is in external package %q (not %q); cross-package message types are not supported yet "+
-				"(would require go_package import resolution)",
+				"(would require go_package import resolution; tracked at gh #1099)",
 			ref, qualifier, protoPkg)
 	}
 	return name, nil
