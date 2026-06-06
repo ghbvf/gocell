@@ -16,13 +16,14 @@ set -e
 : "${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD required for restricted serving role}"
 
 # Defense-in-depth: the password is interpolated into the CREATE ROLE SQL literal
-# below AND into the serving DSN userinfo. gen-deploy-secrets.sh emits it as
-# `openssl rand -hex 16`; enforce that shape so a hand-set value containing a
-# single quote / shell metachar / URL-unsafe byte cannot break the SQL string or
-# the DSN (fail fast at init rather than mid-statement).
+# below AND into the serving DSN userinfo. Restrict it to the RFC 3986 "unreserved"
+# set (A-Z a-z 0-9 - . _ ~) so a single quote / shell metachar / URL-breaking byte
+# (' / + = space etc.) cannot break the SQL string or the DSN — fail fast at init
+# rather than mid-statement. This accepts both gen-deploy-secrets.sh output
+# (openssl rand -hex 16) and the hyphenated CI/e2e fixture values.
 case "${GOCELL_APP_PASSWORD}" in
-  *[!0-9a-fA-F]*|"")
-    echo "10-restricted-role: GOCELL_APP_PASSWORD must be non-empty hex (e.g. openssl rand -hex 16)" >&2
+  *[!A-Za-z0-9._~-]*|"")
+    echo "10-restricted-role: GOCELL_APP_PASSWORD must be non-empty URL-safe (RFC 3986 unreserved: A-Za-z0-9._~-)" >&2
     exit 1
     ;;
 esac
