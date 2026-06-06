@@ -164,6 +164,10 @@ var locatorConsumerPathTokens = []string{
 //     indicates hardcoded discovery; scaffold is a layout generator by
 //     definition.
 //
+//   - cmd/gocell/app/scaffold_assembly.go: `gocell scaffold assembly` is the
+//     assembly counterpart of scaffold.go and intentionally writes the
+//     conventional assemblies/<id>/ + cmd/<id>/ output layout.
+//
 //   - kernel/metadata/assembly_derive.go: the conventional assembly
 //     entrypoint is cmd/<id>/main.go — "cmd" here is the physical output
 //     directory name of the conventional layout, not a discovery token
@@ -180,19 +184,19 @@ var locatorConsumerPathTokens = []string{
 //     from Locator/MetadataSource output. Same rationale as scaffold.go
 //     (layout generator by definition, not a read/discovery consumer).
 var locatorA5AllowedFiles = map[string]bool{
-	"cmd/gocell/app/scaffold.go":         true,
-	"kernel/metadata/assembly_derive.go": true,
-	"kernel/assembly/generator.go":       true,
+	"cmd/gocell/app/scaffold.go":          true,
+	"cmd/gocell/app/scaffold_assembly.go": true,
+	"kernel/metadata/assembly_derive.go":  true,
+	"kernel/assembly/generator.go":        true,
 }
 
-// locatorScanDirs returns the directories whose Go files are scanned by
-// the LOCATOR-DISCOVERY-FUNNEL-01 invariants. kernel/metadata houses the
-// Locator funnel; kernel/governance houses TargetSelector and the
-// conventional-layout strict rules.
-func locatorScanDirs() []string {
+// locatorA2ScanPatterns returns the package patterns scanned by the A2
+// form-uniqueness rules and their blind-spot inventory.
+func locatorA2ScanPatterns() []string {
 	return []string{
-		"kernel/metadata",
-		"kernel/governance",
+		"./kernel/metadata/...",
+		"./kernel/governance/...",
+		"./cmd/gocell/...",
 	}
 }
 
@@ -291,7 +295,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
-	patterns := []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}
+	patterns := locatorA2ScanPatterns()
 	var sawCmdGocell bool
 	diags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
@@ -358,7 +362,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *testing.T) {
-	patterns := []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."}
+	patterns := locatorA2ScanPatterns()
 	var sawCmdGocell bool
 	diags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
@@ -437,13 +441,32 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 // Go) — see SPAN-SETATTR-HOLDER-SEAL-01 #851 same precedent; no
 // tracking issue is opened for the Medium upstream ceiling.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
-	root := findModuleRoot(t)
-	concatDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
+	patterns := locatorA2ScanPatterns()
+	var sawCmdGocell bool
+	inScope := func(rel string) bool {
+		if !locatorInScanScope(rel, patterns) {
+			return false
+		}
+		if strings.HasPrefix(filepath.ToSlash(rel), "cmd/gocell/") {
+			sawCmdGocell = true
+		}
+		return true
+	}
+	skipFile := func(rel string) bool {
+		return !inScope(rel) ||
+			locatorIsAllowedFile(rel) ||
+			locatorA5AllowedFiles[filepath.ToSlash(rel)]
+	}
+
+	// Production (workspace) not AST(DirsScope): cmd/gocell is its own go.work
+	// module (#1557), so the blind-spot inventory must use the same workspace
+	// scope as A2a/A2b and then re-bound per file with locatorInScanScope.
+	concatDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				if locatorIsAllowedFile(rel) {
+				if skipFile(rel) {
 					continue
 				}
 				EachInSubtree[ast.BinaryExpr](f, func(bin *ast.BinaryExpr) {
@@ -474,12 +497,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.CONCAT", concatDiags)
 
-	regexDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
+	regexDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				if locatorIsAllowedFile(rel) {
+				if skipFile(rel) {
 					continue
 				}
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
@@ -523,12 +546,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	// conventional-layout path without any HasPrefix or ==/!= shape.
 	// Originally caught a `filepath.Join("cells", ...)` leak in
 	// kernel/governance/rules_misc_consistency.go after the M1 refactor.
-	joinDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
+	joinDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				if locatorIsAllowedFile(rel) {
+				if skipFile(rel) {
 					continue
 				}
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
@@ -571,12 +594,12 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	// Blind-spot #4: strings.Contains(_, "<token>/") — substring scan for
 	// a conventional-layout prefix. Not caught by A2a (HasPrefix) because
 	// the callee differs.
-	containsDiags := Run(t, AST(DirsScope(root, locatorScanDirs())),
+	containsDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				if locatorIsAllowedFile(rel) {
+				if skipFile(rel) {
 					continue
 				}
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
@@ -618,8 +641,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	// using a conventional-layout prefix as the old-value argument. Not
 	// caught by A2a (HasPrefix), A2b (==/!=), or blind-spots #1–#4.
 	// Uses EvaluateConstString to resolve the second argument.
-	replaceDiags := Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+	replaceDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -627,7 +649,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				if locatorIsAllowedFile(rel) {
+				if skipFile(rel) {
 					continue
 				}
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
@@ -672,8 +694,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	// Blind-spot #6: strings.TrimPrefix(_, "<token>/") — strips a
 	// conventional-layout prefix literal. Not caught by A2a (HasPrefix).
 	// Uses EvaluateConstString to resolve the second argument.
-	trimPrefixDiags := Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+	trimPrefixDiags := Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -681,7 +702,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				if locatorIsAllowedFile(rel) {
+				if skipFile(rel) {
 					continue
 				}
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
@@ -718,6 +739,11 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 		})
 
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.TRIMPREFIX", trimPrefixDiags)
+
+	if !sawCmdGocell {
+		t.Error("anti-vacuity: A2 blind-spot inventory scanned no cmd/gocell file — the " +
+			"Production workspace load no longer reaches the cmd/gocell satellite module (#1557)")
+	}
 }
 
 // TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots asserts that

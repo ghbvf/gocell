@@ -135,9 +135,10 @@ jobs:
       # `go vet ./...` is intentionally absent here: golangci-lint v2 has
       # `govet` in its default-enabled linter set (see .golangci.yml line 4
       # comment), so a standalone vet step would re-walk the full repo AST
-      # for zero additional signal. Removing it cuts ~21s off the kernel
-      # shard wall time. Cross-tag vet (e.g. `-tags=e2e`) is still done
-      # explicitly below where the build tag changes the file set.
+      # for zero additional signal. Nested go.work modules are linted in the
+      # following satellite step through the same hack/lib/modules.sh funnel used
+      # by build/test. Cross-tag vet (e.g. `-tags=e2e`) is still done explicitly
+      # below where the build tag changes the file set.
       - name: golangci-lint
         if: matrix.static_checks
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
@@ -163,6 +164,30 @@ jobs:
           # On pr (lint-mode: pr) use origin/<base-ref> so PRs targeting main
           # or release/* lint against their actual merge-base, not develop.
           args: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
+
+      - name: golangci-lint workspace satellites
+        if: matrix.static_checks
+        env:
+          LINT_ARGS: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
+        run: |
+          set -euo pipefail
+          source hack/lib/util.sh
+          source hack/lib/modules.sh
+          source hack/lib/golangci-lint.sh
+
+          root="$PWD"
+          lint_bin="$(gocell::golangci_lint::ensure)"
+          module_dirs="$(gocell::modules::dirs)"
+          while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            [ "$dir" != "." ] || continue
+            echo "+++ golangci-lint in module: $dir"
+            (
+              cd "$dir"
+              # shellcheck disable=SC2086 # LINT_ARGS is intentionally split into CLI flags.
+              "$lint_bin" run --config "$root/.golangci.yml" $LINT_ARGS ./...
+            )
+          done <<<"$module_dirs"
 
       # Build slowgate (G9 SLOW-TEST-BUDGET) — wall-clock budget gate that
       # consumes `go test -json` events and fails the shard when any
