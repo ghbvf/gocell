@@ -275,7 +275,7 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 // TestCodegenContractGen01_OptedInHasGen verifies CODEGEN-CONTRACT-GEN-01.
 // Contracts are opted into codegen by default; `codegen: false` in
 // contract.yaml is the only way to opt out.
-// For every opted-in contract:
+// For every opted-in contract (EXCEPT the zero-artifact kinds webhook + grpc):
 //   - generated/<kind>/<...>/v<N>/types_gen.go must exist (all kinds)
 //   - generated/<kind>/<...>/v<N>/iface_gen.go must exist (all kinds EXCEPT command)
 //   - generated/<kind>/<...>/v<N>/handler_gen.go must exist (kind=http only)
@@ -283,6 +283,11 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 //   - generated/<kind>/<...>/v<N>/command_gen.go must exist (kind=command only;
 //     command skips iface_gen.go — the typed Handler interface + Register/Dispatch
 //     dispatch funnel live in command_gen.go, mirroring saga_gen.go)
+//
+// webhook and grpc are zero-artifact kinds (contractgen emits no per-contract
+// package): webhook wires via cellgen ReceiverSpec literals; grpc's server
+// contract is buf's generated pb.<Svc>Server (#1688, ADR 202605260000
+// §Amendment 2026-06-07). codegen:true only selects them for Generate(ScopeAll).
 func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -292,13 +297,9 @@ func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 		if !contract.Codegen {
 			continue // not opted into codegen
 		}
-		if contract.Kind == "webhook" {
-			// webhook contracts emit ZERO contractgen artifacts by design:
-			// registration derives via cellgen from slice.yaml using
-			// kernel/webhook spec literals (see contractgen generator.go webhook
-			// branch). codegen:true only selects the contract for
-			// Generate(ScopeAll); there is no per-contract generated package, so
-			// the types_gen.go / iface_gen.go requirement does not apply.
+		if contract.Kind == "webhook" || contract.Kind == "grpc" {
+			// Zero-artifact kinds (see godoc above): no per-contract generated
+			// package, so the types_gen.go / iface_gen.go requirement does not apply.
 			continue
 		}
 		pkgDir := filepath.Join(root, contractIDToExpectedPkgPath(contract.ID))

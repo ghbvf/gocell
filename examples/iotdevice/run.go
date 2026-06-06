@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -160,13 +161,27 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// gRPC listener (first end-to-end grpc handler, #1151). devicecell registers
 	// grpc.device.command.v1 on cell.PrimaryListener (cell_gen.go reg.GRPCService),
 	// so a grpc listener with that ref MUST be wired or bootstrap phase7b fails
-	// fast. It shares the PrimaryListener role with the HTTP listener (:8083) but
-	// binds its own port :8084 — grpc and HTTP listener refs are independent
-	// namespaces. The interceptor chain mirrors the HTTP primary listener's JWT
-	// auth: every RPC is authenticated (per-method public is deferred to #1675).
-	// Metrics record to an in-memory collector — the iotdevice demo runs with a
-	// Nop metrics provider, so neither HTTP nor gRPC metrics are exported to
-	// /metrics here; real grpc metric export + cell attribution are PR-9 / #1383.
+	// fast.
+	//
+	// cell.PrimaryListener is referenced by BOTH the HTTP listener (:8083) and this
+	// gRPC listener (:8084): they are two independent TCP listeners sharing one
+	// listener ROLE (ref), not one socket serving both protocols. HTTP and gRPC
+	// listener refs live in separate bootstrap namespaces, so the shared ref is not
+	// a conflict.
+	//
+	// TLS: AllowInsecure (plaintext), matching the HTTP demo posture. Binding :8084
+	// (non-loopback) plaintext logs a startup Warn (warnIfInsecureNonLoopback);
+	// production must terminate TLS at a sidecar or set CertPEM/KeyPEM.
+	//
+	// The interceptor chain mirrors the HTTP primary listener's JWT auth: every RPC
+	// is authenticated (per-method public is deferred to #1675). The metrics
+	// collector is backed by a Nop provider — the iotdevice demo exports no metrics
+	// (HTTP path is Nop too); real grpc metric export + cell attribution are PR-9 /
+	// #1383, and the grpc_ready readyz probe wiring is PR-9 (plan §"PR 9").
+	grpcCollector, err := rtmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, rtmetrics.ProviderCollectorConfig{})
+	if err != nil {
+		return fmt.Errorf("build grpc metrics collector: %w", err)
+	}
 	grpcServer, err := adaptersgrpc.New(adaptersgrpc.Config{
 		Addr: ":8084",
 		TLS:  adaptersgrpc.TLSConfig{AllowInsecure: true},
@@ -174,7 +189,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 			interceptor.NewUnaryChain(interceptor.Deps{
 				Verifier:  jwtVerifier,
 				Clock:     clk,
-				Collector: rtmetrics.NewInMemoryGRPCCollector(),
+				Collector: grpcCollector,
 			}),
 		},
 	})

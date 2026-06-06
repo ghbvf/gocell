@@ -124,13 +124,25 @@ func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 		}
 	})
 
-	t.Run("error path is non-OK status", func(t *testing.T) {
-		_, err := client.IssueCommand(ctx, &commandv1.IssueCommandRequest{CommandType: "reboot"})
-		if err == nil {
-			t.Fatal("expected non-nil error for missing device_id")
-		}
-		if status.Code(err) == codes.OK {
-			t.Errorf("status code = OK, want non-OK; err=%v", err)
-		}
-	})
+	// Both validation branches over the wire return a non-OK status. We assert
+	// only "not OK" (not the precise code): a returned *errcode.Error currently
+	// surfaces as codes.Unknown — the errcode→codes.Code mapping table lands in
+	// PR-12 (the Kratos GRPCStatus() model), at which point these become
+	// codes.InvalidArgument.
+	errCases := []struct {
+		name string
+		req  *commandv1.IssueCommandRequest
+	}{
+		{"missing device_id", &commandv1.IssueCommandRequest{CommandType: "reboot"}},
+		{"missing command_type", &commandv1.IssueCommandRequest{DeviceId: "device-1"}},
+	}
+	for _, ec := range errCases {
+		t.Run("error path is non-OK status: "+ec.name, func(t *testing.T) {
+			if _, err := client.IssueCommand(ctx, ec.req); err == nil {
+				t.Fatalf("expected non-nil error for %s", ec.name)
+			} else if status.Code(err) == codes.OK {
+				t.Errorf("status code = OK, want non-OK; err=%v", err)
+			}
+		})
+	}
 }

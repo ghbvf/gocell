@@ -370,6 +370,17 @@ func TestGRPCProtoRepoRelPath(t *testing.T) {
 			"some/other/contract.yaml",
 			proto,
 		},
+		{
+			// Documents the "first GRPCProtoPathPrefix segment" semantics: the
+			// module base is everything before the FIRST contracts/grpc/. A second
+			// occurrence inside the tree does not shift the base. Unreachable in
+			// practice (governance FMT-37 / ValidateGRPCProtoPath keep contracts
+			// rooted at a single contracts/grpc/), but guards a refactor to
+			// strings.LastIndex.
+			"duplicate prefix uses first occurrence",
+			"examples/iotdevice/contracts/grpc/a/contracts/grpc/b/contract.yaml",
+			"examples/iotdevice/" + proto,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

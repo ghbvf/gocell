@@ -14,6 +14,7 @@ package devicecommandrpc
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -50,14 +51,21 @@ func (s *Server) IssueCommand(
 ) (*commandv1.IssueCommandResponse, error) {
 	if req.GetDeviceId() == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"device_id is required")
+			"device_id is required",
+			errcode.WithDetails(errcode.PublicString("field", "device_id")))
 	}
 	if req.GetCommandType() == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command_type is required")
+			"command_type is required",
+			errcode.WithDetails(errcode.PublicString("field", "command_type")))
 	}
+	ackID := uuid.NewString()
+	slog.InfoContext(ctx, "devicecommandrpc: command issued",
+		slog.String("device_id", req.GetDeviceId()),
+		slog.String("command_type", req.GetCommandType()),
+		slog.String("ack_id", ackID))
 	return &commandv1.IssueCommandResponse{
-		AckId:                  uuid.NewString(),
+		AckId:                  ackID,
 		AcknowledgedAtUnixNano: s.clk.Now().UnixNano(),
 	}, nil
 }
