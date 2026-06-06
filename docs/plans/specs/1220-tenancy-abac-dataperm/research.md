@@ -19,6 +19,23 @@
 
 **综合判断**：分四层（边界 / 决策 / 行 / 列），各层 enforcement 落点业界共识：行级 DB RLS + 应用层双层、列级应用层 projection（OLTP）。OPA 式 policy→SQL 统一机制投入产出比对当前规模不划算。
 
+### 1.1 决策词汇表对标（PR-6 `pkg/authz`，redone 2026-06-07）
+
+PR-6 把授权**决策词汇表**（`auth.Authorizer` 返回的 `Decision`/obligation）落为框架级 leaf 包 `pkg/authz`（契约 vs 引擎分治：词汇表上框架，policy 引擎+存储留 accesscore——`runtime/auth.Authorizer` 返回 `Decision` 且 runtime↛cells 分层 forces it 上框架）。下表是该词汇表 shape 的源码级对标（区别于 §1 的 4 层架构对标）：
+
+| 设计点 | Cedar | XACML 3.0 | Casbin | OpenFGA/Zanzibar | GoCell `pkg/authz` 采纳 / 偏离 |
+|--------|-------|-----------|--------|------------------|-------------------------------|
+| Decision 值数 | `type Decision bool`（Allow/Deny 2 值） | 4 值 Permit/Deny/NotApplicable/Indeterminate | bool | `{allowed bool}` | **2 值 `Effect{EffectAllow,EffectDeny}`**——NotApplicable/Indeterminate 在 default-deny+fail-closed 下折叠为 Deny；单引擎无多 PDP 联合需求 |
+| 决策输出形态 | `Authorize()→(Decision, Diagnostic{Reasons,Errors})` | Response{Decision, Obligations} | `EnforceEx()→(bool,[]string)` | `{allowed}` | **`Decision{Effect, Obligations, Reason}`**——`Reason` 是 opaque string（框架不知 accesscore PolicyID 类型）；满足 observability「fail-closed deny 须结构化 reason」 |
+| 伪造防护 | `Decision` 是裸 bool（可伪造） | XML（N/A） | bool | bool | **sealed construction（GoCell 升级）**——全字段 unexported + 唯一构造器 `Allow()`/`Deny()`，`Decision{Effect:EffectAllow}` 包外编译不可表达（防 authz 结论伪造 = P0）。同 `outbox.Entry`/`errcode.PublicDetail` 范式 |
+| Obligations | 无原生（Cedar 不做 data-filtering） | Obligations（强制，PEP 必须执行否则拒绝）vs Advice（可选） | 无 | 无 | **bounded `Obligations{RowScope, FieldMask}`**——采纳 XACML 强制 obligation 语义，偏离其 open-ended KV（typed 有界集 = AI-robust 升级，不建 Advice） |
+| 组合算法 | forbid-wins | deny-overrides（§7.16） | 可配置 | N/A | **deny-overrides / forbid-wins**（godoc 双标注；enforcement 在 PR-7 引擎） |
+| 条件求值 | typed schema | XML AttributeValue | 反射 `...interface{}` | 关系元组 | **typed `Condition{Source,Key,Operator,Values}`**——拒 Casbin 反射（违 typed funnel） |
+
+**XACML PDP/PEP/PIP/PAP → GoCell 映射**：PDP 契约 = `auth.Authorizer` + `pkg/authz`（框架）；PDP 实现 = `authorizationdecide` 引擎（PR-7）；PEP = repo typed param + handler `CheckOwner`；PIP = JWT claims + repo resource 属性 + `clock.Clock`；PAP = policymanage（PR-9）。
+
+来源（PR-6 实际 WebFetch）：`cedar-policy/cedar-go` types.go / authorize.go（`Decision bool`、`Authorize()→(Decision,Diagnostic)`）；XACML 3.0 OASIS core §3.4/§3.5/§7.16；`casbin/casbin` enforcer.go（`EnforceEx`、反射 rvals）；`openfga/go-sdk` CheckResponse。
+
 ## 2. GoCell 现状（关键缺口）
 
 1. **TenantID 零生产来源**：ctxkey/wire/DB 列都有位置，`injectPrincipalCtxKeys` 明确「no source on develop」，所有 repo 查询无 tenant 谓词。

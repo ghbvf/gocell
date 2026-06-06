@@ -142,11 +142,14 @@ graph TD
 - [ ] T5.4 **`[R1 F-A9]` async 租户还原测试**：consumer handler 收到带 `principal.TenantID=acme` 的 entry、bootstrap ctx 无 TenantID 时，断言 handler 内 `ctxkeys.TenantIDFrom(ctx)=="acme"`；且 bootstrap ctx 预设错误 tenant 时 entry restore 覆盖之（防 P1 跨租户污染）
 - [ ] T5.5 e2e：三类主体列表可见性
 
-### PR-6 — ABAC policy 域模型 + ports + mem store（W1, ~1200, dep: PR-1）
-- [ ] T6.1 `cells/accesscore/slices/authorizationdecide/domain/`：Policy/Rule/Condition/Decision/obligations 模型
-- [ ] T6.2 ports：PolicyRepository 接口
-- [ ] T6.3 mem store
-- [ ] T6.4 测试：模型不变式 + mem store
+### PR-6 — ABAC policy 域模型 + ports + mem store（W1, ~1200, dep: PR-1）✅ #1344
+> **落地偏离 spec 字面（与用户对齐 2026-06-07，见 research.md §1.1）**：
+> ① **决策词汇表上框架**：`Decision`/`Effect`/`Obligations`/`FieldMask` 落 **新 leaf 包 `pkg/authz`**（非 `authorizationdecide/domain/`）——`runtime/auth.Authorizer`（PR-7 返回 Decision）受 runtime↛cells 分层约束，`Decision` 必须框架级。`Decision` 为 **sealed construction**（全字段 unexported + `Allow()`/`Deny()` 唯一构造器，防 authz 结论伪造 = P0）；守卫 `AUTHZ-DECISION-SEALED-FIELD-FROZEN-01`（reflect-freeze，Hard）。下游 caller-allowlist（仅引擎可调 Allow/Deny）随 PR-7 producer 落地。
+> ② **policy 模型/port/mem 放 cell-shared `internal/`**（`internal/abac` + `internal/ports` + `internal/mem`，非 slice-local）——PR-7 引擎 / PR-8 PG store / PR-9 policymanage 三方复用，slice-local 会破坏 slice 隔离。
+- [x] T6.1 `pkg/authz`（Decision/Effect/Obligations/FieldMask，sealed Decision）+ `cells/accesscore/internal/abac/`（Policy/Rule/Condition/Operator/AttributeSource）
+- [x] T6.2 `cells/accesscore/internal/ports/policy_repo.go`：PolicyRepository（tenant.TenantID typed param[1]）+ 入列 TENANT-REPO-PARAM-FUNNEL-01
+- [x] T6.3 `cells/accesscore/internal/mem/policy_repo.go`（fail-closed Save + defensive clone）
+- [x] T6.4 测试：模型不变式 + mem store（跨租户隔离 / clone 独立 / -race）+ AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 archtest
 
 ### PR-7 — policy 评估引擎 + Authorizer 接口破坏式重做（W2, ~1600, dep: PR-6）
 - [ ] T7.1 评估器：subject(user/device)/resource/env 属性匹配；default-deny + forbid-wins
@@ -185,7 +188,7 @@ graph TD
 - [ ] T10.5 **Closes #914**（split 时归 PR-10b）
 
 ### PR-11 — ResourceProjection sealed framework + FieldMask（W3, ~1100, dep: PR-1,PR-7）
-- [ ] T11.1 **`[R1 F-A4/F-A7]` sealed 机制 + 路径定稿**：`pkg/projection/`（无层依赖，所有层可引用）的 `ResourceProjection`——**全字段 unexported + 唯一构造器** `NewProjection(mask FieldMask, data map[string]any) (ResourceProjection, error)`（对齐 errcode `PublicDetail` sealed marker：包外不可结构字面量伪造）。`FieldMask` obligation 同包
+- [ ] T11.1 **`[R1 F-A4/F-A7]` sealed 机制 + 路径定稿**：`pkg/projection/`（无层依赖，所有层可引用）的 `ResourceProjection`——**全字段 unexported + 唯一构造器** `NewProjection(mask FieldMask, data map[string]any) (ResourceProjection, error)`（对齐 errcode `PublicDetail` sealed marker：包外不可结构字面量伪造）。**`FieldMask` 已在 PR-6（#1344）落 `pkg/authz`**（obligation = 决策输出，与 `Decision`/`Obligations` 同包；ResourceProjection 是 enforcement 机制，**import `pkg/authz.FieldMask`** 而非同包重定义）——偏离原「FieldMask obligation 同包」字面，理由见 research.md §1.1
 - [ ] T11.2 projection 构造经 obligation；无 opt-out；复用 `pkg/redaction`。**`[R1 F-A10]` 无裂变**：无 obligation 时 `NewProjection` = identity（不改变可见字段集），使 MVP（PR-1..5，无 masking）与 P2 引入 projection **不产生 response type 破坏式裂变**
 - [ ] T11.3 archtest `RESOURCE-PROJECTION-SEALED-01`，godoc 按 ai-robust「Funnel 双向锁」格式举证：上游 Hard（unexported 字段 + 唯一构造器，包外不可构造 full view）+ 下游 Hard（callsite lock）+ 反向自检（handler 返回 full view 不可编译）
 
