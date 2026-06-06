@@ -101,7 +101,7 @@ type stubSessionStore struct {
 	revokeCallsFor []string // captures subjectID args
 }
 
-func (s *stubSessionStore) Create(_ context.Context, _ *session.Session) error {
+func (s *stubSessionStore) Create(_ context.Context, _ tenant.TenantID, _ *session.Session) error {
 	panic("stubSessionStore.Create: unexpected call")
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -24,10 +25,25 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// testTenantID is the canonical test tenant UUID used in sessionlogout tests.
+var testTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("sessionlogout_test: invalid testTenantID: " + err.Error())
+	}
+	return t
+}()
+
 const (
 	invalidUUID    = "not-a-uuid-string"
 	logoutBasePath = "/api/v1/access/sessions/"
 )
+
+// testCookieTTL mirrors accesscore.DefaultRefreshMaxAge (7 days). Logout only
+// emits a clear cookie (Max-Age=0), so the value is not asserted, but the
+// NewHandler signature now takes a time.Duration; a named const keeps it
+// readable and satisfies TEST-TIME-LITERAL-01.
+const testCookieTTL = 7 * 24 * time.Hour
 
 func newHandlerLogoutRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
@@ -49,7 +65,7 @@ func setup(t testing.TB) http.Handler {
 	t.Helper()
 	sessionRepo := testutil.RealSessionRepo(t)
 	sessID := testutil.TestID("sess-1")
-	_ = sessionRepo.Create(context.Background(), &session.Session{
+	_ = sessionRepo.Create(context.Background(), testTenantID, &session.Session{
 		ID:                sessID,
 		SubjectID:         testutil.TestID("usr-1"),
 		JTI:               "jti-" + sessID,
@@ -59,7 +75,7 @@ func setup(t testing.TB) http.Handler {
 	})
 	// Victim session owned by a different user — used to prove IDOR guard.
 	victimID := testutil.TestID("sess-victim")
-	_ = sessionRepo.Create(context.Background(), &session.Session{
+	_ = sessionRepo.Create(context.Background(), testTenantID, &session.Session{
 		ID:                victimID,
 		SubjectID:         testutil.TestID("usr-victim"),
 		JTI:               "jti-" + victimID,
@@ -70,7 +86,7 @@ func setup(t testing.TB) http.Handler {
 
 	svc := mustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
 	return mux
@@ -163,6 +179,64 @@ func TestHandleLogout(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandleLogout_CookieBehavior verifies that a successful 204 logout emits a
+// clearing Set-Cookie for __Host-gocell_rt, while error responses (401, 404) do not
+// emit any cookie at all. This drives through RegisterRoutes + mux so the
+// httpcookie.Middleware wrapping added in NewHandler is exercised.
+func TestHandleLogout_CookieBehavior(t *testing.T) {
+	t.Run("successful logout clears __Host-gocell_rt cookie", func(t *testing.T) {
+		h := setup(t)
+		w := httptest.NewRecorder()
+		ctx := auth.TestContext(testutil.TestID("usr-1"), nil)
+		req := httptest.NewRequest(http.MethodDelete, logoutBasePath+testutil.TestID("sess-1"), nil).WithContext(ctx)
+		h.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNoContent, w.Code)
+
+		// The middleware emits Set-Cookie on 2xx; assert __Host-gocell_rt is cleared.
+		cookies := w.Result().Cookies()
+		var rtCookie *http.Cookie
+		for _, c := range cookies {
+			if c.Name == "__Host-gocell_rt" {
+				rtCookie = c
+				break
+			}
+		}
+		require.NotNil(t, rtCookie, "expected __Host-gocell_rt Set-Cookie header on 204 logout")
+		// Wire Max-Age=0 is parsed back to -1 by Go's http package.
+		assert.Equal(t, -1, rtCookie.MaxAge, "__Host-gocell_rt cookie should have MaxAge=-1 (wire: Max-Age=0)")
+		assert.Empty(t, rtCookie.Value, "__Host-gocell_rt cookie should have empty value on clear")
+		assert.True(t, rtCookie.HttpOnly, "__Host-gocell_rt cookie must be HttpOnly")
+		assert.True(t, rtCookie.Secure, "__Host-gocell_rt cookie must be Secure")
+		assert.Equal(t, http.SameSiteStrictMode, rtCookie.SameSite, "__Host-gocell_rt cookie must be SameSite=Strict")
+	})
+
+	t.Run("failed logout (404 not-owner) emits no __Host-gocell_rt cookie", func(t *testing.T) {
+		h := setup(t)
+		w := httptest.NewRecorder()
+		// usr-attacker tries to delete a session they don't own → 404
+		ctx := auth.TestContext(testutil.TestID("usr-attacker"), nil)
+		req := httptest.NewRequest(http.MethodDelete, logoutBasePath+testutil.TestID("sess-victim"), nil).WithContext(ctx)
+		h.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code)
+
+		for _, c := range w.Result().Cookies() {
+			assert.NotEqual(t, "__Host-gocell_rt", c.Name, "expected no __Host-gocell_rt cookie on 404 error response")
+		}
+	})
+
+	t.Run("failed logout (401 missing auth) emits no __Host-gocell_rt cookie", func(t *testing.T) {
+		h := setup(t)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodDelete, logoutBasePath+testutil.TestID("sess-1"), nil).WithContext(context.Background())
+		h.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+
+		for _, c := range w.Result().Cookies() {
+			assert.NotEqual(t, "__Host-gocell_rt", c.Name, "expected no __Host-gocell_rt cookie on 401 error response")
+		}
+	})
 }
 
 // TestHandler_Logout_BlankID tests the service directly with a blank sessionID

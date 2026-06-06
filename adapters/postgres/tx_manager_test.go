@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // mockTx implements pgx.Tx for unit testing.
@@ -296,4 +297,40 @@ func TestRunInTx_Savepoint_Rollback_OnPanic_WithCancelledCtx(t *testing.T) {
 	require.Len(t, mock.execCtxCancelled, 2)
 	assert.False(t, mock.execCtxCancelled[1],
 		"savepoint rollback on panic must use an uncancelled context")
+}
+
+// --- Tests for ApplyTenantScope ---
+
+// TestApplyTenantScope_NoAmbientTx verifies that ApplyTenantScope returns a
+// KindInternal error when there is no ambient pgx.Tx in the context (i.e. when
+// called outside RunInTx). This enforces the fail-closed contract: the GUC is
+// never written without an open transaction.
+func TestApplyTenantScope_NoAmbientTx(t *testing.T) {
+	tm := &TxManager{pool: nil}
+	// No CtxWithTx — context carries no transaction.
+	err := tm.ApplyTenantScope(context.Background(), "00000000-0000-0000-0000-000000000001")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind,
+		"ApplyTenantScope without ambient tx must return KindInternal")
+}
+
+// TestApplyTenantScope_InvalidUUID verifies that ApplyTenantScope returns a
+// KindInternal error when the tenant string is not a valid canonical UUID. This
+// guards the defense-in-depth re-validation at the kernel CellTxManager
+// string boundary.
+func TestApplyTenantScope_InvalidUUID(t *testing.T) {
+	mock := &mockTx{}
+	ctx := CtxWithTx(context.Background(), mock)
+
+	tm := &TxManager{pool: nil}
+	err := tm.ApplyTenantScope(ctx, "not-a-uuid")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind,
+		"ApplyTenantScope with invalid UUID must return KindInternal")
+	// No GUC write should have occurred.
+	assert.Empty(t, mock.execCalls, "no Exec must be called when UUID validation fails")
 }

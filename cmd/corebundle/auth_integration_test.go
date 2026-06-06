@@ -466,7 +466,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// Internal listener + service token → guard passes → policy passes →
 	// handler returns 404 ERR_AUTH_ROLE_NOT_FOUND (user exists, role not seeded).
 	t.Run("internal_assign_service_token_policy_passes_to_handler", func(t *testing.T) {
-		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent"}`, seedUserID))
+		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent","tenantId":%q}`, seedUserID, testTenantID))
 		// Spec: 4-part token — callerCell="accesscore" is the identity claim.
 		token := auth.GenerateServiceToken(ring, "accesscore",
 			http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
@@ -492,7 +492,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// Internal listener + service token → guard passes → policy passes →
 	// handler returns 200 (idempotent revoke of unassigned role).
 	t.Run("internal_revoke_service_token_policy_passes_to_handler", func(t *testing.T) {
-		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent"}`, seedUserID))
+		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent","tenantId":%q}`, seedUserID, testTenantID))
 		// Spec: 4-part token — callerCell="accesscore".
 		token := auth.GenerateServiceToken(ring, "accesscore",
 			http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
@@ -526,7 +526,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		require.NotEmpty(t, token)
 
 		doReq := func() (int, string) {
-			body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent"}`, seedUserID))
+			body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent","tenantId":%q}`, seedUserID, testTenantID))
 			req, err := http.NewRequest(http.MethodPost,
 				fmt.Sprintf("http://%s/internal/v1/access/roles/revoke", internalAddr), body)
 			require.NoError(t, err)

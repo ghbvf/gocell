@@ -12,13 +12,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	"github.com/ghbvf/gocell/kernel/clock"
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/command"
+	"github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
 // fakeEnqueueHandler implements the generated enqueue.Handler interface.
@@ -131,4 +140,114 @@ func TestCommandBus_Enqueue_DispatchNilRequest(t *testing.T) {
 	}
 	_, err := enqueue.Dispatch(context.Background(), reg, nil)
 	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+}
+
+// ---------------------------------------------------------------------------
+// Async dispatch (#1667 / ADR 202606040550-1044 §5 ④)
+// ---------------------------------------------------------------------------
+
+// newCommandEntry builds a command outbox.Entry whose RoutingTopic == the enqueue
+// DispatchID, carrying req as the JSON payload — what a producer writes to the
+// outbox and the relay claims for in-process async dispatch.
+func newCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
+	t.Helper()
+	payload, err := json.Marshal(req)
+	require.NoError(t, err)
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), payload)
+	require.NoError(t, err)
+	return entry
+}
+
+// TestCommandBus_Enqueue_DispatchAsyncRoundTrip drives the REAL generated
+// enqueue.DispatchAsync: it decodes the entry payload into *Request and invokes
+// the registered Handler — the async sibling of the sync Dispatch round-trip.
+func TestCommandBus_Enqueue_DispatchAsyncRoundTrip(t *testing.T) {
+	t.Parallel()
+	reg := command.NewRegistry()
+	h := &fakeEnqueueHandler{}
+	require.NoError(t, enqueue.Register(reg, h))
+
+	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
+	require.NoError(t, enqueue.DispatchAsync(context.Background(), reg, entry))
+
+	assert.True(t, h.called, "handler must be invoked")
+	require.NotNil(t, h.lastReq)
+	assert.Equal(t, "d1", h.lastReq.DeviceID)
+	assert.Equal(t, "reboot", h.lastReq.CommandType)
+}
+
+// TestCommandBus_Enqueue_DispatchAsyncHandlerError verifies the handler error is
+// returned (the relay routes it to MarkRetry).
+func TestCommandBus_Enqueue_DispatchAsyncHandlerError(t *testing.T) {
+	t.Parallel()
+	reg := command.NewRegistry()
+	sentinel := errors.New("downstream failure")
+	require.NoError(t, enqueue.Register(reg, &fakeEnqueueHandler{retErr: sentinel}))
+
+	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{Payload: "x"}))
+	assert.ErrorIs(t, err, sentinel)
+}
+
+// TestCommandBus_Enqueue_DispatchAsyncBadPayload verifies a payload that does not
+// decode into *Request returns ErrValidationFailed before reaching a handler.
+func TestCommandBus_Enqueue_DispatchAsyncBadPayload(t *testing.T) {
+	t.Parallel()
+	reg := command.NewRegistry()
+	h := &fakeEnqueueHandler{}
+	require.NoError(t, enqueue.Register(reg, h))
+
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), []byte("not json"))
+	require.NoError(t, err)
+	errcodetest.AssertCode(t, enqueue.DispatchAsync(context.Background(), reg, entry), errcode.ErrValidationFailed)
+	assert.False(t, h.called, "handler must not run on a malformed payload")
+}
+
+// TestCommandBus_Enqueue_DispatchAsyncNoHandler verifies the no-handler branch.
+func TestCommandBus_Enqueue_DispatchAsyncNoHandler(t *testing.T) {
+	t.Parallel()
+	reg := command.NewRegistry()
+	err := enqueue.DispatchAsync(context.Background(), reg, newCommandEntry(t, enqueue.Request{Payload: "x"}))
+	errcodetest.AssertCode(t, err, errcode.ErrCommandNotFound)
+	var ec *errcode.Error
+	if errors.As(err, &ec) {
+		assert.Equal(t, errcode.KindNotFound, ec.Kind)
+	}
+}
+
+// TestCommandBus_Enqueue_DispatchAsyncNilRegistry verifies the nil-registry guard.
+func TestCommandBus_Enqueue_DispatchAsyncNilRegistry(t *testing.T) {
+	t.Parallel()
+	err := enqueue.DispatchAsync(context.Background(), nil, newCommandEntry(t, enqueue.Request{Payload: "x"}))
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+}
+
+// TestCommandBus_Enqueue_AsyncRelayEndToEnd plays the composition root: it binds
+// the REAL generated enqueue.DispatchAsync into a relay (keyed by the generated
+// enqueue.DispatchID — the direct-symbol shape COMMAND-ASYNC-DISPATCH-CALLER-01
+// requires), seeds a command outbox entry, starts the relay, and asserts the
+// entry is dispatched to the registered handler in-process and settles to
+// published (consumed) — the full in-proc → outbox → relay → handler async loop.
+func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
+	t.Parallel()
+	reg := command.NewRegistry()
+	h := &fakeEnqueueHandler{}
+	require.NoError(t, enqueue.Register(reg, h))
+
+	store := outboxtest.NewFakeStore()
+	store.Seed(outbox.ClaimedEntry{Entry: newCommandEntry(t, enqueue.Request{DeviceID: "d1", Payload: "now"})})
+
+	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
+		outbox.RelayConfig{PollInterval: 5 * time.Millisecond}.WithDefaults())
+	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
+		enqueue.DispatchID: enqueue.DispatchAsync,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = relay.Start(ctx) }()
+
+	require.NoError(t, store.WaitFor(ctx, func(rows []outboxtest.FakeRow) bool {
+		return len(rows) == 1 && rows[0].Status == kout.StatePublished
+	}), "command entry must settle to published after in-process dispatch")
+	assert.True(t, h.called, "the registered enqueue handler must be invoked via the relay")
 }

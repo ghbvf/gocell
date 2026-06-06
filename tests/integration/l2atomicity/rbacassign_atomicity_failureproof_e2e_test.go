@@ -102,7 +102,7 @@ func roleAssignmentCount(t *testing.T, h *l2Harness, userID, roleID string) int 
 // The caller owns all status-code assertions; this helper does not require any specific status.
 func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string) int {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
+	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID, "tenantId": l2TestTenantID})
 	var path string
 	switch action {
 	case "assign":

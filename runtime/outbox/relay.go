@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // non-crypto outbox relay jitter; gosec G404 already silenced at usage sites
@@ -17,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -155,6 +157,16 @@ type Relay struct {
 	pendingDepthObserver PendingDepthObserver
 
 	clock clock.Clock
+
+	// cmdRegistry + cmdDispatch wire the in-process async command bus into the
+	// relay (#1667 / ADR ...202606040550-1044 §5 ④). When a claimed entry's
+	// RoutingTopic matches a registered command id, the relay dispatches it to
+	// the generated DispatchAsync in-process (settling the row like a publish)
+	// instead of marshaling + publishing to the broker. Both are nil unless
+	// WithCommandDispatch was called, so event-only relays are unaffected. See
+	// relay_command.go.
+	cmdRegistry *command.Registry
+	cmdDispatch map[command.CommandID]command.AsyncDispatchFunc
 }
 
 // WithPendingDepthObserver wires a PendingDepthObserver that receives the
@@ -569,16 +581,32 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 	return wbErr
 }
 
-// publishBatch publishes each entry to the broker outside of any transaction.
-// Uses kernel/outbox.MarshalEnvelope to produce the wire envelope with
-// camelCase JSON keys.
+// publishBatch delivers each entry to its sink outside of any transaction. The
+// sink is the broker for events (marshal envelope → Publisher.Publish) and the
+// in-process command handler for command entries whose RoutingTopic matches a
+// registered command id (dispatch → generated DispatchAsync; see
+// WithCommandDispatch in relay_command.go). Both outcomes settle through the
+// shared writeBack below (MarkPublished on success / MarkRetry on error), so a
+// dispatched command's terminal state is "published" — the row is consumed.
+// Uses kernel/outbox.MarshalEnvelope to produce the wire envelope with camelCase
+// JSON keys.
 // ref: Watermill router.go publishBatch — per-message outcome, no batch atomicity
 func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publishResult {
 	results := make([]publishResult, len(entries))
 	for i, e := range entries {
+		if fn, ok := r.commandDispatchFor(e.RoutingTopic()); ok {
+			// Command entry: dispatch to its in-process handler instead of
+			// publishing to the broker. fn is a generated DispatchAsync
+			// (COMMAND-ASYNC-DISPATCH-CALLER-01 locks the map values).
+			results[i] = publishResult{entry: e, err: fn(ctx, r.cmdRegistry, e.Entry)}
+			continue
+		}
 		payload, marshalErr := kout.MarshalEnvelope(e.Entry)
 		if marshalErr != nil {
-			results[i] = publishResult{entry: e, err: marshalErr}
+			// MarshalEnvelope failure is deterministic (the entry can never encode):
+			// tag it permanent so handleFailedEntry dead-letters it immediately
+			// instead of retrying to budget exhaustion.
+			results[i] = publishResult{entry: e, err: kout.NewPermanentError(marshalErr)}
 			continue
 		}
 		results[i] = publishResult{
@@ -655,7 +683,14 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	newAttempts := res.entry.Attempts + 1
 	errMsg := SanitizeError(res.err.Error(), 1000)
 
-	if newAttempts >= r.cfg.MaxAttempts {
+	// Permanent failures (deterministic command-dispatch framework errors +
+	// MarshalEnvelope failures, tagged via kout.PermanentError) can never recover
+	// by retry, so dead-letter them immediately instead of burning the retry
+	// budget. Handler business errors are returned unwrapped and fall through to
+	// the normal attempt-budget retry path. ref: ADR §Amendment 2026-06-06 r2.
+	permanent := isPermanentDispatch(res.err)
+
+	if permanent || newAttempts >= r.cfg.MaxAttempts {
 		if err := kout.Transition(kout.StateClaiming, kout.StateDead); err != nil {
 			return err
 		}
@@ -680,6 +715,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 			slog.String("event_type", res.entry.EventType()),
 			slog.String("aggregate_id", res.entry.AggregateID()),
 			slog.Int("attempts", newAttempts),
+			slog.Bool("permanent", permanent),
 			slog.String("last_error", errMsg),
 		)
 		return nil
@@ -708,6 +744,19 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	}
 	stats.retried++
 	return nil
+}
+
+// isPermanentDispatch reports whether err is tagged as a permanent (non-retryable)
+// failure via kernel/outbox.PermanentError. Generated command DispatchAsync wraps
+// its deterministic framework errors (reg nil, routing-topic ≠ DispatchID, payload
+// decode failure, no handler, wrong-typed handler) this way, and publishBatch wraps
+// MarshalEnvelope failures, so the relay dead-letters them immediately rather than
+// retrying to budget exhaustion. Handler business errors are returned unwrapped and
+// stay transient (MarkRetry) by default; a handler that knows its failure is
+// unrecoverable can itself return a kout.PermanentError to opt in.
+func isPermanentDispatch(err error) bool {
+	var pe *kout.PermanentError
+	return errors.As(err, &pe)
 }
 
 // ---------------------------------------------------------------------------

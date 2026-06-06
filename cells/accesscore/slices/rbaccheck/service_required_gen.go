@@ -19,5 +19,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"rbac-check: cursor codec is required")
 	}
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"rbac-check: TxRunner required; use WithTxManager")
+	}
 	return nil
 }

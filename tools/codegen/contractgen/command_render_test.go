@@ -122,6 +122,8 @@ func TestRender_Command_ContainsKeySymbols(t *testing.T) {
 		{"HandleDo method", "HandleDo(ctx context.Context, req *Request) (*Response, error)"},
 		{"Register func", "func Register(reg *command.Registry, h Handler) error"},
 		{"Dispatch func", "func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Response, error)"},
+		{"AsyncDispatchFunc assert", "var _ command.AsyncDispatchFunc = DispatchAsync"},
+		{"DispatchAsync func", "func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry) error"},
 		{"KindInvalid", "errcode.KindInvalid"},
 		{"KindNotFound", "errcode.KindNotFound"},
 		{"KindInternal", "errcode.KindInternal"},

@@ -37,7 +37,8 @@ func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
 	require.NoError(t, store.UserRepository().Create(context.Background(), testTenantID, u1))
 	_, err := store.RoleRepository().AssignToUser(context.Background(), testTenantID, "usr-1", "admin")
 	require.NoError(t, err)
-	// Option B: Assign/Revoke derive the tenant from the target user (GetByID),
+	// Assign/Revoke require the target user to exist in the tenant (#1617 PR-3b:
+	// repo composite-FK / mem user guard for Assign, ownership guard for Revoke),
 	// so seed the roster of users the handler tests operate on (idempotent — usr-1
 	// above is skipped).
 	seedTestUserRoster(t, store)
@@ -59,7 +60,7 @@ func seedActiveAdminInStore(t *testing.T, store *mem.Store, userID string) {
 	t.Helper()
 	// Idempotent on the user row: setupHandler pre-seeds a roster, so the user
 	// may already exist; only the admin-role assignment is unconditional.
-	if _, gerr := store.UserRepository().GetByID(context.Background(), userID); gerr != nil {
+	if _, gerr := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, userID); gerr != nil {
 		u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
 		require.NoError(t, err)
 		u.ID = userID
@@ -80,7 +81,7 @@ func TestHandler_Assign(t *testing.T) {
 		{
 			// Spec: accesscore caller (PrincipalService, CallerCellID=accesscore) → 201
 			name:       "accesscore caller assigns role returns 201",
-			body:       `{"userId":"usr-2","roleId":"admin"}`,
+			body:       `{"userId":"usr-2","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`,
 			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
@@ -123,7 +124,7 @@ func TestHandler_Assign(t *testing.T) {
 		},
 		{
 			name:       "role not found returns 404",
-			body:       `{"userId":"usr-2","roleId":"nonexistent"}`,
+			body:       `{"userId":"usr-2","roleId":"nonexistent","tenantId":"00000000-0000-0000-0000-000000000001"}`,
 			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusNotFound,
 		},
@@ -176,7 +177,7 @@ func TestHandler_Revoke(t *testing.T) {
 				// Ensure 2 effective admins so last-admin guard doesn't block.
 				seedActiveAdminInStore(t, s, "usr-2")
 			},
-			body:       `{"userId":"usr-1","roleId":"admin"}`,
+			body:       `{"userId":"usr-1","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`,
 			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
@@ -195,7 +196,7 @@ func TestHandler_Revoke(t *testing.T) {
 		},
 		{
 			name:       "revoke last admin returns 403",
-			body:       `{"userId":"usr-1","roleId":"admin"}`,
+			body:       `{"userId":"usr-1","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`,
 			ctx:        func() context.Context { return testAuthServiceCtx("accesscore") },
 			wantStatus: http.StatusForbidden,
 		},

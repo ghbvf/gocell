@@ -118,7 +118,7 @@ func benchMixedConcurrent(b *testing.B, factory BenchFactory) {
 					CreatedAt:         now,
 					ExpiresAt:         now.Add(benchTTL),
 				}
-				if err := store.Create(ctx, fix); err != nil && !isAcceptableBenchErr(err) {
+				if err := store.Create(ctx, testTenantID, fix); err != nil && !isAcceptableBenchErr(err) {
 					b.Errorf("mixed Create: %v", err)
 				}
 			case 1:
@@ -149,7 +149,7 @@ func seedSubjectSessions(b *testing.B, store session.Store, now time.Time, n int
 				CreatedAt:         now,
 				ExpiresAt:         now.Add(benchTTL),
 			}
-			if err := store.Create(ctx, fix); err != nil && !isAcceptableBenchErr(err) {
+			if err := store.Create(ctx, testTenantID, fix); err != nil && !isAcceptableBenchErr(err) {
 				errs <- err
 			}
 		}(i)

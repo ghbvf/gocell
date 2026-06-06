@@ -56,6 +56,7 @@ func TestStandardCellRulesComposition(t *testing.T) {
 		ruleMessageConstLiteral01:           true,
 		ruleExportedErrorNew01:              true,
 		ruleScaffoldDerivedForceOverwrite01: true,
+		sagaCompensatePureRuleID:            true,
 	}
 	for id := range seen {
 		if !wantRuleIDs[id] {

@@ -16,9 +16,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
+
+var scsTestTenantID = func() tenant.TenantID {
+	t, err := tenant.ParseTenantID("00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		panic("session_cache_store_test: invalid scsTestTenantID: " + err.Error())
+	}
+	return t
+}()
 
 const (
 	scsTestTTL     = 30 * time.Second
@@ -31,6 +40,7 @@ const (
 
 // lastCreateArgs records the arguments passed to the most recent Create call.
 type lastCreateArgs struct {
+	t    tenant.TenantID
 	sess *session.Session
 }
 
@@ -82,9 +92,9 @@ type fakeSessionStore struct {
 	lastRevokeSubj atomic.Pointer[lastRevokeSubjArgs]
 }
 
-func (f *fakeSessionStore) Create(_ context.Context, sess *session.Session) error {
+func (f *fakeSessionStore) Create(_ context.Context, t tenant.TenantID, sess *session.Session) error {
 	f.createCalls.Add(1)
-	f.lastCreate.Store(&lastCreateArgs{sess: sess})
+	f.lastCreate.Store(&lastCreateArgs{t: t, sess: sess})
 	return f.createErr
 }
 
@@ -120,6 +130,7 @@ func newTestView() *session.ValidateView {
 	return &session.ValidateView{
 		ID:                scsTestSID,
 		SubjectID:         scsTestSubj,
+		TenantID:          scsTestTenantID,
 		RevokedAt:         nil,
 		AuthzEpochAtIssue: scsTestEpoch,
 	}
@@ -184,8 +195,43 @@ func TestCachingSessionStore_Get_CacheHit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, view.ID, got.ID)
 	assert.Equal(t, view.SubjectID, got.SubjectID)
+	assert.Equal(t, view.TenantID, got.TenantID,
+		"TenantID must round-trip through the cache (#1337 PR-3b: it is the RLS scope carrier; "+
+			"a HIT that dropped it would scope the downstream read to a zero tenant)")
 	assert.Equal(t, view.AuthzEpochAtIssue, got.AuthzEpochAtIssue)
 	assert.Zero(t, inner.getCalls.Load(), "cache hit must not delegate to inner")
+}
+
+// TestCachingSessionStore_Get_StaleEntryWithoutTenantID_FallsThrough verifies
+// that a pre-#1337-PR-3b cache entry (written WITHOUT tenantId) is rejected by
+// validate() — its empty TenantID fails tenant.TenantID.Validate — and falls
+// through to inner, which returns the row with the correct tenant. No tenant-less
+// entry is ever served as a cache hit, and the cache is re-primed with the
+// tenant-bearing view on the way out.
+func TestCachingSessionStore_Get_StaleEntryWithoutTenantID_FallsThrough(t *testing.T) {
+	t.Parallel()
+	mock := newMockCmdable()
+
+	// Hand-craft the legacy on-wire shape: the four pre-PR-3b fields, no tenantId.
+	legacy := struct {
+		ID                string `json:"id"`
+		SubjectID         string `json:"subjectId"`
+		AuthzEpochAtIssue int64  `json:"authzEpochAtIssue"`
+	}{ID: scsTestSID, SubjectID: scsTestSubj, AuthzEpochAtIssue: scsTestEpoch}
+	payload, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+
+	inner := &fakeSessionStore{view: newTestView()} // inner carries the correct tenant
+	store := newTestCachingStore(t, inner, mock)
+
+	got, err := store.Get(context.Background(), scsTestSID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, scsTestTenantID, got.TenantID,
+		"stale tenant-less cache entry must fall through to inner, which carries the correct tenant")
+	assert.Equal(t, int64(1), inner.getCalls.Load(),
+		"the empty-tenant cache entry must NOT satisfy the hit; inner.Get must run exactly once")
 }
 
 // TestCachingSessionStore_Get_CacheMiss_PrimesCache — first Get misses the
@@ -271,7 +317,7 @@ func TestCachingSessionStore_Create_DoesNotTouchCache(t *testing.T) {
 	store := newTestCachingStore(t, inner, mock)
 
 	sess := &session.Session{ID: scsTestSID, SubjectID: scsTestSubj, JTI: "jti-x", AuthzEpochAtIssue: scsTestEpoch}
-	require.NoError(t, store.Create(context.Background(), sess))
+	require.NoError(t, store.Create(context.Background(), scsTestTenantID, sess))
 	assert.Equal(t, int64(1), inner.createCalls.Load())
 	if args := inner.lastCreate.Load(); assert.NotNil(t, args, "lastCreate must be set") {
 		assert.Equal(t, scsTestSID, args.sess.ID, "Create must delegate exact sess")

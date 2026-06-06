@@ -43,6 +43,22 @@ type ScopeOption = scanner.Option
 // the rule ID.
 type Diagnostic = scanner.Diagnostic
 
+// diagAt constructs a located Diagnostic anchored to rel:line. Every rule
+// violation that has a representative source position MUST go through diagAt (or
+// [diagFile]) so [Report] renders a clickable "<rel>:<line>:" prefix instead of
+// degrading to ":0:". rel is the module-relative slash path; line is 1-based.
+func diagAt(rel string, line int, msg string) Diagnostic {
+	return Diagnostic{Rel: rel, Line: line, Message: msg}
+}
+
+// diagFile constructs a file-anchored Diagnostic for a violation that has no
+// finer position than the file itself — e.g. a parse failure where no AST node
+// exists to anchor to. It pins Line to 1 (the file head) so the report stays
+// clickable; rel must still identify the offending file.
+func diagFile(rel, msg string) Diagnostic {
+	return diagAt(rel, 1, msg)
+}
+
 // ModuleScope creates a Scope rooted at modRoot that walks the entire module,
 // skipping the default directory set: vendor, testdata, worktrees, generated,
 // .git, node_modules.

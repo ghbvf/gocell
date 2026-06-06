@@ -19,16 +19,16 @@
 //	      entanglement that motivated the descent.
 //
 // Refs: M0-FOUNDATION (kernel poolstats isolation)
+//
+// Note: poolstatsForbiddenImport, poolstatsCanonicalDir, scanPoolstatsNonStdlibImports,
+// and isPoolstatsStdlibImport are defined in kernel_poolstats_location.go
+// (non-test file) anchored to PlatformModulePath.
 package archtest
 
 import (
-	"strings"
 	"testing"
-)
 
-const (
-	poolstatsForbiddenImport = "github.com/ghbvf/gocell/runtime/observability/poolstats"
-	poolstatsCanonicalDir    = "kernel/observability/poolstats"
+	"github.com/stretchr/testify/require"
 )
 
 // TestKERNEL_POOLSTATS_LOCATION_01a_NoLegacyImport walks every .go file in
@@ -41,7 +41,7 @@ func TestKERNEL_POOLSTATS_LOCATION_01a_NoLegacyImport(t *testing.T) {
 		RuleID:    "KERNEL-POOLSTATS-LOCATION-01a",
 		Forbidden: []string{poolstatsForbiddenImport},
 		AllowRels: []string{"tools/archtest/kernel_poolstats_location_test.go"},
-		Hint:      `descend to "github.com/ghbvf/gocell/` + poolstatsCanonicalDir + `"`,
+		Hint:      `descend to "` + PlatformModulePath + "/" + poolstatsCanonicalDir + `"`,
 	}.Run(t, ModuleScope(root, IncludeTests()))
 }
 
@@ -60,38 +60,29 @@ func TestKERNEL_POOLSTATS_LOCATION_01b_ContractIsImportZero(t *testing.T) {
 	root := findModuleRoot(t)
 
 	scope := DirsScope(root, []string{poolstatsCanonicalDir})
-	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
-		for _, file := range p.Files {
-			for _, imp := range file.Imports {
-				if imp.Path == nil {
-					continue
-				}
-				imported := strings.Trim(imp.Path.Value, `"`)
-				if isPoolstatsStdlibImport(imported) {
-					continue
-				}
-				ds = append(ds, Diagnostic{
-					Rel:     p.Rel(file),
-					Line:    p.Fset.Position(imp.Path.Pos()).Line,
-					Message: `non-stdlib import "` + imported + `" — pool-stats contract must remain import-zero`,
-				})
-			}
-		}
-		return ds
-	})
+	diags := Run(t, AST(scope), scanPoolstatsNonStdlibImports)
 
 	Report(t, "KERNEL-POOLSTATS-LOCATION-01b", diags)
 }
 
-// isPoolstatsStdlibImport returns true when imported has no domain segment —
-// i.e. its first slash-delimited segment contains no '.'. Go stdlib packages
-// like "context", "go/ast", "encoding/json" all satisfy this; module-style
-// paths like "github.com/x/y" or "gopkg.in/yaml.v3" do not.
-func isPoolstatsStdlibImport(imported string) bool {
-	first := imported
-	if i := strings.Index(imported, "/"); i >= 0 {
-		first = imported[:i]
-	}
-	return !strings.Contains(first, ".")
+// INVARIANT: KERNEL-POOLSTATS-LOCATION-01b
+//
+// TestKERNEL_POOLSTATS_LOCATION_01b_ScannerDetectsViolation loads the
+// fixture package tools/archtest/internal/poolstatsfixture/violation and
+// asserts that scanPoolstatsNonStdlibImports detects the non-stdlib import
+// as a violation.
+//
+// Per ai-robust.md §"real source AST capture": the fixture is a real Go
+// package loaded via packages.Load through the Fixture driver. Bypassing
+// this test requires modifying real source — a hand-crafted AST is
+// insufficient because the scanner inspects the actual import spec path.
+func TestKERNEL_POOLSTATS_LOCATION_01b_ScannerDetectsViolation(t *testing.T) {
+	t.Parallel()
+
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/poolstatsfixture/violation"}),
+		scanPoolstatsNonStdlibImports)
+
+	require.NotEmpty(t, diags,
+		"scanner must detect non-stdlib import in poolstatsfixture/violation")
 }

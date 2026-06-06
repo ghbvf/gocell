@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/tenant"
@@ -70,7 +71,8 @@ func newContractRBACHandler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	svc, err := NewService(roleRepo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(roleRepo, codec, slog.Default(), query.RunModeProd,
+		WithTxManager(outbox.DemoCellTxManager()))
 	if err != nil {
 		panic(err)
 	}

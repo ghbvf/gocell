@@ -286,7 +286,10 @@ type stubSessionStore struct {
 
 var _ session.Store = (*stubSessionStore)(nil)
 
-func (s *stubSessionStore) Create(_ context.Context, _ *session.Session) error { return nil }
+func (s *stubSessionStore) Create(_ context.Context, _ tenant.TenantID, _ *session.Session) error {
+	return nil
+}
+
 func (s *stubSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, errors.New("stubSessionStore: Get unused")
 }

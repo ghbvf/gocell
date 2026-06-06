@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
@@ -82,16 +83,16 @@ type pgSessionStoreWrapper struct {
 	t     testing.TB
 }
 
-func (w *pgSessionStoreWrapper) Create(ctx context.Context, s *session.Session) error {
+func (w *pgSessionStoreWrapper) Create(ctx context.Context, t tenant.TenantID, s *session.Session) error {
 	if s == nil {
-		return w.inner.Create(ctx, s)
+		return w.inner.Create(ctx, t, s)
 	}
 	// Ensure the referenced user row exists.
 	uid := upsertUser(w.t, w.pool, s.SubjectID)
 	// Build a copy of the session with the UUID as SubjectID so the FK is valid.
 	copy := *s
 	copy.SubjectID = uid.String()
-	return w.inner.Create(ctx, &copy)
+	return w.inner.Create(ctx, t, &copy)
 }
 
 func (w *pgSessionStoreWrapper) Get(ctx context.Context, id string) (*session.ValidateView, error) {

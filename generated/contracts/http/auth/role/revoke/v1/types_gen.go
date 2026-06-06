@@ -16,8 +16,10 @@ import (
 
 // Request — http.auth.role.revoke.v1.request
 type Request struct {
-	UserID string `json:"userId"`
-	RoleID string `json:"roleId"`
+	// format: uuid
+	TenantID string `json:"tenantId"`
+	UserID   string `json:"userId"`
+	RoleID   string `json:"roleId"`
 }
 
 // Response — http.auth.role.revoke.v1.response

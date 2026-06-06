@@ -73,7 +73,6 @@ package archtest
 
 import (
 	"go/ast"
-	"go/token"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -185,27 +184,6 @@ func selectorMatches(sel *ast.SelectorExpr, xName, selName string) bool {
 		return false
 	}
 	return x.Name == xName
-}
-
-// collectFuncBodyRanges returns the body Pos/End pairs of every FuncDecl in
-// file whose Name matches one of allowedNames. Pairs are flat: even indices
-// are start positions, odd indices are end positions.
-func collectFuncBodyRanges(file *ast.File, allowedNames ...string) []token.Pos {
-	allowed := make(map[string]struct{}, len(allowedNames))
-	for _, n := range allowedNames {
-		allowed[n] = struct{}{}
-	}
-	var ranges []token.Pos
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-		if fn.Body == nil || fn.Name == nil {
-			return
-		}
-		if _, ok := allowed[fn.Name.Name]; !ok {
-			return
-		}
-		ranges = append(ranges, fn.Body.Lbrace, fn.Body.Rbrace)
-	})
-	return ranges
 }
 
 // onlyReturn returns the single *ast.ReturnStmt at depth-1 of fn.Body.

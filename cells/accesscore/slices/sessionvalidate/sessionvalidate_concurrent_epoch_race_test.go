@@ -38,6 +38,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -73,7 +74,7 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), testTenantID, initialUser))
 
 	// Seed an active session with AuthzEpochAtIssue=1 — matches user.epoch=1.
-	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
+	require.NoError(t, sessionStore.Create(context.Background(), testTenantID, &session.Session{
 		ID:                sessionID,
 		SubjectID:         userID,
 		JTI:               "race-jti-" + sessionID,
@@ -82,7 +83,8 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 		ExpiresAt:         clock.Real().Now().Add(time.Hour),
 	}))
 
-	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default())
+	svc, err := NewService(testVerifier, sessionStore, userRepo, slog.Default(),
+		WithTxManager(outbox.DemoCellTxManager()))
 	require.NoError(t, err)
 
 	// Issue a token bound to the session.
