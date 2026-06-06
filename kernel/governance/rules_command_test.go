@@ -121,7 +121,8 @@ func TestCOMMANDCONTRACTSCHEMAREF01_MissingBoth(t *testing.T) {
 			t.Errorf("results[%d]: finding must carry non-empty Fix guidance", i)
 		}
 	}
-	// First finding should be for request, second for response (iteration order).
+	// Request finding comes first: the rule body checks request before response
+	// (fixed field order, not map iteration).
 	if results[0].Field != "schemaRefs.request" {
 		t.Errorf("results[0]: expected field %q, got %q", "schemaRefs.request", results[0].Field)
 	}
