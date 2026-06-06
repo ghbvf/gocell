@@ -30,6 +30,31 @@ func TestAttributeSource_Valid(t *testing.T) {
 	}
 }
 
+func TestAttributeSource_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		src     abac.AttributeSource
+		wantErr bool
+	}{
+		{"zero invalid", 0, true},
+		{"SourceSubject valid", abac.SourceSubject, false},
+		{"SourceResource valid", abac.SourceResource, false},
+		{"SourceEnvironment valid", abac.SourceEnvironment, false},
+		{"out of range invalid", abac.AttributeSource(99), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.src.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("AttributeSource(%d).Validate() error = %v, wantErr %v", tc.src, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestAttributeSource_String(t *testing.T) {
 	t.Parallel()
 

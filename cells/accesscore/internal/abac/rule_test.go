@@ -5,6 +5,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/abac"
 	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 func TestRule_Validate(t *testing.T) {
@@ -96,7 +97,7 @@ func TestRule_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "deny rule with obligations valid (obligation validation deferred to caller)",
+			name: "deny rule with valid obligations",
 			rule: abac.Rule{
 				ID:         "deny-rule",
 				Name:       "Deny sensitive",
@@ -104,6 +105,16 @@ func TestRule_Validate(t *testing.T) {
 				Conditions: []abac.Condition{goodCond},
 			},
 			wantErr: false,
+		},
+		{
+			name: "invalid Obligations propagates",
+			rule: abac.Rule{
+				ID:          "rule-x",
+				Name:        "Test",
+				Effect:      authz.EffectAllow,
+				Obligations: authz.Obligations{RowScope: tenant.RowScope(99)},
+			},
+			wantErr: true,
 		},
 	}
 

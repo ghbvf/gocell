@@ -53,9 +53,12 @@ func (fm FieldMask) Validate() error {
 // Two obligation axes are modeled:
 //
 //   - RowScope: the row-visibility predicate the PEP must apply to list/get
-//     queries. Zero value (RowScope unset) is allowed here — it means "the
-//     policy engine will derive a default in PR-5". If non-zero, it must be a
-//     valid tenant.RowScope value.
+//     queries. A zero RowScope is valid here — it means "this policy does not
+//     itself constrain row scope" (the policy obligation is absent). The
+//     *effective* row scope for a request is resolved by the PR-7 evaluator,
+//     which combines all policy obligations with the principal→RowScope
+//     derivation (PR-5). Only a non-zero RowScope carries an explicit
+//     obligation; it must be a valid tenant.RowScope value.
 //
 //   - FieldMask: the set of columns to mask in the response. An empty FieldMask
 //     is valid and means "identity projection / no masking".
@@ -63,8 +66,11 @@ func (fm FieldMask) Validate() error {
 // ref: XACML-3.0 §3.5 — obligations are MANDATORY; advice is OPTIONAL.
 // GoCell only models mandatory obligations in this type.
 type Obligations struct {
-	// RowScope is the row-visibility obligation. Zero value is allowed (engine
-	// will derive a default in PR-5); non-zero must be Valid().
+	// RowScope is the row-visibility obligation. A zero value is valid and
+	// means "this policy does not impose a row-scope constraint"; the PR-7
+	// evaluator resolves the effective scope from all applicable obligations
+	// combined with the principal→RowScope derivation (PR-5). A non-zero
+	// value must pass tenant.RowScope.Validate().
 	RowScope tenant.RowScope
 	// FieldMask specifies which response columns to mask. An empty FieldMask
 	// is valid (no masking required).
@@ -72,7 +78,8 @@ type Obligations struct {
 }
 
 // Validate returns an error if any obligation field is in an invalid state.
-// A zero RowScope is valid (zero = "not yet bound", engine will derive in PR-5).
+// A zero RowScope is valid (zero = "this policy does not impose a row-scope
+// constraint"; the PR-7 evaluator resolves the effective scope).
 // A non-zero RowScope must pass tenant.RowScope.Validate().
 func (o Obligations) Validate() error {
 	if o.RowScope != 0 {

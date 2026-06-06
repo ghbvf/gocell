@@ -34,10 +34,17 @@
 // # Deferred PR-7 Downstream Caller-Allowlist
 //
 // The downstream funnel half — a caller-allowlist restricting Allow()/Deny() to
-// the PDP engine (authorizationdecide) only — lands in PR-7 (#1345) when a
-// production producer first exists; today there is no production caller so an
-// allowlist would be vacuous. The upstream Hard (sealed fields → literal forge
-// impossible) is achieved here.
+// only the PDP evaluation engine (authorizationdecide) — lands in PR-7
+// (tracking issue: gh #1345) when a production producer first exists; today
+// there is no production caller so an allowlist would be vacuous. The upstream
+// Hard (sealed fields → literal forge impossible) is achieved here.
+//
+// Per ai-robust.md §"Funnel 双向锁评级": a Medium-upstream → Hard-downstream
+// transitional funnel must name its Hard-ization tracker. That tracker is
+// gh #1345 (PR-7). Once PR-7 ships a production Allow()/Deny() caller, the
+// companion archtest in tools/archtest/authz_decision_sealed_test.go must be
+// extended with an AST caller-allowlist guard (only the authorizationdecide
+// engine may call Allow() or Deny()).
 //
 // # Combining Algorithm
 //

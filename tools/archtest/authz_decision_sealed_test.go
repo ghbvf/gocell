@@ -1,5 +1,6 @@
 // authz_decision_sealed_test.go — reflect schema freeze for the sealed
-// authz.Decision type (#1344 PR-6).
+// authz.Decision type and the open obligation types Obligations/FieldMask
+// (#1344 PR-6).
 //
 //   - INVARIANT: AUTHZ-DECISION-SEALED-FIELD-FROZEN-01
 //
@@ -10,15 +11,24 @@
 // is a Go compile error — a P0 authz-bypass vector (business code forging an
 // Allow verdict) is closed at the type-system level.
 //
-// This archtest freezes the field shape of Decision against in-package drift
-// that the Go type system allows but which would break the seal:
+// authz.Obligations and authz.FieldMask carry the PEP-enforcement obligations
+// returned by a Decision. Their fields ARE EXPORTED (PEPs must read them), so
+// the sealed-construction protection does not apply. Instead, a reflect schema
+// freeze prevents field-set drift that would silently change the obligation
+// contract without updating all PEP consumers.
 //
-//   - Any field being exported (PkgPath == "") re-opens outside-package literal
-//     construction → authz-bypass becomes possible.
-//   - A field being renamed breaks downstream callers that rely on the logical
-//     shape (Effect/obligations/reason semantics).
+// This archtest freezes the field shape of Decision, Obligations, and FieldMask
+// against in-package drift that the Go type system allows but which would break
+// the contracts:
+//
+//   - Any Decision field being exported (PkgPath == "") re-opens outside-package
+//     literal construction → authz-bypass becomes possible.
+//   - A Decision field being renamed breaks downstream callers that rely on the
+//     logical shape (Effect/obligations/reason semantics).
+//   - An Obligations or FieldMask field being added, removed, or renamed changes
+//     the PEP obligation contract without any compiler warning to consumers.
 //   - A field being added or removed changes the struct size and may introduce
-//     new forge vectors.
+//     new forge vectors (Decision) or silent gaps in obligation enforcement.
 //
 // # AI-robust Rating ("reflect schema freeze" Hard 范本目录)
 //
@@ -29,24 +39,36 @@
 // checkpoint. This closes in-package drift (rename / reorder / retag / export a
 // field) that the Go type system does not prevent on its own.
 //
-//   - Upstream Hard: unexported fields make Decision{Effect:EffectAllow} a compile
-//     error outside pkg/authz (sealed construction 范本, ai-robust.md). This test
-//     verifies the seal has not been broken by an in-package edit.
-//   - Downstream caller-allowlist: Allow()/Deny() today have zero production callers;
-//     the allowlist lands in PR-7 (#1345). This is explicitly deferred as stated in
-//     pkg/authz/doc.go.
+//   - Upstream Hard (Decision): unexported fields make Decision{Effect:EffectAllow}
+//     a compile error outside pkg/authz (sealed construction 范本, ai-robust.md).
+//     This test verifies the seal has not been broken by an in-package edit.
+//   - Upstream: Obligations and FieldMask have EXPORTED fields (PEPs must read
+//     them) — sealed construction does not apply. The reflect freeze here is the
+//     sole drift guard for those two types.
+//   - Downstream caller-allowlist: Allow()/Deny() today have zero production
+//     callers; the allowlist lands in PR-7 (#1345, gh issue tracking). This is
+//     explicitly deferred as stated in pkg/authz/doc.go per ai-robust.md
+//     §"Funnel 双向锁评级": the Medium-upstream → Hard-downstream transitional
+//     funnel must name its Hard-ization tracker, which is gh #1345 (PR-7).
+//     Once PR-7 ships a production Allow()/Deny() caller, the companion archtest
+//     must be extended with an AST caller-allowlist guard (only the
+//     authorizationdecide engine may call Allow() or Deny()).
 //
 // # Tool Blind Spots (charter §"强制盲区自检")
 //
-//   - This test uses reflect on the *imported* pkg/authz.Decision type. Any
-//     in-package drift in the worktree will be captured because Go recompiles
-//     the package before running tests.
+//   - This test uses reflect on the *imported* pkg/authz types. Any in-package
+//     drift in the worktree will be captured because Go recompiles the package
+//     before running tests.
 //   - Type aliases (type D = authz.Decision in another package) are NOT sealed by
 //     this test — but such an alias would still have all unexported fields because
 //     Go type aliases share the underlying field visibility. The alias itself cannot
 //     be constructed with field values from outside the package.
 //   - The "zero-value fail-closed" property (Decision{}.IsAllow() == false) is
 //     tested in pkg/authz/decision_test.go; this file only locks the struct shape.
+//   - For Obligations and FieldMask the freeze detects field-set drift but does
+//     NOT enforce any construction constraint (those types have exported fields
+//     and are intentionally constructable by PEPs). PEP enforcement correctness
+//     is the caller's responsibility.
 //
 // Reverse self-check: a GREEN fixture (correct shape) and a RED fixture (exported
 // field) are both verified inline below.
@@ -283,4 +305,144 @@ func TestAuthzDecisionSealedFieldFrozen01_ConstructorSet(t *testing.T) {
 		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 constructor: Allow() return type = %s, want authz.Decision",
 		allowType,
 	)
+}
+
+// ---- Companion reflect schema freezes for Obligations and FieldMask ----
+//
+// These companion tests lock the field shapes of authz.Obligations and
+// authz.FieldMask. Unlike Decision, both types have EXPORTED fields (PEPs
+// must read and construct them), so the sealed-construction protection does not
+// apply. The reflect freeze is the sole guard against in-package field-set
+// drift that would silently change the PEP obligation contract.
+//
+// Blind spot: these tests do NOT enforce construction constraints. A PEP can
+// freely construct Obligations{} or FieldMask{} literals — that is intentional
+// and correct; Validate() is the runtime enforcement gate.
+
+// frozenObligationsField mirrors frozenDecisionField for authz.Obligations.
+type frozenObligationsField struct {
+	name     string
+	typeName string // reflect.Type.String()
+	exported bool   // PkgPath == "" → exported
+}
+
+// frozenObligationsFields is the expected exact field tuple for authz.Obligations.
+// Any deviation (rename / reorder / add / remove / export-flip) will fail CI.
+//
+// Fields (in Go struct declaration order):
+//
+//	RowScope  tenant.RowScope  — exported: the row-visibility obligation enum
+//	FieldMask authz.FieldMask  — exported: the column-masking obligation
+var frozenObligationsFields = []frozenObligationsField{
+	{name: "RowScope", typeName: "tenant.RowScope", exported: true},
+	{name: "FieldMask", typeName: "authz.FieldMask", exported: true},
+}
+
+// TestAuthzObligationsFieldsFrozen locks the field shape of authz.Obligations.
+//
+// Three axes (mirroring Decision freeze):
+//
+//  1. Exact field count — adding/removing fields fails immediately.
+//  2. Per-field identity — name + type + exported status frozen.
+//  3. All fields exported — PkgPath == "" for every field; any unexported field
+//     would make PEP literal construction fail (they need to read the fields).
+func TestAuthzObligationsFieldsFrozen(t *testing.T) {
+	t.Parallel()
+
+	ot := reflect.TypeOf(authz.Obligations{})
+	require.Equal(t, reflect.Struct, ot.Kind(), "authz.Obligations must be a struct")
+
+	// Axis 1: exact field count.
+	require.Equal(t, len(frozenObligationsFields), ot.NumField(),
+		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): authz.Obligations NumField = %d, want %d "+
+			"(adding a field silently extends the obligation contract without updating PEP consumers; "+
+			"removing one drops an obligation axis; update frozenObligationsFields and pkg/authz/doc.go together)",
+		ot.NumField(), len(frozenObligationsFields),
+	)
+
+	for i, want := range frozenObligationsFields {
+		sf := ot.Field(i)
+
+		// Axis 2a: field name.
+		assert.Equal(t, want.name, sf.Name,
+			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): Obligations field[%d] name = %q, want %q",
+			i, sf.Name, want.name,
+		)
+
+		// Axis 2b: field type identity.
+		assert.Equal(t, want.typeName, sf.Type.String(),
+			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): Obligations.%s type = %q, want %q",
+			sf.Name, sf.Type.String(), want.typeName,
+		)
+
+		// Axis 3: all fields must be exported (PkgPath == "").
+		exported := sf.PkgPath == ""
+		assert.Equal(t, want.exported, exported,
+			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (Obligations): Obligations.%s exported = %v, want %v "+
+				"(unexported Obligations field would break PEP construction; re-export by uppercasing)",
+			sf.Name, exported, want.exported,
+		)
+	}
+}
+
+// frozenFieldMaskField mirrors frozenDecisionField for authz.FieldMask.
+type frozenFieldMaskField struct {
+	name     string
+	typeName string
+	exported bool
+}
+
+// frozenFieldMaskFields is the expected exact field tuple for authz.FieldMask.
+// Any deviation (rename / reorder / add / remove / export-flip) will fail CI.
+//
+// Fields (in Go struct declaration order):
+//
+//	Fields []string — exported: the ordered list of column names to mask
+var frozenFieldMaskFields = []frozenFieldMaskField{
+	{name: "Fields", typeName: "[]string", exported: true},
+}
+
+// TestAuthzFieldMaskFieldsFrozen locks the field shape of authz.FieldMask.
+//
+// Three axes (mirroring Decision and Obligations freezes):
+//
+//  1. Exact field count.
+//  2. Per-field identity — name + type + exported status frozen.
+//  3. All fields exported — PEPs read FieldMask.Fields directly.
+func TestAuthzFieldMaskFieldsFrozen(t *testing.T) {
+	t.Parallel()
+
+	ft := reflect.TypeOf(authz.FieldMask{})
+	require.Equal(t, reflect.Struct, ft.Kind(), "authz.FieldMask must be a struct")
+
+	// Axis 1: exact field count.
+	require.Equal(t, len(frozenFieldMaskFields), ft.NumField(),
+		"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): authz.FieldMask NumField = %d, want %d "+
+			"(adding a field changes the masking contract; update frozenFieldMaskFields and pkg/authz/doc.go together)",
+		ft.NumField(), len(frozenFieldMaskFields),
+	)
+
+	for i, want := range frozenFieldMaskFields {
+		sf := ft.Field(i)
+
+		// Axis 2a: field name.
+		assert.Equal(t, want.name, sf.Name,
+			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): FieldMask field[%d] name = %q, want %q",
+			i, sf.Name, want.name,
+		)
+
+		// Axis 2b: field type identity.
+		assert.Equal(t, want.typeName, sf.Type.String(),
+			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): FieldMask.%s type = %q, want %q",
+			sf.Name, sf.Type.String(), want.typeName,
+		)
+
+		// Axis 3: all fields must be exported.
+		exported := sf.PkgPath == ""
+		assert.Equal(t, want.exported, exported,
+			"AUTHZ-DECISION-SEALED-FIELD-FROZEN-01 (FieldMask): FieldMask.%s exported = %v, want %v "+
+				"(unexported FieldMask field would break PEP construction; re-export by uppercasing)",
+			sf.Name, exported, want.exported,
+		)
+	}
 }

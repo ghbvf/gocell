@@ -216,12 +216,18 @@ func TestPolicyRepository_SaveTenantMismatch(t *testing.T) {
 	assertKind(t, err, errcode.KindInvalid, "Save() tenant mismatch")
 }
 
+func makeTestPolicyWithFieldMask(policyID string, tid tenant.TenantID) *abac.Policy {
+	p := makeTestPolicy(policyID, tid)
+	p.Rules[0].Obligations.FieldMask.Fields = []string{"email", "phone"}
+	return p
+}
+
 func TestPolicyRepository_ReturnedCloneIsIndependent(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewPolicyRepository()
 	ctx := context.Background()
-	p := makeTestPolicy("policy-1", testTenant1)
+	p := makeTestPolicyWithFieldMask("policy-1", testTenant1)
 
 	if err := repo.Save(ctx, testTenant1, p); err != nil {
 		t.Fatalf("Save() unexpected error: %v", err)
@@ -232,9 +238,10 @@ func TestPolicyRepository_ReturnedCloneIsIndependent(t *testing.T) {
 		t.Fatalf("GetByID() unexpected error: %v", err)
 	}
 
-	// Mutate the returned policy
+	// Mutate the returned policy — top-level fields, rule fields, and FieldMask
 	got.Name = "mutated name"
 	got.Rules[0].Name = "mutated rule name"
+	got.Rules[0].Obligations.FieldMask.Fields[0] = "mutated_field"
 
 	// Re-get should still have original values
 	got2, err := repo.GetByID(ctx, testTenant1, "policy-1")
@@ -246,6 +253,13 @@ func TestPolicyRepository_ReturnedCloneIsIndependent(t *testing.T) {
 	}
 	if got2.Rules[0].Name == "mutated rule name" {
 		t.Errorf("Clone mutation leaked into store: Rules[0].Name = %q", got2.Rules[0].Name)
+	}
+	if len(got2.Rules[0].Obligations.FieldMask.Fields) == 0 {
+		t.Fatal("Clone has no FieldMask.Fields — store lost the data")
+	}
+	if got2.Rules[0].Obligations.FieldMask.Fields[0] == "mutated_field" {
+		t.Errorf("Clone mutation leaked into store: Rules[0].Obligations.FieldMask.Fields[0] = %q",
+			got2.Rules[0].Obligations.FieldMask.Fields[0])
 	}
 }
 
@@ -313,19 +327,69 @@ func TestPolicyRepository_ConcurrentSaveGet(t *testing.T) {
 	repo := mem.NewPolicyRepository()
 	ctx := context.Background()
 
-	var wg sync.WaitGroup
+	var (
+		wg         sync.WaitGroup
+		mu         sync.Mutex
+		saveErrs   []error
+		getErrs    []error
+		listErrs   []error
+		deleteErrs []error
+	)
 	const goroutines = 20
 
-	for range goroutines {
+	for i := range goroutines {
 		wg.Add(1)
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
 			policyID := "policy-concurrent"
 			p := makeTestPolicy(policyID, testTenant1)
-			_ = repo.Save(ctx, testTenant1, p)
-			_, _ = repo.GetByID(ctx, testTenant1, policyID)
-			_, _ = repo.ListByTenant(ctx, testTenant1)
-		}()
+
+			if err := repo.Save(ctx, testTenant1, p); err != nil {
+				mu.Lock()
+				saveErrs = append(saveErrs, err)
+				mu.Unlock()
+			}
+			if _, err := repo.GetByID(ctx, testTenant1, policyID); err != nil {
+				// Not-found is acceptable when a concurrent Delete races ahead
+				var ec *errcode.Error
+				if !errors.As(err, &ec) || ec.Kind != errcode.KindNotFound {
+					mu.Lock()
+					getErrs = append(getErrs, err)
+					mu.Unlock()
+				}
+			}
+			if _, err := repo.ListByTenant(ctx, testTenant1); err != nil {
+				mu.Lock()
+				listErrs = append(listErrs, err)
+				mu.Unlock()
+			}
+			// Interleave Delete on even goroutines to exercise concurrent write paths
+			if idx%2 == 0 {
+				if err := repo.Delete(ctx, testTenant1, policyID); err != nil {
+					// Not-found is acceptable when another goroutine already deleted it
+					var ec *errcode.Error
+					if !errors.As(err, &ec) || ec.Kind != errcode.KindNotFound {
+						mu.Lock()
+						deleteErrs = append(deleteErrs, err)
+						mu.Unlock()
+					}
+				}
+			}
+		}(i)
 	}
 	wg.Wait()
+
+	// No unexpected infrastructure errors from any operation
+	if len(saveErrs) > 0 {
+		t.Errorf("concurrent Save() produced %d unexpected error(s): first=%v", len(saveErrs), saveErrs[0])
+	}
+	if len(getErrs) > 0 {
+		t.Errorf("concurrent GetByID() produced %d unexpected error(s): first=%v", len(getErrs), getErrs[0])
+	}
+	if len(listErrs) > 0 {
+		t.Errorf("concurrent ListByTenant() produced %d unexpected error(s): first=%v", len(listErrs), listErrs[0])
+	}
+	if len(deleteErrs) > 0 {
+		t.Errorf("concurrent Delete() produced %d unexpected error(s): first=%v", len(deleteErrs), deleteErrs[0])
+	}
 }

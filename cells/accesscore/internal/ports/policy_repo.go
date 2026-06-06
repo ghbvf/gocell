@@ -33,8 +33,17 @@ type PolicyRepository interface {
 	// GetByID returns the policy identified by id within the tenant.
 	// Returns KindNotFound when the policy does not exist in t.
 	GetByID(ctx context.Context, t tenant.TenantID, id string) (*abac.Policy, error)
-	// ListByTenant returns all policies owned by the tenant. Returns an empty
-	// slice (not nil) when the tenant has no policies.
+	// ListByTenant returns ALL policies owned by the tenant in a single call.
+	// Returns an empty slice (not nil) when the tenant has no policies.
+	//
+	// No pagination is provided by design: per-tenant policy count is bounded by
+	// management-plane cardinality (policies are authored by administrators, not
+	// generated at data-plane scale). The evaluation engine (PR-7) performs a
+	// full-load of all policies for each authorization decision; a paginated
+	// interface would require multiple round-trips or a cursor-iteration wrapper
+	// in hot-path code, adding complexity with no practical benefit given the
+	// expected cardinality. This is not an HTTP list endpoint — it is an internal
+	// eval-time read path that must return a complete, consistent snapshot.
 	ListByTenant(ctx context.Context, t tenant.TenantID) ([]*abac.Policy, error)
 	// Delete removes the policy identified by id from the tenant. Returns
 	// KindNotFound when the policy does not exist in t.

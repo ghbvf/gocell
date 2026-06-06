@@ -40,11 +40,23 @@ func Allow(o Obligations) Decision {
 	return Decision{effect: EffectAllow, obligations: o}
 }
 
-// Deny returns a fail-closed deny Decision. reason is an opaque, server-side
-// diagnostic string intended for logging (per observability rules). The
-// framework does not interpret its structure and it intentionally does NOT
-// carry accesscore's PolicyID type — keeping pkg/authz free of accesscore
-// dependencies.
+// Deny returns a fail-closed deny Decision.
+//
+// reason MUST be a programmer-authored, static/descriptive string — runtime
+// business data (subject IDs, resource IDs, policy IDs, etc.) must NOT be
+// embedded in reason. Use the errcode Internal channel for runtime diagnostics.
+// This mirrors the errcode.Message const-literal discipline: reason flows to
+// slog and must not carry PII or user-controlled content.
+//
+// An empty reason is discouraged. A fail-closed deny should carry a brief
+// diagnostic string (e.g. "policy evaluation: no matching allow rule") per
+// observability rules — it aids on-call triage without exposing sensitive data.
+// Deny("") is accepted (no behavior change) but callers are expected to provide
+// a meaningful static string.
+//
+// The framework does not interpret the reason's structure, and reason
+// intentionally does NOT carry accesscore's PolicyID type — keeping pkg/authz
+// free of accesscore dependencies.
 func Deny(reason string) Decision {
 	return Decision{effect: EffectDeny, reason: reason}
 }
@@ -63,7 +75,12 @@ func (d Decision) Obligations() Obligations {
 }
 
 // Reason returns the opaque server-side diagnostic string supplied to Deny().
-// Empty string on an Allow Decision. Intended for logging only.
+// Empty string on an Allow Decision. Intended for slog/logging only.
+//
+// Callers MUST NOT surface this string to external clients or embed it in wire
+// payloads — it is a server-side diagnostic aid only (per observability rules).
+// For runtime context (IDs, counts), attach them as slog attributes separately
+// rather than concatenating into reason.
 func (d Decision) Reason() string {
 	return d.reason
 }

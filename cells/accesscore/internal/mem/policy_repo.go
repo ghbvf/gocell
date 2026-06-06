@@ -2,7 +2,6 @@ package mem
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/abac"
@@ -142,9 +141,9 @@ func (r *PolicyRepository) tenantPolicies(t tenant.TenantID) map[string]*abac.Po
 
 // notFound returns a KindNotFound error for the given policy id.
 func (r *PolicyRepository) notFound(id string) error {
-	return errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "policy not found",
+	return errcode.New(errcode.KindNotFound, errcode.ErrAuthPolicyNotFound, "policy not found",
 		errcode.WithCategory(errcode.CategoryDomain),
-		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("policy_id=%s", id))))
+		errcode.WithInternal(errcode.InternalAttr("policy_id", id)))
 }
 
 // clonePolicy returns a deep copy of p so that mutations to the returned
@@ -164,6 +163,11 @@ func clonePolicy(p *abac.Policy) *abac.Policy {
 				}
 				rClone.Conditions[j] = cClone
 			}
+		}
+		if r.Obligations.FieldMask.Fields != nil {
+			fields := make([]string, len(r.Obligations.FieldMask.Fields))
+			copy(fields, r.Obligations.FieldMask.Fields)
+			rClone.Obligations.FieldMask.Fields = fields
 		}
 		clone.Rules[i] = rClone
 	}

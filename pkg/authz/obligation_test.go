@@ -98,7 +98,7 @@ func TestObligations_Validate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "zero Obligations is valid (engine derives default in PR-5)",
+			name:    "zero Obligations is valid (policy does not impose a row-scope constraint)",
 			o:       Obligations{},
 			wantErr: false,
 		},
@@ -136,6 +136,14 @@ func TestObligations_Validate(t *testing.T) {
 			name:    "RowScope zero is explicitly allowed (not validated when zero)",
 			o:       Obligations{RowScope: 0, FieldMask: FieldMask{Fields: []string{"col1", "col2"}}},
 			wantErr: false,
+		},
+		{
+			name: "non-zero valid RowScope with invalid FieldMask returns FieldMask error",
+			o: Obligations{
+				RowScope:  tenant.RowScopeAll,
+				FieldMask: FieldMask{Fields: []string{""}},
+			},
+			wantErr: true,
 		},
 	}
 	for _, tc := range tests {
