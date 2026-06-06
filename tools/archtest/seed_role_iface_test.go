@@ -141,10 +141,35 @@ import _ "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	}
 }
 
+// TestSEED_ROLE_IFACE_01_StructuredLocation verifies each emitted Diagnostic
+// carries a real Rel + 1-based Line so Report renders "<rel>:<line>", not the
+// ":0:" garbage an empty-Rel Diagnostic{Message} produces (PR #1687 review C1
+// regression guard).
+func TestSEED_ROLE_IFACE_01_StructuredLocation(t *testing.T) {
+	t.Parallel()
+	src := `package p
+import "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+func badParam(repo *mem.RoleRepository) {}
+`
+	diags := scanSrcForViolations(t, src, "cells/accesscore/some_prod.go")
+	if len(diags) == 0 {
+		t.Fatalf("expected ≥1 diagnostic for *mem.RoleRepository param; got 0")
+	}
+	for _, d := range diags {
+		if d.Rel == "" {
+			t.Errorf("diagnostic must carry Rel (got empty): %+v", d)
+		}
+		if d.Line <= 0 {
+			t.Errorf("diagnostic must carry a 1-based Line (got %d): %+v", d.Line, d)
+		}
+	}
+}
+
 // scanSrcForViolations is a test helper that writes src to a temp file and
 // runs scanForMemRoleRepositoryUsage (from seed_role_iface.go) on it with the
-// given relative path.
-func scanSrcForViolations(t *testing.T, src, rel string) []string {
+// given relative path. It returns the structured Diagnostics so callers can
+// assert both presence and the Rel/Line location contract.
+func scanSrcForViolations(t *testing.T, src, rel string) []Diagnostic {
 	t.Helper()
 	tmp, err := os.CreateTemp(t.TempDir(), "seed_role_iface_*.go")
 	if err != nil {

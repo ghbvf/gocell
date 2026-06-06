@@ -104,17 +104,22 @@ func CheckSeedRoleIface01(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 		if strings.Contains(rel, "/cells/accesscore/internal/mem/") {
 			continue
 		}
-		for _, v := range scanForMemRoleRepositoryUsage(token.NewFileSet(), f, rel) {
-			diags = append(diags, Diagnostic{Message: "SEED-ROLE-IFACE-01: " + v})
-		}
+		// scanForMemRoleRepositoryUsage already returns structured
+		// Diagnostics carrying Rel/Line; Report prepends the rule id, so
+		// neither the id nor the location is baked into Message here.
+		diags = append(diags, scanForMemRoleRepositoryUsage(token.NewFileSet(), f, rel)...)
 	}
 	return diags
 }
 
-// scanForMemRoleRepositoryUsage returns violation strings for the file at
-// path when it (a) imports cells/accesscore/internal/mem and (b) references
-// mem.RoleRepository via any selector expression OR type alias.
-func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []string {
+// scanForMemRoleRepositoryUsage returns one structured Diagnostic per violation
+// in the file at path when it (a) imports cells/accesscore/internal/mem and
+// (b) references mem.RoleRepository via any selector expression OR type alias.
+// Each Diagnostic carries the repo-relative path (Rel) and 1-based Line so
+// Report renders an actionable "<rel>:<line>" location; the rule-id prefix is
+// added by Report, never baked into Message. Final dedup + ordering is handled
+// once by Report's Canonical pass, so this scanner does not deduplicate.
+func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []Diagnostic {
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil
@@ -129,7 +134,7 @@ func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []stri
 		return nil // not imported, or blank import (no selector usage)
 	}
 
-	var violations []string
+	var diags []Diagnostic
 
 	// Scan selector expressions: mem.RoleRepository (in any AST position).
 	scanner.EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
@@ -140,31 +145,23 @@ func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []stri
 		if sel.Sel.Name != "RoleRepository" {
 			return
 		}
-		pos := fset.Position(sel.Pos())
-		violations = append(violations, fmt.Sprintf(
-			"%s:%d: names %s.RoleRepository (concrete mem type) — production code "+
-				"must use ports.RoleRepository interface; SeedRole is test-only and "+
-				"not on the interface",
-			rel, pos.Line, alias,
-		))
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: fset.Position(sel.Pos()).Line,
+			Message: fmt.Sprintf(
+				"names %s.RoleRepository (concrete mem type) — production code "+
+					"must use ports.RoleRepository interface; SeedRole is test-only "+
+					"and not on the interface", alias),
+		})
 	})
 
 	// Scan type alias declarations: `type X = mem.RoleRepository` or
 	// `type X = *mem.RoleRepository`. These are *ast.TypeSpec nodes with
 	// Assign != token.NoPos; their Type is a SelectorExpr (or a StarExpr
 	// wrapping one) whose base Ident matches the mem package alias.
-	violations = append(violations, scanForMemRoleRepositoryAliases(fset, f, rel, alias)...)
+	diags = append(diags, scanForMemRoleRepositoryAliases(fset, f, rel, alias)...)
 
-	// Deduplicate.
-	seen := make(map[string]bool, len(violations))
-	out := violations[:0]
-	for _, v := range violations {
-		if !seen[v] {
-			seen[v] = true
-			out = append(out, v)
-		}
-	}
-	return out
+	return diags
 }
 
 // scanForMemRoleRepositoryAliases detects type alias declarations of the form
@@ -174,22 +171,24 @@ func scanForMemRoleRepositoryUsage(fset *token.FileSet, path, rel string) []stri
 // AST shape: *ast.TypeSpec with Assign != token.NoPos and Type being either:
 //   - *ast.SelectorExpr{X: Ident(alias), Sel: "RoleRepository"}
 //   - *ast.StarExpr{X: *ast.SelectorExpr{X: Ident(alias), Sel: "RoleRepository"}}
-func scanForMemRoleRepositoryAliases(fset *token.FileSet, f *ast.File, rel, alias string) []string {
-	var violations []string
+func scanForMemRoleRepositoryAliases(fset *token.FileSet, f *ast.File, rel, alias string) []Diagnostic {
+	var diags []Diagnostic
 	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Assign == token.NoPos {
 			return // not a type alias
 		}
 		if isMemRoleRepositoryExpr(ts.Type, alias) {
-			pos := fset.Position(ts.Pos())
-			violations = append(violations, fmt.Sprintf(
-				"%s:%d: type alias %s = %s.RoleRepository (concrete mem type) — "+
-					"production code must use ports.RoleRepository interface",
-				rel, pos.Line, ts.Name.Name, alias,
-			))
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: fset.Position(ts.Pos()).Line,
+				Message: fmt.Sprintf(
+					"type alias %s = %s.RoleRepository (concrete mem type) — "+
+						"production code must use ports.RoleRepository interface",
+					ts.Name.Name, alias),
+			})
 		}
 	})
-	return violations
+	return diags
 }
 
 // isMemRoleRepositoryExpr reports whether expr is `alias.RoleRepository` or

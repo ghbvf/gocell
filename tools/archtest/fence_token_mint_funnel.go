@@ -50,9 +50,7 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
-	"sort"
 	"strings"
 	"testing"
 
@@ -142,7 +140,7 @@ func CheckFenceTokenMintFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnost
 		"./examples/...",
 	}
 
-	var violations []string
+	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
@@ -152,21 +150,17 @@ func CheckFenceTokenMintFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnost
 			if isFenceTokenMintAllowlisted(rel) {
 				continue
 			}
-			violations = append(violations, scanFenceTokenMintRefs(p, file, rel)...)
+			diags = append(diags, scanFenceTokenMintRefs(p, file, rel)...)
 		}
 		return nil
 	})
 
-	sort.Strings(violations)
-
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Message: v})
-	}
+	// Report (via Canonical) dedups and orders diagnostics by
+	// (Rel, Line, Message); no manual sort needed here.
 	return diags
 }
 
-// scanFenceTokenMintRefs returns a violation string for EVERY reference to
+// scanFenceTokenMintRefs returns a structured Diagnostic for EVERY reference to
 // credentialfence.Mint in file — regardless of the syntactic shape that
 // references it. It walks all `*ast.SelectorExpr` nodes and resolves each via
 // ResolvePackageRef, so it catches the direct call (`credentialfence.Mint()`),
@@ -193,8 +187,8 @@ func CheckFenceTokenMintFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnost
 // used anywhere in this module, and a dot-import of an internal-style package
 // would itself be an anomaly), `//go:linkname`, and `unsafe`. These defeat any
 // static analysis and are out of scope for an archtest funnel.
-func scanFenceTokenMintRefs(p *Pass, file *ast.File, rel string) []string {
-	var out []string
+func scanFenceTokenMintRefs(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if sel.Sel == nil || sel.Sel.Name != fenceTokenMintFunc {
 			return
@@ -203,12 +197,12 @@ func scanFenceTokenMintRefs(p *Pass, file *ast.File, rel string) []string {
 		if !ok || pkgPath != fenceTokenPkgPath || name != fenceTokenMintFunc {
 			return
 		}
-		line := p.Fset.Position(sel.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: FENCE-TOKEN-MINT-FUNNEL-01: reference to credentialfence.Mint "+
-				"outside the funnel (direct call or function-value capture)",
-			rel, line,
-		))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: p.Fset.Position(sel.Pos()).Line,
+			Message: "reference to credentialfence.Mint outside the funnel " +
+				"(direct call or function-value capture)",
+		})
 	})
 	return out
 }
@@ -224,22 +218,32 @@ func scanFenceTokenMintRefs(p *Pass, file *ast.File, rel string) []string {
 func verifyFenceTokenMintRedFixture(t *testing.T, fixturePattern, label string, wantMin int) {
 	t.Helper()
 
-	var found int
+	var found []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
 		for _, file := range p.Files {
-			found += len(scanFenceTokenMintRefs(p, file, label))
+			found = append(found, scanFenceTokenMintRefs(p, file, label)...)
 		}
 		return nil
 	})
 
-	require.GreaterOrEqual(t, found, wantMin,
+	require.GreaterOrEqual(t, len(found), wantMin,
 		"RED fixture self-check FAILED: %s — expected ≥ %d violations, got %d. "+
 			"A shortfall means the scanner is NOT form-complete (e.g. it only "+
 			"catches direct CallExpr and misses function-value capture / reflect "+
 			"arg forms), so a non-funnel package could construct a FenceToken "+
 			"undetected. Check scanFenceTokenMintRefs covers every reference shape.",
-		label, wantMin, found)
+		label, wantMin, len(found))
+
+	// Structured-location contract: every diagnostic must carry a real Rel +
+	// 1-based Line so Report renders "<rel>:<line>", not the ":0:" garbage an
+	// empty-Rel Diagnostic{Message} produces (PR #1687 review C1 regression guard).
+	for _, d := range found {
+		require.NotEmpty(t, d.Rel,
+			"%s: diagnostic must carry Rel (got empty): %+v", label, d)
+		require.Greater(t, d.Line, 0,
+			"%s: diagnostic must carry a 1-based Line (got %d): %+v", label, d.Line, d)
+	}
 }
