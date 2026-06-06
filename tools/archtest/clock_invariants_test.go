@@ -372,16 +372,6 @@ func typeHasResetAt(t types.Type) bool {
 	return isTimeTimeType(param)
 }
 
-// isTimeDurationType reports whether t is time.Duration.
-func isTimeDurationType(t types.Type) bool {
-	named, ok := t.(*types.Named)
-	if !ok {
-		return false
-	}
-	obj := named.Obj()
-	return obj.Pkg() != nil && obj.Pkg().Path() == "time" && obj.Name() == "Duration"
-}
-
 // isTimeTimeType reports whether t is time.Time.
 func isTimeTimeType(t types.Type) bool {
 	named, ok := t.(*types.Named)
