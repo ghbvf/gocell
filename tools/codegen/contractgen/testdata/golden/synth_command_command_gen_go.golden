@@ -5,7 +5,9 @@ package do
 
 import (
 	"context"
+	"encoding/json"
 
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -88,4 +90,79 @@ func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Respon
 			"command.synth.do.v1 dispatch: registered handler has wrong type")
 	}
 	return h.HandleDo(ctx, req)
+}
+
+// Compile-assert that DispatchAsync matches the generic async-dispatch signature
+// the outbox relay routes command entries to (command.Relay-side
+// WithCommandDispatch). archtest COMMAND-ASYNC-DISPATCH-CALLER-01 locks the
+// relay's command-dispatch map values to this generated symbol; the assert keeps
+// the signature in lock-step with command.AsyncDispatchFunc.
+var _ command.AsyncDispatchFunc = DispatchAsync
+
+// DispatchAsync decodes a claimed command outbox.Entry, looks up the Handler
+// registered under DispatchID, and invokes it. It mirrors Dispatch but sources
+// the typed *Request from entry.Payload() (JSON) rather than
+// receiving it directly — the async outbox boundary is where a command crosses
+// from wire bytes back to a typed request (ADR §5 ④; JSON marshal happens at the
+// outbox boundary, leaving the synchronous D4 type-assert path unchanged).
+//
+// The relay drives this via Relay.WithCommandDispatch for entries whose
+// RoutingTopic equals DispatchID; it is not called from business code. The
+// entry's principal + observability identity is restored into ctx
+// (entry.RestoreContext) before the handler runs, mirroring the consumer
+// delivery path so the async handler sees the enqueuer's identity.
+//
+// The handler's *Response is intentionally discarded: an
+// async command has no in-process caller awaiting a reply, so only the error is
+// returned for the relay to settle (ack) or retry the entry.
+//
+// Request value-constraints declared in the contract request schema
+// (minLength/maxLength/required) are NOT validated here — the typed
+// *Request is the structural contract; untrusted-payload
+// value validation at the async command-entry boundary is the command-entry
+// validation funnel tracked as #1588 (ADR §5 / Amendment 2026-06-04).
+//
+// # Settle classification (relay)
+//
+// Deterministic framework errors — reg nil, routing-topic ≠ DispatchID (a
+// mis-wired dispatcher map), payload decode failure, no handler registered, or a
+// wrong-typed registered value — are wrapped with kout.NewPermanentError. None
+// can recover by retry, so the relay's handleFailedEntry routes them straight to
+// MarkDead instead of burning the retry budget (ADR §Amendment 2026-06-06 r2).
+// The handler's own business error is returned UNWRAPPED: it is transient by
+// default (relay → MarkRetry until the attempt budget is exhausted); a handler
+// that knows a failure is unrecoverable can itself return a kout.PermanentError.
+// Untrusted-payload value-validation classification stays deferred to #1588.
+func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry) error {
+	if reg == nil {
+		return kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.synth.do.v1 dispatch async: registry must not be nil"))
+	}
+	// Trust-boundary self-check: the relay routes by dispatcher-map membership on
+	// entry.RoutingTopic(), so re-assert here that the claimed entry's topic is
+	// THIS command id before decoding/handling. A mis-wired dispatcher map (a
+	// topic bound to the wrong DispatchAsync) thus fails closed instead of feeding
+	// one command's payload to another command's handler.
+	if entry.RoutingTopic() != string(DispatchID) {
+		return kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.synth.do.v1 dispatch async: entry routing topic does not match DispatchID"))
+	}
+	var req Request
+	if err := json.Unmarshal(entry.Payload(), &req); err != nil {
+		return kout.NewPermanentError(errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.synth.do.v1 dispatch async: decode request payload", err))
+	}
+	ctx = entry.RestoreContext(ctx)
+	boxed, ok := reg.LookupHandler(DispatchID)
+	if !ok {
+		return kout.NewPermanentError(errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
+			"command.synth.do.v1 dispatch async: no handler registered"))
+	}
+	h, ok := boxed.(Handler)
+	if !ok {
+		return kout.NewPermanentError(errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"command.synth.do.v1 dispatch async: registered handler has wrong type"))
+	}
+	_, err := h.HandleDo(ctx, &req)
+	return err
 }

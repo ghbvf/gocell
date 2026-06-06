@@ -199,6 +199,37 @@ cell.go 须声明一个指针类型包名 == sliceID 的字段（如 `*devicecom
 - Claim 获取处理租约 → handler 执行 → broker Ack 后 Settlement.Commit / 失败时 Settlement.Release（由 Subscriber delivery loop 完成）。
 - 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护。
 
+## Relay 命令分发（async command 桥，#1667）
+
+W3 Command Bus 的异步路径复用 outbox relay：业务把命令写成 `eventType = command id`
+的普通 `outbox.Entry`（`outbox.Emit(ctx, clk, emitter, "command.<domain>.<name>.v1", req)`），
+relay 消费时按 **routing-topic** 在 composition-root 注入的 dispatcher-map 中匹配——命中
+则在**进程内**触发生成的 `DispatchAsync`（decode payload → `LookupHandler` → typed `Handler`），
+否则照常发 broker。判别器 = dispatcher-map 成员资格（`command.*.v1` 命名空间 + 闭合 map
+天然隔离事件 topic），**不改 sealed `outbox.Entry`、不带 metadata 标记**。命令 settle 复用事件
+writeBack：成功 `MarkPublished` = 命令已消费；失败分两类——生成 `DispatchAsync` 的**确定性框架错误**
+（reg nil / routing-topic ≠ DispatchID / decode 失败 / no-handler / wrong-type）经 `kout.NewPermanentError`
+标记 → relay 直接 `MarkDead`（不耗重试预算，错配 entry fail-closed）；**handler 业务 error** 透传 → `MarkRetry`
+至耗尽（#1673 F3；值校验失败分类随 #1588）。生成 `DispatchAsync` 体首做 trust-boundary 自检
+`entry.RoutingTopic() == string(DispatchID)`，错配 entry 不被错 handler 消费。
+
+composition root 注入（dispatch 值**必须**是生成 `DispatchAsync` 直接符号——archtest
+`COMMAND-ASYNC-DISPATCH-CALLER-01` 锁定）：
+
+```go
+reg := command.NewRegistry()
+_ = enqueue.Register(reg, handler)
+relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
+    enqueue.DispatchID: enqueue.DispatchAsync, // 生成符号，不可 wrap 闭包
+})
+```
+
+`DispatchAsync` 不执行 schema 值约束（typed struct 即结构契约）；untrusted-payload 值校验
+funnel = #1588。真实 binary producer 接线（devicecell 异步 enqueue）随后续 PR 落地。设计单源 =
+ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5 ④ +
+§Amendment 2026-06-06；funnel 双向锁 = `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（上游 Hard）+
+`COMMAND-ASYNC-DISPATCH-CALLER-01`（下游 Hard）。
+
 ## Projection ↔ ConsumerBase 装配（composition root）
 
 Projection 经与 subscription **同一条 ConsumerBase 消费路径** 在 bootstrap phase6 被
