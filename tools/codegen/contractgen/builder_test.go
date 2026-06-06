@@ -444,6 +444,66 @@ func TestMergeParamsIntoRequest_HeaderConflictDetected(t *testing.T) {
 	}
 }
 
+// TestMergeParamsIntoRequest_ParamVsParamCollision covers #1494 review F2: two
+// params (here a path param and a header) that fold to the SAME goPascalCase Go
+// field must error — not silently emit a duplicate Request field. The error must
+// name BOTH colliding sources.
+func TestMergeParamsIntoRequest_ParamVsParamCollision(t *testing.T) {
+	pathParams := []ParamSpec{{Name: "tenantId", GoName: "TenantID", GoType: "string", Required: true}}
+	headerParams := []ParamSpec{{Name: "X-Tenant-ID", GoName: "TenantID", GoType: "string", Required: true}}
+	_, err := mergeParamsIntoRequest(nil, pathParams, nil, headerParams, "http.test.paramcollision.v1")
+	if err == nil {
+		t.Fatal("expected error for path/header params folding to the same Go field name")
+	}
+	msg := err.Error()
+	for _, want := range []string{"conflict", "TenantID", `path param "tenantId"`, `header param "X-Tenant-ID"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("collision error must contain %q, got: %v", want, err)
+		}
+	}
+}
+
+// TestMergeParamsIntoRequest_PathVsQueryCollision covers the pre-existing
+// path-vs-query GoName collision that #1494 review F2 generalised (the param
+// merge previously only checked param-vs-body).
+func TestMergeParamsIntoRequest_PathVsQueryCollision(t *testing.T) {
+	pathParams := []ParamSpec{{Name: "id", GoName: "ID", GoType: "string", Required: true}}
+	queryParams := []ParamSpec{{Name: "id", GoName: "ID", GoType: "string"}}
+	_, err := mergeParamsIntoRequest(nil, pathParams, queryParams, nil, "http.test.pathquerycollision.v1")
+	if err == nil {
+		t.Fatal("expected error for path/query params folding to the same Go field name")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Errorf("error should mention 'conflict', got: %v", err)
+	}
+}
+
+// TestBuildHTTPSpec_NonStringHeaderFailsClosed covers #1494 review F1/F4: a
+// non-string header type is rejected at codegen time (fail-closed) BEFORE any
+// generation, sharing metadata.ValidateHTTPHeaders with governance FMT-40 — so a
+// "legal contract → uncompilable Go" can never be produced even if `gocell
+// validate` was skipped.
+func TestBuildHTTPSpec_NonStringHeaderFailsClosed(t *testing.T) {
+	contract := &metadata.ContractMeta{
+		ID: "http.test.badheader.v1",
+		Endpoints: metadata.EndpointsMeta{
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:        "GET",
+				Path:          "/api/v1/test",
+				Headers:       map[string]metadata.ParamSchema{"X-Count": {Type: "integer"}},
+				SuccessStatus: 200,
+			},
+		},
+	}
+	err := buildHTTPSpec(&ContractGenSpec{}, t.TempDir(), contract, ".")
+	if err == nil {
+		t.Fatal("expected buildHTTPSpec to fail closed on a non-string header type")
+	}
+	if !strings.Contains(err.Error(), "endpoints.http.headers") || !strings.Contains(err.Error(), "unsupported") {
+		t.Errorf("fail-closed error must point at the invalid header, got: %v", err)
+	}
+}
+
 // TestBuildHeaderParams verifies headers are extracted populate-only: GoName is
 // PascalCase (dash-aware), GoType derives from schema.Type, the canonical header
 // name is preserved as Name (the r.Header.Get literal), and no length/numeric

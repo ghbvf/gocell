@@ -7,15 +7,18 @@
 // request header directly: every inbound business header must be declared in
 // contract.yaml endpoints.http.headers and consumed via the generated Request
 // field (the generated handler is the sole sanctioned reader). This fixture
-// proves the detector fires on the read forms and does NOT false-positive on
-// legitimate writes / response-header reads:
+// proves the detector fires on the read forms (including the one-hop alias) and
+// does NOT false-positive on legitimate writes / response-header reads:
 //
 //   - RED (must be flagged): r.Header.Get / r.Header.Values / r.Header[...] on an
-//     inbound *http.Request — 3 sites.
+//     inbound *http.Request, PLUS the one-hop alias `h := r.Header; h.Get(...)`
+//     (#1494 review F5) — 4 sites.
 //   - GREEN (must NOT be flagged): req.Header.Set on an OUTBOUND request the caller
-//     constructs (a write, e.g. Authorization), and w.Header().Get on a
-//     ResponseWriter (the receiver is a method call, not a *http.Request.Header
-//     field selector).
+//     constructs (a write, e.g. Authorization); w.Header().Get on a ResponseWriter
+//     (the receiver is a method call, not a *http.Request.Header field selector or
+//     its alias); and an inter-procedural read where the header is passed to a
+//     helper taking http.Header (the documented Medium residue — a genuine Go
+//     static-analysis ceiling, not a cheap one-hop bypass).
 package headerreadfixture
 
 import "net/http"
@@ -50,17 +53,25 @@ func goodResponseHeaderGet(w http.ResponseWriter) string {
 	return w.Header().Get("Content-Type")
 }
 
-// goodAliasedHeaderRead is GREEN (alias blind spot): the detector keys on the
-// `r.Header` SelectorExpr where `r` is a *http.Request. When the Header field is
-// first assigned to a local variable (`h := r.Header`) and the Get call is made
-// on that variable, the receiver is a plain Ident `h` of type http.Header — not a
-// SelectorExpr on the *http.Request — so the detector does NOT flag it.
-//
-// This is a documented blind spot of HTTP-REQUEST-HEADER-READ-FUNNEL-01. The
-// reverse self-check (TestHTTPRequestHeaderReadFunnel01_FixtureFires) asserts
-// exactly 3 diagnostics (the three RED functions above); this function must NOT
-// add a 4th, confirming the alias path is outside the detector's scope.
-func goodAliasedHeaderRead(r *http.Request) string {
+// badAliasedHeaderRead is RED (#1494 review F5 — one-hop alias now closed): the
+// header is bound to a local (`h := r.Header`) and read via `h.Get`. The detector
+// tracks variables aliased to an inbound *http.Request.Header by go/types object
+// identity, so this is flagged like a direct read. It is the 4th RED site.
+func badAliasedHeaderRead(r *http.Request) string {
 	h := r.Header
+	return h.Get("X-Foo")
+}
+
+// goodInterProceduralRead is GREEN (documented Medium residue): the header is
+// passed to a helper taking http.Header; inside the helper the receiver is a
+// parameter not traceable to an *http.Request, so the read is NOT flagged. This
+// is the genuine Go static-analysis ceiling (inter-procedural data flow), NOT a
+// cheap one-hop bypass — it is the honest residue the read-funnel cannot close
+// statically. The same-function one-hop alias (badAliasedHeaderRead) IS closed.
+func goodInterProceduralRead(r *http.Request) string {
+	return readFromHeader(r.Header)
+}
+
+func readFromHeader(h http.Header) string {
 	return h.Get("X-Foo")
 }

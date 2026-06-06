@@ -143,14 +143,32 @@ func TestFMT40_Violations(t *testing.T) {
 		{
 			name:       "missing type",
 			headers:    map[string]metadata.ParamSchema{"X-Tenant-ID": {}},
-			wantIssue:  IssueRequired,
+			wantIssue:  IssueInvalid,
 			wantSubstr: "declares no type",
 		},
 		{
 			name:       "unknown type",
 			headers:    map[string]metadata.ParamSchema{"X-Tenant-ID": {Type: "uuid"}},
 			wantIssue:  IssueInvalid,
-			wantSubstr: "is not one of string/integer/number/boolean",
+			wantSubstr: "is unsupported",
+		},
+		{
+			// #1494 review F1: non-string type would generate uncompilable Go
+			// (handler emits r.Header.Get → string). FMT-40 must reject it.
+			name:       "integer type rejected (uncompilable codegen)",
+			headers:    map[string]metadata.ParamSchema{"X-Tenant-ID": {Type: "integer"}},
+			wantIssue:  IssueInvalid,
+			wantSubstr: "is unsupported",
+		},
+		{
+			// #1494 review F3: HTTP header names are case-insensitive.
+			name: "case-insensitive duplicate rejected",
+			headers: map[string]metadata.ParamSchema{
+				"X-Tenant-ID": {Type: "string"},
+				"x-tenant-id": {Type: "string"},
+			},
+			wantIssue:  IssueDuplicate,
+			wantSubstr: "case-insensitive duplicate",
 		},
 		{
 			name:       "unenforced minLength rejected",

@@ -157,6 +157,17 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return fmt.Errorf("contractgen build: contract %q is kind=http but has no http endpoint", contract.ID)
 	}
 
+	// Fail-closed header gate (#1494 review F4): reject any declared header the
+	// populate-only accessor cannot express BEFORE generating. This shares
+	// metadata.ValidateHTTPHeaders with governance FMT-40 (single source), so the
+	// generator fails closed even if `gocell validate` was skipped — a non-string
+	// header type or case-insensitive duplicate can never reach handler.tmpl as
+	// uncompilable Go.
+	if viols := metadata.ValidateHTTPHeaders(http.Headers); len(viols) > 0 {
+		return fmt.Errorf("contractgen build: contract %q invalid endpoints.http.headers: %s",
+			contract.ID, viols[0].Message)
+	}
+
 	// Pre-compute path, query, and header params once; both buildHTTPDTOs and
 	// buildHTTPEndpointSpec need them (F-09: avoid calling builders twice).
 	pathParams := buildPathParams(http)
@@ -1149,14 +1160,17 @@ func mergeParamsIntoRequest(dtos []DTOSpec, pathParams, queryParams, headerParam
 	// Find or create Request DTO.
 	reqIdx := findOrCreateRequestDTO(&dtos)
 
-	// Check for name conflicts between path/query/header param Go names and existing body fields.
-	existing := make(map[string]bool, len(dtos[reqIdx].Fields))
+	// Seed the GoName→source map from existing body fields. buildParamFields then
+	// registers each path/query/header param as it is appended, so a collision is
+	// caught whether it is param-vs-body OR param-vs-param (#1494 review F2: two
+	// params folding to the same goPascalCase GoName — e.g. path "userId" and
+	// header "X-User-ID" — would otherwise emit a duplicate Request field).
+	used := make(map[string]string, len(dtos[reqIdx].Fields))
 	for _, f := range dtos[reqIdx].Fields {
-		existing[f.Name] = true
+		used[f.Name] = fmt.Sprintf("request body field %q", f.Name)
 	}
 
-	// Build prefix fields from path, query, and header params, checking for conflicts.
-	prefixFields, err := buildParamFields(pathParams, queryParams, headerParams, existing, contractID)
+	prefixFields, err := buildParamFields(pathParams, queryParams, headerParams, used, contractID)
 	if err != nil {
 		return nil, err
 	}
@@ -1177,30 +1191,39 @@ func findOrCreateRequestDTO(dtos *[]DTOSpec) int {
 	return 0
 }
 
-// buildParamFields converts ParamSpec slices to DTOFields, checking for name
-// conflicts against existing body fields. Returns error on conflict.
-func buildParamFields(pathParams, queryParams, headerParams []ParamSpec, existing map[string]bool, contractID string) ([]DTOField, error) {
+// buildParamFields converts path/query/header ParamSpec slices to DTOFields,
+// rejecting any GoName collision. used maps an already-claimed Go field name to a
+// human description of its source (seeded with body fields by the caller); each
+// param registers its GoName as it is appended, so collisions are detected
+// across ALL sources — param-vs-body AND param-vs-param (#1494 review F2). The
+// error names both colliding sources and the folded Go field.
+func buildParamFields(pathParams, queryParams, headerParams []ParamSpec, used map[string]string, contractID string) ([]DTOField, error) {
 	var fields []DTOField
-	for _, p := range pathParams {
-		if existing[p.GoName] {
-			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between path param and request body schema",
-				contractID, p.Name)
+	claim := func(p ParamSpec, source string) error {
+		this := fmt.Sprintf("%s param %q", source, p.Name)
+		if prior, ok := used[p.GoName]; ok {
+			return fmt.Errorf("contractgen: contract %q Go field %q conflict: claimed by both %s and %s; "+
+				"rename one so they do not fold to the same identifier",
+				contractID, p.GoName, prior, this)
 		}
-		fields = append(fields, paramToField(p, "path"))
+		used[p.GoName] = this
+		fields = append(fields, paramToField(p, source))
+		return nil
+	}
+	for _, p := range pathParams {
+		if err := claim(p, "path"); err != nil {
+			return nil, err
+		}
 	}
 	for _, q := range queryParams {
-		if existing[q.GoName] {
-			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between query param and request body schema",
-				contractID, q.Name)
+		if err := claim(q, "query"); err != nil {
+			return nil, err
 		}
-		fields = append(fields, paramToField(q, "query"))
 	}
 	for _, hd := range headerParams {
-		if existing[hd.GoName] {
-			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between header param and request body schema",
-				contractID, hd.Name)
+		if err := claim(hd, "header"); err != nil {
+			return nil, err
 		}
-		fields = append(fields, paramToField(hd, "header"))
 	}
 	return fields, nil
 }

@@ -258,7 +258,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	}
 
 	// Parse and validate the tenant before any DB access. Fail-closed: a
-	// malformed or empty tenantId returns 401 (ErrAuthLoginFailed) — the same
+	// present-but-malformed tenantId returns 401 (ErrAuthLoginFailed) — the same
 	// error as an invalid credential. This is intentional non-enumerable posture:
 	// callers must not be able to distinguish a valid-but-wrong tenant from a
 	// malformed tenant string, preventing cross-tenant tenant ID enumeration. The

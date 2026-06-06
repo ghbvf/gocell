@@ -63,11 +63,11 @@ later" posture is retired.
 
 ## Fail-closed semantics per endpoint
 
-| Endpoint | Missing/malformed X-Tenant-ID | Reason |
-|---|---|---|
-| `login` | 401 (same shape as wrong-password) | Prevents tenant enumeration — attacker cannot distinguish "tenant doesn't exist" from "wrong credentials" |
-| `setup/admin` | 400 ERR_AUTH_IDENTITY_INVALID_INPUT | Bootstrap path; invalid tenant UUID is a caller error, not a security probe (the setup service returns the existing identity-input errcode, not a generic validation code) |
-| `setup/status` | 200 `{hasAdmin: false}` | Same shape as "not yet provisioned"; prevents tenant existence disclosure |
+| Endpoint | Missing X-Tenant-ID | Malformed X-Tenant-ID | Reason |
+|---|---|---|---|
+| `login` | 400 `ERR_AUTH_LOGIN_INVALID_INPUT` | 401 (same shape as wrong-password) | A **missing** header is a request-format error that leaks no tenant information (`RequireNotEmpty` → 400 before any auth work). A **present-but-non-canonical** tenant returns the opaque 401 so an attacker cannot distinguish "tenant doesn't exist" from "wrong credentials". (#1707 review F6: the table earlier collapsed both to 401; the implementation splits them and that split is the intended matrix.) |
+| `setup/admin` | 400 `ERR_AUTH_IDENTITY_INVALID_INPUT` | 400 `ERR_AUTH_IDENTITY_INVALID_INPUT` | Bootstrap path; an absent/invalid tenant UUID is a caller error, not a security probe (the setup service returns the existing identity-input errcode, not a generic validation code) |
+| `setup/status` | 200 `{hasAdmin: false}` | 200 `{hasAdmin: false}` | Same shape as "not yet provisioned"; prevents tenant existence disclosure |
 
 All three paths invoke `tenant.ParseTenantID` which rejects empty strings and
 non-canonical UUIDs (Medium runtime guard; Hard gate = PR-2 typed position param
@@ -82,7 +82,8 @@ overrides that** to fail-soft `200 {hasAdmin:false}`, and this supersession is
 explicit (not implicit): `setup/status` is a **public, pre-auth probe**, so a
 uniform `200 {hasAdmin:false}` for "no admin yet" / "tenant unknown" / "bad
 tenant" is the anti-enumeration posture — it denies an unauthenticated attacker a
-tenant-existence oracle, the same reason `login` returns a uniform 401. The
+tenant-existence oracle, the same reason `login` returns a uniform 401 for a
+present-but-invalid tenant. The
 accepted cost: a caller that simply forgot the header gets `hasAdmin:false`
 instead of a 4xx (a DX papercut on a bootstrap-only endpoint), which is the
 deliberate trade for non-enumerability. Decision owner sign-off: keep fail-soft
@@ -99,8 +100,8 @@ invalid tenant → 200" (split), not a blanket fail-closed.
   field automatically.
 - The populate-only model is intentional: the header value is made available to the
   cell adapter, but the generated handler never rejects or validates it. This keeps
-  the per-endpoint fail behavior (login→401, setup/admin→400, setup/status→200
-  fail-soft) entirely under cell-adapter control.
+  the per-endpoint fail behavior (login→400 on missing / 401 on malformed,
+  setup/admin→400, setup/status→200 fail-soft) entirely under cell-adapter control.
 - `gocell validate` now enforces header declaration correctness via `FMT-40`;
   undeclared length/numeric constraints on headers are a hard validation error so
   they can never silently no-op.

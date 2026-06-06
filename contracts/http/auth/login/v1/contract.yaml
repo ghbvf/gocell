@@ -33,10 +33,12 @@ endpoints:
     headers:
       # X-Tenant-ID carries the pre-login tenant scope (no JWT exists yet).
       # Populate-only at codegen → merged into the generated Request field; the
-      # sessionlogin adapter parses it via tenant.ParseTenantID and a missing /
-      # malformed value yields a uniform 401 (same shape as wrong-password) to
-      # prevent tenant enumeration (ADR 1160 — the per-endpoint fail behavior is
-      # adapter-owned, not a codegen gate).
+      # sessionlogin Service then applies a two-stage check (ADR 1160; the
+      # per-endpoint fail behavior is adapter/service-owned, not a codegen gate):
+      #   - absent header (empty value) → 400 ERR_AUTH_LOGIN_INVALID_INPUT
+      #     (RequireNotEmpty): a malformed request, not a tenant-existence probe.
+      #   - present but non-canonical UUID → 401 (ErrAuthLoginFailed), the same
+      #     opaque shape as wrong-password, to prevent tenant enumeration.
       X-Tenant-ID:
         type: string
         format: uuid

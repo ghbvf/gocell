@@ -34,20 +34,22 @@
 //     and a w.Header().Get response read are not false-positives.
 //     上游 Medium — a GO-LANGUAGE CEILING (not a deferred TODO): Go cannot make
 //     "only generated code may touch *http.Request.Header" a compile error — the
-//     *http.Request is freely passed to every handler. Same permanent ceiling as
-//     CTXKEYS-REALIP-READ-CALLER-01 / SPAN-SETATTR-HOLDER-SEAL (#851) /
-//     HEALTHZ-HOLDER-SEAL (#893) / outbox principal-write (#1282); the generic Hard
-//     mechanism (codegen-derived typed header binding for all inbound reads) is the
-//     contractgen funnel itself, tracked as the won't-do Go ceiling at gh #1646.
+//     *http.Request is freely passed to every handler, and inter-procedural data
+//     flow (passing the header to a helper) is not statically tracked. Same
+//     permanent ceiling as CTXKEYS-REALIP-READ-CALLER-01 / SPAN-SETATTR-HOLDER-SEAL
+//     (#851) / HEALTHZ-HOLDER-SEAL (#893) / outbox principal-write (#1282); the
+//     generic Hard mechanism (codegen-derived typed header binding for all inbound
+//     reads) is the contractgen funnel itself, tracked as the won't-do Go ceiling
+//     at gh #1646.
 //
 // Tool blind spots (charter §"强制盲区自检", reverse self-check = the RED fixture):
-//   - Detection is RECEIVER-shape based: it flags `<x>.Header.Get/.Values` and
-//     `<x>.Header[...]` only when TypeOf(x) is *net/http.Request. An alias that
-//     first binds the header map to a local (`h := r.Header; h.Get(..)`) is a
-//     documented blind spot — `h` is not a `.Header` field selector. So is passing
-//     r.Header to a helper (data-flow) and `r.Header.Clone()` / `range r.Header`
-//     (not value reads). These are the same Go-ceiling residue as the upstream
-//     Medium; the contract-declared path is the norm, raw aliasing is contrived.
+//   - The detector flags `<x>.Header.Get/.Values` and `<x>.Header[...]` when x is a
+//     *net/http.Request, AND the one-hop alias `h := r.Header; h.Get(..)` —
+//     collectInboundHeaderAliases binds aliased locals by go/types *Object identity
+//     (so a same-named var in another scope never folds in). REMAINING residue
+//     (the Medium ceiling above, NOT a cheap bypass): multi-hop alias (`h2 := h`),
+//     passing r.Header to a helper (inter-procedural data flow), and `r.Header.Clone()`
+//     / `range r.Header` (not value reads). The contract-declared path is the norm.
 //   - The production scan is scoped to cells/ + examples/ (business layers that own
 //     contracts). Framework header reads in runtime/ + adapters/ (auth /
 //     idempotency / readyz-token middleware) are transport concerns, deliberately
@@ -119,13 +121,66 @@ func isInboundRequestHeaderSelector(info *types.Info, expr ast.Expr) bool {
 	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "net/http" && obj.Name() == "Request"
 }
 
+// collectInboundHeaderAliases returns the set of variable objects bound to an
+// inbound `*http.Request.Header` within file, e.g. `h := r.Header` /
+// `var h = r.Header` (#1494 review F5 — one-hop alias). Binding is by go/types
+// *Object identity, so a same-named variable in another function/scope is a
+// distinct object and never folds in (no cross-scope false positive). Multi-hop
+// (`h2 := h`), passing the header to a helper, and other inter-procedural data
+// flow remain a documented Medium residue (a genuine Go static-analysis ceiling).
+func collectInboundHeaderAliases(info *types.Info, file *ast.File) map[types.Object]bool {
+	aliases := map[types.Object]bool{}
+	record := func(lhs ast.Expr, rhs ast.Expr) {
+		if !isInboundRequestHeaderSelector(info, rhs) {
+			return
+		}
+		if id, ok := lhs.(*ast.Ident); ok {
+			if obj := info.ObjectOf(id); obj != nil {
+				aliases[obj] = true
+			}
+		}
+	}
+	EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+		for i, rhs := range as.Rhs {
+			if i < len(as.Lhs) {
+				record(as.Lhs[i], rhs)
+			}
+		}
+	})
+	EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
+		for i, rhs := range vs.Values {
+			if i < len(vs.Names) {
+				record(vs.Names[i], rhs)
+			}
+		}
+	})
+	return aliases
+}
+
+// isInboundHeaderExpr reports whether expr denotes the inbound request header
+// map — either a direct `<req>.Header` selector or a local variable aliased to
+// one (collectInboundHeaderAliases).
+func isInboundHeaderExpr(info *types.Info, expr ast.Expr, aliases map[types.Object]bool) bool {
+	if isInboundRequestHeaderSelector(info, expr) {
+		return true
+	}
+	if id, ok := expr.(*ast.Ident); ok {
+		if obj := info.ObjectOf(id); obj != nil {
+			return aliases[obj]
+		}
+	}
+	return false
+}
+
 // scanInboundHeaderReads reports every inbound request-header READ in a file:
 // `<req>.Header.Get(..)` / `.Values(..)` (read APIs) and `<req>.Header[..]`
-// (map index). Writes (.Set/.Add/.Del) and response reads (w.Header().Get) are
-// structurally excluded — the receiver of the write methods is not in {Get,Values}
-// and w.Header() is a call, not a *http.Request.Header field selector.
+// (map index), including reads via a one-hop alias `h := r.Header` (review F5).
+// Writes (.Set/.Add/.Del) and response reads (w.Header().Get) are structurally
+// excluded — the receiver of the write methods is not in {Get,Values} and
+// w.Header() is a call, not a *http.Request.Header field selector or its alias.
 func scanInboundHeaderReads(info *types.Info, file *ast.File, rel string, position func(p ast.Node) (int, int)) []Diagnostic {
 	var d []Diagnostic
+	aliases := collectInboundHeaderAliases(info, file)
 	report := func(n ast.Node, form string) {
 		line, _ := position(n)
 		d = append(d, Diagnostic{
@@ -148,12 +203,12 @@ func scanInboundHeaderReads(info *types.Info, file *ast.File, rel string, positi
 		if sel.Sel.Name != "Get" && sel.Sel.Name != "Values" {
 			return
 		}
-		if isInboundRequestHeaderSelector(info, sel.X) {
+		if isInboundHeaderExpr(info, sel.X, aliases) {
 			report(call, "r.Header."+sel.Sel.Name)
 		}
 	})
 	EachInSubtree[ast.IndexExpr](file, func(ix *ast.IndexExpr) {
-		if isInboundRequestHeaderSelector(info, ix.X) {
+		if isInboundHeaderExpr(info, ix.X, aliases) {
 			report(ix, "r.Header[...] index")
 		}
 	})
@@ -190,13 +245,13 @@ func TestHTTPRequestHeaderReadFunnel01(t *testing.T) {
 }
 
 // TestHTTPRequestHeaderReadFunnel01_FixtureFires is the reverse self-check (teeth
-// proof for the flat ban): the RED fixture has 3 inbound reads (Get/Values/index)
-// and 3 GREEN controls (outbound Set write + response w.Header().Get + aliased
-// header read `h := r.Header; h.Get(...)`) — the detector must flag exactly the 3
-// reads. The aliased form is a documented blind spot: the detector keys on the
-// `r.Header` SelectorExpr; when the Header field is first assigned to a local
-// variable the receiver becomes a plain http.Header Ident and is not detected.
-// The count of 3 (not 4) is the explicit reverse self-check for that blind spot.
+// proof for the flat ban): the RED fixture has 4 inbound reads — direct
+// Get/Values/index PLUS the one-hop alias `h := r.Header; h.Get(...)` (#1494
+// review F5, now closed) — and GREEN controls (outbound Set write, response
+// w.Header().Get, and an inter-procedural read passed to a helper). The detector
+// must flag exactly the 4 reads. The count of 4 confirms the one-hop alias is
+// closed; the GREEN inter-procedural read confirms the documented Medium residue
+// (a genuine Go data-flow ceiling) stays out of scope (no false positive).
 func TestHTTPRequestHeaderReadFunnel01_FixtureFires(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -226,10 +281,11 @@ func TestHTTPRequestHeaderReadFunnel01_FixtureFires(t *testing.T) {
 	for _, dg := range diags {
 		t.Log(dg.Message)
 	}
-	require.Len(t, diags, 3,
-		"fixture must yield exactly 3 inbound reads (Get/Values/index); the outbound Set write, "+
-			"the w.Header().Get response read, and the aliased h:=r.Header form (documented blind spot) "+
-			"must NOT be flagged — 3 confirms the alias blind spot is outside the detector's scope")
+	require.Len(t, diags, 4,
+		"fixture must yield exactly 4 inbound reads (Get/Values/index + one-hop alias h:=r.Header); "+
+			"the outbound Set write, the w.Header().Get response read, and the inter-procedural read "+
+			"(helper taking http.Header — the documented Medium residue) must NOT be flagged — 4 confirms "+
+			"the one-hop alias is closed and the data-flow ceiling residue stays out of scope")
 	for _, dg := range diags {
 		assert.Contains(t, dg.Message, "HTTP-REQUEST-HEADER-READ-FUNNEL-01")
 	}
