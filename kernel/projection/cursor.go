@@ -1,9 +1,8 @@
 package projection
 
-import "github.com/ghbvf/gocell/kernel/outbox"
-
-// Cursor maps a consumed event to its monotonic stream position. outbox.Entry
-// carries no sequence field — the position is supplied by the replay source.
+// Cursor maps a consumed event to its monotonic stream position. The
+// ProjectionEvent carrier exposes no sequence field — the position is supplied by
+// the replay source.
 //
 // # Position invariants (required of every implementation)
 //
@@ -40,5 +39,5 @@ import "github.com/ghbvf/gocell/kernel/outbox"
 //
 // ref: Axon TrackingToken (position is a property of the token store / stream).
 type Cursor interface {
-	Position(entry outbox.Entry) (int64, error)
+	Position(entry ProjectionEvent) (int64, error)
 }

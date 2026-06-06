@@ -36,7 +36,7 @@ func TestMemCursor(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		entry      outbox.Entry
+		entry      ProjectionEvent
 		wantPos    int64
 		wantPerm   bool // expect a *outbox.PermanentError
 		wantErrNil bool // expect nil error

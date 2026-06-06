@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -513,7 +514,7 @@ func (c *stubProjectionCell) Init(ctx context.Context, reg cell.Registrar) error
 		Spec:         c.spec,
 		ProjectionID: c.projectionID,
 		CellID:       c.ID(),
-		Apply:        func(_ context.Context, _ outbox.Entry) error { return nil },
+		Apply:        func(_ context.Context, _ projection.ProjectionEvent) error { return nil },
 	})
 }
 

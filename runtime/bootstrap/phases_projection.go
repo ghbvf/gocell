@@ -299,11 +299,11 @@ func (b *Bootstrap) autoWireProjectionMetrics() error {
 
 // buildOneProjection constructs the Coordinator for one ProjectionRequest and
 // drives Coordinator.Subscribe through a captureRegistrar to obtain the wrapped
-// subscription. The cell-local ProjectionApply / ProjectionResetHook are
-// converted to the identical projection.Apply / projection.OnReset signatures
-// (legal named-type conversion; the conversion lives here — runtime/bootstrap
-// may import both kernel/cell and kernel/projection — never in kernel/cell,
-// which would be an import cycle).
+// subscription. cell.ProjectionApply / cell.ProjectionResetHook and
+// projection.Apply / projection.OnReset are all aliases of the cellvocab leaf
+// types (EPIC #1609 PR-01 collapsed the former mirror types now that the carrier
+// lives in cellvocab), so the recorded hooks pass straight to Coordinator.Subscribe
+// with no named-type conversion.
 func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionRequest) (projectionWiring, error) {
 	tracer := b.wrapperTracer
 	if validation.IsNilInterface(tracer) {
@@ -334,9 +334,9 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 
 	var opts []projection.Option
 	if req.OnReset != nil {
-		opts = append(opts, projection.WithOnReset(projection.OnReset(req.OnReset)))
+		opts = append(opts, projection.WithOnReset(req.OnReset))
 	}
-	if err := coord.Subscribe(ctx, req.Spec, projection.Apply(req.Apply), opts...); err != nil {
+	if err := coord.Subscribe(ctx, req.Spec, req.Apply, opts...); err != nil {
 		return projectionWiring{}, fmt.Errorf(
 			"bootstrap: cell %s projection %q: subscribe: %w", req.CellID, req.ProjectionID, err)
 	}

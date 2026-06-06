@@ -41,6 +41,7 @@ import (
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/projection"
 )
 
 // maxOrderIDsPerStatus bounds the per-status orderIds slice returned by Query
@@ -140,11 +141,11 @@ func NewService(opts ...Option) (*Service, error) {
 // A bad/undecodable payload returns outbox.NewPermanentError — the Coordinator
 // classifies this as DispositionReject and routes to DLX. Transient failures
 // return a plain error (Coordinator requeues).
-func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) error {
+func (s *Service) HandleOrderCreated(ctx context.Context, entry projection.ProjectionEvent) error {
 	var payload ordercreated.Payload
 	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		s.logger.Error("orderprojection: failed to decode order-created payload",
-			slog.Any("error", err), slog.String("entry_id", entry.ID()))
+			slog.Any("error", err), slog.String("entry_id", entry.EventID()))
 		return outbox.NewPermanentError(fmt.Errorf("orderprojection: decode order-created: %w", err))
 	}
 
@@ -153,15 +154,15 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) er
 	// A missing field is a permanent producer-side violation.
 	if payload.ID == "" {
 		s.logger.Error("orderprojection: order-created payload missing id",
-			slog.String("entry_id", entry.ID()))
+			slog.String("entry_id", entry.EventID()))
 		return outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-created payload id is empty (entry %s)", entry.ID()))
+			"orderprojection: order-created payload id is empty (entry %s)", entry.EventID()))
 	}
 	if payload.Status == "" {
 		s.logger.Error("orderprojection: order-created payload missing status",
-			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID()))
+			slog.String("order_id", payload.ID), slog.String("entry_id", entry.EventID()))
 		return outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-created payload status is empty (entry %s)", entry.ID()))
+			"orderprojection: order-created payload status is empty (entry %s)", entry.EventID()))
 	}
 
 	s.store.mu.Lock()
@@ -180,11 +181,11 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) er
 // the order's newest status into the latest sub-view; Query composes it over the
 // created sub-view (latest wins). Same exactly-once + per-spec delivery contract
 // as HandleOrderCreated.
-func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Entry) error {
+func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry projection.ProjectionEvent) error {
 	var payload orderstatuschanged.Payload
 	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		s.logger.Error("orderprojection: failed to decode order-status-changed payload",
-			slog.Any("error", err), slog.String("entry_id", entry.ID()))
+			slog.Any("error", err), slog.String("entry_id", entry.EventID()))
 		return outbox.NewPermanentError(fmt.Errorf("orderprojection: decode order-status-changed: %w", err))
 	}
 
@@ -196,15 +197,15 @@ func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Ent
 	// not corrupt the projection.
 	if payload.ID == "" {
 		s.logger.Error("orderprojection: order-status-changed payload missing id",
-			slog.String("entry_id", entry.ID()))
+			slog.String("entry_id", entry.EventID()))
 		return outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-status-changed payload id is empty (entry %s)", entry.ID()))
+			"orderprojection: order-status-changed payload id is empty (entry %s)", entry.EventID()))
 	}
 	if payload.NewStatus == "" {
 		s.logger.Error("orderprojection: order-status-changed payload missing newStatus",
-			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID()))
+			slog.String("order_id", payload.ID), slog.String("entry_id", entry.EventID()))
 		return outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-status-changed payload newStatus is empty (entry %s)", entry.ID()))
+			"orderprojection: order-status-changed payload newStatus is empty (entry %s)", entry.EventID()))
 	}
 
 	s.store.mu.Lock()

@@ -13,7 +13,7 @@ type spec struct{ Topic string }
 
 type entry struct{}
 
-func (entry) RoutingTopic() string { return "" }
+func (entry) Stream() string { return "" }
 
 type coord struct {
 	spec  spec
@@ -27,7 +27,7 @@ func (c *coord) advanceOffsetPastForeign(_ entry) error { return nil }
 // applyGated holds the applyOne call (with a real topic gate) — but it is a
 // SEPARATE function, so drainGap's subtree no longer contains applyOne.
 func (c *coord) applyGated(e entry) error {
-	if e.RoutingTopic() == c.spec.Topic {
+	if e.Stream() == c.spec.Topic {
 		return c.applyOne(e, c.apply)
 	}
 	return c.advanceOffsetPastForeign(e)

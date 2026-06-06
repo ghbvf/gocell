@@ -106,7 +106,7 @@ func (s *PGProjectionReplaySource) Head(ctx context.Context) (int64, error) {
 // is deferred while the PG journal-backed reader stays gated off by default
 // (preview-only; not durably sound until the retained projection journal #1504
 // lands), so SQL-level pruning would optimize a path not yet production-active.
-func (s *PGProjectionReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(kout.Entry) error) error {
+func (s *PGProjectionReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(projection.ProjectionEvent) error) error {
 	rows, err := s.db.Query(ctx, replayScanSQL, fromOffset)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
@@ -216,8 +216,8 @@ const cursorPositionTimeout = 5 * time.Second
 // by delegating to the paired replay source. The lookup runs against the pool (no
 // ambient tx), which is sound because the entry's row was committed by its
 // producer in a prior transaction, under cursorPositionTimeout.
-func (c *PGProjectionCursor) Position(entry kout.Entry) (int64, error) {
+func (c *PGProjectionCursor) Position(entry projection.ProjectionEvent) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cursorPositionTimeout)
 	defer cancel()
-	return c.src.position(ctx, entry.ID())
+	return c.src.position(ctx, entry.EventID())
 }

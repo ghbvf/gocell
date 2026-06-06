@@ -215,6 +215,28 @@ projection coordinator 驱动；因此任何注册 projection 的 assembly，其
 godoc（单源）；运行时 defense-in-depth = `examples/todoorder/run_smoke_test.go` 启动 smoke
 （真启动过 phase6，抓任意 boot 失败）。
 
+## Projection 载体接口（`ProjectionEvent`）
+
+投影 harness 的 `Apply` / `ReplaySource.Replay` 的 fn / `Cursor.Position` 收 **最小 typed 只读载体接口
+`cellvocab.ProjectionEvent`**（`projection.ProjectionEvent` / `cell.ProjectionApply` 为同型 alias），而非具体
+`outbox.Entry`——`outbox.Entry` 与（PR-03）saga journal 事件各自实现它，走同一 typed 漏斗（EPIC #1609 PR-01 /
+ADR `docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md` §D2）。接口 5 方法：`EventID()` /
+`Payload()` / `OccurredAt()` / `Stream()` / `RestoreContext(ctx)`（`EventID`/`Stream` 是 outbox `ID`/`RoutingTopic`
+的多态重命名）。接口家在 `kernel/cellvocab`（纯叶子）而非 ADR §4.1 写的 `kernel/projection`——cell↔projection 环
+使后者编译不可表达（ADR §4.1/§6 amendment 记录）。
+
+| Archtest ID | 摘要 | 评级 |
+|---|---|---|
+| `PROJECTION-EVENT-CARRIER-TYPED-01` | 投影公开载体 API（`projection.Apply` / `ReplaySource.Replay` fn / `Cursor.Position` / `cell.ProjectionApply`）只收 `cellvocab.ProjectionEvent`，禁裸 `outbox.Entry`；A2 broad scan 兜 kernel/projection+cellvocab 导出符号未来新增 | **type-system Hard（API shape，单轴非 funnel）**：签名即接口（编译期）+ archtest 下游禁裸收 `outbox.Entry`。**非** carrier-source-sealing funnel——`ProjectionEvent` 全导出可实现、载体来源不封闭（forge 防护在 wiring 层），故不声明 sealed-carrier 上游 Hard |
+
+完整盲区清单 + 反向自检（RED/GREEN fixture）活在 `tools/archtest/projection_event_carrier_typed_test.go` 的
+package godoc（单源）。
+
+> **运维注意（rebuild lag 盲区，单源 `kernel/projection/rebuild.go::advanceOffsetPastForeign` godoc）**：
+> rebuild 期 foreign-stream 条目只推进 checkpoint、不更新 `projection_event_replay_lag_seconds`（lag 是 own-stream
+> apply 信号）。journal 被 foreign 流主导时 lag gauge 可能长时间平直但 rebuild 仍在进展——排查 rebuild 进度看
+> checkpoint / `pending_events`，不看 lag。
+
 ## Stream 命名
 
 - 新建 stream 前搜索已有常量，禁止重复定义

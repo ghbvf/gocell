@@ -108,6 +108,12 @@ func TestOutboxEntrySealedConstruction01_GettersPresent(t *testing.T) {
 		"ID", "AggregateID", "AggregateType", "EventType", "Topic", "RoutingTopic",
 		"Payload", "CreatedAt", "OccurredAt", "Metadata", "Observability", "Principal",
 		"FailurePolicy", "Validate",
+		// cellvocab.ProjectionEvent read surface (EPIC #1609 PR-01): EventID/Stream
+		// are polymorphic renames of ID/RoutingTopic; RestoreContext folds the
+		// observability+principal restore. The compile-time `var _
+		// cellvocab.ProjectionEvent = Entry{}` is the primary gate; this golden is
+		// the defense-in-depth regression check keeping that read surface complete.
+		"EventID", "Stream", "RestoreContext",
 	} {
 		if _, ok := et.MethodByName(m); !ok {
 			t.Errorf("OUTBOX-ENTRY-SEALED-CONSTRUCTION-01: outbox.Entry is missing the %q value-receiver method "+

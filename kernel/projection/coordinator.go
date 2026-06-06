@@ -313,7 +313,7 @@ func (c *Coordinator) buildHandler(apply Apply) outbox.EntryHandler {
 // drift if a guard is later changed. proceed is true only when the position is
 // new (> checkpoint) and must be committed; a false proceed with nil err means
 // the entry was already reflected (a no-op skip).
-func (c *Coordinator) resolvePosition(ctx context.Context, entry outbox.Entry) (pos int64, proceed bool, err error) {
+func (c *Coordinator) resolvePosition(ctx context.Context, entry ProjectionEvent) (pos int64, proceed bool, err error) {
 	current, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
 	if err != nil {
 		return 0, false, fmt.Errorf("projection.position[load]: %w", err)
@@ -338,7 +338,7 @@ func (c *Coordinator) resolvePosition(ctx context.Context, entry outbox.Entry) (
 // position (1-based + exactly-once guards via resolvePosition), call Apply,
 // advance the checkpoint, and update lastApplied lag metrics. It runs inside a
 // transaction provided by the caller (buildHandler's RunInTx / drainGap).
-func (c *Coordinator) applyOne(ctx context.Context, entry outbox.Entry, apply Apply) error {
+func (c *Coordinator) applyOne(ctx context.Context, entry ProjectionEvent, apply Apply) error {
 	pos, proceed, err := c.resolvePosition(ctx, entry)
 	if err != nil || !proceed {
 		return err

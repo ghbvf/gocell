@@ -9,7 +9,6 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/contractspec"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 )
 
@@ -23,7 +22,7 @@ func rogueSubscribe(coord *projection.Coordinator) {
 		Transport: "amqp",
 		Topic:     "test.v1",
 	}
-	var apply projection.Apply = func(_ context.Context, _ outbox.Entry) error {
+	var apply projection.Apply = func(_ context.Context, _ projection.ProjectionEvent) error {
 		return nil
 	}
 	// VIOLATION: Coordinator.Subscribe called from a non-allowlisted file.

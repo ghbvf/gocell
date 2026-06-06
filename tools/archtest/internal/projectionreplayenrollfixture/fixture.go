@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/projection"
 )
 
 // enrolledReplaySource is a correct in-memory ReplaySource that the fixture
@@ -45,7 +46,7 @@ func (s *enrolledReplaySource) Head(_ context.Context) (int64, error) {
 	return int64(len(s.entries)), nil
 }
 
-func (s *enrolledReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(outbox.Entry) error) error {
+func (s *enrolledReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(projection.ProjectionEvent) error) error {
 	s.mu.RLock()
 	snapshot := make([]outbox.Entry, len(s.entries))
 	copy(snapshot, s.entries)
@@ -78,7 +79,7 @@ func (s *unenrolledReplaySource) Head(_ context.Context) (int64, error) {
 	return int64(len(s.entries)), nil
 }
 
-func (s *unenrolledReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(outbox.Entry) error) error {
+func (s *unenrolledReplaySource) Replay(ctx context.Context, fromOffset int64, fn func(projection.ProjectionEvent) error) error {
 	s.mu.RLock()
 	snapshot := make([]outbox.Entry, len(s.entries))
 	copy(snapshot, s.entries)
