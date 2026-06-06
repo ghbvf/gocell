@@ -1,12 +1,24 @@
 # Quickstart — add a gRPC RPC operation to a cell
 
-Phase 1 walkthrough. The reader has finished PR 8 (first end-to-end usable handler) and now wants to add a second RPC operation to their own cell.
+Walkthrough for adding a unary gRPC RPC to a cell, written against the first
+end-to-end handler landed in PR-8 (#1151, `examples/iotdevice`). Use that cell as
+the working reference.
 
-> **Pre-conditions** (assumed satisfied by PRs 1–8):
-> - `gocell generate` understands `kind: grpc`
-> - `adapters/grpc.Server` is wired via `bootstrap.WithGRPCListener(...)` in the assembly's `cmd/<assembly>/main.go`
-> - `runtime/grpc/interceptor.Chain` is composed and supplied to the server
-> - `buf` is installed and `Makefile` `proto-gen` target works
+> **Pre-conditions** (live as of PR-8 #1151):
+> - `gocell generate` understands `kind: grpc` (PR-1); contractgen emits **no** Go
+>   for grpc (#1688) — buf's `pb.<Svc>Server` is the server contract.
+> - `adapters/grpc.Server` is wired via `bootstrap.WithGRPCListener(...)` in the
+>   assembly's composition root (`examples/iotdevice/run.go`); the cell author does
+>   **not** touch this — only the assembly owner does. The assembly owner also sets
+>   TLS in `adapters/grpc.Config.TLS`: `AllowInsecure: true` (plaintext) for the demo,
+>   or `CertPEM`/`KeyPEM` (+`ClientCAPEM` for mTLS) for production.
+> - `runtime/grpc/interceptor.NewUnaryChain` is composed and supplied to the server.
+> - `buf` is installed and `Makefile` `proto-gen` target works.
+>
+> **Not yet live (planned)**: errcode→codes.Code mapping (PR-12); metrics cell
+> attribution + `/metrics` export + `grpc_ready` readyz probe (PR-9 / #1383). Until
+> then a returned `*errcode.Error` surfaces as `codes.Unknown`, grpc metrics are
+> not exported, and the `cell` metric label is `_runtime`.
 
 ---
 
@@ -15,7 +27,7 @@ Phase 1 walkthrough. The reader has finished PR 8 (first end-to-end usable handl
 Create `contracts/grpc/<domain>/<version>/contract.yaml`:
 
 ```yaml
-id: grpc.todoorder.command.v1.OrderCommandService
+id: grpc.todoorder.command.v1   # contract id does NOT include the service name
 kind: grpc
 version: v1
 owner: todoorder
@@ -35,7 +47,7 @@ endpoints:
 
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.OrderCommandService
+    - contract.grpc.todoorder.command.v1.serve
 ```
 
 Create the proto file `contracts/grpc/todoorder/command/v1/order_command.proto`:
@@ -45,7 +57,7 @@ syntax = "proto3";
 
 package todoorder.command.v1;
 
-option go_package = "github.com/gocell/gocell/generated/contracts/grpc/todoorder/command/v1;orderv1";
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/todoorder/command/v1;orderv1";
 
 service OrderCommandService {
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse) {}
@@ -73,12 +85,12 @@ Update the cell's `slice.yaml` to add the contractUsage. Both `provider` (the ce
 id: ordercommand
 belongsToCell: todoorder
 contractUsages:
-  - contract: grpc.todoorder.command.v1.OrderCommandService
+  - contract: grpc.todoorder.command.v1
     role: serve              # NEW: serve / call (analogous to http server / clients)
     # field: orderCommandServer   # optional, only needed to disambiguate multiple *ordercommand.Service fields
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.OrderCommandService.serve
+    - contract.grpc.todoorder.command.v1.serve
 ```
 
 For a consuming cell:
@@ -86,30 +98,35 @@ For a consuming cell:
 ```yaml
 # cells/todoorder/slices/orderconsumer/slice.yaml
 contractUsages:
-  - contract: grpc.todoorder.command.v1.OrderCommandService
+  - contract: grpc.todoorder.command.v1
     role: call
 verify:
   contract:
-    - contract.grpc.todoorder.command.v1.OrderCommandService.call
+    - contract.grpc.todoorder.command.v1.call
 ```
 
 ---
 
 ## Step 3 — declare the cell field
 
-The cell struct needs a `*ordercommand.Service` field so `cellgen` can resolve where to register the handler (matches existing AMQP subscribe-CU pattern):
+The cell struct needs a pointer field whose **package short-name == the slice id**
+so `cellgen` can resolve where to register the handler (`fieldindex.go` matches on
+package name, not field/type name). The **type name is arbitrary** — by convention
+a grpc-serve slice names it `Server` to signal it implements the pb `<Svc>Server`
+interface (the real `examples/iotdevice` uses `*devicecommandrpc.Server`):
 
 ```go
 // cells/todoorder/cell.go
 package todoorder
 
 import (
-    "github.com/gocell/gocell/cells/todoorder/slices/ordercommand"
+    "github.com/ghbvf/gocell/cells/todoorder/slices/ordercommand"
 )
 
 type Cell struct {
     cell.BaseCell
-    ordercommand *ordercommand.Service   // cellgen looks for this field
+    // cellgen resolves this by "pointer-type package (ordercommand) == slice id".
+    ordercommand *ordercommand.Server
 }
 ```
 
@@ -118,27 +135,34 @@ type Cell struct {
 ## Step 4 — generate
 
 ```bash
-$ make proto-gen          # buf generates .pb.go from .proto
-$ gocell generate         # contractgen reads contract.yaml + slice.yaml, emits:
-                          #  - generated/contracts/grpc/todoorder/command/v1/server_gen.go
-                          #  - generated/contracts/grpc/todoorder/command/v1/client_gen.go
-                          #  - generated/contracts/grpc/todoorder/command/v1/methods_gen.go
-                          #  - cells/todoorder/cell_gen.go (Init calls reg.GRPCService)
+$ make proto-gen          # buf generates the .pb.go from .proto:
+                          #  - generated/contracts/grpc/todoorder/command/v1/order_command.pb.go      (messages)
+                          #  - generated/contracts/grpc/todoorder/command/v1/order_command_grpc.pb.go  (service)
+$ gocell generate         # contractgen emits NOTHING for kind=grpc (#1688); cellgen
+                          # emits cells/todoorder/cell_gen.go (Init calls reg.GRPCService)
 ```
 
-Generated `server_gen.go` declares:
+> **The grpc server contract is buf's generated `pb.<Svc>Server` interface — there is
+> no GoCell-side generated interface (#1688).** buf's `protoc-gen-go-grpc` already
+> emits, from the .proto, the proto-derived server contract that declares every RPC
+> and carries `mustEmbedUnimplemented<Svc>Server()` for forward compatibility. A
+> second contractgen interface would be a register-incompatible, package-colliding
+> duplicate, so contractgen emits no Go file for grpc. The cell author implements
+> the buf interface directly (idiomatic grpc-go / Kratos). This mirrors how the
+> error model lands at the interceptor layer (Kratos `GRPCStatus()`), not at a
+> per-handler typed-response envelope.
+
+buf's `order_command_grpc.pb.go` declares (the interface your handler implements):
 
 ```go
-type OrderCommandServer interface {
-    CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (OrderCommandCreateOrderResponseObject, error)
+type OrderCommandServiceServer interface {
+    CreateOrder(context.Context, *CreateOrderRequest) (*CreateOrderResponse, error)
+    mustEmbedUnimplementedOrderCommandServiceServer()
 }
 
-type OrderCommandCreateOrderResponseObject interface {
-    visitOrderCommandCreateOrderResponse(grpc.ServerStream) error
-}
+type UnimplementedOrderCommandServiceServer struct{} // embed this (by value) for forward-compat
 
-type OrderCommandCreateOrder200JSONResponse orderv1.CreateOrderResponse  // success
-type OrderCommandCreateOrder4xxErrorResponse errcode.Error               // error envelope
+func RegisterOrderCommandServiceServer(s grpc.ServiceRegistrar, srv OrderCommandServiceServer)
 ```
 
 ---
@@ -152,75 +176,79 @@ package ordercommand
 import (
     "context"
 
-    "github.com/gocell/gocell/generated/contracts/grpc/todoorder/command/v1"
-    "github.com/gocell/gocell/pkg/errcode"
+    orderv1 "github.com/ghbvf/gocell/generated/contracts/grpc/todoorder/command/v1"
+    "github.com/ghbvf/gocell/pkg/errcode"
 )
 
-type Service struct {
-    repo     domain.OrderRepository       `gocell:"required"`
-    txRunner persistence.CellTxManager    `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"ordercommand: TxRunner required"` //nolint:lll
+type Server struct {
+    orderv1.UnimplementedOrderCommandServiceServer // by-value embed → forward-compat; satisfies the pb interface
+    repo     domain.OrderRepository    `gocell:"required"`
+    txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"ordercommand: TxRunner required"` //nolint:lll
 }
 
-func (s *Service) CreateOrder(
+func (s *Server) CreateOrder(
     ctx context.Context,
     req *orderv1.CreateOrderRequest,
-) (orderv1.OrderCommandCreateOrderResponseObject, error) {
-    if req.CustomerId == "" {
-        return orderv1.OrderCommandCreateOrder4xxErrorResponse(*errcode.New(
-            errcode.ErrValidationFailed,
+) (*orderv1.CreateOrderResponse, error) {
+    if req.GetCustomerId() == "" {
+        // errcode.Error flows out as the Go error; the gRPC interceptor maps it to a
+        // status code (a returned *errcode.Error surfaces as codes.Unknown today;
+        // the full errcode→codes table lands at runtime/grpc/interceptor in PR-12,
+        // the Kratos GRPCStatus() model). New signature is
+        // errcode.New(kind, code, message, opts...).
+        return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
             "customer_id is required",
-            errcode.WithDetails(errcode.PublicString("field", "customer_id")),
-        )), nil
+            errcode.WithDetails(errcode.PublicString("field", "customer_id")))
     }
 
     order, err := s.createOrderTx(ctx, req)
     if err != nil {
-        return nil, err   // framework converts via runtime/grpc/interceptor/errcode_mapping.go
+        return nil, err
     }
 
-    return orderv1.OrderCommandCreateOrder200JSONResponse{
+    return &orderv1.CreateOrderResponse{
         OrderId:           order.ID,
         CreatedAtUnixNano: order.CreatedAt.UnixNano(),
     }, nil
 }
 ```
 
-**Return shapes**:
-- `(typed success, nil)` → 200-equivalent
-- `(typed 4xx envelope, nil)` → declared business error
-- `(nil, *errcode.Error)` → framework 5xx-equivalent (panic recovery or infrastructure fault)
-
-The four-channel redaction discipline applies identically to HTTP: `errcode.Error.Internal` never reaches the gRPC trailer; for `KindInternal/Unavailable/DeadlineExceeded`, `Details` are stripped at the wire.
+**Return shapes** (idiomatic grpc-go):
+- `(*pb.Response, nil)` → success.
+- `(nil, error)` → failure. Return an `*errcode.Error` for a domain error; the interceptor
+  chain maps it to a gRPC status code and applies the same redaction discipline as HTTP
+  (`errcode.Error.Internal` never reaches the trailer; `Details` stripped for 5xx-class codes).
+  The precise errcode→codes table is PR-12.
 
 ---
 
 ## Step 6 — call from another cell
 
+Use buf's generated standard gRPC client (`pb.New<Svc>Client`):
+
 ```go
-// in a consuming cell's handler
+// in a consuming cell
 import (
-    orderv1 "github.com/gocell/gocell/generated/contracts/grpc/todoorder/command/v1"
+    orderv1 "github.com/ghbvf/gocell/generated/contracts/grpc/todoorder/command/v1"
+    "google.golang.org/grpc"
 )
 
-type Service struct {
-    orders orderv1.OrderCommandClient   `gocell:"required"`
-}
-
-func (s *Service) PlaceOrder(ctx context.Context, ...) error {
-    resp, err := s.orders.CreateOrder(ctx, &orderv1.CreateOrderRequest{
+func placeOrder(ctx context.Context, conn *grpc.ClientConn, customerID string, items []string) error {
+    client := orderv1.NewOrderCommandServiceClient(conn)
+    resp, err := client.CreateOrder(ctx, &orderv1.CreateOrderRequest{
         CustomerId: customerID,
         ItemIds:    items,
     })
     if err != nil {
-        // err is *errcode.Error — public Message + Details present, Internal absent
+        // err is a gRPC status; the interceptor carried the errcode public Message + Details.
         return fmt.Errorf("place order: %w", err)
     }
-    // resp.OrderId available
+    _ = resp.OrderId
     return nil
 }
 ```
 
-Context (deadline, trace, correlation_id, principal envelope) propagates automatically via the generated client.
+Context (deadline, trace, correlation_id, principal envelope) propagates automatically via the standard client + interceptor chain.
 
 ---
 
@@ -233,7 +261,12 @@ $ gocell verify cells/todoorder/slices/ordercommand            # contract verify
 $ go test ./tools/archtest/... -run GRPC                       # archtest invariants
 ```
 
-If `/readyz?verbose` shows `grpc_ready: ok` and `/metrics` reports `grpc_server_requests_total{cell="todoorder",method="/todoorder.command.v1.OrderCommandService/CreateOrder",code="OK"}`, the integration is complete.
+A successful client `CreateOrder` round-trip (response returned, no error) confirms
+the integration. Note the PR-9 / #1383 caveats from the pre-conditions: the
+`grpc_ready` readyz probe is not yet wired (PR-9), grpc metrics are not yet exported
+to `/metrics` (PR-9), and once exported the `cell` label is `_runtime` until cell
+attribution lands (#1383) — `grpc_server_requests_total{cell="_runtime",code=...}`,
+**not** `cell="todoorder"`.
 
 ---
 
@@ -241,8 +274,8 @@ If `/readyz?verbose` shows `grpc_ready: ok` and `/metrics` reports `grpc_server_
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `gocell generate cell` reports `no cell.go struct field for serving slice` | Missing `*ordercommand.Service` field on cell struct | Add the field (Step 3) |
+| `gocell generate cell` reports `no cell.go struct field for slice` | Cell struct lacks a `*<sliceID>.T` pointer field | Add a `*ordercommand.Server` field (Step 3); the pointer-type package must equal the slice id |
+| `pb.Register<Svc>Server(r, c.handler)` fails to compile | Handler does not implement the pb `<Svc>Server` interface | Embed `<pb>.Unimplemented<Svc>Server` **by value** in the handler struct (forward-compat marker, Step 5) |
 | `gocell validate` rejects `kind: grpc` | Pre-PR-1 build, or contract.yaml missing required fields | Upgrade to PR 1+ build; ensure `grpc.service` and `grpc.proto` are set (`grpc.method` was removed in #1655 — service-level granularity) |
-| `make proto-gen` fails with `package mismatch` | `option go_package` not aligned with `generated/contracts/grpc/...` layout | Match the `go_package` to `generated/contracts/grpc/{domain}/{version};{shortname}v1` |
-| `grpc.Server.Serve()` returns immediately at boot | Listener bind failed (port collision) | Check `/readyz?verbose`; the `grpc_ready` probe surfaces the bind error |
-| Cell label shows `_runtime` instead of `todoorder` | Service not registered through generated `cell_gen.go` (hand-rolled `RegisterServer`) | Use generated `reg.GRPCService(...)` wiring only; archtest `GRPC-SERVICE-IN-CONTRACT-01` would normally catch this — check whether it was bypassed |
+| `make proto-gen` fails with `package mismatch` | `option go_package` not aligned with `generated/contracts/grpc/...` layout | Match the `go_package` to `generated/contracts/grpc/{domain}/{version};{shortname}v1`; for a satellite module add the module root to `buf.yaml` |
+| `grpc.Server.Serve()` returns immediately at boot | Listener bind failed (port collision) | Check the startup logs; ensure the grpc port differs from the HTTP listeners |

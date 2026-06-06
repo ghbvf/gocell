@@ -148,6 +148,34 @@ metrics:
         - cell
         - slice
       file: runtime/observability/metrics/eventbus_cache.go
+    - name: grpc_server_request_duration_seconds
+      type: histogram
+      help: gRPC unary server request duration in seconds.
+      labels:
+        - method
+        - code
+        - cell
+      buckets:
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+      file: examples/iotdevice/run.go
+    - name: grpc_server_requests_total
+      type: counter
+      help: Total number of gRPC unary server requests.
+      labels:
+        - method
+        - code
+        - cell
+      file: examples/iotdevice/run.go
     - name: hook_observer_dropped_total
       type: counter
       help: Total number of hook events dropped by the async hook dispatcher, partitioned by reason.

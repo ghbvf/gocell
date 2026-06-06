@@ -44,7 +44,7 @@ cd gocell
 bash scripts/gen-deploy-secrets.sh
 ```
 
-The script generates 12 values in `.env.local` (see §Secrets table for the
+The script generates 13 values in `.env.local` (see §Secrets table for the
 full list). The file is set to `chmod 600` automatically. The script exits
 with code 1 if `.env.local` already exists, so it is safe to run without
 checking first.
@@ -156,11 +156,12 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 
 ### What the script generates
 
-`scripts/gen-deploy-secrets.sh` writes 12 values to `.env.local`:
+`scripts/gen-deploy-secrets.sh` writes 13 values to `.env.local`:
 
 | Variable | How generated |
 |----------|---------------|
 | `PG_PASSWORD` | `openssl rand -hex 16` |
+| `GOCELL_APP_PASSWORD` | `openssl rand -hex 16` (hex = URL-safe; embedded in the restricted serving DSN) |
 | `CONFIGCORE_MASTER_KEY` | `openssl rand -hex 32` (64 hex chars) |
 | `CONFIGCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `AUDITCORE_HMAC_KEY` | `openssl rand -base64 32` |
@@ -199,6 +200,55 @@ completes.
 
 To rotate individual secrets without full teardown, edit `.env.local` manually,
 then run `make local-down && make local-up`.
+
+
+## Dual-role PostgreSQL (RLS runtime enforcement)
+
+GoCell uses PostgreSQL Row Level Security (`FORCE ROW LEVEL SECURITY`) on all six
+tenant tables (config_entries / config_versions / feature_flags / users / roles /
+role_assignments, migrations 052–053). RLS is enforced at runtime only when the
+**serving pool role** is a non-owner that lacks superuser and `BYPASSRLS`. A
+superuser ignores all policies regardless of schema correctness.
+
+To enforce RLS end-to-end, the stack uses **two separate PostgreSQL roles**:
+
+| Role | Used by | Privileges |
+|------|---------|-----------|
+| `gocell` | `migrate` service (pg-migrate tool) | Superuser / table owner; runs DDL |
+| `gocell_app` | `corebundle` serving pool (`GOCELL_CONFIGCORE_DATABASE_URL`) | NOSUPERUSER, NOBYPASSRLS, non-owner; DML only via default privileges |
+
+`gocell_app` is created by `deploy/postgres/init/10-restricted-role.sh`, which
+the PostgreSQL container runs once on first data-directory init (before migrations).
+Migrations are run by the admin role `gocell`, so every table created is auto-granted
+to `gocell_app` via `ALTER DEFAULT PRIVILEGES`.
+
+### New env var: `GOCELL_APP_PASSWORD`
+
+`GOCELL_APP_PASSWORD` sets the password for the restricted role. It must be set in
+`.env.local`. The secret-generation script `scripts/gen-deploy-secrets.sh` writes
+it automatically alongside `PG_PASSWORD`. Use `.env.local.example` as a reference.
+
+### First-time setup (new role, new data dir)
+
+If you already have a local stack running with the old single-role wiring:
+
+```bash
+make local-down        # stops containers AND removes the pgdata volume (-v)
+# ensure .env.local contains GOCELL_APP_PASSWORD (re-run gen-deploy-secrets.sh)
+make local-up          # fresh PG data dir: initdb runs 10-restricted-role.sh
+```
+
+The `make local-down` target runs `docker compose ... down -v`, which removes
+the `pgdata` named volume so the next `make local-up` triggers a full initdb.
+This is a one-time step; subsequent `make local-down && make local-up` cycles
+reuse the initdb mechanism automatically.
+
+### Probe: `postgres_app_role_restricted_ready`
+
+After the dual-role migration, `/readyz` exposes a new probe
+`postgres_app_role_restricted_ready`. It fails (503) when the serving role is a
+superuser or carries `BYPASSRLS`. A green probe confirms RLS is active at runtime.
+See `docs/ops/readyz.md` §Adapter-level: serving-role capability probe.
 
 
 ## Troubleshooting

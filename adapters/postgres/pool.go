@@ -30,6 +30,12 @@ const (
 	ProbeReady healthz.ProbeName = "postgres_ready"
 	// ProbeIndexesValidReady probes that all expected indexes are valid.
 	ProbeIndexesValidReady healthz.ProbeName = "postgres_indexes_valid_ready"
+	// ProbeAppRoleRestrictedReady probes that the serving connection's current_user
+	// is neither a superuser nor BYPASSRLS, so the FORCE ROW LEVEL SECURITY
+	// tenant_isolation policies (migrations 052/053) are actually enforced at
+	// runtime (#1676 [F-B11]). Registered only when Config.RequireRestrictedRole is
+	// set — a serving pool; admin/utility pools (e.g. tools/pg-migrate) leave it off.
+	ProbeAppRoleRestrictedReady healthz.ProbeName = "postgres_app_role_restricted_ready"
 )
 
 // Default pool configuration values.
@@ -74,6 +80,18 @@ type Config struct {
 	// pgconn.Config.ConnectTimeout unconditionally, overriding any
 	// connect_timeout=N in the DSN. Default (applied by applyDefaults): 5s.
 	ConnectTimeout time.Duration
+
+	// RequireRestrictedRole declares this pool as a SERVING pool for
+	// RLS-protected tables: when true, Probes() additionally exposes
+	// ProbeAppRoleRestrictedReady, which fails /readyz if the connection's
+	// current_user is a superuser or carries BYPASSRLS (either bypasses the
+	// FORCE ROW LEVEL SECURITY tenant_isolation policies, making them a runtime
+	// no-op — #1676 [F-B11]). Leave false for admin/migration pools (e.g.
+	// tools/pg-migrate) and utility pools, which legitimately connect as an
+	// owner/superuser. This is a present capability axis (serving vs admin), not
+	// a backward-compat toggle: corebundle's serving pool sets it true because
+	// its schema (migrations 052/053) always carries RLS.
+	RequireRestrictedRole bool
 }
 
 // applyDefaults fills zero-valued fields with default values.
@@ -202,6 +220,44 @@ func (p *Pool) Health(ctx context.Context) error {
 	return nil
 }
 
+// AppRoleRestrictedCheck verifies that the pool's serving connection runs as a
+// role that ROW LEVEL SECURITY actually constrains: neither a superuser nor a
+// BYPASSRLS role. Either bypasses RLS regardless of FORCE, so the tenant_isolation
+// policies (migrations 052/053) would silently leak across tenants at runtime.
+//
+// It backs the ProbeAppRoleRestrictedReady readyz probe (#1676 [F-B11]) and runs
+// only on pools that opt in via Config.RequireRestrictedRole. The catalog read is
+// SELECT-only on pg_roles (readable by any role) keyed on current_user, so it is
+// safe for the restricted serving role itself to execute.
+func (p *Pool) AppRoleRestrictedCheck(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultHealthTimeout)
+	defer cancel()
+
+	var rolsuper, rolbypassrls bool
+	if err := p.inner.QueryRow(ctx,
+		`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`,
+	).Scan(&rolsuper, &rolbypassrls); err != nil {
+		// A missing current_user row or a read failure is itself a precondition
+		// failure: we cannot prove the serving role is restricted.
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGRoleBypassRLS,
+			"postgres: serving-role RLS precondition probe failed", err)
+	}
+	return appRoleRestrictedResult(rolsuper, rolbypassrls)
+}
+
+// appRoleRestrictedResult is the pure (DB-free) verdict for the serving-role RLS
+// precondition: a role is acceptable only when it is neither a superuser nor
+// BYPASSRLS. Split out so the decision is table-testable without a real database.
+func appRoleRestrictedResult(rolsuper, rolbypassrls bool) error {
+	if rolsuper || rolbypassrls {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGRoleBypassRLS,
+			"postgres: serving role bypasses row-level security (superuser or BYPASSRLS); "+
+				"FORCE ROW LEVEL SECURITY tenant isolation is not enforced at runtime — "+
+				"serve from a NOSUPERUSER NOBYPASSRLS non-owner role")
+	}
+	return nil
+}
+
 // Close gracefully shuts down the connection pool, bounded by ctx.
 //
 // pgxpool.Pool.Close() performs a synchronous drain with no context parameter.
@@ -223,15 +279,20 @@ func (p *Pool) Close(ctx context.Context) error {
 	})
 }
 
-// Probes returns two typed readiness probes that contribute to /readyz:
+// Probes returns the pool's typed readiness probes contributing to /readyz:
 //
 //  1. ProbeReady (= "postgres_ready") — pings the PG pool connection via
 //     Pool.Health.
 //  2. ProbeIndexesValidReady (= "postgres_indexes_valid_ready") — calls
 //     InvalidIndexCheck to surface any indexes left invalid by an interrupted
 //     CREATE INDEX CONCURRENTLY.
+//  3. ProbeAppRoleRestrictedReady (= "postgres_app_role_restricted_ready") —
+//     present ONLY when Config.RequireRestrictedRole is set (a serving pool):
+//     verifies current_user is neither superuser nor BYPASSRLS so FORCE RLS is
+//     effective at runtime (#1676 [F-B11]). Admin/migration pools leave the flag
+//     off and so do not register it.
 //
-// Both probes cap their inner wait at adapterutil.DefaultProbeTimeout (5 s)
+// Every probe caps its inner wait at adapterutil.DefaultProbeTimeout (5 s)
 // so a slow PG does not hold the /readyz response indefinitely.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
@@ -241,12 +302,18 @@ func (p *Pool) Probes() []healthz.Probe {
 	if healthFn == nil {
 		healthFn = p.Health
 	}
-	return []healthz.Probe{
+	probes := []healthz.Probe{
 		adapterutil.HealthToProbe(ProbeReady, healthFn, adapterutil.DefaultProbeTimeout),
 		adapterutil.HealthToProbe(ProbeIndexesValidReady, func(ctx context.Context) error {
 			return InvalidIndexCheck(ctx, p)
 		}, adapterutil.DefaultProbeTimeout),
 	}
+	if p.config.RequireRestrictedRole {
+		probes = append(probes,
+			adapterutil.HealthToProbe(ProbeAppRoleRestrictedReady, p.AppRoleRestrictedCheck,
+				adapterutil.DefaultProbeTimeout))
+	}
+	return probes
 }
 
 // Worker returns nil — Pool has no background goroutine. The outbox relay is

@@ -275,7 +275,7 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 // TestCodegenContractGen01_OptedInHasGen verifies CODEGEN-CONTRACT-GEN-01.
 // Contracts are opted into codegen by default; `codegen: false` in
 // contract.yaml is the only way to opt out.
-// For every opted-in contract:
+// For every opted-in contract (EXCEPT the zero-artifact kinds webhook + grpc):
 //   - generated/<kind>/<...>/v<N>/types_gen.go must exist (all kinds)
 //   - generated/<kind>/<...>/v<N>/iface_gen.go must exist (all kinds EXCEPT command)
 //   - generated/<kind>/<...>/v<N>/handler_gen.go must exist (kind=http only)
@@ -283,6 +283,11 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 //   - generated/<kind>/<...>/v<N>/command_gen.go must exist (kind=command only;
 //     command skips iface_gen.go — the typed Handler interface + Register/Dispatch
 //     dispatch funnel live in command_gen.go, mirroring saga_gen.go)
+//
+// webhook and grpc are zero-artifact kinds (contractgen emits no per-contract
+// package): webhook wires via cellgen ReceiverSpec literals; grpc's server
+// contract is buf's generated pb.<Svc>Server (#1688, ADR 202605260000
+// §Amendment 2026-06-07). codegen:true only selects them for Generate(ScopeAll).
 func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -292,13 +297,9 @@ func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 		if !contract.Codegen {
 			continue // not opted into codegen
 		}
-		if contract.Kind == "webhook" {
-			// webhook contracts emit ZERO contractgen artifacts by design:
-			// registration derives via cellgen from slice.yaml using
-			// kernel/webhook spec literals (see contractgen generator.go webhook
-			// branch). codegen:true only selects the contract for
-			// Generate(ScopeAll); there is no per-contract generated package, so
-			// the types_gen.go / iface_gen.go requirement does not apply.
+		if contract.Kind == "webhook" || contract.Kind == "grpc" {
+			// Zero-artifact kinds (see godoc above): no per-contract generated
+			// package, so the types_gen.go / iface_gen.go requirement does not apply.
 			continue
 		}
 		pkgDir := filepath.Join(root, contractIDToExpectedPkgPath(contract.ID))
@@ -384,20 +385,31 @@ func TestCodegenContractGen02_GeneratedHeader(t *testing.T) {
 }
 
 // TestCodegenContractUserOverlap01 verifies CODEGEN-CONTRACT-USER-OVERLAP-01.
-// No hand-written .go files (non _gen.go suffix) are permitted under
-// generated/contracts/.
+// No hand-written .go files (neither _gen.go nor .pb.go suffix) are permitted
+// under generated/contracts/.
 func TestCodegenContractUserOverlap01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	for _, abs := range detectUserFilesUnderGeneratedContracts(t, root, generatedContractsSubdir) {
 		t.Errorf("CODEGEN-CONTRACT-USER-OVERLAP-01: %s is a hand-written .go file under generated/contracts/"+
-			" — only _gen.go files are permitted; move helpers to the consuming package",
+			" — only _gen.go (contractgen) and .pb.go (buf) files are permitted; move helpers to the consuming package",
 			relSlashOrAbs(root, abs))
 	}
 }
 
 // detectUserFilesUnderGeneratedContracts returns absolute paths of every
-// non-_gen.go file under root/dirRel.
+// machine-generated-suffix-less .go file under root/dirRel (i.e. neither
+// contractgen `_gen.go` nor buf `.pb.go`).
+//
+// The `.pb.go` exemption is the buf protoc-gen-go / protoc-gen-go-grpc output
+// landing under generated/contracts/grpc/ (per buf.gen.yaml out, ADR
+// 202605260000). It is generated, not hand-written — protoc-gen-go is a
+// deterministic codegen funnel from the .proto (single-source guarded by
+// GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01 + hermetic buf.gen.yaml), so it belongs
+// in generated/ exactly like contractgen output. The "no hand-written code in
+// generated/contracts/" guarantee is unchanged for plain `.go` files. The buf
+// header is independently asserted by buf's own DO-NOT-EDIT banner; the suffix
+// check here is symmetric with the existing `_gen.go` suffix handling.
 //
 // Single source for CODEGEN-CONTRACT-USER-OVERLAP-01's scope construction —
 // shared by the production rule (TestCodegenContractUserOverlap01) and the
@@ -412,7 +424,7 @@ func detectUserFilesUnderGeneratedContracts(t *testing.T, root, dirRel string) [
 	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			abs := p.Fset.Position(file.Pos()).Filename
-			if strings.HasSuffix(abs, "_gen.go") {
+			if strings.HasSuffix(abs, "_gen.go") || strings.HasSuffix(abs, ".pb.go") {
 				continue
 			}
 			userFiles = append(userFiles, abs)

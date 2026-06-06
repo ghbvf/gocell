@@ -5,7 +5,11 @@ package devicecell
 
 import (
 	"context"
+	"fmt"
 
+	"google.golang.org/grpc"
+
+	grpc0 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -76,6 +80,17 @@ func (c *DeviceCell) Init(ctx context.Context, reg cell.Registrar) error {
 			return firstErr
 		},
 	})
+
+	if err := reg.GRPCService(cell.GRPCServiceSpec{
+		ContractID: "grpc.device.command.v1",
+		CellID:     "devicecell",
+		Listener:   cell.PrimaryListener,
+		Register: func(r grpc.ServiceRegistrar) {
+			grpc0.RegisterDeviceCommandServiceServer(r, c.commandRPCServer)
+		},
+	}); err != nil {
+		return fmt.Errorf("devicecell: grpc-serve grpc.device.command.v1: %w", err)
+	}
 
 	return nil
 }

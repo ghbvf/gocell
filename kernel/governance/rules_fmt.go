@@ -838,12 +838,15 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 // metadata.GRPCProtoPathPrefix so schema, governance, and runtime never drift.
 // A single contract now owns a whole proto service (#1655); method and
 // streamingType fields are deleted — the .proto is the single source of truth.
+// The schema's grpc endpoints are required: [server, clients, grpc]; this rule
+// also enforces endpoints.clients presence (an explicit `clients: []` for the
+// no-caller case) so the validator and schema agree (review #1704 F4).
 //
 // Without this rule, schema-aware tooling validates endpoints.grpc but
 // `gocell validate` accepts any grpc block (service/proto missing, proto
-// outside contracts/grpc/), and a non-grpc contract could silently carry
-// endpoints.grpc — leaving CLI users a different contract than the schema
-// declares (review C1).
+// outside contracts/grpc/, endpoints.clients absent), and a non-grpc contract
+// could silently carry endpoints.grpc — leaving CLI users a different contract
+// than the schema declares (review C1).
 //
 // AI-robust: Medium (governance YAML-metadata validate layer, same tier as
 // FMT-13). Value-presence ceiling; the proto prefix is Hard-locked to the
@@ -889,6 +892,19 @@ func (v *Validator) validateFMT37ForContract(c *metadata.ContractMeta) []Validat
 	}
 
 	var results []ValidationResult
+	// endpoints.clients is required by the contract.schema.json grpc if/then
+	// block (required: [server, clients, grpc]); enforce it here so `gocell
+	// validate` and the schema agree. An absent key is a finding; an explicit
+	// empty list (`clients: []`) is the valid "no caller cells yet" form. yaml.v3
+	// decodes `clients: []` to a non-nil empty slice and an omitted key to nil,
+	// so a nil slice unambiguously means the key was not declared.
+	if c.Endpoints.Clients == nil {
+		results = append(results, v.newError(
+			codeFMT37, IssueRequired, file, "endpoints.clients",
+			fmt.Sprintf("grpc contract %q must declare endpoints.clients (use [] when no cell calls it)", c.ID),
+			"add clients: [] under endpoints (or the list of caller cells/actors)",
+		))
+	}
 	if g.Service == "" {
 		results = append(results, v.newError(
 			codeFMT37, IssueRequired, file, "endpoints.grpc.service",

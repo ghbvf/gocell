@@ -28,7 +28,7 @@ package archtest
 // convention-only.
 //
 // This archtest pins the callsite identity of all four principal setters to the
-// two legitimate writers:
+// three legitimate writers:
 //
 //   - runtime/auth/middleware.go — injectPrincipalCtxKeys, the producer-side
 //     bridge (shared by the JWT and service-token paths) that runs AFTER
@@ -36,6 +36,10 @@ package archtest
 //   - kernel/outbox/principal.go — PrincipalMetadata.RestoreToContext, the
 //     consumer-side restore that re-hydrates the entry's principal into handler
 //     ctx after the async hop.
+//   - kernel/projection/system_principal.go — InstallSystemPrincipal (overwrites all
+//     four keys with the "system" sentinel; saga journal replay path, PR-03 #1627)
+//     and clearAmbientPrincipal (zeroes all four keys at the Rebuild detach boundary).
+//     Both are sanctioned overwrite-writers for the projection principal contract.
 //
 // No producer (cells/* or examples/*) can write a principal ctx key. Together
 // with OUTBOX-RECONSTRUCTION-CALLER-01 (the reconstruction-funnel lock), this
@@ -102,8 +106,17 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 
 // principalSetterAllowlist maps each principal ctx-key setter to the
 // module-relative production files allowed to call it. All four setters share
-// the same two writers: the auth request-boundary bridge (producer) and the
-// consumer-side RestoreToContext.
+// three writers: the auth request-boundary bridge (producer), the
+// consumer-side RestoreToContext, and the projection system-principal writer
+// (InstallSystemPrincipal + clearAmbientPrincipal, PR-03 #1627).
+//
+// WithTenantID additionally allows cells/configcore/configcoretest/fakes.go
+// (CtxWithTenant helper), which simulates the JWT authenticator's ctx injection
+// in test scenarios — the same path used by the JWT authenticator in production
+// (per the file's own godoc). This is a test-helper package (configcoretest),
+// not a production business code path; the call is semantically equivalent to
+// the auth bridge and thus sanctioned. This entry was introduced alongside the
+// multi-tenancy epic (#1337 PR-1) but missed the initial allowlist update.
 //
 // WithTenantID gained its producer writer (runtime/auth/middleware.go) with the
 // multi-tenancy epic (#1337 PR-1): injectPrincipalCtxKeys now writes the JWT
@@ -118,20 +131,25 @@ const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
 // See ADR 202605281200-1042 §Amendment 2026-05-30.
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {
-		"runtime/auth/middleware.go": {}, // producer bridge (JWT + service-token)
-		"kernel/outbox/principal.go": {}, // consumer-side RestoreToContext
+		"runtime/auth/middleware.go":            {}, // producer bridge (JWT + service-token)
+		"kernel/outbox/principal.go":            {}, // consumer-side RestoreToContext
+		"kernel/projection/system_principal.go": {}, // saga journal carrier: InstallSystemPrincipal + clearAmbientPrincipal (PR-03 #1627)
 	},
 	"WithSubjectID": {
-		"runtime/auth/middleware.go": {},
-		"kernel/outbox/principal.go": {},
+		"runtime/auth/middleware.go":            {},
+		"kernel/outbox/principal.go":            {},
+		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
 	},
 	"WithSessionID": {
-		"runtime/auth/middleware.go": {},
-		"kernel/outbox/principal.go": {},
+		"runtime/auth/middleware.go":            {},
+		"kernel/outbox/principal.go":            {},
+		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
 	},
 	"WithTenantID": {
-		"runtime/auth/middleware.go": {}, // producer bridge — JWT tenant_id claim (#1337)
-		"kernel/outbox/principal.go": {}, // consumer-side RestoreToContext
+		"runtime/auth/middleware.go":               {}, // producer bridge — JWT tenant_id claim (#1337)
+		"kernel/outbox/principal.go":               {}, // consumer-side RestoreToContext
+		"kernel/projection/system_principal.go":    {}, // saga journal carrier (PR-03 #1627)
+		"cells/configcore/configcoretest/fakes.go": {}, // CtxWithTenant test-helper — simulates JWT auth ctx (#1337, missed allowlist)
 	},
 }
 

@@ -67,7 +67,7 @@ func TestDeviceCell_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, rec))
-	assert.Len(t, c.OwnedSlices(), 5, "should have 5 slices")
+	assert.Len(t, c.OwnedSlices(), 6, "should have 6 slices (5 HTTP/command + devicecommandrpc grpc, #1151)")
 
 	// Start
 	require.NoError(t, c.Start(ctx))

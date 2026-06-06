@@ -99,10 +99,19 @@ Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
-| `GOCELL_CONFIGCORE_DATABASE_URL` | PostgreSQL DSN for configcore | — | **postgres mode** |
+| `GOCELL_CONFIGCORE_DATABASE_URL` | PostgreSQL DSN for configcore; role must be `gocell_app` (restricted, NOSUPERUSER NOBYPASSRLS) so that `FORCE ROW LEVEL SECURITY` is enforced at runtime | — | **postgres mode** |
 | `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` | Max open connections | 10 | No |
 | `GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT` | Idle connection timeout (e.g. `5m`) | `5m` | No |
 | `GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME` | Max connection lifetime (e.g. `1h`) | `1h` | No |
+
+### Restricted serving-role credential
+
+| Variable | Purpose | Default | Required |
+|---|---|---|---|
+| `GOCELL_APP_PASSWORD` | Password for the restricted PostgreSQL role `gocell_app` (NOSUPERUSER, NOBYPASSRLS, non-owner). Used by `GOCELL_CONFIGCORE_DATABASE_URL` and by `deploy/postgres/init/10-restricted-role.sh` which creates the role on first data-dir init. Must be URL-safe — RFC 3986 unreserved characters only (`A-Za-z0-9._~-`); it is interpolated into a SQL heredoc AND the serving DSN userinfo, so `'` `/` `+` `=` `@` and spaces would break init or connection. Recommended: `openssl rand -hex 16`. | — | **postgres mode** |
+
+See `docs/ops/local-docker-deploy.md` §Dual-role PostgreSQL for first-time setup steps.
+Probe `postgres_app_role_restricted_ready` verifies at runtime that the serving role is not a superuser / `BYPASSRLS`.
 
 ### configcore cell encryption
 

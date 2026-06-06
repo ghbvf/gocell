@@ -29,14 +29,18 @@
 //	event      |   ✔   |   ✔   |    —    |   ✔  |      ✔       |     ✔      |   —  |    —
 //	command    |   ✔   |   —   |    —    |   —  |      —       |     —      |   —  |    ✔
 //	projection |   ✔   |   ✔   |    —    |   —  |      —       |     —      |   —  |    —
-//	grpc       |   ✔   |   ✔   |    —    |   —  |      —       |     —      |   —  |    —
+//	grpc       |   —   |   —   |    —    |   —  |      —       |     —      |   —  |    —
 //	saga       |   ✔   |  ✔ *  |    —    |   —  |      —       |     —      |   ✔  |    —
 //	webhook    |   —   |   —   |    —    |   —  |      —       |     —      |   —  |    —
 //
 // * saga's iface_gen.go is an empty package clause (no Service interface); the
 // typed business interface is Impl in saga_gen.go. See the iface_gen.go section.
 //
-// # types_gen.go (all kinds except webhook)
+// webhook and grpc emit no contractgen artifacts at all: webhook registration
+// derives via cellgen from slice.yaml; grpc's server contract is buf's generated
+// pb.<Svc>Server interface, so contractgen emits no Go for kind=grpc (#1688).
+//
+// # types_gen.go (all kinds except webhook and grpc)
 //
 // Renders Request / Response / Payload / Headers DTOs from the schemaRefs.
 // For HTTP contracts, additionally renders the typed-response-envelope set:
@@ -59,7 +63,7 @@
 // body (errors go through pkg/httputil.WriteErrorWithStatus to share the 4xx/
 // 5xx redaction policy with the framework fallback path).
 //
-// # iface_gen.go (http/event/projection/grpc/saga — not command/webhook)
+// # iface_gen.go (http/event/projection/saga — not command/grpc/webhook)
 //
 // Renders the Service interface that the cell-side handler must implement.
 // For HTTP contracts the signature is
@@ -69,19 +73,17 @@
 // faults), in which case the generated handler falls back to
 // pkg/httputil.WriteError(err) and derives the response status from
 // errcode.Kind. For event contracts the signature is
-// `Handle{Topic}(ctx, *Payload) error`. For grpc contracts the signature is
-// `{Method}(ctx, *pb.{Request}) (*pb.{Response}, error)` on a `Server`
-// interface — the proto-generated message types + import path are resolved from
-// the .proto go_package option + rpc declarations (ReadProtoServiceInfo). types_gen.go
-// carries no DTOs for grpc (proto is the schema); GRPC-PROTO-REGISTRY-SINGLE-SOURCE-01
-// (grpc_proto_registry_test.go) locks that the emitted import path comes only
-// from the proto, not a hand-written literal. For
+// `Handle{Topic}(ctx, *Payload) error`. For
 // kind=saga, iface_gen.go is intentionally empty (just the package clause) —
 // the typed business interface is the Impl interface emitted in saga_gen.go,
 // not a Service here. command contracts emit no iface_gen.go — the typed Handler
 // interface lives in command_gen.go (a Service interface there would collide);
-// webhook contracts emit no contractgen package at all (registration derives via
-// cellgen from slice.yaml).
+// grpc and webhook contracts emit no contractgen package at all: grpc's server
+// contract is buf's generated pb.<Svc>Server interface (proto-derived, declares
+// every RPC, carries the forward-compat mustEmbedUnimplemented marker), so a
+// parallel contractgen interface would be a register-incompatible,
+// package-colliding duplicate (#1688); webhook registration derives via cellgen
+// from slice.yaml.
 //
 // # handler_gen.go (kind=http only)
 //

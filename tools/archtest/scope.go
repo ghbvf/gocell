@@ -99,3 +99,11 @@ func Report(t *testing.T, ruleID string, diags []Diagnostic) {
 	t.Helper()
 	scanner.Report(t, ruleID, diags)
 }
+
+// Canonical deduplicates diags and returns them sorted by (Rel, Line, Message),
+// the same order [Report] and the golden harness use. Rules that accumulate
+// diagnostics across multiple passes (e.g. a build-tag×N scan) use it to return
+// a stable, duplicate-free slice from their importable Check* body.
+func Canonical(diags []Diagnostic) []Diagnostic {
+	return scanner.Canonical(diags)
+}

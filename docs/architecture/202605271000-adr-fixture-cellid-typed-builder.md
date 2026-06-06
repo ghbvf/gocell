@@ -65,11 +65,11 @@ Slice-id, contract-id, journey-id, assembly-id, and actor-id each share the cell
 
 ## §2 — Carveout Registry
 
-Carveouts apply at **function-level** only (per `.claude/rules/gocell/ai-robust.md` "archtest carve-out 约束"). Each entry must appear character-identical here and in `fixtureCellIDCarveOuts` in `tools/archtest/fixture_cellid_typed_builder_test.go`; A4 fails if either side drifts.
+Carveouts apply at **function-level** only (per `.claude/rules/gocell/ai-robust.md` "archtest carve-out 约束"). Each entry must appear character-identical here and in `fixtureCellIDCarveOuts` in `tools/archtest/fixture_cellid_typed_builder.go`; A4 fails if either side drifts. Names are **module-relative** (no platform module-path prefix) so the registry stays single-place across a module rename / `/v2` bump (#1708 F5).
 
 | Carved-out function | Reason |
 |---------------------|--------|
-| github.com/ghbvf/gocell/kernel/governance.TestValidator_FMTC1_CellIDPattern | FMT-C1 RED case: intentionally constructs invalid cell ids ("foo-bar", "FooBar", "1foo", "foo_bar", "a") as fixture content to verify FMT-C1 detection. metadatatest.NewCellID would panic at those literals; the test cannot use the builder. |
+| kernel/governance.TestValidator_FMTC1_CellIDPattern | FMT-C1 RED case: intentionally constructs invalid cell ids ("foo-bar", "FooBar", "1foo", "foo_bar", "a") as fixture content to verify FMT-C1 detection. metadatatest.NewCellID would panic at those literals; the test cannot use the builder. |
 
 ## §3 — 升级路径
 
