@@ -55,6 +55,7 @@ func TestMirrorsManifest(t *testing.T) {
 	}
 
 	wantDestRoots := []string{
+		"examples/demo",
 		"examples/iotdevice",
 		"examples/orderfulfillment",
 		"examples/todoorder",

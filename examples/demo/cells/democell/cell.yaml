@@ -1,0 +1,20 @@
+id: democell
+type: core
+# L1 (not L0): a cell that provides an HTTP contract is a request boundary, so
+# TOPO-05 forbids L0 here. The hello slice itself is pure compute (L0); the cell
+# level reflects its provider role. No real transaction is used (demo only).
+consistencyLevel: L1
+lifecycle: experimental
+owner:
+  team: examples
+  role: cell-owner
+# schema.primary is required for non-L0 cells (FMT-06). The demo has no
+# persistence, so this is a nominal logical name (no backing schema file —
+# the same as examples/orderfulfillment's "orders").
+schema:
+  primary: demo
+verify:
+  smoke:
+    - smoke.democell.startup
+goStructName: DemoCell
+l0Dependencies: []

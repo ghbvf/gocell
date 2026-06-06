@@ -60,6 +60,7 @@ var probeNameSanctionedPkgs = map[string]bool{
 	PlatformModulePath + "/cells/auditcore":  true,
 	PlatformModulePath + "/cells/accesscore": true,
 	// Example cells (cellgen healthz_gen.go — marker required)
+	PlatformModulePath + "/examples/demo/cells/democell":                         true,
 	PlatformModulePath + "/examples/iotdevice/cells/devicecell":                  true,
 	PlatformModulePath + "/examples/orderfulfillment/cells/orderfulfillmentcell": true,
 	PlatformModulePath + "/examples/todoorder/cells/ordercell":                   true,
@@ -73,6 +74,7 @@ var cellgenSanctionedPkgs = map[string]bool{
 	PlatformModulePath + "/cells/configcore":                                     true,
 	PlatformModulePath + "/cells/auditcore":                                      true,
 	PlatformModulePath + "/cells/accesscore":                                     true,
+	PlatformModulePath + "/examples/demo/cells/democell":                         true,
 	PlatformModulePath + "/examples/iotdevice/cells/devicecell":                  true,
 	PlatformModulePath + "/examples/orderfulfillment/cells/orderfulfillmentcell": true,
 	PlatformModulePath + "/examples/todoorder/cells/ordercell":                   true,

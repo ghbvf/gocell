@@ -25,16 +25,15 @@
 #   - examples/ssobff + examples/corebundlestarter are go.work members but carry
 #     NO GoCell metadata (hand-wired assemblies), so they legitimately stay out
 #     of this manifest (the reverse cross-check exempts metadata-free members).
-#   - examples/demo carries one cell.yaml but has no compilable Go (no go.mod),
-#     so it is NOT a go.work member; its cell stays in the root module entry's
-#     examples/demo glob below.
+#   - examples/demo is now a satellite module like todoorder/iotdevice/
+#     orderfulfillment (#1644): it has its own go.mod + go.work `use` line and
+#     declares its own module entry below with module-relative include globs.
 version: v1
 modules:
   - path: .
     includes:
       cells:
         - "cells/*/cell.yaml"
-        - "examples/demo/cells/*/cell.yaml"
       slices:
         - "cells/*/slices/*/slice.yaml"
       contracts:
@@ -77,6 +76,16 @@ modules:
         - "contracts/**/contract.yaml"
       journeys:
         - "journeys/J-*.yaml"
+      assemblies:
+        - "assembly.yaml"
+  - path: examples/demo
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+      contracts:
+        - "contracts/**/contract.yaml"
       assemblies:
         - "assembly.yaml"
   - path: examples/webhookdemo

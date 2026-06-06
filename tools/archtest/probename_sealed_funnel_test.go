@@ -20,6 +20,7 @@
 //   - runtime/websocket — ProbeReady
 //   - runtime/saga — ProbeCoordinatorReady
 //   - cells/{configcore,auditcore,accesscore}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/demo/cells/democell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
 //   - examples/iotdevice/cells/devicecell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
 //   - examples/orderfulfillment/cells/orderfulfillmentcell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
 //   - examples/todoorder/cells/ordercell/healthz_gen.go — ProbeRepoReady (cellgen marker required)
@@ -237,6 +238,7 @@ func goldenProbeNames() []string {
 		"cells/accesscore.ProbeRepoReady=accesscore_repo_ready",
 		"cells/auditcore.ProbeRepoReady=auditcore_repo_ready",
 		"cells/configcore.ProbeRepoReady=configcore_repo_ready",
+		"examples/demo/cells/democell.ProbeRepoReady=democell_repo_ready",
 		"examples/iotdevice/cells/devicecell.ProbeRepoReady=devicecell_repo_ready",
 		"examples/orderfulfillment/cells/orderfulfillmentcell.ProbeRepoReady=orderfulfillmentcell_repo_ready",
 		"examples/todoorder/cells/ordercell.ProbeRepoReady=ordercell_repo_ready",

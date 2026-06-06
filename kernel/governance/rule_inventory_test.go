@@ -62,6 +62,7 @@ func goldenRuleIDs() []string {
 		"ADV-01", "ADV-03", "ADV-04", "ADV-05",
 
 		// COMMAND — command contract format (rules_command.go)
+		"COMMAND-CONTRACT-CONSISTENCY-LEVEL-01",
 		"COMMAND-CONTRACT-SCHEMA-REF-01",
 
 		// CONTRACT-ENDPOINT-TEST-MAPPING — active HTTP contract → slice.verify.contract.serve

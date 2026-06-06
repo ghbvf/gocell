@@ -1,0 +1,24 @@
+id: http.goldcell.example.v1
+kind: http
+ownerCell: goldcell
+consistencyLevel: L1
+lifecycle: draft
+endpoints:
+  server: goldcell
+  clients: []
+  http:
+    method: POST
+    path: /api/v1/goldcell/example
+    successStatus: 200
+    auth:
+      public: false
+    responses:
+      400:
+        description: "Bad request — malformed JSON body or invalid input"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: "Internal server error — unexpected failure"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
