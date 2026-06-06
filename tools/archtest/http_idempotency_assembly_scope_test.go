@@ -78,11 +78,9 @@ package archtest
 //     ReverseBlindSpot test (synthetic reflect shapes + a package-level
 //     method-bearing fixture, since Go forbids method decls inside a func).
 //   - β prong-1b/2 go/types blind spots: a 2nd package-level producer (func or
-//     function-typed var) → sole-producer diff (scan is exported-only — an
-//     unexported package-level func/var returning IdempotencyKey is NOT caught;
-//     the upstream-external Hard construction seal via unexported fields is the
-//     backstop there); reverting Store.Claim to raw strings → param-type freeze;
-//     both fail loud via the visited-guard if the package path moves.
+//     function-typed var), exported OR unexported, → sole-producer diff;
+//     reverting Store.Claim to raw strings → param-type freeze; both fail loud
+//     via the visited-guard if the package path moves.
 //   - β prong-1b/2 method blind spot: checkIdempotencyKeyMethods only scans
 //     methods of IdempotencyKey itself (via reflect.PointerTo), and the go/types
 //     sole-producer scan skips methods (Recv != nil) — so a method on ANOTHER
@@ -258,7 +256,7 @@ const (
 	storeClaimMethodName   = "Claim"
 )
 
-// deriveKeyProducerAllowed is the exhaustive set of exported package-level
+// deriveKeyProducerAllowed is the exhaustive set of package-level
 // surfaces in runtime/http/idempotency that may PRODUCE an IdempotencyKey value.
 // DeriveKey is the sole constructor; a second producer (FromStrings / a
 // function-typed var / an Unmarshal) would launder an arbitrary (ns,key) —
@@ -355,7 +353,7 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_KeySealed(t *testing.T) {
 }
 
 // TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink pins, via go/types,
-// (1) DeriveKey as the SOLE exported package-level producer of an IdempotencyKey
+// (1) DeriveKey as the SOLE package-level producer of an IdempotencyKey
 // value (a second producer would launder an arbitrary key), and (2) Store.Claim's
 // post-ctx parameter as IdempotencyKey (the downstream Hard sink — a raw (ns,key)
 // string pair is inexpressible at the boundary).
@@ -383,31 +381,11 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink(t *testing.T) {
 			}
 			ikType := ikObj.Type()
 
-			// (1) sole producer: exported package-level funcs AND function-typed
-			// vars whose signature returns IdempotencyKey must be exactly {DeriveKey}.
-			var producers []string
-			for _, name := range scope.Names() {
-				obj := scope.Lookup(name)
-				if !obj.Exported() {
-					continue
-				}
-				var sig *types.Signature
-				switch o := obj.(type) {
-				case *types.Func:
-					if s, ok := o.Type().(*types.Signature); ok && s.Recv() == nil {
-						sig = s
-					}
-				case *types.Var:
-					if s, ok := o.Type().(*types.Signature); ok {
-						sig = s
-					}
-				}
-				if sig != nil && sigReturnsType(sig, ikType) {
-					producers = append(producers, name)
-				}
-			}
+			// (1) sole producer: package-level funcs AND function-typed vars whose
+			// signature returns IdempotencyKey must be exactly {DeriveKey}.
+			producers := idempotencyKeyProducerNames(scope, ikType)
 			diags = append(diags, diffHTTPIdempotencyExpectedSet(
-				"exported package-level surfaces producing IdempotencyKey",
+				"package-level surfaces producing IdempotencyKey",
 				deriveKeyProducerAllowed, producers)...)
 
 			// (2) Store.Claim sink: the post-ctx parameter must be IdempotencyKey.
@@ -420,6 +398,30 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink(t *testing.T) {
 			"/SoleProducerAndSink: " + httpIdempotencyPkgPath + " not scanned — the funnel freeze did not run."})
 	}
 	Report(t, ruleHTTPIdemKeyNodeAgnostic01+"/SoleProducerAndSink", diags)
+}
+
+// idempotencyKeyProducerNames returns package-level func / function-typed var
+// names whose signature returns IdempotencyKey.
+func idempotencyKeyProducerNames(scope *types.Scope, ikType types.Type) []string {
+	var producers []string
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		var sig *types.Signature
+		switch o := obj.(type) {
+		case *types.Func:
+			if s, ok := o.Type().(*types.Signature); ok && s.Recv() == nil {
+				sig = s
+			}
+		case *types.Var:
+			if s, ok := o.Type().(*types.Signature); ok {
+				sig = s
+			}
+		}
+		if sig != nil && sigReturnsType(sig, ikType) {
+			producers = append(producers, name)
+		}
+	}
+	return producers
 }
 
 // checkStoreClaimParamType asserts Store.Claim's parameter after ctx is exactly
@@ -730,6 +732,10 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot(t *testing.T) {
 		t.Errorf("%s self-test: method detector missed the backdoor/builder fixture (got %v)",
 			ruleHTTPIdemKeyNodeAgnostic01, v)
 	}
+	if got := reverseSoleProducerFixtureNames(); !containsString(got, "hiddenProducer") {
+		t.Errorf("%s self-test: sole-producer detector missed unexported producer hiddenProducer (got %v)",
+			ruleHTTPIdemKeyNodeAgnostic01, got)
+	}
 
 	// Taint reverse fixtures (inline DeriveKey source). The conforming body yields
 	// zero; each malformed variant yields ≥1 from the signature freeze or taint walk.
@@ -743,6 +749,32 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_ReverseBlindSpot(t *testing.T) {
 				ruleHTTPIdemKeyNodeAgnostic01, name)
 		}
 	}
+}
+
+// reverseSoleProducerFixtureNames builds a synthetic package scope with an
+// unexported package-level producer. The production detector must include it:
+// same-package helpers can populate IdempotencyKey's unexported fields, so
+// exported-only scanning does not prove DeriveKey is the sole producer.
+func reverseSoleProducerFixtureNames() []string {
+	pkg := types.NewPackage("example.com/reverse/idem", "idem")
+	scope := pkg.Scope()
+	ikObj := types.NewTypeName(token.NoPos, pkg, idempotencyKeyTypeName, nil)
+	ikType := types.NewNamed(ikObj, types.NewStruct(nil, nil), nil)
+	scope.Insert(ikObj)
+
+	result := types.NewTuple(types.NewVar(token.NoPos, pkg, "", ikType))
+	producerSig := types.NewSignatureType(nil, nil, nil, types.NewTuple(), result, false)
+	scope.Insert(types.NewFunc(token.NoPos, pkg, "hiddenProducer", producerSig))
+	return idempotencyKeyProducerNames(scope, ikType)
+}
+
+func containsString(vals []string, want string) bool {
+	for _, v := range vals {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 const deriveKeyGood = `package p

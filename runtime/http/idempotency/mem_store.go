@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // MemStore is an in-process Store implementation backed by a mutex-guarded map.
@@ -54,6 +55,10 @@ func NewMemStore(clk clock.Clock) *MemStore {
 
 // Claim implements Store.
 func (ms *MemStore) Claim(ctx context.Context, k IdempotencyKey, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) { //nolint:lll // Store.Claim signature mirrors the interface; cannot shorten without breaking the interface contract
+	if k.Namespace() == "" || k.Key() == "" {
+		return 0, nil, nil, errcode.Assertion("idempotency.MemStore: IdempotencyKey namespace and key must be non-empty")
+	}
+
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 

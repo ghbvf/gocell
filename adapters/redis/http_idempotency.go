@@ -133,23 +133,30 @@ func (s *HTTPIdempotencyStore) ReadyCheck(ctx context.Context) error {
 // ARGV[1] = token
 // ARGV[2] = leaseTTL (milliseconds — PX precision)
 // ARGV[3] = fingerprint (hex sha256 of request body)
-// ARGV[4] = fpTTL (milliseconds — max(leaseTTL, doneTTL) to keep fp alongside resp)
+// ARGV[4] = fpTTL (milliseconds — leaseTTL; Record extends it to doneTTL)
 //
 // Returns:
 //
-//	{1}            = ClaimAcquired (lease set successfully; fp stored at KEYS[3])
+//	{1}            = ClaimAcquired (lease set successfully; fp stored at KEYS[3] with lease TTL)
 //	{0}            = ClaimBusy    (lease already held; fp matches or fp absent)
 //	{2,blob}       = ClaimDone    (resp key exists; blob = stored response; fp matches or fp absent)
 //	{3,fp_stored}  = FingerprintMismatch (fp key differs from ARGV[3]; fp_stored = the
 //	                 stored fingerprint blob, carried back for the per-field diff)
 const claimRespScript = `
 local fp_stored = redis.call('GET', KEYS[3])
-if fp_stored ~= false and ARGV[3] ~= "" and fp_stored ~= ARGV[3] then
-  return {3, fp_stored}
-end
 local resp = redis.call('GET', KEYS[1])
 if resp ~= false then
+  if fp_stored ~= false and ARGV[3] ~= "" and fp_stored ~= ARGV[3] then
+    return {3, fp_stored}
+  end
   return {2, resp}
+end
+local lease = redis.call('GET', KEYS[2])
+if lease ~= false then
+  if fp_stored ~= false and ARGV[3] ~= "" and fp_stored ~= ARGV[3] then
+    return {3, fp_stored}
+  end
+  return {0}
 end
 local ok = redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2])
 if ok then
@@ -162,7 +169,7 @@ return {0}
 `
 
 // recordScript: atomic Record (token-guarded). KEYS[1] is the lease-key.
-// On success the fp key is preserved (SET with doneTTL) so that future
+// On success the fp key is extended to doneTTL so that future
 // replay Claim calls can still validate the fingerprint. On Release the fp key
 // is deleted with the lease because there is no response to protect.
 //
@@ -257,10 +264,10 @@ func (s *HTTPIdempotencyStore) Claim(
 	leaseKey := KeyNamespace(scopedNS).applyHashtag(key, "lease")
 	fpKey := KeyNamespace(scopedNS).applyHashtag(key, "fp")
 	leaseMs := max(leaseTTL.Milliseconds(), 1)
-	// fpTTL = max(leaseTTL, doneTTL) so the fp key outlasts the lease but
-	// expires alongside the response key. Use doneTTL (24h default) as an upper
-	// bound; leaseTTL is at most 5 min so doneTTL dominates in practice.
-	fpMs := max(idempotency.DefaultTTL.Milliseconds(), leaseMs)
+	// fpTTL follows the in-flight lease. If the handler never records a response
+	// and the lease expires, the old fingerprint must expire with it so a later
+	// retry is a fresh acquisition. Record extends the fp key to doneTTL.
+	fpMs := leaseMs
 
 	res, err := s.rdb.Eval(ctx, claimRespScript, []string{respKey, leaseKey, fpKey}, token, leaseMs, fingerprint, fpMs).Result()
 	if err != nil {

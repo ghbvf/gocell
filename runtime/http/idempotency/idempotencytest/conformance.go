@@ -99,7 +99,9 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"ClaimDone_AfterRecord", conformClaimDoneAfterRecord},
 		{"ClaimBusy_WhileLeaseHeld", conformClaimBusyWhileLeaseHeld},
 		{"Release_AllowsReClaim", conformReleaseAllowsReClaim},
+		{"InvalidZeroKey_ReturnsError", conformInvalidZeroKeyReturnsError},
 		{"LeaseTTLExpiry_AllowsReClaim", conformLeaseTTLExpiry},
+		{"LeaseTTLExpiry_DifferentFingerprint_AllowsReClaim", conformLeaseTTLExpiryDifferentFingerprint},
 		{"StaleToken_RecordReturnsError", conformStaleTokenRecord},
 		{"DifferentNamespaceKey_AreIndependent", conformDifferentNsKeyIndependent},
 		{"DoneTTLExpiry_AllowsReClaim", conformDoneTTLExpiry},
@@ -240,6 +242,31 @@ func conformReleaseAllowsReClaim(t *testing.T, factory Factory) {
 	}
 }
 
+// conformInvalidZeroKeyReturnsError verifies that the externally-expressible
+// zero value of the sealed IdempotencyKey fails closed. A populated key cannot
+// be constructed outside package idempotency, but the zero value always can; all
+// Store implementations must reject it consistently instead of collapsing it
+// into a shared empty bucket.
+func conformInvalidZeroKeyReturnsError(t *testing.T, factory Factory) {
+	t.Helper()
+	store, _, cleanup := factory(t)
+	defer cleanup()
+
+	state, rec, receipt, err := store.Claim(context.Background(), idemhttp.IdempotencyKey{}, conformFP, conformLeaseTTL)
+	if err == nil {
+		t.Fatal("Claim with zero IdempotencyKey must fail closed, got nil error")
+	}
+	if state != 0 {
+		t.Errorf("state = %v, want zero on invalid key", state)
+	}
+	if rec != nil {
+		t.Error("recorded response must be nil on invalid key")
+	}
+	if receipt != nil {
+		t.Error("receipt must be nil on invalid key")
+	}
+}
+
 // conformLeaseTTLExpiry verifies that after a short lease TTL expires, the
 // same (ns, key) can be re-claimed as ClaimAcquired.
 func conformLeaseTTLExpiry(t *testing.T, factory Factory) {
@@ -262,6 +289,38 @@ func conformLeaseTTLExpiry(t *testing.T, factory Factory) {
 	}
 	if state2 != idempotency.ClaimAcquired {
 		t.Errorf("re-Claim after TTL expiry: state = %v, want ClaimAcquired (lease should have expired)", state2)
+	}
+}
+
+// conformLeaseTTLExpiryDifferentFingerprint verifies that an unfinished lease
+// does not keep binding the key to its old fingerprint after the lease expires.
+// Once there is no active lease and no recorded response, a retry with the same
+// idempotency key but a different body fingerprint is a fresh acquisition.
+func conformLeaseTTLExpiryDifferentFingerprint(t *testing.T, factory Factory) {
+	t.Helper()
+	store, adv, cleanup := factory(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	state, _, _, err := store.Claim(ctx, conformKeyMain, conformFP, shortLeaseTTL)
+	if err != nil || state != idempotency.ClaimAcquired {
+		t.Fatalf("Claim: state=%v err=%v; want ClaimAcquired nil", state, err)
+	}
+
+	adv.AdvancePast(shortLeaseTTL)
+
+	state2, rec2, receipt2, err2 := store.Claim(ctx, conformKeyMain, conformFPAlt, conformLeaseTTL)
+	if err2 != nil {
+		t.Fatalf("re-Claim with different fingerprint after TTL expiry: unexpected error: %v", err2)
+	}
+	if state2 != idempotency.ClaimAcquired {
+		t.Errorf("re-Claim with different fingerprint state = %v, want ClaimAcquired", state2)
+	}
+	if rec2 != nil {
+		t.Error("ClaimAcquired after lease expiry must not return a recorded response")
+	}
+	if receipt2 == nil {
+		t.Error("ClaimAcquired after lease expiry must return a receipt")
 	}
 }
 

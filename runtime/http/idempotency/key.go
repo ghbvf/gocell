@@ -45,9 +45,10 @@ type IdempotencyKey struct {
 }
 
 // Namespace returns the idempotency namespace that scopes keys to a tenant (or
-// noTenantSentinel when the principal carries no tenant). A cluster-aware store
-// uses it as the Redis hash-tag so all keys for one tenant colocate on a single
-// slot.
+// noTenantSentinel when the principal carries no tenant). Redis-backed stores
+// use it as the tenant prefix segment outside the hash-tag; the per-request
+// Key() value is the hash-tag payload that colocates lease/response/fingerprint
+// keys on one cluster slot.
 func (k IdempotencyKey) Namespace() string { return k.ns }
 
 // Key returns the per-request key within the namespace.

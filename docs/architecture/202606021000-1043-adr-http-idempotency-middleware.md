@@ -178,12 +178,12 @@ Claim）→ 返回 0，抛出 permanent error（不重试）。
 `NewHTTPIdempotencyStore` 在构造期调用 `ns.Validate()` + nil client 检查，满足
 `REDIS-KEY-NAMESPACE-01` archtest 约束（构造器 body 顶部强制 `ns.Validate()`）。
 
-注意：`HTTPIdempotencyStore.Claim` 中 `ns` 参数（来自 Middleware 的 `DeriveKey`
-输出，值为 tenantID 或 `_notenant`）作为 Redis key namespace 的**运行时部分**，与构造器
+注意：`HTTPIdempotencyStore.Claim` 中的 sealed `IdempotencyKey`（来自 Middleware 的
+`DeriveKey` 输出；`k.Namespace()` 为 tenantID 或 `_notenant`）作为 Redis key namespace 的**运行时部分**，与构造器
 注入的 `KeyNamespace`（标识 adapter owner，如 `"http-idempotency"`）是两个正交概念——
 `KeyNamespace` 在 `REDIS-KEY-NAMESPACE-01` archtest 的 `ns.Validate()` 守卫下；Claim 的
-`ns` 参数由 Middleware 生成，不走同一 funnel，但代码中对 `"{}` 字符做了额外 runtime
-guard（避免破坏 hashtag 边界）。
+request namespace 来自 sealed key，由 Middleware 生成，不走同一 funnel，但代码中对 `{` / `}` 字符做了额外 runtime
+guard（避免破坏 hashtag 边界）。`k.Key()` 是 Redis hash-tag payload，确保 resp/lease/fp 三键同槽。
 
 ### 9. 作用域范围
 
@@ -398,7 +398,7 @@ Dependent contracts (governance scan): none — middleware 是 framework 横切�
 
 以下内容在本 PR 范围之外，按 `feedback_pr_scope_carveouts_must_backlog` 规则同步登记 backlog：
 
-- **full-assembly 幂等命名空间** — ✅ **已实现**（gh #1449）：`_runtime` 定调为 assembly-wide 命名空间 + 两道结构闸（`HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01` Hard / `HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01` Medium）+ 三层证明测试，见 §9 Amendment + ADR `202606051000-1449`。
+- **full-assembly 幂等命名空间** — ✅ **已实现**（gh #1449）：`_runtime` 定调为 assembly-wide 命名空间 + 两道结构闸（`HTTP-IDEMPOTENCY-STORE-STATELESS-FROZEN-01` Hard / `HTTP-IDEMPOTENCY-KEY-NODE-AGNOSTIC-01` 分轴：downstream Hard、upstream-external Hard、upstream-in-package + require-isolation-tuple Medium）+ 三层证明测试，见 §9 Amendment + ADR `202606051000-1449`。
 - **cross-cell 跨 cell 同槽幂等**（gh #1610，blocked-by #1044）：同一 idempotency-key 在不同 cell/listener 间共享同一去重槽，需 HTTP `Idempotency-Key` ↔ `command_id` 映射桥（ADR-1044 §5 演进路径 ⑤）+ 新的共享 KeyNamespace 治理决策。
 - **request-payload fingerprinting + 422 + per-field diff** — ✅ **已实现**（gh #1450）：`Store.Claim` 接收 canonical fingerprint blob；同一 key + 不同 body → **422** `ERR_IDEMPOTENCY_KEY_REUSED`，响应 details 列出差异的顶层字段名（Stripe 式 per-field diff，只回字段名/不回值）。详见文末 §"Amendment 2026-06-04"。gh #1450 关闭。
 - **production wiring** — ✅ **已实现**（gh #1469）：`cmd/corebundle` 在 `shared.Redis != nil` 时默认接通 `bootstrap.WithIdempotencyStore(redis.NewHTTPIdempotencyStore(client, "_runtime"))`（`buildHTTPIdempotencyStore` + `defaultRuntimeOptions`）。HARD 前置三件套（codegen 入口 + 3 凭据路由豁免 + fail-closed 守卫）同 PR 落地，见 §"敏感 body route 豁免（✅ 已收口，gh #1469）"。bootstrap e2e replay + exempt-never-recorded 测试覆盖。
