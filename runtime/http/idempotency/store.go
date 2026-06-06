@@ -105,10 +105,11 @@ func FrameworkStatuses() []int {
 // return a *FingerprintMismatchError (which wraps the sentinel) so the middleware
 // can recover the stored fingerprint blob for the per-field diff.
 //
-// k is the sealed (namespace, key) pair produced by DeriveKey from the request +
-// principal isolation tuple; the Store reads it via k.Namespace() (the tenant
-// scope, or "_notenant" when absent) and k.Key() (the per-request key — see
-// DeriveKey for the byte layout). A raw (ns,key) string pair cannot reach Claim —
+// k is the sealed (namespace, key) pair produced by a sanctioned constructor
+// (DeriveKey from the HTTP request + principal isolation tuple, or DeriveCommandKey
+// from the command isolation tuple); the Store reads it via k.Namespace() (the
+// tenant scope, or "_notenant" when absent) and k.Key() (the per-request key — see
+// those constructors for the byte layout). A raw (ns,key) string pair cannot reach Claim —
 // that typed boundary is the downstream Hard gate of the node-agnostic invariant
 // (#1449/#1610). fingerprint is the opaque canonical blob produced by
 // computeFingerprint (JSON whose Body field is hex(sha256(rawBody)) and whose
