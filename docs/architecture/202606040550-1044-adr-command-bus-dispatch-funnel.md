@@ -47,8 +47,9 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 
 | Invariant | 语句 | 上游 | 下游 |
 |-----------|------|------|------|
-| `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` | typed Handler/Register/Dispatch 仅由 `command.tmpl` 派生（生产包外无手写 look-alike trio 声明） | **Hard**（codegen funnel + golden regenerate-and-diff 字节锁；`command.tmpl` 单一 emitter） | Medium（AST/types 声明扫描 + 反向 synth fixture） |
+| `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` | typed Handler/Register/Dispatch**/DispatchAsync**（#1667 起含 async）仅由 `command.tmpl` 派生（生产包外无手写 look-alike trio 声明） | **Hard**（codegen funnel + golden regenerate-and-diff 字节锁；`command.tmpl` 单一 emitter） | Medium（AST/types 声明扫描 + 反向 synth fixture） |
 | `COMMAND-DISPATCH-REGISTER-CALLER-01` | `(*command.Registry).RegisterHandler`/`LookupHandler` 调用方 ⊆ `generated/contracts/command/**` + `runtime/command` 自测 | Medium（Go 无 friend-package：「仅生成码可调」不可编译期表达；archtest caller-allowlist 兜底） | **Hard**（`ResolveMethodCall` 按 pkg path + receiver type 绑定 callee，alias/同名异型不匹配） |
+| `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1667） | `(*outbox.Relay).WithCommandDispatch` 的 dispatch-map 值 ⊆ 生成 `DispatchAsync`（`generated/contracts/command/**`），异步路径下游半边 | Medium（Go 无 friend-package：「relay 只接生成 DispatchAsync」不可编译期表达；archtest value-allowlist 兜底。forwarded func-var = #1508-family data-flow 残留。与同步 `…REGISTER-CALLER-01` 共用 gh #1575） | **Hard**（go/types value-resolution 绑 `*types.Func` 身份 = pkg path + name，alias-proof，form-unique：仅 Ident/SelectorExpr，func-lit/wrapper 即违例） |
 
 **闭环论证**：codegen-Hard 上游（typed funnel 不可手写，D1/D2）+ caller-allowlist-Hard 下游（raw `RegisterHandler` 在生成码外被调即 CI 红，D3）= 业务**既不能手写 typed funnel、也不能在 funnel 外用 raw registry** → 达成立项门「Hard 双向锁」。
 
@@ -60,12 +61,13 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 
 PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 funnel 为后续保持**前向兼容的 seam**（不预设字段，需要时加）：
 
-- **④ async outbox 桥（#1044 子 issue）**：`DispatchAsync[C]` 写 `outbox.Entry`（携带 command kind——触及 sealed `Entry` wire envelope 或 topic 约定，触发 contract-fanout 5 载体）；relay 消费按 command id `LookupHandler` → 触发 handler。此时 JSON marshal 在 outbox 边界发生（D4 的同步 type-assert 不变，异步路径独立 marshal）。
-- **⑤ idempotency 桥（#1044 子 issue）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` Claimer 两阶段）。
+- **④ async outbox 桥（#1667，已落地——见 §Amendment 2026-06-06）**：codegen 派生单态 `DispatchAsync(ctx, reg, entry)`（从 `entry.Payload()` JSON unmarshal 回 typed `*Request` → `LookupHandler` → 复用同一 `Handler`，丢弃 `*Response` 回 `error`）；relay 按 routing-topic 在 composition-root 注入的 dispatcher-map 中匹配 command → 在进程内触发 `DispatchAsync`，否则发 broker。JSON marshal 在 outbox 边界发生（D4 同步 type-assert 路径不变）。**判别器 = routing-topic + dispatcher-map 成员，未改 sealed `Entry` wire envelope、未引入 metadata 约定 → 未触发 contract-fanout 5 载体**（原文「携带 command kind——触及 sealed Entry wire envelope 或 topic 约定，触发 contract-fanout」+「relay 消费按 command id LookupHandler」实现为：command entry 即 `eventType = command id` 的普通 entry，`LookupHandler` 留在生成 `DispatchAsync` 体内、relay 不直接调）。
+- **⑤ idempotency 桥（#1044 子 issue）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` Claimer 两阶段）。Blocked-by ④。
+- **command-entry 值校验 funnel（#1588，Blocked-by ④）**：`DispatchAsync` 只做 typed JSON unmarshal（typed struct 即结构契约），不执行 schema 值约束（minLength/required/…）；untrusted-payload 值校验在此不可信 async 边界落地（Amendment 2026-06-04 已点名归属）。
 - **command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level（命令跨 L1 同步..L4 设备；现有 active L4 `devicecommand` slice 不能被锁 L3 误伤）。
-- **真实 handler 端到端接线（#1044 子 issue）**：PR-1 funnel 由 unit test 假 handler + golden 证，未经真实 cell 接线（devicecell enqueue adapter + bootstrap `Registry`）。
+- **真实 binary async producer 接线（#1044 子 issue，gh backlog，Blocked-by ④）**：④ 交付机制 + relay-level E2E（mem outbox store 绑生成 `enqueue.DispatchAsync` 扮演 composition root）；devicecell 异步 enqueue 命令 + iotdevice durable-mode relay `WithCommandDispatch` 接线随真实 producer 落地（给无 producer 的 consumer 接 binary wiring = dead wiring，故 defer）。
 
-amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：④ 引入的 sealed `Entry` 修改若改变某格评级，显式列补偿。
+amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：见 §Amendment 2026-06-06。
 
 ---
 
@@ -108,3 +110,25 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 **§4 评级矩阵逐行重评（ai-robust.md ADR amendment 必查）**：本 amendment **不改 §4 任一格**。§4 双向锁矩阵约束的是 *dispatch/register funnel*（typed Handler/Register/Dispatch 仅由 codegen 派生 + raw `RegisterHandler`/`LookupHandler` 调用方收口），与 *request value-validation* 正交——后者既不放宽前者的上游/下游 Hard，也不新增伪造面。D4（golden 锁 sync 形态）、D6（codegen fail-closed 上游 Hard + governance Medium）评级不变；无 ✅→⚠️/❌ 降格，无需补偿措施。
 
 **为何不 silent defer（非 lazy）**：真实 blocker = 正确实现（typed-struct 级约束 IR，不 JSON round-trip）是一个**全新 codegen 机制**（须自带 AI-robust 评级 + archtest + golden），且其唯一真实消费点是不可信 command-entry 边界——与 ④ async 共同设计才有正确 altitude；廉价实现（JSON round-trip）违背 D4。故 funnel 设计随 ④ 落地，本 PR 以 §D8 显式收口设计边界。
+
+---
+
+## Amendment 2026-06-06（④ async outbox 桥落地 — #1667）
+
+**触发**：#1667 落地 §5 演进路径 ④（async outbox 桥），按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 重写矛盾原文。
+
+**D9：DispatchAsync 镜像同步 Dispatch，复用 `Handler`，`LookupHandler` 留生成码内**。codegen 为每个 `kind:command,codegen:true` 契约派生 `DispatchAsync(ctx, reg, entry kout.Entry) error`（生成码内 `var _ command.AsyncDispatchFunc = DispatchAsync` 编译期自证），与同步 `Dispatch` 同构、唯一差异 = 从 `entry.Payload()` JSON unmarshal 回 typed `*Request`（同步直收 typed），其余 `LookupHandler` → type-assert `Handler` → 调 handler 一致。**复用同一 `Handler` 接口**（不新增 `HandlerAsync`）；async 丢弃 `*Response`、只回 `error` 供 relay settle/retry。`ctx = entry.RestoreContext(ctx)` 在调 handler 前还原 principal/observability 身份（跨 async 边界）。
+
+**D10：判别器 = routing-topic + dispatcher-map 成员（零 Entry 改动、零 metadata）**。command entry 即 `eventType = command id` 的普通 `outbox.Entry`（`NewEntry(clk, ctx, commandID, payload)`，`RoutingTopic()` = command id）。relay 持 composition-root 经 `(*outbox.Relay).WithCommandDispatch(reg, map[CommandID]AsyncDispatchFunc)` 注入的 dispatcher-map + registry；`publishBatch` 每条 entry：命中 map → 进程内 `fn(ctx, reg, e.Entry)`（跳过 marshal + broker），否则发 broker。settle（成功 `MarkPublished` = 命令已消费 / 失败 `MarkRetry`）复用 broker 路径 writeBack。**未改 sealed `kernel/outbox.Entry`、未引入 metadata 约定 → 未触发 contract-fanout 5 载体**；判别器 = 闭合 dispatcher-map 成员资格（命名空间 `command.*.v1` + 闭合 map 天然隔离事件 topic），比 metadata 标记更优（无 business-writable 伪造面）。reg 作为 `AsyncDispatchFunc` 位置参（非 composition-root 闭包捕获），使 map 值是 archtest 可静态解析的**直接生成符号**。
+
+**§4 评级矩阵逐行重评（无格降级）**：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：覆盖**扩大**（`DispatchAsync` 纳入 sole-emitter free-func 名集合 {Register, Dispatch, DispatchAsync}，golden 字节锁含 DispatchAsync）；上游 Hard / 下游 Medium **不变**。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：**不变**。`DispatchAsync` 体内 `LookupHandler` 仍在 `generated/contracts/command/**`，调用方集合不动；relay 经注入的 generated `DispatchAsync`（free func），**从不直接调** `LookupHandler`/`RegisterHandler`，不新增 raw caller。
+- **新增第三行** `COMMAND-ASYNC-DISPATCH-CALLER-01`（异步路径下游半边）：上游 Medium（Go 无 friend-package，共用 gh #1575）/ 下游 Hard（go/types value-resolution 绑生成 `DispatchAsync` 符号身份）。与上游 Hard 半边 `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（DispatchAsync 入 sole-emitter + golden）合成异步路径闭环双向锁，与同步路径同结构。
+
+**无 ✅→⚠️/❌ 降格，无补偿措施**：D10 未改 `Entry`，OUTBOX-ENTRY 系列封装与 §4 同步双向锁均不受影响；新增 async funnel 是**净增**覆盖。
+
+**范围（显式 backlog，不 silent）**：本 PR = 机制（codegen DispatchAsync + relay 分支 + 注入 option + archtest + ADR）+ relay-level E2E（mem outbox store 绑生成 `enqueue.DispatchAsync` 扮演 composition root，`examples/iotdevice`）。**真实 binary async producer 接线**（devicecell 异步 enqueue + iotdevice durable relay 接线）→ gh backlog（area-eventing/type-feat/pri-p2，Blocked-by #1667）；值校验 = #1588；permanent/transient 分类随 #1588 细化。注：5 个 `command` 契约中仅 `enqueue` 为 `codegen:true`（其余 4 个 `codegen:false`），故仅 `enqueue/v1/command_gen.go` 生成 DispatchAsync。
+
+enforcement 索引（§7）新增：archtest `COMMAND-ASYNC-DISPATCH-CALLER-01`（`tools/archtest/command_dispatch_funnel_test.go`）。

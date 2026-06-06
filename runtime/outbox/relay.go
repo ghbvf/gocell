@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -155,6 +156,16 @@ type Relay struct {
 	pendingDepthObserver PendingDepthObserver
 
 	clock clock.Clock
+
+	// cmdRegistry + cmdDispatch wire the in-process async command bus into the
+	// relay (#1667 / ADR ...202606040550-1044 §5 ④). When a claimed entry's
+	// RoutingTopic matches a registered command id, the relay dispatches it to
+	// the generated DispatchAsync in-process (settling the row like a publish)
+	// instead of marshaling + publishing to the broker. Both are nil unless
+	// WithCommandDispatch was called, so event-only relays are unaffected. See
+	// relay_command.go.
+	cmdRegistry *command.Registry
+	cmdDispatch map[command.CommandID]command.AsyncDispatchFunc
 }
 
 // WithPendingDepthObserver wires a PendingDepthObserver that receives the
@@ -569,13 +580,26 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 	return wbErr
 }
 
-// publishBatch publishes each entry to the broker outside of any transaction.
-// Uses kernel/outbox.MarshalEnvelope to produce the wire envelope with
-// camelCase JSON keys.
+// publishBatch delivers each entry to its sink outside of any transaction. The
+// sink is the broker for events (marshal envelope → Publisher.Publish) and the
+// in-process command handler for command entries whose RoutingTopic matches a
+// registered command id (dispatch → generated DispatchAsync; see
+// WithCommandDispatch in relay_command.go). Both outcomes settle through the
+// shared writeBack below (MarkPublished on success / MarkRetry on error), so a
+// dispatched command's terminal state is "published" — the row is consumed.
+// Uses kernel/outbox.MarshalEnvelope to produce the wire envelope with camelCase
+// JSON keys.
 // ref: Watermill router.go publishBatch — per-message outcome, no batch atomicity
 func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publishResult {
 	results := make([]publishResult, len(entries))
 	for i, e := range entries {
+		if fn, ok := r.commandDispatchFor(e.RoutingTopic()); ok {
+			// Command entry: dispatch to its in-process handler instead of
+			// publishing to the broker. fn is a generated DispatchAsync
+			// (COMMAND-ASYNC-DISPATCH-CALLER-01 locks the map values).
+			results[i] = publishResult{entry: e, err: fn(ctx, r.cmdRegistry, e.Entry)}
+			continue
+		}
 		payload, marshalErr := kout.MarshalEnvelope(e.Entry)
 		if marshalErr != nil {
 			results[i] = publishResult{entry: e, err: marshalErr}

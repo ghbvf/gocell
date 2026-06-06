@@ -5,7 +5,9 @@ package enqueue
 
 import (
 	"context"
+	"encoding/json"
 
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -88,4 +90,64 @@ func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Respon
 			"command.devicecommand.enqueue.v1 dispatch: registered handler has wrong type")
 	}
 	return h.HandleEnqueue(ctx, req)
+}
+
+// Compile-assert that DispatchAsync matches the generic async-dispatch signature
+// the outbox relay routes command entries to (command.Relay-side
+// WithCommandDispatch). archtest COMMAND-ASYNC-DISPATCH-CALLER-01 locks the
+// relay's command-dispatch map values to this generated symbol; the assert keeps
+// the signature in lock-step with command.AsyncDispatchFunc.
+var _ command.AsyncDispatchFunc = DispatchAsync
+
+// DispatchAsync decodes a claimed command outbox.Entry, looks up the Handler
+// registered under DispatchID, and invokes it. It mirrors Dispatch but sources
+// the typed *Request from entry.Payload() (JSON) rather than
+// receiving it directly — the async outbox boundary is where a command crosses
+// from wire bytes back to a typed request (ADR §5 ④; JSON marshal happens at the
+// outbox boundary, leaving the synchronous D4 type-assert path unchanged).
+//
+// The relay drives this via Relay.WithCommandDispatch for entries whose
+// RoutingTopic equals DispatchID; it is not called from business code. The
+// entry's principal + observability identity is restored into ctx
+// (entry.RestoreContext) before the handler runs, mirroring the consumer
+// delivery path so the async handler sees the enqueuer's identity.
+//
+// The handler's *Response is intentionally discarded: an
+// async command has no in-process caller awaiting a reply, so only the error is
+// returned for the relay to settle (ack) or retry the entry.
+//
+// Request value-constraints declared in the contract request schema
+// (minLength/maxLength/required) are NOT validated here — the typed
+// *Request is the structural contract; untrusted-payload
+// value validation at the async command-entry boundary is the command-entry
+// validation funnel tracked as #1588 (ADR §5 / Amendment 2026-06-04).
+//
+// Returns KindInvalid / ErrValidationFailed when reg is nil or the payload does
+// not decode into *Request; KindNotFound / ErrCommandNotFound
+// when no handler has been registered; KindInternal / ErrInternal when the
+// registered value has an unexpected type (invariant violation — should never
+// fire in production).
+func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry) error {
+	if reg == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.devicecommand.enqueue.v1 dispatch async: registry must not be nil")
+	}
+	var req Request
+	if err := json.Unmarshal(entry.Payload(), &req); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.devicecommand.enqueue.v1 dispatch async: decode request payload", err)
+	}
+	ctx = entry.RestoreContext(ctx)
+	boxed, ok := reg.LookupHandler(DispatchID)
+	if !ok {
+		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
+			"command.devicecommand.enqueue.v1 dispatch async: no handler registered")
+	}
+	h, ok := boxed.(Handler)
+	if !ok {
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"command.devicecommand.enqueue.v1 dispatch async: registered handler has wrong type")
+	}
+	_, err := h.HandleEnqueue(ctx, &req)
+	return err
 }
