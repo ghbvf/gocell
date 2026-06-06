@@ -121,11 +121,11 @@ func TestPGUserRepo_Integration(t *testing.T) {
 	repo, txMgr := setupUserRepoPG(t)
 	ctx := context.Background()
 
-	t.Run("Create_GetByID_roundtrip", func(t *testing.T) {
+	t.Run("Create_GetByIDInTenant_roundtrip", func(t *testing.T) {
 		u := newTestUser("rt1")
 		require.NoError(t, repo.Create(ctx, testTenantID, u))
 
-		got, err := repo.GetByID(ctx, u.ID)
+		got, err := repo.GetByIDInTenant(ctx, testTenantID,u.ID)
 		require.NoError(t, err)
 		assert.Equal(t, u.ID, got.ID)
 		assert.Equal(t, u.Username, got.Username)
@@ -207,8 +207,8 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, u.Username, got.Username)
 	})
 
-	t.Run("GetByID_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
-		_, err := repo.GetByID(ctx, uuid.NewString())
+	t.Run("GetByIDInTenant_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
+		_, err := repo.GetByIDInTenant(ctx, testTenantID,uuid.NewString())
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
@@ -232,7 +232,7 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		require.NoError(t, repo.UpdateLockState(ctx, testTenantID, u.ID, domain.StatusSuspended, now))
 		require.NoError(t, repo.UpdatePasswordResetFlag(ctx, testTenantID, u.ID, true, now))
 
-		got, err := repo.GetByID(ctx, u.ID)
+		got, err := repo.GetByIDInTenant(ctx, testTenantID,u.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.StatusSuspended, got.Status())
 		assert.True(t, got.PasswordResetRequired())
@@ -255,7 +255,7 @@ func TestPGUserRepo_Integration(t *testing.T) {
 
 		require.NoError(t, repo.Delete(ctx, testTenantID, u.ID))
 
-		_, err := repo.GetByID(ctx, u.ID)
+		_, err := repo.GetByIDInTenant(ctx, testTenantID,u.ID)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
@@ -362,7 +362,7 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		}))
 		assert.Equal(t, int64(1), newVersion, "expected password_version to bump 0→1")
 
-		got, err := repo.GetByID(ctx, user.ID)
+		got, err := repo.GetByIDInTenant(ctx, testTenantID,user.ID)
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), got.PasswordVersion)
 		assert.Equal(t, "$2a$12$newhash_match", got.PasswordHash)
@@ -392,7 +392,7 @@ func TestPGUserRepo_Integration(t *testing.T) {
 			"stale expectedVersion must return ErrVersionConflict (409), got %s", ec.Code)
 
 		// Confirm hash was NOT overwritten by the stale attempt.
-		got, err := repo.GetByID(ctx, user.ID)
+		got, err := repo.GetByIDInTenant(ctx, testTenantID,user.ID)
 		require.NoError(t, err)
 		assert.Equal(t, "$2a$12$first", got.PasswordHash,
 			"stale CAS must not overwrite first-writer's hash")
@@ -430,7 +430,7 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 	// Baseline: freshly created user must have authz_epoch=1 from the INSERT.
 	// domain.NewUser seeds epoch=1; migration 028 enforces CHECK(>0) so epoch=0
 	// is rejected by the DB. ReconstituteUser also rejects authzEpoch<=0.
-	got, err := repo.GetByID(ctx, u.ID)
+	got, err := repo.GetByIDInTenant(ctx, testTenantID,u.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), got.AuthzEpoch(),
 		"new user must have AuthzEpoch=1 (seeded by NewUser); got %d", got.AuthzEpoch())
@@ -450,7 +450,7 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 	assert.Equal(t, int64(2), bumped, "BumpAuthzEpoch must return new value 2 (user started at 1)")
 
 	// Readback via GetByID — must reflect the post-bump value.
-	gotByID, err := repo.GetByID(ctx, u.ID)
+	gotByID, err := repo.GetByIDInTenant(ctx, testTenantID,u.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), gotByID.AuthzEpoch(),
 		"GetByID must return post-bump AuthzEpoch=2; got %d — SELECT list likely missing authz_epoch column",
@@ -472,7 +472,7 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 		return nil
 	}))
 	assert.Equal(t, int64(3), bumped)
-	got2, err := repo.GetByID(ctx, u.ID)
+	got2, err := repo.GetByIDInTenant(ctx, testTenantID,u.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), got2.AuthzEpoch(),
 		"second bump must propagate through read path")
@@ -567,7 +567,7 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 	// Now scanUser must reject the invalid status and GetByID must propagate
 	// ErrPGSchemaShape unchanged (no ErrInternal wrap) so operators can
 	// distinguish DB schema drift from generic infra faults.
-	_, scanErr := repo.GetByID(ctx, id)
+	_, scanErr := repo.GetByIDInTenant(ctx, testTenantID,id)
 	require.Error(t, scanErr, "GetByID must return error for row with invalid status")
 	var ec *errcode.Error
 	require.True(t, errors.As(scanErr, &ec),
@@ -602,7 +602,7 @@ func TestUserRepo_Scan_RejectsInvalidCreationSource(t *testing.T) {
 		id, "scan_invalid_source_user", "scan_invalid_source@example.com", "$2a$12$fakehash", now)
 	require.NoError(t, err)
 
-	_, scanErr := repo.GetByID(ctx, id)
+	_, scanErr := repo.GetByIDInTenant(ctx, testTenantID,id)
 	require.Error(t, scanErr)
 	var ec *errcode.Error
 	require.True(t, errors.As(scanErr, &ec))
@@ -681,11 +681,11 @@ func TestUserRepo_CreationSource_BothValid(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, testTenantID, identityUser), "identity source user must be created")
 	require.NoError(t, repo.Create(ctx, testTenantID, setupUser), "setup source user must be created")
 
-	gotIdentity, err := repo.GetByID(ctx, identityUser.ID)
+	gotIdentity, err := repo.GetByIDInTenant(ctx, testTenantID,identityUser.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.UserSourceIdentity, gotIdentity.CreationSource)
 
-	gotSetup, err := repo.GetByID(ctx, setupUser.ID)
+	gotSetup, err := repo.GetByIDInTenant(ctx, testTenantID,setupUser.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.UserSourceSetup, gotSetup.CreationSource)
 }

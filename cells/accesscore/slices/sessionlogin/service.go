@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/scopedtx"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -284,7 +285,16 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	// Timing normalisation: bcrypt runs for every attempt regardless of whether
 	// the user exists or is active, so callers cannot distinguish "user not found"
 	// from "wrong password" via response latency (zitadel-style constant-time path).
-	preUser, userLookupErr := s.userRepo.GetByUsername(ctx, tid, input.Username)
+	//
+	// RLS (PR-3b): the users table is under FORCE ROW LEVEL SECURITY; every SELECT
+	// requires app.tenant_id to be set (via SET LOCAL in RunInTx).  We open a
+	// short read-tx here so the GUC is present for GetByUsername.  bcrypt runs
+	// AFTER this tx closes — the conn is returned to the pool during the CPU-bound
+	// comparison — preserving the constant-time timing guarantee.
+	preUser, userLookupErr := scopedtx.Do(ctx, s.txRunner, tid,
+		func(txCtx context.Context) (*domain.User, error) {
+			return s.userRepo.GetByUsername(txCtx, tid, input.Username)
+		})
 
 	// Choose the hash to compare against. If the user does not exist we use
 	// dummyBcryptHash to maintain constant time; if found we use the real hash.
@@ -319,19 +329,19 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	// CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream prong).
 	pwVersionPin := credentialauthority.SnapshotPasswordVersion(preUser)
 	sessionID := uuid.NewString()
-	var outcome loginOutcome
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		o, infraErr := s.loginInTx(ctx, txCtx, tid, input.Username, sessionID, pwVersionPin, bcryptErr)
-		if infraErr != nil {
-			return infraErr // real infra error → tx rollback
-		}
-		outcome = o
-		// Returning nil even on credential failure is intentional: the
-		// auto-lockout counter UPDATE (and any threshold-triggered LockUser
-		// mutation) must commit. The 401 surfaces via outcome.failureErr
-		// after RunInTx returns. PR #585 review P1#1.
-		return nil
-	}); err != nil {
+	outcome, err := scopedtx.Do(ctx, s.txRunner, tid,
+		func(txCtx context.Context) (loginOutcome, error) {
+			o, infraErr := s.loginInTx(ctx, txCtx, tid, input.Username, sessionID, pwVersionPin, bcryptErr)
+			if infraErr != nil {
+				return loginOutcome{}, infraErr // real infra error → tx rollback
+			}
+			// Returning nil even on credential failure is intentional: the
+			// auto-lockout counter UPDATE (and any threshold-triggered LockUser
+			// mutation) must commit. The 401 surfaces via outcome.failureErr
+			// after RunInTx returns. PR #585 review P1#1.
+			return o, nil
+		})
+	if err != nil {
 		return dto.TokenPair{}, err
 	}
 	if outcome.failureErr != nil {
@@ -547,7 +557,7 @@ func (s *Service) mintAndPersistSession(
 		ExpiresAt:         now.Add(s.sessionTTL),
 	}
 
-	if err := s.sessionStore.Create(txCtx, sess); err != nil {
+	if err := s.sessionStore.Create(txCtx, tid, sess); err != nil {
 		return loginOutcome{}, fmt.Errorf("sessionlogin:persist session: %w", err)
 	}
 	refreshWire, _, err := s.refreshStore.Issue(txCtx, sess.ID, user.ID, user.AuthzEpoch())
@@ -624,38 +634,37 @@ func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, tid tenant
 // it is passed explicitly so the refresh.Issue call uses the same value
 // without re-reading the sess field (avoids silent zero if caller forgets
 // to set AuthzEpochAtIssue).
-func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.Session, userID string, authzEpoch int64) (string, error) {
-	var refreshWire string
-	do := func(txCtx context.Context) error {
-		if err := s.sessionStore.Create(txCtx, sess); err != nil {
-			return fmt.Errorf("sessionlogin:persist session: %w", err)
-		}
-		wire, _, err := s.refreshStore.Issue(txCtx, sess.ID, userID, authzEpoch)
-		if err != nil {
-			s.logger.Error("sessionlogin:refresh store issue failed",
-				slog.Any("error", err), slog.String("user_id", userID))
-			// In demo/noop-tx mode, the session was already written without a real
-			// transaction; compensate explicitly. In durable-tx mode, the tx rollback
-			// handles atomicity — no explicit cleanup is needed (and would double-revoke).
-			if isNoopTx(s.txRunner) {
-				_ = s.sessionStore.Revoke(context.WithoutCancel(txCtx), sess.ID)
+func (s *Service) persistSessionWithRefresh(ctx context.Context, tid tenant.TenantID, sess *session.Session, userID string, authzEpoch int64) (string, error) {
+	refreshWire, err := scopedtx.Do(ctx, s.txRunner, tid,
+		func(txCtx context.Context) (string, error) {
+			if err := s.sessionStore.Create(txCtx, tid, sess); err != nil {
+				return "", fmt.Errorf("sessionlogin:persist session: %w", err)
 			}
-			return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
-		}
-		refreshWire = wire
-		if err := outbox.Emit(txCtx, s.clock, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
-			SessionID: sess.ID,
-			UserID:    userID,
-		}); err != nil {
-			// Same pattern: explicit cleanup only in noop/demo mode.
-			if isNoopTx(s.txRunner) {
-				s.cleanupIssuedSession(txCtx, sess.ID)
+			wire, _, err := s.refreshStore.Issue(txCtx, sess.ID, userID, authzEpoch)
+			if err != nil {
+				s.logger.Error("sessionlogin:refresh store issue failed",
+					slog.Any("error", err), slog.String("user_id", userID))
+				// In demo/noop-tx mode, the session was already written without a real
+				// transaction; compensate explicitly. In durable-tx mode, the tx rollback
+				// handles atomicity — no explicit cleanup is needed (and would double-revoke).
+				if isNoopTx(s.txRunner) {
+					_ = s.sessionStore.Revoke(context.WithoutCancel(txCtx), sess.ID)
+				}
+				return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 			}
-			return fmt.Errorf("sessionlogin:emit event: %w", err)
-		}
-		return nil
-	}
-	if err := s.txRunner.RunInTx(ctx, do); err != nil {
+			if err := outbox.Emit(txCtx, s.clock, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
+				SessionID: sess.ID,
+				UserID:    userID,
+			}); err != nil {
+				// Same pattern: explicit cleanup only in noop/demo mode.
+				if isNoopTx(s.txRunner) {
+					s.cleanupIssuedSession(txCtx, sess.ID)
+				}
+				return "", fmt.Errorf("sessionlogin:emit event: %w", err)
+			}
+			return wire, nil
+		})
+	if err != nil {
 		return "", err
 	}
 	return refreshWire, nil
@@ -776,29 +785,45 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser tenant: %w", err)
 	}
-	user, err := s.userRepo.GetByIDInTenant(ctx, tid, userID)
-	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
-	}
-	if err := credentialauthority.Assert(user); err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
-			"account is not active",
-			errcode.WithInternal(errcode.InternalAttr("_", "sessionlogin:IssueForUser credential not authoritative")))
-	}
 
+	// PR-3b (RLS): the user read (users) + role-reading mint (roles) are on
+	// FORCE-RLS tables, so they must run under a tenant scope or they fail-closed
+	// to 0 rows under a restricted role. Scope them via scopedtx.Do. persist runs
+	// in its own scoped tx below (persistSessionWithRefresh), preserving the
+	// pre-existing transaction boundary — read+mint were never in the persist tx.
 	sessionID := uuid.NewString()
-	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
-		Issuer:   s.issuer,
-		RoleRepo: s.roleRepo,
-	}, sessionmint.Request{
-		UserID:                userID,
-		SessionID:             sessionID,
-		PasswordResetRequired: user.PasswordResetRequired(),
-		TenantID:              tid,
-	})
-	if err != nil {
-		s.logger.Error("sessionlogin:IssueForUser token issuance failed",
-			slog.Any("error", err), slog.String("user_id", userID))
+	var minted sessionmint.Result
+	var authzEpoch int64
+	var passwordResetRequired bool
+	if _, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (struct{}, error) {
+		user, err := s.userRepo.GetByIDInTenant(txCtx, tid, userID)
+		if err != nil {
+			return struct{}{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
+		}
+		if err := credentialauthority.Assert(user); err != nil {
+			return struct{}{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+				"account is not active",
+				errcode.WithInternal(errcode.InternalAttr("_", "sessionlogin:IssueForUser credential not authoritative")))
+		}
+		m, err := sessionmint.MintAccess(txCtx, s.clock, sessionmint.Deps{
+			Issuer:   s.issuer,
+			RoleRepo: s.roleRepo,
+		}, sessionmint.Request{
+			UserID:                userID,
+			SessionID:             sessionID,
+			PasswordResetRequired: user.PasswordResetRequired(),
+			TenantID:              tid,
+		})
+		if err != nil {
+			s.logger.Error("sessionlogin:IssueForUser token issuance failed",
+				slog.Any("error", err), slog.String("user_id", userID))
+			return struct{}{}, err
+		}
+		minted = m
+		authzEpoch = user.AuthzEpoch()
+		passwordResetRequired = user.PasswordResetRequired()
+		return struct{}{}, nil
+	}); err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -814,11 +839,11 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		ID:                sessionID,
 		SubjectID:         userID,
 		JTI:               minted.JTI,
-		AuthzEpochAtIssue: user.AuthzEpoch(),
+		AuthzEpochAtIssue: authzEpoch,
 		CreatedAt:         now,
 		ExpiresAt:         now.Add(s.sessionTTL),
 	}
-	refreshWire, err := s.persistSessionWithRefresh(ctx, sess, userID, user.AuthzEpoch())
+	refreshWire, err := s.persistSessionWithRefresh(ctx, tid, sess, userID, authzEpoch)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -832,6 +857,6 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		ExpiresAt:             minted.ExpiresAt,
 		SessionID:             sessionID,
 		UserID:                userID,
-		PasswordResetRequired: user.PasswordResetRequired(),
+		PasswordResetRequired: passwordResetRequired,
 	}, nil
 }

@@ -3,9 +3,10 @@
   "title": "http.auth.role.assign.v1.request",
   "type": "object",
   "properties": {
+    "tenantId": { "type": "string", "format": "uuid", "minLength": 1, "maxLength": 64 },
     "userId": { "type": "string", "minLength": 1, "maxLength": 64 },
     "roleId": { "type": "string", "minLength": 1, "maxLength": 64 }
   },
-  "required": ["userId", "roleId"],
+  "required": ["tenantId", "userId", "roleId"],
   "additionalProperties": false
 }

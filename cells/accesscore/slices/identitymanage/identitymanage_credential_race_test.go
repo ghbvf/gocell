@@ -98,7 +98,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 
 	// Seed one active session so revocation assertions are meaningful.
 	seedSessionID := uuid.NewString()
-	require.NoError(t, sessionStore.Create(context.Background(), &session.Session{
+	require.NoError(t, sessionStore.Create(context.Background(), testTenantID, &session.Session{
 		ID:                seedSessionID,
 		SubjectID:         userID,
 		JTI:               "race-jti-" + seedSessionID,
@@ -140,7 +140,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 	// Terminal assertions — evaluated after all goroutines complete.
 
 	// authz_epoch: at least one credential event must have committed.
-	finalUser, err := userRepo.GetByID(context.Background(), userID)
+	finalUser, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, userID)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, finalUser.AuthzEpoch(), int64(1),
 		"authz_epoch must be ≥ 1 after concurrent credential events; got %d (successCount=%d)",
@@ -221,7 +221,7 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	}
 	wg.Wait()
 
-	finalUser, err := userRepo.GetByID(context.Background(), userID)
+	finalUser, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, userID)
 	require.NoError(t, err)
 
 	// The epoch must reflect initial=1 plus the number of successful changes.

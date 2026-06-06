@@ -10,7 +10,10 @@ import (
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/scopedtx"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -30,10 +33,25 @@ var _ kauth.IntentTokenVerifier = (*Service)(nil)
 
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	verifier     kauth.IntentTokenVerifier `gocell:"required" gocellErr:"session-validate: IntentTokenVerifier required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	verifier     kauth.IntentTokenVerifier  `gocell:"required" gocellErr:"session-validate: IntentTokenVerifier required"`                                            //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	sessionStore session.Store
-	userRepo     ports.UserRepository `gocell:"required" gocellErr:"session-validate: UserRepository required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	userRepo     ports.UserRepository       `gocell:"required" gocellErr:"session-validate: UserRepository required"`                                                  //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner     persistence.CellTxManager  `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"session-validate: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger       *slog.Logger
+}
+
+// Option configures an optional dependency on a Service.
+type Option func(*Service)
+
+// WithTxManager sets the CellTxManager used to scope user-repo reads under the
+// session's tenant RLS context. nil is silently ignored; the final nil check is
+// performed by validateRequired.
+func WithTxManager(tx persistence.CellTxManager) Option {
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // NewService creates a session-validate Service. Returns an error when any
@@ -47,11 +65,15 @@ func NewService(
 	sessionStore session.Store,
 	userRepo ports.UserRepository,
 	logger *slog.Logger,
+	opts ...Option,
 ) (*Service, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{verifier: verifier, sessionStore: sessionStore, userRepo: userRepo, logger: logger}
+	for _, o := range opts {
+		o(s)
+	}
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
@@ -189,7 +211,12 @@ func (s *Service) enforceSessionState(ctx context.Context, claims kauth.Claims) 
 	}
 
 	// 4) User lookup. Session is confirmed not-revoked at this point.
-	user, err := s.userRepo.GetByID(ctx, claims.Subject)
+	// view.TenantID is the tenant carrier from sessions.tenant_id (#1337 PR-3b).
+	// scopedtx.Do sets the tenant scope on the context so that the PG RLS
+	// policy on users/roles/role_assignments is satisfied (PR-3b Site 4).
+	user, err := scopedtx.Do(ctx, s.txRunner, view.TenantID, func(txCtx context.Context) (*domain.User, error) {
+		return s.userRepo.GetByIDInTenant(txCtx, view.TenantID, claims.Subject)
+	})
 	if err != nil {
 		if errcode.IsInfraError(err) {
 			s.logger.Error("session-validate: user repo unavailable",

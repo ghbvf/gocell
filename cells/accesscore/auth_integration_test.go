@@ -386,7 +386,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 		CreatedAt:         time.Now().UTC(),
 		ExpiresAt:         time.Now().Add(time.Hour).UTC(),
 	}
-	require.NoError(t, sessionRepo.Create(ctx, bobSession))
+	require.NoError(t, sessionRepo.Create(ctx, testTenantID, bobSession))
 
 	// S4b: rbacassign.Revoke now drives credential invalidation through the
 	// credentialinvalidate funnel (3-op same-tx: bump epoch + revoke sessions
@@ -408,7 +408,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	consumer := sessionlogout.NewConsumer(slog.Default())
 
 	// Revoke bob's member role — should produce one outbox entry.
-	require.NoError(t, assignSvc.Revoke(ctx, "usr-bob", "member"))
+	require.NoError(t, assignSvc.Revoke(ctx, testTenantID, "usr-bob", "member"))
 	require.Len(t, stubWriter.entries, 1, "Revoke must produce exactly one outbox entry")
 
 	// Deliver the outbox entry synchronously to the consumer (simulates relay dispatch).

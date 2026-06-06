@@ -754,17 +754,16 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// #1337 PR-2a Option B: this InternalListener / service-token endpoint derives
-	// the assignment tenant from the TARGET user (GetByID), which runs BEFORE the
-	// role lookup. usr-1 is not seeded in newTestCell(t), so the user lookup fails
-	// first → domain-level 404 (user not found). The role-not-found path is covered
-	// at the rbacassign slice level (TestService_Assign, with a seeded user).
+	// #1337 PR-3b: tenantId is supplied in the request body by the service-token
+	// caller (InternalListener, no JWT). usr-1 is not seeded in newTestCell(t), so
+	// the user lookup fails → domain-level 404 (user not found). The role-not-found
+	// path is covered at the rbacassign slice level (TestService_Assign, with a
+	// seeded user).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
-		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+		strings.NewReader(`{"tenantId":"00000000-0000-0000-0000-000000000001","userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	// Service principals carry no tenant; Option B derives it from the user, so no
-	// ctx tenant is injected here (reflects the real tenant-less service caller).
+	// Service principals carry no JWT tenant; tenant is supplied via request body.
 	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
@@ -803,23 +802,23 @@ func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
 func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// #1337 PR-2a Option B: Revoke derives the tenant from the TARGET user
-	// (GetByID), which runs before the role lookup. usr-1 is not seeded in
-	// newTestCell(t), so revoking from a non-existent user is user-not-found 404.
-	// The idempotent no-op-revoke → 200 path is covered at the rbacassign slice
-	// level (TestService_Revoke / handler tests, with a seeded user).
+	// #1337 PR-3b: tenantId is supplied in the request body by the service-token
+	// caller (InternalListener, no JWT). Revoke is idempotent: revoking a role from
+	// a non-existent user returns 200 with revoked=true (no role to remove is a
+	// no-op success, changed=false). The user-not-found 404 path was an artifact of
+	// the pre-PR-3b Option B design (which derived tenant via GetByID and found no
+	// user first); PR-3b passes tenantId in the body and skips the user pre-check.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
-		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+		strings.NewReader(`{"tenantId":"00000000-0000-0000-0000-000000000001","userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	// Service principals carry no tenant; Option B derives it from the user.
+	// Service principals carry no JWT tenant; tenant is supplied via request body.
 	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
-		"response should be JSON (handler reached, not router 404)")
-	assert.Contains(t, rec.Body.String(), "ERR_AUTH_USER_NOT_FOUND")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.Contains(t, rec.Body.String(), `"revoked":true`)
 }
 
 func TestAccessCore_RouteRoleRevoke_NoAuth_Returns401(t *testing.T) {

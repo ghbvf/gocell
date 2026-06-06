@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/scopedtx"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -138,22 +139,22 @@ func (s *Service) persistChange(
 	emitFn func(ctx context.Context, evt dto.RoleChangedEvent) error,
 	callFunnel bool,
 ) (changed bool, err error) {
-	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		var innerErr error
-		changed, innerErr = writeFn(txCtx)
-		if innerErr != nil {
-			return innerErr
-		}
-		if !changed {
-			return nil
-		}
-		if callFunnel {
-			if err := s.invalidator.Apply(txCtx, tid, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
-				return fmt.Errorf("rbac-assign: invalidate credentials: %w", err)
+	changed, err = scopedtx.Do(ctx, s.txRunner, tid,
+		func(txCtx context.Context) (bool, error) {
+			ok, innerErr := writeFn(txCtx)
+			if innerErr != nil {
+				return false, innerErr
 			}
-		}
-		return emitFn(txCtx, evt)
-	})
+			if !ok {
+				return false, nil
+			}
+			if callFunnel {
+				if err := s.invalidator.Apply(txCtx, tid, evt.UserID, session.CredentialEventRoleRevoke); err != nil {
+					return false, fmt.Errorf("rbac-assign: invalidate credentials: %w", err)
+				}
+			}
+			return ok, emitFn(txCtx, evt)
+		})
 	return changed, err
 }
 
@@ -162,7 +163,11 @@ func (s *Service) persistChange(
 //
 // HIGH-3 decision: granting a role is additive and not a credential-security
 // event. The funnel is intentionally NOT called on Assign.
-func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
+//
+// tenantID is derived from the request body (PR-3b #1617): the
+// InternalListener / service-token caller has no JWT, so the tenant is
+// supplied explicitly by the caller rather than via GetByID carve-out.
+func (s *Service) Assign(ctx context.Context, tenantID tenant.TenantID, userID, roleID string) error {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -171,16 +176,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 		return err
 	}
 
-	// Option B (#1337 PR-2a): this InternalListener / service-token endpoint has
-	// a tenant-less caller, so the assignment tenant is derived from the TARGET
-	// user via the by-global-PK tenant-deriving GetByID carve-out — "assign role
-	// to user U" inherently scopes to U's tenant. A missing user surfaces as the
-	// GetByID not-found error.
-	u, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("rbac-assign: assign: resolve user tenant: %w", err)
-	}
-	tid := u.TenantID
+	tid := tenantID
 	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionAssigned, ActorID: actorFromContext(ctx)}
 	writeFn := func(txCtx context.Context) (bool, error) {
 		changed, err := s.roleRepo.AssignToUser(txCtx, tid, userID, roleID)
@@ -212,7 +208,9 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 // When a state change occurs, the credentialinvalidate funnel runs inside the same
 // transaction, atomically bumping the authz_epoch and revoking all active sessions
 // and refresh chains.
-func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
+//
+// tenantID is derived from the request body (PR-3b #1617): same rationale as Assign.
+func (s *Service) Revoke(ctx context.Context, tenantID tenant.TenantID, userID, roleID string) error {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -221,12 +219,7 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 		return err
 	}
 
-	// Option B (#1337 PR-2a): tenant derived from the target user (see Assign).
-	u, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("rbac-assign: revoke: resolve user tenant: %w", err)
-	}
-	tid := u.TenantID
+	tid := tenantID
 	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionRevoked, ActorID: actorFromContext(ctx)}
 	writeFn := func(txCtx context.Context) (bool, error) {
 		// Atomic count-check + removal eliminates TOCTOU race for last-admin guard.

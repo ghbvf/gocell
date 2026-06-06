@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/scopedtx"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -231,29 +232,28 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		return nil, fmt.Errorf("setup: hash password: %w", err)
 	}
 
-	var out *CreateAdminOutput
-	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		// Acquire the setup lock first so that the CountByRole==0 fast-path,
-		// user write, and outbox emit all run under the same serialization
-		// boundary. PG mode uses pg_advisory_xact_lock (cross-pod); memstore
-		// mode uses NoopSetupLock — memTxRunner.RunInTx itself holds store.mu
-		// for the whole closure, already serializing within-process goroutines.
-		// NewService rejects nil at construction so this call is always safe.
-		if err := s.setupLock.Acquire(txCtx); err != nil {
-			return fmt.Errorf("setup: acquire setup lock: %w", err)
-		}
-		user, err := s.provisionAndMaybeEmit(txCtx, tid, in, []byte(hash))
-		if err != nil {
-			return err
-		}
-		out = &CreateAdminOutput{
-			ID:        user.ID,
-			Username:  user.Username,
-			Email:     user.Email,
-			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339Nano),
-		}
-		return nil
-	})
+	out, err := scopedtx.Do(ctx, s.txRunner, tid,
+		func(txCtx context.Context) (*CreateAdminOutput, error) {
+			// Acquire the setup lock first so that the CountByRole==0 fast-path,
+			// user write, and outbox emit all run under the same serialization
+			// boundary. PG mode uses pg_advisory_xact_lock (cross-pod); memstore
+			// mode uses NoopSetupLock — memTxRunner.RunInTx itself holds store.mu
+			// for the whole closure, already serializing within-process goroutines.
+			// NewService rejects nil at construction so this call is always safe.
+			if err := s.setupLock.Acquire(txCtx); err != nil {
+				return nil, fmt.Errorf("setup: acquire setup lock: %w", err)
+			}
+			user, err := s.provisionAndMaybeEmit(txCtx, tid, in, []byte(hash))
+			if err != nil {
+				return nil, err
+			}
+			return &CreateAdminOutput{
+				ID:        user.ID,
+				Username:  user.Username,
+				Email:     user.Email,
+				CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339Nano),
+			}, nil
+		})
 	if err != nil {
 		return nil, err
 	}

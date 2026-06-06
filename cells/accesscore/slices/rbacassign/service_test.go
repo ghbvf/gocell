@@ -93,7 +93,7 @@ func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 	// Idempotent: a roster pre-seed (seedTestUserRoster) plus explicit per-test
 	// seeds (assignActiveAdmin, table-case setups) can both target the same user;
 	// skip if already present so the second Create does not hit ErrAuthUserDuplicate.
-	if _, err := store.UserRepository().GetByID(context.Background(), userID); err == nil {
+	if _, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, userID); err == nil {
 		return
 	}
 	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
@@ -238,7 +238,7 @@ func TestService_Assign(t *testing.T) {
 				tc.setup(t, store)
 			}
 
-			err := svc.Assign(tenantCtx(), tc.userID, tc.roleID)
+			err := svc.Assign(tenantCtx(), testTenantID, tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				assertRoleAssigned(t, store, tc.userID, tc.roleID)
@@ -359,7 +359,7 @@ func TestService_Revoke(t *testing.T) {
 				tc.setup(t, store)
 			}
 
-			err := svc.Revoke(tenantCtx(), tc.userID, tc.roleID)
+			err := svc.Revoke(tenantCtx(), testTenantID, tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				// Verify removal persisted.
@@ -388,9 +388,9 @@ func TestRevoke_CallsFunnel_InvalidatesSessions(t *testing.T) {
 	assignActiveAdmin(t, store, "usr-1")
 	assignActiveAdmin(t, store, "usr-2")
 	sess := &session.Session{ID: "sess-1", SubjectID: "usr-1", JTI: "jti-sess-1", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
-	require.NoError(t, svc.Revoke(ctx, "usr-1", "admin"))
+	require.NoError(t, svc.Revoke(ctx, testTenantID, "usr-1", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-1")
 	require.NoError(t, err)
@@ -406,9 +406,9 @@ func TestAssign_DoesNotInvalidateSessions(t *testing.T) {
 	seedActiveUser(t, store, "usr-2") // Option B: Assign derives tenant from the target user
 
 	sess := &session.Session{ID: "sess-2", SubjectID: "usr-2", JTI: "jti-sess-2", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
-	require.NoError(t, svc.Assign(ctx, "usr-2", "admin"))
+	require.NoError(t, svc.Assign(ctx, testTenantID, "usr-2", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-2")
 	require.NoError(t, err)
@@ -422,10 +422,10 @@ func TestRevoke_NoOp_DoesNotCallFunnel(t *testing.T) {
 	ctx := tenantCtx()
 
 	sess := &session.Session{ID: "sess-noop-r", SubjectID: "usr-noop", JTI: "jti-noop-r", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
 	// usr-noop does not hold admin role — Revoke is a no-op.
-	require.NoError(t, svc.Revoke(ctx, "usr-noop", "admin"))
+	require.NoError(t, svc.Revoke(ctx, testTenantID, "usr-noop", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-noop-r")
 	require.NoError(t, err)
@@ -443,9 +443,9 @@ func TestAssign_NoOp_DoesNotEmit(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := &session.Session{ID: "sess-noop-a", SubjectID: "usr-3", JTI: "jti-noop-a", AuthzEpochAtIssue: 1}
-	require.NoError(t, sessionStore.Create(ctx, sess))
+	require.NoError(t, sessionStore.Create(ctx, testTenantID, sess))
 
-	require.NoError(t, svc.Assign(ctx, "usr-3", "admin"))
+	require.NoError(t, svc.Assign(ctx, testTenantID, "usr-3", "admin"))
 
 	s, err := sessionStore.Get(ctx, "sess-noop-a")
 	require.NoError(t, err)
@@ -477,7 +477,7 @@ func TestRevoke_FunnelFail_ReturnsError(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
 	require.NoError(t, err)
 
-	err = svc.Revoke(tenantCtx(), "usr-1", "admin")
+	err = svc.Revoke(tenantCtx(), testTenantID, "usr-1", "admin")
 	require.Error(t, err, "Revoke must fail-closed when credential invalidation fails")
 	assert.Contains(t, err.Error(), "invalidate credentials")
 }

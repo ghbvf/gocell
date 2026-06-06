@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -73,7 +74,8 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	svc, err := NewService(roleRepo, codec, slog.Default(), runMode)
+	svc, err := NewService(roleRepo, codec, slog.Default(), runMode,
+		WithTxManager(outbox.DemoCellTxManager()))
 	if err != nil {
 		panic(err)
 	}

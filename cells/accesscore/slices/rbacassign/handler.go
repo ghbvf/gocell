@@ -6,6 +6,8 @@ import (
 	assign "github.com/ghbvf/gocell/generated/contracts/http/auth/role/assign/v1"
 	revoke "github.com/ghbvf/gocell/generated/contracts/http/auth/role/revoke/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -13,8 +15,17 @@ import (
 type AssignAdapter struct{ S *Service }
 
 // Assign implements assign.Service.
+// tenantID is parsed from req.TenantID (#1337 PR-3b): the InternalListener
+// service-token caller has no JWT, so the tenant is supplied in the request body.
 func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (assign.AssignResponseObject, error) {
-	if err := a.S.Assign(ctx, req.UserID, req.RoleID); err != nil {
+	tid, err := tenant.ParseTenantID(req.TenantID)
+	if err != nil {
+		return assign.Assign400ErrorResponse{Body: *errcode.New(
+			errcode.KindInvalid, errcode.ErrAuthRBACInvalidInput, "invalid tenantId",
+			errcode.WithDetails(errcode.PublicString("tenantId", req.TenantID)),
+		)}, nil
+	}
+	if err := a.S.Assign(ctx, tid, req.UserID, req.RoleID); err != nil {
 		return nil, err
 	}
 	return assign.Assign201JSONResponse{Data: &assign.ResponseData{
@@ -28,8 +39,16 @@ func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (assign.
 type RevokeAdapter struct{ S *Service }
 
 // Revoke implements revoke.Service.
+// tenantID is parsed from req.TenantID (#1337 PR-3b): same rationale as Assign.
 func (a RevokeAdapter) Revoke(ctx context.Context, req *revoke.Request) (revoke.RevokeResponseObject, error) {
-	if err := a.S.Revoke(ctx, req.UserID, req.RoleID); err != nil {
+	tid, err := tenant.ParseTenantID(req.TenantID)
+	if err != nil {
+		return revoke.Revoke400ErrorResponse{Body: *errcode.New(
+			errcode.KindInvalid, errcode.ErrAuthRBACInvalidInput, "invalid tenantId",
+			errcode.WithDetails(errcode.PublicString("tenantId", req.TenantID)),
+		)}, nil
+	}
+	if err := a.S.Revoke(ctx, tid, req.UserID, req.RoleID); err != nil {
 		return nil, err
 	}
 	return revoke.Revoke200JSONResponse{Data: &revoke.ResponseData{

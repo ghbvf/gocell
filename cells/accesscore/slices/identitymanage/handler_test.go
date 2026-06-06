@@ -698,7 +698,7 @@ func TestPatch_RequirePasswordResetFalse_Clears(t *testing.T) {
 	id := created.Data.ID
 
 	// Confirm the flag is set.
-	user, err := repo.GetByID(context.Background(), id)
+	user, err := repo.GetByIDInTenant(context.Background(), testTenantID, id)
 	require.NoError(t, err)
 	require.True(t, user.PasswordResetRequired(), "flag should be set after create")
 
@@ -712,7 +712,7 @@ func TestPatch_RequirePasswordResetFalse_Clears(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "PATCH false must return 200")
 
 	// After PATCH, flag must be cleared.
-	user, err = repo.GetByID(context.Background(), id)
+	user, err = repo.GetByIDInTenant(context.Background(), testTenantID, id)
 	require.NoError(t, err)
 	require.False(t, user.PasswordResetRequired(), "PATCH false must clear the flag (not treat it as no-change)")
 }
@@ -739,7 +739,7 @@ func TestPatch_RequirePasswordResetTrue_Sets(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 	id := created.Data.ID
 
-	user, err := repo.GetByID(context.Background(), id)
+	user, err := repo.GetByIDInTenant(context.Background(), testTenantID, id)
 	require.NoError(t, err)
 	require.False(t, user.PasswordResetRequired(), "flag should not be set after create without it")
 
@@ -752,7 +752,7 @@ func TestPatch_RequirePasswordResetTrue_Sets(t *testing.T) {
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	user, err = repo.GetByID(context.Background(), id)
+	user, err = repo.GetByIDInTenant(context.Background(), testTenantID, id)
 	require.NoError(t, err)
 	require.True(t, user.PasswordResetRequired(), "PATCH true must set the flag")
 }
@@ -788,7 +788,7 @@ func TestPatch_RequirePasswordResetAbsent_NoChange(t *testing.T) {
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	user, err := repo.GetByID(context.Background(), id)
+	user, err := repo.GetByIDInTenant(context.Background(), testTenantID, id)
 	require.NoError(t, err)
 	require.True(t, user.PasswordResetRequired(), "PATCH with absent field must not change the flag")
 }

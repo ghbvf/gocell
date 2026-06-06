@@ -245,7 +245,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.Equal(t, "root", payload["username"])
 
 	// Verify persisted user does NOT have PasswordResetRequired
-	persisted, err := userRepo.GetByID(context.Background(), out.ID)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, out.ID)
 	require.NoError(t, err)
 	assert.False(t, persisted.PasswordResetRequired(), "setup path creates with operator-chosen password")
 	// Verify password was hashed with bcrypt
@@ -678,7 +678,7 @@ func TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover(t *test
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 
-	refreshed, err := userRepo.GetByID(context.Background(), "usr-existing-prior")
+	refreshed, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, "usr-existing-prior")
 	require.NoError(t, err)
 	assert.Equal(t, "$2a$10$oldhash00000000000000000000000000000000000000000000000", refreshed.PasswordHash,
 		"existing user hash must be untouched")
