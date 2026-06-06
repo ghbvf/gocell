@@ -13,19 +13,24 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/runtime/auth"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // stubConfigGetter is a test double for ports.ConfigGetter.
 type stubConfigGetter struct {
-	entry      ports.ConfigEntry
-	err        error
-	calledWith string // records the key argument passed to GetEntry
+	entry            ports.ConfigEntry
+	err              error
+	calledWith       string          // records the key argument passed to GetEntry
+	calledWithTenant tenant.TenantID // records the tenant argument passed to GetEntry
 }
 
-func (s *stubConfigGetter) GetEntry(_ context.Context, key string) (ports.ConfigEntry, error) {
+func (s *stubConfigGetter) GetEntry(_ context.Context, t tenant.TenantID, key string) (ports.ConfigEntry, error) {
 	s.calledWith = key
+	s.calledWithTenant = t
 	return s.entry, s.err
 }
 
@@ -48,9 +53,19 @@ func (c *recordingConfigEventCollector) RecordEventProcess(
 func (c *recordingConfigEventCollector) RecordEventSettlement(_ context.Context, _, _, _ string, _ outbox.SettlementResult) {
 }
 
+// testTenantUUID is the canonical UUID used by service_test to inject tenant context.
+const testTenantUUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+// tenantCtx returns a context carrying testTenantUUID as the authenticated tenant.
+// Legal in _test.go — CTXKEYS-PRINCIPAL-WRITE-CALLER-01 is Production-scoped only.
+func tenantCtx() context.Context {
+	return ctxkeys.WithTenantID(auth.TestContext("acc", []string{"admin"}), testTenantUUID)
+}
+
 // callWithConfigEventOwner runs handler through ConfigEventMiddleware and returns
 // (disposition, err) extracted from the HandleResult.
 func callWithConfigEventOwner(
+	ctx context.Context,
 	entry outbox.Entry,
 	fn outbox.EntryHandler,
 ) (outbox.Disposition, error) {
@@ -58,7 +73,7 @@ func callWithConfigEventOwner(
 		outbox.Subscription{Topic: entry.Topic(), ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		fn,
 	)
-	result := wrapped(context.Background(), entry)
+	result := wrapped(ctx, entry)
 	return result.Disposition, result.Err
 }
 
@@ -200,7 +215,7 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchOK(t *testing.T) {
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":2,"actorId":"adm-1"}`))
-	result := svc.HandleEntryUpserted(context.Background(), entry)
+	result := svc.HandleEntryUpserted(tenantCtx(), entry)
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
 	// F5: assert stub was called with the correct key from the event payload.
@@ -216,7 +231,7 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchError(t *testing.T) {
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
-	result := svc.HandleEntryUpserted(context.Background(), entry)
+	result := svc.HandleEntryUpserted(tenantCtx(), entry)
 	assert.Equal(t, outbox.DispositionRequeue, result.Disposition, "transient fetch failure must trigger Requeue")
 	assert.Error(t, result.Err)
 	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigGetter.GetEntry must be called with the event's key")
@@ -233,7 +248,7 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchNotFound(t *testing.T) {
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
-	result := svc.HandleEntryUpserted(context.Background(), entry)
+	result := svc.HandleEntryUpserted(tenantCtx(), entry)
 	assert.Equal(t, outbox.DispositionAck, result.Disposition, "not-found fetch must Ack (stale event, no retry needed)")
 	assert.NoError(t, result.Err)
 }
@@ -253,6 +268,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 		name            string
 		getter          ports.ConfigGetter
 		payload         []byte
+		needTenant      bool // true when the subtest exercises a configGetter code path
 		wantDisposition outbox.Disposition
 		wantRecords     []configEventRecord
 	}{
@@ -269,6 +285,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			getter: &stubConfigGetter{entry: ports.ConfigEntry{
 				Key: "jwt.ttl", Value: "30m", Version: 1,
 			}},
+			needTenant:      true,
 			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantDisposition: outbox.DispositionAck,
 			wantRecords: []configEventRecord{{
@@ -279,6 +296,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			name: "getter not found records stale",
 			getter: &stubConfigGetter{err: errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "missing",
 				errcode.WithCategory(errcode.CategoryDomain))},
+			needTenant:      true,
 			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantDisposition: outbox.DispositionAck,
 			wantRecords: []configEventRecord{{
@@ -296,6 +314,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 		{
 			name:            "transient getter error records no service outcome",
 			getter:          &stubConfigGetter{err: errors.New("configcore unavailable")},
+			needTenant:      true,
 			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantDisposition: outbox.DispositionRequeue,
 			wantRecords:     nil,
@@ -312,11 +331,58 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), opts...)
 			entry := outboxtest.NewEntry(TopicConfigEntryUpserted, tt.payload)
 
-			disposition, _ := callWithConfigEventOwner(entry, svc.HandleEntryUpserted)
+			ctx := context.Background()
+			if tt.needTenant {
+				ctx = tenantCtx()
+			}
+			disposition, _ := callWithConfigEventOwner(ctx, entry, svc.HandleEntryUpserted)
 			assert.Equal(t, tt.wantDisposition, disposition)
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
 	}
+}
+
+// TestHandleEntryUpserted_WithConfigGetter_ForwardsRealTenant asserts that when
+// a tenant.TenantID is present in the context (as restored by
+// SubscriberWithMiddleware from the outbox principal envelope), HandleEntryUpserted
+// passes that exact tenant to ConfigGetter.GetEntry and returns Ack on success.
+func TestHandleEntryUpserted_WithConfigGetter_ForwardsRealTenant(t *testing.T) {
+	realTenantID := "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	stub := &stubConfigGetter{
+		entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 2},
+	}
+	svc := NewService(slog.Default(), WithConfigGetter(stub))
+
+	// Inject tenant via ctxkeys — legal in _test.go (CTXKEYS-PRINCIPAL-WRITE-CALLER-01
+	// is Production-scoped and does not apply to test files).
+	ctx := ctxkeys.WithTenantID(auth.TestContext("acc", []string{"admin"}), realTenantID)
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":2,"actorId":"adm-1"}`))
+	result := svc.HandleEntryUpserted(ctx, entry)
+
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+	assert.Equal(t, "jwt.ttl", stub.calledWith, "GetEntry must be called with the event's key")
+	wantTenant, err := tenant.ParseTenantID(realTenantID)
+	require.NoError(t, err)
+	assert.Equal(t, wantTenant, stub.calledWithTenant, "GetEntry must receive the real tenant from context")
+}
+
+// TestHandleEntryUpserted_WithConfigGetter_NoTenant_SkipsRefetch asserts that
+// when no tenant is present in the context (bare context.Background()), the
+// service skips the ConfigGetter refetch and returns Ack without calling GetEntry.
+func TestHandleEntryUpserted_WithConfigGetter_NoTenant_SkipsRefetch(t *testing.T) {
+	stub := &stubConfigGetter{
+		entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 1},
+	}
+	svc := NewService(slog.Default(), WithConfigGetter(stub))
+
+	// Bare context — no tenant installed.
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+	assert.Empty(t, stub.calledWith, "GetEntry must NOT be called when no tenant in context")
 }
 
 // TestIsPermanentAuthFailure tests the isPermanentAuthFailure helper directly.
@@ -351,7 +417,7 @@ func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth401(t *testing.T) {
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
-	result := svc.HandleEntryUpserted(context.Background(), entry)
+	result := svc.HandleEntryUpserted(tenantCtx(), entry)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition, "401 must Reject (permanent)")
 	require.Error(t, result.Err)
 
@@ -368,7 +434,7 @@ func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth403(t *testing.T) {
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
-	result := svc.HandleEntryUpserted(context.Background(), entry)
+	result := svc.HandleEntryUpserted(tenantCtx(), entry)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition, "403 must Reject (permanent)")
 	require.Error(t, result.Err)
 
@@ -433,7 +499,7 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
 			entry := outboxtest.NewEntry(TopicConfigEntryDeleted, tt.payload)
 
-			disposition, _ := callWithConfigEventOwner(entry, svc.HandleEntryDeleted)
+			disposition, _ := callWithConfigEventOwner(context.Background(), entry, svc.HandleEntryDeleted)
 			assert.Equal(t, tt.wantDisposition, disposition)
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})

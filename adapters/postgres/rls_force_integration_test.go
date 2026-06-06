@@ -170,18 +170,22 @@ func TestRLSForce_AppRoleNotBypassRLS(t *testing.T) {
 	assert.False(t, super, "[F-B11] application role must NOT be a superuser")
 }
 
-func TestRLSForce_SystemTenantStrictEquality(t *testing.T) {
+// TestRLSForce_TenantStrictEquality asserts that RLS enforces strict per-tenant
+// equality: rows seeded under rlsTenantA are invisible to rlsTenantB. This
+// replaces the previous SystemTenantID-based test; the nil-UUID sentinel was
+// removed in issue #1577 — every tenant must be a real non-reserved UUID.
+func TestRLSForce_TenantStrictEquality(t *testing.T) {
 	dsn := sharedPG.CloneDSN(t)
 	admin := openPerTestPool(t, dsn)
 	app := restrictedAppPool(t, dsn, admin)
 	tm := NewTxManager(app)
 
-	require.NoError(t, scopedInsertFlag(t, tm, tenant.SystemTenantID, "flag-sys", "k-sys"))
+	require.NoError(t, scopedInsertFlag(t, tm, rlsTenantA, "flag-teq", "k-teq"))
 
-	assert.Equal(t, 1, scopedCountFlags(t, tm, tenant.SystemTenantID, "k-sys"),
-		"SystemTenantID scope must see the system-tier row")
-	assert.Equal(t, 0, scopedCountFlags(t, tm, rlsTenantA, "k-sys"),
-		"a real tenant must NOT see SystemTenantID rows (strict equality, no OR-merge)")
+	assert.Equal(t, 1, scopedCountFlags(t, tm, rlsTenantA, "k-teq"),
+		"tenant A scope must see its own row")
+	assert.Equal(t, 0, scopedCountFlags(t, tm, rlsTenantB, "k-teq"),
+		"tenant B must NOT see tenant A's row (strict equality, no OR-merge)")
 }
 
 func TestRLSForce_SchemaGuardVerifyRLS(t *testing.T) {

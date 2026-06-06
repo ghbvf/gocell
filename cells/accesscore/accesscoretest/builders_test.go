@@ -27,6 +27,11 @@ import (
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
+// fixtureTestTenant is a package-level alias for the canonical test tenant used
+// in GetEntry recorder assertions. It exercises the new tenant.TenantID parameter
+// without coupling every test to a separate UUID constant.
+var fixtureTestTenant = accesscoretest.DefaultFixtureTenantID
+
 // TestNewAccessFixtureSeedAndQuery seeds a user and role, then reads them back
 // via the value-type Get* helpers.
 func TestNewAccessFixtureSeedAndQuery(t *testing.T) {
@@ -88,7 +93,7 @@ func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"foo": accesscoretest.PresentStub("foo", "bar", 1),
 	})
-	got, err := fg.GetEntry(ctx, "foo")
+	got, err := fg.GetEntry(ctx, fixtureTestTenant, "foo")
 	require.NoError(t, err)
 	assert.Equal(t, "foo", got.Key)
 	assert.Equal(t, "bar", got.Value)
@@ -99,7 +104,7 @@ func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 	fgSens := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"kms.key": accesscoretest.SensitiveStub("kms.key", 4),
 	})
-	gotSens, err := fgSens.GetEntry(ctx, "kms.key")
+	gotSens, err := fgSens.GetEntry(ctx, fixtureTestTenant, "kms.key")
 	require.NoError(t, err)
 	assert.True(t, gotSens.Sensitive)
 	assert.Equal(t, "******", gotSens.Value,
@@ -110,13 +115,13 @@ func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 	fgErr := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"missing": accesscoretest.ErrorStub(customErr),
 	})
-	_, err = fgErr.GetEntry(ctx, "missing")
+	_, err = fgErr.GetEntry(ctx, fixtureTestTenant, "missing")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, customErr)
 
 	// Unknown key (no stub) — ErrConfigRepoNotFound with CategoryDomain.
 	fgUnknown := accesscoretest.NewFakeConfigGetter(nil)
-	_, err = fgUnknown.GetEntry(ctx, "unknown")
+	_, err = fgUnknown.GetEntry(ctx, fixtureTestTenant, "unknown")
 	require.Error(t, err)
 	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"unknown key must carry CategoryDomain so HandleEntryUpserted Acks")
@@ -125,7 +130,7 @@ func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 	fgGone := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"stale": accesscoretest.NotFoundStub(),
 	})
-	_, err = fgGone.GetEntry(ctx, "stale")
+	_, err = fgGone.GetEntry(ctx, fixtureTestTenant, "stale")
 	require.Error(t, err)
 	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"NotFoundStub must carry CategoryDomain so HandleEntryUpserted Acks")
@@ -141,7 +146,7 @@ func TestFakeConfigGetterCtxCancel(t *testing.T) {
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"foo": accesscoretest.PresentStub("foo", "v", 1),
 	})
-	_, err := fg.GetEntry(ctx, "foo")
+	_, err := fg.GetEntry(ctx, fixtureTestTenant, "foo")
 	require.Error(t, err, "GetEntry must propagate canceled ctx error")
 	assert.True(t, errors.Is(err, context.Canceled))
 }
@@ -155,8 +160,8 @@ func TestFakeConfigGetterCallsRecorded(t *testing.T) {
 		"foo": accesscoretest.PresentStub("foo", "v", 1),
 		"bar": accesscoretest.PresentStub("bar", "v2", 1),
 	})
-	_, _ = fg.GetEntry(ctx, "foo")
-	_, _ = fg.GetEntry(ctx, "bar")
+	_, _ = fg.GetEntry(ctx, fixtureTestTenant, "foo")
+	_, _ = fg.GetEntry(ctx, fixtureTestTenant, "bar")
 
 	calls := fg.Calls()
 	require.Equal(t, []string{"foo", "bar"}, calls)
@@ -224,7 +229,12 @@ func TestBuildIdentityManageServiceSmoke(t *testing.T) {
 // HandleResult disposition for both the hit (Ack) and stale (Ack) paths.
 func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	// Inject tenant so the configGetter refetch path is exercised.
+	// HandleEntryUpserted skips the getter when no tenant is in context
+	// (consumer pipeline restores tenant from the outbox principal envelope
+	// before the handler runs; in unit tests we inject it explicitly).
+	ctx := ctxkeys.WithTenantID(auth.TestContext("acc", []string{"admin"}),
+		accesscoretest.DefaultFixtureTenantID.String())
 
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"jwt.ttl": accesscoretest.PresentStub("jwt.ttl", "3600", 1),

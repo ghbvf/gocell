@@ -1,3 +1,13 @@
+# X-Tenant-ID header (required, string, canonical lowercase UUID)
+# ----------------------------------------------------------------
+# Callers MUST supply a valid per-tenant UUID in the X-Tenant-ID request header.
+# The handler parses it via tenant.ParseTenantID (fail-closed):
+#   - absent or empty value → 400 ERR_VALIDATION_FAILED
+#   - malformed (non-UUID, non-canonical) value → 400 ERR_VALIDATION_FAILED
+#   - reserved nil-UUID ("00000000-0000-0000-0000-000000000000") → 400 ERR_VALIDATION_FAILED
+# There is no SystemTenantID fallback — every call must carry a real tenant UUID.
+# Note: contractgen does not yet emit header parameters from contract.yaml (#1494);
+# this comment is the authoritative documentation until that support lands.
 id: http.config.internal.get.v1
 kind: http
 ownerCell: configcore

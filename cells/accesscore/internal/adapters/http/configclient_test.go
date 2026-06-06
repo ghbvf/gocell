@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -24,6 +25,17 @@ func newTestRing(t *testing.T) *auth.HMACKeyRing {
 	return ring
 }
 
+// testTenant is a canonical UUID used across configclient tests.
+var testTenant = mustParseTenant("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+
+func mustParseTenant(s string) tenant.TenantID {
+	t, err := tenant.ParseTenantID(s)
+	if err != nil {
+		panic("mustParseTenant: " + err.Error())
+	}
+	return t
+}
+
 func TestHTTPConfigGetter_GetEntry_OK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -31,6 +43,8 @@ func TestHTTPConfigGetter_GetEntry_OK(t *testing.T) {
 		// Service token header must be present.
 		assert.NotEmpty(t, r.Header.Get("Authorization"))
 		assert.Contains(t, r.Header.Get("Authorization"), "ServiceToken")
+		// X-Tenant-ID must match the tenant passed to GetEntry.
+		assert.Equal(t, testTenant.String(), r.Header.Get("X-Tenant-ID"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -50,7 +64,7 @@ func TestHTTPConfigGetter_GetEntry_OK(t *testing.T) {
 
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
-	entry, err := client.GetEntry(context.Background(), "app.name")
+	entry, err := client.GetEntry(context.Background(), testTenant, "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, "app.name", entry.Key)
 	assert.Equal(t, "gocell", entry.Value)
@@ -60,6 +74,7 @@ func TestHTTPConfigGetter_GetEntry_OK(t *testing.T) {
 
 func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, testTenant.String(), r.Header.Get("X-Tenant-ID"))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -70,12 +85,13 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
-	_, err := client.GetEntry(context.Background(), "missing.key")
+	_, err := client.GetEntry(context.Background(), testTenant, "missing.key")
 	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 }
 
 func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, testTenant.String(), r.Header.Get("X-Tenant-ID"))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -94,7 +110,7 @@ func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {
 
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
-	entry, err := client.GetEntry(context.Background(), "db.password")
+	entry, err := client.GetEntry(context.Background(), testTenant, "db.password")
 	require.NoError(t, err)
 	assert.Equal(t, "db.password", entry.Key)
 	assert.True(t, entry.Sensitive)
@@ -108,7 +124,7 @@ func TestHTTPConfigGetter_GetEntry_UnexpectedStatus(t *testing.T) {
 
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
-	_, err := client.GetEntry(context.Background(), "any.key")
+	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status 500")
 }
@@ -121,7 +137,7 @@ func TestHTTPConfigGetter_GetEntry_Unauthorized(t *testing.T) {
 
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
-	_, err := client.GetEntry(context.Background(), "some.key")
+	_, err := client.GetEntry(context.Background(), testTenant, "some.key")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -137,7 +153,7 @@ func TestHTTPConfigGetter_GetEntry_Forbidden(t *testing.T) {
 
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
-	_, err := client.GetEntry(context.Background(), "some.key")
+	_, err := client.GetEntry(context.Background(), testTenant, "some.key")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -158,7 +174,7 @@ func TestNewHTTPConfigGetter_Constructor(t *testing.T) {
 func TestHTTPConfigGetter_GetEntry_EmptyToken(t *testing.T) {
 	// nil ring causes GenerateServiceToken to return "".
 	client := NewHTTPConfigGetterWithHTTPClient("http://localhost:19090", nil, http.DefaultClient, clock.Real())
-	_, err := client.GetEntry(context.Background(), "any.key")
+	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -177,7 +193,38 @@ func TestHTTPConfigGetter_GetEntry_BadResponseBody(t *testing.T) {
 
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
-	_, err := client.GetEntry(context.Background(), "any.key")
+	_, err := client.GetEntry(context.Background(), testTenant, "any.key")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode response")
+}
+
+// TestHTTPConfigGetter_GetEntry_TenantIDForwarded asserts that GetEntry sets
+// the X-Tenant-ID header to the string representation of the tenant.TenantID
+// argument, and that two distinct tenants produce two distinct header values.
+func TestHTTPConfigGetter_GetEntry_TenantIDForwarded(t *testing.T) {
+	var receivedTenant string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedTenant = r.Header.Get("X-Tenant-ID")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"key": "k", "value": "v", "sensitive": false, "version": 1,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	ring := newTestRing(t)
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+
+	tid1 := mustParseTenant("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	_, err := client.GetEntry(context.Background(), tid1, "k")
+	require.NoError(t, err)
+	assert.Equal(t, tid1.String(), receivedTenant, "X-Tenant-ID must match the tenant argument")
+
+	tid2 := mustParseTenant("11111111-2222-3333-4444-555555555555")
+	_, err = client.GetEntry(context.Background(), tid2, "k")
+	require.NoError(t, err)
+	assert.Equal(t, tid2.String(), receivedTenant, "X-Tenant-ID must update with each call")
 }

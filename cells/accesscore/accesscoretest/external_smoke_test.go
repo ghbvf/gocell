@@ -121,7 +121,7 @@ func TestExternalImportSurface_NoInternalTypes(t *testing.T) {
 		"missing":   accesscoretest.NotFoundStub(),
 		"transient": accesscoretest.ErrorStub(errors.New("transient")),
 	})
-	_, _ = g.GetEntry(ctx, "plain")
+	_, _ = g.GetEntry(ctx, accesscoretest.DefaultFixtureTenantID, "plain")
 
 	cfgSvc := accesscoretest.BuildConfigReceiveService(
 		t,
