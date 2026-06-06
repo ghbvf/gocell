@@ -29,6 +29,12 @@ const (
 	logoutBasePath = "/api/v1/access/sessions/"
 )
 
+// testCookieTTL mirrors accesscore.DefaultRefreshMaxAge (7 days). Logout only
+// emits a clear cookie (Max-Age=0), so the value is not asserted, but the
+// NewHandler signature now takes a time.Duration; a named const keeps it
+// readable and satisfies TEST-TIME-LITERAL-01.
+const testCookieTTL = 7 * 24 * time.Hour
+
 func newHandlerLogoutRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
 	store, err := refreshmem.New(refresh.Policy{
@@ -70,7 +76,7 @@ func setup(t testing.TB) http.Handler {
 
 	svc := mustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc, 604800).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
 	}
 	return mux

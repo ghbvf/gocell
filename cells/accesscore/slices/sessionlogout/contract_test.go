@@ -101,7 +101,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	require.NoError(t, err)
 
 	mux := celltest.NewTestMux()
-	if err := NewHandler(svc, 604800).RegisterRoutes(mux); err != nil {
+	if err := NewHandler(svc, testCookieTTL).RegisterRoutes(mux); err != nil {
 		t.Fatalf("RegisterRoutes: %v", err)
 	}
 
