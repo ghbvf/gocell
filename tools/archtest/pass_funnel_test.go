@@ -65,10 +65,10 @@ import (
 )
 
 const (
-	scannerPkgPath        = "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	archtestPkgPath       = "github.com/ghbvf/gocell/tools/archtest"
-	typesevalPkgPath      = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	callresolverPkgPath   = "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
+	scannerPkgPath        = PlatformModulePath + "/tools/archtest/internal/scanner"
+	archtestPkgPath       = PlatformModulePath + "/tools/archtest"
+	typesevalPkgPath      = PlatformModulePath + "/tools/archtest/internal/typeseval"
+	callresolverPkgPath   = PlatformModulePath + "/tools/archtest/internal/callresolver"
 	packagesPkgPath       = "golang.org/x/tools/go/packages"
 	usage02FixturesRelDir = "tools/archtest/internal/usage02fixtures"
 )

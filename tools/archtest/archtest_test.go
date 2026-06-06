@@ -795,25 +795,25 @@ func checkTransitiveCrossCellEvents(cls kerneldepgraph.Classifier, g *kerneldepg
 // --- unit tests for helper functions ---
 
 func TestLayerOf(t *testing.T) {
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{"github.com/ghbvf/gocell/kernel/cell", "kernel"},
-		{"github.com/ghbvf/gocell/kernel/outbox", "kernel"},
-		{"github.com/ghbvf/gocell/runtime/auth", "runtime"},
-		{"github.com/ghbvf/gocell/runtime/http/middleware", "runtime"},
-		{"github.com/ghbvf/gocell/adapters/postgres", "adapters"},
-		{"github.com/ghbvf/gocell/cells/accesscore", "cells"},
-		{"github.com/ghbvf/gocell/cells/accesscore/internal/domain", "cells"},
-		{"github.com/ghbvf/gocell/pkg/errcode", "pkg"},
-		{"github.com/ghbvf/gocell/cmd/gocell", "cmd"},
-		{"github.com/ghbvf/gocell/examples/ssobff", "examples"},
-		{"github.com/ghbvf/gocell/tools/archtest", "tools"},
+		{PlatformModulePath + "/kernel/cell", "kernel"},
+		{PlatformModulePath + "/kernel/outbox", "kernel"},
+		{PlatformModulePath + "/runtime/auth", "runtime"},
+		{PlatformModulePath + "/runtime/http/middleware", "runtime"},
+		{PlatformModulePath + "/adapters/postgres", "adapters"},
+		{PlatformModulePath + "/cells/accesscore", "cells"},
+		{PlatformModulePath + "/cells/accesscore/internal/domain", "cells"},
+		{PlatformModulePath + "/pkg/errcode", "pkg"},
+		{PlatformModulePath + "/cmd/gocell", "cmd"},
+		{PlatformModulePath + "/examples/ssobff", "examples"},
+		{PlatformModulePath + "/tools/archtest", "tools"},
 		// Module root package returns "" (no layer segment after prefix).
-		{"github.com/ghbvf/gocell", ""},
+		{PlatformModulePath, ""},
 		// External packages return "".
 		{"fmt", ""},
 		{"github.com/stretchr/testify/assert", ""},
@@ -827,19 +827,19 @@ func TestLayerOf(t *testing.T) {
 }
 
 func TestCellOf(t *testing.T) {
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{"github.com/ghbvf/gocell/cells/accesscore", "accesscore"},
-		{"github.com/ghbvf/gocell/cells/accesscore/internal/domain", "accesscore"},
-		{"github.com/ghbvf/gocell/cells/auditcore/slices/auditappend", "auditcore"},
-		{"github.com/ghbvf/gocell/cells/configcore", "configcore"},
+		{PlatformModulePath + "/cells/accesscore", "accesscore"},
+		{PlatformModulePath + "/cells/accesscore/internal/domain", "accesscore"},
+		{PlatformModulePath + "/cells/auditcore/slices/auditappend", "auditcore"},
+		{PlatformModulePath + "/cells/configcore", "configcore"},
 		// Non-cell paths return "".
-		{"github.com/ghbvf/gocell/kernel/cell", ""},
-		{"github.com/ghbvf/gocell/runtime/auth", ""},
+		{PlatformModulePath + "/kernel/cell", ""},
+		{PlatformModulePath + "/runtime/auth", ""},
 		{"fmt", ""},
 	}
 	for _, tt := range tests {
@@ -850,17 +850,17 @@ func TestCellOf(t *testing.T) {
 }
 
 func TestIsRootCellPackage(t *testing.T) {
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		input string
 		want  bool
 	}{
-		{"github.com/ghbvf/gocell/cells/configcore", true},
-		{"github.com/ghbvf/gocell/cells/accesscore", true},
-		{"github.com/ghbvf/gocell/cells/configcore/postgres", false},
-		{"github.com/ghbvf/gocell/cells/configcore/internal/ports", false},
-		{"github.com/ghbvf/gocell/runtime/auth", false},
+		{PlatformModulePath + "/cells/configcore", true},
+		{PlatformModulePath + "/cells/accesscore", true},
+		{PlatformModulePath + "/cells/configcore/postgres", false},
+		{PlatformModulePath + "/cells/configcore/internal/ports", false},
+		{PlatformModulePath + "/runtime/auth", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -870,19 +870,19 @@ func TestIsRootCellPackage(t *testing.T) {
 }
 
 func TestIsCellPublicAPIDisallowedType(t *testing.T) {
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
 	tests := []struct {
 		pkgPath string
 		want    bool
 	}{
-		{"github.com/ghbvf/gocell/adapters/postgres", true},
+		{PlatformModulePath + "/adapters/postgres", true},
 		{"github.com/jackc/pgx/v5/pgxpool", true},
 		{"github.com/redis/go-redis/v9", true},
 		{"github.com/rabbitmq/amqp091-go", true},
 		{"github.com/coder/websocket", true},
 		{"github.com/prometheus/client_golang/prometheus", true},
-		{"github.com/ghbvf/gocell/kernel/outbox", false},
+		{PlatformModulePath + "/kernel/outbox", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.pkgPath, func(t *testing.T) {
@@ -892,9 +892,9 @@ func TestIsCellPublicAPIDisallowedType(t *testing.T) {
 }
 
 func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
-	rootPkg := types.NewPackage("github.com/ghbvf/gocell/cells/accesscore", "accesscore")
+	rootPkg := types.NewPackage(PlatformModulePath+"/cells/accesscore", "accesscore")
 	poolPkg := types.NewPackage("github.com/jackc/pgx/v5/pgxpool", "pgxpool")
 	promPkg := types.NewPackage("github.com/prometheus/client_golang/prometheus", "prometheus")
 
@@ -918,7 +918,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	}
 
 	fakePkg := &packages.Package{
-		PkgPath: "github.com/ghbvf/gocell/cells/accesscore",
+		PkgPath: PlatformModulePath + "/cells/accesscore",
 		Syntax:  []*ast.File{file},
 		Types:   rootPkg,
 		TypesInfo: &types.Info{
@@ -941,7 +941,7 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 		types.NewSignatureType(nil, nil, nil,
 			types.NewTuple(types.NewVar(token.NoPos, rootPkg, "pool", poolPtr)), nil, false))
 	fakePkg.TypesInfo.Defs[metricName] = types.NewVar(token.NoPos, rootPkg, "ExportedMetric", counterType)
-	fakePkg.PkgPath = "github.com/ghbvf/gocell/cells/accesscore"
+	fakePkg.PkgPath = PlatformModulePath + "/cells/accesscore"
 
 	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{fakePkg})
 
@@ -957,9 +957,9 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 }
 
 func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *testing.T) {
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cls := kerneldepgraph.NewClassifier([]string{module})
-	rootPkg := types.NewPackage("github.com/ghbvf/gocell/cells/accesscore", "accesscore")
+	rootPkg := types.NewPackage(PlatformModulePath+"/cells/accesscore", "accesscore")
 	funcDecl := &ast.FuncDecl{Name: ast.NewIdent("Exported"), Type: &ast.FuncType{}}
 	file := &ast.File{
 		Name:  ast.NewIdent("accesscore"),
@@ -967,7 +967,7 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 	}
 
 	loadErrorPkg := &packages.Package{
-		PkgPath: "github.com/ghbvf/gocell/cells/accesscore",
+		PkgPath: PlatformModulePath + "/cells/accesscore",
 		Syntax:  []*ast.File{file},
 		Types:   rootPkg,
 		TypesInfo: &types.Info{
@@ -979,17 +979,17 @@ func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *t
 		Errors: []packages.Error{{Msg: "undefined: broken"}},
 	}
 	missingObjectPkg := &packages.Package{
-		PkgPath: "github.com/ghbvf/gocell/cells/configcore",
+		PkgPath: PlatformModulePath + "/cells/configcore",
 		Syntax:  []*ast.File{file},
-		Types:   types.NewPackage("github.com/ghbvf/gocell/cells/configcore", "configcore"),
+		Types:   types.NewPackage(PlatformModulePath+"/cells/configcore", "configcore"),
 		TypesInfo: &types.Info{
 			Defs: map[*ast.Ident]types.Object{},
 		},
 	}
 	missingTypesInfoPkg := &packages.Package{
-		PkgPath: "github.com/ghbvf/gocell/cells/auditcore",
+		PkgPath: PlatformModulePath + "/cells/auditcore",
 		Syntax:  []*ast.File{file},
-		Types:   types.NewPackage("github.com/ghbvf/gocell/cells/auditcore", "auditcore"),
+		Types:   types.NewPackage(PlatformModulePath+"/cells/auditcore", "auditcore"),
 	}
 
 	violations := checkCellPublicAPIAdapterTypes(cls, []*packages.Package{
@@ -1014,11 +1014,11 @@ func TestIsInternal(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"github.com/ghbvf/gocell/cells/accesscore/internal/domain", true},
-		{"github.com/ghbvf/gocell/cells/auditcore/internal", true},
-		{"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin", false},
-		{"github.com/ghbvf/gocell/kernel/cell", false},
-		{"github.com/ghbvf/gocell/runtime/auth", false},
+		{PlatformModulePath + "/cells/accesscore/internal/domain", true},
+		{PlatformModulePath + "/cells/auditcore/internal", true},
+		{PlatformModulePath + "/cells/accesscore/slices/sessionlogin", false},
+		{PlatformModulePath + "/kernel/cell", false},
+		{PlatformModulePath + "/runtime/auth", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1030,7 +1030,7 @@ func TestIsInternal(t *testing.T) {
 // --- unit tests for checkLayering (table-driven with mock data) ---
 
 func TestCheckLayering(t *testing.T) {
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	// Note: LAYER-01..04 path rules are owned by depguard in .golangci.yml.
 	// Only LAYER-05/06/09/10 (metadata-aware rules) are tested here. Each
 	// case stages a *packages.Package slice that depgraph.FromPackages
@@ -1235,7 +1235,7 @@ func TestCheckLayering(t *testing.T) {
 func TestLayeringRules_LAYER07_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	routerPkg := module + "/runtime/http/router"
 	cellSlice := module + "/cells/accesscore/slices/some_route_slice"
 
@@ -1278,7 +1278,7 @@ func TestLayeringRules_LAYER07_NegativeProbe(t *testing.T) {
 func TestLayeringRules_LAYER08_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	pkgPath := module + "/cells/fakecore"
 	tp := types.NewPackage(pkgPath, "fakecore")
 	tp.Scope().Insert(types.NewTypeName(token.NoPos, tp, "HTTPRegistrar", nil))
@@ -1302,7 +1302,7 @@ func TestLayeringRules_LAYER08_NegativeProbe(t *testing.T) {
 func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 
 	tests := []struct {
 		name        string
@@ -1383,7 +1383,7 @@ func synthPkg(path string, imports ...string) *packages.Package {
 func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cellA := module + "/cells/cellA"
 	util := module + "/pkg/util"
 	cellBInt := module + "/cells/cellB/internal/domain"
@@ -1417,7 +1417,7 @@ func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	auditcore := module + "/cells/auditcore"
 	util := module + "/pkg/util"
 	initialadmin := module + "/cells/accesscore/initialadmin"
@@ -1457,7 +1457,7 @@ func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
 func TestLayeringRules_LAYER09T_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	const module = "github.com/ghbvf/gocell"
+	const module = PlatformModulePath
 	cellA := module + "/cells/cellA"
 	util := module + "/pkg/util"
 	cellBEvents := module + "/cells/cellB/events"
