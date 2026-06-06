@@ -23,11 +23,13 @@ type ContractGenSpec struct {
 	// truth source instead of hand-writing a transport string.
 	Transports []string
 	// ConsistencyLevel is the contract's declared consistency level ("L0".."L4").
-	// Consumed by types.tmpl only for kind=projection, where it drives the
-	// PROJECTION-CONSISTENCY-01 compile-time guard (gh #960):
-	// `const _ = uint(cellvocab.<ConsistencyLevel> - cellvocab.L3)`, which fails
-	// to compile when the level is below L3. buildContractSpec validates that the
-	// value parses (cellvocab.ParseLevel) before it reaches the template.
+	// Consumed by types.tmpl for two kinds, each driving a compile-time level
+	// guard `const _ = uint(cellvocab.<ConsistencyLevel> - cellvocab.<floor>)`
+	// that fails to compile when the level is below the floor:
+	//   - kind=projection → floor L3 (PROJECTION-CONSISTENCY-01, gh #960)
+	//   - kind=command    → floor L1 (COMMAND-CONTRACT-CONSISTENCY-LEVEL-01, #1668)
+	// buildContractSpec validates that the value parses (cellvocab.ParseLevel)
+	// before it reaches the template (validateProjectionLevel / validateCommandLevel).
 	ConsistencyLevel string
 	// SourceFile is the repo-relative path of the contract.yaml that drove
 	// generation, e.g. "examples/todoorder/contracts/http/order/create/v1/contract.yaml".

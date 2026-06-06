@@ -3,6 +3,21 @@
 
 package enqueue
 
+import "github.com/ghbvf/gocell/kernel/cellvocab"
+
+// COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 (#1668) — compile-time Hard gate. Command
+// contracts must declare consistencyLevel L1 (LocalTx) or higher: a command
+// crosses the local boundary and needs at least single-cell transactional
+// atomicity. L0 (LocalOnly) is structurally inapplicable. A lower level makes
+// (level - L1) negative, which overflows uint at compile time, so an L0 command
+// contract cannot produce a buildable tree. codegen:false contracts and
+// in-memory ProjectMeta fixtures are backstopped (Medium) by the
+// COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 governance rule.
+//
+// If `go build` reports "constant overflows uint" on the line below, raise
+// consistencyLevel to L1, L2, L3, or L4 in examples/iotdevice/contracts/command/devicecommand/enqueue/v1/contract.yaml.
+const _ = uint(cellvocab.L4 - cellvocab.L1)
+
 // Request — command.devicecommand.enqueue.v1.request
 type Request struct {
 	DeviceID    string `json:"deviceId"`

@@ -157,7 +157,8 @@ func TestCommandLowLevelGuardFailsCompile(t *testing.T) {
 	cmd.Dir = dir
 	out2, berr := cmd.CombinedOutput()
 	if berr == nil {
-		t.Fatalf("expected L0 command types_gen.go to FAIL compilation (COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 Hard gate), but it compiled:\n%s", out2)
+		t.Fatalf("expected L0 command types_gen.go to FAIL compilation "+
+			"(COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 Hard gate), but it compiled:\n%s", out2)
 	}
 	if !strings.Contains(string(out2), "overflows uint") {
 		t.Errorf("expected uint-overflow compile error, got:\n%s", out2)
