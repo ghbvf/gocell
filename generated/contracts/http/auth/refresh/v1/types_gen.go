@@ -16,7 +16,7 @@ import (
 
 // Request — http.auth.refresh.v1.request
 type Request struct {
-	RefreshToken string `json:"refreshToken"`
+	RefreshToken string `json:"refreshToken,omitempty"`
 }
 
 // Response — http.auth.refresh.v1.response
