@@ -121,6 +121,18 @@ type ConfigForExternalCell struct {
 // PR-2..N, tracked at issue #1302); the ratchet meta-archtest
 // ARCHTEST-MODULE-PATH-FUNNEL-01 guarantees that migration converges.
 //
+// Classification (form follows function): a rule migrates to a Check* + a
+// StandardCellRules entry only when it yields a meaningful PURE BAN for an
+// external repo — its allowlist / sanctioned sites are GoCell-internal packages
+// absent from a consumer module, so the constraint genuinely fires on consumer
+// code. A rule whose scan targets GoCell-specific paths / sealed types / floors /
+// waivers (vacuous-green or false-red externally) is NOT registered: it either
+// stays a Check* that GoCell dogfoods but does not register (listed below), or —
+// for a pure self-check with no portable value — keeps its logic in its _test.go
+// with only platform paths derived from PlatformModulePath (e.g. this PR's L2
+// atomicity, publisher/checkpoint conformance enrollment, outboxtest import
+// boundary, relay isolation, checkpoint tx-bound rules).
+//
 // Rules intentionally NOT registered (register=no) because they reason about
 // GoCell's own internal package layout / source, not about how a consumer uses
 // platform APIs — so they are vacuous-green or false-red in an external module:
@@ -177,8 +189,10 @@ func StandardCellRules() []*CellRule {
 		{ID: ruleOutboxReconstructionCaller01, Run: CheckOutboxReconstructionCaller01},
 		// PROJECTION-APPLY-HOOK-FUNNEL-01: bans consumer code from calling
 		// projection.Coordinator.Subscribe outside the sanctioned bootstrap drain
-		// (no such site in an external repo → pure ban). Cell-applicable; Hard
-		// downstream (types.Info caller-allowlist).
+		// (no such site in an external repo → pure ban). Cell-applicable; Medium
+		// downstream (archtest caller-allowlist; function-value forms are caught by
+		// a separate reverse blind-spot self-check, not the forward rule — permanent
+		// Go-language ceiling, gh #1372). See projection_apply_hook_funnel.go godoc.
 		{ID: ruleProjectionApplyHookFunnel01, Run: CheckProjectionApplyHookFunnel01},
 		// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: business handlers must return
 		// outbox.Ack()/Requeue()/Reject() rather than construct outbox.HandleResult{}

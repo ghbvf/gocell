@@ -42,7 +42,9 @@
 // type-identity scan); Hard upstream is not reachable — Go cannot express
 // "callers in cells/ must use factory names" without unexporting HandleResult
 // (which breaks kernel-internal plumbing), nor can Go prevent an outbox.Entry
-// composite literal from setting any public field.
+// composite literal from setting any public field. This permanent upstream
+// ceiling is the same Go-visibility limit tracked for the #851 / #893 / #1282
+// holder-seal family (won't-do).
 package archtest
 
 import (
