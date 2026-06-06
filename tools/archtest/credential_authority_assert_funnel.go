@@ -102,26 +102,30 @@ func isInSliceFunnelScope(rel string) bool {
 
 // scanAssertCallSites flags every CallExpr in file whose callee resolves via
 // ResolvePackageRef to credentialauthority.Assert.
-func scanAssertCallSites(p *Pass, file *ast.File, rel string) []string {
-	var out []string
+func scanAssertCallSites(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !IsCallToPkgFunc(p.TypesInfo, call, credAuthorityPkgPath, credAuthorityFnName) {
 			return
 		}
 		line := p.Fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: call to %s.%s "+
-				"outside slice allowlist (sessionlogin/, sessionrefresh/, sessionvalidate/)",
-			rel, line, credAuthorityPkgPath, credAuthorityFnName,
-		))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"call to %s.%s outside slice allowlist "+
+					"(sessionlogin/, sessionrefresh/, sessionvalidate/)",
+				credAuthorityPkgPath, credAuthorityFnName,
+			),
+		})
 	})
 	return out
 }
 
 // scanDirectCanAuthCalls flags direct CallExpr to (*domain.User).CanAuthenticate
 // inside slice files that should route through Assert.
-func scanDirectCanAuthCalls(p *Pass, file *ast.File, rel string) []string {
-	var out []string
+func scanDirectCanAuthCalls(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != credCanAuthenticate {
@@ -135,19 +139,19 @@ func scanDirectCanAuthCalls(p *Pass, file *ast.File, rel string) []string {
 			return
 		}
 		line := p.Fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: direct call to "+
-				"domain.(*User).CanAuthenticate outside credentialauthority.Assert",
-			rel, line,
-		))
+		out = append(out, Diagnostic{
+			Rel:     rel,
+			Line:    line,
+			Message: "direct call to domain.(*User).CanAuthenticate outside credentialauthority.Assert",
+		})
 	})
 	return out
 }
 
 // scanDirectFieldReads flags SelectorExpr reads of domain.User.PasswordVersion
 // inside slice files. (RevokedAt is handled by SESSION-REVOKED-FIELD-ACCESS-01.)
-func scanDirectFieldReads(p *Pass, file *ast.File, rel string) []string {
-	var out []string
+func scanDirectFieldReads(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if sel.Sel == nil || sel.Sel.Name != credPasswordVersion {
 			return
@@ -176,11 +180,14 @@ func scanDirectFieldReads(p *Pass, file *ast.File, rel string) []string {
 			return
 		}
 		line := p.Fset.Position(sel.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: direct read of "+
-				"%s.%s.%s outside credentialauthority.Assert",
-			rel, line, ownerPkg.Path(), owner.Name(), sel.Sel.Name,
-		))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"direct read of %s.%s.%s outside credentialauthority.Assert",
+				ownerPkg.Path(), owner.Name(), sel.Sel.Name,
+			),
+		})
 	})
 	return out
 }
@@ -229,15 +236,18 @@ func collectFunnelCalleeReferenceHits(p *Pass, file *ast.File) []funnelCalleeHit
 // scanFunnelCalleeReferences flags every SelectorExpr that typed-resolves
 // to a funnel-protected callee (credentialauthority.Assert or
 // domain.(*User).CanAuthenticate) and is NOT at CallExpr.Fun position.
-func scanFunnelCalleeReferences(p *Pass, file *ast.File, rel string) []string {
-	var out []string
+func scanFunnelCalleeReferences(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
 	for _, hit := range collectFunnelCalleeReferenceHits(p, file) {
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference): "+
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: hit.Line,
+			Message: fmt.Sprintf(
 				"%s referenced as value (not direct call) — bypasses "+
-				"caller allowlist via deferred invocation",
-			rel, hit.Line, hit.Callee,
-		))
+					"caller allowlist via deferred invocation",
+				hit.Callee,
+			),
+		})
 	}
 	return out
 }
@@ -339,91 +349,59 @@ func typeOwner(t types.Type) *types.TypeName {
 // ─── CheckCredentialAuthorityAssertFunnel01 sub-runners ──────────────────
 
 // collectDownstreamCallerViolations runs the downstream caller-allowlist
-// prong and appends any violations to *diags.
-func collectDownstreamCallerViolations(t *testing.T, diags *[]Diagnostic) {
+// prong and returns any violations.
+func collectDownstreamCallerViolations(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	_ = Run(t, Typed(TypedOpts{}, []string{
+	return runFunnelDualScan(t, cfg, []string{
 		"./cells/...",
 		"./cmd/...",
-	}),
-		func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil || p.Fset == nil {
-				return nil
-			}
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if isAssertCallerAllowlisted(rel) {
-					continue
-				}
-				for _, msg := range scanAssertCallSites(p, file, rel) {
-					*diags = append(*diags, Diagnostic{Rel: rel, Message: msg})
-				}
-			}
+	}, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if isAssertCallerAllowlisted(rel) {
 			return nil
-		})
+		}
+		return scanAssertCallSites(p, file, rel)
+	})
 }
 
 // collectUpstreamMandatoryViolations runs the upstream mandatory-funnel prong
-// and appends any violations to *diags.
-func collectUpstreamMandatoryViolations(t *testing.T, diags *[]Diagnostic) {
+// and returns any violations.
+func collectUpstreamMandatoryViolations(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	_ = Run(t, Typed(TypedOpts{}, []string{
+	return runFunnelDualScan(t, cfg, []string{
 		"./cells/accesscore/slices/sessionlogin/...",
 		"./cells/accesscore/slices/sessionrefresh/...",
 		"./cells/accesscore/slices/sessionvalidate/...",
-	}),
-		func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil || p.Fset == nil {
-				return nil
-			}
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") || !isInSliceFunnelScope(rel) {
-					continue
-				}
-				*diags = append(*diags, scanUpstreamMandatoryFile(p, file, rel)...)
-			}
+	}, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if strings.HasSuffix(rel, "_test.go") || !isInSliceFunnelScope(rel) {
 			return nil
-		})
+		}
+		return scanUpstreamMandatoryFile(p, file, rel)
+	})
 }
 
 // scanUpstreamMandatoryFile collects the direct-canAuth-call and
 // direct-field-read violations for a single sliced production file.
 func scanUpstreamMandatoryFile(p *Pass, file *ast.File, rel string) []Diagnostic {
 	var out []Diagnostic
-	for _, msg := range scanDirectCanAuthCalls(p, file, rel) {
-		out = append(out, Diagnostic{Rel: rel, Message: msg})
-	}
-	for _, msg := range scanDirectFieldReads(p, file, rel) {
-		out = append(out, Diagnostic{Rel: rel, Message: msg})
-	}
+	out = append(out, scanDirectCanAuthCalls(p, file, rel)...)
+	out = append(out, scanDirectFieldReads(p, file, rel)...)
 	return out
 }
 
 // collectCalleeReferenceViolations runs the callee-reference (no value-capture)
-// prong and appends any violations to *diags.
-func collectCalleeReferenceViolations(t *testing.T, diags *[]Diagnostic) {
+// prong and returns any violations.
+func collectCalleeReferenceViolations(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	_ = Run(t, Typed(TypedOpts{}, []string{
+	return runFunnelDualScan(t, cfg, []string{
 		"./cells/...",
 		"./cmd/...",
 		"./runtime/...",
-	}),
-		func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil || p.Fset == nil {
-				return nil
-			}
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				for _, msg := range scanFunnelCalleeReferences(p, file, rel) {
-					*diags = append(*diags, Diagnostic{Rel: rel, Message: msg})
-				}
-			}
+	}, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if strings.HasSuffix(rel, "_test.go") {
 			return nil
-		})
+		}
+		return scanFunnelCalleeReferences(p, file, rel)
+	})
 }
 
 // ─── CheckCredentialAuthorityAssertFunnel01 ───────────────────────────────
@@ -441,8 +419,8 @@ func collectCalleeReferenceViolations(t *testing.T, diags *[]Diagnostic) {
 func CheckCredentialAuthorityAssertFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	var diags []Diagnostic
-	collectDownstreamCallerViolations(t, &diags)
-	collectUpstreamMandatoryViolations(t, &diags)
-	collectCalleeReferenceViolations(t, &diags)
+	diags = append(diags, collectDownstreamCallerViolations(t, cfg)...)
+	diags = append(diags, collectUpstreamMandatoryViolations(t, cfg)...)
+	diags = append(diags, collectCalleeReferenceViolations(t, cfg)...)
 	return diags
 }

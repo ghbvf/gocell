@@ -151,7 +151,7 @@ func TestCredentialAuthorityAssertFunnel(t *testing.T) {
 func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 	t.Parallel()
 
-	var violations []string
+	var violations []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/...",
 		"./cmd/...",
@@ -170,9 +170,14 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 			return nil
 		})
 
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].Rel != violations[j].Rel {
+			return violations[i].Rel < violations[j].Rel
+		}
+		return violations[i].Line < violations[j].Line
+	})
+	for _, d := range violations {
+		t.Logf("%s:%d: %s", d.Rel, d.Line, d.Message)
 	}
 	assert.Empty(t, violations,
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (downstream): credentialauthority.Assert "+
@@ -221,7 +226,7 @@ func verifyAssertCallerRedFixtureDetected(t *testing.T, pattern, label string) {
 func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 	t.Parallel()
 
-	var violations []string
+	var violations []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/slices/sessionlogin/...",
 		"./cells/accesscore/slices/sessionrefresh/...",
@@ -245,9 +250,14 @@ func TestCredentialAuthorityAssertFunnel_UpstreamMandatory_02(t *testing.T) {
 			return nil
 		})
 
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].Rel != violations[j].Rel {
+			return violations[i].Rel < violations[j].Rel
+		}
+		return violations[i].Line < violations[j].Line
+	})
+	for _, d := range violations {
+		t.Logf("%s:%d: %s", d.Rel, d.Line, d.Message)
 	}
 	assert.Empty(t, violations,
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (upstream): slice production "+
@@ -613,7 +623,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T) {
 	t.Parallel()
 
-	var violations []string
+	var violations []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/...",
 		"./cmd/...",
@@ -633,9 +643,14 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 			return nil
 		})
 
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].Rel != violations[j].Rel {
+			return violations[i].Rel < violations[j].Rel
+		}
+		return violations[i].Line < violations[j].Line
+	})
+	for _, d := range violations {
+		t.Logf("%s:%d: %s", d.Rel, d.Line, d.Message)
 	}
 	assert.Empty(t, violations,
 		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference): "+

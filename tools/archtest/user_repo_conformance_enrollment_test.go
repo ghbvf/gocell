@@ -134,24 +134,22 @@ func TestUserRepoConformanceEnrollment_REDFixture(t *testing.T) {
 		}
 	}
 
-	// Run the flagging logic with the simulated enrolled set.
-	var diags []Diagnostic
-	for implKey := range implSet {
-		dotIdx2 := strings.LastIndex(implKey, ".")
-		if dotIdx2 < 0 {
-			continue
-		}
-		pkgPath := implKey[:dotIdx2]
-		if !enrolledPkgs[pkgPath] {
-			diags = append(diags, Diagnostic{
-				Rel:     implKey,
-				Message: implKey + " not enrolled",
-			})
-		}
-	}
+	// Run the real flagging logic with the simulated enrolled set.
+	diags := flagUnenrolledImpls(implSet, enrolledPkgs)
 
 	assert.GreaterOrEqual(t, len(diags), 1,
 		"REDFixture: removing pkg %q from enrolledPkgs must produce at least 1 violation, got 0", targetPkg)
+
+	// Extra: confirm at least one diagnostic targets the removed pkg.
+	var foundTarget bool
+	for _, d := range diags {
+		if strings.HasPrefix(d.Rel, targetPkg) {
+			foundTarget = true
+			break
+		}
+	}
+	assert.True(t, foundTarget,
+		"REDFixture: expected at least one diagnostic with Rel prefix %q, got %v", targetPkg, diags)
 }
 
 // TestUserRepoConformanceEnrollment_ReverseBlindSpot_NoReflectImpl (blind spot B1)

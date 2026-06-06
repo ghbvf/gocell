@@ -86,10 +86,17 @@ var refreshGuardedMethods = map[refreshGuardedMethod]struct{}{
 // calls it directly — single source.
 func CheckRefreshCrossStoreTX01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	return Run(t, Typed(
-		TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/slices/sessionrefresh/..."},
-	), scanRefreshCrossStoreTX)
+	patterns := []string{"./cells/accesscore/slices/sessionrefresh/..."}
+	diags := Run(t, Typed(TypedOpts{Tests: false}, patterns), scanRefreshCrossStoreTX)
+	// Mirror runErrcodeTypedScan / runFunnelDualScan: scan files behind the
+	// consumer's build tags too so a (*Service).Refresh hidden by a //go:build
+	// directive is not missed. Report's Canonical dedups files seen in both passes.
+	if len(cfg.BuildTags) > 0 {
+		diags = append(diags, Run(t, Typed(
+			TypedOpts{Tests: false, Tags: cfg.BuildTags}, patterns,
+		), scanRefreshCrossStoreTX)...)
+	}
+	return diags
 }
 
 // scanRefreshCrossStoreTX walks every production file in pass.Files for a

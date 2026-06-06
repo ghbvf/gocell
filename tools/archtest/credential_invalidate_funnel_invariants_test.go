@@ -349,8 +349,8 @@ func TestCredentialInvalidateApplierInterfaceCanonical_01(t *testing.T) {
 	Report(t, ruleCredentialInvalidateApplierCanonical01,
 		CheckCredentialInvalidateApplierCanonical01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 
-	// RED fixture: same single-Load pattern (canonical + fixture together).
-	redViolations := scanApplierInterfaceCanonical(t, []string{
+	// RED fixture: same dual-scan pattern (canonical + fixture together).
+	redViolations := scanApplierInterfaceCanonical(t, ConfigForExternalCell{}, []string{
 		"./cells/accesscore/internal/credentialinvalidate",
 		"./tools/archtest/testdata/credential_invalidate_fixtures/noncanonical_applier_interface_red",
 	})
@@ -446,7 +446,7 @@ func verifyRedFixtureDetectedPass(
 			return nil
 		}
 		for _, file := range p.Files {
-			found += len(scanFunnelViolationsPass(p, file, label, targetPkg, targetMethod, label))
+			found += len(scanFunnelViolationsPass(p, file, label, targetPkg, targetMethod))
 		}
 		return nil
 	})

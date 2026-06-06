@@ -17,7 +17,6 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -138,6 +137,44 @@ func isAllowlisted(rel string) bool {
 	return false
 }
 
+// ─── runFunnelDualScan ────────────────────────────────────────────────────────
+
+// runFunnelDualScan loads patterns under the default build config plus (when
+// cfg.BuildTags is non-empty) a second pass with those tags, applying perFile to
+// every production file once (deduped by absolute path), aggregating diagnostics.
+// Mirrors runErrcodeTypedScan so a violation hidden behind a //go:build directive
+// is not missed. The gocell-internal funnel rules are NOT registered in
+// StandardCellRules; GoCell's dogfood passes FlatNonDefaultTags().
+func runFunnelDualScan(
+	t *testing.T,
+	cfg ConfigForExternalCell,
+	patterns []string,
+	perFile func(p *Pass, file *ast.File, rel string) []Diagnostic,
+) []Diagnostic {
+	t.Helper()
+	visited := map[string]bool{}
+	var out []Diagnostic
+	scan := func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			abs := p.Abs(file)
+			if visited[abs] {
+				continue
+			}
+			visited[abs] = true
+			out = append(out, perFile(p, file, p.Rel(file))...)
+		}
+		return nil
+	}
+	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), scan)
+	if len(cfg.BuildTags) > 0 {
+		_ = Run(t, Typed(TypedOpts{Tests: false, Tags: cfg.BuildTags}, patterns), scan)
+	}
+	return out
+}
+
 // ─── Rule 1: CheckCredentialInvalidateFunnel01 ───────────────────────────────
 
 // CheckCredentialInvalidateFunnel01 runs CREDENTIAL-INVALIDATE-FUNNEL-01:
@@ -151,32 +188,12 @@ func CheckCredentialInvalidateFunnel01(t *testing.T, cfg ConfigForExternalCell) 
 		"./adapters/...",
 		"./cmd/...",
 	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
+	return runFunnelDualScan(t, cfg, patterns, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if isAllowlisted(rel) {
 			return nil
 		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isAllowlisted(rel) {
-				continue
-			}
-			violations = append(violations, scanFunnelViolationsPass(
-				p, file, rel,
-				sessionStorePkg, sessionRevokeMethod,
-				ruleCredentialInvalidateFunnel01,
-			)...)
-		}
-		return nil
+		return scanFunnelViolationsPass(p, file, rel, sessionStorePkg, sessionRevokeMethod)
 	})
-
-	sort.Strings(violations)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Rel: v, Line: 0, Message: v})
-	}
-	return diags
 }
 
 // ─── Rule 2: CheckUserAuthzEpochBumpFunnel01 ─────────────────────────────────
@@ -191,32 +208,12 @@ func CheckUserAuthzEpochBumpFunnel01(t *testing.T, cfg ConfigForExternalCell) []
 		"./adapters/...",
 		"./cmd/...",
 	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
+	return runFunnelDualScan(t, cfg, patterns, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if isAllowlisted(rel) {
 			return nil
 		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isAllowlisted(rel) {
-				continue
-			}
-			violations = append(violations, scanFunnelViolationsPass(
-				p, file, rel,
-				userRepoPkg, userBumpMethod,
-				ruleUserAuthzEpochBumpFunnel01,
-			)...)
-		}
-		return nil
+		return scanFunnelViolationsPass(p, file, rel, userRepoPkg, userBumpMethod)
 	})
-
-	sort.Strings(violations)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Rel: v, Line: 0, Message: v})
-	}
-	return diags
 }
 
 // ─── Rule 3: CheckRefreshRevokeUserFunnel01 ──────────────────────────────────
@@ -232,32 +229,12 @@ func CheckRefreshRevokeUserFunnel01(t *testing.T, cfg ConfigForExternalCell) []D
 		"./adapters/...",
 		"./cmd/...",
 	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
+	return runFunnelDualScan(t, cfg, patterns, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if isAllowlisted(rel) {
 			return nil
 		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if isAllowlisted(rel) {
-				continue
-			}
-			violations = append(violations, scanFunnelViolationsPass(
-				p, file, rel,
-				refreshStorePkg, refreshRevokeMethod,
-				ruleRefreshRevokeUserFunnel01,
-			)...)
-		}
-		return nil
+		return scanFunnelViolationsPass(p, file, rel, refreshStorePkg, refreshRevokeMethod)
 	})
-
-	sort.Strings(violations)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Rel: v, Line: 0, Message: v})
-	}
-	return diags
 }
 
 // ─── Rule 4: CheckCredentialInvalidateUpstreamCaller01 ───────────────────────
@@ -272,32 +249,12 @@ func CheckCredentialInvalidateUpstreamCaller01(t *testing.T, cfg ConfigForExtern
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}
-
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
+	return runFunnelDualScan(t, cfg, patterns, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if strings.HasSuffix(rel, "_test.go") {
 			return nil
 		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			violations = append(violations, scanUpstreamCallerViolationsPass(
-				p, file, rel,
-				invalidatorPkg, invalidatorMethod,
-				ruleCredentialInvalidateUpstreamCaller01,
-			)...)
-		}
-		return nil
+		return scanUpstreamCallerViolationsPass(p, file, rel, invalidatorPkg, invalidatorMethod)
 	})
-
-	sort.Strings(violations)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Rel: v, Line: 0, Message: v})
-	}
-	return diags
 }
 
 // ─── Rule 5: CheckCredentialInvalidateApplierCanonical01 ─────────────────────
@@ -308,24 +265,18 @@ func CheckCredentialInvalidateUpstreamCaller01(t *testing.T, cfg ConfigForExtern
 // credentialinvalidate package.
 func CheckCredentialInvalidateApplierCanonical01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	violations := scanApplierInterfaceCanonical(t, []string{
+	return scanApplierInterfaceCanonical(t, cfg, []string{
 		"./cells/accesscore/internal/credentialinvalidate",
 		"./cells/...",
 		"./runtime/...",
 		"./cmd/...",
 	})
-	sort.Strings(violations)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Rel: v, Line: 0, Message: v})
-	}
-	return diags
 }
 
 // ─── scanUpstreamCallerViolationsPass ────────────────────────────────────────
 
 // scanUpstreamCallerViolationsPass walks file's AST for every SelectorExpr
-// resolving to (targetPkg, targetMethod) and emits a violation when the
+// resolving to (targetPkg, targetMethod) and emits a Diagnostic when the
 // SelectorExpr's enclosing FuncDecl identity is NOT in
 // upstreamCallerCallsiteAllowlist. Catches direct call AND function-value
 // capture forms.
@@ -333,9 +284,9 @@ func scanUpstreamCallerViolationsPass(
 	p *Pass,
 	file *ast.File,
 	rel string,
-	targetPkg, targetMethod, ruleID string,
-) []string {
-	var out []string
+	targetPkg, targetMethod string,
+) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if sel.Sel == nil || sel.Sel.Name != targetMethod {
 			return
@@ -350,23 +301,31 @@ func scanUpstreamCallerViolationsPass(
 		line := p.Fset.Position(sel.Pos()).Line
 		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
 		if !ok {
-			out = append(out, fmt.Sprintf(
-				"%s:%d: %s: reference to %s.%s outside any FuncDecl "+
-					"(package-level init or similar) — cannot be allowlisted",
-				rel, line, ruleID, filepath.Base(targetPkg), targetMethod,
-			))
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"reference to %s.%s outside any FuncDecl "+
+						"(package-level init or similar) — cannot be allowlisted",
+					filepath.Base(targetPkg), targetMethod,
+				),
+			})
 			return
 		}
 		callerID := caller.FullName()
 		if _, allowed := upstreamCallerCallsiteAllowlist[callerID]; allowed {
 			return
 		}
-		out = append(out, fmt.Sprintf(
-			"%s:%d: %s: reference to %s.%s from caller %q not in "+
-				"upstreamCallerCallsiteAllowlist (direct call or function-value capture) "+
-				"(copy the quoted key verbatim into the map to allow)",
-			rel, line, ruleID, filepath.Base(targetPkg), targetMethod, callerID,
-		))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"reference to %s.%s from caller %q not in "+
+					"upstreamCallerCallsiteAllowlist (direct call or function-value capture) "+
+					"(copy the quoted key verbatim into the map to allow)",
+				filepath.Base(targetPkg), targetMethod, callerID,
+			),
+		})
 	})
 	return out
 }
@@ -400,16 +359,16 @@ func countUpstreamAllowlistHits(p *Pass, file *ast.File, hits map[string]int) {
 
 // scanFunnelViolationsPass walks a single file's AST for EVERY SelectorExpr
 // that resolves to the method (targetPkg, targetMethod) — regardless of whether
-// it is the Fun of a CallExpr. It returns a violation string for each. Walking
+// it is the Fun of a CallExpr. It returns a Diagnostic for each. Walking
 // all selectors (not just call.Fun) makes the scan form-complete: it catches
 // the direct call AND the function-value capture forms.
 func scanFunnelViolationsPass(
 	p *Pass,
 	file *ast.File,
 	rel string,
-	targetPkg, targetMethod, ruleID string,
-) []string {
-	var out []string
+	targetPkg, targetMethod string,
+) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if sel.Sel == nil || sel.Sel.Name != targetMethod {
 			return
@@ -422,11 +381,15 @@ func scanFunnelViolationsPass(
 			return
 		}
 		line := p.Fset.Position(sel.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: %s: reference to %s.%s outside credentialinvalidate funnel "+
-				"(direct call or function-value capture)",
-			rel, line, ruleID, filepath.Base(targetPkg), targetMethod,
-		))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"reference to %s.%s outside credentialinvalidate funnel "+
+					"(direct call or function-value capture)",
+				filepath.Base(targetPkg), targetMethod,
+			),
+		})
 	})
 	return out
 }
@@ -442,15 +405,18 @@ type applierInterfaceCandidate struct {
 	pos        token.Position
 }
 
-// scanApplierInterfaceCanonical loads the canonical credentialinvalidate
-// package together with the scan-target patterns in a SINGLE Run(t, Typed(...))
-// call, then compares each candidate interface's Apply signature against the
-// canonical via types.Identical.
-func scanApplierInterfaceCanonical(t *testing.T, patterns []string) []string {
+// loadApplierPassOnce loads patterns with the given tags and collects the
+// canonical Apply type from the credentialinvalidate package and all Apply
+// method candidates from other packages.
+func loadApplierPassOnce(t *testing.T, tags []string, patterns []string) (types.Type, []applierInterfaceCandidate) {
 	t.Helper()
 	var canonical types.Type
 	var candidates []applierInterfaceCandidate
-	_ = Run(t, Typed(TypedOpts{Tests: false}, patterns), func(p *Pass) []Diagnostic {
+	opts := TypedOpts{Tests: false}
+	if len(tags) > 0 {
+		opts.Tags = tags
+	}
+	_ = Run(t, Typed(opts, patterns), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
@@ -461,6 +427,44 @@ func scanApplierInterfaceCanonical(t *testing.T, patterns []string) []string {
 		candidates = append(candidates, collectApplyCandidates(p)...)
 		return nil
 	})
+	return canonical, candidates
+}
+
+// mergeApplierCandidates appends candidates2 items not already in candidates
+// (deduped by pkgPath+typeName key), and returns the merged canonical type.
+func mergeApplierCandidates(
+	canonical types.Type, candidates []applierInterfaceCandidate,
+	canonical2 types.Type, candidates2 []applierInterfaceCandidate,
+) (types.Type, []applierInterfaceCandidate) {
+	if canonical == nil {
+		canonical = canonical2
+	}
+	seen := map[string]bool{}
+	for _, c := range candidates {
+		seen[c.pkgPath+"."+c.typeName] = true
+	}
+	for _, c := range candidates2 {
+		if !seen[c.pkgPath+"."+c.typeName] {
+			candidates = append(candidates, c)
+		}
+	}
+	return canonical, candidates
+}
+
+// scanApplierInterfaceCanonical loads the canonical credentialinvalidate
+// package together with the scan-target patterns, then compares each candidate
+// interface's Apply signature against the canonical via types.Identical.
+// When cfg.BuildTags is non-empty, a second pass loads files behind those
+// build directives; candidates are deduped by (pkgPath, typeName) to avoid
+// duplicate violations.
+func scanApplierInterfaceCanonical(t *testing.T, cfg ConfigForExternalCell, patterns []string) []Diagnostic {
+	t.Helper()
+
+	canonical, candidates := loadApplierPassOnce(t, nil, patterns)
+	if len(cfg.BuildTags) > 0 {
+		canonical2, candidates2 := loadApplierPassOnce(t, cfg.BuildTags, patterns)
+		canonical, candidates = mergeApplierCandidates(canonical, candidates, canonical2, candidates2)
+	}
 
 	require.NotNil(t, canonical,
 		"credentialinvalidate.Applier signature not captured — ensure "+
@@ -525,19 +529,24 @@ func collectApplyMethodCandidates(p *Pass, tn *types.TypeName, iface *types.Inte
 	return out
 }
 
-// buildApplierViolations returns a violation string for each candidate whose
+// buildApplierViolations returns a Diagnostic for each candidate whose
 // Apply signature is identical to canonical.
-func buildApplierViolations(candidates []applierInterfaceCandidate, canonical types.Type) []string {
-	var violations []string
+func buildApplierViolations(candidates []applierInterfaceCandidate, canonical types.Type) []Diagnostic {
+	var out []Diagnostic
 	for _, c := range candidates {
 		if types.Identical(c.methodType, canonical) {
-			violations = append(violations, fmt.Sprintf(
-				"%s: interface %s.%s declares Apply with the same signature "+
-					"as credentialinvalidate.Applier — interface must live in "+
-					"credentialinvalidate package",
-				c.pos, c.pkgPath, c.typeName,
-			))
+			rel := stripModuleRoot(c.pos.Filename)
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: c.pos.Line,
+				Message: fmt.Sprintf(
+					"interface %s.%s declares Apply with the same signature "+
+						"as credentialinvalidate.Applier — interface must live in "+
+						"credentialinvalidate package",
+					c.pkgPath, c.typeName,
+				),
+			})
 		}
 	}
-	return violations
+	return out
 }

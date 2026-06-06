@@ -284,7 +284,7 @@ func TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive(t *testing.T) {
 func TestDomainAuthzMutation_ValueCapture_Detected(t *testing.T) {
 	t.Parallel()
 
-	var found []string
+	var found []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/domain/testdata/value_capture_setstatus_red",
 	}),
@@ -302,9 +302,14 @@ func TestDomainAuthzMutation_ValueCapture_Detected(t *testing.T) {
 			return nil
 		})
 
-	sort.Strings(found)
-	for _, v := range found {
-		t.Log(v)
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].Rel != found[j].Rel {
+			return found[i].Rel < found[j].Rel
+		}
+		return found[i].Line < found[j].Line
+	})
+	for _, d := range found {
+		t.Logf("%s:%d: %s", d.Rel, d.Line, d.Message)
 	}
 	// Three banned references in the fixture: badValueCapture (SetStatus
 	// assigned to var), badReturnDirect (SetPasswordResetRequired returned),
@@ -482,7 +487,7 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
 	t.Parallel()
 
-	var found []string
+	var found []Diagnostic
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./cells/accesscore/internal/domain/testdata/var_init_setstatus_red",
 	}),
@@ -499,9 +504,9 @@ func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
 		})
 
 	var hasOutsideFuncDecl bool
-	for _, v := range found {
-		t.Log(v)
-		if strings.Contains(v, "outside any FuncDecl") {
+	for _, d := range found {
+		t.Logf("%s:%d: %s", d.Rel, d.Line, d.Message)
+		if strings.Contains(d.Message, "outside any FuncDecl") {
 			hasOutsideFuncDecl = true
 		}
 	}

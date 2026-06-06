@@ -16,7 +16,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -111,19 +110,36 @@ var setMutatorCallsiteAllowlist = map[string]string{
 // sanctioned ones (SetStatus / SetPasswordResetRequired).
 func CheckDomainAuthzFieldPrivate01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{}, []string{"./cells/accesscore/internal/domain"}), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != domainUserPkg {
-			return nil
-		}
-		violations = append(violations, scanDomainUserViolations(p.Pkg)...)
-		return nil
-	})
+	patterns := []string{"./cells/accesscore/internal/domain"}
 
-	sort.Strings(violations)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Rel: v, Line: 0, Message: v})
+	runOnce := func(tags []string) []Diagnostic {
+		var out []Diagnostic
+		opts := TypedOpts{Tests: false}
+		if len(tags) > 0 {
+			opts.Tags = tags
+		}
+		_ = Run(t, Typed(opts, patterns), func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != domainUserPkg {
+				return nil
+			}
+			out = append(out, scanDomainUserViolations(p.Pkg)...)
+			return nil
+		})
+		return out
+	}
+
+	diags := runOnce(nil)
+	if len(cfg.BuildTags) > 0 {
+		// Deduplicate by Rel+Line+Message.
+		seen := map[string]bool{}
+		for _, d := range diags {
+			seen[d.Rel+d.Message] = true
+		}
+		for _, d := range runOnce(cfg.BuildTags) {
+			if !seen[d.Rel+d.Message] {
+				diags = append(diags, d)
+			}
+		}
 	}
 	return diags
 }
@@ -137,113 +153,114 @@ func CheckDomainAuthzFieldPrivate01(t *testing.T, cfg ConfigForExternalCell) []D
 // setMutatorCallsiteAllowlist.
 func CheckAuthzMutationApplyFunnel01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	var violations []string
-	_ = Run(t, Typed(TypedOpts{}, []string{
+	patterns := []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
-	}),
-		func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil || p.Fset == nil {
-				return nil
-			}
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				violations = append(violations,
-					scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
-				violations = append(violations,
-					scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
-			}
-			return nil
-		})
-
-	sort.Strings(violations)
-	var diags []Diagnostic
-	for _, v := range violations {
-		diags = append(diags, Diagnostic{Rel: v, Line: 0, Message: v})
 	}
-	return diags
+	return runFunnelDualScan(t, cfg, patterns, func(p *Pass, file *ast.File, rel string) []Diagnostic {
+		if strings.HasSuffix(rel, "_test.go") {
+			return nil
+		}
+		var out []Diagnostic
+		out = append(out, scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
+		out = append(out, scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
+		return out
+	})
 }
 
 // ─── scanDomainUserViolations ────────────────────────────────────────────────
 
 // scanDomainUserViolations inspects the User named type in pkg for exported
 // authz fields and unauthorized exported setter methods.
-func scanDomainUserViolations(pkg *types.Package) []string {
+func scanDomainUserViolations(pkg *types.Package) []Diagnostic {
 	obj := pkg.Scope().Lookup(domainUserType)
 	if obj == nil {
-		return []string{fmt.Sprintf(
-			"DOMAIN-AUTHZ-FIELD-PRIVATE-01: type %s not found in package %s",
-			domainUserType, pkg.Path(),
-		)}
+		return []Diagnostic{{
+			Rel:  pkg.Path(),
+			Line: 0,
+			Message: fmt.Sprintf(
+				"type %s not found in package %s",
+				domainUserType, pkg.Path(),
+			),
+		}}
 	}
 	named, ok := obj.Type().(*types.Named)
 	if !ok {
-		return []string{fmt.Sprintf(
-			"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s is not a named type in %s",
-			domainUserType, pkg.Path(),
-		)}
+		return []Diagnostic{{
+			Rel:  pkg.Path(),
+			Line: 0,
+			Message: fmt.Sprintf(
+				"%s is not a named type in %s",
+				domainUserType, pkg.Path(),
+			),
+		}}
 	}
 
-	var out []string
+	var out []Diagnostic
 	out = append(out, scanExportedAuthzFields(named, pkg.Path())...)
 	out = append(out, scanUnauthorizedSetterMethods(named, pkg.Path())...)
 	return out
 }
 
-// scanExportedAuthzFields returns a violation for each exported struct field
+// scanExportedAuthzFields returns a Diagnostic for each exported struct field
 // whose name is in authzFieldNames.
-func scanExportedAuthzFields(named *types.Named, pkgPath string) []string {
+func scanExportedAuthzFields(named *types.Named, pkgPath string) []Diagnostic {
 	strct, ok := named.Underlying().(*types.Struct)
 	if !ok {
 		return nil
 	}
-	var out []string
+	var out []Diagnostic
 	for i := 0; i < strct.NumFields(); i++ {
 		f := strct.Field(i)
 		if f.Exported() && authzFieldNames[f.Name()] {
-			out = append(out, fmt.Sprintf(
-				"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s.%s has exported authz field %q — must be private",
-				domainUserType, pkgPath, f.Name(),
-			))
+			out = append(out, Diagnostic{
+				Rel:  pkgPath,
+				Line: 0,
+				Message: fmt.Sprintf(
+					"%s.%s has exported authz field %q — must be private",
+					domainUserType, pkgPath, f.Name(),
+				),
+			})
 		}
 	}
 	return out
 }
 
-// scanUnauthorizedSetterMethods returns a violation for each exported
+// scanUnauthorizedSetterMethods returns a Diagnostic for each exported
 // pointer-receiver method whose name matches an authzSetterPrefixes entry but
 // is not in sanctionedSetters.
-func scanUnauthorizedSetterMethods(named *types.Named, pkgPath string) []string {
+func scanUnauthorizedSetterMethods(named *types.Named, pkgPath string) []Diagnostic {
 	mset := types.NewMethodSet(types.NewPointer(named))
-	var out []string
+	var out []Diagnostic
 	for i := 0; i < mset.Len(); i++ {
 		name := mset.At(i).Obj().Name()
 		if !token.IsExported(name) || sanctionedSetters[name] {
 			continue
 		}
-		if v := unauthorizedSetterViolation(name, pkgPath); v != "" {
-			out = append(out, v)
+		if d, ok := unauthorizedSetterViolation(name, pkgPath); ok {
+			out = append(out, d)
 		}
 	}
 	return out
 }
 
-// unauthorizedSetterViolation returns a non-empty violation string when name
-// matches an authzSetterPrefixes entry, otherwise returns "".
-func unauthorizedSetterViolation(name, pkgPath string) string {
+// unauthorizedSetterViolation returns a Diagnostic (and ok=true) when name
+// matches an authzSetterPrefixes entry, otherwise returns (zero, false).
+func unauthorizedSetterViolation(name, pkgPath string) (Diagnostic, bool) {
 	for _, prefix := range authzSetterPrefixes {
 		if strings.HasPrefix(name, prefix) {
-			return fmt.Sprintf(
-				"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s.%s has unauthorized exported setter %q "+
-					"(prefix %q); only SetStatus and SetPasswordResetRequired are sanctioned",
-				domainUserType, pkgPath, name, prefix,
-			)
+			return Diagnostic{
+				Rel:  pkgPath,
+				Line: 0,
+				Message: fmt.Sprintf(
+					"%s.%s has unauthorized exported setter %q "+
+						"(prefix %q); only SetStatus and SetPasswordResetRequired are sanctioned",
+					domainUserType, pkgPath, name, prefix,
+				),
+			}, true
 		}
 	}
-	return ""
+	return Diagnostic{}, false
 }
 
 // ─── scanSetMutatorViolationsPass ────────────────────────────────────────────
@@ -267,8 +284,8 @@ func scanSetMutatorViolationsPass(
 	file *ast.File,
 	rel string,
 	targetMethod string,
-) []string {
-	var out []string
+) []Diagnostic {
+	var out []Diagnostic
 	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if sel.Sel == nil || sel.Sel.Name != targetMethod {
 			return
@@ -283,23 +300,30 @@ func scanSetMutatorViolationsPass(
 		line := p.Fset.Position(sel.Pos()).Line
 		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
 		if !ok {
-			out = append(out, fmt.Sprintf(
-				"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: reference to domain.User.%s "+
-					"outside any FuncDecl (package-level init or similar) — cannot be allowlisted",
-				rel, line, targetMethod,
-			))
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"reference to domain.User.%s outside any FuncDecl "+
+						"(package-level init or similar) — cannot be allowlisted",
+					targetMethod,
+				),
+			})
 			return
 		}
 		callerID := caller.FullName()
 		if _, allowed := setMutatorCallsiteAllowlist[callerID]; allowed {
 			return
 		}
-		out = append(out, fmt.Sprintf(
-			"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: reference to domain.User.%s "+
-				"from caller %q not in setMutatorCallsiteAllowlist "+
-				"(direct call or function-value capture; copy the quoted key verbatim into the map to allow)",
-			rel, line, targetMethod, callerID,
-		))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"reference to domain.User.%s from caller %q not in setMutatorCallsiteAllowlist "+
+					"(direct call or function-value capture; copy the quoted key verbatim into the map to allow)",
+				targetMethod, callerID,
+			),
+		})
 	})
 	return out
 }
