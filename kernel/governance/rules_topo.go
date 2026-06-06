@@ -197,7 +197,10 @@ func (v *Validator) checkContractProviderLevel(
 	return nil
 }
 
-// validateTOPO05 checks that L0 cells do not appear in any contract's endpoints.
+// validateTOPO05 checks that L0 cells do not appear in contract endpoints that
+// require cross-cell or externally visible side effects. Inbound webhooks are
+// the exception: the owner cell is listed as the provider/receiver endpoint, but
+// its implementing role is webhook-receive and may be a pure L0 receiver.
 func (v *Validator) validateTOPO05() []ValidationResult {
 	var results []ValidationResult
 
@@ -218,7 +221,7 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 
 	for _, ct := range v.project.Contracts {
 		provider := contractProvider(ct)
-		if l0Cells[provider] {
+		if l0Cells[provider] && !v.inboundWebhookL0Receiver(ct, provider) {
 			results = append(results, v.newError(
 				codeTOPO05, IssueForbidden,
 				contractFile(ct),
@@ -228,7 +231,7 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 			))
 		}
 		for _, consumer := range contractConsumers(ct) {
-			if l0Cells[consumer] {
+			if l0Cells[consumer] && !v.inboundWebhookL0Receiver(ct, consumer) {
 				results = append(results, v.newError(
 					codeTOPO05, IssueForbidden,
 					contractFile(ct),
@@ -240,6 +243,17 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 		}
 	}
 	return results
+}
+
+// inboundWebhookL0Receiver reports whether an L0 owner cell is the legitimate
+// receive-side implementation of an inbound webhook contract. The external
+// sender is the real data provider; the owner cell only verifies/decodes the
+// delivery through a webhook-receive slice, so TOPO-05 should not force it to
+// pretend to be LocalTx.
+func (v *Validator) inboundWebhookL0Receiver(ct *metadata.ContractMeta, provider string) bool {
+	return cellvocab.ContractKind(ct.Kind) == cellvocab.ContractWebhook &&
+		ct.Direction == string(cellvocab.DirectionInbound) &&
+		v.hasImplementingSlice(ct, provider)
 }
 
 // validateTOPO07 checks that contract.consistencyLevel does not exceed the

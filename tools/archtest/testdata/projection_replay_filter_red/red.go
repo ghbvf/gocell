@@ -1,6 +1,6 @@
 // Package projection_replay_filter_red is a RED fixture for
 // PROJECTION-REPLAY-PER-SPEC-FILTER-01: drainGap invokes applyOne
-// UNCONDITIONALLY (no `entry.RoutingTopic() == c.spec.Topic` gate), so the
+// UNCONDITIONALLY (no `entry.Stream() == c.spec.Topic` gate), so the
 // business Apply would run for foreign streams during a rebuild. The detector
 // must report ≥1 diagnostic.
 //
@@ -11,7 +11,7 @@ type spec struct{ Topic string }
 
 type entry struct{}
 
-func (entry) RoutingTopic() string { return "" }
+func (entry) Stream() string { return "" }
 
 type coord struct {
 	spec  spec

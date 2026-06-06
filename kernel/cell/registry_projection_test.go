@@ -16,11 +16,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func noopProjectionApply(_ context.Context, _ outbox.Entry) error { return nil }
+func noopProjectionApply(_ context.Context, _ cellvocab.ProjectionEvent) error { return nil }
 
 func validProjectionRequest() ProjectionRequest {
 	return ProjectionRequest{
@@ -176,6 +177,7 @@ func TestRegisterProjection_SpecValidate_RejectsInvalidSpec(t *testing.T) {
 	assert.Empty(t, rec.Snapshot().Projections, "rejected request must not be recorded")
 }
 
-// Compile-time anchor: ProjectionRequest.Apply has the same underlying signature
-// as projection.Apply so the bootstrap drain's named-type conversion is legal.
-var _ ProjectionApply = (func(context.Context, outbox.Entry) error)(nil)
+// Compile-time anchor: ProjectionApply is an alias of cellvocab.ProjectionApply
+// (carrier = cellvocab.ProjectionEvent), so a recorded hook is passed straight to
+// the bootstrap drain → Coordinator.Subscribe with no named-type conversion.
+var _ ProjectionApply = (func(context.Context, cellvocab.ProjectionEvent) error)(nil)

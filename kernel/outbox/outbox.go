@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metautil"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -256,6 +257,35 @@ func (e Entry) RoutingTopic() string {
 		return e.topic
 	}
 	return e.eventType
+}
+
+// Entry implements cellvocab.ProjectionEvent so the outbox event source (live
+// bus delivery + outbox-store replay) flows through the generalized projection
+// carrier. The following three methods are the additive read-only accessors the
+// interface requires beyond the existing Payload/OccurredAt; they add no new
+// construction path, so sealed construction (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01)
+// is unaffected.
+var _ cellvocab.ProjectionEvent = Entry{}
+
+// EventID is the stream-unique identifier (cellvocab.ProjectionEvent). It is the
+// entry id — the polymorphic carrier name for outbox.Entry.ID.
+func (e Entry) EventID() string { return e.id }
+
+// Stream is the routing/topic equivalent (cellvocab.ProjectionEvent): the
+// projection harness compares it against the subscribed spec topic. Identical to
+// RoutingTopic; the distinct name reads correctly for a non-outbox carrier.
+func (e Entry) Stream() string { return e.RoutingTopic() }
+
+// RestoreContext installs the entry's observability + principal identity into ctx
+// (cellvocab.ProjectionEvent). It is the single source of the "restore both
+// envelope identity families into ctx" sequence used by the projection rebuild
+// path and the live consumer delivery path (SubscriberWithMiddleware). Both
+// RestoreToContext calls are idempotent and preserve any ambient transaction
+// already on ctx.
+func (e Entry) RestoreContext(ctx context.Context) context.Context {
+	ctx = e.observability.RestoreToContext(ctx)
+	ctx = e.principal.RestoreToContext(ctx)
+	return ctx
 }
 
 // Validate checks that required fields (id, topic or eventType, payload, and a
@@ -1065,8 +1095,7 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 	// identity. Symmetric with NewEntry's construction-time injection; neither
 	// endpoint has a kill-switch.
 	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
-		reqCtx = entry.observability.RestoreToContext(reqCtx)
-		reqCtx = entry.principal.RestoreToContext(reqCtx)
+		reqCtx = entry.RestoreContext(reqCtx)
 		return subHandler(reqCtx, entry)
 	}
 	return s.inner.Subscribe(ctx, sub, withRestore)

@@ -2,42 +2,10 @@ package projection
 
 import (
 	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// OnReset is the business hook invoked during a projection rebuild Reset phase.
-// It allows the projection owner to clear its read-model state (e.g. TRUNCATE a
-// view table) before the harness resets the checkpoint offset to 0 and begins
-// replay. The transaction is ambient — OnReset obtains it via
-// persistence.TxFromContext(ctx), exactly like Apply. Both OnReset and the
-// SaveOffset(0) call share the same transaction; if OnReset returns an error,
-// the whole transaction rolls back and the read-model is left untouched.
-//
-// Passing nil is valid (projection has no read-model table to clear — offset
-// reset alone suffices). OnReset is set via WithOnReset option on Subscribe.
-//
-// ref: AxonFramework @ResetHandler — called during TrackingEventProcessor reset
-// to let the projection clear application state before replay.
-type OnReset func(ctx context.Context) error
-
-// Apply is the business event→state projection hook: given a consumed event,
-// mutate the read-model. The transaction is ambient — Apply obtains it via
-// persistence.TxFromContext(ctx) exactly like outbox.Writer.Write, because the
-// Coordinator (PR-01) invokes Apply inside persistence.TxRunner.RunInTx so the
-// read-model mutation and the checkpoint advance commit atomically (exactly-once
-// delivery; the harness never calls Apply twice for the same offset).
-//
-// Apply MUST NOT open its own transaction or connection. A transient failure
-// returns a plain error (the Coordinator requeues). A permanent failure returns
-// an error wrapping outbox.NewPermanentError(err); the Coordinator classifies it
-// as DispositionReject and routes to the DLX — the same vocabulary as the
-// ConsumerBase handler convention (see .claude/rules/gocell/eventbus.md). Decided
-// in ADR §3 Q2 against the eventhorizon read-modify-write entity shape and the
-// explicit tx-handle parameter.
-//
-// ref: JasperFx/marten async-daemon IDocumentOperations apply shape.
-type Apply func(ctx context.Context, event outbox.Entry) error
+// Apply, OnReset, and the ProjectionEvent carrier are declared in event.go (as
+// aliases of the cellvocab leaf types that break the cell↔projection cycle).
 
 // CheckpointStore persists a projection's consumed offset. It is the framework's
 // own offset table — it does NOT touch any business read-model schema (the

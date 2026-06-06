@@ -129,9 +129,21 @@ func testCMDFixFieldNegativeFixtures(t *testing.T) {
 // passes CMD-VALIDATIONRESULT-FIX-FIELD-01: every governance.ValidationResult{}
 // composite literal carries a non-empty, resolvable Fix: field.
 func testCMDFixFieldProductionSource(t *testing.T) {
+	// cmd/gocell is its own go.work module (#1557), so a Typed(GOWORK=off) load of
+	// "./cmd/gocell/app" can no longer cross the satellite module boundary. Production
+	// (ModeWorkspace) crosses every workspace member; the per-package path filter
+	// preserves the original cmd/gocell/app-only scope. sawPkg guards anti-vacuity —
+	// if the satellite ever drops out of the workspace scan, the assertion below would
+	// pass falsely on an empty violations slice; sawPkg turns that into a hard failure.
+	const cmdAppPkg = PlatformModulePath + "/cmd/gocell/app" // ARCHTEST-MODULE-PATH-FUNNEL-01: no bare module literal
 	var violations []string
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./cmd/gocell/app"}),
+	var sawPkg bool
+	Run(t, Production(TypedOpts{Tests: false}),
 		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != cmdAppPkg {
+				return nil
+			}
+			sawPkg = true
 			consts := collectPackageStringConsts(p.Pkg.Scope())
 			for _, file := range p.Files {
 				violations = append(violations,
@@ -140,6 +152,9 @@ func testCMDFixFieldProductionSource(t *testing.T) {
 			return nil
 		})
 
+	assert.True(t, sawPkg,
+		"anti-vacuity: cmd/gocell/app was not scanned — the Production workspace load no "+
+			"longer reaches the cmd/gocell satellite module (CMD-VALIDATIONRESULT-FIX-FIELD-01)")
 	sort.Strings(violations)
 	assert.Empty(t, violations,
 		"every governance.ValidationResult{} composite literal in cmd/gocell/app "+

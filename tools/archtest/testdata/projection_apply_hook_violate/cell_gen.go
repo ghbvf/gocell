@@ -6,7 +6,6 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/contractspec"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 )
 
@@ -17,7 +16,7 @@ import (
 // (runtime/bootstrap/phases_projection.go). PROJECTION-APPLY-HOOK-FUNNEL-01 must
 // therefore FIRE on this call — no generated file is a sanctioned callsite.
 func generatedCellSubscribe(coord *projection.Coordinator) {
-	var apply projection.Apply = func(_ context.Context, _ outbox.Entry) error { return nil }
+	var apply projection.Apply = func(_ context.Context, _ projection.ProjectionEvent) error { return nil }
 	_ = coord.Subscribe(context.Background(), contractspec.ContractSpec{
 		ID:        "event.test.v1",
 		Kind:      "event",

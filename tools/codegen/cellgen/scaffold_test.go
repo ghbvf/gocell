@@ -76,6 +76,10 @@ func TestScaffoldCell_CellGoNoSubscribeMarker(t *testing.T) {
 
 // TestScaffoldCell_CellGoContainsListenerMarker verifies the scaffolded
 // cell.go includes the K#05 // +cell:listener: stub marker.
+//
+// INVARIANT: SCAFFOLD-BUNDLE-MARKER-01 (single-cell path) — the bundle path is
+// asserted in TestScaffoldCellBundle_HTTP; both were migrated here from the
+// retired archtest scaffold_bundle_invariants_test.go (M3 #1302).
 func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
@@ -93,9 +97,24 @@ func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 
 	content := fileutil.MustReadFile(t, filepath.Join(dir, "cells", "barcell", "cell.go"))
 
-	if !strings.Contains(string(content), "// +cell:listener:") {
-		t.Error("cell.go missing // +cell:listener: stub marker")
+	if !cellGoHasListenerMarker(string(content)) {
+		t.Errorf("cell.go missing a markergen-parseable %s marker line; got:\n%s", ListenerMarker, content)
 	}
+}
+
+// cellGoHasListenerMarker reports whether content has a line that, after
+// trimming, begins with the canonical listener marker (ListenerMarker =
+// "// +cell:listener:"). This mirrors markergen.splitMarker's "// +" prefix
+// gate, so a double-commented "// // +cell:listener:" (which markergen does NOT
+// recognize) correctly fails — unlike a bare strings.Contains, which is
+// false-green on that broken render.
+func cellGoHasListenerMarker(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), ListenerMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestScaffoldCell_CellYAMLContainsGoStructName verifies the scaffolded

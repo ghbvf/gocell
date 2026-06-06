@@ -1,3 +1,0 @@
-module fixturetest/prod_clock_injection/control_plane_cross_host_method_violates
-
-go 1.22

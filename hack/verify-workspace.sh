@@ -74,9 +74,11 @@ fi
 # go.mod (release-consistent, Plan D §5.6), not the workspace-stitched graph.
 # This is the cross-module BUILD traversal extension point; per-module `go test`
 # is deliberately not run here (see file header).
+build_out="$(mktemp -d)"
+trap 'rm -rf "${build_out}"' EXIT
 for dir in "${module_dirs[@]}"; do
     gocell::log::status "Building module (GOWORK=off): ${dir}"
-    if ! GOWORK=off go -C "${dir}" build ./...; then
+    if ! GOWORK=off go -C "${dir}" build -o "${build_out}/" ./...; then
         gocell::log::error "go build ./... failed in module '${dir}' (GOWORK=off)"
         exit 1
     fi

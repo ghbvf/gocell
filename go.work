@@ -2,9 +2,11 @@ go 1.25.11
 
 use (
 	.
+	./cmd/gocell
 	./examples/corebundlestarter
 	./examples/iotdevice
 	./examples/orderfulfillment
 	./examples/ssobff
 	./examples/todoorder
+	./examples/webhookdemo
 )

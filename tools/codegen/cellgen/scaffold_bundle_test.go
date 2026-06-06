@@ -9,9 +9,39 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
+
+// assertContractYAMLOmitsCodegenKey fails if the scaffolded contract.yaml's
+// top-level mapping declares a `codegen:` key. Structured yaml.Node parse so
+// only a genuine top-level key trips it (a nested or quoted `codegen:` does
+// not). Migrated from the retired archtest gate for
+// SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 (M3 #1302).
+func assertContractYAMLOmitsCodegenKey(t *testing.T, raw []byte) {
+	t.Helper()
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse scaffold contract.yaml: %v", err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
+		t.Fatalf("scaffold contract.yaml: expected a single YAML document; got:\n%s", raw)
+	}
+	mapping := doc.Content[0]
+	if mapping.Kind != yaml.MappingNode {
+		t.Fatalf("scaffold contract.yaml: top-level node must be a mapping; got:\n%s", raw)
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if key := mapping.Content[i]; key.Kind == yaml.ScalarNode && key.Value == "codegen" {
+			t.Errorf("INVARIANT SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 violated: scaffolded "+
+				"contract.yaml top-level mapping must not declare `codegen:` key "+
+				"(parser default true is the K#09 funnel); got:\n%s", raw)
+			return
+		}
+	}
+}
 
 // scaffoldBundleSkip is a test helper that calls PlanCellBundleScaffold
 // (with SkipGenerate forced true so no metadata parse is needed) and then
@@ -105,18 +135,19 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 		}
 	}
 
-	// Verify contract.yaml does NOT carry an explicit `codegen:` line —
+	// Verify contract.yaml does NOT carry an explicit top-level `codegen:` key —
 	// K#09 funnel: parser defaults Codegen to true so the field is redundant.
-	// INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL
+	// Structured yaml.Node parse (not strings.Contains) so a nested/quoted
+	// `codegen:` elsewhere cannot false-trip. Migrated from the retired archtest
+	// TestScaffoldBundle_ContractYAMLOmitsCodegenKey (M3 #1302) — this is now the
+	// single enforcement home for the invariant.
+	// INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01
 	cYAMLPath := filepath.Join(dir, "contracts", "http", "myhttpcell", "example", "v1", "contract.yaml")
 	contractYAML, err := os.ReadFile(cYAMLPath) //nolint:gosec // tempdir test fixture
 	if err != nil {
 		t.Fatalf("read contract.yaml: %v", err)
 	}
-	if strings.Contains(string(contractYAML), "codegen:") {
-		t.Errorf("scaffold contract.yaml must not declare codegen field (parser defaults to true); got:\n%s",
-			string(contractYAML))
-	}
+	assertContractYAMLOmitsCodegenKey(t, contractYAML)
 
 	// Verify cell.go emits an errcode.RegisterPrefix init() that owns the cell's
 	// ERR_<UPPERCELLID>_ namespace by construction (issue #1091, M11 pattern).
@@ -124,6 +155,15 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 	cellGo, err := os.ReadFile(cellGoPath) //nolint:gosec // tempdir test fixture
 	if err != nil {
 		t.Fatalf("read cell.go: %v", err)
+	}
+	// Scaffolded bundle cell.go must embed the K#05 +cell:listener: marker
+	// (sourced from the ListenerMarker typed const) so MARKERGEN-DRIFT-VERIFY-01
+	// extends to bundle scaffold output. Migrated from the retired archtest
+	// TestScaffoldBundle_CellMarkerEmbedded (M3 #1302) — covers the bundle path
+	// the cellgen single-cell TestScaffoldCell_CellGoContainsListenerMarker did not.
+	// INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
+	if !cellGoHasListenerMarker(string(cellGo)) {
+		t.Errorf("scaffold bundle cell.go missing a markergen-parseable %s marker line; got:\n%s", ListenerMarker, cellGo)
 	}
 	if !strings.Contains(string(cellGo), `errcode.RegisterPrefix(`) {
 		t.Errorf("cell.go must call errcode.RegisterPrefix in init(); got:\n%s", cellGo)

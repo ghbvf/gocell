@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
 )
 
@@ -19,15 +20,15 @@ import (
 func TestEnrolledCursorConformance(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	cur := newEnrolledCursor()
-	newEntry := func() outbox.Entry {
+	newEntry := func() projection.ProjectionEvent {
 		e, err := outbox.NewEntry(clk, context.Background(), "topic.v1", []byte(`{}`))
 		if err != nil {
 			t.Fatalf("outbox.NewEntry: %v", err)
 		}
 		return e
 	}
-	seed := func(n int) []outbox.Entry {
-		entries := make([]outbox.Entry, n)
+	seed := func(n int) []projection.ProjectionEvent {
+		entries := make([]projection.ProjectionEvent, n)
 		for i := range entries {
 			e := newEntry()
 			cur.add(e)

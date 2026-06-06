@@ -12,7 +12,7 @@
 
 ## 1. 上下文与问题
 
-`kernel/cellvocab.ContractCommand = "command"` 这个 contract kind 早已在闭集中，`runtime/command` 却只有 `SweeperLifecycle`（L4 设备命令超时生命周期），`kernel/command` 是 L4 设备队列状态机——**两者都不是 dispatcher**。CQRS 写侧（命令 → 单一 handler → 响应）无框架支持，业务只能手撕。004 缺口 4「Command Bus 半空壳」/ 005 W3 要求补齐：`Dispatcher` + handler registry + codegen `kind:command` 派生 typed Command/Handler + 与 outbox/idempotency 协同，**立项门 = funnel 双向锁（上游 codegen Hard + 下游 callsite Hard）**。
+`kernel/cellvocab.ContractCommand = "command"` 这个 contract kind 早已在闭集中，`runtime/command` 却只有 dispatch registry + queue discovery（原 `SweeperLifecycle` 已于 PR-A8 #1169 删除，L4 设备命令超时生命周期迁至 `kernel/reconcile.Loop`），`kernel/command` 是 L4 设备队列状态机——**两者都不是 dispatcher**。CQRS 写侧（命令 → 单一 handler → 响应）无框架支持，业务只能手撕。004 缺口 4「Command Bus 半空壳」/ 005 W3 要求补齐：`Dispatcher` + handler registry + codegen `kind:command` 派生 typed Command/Handler + 与 outbox/idempotency 协同，**立项门 = funnel 双向锁（上游 codegen Hard + 下游 callsite Hard）**。
 
 PR-1 交付其中的**同步 in-process 核心**：codegen 派生 typed `Handler`/`Register`/`Dispatch` + sealed `runtime/command.Registry` + funnel 双向锁 archtest + governance 校验。异步（写 command outbox、relay 触发）与 idempotency 桥拆为 #1044 子 issue。
 
@@ -28,7 +28,7 @@ PR-1 交付其中的**同步 in-process 核心**：codegen 派生 typed `Handler
 | **D4** | **同步 type-assert，不用 JSON round-trip**：生成 `Dispatch` 把 boxed handler 断言回 typed `Handler` 后直调。零序列化、in-process 惯用。saga 用 JSON 是因跨异步 step 边界；PR-1 同步不跨边界。JSON 统一性留 ④ 异步。 | 生成码形态（golden 锁） | 形态由 golden 锁（上游 Hard） |
 | **D5** | **「编译期注册唯一性」= sole-emitter funnel + runtime KindConflict**。issue ③ 字面「编译期 Handler 注册唯一性」中**「编译期阻止第二次 runtime `Register` 调用」Go 不可表达**（运行时多次调用无法编译期拦）。落地 = (a) 编译期：typed `Register` 唯一来源（sole-emitter）；(b) 运行时：`RegisterHandler` 第二次同 id → `KindConflict`（对标 Watermill `DuplicateCommandHandlerError`）。 | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`（a）+ `Registry.RegisterHandler` runtime guard（b） | a 上游 Hard / b runtime guard（Medium） |
 | **D6** | **codegen fail-closed，无 stub 降级**：`kind:command,codegen:true` 缺 request **或** response schemaRef → `buildCommandSpec` 硬错（不静默生成空包）。governance `COMMAND-CONTRACT-SCHEMA-REF-01` 在 validate 期并行兜底。schemaRef 的作用 = **派生 typed `*Request`/`*Response` 签名**，**非**运行时值约束门；sync `Dispatch` 不执行 request value-validation（见 §Amendment 2026-06-04）。 | `contractgen.buildCommandSpec`（codegen Hard 半边）+ `COMMAND-CONTRACT-SCHEMA-REF-01`（governance Medium 兜底） | **codegen 上游 Hard + governance Medium**（同 saga step-schema-ref 范式） |
-| **D7** | **layer = `runtime/command`**：dispatcher 核心入 `runtime/command`（已有 SweeperLifecycle），依赖 `kernel/+pkg/`，不依赖 cells/adapters。生成码在 `generated/contracts/command/**` import `runtime/command`（`generated/` 可 import 任意层，无环）。 | 分层依赖规则（`go-standards.md`）+ build | 结构性（build 守） |
+| **D7** | **layer = `runtime/command`**：dispatcher 核心入 `runtime/command`（已有 dispatch registry + queue discovery；原 SweeperLifecycle 已于 PR-A8 #1169 删除），依赖 `kernel/+pkg/`，不依赖 cells/adapters。生成码在 `generated/contracts/command/**` import `runtime/command`（`generated/` 可 import 任意层，无环）。 | 分层依赖规则（`go-standards.md`）+ build | 结构性（build 守） |
 
 ---
 
@@ -62,7 +62,7 @@ PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 fun
 
 - **④ async outbox 桥（#1044 子 issue）**：`DispatchAsync[C]` 写 `outbox.Entry`（携带 command kind——触及 sealed `Entry` wire envelope 或 topic 约定，触发 contract-fanout 5 载体）；relay 消费按 command id `LookupHandler` → 触发 handler。此时 JSON marshal 在 outbox 边界发生（D4 的同步 type-assert 不变，异步路径独立 marshal）。
 - **⑤ idempotency 桥（#1044 子 issue）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` Claimer 两阶段）。
-- **command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level（命令跨 L1 同步..L4 设备；现有 active L4 `devicecommand` slice 不能被锁 L3 误伤）。
+- ~~**command consistencyLevel governance（#1044 子 issue）**：PR-1 不锁 level~~ **已交付（#1668，双层）**：`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 下界约束 `consistencyLevel ≥ L1`，仅拒 `L0`（命令跨本地边界至少需 L1 LocalTx 原子性，L0 LocalOnly 结构上不适用）。**双层**（同 PROJECTION-CONSISTENCY-01 单 ID 双层范式）：Hard = `types.tmpl` 编译期 `const _ = uint(cellvocab.<level> - cellvocab.L1)` 对 codegen:true 命令契约 uint 下溢拦 L0；Medium = governance rule 兜底 codegen:false + in-memory fixture。下界（非 exact-lock）使现有 active L4 `devicecommand` 契约全部通过、零误伤。详见 §Amendment 2026-06-06。
 - **真实 handler 端到端接线（#1044 子 issue）**：PR-1 funnel 由 unit test 假 handler + golden 证，未经真实 cell 接线（devicecell enqueue adapter + bootstrap `Registry`）。
 
 amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）：④ 引入的 sealed `Entry` 修改若改变某格评级，显式列补偿。
@@ -84,8 +84,8 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 | 载体 | ID / 名 | 文件 |
 |------|---------|------|
 | archtest | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` | `tools/archtest/command_dispatch_funnel_test.go` |
-| governance | `COMMAND-CONTRACT-SCHEMA-REF-01` | `kernel/governance/rules_command.go` |
-| codegen | `kind:command` 生成器 + golden | `tools/codegen/contractgen/{builder,generator}.go` + `templates/command.tmpl` |
+| governance | `COMMAND-CONTRACT-SCHEMA-REF-01` / `COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` | `kernel/governance/rules_command.go` |
+| codegen | `kind:command` 生成器 + golden；`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 编译期 const-guard | `tools/codegen/contractgen/{builder,generator}.go`（`validateCommandLevel`）+ `templates/{command,types}.tmpl` |
 | runtime | sealed `Registry` | `runtime/command/registry.go` |
 
 ---
@@ -108,3 +108,29 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 **§4 评级矩阵逐行重评（ai-robust.md ADR amendment 必查）**：本 amendment **不改 §4 任一格**。§4 双向锁矩阵约束的是 *dispatch/register funnel*（typed Handler/Register/Dispatch 仅由 codegen 派生 + raw `RegisterHandler`/`LookupHandler` 调用方收口），与 *request value-validation* 正交——后者既不放宽前者的上游/下游 Hard，也不新增伪造面。D4（golden 锁 sync 形态）、D6（codegen fail-closed 上游 Hard + governance Medium）评级不变；无 ✅→⚠️/❌ 降格，无需补偿措施。
 
 **为何不 silent defer（非 lazy）**：真实 blocker = 正确实现（typed-struct 级约束 IR，不 JSON round-trip）是一个**全新 codegen 机制**（须自带 AI-robust 评级 + archtest + golden），且其唯一真实消费点是不可信 command-entry 边界——与 ④ async 共同设计才有正确 altitude；廉价实现（JSON round-trip）违背 D4。故 funnel 设计随 ④ 落地，本 PR 以 §D8 显式收口设计边界。
+
+---
+
+## Amendment 2026-06-06（#1668：command consistencyLevel governance — 双层下界交付）
+
+**触发**：§5 演进路径子项「command consistencyLevel governance」落地（#1668，拆自 #1044）。
+
+**交付**：`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` —— `kind:command` 契约声明的 `consistencyLevel` 必须 **≥ L1**（LocalTx），`L0` 拒。命令跨本地边界（HTTP / async entry → cell）至少需单 cell 事务原子性；`L0 LocalOnly` 为纯 in-slice 计算语义，结构上不适用于命令。**下界**约束（非 exact-level lock），故现有 active L4 `devicecommand` 五契约 + synth_command（L4）全部通过，零误伤。
+
+**双层形态（同 PROJECTION-CONSISTENCY-01 单 invariant ID 双层范式）**：
+
+| 层 | 载体 | 覆盖 | 评级 |
+|----|------|------|------|
+| Hard 主门控 | `types.tmpl` 编译期 `const _ = uint(cellvocab.{{.ConsistencyLevel}} - cellvocab.L1)`（L0 → uint 下溢 → `go build` 失败）+ `builder.go::validateCommandLevel`（ParseLevel 守，使模板渲染合法 cellvocab identifier） | codegen:true 命令契约 | **上游 Hard**（codegen funnel + golden 字节锁；L0 不可表达为可编译树） |
+| Medium 兜底 | governance `validateCOMMANDCONTRACTCONSISTENCYLEVEL01`（`gocell validate` PhaseBase CI gate） | 所有命令契约（codegen:false + in-memory ProjectMeta fixture） | **Medium**（archtest/runtime guard 不可达的 in-memory 向量兜底） |
+
+empty / 非法 level 不由本规则报——由 `FMT-03`（contract consistencyLevel validity）+ parser 非空拒兜底，避免双报同一根因。
+
+**为何前移而非延后（issue 原文 deferral 前提已失效）**：#1668 issue body 将 Hard 编译期门列为「未来，随 ④/⑤ codegen 形态稳定」。但 command codegen（D1 `command.tmpl`/`command_gen.go` golden + D6 `buildCommandSpec` + `types.tmpl`）在 PR-1 即已交付并 golden-lock——延后前提已蒸发。Hard 半边是 `types.tmpl` 现成 const-guard idiom 的复制（projection L3 → command L1），低成本且与 projection 结构对齐，故同 PR 双层交付（彻底 + AI-Hard）。
+
+**§4 评级矩阵逐行重评（ai-robust.md ADR amendment 必查）**：本 amendment **不改 §4 任一格**。§4 双向锁矩阵约束的是 *dispatch/register funnel*（typed Handler/Register/Dispatch 仅由 codegen 派生 + raw `RegisterHandler`/`LookupHandler` 调用方收口）。`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 约束的是 *contract consistencyLevel 下界*，与之**正交**——既不放宽 funnel 上游/下游任一 Hard，也不新增伪造面。§4 两行 invariant **逐行重评**：
+
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：✅ 评级不变（上游 Hard / 下游 Medium）——本规则不触及 typed Handler/Register/Dispatch 派生。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：✅ 评级不变（上游 Medium / 下游 Hard）——本规则不触及 `RegisterHandler`/`LookupHandler` caller-allowlist。
+
+无 ✅→⚠️/❌ 降格，无需补偿措施。**不触发 contract-fanout**（`consistencyLevel` 既有字段，新增对它的约束 ≠ wire schema 改动）。

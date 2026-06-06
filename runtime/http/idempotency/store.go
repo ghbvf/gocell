@@ -105,15 +105,17 @@ func FrameworkStatuses() []int {
 // return a *FingerprintMismatchError (which wraps the sentinel) so the middleware
 // can recover the stored fingerprint blob for the per-field diff.
 //
-// ns is the idempotency namespace that scopes keys to a part of the
-// application. In the standard Middleware, ns is the caller TenantID (or
-// "_notenant" when absent). key is method+"\x00"+path+"\x00"+subject+"\x00"+
-// Idempotency-Key header value. fingerprint is the opaque canonical blob produced
-// by computeFingerprint (JSON whose Body field is hex(sha256(rawBody)) and whose
+// k is the sealed (namespace, key) pair produced by DeriveKey from the request +
+// principal isolation tuple; the Store reads it via k.Namespace() (the tenant
+// scope, or "_notenant" when absent) and k.Key() (the per-request key — see
+// DeriveKey for the byte layout). A raw (ns,key) string pair cannot reach Claim —
+// that typed boundary is the downstream Hard gate of the node-agnostic invariant
+// (#1449/#1610). fingerprint is the opaque canonical blob produced by
+// computeFingerprint (JSON whose Body field is hex(sha256(rawBody)) and whose
 // Fields field maps top-level field names to per-field hashes for the diff); the
 // Store treats it as an opaque string and only compares / round-trips it.
 type Store interface {
-	Claim(ctx context.Context, ns, key, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error)
+	Claim(ctx context.Context, k IdempotencyKey, fingerprint string, leaseTTL time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) //nolint:lll // full Claim contract signature cannot be wrapped in an interface decl
 }
 
 // Receipt is the HTTP-specific lifecycle handle for a single acquired

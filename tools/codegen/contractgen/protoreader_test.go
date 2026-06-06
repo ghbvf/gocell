@@ -8,7 +8,7 @@ import (
 )
 
 // Fully-qualified service names matching the fixtures' proto package +
-// service declarations (readProtoTypeInfo scopes the method to this service).
+// service declarations (ReadProtoTypeInfo scopes the method to this service).
 const (
 	fixtureFQService = "device.command.v1.DeviceCommandService"
 	synthFQServiceS  = "device.command.v1.S"
@@ -28,11 +28,11 @@ func fixtureProtoPath(t *testing.T) string {
 
 func TestReadProtoTypeInfo_HappyPath(t *testing.T) {
 	t.Parallel()
-	info, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
+	info, err := ReadProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "IssueCommand")
 	if err != nil {
-		t.Fatalf("readProtoTypeInfo: %v", err)
+		t.Fatalf("ReadProtoTypeInfo: %v", err)
 	}
-	want := protoTypeInfo{
+	want := ProtoTypeInfo{
 		ProtoPackage: "device.command.v1",
 		ImportPath:   "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1",
 		Alias:        "commandv1",
@@ -46,7 +46,7 @@ func TestReadProtoTypeInfo_HappyPath(t *testing.T) {
 
 func TestReadProtoTypeInfo_FileUnreadable(t *testing.T) {
 	t.Parallel()
-	_, err := readProtoTypeInfo(filepath.Join(t.TempDir(), "missing.proto"), fixtureFQService, "IssueCommand")
+	_, err := ReadProtoTypeInfo(filepath.Join(t.TempDir(), "missing.proto"), fixtureFQService, "IssueCommand")
 	if err == nil {
 		t.Fatal("expected error for missing proto file")
 	}
@@ -61,7 +61,7 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
+	_, err := ReadProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "go_package") {
 		t.Fatalf("expected go_package error, got %v", err)
 	}
@@ -77,7 +77,7 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
+	_, err := ReadProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	// Distinct from the missing-go_package path: this is the no-";alias" branch.
 	if err == nil || !strings.Contains(err.Error(), "must be") {
 		t.Fatalf("expected go_package missing-alias (`must be`) error, got %v", err)
@@ -94,25 +94,60 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
+	_, err := ReadProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "identifier") {
 		t.Fatalf("expected alias-not-identifier error, got %v", err)
 	}
 }
 
-func TestReadProtoTypeInfo_GoPackagePathWhitespace(t *testing.T) {
+// TestReadProtoTypeInfo_GoPackagePathInvalid covers module.CheckImportPath rejection.
+// Whitespace (space) is invalid per module.CheckImportPath; the error text now
+// comes from that authoritative checker rather than our prior whitespace-only guard.
+func TestReadProtoTypeInfo_GoPackagePathInvalid(t *testing.T) {
 	t.Parallel()
-	src := `syntax = "proto3";
+
+	cases := []struct {
+		name    string
+		path    string
+		wantErr string
+	}{
+		{
+			name:    "whitespace in path",
+			path:    "github.com/ghbvf/gocell/generated/ grpc",
+			wantErr: "invalid",
+		},
+		{
+			name:    "backslash in path",
+			path:    `github.com/ghbvf/gocell/generated\grpc`,
+			wantErr: "invalid",
+		},
+		{
+			name:    "leading dot segment",
+			path:    "./github.com/ghbvf/gocell/generated/grpc",
+			wantErr: "invalid",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src := `syntax = "proto3";
 package device.command.v1;
-option go_package = "github.com/ghbvf/gocell/generated/ grpc;commandv1";
+option go_package = "` + tc.path + `;commandv1";
 service S {
   rpc IssueCommand(IssueCommandRequest) returns (IssueCommandResponse) {}
 }
 `
-	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
-	if err == nil || !strings.Contains(err.Error(), "whitespace") {
-		t.Fatalf("expected import-path whitespace error, got %v", err)
+			path := writeTempProto(t, src)
+			_, err := ReadProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
+			if err == nil {
+				t.Fatalf("expected error for invalid import path %q, got nil", tc.path)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -125,7 +160,7 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
+	_, err := ReadProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "package") {
 		t.Fatalf("expected package error, got %v", err)
 	}
@@ -133,7 +168,7 @@ service DeviceCommandService {
 
 func TestReadProtoTypeInfo_MethodNotFound(t *testing.T) {
 	t.Parallel()
-	_, err := readProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "Ghost")
+	_, err := ReadProtoTypeInfo(fixtureProtoPath(t), fixtureFQService, "Ghost")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected method-not-found error, got %v", err)
 	}
@@ -149,7 +184,7 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, synthFQServiceS, "Watch")
+	_, err := ReadProtoTypeInfo(path, synthFQServiceS, "Watch")
 	if err == nil || !strings.Contains(err.Error(), "streaming") {
 		t.Fatalf("expected streaming-rejected error, got %v", err)
 	}
@@ -170,9 +205,9 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	info, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
+	info, err := ReadProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err != nil {
-		t.Fatalf("readProtoTypeInfo: %v", err)
+		t.Fatalf("ReadProtoTypeInfo: %v", err)
 	}
 	if info.RequestType != "IssueCommandRequest" || info.ResponseType != "IssueCommandResponse" {
 		t.Errorf("comment stripping failed: matched %q/%q", info.RequestType, info.ResponseType)
@@ -192,9 +227,9 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	info, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
+	info, err := ReadProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err != nil {
-		t.Fatalf("readProtoTypeInfo: %v", err)
+		t.Fatalf("ReadProtoTypeInfo: %v", err)
 	}
 	if info.RequestType != "IssueCommandRequest" || info.ResponseType != "IssueCommandResponse" {
 		t.Errorf("package-qualifier strip failed: %q/%q", info.RequestType, info.ResponseType)
@@ -217,9 +252,9 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	info, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
+	info, err := ReadProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	if err != nil {
-		t.Fatalf("readProtoTypeInfo: %v", err)
+		t.Fatalf("ReadProtoTypeInfo: %v", err)
 	}
 	// Must pick DeviceCommandService's types, NOT OtherService's (which appears
 	// first in the file and would win a whole-file scan).
@@ -243,7 +278,7 @@ service DeviceCommandService {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, fixtureFQService, "IssueCommand")
+	_, err := ReadProtoTypeInfo(path, fixtureFQService, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "not found in service block") {
 		t.Fatalf("expected method-not-in-declared-service error, got %v", err)
 	}
@@ -262,7 +297,7 @@ service S {
 }
 `
 	path := writeTempProto(t, src)
-	_, err := readProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
+	_, err := ReadProtoTypeInfo(path, synthFQServiceS, "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "external package") {
 		t.Fatalf("expected external-package rejection, got %v", err)
 	}
@@ -270,7 +305,7 @@ service S {
 
 func TestReadProtoTypeInfo_ServiceNotInDeclaredPackage(t *testing.T) {
 	t.Parallel()
-	_, err := readProtoTypeInfo(fixtureProtoPath(t), "wrong.pkg.DeviceCommandService", "IssueCommand")
+	_, err := ReadProtoTypeInfo(fixtureProtoPath(t), "wrong.pkg.DeviceCommandService", "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "not in proto package") {
 		t.Fatalf("expected service-package-mismatch error, got %v", err)
 	}
@@ -278,7 +313,7 @@ func TestReadProtoTypeInfo_ServiceNotInDeclaredPackage(t *testing.T) {
 
 func TestReadProtoTypeInfo_ServiceBlockNotFound(t *testing.T) {
 	t.Parallel()
-	_, err := readProtoTypeInfo(fixtureProtoPath(t), "device.command.v1.NoSuchService", "IssueCommand")
+	_, err := ReadProtoTypeInfo(fixtureProtoPath(t), "device.command.v1.NoSuchService", "IssueCommand")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected service-not-found error, got %v", err)
 	}

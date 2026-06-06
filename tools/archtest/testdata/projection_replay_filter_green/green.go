@@ -1,6 +1,6 @@
 // Package projection_replay_filter_green is a GREEN fixture for
 // PROJECTION-REPLAY-PER-SPEC-FILTER-01: drainGap invokes applyOne ONLY inside
-// the `entry.RoutingTopic() == c.spec.Topic` gate, mirroring the production
+// the `entry.Stream() == c.spec.Topic` gate, mirroring the production
 // kernel/projection/rebuild.go shape. The detector must report 0 diagnostics.
 //
 // DO NOT use this package in production code.
@@ -10,7 +10,7 @@ type spec struct{ Topic string }
 
 type entry struct{}
 
-func (entry) RoutingTopic() string { return "" }
+func (entry) Stream() string { return "" }
 
 type coord struct {
 	spec  spec
@@ -24,7 +24,7 @@ func (c *coord) advanceOffsetPastForeign(_ entry) error { return nil }
 // drainGap gates applyOne behind the per-spec topic check.
 func (c *coord) drainGap(entries []entry) error {
 	for _, e := range entries {
-		if e.RoutingTopic() == c.spec.Topic {
+		if e.Stream() == c.spec.Topic {
 			if err := c.applyOne(e, c.apply); err != nil {
 				return err
 			}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "webhook.demo.events.v1.payload",
+  "description": "Inbound demo webhook payload. Not additionalProperties:false — inbound payloads from external senders may carry extra fields the receiver ignores (v1 schema evolution rule).",
+  "type": "object",
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "description": "Sender-assigned event identifier."
+    },
+    "type": {
+      "type": "string",
+      "description": "Event type discriminator, e.g. \"order.created\"."
+    },
+    "data": {
+      "type": "object",
+      "description": "Opaque event body; shape varies by type."
+    }
+  },
+  "required": ["eventId", "type"]
+}

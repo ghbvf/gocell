@@ -73,7 +73,7 @@ func TestIntegration_HTTPIdempotencyStore_AssemblyScope_CrossPodReplay(t *testin
 	key := "asm-replay\x00POST\x00/api/v1/orders\x00" + t.Name()
 
 	// Pod A acquires and records.
-	stateA, _, receiptA, err := podA.Claim(ctx, asmReqNS, key, asmFP, testtime.D5min)
+	stateA, _, receiptA, err := podA.Claim(ctx, httpKey(asmReqNS, key), asmFP, testtime.D5min)
 	require.NoError(t, err, "pod-A Claim")
 	require.Equal(t, idempotency.ClaimAcquired, stateA, "pod-A must acquire a fresh key")
 
@@ -82,7 +82,7 @@ func TestIntegration_HTTPIdempotencyStore_AssemblyScope_CrossPodReplay(t *testin
 	require.NoError(t, receiptA.Record(ctx, &resp, testtime.CtxLong), "pod-A Record")
 
 	// Pod B (different store instance) replays the same (ns,key,fp).
-	stateB, recB, _, err := podB.Claim(ctx, asmReqNS, key, asmFP, testtime.D5min)
+	stateB, recB, _, err := podB.Claim(ctx, httpKey(asmReqNS, key), asmFP, testtime.D5min)
 	require.NoError(t, err, "pod-B Claim")
 	require.Equal(t, idempotency.ClaimDone, stateB,
 		"pod-B must replay (ClaimDone) a key pod-A recorded — assembly-wide dedup")
@@ -103,12 +103,12 @@ func TestIntegration_HTTPIdempotencyStore_AssemblyScope_CrossPodBusy(t *testing.
 	ctx := context.Background()
 	key := "asm-busy\x00PUT\x00/api/v1/payments\x00" + t.Name()
 
-	stateA, _, _, err := podA.Claim(ctx, asmReqNS, key, asmFP, testtime.D5min)
+	stateA, _, _, err := podA.Claim(ctx, httpKey(asmReqNS, key), asmFP, testtime.D5min)
 	require.NoError(t, err, "pod-A Claim")
 	require.Equal(t, idempotency.ClaimAcquired, stateA, "pod-A must acquire")
 
 	// Pod B sees the in-flight lease held by pod A.
-	stateB, _, _, err := podB.Claim(ctx, asmReqNS, key, asmFP, testtime.D5min)
+	stateB, _, _, err := podB.Claim(ctx, httpKey(asmReqNS, key), asmFP, testtime.D5min)
 	require.NoError(t, err, "pod-B Claim")
 	require.Equal(t, idempotency.ClaimBusy, stateB,
 		"pod-B must observe pod-A's in-flight lease (ClaimBusy) — cross-pod concurrency lock")
@@ -124,14 +124,14 @@ func TestIntegration_HTTPIdempotencyStore_AssemblyScope_CrossPodFingerprintMisma
 	ctx := context.Background()
 	key := "asm-fp\x00POST\x00/api/v1/orders\x00" + t.Name()
 
-	stateA, _, receiptA, err := podA.Claim(ctx, asmReqNS, key, asmFP, testtime.D5min)
+	stateA, _, receiptA, err := podA.Claim(ctx, httpKey(asmReqNS, key), asmFP, testtime.D5min)
 	require.NoError(t, err, "pod-A Claim")
 	require.Equal(t, idempotency.ClaimAcquired, stateA, "pod-A must acquire")
 	resp := idempotencytest.BuildRecordedResponse(t, 200, []byte(`{"ok":true}`))
 	require.NoError(t, receiptA.Record(ctx, &resp, testtime.CtxLong), "pod-A Record")
 
 	// Pod B replays the same key with a different body fingerprint → mismatch.
-	_, _, _, err = podB.Claim(ctx, asmReqNS, key, asmFPAlt, testtime.D5min)
+	_, _, _, err = podB.Claim(ctx, httpKey(asmReqNS, key), asmFPAlt, testtime.D5min)
 	require.Error(t, err, "pod-B Claim with mismatched fingerprint must error")
 	require.True(t, errors.Is(err, idemhttp.ErrFingerprintMismatch),
 		"cross-pod fingerprint mismatch must surface ErrFingerprintMismatch; got %v", err)

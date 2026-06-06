@@ -1,0 +1,6 @@
+id: grpc.fixture.orphan.v1
+kind: grpc
+lifecycle: active
+ownerCell: fixturecell
+endpoints:
+  server: fixturecell

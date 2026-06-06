@@ -11,6 +11,22 @@
 >   sub-check B (any With*Clock option injector banned, not just exact WithClock);
 >   delete all existing With*Clock injectors; migrate controlPlaneClockCarveOut
 >   map to receiver-type confinement (controlPlaneClock struct). See §Amendment A2.
+> Amended: 2026-06-06 — PR-A8 #1169 (Sweeper → reconcile.Reconciler): the
+>   `runtime/command.SweeperLifecycle` control shell that embodied this ADR's C.1
+>   clock split is DELETED; the devicecommand sweep now runs on a generic
+>   `kernel/reconcile.Loop` (kernel Sweeper implements `reconcile.Reconciler`).
+>   The control-plane/business-plane clock split itself is unchanged in substance
+>   but its carrier MOVED: the sealed `controlPlaneClock` + the
+>   `controlPlaneClockCarveOut` host now live in `kernel/reconcile/` (not
+>   `runtime/command/`), with sanctioned methods `newProbeTimer` / `newRequeueTimer`
+>   / `newRenewTicker`. §A2-2, §D-A's carve-out code/grading, and the 威胁分析
+>   matrix rows are rewritten in place to that current truth (per ai-robust.md
+>   「ADR amendment 落地必查」). The C.1/C.2/C.3 and A1-* prose below is retained as
+>   the original decision record (the decision stands; only the implementation site
+>   moved) — read `runtime/command.SweeperLifecycle` there as "the per-tick control
+>   shell, since superseded by `reconcile.Loop`". Authoritative current carve-out
+>   source: ADR `202605291600-661-adr-kernel-reconcile-design.md` + archtest
+>   `PROD-CLOCK-INJECTION-01`.
 > Backlog: `BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE` (cap-01)
 > Source: PR #441 second/third-round review 聚合，3 子条 C.1/C.2/C.3 同根因
 > Supersedes: `202605102000-adr-lifecycle-hook-ctx-semantics.md` §D1/§D3/§Consequences
@@ -91,21 +107,34 @@ are deleted; their constructors gain a mandatory positional `clk clock.Clock` fi
 parameter instead. This closes the loophole where a suffixed name like `WithRouterClock`
 survived the prior exact-match check.
 
-**A2-2 — control-plane carve-out migrated to receiver-type confinement**: The
-`controlPlaneClockCarveOut` map + `//archtest:allow:clock-injection:control-plane`
-comment-marker mechanism (A1-6, previously Medium) is eliminated. In its place, the
-control-plane real-time clock calls (`time.NewTicker`, `time.NewTimer`) are confined
-to methods on the unexported `controlPlaneClock` struct in `runtime/command/lifecycle.go`.
-The archtest now grants the exemption only to methods whose receiver type is
-`controlPlaneClock` and whose file is under `runtime/command/` — removing the
-AI-abusable comment-marker from production source. The AI-robust grade of the
-runtime-side carve-out remains **Medium** (Go cannot prevent `time.*` calls
-statically; receiver-type confinement is the permanent ceiling for this shape).
+**A2-2 — control-plane carve-out: sealed `controlPlaneClock` + host→method map
+(host `kernel/reconcile/` as of PR-A8 #1169)**: the `//archtest:allow:clock-injection:control-plane`
+comment-marker (A1-6, previously Medium) is eliminated — no AI-abusable marker in
+production source. The control-plane real-time clock calls (`time.NewTimer`,
+`time.NewTicker`) are confined two ways, BOTH required by `PROD-CLOCK-INJECTION-01`:
 
-§D-A AI-robust 评级 table row for "C.1 runtime 侧" is updated in-place below; the
-威胁分析 table rows for "fake clock 注入控制面 scheduling" and "carve-out marker
-被任意函数添加绕过 PROD-CLOCK-INJECTION-01" are updated in-place below. No dual
-truth source is retained (per ai-robust.md「ADR amendment 落地必查」).
+1. **Receiver-type confinement** — the call must be in a method whose receiver
+   type is the package-private `controlPlaneClock` struct (unexported → no
+   external constructor; a different struct named the same is not exempt — the
+   gate checks the *receiver type*, not the method name).
+2. **Host→method allowlist** — `controlPlaneClockCarveOut` maps each sanctioned
+   host package prefix to the exact `{controlPlaneClock method → sanctioned time.*
+   callee}` set. As of PR-A8 #1169 the single host is `kernel/reconcile/`
+   (previously `runtime/command/`, deleted with `SweeperLifecycle`), with methods
+   `newProbeTimer`→`NewTimer` (startup probe), `newRequeueTimer`→`NewTimer`
+   (delayed requeue), `newRenewTicker`→`NewTicker` (leader-lease renew). Adding a
+   `controlPlaneClock` method without a map entry is flagged; any other `time.*`
+   call inside a `controlPlaneClock` method body (or a closure within it) is
+   flagged.
+
+The AI-robust grade remains **Medium** (Go cannot make `time.*` free functions
+uncallable; sealed-receiver + host→method allowlist is the permanent ceiling for
+this shape — Hard-upgrade backlog `CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01`).
+
+§D-A AI-robust 评级 table row for the control-plane real-time carve-out is updated
+in-place below; the 威胁分析 table rows for "fake clock 注入控制面 scheduling" and
+"carve-out marker 被任意函数添加绕过 PROD-CLOCK-INJECTION-01" are updated in-place
+below. No dual truth source is retained (per ai-robust.md「ADR amendment 落地必查」).
 
 ---
 
@@ -171,42 +200,41 @@ P2-2）。修复前 `now` 取自实时 ticker.C 的 tick 值，与 cell 注入�
 fake）产生的命令创建时间错配，污染 fake-clock assembly 的过期决策。
 `kernel/command.Sweeper` 仍无任何时钟字段（本节 Hard 不变量不受影响）。
 
-控制面时间源（ticker + 50 ms 启动探针）收敛在 `controlPlaneClock` struct 的方法上
-（A2-2，`runtime/command/lifecycle.go`）：
+控制面时间源（startup probe / 延迟 requeue / leader-lease renew）收敛在
+package-private `controlPlaneClock` struct 的方法上。**自 PR-A8 #1169 起 host =
+`kernel/reconcile/`**（原 `runtime/command/lifecycle.go` 随 `SweeperLifecycle` 删除）：
 
 ```go
 // controlPlaneClock is the sealed real-time source for all control-plane
-// scheduling in SweeperLifecycle. Confining time.NewTicker / time.NewTimer
-// here — rather than calling them from free functions — satisfies the
-// receiver-type confinement gate of PROD-CLOCK-INJECTION-01.
+// scheduling in reconcile.Loop. Confining time.NewTimer / time.NewTicker here —
+// rather than calling them from free functions — satisfies the receiver-type
+// confinement gate of PROD-CLOCK-INJECTION-01.
 // (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
 type controlPlaneClock struct{}
 
-func (controlPlaneClock) newTicker(interval time.Duration) *time.Ticker {
-    return time.NewTicker(interval)
-}
-
-func (controlPlaneClock) newProbeTimer(d time.Duration) *time.Timer {
-    return time.NewTimer(d)
-}
+func (controlPlaneClock) newProbeTimer(d time.Duration) *time.Timer  { return time.NewTimer(d) }
+func (controlPlaneClock) newRequeueTimer(d time.Duration) *time.Timer { return time.NewTimer(d) }
+func (controlPlaneClock) newRenewTicker(d time.Duration) *time.Ticker { return time.NewTicker(d) }
 ```
 
-`PROD-CLOCK-INJECTION-01` archtest 的 `clockControlPlaneAllowedMethods` 函数通过
-receiver 类型名 `controlPlaneClock` + 文件路径 `runtime/command/` 识别豁免方法，
-不依赖 comment-marker 或 hand-maintained map。
+`PROD-CLOCK-INJECTION-01` archtest 双重门控（详见 §A2-2）：(a) receiver 类型名 =
+package-private `controlPlaneClock`；(b) 方法 ∈ `controlPlaneClockCarveOut[host]`
+host→method 白名单（host=`kernel/reconcile/`，method∈{`newProbeTimer`,
+`newRequeueTimer`, `newRenewTicker`}）。无 comment-marker。
 
 **AI-robust 评级（双栏）**：
 
 | 维度 | 评级 | 根据 |
 |---|---|---|
 | C.1 下游：kernel Sweeper 无时钟字段 | **Hard** | 类型不可表达 — 字段不存在，无论何种 AI 实现变体均无法合法引入 fake clock |
-| C.1 runtime 侧：控制面真实时间 carve-out | **Medium**（A2-2 升级后） | Receiver-type confinement：`time.NewTicker` / `time.NewTimer` 仅允许出现在 `runtime/command/` 下以 `controlPlaneClock` 为 receiver 类型的方法体内（gate: 文件路径前缀 + receiver 类型名 `controlPlaneClock`）。`//archtest:allow:clock-injection:control-plane` comment-marker 与 `controlPlaneClockCarveOut` map 已删除（A2-2）。新增控制面真实时钟调用需在 `controlPlaneClock` struct 上新增方法，是可审查的代码变更，不是一行注释。Go 无法静态禁止 `time.*` 调用，receiver-type confinement 是该形态的永久上限，评级维持 Medium |
+| C.1 控制面真实时间 carve-out（host `kernel/reconcile/`，PR-A8 #1169） | **Medium** | sealed `controlPlaneClock` + host→method 白名单：`time.NewTimer` / `time.NewTicker` 仅允许出现在 host（`kernel/reconcile/`）下、receiver 类型 = package-private `controlPlaneClock`、且方法 ∈ `controlPlaneClockCarveOut[host]`（`newProbeTimer` / `newRequeueTimer` / `newRenewTicker`）的方法体内。`//archtest:allow:clock-injection:control-plane` comment-marker 已删除。新增控制面真实时钟调用需在 `controlPlaneClock` 上新增方法 **并**登记进 `controlPlaneClockCarveOut`，是可审查的代码变更，不是一行注释。Go 无法静态禁止 `time.*` 自由函数调用，sealed-receiver + host→method 白名单是该形态的永久上限，评级维持 Medium |
 
-**carve-out 唯一真值（A2-2 修订）**：carve-out 的权威载体是 archtest
-`tools/archtest/clock_invariants_test.go::clockControlPlaneAllowedMethods`，
-它通过三重 gate（(a) 文件路径前缀 `runtime/command/`；(b) 有 receiver；
-(c) receiver 类型名 = `controlPlaneClock`）判定是否豁免，无 hand-maintained map，
-无 comment-marker 依赖。**本 ADR 仍是文档，不是 enforcement 来源**。
+**carve-out 唯一真值**：carve-out 的权威载体是 archtest
+`tools/archtest/clock_invariants_test.go`（`controlPlaneClockCarveOut` map +
+`controlPlaneClockHostMethods`），它通过三重 gate（(a) host 前缀命中
+`controlPlaneClockCarveOut`（`kernel/reconcile/`）；(b) receiver 类型名 =
+package-private `controlPlaneClock`；(c) 方法 ∈ 该 host 的 method 白名单且 callee
+匹配 sanctioned `time.*`）判定是否豁免。**本 ADR 仍是文档，不是 enforcement 来源**。
 
 **carve-out 盲区保持关闭**：`enclosingFuncDeclKey` 通过 `EachInSubtree[ast.FuncLit]`
 递归排除嵌套 FuncLit body，确保 `controlPlaneClock` 方法内的闭包中 `time.*` 调用
@@ -372,7 +400,7 @@ worker goroutine（sweeper loop、refresh GC loop）在 `lifecycle.Stop` 执行�
 
 | 威胁 | 状态 | 说明 |
 |---|---|---|
-| fake clock 注入控制面 scheduling | 消除 | kernel Sweeper 无时钟字段（Hard，A1-3 后仍无）；runtime 层控制面 ticker/probe carve-out 由 receiver-type confinement（`controlPlaneClock` struct，Medium，A2-2）守卫，已删除 comment-marker 与 `controlPlaneClockCarveOut` map。`BusinessClock` 仅供业务 `now`，不驱动 scheduling |
+| fake clock 注入控制面 scheduling | 消除 | kernel Sweeper 无时钟字段（Hard，A1-3 后仍无）；控制面 probe/requeue/renew carve-out 由 sealed `controlPlaneClock` + host→method 白名单（host `kernel/reconcile/`，Medium，A2-2）守卫，已删除 comment-marker。Reconciler 的业务 `now` 来自其自有 clock（devicecell 即 `c.clk`），不驱动 scheduling |
 | 启动探针 frozen-clock deadlock | 消除 | controlPlaneProbeTimer 使用真实时间（A1-3 未改控制面时间源）|
 | worker goroutine 在 assembly 关停后仍存活 | 消除 | ownerCancel 先行，worker 响应 ownerCtx.Done() |
 | sweep 错误静默 | 消除 | SweepTick 返回聚合错误；runLoop slog.Error + counter |
@@ -382,7 +410,7 @@ worker goroutine（sweeper loop、refresh GC loop）在 `lifecycle.Stop` 执行�
 | 控制面 real-now 当业务过期时间，fake-clock assembly 时间域错配 | 消除（A1-3） | `SweepTick` 的 `now` = `BusinessClock.Now()`，不再取自实时 ticker.C |
 | 零值 `&command.Sweeper{}` 启动成功、首 tick 才静默错 | 消除（A1-4） | OnStart 调 `Sweeper.Validate()`（无副作用），失败即 fail-fast，bootstrap rollback |
 | `SweepErrorCounter` label 不匹配 → `With` panic crashloop | 消除（A1-5） | OnStart 在 recover 下 preflight `.With({"cell":…})`，label 错配转 fail-fast wiring error |
-| carve-out marker 被任意函数添加绕过 PROD-CLOCK-INJECTION-01 | 消除（A2-2） | comment-marker `//archtest:allow:clock-injection:control-plane` 与 `controlPlaneClockCarveOut` map 已完全删除；carve-out 现由 receiver-type confinement 实现，新增真实时钟调用需在 `controlPlaneClock` struct 上增加方法（可审查代码变更，非注释添加）。Hard 升级 backlog `CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01` 已登记 |
+| carve-out marker 被任意函数添加绕过 PROD-CLOCK-INJECTION-01 | 消除（A2-2） | comment-marker `//archtest:allow:clock-injection:control-plane` 已完全删除；carve-out 现由 sealed `controlPlaneClock` 受体类型 + `controlPlaneClockCarveOut` host→method 白名单（host `kernel/reconcile/`）双重门控，新增真实时钟调用需在 `controlPlaneClock` 上增方法 **并**登记进白名单（可审查代码变更，非注释添加）。Hard 升级 backlog `CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01` 已登记 |
 | StartTimeout 强制 OnStart 超时 | 消除（语义变更 + A1-1 backstop） | StartTimeout 仅 informational（slow-start 警告）；deadlock 防线移至编排层 supervise，非 per-hook deadline |
 
 ### ref

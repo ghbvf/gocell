@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/migration"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	commandruntime "github.com/ghbvf/gocell/runtime/command"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
@@ -110,12 +111,18 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("build cursor codec: %w", err)
 	}
 
+	// Process command.Registry for the synchronous command bus. devicecell
+	// registers its enqueue handler into it during Init; the registry is a
+	// required cell dependency (#1580), so it must be wired here.
+	commandReg := commandruntime.NewRegistry()
+
 	// Create the device cell with explicitly wired persistence.
 	dc := devicecell.NewDeviceCell(
 		clk,
 		devicecell.WithDeviceRepository(deviceRepo),
 		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(directPub)),
 		devicecell.WithCursorCodec(cursorCodec),
+		devicecell.WithCommandRegistry(commandReg),
 		devicecell.WithLogger(logger),
 	)
 	dc.RegisterCommandQueue(commandQueue)

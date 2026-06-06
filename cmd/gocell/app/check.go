@@ -12,6 +12,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/checker"
 	"golang.org/x/tools/go/packages"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -728,9 +729,10 @@ func checkL0ImportsForAllCells(root string, project *metadata.ProjectMeta, forma
 // l0ImportsForCell runs all L0 import checks for a single cell.
 func l0ImportsForCell(root string, cm *metadata.CellMeta) []governance.ValidationResult {
 	declaredDeps := buildDeclaredDeps(cm)
+	declaredField := cellDeclaresL0Dependencies(root, cm)
 	var results []governance.ValidationResult
 
-	if len(declaredDeps) == 0 {
+	if !declaredField {
 		results = append(results, governance.ValidationResult{
 			Code:      governance.RuleCode("CHECK-L0-MISSING-L0DEPS"),
 			Severity:  governance.SeverityError,
@@ -749,7 +751,7 @@ func l0ImportsForCell(root string, cm *metadata.CellMeta) []governance.Validatio
 
 	// Fix 2.5: if no l0Dependencies declared, skip undeclared/dangling checks
 	// to avoid noisy false positives.
-	if len(declaredDeps) == 0 {
+	if !declaredField {
 		return results
 	}
 
@@ -765,6 +767,28 @@ func buildDeclaredDeps(cm *metadata.CellMeta) map[string]bool {
 		deps[dep.Cell] = true
 	}
 	return deps
+}
+
+func cellDeclaresL0Dependencies(root string, cm *metadata.CellMeta) bool {
+	//nolint:gosec // G304: cm.File is emitted by the metadata locator, not user input.
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(cm.File)))
+	if err != nil {
+		return false
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return false
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(doc.Content[0].Content); i += 2 {
+		if doc.Content[0].Content[i].Value == "l0Dependencies" {
+			return true
+		}
+	}
+	return false
 }
 
 // loadCellImports loads packages in the cell directory and returns the set of

@@ -11,8 +11,8 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
-	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // fixtureRequest builds a valid ProjectionRequest for the fixture callsites.
@@ -26,6 +26,6 @@ func fixtureRequest() cell.ProjectionRequest {
 		},
 		ProjectionID: "p1",
 		CellID:       "c1",
-		Apply:        func(_ context.Context, _ outbox.Entry) error { return nil },
+		Apply:        func(_ context.Context, _ cellvocab.ProjectionEvent) error { return nil },
 	}
 }

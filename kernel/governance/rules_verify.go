@@ -205,36 +205,60 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 		if _, isCell := v.project.Cells[providerID]; !isCell {
 			continue
 		}
-		if !v.hasProviderSlice(c.ID, providerID) {
+		if !v.hasImplementingSlice(c, providerID) {
 			results = append(results, v.newError(
 				codeVERIFY04, IssueRequired,
 				contractFile(c),
 				"lifecycle",
 				fmt.Sprintf(
-					"active contract %q has no provider-role slice in cell %q",
+					"active contract %q has no implementing slice in cell %q",
 					c.ID, providerID,
 				),
-				"create a slice in the provider cell with a provider contractUsage for this contract",
+				"create a slice in that cell with a contractUsage that implements this "+
+					"contract (a provider role such as serve/publish/handle/provide; "+
+					"webhook-receive for an inbound webhook, webhook-dispatch for an outbound one)",
 			))
 		}
 	}
 	return results
 }
 
-// hasProviderSlice returns true if any slice belonging to providerCell declares
-// a provider-role contractUsage for the given contract ID.
-func (v *Validator) hasProviderSlice(contractID, providerCell string) bool {
+// hasImplementingSlice returns true if any slice belonging to providerCell
+// declares a contractUsage that IMPLEMENTS contract c. For most kinds the
+// implementing role is a provider role (serve/publish/handle/provide, and
+// webhook-dispatch for outbound webhooks). An INBOUND webhook is the exception:
+// its provider (ProviderEndpoint) is the owner cell, but the owner implements it
+// via a webhook-receive slice — which cellvocab classifies as a consumer role
+// (the cell consumes the inbound delivery). Without this carve-out an inbound
+// webhook contract could never satisfy VERIFY-04, because no provider-role slice
+// is expressible for it (webhook-receive is consumer-side; the real "provider"
+// is the external sender).
+func (v *Validator) hasImplementingSlice(c *metadata.ContractMeta, providerCell string) bool {
 	for _, s := range v.project.Slices {
 		if s.BelongsToCell != providerCell {
 			continue
 		}
 		for _, cu := range s.ContractUsages {
-			if cu.Contract == contractID && cellvocab.IsProviderRole(cellvocab.ContractRole(cu.Role)) {
+			if cu.Contract == c.ID && implementsContract(c, cu.Role) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// implementsContract reports whether role is the owner cell's implementing role
+// for contract c. An inbound webhook is the carve-out: its on-paper provider is
+// the ownerCell, but the actual data provider is the external sender — the owner
+// cell implements the contract by RECEIVING, so a webhook-receive slice (a
+// consumer role per cellvocab) is what implements it. Every other kind (incl.
+// outbound webhooks via webhook-dispatch) is implemented by a provider role.
+func implementsContract(c *metadata.ContractMeta, role string) bool {
+	if cellvocab.ContractKind(c.Kind) == cellvocab.ContractWebhook &&
+		c.Direction == string(cellvocab.DirectionInbound) {
+		return cellvocab.ContractRole(role) == cellvocab.RoleWebhookReceive
+	}
+	return cellvocab.IsProviderRole(cellvocab.ContractRole(role))
 }
 
 // validRefPrefixes is the set of allowed first segments in a verify ref.

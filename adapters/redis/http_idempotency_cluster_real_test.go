@@ -54,7 +54,7 @@ func TestClusterIntegration_HTTPIdempotencyStore_NoCrossSlot(t *testing.T) {
 	}
 	for _, k := range keys {
 		t.Run(k, func(t *testing.T) {
-			state, _, receipt, err := store.Claim(ctx, reqNS, k, clusterHTTPFP, testtime.D5min)
+			state, _, receipt, err := store.Claim(ctx, httpKey(reqNS, k), clusterHTTPFP, testtime.D5min)
 			require.NoError(t, err, "Claim must not return CROSSSLOT")
 			require.Equal(t, idempotency.ClaimAcquired, state)
 
@@ -63,7 +63,7 @@ func TestClusterIntegration_HTTPIdempotencyStore_NoCrossSlot(t *testing.T) {
 				"Record must not return CROSSSLOT")
 
 			// Re-Claim returns ClaimDone now that the resp key is set.
-			state2, rec2, _, err := store.Claim(ctx, reqNS, k, clusterHTTPFP, testtime.D5min)
+			state2, rec2, _, err := store.Claim(ctx, httpKey(reqNS, k), clusterHTTPFP, testtime.D5min)
 			require.NoError(t, err, "re-Claim must not return CROSSSLOT")
 			require.Equal(t, idempotency.ClaimDone, state2)
 			require.NotNil(t, rec2, "replay response must be non-nil")

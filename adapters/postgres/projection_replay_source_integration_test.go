@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
 )
 
@@ -24,8 +25,8 @@ type projectionJournalFixture struct {
 	pool        *Pool
 	src         *PGProjectionReplaySource
 	cursor      *PGProjectionCursor
-	seed        func(n int) []kout.Entry
-	newUnseeded func() kout.Entry
+	seed        func(n int) []projection.ProjectionEvent
+	newUnseeded func() projection.ProjectionEvent
 }
 
 // newProjectionJournal builds the fixture on a fresh per-test database cloned from
@@ -47,22 +48,27 @@ func newProjectionJournal(t *testing.T) projectionJournalFixture {
 		require.NoError(t, nerr)
 		return e
 	}
-	seed := func(n int) []kout.Entry {
-		entries := make([]kout.Entry, n)
+	seed := func(n int) []projection.ProjectionEvent {
+		koutEntries := make([]kout.Entry, n)
 		runErr := txm.RunInTx(context.Background(), func(txCtx context.Context) error {
 			for i := 0; i < n; i++ {
 				e := newEntry()
 				if werr := writer.Write(txCtx, e); werr != nil {
 					return werr
 				}
-				entries[i] = e
+				koutEntries[i] = e
 			}
 			return nil
 		})
 		require.NoError(t, runErr)
-		return entries
+		events := make([]projection.ProjectionEvent, n)
+		for i, e := range koutEntries {
+			events[i] = e
+		}
+		return events
 	}
-	return projectionJournalFixture{pool: pool, src: src, cursor: cursor, seed: seed, newUnseeded: newEntry}
+	newUnseeded := func() projection.ProjectionEvent { return newEntry() }
+	return projectionJournalFixture{pool: pool, src: src, cursor: cursor, seed: seed, newUnseeded: newUnseeded}
 }
 
 // TestPGProjectionReplaySource_Conformance enrolls the concrete
@@ -109,16 +115,16 @@ func TestPGProjectionJournal_GapAfterCleanup(t *testing.T) {
 	// Delete the middle entry, creating a position gap (e.g. 1, _, 3) — as the
 	// relay's CleanupPublished/CleanupDead would after retention.
 	_, err := f.pool.DB().Exec(context.Background(),
-		`DELETE FROM outbox_entries WHERE id = $1`, deleted.ID())
+		`DELETE FROM outbox_entries WHERE id = $1`, deleted.EventID())
 	require.NoError(t, err)
 
 	// Replay(0) delivers exactly the two survivors, in ascending order.
 	var got []string
-	require.NoError(t, f.src.Replay(context.Background(), 0, func(e kout.Entry) error {
-		got = append(got, e.ID())
+	require.NoError(t, f.src.Replay(context.Background(), 0, func(e projection.ProjectionEvent) error {
+		got = append(got, e.EventID())
 		return nil
 	}))
-	assert.Equal(t, []string{entries[0].ID(), entries[2].ID()}, got,
+	assert.Equal(t, []string{entries[0].EventID(), entries[2].EventID()}, got,
 		"Replay must deliver survivors in order, skipping the cleaned-up gap")
 
 	// Survivors still resolve to strictly increasing positions (gap tolerated).

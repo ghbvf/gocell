@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # verify-workspace-test runs `go test ./...` for every NON-root workspace member
-# (the satellite modules — examples/* today). The root module's tests are already
+# (the satellite modules). The root module's tests are already
 # covered by the _build-lint.yml build-test matrix; running them here too would
 # duplicate that load and slow `make verify`. This is the test-traversal half of
 # the go.work multi-module gate, complementing hack/verify-workspace.sh (which
@@ -37,11 +37,9 @@ while IFS= read -r dir; do
 done <<< "${modules_raw}"
 
 # Anti-vacuity: a workspace with only the root module would test nothing here and
-# silently "pass". That is a legitimate state TODAY only if no satellite exists;
-# once examples/* are extracted there is always ≥1 non-root member, so an empty
-# satellite set after extraction signals go.work drift rather than a real pass.
-# `./examples/x` (go.work DiskPath form) → `examples/x` so the membership set
-# below compares apples-to-apples with the filesystem glob.
+# silently "pass". That is legitimate only if no real in-repo satellite module
+# exists. `./examples/x` (go.work DiskPath form) → `examples/x` so the membership
+# set below compares apples-to-apples with the filesystem scan.
 satellite_dirs=()
 for dir in "${module_dirs[@]}"; do
     [[ "${dir}" == "." ]] && continue
@@ -65,33 +63,46 @@ workspace_has() {
 # satellite module exists". The go.work-derived set above only knows about
 # modules someone remembered to `go work use`; it CANNOT catch a module that
 # exists on disk but was never added to go.work — that module then vanishes
-# silently from every gate iterating this funnel. So cross-check every
-# examples/*/go.mod against the workspace `use` set and fail on any that is
-# missing (mirrors the manifest ⊆ go.work reverse check in tools/workspace).
-# This also subsumes the old empty-set guard: with ≥1 examples/*/go.mod on
-# disk, an empty satellite set fails here as N missing modules.
-shopt -s nullglob
-disk_example_mods=()
-for gomod in examples/*/go.mod; do
-    disk_example_mods+=("$(dirname "${gomod}")")
-done
-shopt -u nullglob
+# silently from every gate iterating this funnel. Cross-check every real in-repo
+# satellite go.mod against the workspace `use` set and fail on any missing member
+# (mirrors the manifest ⊆ go.work reverse check in tools/workspace). Fixture
+# modules under testdata are intentionally excluded: they are standalone broken or
+# synthetic modules for tests, not production workspace members.
+gocell::log::status "Discovering in-repo satellite modules on disk"
+if ! disk_mods_raw="$(
+    find . \
+        -path './.git' -prune -o \
+        -path './worktrees' -prune -o \
+        -path '*/testdata/*' -prune -o \
+        -name go.mod -print | sort
+)"; then
+    gocell::log::error "failed to discover go.mod files on disk"
+    exit 1
+fi
+disk_satellite_mods=()
+while IFS= read -r gomod; do
+    [[ -n "${gomod}" ]] || continue
+    mod="${gomod%/go.mod}"
+    mod="${mod#./}"
+    [[ "${mod}" == "." || "${mod}" == "go.mod" ]] && continue
+    disk_satellite_mods+=("${mod}")
+done <<< "${disk_mods_raw}"
 
 missing_from_workspace=()
-for mod in "${disk_example_mods[@]}"; do
+for mod in "${disk_satellite_mods[@]}"; do
     workspace_has "${mod}" || missing_from_workspace+=("${mod}")
 done
 if [[ ${#missing_from_workspace[@]} -gt 0 ]]; then
-    gocell::log::error "satellite example module(s) on disk but absent from go.work 'use' (workspace drift): ${missing_from_workspace[*]}"
+    gocell::log::error "satellite module(s) on disk but absent from go.work 'use' (workspace drift): ${missing_from_workspace[*]}"
     gocell::log::error "add each via 'go work use ./<dir>' so every gate iterating hack/lib/modules.sh covers it"
     exit 1
 fi
 
 if [[ ${#satellite_dirs[@]} -eq 0 ]]; then
-    # Reached only in the genuine pre-extraction state: zero non-root workspace
-    # members AND zero examples/*/go.mod on disk (the reverse check above would
+    # Reached only when there are zero non-root workspace members AND zero
+    # non-fixture satellite go.mod files on disk (the reverse check above would
     # have fired otherwise). Nothing to test.
-    gocell::log::status "no satellite (non-root) workspace modules and no examples/*/go.mod on disk — nothing to test"
+    gocell::log::status "no satellite (non-root) workspace modules and no satellite go.mod on disk — nothing to test"
     exit 0
 fi
 gocell::log::status "Satellite modules: ${satellite_dirs[*]}"

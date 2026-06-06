@@ -31,7 +31,7 @@ func NewMemCursor(src *MemReplaySource) (*MemCursor, error) {
 
 // Position returns the 1-based insertion index of entry in the paired
 // MemReplaySource, or 0 and a permanent error if the entry is not present.
-func (c *MemCursor) Position(entry outbox.Entry) (int64, error) {
+func (c *MemCursor) Position(entry ProjectionEvent) (int64, error) {
 	pos := c.src.Position(entry)
 	if pos == 0 {
 		// entry not in the replay source → cannot assign a stream position;
