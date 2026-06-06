@@ -33,10 +33,10 @@ var _ kauth.IntentTokenVerifier = (*Service)(nil)
 
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	verifier     kauth.IntentTokenVerifier  `gocell:"required" gocellErr:"session-validate: IntentTokenVerifier required"`                                            //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	verifier     kauth.IntentTokenVerifier `gocell:"required" gocellErr:"session-validate: IntentTokenVerifier required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	sessionStore session.Store
-	userRepo     ports.UserRepository       `gocell:"required" gocellErr:"session-validate: UserRepository required"`                                                  //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	txRunner     persistence.CellTxManager  `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"session-validate: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	userRepo     ports.UserRepository      `gocell:"required" gocellErr:"session-validate: UserRepository required"`                                                                        //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner     persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"session-validate: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger       *slog.Logger
 }
 

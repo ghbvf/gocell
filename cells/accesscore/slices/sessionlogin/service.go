@@ -634,7 +634,13 @@ func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, tid tenant
 // it is passed explicitly so the refresh.Issue call uses the same value
 // without re-reading the sess field (avoids silent zero if caller forgets
 // to set AuthzEpochAtIssue).
-func (s *Service) persistSessionWithRefresh(ctx context.Context, tid tenant.TenantID, sess *session.Session, userID string, authzEpoch int64) (string, error) {
+func (s *Service) persistSessionWithRefresh(
+	ctx context.Context,
+	tid tenant.TenantID,
+	sess *session.Session,
+	userID string,
+	authzEpoch int64,
+) (string, error) {
 	refreshWire, err := scopedtx.Do(ctx, s.txRunner, tid,
 		func(txCtx context.Context) (string, error) {
 			if err := s.sessionStore.Create(txCtx, tid, sess); err != nil {

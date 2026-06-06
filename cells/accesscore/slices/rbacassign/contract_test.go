@@ -97,7 +97,8 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 
 	// Execute real handler.
 	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-2","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`))
+	const assignBody = `{"userId":"usr-2","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(assignBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(testAuthServiceCtx("accesscore"))
 	rec := httptest.NewRecorder()
@@ -122,7 +123,8 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 
 	// Execute real handler.
 	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-seed","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`))
+	const revokeBody = `{"userId":"usr-seed","roleId":"admin","tenantId":"00000000-0000-0000-0000-000000000001"}`
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(revokeBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(testAuthServiceCtx("accesscore"))
 	rec := httptest.NewRecorder()

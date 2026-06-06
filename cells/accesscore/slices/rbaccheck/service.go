@@ -24,8 +24,8 @@ var roleSort = []query.SortColumn{
 
 // Service implements RBAC query operations.
 type Service struct {
-	roleRepo ports.RoleRepository     `gocell:"required" gocellErr:"rbac-check: roleRepo is required"`                                                                                                    //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	codec    *query.CursorCodec       `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"rbac-check: cursor codec is required"`                                    //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	roleRepo ports.RoleRepository      `gocell:"required" gocellErr:"rbac-check: roleRepo is required"`                                                                           //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	codec    *query.CursorCodec        `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"rbac-check: cursor codec is required"`            //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"rbac-check: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger   *slog.Logger
 	runMode  query.RunMode
@@ -46,7 +46,13 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 
 // NewService creates an rbac-check Service. roleRepo and codec are required;
 // logger defaults to slog.Default() when nil.
-func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode, opts ...Option) (*Service, error) {
+func NewService(
+	roleRepo ports.RoleRepository,
+	codec *query.CursorCodec,
+	logger *slog.Logger,
+	runMode query.RunMode,
+	opts ...Option,
+) (*Service, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}

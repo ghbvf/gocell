@@ -22,7 +22,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -32,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -1501,37 +1501,48 @@ var _ ports.UserRepository = (*scopeCapturingUserRepo)(nil)
 func (r *scopeCapturingUserRepo) Create(ctx context.Context, t tenant.TenantID, user *domain.User) error {
 	return r.inner.Create(ctx, t, user)
 }
+
 func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
 	return r.inner.GetByIDInTenant(ctx, t, id)
 }
+
 func (r *scopeCapturingUserRepo) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
 	return r.inner.GetByUsername(ctx, t, username)
 }
+
 func (r *scopeCapturingUserRepo) Delete(ctx context.Context, t tenant.TenantID, id string) error {
 	return r.inner.Delete(ctx, t, id)
 }
-func (r *scopeCapturingUserRepo) UpdateProfile(ctx context.Context, t tenant.TenantID, userID string, name, email *domain.NonEmpty, now time.Time) (*domain.User, error) {
+
+func (r *scopeCapturingUserRepo) UpdateProfile(ctx context.Context, t tenant.TenantID, userID string, name, email *domain.NonEmpty, now time.Time) (*domain.User, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	return r.inner.UpdateProfile(ctx, t, userID, name, email, now)
 }
-func (r *scopeCapturingUserRepo) UpdateLockState(ctx context.Context, t tenant.TenantID, userID string, status domain.UserStatus, now time.Time) error {
+
+func (r *scopeCapturingUserRepo) UpdateLockState(ctx context.Context, t tenant.TenantID, userID string, status domain.UserStatus, now time.Time) error { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	return r.inner.UpdateLockState(ctx, t, userID, status, now)
 }
-func (r *scopeCapturingUserRepo) UpdatePasswordResetFlag(ctx context.Context, t tenant.TenantID, userID string, required bool, now time.Time) error {
+
+func (r *scopeCapturingUserRepo) UpdatePasswordResetFlag(ctx context.Context, t tenant.TenantID, userID string, required bool, now time.Time) error { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	return r.inner.UpdatePasswordResetFlag(ctx, t, userID, required, now)
 }
-func (r *scopeCapturingUserRepo) UpdatePassword(ctx context.Context, t tenant.TenantID, userID string, newHash string, resetRequired bool, expectedPasswordVersion int64) (int64, error) {
+
+func (r *scopeCapturingUserRepo) UpdatePassword(ctx context.Context, t tenant.TenantID, userID string, newHash string, resetRequired bool, expectedPasswordVersion int64) (int64, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	return r.inner.UpdatePassword(ctx, t, userID, newHash, resetRequired, expectedPasswordVersion)
 }
-func (r *scopeCapturingUserRepo) BumpAuthzEpoch(ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken) (int64, error) {
+
+func (r *scopeCapturingUserRepo) BumpAuthzEpoch(ctx context.Context, t tenant.TenantID, userID string, tok credentialfence.FenceToken) (int64, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	return r.inner.BumpAuthzEpoch(ctx, t, userID, tok)
 }
+
 func (r *scopeCapturingUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
 	return r.inner.GetByIDForUpdate(ctx, t, id)
 }
+
 func (r *scopeCapturingUserRepo) GetByUsernameForUpdate(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {
 	return r.inner.GetByUsernameForUpdate(ctx, t, username)
 }
+
 func (r *scopeCapturingUserRepo) UpdateLockoutFields(ctx context.Context, t tenant.TenantID, user *domain.User) error {
 	return r.inner.UpdateLockoutFields(ctx, t, user)
 }

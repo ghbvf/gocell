@@ -20,10 +20,11 @@ type AssignAdapter struct{ S *Service }
 func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (assign.AssignResponseObject, error) {
 	tid, err := tenant.ParseTenantID(req.TenantID)
 	if err != nil {
-		return assign.Assign400ErrorResponse{Body: *errcode.New(
+		resp400 := assign.Assign400ErrorResponse{Body: *errcode.New(
 			errcode.KindInvalid, errcode.ErrAuthRBACInvalidInput, "invalid tenantId",
 			errcode.WithDetails(errcode.PublicString("tenantId", req.TenantID)),
-		)}, nil
+		)}
+		return resp400, nil //nolint:nilerr // typed-response-envelope: declared 400 returned as typed struct + nil err (cell-patterns.md)
 	}
 	if err := a.S.Assign(ctx, tid, req.UserID, req.RoleID); err != nil {
 		return nil, err
@@ -43,10 +44,11 @@ type RevokeAdapter struct{ S *Service }
 func (a RevokeAdapter) Revoke(ctx context.Context, req *revoke.Request) (revoke.RevokeResponseObject, error) {
 	tid, err := tenant.ParseTenantID(req.TenantID)
 	if err != nil {
-		return revoke.Revoke400ErrorResponse{Body: *errcode.New(
+		resp400 := revoke.Revoke400ErrorResponse{Body: *errcode.New(
 			errcode.KindInvalid, errcode.ErrAuthRBACInvalidInput, "invalid tenantId",
 			errcode.WithDetails(errcode.PublicString("tenantId", req.TenantID)),
-		)}, nil
+		)}
+		return resp400, nil //nolint:nilerr // typed-response-envelope: declared 400 returned as typed struct + nil err (cell-patterns.md)
 	}
 	if err := a.S.Revoke(ctx, tid, req.UserID, req.RoleID); err != nil {
 		return nil, err

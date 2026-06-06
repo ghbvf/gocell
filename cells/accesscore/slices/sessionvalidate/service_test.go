@@ -263,6 +263,7 @@ type errorSessionStore struct{}
 func (errorSessionStore) Create(_ context.Context, _ tenant.TenantID, _ *session.Session) error {
 	return nil
 }
+
 func (errorSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, fmt.Errorf("db connection timeout")
 }
@@ -479,6 +480,7 @@ type capturingStore struct {
 func (r capturingStore) Create(_ context.Context, _ tenant.TenantID, _ *session.Session) error {
 	return nil
 }
+
 func (r capturingStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
 	return nil, r.getErr
 }
@@ -1071,33 +1073,43 @@ func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, _ tenant.T
 func (r *scopeCapturingUserRepo) Create(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	return nil
 }
+
 func (r *scopeCapturingUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
-	return nil, nil
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
 }
-func (r *scopeCapturingUserRepo) UpdateProfile(_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
-	return nil, nil
+
+func (r *scopeCapturingUserRepo) UpdateProfile(_ context.Context, _ tenant.TenantID, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
 }
+
 func (r *scopeCapturingUserRepo) UpdateLockState(_ context.Context, _ tenant.TenantID, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
+
 func (r *scopeCapturingUserRepo) UpdatePasswordResetFlag(_ context.Context, _ tenant.TenantID, _ string, _ bool, _ time.Time) error {
 	return nil
 }
+
 func (r *scopeCapturingUserRepo) Delete(_ context.Context, _ tenant.TenantID, _ string) error {
 	return nil
 }
+
 func (r *scopeCapturingUserRepo) UpdatePassword(_ context.Context, _ tenant.TenantID, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }
-func (r *scopeCapturingUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) {
+
+func (r *scopeCapturingUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ string, _ credentialfence.FenceToken) (int64, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	return 0, nil
 }
+
 func (r *scopeCapturingUserRepo) GetByIDForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
-	return nil, nil
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
 }
+
 func (r *scopeCapturingUserRepo) GetByUsernameForUpdate(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
-	return nil, nil
+	return nil, nil //nolint:nilnil // test fake stub; method never exercised
 }
+
 func (r *scopeCapturingUserRepo) UpdateLockoutFields(_ context.Context, _ tenant.TenantID, _ *domain.User) error {
 	return nil
 }

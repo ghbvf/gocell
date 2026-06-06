@@ -20,7 +20,7 @@ var _ auth.Authorizer = (*Service)(nil)
 
 // Service implements RBAC authorization decisions.
 type Service struct {
-	roleRepo ports.RoleRepository       `gocell:"required" gocellErr:"authorizationdecide: roleRepo is required"`                                                                                                    //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	roleRepo ports.RoleRepository      `gocell:"required" gocellErr:"authorizationdecide: roleRepo is required"`                                                                           //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"authorizationdecide: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger   *slog.Logger
 }

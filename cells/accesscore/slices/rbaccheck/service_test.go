@@ -173,7 +173,7 @@ func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.Tenan
 	return r.inner.GetByUserID(ctx, t, userID)
 }
 
-func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) {
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
 	return r.inner.ListByUserID(ctx, t, userID, params)
 }

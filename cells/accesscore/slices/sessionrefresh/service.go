@@ -245,7 +245,11 @@ func (s *Service) handlePeekError(outerCtx context.Context, presented *refresh.T
 // Mid-flight scoping is safe here: every statement above the ApplyScope call
 // touched only non-RLS tables (refresh store, sessions); the users/roles reads
 // that need the GUC all happen after it returns.
-func (s *Service) peekVerifyAndScope(ctx context.Context, outerCtx context.Context, refreshToken string) (*refresh.Token, *session.ValidateView, error) {
+func (s *Service) peekVerifyAndScope(
+	ctx context.Context,
+	outerCtx context.Context,
+	refreshToken string,
+) (*refresh.Token, *session.ValidateView, error) {
 	presented, err := s.refreshStore.Peek(ctx, refreshToken)
 	if err != nil {
 		return nil, nil, s.handlePeekError(outerCtx, presented, err)
