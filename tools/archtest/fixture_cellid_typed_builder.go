@@ -64,7 +64,6 @@ import (
 	"go/token"
 	"go/types"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -138,11 +137,14 @@ var cellIDMapKeyValueStructs = map[string]struct{}{
 // A1 enforcement at the function-body level. Each entry must mirror an
 // ADR §2 row. See A4 TestFixtureCellIDTypedBuilder_CarveOutADRConsistency.
 //
-// The carve-out key prefix derives from PlatformModulePath to satisfy
-// ARCHTEST-MODULE-PATH-FUNNEL-01 — no bare "github.com/ghbvf/gocell"
-// string literal in code.
+// Keys are MODULE-RELATIVE (no platform module-path prefix), so the registry
+// carries no "github.com/ghbvf/gocell" literal AND a module rename / /v2 bump
+// touches neither this map nor the backing ADR §2 table — A4's
+// character-identical compare stays a genuine single-place edit
+// (ARCHTEST-MODULE-PATH-FUNNEL-01 + codex #1708 F5). carvedOutFunctions strips
+// the platform prefix from each resolved package path before matching.
 var fixtureCellIDCarveOuts = map[string]struct{}{
-	PlatformModulePath + "/kernel/governance.TestValidator_FMTC1_CellIDPattern": {},
+	"kernel/governance.TestValidator_FMTC1_CellIDPattern": {},
 }
 
 // CheckFixtureCellIDTypedBuilder enforces FIXTURE-CELLID-TYPED-BUILDER-01
@@ -168,14 +170,7 @@ func CheckFixtureCellIDTypedBuilder(t *testing.T, _ ConfigForExternalCell) []Dia
 		"kernel/metadata/types.go": {},
 	}
 
-	raw := scanCellIDFixtureViolations(t, allowSelfFile, fixtureCellIDCarveOuts)
-	sort.Strings(raw)
-	raw = dedupCellIDStrings(raw)
-	diags := make([]Diagnostic, 0, len(raw))
-	for _, s := range raw {
-		diags = append(diags, Diagnostic{Message: s})
-	}
-	return diags
+	return Canonical(scanCellIDFixtureViolations(t, allowSelfFile, fixtureCellIDCarveOuts))
 }
 
 // CheckMetadatatestImportScope enforces METADATATEST-IMPORT-SCOPE-01: no
@@ -187,41 +182,43 @@ func CheckMetadatatestImportScope(t *testing.T, _ ConfigForExternalCell) []Diagn
 
 	root := findModuleRoot(t)
 	scope := ModuleScope(root)
-	var violations []string
+	var diags []Diagnostic
 	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			if strings.HasPrefix(rel, "kernel/metadata/metadatatest/") {
-				continue
-			}
-			if !importsMetadatatest(file) {
-				continue
-			}
-			pos := p.Fset.Position(file.Pos())
-			violations = append(violations,
-				fmt.Sprintf("%s:%d: production file imports %s — restricted to *_test.go",
-					rel, pos.Line, metadatatestPkgPath))
+			diags = append(diags, scanMetadatatestImport(p.Rel(file), file, p.Fset)...)
 		}
 		return nil
 	})
+	return Canonical(diags)
+}
 
-	sort.Strings(violations)
-	violations = dedupCellIDStrings(violations)
-	diags := make([]Diagnostic, 0, len(violations))
-	for _, s := range violations {
-		diags = append(diags, Diagnostic{Message: s})
+// scanMetadatatestImport returns a structured Diagnostic (anchored at rel:line,
+// NOT a stringly ":0:" message — codex #1708 F2) when the production file at rel
+// imports the metadatatest package. _test.go files and metadatatest's own package
+// are exempt. Pure (no *Pass) so the structured location is unit-testable
+// (TestMetadatatestImportScope_StructuredLocation), mirroring
+// scanSrcForViolations in seed_role_iface.
+func scanMetadatatestImport(rel string, file *ast.File, fset *token.FileSet) []Diagnostic {
+	if strings.HasSuffix(rel, "_test.go") {
+		return nil
 	}
-	return diags
+	if strings.HasPrefix(rel, "kernel/metadata/metadatatest/") {
+		return nil
+	}
+	if !importsMetadatatest(file) {
+		return nil
+	}
+	line := fset.Position(file.Pos()).Line
+	return []Diagnostic{diagAt(rel, line,
+		fmt.Sprintf("production file imports %s — restricted to *_test.go", metadatatestPkgPath))}
 }
 
 // scanCellIDFixtureViolations runs Run(t, Typed(...)) over the kernel/ package
 // tree (tests=true) twice — once with FlatNonDefaultTags, once with no
-// tags — to cover //go:build !X reverse directives. Returns one
-// diagnostic per violating position with file:line:column source
-// pointer.
+// tags — to cover //go:build !X reverse directives. Returns one structured
+// Diagnostic per violating position, anchored at Rel:Line (the column is carried
+// in Message); duplicates from the two-pass overlap are folded by the caller's
+// Canonical.
 //
 // Scope rationale: this rule's scope tracks the plan and ADR §1 scope
 // — kernel/ is where the cell-id metadata fixtures originate and the
@@ -230,10 +227,10 @@ func CheckMetadatatestImportScope(t *testing.T, _ ConfigForExternalCell) []Diagn
 // fixtures and will be migrated via mirror backlog issues; once each
 // such package is migrated, its path prefix is added to the scan scope
 // list below and its allowlist entry (if any) removed.
-func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[string]struct{}) []string { //nolint:gocognit,lll // archtest AST scanner: per-file carve-out + composite-literal walk over kernel/ tags×2; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 A1's exhaustive composite-literal walk
+func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[string]struct{}) []Diagnostic { //nolint:gocognit,lll // archtest AST scanner: per-file carve-out + composite-literal walk over kernel/ tags×2; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01 A1's exhaustive composite-literal walk
 	t.Helper()
 	scopePrefixes := []string{"kernel/"}
-	var violations []string
+	var violations []Diagnostic
 	collect := func(opts TypedOpts) {
 		_ = Run(t, Typed(opts, []string{"./kernel/..."}), func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
@@ -283,13 +280,17 @@ func carvedOutFunctions(file *ast.File, p *Pass, carveOuts map[string]struct{}) 
 	if p.Pkg == nil {
 		return nil
 	}
-	pkgPath := p.Pkg.Path()
+	// Carve-out keys are module-relative (codex #1708 F5): strip the platform
+	// module prefix from the resolved package path before matching. A non-platform
+	// package path is left unchanged and matches no GoCell-internal carve-out
+	// (correct — every carve-out names a GoCell-internal function).
+	relPkg := strings.TrimPrefix(p.Pkg.Path(), PlatformModulePath+"/")
 	var out []funcRange
 	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Name == nil {
 			return
 		}
-		qual := pkgPath + "." + fd.Name.Name
+		qual := relPkg + "." + fd.Name.Name
 		if _, ok := carveOuts[qual]; !ok {
 			return
 		}
@@ -316,9 +317,9 @@ func isInsideCarvedFunc(n ast.Node, carved []funcRange) bool {
 }
 
 // scanCellIDComposite inspects a single CompositeLit and emits one
-// violation per cell-id position whose expression is not a sanctioned
-// metadatatest reference.
-func scanCellIDComposite(p *Pass, _ *ast.File, rel string, comp *ast.CompositeLit) []string {
+// structured Diagnostic per cell-id position whose expression is not a
+// sanctioned metadatatest reference.
+func scanCellIDComposite(p *Pass, _ *ast.File, rel string, comp *ast.CompositeLit) []Diagnostic {
 	t := p.TypesInfo.TypeOf(comp)
 	if t == nil {
 		return nil
@@ -340,7 +341,7 @@ func scanCellIDComposite(p *Pass, _ *ast.File, rel string, comp *ast.CompositeLi
 	return nil
 }
 
-func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *types.Map) []string {
+func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *types.Map) []Diagnostic {
 	// Match map[string]*metadata.<Struct> or map[string]metadata.<Struct>
 	// where struct name is in cellIDMapKeyValueStructs.
 	keyT, ok := m.Key().(*types.Basic)
@@ -357,7 +358,7 @@ func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *type
 	if _, ok := cellIDMapKeyValueStructs[valStruct.Obj().Name()]; !ok {
 		return nil
 	}
-	var out []string
+	var out []Diagnostic
 	valName := valStruct.Obj().Name()
 	EachInChildren[ast.KeyValueExpr](comp, func(kv *ast.KeyValueExpr) {
 		if !isSanctionedCellIDExpr(p, kv.Key) {
@@ -367,7 +368,7 @@ func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *type
 	return out
 }
 
-func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t types.Type) []string { //nolint:gocognit,lll // archtest AST scanner: keyed/positional struct-literal field-position resolution; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's keyed/positional struct handling
+func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t types.Type) []Diagnostic { //nolint:gocognit,lll // archtest AST scanner: keyed/positional struct-literal field-position resolution; complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's keyed/positional struct handling
 	named, ok := t.(*types.Named)
 	if !ok {
 		// pointer to named?
@@ -384,7 +385,7 @@ func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t ty
 		return nil
 	}
 	structName := named.Obj().Name()
-	var out []string
+	var out []Diagnostic
 	EachInChildren[ast.KeyValueExpr](comp, func(kv *ast.KeyValueExpr) {
 		keyIdent, ok := kv.Key.(*ast.Ident)
 		if !ok {
@@ -499,10 +500,14 @@ func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyc
 	return false
 }
 
-func fmtPositionViolation(p *Pass, rel string, expr ast.Expr, fieldPath string) string {
+// fmtPositionViolation builds a structured Diagnostic anchored at rel:line
+// (codex #1708 F2 — not a stringly ":0:" Diagnostic{Message}). The column is
+// carried in Message since Diagnostic has no column field.
+func fmtPositionViolation(p *Pass, rel string, expr ast.Expr, fieldPath string) Diagnostic {
 	pos := p.Fset.Position(expr.Pos())
-	return fmt.Sprintf("%s:%d:%d: %s — expected metadatatest.NewCellID(literal) or metadatatest.<CellIDVar>, got %s",
-		rel, pos.Line, pos.Column, fieldPath, exprSourceSnippet(expr))
+	return diagAt(rel, pos.Line,
+		fmt.Sprintf("col %d: %s — expected metadatatest.NewCellID(literal) or metadatatest.<CellIDVar>, got %s",
+			pos.Column, fieldPath, exprSourceSnippet(expr)))
 }
 
 func exprSourceSnippet(expr ast.Expr) string {
@@ -588,26 +593,6 @@ func importsMetadatatest(file *ast.File) bool {
 		}
 	}
 	return false
-}
-
-// dedupCellIDStrings deduplicates an already-sorted slice in place. Used to
-// fold duplicate diagnostics from packages.Visit's TestVariant overlap (the
-// same file appears in both the `package x` and `package x_test` load when
-// tests=true). This is the local equivalent of dedupSortedStrings defined in
-// cell_id_pattern_single_source_test.go — kept here so the non-test Check*
-// functions can call it without test-file dependency.
-func dedupCellIDStrings(in []string) []string {
-	if len(in) <= 1 {
-		return in
-	}
-	out := in[:1]
-	for _, s := range in[1:] {
-		if s == out[len(out)-1] {
-			continue
-		}
-		out = append(out, s)
-	}
-	return out
 }
 
 // parseCarveOutTableFromADR extracts function qualified names from the

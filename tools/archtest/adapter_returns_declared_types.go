@@ -63,6 +63,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -120,28 +121,50 @@ func collectAdapterReturnsViolations(t *testing.T, root string) []Diagnostic {
 }
 
 // collectAdapterReturnsViolationsAt is the pure (t-free) detection core shared
-// by the real-repo path and the fixture subtests. It aggregates
-// collectAdapterFileViolations over all fpath entries, relativising diagnostics
-// to root where possible.
+// by the real-repo path and the fixture subtests. It builds the forward
+// import-path→contract-ID index once (single source via contractpath), then
+// aggregates collectAdapterFileViolations over all fpath entries, relativising
+// diagnostics to root where possible.
 func collectAdapterReturnsViolationsAt(root, modulePath string, files []string, contractStatuses map[string]map[int]bool) []Diagnostic {
+	importIndex := buildContractImportIndex(modulePath, contractStatuses)
 	var out []Diagnostic
 	for _, fpath := range files {
-		out = append(out, collectAdapterFileViolations(fpath, root, modulePath, contractStatuses)...)
+		out = append(out, collectAdapterFileViolations(fpath, root, importIndex, contractStatuses)...)
 	}
 	return out
+}
+
+// buildContractImportIndex maps each status-bearing contract's generated Go
+// import path back to its contract ID. The path is derived from
+// contractpath.ContractIDToImportPath — the single source of truth for the
+// generated package layout (the "internal"→"internalapi" segment rewrite, the
+// generated/contracts/ prefix) shared with cellgen and kernel/governance. This
+// replaces a hand-written inverse of that layout (codex #1708 F4): deriving from
+// the forward function means a future change to the generated path scheme can no
+// longer drift between codegen and this archtest.
+func buildContractImportIndex(modulePath string, contractStatuses map[string]map[int]bool) map[string]string {
+	index := make(map[string]string, len(contractStatuses))
+	for id := range contractStatuses {
+		index[contractpath.ContractIDToImportPath(modulePath, id)] = id
+	}
+	return index
 }
 
 // collectAdapterFileViolations is the single detection core: returns one
 // Diagnostic per disallowed status return in fpath. Parse/import-resolve
 // failures yield no diagnostics (skip — ceiling guard does not chase
 // unresolved imports), matching the prior variants' early-return behavior.
-func collectAdapterFileViolations(fpath, root, modulePath string, contractStatuses map[string]map[int]bool) []Diagnostic {
+func collectAdapterFileViolations(
+	fpath, root string,
+	importIndex map[string]string,
+	contractStatuses map[string]map[int]bool,
+) []Diagnostic {
 	returns, parseErr := extractAdapterReturnStatuses(fpath)
 	if parseErr != nil {
 		return nil
 	}
 
-	contractImports, err := resolveContractImports(fpath, modulePath)
+	contractImports, err := resolveContractImports(fpath, importIndex)
 	if err != nil {
 		return nil
 	}
@@ -208,32 +231,6 @@ func loadContractStatusSets(rootDir string) (map[string]map[int]bool, error) {
 		out[id] = set
 	}
 	return out, nil
-}
-
-// importPathToContractID converts a full Go import path for a generated
-// contract package back to its contract ID.
-// It is the inverse of contractpath.ContractIDToPackagePath + module prefix.
-//
-// "<module>/generated/contracts/http/auth/login/v1" → "http.auth.login.v1"
-// "<module>/generated/contracts/http/internalapi/foo/v1" → "http.internal.foo.v1"
-// Non-generated import paths → "".
-// Empty string → "".
-func importPathToContractID(modulePath, importPath string) string {
-	if importPath == "" {
-		return ""
-	}
-	prefix := modulePath + "/generated/contracts/"
-	if !strings.HasPrefix(importPath, prefix) {
-		return ""
-	}
-	tail := strings.TrimPrefix(importPath, prefix)
-	segments := strings.Split(tail, "/")
-	for i, seg := range segments {
-		if seg == "internalapi" {
-			segments[i] = "internal"
-		}
-	}
-	return strings.Join(segments, ".")
 }
 
 // gatherAdapterFiles collects candidate handler.go and service.go files
@@ -346,9 +343,11 @@ func compositeLitTypeName(cl *ast.CompositeLit) string {
 }
 
 // resolveContractImports parses the import block of filePath and returns a
-// map from Go package alias (or last segment of path) to contract ID.
-// Only imports whose path resolves to a contract ID are included.
-func resolveContractImports(filePath, modulePath string) (map[string]string, error) {
+// map from Go package alias (or last segment of path) to contract ID. Each
+// import path is resolved against importIndex (the forward import-path→contract-ID
+// map built by buildContractImportIndex); only imports present in the index are
+// included.
+func resolveContractImports(filePath string, importIndex map[string]string) (map[string]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filePath, nil, parser.ImportsOnly)
 	if err != nil {
@@ -361,8 +360,8 @@ func resolveContractImports(filePath, modulePath string) (map[string]string, err
 			continue
 		}
 		raw := strings.Trim(imp.Path.Value, `"`)
-		contractID := importPathToContractID(modulePath, raw)
-		if contractID == "" {
+		contractID, ok := importIndex[raw]
+		if !ok {
 			continue
 		}
 		alias := importAlias(imp, raw)

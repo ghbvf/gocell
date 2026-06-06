@@ -49,3 +49,34 @@ func TestCapabilityProviderFunnel_RedFixtureDetected(t *testing.T) {
 			"(3 PG qualified + 1 redis qualified + 1 aliased + 1 dot-import); "+
 			"if the fixture changes intentionally, update the expected count")
 }
+
+// TestIsCapWiringSanctionedSite locks the platform-identity bind on the
+// provisioning-site exemption (codex #1708 F1): the cap_wiring.go exemption only
+// applies inside a GoCell platform package. A consumer module that wires this
+// importable rule via cfg.ExtraRules and forges cmd/corebundle/cap_wiring.go must
+// NOT be exempt — its package path is outside PlatformModulePath. Mirrors
+// TestIsReconstructionAllowedSite (OUTBOX-RECONSTRUCTION-CALLER-01).
+func TestIsCapWiringSanctionedSite(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		pkgPath string
+		rel     string
+		want    bool
+	}{
+		{"sanctioned platform provisioning site", PlatformModulePath + "/cmd/corebundle", capWiringRel, true},
+		{"consumer module forges cap_wiring rel", "consumer.example/app/cmd/corebundle", capWiringRel, false},
+		{"platform pkg, non-provisioning rel", PlatformModulePath + "/cmd/corebundle", "cmd/corebundle/main.go", false},
+		{"unresolved pkg", "", capWiringRel, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isCapWiringSanctionedSite(tc.pkgPath, tc.rel); got != tc.want {
+				t.Errorf("isCapWiringSanctionedSite(%q, %q) = %v, want %v",
+					tc.pkgPath, tc.rel, got, tc.want)
+			}
+		})
+	}
+}

@@ -50,6 +50,16 @@
 // (cmd/corebundle module files moved out of `package main` so the banned
 // constructors are import-unreachable) is tracked at gh issue #988.
 //
+// The sole sanctioned provisioning site (capWiringRel) is matched by
+// isCapWiringSanctionedSite, which binds the exemption to PLATFORM PACKAGE
+// IDENTITY (isGoCellPlatformPkgPath) — not a bare repo-relative path. This rule
+// is importable: an external Cell repo can wire it via cfg.ExtraRules, and a
+// consumer module could otherwise place its own cmd/corebundle/cap_wiring.go and
+// call the banned constructors to claim the GoCell-internal exemption. A forged
+// site has pkgPath = <consumer-module>/… (not under PlatformModulePath), so it is
+// correctly never exempt and the rule stays a true pure ban there. Same
+// provenance bind as isReconstructionAllowedSite (OUTBOX-RECONSTRUCTION-CALLER-01).
+//
 // # _test.go scope
 //
 // Run(t, Typed(TypedOpts{Tests: false}, ...)) loads only production-variant packages, so
@@ -84,9 +94,11 @@ const (
 	// module rename / /v2 bump updates one place (ARCHTEST-MODULE-PATH-FUNNEL-01).
 	capPgImportPath    = PlatformModulePath + "/adapters/postgres"
 	capRedisImportPath = PlatformModulePath + "/adapters/redis"
-	// capWiringRel is the sole sanctioned provisioning site. It is a
-	// running-module repo-relative path, NOT a platform module-path literal, so
-	// an external Cell repo (which has no such file) makes the rule vacuous-green.
+	// capWiringRel is the sole sanctioned provisioning site, as a running-module
+	// repo-relative path (NOT a platform module-path literal). It is consulted
+	// only via isCapWiringSanctionedSite, which additionally requires the file's
+	// package to be a GoCell platform package — so a consumer module that forges
+	// this same relative path is NOT exempt (see isCapWiringSanctionedSite).
 	capWiringRel = "cmd/corebundle/cap_wiring.go"
 )
 
@@ -125,12 +137,18 @@ func CheckCapabilityProviderFunnel(t *testing.T, _ ConfigForExternalCell) []Diag
 // file is the sanctioned provisioning site or a _test.go file.
 func scanCapabilityProviderViolations(p *Pass) []Diagnostic {
 	var out []Diagnostic
+	// pkgPath is constant across p.Files (a Pass is one loaded package); resolve
+	// it once for the platform-identity bind in isCapWiringSanctionedSite.
+	pkgPath := ""
+	if p.Pkg != nil {
+		pkgPath = p.Pkg.Path()
+	}
 	for _, file := range p.Files {
 		rel := p.Rel(file)
 		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
-		if rel == capWiringRel {
+		if isCapWiringSanctionedSite(pkgPath, rel) {
 			continue
 		}
 		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -158,6 +176,23 @@ func scanCapabilityProviderViolations(p *Pass) []Diagnostic {
 		})
 	}
 	return out
+}
+
+// isCapWiringSanctionedSite reports whether the file at module-relative path rel
+// in package pkgPath is the sole sanctioned shared-infra provisioning site. The
+// exemption is bound to PLATFORM PACKAGE IDENTITY (isGoCellPlatformPkgPath), not
+// a bare repo-relative path: this rule is importable and an external Cell repo
+// wiring it via cfg.ExtraRules could otherwise place its own
+// cmd/corebundle/cap_wiring.go, call the banned constructors, and claim the
+// GoCell-internal exemption. A forged site in a consumer module has pkgPath =
+// <consumer-module>/… (not under PlatformModulePath), so it is correctly never
+// exempt and the rule stays a true pure ban there. In GoCell's own dogfood every
+// production package is under PlatformModulePath, so the bind is transparent
+// (rel→file is a bijection within a single module). Extracted as a pure function
+// so the bind is unit-testable (TestIsCapWiringSanctionedSite). Same provenance
+// bind as isReconstructionAllowedSite (OUTBOX-RECONSTRUCTION-CALLER-01).
+func isCapWiringSanctionedSite(pkgPath, rel string) bool {
+	return isGoCellPlatformPkgPath(pkgPath) && rel == capWiringRel
 }
 
 // shortPkg returns the last path segment of an import path for messages.

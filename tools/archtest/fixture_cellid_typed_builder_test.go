@@ -26,7 +26,9 @@
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
@@ -288,7 +290,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	allowSelfFile := map[string]struct{}{} // no allow in fixture scope
 	carveOuts := map[string]struct{}{}     // no carveouts in fixture scope
 
-	var violations []string
+	var violations []Diagnostic
 	visitedFiles := make(map[string]struct{})
 	fixturePkgPattern := []string{"./tools/archtest/internal/fixturecellidnegfixture"}
 	_ = Run(t, Fixture(FixtureOpts{Tests: false}, fixturePkgPattern), func(p *Pass) []Diagnostic {
@@ -312,18 +314,26 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 		return nil
 	})
 
-	sort.Strings(violations)
-	violations = dedupSortedStrings(violations)
+	violations = Canonical(violations)
 
 	const negFixturePrefix = "tools/archtest/internal/fixturecellidnegfixture/"
 
-	// hasFile reports whether any violation string contains an exact
-	// rel-path segment for the given filename, e.g.
-	// "tools/archtest/internal/fixturecellidnegfixture/bad_map_key.go:N:M:".
+	// Structured-location guard (codex #1708 F2; mirrors the PR #1687 regression
+	// guard): every violation must carry a clickable Rel + 1-based Line so Report
+	// renders "<rel>:<line>:", never the ":0:" an empty-Rel Diagnostic{Message}
+	// produced.
+	for _, d := range violations {
+		if d.Rel == "" || d.Line <= 0 {
+			t.Errorf("%s/A3: violation must carry Rel + 1-based Line; got %+v", fixtureCellIDRuleID, d)
+		}
+	}
+
+	// hasFile reports whether any violation is anchored (structured Rel) to the
+	// given fixture file.
 	hasFile := func(filename string) bool {
-		prefix := negFixturePrefix + filename + ":"
-		for _, v := range violations {
-			if strings.HasPrefix(strings.TrimLeft(v, " "), prefix) {
+		want := negFixturePrefix + filename
+		for _, d := range violations {
+			if d.Rel == want {
 				return true
 			}
 		}
@@ -353,14 +363,14 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Fatalf("%s/A3: archtest A1 failed to detect bad fixtures in %v.\nViolations seen:\n  %s",
-			fixtureCellIDRuleID, missing, strings.Join(violations, "\n  "))
+			fixtureCellIDRuleID, missing, strings.Join(diagLines(violations), "\n  "))
 	}
 
 	// bad_ident_chain.go uses localBareCellID at both map key AND
 	// CellMeta.ID — must produce at least 2 findings.
 	var identChainCount int
-	for _, v := range violations {
-		if strings.HasPrefix(strings.TrimLeft(v, " "), negFixturePrefix+"bad_ident_chain.go:") {
+	for _, d := range violations {
+		if d.Rel == negFixturePrefix+"bad_ident_chain.go" {
 			identChainCount++
 		}
 	}
@@ -371,10 +381,11 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 
 	// Good files must NOT produce any violations.
 	goodFiles := []string{"good_const_ref.go", "good_call_literal.go"}
-	for _, v := range violations {
+	for _, d := range violations {
 		for _, gf := range goodFiles {
-			if strings.HasPrefix(strings.TrimLeft(v, " "), negFixturePrefix+gf+":") {
-				t.Errorf("%s/A3: archtest A1 produced false positive on good fixture: %s", fixtureCellIDRuleID, v)
+			if d.Rel == negFixturePrefix+gf {
+				t.Errorf("%s/A3: archtest A1 produced false positive on good fixture: %s:%d: %s",
+					fixtureCellIDRuleID, d.Rel, d.Line, d.Message)
 			}
 		}
 	}
@@ -382,10 +393,11 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	// Blind-spot files must NOT produce any violations (they document
 	// known A1 limitations, not bugs).
 	blindSpotFiles := []string{"blind_spot_ident_slice.go", "blind_spot_assign.go"}
-	for _, v := range violations {
+	for _, d := range violations {
 		for _, bf := range blindSpotFiles {
-			if strings.HasPrefix(strings.TrimLeft(v, " "), negFixturePrefix+bf+":") {
-				t.Errorf("%s/A3: archtest A1 produced unexpected violation on blind-spot fixture (known A1 limitation): %s", fixtureCellIDRuleID, v)
+			if d.Rel == negFixturePrefix+bf {
+				t.Errorf("%s/A3: archtest A1 produced unexpected violation on blind-spot fixture (known A1 limitation): %s:%d: %s",
+					fixtureCellIDRuleID, d.Rel, d.Line, d.Message)
 			}
 		}
 	}
@@ -453,4 +465,47 @@ func TestFixtureCellIDTypedBuilder_CarveOutADRConsistency(t *testing.T) {
 			"fixtureCellIDCarveOuts",
 			strings.Join(onlyInCode, "\n  "))
 	}
+}
+
+// TestMetadatatestImportScope_StructuredLocation verifies CheckMetadatatestImportScope
+// emits a clickable Rel + 1-based Line (codex #1708 F2; PR #1687 regression
+// guard). A synthetic production file importing metadatatest must yield a
+// Diagnostic with non-empty Rel and Line > 0 — never the ":0:" garbage an
+// empty-Rel Diagnostic{Message} produces. Runs the extracted pure scanner
+// (scanMetadatatestImport) over an in-memory source, mirroring
+// TestSEED_ROLE_IFACE_01_StructuredLocation.
+func TestMetadatatestImportScope_StructuredLocation(t *testing.T) {
+	t.Parallel()
+	src := "package p\n\nimport _ \"" + metadatatestPkgPath + "\"\n"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "prod.go", src, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parse synthetic source: %v", err)
+	}
+	const rel = "cells/widgetcell/some_prod.go"
+	diags := scanMetadatatestImport(rel, f, fset)
+	if len(diags) != 1 {
+		t.Fatalf("%s: expected exactly 1 diagnostic for a production file importing metadatatest; got %d: %+v",
+			metadatatestImportScopeRuleID, len(diags), diags)
+	}
+	d := diags[0]
+	if d.Rel != rel {
+		t.Errorf("%s: diagnostic Rel = %q; want %q", metadatatestImportScopeRuleID, d.Rel, rel)
+	}
+	if d.Line <= 0 {
+		t.Errorf("%s: diagnostic must carry a 1-based Line; got %d", metadatatestImportScopeRuleID, d.Line)
+	}
+	if !strings.Contains(d.Message, metadatatestPkgPath) {
+		t.Errorf("%s: diagnostic message %q must name the restricted package", metadatatestImportScopeRuleID, d.Message)
+	}
+}
+
+// diagLines renders diagnostics as "<rel>:<line>: <message>" for test failure
+// output (Diagnostic is not a string, so strings.Join needs this projection).
+func diagLines(diags []Diagnostic) []string {
+	out := make([]string, len(diags))
+	for i, d := range diags {
+		out[i] = fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message)
+	}
+	return out
 }
