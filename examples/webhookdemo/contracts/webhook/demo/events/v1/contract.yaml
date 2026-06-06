@@ -3,8 +3,8 @@ kind: webhook
 direction: inbound
 ownerCell: hooks
 lifecycle: active
-# Inbound receive is local processing (decode + log) in a single cell → L1.
-consistencyLevel: L1
+# Inbound receive is local processing (validate + decode + log) in one L0 cell.
+consistencyLevel: L0
 # Vendor-agnostic demo of GoCell's inbound webhook path. The signature scheme is
 # Svix / standard-webhooks (signed string "{deliveryID}.{timestamp}.{body}",
 # token form "v1,<base64(HMAC-SHA256)>"), so the header names are neutral rather

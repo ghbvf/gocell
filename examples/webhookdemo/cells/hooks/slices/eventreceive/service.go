@@ -1,10 +1,9 @@
 // Package eventreceive implements the eventreceive slice: the inbound webhook
 // receive handler for the webhookdemo example.
 //
-// Consistency: this slice is L0 LocalOnly (its owning cell is L1 — see
-// cells/hooks/cell.yaml for why TOPO-05 forces the cell to L1). The runtime
-// webhook.Receiver verifies the HMAC signature, enforces the timestamp window,
-// and claims idempotency BEFORE this handler runs. HandleEvent only decodes the
+// Consistency: this slice is L0 LocalOnly. The runtime webhook.Receiver verifies
+// the HMAC signature, enforces the timestamp window, and claims idempotency
+// BEFORE this handler runs. HandleEvent only validates/decodes the
 // already-verified delivery and emits a structured log. No transaction, no
 // outbox, no persistence.
 package eventreceive

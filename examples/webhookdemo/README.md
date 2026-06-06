@@ -18,13 +18,13 @@ re-run).
 | `reg.RegisterWebhookReceiver(...)` (cellgen-derived) | `cells/hooks/cell_gen.go` |
 | Assembly + entrypoint | `assembly.yaml`, `main.go` (generated), `run.go` (hand-written) |
 
-The `eventreceive` slice is **L0 LocalOnly** — the runtime `webhook.Receiver`
-does HMAC verification, the timestamp window check, and idempotency claiming, and
-the slice's `HandleEvent` only decodes the verified delivery and structured-logs
-it (no transaction, no outbox, no persistence). The **cell** is declared `L1` in
-`cell.yaml` not because it runs a transaction, but because `TOPO-05` forbids an
-`L0` cell from being a contract provider/consumer and an inbound webhook
-contract's provider is its `ownerCell`.
+The `hooks` cell and its `eventreceive` slice are **L0 LocalOnly** — the runtime
+`webhook.Receiver` does HMAC verification, the timestamp window check, and
+idempotency claiming, and the slice's `HandleEvent` only validates/decodes the
+verified delivery and structured-logs it (no transaction, no outbox, no
+persistence). Inbound webhook receive is the sanctioned `TOPO-05` exception where
+the owner cell is listed as the provider endpoint but implements the contract
+through `webhook-receive`.
 
 `run.go` mounts the receiver on the dedicated **`cell.WebhookListener`** with
 `auth.AuthNone{}` — the HMAC signature **is** the application-layer auth, so a JWT

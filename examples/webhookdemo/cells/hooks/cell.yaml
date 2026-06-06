@@ -1,21 +1,15 @@
 id: hooks
 type: edge
-# L1 LocalTx: an inbound webhook contract's provider is its ownerCell (the
-# receiving cell), and TOPO-05 forbids an L0 cell from being a contract
-# provider/consumer — so a receiver cell is L1, not L0. The runtime
-# webhook.Receiver still owns HMAC verification, the timestamp window, and
-# idempotency; this cell's HandleEvent only decodes + structured-logs (the demo
-# does not persist, mirroring todoorder's "events validated then discarded").
-consistencyLevel: L1
+# L0 LocalOnly: the runtime webhook.Receiver owns HMAC verification, the
+# timestamp window, and idempotency; this cell's HandleEvent only validates,
+# decodes, and structured-logs the already verified delivery. Inbound webhook
+# receive is the sanctioned TOPO-05 exception where an L0 owner cell implements
+# the contract via webhook-receive.
+consistencyLevel: L0
 lifecycle: experimental
 owner:
   team: examples
   role: webhook-owner
-schema:
-  # Logical resource this cell owns. The demo logs deliveries rather than
-  # persisting them, so there is no migration behind this name (same as
-  # todoorder's schema.primary: orders in demo mode).
-  primary: webhook_deliveries
 verify:
   smoke:
     - smoke.hooks.startup

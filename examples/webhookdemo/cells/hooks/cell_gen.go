@@ -21,10 +21,9 @@ var _ cell.Cell = (*HooksCell)(nil)
 var cellMeta = &metadata.CellMeta{
 	ID:               "hooks",
 	Type:             "edge",
-	ConsistencyLevel: "L1",
+	ConsistencyLevel: "L0",
 	Lifecycle:        "experimental",
 	Owner:            metadata.OwnerMeta{Team: "examples", Role: "webhook-owner"},
-	Schema:           metadata.SchemaMeta{Primary: "webhook_deliveries"},
 	Verify: metadata.CellVerifyMeta{Smoke: []string{
 		"smoke.hooks.startup",
 	}},

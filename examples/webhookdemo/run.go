@@ -142,9 +142,8 @@ func buildWebhookdemoBootstrap(assemblyID string, assemblyCellIDs []string, addr
 	claimer := idempotency.NewInMemClaimer(clock.Real())
 
 	// Construct the hooks cell and register it on the assembly. The cell holds no
-	// outbox/txManager — its eventreceive slice is L0 (decode + log only); the
-	// cell is declared L1 in cell.yaml only to satisfy TOPO-05 (an inbound webhook
-	// contract's provider cannot be L0).
+	// outbox/txManager; inbound webhook receive is L0 because the slice only
+	// validates, decodes, and logs an already verified delivery.
 	hc := hooks.NewHooksCell(hooks.WithLogger(logger))
 	asm := assembly.New(clock.Real(), assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
 	if err := asm.Register(hc); err != nil {

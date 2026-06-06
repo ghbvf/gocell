@@ -921,6 +921,67 @@ func TestTOPO05(t *testing.T) {
 			},
 			wantCount: 1,
 		},
+		{
+			name: "L0 inbound webhook receiver is allowed",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells[metadatatest.CellIDSharedCrypto] = &metadata.CellMeta{
+					ID:               metadatatest.CellIDSharedCrypto,
+					Type:             "edge",
+					ConsistencyLevel: "L0",
+				}
+				pm.Contracts["webhook.crypto.receive.v1"] = &metadata.ContractMeta{
+					ID:               "webhook.crypto.receive.v1",
+					Kind:             "webhook",
+					Direction:        "inbound",
+					OwnerCell:        metadatatest.CellIDSharedCrypto,
+					ConsistencyLevel: "L0",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Receivers: []string{metadatatest.CellIDSharedCrypto},
+					},
+				}
+				pm.Slices["sharedcrypto/receive"] = &metadata.SliceMeta{
+					ID:            "receive",
+					BelongsToCell: metadatatest.CellIDSharedCrypto,
+					ContractUsages: []metadata.ContractUsage{{
+						Contract: "webhook.crypto.receive.v1",
+						Role:     "webhook-receive",
+						Handler:  "HandleWebhook",
+						SourceID: "demosource",
+					}},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "L0 outbound webhook dispatcher is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells[metadatatest.CellIDSharedCrypto] = &metadata.CellMeta{
+					ID:               metadatatest.CellIDSharedCrypto,
+					Type:             "edge",
+					ConsistencyLevel: "L0",
+				}
+				pm.Contracts["webhook.crypto.dispatch.v1"] = &metadata.ContractMeta{
+					ID:               "webhook.crypto.dispatch.v1",
+					Kind:             "webhook",
+					Direction:        "outbound",
+					OwnerCell:        metadatatest.CellIDSharedCrypto,
+					ConsistencyLevel: "L0",
+					Lifecycle:        "active",
+				}
+				pm.Slices["sharedcrypto/dispatch"] = &metadata.SliceMeta{
+					ID:            "dispatch",
+					BelongsToCell: metadatatest.CellIDSharedCrypto,
+					ContractUsages: []metadata.ContractUsage{{
+						Contract:       "webhook.crypto.dispatch.v1",
+						Role:           "webhook-dispatch",
+						TargetSelector: "Target",
+						SourceID:       "demosource",
+					}},
+				}
+			},
+			wantCount: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
